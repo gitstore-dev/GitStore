@@ -1,0 +1,31 @@
+{
+  "name": "gitstore-admin-ui",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "test": "vitest",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@apollo/client": "^3.9.0",
+    "@astrojs/react": "^3.0.10",
+    "astro": "^4.3.0",
+    "graphql": "^16.8.1",
+    "react": "^18.2.0",
+    "react-beautiful-dnd": "^13.1.1",
+    "react-dom": "^18.2.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.41.0",
+    "@types/react": "^18.2.56",
+    "@types/react-beautiful-dnd": "^13.1.8",
+    "@types/react-dom": "^18.2.19",
+    "@types/uuid": "^9.0.8",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.2"
+  }
+}
