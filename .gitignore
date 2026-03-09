@@ -5,7 +5,8 @@
 # Rust
 target/
 **/*.rs.bk
-Cargo.lock
+# Note: Cargo.lock should be committed for binary crates (applications)
+# and ignored for library crates. GitStore is an application, so we commit it.
 
 # Go
 bin/
