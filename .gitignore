@@ -1,0 +1,55 @@
+# Environment
+.env
+.env.local
+
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Go
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Node.js
+node_modules/
+dist/
+.astro/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Generated files
+api/internal/graph/generated.go
+api/internal/graph/model/models_gen.go
+
+# Test coverage
+coverage/
+*.cover
+*.out
+
+# Logs
+*.log
+logs/

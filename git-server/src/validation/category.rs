@@ -167,7 +167,9 @@ mod tests {
         assert!(result.is_err());
 
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, CategoryValidationError::InvalidIdFormat { .. })));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, CategoryValidationError::InvalidIdFormat { .. })));
     }
 
     #[test]
@@ -188,7 +190,9 @@ mod tests {
         assert!(result.is_err());
 
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, CategoryValidationError::InvalidSlug { .. })));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, CategoryValidationError::InvalidSlug { .. })));
     }
 
     #[test]
@@ -200,7 +204,9 @@ mod tests {
         assert!(result.is_err());
 
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, CategoryValidationError::InvalidDisplayOrder { .. })));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, CategoryValidationError::InvalidDisplayOrder { .. })));
     }
 
     #[test]
@@ -212,7 +218,10 @@ mod tests {
 
         let errors = check_duplicate_slugs(&categories);
         assert_eq!(errors.len(), 1);
-        assert!(matches!(errors[0], CategoryValidationError::DuplicateSlug { .. }));
+        assert!(matches!(
+            errors[0],
+            CategoryValidationError::DuplicateSlug { .. }
+        ));
     }
 
     #[test]

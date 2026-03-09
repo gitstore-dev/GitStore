@@ -1,28 +1,28 @@
 // Validation orchestrator - coordinates validation of all catalog entities
 
-use crate::models::{Product, Category, Collection};
 use crate::models::parser::parse_markdown_with_frontmatter;
-use crate::validation::product::{
-    validate_product, check_duplicate_skus, validate_category_reference,
-    validate_collection_references, ProductValidationError,
-};
+use crate::models::{Category, Collection, Product};
 use crate::validation::category::{
-    validate_category, check_duplicate_slugs as check_duplicate_category_slugs,
-    validate_parent_reference, detect_circular_reference, CategoryValidationError,
+    check_duplicate_slugs as check_duplicate_category_slugs, detect_circular_reference,
+    validate_category, validate_parent_reference, CategoryValidationError,
 };
 use crate::validation::collection::{
-    validate_collection, check_duplicate_slugs as check_duplicate_collection_slugs,
+    check_duplicate_slugs as check_duplicate_collection_slugs, validate_collection,
     validate_product_references, CollectionValidationError,
 };
 use crate::validation::errors::ValidationResult;
+use crate::validation::product::{
+    check_duplicate_skus, validate_category_reference, validate_collection_references,
+    validate_product, ProductValidationError,
+};
 use anyhow::{Context, Result};
 use tracing::{debug, info, warn};
 
 /// Catalog validator that coordinates validation across all entity types
 pub struct CatalogValidator {
-    products: Vec<(String, Product)>,  // (file_path, product)
-    categories: Vec<(String, Category)>,  // (file_path, category)
-    collections: Vec<(String, Collection)>,  // (file_path, collection)
+    products: Vec<(String, Product)>,       // (file_path, product)
+    categories: Vec<(String, Category)>,    // (file_path, category)
+    collections: Vec<(String, Collection)>, // (file_path, collection)
 }
 
 impl CatalogValidator {
@@ -84,11 +84,15 @@ impl CatalogValidator {
         );
 
         // Build lookup maps for reference validation
-        let category_ids: Vec<String> = self.categories.iter()
+        let category_ids: Vec<String> = self
+            .categories
+            .iter()
             .map(|(_, cat)| cat.id.clone())
             .collect();
 
-        let collection_ids: Vec<String> = self.collections.iter()
+        let collection_ids: Vec<String> = self
+            .collections
+            .iter()
             .map(|(_, coll)| coll.id.clone())
             .collect();
 
@@ -114,9 +118,7 @@ impl CatalogValidator {
         }
 
         // Check for duplicate SKUs
-        let all_products: Vec<Product> = self.products.iter()
-            .map(|(_, p)| p.clone())
-            .collect();
+        let all_products: Vec<Product> = self.products.iter().map(|(_, p)| p.clone()).collect();
         let dup_errors = check_duplicate_skus(&all_products);
         for error in dup_errors {
             // Find which files have the duplicate SKU
@@ -145,20 +147,23 @@ impl CatalogValidator {
                 }
 
                 // Circular reference detection
-                let category_hierarchy: Vec<(String, Option<String>)> = self.categories.iter()
+                let category_hierarchy: Vec<(String, Option<String>)> = self
+                    .categories
+                    .iter()
                     .map(|(_, cat)| (cat.id.clone(), cat.parent_id.clone()))
                     .collect();
 
-                if let Err(error) = detect_circular_reference(&category.id, Some(parent_id), &category_hierarchy) {
+                if let Err(error) =
+                    detect_circular_reference(&category.id, Some(parent_id), &category_hierarchy)
+                {
                     result.add_error(file_path, error.to_string());
                 }
             }
         }
 
         // Check for duplicate category slugs
-        let all_categories: Vec<Category> = self.categories.iter()
-            .map(|(_, c)| c.clone())
-            .collect();
+        let all_categories: Vec<Category> =
+            self.categories.iter().map(|(_, c)| c.clone()).collect();
         let cat_slug_errors = check_duplicate_category_slugs(&all_categories);
         for error in cat_slug_errors {
             // Find which files have the duplicate slug
@@ -172,7 +177,9 @@ impl CatalogValidator {
         }
 
         // Validate collections
-        let product_ids: Vec<String> = self.products.iter()
+        let product_ids: Vec<String> = self
+            .products
+            .iter()
             .map(|(_, prod)| prod.id.clone())
             .collect();
 
@@ -192,9 +199,8 @@ impl CatalogValidator {
         }
 
         // Check for duplicate collection slugs
-        let all_collections: Vec<Collection> = self.collections.iter()
-            .map(|(_, c)| c.clone())
-            .collect();
+        let all_collections: Vec<Collection> =
+            self.collections.iter().map(|(_, c)| c.clone()).collect();
         let coll_slug_errors = check_duplicate_collection_slugs(&all_collections);
         for error in coll_slug_errors {
             // Find which files have the duplicate slug
@@ -210,7 +216,10 @@ impl CatalogValidator {
         if result.is_valid() {
             info!("Catalog validation passed");
         } else {
-            warn!(error_count = result.error_count(), "Catalog validation failed");
+            warn!(
+                error_count = result.error_count(),
+                "Catalog validation failed"
+            );
         }
 
         result
@@ -259,8 +268,12 @@ updated_at: 2026-03-09T10:00:00Z
 # Electronics
 "#;
 
-        validator.load_file("categories/electronics.md", category_content).unwrap();
-        validator.load_file("products/electronics/TEST-001.md", content).unwrap();
+        validator
+            .load_file("categories/electronics.md", category_content)
+            .unwrap();
+        validator
+            .load_file("products/electronics/TEST-001.md", content)
+            .unwrap();
 
         let result = validator.validate();
         assert!(result.is_valid());
@@ -287,7 +300,9 @@ updated_at: 2026-03-09T10:00:00Z
 # Test Product
 "#;
 
-        validator.load_file("products/TEST-001.md", content).unwrap();
+        validator
+            .load_file("products/TEST-001.md", content)
+            .unwrap();
 
         let result = validator.validate();
         assert!(!result.is_valid());
@@ -496,7 +511,9 @@ updated_at: 2026-03-09T10:00:00Z
 
         validator.load_file("categories/test.md", category).unwrap();
         validator.load_file("products/test.md", product).unwrap();
-        validator.load_file("collections/featured.md", collection).unwrap();
+        validator
+            .load_file("collections/featured.md", collection)
+            .unwrap();
 
         let result = validator.validate();
         assert!(!result.is_valid());
@@ -644,15 +661,30 @@ updated_at: 2026-03-09T10:00:00Z
 "#;
 
         // Load all files
-        validator.load_file("categories/electronics.md", root_category).unwrap();
-        validator.load_file("categories/laptops.md", child_category).unwrap();
-        validator.load_file("products/laptop1.md", product1).unwrap();
-        validator.load_file("products/laptop2.md", product2).unwrap();
-        validator.load_file("collections/featured.md", featured_collection).unwrap();
-        validator.load_file("collections/sale.md", sale_collection).unwrap();
+        validator
+            .load_file("categories/electronics.md", root_category)
+            .unwrap();
+        validator
+            .load_file("categories/laptops.md", child_category)
+            .unwrap();
+        validator
+            .load_file("products/laptop1.md", product1)
+            .unwrap();
+        validator
+            .load_file("products/laptop2.md", product2)
+            .unwrap();
+        validator
+            .load_file("collections/featured.md", featured_collection)
+            .unwrap();
+        validator
+            .load_file("collections/sale.md", sale_collection)
+            .unwrap();
 
         let result = validator.validate();
-        assert!(result.is_valid(), "Validation should pass for complete valid catalog");
+        assert!(
+            result.is_valid(),
+            "Validation should pass for complete valid catalog"
+        );
         assert_eq!(result.error_count(), 0);
     }
 }

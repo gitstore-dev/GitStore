@@ -1,0 +1,354 @@
+# Collection Entity GraphQL Types
+
+"""
+Collection represents a curated grouping of products (flat, non-hierarchical)
+"""
+type Collection implements Node {
+  """
+  Globally unique identifier (format: coll_[base62])
+  """
+  id: ID!
+
+  """
+  Collection display name
+  """
+  name: String!
+
+  """
+  URL-friendly slug (unique)
+  """
+  slug: String!
+
+  """
+  Display order for collection listing
+  """
+  displayOrder: Int!
+
+  """
+  Products in this collection
+  """
+  products(
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): ProductConnection!
+
+  """
+  Markdown body content (collection description with rich formatting)
+  """
+  body: String
+
+  """
+  Creation timestamp
+  """
+  createdAt: DateTime!
+
+  """
+  Last modification timestamp
+  """
+  updatedAt: DateTime!
+
+  """
+  Number of products in this collection
+  """
+  productCount: Int!
+}
+
+# ============================================================================
+# Mutations
+# ============================================================================
+
+"""
+Input for creating a collection
+"""
+input CreateCollectionInput {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Collection name
+  """
+  name: String!
+
+  """
+  URL-friendly slug (must be unique)
+  """
+  slug: String!
+
+  """
+  Display order
+  """
+  displayOrder: Int
+
+  """
+  Product IDs to include
+  """
+  productIds: [ID!]
+
+  """
+  Markdown body content
+  """
+  body: String
+}
+
+"""
+Payload for createCollection mutation
+"""
+type CreateCollectionPayload {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  The created collection
+  """
+  collection: Collection
+}
+
+"""
+Input for updating a collection
+"""
+input UpdateCollectionInput {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Collection ID to update
+  """
+  id: ID!
+
+  """
+  New name
+  """
+  name: String
+
+  """
+  New slug
+  """
+  slug: String
+
+  """
+  New display order
+  """
+  displayOrder: Int
+
+  """
+  New product IDs (replaces all)
+  """
+  productIds: [ID!]
+
+  """
+  New body content
+  """
+  body: String
+
+  """
+  Version for optimistic locking
+  """
+  version: DateTime!
+}
+
+"""
+Payload for updateCollection mutation
+"""
+type UpdateCollectionPayload {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  The updated collection
+  """
+  collection: Collection
+
+  """
+  Conflict information (if optimistic lock failed)
+  """
+  conflict: CollectionOptimisticLockConflict
+}
+
+"""
+Input for deleting a collection
+"""
+input DeleteCollectionInput {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Collection ID to delete
+  """
+  id: ID!
+}
+
+"""
+Payload for deleteCollection mutation
+"""
+type DeleteCollectionPayload {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Deleted collection ID
+  """
+  deletedCollectionId: ID
+}
+
+"""
+Input for reordering collections (drag-and-drop)
+"""
+input ReorderCollectionsInput {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Ordered list of collection IDs
+  """
+  orderedIds: [ID!]!
+}
+
+"""
+Payload for reorderCollections mutation
+"""
+type ReorderCollectionsPayload {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Updated collections
+  """
+  collections: [Collection!]
+}
+
+"""
+Optimistic lock conflict for collection
+"""
+type CollectionOptimisticLockConflict {
+  """
+  Current version in database
+  """
+  currentVersion: DateTime!
+
+  """
+  Version client attempted to update
+  """
+  attemptedVersion: DateTime!
+
+  """
+  Current state of the collection
+  """
+  current: Collection!
+
+  """
+  Diff between current and attempted
+  """
+  diff: String!
+}
+
+# ============================================================================
+# Publish Mutation (shared across entities)
+# ============================================================================
+
+"""
+Input for publishing catalog changes
+"""
+input PublishCatalogInput {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Release version tag (e.g., v1.0.0)
+  """
+  version: String!
+
+  """
+  Release notes/commit message
+  """
+  message: String!
+}
+
+"""
+Payload for publishCatalog mutation
+"""
+type PublishCatalogPayload {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  New catalog version
+  """
+  catalogVersion: CatalogVersion
+}
+
+"""
+Catalog version information
+"""
+type CatalogVersion {
+  """
+  Version tag (e.g., v1.0.0)
+  """
+  tag: String!
+
+  """
+  Commit SHA
+  """
+  commit: String!
+
+  """
+  Release timestamp
+  """
+  publishedAt: DateTime!
+
+  """
+  Release message
+  """
+  message: String
+
+  """
+  Statistics
+  """
+  stats: CatalogStats!
+}
+
+"""
+Catalog statistics
+"""
+type CatalogStats {
+  """
+  Total products
+  """
+  productCount: Int!
+
+  """
+  Total categories
+  """
+  categoryCount: Int!
+
+  """
+  Total collections
+  """
+  collectionCount: Int!
+
+  """
+  Number of orphaned product references
+  """
+  orphanedReferences: Int!
+}

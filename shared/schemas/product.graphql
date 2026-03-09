@@ -1,0 +1,350 @@
+# Product Entity GraphQL Types
+
+"""
+Product represents a sellable item in the catalog
+"""
+type Product implements Node {
+  """
+  Globally unique identifier (format: prod_[base62])
+  """
+  id: ID!
+
+  """
+  Stock Keeping Unit (unique)
+  """
+  sku: String!
+
+  """
+  Product display name
+  """
+  title: String!
+
+  """
+  Markdown body content (product description with rich formatting)
+  """
+  body: String
+
+  """
+  Product price
+  """
+  price: Decimal!
+
+  """
+  Currency code (ISO 4217)
+  """
+  currency: String!
+
+  """
+  Inventory status
+  """
+  inventoryStatus: InventoryStatus!
+
+  """
+  Available quantity (null if not tracked)
+  """
+  inventoryQuantity: Int
+
+  """
+  Primary category (exactly one)
+  """
+  category: Category!
+
+  """
+  Collections this product belongs to (multiple allowed)
+  """
+  collections: [Collection!]!
+
+  """
+  Product image URLs (external CDN)
+  """
+  images: [String!]!
+
+  """
+  Custom metadata (free-form JSON)
+  """
+  metadata: JSON
+
+  """
+  Creation timestamp
+  """
+  createdAt: DateTime!
+
+  """
+  Last modification timestamp
+  """
+  updatedAt: DateTime!
+}
+
+"""
+Edge type for Product connection (Relay pattern)
+"""
+type ProductEdge {
+  """
+  Cursor for pagination
+  """
+  cursor: String!
+
+  """
+  The product node
+  """
+  node: Product!
+}
+
+"""
+Connection type for paginated products (Relay pattern)
+"""
+type ProductConnection {
+  """
+  List of product edges
+  """
+  edges: [ProductEdge!]!
+
+  """
+  Pagination information
+  """
+  pageInfo: PageInfo!
+
+  """
+  Total count of products matching filter
+  """
+  totalCount: Int!
+}
+
+# ============================================================================
+# Mutations
+# ============================================================================
+
+"""
+Input for creating a product
+"""
+input CreateProductInput {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Stock Keeping Unit (must be unique)
+  """
+  sku: String!
+
+  """
+  Product display name
+  """
+  title: String!
+
+  """
+  Markdown body content (product description)
+  """
+  body: String
+
+  """
+  Product price
+  """
+  price: Decimal!
+
+  """
+  Currency code (default: USD)
+  """
+  currency: String
+
+  """
+  Inventory status (default: IN_STOCK)
+  """
+  inventoryStatus: InventoryStatus
+
+  """
+  Available quantity
+  """
+  inventoryQuantity: Int
+
+  """
+  Primary category ID (required)
+  """
+  categoryId: ID!
+
+  """
+  Collection IDs (optional)
+  """
+  collectionIds: [ID!]
+
+  """
+  Product image URLs
+  """
+  images: [String!]
+
+  """
+  Custom metadata
+  """
+  metadata: JSON
+}
+
+"""
+Payload for createProduct mutation
+"""
+type CreateProductPayload {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  The created product
+  """
+  product: Product
+}
+
+"""
+Input for updating a product
+"""
+input UpdateProductInput {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Product ID to update
+  """
+  id: ID!
+
+  """
+  New SKU (optional, must be unique)
+  """
+  sku: String
+
+  """
+  New title
+  """
+  title: String
+
+  """
+  New description
+  """
+  description: String
+
+  """
+  New body content
+  """
+  body: String
+
+  """
+  New price
+  """
+  price: Decimal
+
+  """
+  New currency
+  """
+  currency: String
+
+  """
+  New inventory status
+  """
+  inventoryStatus: InventoryStatus
+
+  """
+  New inventory quantity
+  """
+  inventoryQuantity: Int
+
+  """
+  New category ID
+  """
+  categoryId: ID
+
+  """
+  New collection IDs (replaces all)
+  """
+  collectionIds: [ID!]
+
+  """
+  New image URLs (replaces all)
+  """
+  images: [String!]
+
+  """
+  New metadata (replaces all)
+  """
+  metadata: JSON
+
+  """
+  Version for optimistic locking (updated_at timestamp)
+  """
+  version: DateTime!
+}
+
+"""
+Payload for updateProduct mutation
+"""
+type UpdateProductPayload {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  The updated product
+  """
+  product: Product
+
+  """
+  Conflict information (if optimistic lock failed)
+  """
+  conflict: OptimisticLockConflict
+}
+
+"""
+Input for deleting a product
+"""
+input DeleteProductInput {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Product ID to delete
+  """
+  id: ID!
+}
+
+"""
+Payload for deleteProduct mutation
+"""
+type DeleteProductPayload {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Deleted product ID
+  """
+  deletedProductId: ID
+}
+
+"""
+Optimistic lock conflict information
+"""
+type OptimisticLockConflict {
+  """
+  Current version in database
+  """
+  currentVersion: DateTime!
+
+  """
+  Version client attempted to update
+  """
+  attemptedVersion: DateTime!
+
+  """
+  Current state of the entity
+  """
+  current: Product!
+
+  """
+  Diff between current and attempted (human-readable)
+  """
+  diff: String!
+}

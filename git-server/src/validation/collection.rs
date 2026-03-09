@@ -132,7 +132,9 @@ mod tests {
         assert!(result.is_err());
 
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, CollectionValidationError::InvalidIdFormat { .. })));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, CollectionValidationError::InvalidIdFormat { .. })));
     }
 
     #[test]
@@ -153,7 +155,9 @@ mod tests {
         assert!(result.is_err());
 
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, CollectionValidationError::InvalidSlug { .. })));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, CollectionValidationError::InvalidSlug { .. })));
     }
 
     #[test]
@@ -165,7 +169,9 @@ mod tests {
         assert!(result.is_err());
 
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| matches!(e, CollectionValidationError::InvalidDisplayOrder { .. })));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, CollectionValidationError::InvalidDisplayOrder { .. })));
     }
 
     #[test]
@@ -177,7 +183,10 @@ mod tests {
 
         let errors = check_duplicate_slugs(&collections);
         assert_eq!(errors.len(), 1);
-        assert!(matches!(errors[0], CollectionValidationError::DuplicateSlug { .. }));
+        assert!(matches!(
+            errors[0],
+            CollectionValidationError::DuplicateSlug { .. }
+        ));
     }
 
     #[test]

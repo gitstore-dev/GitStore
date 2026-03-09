@@ -1,0 +1,23 @@
+schema:
+  - ../shared/schemas/*.graphql
+
+exec:
+  filename: internal/graph/generated/generated.go
+  package: generated
+
+model:
+  filename: internal/graph/model/models_gen.go
+  package: model
+
+resolver:
+  layout: follow-schema
+  dir: internal/graph
+  package: graph
+
+models:
+  DateTime:
+    model: time.Time
+  Decimal:
+    model: string
+  JSON:
+    model: map[string]interface{}
