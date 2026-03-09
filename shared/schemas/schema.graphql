@@ -1,0 +1,258 @@
+# GitStore GraphQL Schema
+# API-First Design: Contract defined before implementation
+# Relay Specification: Node interface, Connection pattern, Mutation pattern
+
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+# ============================================================================
+# Relay Node Interface
+# ============================================================================
+
+"""
+An object with a globally unique ID
+"""
+interface Node {
+  """
+  Globally unique identifier (format: [type]_[base62])
+  """
+  id: ID!
+}
+
+"""
+Information about pagination in a connection
+"""
+type PageInfo {
+  """
+  When paginating forwards, are there more items?
+  """
+  hasNextPage: Boolean!
+
+  """
+  When paginating backwards, are there more items?
+  """
+  hasPreviousPage: Boolean!
+
+  """
+  When paginating backwards, the cursor to continue
+  """
+  startCursor: String
+
+  """
+  When paginating forwards, the cursor to continue
+  """
+  endCursor: String
+}
+
+# ============================================================================
+# Query Root
+# ============================================================================
+
+type Query {
+  """
+  Fetches an object given its globally unique ID
+  Relay Node interface implementation
+  """
+  node(id: ID!): Node
+
+  """
+  Fetches multiple objects given their globally unique IDs
+  """
+  nodes(ids: [ID!]!): [Node]!
+
+  """
+  Get product by SKU
+  """
+  product(sku: String!): Product
+
+  """
+  Get product by ID
+  """
+  productById(id: ID!): Product
+
+  """
+  List products with Relay cursor-based pagination
+  """
+  products(
+    first: Int
+    after: String
+    last: Int
+    before: String
+    filter: ProductFilter
+  ): ProductConnection!
+
+  """
+  Get category by slug
+  """
+  category(slug: String!): Category
+
+  """
+  Get category by ID
+  """
+  categoryById(id: ID!): Category
+
+  """
+  List all categories (hierarchical structure)
+  """
+  categories: [Category!]!
+
+  """
+  Get collection by slug
+  """
+  collection(slug: String!): Collection
+
+  """
+  Get collection by ID
+  """
+  collectionById(id: ID!): Collection
+
+  """
+  List all collections
+  """
+  collections: [Collection!]!
+
+  """
+  Get current catalog version (release tag)
+  """
+  catalogVersion: CatalogVersion!
+}
+
+# ============================================================================
+# Mutation Root
+# ============================================================================
+
+type Mutation {
+  """
+  Create a new product
+  """
+  createProduct(input: CreateProductInput!): CreateProductPayload!
+
+  """
+  Update an existing product
+  """
+  updateProduct(input: UpdateProductInput!): UpdateProductPayload!
+
+  """
+  Delete a product
+  """
+  deleteProduct(input: DeleteProductInput!): DeleteProductPayload!
+
+  """
+  Create a new category
+  """
+  createCategory(input: CreateCategoryInput!): CreateCategoryPayload!
+
+  """
+  Update an existing category
+  """
+  updateCategory(input: UpdateCategoryInput!): UpdateCategoryPayload!
+
+  """
+  Delete a category
+  """
+  deleteCategory(input: DeleteCategoryInput!): DeleteCategoryPayload!
+
+  """
+  Reorder categories (drag-and-drop)
+  """
+  reorderCategories(input: ReorderCategoriesInput!): ReorderCategoriesPayload!
+
+  """
+  Create a new collection
+  """
+  createCollection(input: CreateCollectionInput!): CreateCollectionPayload!
+
+  """
+  Update an existing collection
+  """
+  updateCollection(input: UpdateCollectionInput!): UpdateCollectionPayload!
+
+  """
+  Delete a collection
+  """
+  deleteCollection(input: DeleteCollectionInput!): DeleteCollectionPayload!
+
+  """
+  Reorder collections (drag-and-drop)
+  """
+  reorderCollections(input: ReorderCollectionsInput!): ReorderCollectionsPayload!
+
+  """
+  Publish changes (commit + push + create release tag)
+  """
+  publishCatalog(input: PublishCatalogInput!): PublishCatalogPayload!
+}
+
+# ============================================================================
+# Scalars & Enums
+# ============================================================================
+
+"""
+Decimal type for prices (stored as string to preserve precision)
+"""
+scalar Decimal
+
+"""
+DateTime in ISO 8601 format
+"""
+scalar DateTime
+
+"""
+JSON metadata object
+"""
+scalar JSON
+
+"""
+Product inventory status
+"""
+enum InventoryStatus {
+  IN_STOCK
+  OUT_OF_STOCK
+  PREORDER
+  DISCONTINUED
+}
+
+"""
+Product filter options
+"""
+input ProductFilter {
+  """
+  Filter by category ID (includes subcategory products)
+  """
+  categoryId: ID
+
+  """
+  Filter by collection ID
+  """
+  collectionId: ID
+
+  """
+  Filter by inventory status
+  """
+  inventoryStatus: InventoryStatus
+
+  """
+  Filter by minimum price
+  """
+  priceMin: Decimal
+
+  """
+  Filter by maximum price
+  """
+  priceMax: Decimal
+
+  """
+  Search query (title, description, SKU)
+  """
+  search: String
+}
+
+# ============================================================================
+# Include entity type definitions
+# ============================================================================
+
+# Product types defined in product.graphql
+# Category types defined in category.graphql
+# Collection types defined in collection.graphql

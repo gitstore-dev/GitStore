@@ -1,0 +1,295 @@
+# Category Entity GraphQL Types
+
+"""
+Category represents a hierarchical classification system for products
+"""
+type Category implements Node {
+  """
+  Globally unique identifier (format: cat_[base62])
+  """
+  id: ID!
+
+  """
+  Category display name
+  """
+  name: String!
+
+  """
+  URL-friendly slug (unique)
+  """
+  slug: String!
+
+  """
+  Parent category (null for root categories)
+  """
+  parent: Category
+
+  """
+  Child categories (subcategories)
+  """
+  children: [Category!]!
+
+  """
+  Display order within parent
+  """
+  displayOrder: Int!
+
+  """
+  Products in this category (includes subcategory products)
+  """
+  products(
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): ProductConnection!
+
+  """
+  Markdown body content (category description with rich formatting)
+  """
+  body: String
+
+  """
+  Creation timestamp
+  """
+  createdAt: DateTime!
+
+  """
+  Last modification timestamp
+  """
+  updatedAt: DateTime!
+
+  """
+  Full path from root (e.g., ["Electronics", "Computers", "Laptops"])
+  """
+  path: [String!]!
+
+  """
+  Depth in tree (root = 0)
+  """
+  depth: Int!
+}
+
+# ============================================================================
+# Mutations
+# ============================================================================
+
+"""
+Input for creating a category
+"""
+input CreateCategoryInput {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Category name
+  """
+  name: String!
+
+  """
+  URL-friendly slug (must be unique)
+  """
+  slug: String!
+
+  """
+  Parent category ID (null for root)
+  """
+  parentId: ID
+
+  """
+  Display order
+  """
+  displayOrder: Int
+
+  """
+  Markdown body content
+  """
+  body: String
+}
+
+"""
+Payload for createCategory mutation
+"""
+type CreateCategoryPayload {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  The created category
+  """
+  category: Category
+}
+
+"""
+Input for updating a category
+"""
+input UpdateCategoryInput {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Category ID to update
+  """
+  id: ID!
+
+  """
+  New name
+  """
+  name: String
+
+  """
+  New slug
+  """
+  slug: String
+
+  """
+  New parent ID (null to make root, ID to change parent)
+  """
+  parentId: ID
+
+  """
+  New display order
+  """
+  displayOrder: Int
+
+  """
+  New body content
+  """
+  body: String
+
+  """
+  Version for optimistic locking
+  """
+  version: DateTime!
+}
+
+"""
+Payload for updateCategory mutation
+"""
+type UpdateCategoryPayload {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  The updated category
+  """
+  category: Category
+
+  """
+  Conflict information (if optimistic lock failed)
+  """
+  conflict: CategoryOptimisticLockConflict
+}
+
+"""
+Input for deleting a category
+"""
+input DeleteCategoryInput {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Category ID to delete
+  """
+  id: ID!
+}
+
+"""
+Payload for deleteCategory mutation
+"""
+type DeleteCategoryPayload {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Deleted category ID
+  """
+  deletedCategoryId: ID
+
+  """
+  Orphaned product IDs (products that referenced this category)
+  """
+  orphanedProductIds: [ID!]
+}
+
+"""
+Input for reordering categories (drag-and-drop)
+"""
+input ReorderCategoriesInput {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Ordered list of category IDs within parent
+  """
+  orderedIds: [ID!]!
+
+  """
+  Parent category ID (null for root categories)
+  """
+  parentId: ID
+
+  """
+  Category ID being moved (for tree restructure)
+  """
+  movedCategoryId: ID
+
+  """
+  New parent ID for moved category (for tree restructure)
+  """
+  newParentId: ID
+}
+
+"""
+Payload for reorderCategories mutation
+"""
+type ReorderCategoriesPayload {
+  """
+  Client mutation ID (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Updated categories
+  """
+  categories: [Category!]
+}
+
+"""
+Optimistic lock conflict for category
+"""
+type CategoryOptimisticLockConflict {
+  """
+  Current version in database
+  """
+  currentVersion: DateTime!
+
+  """
+  Version client attempted to update
+  """
+  attemptedVersion: DateTime!
+
+  """
+  Current state of the category
+  """
+  current: Category!
+
+  """
+  Diff between current and attempted
+  """
+  diff: String!
+}

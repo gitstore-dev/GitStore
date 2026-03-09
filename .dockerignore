@@ -1,0 +1,53 @@
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Documentation
+README.md
+docs/
+specs/
+*.md
+
+# Development
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env*
+!.env.example
+
+# Build artifacts (will be rebuilt in container)
+target/
+node_modules/
+dist/
+build/
+bin/
+
+# Logs
+*.log
+logs/
+
+# Test files
+*_test.go
+*_test.rs
+**/__tests__/
+**/tests/
+coverage/
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# OS
+.DS_Store
+Thumbs.db
