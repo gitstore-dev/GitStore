@@ -20,7 +20,7 @@ Multi-service architecture:
 - **API**: `api/internal/`, `api/cmd/`, `api/tests/`
 - **Admin UI**: `admin-ui/src/`, `admin-ui/tests/`
 - **Shared**: `shared/schemas/`
-- **Docker**: `docker/`, `docker-compose.yml`
+- **Docker**: `docker/`, `compose.yml`
 
 ---
 
@@ -36,7 +36,7 @@ Multi-service architecture:
 - [ ] T006 [P] Create docker/git-server.Dockerfile for Rust multi-stage build
 - [ ] T007 [P] Create docker/api.Dockerfile for Go multi-stage build
 - [ ] T008 [P] Create docker/admin-ui.Dockerfile for Node.js build
-- [ ] T009 Create docker-compose.yml with services: git-server (ports 9418, 8080), api (port 4000), admin-ui (port 3000)
+- [X] T009 Create compose.yml with services: git-server (ports 9418, 8080), api (port 4000), admin-ui (port 3000)
 - [ ] T010 [P] Configure gqlgen.yml in api/ pointing to shared/schemas/*.graphql
 - [ ] T011 [P] Configure astro.config.mjs in admin-ui/ with React integration
 - [ ] T012 Create README.md with quickstart instructions and architecture diagram
@@ -74,7 +74,11 @@ Multi-service architecture:
 
 ### Tests for User Story 1 (Test-First Development) ⚠️
 
-> **NOTE: Write these tests FIRST, ensure they FAIL before implementation**
+> **🚨 BLOCKING REQUIREMENT (Constitution Principle I - NON-NEGOTIABLE):**
+>
+> All test tasks (T025-T029) MUST be completed and FAILING before ANY implementation tasks (T030-T053) can begin.
+>
+> This enforces Test-First Development. No implementation code may be written until corresponding tests exist and fail.
 
 - [ ] T025 [P] [US1] Write contract test for products query in api/tests/contract/products_test.go
 - [ ] T026 [P] [US1] Write contract test for product(sku) query in api/tests/contract/product_test.go
@@ -129,6 +133,10 @@ Multi-service architecture:
 
 ### Tests for User Story 2 (Test-First Development) ⚠️
 
+> **🚨 BLOCKING REQUIREMENT (Constitution Principle I - NON-NEGOTIABLE):**
+>
+> All test tasks (T054-T057) MUST be completed and FAILING before ANY implementation tasks (T058-T078) can begin.
+
 - [ ] T054 [P] [US2] Write contract test for categories query in api/tests/contract/categories_test.go
 - [ ] T055 [P] [US2] Write contract test for collections query in api/tests/contract/collections_test.go
 - [ ] T056 [P] [US2] Write integration test for category parent-child relationships in api/tests/integration/category_hierarchy_test.go
@@ -177,6 +185,10 @@ Multi-service architecture:
 **Independent Test**: Login to admin UI, create/edit/delete entities, drag-and-drop reorder, publish, verify git commits and storefront updates
 
 ### Tests for User Story 3 (Test-First Development) ⚠️
+
+> **🚨 BLOCKING REQUIREMENT (Constitution Principle I - NON-NEGOTIABLE):**
+>
+> All test tasks (T079-T083) MUST be completed and FAILING before ANY implementation tasks (T084-T125) can begin.
 
 - [ ] T079 [P] [US3] Write contract test for createProduct mutation in api/tests/contract/create_product_test.go
 - [ ] T080 [P] [US3] Write contract test for updateProduct mutation with optimistic locking in api/tests/contract/update_product_test.go
@@ -233,6 +245,7 @@ Multi-service architecture:
 - [ ] T123 [US3] Implement publish flow in admin-ui/src/lib/publish.ts (version input, confirmation, publishCatalog mutation)
 - [ ] T124 [P] [US3] Create conflict resolution modal in admin-ui/src/components/shared/ConflictModal.tsx (shows diff, allows overwrite/cancel)
 - [ ] T125 [P] [US3] Implement optimistic UI updates for mutations in admin-ui/src/lib/apollo-client.ts (Apollo cache updates)
+- [ ] T126 [P] [US3] Implement client-side validation in admin-ui/src/lib/validation.ts (validate required fields, formats, constraints before mutation submission to catch errors early and provide immediate feedback)
 
 **Checkpoint**: All user stories should now be independently functional
 
@@ -242,23 +255,24 @@ Multi-service architecture:
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T126 [P] Add GraphQL filtering support (ProductFilter) to products query in api/internal/graph/products.resolvers.go
-- [ ] T127 [P] Implement cursor pagination helpers in api/internal/graph/pagination.go (Relay connections)
-- [ ] T128 [P] Add git repository size monitoring in git-server/src/git/metrics.rs
-- [ ] T129 [P] Add catalog statistics to CatalogVersion type in api/internal/graph/catalog_version.resolvers.go
-- [ ] T130 [P] Create initialization script in scripts/init-demo-catalog.sh (creates sample products/categories/collections)
-- [ ] T131 [P] Add graceful shutdown handling for websocket connections in git-server/src/websocket/server.rs
-- [ ] T132 [P] Add connection pooling for git operations in api/internal/gitclient/pool.go
-- [ ] T133 [P] Implement request rate limiting middleware in api/internal/middleware/rate_limit.go
-- [ ] T134 [P] Add health check endpoints for all three services (/health, /ready)
-- [ ] T135 [P] Create Prometheus metrics exporters for api and git-server
-- [ ] T136 [P] Add accessibility labels to admin UI components (ARIA attributes)
-- [ ] T137 [P] Implement loading states for all async operations in admin UI
-- [ ] T138 [P] Add error boundaries in admin UI React components
-- [ ] T139 [P] Create user documentation in docs/user-guide.md
-- [ ] T140 [P] Create API documentation in docs/api-reference.md
-- [ ] T141 [P] Validate quickstart.md examples against running system
-- [ ] T142 Run all tests across all three services (cargo test, go test, npm test)
+- [ ] T127 [P] Add GraphQL filtering support including price range (ProductFilter with priceMin/priceMax parameters) to products query in api/internal/graph/products.resolvers.go
+- [ ] T128 [P] Implement cursor pagination helpers in api/internal/graph/pagination.go (Relay connections)
+- [ ] T129 [P] Add git repository size monitoring in git-server/src/git/metrics.rs
+- [ ] T130 [P] Add catalog statistics to CatalogVersion type in api/internal/graph/catalog_version.resolvers.go
+- [ ] T131 [P] Create initialization script in scripts/init-demo-catalog.sh (creates sample products/categories/collections)
+- [ ] T132 [P] Add graceful shutdown handling for websocket connections in git-server/src/websocket/server.rs
+- [ ] T133 [P] Add connection pooling for git operations in api/internal/gitclient/pool.go
+- [ ] T134 [P] Implement request rate limiting middleware in api/internal/middleware/rate_limit.go
+- [ ] T135 [P] Add health check endpoints for all three services (/health, /ready)
+- [ ] T136 [P] Create Prometheus metrics exporters for api and git-server
+- [ ] T137 [P] Add accessibility labels to admin UI components (ARIA attributes)
+- [ ] T138 [P] Implement loading states for all async operations in admin UI
+- [ ] T139 [P] Add error boundaries in admin UI React components
+- [ ] T140 [P] Create user documentation in docs/user-guide.md
+- [ ] T141 [P] Create API documentation in docs/api-reference.md
+- [ ] T142 [P] Validate quickstart.md examples against running system
+- [ ] T143 [P] Write E2E integration test validating request ID propagation from admin-ui → api → git-server in tests/e2e/request_tracing.spec.ts (validates Constitution Principle IV - Observability)
+- [ ] T144 Run all tests across all three services (cargo test, go test, npm test)
 
 ---
 
