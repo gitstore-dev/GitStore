@@ -10,6 +10,12 @@ pub struct ConnectionManager {
     connections: HashMap<SocketAddr, UnboundedSender<String>>,
 }
 
+impl Default for ConnectionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConnectionManager {
     /// Create a new connection manager
     pub fn new() -> Self {

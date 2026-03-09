@@ -1,8 +1,5 @@
 // Integration test: Release tag → websocket notification
 
-use std::time::Duration;
-use tokio::time::timeout;
-
 #[tokio::test]
 #[ignore] // Will be enabled once websocket server is implemented
 async fn test_tag_creates_websocket_notification() {

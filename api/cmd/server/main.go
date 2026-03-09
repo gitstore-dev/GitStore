@@ -13,12 +13,12 @@ import (
 	"time"
 
 	"github.com/99designs/gqlgen/graphql/playground"
-	"github.com/yourorg/gitstore/api/internal/cache"
-	"github.com/yourorg/gitstore/api/internal/catalog"
-	_ "github.com/yourorg/gitstore/api/internal/graph"
-	"github.com/yourorg/gitstore/api/internal/logger"
-	"github.com/yourorg/gitstore/api/internal/middleware"
-	"github.com/yourorg/gitstore/api/internal/websocket"
+	"github.com/commerce-projects/gitstore/api/internal/cache"
+	"github.com/commerce-projects/gitstore/api/internal/catalog"
+	_ "github.com/commerce-projects/gitstore/api/internal/graph"
+	"github.com/commerce-projects/gitstore/api/internal/logger"
+	"github.com/commerce-projects/gitstore/api/internal/middleware"
+	"github.com/commerce-projects/gitstore/api/internal/websocket"
 	"go.uber.org/zap"
 )
 

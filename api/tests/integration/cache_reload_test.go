@@ -3,11 +3,7 @@
 package integration
 
 import (
-	"context"
 	"testing"
-	"time"
-
-	"github.com/stretchr/testify/assert"
 )
 
 // TestWebsocketCacheInvalidation tests that websocket notifications trigger cache reload

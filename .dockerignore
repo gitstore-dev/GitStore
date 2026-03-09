@@ -1,59 +1,53 @@
 # Git
-.git
+.git/
 .gitignore
 .gitattributes
 
 # CI/CD
-.github
+.github/
+.gitlab-ci.yml
+.travis.yml
 
 # Documentation
-*.md
+README.md
 docs/
+specs/
+*.md
 
-# Rust
-target/
-**/*.rs.bk
-Cargo.lock
-
-# Go
-vendor/
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.out
-
-# Node/Astro
-node_modules/
-dist/
-.astro/
-.vercel/
-.netlify/
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# IDE
+# Development
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
+# Environment
+.env*
+!.env.example
+
+# Build artifacts (will be rebuilt in container)
+target/
+node_modules/
+dist/
+build/
+bin/
+
+# Logs
+*.log
+logs/
+
+# Test files
+*_test.go
+*_test.rs
+**/__tests__/
+**/tests/
+coverage/
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
 # OS
 .DS_Store
 Thumbs.db
-
-# Test coverage
-coverage/
-*.coverage
-*.coverprofile
-
-# Temporary files
-tmp/
-temp/
-*.tmp

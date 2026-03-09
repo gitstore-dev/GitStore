@@ -195,6 +195,7 @@ cd admin-ui && npm run test:e2e
 
 ## Documentation
 
+- **Project Constitution**: [.specify/memory/constitution.md](.specify/memory/constitution.md) - Core principles and governance
 - **Full Specification**: [specs/001-git-backed-ecommerce/spec.md](specs/001-git-backed-ecommerce/spec.md)
 - **Implementation Plan**: [specs/001-git-backed-ecommerce/plan.md](specs/001-git-backed-ecommerce/plan.md)
 - **Quickstart Guide**: [specs/001-git-backed-ecommerce/quickstart.md](specs/001-git-backed-ecommerce/quickstart.md)

@@ -6,8 +6,8 @@ import (
 	"context"
 	"sort"
 
-	"github.com/yourorg/gitstore/api/internal/catalog"
-	"github.com/yourorg/gitstore/api/internal/models"
+	"github.com/commerce-projects/gitstore/api/internal/catalog"
+	"github.com/commerce-projects/gitstore/api/internal/models"
 	"go.uber.org/zap"
 )
 

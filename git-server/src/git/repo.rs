@@ -23,7 +23,7 @@ pub fn init_or_open_repository(path: &Path) -> Result<Repository> {
 }
 
 /// Get the current HEAD commit
-pub fn get_head_commit(repo: &Repository) -> Result<git2::Commit> {
+pub fn get_head_commit(repo: &Repository) -> Result<git2::Commit<'_>> {
     let head = repo.head().context("Failed to get HEAD reference")?;
 
     let commit = head

@@ -18,7 +18,7 @@ impl ValidationResult {
     pub fn add_error(&mut self, file_path: &str, error_message: String) {
         self.errors
             .entry(file_path.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(error_message);
     }
 

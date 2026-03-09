@@ -1,7 +1,5 @@
 // Integration test: Git push → validation → accept/reject
 
-use std::fs;
-use std::path::PathBuf;
 use tempfile::TempDir;
 
 #[test]
@@ -10,14 +8,14 @@ fn test_valid_product_push_accepted() {
     // This test will fail initially (Red phase of TDD)
     // Implementation will make it pass (Green phase)
 
-    let temp_dir = TempDir::new().unwrap();
-    let repo_path = temp_dir.path().join("catalog.git");
+    let _temp_dir = TempDir::new().unwrap();
+    let _repo_path = _temp_dir.path().join("catalog.git");
 
     // TODO: Initialize bare git repository
     // TODO: Setup pre-receive hook with validation
 
     // Create valid product markdown
-    let product_content = r#"---
+    let _product_content = r#"---
 id: prod_test123
 sku: TEST-001
 title: Test Product
@@ -53,10 +51,10 @@ This is a test product description.
 #[test]
 #[ignore]
 fn test_invalid_product_push_rejected() {
-    let temp_dir = TempDir::new().unwrap();
+    let _temp_dir = TempDir::new().unwrap();
 
     // Create product with missing required fields
-    let invalid_product = r#"---
+    let _invalid_product = r#"---
 id: prod_invalid
 title: Missing SKU Product
 ---
@@ -77,7 +75,7 @@ title: Missing SKU Product
 #[test]
 #[ignore]
 fn test_duplicate_sku_rejected() {
-    let temp_dir = TempDir::new().unwrap();
+    let _temp_dir = TempDir::new().unwrap();
 
     // TODO: Push first product with SKU "DUP-001"
     // TODO: Attempt to push second product with same SKU
@@ -91,9 +89,9 @@ fn test_duplicate_sku_rejected() {
 #[test]
 #[ignore]
 fn test_invalid_price_rejected() {
-    let temp_dir = TempDir::new().unwrap();
+    let _temp_dir = TempDir::new().unwrap();
 
-    let invalid_price_product = r#"---
+    let _invalid_price_product = r#"---
 id: prod_test
 sku: TEST-002
 title: Invalid Price
@@ -119,9 +117,9 @@ updated_at: 2026-03-09T10:00:00Z
 #[test]
 #[ignore]
 fn test_missing_category_reference_rejected() {
-    let temp_dir = TempDir::new().unwrap();
+    let _temp_dir = TempDir::new().unwrap();
 
-    let product_missing_category = r#"---
+    let _product_missing_category = r#"---
 id: prod_test
 sku: TEST-003
 title: Product
@@ -147,7 +145,7 @@ updated_at: 2026-03-09T10:00:00Z
 #[test]
 #[ignore]
 fn test_multiple_files_validated_together() {
-    let temp_dir = TempDir::new().unwrap();
+    let _temp_dir = TempDir::new().unwrap();
 
     // TODO: Push commit with multiple markdown files
     // - Some valid, some invalid
@@ -162,7 +160,7 @@ fn test_multiple_files_validated_together() {
 #[test]
 #[ignore]
 fn test_validation_error_format() {
-    let temp_dir = TempDir::new().unwrap();
+    let _temp_dir = TempDir::new().unwrap();
 
     // TODO: Push invalid product
     // TODO: Capture error output

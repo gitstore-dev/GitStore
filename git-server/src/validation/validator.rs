@@ -25,6 +25,12 @@ pub struct CatalogValidator {
     collections: Vec<(String, Collection)>, // (file_path, collection)
 }
 
+impl Default for CatalogValidator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CatalogValidator {
     pub fn new() -> Self {
         Self {

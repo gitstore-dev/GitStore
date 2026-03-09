@@ -3,11 +3,9 @@
 package contract
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestProductsQuery tests the products connection query
@@ -16,7 +14,7 @@ func TestProductsQuery(t *testing.T) {
 	// Implementation in Phase 3 will make it pass (Green phase)
 
 	t.Run("should return paginated products", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				products(first: 5) {
 					edges {
@@ -85,7 +83,7 @@ func TestProductsQuery(t *testing.T) {
 	})
 
 	t.Run("should respect pagination parameters", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				products(first: 2) {
 					edges {
@@ -110,7 +108,7 @@ func TestProductsQuery(t *testing.T) {
 	})
 
 	t.Run("should handle empty catalog", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				products(first: 10) {
 					edges {
@@ -135,7 +133,7 @@ func TestProductsQuery(t *testing.T) {
 // TestProductsQueryValidation tests query validation
 func TestProductsQueryValidation(t *testing.T) {
 	t.Run("should reject negative first parameter", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				products(first: -1) {
 					edges {
@@ -154,7 +152,7 @@ func TestProductsQueryValidation(t *testing.T) {
 	})
 
 	t.Run("should enforce max page size", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				products(first: 1000) {
 					edges {

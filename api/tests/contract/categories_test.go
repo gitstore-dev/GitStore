@@ -12,7 +12,8 @@ func TestCategoriesQuery(t *testing.T) {
 	// Implementation in Phase 4 will make it pass (Green phase)
 
 	t.Run("should return all categories", func(t *testing.T) {
-		query := `
+		// Define query for future use when GraphQL server is implemented
+		_ = `
 			query {
 				categories {
 					id
@@ -46,7 +47,7 @@ func TestCategoriesQuery(t *testing.T) {
 	})
 
 	t.Run("should return hierarchical structure", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				categories {
 					name
@@ -66,7 +67,7 @@ func TestCategoriesQuery(t *testing.T) {
 	})
 
 	t.Run("should handle empty categories", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				categories {
 					id
@@ -83,7 +84,7 @@ func TestCategoriesQuery(t *testing.T) {
 // TestCategoryBySlugQuery tests single category query by slug
 func TestCategoryBySlugQuery(t *testing.T) {
 	t.Run("should return category by slug", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				category(slug: "electronics") {
 					id
@@ -109,7 +110,7 @@ func TestCategoryBySlugQuery(t *testing.T) {
 	})
 
 	t.Run("should return null for non-existent slug", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				category(slug: "non-existent") {
 					id
@@ -126,7 +127,7 @@ func TestCategoryBySlugQuery(t *testing.T) {
 // TestCategoryProductsField tests the products field on Category
 func TestCategoryProductsField(t *testing.T) {
 	t.Run("should return products in category", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				category(slug: "laptops") {
 					name
@@ -151,7 +152,7 @@ func TestCategoryProductsField(t *testing.T) {
 	})
 
 	t.Run("should include subcategory products", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				category(slug: "electronics") {
 					name

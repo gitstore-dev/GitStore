@@ -9,7 +9,7 @@ import (
 // TestCollectionsQuery tests the collections list query
 func TestCollectionsQuery(t *testing.T) {
 	t.Run("should return all collections", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				collections {
 					id
@@ -30,7 +30,7 @@ func TestCollectionsQuery(t *testing.T) {
 	})
 
 	t.Run("should handle empty collections", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				collections {
 					id
@@ -47,7 +47,7 @@ func TestCollectionsQuery(t *testing.T) {
 // TestCollectionBySlugQuery tests single collection query
 func TestCollectionBySlugQuery(t *testing.T) {
 	t.Run("should return collection by slug", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				collection(slug: "featured") {
 					id
@@ -76,7 +76,7 @@ func TestCollectionBySlugQuery(t *testing.T) {
 	})
 
 	t.Run("should return null for non-existent slug", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				collection(slug: "non-existent") {
 					id
@@ -93,7 +93,7 @@ func TestCollectionBySlugQuery(t *testing.T) {
 // TestCollectionProductsField tests the products field on Collection
 func TestCollectionProductsField(t *testing.T) {
 	t.Run("should return products in collection", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				collection(slug: "winter-sale") {
 					name
@@ -122,7 +122,7 @@ func TestCollectionProductsField(t *testing.T) {
 	})
 
 	t.Run("should handle collection with no products", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				collection(slug: "empty-collection") {
 					name

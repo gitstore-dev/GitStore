@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yourorg/gitstore/api/internal/catalog"
+	"github.com/commerce-projects/gitstore/api/internal/catalog"
 	"go.uber.org/zap"
 )
 

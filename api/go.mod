@@ -1,4 +1,4 @@
-module github.com/yourorg/gitstore/api
+module github.com/commerce-projects/gitstore/api
 
 go 1.21
 

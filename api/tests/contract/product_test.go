@@ -9,7 +9,7 @@ import (
 // TestProductQuery tests the single product query by SKU
 func TestProductQuery(t *testing.T) {
 	t.Run("should return product by SKU", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				product(sku: "LAPTOP-001") {
 					id
@@ -50,7 +50,7 @@ func TestProductQuery(t *testing.T) {
 	})
 
 	t.Run("should return null for non-existent SKU", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				product(sku: "NON-EXISTENT") {
 					id
@@ -67,7 +67,7 @@ func TestProductQuery(t *testing.T) {
 	})
 
 	t.Run("should handle SKU with special characters", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				product(sku: "SPECIAL-SKU-123_ABC") {
 					sku
@@ -81,7 +81,7 @@ func TestProductQuery(t *testing.T) {
 	})
 
 	t.Run("should resolve category relationship", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				product(sku: "LAPTOP-001") {
 					sku
@@ -105,7 +105,7 @@ func TestProductQuery(t *testing.T) {
 	})
 
 	t.Run("should resolve collections relationship", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				product(sku: "LAPTOP-001") {
 					sku
@@ -127,7 +127,7 @@ func TestProductQuery(t *testing.T) {
 	})
 
 	t.Run("should handle product with orphaned category", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				product(sku: "ORPHANED-PRODUCT") {
 					sku
@@ -149,7 +149,7 @@ func TestProductQuery(t *testing.T) {
 // TestProductQueryNode tests Node interface implementation
 func TestProductQueryNode(t *testing.T) {
 	t.Run("should support node query by ID", func(t *testing.T) {
-		query := `
+		_ = `
 			query {
 				node(id: "prod_abc123") {
 					id

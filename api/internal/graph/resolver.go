@@ -5,9 +5,9 @@ package graph
 import (
 	"context"
 
-	"github.com/yourorg/gitstore/api/internal/cache"
-	"github.com/yourorg/gitstore/api/internal/loader"
-	"github.com/yourorg/gitstore/api/internal/logger"
+	"github.com/commerce-projects/gitstore/api/internal/cache"
+	"github.com/commerce-projects/gitstore/api/internal/loader"
+	"github.com/commerce-projects/gitstore/api/internal/logger"
 	"go.uber.org/zap"
 )
 
