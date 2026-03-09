@@ -50,10 +50,10 @@ git clone https://github.com/yourorg/gitstore.git
 cd gitstore
 
 # Start all services
-docker-compose up -d
+docker compose up -d
 
 # Check service health
-docker-compose ps
+docker compose ps
 ```
 
 **Expected Output**:
@@ -183,9 +183,9 @@ curl http://localhost:4000/graphql \
 
 ```bash
 # Run all tests
-docker-compose run --rm git-server cargo test
-docker-compose run --rm api go test ./...
-docker-compose run --rm admin-ui npm test
+docker compose run --rm git-server cargo test
+docker compose run --rm api go test ./...
+docker compose run --rm admin-ui npm test
 
 # Integration tests
 cd git-server && cargo test --test integration
