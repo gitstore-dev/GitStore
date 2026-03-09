@@ -1,6 +1,6 @@
 // Product validation logic
 
-use crate::models::{InventoryStatus, Product};
+use crate::models::Product;
 use thiserror::Error;
 use tracing::debug;
 
@@ -147,6 +147,7 @@ pub fn validate_collection_references(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::InventoryStatus;
 
     fn create_valid_product() -> Product {
         Product {

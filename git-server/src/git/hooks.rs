@@ -1,9 +1,9 @@
 // Git hooks handler
 
 use anyhow::{Context, Result};
-use git2::{Commit, Diff, DiffOptions, Repository};
+use git2::{DiffOptions, Repository};
 use std::path::Path;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 /// Information about a reference update
 pub struct RefUpdate {

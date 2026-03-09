@@ -4,20 +4,20 @@ import "time"
 
 // Category represents a hierarchical product category
 type Category struct {
-	ID           string     `json:"id"`
-	Name         string     `json:"name"`
-	Slug         string     `json:"slug"`
-	ParentID     *string    `json:"parent_id,omitempty"`
-	DisplayOrder int        `json:"display_order"`
-	Body         string     `json:"body"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Slug         string    `json:"slug"`
+	ParentID     *string   `json:"parent_id,omitempty"`
+	DisplayOrder int       `json:"display_order"`
+	Body         string    `json:"body"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 
 	// Computed fields (not in YAML)
-	Parent       *Category   `json:"-"`
-	Children     []*Category `json:"-"`
-	Path         []*Category `json:"-"`  // Root to current
-	Depth        int         `json:"-"`
+	Parent   *Category   `json:"-"`
+	Children []*Category `json:"-"`
+	Path     []*Category `json:"-"` // Root to current
+	Depth    int         `json:"-"`
 }
 
 // IsRoot returns true if this category has no parent

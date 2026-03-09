@@ -4,16 +4,14 @@ use std::collections::HashMap;
 use std::fmt;
 
 /// Validation result that collects errors by file
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ValidationResult {
     errors: HashMap<String, Vec<String>>,
 }
 
 impl ValidationResult {
     pub fn new() -> Self {
-        Self {
-            errors: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Add an error for a specific file

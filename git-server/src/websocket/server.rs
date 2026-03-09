@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::websocket::connections::ConnectionManager;
 
@@ -92,7 +92,7 @@ async fn handle_connection(
                 debug!(peer = %peer_addr, text = %text, "Received message");
                 // Echo back for now (can be used for health checks)
             }
-            Ok(Message::Ping(data)) => {
+            Ok(Message::Ping(_data)) => {
                 debug!(peer = %peer_addr, "Received ping");
                 // Pong is automatically handled by tungstenite
             }

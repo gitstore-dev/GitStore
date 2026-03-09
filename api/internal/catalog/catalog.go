@@ -55,15 +55,15 @@ type Collection struct {
 
 // Catalog holds all catalog entities loaded from git
 type Catalog struct {
-	mu                 sync.RWMutex
-	commit             string
-	products           map[string]*Product    // ID -> Product
-	categories         map[string]*Category   // ID -> Category
-	collections        map[string]*Collection // ID -> Collection
-	productsBySKU      map[string]*Product    // SKU -> Product
-	categoriesBySlug   map[string]*Category   // Slug -> Category
-	collectionsBySlug  map[string]*Collection // Slug -> Collection
-	loadedAt           time.Time
+	mu                sync.RWMutex
+	commit            string
+	products          map[string]*Product    // ID -> Product
+	categories        map[string]*Category   // ID -> Category
+	collections       map[string]*Collection // ID -> Collection
+	productsBySKU     map[string]*Product    // SKU -> Product
+	categoriesBySlug  map[string]*Category   // Slug -> Category
+	collectionsBySlug map[string]*Collection // Slug -> Collection
+	loadedAt          time.Time
 }
 
 // NewCatalog creates a new empty catalog

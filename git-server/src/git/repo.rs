@@ -37,7 +37,7 @@ pub fn get_head_commit(repo: &Repository) -> Result<git2::Commit> {
 pub fn list_tags(repo: &Repository) -> Result<Vec<String>> {
     let mut tags = Vec::new();
 
-    repo.tag_foreach(|oid, name| {
+    repo.tag_foreach(|_oid, name| {
         if let Ok(name_str) = std::str::from_utf8(name) {
             // Remove 'refs/tags/' prefix
             if let Some(tag_name) = name_str.strip_prefix("refs/tags/") {
