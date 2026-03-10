@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/commerce-projects/gitstore/api/internal/auth"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -24,6 +25,7 @@ type User struct {
 type AuthMiddleware struct {
 	adminUsername     string
 	adminPasswordHash string
+	sessionManager    *auth.SessionManager
 }
 
 // NewAuthMiddleware creates a new authentication middleware
@@ -45,9 +47,16 @@ func NewAuthMiddleware() (*AuthMiddleware, error) {
 		passwordHash = string(hash)
 	}
 
+	// Create session manager
+	sessionManager, err := auth.NewSessionManager()
+	if err != nil {
+		return nil, err
+	}
+
 	return &AuthMiddleware{
 		adminUsername:     username,
 		adminPasswordHash: passwordHash,
+		sessionManager:    sessionManager,
 	}, nil
 }
 
@@ -80,14 +89,17 @@ func (am *AuthMiddleware) RequireAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		// Validate token (will be implemented in session.go)
-		// For now, we'll add the user to context if token is present
-		// This will be enhanced in T103 with proper JWT/session validation
+		// Validate JWT token
+		claims, err := am.sessionManager.ValidateToken(token)
+		if err != nil {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
 
 		// Add user to context
 		user := &User{
-			Username: am.adminUsername,
-			IsAdmin:  true,
+			Username: claims.Username,
+			IsAdmin:  claims.IsAdmin,
 		}
 		ctx := context.WithValue(r.Context(), UserContextKey, user)
 
@@ -105,14 +117,19 @@ func (am *AuthMiddleware) OptionalAuth(next http.Handler) http.Handler {
 			// Extract bearer token
 			token := strings.TrimPrefix(authHeader, "Bearer ")
 			if token != authHeader {
-				// Token present and valid format, add user to context
-				user := &User{
-					Username: am.adminUsername,
-					IsAdmin:  true,
+				// Validate JWT token
+				claims, err := am.sessionManager.ValidateToken(token)
+				if err == nil {
+					// Token valid, add user to context
+					user := &User{
+						Username: claims.Username,
+						IsAdmin:  claims.IsAdmin,
+					}
+					ctx := context.WithValue(r.Context(), UserContextKey, user)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
 				}
-				ctx := context.WithValue(r.Context(), UserContextKey, user)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
+				// Invalid token, proceed without user context
 			}
 		}
 
@@ -125,6 +142,16 @@ func (am *AuthMiddleware) OptionalAuth(next http.Handler) http.Handler {
 func GetUserFromContext(ctx context.Context) (*User, bool) {
 	user, ok := ctx.Value(UserContextKey).(*User)
 	return user, ok
+}
+
+// GenerateSessionToken generates a JWT token for a user (used after successful login)
+func (am *AuthMiddleware) GenerateSessionToken(username string, isAdmin bool) (string, error) {
+	return am.sessionManager.GenerateToken(username, isAdmin)
+}
+
+// RefreshSessionToken refreshes an existing token
+func (am *AuthMiddleware) RefreshSessionToken(token string) (string, error) {
+	return am.sessionManager.RefreshToken(token)
 }
 
 // HashPassword generates a bcrypt hash from a plain text password

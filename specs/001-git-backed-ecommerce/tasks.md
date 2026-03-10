@@ -219,7 +219,7 @@ Multi-service architecture:
 - [X] T100 [US3] Implement reorderCollections mutation resolver in api/internal/graph/mutations.resolvers.go
 - [X] T101 [US3] Implement publishCatalog mutation resolver (commit all changes → push → tag) in api/internal/graph/mutations.resolvers.go
 - [X] T102 [P] [US3] Implement single admin user authentication middleware in api/internal/middleware/auth.go (bcrypt password check)
-- [ ] T103 [P] [US3] Implement session token management in api/internal/auth/session.go (JWT or opaque tokens)
+- [X] T103 [P] [US3] Implement session token management in api/internal/auth/session.go (JWT or opaque tokens)
 
 #### Admin UI (Astro/React) - CRUD Interface
 

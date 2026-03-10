@@ -108,15 +108,30 @@ func TestRequireAuth(t *testing.T) {
 		assert.Contains(t, w.Body.String(), "invalid authorization format")
 	})
 
-	t.Run("should accept request with bearer token", func(t *testing.T) {
+	t.Run("should accept request with valid bearer token", func(t *testing.T) {
+		// Generate a valid JWT token
+		token, err := am.GenerateSessionToken("admin", true)
+		require.NoError(t, err)
+
 		req := httptest.NewRequest("GET", "/test", nil)
-		req.Header.Set("Authorization", "Bearer valid-token-123")
+		req.Header.Set("Authorization", "Bearer "+token)
 		w := httptest.NewRecorder()
 
 		wrappedHandler.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.Contains(t, w.Body.String(), "Hello admin")
+	})
+
+	t.Run("should reject request with invalid bearer token", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.Header.Set("Authorization", "Bearer invalid-token-123")
+		w := httptest.NewRecorder()
+
+		wrappedHandler.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assert.Contains(t, w.Body.String(), "Unauthorized")
 	})
 }
 
@@ -148,9 +163,13 @@ func TestOptionalAuth(t *testing.T) {
 		assert.Equal(t, "Anonymous", w.Body.String())
 	})
 
-	t.Run("should add user to context with valid token", func(t *testing.T) {
+	t.Run("should add user to context with valid bearer token", func(t *testing.T) {
+		// Generate a valid JWT token
+		token, err := am.GenerateSessionToken("admin", true)
+		require.NoError(t, err)
+
 		req := httptest.NewRequest("GET", "/test", nil)
-		req.Header.Set("Authorization", "Bearer valid-token-123")
+		req.Header.Set("Authorization", "Bearer "+token)
 		w := httptest.NewRecorder()
 
 		wrappedHandler.ServeHTTP(w, req)
