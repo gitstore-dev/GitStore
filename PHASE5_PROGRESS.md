@@ -359,7 +359,8 @@ Storefront Reload
 13. **bb2b89b**: feat: implement updateCollection and deleteCollection mutations (T098-T099)
 14. **aed322e**: feat: implement reorderCollections mutation (T100)
 15. **616095b**: feat: implement publishCatalog mutation (T101)
-16. **[pending]**: feat: implement admin authentication and session management (T102-T103)
+16. **aff3dd2**: feat: implement admin authentication middleware (T102)
+17. **8a353ee**: feat: implement session token management with JWT (T103)
 
 ---
 
