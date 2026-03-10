@@ -206,7 +206,7 @@ Multi-service architecture:
 - [X] T087 [US3] Implement git tag creator in api/internal/gitclient/tag.go (create annotated release tag)
 - [X] T088 [P] [US3] Implement optimistic lock version checker in api/internal/graph/version_check.go
 - [X] T089 [P] [US3] Implement diff generator for conflicts in api/internal/graph/diff.go
-- [ ] T090 [US3] Implement createProduct mutation resolver in api/internal/graph/mutations.resolvers.go
+- [X] T090 [US3] Implement createProduct mutation resolver in api/internal/graph/mutations.resolvers.go
 - [ ] T091 [US3] Implement updateProduct mutation resolver with optimistic locking in api/internal/graph/mutations.resolvers.go
 - [ ] T092 [US3] Implement deleteProduct mutation resolver in api/internal/graph/mutations.resolvers.go
 - [ ] T093 [US3] Implement createCategory mutation resolver in api/internal/graph/mutations.resolvers.go

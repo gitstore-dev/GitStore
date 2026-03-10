@@ -3,7 +3,7 @@
 **Feature**: User Story 3 - Admin UI with Mutations
 **Branch**: `002-admin-ui-mutations`
 **Started**: 2026-03-10
-**Status**: 🟡 In Progress (19.1% complete)
+**Status**: 🟡 In Progress (21.3% complete)
 
 ---
 
@@ -15,7 +15,7 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
 
 ---
 
-## Completed Tasks (9/47)
+## Completed Tasks (10/47)
 
 ### Tests (Test-First Development ✅)
 - ✅ **T079**: Contract test for `createProduct` mutation (3 scenarios, skipped)
@@ -68,6 +68,14 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
   - Conflict summary for user resolution
   - **Tests**: 18/18 passing ✅
 
+- ✅ **T090**: createProduct mutation resolver (`api/internal/graph/mutations.go`)
+  - Parse GraphQL input with Relay pattern
+  - Generate product IDs (prod_[base62])
+  - Comprehensive validation (SKU, price, inventory)
+  - Markdown generation + git commit + push
+  - Product model with 27 validation tests
+  - **Tests**: 38/38 passing (11 integration + 27 unit) ✅
+
 ---
 
 ## Next Steps (Remaining Tasks)
@@ -81,7 +89,7 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
 - [X] **T089**: Diff generator for conflicts
 
 ### GraphQL Mutations (T090-T101)
-- [ ] T090: createProduct mutation resolver
+- [X] T090: createProduct mutation resolver
 - [ ] T091: updateProduct mutation resolver
 - [ ] T092: deleteProduct mutation resolver
 - [ ] T093-T095: Category mutation resolvers (create, update, delete)
@@ -133,7 +141,7 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
 ✓ TestGenerateCommitMessage (3/3 passing)
 ```
 
-**Total**: 114 test cases (101 passing, 13 skipped)
+**Total**: 152 test cases (139 passing, 13 skipped)
 
 ---
 
@@ -196,8 +204,12 @@ Storefront Reload
 - `api/internal/graph/version_check_test.go` (318 lines)
 - `api/internal/graph/diff.go` (321 lines)
 - `api/internal/graph/diff_test.go` (352 lines)
+- `api/internal/models/product.go` (175 lines)
+- `api/internal/models/product_test.go` (257 lines)
+- `api/internal/graph/mutations.go` (219 lines)
+- `api/internal/graph/mutations_test.go` (338 lines)
 
-**Total**: 3,241 lines of code + tests
+**Total**: 4,254 lines of code + tests
 
 ---
 
@@ -220,6 +232,7 @@ Storefront Reload
 3. **982e9ca**: feat: implement git commit builder (T085)
 4. **038a175**: feat: implement git push and tag operations (T086-T087)
 5. **ae10779**: feat: implement optimistic locking and diff generation (T088-T089)
+6. **589461c**: feat: implement createProduct mutation resolver (T090)
 
 ---
 
@@ -272,10 +285,10 @@ golangci-lint run ./...
 
 ## Progress Metrics
 
-- **Overall**: 9/47 tasks (19.1%)
+- **Overall**: 10/47 tasks (21.3%)
 - **Git Client**: 4/4 tasks (100%) ✅
 - **Mutation Infrastructure**: 2/2 tasks (100%) ✅
-- **Mutations**: 0/12 tasks (0%)
+- **Mutations**: 1/12 tasks (8.3%)
 - **Auth**: 0/2 tasks (0%)
 - **Admin UI**: 0/23 tasks (0%)
 - **Tests**: 28 passing, 13 skipped (correct)
@@ -297,4 +310,4 @@ golangci-lint run ./...
 
 **Last Updated**: 2026-03-10
 **Branch**: https://github.com/commerce-projects/gitstore/tree/002-admin-ui-mutations
-**Status**: Mutation infrastructure complete! Ready for T090 (createProduct resolver)
+**Status**: First mutation complete! Ready for T091 (updateProduct) and T092 (deleteProduct)
