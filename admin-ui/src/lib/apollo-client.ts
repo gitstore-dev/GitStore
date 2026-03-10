@@ -4,6 +4,20 @@ import { ApolloClient, InMemoryCache, HttpLink, ApolloLink } from '@apollo/clien
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from './logger';
 
+// Auth middleware - adds JWT token to requests
+const authLink = new ApolloLink((operation, forward) => {
+  const token = localStorage.getItem('auth_token');
+
+  operation.setContext(({ headers = {} }) => ({
+    headers: {
+      ...headers,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  }));
+
+  return forward(operation);
+});
+
 // Request ID middleware
 const requestIdLink = new ApolloLink((operation, forward) => {
   const requestId = uuidv4();
@@ -30,7 +44,7 @@ const httpLink = new HttpLink({
 
 // Create Apollo Client
 export const apolloClient = new ApolloClient({
-  link: ApolloLink.from([requestIdLink, httpLink]),
+  link: ApolloLink.from([authLink, requestIdLink, httpLink]),
   cache: new InMemoryCache({
     typePolicies: {
       Query: {

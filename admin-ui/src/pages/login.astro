@@ -206,8 +206,14 @@ import Layout from '../layouts/Layout.astro';
         isAdmin: result.isAdmin
       }));
 
-      // Redirect to products page
-      window.location.href = '/products';
+      // Redirect to saved path or products page
+      const redirectPath = sessionStorage.getItem('redirect_after_login');
+      if (redirectPath) {
+        sessionStorage.removeItem('redirect_after_login');
+        window.location.href = redirectPath;
+      } else {
+        window.location.href = '/products';
+      }
 
     } catch (error) {
       console.error('Login error:', error);

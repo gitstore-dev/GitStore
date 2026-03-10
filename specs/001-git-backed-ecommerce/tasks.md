@@ -224,7 +224,7 @@ Multi-service architecture:
 #### Admin UI (Astro/React) - CRUD Interface
 
 - [X] T104 [P] [US3] Create authentication page in admin-ui/src/pages/login.astro
-- [ ] T105 [P] [US3] Create auth context provider in admin-ui/src/lib/auth-context.tsx (session management)
+- [X] T105 [P] [US3] Create auth context provider in admin-ui/src/lib/auth-context.tsx (session management)
 - [ ] T106 [P] [US3] Generate TypeScript types from GraphQL schema in admin-ui/src/graphql/generated.ts using graphql-codegen
 - [ ] T107 [P] [US3] Create GraphQL mutation hooks in admin-ui/src/graphql/mutations.ts (createProduct, updateProduct, etc.)
 - [ ] T108 [P] [US3] Create GraphQL query hooks in admin-ui/src/graphql/queries.ts (products, categories, collections)
