@@ -190,9 +190,9 @@ Multi-service architecture:
 >
 > All test tasks (T079-T083) MUST be completed and FAILING before ANY implementation tasks (T084-T125) can begin.
 
-- [ ] T079 [P] [US3] Write contract test for createProduct mutation in api/tests/contract/create_product_test.go
-- [ ] T080 [P] [US3] Write contract test for updateProduct mutation with optimistic locking in api/tests/contract/update_product_test.go
-- [ ] T081 [P] [US3] Write contract test for publishCatalog mutation in api/tests/contract/publish_catalog_test.go
+- [X] T079 [P] [US3] Write contract test for createProduct mutation in api/tests/contract/create_product_test.go
+- [X] T080 [P] [US3] Write contract test for updateProduct mutation with optimistic locking in api/tests/contract/update_product_test.go
+- [X] T081 [P] [US3] Write contract test for publishCatalog mutation in api/tests/contract/publish_catalog_test.go
 - [ ] T082 [P] [US3] Write E2E test for product CRUD workflow in admin-ui/tests/e2e/product_crud.spec.ts
 - [ ] T083 [P] [US3] Write E2E test for drag-and-drop category reordering in admin-ui/tests/e2e/category_reorder.spec.ts
 
@@ -200,10 +200,10 @@ Multi-service architecture:
 
 #### GraphQL API (Go) - Mutations & Git Client
 
-- [ ] T084 [P] [US3] Implement markdown file generator in api/internal/gitclient/writer.go (struct → YAML front-matter + markdown body)
-- [ ] T085 [US3] Implement git commit builder in api/internal/gitclient/commit.go (stage files, create commit with message)
-- [ ] T086 [US3] Implement git push client in api/internal/gitclient/push.go (push to git-server with validation handling)
-- [ ] T087 [US3] Implement git tag creator in api/internal/gitclient/tag.go (create annotated release tag)
+- [X] T084 [P] [US3] Implement markdown file generator in api/internal/gitclient/writer.go (struct → YAML front-matter + markdown body)
+- [X] T085 [US3] Implement git commit builder in api/internal/gitclient/commit.go (stage files, create commit with message)
+- [X] T086 [US3] Implement git push client in api/internal/gitclient/push.go (push to git-server with validation handling)
+- [X] T087 [US3] Implement git tag creator in api/internal/gitclient/tag.go (create annotated release tag)
 - [ ] T088 [P] [US3] Implement optimistic lock version checker in api/internal/graph/version_check.go
 - [ ] T089 [P] [US3] Implement diff generator for conflicts in api/internal/graph/diff.go
 - [ ] T090 [US3] Implement createProduct mutation resolver in api/internal/graph/mutations.resolvers.go

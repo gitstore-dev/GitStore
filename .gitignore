@@ -48,7 +48,7 @@ Thumbs.db
 docker-compose.override.yml
 
 # Generated files
-api/internal/graph/generated.go
+api/internal/graph/generated/generated.go
 api/internal/graph/model/models_gen.go
 
 # Test coverage

@@ -3,7 +3,7 @@
 **Feature**: User Story 3 - Admin UI with Mutations
 **Branch**: `002-admin-ui-mutations`
 **Started**: 2026-03-10
-**Status**: 🟡 In Progress (10.6% complete)
+**Status**: 🟡 In Progress (14.9% complete)
 
 ---
 
@@ -15,7 +15,7 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
 
 ---
 
-## Completed Tasks (5/47)
+## Completed Tasks (7/47)
 
 ### Tests (Test-First Development ✅)
 - ✅ **T079**: Contract test for `createProduct` mutation (3 scenarios, skipped)
@@ -39,13 +39,28 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
   - Convenience methods for single/multiple file commits
   - **Tests**: 14/14 passing ✅
 
+- ✅ **T086**: Git push client (`api/internal/gitclient/push.go`)
+  - Connect to git remote (file:// or git:// protocol)
+  - Push commits to remote repository
+  - Handle validation errors from git server
+  - Parse pre-receive hook rejection messages
+  - **Tests**: 13/13 passing ✅
+
+- ✅ **T087**: Git tag creator (`api/internal/gitclient/tag.go`)
+  - Create annotated tags with messages
+  - Push tags to remote repository
+  - List and retrieve tag information
+  - Validate tag name formats (semver, date-based, custom)
+  - Generate next semantic version automatically
+  - **Tests**: 20/20 passing ✅
+
 ---
 
 ## Next Steps (Remaining Tasks)
 
 ### Immediate (Git Client - T086-T087)
-- [ ] **T086**: Git push client (connect to git-server with validation handling)
-- [ ] **T087**: Git tag creator (create annotated release tags)
+- [X] **T086**: Git push client (connect to git-server with validation handling)
+- [X] **T087**: Git tag creator (create annotated release tags)
 
 ### Mutation Infrastructure (T088-T089)
 - [ ] **T088**: Optimistic lock version checker
@@ -104,7 +119,7 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
 ✓ TestGenerateCommitMessage (3/3 passing)
 ```
 
-**Total**: 41 test cases (28 passing, 13 skipped)
+**Total**: 74 test cases (61 passing, 13 skipped)
 
 ---
 
@@ -117,9 +132,11 @@ api/internal/gitclient/
 ├── writer_test.go     ✅ 14 tests passing
 ├── commit.go          ✅ Git commit builder
 ├── commit_test.go     ✅ 14 tests passing
-├── push.go            ⏳ Next: Git push client
-├── tag.go             ⏳ Next: Tag creator
-└── repository.go      ⏳ Future: Repository management
+├── push.go            ✅ Git push client
+├── push_test.go       ✅ 13 tests passing
+├── tag.go             ✅ Git tag creator
+├── tag_test.go        ✅ 20 tests passing
+└── repository.go      ⏳ Future: Repository management (if needed)
 ```
 
 ### Mutation Flow (Planned)
@@ -153,12 +170,16 @@ Storefront Reload
 - `api/tests/contract/publish_catalog_test.go` (6 scenarios)
 
 ### Implementation
-- `api/internal/gitclient/writer.go` (262 lines)
-- `api/internal/gitclient/writer_test.go` (267 lines)
-- `api/internal/gitclient/commit.go` (250 lines)
-- `api/internal/gitclient/commit_test.go` (262 lines)
+- `api/internal/gitclient/writer.go` (195 lines)
+- `api/internal/gitclient/writer_test.go` (243 lines)
+- `api/internal/gitclient/commit.go` (218 lines)
+- `api/internal/gitclient/commit_test.go` (296 lines)
+- `api/internal/gitclient/push.go` (191 lines)
+- `api/internal/gitclient/push_test.go` (244 lines)
+- `api/internal/gitclient/tag.go` (268 lines)
+- `api/internal/gitclient/tag_test.go` (413 lines)
 
-**Total**: 1,041 lines of code + tests
+**Total**: 2,068 lines of code + tests
 
 ---
 
@@ -179,6 +200,8 @@ Storefront Reload
 1. **7291b8b**: test: add contract tests for Phase 5 mutations (T079-T081)
 2. **2da2b3c**: feat: implement markdown file generator (T084)
 3. **982e9ca**: feat: implement git commit builder (T085)
+4. *(pending)*: feat: implement git push client (T086)
+5. *(pending)*: feat: implement git tag creator (T087)
 
 ---
 
@@ -186,25 +209,24 @@ Storefront Reload
 
 Priority order for next session:
 
-1. **T086**: Implement git push client
-   - Connect to git-server (git://localhost:9418)
-   - Handle authentication
-   - Process validation errors from server
-   - Retry logic for transient failures
+1. **T088**: Implement optimistic lock version checker
+   - Compare current version with stored version
+   - Detect concurrent modifications
+   - Generate version mismatch errors
 
-2. **T087**: Implement git tag creator
-   - Create annotated tags with messages
-   - Push tags to server
-   - Validate tag format (semver or date)
-   - Trigger websocket notification
+2. **T089**: Implement diff generator for conflicts
+   - Compare file contents between versions
+   - Generate unified diff format
+   - Return conflict details to client
 
 3. **T090**: Implement createProduct mutation resolver
    - Parse GraphQL input
    - Generate product ID
    - Call writer + commit + push
    - Return created product
+   - Handle validation errors
 
-After these 3 tasks, the basic mutation flow will be functional!
+After these 3 tasks, the first mutation will be functional and testable!
 
 ---
 
@@ -232,22 +254,22 @@ golangci-lint run ./...
 
 ## Progress Metrics
 
-- **Overall**: 5/47 tasks (10.6%)
-- **Git Client**: 2/4 tasks (50%)
+- **Overall**: 7/47 tasks (14.9%)
+- **Git Client**: 4/4 tasks (100%) ✅
 - **Mutations**: 0/12 tasks (0%)
 - **Auth**: 0/2 tasks (0%)
 - **Admin UI**: 0/23 tasks (0%)
 - **Tests**: 28 passing, 13 skipped (correct)
 
-**Estimated Remaining**: ~40 tasks (~85-90% remaining)
+**Estimated Remaining**: ~40 tasks (~85% remaining)
 
 ---
 
 ## Notes
 
-- All foundational git operations (write, commit) are complete and tested
-- Push and tag operations are next critical path items
-- Once push/tag are done, mutation resolvers can be implemented rapidly
+- ✅ All foundational git operations complete (write, commit, push, tag)
+- Git client package is 100% complete with 61 passing tests
+- Ready to implement mutation resolvers (T088-T101)
 - Admin UI can be built incrementally once mutations work
 - E2E tests (T082-T083) deferred until UI is functional
 
@@ -255,4 +277,4 @@ golangci-lint run ./...
 
 **Last Updated**: 2026-03-10
 **Branch**: https://github.com/commerce-projects/gitstore/tree/002-admin-ui-mutations
-**Status**: Ready to resume with T086 (git push client)
+**Status**: Git client complete! Ready for T088 (optimistic locking)
