@@ -229,6 +229,21 @@ type ReorderCollectionsPayload struct {
 	Collections      []*models.CollectionMutation
 }
 
+// PublishCatalogInput represents the input for publishing the catalog
+type PublishCatalogInput struct {
+	ClientMutationID *string
+	TagName          *string // Optional: custom tag name (defaults to auto-generated semver)
+	Message          *string // Optional: custom tag message
+}
+
+// PublishCatalogPayload represents the payload returned from publishCatalog
+type PublishCatalogPayload struct {
+	ClientMutationID *string
+	TagName          string
+	CommitHash       string
+	Success          bool
+}
+
 // CreateProduct creates a new product and commits it to git
 func (s *ProductMutationService) CreateProduct(ctx context.Context, input CreateProductInput) (*CreateProductPayload, error) {
 	// Set defaults
@@ -1475,5 +1490,111 @@ func (s *ProductMutationService) ReorderCollections(ctx context.Context, input R
 	return &ReorderCollectionsPayload{
 		ClientMutationID: input.ClientMutationID,
 		Collections:      updatedCollections,
+	}, nil
+}
+
+// PublishCatalog commits all changes, pushes to remote, and creates a release tag
+func (s *ProductMutationService) PublishCatalog(ctx context.Context, input PublishCatalogInput) (*PublishCatalogPayload, error) {
+	// Ensure repository exists
+	if err := ensureRepoExists(s.repoPath); err != nil {
+		return nil, fmt.Errorf("failed to initialize repository: %w", err)
+	}
+
+	// Check if remote is configured
+	if s.remoteURL == "" {
+		return nil, fmt.Errorf("remote URL not configured - cannot publish catalog")
+	}
+
+	// Initialize commit builder to check for uncommitted changes
+	commitBuilder, err := gitclient.NewCommitBuilder(s.repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize git: %w", err)
+	}
+
+	// Check if there are uncommitted changes
+	hasChanges, err := commitBuilder.HasChanges()
+	if err != nil {
+		return nil, fmt.Errorf("failed to check for changes: %w", err)
+	}
+
+	var commitHash string
+	if hasChanges {
+		// Commit all pending changes
+		commitMsg := "chore: publish catalog with all pending changes"
+		if input.Message != nil && *input.Message != "" {
+			commitMsg = *input.Message
+		}
+
+		commitHash, err = commitBuilder.CommitAll(commitMsg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to commit changes: %w", err)
+		}
+		fmt.Printf("Committed pending changes (commit: %s)\n", commitHash[:8])
+	} else {
+		// Get current HEAD commit
+		commitHash = commitBuilder.GetCurrentCommitHash()
+		if commitHash == "" {
+			return nil, fmt.Errorf("failed to get current commit hash")
+		}
+	}
+
+	// Push to remote
+	pushClient, err := gitclient.NewPushClient(s.repoPath, "origin", s.remoteURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize push client: %w", err)
+	}
+
+	if err := pushClient.PushBranch(); err != nil {
+		return nil, fmt.Errorf("failed to push to remote: %w", err)
+	}
+	fmt.Printf("Pushed changes to remote\n")
+
+	// Create tag
+	tagClient, err := gitclient.NewTagClient(s.repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize tag client: %w", err)
+	}
+
+	// Determine tag name
+	var tagName string
+	if input.TagName != nil && *input.TagName != "" {
+		tagName = *input.TagName
+	} else {
+		// Auto-generate semver tag
+		tagName, err = tagClient.GenerateSemverTagName()
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate tag name: %w", err)
+		}
+	}
+
+	// Determine tag message
+	tagMessage := "Release catalog version " + tagName
+	if input.Message != nil && *input.Message != "" {
+		tagMessage = *input.Message
+	}
+
+	// Create annotated tag
+	tagOpts := gitclient.TagOptions{
+		Name:    tagName,
+		Message: tagMessage,
+	}
+
+	_, err = tagClient.CreateTag(tagOpts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create tag: %w", err)
+	}
+	fmt.Printf("Created tag %s\n", tagName)
+
+	// Push tag to remote
+	if err := tagClient.PushTag(tagName, "origin", s.remoteURL); err != nil {
+		return nil, fmt.Errorf("failed to push tag: %w", err)
+	}
+	fmt.Printf("Pushed tag %s to remote\n", tagName)
+
+	return &PublishCatalogPayload{
+		ClientMutationID: input.ClientMutationID,
+		TagName:          tagName,
+		CommitHash:       commitHash,
+		Success:          true,
 	}, nil
 }

@@ -208,6 +208,28 @@ func (cb *CommitBuilder) CommitMultiple(changes map[string]string, message strin
 	})
 }
 
+// CommitAll stages and commits all changes in the repository
+func (cb *CommitBuilder) CommitAll(message string) (string, error) {
+	// Stage all changes
+	if err := cb.StageAll(); err != nil {
+		return "", err
+	}
+
+	// Commit
+	return cb.Commit(CommitOptions{
+		Message: message,
+	})
+}
+
+// GetCurrentCommitHash returns the current HEAD commit hash
+func (cb *CommitBuilder) GetCurrentCommitHash() string {
+	ref, err := cb.repo.Head()
+	if err != nil {
+		return ""
+	}
+	return ref.Hash().String()
+}
+
 // GenerateCommitMessage generates a descriptive commit message for catalog changes
 func GenerateCommitMessage(action string, entityType string, entityID string, summary string) string {
 	if summary != "" {

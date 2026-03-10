@@ -3,7 +3,7 @@
 **Feature**: User Story 3 - Admin UI with Mutations
 **Branch**: `002-admin-ui-mutations`
 **Started**: 2026-03-10
-**Status**: 🟡 In Progress (42.6% complete)
+**Status**: 🟡 In Progress (44.7% complete)
 
 ---
 
@@ -15,7 +15,7 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
 
 ---
 
-## Completed Tasks (20/47)
+## Completed Tasks (21/47)
 
 ### Tests (Test-First Development ✅)
 - ✅ **T079**: Contract test for `createProduct` mutation (3 scenarios, skipped)
@@ -151,6 +151,14 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
   - Support drag-and-drop reordering workflows
   - **Tests**: 6/6 passing ✅
 
+- ✅ **T101**: publishCatalog mutation resolver (`api/internal/graph/mutations.go`)
+  - Commit all pending changes to git
+  - Push commits to remote repository
+  - Create annotated release tag (auto-generate or custom)
+  - Push tag to remote
+  - Support custom tag names and messages
+  - **Tests**: 7/7 passing ✅
+
 ---
 
 ## Next Steps (Remaining Tasks)
@@ -175,7 +183,7 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
 - [X] T098: updateCollection mutation resolver
 - [X] T099: deleteCollection mutation resolver
 - [X] T100: reorderCollections mutation resolver
-- [ ] T101: publishCatalog mutation resolver
+- [X] T101: publishCatalog mutation resolver
 
 ### Authentication (T102-T103)
 - [ ] T102: Admin user authentication middleware (bcrypt)
@@ -220,7 +228,7 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
 ✓ TestGenerateCommitMessage (3/3 passing)
 ```
 
-**Total**: 218 test cases (205 passing, 13 skipped)
+**Total**: 225 test cases (212 passing, 13 skipped)
 
 ---
 
@@ -287,12 +295,14 @@ Storefront Reload
 - `api/internal/models/product_test.go` (257 lines)
 - `api/internal/models/category_mutations.go` (152 lines)
 - `api/internal/models/collection_mutations.go` (92 lines)
-- `api/internal/graph/mutations.go` (1291 lines)
+- `api/internal/gitclient/commit.go` (240 lines)
+- `api/internal/graph/mutations.go` (1405 lines)
 - `api/internal/graph/mutations_test.go` (338 lines)
 - `api/internal/graph/category_mutations_test.go` (689 lines)
 - `api/internal/graph/collection_mutations_test.go` (592 lines)
+- `api/internal/graph/publish_catalog_test.go` (258 lines)
 
-**Total**: 6,531 lines of code + tests
+**Total**: 7,043 lines of code + tests
 
 ---
 
@@ -323,7 +333,8 @@ Storefront Reload
 11. **0f7ab04**: feat: implement reorderCategories mutation (T096)
 12. **4648e76**: feat: implement createCollection mutation (T097)
 13. **bb2b89b**: feat: implement updateCollection and deleteCollection mutations (T098-T099)
-14. **[pending]**: feat: implement reorderCollections mutation (T100)
+14. **aed322e**: feat: implement reorderCollections mutation (T100)
+15. **[pending]**: feat: implement publishCatalog mutation (T101)
 
 ---
 
@@ -376,18 +387,18 @@ golangci-lint run ./...
 
 ## Progress Metrics
 
-- **Overall**: 20/47 tasks (42.6%)
+- **Overall**: 21/47 tasks (44.7%)
 - **Git Client**: 4/4 tasks (100%) ✅
 - **Mutation Infrastructure**: 2/2 tasks (100%) ✅
 - **Product Mutations**: 3/3 tasks (100%) ✅
 - **Category Mutations**: 4/4 tasks (100%) ✅
 - **Collection Mutations**: 4/4 tasks (100%) ✅
-- **Remaining Mutations**: 0/1 tasks (0%)
+- **Publish Mutation**: 1/1 tasks (100%) ✅
 - **Auth**: 0/2 tasks (0%)
 - **Admin UI**: 0/23 tasks (0%)
-- **Tests**: 80 passing, 13 skipped (correct)
+- **Tests**: 87 passing, 13 skipped (correct)
 
-**Estimated Remaining**: ~27 tasks (~57% remaining)
+**Estimated Remaining**: ~26 tasks (~55% remaining)
 
 ---
 
@@ -398,13 +409,13 @@ golangci-lint run ./...
 - ✅ Product CRUD mutations complete (create, update, delete)
 - ✅ Category CRUD + reorder mutations complete (create, update, delete, reorder)
 - ✅ Collection CRUD + reorder mutations complete (create, update, delete, reorder)
-- Git client + mutation infrastructure + all CRUD mutations: 205 passing tests
-- Ready for publishCatalog (T101) - final mutation!
-- Admin UI can be built incrementally once mutations work
+- ✅ publishCatalog mutation complete (commit, push, tag)
+- **ALL MUTATIONS COMPLETE!** 212 passing tests across 12 mutation types
+- Ready for authentication (T102-T103) and Admin UI (T104-T126)
 - E2E tests (T082-T083) deferred until UI is functional
 
 ---
 
 **Last Updated**: 2026-03-10
 **Branch**: https://github.com/commerce-projects/gitstore/tree/002-admin-ui-mutations
-**Status**: All CRUD mutations complete! Only publishCatalog (T101) remaining before Auth & Admin UI
+**Status**: 🎉 ALL MUTATIONS COMPLETE! Ready for Auth (T102-T103) and Admin UI (T104-T126)
