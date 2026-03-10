@@ -212,7 +212,7 @@ Multi-service architecture:
 - [X] T093 [US3] Implement createCategory mutation resolver in api/internal/graph/mutations.resolvers.go
 - [X] T094 [US3] Implement updateCategory mutation resolver in api/internal/graph/mutations.resolvers.go
 - [X] T095 [US3] Implement deleteCategory mutation resolver in api/internal/graph/mutations.resolvers.go
-- [ ] T096 [US3] Implement reorderCategories mutation resolver in api/internal/graph/mutations.resolvers.go
+- [X] T096 [US3] Implement reorderCategories mutation resolver in api/internal/graph/mutations.resolvers.go
 - [ ] T097 [US3] Implement createCollection mutation resolver in api/internal/graph/mutations.resolvers.go
 - [ ] T098 [US3] Implement updateCollection mutation resolver in api/internal/graph/mutations.resolvers.go
 - [ ] T099 [US3] Implement deleteCollection mutation resolver in api/internal/graph/mutations.resolvers.go

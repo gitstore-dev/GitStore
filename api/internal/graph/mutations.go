@@ -146,6 +146,24 @@ type DeleteCategoryPayload struct {
 	DeletedCategoryID *string
 }
 
+// CategoryOrderInput represents a category and its new display order
+type CategoryOrderInput struct {
+	ID           string
+	DisplayOrder int
+}
+
+// ReorderCategoriesInput represents the input for reordering categories
+type ReorderCategoriesInput struct {
+	ClientMutationID *string
+	Orders           []CategoryOrderInput
+}
+
+// ReorderCategoriesPayload represents the payload returned from reorderCategories
+type ReorderCategoriesPayload struct {
+	ClientMutationID *string
+	Categories       []*models.CategoryMutation
+}
+
 // CreateProduct creates a new product and commits it to git
 func (s *ProductMutationService) CreateProduct(ctx context.Context, input CreateProductInput) (*CreateProductPayload, error) {
 	// Set defaults
@@ -910,5 +928,78 @@ func (s *ProductMutationService) DeleteCategory(ctx context.Context, input Delet
 	return &DeleteCategoryPayload{
 		ClientMutationID:  input.ClientMutationID,
 		DeletedCategoryID: &input.ID,
+	}, nil
+}
+
+// ReorderCategories updates the display order of multiple categories in a single transaction
+func (s *ProductMutationService) ReorderCategories(ctx context.Context, input ReorderCategoriesInput) (*ReorderCategoriesPayload, error) {
+	if len(input.Orders) == 0 {
+		return nil, fmt.Errorf("at least one category order must be specified")
+	}
+
+	// Ensure repository exists
+	if err := ensureRepoExists(s.repoPath); err != nil {
+		return nil, fmt.Errorf("failed to initialize repository: %w", err)
+	}
+
+	// Read all categories and update their display orders
+	var updatedCategories []*models.CategoryMutation
+	filesToUpdate := make(map[string]string)
+
+	for _, order := range input.Orders {
+		// Read existing category
+		category, _, err := s.readCategoryFromGit(order.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read category %s: %w", order.ID, err)
+		}
+
+		// Validate display order
+		if err := models.ValidateDisplayOrder(order.DisplayOrder); err != nil {
+			return nil, fmt.Errorf("invalid display order for category %s: %w", order.ID, err)
+		}
+
+		// Update display order and timestamp
+		category.DisplayOrder = order.DisplayOrder
+		category.UpdatedAt = time.Now().UTC()
+
+		// Generate markdown content
+		markdown := s.generateCategoryContent(category)
+		filePath := gitclient.GetCategoryFilePath(category.Slug)
+		filesToUpdate[filePath] = markdown
+
+		updatedCategories = append(updatedCategories, category)
+	}
+
+	// Commit all changes in a single transaction
+	commitBuilder, err := gitclient.NewCommitBuilder(s.repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize git: %w", err)
+	}
+
+	commitMsg := gitclient.GenerateCommitMessage("reorder", "categories", "",
+		fmt.Sprintf("%d categories", len(input.Orders)))
+	commitHash, err := commitBuilder.CommitMultiple(filesToUpdate, commitMsg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to commit: %w", err)
+	}
+
+	// Push to remote (if configured)
+	if s.remoteURL != "" {
+		pushClient, err := gitclient.NewPushClient(s.repoPath, "origin", s.remoteURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize push client: %w", err)
+		}
+
+		if err := pushClient.PushBranch(); err != nil {
+			return nil, fmt.Errorf("failed to push to remote: %w", err)
+		}
+	}
+
+	// Log success
+	fmt.Printf("Reordered %d categories (commit: %s)\n", len(input.Orders), commitHash[:8])
+
+	return &ReorderCategoriesPayload{
+		ClientMutationID: input.ClientMutationID,
+		Categories:       updatedCategories,
 	}, nil
 }

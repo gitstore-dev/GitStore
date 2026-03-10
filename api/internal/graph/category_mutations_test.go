@@ -642,3 +642,261 @@ func TestDeleteCategory(t *testing.T) {
 		assert.Equal(t, "delete-category-123", *payload.ClientMutationID)
 	})
 }
+
+func TestReorderCategories(t *testing.T) {
+	t.Run("should reorder multiple categories", func(t *testing.T) {
+		repoPath, cleanup := setupTestMutationRepo(t)
+		defer cleanup()
+
+		service := NewProductMutationService(repoPath, "")
+		ctx := context.Background()
+
+		// Create three categories
+		categories := []struct {
+			name string
+			slug string
+		}{
+			{"Electronics", "electronics"},
+			{"Books", "books"},
+			{"Clothing", "clothing"},
+		}
+
+		createdCategories := make([]*models.CategoryMutation, 0, len(categories))
+		for _, cat := range categories {
+			createInput := CreateCategoryInput{
+				Name: cat.name,
+				Slug: cat.slug,
+			}
+			payload, err := service.CreateCategory(ctx, createInput)
+			require.NoError(t, err)
+			createdCategories = append(createdCategories, payload.Category)
+		}
+
+		// Mock readCategoryFromGit
+		service.readCategoryFromGit = func(id string) (*models.CategoryMutation, string, error) {
+			for _, cat := range createdCategories {
+				if cat.ID == id {
+					content := service.generateCategoryContent(cat)
+					return cat, content, nil
+				}
+			}
+			return nil, "", fmt.Errorf("category not found")
+		}
+
+		// Reorder: Books=0, Clothing=1, Electronics=2
+		reorderInput := ReorderCategoriesInput{
+			Orders: []CategoryOrderInput{
+				{ID: createdCategories[1].ID, DisplayOrder: 0}, // Books
+				{ID: createdCategories[2].ID, DisplayOrder: 1}, // Clothing
+				{ID: createdCategories[0].ID, DisplayOrder: 2}, // Electronics
+			},
+		}
+
+		payload, err := service.ReorderCategories(ctx, reorderInput)
+		require.NoError(t, err)
+		require.NotNil(t, payload)
+		require.Len(t, payload.Categories, 3)
+
+		// Verify display orders
+		assert.Equal(t, 0, payload.Categories[0].DisplayOrder)
+		assert.Equal(t, 1, payload.Categories[1].DisplayOrder)
+		assert.Equal(t, 2, payload.Categories[2].DisplayOrder)
+	})
+
+	t.Run("should update markdown files", func(t *testing.T) {
+		repoPath, cleanup := setupTestMutationRepo(t)
+		defer cleanup()
+
+		service := NewProductMutationService(repoPath, "")
+		ctx := context.Background()
+
+		// Create two categories
+		cat1Input := CreateCategoryInput{Name: "Home", Slug: "home"}
+		cat1Payload, err := service.CreateCategory(ctx, cat1Input)
+		require.NoError(t, err)
+
+		cat2Input := CreateCategoryInput{Name: "Garden", Slug: "garden"}
+		cat2Payload, err := service.CreateCategory(ctx, cat2Input)
+		require.NoError(t, err)
+
+		service.readCategoryFromGit = func(id string) (*models.CategoryMutation, string, error) {
+			if id == cat1Payload.Category.ID {
+				content := service.generateCategoryContent(cat1Payload.Category)
+				return cat1Payload.Category, content, nil
+			}
+			if id == cat2Payload.Category.ID {
+				content := service.generateCategoryContent(cat2Payload.Category)
+				return cat2Payload.Category, content, nil
+			}
+			return nil, "", fmt.Errorf("category not found")
+		}
+
+		// Reorder
+		reorderInput := ReorderCategoriesInput{
+			Orders: []CategoryOrderInput{
+				{ID: cat1Payload.Category.ID, DisplayOrder: 5},
+				{ID: cat2Payload.Category.ID, DisplayOrder: 10},
+			},
+		}
+
+		_, err = service.ReorderCategories(ctx, reorderInput)
+		require.NoError(t, err)
+
+		// Verify files were updated
+		cat1Path := filepath.Join(repoPath, "categories/home.md")
+		cat1Content, err := os.ReadFile(cat1Path)
+		require.NoError(t, err)
+		assert.Contains(t, string(cat1Content), "display_order: 5")
+
+		cat2Path := filepath.Join(repoPath, "categories/garden.md")
+		cat2Content, err := os.ReadFile(cat2Path)
+		require.NoError(t, err)
+		assert.Contains(t, string(cat2Content), "display_order: 10")
+	})
+
+	t.Run("should commit single transaction", func(t *testing.T) {
+		repoPath, cleanup := setupTestMutationRepo(t)
+		defer cleanup()
+
+		service := NewProductMutationService(repoPath, "")
+		ctx := context.Background()
+
+		// Create categories
+		cat1Input := CreateCategoryInput{Name: "Music", Slug: "music"}
+		cat1Payload, err := service.CreateCategory(ctx, cat1Input)
+		require.NoError(t, err)
+
+		cat2Input := CreateCategoryInput{Name: "Movies", Slug: "movies"}
+		cat2Payload, err := service.CreateCategory(ctx, cat2Input)
+		require.NoError(t, err)
+
+		// Get initial commit count
+		repo, err := git.PlainOpen(repoPath)
+		require.NoError(t, err)
+
+		ref, err := repo.Head()
+		require.NoError(t, err)
+
+		initialCommit, err := repo.CommitObject(ref.Hash())
+		require.NoError(t, err)
+
+		service.readCategoryFromGit = func(id string) (*models.CategoryMutation, string, error) {
+			if id == cat1Payload.Category.ID {
+				content := service.generateCategoryContent(cat1Payload.Category)
+				return cat1Payload.Category, content, nil
+			}
+			if id == cat2Payload.Category.ID {
+				content := service.generateCategoryContent(cat2Payload.Category)
+				return cat2Payload.Category, content, nil
+			}
+			return nil, "", fmt.Errorf("category not found")
+		}
+
+		// Reorder
+		reorderInput := ReorderCategoriesInput{
+			Orders: []CategoryOrderInput{
+				{ID: cat1Payload.Category.ID, DisplayOrder: 1},
+				{ID: cat2Payload.Category.ID, DisplayOrder: 2},
+			},
+		}
+
+		_, err = service.ReorderCategories(ctx, reorderInput)
+		require.NoError(t, err)
+
+		// Verify only one new commit was created
+		ref, err = repo.Head()
+		require.NoError(t, err)
+
+		newCommit, err := repo.CommitObject(ref.Hash())
+		require.NoError(t, err)
+
+		assert.NotEqual(t, initialCommit.Hash, newCommit.Hash)
+		assert.Contains(t, newCommit.Message, "reorder")
+		assert.Contains(t, newCommit.Message, "categories")
+		assert.Contains(t, newCommit.Message, "2 categories")
+	})
+
+	t.Run("should validate display orders", func(t *testing.T) {
+		repoPath, cleanup := setupTestMutationRepo(t)
+		defer cleanup()
+
+		service := NewProductMutationService(repoPath, "")
+		ctx := context.Background()
+
+		// Create category
+		createInput := CreateCategoryInput{Name: "Sports", Slug: "sports"}
+		createPayload, err := service.CreateCategory(ctx, createInput)
+		require.NoError(t, err)
+
+		service.readCategoryFromGit = func(id string) (*models.CategoryMutation, string, error) {
+			if id == createPayload.Category.ID {
+				content := service.generateCategoryContent(createPayload.Category)
+				return createPayload.Category, content, nil
+			}
+			return nil, "", fmt.Errorf("category not found")
+		}
+
+		// Try invalid display order
+		reorderInput := ReorderCategoriesInput{
+			Orders: []CategoryOrderInput{
+				{ID: createPayload.Category.ID, DisplayOrder: -1},
+			},
+		}
+
+		_, err = service.ReorderCategories(ctx, reorderInput)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "display order cannot be negative")
+	})
+
+	t.Run("should require at least one category", func(t *testing.T) {
+		repoPath, cleanup := setupTestMutationRepo(t)
+		defer cleanup()
+
+		service := NewProductMutationService(repoPath, "")
+		ctx := context.Background()
+
+		// Try to reorder with no categories
+		reorderInput := ReorderCategoriesInput{
+			Orders: []CategoryOrderInput{},
+		}
+
+		_, err := service.ReorderCategories(ctx, reorderInput)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "at least one category")
+	})
+
+	t.Run("should return clientMutationId", func(t *testing.T) {
+		repoPath, cleanup := setupTestMutationRepo(t)
+		defer cleanup()
+
+		service := NewProductMutationService(repoPath, "")
+		ctx := context.Background()
+
+		// Create category with default display order (0)
+		createInput := CreateCategoryInput{Name: "Food", Slug: "food"}
+		createPayload, err := service.CreateCategory(ctx, createInput)
+		require.NoError(t, err)
+
+		service.readCategoryFromGit = func(id string) (*models.CategoryMutation, string, error) {
+			if id == createPayload.Category.ID {
+				content := service.generateCategoryContent(createPayload.Category)
+				return createPayload.Category, content, nil
+			}
+			return nil, "", fmt.Errorf("category not found")
+		}
+
+		clientID := "reorder-123"
+		// Change display order to something different to create actual changes
+		reorderInput := ReorderCategoriesInput{
+			ClientMutationID: &clientID,
+			Orders: []CategoryOrderInput{
+				{ID: createPayload.Category.ID, DisplayOrder: 5},
+			},
+		}
+
+		payload, err := service.ReorderCategories(ctx, reorderInput)
+		require.NoError(t, err)
+		require.NotNil(t, payload.ClientMutationID)
+		assert.Equal(t, "reorder-123", *payload.ClientMutationID)
+	})
+}
