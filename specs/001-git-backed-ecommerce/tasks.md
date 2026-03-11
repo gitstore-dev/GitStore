@@ -237,7 +237,7 @@ Multi-service architecture:
 - [X] T115 [US3] Create category form component in admin-ui/src/components/categories/CategoryForm.tsx
 - [X] T116 [US3] Implement drag-and-drop category tree in admin-ui/src/components/categories/CategoryTree.tsx using react-beautiful-dnd
 - [X] T117 [US3] Implement category reorder handler in admin-ui/src/components/categories/CategoryTree.tsx (calls reorderCategories mutation)
-- [ ] T118 [US3] Create collection list page in admin-ui/src/pages/collections/index.astro
+- [X] T118 [US3] Create collection list page in admin-ui/src/pages/collections/index.astro
 - [ ] T119 [US3] Create collection form component in admin-ui/src/components/collections/CollectionForm.tsx
 - [ ] T120 [US3] Implement drag-and-drop collection list in admin-ui/src/components/collections/CollectionList.tsx
 - [ ] T121 [US3] Implement collection product selector in admin-ui/src/components/collections/ProductSelector.tsx (multi-select)

@@ -3,6 +3,7 @@ import Layout from '../../layouts/Layout.astro';
 import { App } from '../../components/App';
 import { ProtectedRoute } from '../../components/ProtectedRoute';
 import { Header } from '../../components/Header';
+import { CollectionList } from '../../components/collections/CollectionList';
 ---
 
 <Layout title="Collections - GitStore Admin">
@@ -12,11 +13,9 @@ import { Header } from '../../components/Header';
       <main>
         <div class="page-header">
           <h1>Collections</h1>
-          <p class="subtitle">Curate product collections</p>
+          <p class="subtitle">Curate product collections for featured displays</p>
         </div>
-        <div class="placeholder">
-          <p>Collection management coming soon...</p>
-        </div>
+        <CollectionList client:only="react" />
       </main>
     </ProtectedRoute>
   </App>
@@ -45,13 +44,5 @@ import { Header } from '../../components/Header';
     margin: 0.5rem 0 0;
     color: #718096;
     font-size: 1rem;
-  }
-
-  .placeholder {
-    padding: 4rem 2rem;
-    max-width: 1440px;
-    margin: 0 auto;
-    text-align: center;
-    color: #718096;
   }
 </style>
