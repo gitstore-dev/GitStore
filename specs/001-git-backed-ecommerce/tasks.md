@@ -230,7 +230,7 @@ Multi-service architecture:
 - [X] T108 [P] [US3] Create GraphQL query hooks in admin-ui/src/graphql/queries.ts (products, categories, collections)
 - [X] T109 [US3] Create product list page in admin-ui/src/pages/products/index.astro
 - [X] T110 [US3] Create product form component in admin-ui/src/components/products/ProductForm.tsx (title, SKU, price, category, collections)
-- [ ] T111 [US3] Create product create page in admin-ui/src/pages/products/new.astro
+- [X] T111 [US3] Create product create page in admin-ui/src/pages/products/new.astro
 - [ ] T112 [US3] Create product edit page in admin-ui/src/pages/products/[id].astro with optimistic lock handling
 - [ ] T113 [US3] Implement markdown editor component in admin-ui/src/components/shared/MarkdownEditor.tsx
 - [ ] T114 [US3] Create category list page with tree view in admin-ui/src/pages/categories/index.astro
