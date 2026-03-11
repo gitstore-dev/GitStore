@@ -3,7 +3,7 @@
 **Feature**: User Story 3 - Admin UI with Mutations
 **Branch**: `002-admin-ui-mutations`
 **Started**: 2026-03-10
-**Status**: 🟡 In Progress (91.5% complete)
+**Status**: 🟡 In Progress (93.6% complete)
 
 ---
 
@@ -15,7 +15,7 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
 
 ---
 
-## Completed Tasks (43/47)
+## Completed Tasks (44/47)
 
 ### Tests (Test-First Development ✅)
 - ✅ **T079**: Contract test for `createProduct` mutation (3 scenarios, skipped)
@@ -294,6 +294,18 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
   - Success confirmation with version display
   - Integrated with Header component
 
+- ✅ **T125**: Optimistic UI updates (`admin-ui/src/lib/optimistic-updates.ts`, `admin-ui/src/lib/mutation-hooks.ts`)
+  - Apollo Client cache configuration with type policies
+  - Optimistic response generators for all mutations
+  - Product: create, update, delete with cache updates
+  - Category: create, update, delete, reorder with cache updates
+  - Collection: create, update, delete, reorder with cache updates
+  - Custom mutation hooks wrapping Apollo useMutation
+  - Cache eviction and garbage collection for deletes
+  - Rollback helpers for failed optimistic updates
+  - Temporary IDs for optimistic creates
+  - Ready for codegen integration
+
 ---
 
 ## Next Steps (Remaining Tasks)
@@ -529,7 +541,7 @@ golangci-lint run ./...
 
 ## Progress Metrics
 
-- **Overall**: 43/47 tasks (91.5%)
+- **Overall**: 44/47 tasks (93.6%)
 - **Git Client**: 4/4 tasks (100%) ✅
 - **Mutation Infrastructure**: 2/2 tasks (100%) ✅
 - **Product Mutations**: 3/3 tasks (100%) ✅
@@ -537,10 +549,10 @@ golangci-lint run ./...
 - **Collection Mutations**: 4/4 tasks (100%) ✅
 - **Publish Mutation**: 1/1 tasks (100%) ✅
 - **Auth**: 2/2 tasks (100%) ✅
-- **Admin UI**: 20/23 tasks (87.0%) 🟡
+- **Admin UI**: 21/23 tasks (91.3%) 🟡
 - **Tests**: 296 passing, 48 skipped
 
-**Estimated Remaining**: ~4 tasks (~9% remaining)
+**Estimated Remaining**: ~3 tasks (~6% remaining)
 
 ---
 
@@ -562,4 +574,4 @@ golangci-lint run ./...
 
 **Last Updated**: 2026-03-11
 **Branch**: https://github.com/commerce-projects/gitstore/tree/002-admin-ui-mutations
-**Status**: Admin UI almost done! 20/23 UI tasks complete. Remaining: Conflict modal (T124 - already exists), optimistic updates (T125), validation (T126). E2E tests deferred.
+**Status**: Admin UI nearly finished! 21/23 UI tasks complete. Remaining: Conflict modal (T124 - already exists), validation (T126). E2E tests deferred.

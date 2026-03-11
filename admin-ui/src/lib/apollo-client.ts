@@ -42,7 +42,7 @@ const httpLink = new HttpLink({
   credentials: 'same-origin',
 });
 
-// Create Apollo Client
+// Create Apollo Client with optimistic UI support
 export const apolloClient = new ApolloClient({
   link: ApolloLink.from([authLink, requestIdLink, httpLink]),
   cache: new InMemoryCache({
@@ -57,6 +57,44 @@ export const apolloClient = new ApolloClient({
                 ...incoming,
                 edges: [...existing.edges, ...incoming.edges],
               };
+            },
+          },
+          categories: {
+            merge(existing, incoming) {
+              return incoming;
+            },
+          },
+          collections: {
+            merge(existing, incoming) {
+              return incoming;
+            },
+          },
+        },
+      },
+      Product: {
+        fields: {
+          // Merge function for product updates
+          version: {
+            merge(_existing, incoming) {
+              return incoming;
+            },
+          },
+        },
+      },
+      Category: {
+        fields: {
+          children: {
+            merge(_existing, incoming) {
+              return incoming;
+            },
+          },
+        },
+      },
+      Collection: {
+        fields: {
+          productIds: {
+            merge(_existing, incoming) {
+              return incoming;
             },
           },
         },
