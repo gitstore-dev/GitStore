@@ -234,7 +234,7 @@ Multi-service architecture:
 - [X] T112 [US3] Create product edit page in admin-ui/src/pages/products/[id].astro with optimistic lock handling
 - [X] T113 [US3] Implement markdown editor component in admin-ui/src/components/shared/MarkdownEditor.tsx
 - [X] T114 [US3] Create category list page with tree view in admin-ui/src/pages/categories/index.astro
-- [ ] T115 [US3] Create category form component in admin-ui/src/components/categories/CategoryForm.tsx
+- [X] T115 [US3] Create category form component in admin-ui/src/components/categories/CategoryForm.tsx
 - [ ] T116 [US3] Implement drag-and-drop category tree in admin-ui/src/components/categories/CategoryTree.tsx using react-beautiful-dnd
 - [ ] T117 [US3] Implement category reorder handler in admin-ui/src/components/categories/CategoryTree.tsx (calls reorderCategories mutation)
 - [ ] T118 [US3] Create collection list page in admin-ui/src/pages/collections/index.astro
