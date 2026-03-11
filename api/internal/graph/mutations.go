@@ -82,11 +82,11 @@ type UpdateProductPayload struct {
 
 // OptimisticLockConflict contains information about a version conflict
 type OptimisticLockConflict struct {
-	Detected        bool
-	CurrentVersion  string
+	Detected         bool
+	CurrentVersion   string
 	AttemptedVersion string
-	CurrentProduct  *models.Product
-	Diff            string
+	CurrentProduct   *models.Product
+	Diff             string
 }
 
 // DeleteProductInput represents the input for deleting a product
@@ -207,7 +207,7 @@ type DeleteCollectionInput struct {
 
 // DeleteCollectionPayload represents the payload returned from deleteCollection
 type DeleteCollectionPayload struct {
-	ClientMutationID   *string
+	ClientMutationID    *string
 	DeletedCollectionID *string
 }
 
@@ -1415,7 +1415,7 @@ func (s *ProductMutationService) DeleteCollection(ctx context.Context, input Del
 	fmt.Printf("Deleted collection %s (commit: %s)\n", existingCollection.Slug, commitHash[:8])
 
 	return &DeleteCollectionPayload{
-		ClientMutationID:   input.ClientMutationID,
+		ClientMutationID:    input.ClientMutationID,
 		DeletedCollectionID: &input.ID,
 	}, nil
 }

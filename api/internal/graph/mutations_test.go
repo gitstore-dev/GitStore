@@ -666,9 +666,9 @@ func TestUpdateProduct(t *testing.T) {
 		require.NoError(t, err)
 
 		updated := updatePayload.Product
-		assert.Equal(t, 39.99, updated.Price) // Updated
-		assert.Equal(t, "Original Title", updated.Title) // Unchanged
-		assert.Equal(t, 100, *updated.InventoryQuantity) // Unchanged
+		assert.Equal(t, 39.99, updated.Price)                                // Updated
+		assert.Equal(t, "Original Title", updated.Title)                     // Unchanged
+		assert.Equal(t, 100, *updated.InventoryQuantity)                     // Unchanged
 		assert.Equal(t, []string{"coll_1", "coll_2"}, updated.CollectionIDs) // Unchanged
 	})
 }
@@ -720,8 +720,8 @@ func TestApplyUpdates(t *testing.T) {
 		updated := service.applyUpdates(existing, input)
 
 		assert.Equal(t, "Updated Title Only", updated.Title)
-		assert.Equal(t, "ORIGINAL-SKU", updated.SKU) // Unchanged
-		assert.Equal(t, 29.99, updated.Price) // Unchanged
+		assert.Equal(t, "ORIGINAL-SKU", updated.SKU)        // Unchanged
+		assert.Equal(t, 29.99, updated.Price)               // Unchanged
 		assert.Equal(t, "cat_original", updated.CategoryID) // Unchanged
 	})
 }

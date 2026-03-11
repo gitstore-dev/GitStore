@@ -131,10 +131,10 @@ func ValidatePrice(price float64) error {
 // ValidateInventoryStatus checks if inventory status is valid
 func ValidateInventoryStatus(status string) error {
 	validStatuses := map[string]bool{
-		"IN_STOCK":      true,
-		"OUT_OF_STOCK":  true,
-		"PREORDER":      true,
-		"DISCONTINUED":  true,
+		"IN_STOCK":     true,
+		"OUT_OF_STOCK": true,
+		"PREORDER":     true,
+		"DISCONTINUED": true,
 	}
 
 	if !validStatuses[strings.ToUpper(status)] {

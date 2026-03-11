@@ -8,11 +8,11 @@ import (
 
 // VersionMismatchError represents a concurrent modification conflict
 type VersionMismatchError struct {
-	EntityType     string
-	EntityID       string
+	EntityType      string
+	EntityID        string
 	ExpectedVersion string
 	ActualVersion   string
-	Message        string
+	Message         string
 }
 
 func (e *VersionMismatchError) Error() string {

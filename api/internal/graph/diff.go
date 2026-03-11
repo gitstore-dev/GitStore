@@ -21,11 +21,11 @@ func NewDiffGenerator() *DiffGenerator {
 
 // DiffResult contains the diff between two versions
 type DiffResult struct {
-	OldContent string
-	NewContent string
+	OldContent  string
+	NewContent  string
 	UnifiedDiff string
-	Changes    []Change
-	HasChanges bool
+	Changes     []Change
+	HasChanges  bool
 }
 
 // Change represents a single change in the diff
