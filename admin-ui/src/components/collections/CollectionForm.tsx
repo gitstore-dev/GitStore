@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { MarkdownEditor } from '../shared/MarkdownEditor';
+import { ProductSelector } from './ProductSelector';
 
 // Placeholder types until codegen runs
 interface Collection {
@@ -195,17 +196,14 @@ export function CollectionForm({ collection, onSubmit, onCancel, isLoading = fal
         </div>
       </div>
 
-      {/* Products Section - Placeholder for T121 */}
+      {/* Products Section */}
       <div style={styles.section}>
         <h2 style={styles.sectionTitle}>Products</h2>
-        <div style={styles.placeholder}>
-          <p style={styles.placeholderText}>
-            Product selection will be implemented in T121
-          </p>
-          <p style={styles.helpText}>
-            Currently has {formData.productIds.length} product{formData.productIds.length !== 1 ? 's' : ''}
-          </p>
-        </div>
+        <ProductSelector
+          selectedProductIds={formData.productIds}
+          onChange={(productIds) => setFormData(prev => ({ ...prev, productIds }))}
+          disabled={isLoading}
+        />
       </div>
 
       {/* Form Actions */}
@@ -283,18 +281,6 @@ const styles = {
     marginTop: '0.25rem',
     fontSize: '0.75rem',
     color: '#a0aec0',
-  } as React.CSSProperties,
-  placeholder: {
-    padding: '2rem',
-    backgroundColor: '#f7fafc',
-    borderRadius: '4px',
-    border: '1px dashed #e2e8f0',
-    textAlign: 'center',
-  } as React.CSSProperties,
-  placeholderText: {
-    margin: '0 0 0.5rem',
-    color: '#718096',
-    fontSize: '0.875rem',
   } as React.CSSProperties,
   actions: {
     display: 'flex',
