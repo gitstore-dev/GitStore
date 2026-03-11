@@ -1,11 +1,13 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../lib/auth-context';
+import { PublishButton } from './shared/PublishButton';
 
 /**
  * Application header with navigation and user menu
  */
 export function Header() {
   const { user, logout } = useAuth();
+  const [hasChanges, setHasChanges] = useState(false);
 
   const handleLogout = async () => {
     try {
@@ -14,6 +16,12 @@ export function Header() {
     } catch (error) {
       console.error('Logout failed:', error);
     }
+  };
+
+  const handlePublish = async () => {
+    // This will be implemented in T123
+    console.log('Publishing catalog...');
+    // TODO: Open publish modal with version input and confirmation
   };
 
   return (
@@ -34,6 +42,10 @@ export function Header() {
             Collections
           </a>
         </nav>
+
+        <div style={styles.actions}>
+          <PublishButton onPublish={handlePublish} hasChanges={hasChanges} />
+        </div>
 
         <div style={styles.userMenu}>
           {user && (
@@ -86,6 +98,10 @@ const styles = {
     fontSize: '1rem',
     fontWeight: 500,
     transition: 'color 0.2s',
+  } as React.CSSProperties,
+  actions: {
+    display: 'flex',
+    alignItems: 'center',
   } as React.CSSProperties,
   userMenu: {
     display: 'flex',

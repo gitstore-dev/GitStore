@@ -3,7 +3,7 @@
 **Feature**: User Story 3 - Admin UI with Mutations
 **Branch**: `002-admin-ui-mutations`
 **Started**: 2026-03-10
-**Status**: 🟡 In Progress (87.2% complete)
+**Status**: 🟡 In Progress (89.4% complete)
 
 ---
 
@@ -15,7 +15,7 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
 
 ---
 
-## Completed Tasks (41/47)
+## Completed Tasks (42/47)
 
 ### Tests (Test-First Development ✅)
 - ✅ **T079**: Contract test for `createProduct` mutation (3 scenarios, skipped)
@@ -276,6 +276,13 @@ Implementing Phase 5 to add GraphQL mutations and Admin UI for non-technical use
   - Add products section with search
   - Integrated with CollectionForm
 
+- ✅ **T122**: Publish button component (`admin-ui/src/components/shared/PublishButton.tsx`)
+  - Visual indicator for pending changes (pulsing dot)
+  - Disabled state when no changes
+  - Loading state with spinner during publish
+  - Integrated with Header component
+  - Async publish handler support
+
 ---
 
 ## Next Steps (Remaining Tasks)
@@ -511,7 +518,7 @@ golangci-lint run ./...
 
 ## Progress Metrics
 
-- **Overall**: 41/47 tasks (87.2%)
+- **Overall**: 42/47 tasks (89.4%)
 - **Git Client**: 4/4 tasks (100%) ✅
 - **Mutation Infrastructure**: 2/2 tasks (100%) ✅
 - **Product Mutations**: 3/3 tasks (100%) ✅
@@ -519,10 +526,10 @@ golangci-lint run ./...
 - **Collection Mutations**: 4/4 tasks (100%) ✅
 - **Publish Mutation**: 1/1 tasks (100%) ✅
 - **Auth**: 2/2 tasks (100%) ✅
-- **Admin UI**: 18/23 tasks (78.3%) 🟡
+- **Admin UI**: 19/23 tasks (82.6%) 🟡
 - **Tests**: 296 passing, 48 skipped
 
-**Estimated Remaining**: ~6 tasks (~13% remaining)
+**Estimated Remaining**: ~5 tasks (~11% remaining)
 
 ---
 
@@ -544,4 +551,4 @@ golangci-lint run ./...
 
 **Last Updated**: 2026-03-11
 **Branch**: https://github.com/commerce-projects/gitstore/tree/002-admin-ui-mutations
-**Status**: Admin UI mostly complete! 18/23 UI tasks done. Remaining: Publish flow (T122-T123), optimistic updates (T125), validation (T126). E2E tests deferred.
+**Status**: Admin UI nearly complete! 19/23 UI tasks done. Remaining: Publish flow modal (T123), optimistic updates (T125), validation (T126). E2E tests deferred.
