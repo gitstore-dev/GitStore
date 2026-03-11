@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
 
 // Placeholder types until codegen runs
 interface Collection {
@@ -16,13 +17,14 @@ interface CollectionListProps {
 }
 
 /**
- * Collection list component displaying collections in a table
+ * Collection list component displaying collections in a table with drag-and-drop reordering
  */
 export function CollectionList({ onEdit, onDelete }: CollectionListProps) {
   const [collections, setCollections] = useState<Collection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
 
   // TODO: Replace with actual GraphQL query when codegen runs
   // const { data, loading, error } = useGetCollectionsQuery();
@@ -121,6 +123,59 @@ export function CollectionList({ onEdit, onDelete }: CollectionListProps) {
     }
   };
 
+  const handleDragStart = () => {
+    setIsDragging(true);
+  };
+
+  const handleDragEnd = async (result: DropResult) => {
+    setIsDragging(false);
+
+    if (!result.destination) {
+      return;
+    }
+
+    const { source, destination } = result;
+
+    // If dropped in same position, do nothing
+    if (source.index === destination.index) {
+      return;
+    }
+
+    // Reorder collections
+    const reordered = Array.from(collections);
+    const [removed] = reordered.splice(source.index, 1);
+    reordered.splice(destination.index, 0, removed);
+
+    // Update display order
+    const updated = reordered.map((coll, index) => ({
+      ...coll,
+      displayOrder: index,
+    }));
+
+    // Optimistically update UI
+    setCollections(updated);
+
+    try {
+      // TODO: Use GraphQL mutation
+      // const [reorderCollections] = useReorderCollectionsMutation();
+      // await reorderCollections({
+      //   variables: {
+      //     input: {
+      //       clientMutationId: uuidv4(),
+      //       collectionIds: updated.map(c => c.id),
+      //     },
+      //   },
+      // });
+
+      console.log('Collections reordered:', updated.map(c => c.id));
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (err) {
+      console.error('Failed to reorder collections:', err);
+      alert('Failed to reorder collections. Changes reverted.');
+      window.location.reload();
+    }
+  };
+
   const filteredCollections = collections.filter(collection =>
     collection.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     collection.slug.toLowerCase().includes(searchQuery.toLowerCase())
@@ -167,21 +222,47 @@ export function CollectionList({ onEdit, onDelete }: CollectionListProps) {
           </a>
         </div>
       ) : (
-        <div style={styles.tableContainer}>
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Name</th>
-                <th style={styles.th}>Slug</th>
-                <th style={styles.th}>Products</th>
-                <th style={styles.th}>Order</th>
-                <th style={styles.thActions}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredCollections.map((collection) => (
-                <tr key={collection.id} style={styles.tr}>
-                  <td style={styles.td}>
+        <DragDropContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+          <div style={styles.tableContainer}>
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.thDrag}></th>
+                  <th style={styles.th}>Name</th>
+                  <th style={styles.th}>Slug</th>
+                  <th style={styles.th}>Products</th>
+                  <th style={styles.th}>Order</th>
+                  <th style={styles.thActions}>Actions</th>
+                </tr>
+              </thead>
+              <Droppable droppableId="collections">
+                {(provided, snapshot) => (
+                  <tbody
+                    ref={provided.innerRef}
+                    {...provided.droppableProps}
+                    style={{
+                      backgroundColor: snapshot.isDraggingOver ? '#f0f4ff' : 'transparent',
+                    }}
+                  >
+                    {filteredCollections.map((collection, index) => (
+                      <Draggable key={collection.id} draggableId={collection.id} index={index}>
+                        {(provided, snapshot) => (
+                          <tr
+                            ref={provided.innerRef}
+                            {...provided.draggableProps}
+                            key={collection.id}
+                            style={{
+                              ...styles.tr,
+                              ...provided.draggableProps.style,
+                              backgroundColor: snapshot.isDragging ? '#e6f2ff' : 'white',
+                            }}
+                          >
+                            <td style={styles.tdDrag}>
+                              <div {...provided.dragHandleProps} style={styles.dragHandle}>
+                                ⋮⋮
+                              </div>
+                            </td>
+                            <td style={styles.td}>
                     <div style={styles.nameCell}>
                       <div style={styles.collectionName}>{collection.name}</div>
                       {collection.description && (
@@ -210,13 +291,19 @@ export function CollectionList({ onEdit, onDelete }: CollectionListProps) {
                       >
                         Delete
                       </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Draggable>
+                    ))}
+                    {provided.placeholder}
+                  </tbody>
+                )}
+              </Droppable>
+            </table>
+          </div>
+        </DragDropContext>
       )}
     </div>
   );
@@ -300,6 +387,12 @@ const styles = {
     width: '100%',
     borderCollapse: 'collapse',
   } as React.CSSProperties,
+  thDrag: {
+    width: '40px',
+    padding: '1rem 0.5rem',
+    backgroundColor: '#f7fafc',
+    borderBottom: '1px solid #e2e8f0',
+  } as React.CSSProperties,
   th: {
     textAlign: 'left',
     padding: '1rem',
@@ -325,6 +418,22 @@ const styles = {
   tr: {
     borderBottom: '1px solid #e2e8f0',
     transition: 'background-color 0.2s',
+  } as React.CSSProperties,
+  tdDrag: {
+    padding: '0.5rem',
+    textAlign: 'center',
+  } as React.CSSProperties,
+  dragHandle: {
+    width: '24px',
+    height: '24px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    margin: '0 auto',
+    color: '#a0aec0',
+    cursor: 'grab',
+    fontSize: '1rem',
+    userSelect: 'none',
   } as React.CSSProperties,
   td: {
     padding: '1rem',
