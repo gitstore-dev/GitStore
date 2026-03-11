@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
 
 // Placeholder types until codegen runs
 interface Category {
@@ -16,14 +17,16 @@ interface CategoryTreeProps {
   onEdit?: (categoryId: string) => void;
   onDelete?: (categoryId: string) => void;
   onAddChild?: (parentId: string) => void;
+  onReorder?: (reorderedCategories: Category[]) => void;
 }
 
 /**
  * Category tree component displaying hierarchical category structure
- * Shows nested categories with expand/collapse and action buttons
+ * Shows nested categories with expand/collapse, drag-and-drop, and action buttons
  */
-export function CategoryTree({ categories, onEdit, onDelete, onAddChild }: CategoryTreeProps) {
+export function CategoryTree({ categories, onEdit, onDelete, onAddChild, onReorder }: CategoryTreeProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [isDragging, setIsDragging] = useState(false);
 
   const toggleExpand = (id: string) => {
     setExpandedIds(prev => {
@@ -55,18 +58,65 @@ export function CategoryTree({ categories, onEdit, onDelete, onAddChild }: Categ
     setExpandedIds(new Set());
   };
 
-  const renderCategory = (category: Category, level: number = 0) => {
+  const handleDragStart = () => {
+    setIsDragging(true);
+  };
+
+  const handleDragEnd = (result: DropResult) => {
+    setIsDragging(false);
+
+    if (!result.destination || !onReorder) {
+      return;
+    }
+
+    const { source, destination } = result;
+
+    // If dropped in same position, do nothing
+    if (source.index === destination.index) {
+      return;
+    }
+
+    // Reorder categories
+    const reordered = Array.from(categories);
+    const [removed] = reordered.splice(source.index, 1);
+    reordered.splice(destination.index, 0, removed);
+
+    // Update display order
+    const updated = reordered.map((cat, index) => ({
+      ...cat,
+      displayOrder: index,
+    }));
+
+    onReorder(updated);
+  };
+
+  const renderCategory = (category: Category, index: number, level: number = 0) => {
     const hasChildren = category.children && category.children.length > 0;
     const isExpanded = expandedIds.has(category.id);
 
     return (
-      <div key={category.id} style={styles.categoryContainer}>
-        <div
-          style={{
-            ...styles.categoryRow,
-            paddingLeft: `${level * 2 + 1}rem`,
-          }}
-        >
+      <Draggable key={category.id} draggableId={category.id} index={index}>
+        {(provided, snapshot) => (
+          <div
+            ref={provided.innerRef}
+            {...provided.draggableProps}
+            style={{
+              ...styles.categoryContainer,
+              ...provided.draggableProps.style,
+            }}
+          >
+            <div
+              style={{
+                ...styles.categoryRow,
+                paddingLeft: `${level * 2 + 1}rem`,
+                backgroundColor: snapshot.isDragging ? '#e6f2ff' : '#f7fafc',
+                boxShadow: snapshot.isDragging ? '0 4px 8px rgba(0,0,0,0.15)' : undefined,
+              }}
+            >
+              {/* Drag Handle */}
+              <div {...provided.dragHandleProps} style={styles.dragHandle}>
+                ⋮⋮
+              </div>
           {/* Expand/Collapse Button */}
           <button
             onClick={() => toggleExpand(category.id)}
@@ -131,13 +181,15 @@ export function CategoryTree({ categories, onEdit, onDelete, onAddChild }: Categ
           </div>
         </div>
 
-        {/* Children */}
-        {hasChildren && isExpanded && (
-          <div style={styles.childrenContainer}>
-            {category.children!.map(child => renderCategory(child, level + 1))}
+            {/* Children */}
+            {hasChildren && isExpanded && (
+              <div style={styles.childrenContainer}>
+                {category.children!.map((child, idx) => renderCategory(child, idx, level + 1))}
+              </div>
+            )}
           </div>
         )}
-      </div>
+      </Draggable>
     );
   };
 
@@ -153,27 +205,41 @@ export function CategoryTree({ categories, onEdit, onDelete, onAddChild }: Categ
   }
 
   return (
-    <div style={styles.container}>
-      {/* Toolbar */}
-      <div style={styles.toolbar}>
-        <div style={styles.toolbarLeft}>
-          <button onClick={expandAll} style={styles.toolbarButton} type="button">
-            Expand All
-          </button>
-          <button onClick={collapseAll} style={styles.toolbarButton} type="button">
-            Collapse All
-          </button>
+    <DragDropContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+      <div style={styles.container}>
+        {/* Toolbar */}
+        <div style={styles.toolbar}>
+          <div style={styles.toolbarLeft}>
+            <button onClick={expandAll} style={styles.toolbarButton} type="button">
+              Expand All
+            </button>
+            <button onClick={collapseAll} style={styles.toolbarButton} type="button">
+              Collapse All
+            </button>
+          </div>
+          <a href="/categories/new" style={styles.createButton}>
+            + New Category
+          </a>
         </div>
-        <a href="/categories/new" style={styles.createButton}>
-          + New Category
-        </a>
-      </div>
 
-      {/* Tree */}
-      <div style={styles.treeContainer}>
-        {categories.map(category => renderCategory(category, 0))}
+        {/* Tree */}
+        <Droppable droppableId="categories">
+          {(provided, snapshot) => (
+            <div
+              ref={provided.innerRef}
+              {...provided.droppableProps}
+              style={{
+                ...styles.treeContainer,
+                backgroundColor: snapshot.isDraggingOver ? '#f0f4ff' : 'transparent',
+              }}
+            >
+              {categories.map((category, index) => renderCategory(category, index, 0))}
+              {provided.placeholder}
+            </div>
+          )}
+        </Droppable>
       </div>
-    </div>
+    </DragDropContext>
   );
 }
 
@@ -221,9 +287,22 @@ const styles = {
   } as React.CSSProperties,
   treeContainer: {
     padding: '1rem',
+    transition: 'background-color 0.2s',
   } as React.CSSProperties,
   categoryContainer: {
     marginBottom: '0.5rem',
+  } as React.CSSProperties,
+  dragHandle: {
+    width: '24px',
+    height: '24px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#a0aec0',
+    cursor: 'grab',
+    fontSize: '1rem',
+    flexShrink: 0,
+    userSelect: 'none',
   } as React.CSSProperties,
   categoryRow: {
     display: 'flex',
