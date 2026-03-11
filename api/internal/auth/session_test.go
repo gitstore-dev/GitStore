@@ -161,15 +161,10 @@ func TestValidateToken(t *testing.T) {
 			},
 		}
 
-		// This would fail because we don't support RS256
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		// Modify the header to claim RS256
-		tokenString, _ := token.SignedString(sm.secretKey)
-
-		// The token is still valid with HS256, so let's create an actual invalid method scenario
-		// by parsing a token claiming to use a different method
+		// Create a token with an invalid signing method (None)
+		// This will fail validation because we only accept HS256
 		invalidToken := jwt.NewWithClaims(jwt.SigningMethodNone, claims)
-		tokenString, _ = invalidToken.SignedString(jwt.UnsafeAllowNoneSignatureType)
+		tokenString, _ := invalidToken.SignedString(jwt.UnsafeAllowNoneSignatureType)
 
 		_, err := sm.ValidateToken(tokenString)
 		require.Error(t, err)
