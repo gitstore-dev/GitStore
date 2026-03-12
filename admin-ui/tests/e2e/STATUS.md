@@ -48,20 +48,32 @@ The E2E test suite is **fully implemented and ready**, but tests currently fail 
 
 ## Current Issue
 
-❌ **Backend Not Operational**: All tests fail at the authentication step
+❌ **Vite + Apollo Client Module Resolution**: Dev server fails to start during Playwright tests
 
 ```
-Error: Login failed: Not Found
+[vite] Named export 'useApolloClient' not found. The requested module '@apollo/client'
+is a CommonJS module, which may not support all module.exports as named exports.
 ```
 
-The GraphQL API returns:
-```json
-{
-  "errors": [{
-    "message": "GraphQL server not yet implemented - gqlgen code generation required"
-  }]
-}
-```
+**Status**: BLOCKED by Vite/Apollo Client compatibility issue
+**Severity**: HIGH
+**Date**: 2026-03-12
+
+### Technical Details
+
+Apollo Client v3.x uses mixed CommonJS/ESM exports that Vite cannot properly resolve during static analysis. This prevents the dev server from starting when Playwright attempts to launch it for E2E tests.
+
+**What Works**:
+- ✅ Backend GraphQL resolvers implemented with mock data
+- ✅ Authentication endpoint operational with JWT
+- ✅ All proxy routes configured (`/api`, `/graphql`)
+- ✅ React context hydration fixed
+- ✅ Dev server runs when started manually with cleared cache
+
+**What's Blocked**:
+- ❌ Playwright webServer times out (can't detect server is ready)
+- ❌ E2E tests cannot run automatically
+- ❌ Test verification of mock resolvers blocked
 
 ## What Tests Are Doing
 
@@ -105,21 +117,30 @@ The E2E tests will pass once the backend implements:
    - Include proper commit messages
    - Handle optimistic locking with version tracking
 
-## Running Tests
+## Workaround: Manual Server Management
+
+Until the Vite/Apollo Client issue is resolved, tests require manual dev server setup:
 
 ### Prerequisites
 ```bash
-# Start API server (required)
-cd api && go run cmd/server/main.go
+# Terminal 1: Start API server
+cd api
+ADMIN_PASSWORD_HASH='$2a$10$PKciUgKAQvveYxa5l8r.heSSsMDBkdKs9UzykD0QCU01UNmFPxhxi' go run cmd/server/main.go
 
-# API must be running on http://localhost:4000
+# Terminal 2: Start Admin UI dev server manually
+cd admin-ui
+rm -rf node_modules/.vite .astro  # Clear Vite cache
+npm run dev
 ```
 
 ### Run Tests
 ```bash
+# Terminal 3: Run tests (server must already be running)
 cd admin-ui
-npm run test:e2e
+ADMIN_PASSWORD_HASH='$2a$10$PKciUgKAQvveYxa5l8r.heSSsMDBkdKs9UzykD0QCU01UNmFPxhxi' npx playwright test
 ```
+
+**Note**: The `ADMIN_PASSWORD_HASH` is the bcrypt hash for password "admin"
 
 ### View Test Report
 ```bash
