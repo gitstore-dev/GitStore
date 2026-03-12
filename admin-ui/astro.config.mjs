@@ -10,20 +10,6 @@ export default defineConfig({
     host: true
   },
   vite: {
-    resolve: {
-      alias: {
-        '@apollo/client': '@apollo/client/index.js'
-      }
-    },
-    optimizeDeps: {
-      include: ['@apollo/client'],
-      esbuildOptions: {
-        target: 'es2020'
-      }
-    },
-    ssr: {
-      external: ['@apollo/client', 'react', 'react-dom']
-    },
     server: {
       proxy: {
         '/graphql': {
