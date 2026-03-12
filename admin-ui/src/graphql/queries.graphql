@@ -1,0 +1,176 @@
+# Product Queries
+
+query GetProducts($first: Int, $after: String, $filter: ProductFilter) {
+  products(first: $first, after: $after, filter: $filter) {
+    edges {
+      node {
+        id
+        title
+        sku
+        price
+        compareAtPrice
+        inventoryStatus
+        inventoryQuantity
+        description
+        categoryId
+        collectionIds
+        images
+        metadata
+        createdAt
+        updatedAt
+        version
+      }
+      cursor
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+  }
+}
+
+query GetProduct($sku: String!) {
+  product(sku: $sku) {
+    id
+    title
+    sku
+    price
+    compareAtPrice
+    inventoryStatus
+    inventoryQuantity
+    description
+    categoryId
+    collectionIds
+    images
+    metadata
+    createdAt
+    updatedAt
+    version
+  }
+}
+
+query GetProductById($id: ID!) {
+  productById(id: $id) {
+    id
+    title
+    sku
+    price
+    compareAtPrice
+    inventoryStatus
+    inventoryQuantity
+    description
+    categoryId
+    collectionIds
+    images
+    metadata
+    createdAt
+    updatedAt
+    version
+  }
+}
+
+# Category Queries
+
+query GetCategories {
+  categories {
+    id
+    name
+    slug
+    description
+    parentId
+    displayOrder
+    metadata
+    createdAt
+    updatedAt
+    version
+  }
+}
+
+query GetCategory($slug: String!) {
+  category(slug: $slug) {
+    id
+    name
+    slug
+    description
+    parentId
+    displayOrder
+    metadata
+    createdAt
+    updatedAt
+    version
+  }
+}
+
+query GetCategoryById($id: ID!) {
+  categoryById(id: $id) {
+    id
+    name
+    slug
+    description
+    parentId
+    displayOrder
+    metadata
+    createdAt
+    updatedAt
+    version
+  }
+}
+
+# Collection Queries
+
+query GetCollections {
+  collections {
+    id
+    name
+    slug
+    description
+    productIds
+    displayOrder
+    metadata
+    createdAt
+    updatedAt
+    version
+  }
+}
+
+query GetCollection($slug: String!) {
+  collection(slug: $slug) {
+    id
+    name
+    slug
+    description
+    productIds
+    displayOrder
+    metadata
+    createdAt
+    updatedAt
+    version
+  }
+}
+
+query GetCollectionById($id: ID!) {
+  collectionById(id: $id) {
+    id
+    name
+    slug
+    description
+    productIds
+    displayOrder
+    metadata
+    createdAt
+    updatedAt
+    version
+  }
+}
+
+# Catalog Version Query
+
+query GetCatalogVersion {
+  catalogVersion {
+    releaseTag
+    commitHash
+    timestamp
+  }
+}

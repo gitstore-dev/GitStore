@@ -7,7 +7,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "test": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "codegen": "graphql-codegen --config codegen.yml"
   },
   "dependencies": {
     "@apollo/client": "^3.9.0",
@@ -20,6 +21,11 @@
     "uuid": "^9.0.1"
   },
   "devDependencies": {
+    "@graphql-codegen/cli": "^5.0.0",
+    "@graphql-codegen/client-preset": "^4.1.0",
+    "@graphql-codegen/typescript": "^4.0.1",
+    "@graphql-codegen/typescript-operations": "^4.0.1",
+    "@graphql-codegen/typescript-react-apollo": "^4.1.0",
     "@playwright/test": "^1.41.0",
     "@types/react": "^18.2.56",
     "@types/react-beautiful-dnd": "^13.1.8",

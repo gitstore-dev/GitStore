@@ -190,9 +190,9 @@ Multi-service architecture:
 >
 > All test tasks (T079-T083) MUST be completed and FAILING before ANY implementation tasks (T084-T125) can begin.
 
-- [ ] T079 [P] [US3] Write contract test for createProduct mutation in api/tests/contract/create_product_test.go
-- [ ] T080 [P] [US3] Write contract test for updateProduct mutation with optimistic locking in api/tests/contract/update_product_test.go
-- [ ] T081 [P] [US3] Write contract test for publishCatalog mutation in api/tests/contract/publish_catalog_test.go
+- [X] T079 [P] [US3] Write contract test for createProduct mutation in api/tests/contract/create_product_test.go
+- [X] T080 [P] [US3] Write contract test for updateProduct mutation with optimistic locking in api/tests/contract/update_product_test.go
+- [X] T081 [P] [US3] Write contract test for publishCatalog mutation in api/tests/contract/publish_catalog_test.go
 - [ ] T082 [P] [US3] Write E2E test for product CRUD workflow in admin-ui/tests/e2e/product_crud.spec.ts
 - [ ] T083 [P] [US3] Write E2E test for drag-and-drop category reordering in admin-ui/tests/e2e/category_reorder.spec.ts
 
@@ -200,46 +200,46 @@ Multi-service architecture:
 
 #### GraphQL API (Go) - Mutations & Git Client
 
-- [ ] T084 [P] [US3] Implement markdown file generator in api/internal/gitclient/writer.go (struct → YAML front-matter + markdown body)
-- [ ] T085 [US3] Implement git commit builder in api/internal/gitclient/commit.go (stage files, create commit with message)
-- [ ] T086 [US3] Implement git push client in api/internal/gitclient/push.go (push to git-server with validation handling)
-- [ ] T087 [US3] Implement git tag creator in api/internal/gitclient/tag.go (create annotated release tag)
-- [ ] T088 [P] [US3] Implement optimistic lock version checker in api/internal/graph/version_check.go
-- [ ] T089 [P] [US3] Implement diff generator for conflicts in api/internal/graph/diff.go
-- [ ] T090 [US3] Implement createProduct mutation resolver in api/internal/graph/mutations.resolvers.go
-- [ ] T091 [US3] Implement updateProduct mutation resolver with optimistic locking in api/internal/graph/mutations.resolvers.go
-- [ ] T092 [US3] Implement deleteProduct mutation resolver in api/internal/graph/mutations.resolvers.go
-- [ ] T093 [US3] Implement createCategory mutation resolver in api/internal/graph/mutations.resolvers.go
-- [ ] T094 [US3] Implement updateCategory mutation resolver in api/internal/graph/mutations.resolvers.go
-- [ ] T095 [US3] Implement deleteCategory mutation resolver in api/internal/graph/mutations.resolvers.go
-- [ ] T096 [US3] Implement reorderCategories mutation resolver in api/internal/graph/mutations.resolvers.go
-- [ ] T097 [US3] Implement createCollection mutation resolver in api/internal/graph/mutations.resolvers.go
-- [ ] T098 [US3] Implement updateCollection mutation resolver in api/internal/graph/mutations.resolvers.go
-- [ ] T099 [US3] Implement deleteCollection mutation resolver in api/internal/graph/mutations.resolvers.go
-- [ ] T100 [US3] Implement reorderCollections mutation resolver in api/internal/graph/mutations.resolvers.go
-- [ ] T101 [US3] Implement publishCatalog mutation resolver (commit all changes → push → tag) in api/internal/graph/mutations.resolvers.go
-- [ ] T102 [P] [US3] Implement single admin user authentication middleware in api/internal/middleware/auth.go (bcrypt password check)
-- [ ] T103 [P] [US3] Implement session token management in api/internal/auth/session.go (JWT or opaque tokens)
+- [X] T084 [P] [US3] Implement markdown file generator in api/internal/gitclient/writer.go (struct → YAML front-matter + markdown body)
+- [X] T085 [US3] Implement git commit builder in api/internal/gitclient/commit.go (stage files, create commit with message)
+- [X] T086 [US3] Implement git push client in api/internal/gitclient/push.go (push to git-server with validation handling)
+- [X] T087 [US3] Implement git tag creator in api/internal/gitclient/tag.go (create annotated release tag)
+- [X] T088 [P] [US3] Implement optimistic lock version checker in api/internal/graph/version_check.go
+- [X] T089 [P] [US3] Implement diff generator for conflicts in api/internal/graph/diff.go
+- [X] T090 [US3] Implement createProduct mutation resolver in api/internal/graph/mutations.resolvers.go
+- [X] T091 [US3] Implement updateProduct mutation resolver with optimistic locking in api/internal/graph/mutations.resolvers.go
+- [X] T092 [US3] Implement deleteProduct mutation resolver in api/internal/graph/mutations.resolvers.go
+- [X] T093 [US3] Implement createCategory mutation resolver in api/internal/graph/mutations.resolvers.go
+- [X] T094 [US3] Implement updateCategory mutation resolver in api/internal/graph/mutations.resolvers.go
+- [X] T095 [US3] Implement deleteCategory mutation resolver in api/internal/graph/mutations.resolvers.go
+- [X] T096 [US3] Implement reorderCategories mutation resolver in api/internal/graph/mutations.resolvers.go
+- [X] T097 [US3] Implement createCollection mutation resolver in api/internal/graph/mutations.resolvers.go
+- [X] T098 [US3] Implement updateCollection mutation resolver in api/internal/graph/mutations.resolvers.go
+- [X] T099 [US3] Implement deleteCollection mutation resolver in api/internal/graph/mutations.resolvers.go
+- [X] T100 [US3] Implement reorderCollections mutation resolver in api/internal/graph/mutations.resolvers.go
+- [X] T101 [US3] Implement publishCatalog mutation resolver (commit all changes → push → tag) in api/internal/graph/mutations.resolvers.go
+- [X] T102 [P] [US3] Implement single admin user authentication middleware in api/internal/middleware/auth.go (bcrypt password check)
+- [X] T103 [P] [US3] Implement session token management in api/internal/auth/session.go (JWT or opaque tokens)
 
 #### Admin UI (Astro/React) - CRUD Interface
 
-- [ ] T104 [P] [US3] Create authentication page in admin-ui/src/pages/login.astro
-- [ ] T105 [P] [US3] Create auth context provider in admin-ui/src/lib/auth-context.tsx (session management)
-- [ ] T106 [P] [US3] Generate TypeScript types from GraphQL schema in admin-ui/src/graphql/generated.ts using graphql-codegen
-- [ ] T107 [P] [US3] Create GraphQL mutation hooks in admin-ui/src/graphql/mutations.ts (createProduct, updateProduct, etc.)
-- [ ] T108 [P] [US3] Create GraphQL query hooks in admin-ui/src/graphql/queries.ts (products, categories, collections)
-- [ ] T109 [US3] Create product list page in admin-ui/src/pages/products/index.astro
-- [ ] T110 [US3] Create product form component in admin-ui/src/components/products/ProductForm.tsx (title, SKU, price, category, collections)
-- [ ] T111 [US3] Create product create page in admin-ui/src/pages/products/new.astro
-- [ ] T112 [US3] Create product edit page in admin-ui/src/pages/products/[id].astro with optimistic lock handling
-- [ ] T113 [US3] Implement markdown editor component in admin-ui/src/components/shared/MarkdownEditor.tsx
-- [ ] T114 [US3] Create category list page with tree view in admin-ui/src/pages/categories/index.astro
-- [ ] T115 [US3] Create category form component in admin-ui/src/components/categories/CategoryForm.tsx
-- [ ] T116 [US3] Implement drag-and-drop category tree in admin-ui/src/components/categories/CategoryTree.tsx using react-beautiful-dnd
-- [ ] T117 [US3] Implement category reorder handler in admin-ui/src/components/categories/CategoryTree.tsx (calls reorderCategories mutation)
-- [ ] T118 [US3] Create collection list page in admin-ui/src/pages/collections/index.astro
-- [ ] T119 [US3] Create collection form component in admin-ui/src/components/collections/CollectionForm.tsx
-- [ ] T120 [US3] Implement drag-and-drop collection list in admin-ui/src/components/collections/CollectionList.tsx
+- [X] T104 [P] [US3] Create authentication page in admin-ui/src/pages/login.astro
+- [X] T105 [P] [US3] Create auth context provider in admin-ui/src/lib/auth-context.tsx (session management)
+- [X] T106 [P] [US3] Generate TypeScript types from GraphQL schema in admin-ui/src/graphql/generated.ts using graphql-codegen
+- [X] T107 [P] [US3] Create GraphQL mutation hooks in admin-ui/src/graphql/mutations.ts (createProduct, updateProduct, etc.)
+- [X] T108 [P] [US3] Create GraphQL query hooks in admin-ui/src/graphql/queries.ts (products, categories, collections)
+- [X] T109 [US3] Create product list page in admin-ui/src/pages/products/index.astro
+- [X] T110 [US3] Create product form component in admin-ui/src/components/products/ProductForm.tsx (title, SKU, price, category, collections)
+- [X] T111 [US3] Create product create page in admin-ui/src/pages/products/new.astro
+- [X] T112 [US3] Create product edit page in admin-ui/src/pages/products/[id].astro with optimistic lock handling
+- [X] T113 [US3] Implement markdown editor component in admin-ui/src/components/shared/MarkdownEditor.tsx
+- [X] T114 [US3] Create category list page with tree view in admin-ui/src/pages/categories/index.astro
+- [X] T115 [US3] Create category form component in admin-ui/src/components/categories/CategoryForm.tsx
+- [X] T116 [US3] Implement drag-and-drop category tree in admin-ui/src/components/categories/CategoryTree.tsx using react-beautiful-dnd
+- [X] T117 [US3] Implement category reorder handler in admin-ui/src/components/categories/CategoryTree.tsx (calls reorderCategories mutation)
+- [X] T118 [US3] Create collection list page in admin-ui/src/pages/collections/index.astro
+- [X] T119 [US3] Create collection form component in admin-ui/src/components/collections/CollectionForm.tsx
+- [X] T120 [US3] Implement drag-and-drop collection list in admin-ui/src/components/collections/CollectionList.tsx
 - [ ] T121 [US3] Implement collection product selector in admin-ui/src/components/collections/ProductSelector.tsx (multi-select)
 - [ ] T122 [US3] Create publish button component in admin-ui/src/components/shared/PublishButton.tsx
 - [ ] T123 [US3] Implement publish flow in admin-ui/src/lib/publish.ts (version input, confirmation, publishCatalog mutation)
