@@ -11,13 +11,13 @@
     "codegen": "graphql-codegen --config codegen.yml"
   },
   "dependencies": {
-    "@apollo/client": "^3.14.0",
     "@astrojs/react": "^5.0.0",
     "astro": "^6.0.4",
-    "graphql": "^16.8.1",
+    "graphql": "^16.13.1",
     "react": "^18.2.0",
     "react-beautiful-dnd": "^13.1.1",
     "react-dom": "^18.2.0",
+    "urql": "^5.0.1",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
@@ -27,7 +27,6 @@
     "@graphql-codegen/typescript-operations": "^4.0.1",
     "@graphql-codegen/typescript-react-apollo": "^4.1.0",
     "@playwright/test": "^1.41.0",
-    "@rollup/plugin-commonjs": "^29.0.2",
     "@types/react": "^18.2.56",
     "@types/react-beautiful-dnd": "^13.1.8",
     "@types/react-dom": "^18.2.19",

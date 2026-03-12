@@ -10,9 +10,6 @@ export default defineConfig({
     host: true
   },
   vite: {
-    optimizeDeps: {
-      include: ['@apollo/client']
-    },
     server: {
       proxy: {
         '/graphql': {
