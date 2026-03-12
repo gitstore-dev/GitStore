@@ -283,7 +283,8 @@ func (r *queryResolver) Products(ctx context.Context, first *int32, after *strin
 	// TODO: Implement proper product querying from git
 	// For now, return empty list to unblock E2E tests
 	return &model.ProductConnection{
-		Edges: []*model.ProductEdge{},
+		Edges:      []*model.ProductEdge{},
+		TotalCount: 0,
 		PageInfo: &model.PageInfo{
 			HasNextPage:     false,
 			HasPreviousPage: false,
