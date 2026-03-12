@@ -13,15 +13,17 @@ import (
 
 // Resolver is the root GraphQL resolver
 type Resolver struct {
-	logger *zap.Logger
-	cache  *cache.Manager
+	logger  *zap.Logger
+	cache   *cache.Manager
+	service *Service
 }
 
 // NewResolver creates a new GraphQL resolver
-func NewResolver(cacheManager *cache.Manager) *Resolver {
+func NewResolver(cacheManager *cache.Manager, repoPath string) *Resolver {
 	return &Resolver{
-		logger: logger.Log,
-		cache:  cacheManager,
+		logger:  logger.Log,
+		cache:   cacheManager,
+		service: NewService(cacheManager, repoPath, logger.Log),
 	}
 }
 

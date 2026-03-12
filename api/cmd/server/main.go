@@ -103,7 +103,7 @@ func main() {
 	}
 
 	// Create GraphQL resolver
-	resolver := graph.NewResolver(cacheManager)
+	resolver := graph.NewResolver(cacheManager, *gitRepo)
 	gqlServer := gqlhandler.NewDefaultServer(generated.NewExecutableSchema(generated.Config{Resolvers: resolver}))
 
 	// Create HTTP server

@@ -18,24 +18,42 @@ import (
 
 // CreateProduct is the resolver for the createProduct field.
 func (r *mutationResolver) CreateProduct(ctx context.Context, input model.CreateProductInput) (*model.CreateProductPayload, error) {
-	// TODO: Implement proper git-backed product creation
-	// For now, return mock response to unblock E2E tests
-	product := &model.Product{
-		ID:                generateID(),
-		Title:             input.Title,
-		Sku:               input.Sku,
-		Price:             input.Price,
-		Currency:          stringOrDefault(input.Currency, "USD"),
-		Body:              input.Body,
-		InventoryStatus:   derefInventoryStatus(input.InventoryStatus),
-		InventoryQuantity: input.InventoryQuantity,
-		Category:          nil, // TODO: lookup category
-		Collections:       []*model.Collection{}, // TODO: lookup collections
-		Images:            input.Images,
-		Metadata:          input.Metadata,
-		CreatedAt:         time.Now(),
-		UpdatedAt:         time.Now(),
+	// Build input map for service
+	serviceInput := map[string]interface{}{
+		"title": input.Title,
+		"price": float64(input.Price),
 	}
+
+	if input.Sku != nil {
+		serviceInput["sku"] = *input.Sku
+	}
+	if input.Currency != nil {
+		serviceInput["currency"] = *input.Currency
+	}
+	if input.Body != nil {
+		serviceInput["body"] = *input.Body
+	}
+	if input.InventoryStatus != nil {
+		serviceInput["inventoryStatus"] = string(*input.InventoryStatus)
+	}
+	if input.InventoryQuantity != nil {
+		serviceInput["inventoryQuantity"] = *input.InventoryQuantity
+	}
+	if input.Images != nil {
+		serviceInput["images"] = input.Images
+	}
+	if input.Metadata != nil {
+		serviceInput["metadata"] = input.Metadata
+	}
+
+	// Create product via service
+	catalogProduct, err := r.service.CreateProduct(ctx, serviceInput)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create product: %w", err)
+	}
+
+	// Convert to GraphQL model
+	product := CatalogProductToGraphQL(catalogProduct)
 
 	return &model.CreateProductPayload{
 		ClientMutationID: input.ClientMutationID,
