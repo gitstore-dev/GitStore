@@ -28,16 +28,40 @@ Tests the drag-and-drop category reordering functionality:
 
 ## Prerequisites
 
-1. **Services Running**: Ensure the following services are running:
-   - API server (http://localhost:4000)
-   - Admin UI dev server (http://localhost:4321)
-   - Git server (if testing publish functionality)
+### Option 1: Auto-start Dev Server (Recommended)
+Playwright will automatically start the dev server when you run tests. Just ensure:
+- API server is running on port 4000
+- Port 4321 is available for the dev server
+- Dependencies are installed (`npm install`)
 
-2. **Test Data**: Tests will create and clean up their own test data
+### Option 2: Manual Server Start
+If you prefer to start servers manually:
+1. **API Server**: Start on http://localhost:4000
+   ```bash
+   cd api && go run cmd/server/main.go
+   ```
 
-3. **Admin Credentials**: Tests use default credentials:
-   - Username: `admin`
-   - Password: `admin`
+2. **Admin UI Dev Server**: Start on http://localhost:4321
+   ```bash
+   cd admin-ui && npm run dev
+   ```
+
+3. **Run tests with existing server**:
+   ```bash
+   # Add this to playwright.config.ts webServer section:
+   # reuseExistingServer: true
+   npm run test:e2e
+   ```
+
+### Test Data
+Tests will create and clean up their own test data automatically.
+
+### Admin Credentials
+Tests use default credentials:
+- Username: `admin`
+- Password: `admin`
+
+⚠️ **Important**: The API server must be running before starting tests!
 
 ## Running Tests
 
@@ -135,17 +159,43 @@ test.describe('Feature Name', () => {
 
 ## Troubleshooting
 
-### Web Server Not Starting
-```bash
-# Manually start the dev server
-npm run dev
+### "Timed out waiting from config.webServer"
+This means Playwright couldn't start the dev server. Common causes:
 
-# Then run tests with existing server
-npx playwright test
+1. **API server not running**: Start the API server first
+   ```bash
+   cd api && go run cmd/server/main.go
+   ```
+
+2. **Port 4321 already in use**: Kill the process or change the port
+   ```bash
+   lsof -ti:4321 | xargs kill -9
+   ```
+
+3. **Dependencies not installed**: Install npm packages
+   ```bash
+   npm install
+   ```
+
+### Manual Server Approach
+If auto-start isn't working, start servers manually:
+
+```bash
+# Terminal 1: Start API
+cd api && go run cmd/server/main.go
+
+# Terminal 2: Start Admin UI
+cd admin-ui && npm run dev
+
+# Terminal 3: Run tests (server will be reused)
+cd admin-ui && npx playwright test
 ```
 
 ### Authentication Issues
 Verify admin credentials are set correctly in environment or test configuration.
+
+### API Connection Errors
+Ensure the API server is running and accessible at http://localhost:4000/graphql
 
 ### Flaky Tests
 - Increase timeouts for slow operations
