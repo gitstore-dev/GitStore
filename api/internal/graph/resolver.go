@@ -30,16 +30,6 @@ func (r *Resolver) getLoaders(ctx context.Context) *loader.Loaders {
 	return loader.FromContext(ctx)
 }
 
-// Query returns QueryResolver interface
-func (r *Resolver) Query() QueryResolver {
-	return &queryResolver{r}
-}
-
-// Mutation returns MutationResolver interface
-func (r *Resolver) Mutation() MutationResolver {
-	return &mutationResolver{r}
-}
-
 // Category returns CategoryResolver interface
 func (r *Resolver) Category() CategoryResolver {
 	return &categoryResolver{r}
@@ -49,9 +39,6 @@ func (r *Resolver) Category() CategoryResolver {
 func (r *Resolver) Collection() CollectionResolver {
 	return &collectionResolver{r}
 }
-
-type queryResolver struct{ *Resolver }
-type mutationResolver struct{ *Resolver }
 
 // QueryResolver interface
 type QueryResolver interface{}

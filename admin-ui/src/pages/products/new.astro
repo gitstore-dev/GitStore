@@ -1,0 +1,81 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { App } from '../../components/App';
+import { ProtectedRoute } from '../../components/ProtectedRoute';
+import { Header } from '../../components/Header';
+import { CreateProductPage } from '../../components/products/CreateProductPage';
+---
+
+<Layout title="New Product - GitStore Admin">
+  <App client:only="react">
+    <ProtectedRoute client:only="react">
+      <Header client:only="react" />
+      <main>
+        <div class="page-header">
+          <div class="breadcrumbs">
+            <a href="/products">Products</a>
+            <span class="separator">/</span>
+            <span class="current">New Product</span>
+          </div>
+          <h1>Create Product</h1>
+          <p class="subtitle">Add a new product to your catalog</p>
+        </div>
+        <CreateProductPage client:only="react" />
+      </main>
+    </ProtectedRoute>
+  </App>
+</Layout>
+
+<style>
+  main {
+    min-height: calc(100vh - 80px);
+    background-color: #f7fafc;
+    padding-bottom: 2rem;
+  }
+
+  .page-header {
+    padding: 2rem 2rem 0;
+    max-width: 1440px;
+    margin: 0 auto;
+  }
+
+  .breadcrumbs {
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
+    color: #718096;
+  }
+
+  .breadcrumbs a {
+    color: #667eea;
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+
+  .breadcrumbs a:hover {
+    color: #5568d3;
+    text-decoration: underline;
+  }
+
+  .separator {
+    margin: 0 0.5rem;
+    color: #cbd5e0;
+  }
+
+  .current {
+    color: #4a5568;
+    font-weight: 500;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 2rem;
+    font-weight: 700;
+    color: #1a202c;
+  }
+
+  .subtitle {
+    margin: 0.5rem 0 0;
+    color: #718096;
+    font-size: 1rem;
+  }
+</style>

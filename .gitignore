@@ -9,15 +9,20 @@ target/
 # and ignored for library crates. GitStore is an application, so we commit it.
 
 # Go
-bin/
+/bin/
+/api/bin/
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
 *.test
-*.out
+*.prof
+coverage.out
+cover.out
+.coverprofile
 go.work
+go.work.sum
 
 # Node.js
 node_modules/
@@ -43,13 +48,13 @@ Thumbs.db
 docker-compose.override.yml
 
 # Generated files
-api/internal/graph/generated.go
-api/internal/graph/model/models_gen.go
+# Note: Committing generated files to avoid CI needing go generate step
+# api/internal/graph/generated/generated.go
+# api/internal/graph/model/models_gen.go
 
 # Test coverage
 coverage/
 *.cover
-*.out
 
 # Logs
 *.log

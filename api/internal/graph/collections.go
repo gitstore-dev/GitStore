@@ -11,66 +11,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// Collections returns all collections
-func (r *queryResolver) Collections(ctx context.Context) ([]*models.Collection, error) {
-	r.logger.Debug("Fetching all collections")
-
-	// Get catalog from cache
-	cat, err := r.cache.Get(ctx)
-	if err != nil {
-		r.logger.Error("Failed to load catalog", zap.Error(err))
-		return nil, err
-	}
-
-	// Get all collections from catalog
-	catalogCollections := cat.AllCollections()
-
-	// Convert to model collections
-	result := make([]*models.Collection, 0, len(catalogCollections))
-	for _, coll := range catalogCollections {
-		result = append(result, catalogCollectionToModel(coll))
-	}
-
-	// Sort by display order
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].DisplayOrder < result[j].DisplayOrder
-	})
-
-	r.logger.Debug("Collections fetched",
-		zap.Int("count", len(result)),
-	)
-
-	return result, nil
-}
-
-// Collection returns a collection by slug
-func (r *queryResolver) Collection(ctx context.Context, slug string) (*models.Collection, error) {
-	r.logger.Debug("Fetching collection by slug", zap.String("slug", slug))
-
-	// Get catalog from cache
-	cat, err := r.cache.Get(ctx)
-	if err != nil {
-		r.logger.Error("Failed to load catalog", zap.Error(err))
-		return nil, err
-	}
-
-	// Get collection by slug
-	catalogColl, ok := cat.GetCollectionBySlug(slug)
-	if !ok {
-		r.logger.Debug("Collection not found", zap.String("slug", slug))
-		return nil, nil
-	}
-
-	modelColl := catalogCollectionToModel(catalogColl)
-
-	r.logger.Debug("Collection found",
-		zap.String("slug", slug),
-		zap.String("id", modelColl.ID),
-	)
-
-	return modelColl, nil
-}
-
 // CollectionById returns a collection by ID
 func (r *queryResolver) CollectionById(ctx context.Context, id string) (*models.Collection, error) {
 	r.logger.Debug("Fetching collection by ID", zap.String("id", id))

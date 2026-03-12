@@ -1,0 +1,139 @@
+# Authentication Types and Mutations
+
+"""
+Authenticated user information
+"""
+type User {
+  """
+  Username
+  """
+  username: String!
+
+  """
+  Whether the user has admin privileges
+  """
+  isAdmin: Boolean!
+}
+
+"""
+Authentication session response
+"""
+type AuthSession {
+  """
+  JWT token for authentication
+  """
+  token: String!
+
+  """
+  Token expiration time (ISO 8601)
+  """
+  expiresAt: DateTime!
+
+  """
+  Authenticated user information
+  """
+  user: User!
+}
+
+"""
+Login mutation input (Relay pattern)
+"""
+input LoginInput {
+  """
+  Client mutation ID for request tracking (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Username
+  """
+  username: String!
+
+  """
+  Password
+  """
+  password: String!
+}
+
+"""
+Login mutation payload (Relay pattern)
+"""
+type LoginPayload {
+  """
+  Client mutation ID for request tracking (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Authentication session (token + user info)
+  """
+  session: AuthSession
+}
+
+"""
+Logout mutation input (Relay pattern)
+"""
+input LogoutInput {
+  """
+  Client mutation ID for request tracking (Relay pattern)
+  """
+  clientMutationId: String
+}
+
+"""
+Logout mutation payload (Relay pattern)
+"""
+type LogoutPayload {
+  """
+  Client mutation ID for request tracking (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  Success indicator
+  """
+  success: Boolean!
+}
+
+"""
+Refresh token mutation input (Relay pattern)
+"""
+input RefreshTokenInput {
+  """
+  Client mutation ID for request tracking (Relay pattern)
+  """
+  clientMutationId: String
+}
+
+"""
+Refresh token mutation payload (Relay pattern)
+"""
+type RefreshTokenPayload {
+  """
+  Client mutation ID for request tracking (Relay pattern)
+  """
+  clientMutationId: String
+
+  """
+  New authentication session
+  """
+  session: AuthSession
+}
+
+# Add authentication mutations to the Mutation type
+extend type Mutation {
+  """
+  Authenticate with username and password
+  """
+  login(input: LoginInput!): LoginPayload!
+
+  """
+  Logout and invalidate current session
+  """
+  logout(input: LogoutInput!): LogoutPayload!
+
+  """
+  Refresh authentication token
+  """
+  refreshToken(input: RefreshTokenInput!): RefreshTokenPayload!
+}

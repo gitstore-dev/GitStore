@@ -1,0 +1,197 @@
+# Product Mutations
+
+mutation CreateProduct($input: CreateProductInput!) {
+  createProduct(input: $input) {
+    clientMutationId
+    product {
+      id
+      title
+      sku
+      price
+      compareAtPrice
+      inventoryStatus
+      inventoryQuantity
+      description
+      categoryId
+      collectionIds
+      images
+      metadata
+      createdAt
+      updatedAt
+      version
+    }
+  }
+}
+
+mutation UpdateProduct($input: UpdateProductInput!) {
+  updateProduct(input: $input) {
+    clientMutationId
+    product {
+      id
+      title
+      sku
+      price
+      compareAtPrice
+      inventoryStatus
+      inventoryQuantity
+      description
+      categoryId
+      collectionIds
+      images
+      metadata
+      createdAt
+      updatedAt
+      version
+    }
+    conflict {
+      field
+      currentValue
+      incomingValue
+      diff
+    }
+  }
+}
+
+mutation DeleteProduct($input: DeleteProductInput!) {
+  deleteProduct(input: $input) {
+    clientMutationId
+    deletedProductId
+  }
+}
+
+# Category Mutations
+
+mutation CreateCategory($input: CreateCategoryInput!) {
+  createCategory(input: $input) {
+    clientMutationId
+    category {
+      id
+      name
+      slug
+      description
+      parentId
+      displayOrder
+      metadata
+      createdAt
+      updatedAt
+      version
+    }
+  }
+}
+
+mutation UpdateCategory($input: UpdateCategoryInput!) {
+  updateCategory(input: $input) {
+    clientMutationId
+    category {
+      id
+      name
+      slug
+      description
+      parentId
+      displayOrder
+      metadata
+      createdAt
+      updatedAt
+      version
+    }
+    conflict {
+      field
+      currentValue
+      incomingValue
+      diff
+    }
+  }
+}
+
+mutation DeleteCategory($input: DeleteCategoryInput!) {
+  deleteCategory(input: $input) {
+    clientMutationId
+    deletedCategoryId
+  }
+}
+
+mutation ReorderCategories($input: ReorderCategoriesInput!) {
+  reorderCategories(input: $input) {
+    clientMutationId
+    categories {
+      id
+      name
+      slug
+      displayOrder
+    }
+  }
+}
+
+# Collection Mutations
+
+mutation CreateCollection($input: CreateCollectionInput!) {
+  createCollection(input: $input) {
+    clientMutationId
+    collection {
+      id
+      name
+      slug
+      description
+      productIds
+      displayOrder
+      metadata
+      createdAt
+      updatedAt
+      version
+    }
+  }
+}
+
+mutation UpdateCollection($input: UpdateCollectionInput!) {
+  updateCollection(input: $input) {
+    clientMutationId
+    collection {
+      id
+      name
+      slug
+      description
+      productIds
+      displayOrder
+      metadata
+      createdAt
+      updatedAt
+      version
+    }
+    conflict {
+      field
+      currentValue
+      incomingValue
+      diff
+    }
+  }
+}
+
+mutation DeleteCollection($input: DeleteCollectionInput!) {
+  deleteCollection(input: $input) {
+    clientMutationId
+    deletedCollectionId
+  }
+}
+
+mutation ReorderCollections($input: ReorderCollectionsInput!) {
+  reorderCollections(input: $input) {
+    clientMutationId
+    collections {
+      id
+      name
+      slug
+      displayOrder
+    }
+  }
+}
+
+# Publish Mutation
+
+mutation PublishCatalog($input: PublishCatalogInput!) {
+  publishCatalog(input: $input) {
+    clientMutationId
+    tagName
+    commitHash
+    pushedAt
+  }
+}
