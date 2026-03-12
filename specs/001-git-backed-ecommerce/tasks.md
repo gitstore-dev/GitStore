@@ -193,8 +193,8 @@ Multi-service architecture:
 - [X] T079 [P] [US3] Write contract test for createProduct mutation in api/tests/contract/create_product_test.go
 - [X] T080 [P] [US3] Write contract test for updateProduct mutation with optimistic locking in api/tests/contract/update_product_test.go
 - [X] T081 [P] [US3] Write contract test for publishCatalog mutation in api/tests/contract/publish_catalog_test.go
-- [ ] T082 [P] [US3] Write E2E test for product CRUD workflow in admin-ui/tests/e2e/product_crud.spec.ts
-- [ ] T083 [P] [US3] Write E2E test for drag-and-drop category reordering in admin-ui/tests/e2e/category_reorder.spec.ts
+- [X] T082 [P] [US3] Write E2E test for product CRUD workflow in admin-ui/tests/e2e/product_crud.spec.ts
+- [X] T083 [P] [US3] Write E2E test for drag-and-drop category reordering in admin-ui/tests/e2e/category_reorder.spec.ts
 
 ### Implementation for User Story 3
 
