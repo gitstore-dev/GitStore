@@ -39,6 +39,12 @@ type Category struct {
 	CreatedAt    time.Time `yaml:"created_at"`
 	UpdatedAt    time.Time `yaml:"updated_at"`
 	Body         string    `yaml:"-"`
+
+	// Computed fields (built by BuildCategoryHierarchy)
+	Parent   *Category   `yaml:"-"`
+	Children []*Category `yaml:"-"`
+	Path     []*Category `yaml:"-"` // Root to current
+	Depth    int         `yaml:"-"`
 }
 
 // Collection represents a flat grouping of products

@@ -99,6 +99,86 @@ func (s *Service) GetProductBySKU(ctx context.Context, sku string) (*catalog.Pro
 	return product, nil
 }
 
+// GetCategories returns all categories
+func (s *Service) GetCategories(ctx context.Context) ([]*catalog.Category, error) {
+	cat, err := s.GetCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return cat.AllCategories(), nil
+}
+
+// GetCategoryByID returns a category by ID
+func (s *Service) GetCategoryByID(ctx context.Context, id string) (*catalog.Category, error) {
+	cat, err := s.GetCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	category, ok := cat.GetCategory(id)
+	if !ok {
+		return nil, fmt.Errorf("category not found: %s", id)
+	}
+
+	return category, nil
+}
+
+// GetCategoryBySlug returns a category by slug
+func (s *Service) GetCategoryBySlug(ctx context.Context, slug string) (*catalog.Category, error) {
+	cat, err := s.GetCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	category, ok := cat.GetCategoryBySlug(slug)
+	if !ok {
+		return nil, fmt.Errorf("category not found with slug: %s", slug)
+	}
+
+	return category, nil
+}
+
+// GetCollections returns all collections
+func (s *Service) GetCollections(ctx context.Context) ([]*catalog.Collection, error) {
+	cat, err := s.GetCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return cat.AllCollections(), nil
+}
+
+// GetCollectionByID returns a collection by ID
+func (s *Service) GetCollectionByID(ctx context.Context, id string) (*catalog.Collection, error) {
+	cat, err := s.GetCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	collection, ok := cat.GetCollection(id)
+	if !ok {
+		return nil, fmt.Errorf("collection not found: %s", id)
+	}
+
+	return collection, nil
+}
+
+// GetCollectionBySlug returns a collection by slug
+func (s *Service) GetCollectionBySlug(ctx context.Context, slug string) (*catalog.Collection, error) {
+	cat, err := s.GetCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	collection, ok := cat.GetCollectionBySlug(slug)
+	if !ok {
+		return nil, fmt.Errorf("collection not found with slug: %s", slug)
+	}
+
+	return collection, nil
+}
+
 // CreateProduct creates a new product and commits to git
 func (s *Service) CreateProduct(ctx context.Context, input map[string]interface{}) (*catalog.Product, error) {
 	// Generate ID

@@ -381,39 +381,70 @@ func (r *queryResolver) Products(ctx context.Context, first *int32, after *strin
 
 // Category returns a category by slug
 func (r *queryResolver) Category(ctx context.Context, slug string) (*model.Category, error) {
-	// TODO: Implement proper category lookup by slug
-	return nil, nil
+	catalogCategory, err := r.service.GetCategoryBySlug(ctx, slug)
+	if err != nil {
+		return nil, nil // Return nil for not found (not an error)
+	}
+	return CatalogCategoryToGraphQL(catalogCategory), nil
 }
 
 // CategoryByID is the resolver for the categoryById field.
 func (r *queryResolver) CategoryByID(ctx context.Context, id string) (*model.Category, error) {
-	// TODO: Implement proper category lookup by ID
-	return nil, nil
+	catalogCategory, err := r.service.GetCategoryByID(ctx, id)
+	if err != nil {
+		return nil, nil // Return nil for not found
+	}
+	return CatalogCategoryToGraphQL(catalogCategory), nil
 }
 
 // Categories returns all categories in hierarchical structure
 func (r *queryResolver) Categories(ctx context.Context) ([]*model.Category, error) {
-	// TODO: Implement proper category querying from git
-	// For now, return empty list to unblock E2E tests
-	return []*model.Category{}, nil
+	catalogCategories, err := r.service.GetCategories(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get categories: %w", err)
+	}
+
+	// Convert to GraphQL models
+	categories := make([]*model.Category, len(catalogCategories))
+	for i, cat := range catalogCategories {
+		categories[i] = CatalogCategoryToGraphQL(cat)
+	}
+
+	return categories, nil
 }
 
 // Collection returns a collection by slug
 func (r *queryResolver) Collection(ctx context.Context, slug string) (*model.Collection, error) {
-	// TODO: Implement proper collection lookup by slug
-	return nil, nil
+	catalogCollection, err := r.service.GetCollectionBySlug(ctx, slug)
+	if err != nil {
+		return nil, nil // Return nil for not found
+	}
+	return CatalogCollectionToGraphQL(catalogCollection), nil
 }
 
 // CollectionByID is the resolver for the collectionById field.
 func (r *queryResolver) CollectionByID(ctx context.Context, id string) (*model.Collection, error) {
-	// TODO: Implement proper collection lookup by ID
-	return nil, nil
+	catalogCollection, err := r.service.GetCollectionByID(ctx, id)
+	if err != nil {
+		return nil, nil // Return nil for not found
+	}
+	return CatalogCollectionToGraphQL(catalogCollection), nil
 }
 
 // Collections returns all collections
 func (r *queryResolver) Collections(ctx context.Context) ([]*model.Collection, error) {
-	// TODO: Implement proper collection querying
-	return []*model.Collection{}, nil
+	catalogCollections, err := r.service.GetCollections(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get collections: %w", err)
+	}
+
+	// Convert to GraphQL models
+	collections := make([]*model.Collection, len(catalogCollections))
+	for i, coll := range catalogCollections {
+		collections[i] = CatalogCollectionToGraphQL(coll)
+	}
+
+	return collections, nil
 }
 
 // CatalogVersion is the resolver for the catalogVersion field.
