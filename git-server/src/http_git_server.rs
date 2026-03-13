@@ -9,12 +9,13 @@ use axum::{
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Router,
+    Json, Router,
 };
 use git2::Repository;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
@@ -27,6 +28,7 @@ pub struct GitServerState {
     pub repo_path: PathBuf,
     pub validator: Arc<Validator>,
     pub broadcaster: Arc<RwLock<Broadcaster>>,
+    pub start_time: Instant,
 }
 
 /// Create HTTP git server routes
@@ -36,8 +38,9 @@ pub fn create_git_routes(state: GitServerState) -> Router {
         .route("/{repo}/info/refs", get(info_refs))
         .route("/{repo}/git-upload-pack", post(upload_pack))
         .route("/{repo}/git-receive-pack", post(receive_pack))
-        // Health check
+        // Health check endpoints
         .route("/health", get(health_check))
+        .route("/ready", get(readiness_check))
         .with_state(state)
 }
 
@@ -301,9 +304,135 @@ async fn receive_pack(
         .unwrap())
 }
 
-/// Health check endpoint
-async fn health_check() -> &'static str {
-    "OK"
+/// Health check response
+#[derive(Serialize)]
+struct HealthResponse {
+    status: String,
+    version: String,
+    timestamp: String,
+}
+
+/// Readiness check response
+#[derive(Serialize)]
+struct ReadinessResponse {
+    status: String,
+    version: String,
+    timestamp: String,
+    checks: ReadinessChecks,
+}
+
+/// Individual readiness checks
+#[derive(Serialize)]
+struct ReadinessChecks {
+    repository: CheckStatus,
+    uptime: CheckStatus,
+    websocket: CheckStatus,
+}
+
+/// Status of an individual check
+#[derive(Serialize)]
+struct CheckStatus {
+    status: String,
+    message: String,
+}
+
+/// Health check endpoint - basic liveness
+///
+/// Returns 200 if service is running
+async fn health_check() -> Json<HealthResponse> {
+    Json(HealthResponse {
+        status: "healthy".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+/// Readiness check endpoint - detailed status
+///
+/// Returns 200 if service is ready to accept traffic, 503 otherwise
+async fn readiness_check(
+    State(state): State<GitServerState>,
+) -> Result<Json<ReadinessResponse>, StatusCode> {
+    let uptime = state.start_time.elapsed();
+
+    // Check repository accessibility
+    let repo_check = check_repository(&state.repo_path);
+
+    // Check uptime (consider degraded if < 5 seconds)
+    let uptime_check = if uptime.as_secs() < 5 {
+        CheckStatus {
+            status: "degraded".to_string(),
+            message: "service warming up".to_string(),
+        }
+    } else {
+        CheckStatus {
+            status: "healthy".to_string(),
+            message: "service operational".to_string(),
+        }
+    };
+
+    // Check websocket broadcaster
+    let ws_check = check_websocket(&state.broadcaster).await;
+
+    // Determine overall status
+    let overall_status = if repo_check.status == "unhealthy" || ws_check.status == "unhealthy" {
+        "unhealthy"
+    } else if uptime_check.status == "degraded" {
+        "degraded"
+    } else {
+        "healthy"
+    };
+
+    let response = ReadinessResponse {
+        status: overall_status.to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        checks: ReadinessChecks {
+            repository: repo_check,
+            uptime: uptime_check,
+            websocket: ws_check,
+        },
+    };
+
+    if overall_status == "unhealthy" {
+        Err(StatusCode::SERVICE_UNAVAILABLE)
+    } else {
+        Ok(Json(response))
+    }
+}
+
+/// Check if repository is accessible
+fn check_repository(repo_path: &PathBuf) -> CheckStatus {
+    let catalog_path = repo_path.join("catalog.git");
+
+    match Repository::open(&catalog_path) {
+        Ok(_) => CheckStatus {
+            status: "healthy".to_string(),
+            message: "repository accessible".to_string(),
+        },
+        Err(e) => {
+            error!(error = %e, "Repository check failed");
+            CheckStatus {
+                status: "unhealthy".to_string(),
+                message: format!("repository unavailable: {}", e),
+            }
+        }
+    }
+}
+
+/// Check if websocket broadcaster is operational
+async fn check_websocket(broadcaster: &Arc<RwLock<Broadcaster>>) -> CheckStatus {
+    // Simple check - can we acquire the lock?
+    match tokio::time::timeout(std::time::Duration::from_secs(1), broadcaster.read()).await {
+        Ok(_) => CheckStatus {
+            status: "healthy".to_string(),
+            message: "websocket operational".to_string(),
+        },
+        Err(_) => CheckStatus {
+            status: "degraded".to_string(),
+            message: "websocket lock timeout".to_string(),
+        },
+    }
 }
 
 /// Git server errors

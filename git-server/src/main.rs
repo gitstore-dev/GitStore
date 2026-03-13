@@ -4,6 +4,7 @@ use clap::Parser;
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Instant;
 use tracing::{error, info};
 
 use gitstore::git::repo::init_or_open_repository;
@@ -48,6 +49,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(log_level) = env::var("GITSTORE_LOG_LEVEL") {
         args.log_level = log_level;
     }
+
+    // Record start time for health checks
+    let start_time = Instant::now();
 
     // Initialize structured logging
     gitstore::init_logging();
@@ -98,6 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         repo_path: data_path.clone(),
         validator: std::sync::Arc::new(Validator::new()),
         broadcaster: std::sync::Arc::new(tokio::sync::RwLock::new(broadcaster)),
+        start_time,
     };
 
     // Create HTTP git server routes
