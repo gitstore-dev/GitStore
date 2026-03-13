@@ -240,12 +240,12 @@ Multi-service architecture:
 - [X] T118 [US3] Create collection list page in admin-ui/src/pages/collections/index.astro
 - [X] T119 [US3] Create collection form component in admin-ui/src/components/collections/CollectionForm.tsx
 - [X] T120 [US3] Implement drag-and-drop collection list in admin-ui/src/components/collections/CollectionList.tsx
-- [ ] T121 [US3] Implement collection product selector in admin-ui/src/components/collections/ProductSelector.tsx (multi-select)
-- [ ] T122 [US3] Create publish button component in admin-ui/src/components/shared/PublishButton.tsx
-- [ ] T123 [US3] Implement publish flow in admin-ui/src/lib/publish.ts (version input, confirmation, publishCatalog mutation)
-- [ ] T124 [P] [US3] Create conflict resolution modal in admin-ui/src/components/shared/ConflictModal.tsx (shows diff, allows overwrite/cancel)
-- [ ] T125 [P] [US3] Implement optimistic UI updates for mutations in admin-ui/src/lib/apollo-client.ts (Apollo cache updates)
-- [ ] T126 [P] [US3] Implement client-side validation in admin-ui/src/lib/validation.ts (validate required fields, formats, constraints before mutation submission to catch errors early and provide immediate feedback)
+- [X] T121 [US3] Implement collection product selector in admin-ui/src/components/collections/ProductSelector.tsx (multi-select)
+- [X] T122 [US3] Create publish button component in admin-ui/src/components/shared/PublishButton.tsx
+- [X] T123 [US3] Implement publish flow in admin-ui/src/lib/publish.ts (version input, confirmation, publishCatalog mutation)
+- [X] T124 [P] [US3] Create conflict resolution modal in admin-ui/src/components/shared/ConflictModal.tsx (shows diff, allows overwrite/cancel)
+- [X] T125 [P] [US3] Implement optimistic UI updates for mutations in admin-ui/src/lib/optimistic-updates.ts (urql cache updates)
+- [X] T126 [P] [US3] Implement client-side validation in admin-ui/src/lib/validation.ts (validate required fields, formats, constraints before mutation submission to catch errors early and provide immediate feedback)
 
 **Checkpoint**: All user stories should now be independently functional
 
