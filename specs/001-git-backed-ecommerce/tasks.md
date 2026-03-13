@@ -137,10 +137,10 @@ Multi-service architecture:
 >
 > All test tasks (T054-T057) MUST be completed and FAILING before ANY implementation tasks (T058-T078) can begin.
 
-- [ ] T054 [P] [US2] Write contract test for categories query in api/tests/contract/categories_test.go
-- [ ] T055 [P] [US2] Write contract test for collections query in api/tests/contract/collections_test.go
-- [ ] T056 [P] [US2] Write integration test for category parent-child relationships in api/tests/integration/category_hierarchy_test.go
-- [ ] T057 [P] [US2] Write integration test for products query filtered by categoryId in api/tests/contract/products_by_category_test.go
+- [X] T054 [P] [US2] Write contract test for categories query in api/tests/contract/categories_test.go
+- [X] T055 [P] [US2] Write contract test for collections query in api/tests/contract/collections_test.go
+- [X] T056 [P] [US2] Write integration test for category parent-child relationships in api/tests/integration/category_hierarchy_test.go
+- [X] T057 [P] [US2] Write integration test for products query filtered by categoryId in api/tests/contract/products_by_category_test.go
 
 ### Implementation for User Story 2
 
