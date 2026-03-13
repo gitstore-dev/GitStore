@@ -192,6 +192,9 @@ func (l *Loader) loadFromCommit(ctx context.Context, repo *git.Repository, commi
 		return nil, fmt.Errorf("failed to walk tree: %w", err)
 	}
 
+	// Build category hierarchy (parent/children/path/depth)
+	catalog.BuildCategoryHierarchy()
+
 	l.logger.Info("Catalog loaded successfully",
 		zap.Int("products", catalog.ProductCount()),
 		zap.Int("categories", catalog.CategoryCount()),
