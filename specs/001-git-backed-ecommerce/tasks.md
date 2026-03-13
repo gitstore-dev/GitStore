@@ -153,15 +153,15 @@ Multi-service architecture:
 
 #### GraphQL API (Go) - Category & Collection Queries
 
-- [ ] T062 [P] [US2] Implement Category model mapping in api/internal/models/category.go
-- [ ] T063 [P] [US2] Implement Collection model mapping in api/internal/models/collection.go
-- [ ] T064 [US2] Extend cache structure with CategoryByID, CategoryBySlug, CollectionByID maps in api/internal/cache/catalog.go
-- [ ] T065 [US2] Update catalog loader to parse categories and collections in api/internal/cache/loader.go
-- [ ] T066 [US2] Implement category hierarchy builder in api/internal/models/category_tree.go (parent-child linking)
-- [ ] T067 [US2] Implement categories query resolver in api/internal/graph/categories.resolvers.go
-- [ ] T068 [US2] Implement category(slug) query resolver in api/internal/graph/category.resolvers.go
-- [ ] T069 [US2] Implement collections query resolver in api/internal/graph/collections.resolvers.go
-- [ ] T070 [US2] Implement collection(slug) query resolver in api/internal/graph/collection.resolvers.go
+- [X] T062 [P] [US2] Implement Category model mapping in api/internal/models/category.go
+- [X] T063 [P] [US2] Implement Collection model mapping in api/internal/models/collection.go
+- [X] T064 [US2] Extend cache structure with CategoryByID, CategoryBySlug, CollectionByID maps in api/internal/cache/catalog.go
+- [X] T065 [US2] Update catalog loader to parse categories and collections in api/internal/cache/loader.go
+- [X] T066 [US2] Implement category hierarchy builder in api/internal/models/category_tree.go (parent-child linking)
+- [X] T067 [US2] Implement categories query resolver in api/internal/graph/categories.resolvers.go
+- [X] T068 [US2] Implement category(slug) query resolver in api/internal/graph/category.resolvers.go
+- [X] T069 [US2] Implement collections query resolver in api/internal/graph/collections.resolvers.go
+- [X] T070 [US2] Implement collection(slug) query resolver in api/internal/graph/collection.resolvers.go
 - [ ] T071 [US2] Implement Product.category field resolver (single category lookup) in api/internal/graph/product.resolvers.go
 - [ ] T072 [US2] Implement Product.collections field resolver (multiple collection lookup) in api/internal/graph/product.resolvers.go
 - [ ] T073 [US2] Implement Category.products field resolver with subcategory product inclusion in api/internal/graph/category.resolvers.go
