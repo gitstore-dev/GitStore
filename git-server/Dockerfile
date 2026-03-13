@@ -1,7 +1,7 @@
 # Rust git-server Dockerfile
 
 # Build stage
-FROM rust:1.75-slim AS builder
+FROM rust:1.94-slim AS builder
 
 WORKDIR /app
 
