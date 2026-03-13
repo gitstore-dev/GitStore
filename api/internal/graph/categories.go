@@ -52,6 +52,7 @@ func (r *queryResolver) CategoryById(ctx context.Context, id string) (*models.Ca
 type categoryResolver struct{ *Resolver }
 
 // Parent resolves the parent category
+// nolint:unused // Reserved for future use
 func (r *categoryResolver) Parent(ctx context.Context, obj *models.Category) (*models.Category, error) {
 	if obj.ParentID == nil {
 		return nil, nil
@@ -94,6 +95,7 @@ func (r *categoryResolver) Parent(ctx context.Context, obj *models.Category) (*m
 }
 
 // Children resolves child categories
+// nolint:unused // Reserved for future use
 func (r *categoryResolver) Children(ctx context.Context, obj *models.Category) ([]*models.Category, error) {
 	// Children should already be set by tree builder
 	if obj.Children != nil {
@@ -105,6 +107,7 @@ func (r *categoryResolver) Children(ctx context.Context, obj *models.Category) (
 }
 
 // Path resolves the path from root to current category
+// nolint:unused // Reserved for future use
 func (r *categoryResolver) Path(ctx context.Context, obj *models.Category) ([]string, error) {
 	path := make([]string, 0, len(obj.Path)+1)
 
@@ -117,6 +120,7 @@ func (r *categoryResolver) Path(ctx context.Context, obj *models.Category) ([]st
 }
 
 // Depth resolves the depth in the tree
+// nolint:unused // Reserved for future use
 func (r *categoryResolver) Depth(ctx context.Context, obj *models.Category) (int, error) {
 	return obj.Depth, nil
 }

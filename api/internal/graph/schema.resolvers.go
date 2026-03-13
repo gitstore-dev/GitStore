@@ -38,10 +38,10 @@ func (r *mutationResolver) CreateProduct(ctx context.Context, input model.Create
 	if input.InventoryQuantity != nil {
 		serviceInput["inventoryQuantity"] = int(*input.InventoryQuantity)
 	}
-	if input.CollectionIds != nil && len(input.CollectionIds) > 0 {
+	if len(input.CollectionIds) > 0 {
 		serviceInput["collectionIds"] = input.CollectionIds
 	}
-	if input.Images != nil && len(input.Images) > 0 {
+	if len(input.Images) > 0 {
 		serviceInput["images"] = input.Images
 	}
 	if input.Metadata != nil {
@@ -93,10 +93,10 @@ func (r *mutationResolver) UpdateProduct(ctx context.Context, input model.Update
 	if input.CategoryID != nil {
 		serviceInput["categoryId"] = *input.CategoryID
 	}
-	if input.CollectionIds != nil && len(input.CollectionIds) > 0 {
+	if len(input.CollectionIds) > 0 {
 		serviceInput["collectionIds"] = input.CollectionIds
 	}
-	if input.Images != nil && len(input.Images) > 0 {
+	if len(input.Images) > 0 {
 		serviceInput["images"] = input.Images
 	}
 	if input.Metadata != nil {
@@ -454,6 +454,7 @@ func stringOrDefault(s *string, def string) string {
 	return def
 }
 
+// nolint:unused // Reserved for future use
 func floatOrDefault(f *float64, def float64) float64 {
 	if f != nil {
 		return *f
@@ -468,6 +469,7 @@ func intOrDefault(i *int32, def int32) int32 {
 	return def
 }
 
+// nolint:unused // Reserved for future use
 func derefInventoryStatus(s *model.InventoryStatus) model.InventoryStatus {
 	if s != nil {
 		return *s

@@ -44,6 +44,7 @@ func (r *queryResolver) CollectionById(ctx context.Context, id string) (*models.
 type collectionResolver struct{ *Resolver }
 
 // ProductCount resolves the number of products in the collection
+// nolint:unused // Reserved for future use
 func (r *collectionResolver) ProductCount(ctx context.Context, obj *models.Collection) (int, error) {
 	return obj.ProductCount(), nil
 }
