@@ -10,18 +10,18 @@ interface ProtectedRouteProps {
  * Component that protects routes requiring authentication
  * Redirects to login page if user is not authenticated
  */
-export function ProtectedRoute({ children, redirectTo = '/login' }: ProtectedRouteProps) {
+export function ProtectedRoute({ children, redirectTo = '/login' }: Readonly<ProtectedRouteProps>) {
   const { isAuthenticated, isLoading } = useAuth();
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
       // Save current path for redirect after login
-      const currentPath = window.location.pathname;
+      const currentPath = globalThis.location.pathname;
       if (currentPath !== redirectTo) {
         sessionStorage.setItem('redirect_after_login', currentPath);
       }
       // Redirect to login
-      window.location.href = redirectTo;
+      globalThis.location.href = redirectTo;
     }
   }, [isAuthenticated, isLoading, redirectTo]);
 
@@ -45,7 +45,20 @@ export function ProtectedRoute({ children, redirectTo = '/login' }: ProtectedRou
 
   // Don't render children if not authenticated
   if (!isAuthenticated) {
-    return null;
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '100vh',
+          fontSize: '1rem',
+          color: '#718096',
+        }}
+      >
+        <div>Redirecting to login...</div>
+      </div>
+    );
   }
 
   return <>{children}</>;

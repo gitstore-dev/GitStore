@@ -26,7 +26,9 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
-export function AuthProvider({ children }: AuthProviderProps) {
+const LOGIN_ENDPOINT = import.meta.env.PUBLIC_GITSTORE_LOGIN_ENDPOINT || 'http://localhost:4000/api/login';
+
+export function AuthProvider({ children }: Readonly<AuthProviderProps>) {
   const [state, setState] = useState<AuthState>({
     user: null,
     token: null,
@@ -110,7 +112,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
     try {
       const credentials = btoa(`${username}:${password}`);
-      const response = await fetch('/api/login', {
+      const response = await fetch(LOGIN_ENDPOINT, {
         method: 'POST',
         headers: {
           'Authorization': `Basic ${credentials}`,

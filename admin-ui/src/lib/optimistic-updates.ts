@@ -1,4 +1,6 @@
-import { ApolloCache } from '@apollo/client';
+// NOTE: This file contains optimistic update helpers that were originally for Apollo Client.
+// With urql, optimistic updates are handled differently. These functions are kept for
+// reference but may not be actively used. urql uses simpler cache updates.
 
 // TODO: Replace with generated types from codegen
 interface Product {

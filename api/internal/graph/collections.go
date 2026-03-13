@@ -41,9 +41,12 @@ func (r *queryResolver) CollectionById(ctx context.Context, id string) (*models.
 
 // Collection field resolvers
 
+//lint:ignore U1000 Reserved for future GraphQL field resolver implementation
 type collectionResolver struct{ *Resolver }
 
 // ProductCount resolves the number of products in the collection
+//
+//lint:ignore U1000 Reserved for future GraphQL field resolver implementation
 func (r *collectionResolver) ProductCount(ctx context.Context, obj *models.Collection) (int, error) {
 	return obj.ProductCount(), nil
 }

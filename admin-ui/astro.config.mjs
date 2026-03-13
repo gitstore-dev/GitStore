@@ -15,6 +15,10 @@ export default defineConfig({
         '/graphql': {
           target: process.env.GITSTORE_GRAPHQL_URL || 'http://localhost:4000',
           changeOrigin: true
+        },
+        '/api': {
+          target: process.env.GITSTORE_GRAPHQL_URL || 'http://localhost:4000',
+          changeOrigin: true
         }
       }
     }

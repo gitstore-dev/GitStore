@@ -1,4 +1,4 @@
-import { ApolloClient } from '@apollo/client';
+import { Client } from 'urql';
 
 // TODO: Replace with generated types from codegen
 interface PublishCatalogInput {
@@ -23,7 +23,7 @@ interface PublishCatalogMutationResponse {
  * Commits pending changes, pushes to remote, and creates release tag
  */
 export async function publishCatalog(
-  client: ApolloClient<any>,
+  client: Client,
   message: string,
   version?: string
 ): Promise<PublishCatalogPayload> {
@@ -42,26 +42,26 @@ export async function publishCatalog(
   `;
 
   try {
-    const { data, errors } = await client.mutate<PublishCatalogMutationResponse>({
-      mutation: require('@apollo/client').gql(PUBLISH_CATALOG_MUTATION),
-      variables: {
+    const result = await client.mutation<PublishCatalogMutationResponse>(
+      PUBLISH_CATALOG_MUTATION,
+      {
         input: {
           clientMutationId: generateClientMutationId(),
           message,
           version: version || null,
         },
-      },
-    });
+      }
+    ).toPromise();
 
-    if (errors && errors.length > 0) {
-      throw new Error(errors[0].message);
+    if (result.error) {
+      throw new Error(result.error.message);
     }
 
-    if (!data?.publishCatalog) {
+    if (!result.data?.publishCatalog) {
       throw new Error('No data returned from publishCatalog mutation');
     }
 
-    return data.publishCatalog;
+    return result.data.publishCatalog;
   } catch (error) {
     console.error('Publish catalog failed:', error);
     throw error;
@@ -72,7 +72,7 @@ export async function publishCatalog(
  * Check if there are uncommitted changes in the catalog
  * This would typically query git status or check a pending changes flag
  */
-export async function hasUncommittedChanges(client: ApolloClient<any>): Promise<boolean> {
+export async function hasUncommittedChanges(client: Client): Promise<boolean> {
   // TODO: Implement actual check via GraphQL query
   // This could query git status or check a flag in the backend
   // For now, we'll return a placeholder

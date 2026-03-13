@@ -62,6 +62,36 @@ func (l *Loader) LoadFromTag(ctx context.Context, tag string) (*Catalog, error) 
 	return l.loadFromCommit(ctx, repo, commit)
 }
 
+// LoadFromHEAD loads catalog from the current HEAD commit
+func (l *Loader) LoadFromHEAD(ctx context.Context) (*Catalog, error) {
+	l.logger.Info("Loading catalog from HEAD")
+
+	// Open repository
+	repo, err := git.PlainOpen(l.repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	// Get HEAD reference
+	ref, err := repo.Head()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get HEAD: %w", err)
+	}
+
+	// Get commit from HEAD
+	commit, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get commit: %w", err)
+	}
+
+	l.logger.Debug("Resolved HEAD to commit",
+		zap.String("commit", commit.Hash.String()),
+	)
+
+	// Load catalog from commit
+	return l.loadFromCommit(ctx, repo, commit)
+}
+
 // LoadFromLatestTag loads catalog from the latest release tag
 func (l *Loader) LoadFromLatestTag(ctx context.Context) (*Catalog, error) {
 	l.logger.Info("Loading catalog from latest tag")

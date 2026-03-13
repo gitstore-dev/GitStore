@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../lib/auth-context';
 import { PublishButton } from './shared/PublishButton';
 import { PublishModal } from './shared/PublishModal';
-import { useApolloClient } from '@apollo/client';
+import { useClient } from 'urql';
 import { publishCatalog, hasUncommittedChanges, formatPublishError } from '../lib/publish';
 
 /**
@@ -10,7 +10,7 @@ import { publishCatalog, hasUncommittedChanges, formatPublishError } from '../li
  */
 export function Header() {
   const { user, logout } = useAuth();
-  const client = useApolloClient();
+  const client = useClient();
   const [hasChanges, setHasChanges] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);

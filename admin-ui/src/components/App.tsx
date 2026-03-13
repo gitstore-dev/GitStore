@@ -1,7 +1,7 @@
-import React, { type ReactNode } from 'react';
-import { ApolloProvider } from '@apollo/client';
+import React, { type ReactNode, useMemo } from 'react';
+import { Provider as UrqlProvider } from 'urql';
 import { AuthProvider } from '../lib/auth-context';
-import { apolloClient } from '../lib/apollo-client';
+import { getUrqlClient } from '../lib/urql-client';
 
 interface AppProps {
   children: ReactNode;
@@ -10,14 +10,17 @@ interface AppProps {
 /**
  * Root application component that provides global context providers
  * - AuthProvider: Authentication and session management
- * - ApolloProvider: GraphQL client for data fetching
+ * - UrqlProvider: GraphQL client for data fetching
  */
-export function App({ children }: AppProps) {
+export function App({ children }: Readonly<AppProps>) {
+  // Create client only once when component mounts (in browser)
+  const urqlClient = useMemo(() => getUrqlClient(), []);
+
   return (
-    <ApolloProvider client={apolloClient}>
+    <UrqlProvider value={urqlClient}>
       <AuthProvider>
         {children}
       </AuthProvider>
-    </ApolloProvider>
+    </UrqlProvider>
   );
 }

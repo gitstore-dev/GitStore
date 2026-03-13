@@ -1,48 +1,8 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { App } from '../../components/App';
-import { ProtectedRoute } from '../../components/ProtectedRoute';
-import { Header } from '../../components/Header';
-import { CategoryList } from '../../components/categories/CategoryList';
+import { CategoriesPage } from '../../components/categories/CategoriesPage';
 ---
 
 <Layout title="Categories - GitStore Admin">
-  <App client:only="react">
-    <ProtectedRoute client:only="react">
-      <Header client:only="react" />
-      <main>
-        <div class="page-header">
-          <h1>Categories</h1>
-          <p class="subtitle">Organize your products into hierarchical categories</p>
-        </div>
-        <CategoryList client:only="react" />
-      </main>
-    </ProtectedRoute>
-  </App>
+  <CategoriesPage client:only="react" />
 </Layout>
-
-<style>
-  main {
-    min-height: calc(100vh - 80px);
-    background-color: #f7fafc;
-  }
-
-  .page-header {
-    padding: 2rem 2rem 0;
-    max-width: 1440px;
-    margin: 0 auto;
-  }
-
-  h1 {
-    margin: 0;
-    font-size: 2rem;
-    font-weight: 700;
-    color: #1a202c;
-  }
-
-  .subtitle {
-    margin: 0.5rem 0 0;
-    color: #718096;
-    font-size: 1rem;
-  }
-</style>

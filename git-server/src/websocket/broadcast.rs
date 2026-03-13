@@ -7,6 +7,32 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
+/// Broadcaster wraps ConnectionManager for easier sharing
+#[derive(Clone)]
+pub struct Broadcaster {
+    manager: Arc<RwLock<ConnectionManager>>,
+}
+
+impl Broadcaster {
+    /// Create a new broadcaster
+    pub fn new(manager: Arc<RwLock<ConnectionManager>>) -> Self {
+        Self { manager }
+    }
+
+    /// Broadcast a message to all connected clients
+    pub async fn broadcast(&self, message: &str) {
+        let manager = self.manager.read().await;
+        manager.broadcast(message.to_string());
+    }
+
+    /// Broadcast a git event
+    pub async fn broadcast_event(&self, event: GitEvent) -> Result<()> {
+        let json = event.to_json()?;
+        self.broadcast(&json).await;
+        Ok(())
+    }
+}
+
 /// Broadcast a git event to all connected websocket clients
 pub async fn broadcast_event(
     manager: &Arc<RwLock<ConnectionManager>>,

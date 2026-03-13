@@ -58,8 +58,8 @@ func (m *Manager) Reload(ctx context.Context) (*catalog.Catalog, error) {
 
 	m.logger.Info("Reloading catalog from git")
 
-	// Load catalog from latest tag
-	newCatalog, err := m.loader.LoadFromLatestTag(ctx)
+	// Load catalog from HEAD (includes uncommitted work)
+	newCatalog, err := m.loader.LoadFromHEAD(ctx)
 	if err != nil {
 		return nil, err
 	}

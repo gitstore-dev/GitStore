@@ -14,6 +14,13 @@ impl ValidationResult {
         Self::default()
     }
 
+    /// Create a validation result with a single error
+    pub fn with_error(file_path: &str, error_message: &str) -> Self {
+        let mut result = Self::new();
+        result.add_error(file_path, error_message.to_string());
+        result
+    }
+
     /// Add an error for a specific file
     pub fn add_error(&mut self, file_path: &str, error_message: String) {
         self.errors
