@@ -259,7 +259,7 @@ Multi-service architecture:
 - [ ] T128 [P] Implement cursor pagination helpers in api/internal/graph/pagination.go (Relay connections)
 - [ ] T129 [P] Add git repository size monitoring in git-server/src/git/metrics.rs
 - [ ] T130 [P] Add catalog statistics to CatalogVersion type in api/internal/graph/catalog_version.resolvers.go
-- [ ] T131 [P] Create initialization script in scripts/init-demo-catalog.sh (creates sample products/categories/collections)
+- [X] T131 [P] Create initialization script in scripts/init-demo-catalog.sh (creates sample products/categories/collections)
 - [ ] T132 [P] Add graceful shutdown handling for websocket connections in git-server/src/websocket/server.rs
 - [ ] T133 [P] Add connection pooling for git operations in api/internal/gitclient/pool.go
 - [ ] T134 [P] Implement request rate limiting middleware in api/internal/middleware/rate_limit.go
