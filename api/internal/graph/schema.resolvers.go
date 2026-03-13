@@ -454,7 +454,7 @@ func stringOrDefault(s *string, def string) string {
 	return def
 }
 
-// nolint:unused // Reserved for future use
+//lint:ignore U1000 Reserved for future use in resolver implementations
 func floatOrDefault(f *float64, def float64) float64 {
 	if f != nil {
 		return *f
@@ -469,7 +469,7 @@ func intOrDefault(i *int32, def int32) int32 {
 	return def
 }
 
-// nolint:unused // Reserved for future use
+//lint:ignore U1000 Reserved for future use in resolver implementations
 func derefInventoryStatus(s *model.InventoryStatus) model.InventoryStatus {
 	if s != nil {
 		return *s
