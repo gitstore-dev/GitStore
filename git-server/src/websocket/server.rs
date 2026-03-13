@@ -9,6 +9,7 @@ use tokio::sync::RwLock;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{debug, error, info};
 
+use crate::websocket::broadcast::Broadcaster;
 use crate::websocket::connections::ConnectionManager;
 
 /// Websocket server for broadcasting git events
@@ -29,6 +30,11 @@ impl WebsocketServer {
     /// Get a reference to the connection manager for broadcasting
     pub fn connection_manager(&self) -> Arc<RwLock<ConnectionManager>> {
         Arc::clone(&self.connection_manager)
+    }
+
+    /// Get a broadcaster instance
+    pub fn broadcaster(&self) -> Broadcaster {
+        Broadcaster::new(Arc::clone(&self.connection_manager))
     }
 
     /// Start the websocket server

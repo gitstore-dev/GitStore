@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use tracing::{error, info};
 
 use gitstore::git::repo::init_or_open_repository;
+use gitstore::http_git_server::{create_git_routes, GitServerState};
+use gitstore::validation::Validator;
 use gitstore::websocket::server::WebsocketServer;
 
 #[derive(Parser, Debug)]
@@ -80,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start websocket server
     let ws_addr: SocketAddr = format!("0.0.0.0:{}", args.ws_port).parse()?;
     let ws_server = WebsocketServer::new(ws_addr);
-    let _connection_manager = ws_server.connection_manager();
+    let broadcaster = ws_server.broadcaster();
 
     info!("Websocket server starting on {}", ws_addr);
 
@@ -91,18 +93,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // TODO: Start git protocol server on args.port
-    // For now, just keep the websocket server running
+    // Create HTTP Git server state
+    let git_state = GitServerState {
+        repo_path: data_path.clone(),
+        validator: std::sync::Arc::new(Validator::new()),
+        broadcaster: std::sync::Arc::new(tokio::sync::RwLock::new(broadcaster)),
+    };
+
+    // Create HTTP git server routes
+    let app = create_git_routes(git_state);
+
+    // Start HTTP server for git operations
+    let http_addr: SocketAddr = format!("0.0.0.0:{}", args.port).parse()?;
     info!(
-        git_port = args.port,
-        "Git protocol server not yet implemented - websocket server running"
+        http_port = args.port,
+        "HTTP Git server starting on http://{}", http_addr
     );
 
-    // Wait for websocket server (or until interrupted)
+    let listener = tokio::net::TcpListener::bind(http_addr).await?;
+
+    // Serve HTTP git server
+    let http_handle = tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, app).await {
+            error!(error = %e, "HTTP server error");
+        }
+    });
+
+    // Wait for shutdown signal
     tokio::signal::ctrl_c().await?;
     info!("Shutting down...");
 
     ws_handle.abort();
+    http_handle.abort();
 
     Ok(())
 }

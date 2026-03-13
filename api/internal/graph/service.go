@@ -34,11 +34,64 @@ func NewService(cacheManager *cache.Manager, repoPath string, logger *zap.Logger
 
 // GetCatalog retrieves the current catalog from cache
 func (s *Service) GetCatalog(ctx context.Context) (*catalog.Catalog, error) {
-	cat, err := s.cacheManager.GetCatalog(ctx)
+	cat, err := s.cacheManager.Get(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get catalog: %w", err)
 	}
 	return cat, nil
+}
+
+// GetProducts retrieves all products from catalog with optional filtering
+func (s *Service) GetProducts(ctx context.Context, categoryID *string) ([]*catalog.Product, error) {
+	cat, err := s.GetCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	products := cat.AllProducts()
+
+	// Filter by category if specified
+	if categoryID != nil && *categoryID != "" {
+		var filtered []*catalog.Product
+		for _, p := range products {
+			if p.CategoryID == *categoryID {
+				filtered = append(filtered, p)
+			}
+		}
+		products = filtered
+	}
+
+	return products, nil
+}
+
+// GetProductByID retrieves a product by ID
+func (s *Service) GetProductByID(ctx context.Context, id string) (*catalog.Product, error) {
+	cat, err := s.GetCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	product, ok := cat.GetProduct(id)
+	if !ok {
+		return nil, fmt.Errorf("product not found: %s", id)
+	}
+
+	return product, nil
+}
+
+// GetProductBySKU retrieves a product by SKU
+func (s *Service) GetProductBySKU(ctx context.Context, sku string) (*catalog.Product, error) {
+	cat, err := s.GetCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	product, ok := cat.GetProductBySKU(sku)
+	if !ok {
+		return nil, fmt.Errorf("product not found with SKU: %s", sku)
+	}
+
+	return product, nil
 }
 
 // CreateProduct creates a new product and commits to git
@@ -66,6 +119,12 @@ func (s *Service) CreateProduct(ctx context.Context, input map[string]interface{
 	if qty, ok := input["inventoryQuantity"].(int); ok {
 		product.InventoryQuantity = &qty
 	}
+	if categoryID, ok := input["categoryId"].(string); ok {
+		product.CategoryID = categoryID
+	}
+	if collectionIDs, ok := input["collectionIds"].([]string); ok {
+		product.CollectionIDs = collectionIDs
+	}
 	if images, ok := input["images"].([]string); ok {
 		product.Images = images
 	}
@@ -79,7 +138,7 @@ func (s *Service) CreateProduct(ctx context.Context, input map[string]interface{
 	}
 
 	// Reload catalog
-	if err := s.cacheManager.Reload(ctx); err != nil {
+	if _, err := s.cacheManager.Reload(ctx); err != nil {
 		s.logger.Error("Failed to reload catalog after create", zap.Error(err))
 	}
 
@@ -125,6 +184,12 @@ func (s *Service) UpdateProduct(ctx context.Context, id string, input map[string
 	if qty, ok := input["inventoryQuantity"].(int); ok {
 		product.InventoryQuantity = &qty
 	}
+	if categoryID, ok := input["categoryId"].(string); ok {
+		product.CategoryID = categoryID
+	}
+	if collectionIDs, ok := input["collectionIds"].([]string); ok {
+		product.CollectionIDs = collectionIDs
+	}
 	if images, ok := input["images"].([]string); ok {
 		product.Images = images
 	}
@@ -138,7 +203,7 @@ func (s *Service) UpdateProduct(ctx context.Context, id string, input map[string
 	}
 
 	// Reload catalog
-	if err := s.cacheManager.Reload(ctx); err != nil {
+	if _, err := s.cacheManager.Reload(ctx); err != nil {
 		s.logger.Error("Failed to reload catalog after update", zap.Error(err))
 	}
 
@@ -158,16 +223,33 @@ func (s *Service) DeleteProduct(ctx context.Context, id string) error {
 		return fmt.Errorf("product not found: %s", id)
 	}
 
-	// Delete file from git
+	// Delete file from git using CommitBuilder
 	filePath := filepath.Join("products", id+".md")
-	writer := gitclient.NewWriter(s.repoPath, s.logger)
+	commitBuilder, err := gitclient.NewCommitBuilder(s.repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to create commit builder: %w", err)
+	}
 
-	if err := writer.DeleteFile(ctx, filePath, "Delete product: "+product.Title); err != nil {
-		return fmt.Errorf("failed to delete product: %w", err)
+	// Delete file
+	if err := commitBuilder.DeleteFile(filePath); err != nil {
+		return fmt.Errorf("failed to delete file: %w", err)
+	}
+
+	// Stage the deletion
+	if err := commitBuilder.StageFile(filePath); err != nil {
+		return fmt.Errorf("failed to stage deletion: %w", err)
+	}
+
+	// Commit
+	_, err = commitBuilder.Commit(gitclient.CommitOptions{
+		Message: "Delete product: " + product.Title,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to commit: %w", err)
 	}
 
 	// Reload catalog
-	if err := s.cacheManager.Reload(ctx); err != nil {
+	if _, err := s.cacheManager.Reload(ctx); err != nil {
 		s.logger.Error("Failed to reload catalog after delete", zap.Error(err))
 	}
 
@@ -179,12 +261,29 @@ func (s *Service) writeProductToGit(ctx context.Context, product *catalog.Produc
 	// Create markdown content
 	content := formatProductMarkdown(product)
 
-	// Write to git
+	// Write to git using CommitBuilder
 	filePath := filepath.Join("products", product.ID+".md")
-	writer := gitclient.NewWriter(s.repoPath, s.logger)
+	commitBuilder, err := gitclient.NewCommitBuilder(s.repoPath)
+	if err != nil {
+		return fmt.Errorf("failed to create commit builder: %w", err)
+	}
 
-	if err := writer.WriteFile(ctx, filePath, []byte(content), commitMessage); err != nil {
-		return fmt.Errorf("failed to write product: %w", err)
+	// Write file to disk
+	if err := commitBuilder.WriteFile(filePath, content); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	// Stage file
+	if err := commitBuilder.StageFile(filePath); err != nil {
+		return fmt.Errorf("failed to stage file: %w", err)
+	}
+
+	// Commit
+	_, err = commitBuilder.Commit(gitclient.CommitOptions{
+		Message: commitMessage,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to commit: %w", err)
 	}
 
 	return nil

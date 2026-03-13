@@ -12,7 +12,7 @@ interface AppProps {
  * - AuthProvider: Authentication and session management
  * - UrqlProvider: GraphQL client for data fetching
  */
-export function App({ children }: AppProps) {
+export function App({ children }: Readonly<AppProps>) {
   // Create client only once when component mounts (in browser)
   const urqlClient = useMemo(() => getUrqlClient(), []);
 

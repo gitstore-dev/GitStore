@@ -6,6 +6,7 @@ import (
 	"github.com/commerce-projects/gitstore/api/internal/catalog"
 	"github.com/commerce-projects/gitstore/api/internal/graph/model"
 	"github.com/commerce-projects/gitstore/api/internal/graph/scalar"
+	"github.com/shopspring/decimal"
 )
 
 // CatalogProductToGraphQL converts a catalog product to a GraphQL product
@@ -14,15 +15,22 @@ func CatalogProductToGraphQL(p *catalog.Product) *model.Product {
 		return nil
 	}
 
+	// Convert inventory quantity from *int to *int32
+	var invQty *int32
+	if p.InventoryQuantity != nil {
+		qty32 := int32(*p.InventoryQuantity)
+		invQty = &qty32
+	}
+
 	return &model.Product{
 		ID:                p.ID,
 		Title:             p.Title,
-		Sku:               &p.SKU,
-		Price:             scalar.Decimal(p.Price),
-		Currency:          &p.Currency,
+		Sku:               p.SKU,
+		Price:             scalar.Decimal{Decimal: decimal.NewFromFloat(p.Price)},
+		Currency:          p.Currency,
 		Body:              &p.Body,
 		InventoryStatus:   model.InventoryStatus(p.InventoryStatus),
-		InventoryQuantity: p.InventoryQuantity,
+		InventoryQuantity: invQty,
 		Category:          nil, // TODO: lookup category if needed
 		Collections:       []*model.Collection{}, // TODO: lookup collections if needed
 		Images:            p.Images,
@@ -57,13 +65,12 @@ func CatalogCollectionToGraphQL(c *catalog.Collection) *model.Collection {
 	}
 
 	return &model.Collection{
-		ID:         c.ID,
-		Name:       c.Name,
-		Slug:       c.Slug,
-		Body:       &c.Body,
-		ProductIds: c.ProductIDs,
-		Products:   []*model.Product{}, // TODO: lookup products if needed
-		CreatedAt:  c.CreatedAt,
-		UpdatedAt:  c.UpdatedAt,
+		ID:        c.ID,
+		Name:      c.Name,
+		Slug:      c.Slug,
+		Body:      &c.Body,
+		Products:  nil, // TODO: Will be resolved by GraphQL field resolver
+		CreatedAt: c.CreatedAt,
+		UpdatedAt: c.UpdatedAt,
 	}
 }

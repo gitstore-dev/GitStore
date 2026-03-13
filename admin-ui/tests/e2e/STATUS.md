@@ -2,7 +2,7 @@
 
 ## Summary
 
-The E2E test suite is **fully implemented and ready**, but tests currently fail because the GraphQL backend is not yet operational.
+The E2E test suite is **fully implemented and ready**. Backend implementation is in progress with Product CRUD operations now fully functional with real git persistence.
 
 ## Test Coverage
 
@@ -49,16 +49,17 @@ The E2E test suite is **fully implemented and ready**, but tests currently fail 
 ## Current Status
 
 ✅ **Apollo Client → urql Migration Complete**: Vite/Apollo compatibility issue RESOLVED
+✅ **Product CRUD Backend Implemented**: Real git-backed persistence working
 
 **Date**: 2026-03-12
-**Status**: GraphQL client functional, minor SSR issue remains
+**Status**: Product CRUD operational, Category/Collection CRUD pending
 
 ### Technical Details
 
 Apollo Client v3.x uses mixed CommonJS/ESM exports that Vite cannot properly resolve during static analysis. This prevents the dev server from starting when Playwright attempts to launch it for E2E tests.
 
 **What Works**:
-- ✅ Backend GraphQL resolvers implemented with mock data
+- ✅ Backend GraphQL resolvers implemented with **real git persistence**
 - ✅ Authentication endpoint operational with JWT
 - ✅ All proxy routes configured (`/api`, `/graphql`)
 - ✅ React context hydration fixed
@@ -67,6 +68,9 @@ Apollo Client v3.x uses mixed CommonJS/ESM exports that Vite cannot properly res
 - ✅ Pages load correctly (/products, /categories, /collections)
 - ✅ Playwright webServer management working
 - ✅ GraphQL queries and mutations functional
+- ✅ **Product CRUD**: Create, Update, Delete with git commits working
+- ✅ **Catalog Loading**: Cache loads from HEAD commit (sees latest changes)
+- ✅ **Type Converters**: catalog.Product ↔ model.Product conversion working
 
 **Minor Issue**:
 - ⚠️ SSR "useAuth must be used within an AuthProvider" warning
@@ -94,26 +98,28 @@ Timeout: Waiting for /products redirect after login
 
 ## What's Needed to Pass Tests
 
-The E2E tests will pass once the backend implements:
+### ✅ Completed
+1. **Product CRUD Resolvers**
+   - ✅ Create product with git commit
+   - ✅ Update product with version tracking
+   - ✅ Delete product with git commit
+   - ✅ Git integration with descriptive commit messages
+   - ✅ Catalog cache reload after mutations
 
-1. **GraphQL Code Generation**
-   - Run `gqlgen` in the API project
-   - Generate resolver stubs
+### 🚧 In Progress / Remaining
+1. **Product Query Resolvers**
+   - ⏳ Products list query (filtering, pagination)
+   - ⏳ Product by ID/SKU lookup
 
-2. **Authentication Resolvers**
-   - `login(username, password)` → returns token and user
-   - `logout()` → invalidates session
-   - `refreshToken(token)` → returns new token
+2. **Category CRUD Resolvers**
+   - ⏳ Categories: list, get, create, update, delete, reorder
 
-3. **CRUD Resolvers**
-   - Products: list, get, create, update, delete
-   - Categories: list, get, create, update, delete, reorder
-   - Collections: list, get, create, update, delete
+3. **Collection CRUD Resolvers**
+   - ⏳ Collections: list, get, create, update, delete
 
-4. **Git Integration**
-   - Mutations should commit changes to git
-   - Include proper commit messages
-   - Handle optimistic locking with version tracking
+4. **Authentication Flow**
+   - ✅ Login endpoint exists (`/api/login`)
+   - ⏳ Need to verify integration with frontend auth context
 
 ## Workaround: Manual Server Management
 
@@ -147,9 +153,31 @@ npx playwright show-report
 
 ## Next Steps
 
-1. **Phase 6**: Implement GraphQL backend resolvers
-2. **Re-run E2E tests**: They should pass once backend is complete
-3. **CI Integration**: Tests are already configured for CI/CD
+1. **Implement Product Query Resolvers**: Enable listing/filtering products
+2. **Implement Category CRUD**: Similar pattern to products (with reordering)
+3. **Implement Collection CRUD**: Same pattern for collections
+4. **Implement PublishCatalog**: Git tagging for versioning
+5. **Test E2E Flows**: Run tests against real backend
+6. **CI Integration**: Tests are already configured for CI/CD
+
+## Implementation Notes
+
+### Architecture
+- **Service Layer**: `internal/graph/service.go` handles business logic
+- **Type Converters**: `internal/graph/converters.go` for catalog ↔ GraphQL models
+- **Git Persistence**: Uses `CommitBuilder` pattern for atomic commits
+- **Cache Strategy**: Loads from HEAD (enables seeing uncommitted changes)
+- **File Format**: Markdown files with YAML frontmatter in `products/{uuid}.md`
+
+### Verified CRUD Cycle
+```bash
+# Test results from /Users/julius.krah/Documents/github/gitstore/test-catalog
+ee6c716 Create product: Test Product      # Initial creation
+549562d Update product: Updated Test Product  # Field updates
+4a362e7 Delete product: Updated Test Product  # File removal
+```
+
+Each operation creates clean, descriptive git commits with proper file handling.
 
 ## Notes
 

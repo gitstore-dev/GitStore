@@ -14,7 +14,7 @@ export function getUrqlClient(): Client {
 
   // Only create client in browser environment
   if (typeof window === 'undefined') {
-    throw new Error('urql client can only be created in browser environment');
+    throw new TypeError('urql client can only be created in browser environment');
   }
 
   clientInstance = createClient({

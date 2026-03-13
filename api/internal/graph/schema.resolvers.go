@@ -12,21 +12,20 @@ import (
 
 	"github.com/commerce-projects/gitstore/api/internal/graph/generated"
 	"github.com/commerce-projects/gitstore/api/internal/graph/model"
-	"github.com/commerce-projects/gitstore/api/internal/graph/scalar"
 	"github.com/google/uuid"
 )
 
 // CreateProduct is the resolver for the createProduct field.
 func (r *mutationResolver) CreateProduct(ctx context.Context, input model.CreateProductInput) (*model.CreateProductPayload, error) {
 	// Build input map for service
+	priceFloat, _ := input.Price.Float64()
 	serviceInput := map[string]interface{}{
-		"title": input.Title,
-		"price": float64(input.Price),
+		"title":      input.Title,
+		"sku":        input.Sku,
+		"price":      priceFloat,
+		"categoryId": input.CategoryID,
 	}
 
-	if input.Sku != nil {
-		serviceInput["sku"] = *input.Sku
-	}
 	if input.Currency != nil {
 		serviceInput["currency"] = *input.Currency
 	}
@@ -37,9 +36,12 @@ func (r *mutationResolver) CreateProduct(ctx context.Context, input model.Create
 		serviceInput["inventoryStatus"] = string(*input.InventoryStatus)
 	}
 	if input.InventoryQuantity != nil {
-		serviceInput["inventoryQuantity"] = *input.InventoryQuantity
+		serviceInput["inventoryQuantity"] = int(*input.InventoryQuantity)
 	}
-	if input.Images != nil {
+	if input.CollectionIds != nil && len(input.CollectionIds) > 0 {
+		serviceInput["collectionIds"] = input.CollectionIds
+	}
+	if input.Images != nil && len(input.Images) > 0 {
 		serviceInput["images"] = input.Images
 	}
 	if input.Metadata != nil {
@@ -63,41 +65,68 @@ func (r *mutationResolver) CreateProduct(ctx context.Context, input model.Create
 
 // UpdateProduct is the resolver for the updateProduct field.
 func (r *mutationResolver) UpdateProduct(ctx context.Context, input model.UpdateProductInput) (*model.UpdateProductPayload, error) {
-	// TODO: Implement proper git-backed product update with optimistic locking
-	// For now, return mock response to unblock E2E tests
-	var price scalar.Decimal
+	// Build input map for service
+	serviceInput := map[string]interface{}{}
+
+	if input.Title != nil {
+		serviceInput["title"] = *input.Title
+	}
+	if input.Sku != nil {
+		serviceInput["sku"] = *input.Sku
+	}
 	if input.Price != nil {
-		price = *input.Price
+		priceFloat, _ := input.Price.Float64()
+		serviceInput["price"] = priceFloat
+	}
+	if input.Currency != nil {
+		serviceInput["currency"] = *input.Currency
+	}
+	if input.Body != nil {
+		serviceInput["body"] = *input.Body
+	}
+	if input.InventoryStatus != nil {
+		serviceInput["inventoryStatus"] = string(*input.InventoryStatus)
+	}
+	if input.InventoryQuantity != nil {
+		serviceInput["inventoryQuantity"] = int(*input.InventoryQuantity)
+	}
+	if input.CategoryID != nil {
+		serviceInput["categoryId"] = *input.CategoryID
+	}
+	if input.CollectionIds != nil && len(input.CollectionIds) > 0 {
+		serviceInput["collectionIds"] = input.CollectionIds
+	}
+	if input.Images != nil && len(input.Images) > 0 {
+		serviceInput["images"] = input.Images
+	}
+	if input.Metadata != nil {
+		serviceInput["metadata"] = input.Metadata
 	}
 
-	product := &model.Product{
-		ID:                input.ID,
-		Title:             stringOrDefault(input.Title, "Updated Product"),
-		Sku:               stringOrDefault(input.Sku, "updated-sku"),
-		Price:             price,
-		Currency:          stringOrDefault(input.Currency, "USD"),
-		Body:              input.Body,
-		InventoryStatus:   derefInventoryStatus(input.InventoryStatus),
-		InventoryQuantity: input.InventoryQuantity,
-		Category:          nil, // TODO: lookup category
-		Collections:       []*model.Collection{}, // TODO: lookup collections
-		Images:            input.Images,
-		Metadata:          input.Metadata,
-		CreatedAt:         time.Now().Add(-24 * time.Hour),
-		UpdatedAt:         time.Now(),
+	// Update product via service
+	catalogProduct, err := r.service.UpdateProduct(ctx, input.ID, serviceInput)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update product: %w", err)
 	}
+
+	// Convert to GraphQL model
+	product := CatalogProductToGraphQL(catalogProduct)
 
 	return &model.UpdateProductPayload{
 		ClientMutationID: input.ClientMutationID,
 		Product:          product,
-		Conflict:         nil, // No conflicts in mock
+		Conflict:         nil, // TODO: Implement optimistic locking
 	}, nil
 }
 
 // DeleteProduct is the resolver for the deleteProduct field.
 func (r *mutationResolver) DeleteProduct(ctx context.Context, input model.DeleteProductInput) (*model.DeleteProductPayload, error) {
-	// TODO: Implement proper git-backed product deletion
-	// For now, return mock response to unblock E2E tests
+	// Delete product via service
+	err := r.service.DeleteProduct(ctx, input.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete product: %w", err)
+	}
+
 	idCopy := input.ID
 	return &model.DeleteProductPayload{
 		ClientMutationID: input.ClientMutationID,
@@ -286,28 +315,66 @@ func (r *queryResolver) Nodes(ctx context.Context, ids []string) ([]model.Node, 
 
 // Product is the resolver for the product field.
 func (r *queryResolver) Product(ctx context.Context, sku string) (*model.Product, error) {
-	// TODO: Implement proper product lookup by SKU
-	return nil, nil
+	catalogProduct, err := r.service.GetProductBySKU(ctx, sku)
+	if err != nil {
+		return nil, nil // Return nil instead of error for not found
+	}
+	return CatalogProductToGraphQL(catalogProduct), nil
 }
 
 // ProductByID is the resolver for the productById field.
 func (r *queryResolver) ProductByID(ctx context.Context, id string) (*model.Product, error) {
-	// TODO: Implement proper product lookup by ID
-	return nil, nil
+	catalogProduct, err := r.service.GetProductByID(ctx, id)
+	if err != nil {
+		return nil, nil // Return nil instead of error for not found
+	}
+	return CatalogProductToGraphQL(catalogProduct), nil
 }
 
 // Products is the resolver for the products field.
 func (r *queryResolver) Products(ctx context.Context, first *int32, after *string, last *int32, before *string, filter *model.ProductFilter) (*model.ProductConnection, error) {
-	// TODO: Implement proper product querying from git
-	// For now, return empty list to unblock E2E tests
+	// Get category filter if specified
+	var categoryID *string
+	if filter != nil {
+		categoryID = filter.CategoryID
+	}
+
+	// Get products from service
+	products, err := r.service.GetProducts(ctx, categoryID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get products: %w", err)
+	}
+
+	// Simple pagination: for now, return all products
+	// TODO: Implement proper cursor-based pagination
+	edges := make([]*model.ProductEdge, len(products))
+	for i, p := range products {
+		edges[i] = &model.ProductEdge{
+			Cursor: p.ID, // Use ID as cursor for simplicity
+			Node:   CatalogProductToGraphQL(p),
+		}
+	}
+
+	// Calculate pagination info
+	hasNextPage := false
+	hasPreviousPage := false
+	var startCursor, endCursor *string
+
+	if len(edges) > 0 {
+		start := edges[0].Cursor
+		end := edges[len(edges)-1].Cursor
+		startCursor = &start
+		endCursor = &end
+	}
+
 	return &model.ProductConnection{
-		Edges:      []*model.ProductEdge{},
-		TotalCount: 0,
+		Edges:      edges,
+		TotalCount: int32(len(products)),
 		PageInfo: &model.PageInfo{
-			HasNextPage:     false,
-			HasPreviousPage: false,
-			StartCursor:     nil,
-			EndCursor:       nil,
+			HasNextPage:     hasNextPage,
+			HasPreviousPage: hasPreviousPage,
+			StartCursor:     startCursor,
+			EndCursor:       endCursor,
 		},
 	}, nil
 }
