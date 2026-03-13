@@ -263,7 +263,7 @@ Multi-service architecture:
 - [ ] T132 [P] Add graceful shutdown handling for websocket connections in git-server/src/websocket/server.rs
 - [ ] T133 [P] Add connection pooling for git operations in api/internal/gitclient/pool.go
 - [ ] T134 [P] Implement request rate limiting middleware in api/internal/middleware/rate_limit.go
-- [ ] T135 [P] Add health check endpoints for all three services (/health, /ready)
+- [X] T135 [P] Add health check endpoints for all three services (/health, /ready)
 - [ ] T136 [P] Create Prometheus metrics exporters for api and git-server
 - [ ] T137 [P] Add accessibility labels to admin UI components (ARIA attributes)
 - [ ] T138 [P] Implement loading states for all async operations in admin UI
