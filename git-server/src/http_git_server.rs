@@ -13,7 +13,7 @@ use axum::{
 };
 use git2::Repository;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path as StdPath, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -402,7 +402,7 @@ async fn readiness_check(
 }
 
 /// Check if repository is accessible
-fn check_repository(repo_path: &PathBuf) -> CheckStatus {
+fn check_repository(repo_path: &StdPath) -> CheckStatus {
     let catalog_path = repo_path.join("catalog.git");
 
     match Repository::open(&catalog_path) {
