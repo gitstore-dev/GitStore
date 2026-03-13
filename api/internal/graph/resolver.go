@@ -13,41 +13,23 @@ import (
 
 // Resolver is the root GraphQL resolver
 type Resolver struct {
-	logger *zap.Logger
-	cache  *cache.Manager
+	logger  *zap.Logger
+	cache   *cache.Manager
+	service *Service
 }
 
 // NewResolver creates a new GraphQL resolver
-func NewResolver(cacheManager *cache.Manager) *Resolver {
+func NewResolver(cacheManager *cache.Manager, repoPath string, gitServerURL string) *Resolver {
 	return &Resolver{
-		logger: logger.Log,
-		cache:  cacheManager,
+		logger:  logger.Log,
+		cache:   cacheManager,
+		service: NewService(cacheManager, repoPath, gitServerURL, logger.Log),
 	}
 }
 
 // getLoaders retrieves data loaders from context
+//
+//lint:ignore U1000 Reserved for future DataLoader implementation
 func (r *Resolver) getLoaders(ctx context.Context) *loader.Loaders {
 	return loader.FromContext(ctx)
 }
-
-// Category returns CategoryResolver interface
-func (r *Resolver) Category() CategoryResolver {
-	return &categoryResolver{r}
-}
-
-// Collection returns CollectionResolver interface
-func (r *Resolver) Collection() CollectionResolver {
-	return &collectionResolver{r}
-}
-
-// QueryResolver interface
-type QueryResolver interface{}
-
-// MutationResolver interface
-type MutationResolver interface{}
-
-// CategoryResolver interface
-type CategoryResolver interface{}
-
-// CollectionResolver interface
-type CollectionResolver interface{}

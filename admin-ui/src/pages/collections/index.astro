@@ -1,48 +1,8 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { App } from '../../components/App';
-import { ProtectedRoute } from '../../components/ProtectedRoute';
-import { Header } from '../../components/Header';
-import { CollectionList } from '../../components/collections/CollectionList';
+import { CollectionsPage } from '../../components/collections/CollectionsPage';
 ---
 
 <Layout title="Collections - GitStore Admin">
-  <App client:only="react">
-    <ProtectedRoute client:only="react">
-      <Header client:only="react" />
-      <main>
-        <div class="page-header">
-          <h1>Collections</h1>
-          <p class="subtitle">Curate product collections for featured displays</p>
-        </div>
-        <CollectionList client:only="react" />
-      </main>
-    </ProtectedRoute>
-  </App>
+  <CollectionsPage client:only="react" />
 </Layout>
-
-<style>
-  main {
-    min-height: calc(100vh - 80px);
-    background-color: #f7fafc;
-  }
-
-  .page-header {
-    padding: 2rem 2rem 0;
-    max-width: 1440px;
-    margin: 0 auto;
-  }
-
-  h1 {
-    margin: 0;
-    font-size: 2rem;
-    font-weight: 700;
-    color: #1a202c;
-  }
-
-  .subtitle {
-    margin: 0.5rem 0 0;
-    color: #718096;
-    font-size: 1rem;
-  }
-</style>

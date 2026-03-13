@@ -1,37 +1,21 @@
 /**
- * Custom hooks for mutations with optimistic updates
- * These hooks wrap Apollo useMutation with optimistic UI updates
+ * Custom hooks for mutations with urql
+ * These hooks wrap urql useMutation for consistent error handling
  *
  * Usage example:
  *
- * const [createProduct] = useCreateProductWithOptimistic();
+ * const [createProductResult, createProduct] = useCreateProduct();
  *
  * await createProduct({
- *   variables: {
- *     input: {
- *       title: 'New Product',
- *       price: 99.99,
- *       ...
- *     }
+ *   input: {
+ *     title: 'New Product',
+ *     price: 99.99,
+ *     ...
  *   }
  * });
  */
 
-import { useMutation, MutationHookOptions } from '@apollo/client';
-import {
-  optimisticCreateProduct,
-  optimisticUpdateProduct,
-  optimisticCreateCategory,
-  optimisticUpdateCategory,
-  optimisticCreateCollection,
-  optimisticUpdateCollection,
-  optimisticReorderCategories,
-  optimisticReorderCollections,
-  updateCacheAfterCreateProduct,
-  updateCacheAfterDeleteProduct,
-  updateCacheAfterDeleteCategory,
-  updateCacheAfterDeleteCollection,
-} from './optimistic-updates';
+import { useMutation } from 'urql';
 
 // TODO: Replace with generated types and documents from codegen
 // import {
@@ -43,376 +27,233 @@ import {
 // } from '../generated/graphql';
 
 /**
- * Hook for createProduct mutation with optimistic UI
+ * Hook for createProduct mutation
  */
-export function useCreateProductWithOptimistic(options?: MutationHookOptions<any, any>) {
-  return useMutation<any, any>(
-    // TODO: Replace with CreateProductDocument from codegen
-    require('@apollo/client').gql`
-      mutation CreateProduct($input: CreateProductInput!) {
-        createProduct(input: $input) {
-          clientMutationId
-          product {
-            id
-            title
-            slug
-            sku
-            price
-            inventory
-            status
-            version
-          }
+export function useCreateProduct() {
+  return useMutation(`
+    mutation CreateProduct($input: CreateProductInput!) {
+      createProduct(input: $input) {
+        clientMutationId
+        product {
+          id
+          title
+          slug
+          sku
+          price
+          currency
+          body
+          inventoryStatus
+          inventoryQuantity
+          images
+          metadata
+          version
+          createdAt
+          updatedAt
         }
       }
-    `,
-    {
-      ...options,
-      optimisticResponse: (variables) => ({
-        createProduct: {
-          __typename: 'CreateProductPayload',
-          clientMutationId: variables.input.clientMutationId,
-          product: optimisticCreateProduct(variables.input),
-        },
-      }),
-      update: (cache, { data }) => {
-        if (data?.createProduct?.product) {
-          updateCacheAfterCreateProduct(cache, data.createProduct.product);
-        }
-      },
     }
-  );
+  `);
 }
 
 /**
- * Hook for updateProduct mutation with optimistic UI
+ * Hook for updateProduct mutation
  */
-export function useUpdateProductWithOptimistic(
-  currentProduct: any,
-  options?: MutationHookOptions<any, any>
-) {
-  return useMutation<any, any>(
-    // TODO: Replace with UpdateProductDocument from codegen
-    require('@apollo/client').gql`
-      mutation UpdateProduct($input: UpdateProductInput!) {
-        updateProduct(input: $input) {
-          clientMutationId
-          product {
-            id
-            title
-            slug
-            sku
-            price
-            inventory
-            status
-            version
-          }
+export function useUpdateProduct() {
+  return useMutation(`
+    mutation UpdateProduct($input: UpdateProductInput!) {
+      updateProduct(input: $input) {
+        clientMutationId
+        product {
+          id
+          title
+          slug
+          sku
+          price
+          currency
+          body
+          inventoryStatus
+          inventoryQuantity
+          images
+          metadata
+          version
+          createdAt
+          updatedAt
         }
       }
-    `,
-    {
-      ...options,
-      optimisticResponse: (variables) => ({
-        updateProduct: {
-          __typename: 'UpdateProductPayload',
-          clientMutationId: variables.input.clientMutationId,
-          product: optimisticUpdateProduct(currentProduct, variables.input),
-        },
-      }),
     }
-  );
+  `);
 }
 
 /**
- * Hook for deleteProduct mutation with optimistic UI
+ * Hook for deleteProduct mutation
  */
-export function useDeleteProductWithOptimistic(options?: MutationHookOptions<any, any>) {
-  return useMutation<any, any>(
-    // TODO: Replace with DeleteProductDocument from codegen
-    require('@apollo/client').gql`
-      mutation DeleteProduct($input: DeleteProductInput!) {
-        deleteProduct(input: $input) {
-          clientMutationId
-          success
-        }
+export function useDeleteProduct() {
+  return useMutation(`
+    mutation DeleteProduct($input: DeleteProductInput!) {
+      deleteProduct(input: $input) {
+        clientMutationId
+        success
       }
-    `,
-    {
-      ...options,
-      update: (cache, { data }, { variables }) => {
-        if (data?.deleteProduct?.success) {
-          updateCacheAfterDeleteProduct(cache, variables.input.id);
-        }
-      },
     }
-  );
+  `);
 }
 
 /**
- * Hook for createCategory mutation with optimistic UI
+ * Hook for createCategory mutation
  */
-export function useCreateCategoryWithOptimistic(options?: MutationHookOptions<any, any>) {
-  return useMutation<any, any>(
-    // TODO: Replace with CreateCategoryDocument from codegen
-    require('@apollo/client').gql`
-      mutation CreateCategory($input: CreateCategoryInput!) {
-        createCategory(input: $input) {
-          clientMutationId
-          category {
-            id
-            name
-            slug
-            description
-            parentId
-            displayOrder
-            version
-          }
+export function useCreateCategory() {
+  return useMutation(`
+    mutation CreateCategory($input: CreateCategoryInput!) {
+      createCategory(input: $input) {
+        clientMutationId
+        category {
+          id
+          name
+          slug
+          description
+          parentId
+          displayOrder
+          version
+          createdAt
+          updatedAt
         }
       }
-    `,
-    {
-      ...options,
-      optimisticResponse: (variables) => ({
-        createCategory: {
-          __typename: 'CreateCategoryPayload',
-          clientMutationId: variables.input.clientMutationId,
-          category: optimisticCreateCategory(variables.input),
-        },
-      }),
     }
-  );
+  `);
 }
 
 /**
- * Hook for updateCategory mutation with optimistic UI
+ * Hook for updateCategory mutation
  */
-export function useUpdateCategoryWithOptimistic(
-  currentCategory: any,
-  options?: MutationHookOptions<any, any>
-) {
-  return useMutation<any, any>(
-    // TODO: Replace with UpdateCategoryDocument from codegen
-    require('@apollo/client').gql`
-      mutation UpdateCategory($input: UpdateCategoryInput!) {
-        updateCategory(input: $input) {
-          clientMutationId
-          category {
-            id
-            name
-            slug
-            description
-            parentId
-            displayOrder
-            version
-          }
+export function useUpdateCategory() {
+  return useMutation(`
+    mutation UpdateCategory($input: UpdateCategoryInput!) {
+      updateCategory(input: $input) {
+        clientMutationId
+        category {
+          id
+          name
+          slug
+          description
+          parentId
+          displayOrder
+          version
+          createdAt
+          updatedAt
         }
       }
-    `,
-    {
-      ...options,
-      optimisticResponse: (variables) => ({
-        updateCategory: {
-          __typename: 'UpdateCategoryPayload',
-          clientMutationId: variables.input.clientMutationId,
-          category: optimisticUpdateCategory(currentCategory, variables.input),
-        },
-      }),
     }
-  );
+  `);
 }
 
 /**
- * Hook for deleteCategory mutation with optimistic UI
+ * Hook for deleteCategory mutation
  */
-export function useDeleteCategoryWithOptimistic(options?: MutationHookOptions<any, any>) {
-  return useMutation<any, any>(
-    // TODO: Replace with DeleteCategoryDocument from codegen
-    require('@apollo/client').gql`
-      mutation DeleteCategory($input: DeleteCategoryInput!) {
-        deleteCategory(input: $input) {
-          clientMutationId
-          success
-        }
+export function useDeleteCategory() {
+  return useMutation(`
+    mutation DeleteCategory($input: DeleteCategoryInput!) {
+      deleteCategory(input: $input) {
+        clientMutationId
+        success
       }
-    `,
-    {
-      ...options,
-      update: (cache, { data }, { variables }) => {
-        if (data?.deleteCategory?.success) {
-          updateCacheAfterDeleteCategory(cache, variables.input.id);
-        }
-      },
     }
-  );
+  `);
 }
 
 /**
- * Hook for reorderCategories mutation with optimistic UI
+ * Hook for reorderCategories mutation
  */
-export function useReorderCategoriesWithOptimistic(
-  currentCategories: any[],
-  options?: MutationHookOptions<any, any>
-) {
-  return useMutation<any, any>(
-    // TODO: Replace with ReorderCategoriesDocument from codegen
-    require('@apollo/client').gql`
-      mutation ReorderCategories($input: ReorderCategoriesInput!) {
-        reorderCategories(input: $input) {
-          clientMutationId
-          categories {
-            id
-            displayOrder
-            version
-          }
+export function useReorderCategories() {
+  return useMutation(`
+    mutation ReorderCategories($input: ReorderCategoriesInput!) {
+      reorderCategories(input: $input) {
+        clientMutationId
+        categories {
+          id
+          displayOrder
+          version
         }
       }
-    `,
-    {
-      ...options,
-      optimisticResponse: (variables) => ({
-        reorderCategories: {
-          __typename: 'ReorderCategoriesPayload',
-          clientMutationId: variables.input.clientMutationId,
-          categories: optimisticReorderCategories(
-            currentCategories,
-            variables.input.categoryIds
-          ),
-        },
-      }),
     }
-  );
+  `);
 }
 
 /**
- * Hook for createCollection mutation with optimistic UI
+ * Hook for createCollection mutation
  */
-export function useCreateCollectionWithOptimistic(options?: MutationHookOptions<any, any>) {
-  return useMutation<any, any>(
-    // TODO: Replace with CreateCollectionDocument from codegen
-    require('@apollo/client').gql`
-      mutation CreateCollection($input: CreateCollectionInput!) {
-        createCollection(input: $input) {
-          clientMutationId
-          collection {
-            id
-            name
-            slug
-            description
-            productIds
-            displayOrder
-            version
-          }
+export function useCreateCollection() {
+  return useMutation(`
+    mutation CreateCollection($input: CreateCollectionInput!) {
+      createCollection(input: $input) {
+        clientMutationId
+        collection {
+          id
+          name
+          slug
+          description
+          productIds
+          displayOrder
+          version
+          createdAt
+          updatedAt
         }
       }
-    `,
-    {
-      ...options,
-      optimisticResponse: (variables) => ({
-        createCollection: {
-          __typename: 'CreateCollectionPayload',
-          clientMutationId: variables.input.clientMutationId,
-          collection: optimisticCreateCollection(variables.input),
-        },
-      }),
     }
-  );
+  `);
 }
 
 /**
- * Hook for updateCollection mutation with optimistic UI
+ * Hook for updateCollection mutation
  */
-export function useUpdateCollectionWithOptimistic(
-  currentCollection: any,
-  options?: MutationHookOptions<any, any>
-) {
-  return useMutation<any, any>(
-    // TODO: Replace with UpdateCollectionDocument from codegen
-    require('@apollo/client').gql`
-      mutation UpdateCollection($input: UpdateCollectionInput!) {
-        updateCollection(input: $input) {
-          clientMutationId
-          collection {
-            id
-            name
-            slug
-            description
-            productIds
-            displayOrder
-            version
-          }
+export function useUpdateCollection() {
+  return useMutation(`
+    mutation UpdateCollection($input: UpdateCollectionInput!) {
+      updateCollection(input: $input) {
+        clientMutationId
+        collection {
+          id
+          name
+          slug
+          description
+          productIds
+          displayOrder
+          version
+          createdAt
+          updatedAt
         }
       }
-    `,
-    {
-      ...options,
-      optimisticResponse: (variables) => ({
-        updateCollection: {
-          __typename: 'UpdateCollectionPayload',
-          clientMutationId: variables.input.clientMutationId,
-          collection: optimisticUpdateCollection(currentCollection, variables.input),
-        },
-      }),
     }
-  );
+  `);
 }
 
 /**
- * Hook for deleteCollection mutation with optimistic UI
+ * Hook for deleteCollection mutation
  */
-export function useDeleteCollectionWithOptimistic(options?: MutationHookOptions<any, any>) {
-  return useMutation<any, any>(
-    // TODO: Replace with DeleteCollectionDocument from codegen
-    require('@apollo/client').gql`
-      mutation DeleteCollection($input: DeleteCollectionInput!) {
-        deleteCollection(input: $input) {
-          clientMutationId
-          success
-        }
+export function useDeleteCollection() {
+  return useMutation(`
+    mutation DeleteCollection($input: DeleteCollectionInput!) {
+      deleteCollection(input: $input) {
+        clientMutationId
+        success
       }
-    `,
-    {
-      ...options,
-      update: (cache, { data }, { variables }) => {
-        if (data?.deleteCollection?.success) {
-          updateCacheAfterDeleteCollection(cache, variables.input.id);
-        }
-      },
     }
-  );
+  `);
 }
 
 /**
- * Hook for reorderCollections mutation with optimistic UI
+ * Hook for reorderCollections mutation
  */
-export function useReorderCollectionsWithOptimistic(
-  currentCollections: any[],
-  options?: MutationHookOptions<any, any>
-) {
-  return useMutation<any, any>(
-    // TODO: Replace with ReorderCollectionsDocument from codegen
-    require('@apollo/client').gql`
-      mutation ReorderCollections($input: ReorderCollectionsInput!) {
-        reorderCollections(input: $input) {
-          clientMutationId
-          collections {
-            id
-            displayOrder
-            version
-          }
+export function useReorderCollections() {
+  return useMutation(`
+    mutation ReorderCollections($input: ReorderCollectionsInput!) {
+      reorderCollections(input: $input) {
+        clientMutationId
+        collections {
+          id
+          displayOrder
+          version
         }
       }
-    `,
-    {
-      ...options,
-      optimisticResponse: (variables) => ({
-        reorderCollections: {
-          __typename: 'ReorderCollectionsPayload',
-          clientMutationId: variables.input.clientMutationId,
-          collections: optimisticReorderCollections(
-            currentCollections,
-            variables.input.collectionIds
-          ),
-        },
-      }),
     }
-  );
+  `);
 }

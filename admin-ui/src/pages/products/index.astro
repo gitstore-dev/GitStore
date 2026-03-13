@@ -1,48 +1,8 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { App } from '../../components/App';
-import { ProtectedRoute } from '../../components/ProtectedRoute';
-import { Header } from '../../components/Header';
-import { ProductList } from '../../components/products/ProductList';
+import { ProductsPage } from '../../components/products/ProductsPage';
 ---
 
 <Layout title="Products - GitStore Admin">
-  <App client:only="react">
-    <ProtectedRoute client:only="react">
-      <Header client:only="react" />
-      <main>
-        <div class="page-header">
-          <h1>Products</h1>
-          <p class="subtitle">Manage your product catalog</p>
-        </div>
-        <ProductList client:only="react" />
-      </main>
-    </ProtectedRoute>
-  </App>
+  <ProductsPage client:only="react" />
 </Layout>
-
-<style>
-  main {
-    min-height: calc(100vh - 80px);
-    background-color: #f7fafc;
-  }
-
-  .page-header {
-    padding: 2rem 2rem 0;
-    max-width: 1440px;
-    margin: 0 auto;
-  }
-
-  h1 {
-    margin: 0;
-    font-size: 2rem;
-    font-weight: 700;
-    color: #1a202c;
-  }
-
-  .subtitle {
-    margin: 0.5rem 0 0;
-    color: #718096;
-    font-size: 1rem;
-  }
-</style>

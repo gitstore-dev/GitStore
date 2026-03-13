@@ -16,7 +16,95 @@ use crate::validation::product::{
     validate_product, ProductValidationError,
 };
 use anyhow::{Context, Result};
+use git2::{ObjectType, Oid, Repository};
+use std::str;
 use tracing::{debug, info, warn};
+
+/// Git push validator (public API)
+pub struct Validator {}
+
+impl Validator {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    /// Validate a git push operation
+    ///
+    /// Checks all modified/added files between old and new commits
+    pub fn validate_push(
+        &self,
+        repo: &Repository,
+        _old_commit_id: Option<&str>,
+        new_commit_id: &str,
+    ) -> Result<(), ValidationResult> {
+        let new_oid = Oid::from_str(new_commit_id)
+            .map_err(|e| ValidationResult::with_error("", &format!("Invalid commit ID: {}", e)))?;
+
+        let new_commit = repo
+            .find_commit(new_oid)
+            .map_err(|e| ValidationResult::with_error("", &format!("Commit not found: {}", e)))?;
+
+        // Get the tree of the new commit
+        let new_tree = new_commit
+            .tree()
+            .map_err(|e| ValidationResult::with_error("", &format!("Failed to get tree: {}", e)))?;
+
+        // Load all files from the new commit
+        let mut validator = CatalogValidator::new();
+
+        // Walk the tree and load all markdown files
+        new_tree
+            .walk(git2::TreeWalkMode::PreOrder, |root, entry| {
+                if let Some(name) = entry.name() {
+                    let file_path = if root.is_empty() {
+                        name.to_string()
+                    } else {
+                        format!("{}/{}", root, name)
+                    };
+
+                    // Only process markdown files in catalog directories
+                    if (file_path.starts_with("products/")
+                        || file_path.starts_with("categories/")
+                        || file_path.starts_with("collections/"))
+                        && file_path.ends_with(".md")
+                    {
+                        if let Ok(object) = entry.to_object(repo) {
+                            if object.kind() == Some(ObjectType::Blob) {
+                                if let Some(blob) = object.as_blob() {
+                                    if let Ok(content) = str::from_utf8(blob.content()) {
+                                        if let Err(e) = validator.load_file(&file_path, content) {
+                                            warn!(
+                                                file = %file_path,
+                                                error = %e,
+                                                "Failed to load file during validation"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                git2::TreeWalkResult::Ok
+            })
+            .ok();
+
+        // Run validation
+        let result = validator.validate();
+
+        if result.is_valid() {
+            Ok(())
+        } else {
+            Err(result)
+        }
+    }
+}
+
+impl Default for Validator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Catalog validator that coordinates validation across all entity types
 pub struct CatalogValidator {
