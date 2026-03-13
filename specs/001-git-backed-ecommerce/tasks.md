@@ -162,11 +162,11 @@ Multi-service architecture:
 - [X] T068 [US2] Implement category(slug) query resolver in api/internal/graph/category.resolvers.go
 - [X] T069 [US2] Implement collections query resolver in api/internal/graph/collections.resolvers.go
 - [X] T070 [US2] Implement collection(slug) query resolver in api/internal/graph/collection.resolvers.go
-- [ ] T071 [US2] Implement Product.category field resolver (single category lookup) in api/internal/graph/product.resolvers.go
-- [ ] T072 [US2] Implement Product.collections field resolver (multiple collection lookup) in api/internal/graph/product.resolvers.go
-- [ ] T073 [US2] Implement Category.products field resolver with subcategory product inclusion in api/internal/graph/category.resolvers.go
-- [ ] T074 [US2] Implement Collection.products field resolver in api/internal/graph/collection.resolvers.go
-- [ ] T075 [US2] Implement orphaned reference handling (mark as invalid, don't fail queries) in api/internal/models/references.go
+- [X] T071 [US2] Implement Product.category field resolver (single category lookup) in api/internal/graph/product.resolvers.go
+- [X] T072 [US2] Implement Product.collections field resolver (multiple collection lookup) in api/internal/graph/product.resolvers.go
+- [X] T073 [US2] Implement Category.products field resolver with subcategory product inclusion in api/internal/graph/category.resolvers.go
+- [X] T074 [US2] Implement Collection.products field resolver in api/internal/graph/collection.resolvers.go
+- [X] T075 [US2] Implement orphaned reference handling (mark as invalid, don't fail queries) in api/internal/models/references.go
 
 #### DataLoader for N+1 Prevention
 
