@@ -75,9 +75,9 @@ func TestProductsFilteredByCategory(t *testing.T) {
 			Products struct {
 				Edges []struct {
 					Node struct {
-						ID    string `json:"id"`
-						SKU   string `json:"sku"`
-						Title string `json:"title"`
+						ID       string `json:"id"`
+						SKU      string `json:"sku"`
+						Title    string `json:"title"`
 						Category *struct {
 							ID   string `json:"id"`
 							Name string `json:"name"`
@@ -128,8 +128,8 @@ func TestProductsFilteredByCategory(t *testing.T) {
 
 		var result struct {
 			Category *struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
+				ID       string `json:"id"`
+				Name     string `json:"name"`
 				Products struct {
 					Edges []struct {
 						Node struct {
@@ -210,7 +210,7 @@ func TestProductsFilteredByCategory(t *testing.T) {
 			Products struct {
 				Edges []struct {
 					Cursor string `json:"cursor"`
-					Node struct {
+					Node   struct {
 						ID  string `json:"id"`
 						SKU string `json:"sku"`
 					} `json:"node"`
@@ -267,8 +267,8 @@ func TestProductsFilteredByCategory(t *testing.T) {
 				Products struct {
 					Edges []struct {
 						Node struct {
-							ID  string `json:"id"`
-							SKU string `json:"sku"`
+							ID       string `json:"id"`
+							SKU      string `json:"sku"`
 							Category *struct {
 								ID string `json:"id"`
 							} `json:"category"`
@@ -378,11 +378,11 @@ func TestProductsFilteredByCategory(t *testing.T) {
 			Products struct {
 				Edges []struct {
 					Node struct {
-						SKU string `json:"sku"`
+						SKU      string `json:"sku"`
 						Category *struct {
-							ID   string `json:"id"`
-							Name string `json:"name"`
-							Slug string `json:"slug"`
+							ID     string `json:"id"`
+							Name   string `json:"name"`
+							Slug   string `json:"slug"`
 							Parent *struct {
 								ID   string `json:"id"`
 								Name string `json:"name"`

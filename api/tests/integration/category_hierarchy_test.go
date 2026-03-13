@@ -41,9 +41,9 @@ func TestCategoryHierarchy(t *testing.T) {
 
 		var result struct {
 			Category *struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-				Slug string `json:"slug"`
+				ID     string `json:"id"`
+				Name   string `json:"name"`
+				Slug   string `json:"slug"`
 				Parent *struct {
 					ID   string `json:"id"`
 					Name string `json:"name"`
@@ -99,13 +99,13 @@ func TestCategoryHierarchy(t *testing.T) {
 
 		var result struct {
 			Category *struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-				Slug string `json:"slug"`
+				ID       string `json:"id"`
+				Name     string `json:"name"`
+				Slug     string `json:"slug"`
 				Children []struct {
-					ID   string `json:"id"`
-					Name string `json:"name"`
-					Slug string `json:"slug"`
+					ID     string `json:"id"`
+					Name   string `json:"name"`
+					Slug   string `json:"slug"`
 					Parent *struct {
 						Slug string `json:"slug"`
 					} `json:"parent"`
@@ -166,11 +166,11 @@ func TestCategoryHierarchy(t *testing.T) {
 
 		var result struct {
 			Categories []struct {
-				Name  string `json:"name"`
-				Depth int    `json:"depth"`
+				Name   string `json:"name"`
+				Depth  int    `json:"depth"`
 				Parent *struct {
-					Name  string `json:"name"`
-					Depth int    `json:"depth"`
+					Name   string `json:"name"`
+					Depth  int    `json:"depth"`
 					Parent *struct {
 						Name  string `json:"name"`
 						Depth int    `json:"depth"`
@@ -216,10 +216,10 @@ func TestCategoryHierarchy(t *testing.T) {
 
 		var result struct {
 			Categories []struct {
-				Name  string   `json:"name"`
-				Slug  string   `json:"slug"`
-				Depth int      `json:"depth"`
-				Path  []string `json:"path"`
+				Name   string   `json:"name"`
+				Slug   string   `json:"slug"`
+				Depth  int      `json:"depth"`
+				Path   []string `json:"path"`
 				Parent *struct {
 					Slug string `json:"slug"`
 				} `json:"parent"`
@@ -279,14 +279,14 @@ func TestCategoryHierarchy(t *testing.T) {
 
 		var result struct {
 			Categories []struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-				Slug string `json:"slug"`
+				ID     string `json:"id"`
+				Name   string `json:"name"`
+				Slug   string `json:"slug"`
 				Parent *struct {
 					ID string `json:"id"`
 				} `json:"parent"`
-				Depth int      `json:"depth"`
-				Path  []string `json:"path"`
+				Depth    int      `json:"depth"`
+				Path     []string `json:"path"`
 				Children []struct {
 					ID string `json:"id"`
 				} `json:"children"`

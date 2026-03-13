@@ -203,9 +203,9 @@ func TestCategoryBySlugQuery(t *testing.T) {
 
 		var result struct {
 			Category *struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-				Slug string `json:"slug"`
+				ID     string `json:"id"`
+				Name   string `json:"name"`
+				Slug   string `json:"slug"`
 				Parent *struct {
 					ID string `json:"id"`
 				} `json:"parent"`
@@ -285,12 +285,12 @@ func TestCategoryProductsField(t *testing.T) {
 
 		var result struct {
 			Category *struct {
-				Name string `json:"name"`
+				Name     string `json:"name"`
 				Products struct {
 					Edges []struct {
 						Node struct {
-							SKU   string `json:"sku"`
-							Title string `json:"title"`
+							SKU      string `json:"sku"`
+							Title    string `json:"title"`
 							Category *struct {
 								Slug string `json:"slug"`
 							} `json:"category"`
@@ -346,11 +346,11 @@ func TestCategoryProductsField(t *testing.T) {
 
 		var result struct {
 			Category *struct {
-				Name string `json:"name"`
+				Name     string `json:"name"`
 				Products struct {
 					Edges []struct {
 						Node struct {
-							SKU   string `json:"sku"`
+							SKU      string `json:"sku"`
 							Category *struct {
 								Slug string   `json:"slug"`
 								Path []string `json:"path"`
