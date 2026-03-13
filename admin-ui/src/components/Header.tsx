@@ -55,20 +55,28 @@ export function Header() {
     setPublishError(null);
 
     try {
-      const result = await publishCatalog(client, message, version || undefined);
+      const result = await publishCatalog(client, version, message);
 
-      if (result.success) {
-        console.log('Catalog published successfully:', result.version);
+      if (result.catalogVersion) {
+        console.log('Catalog published successfully:', result.catalogVersion.tag);
         setIsModalOpen(false);
         setHasChanges(false);
 
-        // Show success message
-        alert(`Catalog published successfully!\nVersion: ${result.version}`);
+        // Show success message with stats
+        const stats = result.catalogVersion.stats;
+        alert(
+          `Catalog published successfully!\n\n` +
+          `Version: ${result.catalogVersion.tag}\n` +
+          `Products: ${stats.productCount}\n` +
+          `Categories: ${stats.categoryCount}\n` +
+          `Collections: ${stats.collectionCount}\n` +
+          `${stats.orphanedReferences > 0 ? `⚠️ Orphaned references: ${stats.orphanedReferences}\n` : ''}`
+        );
 
         // Optionally reload the page to reflect changes
         // window.location.reload();
       } else {
-        throw new Error(result.message || 'Publish failed');
+        throw new Error('No catalog version returned from publish');
       }
     } catch (error) {
       console.error('Publish failed:', error);

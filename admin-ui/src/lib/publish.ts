@@ -1,17 +1,28 @@
 import { Client } from 'urql';
 
-// TODO: Replace with generated types from codegen
+// Types matching GraphQL schema
 interface PublishCatalogInput {
   clientMutationId?: string;
+  version: string; // Required in schema
   message: string;
-  version?: string | null;
+}
+
+interface CatalogVersion {
+  tag: string;
+  commit: string;
+  publishedAt: string;
+  message?: string | null;
+  stats: {
+    productCount: number;
+    categoryCount: number;
+    collectionCount: number;
+    orphanedReferences: number;
+  };
 }
 
 interface PublishCatalogPayload {
   clientMutationId?: string | null;
-  success: boolean;
-  version: string;
-  message?: string | null;
+  catalogVersion?: CatalogVersion | null;
 }
 
 interface PublishCatalogMutationResponse {
@@ -24,19 +35,26 @@ interface PublishCatalogMutationResponse {
  */
 export async function publishCatalog(
   client: Client,
-  message: string,
-  version?: string
+  version: string,
+  message: string
 ): Promise<PublishCatalogPayload> {
-  // TODO: Replace with generated mutation from codegen
-  // import { PublishCatalogDocument } from '../generated/graphql';
-
+  // GraphQL mutation matching schema
   const PUBLISH_CATALOG_MUTATION = `
     mutation PublishCatalog($input: PublishCatalogInput!) {
       publishCatalog(input: $input) {
         clientMutationId
-        success
-        version
-        message
+        catalogVersion {
+          tag
+          commit
+          publishedAt
+          message
+          stats {
+            productCount
+            categoryCount
+            collectionCount
+            orphanedReferences
+          }
+        }
       }
     }
   `;
@@ -47,8 +65,8 @@ export async function publishCatalog(
       {
         input: {
           clientMutationId: generateClientMutationId(),
+          version,
           message,
-          version: version || null,
         },
       }
     ).toPromise();

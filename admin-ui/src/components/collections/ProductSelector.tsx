@@ -1,13 +1,28 @@
 import React, { useState, useEffect } from 'react';
+import { useQuery } from 'urql';
 
-// Placeholder types until codegen runs
+// GraphQL query for products
+const PRODUCTS_QUERY = `
+  query GetProductsForSelector {
+    products(first: 1000) {
+      edges {
+        node {
+          id
+          title
+          sku
+          price
+        }
+      }
+    }
+  }
+`;
+
+// Product type from GraphQL
 interface Product {
   id: string;
   title: string;
-  slug: string;
   sku?: string | null;
-  price: number;
-  thumbnailUrl?: string | null;
+  price: string; // Decimal type from GraphQL
 }
 
 interface ProductSelectorProps {
@@ -21,101 +36,16 @@ interface ProductSelectorProps {
  * Provides search, filtering, and multi-select functionality
  */
 export function ProductSelector({ selectedProductIds, onChange, disabled = false }: ProductSelectorProps) {
-  const [allProducts, setAllProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddingProducts, setIsAddingProducts] = useState(false);
 
-  // TODO: Replace with actual GraphQL query when codegen runs
-  // const { data, loading, error } = useGetProductsQuery();
+  // Query products from GraphQL API
+  const [{ data, fetching: loading, error: queryError }] = useQuery({
+    query: PRODUCTS_QUERY,
+  });
 
-  // Load all products
-  useEffect(() => {
-    const loadProducts = async () => {
-      setLoading(true);
-      setError(null);
-
-      try {
-        // TODO: Use GraphQL query
-        // const result = await client.query({
-        //   query: GetProductsDocument,
-        // });
-
-        // Simulate API call with mock data
-        console.log('Loading products for selector');
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        const mockProducts: Product[] = [
-          {
-            id: 'prod_1',
-            title: 'Wireless Bluetooth Headphones',
-            slug: 'wireless-bluetooth-headphones',
-            sku: 'WBH-001',
-            price: 79.99,
-            thumbnailUrl: null,
-          },
-          {
-            id: 'prod_2',
-            title: 'USB-C Charging Cable',
-            slug: 'usb-c-charging-cable',
-            sku: 'UCC-002',
-            price: 12.99,
-            thumbnailUrl: null,
-          },
-          {
-            id: 'prod_3',
-            title: 'Laptop Stand',
-            slug: 'laptop-stand',
-            sku: 'LS-003',
-            price: 34.99,
-            thumbnailUrl: null,
-          },
-          {
-            id: 'prod_4',
-            title: 'Mechanical Keyboard',
-            slug: 'mechanical-keyboard',
-            sku: 'MK-004',
-            price: 129.99,
-            thumbnailUrl: null,
-          },
-          {
-            id: 'prod_5',
-            title: 'Wireless Mouse',
-            slug: 'wireless-mouse',
-            sku: 'WM-005',
-            price: 29.99,
-            thumbnailUrl: null,
-          },
-          {
-            id: 'prod_6',
-            title: '4K Monitor',
-            slug: '4k-monitor',
-            sku: '4KM-006',
-            price: 399.99,
-            thumbnailUrl: null,
-          },
-          {
-            id: 'prod_7',
-            title: 'Desk Lamp',
-            slug: 'desk-lamp',
-            sku: 'DL-007',
-            price: 45.99,
-            thumbnailUrl: null,
-          },
-        ];
-
-        setAllProducts(mockProducts);
-      } catch (err) {
-        console.error('Failed to load products:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load products');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadProducts();
-  }, []);
+  const error = queryError ? queryError.message : null;
+  const allProducts: Product[] = data?.products?.edges?.map((edge: any) => edge.node) || [];
 
   const handleAddProduct = (productId: string) => {
     if (!selectedProductIds.includes(productId)) {
@@ -137,7 +67,6 @@ export function ProductSelector({ selectedProductIds, onChange, disabled = false
 
   const filteredAvailableProducts = availableProducts.filter(product =>
     product.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    product.slug.toLowerCase().includes(searchQuery.toLowerCase()) ||
     (product.sku && product.sku.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
@@ -177,7 +106,7 @@ export function ProductSelector({ selectedProductIds, onChange, disabled = false
                   <div style={styles.productTitle}>{product.title}</div>
                   <div style={styles.productMeta}>
                     {product.sku && <span style={styles.sku}>{product.sku}</span>}
-                    <span style={styles.price}>${product.price.toFixed(2)}</span>
+                    <span style={styles.price}>${parseFloat(product.price).toFixed(2)}</span>
                   </div>
                 </div>
                 <button
@@ -246,7 +175,7 @@ export function ProductSelector({ selectedProductIds, onChange, disabled = false
                     <div style={styles.productTitle}>{product.title}</div>
                     <div style={styles.productMeta}>
                       {product.sku && <span style={styles.sku}>{product.sku}</span>}
-                      <span style={styles.price}>${product.price.toFixed(2)}</span>
+                      <span style={styles.price}>${parseFloat(product.price).toFixed(2)}</span>
                     </div>
                   </div>
                   <button

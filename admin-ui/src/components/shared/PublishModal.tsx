@@ -58,7 +58,11 @@ export function PublishModal({ isOpen, onClose, onConfirm, isPublishing = false 
       return;
     }
 
-    const finalVersion = useAutoVersion ? '' : version.trim();
+    // Generate auto-version if enabled (use timestamp-based version)
+    const finalVersion = useAutoVersion
+      ? `v${new Date().toISOString().split('T')[0].replace(/-/g, '.')}.${Date.now() % 1000}`
+      : version.trim();
+
     await onConfirm(finalVersion, message.trim());
   };
 
