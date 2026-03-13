@@ -19,6 +19,7 @@ import (
 	"github.com/commerce-projects/gitstore/api/internal/graph"
 	"github.com/commerce-projects/gitstore/api/internal/graph/generated"
 	"github.com/commerce-projects/gitstore/api/internal/handler"
+	"github.com/commerce-projects/gitstore/api/internal/health"
 	"github.com/commerce-projects/gitstore/api/internal/logger"
 	"github.com/commerce-projects/gitstore/api/internal/middleware"
 	"github.com/commerce-projects/gitstore/api/internal/websocket"
@@ -108,6 +109,9 @@ func main() {
 	resolver := graph.NewResolver(cacheManager, *gitRepo, *gitServerURL)
 	gqlServer := gqlhandler.NewDefaultServer(generated.NewExecutableSchema(generated.Config{Resolvers: resolver}))
 
+	// Create health check handler
+	healthHandler := health.NewHandler(cacheManager, logger.Log, "1.0.0")
+
 	// Create HTTP server
 	mux := http.NewServeMux()
 
@@ -121,11 +125,10 @@ func main() {
 	// Playground endpoint
 	mux.Handle("/playground", playground.Handler("GraphQL Playground", "/graphql"))
 
-	// Health check endpoint
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "OK")
-	})
+	// Health check endpoints
+	mux.HandleFunc("/health", healthHandler.Health)
+	mux.HandleFunc("/ready", healthHandler.Ready)
+	mux.HandleFunc("/healthz", healthHandler.Healthz) // Backwards compatibility
 
 	// Apply middleware
 	var handler http.Handler = mux
@@ -152,7 +155,8 @@ func main() {
 	logger.Log.Info("Server ready",
 		zap.String("graphql", fmt.Sprintf("http://localhost:%d/graphql", *port)),
 		zap.String("playground", fmt.Sprintf("http://localhost:%d/playground", *port)),
-		zap.String("healthz", fmt.Sprintf("http://localhost:%d/healthz", *port)),
+		zap.String("health", fmt.Sprintf("http://localhost:%d/health", *port)),
+		zap.String("ready", fmt.Sprintf("http://localhost:%d/ready", *port)),
 	)
 
 	// Wait for interrupt signal
