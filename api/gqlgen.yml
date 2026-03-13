@@ -199,3 +199,19 @@ models:
     model: github.com/commerce-projects/gitstore/api/internal/graph/scalar.Decimal
   JSON:
     model: github.com/commerce-projects/gitstore/api/internal/graph/scalar.JSON
+
+  # Configure field resolvers for relationship fields
+  Product:
+    fields:
+      category:
+        resolver: true
+      collections:
+        resolver: true
+  Category:
+    fields:
+      products:
+        resolver: true
+  Collection:
+    fields:
+      products:
+        resolver: true

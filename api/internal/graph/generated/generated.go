@@ -29,7 +29,10 @@ func NewExecutableSchema(cfg Config) graphql.ExecutableSchema {
 type Config = graphql.Config[ResolverRoot, DirectiveRoot, ComplexityRoot]
 
 type ResolverRoot interface {
+	Category() CategoryResolver
+	Collection() CollectionResolver
 	Mutation() MutationResolver
+	Product() ProductResolver
 	Query() QueryResolver
 }
 
@@ -259,6 +262,12 @@ type ComplexityRoot struct {
 	}
 }
 
+type CategoryResolver interface {
+	Products(ctx context.Context, obj *model.Category, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error)
+}
+type CollectionResolver interface {
+	Products(ctx context.Context, obj *model.Collection, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error)
+}
 type MutationResolver interface {
 	CreateProduct(ctx context.Context, input model.CreateProductInput) (*model.CreateProductPayload, error)
 	UpdateProduct(ctx context.Context, input model.UpdateProductInput) (*model.UpdateProductPayload, error)
@@ -275,6 +284,10 @@ type MutationResolver interface {
 	Login(ctx context.Context, input model.LoginInput) (*model.LoginPayload, error)
 	Logout(ctx context.Context, input model.LogoutInput) (*model.LogoutPayload, error)
 	RefreshToken(ctx context.Context, input model.RefreshTokenInput) (*model.RefreshTokenPayload, error)
+}
+type ProductResolver interface {
+	Category(ctx context.Context, obj *model.Product) (*model.Category, error)
+	Collections(ctx context.Context, obj *model.Product) ([]*model.Collection, error)
 }
 type QueryResolver interface {
 	Node(ctx context.Context, id string) (model.Node, error)
@@ -3755,7 +3768,8 @@ func (ec *executionContext) _Category_products(ctx context.Context, field graphq
 		field,
 		ec.fieldContext_Category_products,
 		func(ctx context.Context) (any, error) {
-			return obj.Products, nil
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Category().Products(ctx, obj, fc.Args["first"].(*int32), fc.Args["after"].(*string), fc.Args["last"].(*int32), fc.Args["before"].(*string))
 		},
 		nil,
 		ec.marshalNProductConnection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductConnection,
@@ -3768,8 +3782,8 @@ func (ec *executionContext) fieldContext_Category_products(ctx context.Context, 
 	fc = &graphql.FieldContext{
 		Object:     "Category",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
 			case "edges":
@@ -4206,7 +4220,8 @@ func (ec *executionContext) _Collection_products(ctx context.Context, field grap
 		field,
 		ec.fieldContext_Collection_products,
 		func(ctx context.Context) (any, error) {
-			return obj.Products, nil
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Collection().Products(ctx, obj, fc.Args["first"].(*int32), fc.Args["after"].(*string), fc.Args["last"].(*int32), fc.Args["before"].(*string))
 		},
 		nil,
 		ec.marshalNProductConnection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductConnection,
@@ -4219,8 +4234,8 @@ func (ec *executionContext) fieldContext_Collection_products(ctx context.Context
 	fc = &graphql.FieldContext{
 		Object:     "Collection",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
 			case "edges":
@@ -6290,7 +6305,7 @@ func (ec *executionContext) _Product_category(ctx context.Context, field graphql
 		field,
 		ec.fieldContext_Product_category,
 		func(ctx context.Context) (any, error) {
-			return obj.Category, nil
+			return ec.Resolvers.Product().Category(ctx, obj)
 		},
 		nil,
 		ec.marshalNCategory2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
@@ -6303,8 +6318,8 @@ func (ec *executionContext) fieldContext_Product_category(_ context.Context, fie
 	fc = &graphql.FieldContext{
 		Object:     "Product",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
 			case "id":
@@ -6345,7 +6360,7 @@ func (ec *executionContext) _Product_collections(ctx context.Context, field grap
 		field,
 		ec.fieldContext_Product_collections,
 		func(ctx context.Context) (any, error) {
-			return obj.Collections, nil
+			return ec.Resolvers.Product().Collections(ctx, obj)
 		},
 		nil,
 		ec.marshalNCollection2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionᚄ,
@@ -6358,8 +6373,8 @@ func (ec *executionContext) fieldContext_Product_collections(_ context.Context, 
 	fc = &graphql.FieldContext{
 		Object:     "Product",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
 			case "id":
@@ -10802,56 +10817,87 @@ func (ec *executionContext) _Category(ctx context.Context, sel ast.SelectionSet,
 		case "id":
 			out.Values[i] = ec._Category_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "name":
 			out.Values[i] = ec._Category_name(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "slug":
 			out.Values[i] = ec._Category_slug(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "parent":
 			out.Values[i] = ec._Category_parent(ctx, field, obj)
 		case "children":
 			out.Values[i] = ec._Category_children(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "displayOrder":
 			out.Values[i] = ec._Category_displayOrder(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "products":
-			out.Values[i] = ec._Category_products(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Category_products(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "body":
 			out.Values[i] = ec._Category_body(ctx, field, obj)
 		case "createdAt":
 			out.Values[i] = ec._Category_createdAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "updatedAt":
 			out.Values[i] = ec._Category_updatedAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "path":
 			out.Values[i] = ec._Category_path(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "depth":
 			out.Values[i] = ec._Category_depth(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
@@ -10944,44 +10990,75 @@ func (ec *executionContext) _Collection(ctx context.Context, sel ast.SelectionSe
 		case "id":
 			out.Values[i] = ec._Collection_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "name":
 			out.Values[i] = ec._Collection_name(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "slug":
 			out.Values[i] = ec._Collection_slug(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "displayOrder":
 			out.Values[i] = ec._Collection_displayOrder(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "products":
-			out.Values[i] = ec._Collection_products(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Collection_products(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "body":
 			out.Values[i] = ec._Collection_body(ctx, field, obj)
 		case "createdAt":
 			out.Values[i] = ec._Collection_createdAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "updatedAt":
 			out.Values[i] = ec._Collection_updatedAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "productCount":
 			out.Values[i] = ec._Collection_productCount(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
@@ -11632,63 +11709,125 @@ func (ec *executionContext) _Product(ctx context.Context, sel ast.SelectionSet, 
 		case "id":
 			out.Values[i] = ec._Product_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "sku":
 			out.Values[i] = ec._Product_sku(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "title":
 			out.Values[i] = ec._Product_title(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "body":
 			out.Values[i] = ec._Product_body(ctx, field, obj)
 		case "price":
 			out.Values[i] = ec._Product_price(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "currency":
 			out.Values[i] = ec._Product_currency(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "inventoryStatus":
 			out.Values[i] = ec._Product_inventoryStatus(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "inventoryQuantity":
 			out.Values[i] = ec._Product_inventoryQuantity(ctx, field, obj)
 		case "category":
-			out.Values[i] = ec._Product_category(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Product_category(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "collections":
-			out.Values[i] = ec._Product_collections(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Product_collections(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "images":
 			out.Values[i] = ec._Product_images(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "metadata":
 			out.Values[i] = ec._Product_metadata(ctx, field, obj)
 		case "createdAt":
 			out.Values[i] = ec._Product_createdAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "updatedAt":
 			out.Values[i] = ec._Product_updatedAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
@@ -12788,6 +12927,10 @@ func (ec *executionContext) marshalNCatalogVersion2ᚖgithubᚗcomᚋcommerceᚑ
 		return graphql.Null
 	}
 	return ec._CatalogVersion(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNCategory2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx context.Context, sel ast.SelectionSet, v model.Category) graphql.Marshaler {
+	return ec._Category(ctx, sel, &v)
 }
 
 func (ec *executionContext) marshalNCategory2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Category) graphql.Marshaler {
