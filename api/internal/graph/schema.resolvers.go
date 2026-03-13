@@ -12,7 +12,6 @@ import (
 
 	"github.com/commerce-projects/gitstore/api/internal/graph/generated"
 	"github.com/commerce-projects/gitstore/api/internal/graph/model"
-	"github.com/google/uuid"
 )
 
 // CreateProduct is the resolver for the createProduct field.
@@ -459,51 +458,11 @@ func (r *queryResolver) CatalogVersion(ctx context.Context) (*model.CatalogVersi
 	}, nil
 }
 
-// Mutation returns generated.MutationResolver interface
-func (r *Resolver) Mutation() generated.MutationResolver {
-	return &mutationResolver{r}
-}
+// Mutation returns generated.MutationResolver implementation.
+func (r *Resolver) Mutation() generated.MutationResolver { return &mutationResolver{r} }
 
-// Query returns generated.QueryResolver interface
-func (r *Resolver) Query() generated.QueryResolver {
-	return &queryResolver{r}
-}
+// Query returns generated.QueryResolver implementation.
+func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
-
-// Helper function to generate unique IDs
-func generateID() string {
-	return uuid.New().String()
-}
-
-// Helper functions for optional field handling
-func stringOrDefault(s *string, def string) string {
-	if s != nil {
-		return *s
-	}
-	return def
-}
-
-//lint:ignore U1000 Reserved for future use in resolver implementations
-func floatOrDefault(f *float64, def float64) float64 {
-	if f != nil {
-		return *f
-	}
-	return def
-}
-
-func intOrDefault(i *int32, def int32) int32 {
-	if i != nil {
-		return *i
-	}
-	return def
-}
-
-//lint:ignore U1000 Reserved for future use in resolver implementations
-func derefInventoryStatus(s *model.InventoryStatus) model.InventoryStatus {
-	if s != nil {
-		return *s
-	}
-	return model.InventoryStatusInStock
-}
