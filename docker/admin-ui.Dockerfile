@@ -1,5 +1,5 @@
 # Multi-stage build for Admin UI (Node.js/Astro)
-FROM node:18-alpine as builder
+FROM node:25.8.1-alpine3.23 AS builder
 
 WORKDIR /build
 
@@ -15,8 +15,11 @@ COPY admin-ui/ ./
 # Build application
 RUN npm run build
 
+# Keep only production dependencies for runtime image
+RUN npm prune --omit=dev
+
 # Runtime stage
-FROM node:18-alpine
+FROM node:25.8.1-alpine3.23
 
 WORKDIR /app
 

@@ -55,8 +55,8 @@ After running the script:
 
 1. **Point git-server to the catalog:**
    ```bash
-   # In docker-compose.yml or environment
-   GITSTORE_DATA_DIR=/path/to/demo-catalog
+   # In terminal
+   export GITSTORE_DATA_DIR=/path/to/demo-catalog
    ```
 
 2. **Create a release tag:**

@@ -1,15 +1,8 @@
 ---
 import Layout from '../../layouts/Layout.astro';
 import { EditProductRoutePage } from '../../components/products/EditProductRoutePage';
-
-// Get the product ID from the URL
-const { id } = Astro.params;
-
-if (!id) {
-  return Astro.redirect('/products');
-}
 ---
 
 <Layout title="Edit Product - GitStore Admin">
-  <EditProductRoutePage client:only="react" productId={id} />
+  <EditProductRoutePage client:only="react" />
 </Layout>

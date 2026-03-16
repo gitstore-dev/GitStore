@@ -5,7 +5,7 @@ import { Header } from '../Header';
 import { EditProductPage } from './EditProductPage';
 
 interface EditProductRoutePageProps {
-  productId: string;
+  productId?: string;
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -50,6 +50,12 @@ const styles: Record<string, React.CSSProperties> = {
 };
 
 export function EditProductRoutePage({ productId }: Readonly<EditProductRoutePageProps>) {
+  const resolvedProductId = productId ?? (
+    globalThis.window?.location
+      ? new URLSearchParams(globalThis.window.location.search).get('id') ?? ''
+      : ''
+  );
+
   return (
     <App>
       <ProtectedRoute>
@@ -64,7 +70,13 @@ export function EditProductRoutePage({ productId }: Readonly<EditProductRoutePag
             <h1 style={styles.title}>Edit Product</h1>
             <p style={styles.subtitle}>Update product information</p>
           </div>
-          <EditProductPage productId={productId} />
+          {resolvedProductId ? (
+            <EditProductPage productId={resolvedProductId} />
+          ) : (
+            <div style={styles.pageHeader}>
+              <p style={styles.subtitle}>Product ID is missing. Return to products and select an item to edit.</p>
+            </div>
+          )}
         </main>
       </ProtectedRoute>
     </App>

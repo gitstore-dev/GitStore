@@ -1,5 +1,5 @@
 # Multi-stage build for Git Server (Rust)
-FROM rust:1.75-slim as builder
+FROM rust:1.94-slim AS builder
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
@@ -26,17 +26,21 @@ RUN cargo build --release && \
 # Copy actual source code
 COPY git-server/src ./src
 
-# Build application
-RUN touch src/main.rs && \
+# Build application.
+# Refresh mtimes for all source files so Cargo invalidates dummy artifacts
+# from the dependency-caching step and recompiles the real crate.
+RUN find src -type f -name '*.rs' -exec touch {} + && \
     cargo build --release
 
 # Runtime stage
-FROM debian:bookworm-slim
+# Keep runtime libc compatible with the builder output.
+FROM rust:1.94-slim
 
 RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
     libssh2-1 \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

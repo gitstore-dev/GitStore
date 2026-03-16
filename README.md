@@ -1,6 +1,7 @@
 # GitStore - Git-Backed Ecommerce Engine
 
 A git-backed headless ecommerce engine where product catalogs are managed as markdown files with YAML front-matter.
+GitStore is also a developer tool: catalogs are plain files in git, so developers and AI agents can generate, review, and evolve commerce data using familiar markdown workflows.
 
 ## Architecture
 
@@ -35,6 +36,13 @@ A git-backed headless ecommerce engine where product catalogs are managed as mar
 - **GraphQL API** (Go): Headless API with Relay support
 - **Admin UI** (Astro/React): Drag-and-drop catalog management
 
+## Why This Works Well for Developers and AI Agents
+
+- **Markdown-native catalog authoring**: Products, categories, and collections are easy to create and edit as text files.
+- **Git-native collaboration**: Branches, commits, diffs, code review, and tags become catalog lifecycle tools.
+- **Automation-friendly**: AI agents can generate and update catalog content through file operations and standard git pushes.
+- **Operational safety**: Validation happens at push time, with clear errors before bad data reaches the runtime API.
+
 ## Quick Start
 
 ### Prerequisites
@@ -46,7 +54,7 @@ A git-backed headless ecommerce engine where product catalogs are managed as mar
 
 ```bash
 # Clone repository
-git clone https://github.com/yourorg/gitstore.git
+git clone https://github.com/commerce-projects/gitstore
 cd gitstore
 
 # Start all services
@@ -55,6 +63,35 @@ docker compose up -d
 # Check service health
 docker compose ps
 ```
+
+### Configure Catalog Data Storage
+
+The `git-server` volume mount in [compose.yml](compose.yml) is:
+
+```yaml
+${GITSTORE_DATA_DIR:-git-data}:/data/repos
+```
+
+Behavior:
+
+- If `GITSTORE_DATA_DIR` is unset, Docker uses the named volume `git-data`.
+- If `GITSTORE_DATA_DIR` is set to a host path, Docker uses a bind mount from that host path.
+
+Examples:
+
+```bash
+# Use default named volume (git-data)
+docker compose up -d
+
+# Use a host directory (recommended: absolute path)
+export GITSTORE_DATA_DIR=/Users/yourname/.gitstore/data/repos
+docker compose up -d
+```
+
+Important notes:
+
+- In shell exports, `~` usually expands (`export GITSTORE_DATA_DIR=~/.gitstore/data/repos`).
+- In `.env` files, `~` is not expanded by Docker Compose. Use an absolute path instead.
 
 **Expected Output**:
 ```
