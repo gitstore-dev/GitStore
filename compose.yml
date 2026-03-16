@@ -1,14 +1,14 @@
 services:
   git-server:
     build:
-      context: ./git-server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: docker/git-server.Dockerfile
     container_name: gitstore-git-server
     ports:
       - "9418:9418"  # Git protocol
       - "8080:8080"  # Websocket notifications
     volumes:
-      - git-data:/data/repos
+      - ${GITSTORE_DATA_DIR:-git-data}:/data/repos
     environment:
       - GITSTORE_GIT_PORT=9418
       - GITSTORE_WS_PORT=8080
@@ -25,8 +25,8 @@ services:
 
   api:
     build:
-      context: ./api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: docker/api.Dockerfile
     container_name: gitstore-api
     ports:
       - "4000:4000"  # GraphQL API
@@ -63,6 +63,11 @@ services:
       - GITSTORE_SESSION_TIMEOUT=3600
     networks:
       - gitstore-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   git-data:

@@ -171,7 +171,7 @@ export function ProductList({ onDelete }: ProductListProps) {
                   <td style={styles.tdActions}>
                     <div style={styles.actions}>
                       <a
-                        href={`/products/${product.id}`}
+                        href={`/products/edit?id=${encodeURIComponent(product.id)}`}
                         style={styles.actionLink}
                       >
                         Edit

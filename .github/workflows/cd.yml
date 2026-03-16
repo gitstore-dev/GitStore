@@ -43,7 +43,7 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Extract metadata (tags, labels)
+    - name: Extract metadata for Git Server
       id: meta-git-server
       uses: docker/metadata-action@v5
       with:
@@ -55,10 +55,11 @@ jobs:
           type=semver,pattern={{major}}.{{minor}}
           type=sha,prefix={{branch}}-
 
-    - name: Build and push git-server image
+    - name: Build and push Git Server image
       uses: docker/build-push-action@v5
       with:
-        context: ./git-server
+        context: .
+        file: ./docker/git-server.Dockerfile
         push: true
         tags: ${{ steps.meta-git-server.outputs.tags }}
         labels: ${{ steps.meta-git-server.outputs.labels }}
@@ -80,7 +81,8 @@ jobs:
     - name: Build and push API image
       uses: docker/build-push-action@v5
       with:
-        context: ./api
+        context: .
+        file: ./docker/api.Dockerfile
         push: true
         tags: ${{ steps.meta-api.outputs.tags }}
         labels: ${{ steps.meta-api.outputs.labels }}
@@ -102,7 +104,8 @@ jobs:
     - name: Build and push Admin UI image
       uses: docker/build-push-action@v5
       with:
-        context: ./admin-ui
+        context: .
+        file: ./docker/admin-ui.Dockerfile
         push: true
         tags: ${{ steps.meta-admin.outputs.tags }}
         labels: ${{ steps.meta-admin.outputs.labels }}

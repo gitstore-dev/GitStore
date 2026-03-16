@@ -1,5 +1,5 @@
 # Multi-stage build for GraphQL API (Go)
-FROM golang:1.21-alpine as builder
+FROM golang:1.26.1-alpine3.23 AS builder
 
 RUN apk add --no-cache git
 
@@ -15,14 +15,11 @@ RUN go mod download
 COPY api/ ./
 COPY shared/schemas /build/shared/schemas
 
-# Generate GraphQL code
-RUN go generate ./...
-
 # Build application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o api ./cmd/server
 
 # Runtime stage
-FROM alpine:latest
+FROM alpine:3.23.3
 
 RUN apk --no-cache add ca-certificates
 

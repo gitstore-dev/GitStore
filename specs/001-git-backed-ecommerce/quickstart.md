@@ -17,7 +17,7 @@ GitStore is a git-backed ecommerce headless engine with three main components:
 
 ```bash
 # Clone repository
-git clone https://github.com/yourorg/gitstore.git
+git clone https://github.com/commerce-projects/gitstore
 cd gitstore
 
 # Start all services with docker-compose
@@ -650,7 +650,7 @@ loader := dataloader.NewBatchedLoader(func(keys []string) []*Category {
 
 ## Support & Resources
 
-- **GitHub Issues**: https://github.com/yourorg/gitstore/issues
+- **GitHub Issues**: https://github.com/commerce-projects/gitstore
 - **Documentation**: https://docs.gitstore.dev
 - **GraphQL Playground**: http://localhost:4000/graphql
 - **Constitution**: See `.specify/memory/constitution.md` for development principles
