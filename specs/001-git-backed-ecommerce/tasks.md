@@ -29,17 +29,17 @@ Multi-service architecture:
 **Purpose**: Project initialization and basic structure
 
 - [ ] T001 Create root project structure with git-server/, api/, admin-ui/, shared/, docker/ directories
-- [ ] T002 [P] Initialize Rust project in git-server/ with Cargo.toml (dependencies: libgit2, tokio, tungstenite, serde, serde_yaml)
-- [ ] T003 [P] Initialize Go module in api/ with go.mod (dependencies: gqlgen, graphql-relay-go, go-git)
-- [ ] T004 [P] Initialize Node.js project in admin-ui/ with package.json (dependencies: astro, react, react-beautiful-dnd, @apollo/client)
-- [ ] T005 [P] Copy GraphQL schema files from specs/001-git-backed-ecommerce/contracts/ to shared/schemas/
-- [ ] T006 [P] Create docker/git-server.Dockerfile for Rust multi-stage build
-- [ ] T007 [P] Create docker/api.Dockerfile for Go multi-stage build
-- [ ] T008 [P] Create docker/admin-ui.Dockerfile for Node.js build
+- [X] T002 [P] Initialize Rust project in git-server/ with Cargo.toml (dependencies: libgit2, tokio, tungstenite, serde, serde_yaml)
+- [X] T003 [P] Initialize Go module in api/ with go.mod (dependencies: gqlgen, graphql-relay-go, go-git)
+- [X] T004 [P] Initialize Node.js project in admin-ui/ with package.json (dependencies: astro, react, react-beautiful-dnd, urql)
+- [X] T005 [P] Copy GraphQL schema files from specs/001-git-backed-ecommerce/contracts/ to shared/schemas/
+- [X] T006 [P] Create docker/git-server.Dockerfile for Rust multi-stage build
+- [X] T007 [P] Create docker/api.Dockerfile for Go multi-stage build
+- [X] T008 [P] Create docker/admin-ui.Dockerfile for Node.js build
 - [X] T009 Create compose.yml with services: git-server (ports 9418, 8080), api (port 4000), admin-ui (port 3000)
-- [ ] T010 [P] Configure gqlgen.yml in api/ pointing to shared/schemas/*.graphql
-- [ ] T011 [P] Configure astro.config.mjs in admin-ui/ with React integration
-- [ ] T012 Create README.md with quickstart instructions and architecture diagram
+- [X] T010 [P] Configure gqlgen.yml in api/ pointing to shared/schemas/*.graphql
+- [X] T011 [P] Configure astro.config.mjs in admin-ui/ with React integration
+- [X] T012 Create README.md with quickstart instructions and architecture diagram
 
 ---
 
@@ -49,18 +49,18 @@ Multi-service architecture:
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T013 [P] Implement structured logging setup in git-server/src/lib.rs using tracing crate
-- [ ] T014 [P] Implement structured logging setup in api/internal/logger/logger.go using zap
-- [ ] T015 [P] Implement structured logging setup in admin-ui/src/lib/logger.ts using console wrappers
-- [ ] T016 [P] Create base domain models in git-server/src/models/mod.rs (Product, Category, Collection structs)
-- [ ] T017 [P] Create YAML front-matter parser in git-server/src/models/parser.rs using serde_yaml
-- [ ] T018 [P] Create markdown file reader in git-server/src/models/reader.rs
-- [ ] T019 [P] Run gqlgen generate in api/ to generate GraphQL resolvers from schemas
-- [ ] T020 [P] Create base resolver stubs in api/internal/graph/resolver.go
-- [ ] T021 [P] Create request ID middleware in api/internal/middleware/request_id.go
-- [ ] T022 [P] Create CORS middleware in api/internal/middleware/cors.go
-- [ ] T023 [P] Create Apollo Client setup in admin-ui/src/lib/apollo-client.ts with request ID headers
-- [ ] T024 Create environment configuration loading for all three services (.env file support)
+- [X] T013 [P] Implement structured logging setup in git-server/src/lib.rs using tracing crate
+- [X] T014 [P] Implement structured logging setup in api/internal/logger/logger.go using zap
+- [X] T015 [P] Implement structured logging setup in admin-ui/src/lib/logger.ts using console wrappers
+- [X] T016 [P] Create base domain models in git-server/src/models/mod.rs (Product, Category, Collection structs)
+- [X] T017 [P] Create YAML front-matter parser in git-server/src/models/parser.rs using serde_yaml
+- [X] T018 [P] Create markdown file reader in git-server/src/models/reader.rs
+- [X] T019 [P] Run gqlgen generate in api/ to generate GraphQL resolvers from schemas
+- [X] T020 [P] Create base resolver stubs in api/internal/graph/resolver.go
+- [X] T021 [P] Create request ID middleware in api/internal/middleware/request_id.go
+- [X] T022 [P] Create CORS middleware in api/internal/middleware/cors.go
+- [X] T023 [P] Create urql Client setup in admin-ui/src/lib/urql-client.ts with request ID headers
+- [X] T024 Create environment configuration loading for all three services (.env file support)
 
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
@@ -80,46 +80,46 @@ Multi-service architecture:
 >
 > This enforces Test-First Development. No implementation code may be written until corresponding tests exist and fail.
 
-- [ ] T025 [P] [US1] Write contract test for products query in api/tests/contract/products_test.go
-- [ ] T026 [P] [US1] Write contract test for product(sku) query in api/tests/contract/product_test.go
-- [ ] T027 [P] [US1] Write integration test for git push → validation → accept in git-server/tests/integration/push_validation_test.rs
-- [ ] T028 [P] [US1] Write integration test for release tag → websocket notification in git-server/tests/integration/tag_notification_test.rs
-- [ ] T029 [P] [US1] Write integration test for websocket → cache reload in api/tests/integration/cache_reload_test.go
+- [X] T025 [P] [US1] Write contract test for products query in api/tests/contract/products_test.go
+- [X] T026 [P] [US1] Write contract test for product(sku) query in api/tests/contract/product_test.go
+- [X] T027 [P] [US1] Write integration test for git push → validation → accept in git-server/tests/integration/push_validation_test.rs
+- [X] T028 [P] [US1] Write integration test for release tag → websocket notification in git-server/tests/integration/tag_notification_test.rs
+- [X] T029 [P] [US1] Write integration test for websocket → cache reload in api/tests/integration/cache_reload_test.go
 
 ### Implementation for User Story 1
 
 #### Git Server (Rust) - Validation & Notifications
 
-- [ ] T030 [P] [US1] Implement git repository initialization in git-server/src/git/repo.rs
-- [ ] T031 [P] [US1] Implement pre-receive hook handler in git-server/src/git/hooks.rs
-- [ ] T032 [US1] Implement Product validation logic in git-server/src/validation/product.rs (required fields, SKU uniqueness, price validation)
-- [ ] T033 [US1] Implement validation orchestrator in git-server/src/validation/validator.rs (parses all markdown files in push)
-- [ ] T034 [US1] Implement validation error response formatting in git-server/src/validation/errors.rs
-- [ ] T035 [P] [US1] Implement websocket server setup in git-server/src/websocket/server.rs using tungstenite
-- [ ] T036 [P] [US1] Implement websocket connection manager in git-server/src/websocket/connections.rs
-- [ ] T037 [US1] Implement tag event detection in git-server/src/git/events.rs
-- [ ] T038 [US1] Implement websocket broadcast on tag creation in git-server/src/websocket/broadcast.rs
-- [ ] T039 [US1] Wire up git server main.rs with git protocol listener (port 9418) and websocket (port 8080)
+- [X] T030 [P] [US1] Implement git repository initialization in git-server/src/git/repo.rs
+- [X] T031 [P] [US1] Implement pre-receive hook handler in git-server/src/git/hooks.rs
+- [X] T032 [US1] Implement Product validation logic in git-server/src/validation/product.rs (required fields, SKU uniqueness, price validation)
+- [X] T033 [US1] Implement validation orchestrator in git-server/src/validation/validator.rs (parses all markdown files in push)
+- [X] T034 [US1] Implement validation error response formatting in git-server/src/validation/errors.rs
+- [X] T035 [P] [US1] Implement websocket server setup in git-server/src/websocket/server.rs using tungstenite
+- [X] T036 [P] [US1] Implement websocket connection manager in git-server/src/websocket/connections.rs
+- [X] T037 [US1] Implement tag event detection in git-server/src/git/events.rs
+- [X] T038 [US1] Implement websocket broadcast on tag creation in git-server/src/websocket/broadcast.rs
+- [X] T039 [US1] Wire up git server main.rs with git protocol listener (port 9418) and websocket (port 8080)
 
 #### GraphQL API (Go) - Catalog Queries
 
-- [ ] T040 [P] [US1] Implement git repository reader in api/internal/gitclient/reader.go (clone, checkout tag)
-- [ ] T041 [P] [US1] Implement markdown file parser in api/internal/gitclient/parser.go (YAML front-matter + body)
-- [ ] T042 [US1] Implement Product model mapping in api/internal/models/product.go
-- [ ] T043 [P] [US1] Implement in-memory cache structure in api/internal/cache/catalog.go (ProductsByID, ProductsBySKU maps)
-- [ ] T044 [US1] Implement catalog loader in api/internal/cache/loader.go (read git tag → parse → populate cache)
-- [ ] T045 [P] [US1] Implement websocket client in api/internal/websocket/client.go (connect to git-server:8080)
-- [ ] T046 [US1] Implement cache invalidation on websocket notification in api/internal/cache/invalidator.go
-- [ ] T047 [US1] Implement products query resolver in api/internal/graph/products.resolvers.go (Relay connection pattern)
-- [ ] T048 [US1] Implement product(sku) query resolver in api/internal/graph/product.resolvers.go
-- [ ] T049 [US1] Implement Node interface resolver for Product in api/internal/graph/node.resolvers.go
-- [ ] T050 [US1] Wire up API server in api/cmd/server/main.go (GraphQL endpoint, websocket client startup)
+- [X] T040 [P] [US1] Implement git repository reader in api/internal/gitclient/reader.go (clone, checkout tag)
+- [X] T041 [P] [US1] Implement markdown file parser in api/internal/gitclient/parser.go (YAML front-matter + body)
+- [X] T042 [US1] Implement Product model mapping in api/internal/models/product.go
+- [X] T043 [P] [US1] Implement in-memory cache structure in api/internal/cache/catalog.go (ProductsByID, ProductsBySKU maps)
+- [X] T044 [US1] Implement catalog loader in api/internal/cache/loader.go (read git tag → parse → populate cache)
+- [X] T045 [P] [US1] Implement websocket client in api/internal/websocket/client.go (connect to git-server:8080)
+- [X] T046 [US1] Implement cache invalidation on websocket notification in api/internal/cache/invalidator.go
+- [X] T047 [US1] Implement products query resolver in api/internal/graph/products.resolvers.go (Relay connection pattern)
+- [X] T048 [US1] Implement product(sku) query resolver in api/internal/graph/product.resolvers.go
+- [X] T049 [US1] Implement Node interface resolver for Product in api/internal/graph/node.resolvers.go
+- [X] T050 [US1] Wire up API server in api/cmd/server/main.go (GraphQL endpoint, websocket client startup)
 
 #### Logging & Observability
 
-- [ ] T051 [P] [US1] Add structured logging to git validation pipeline in git-server/src/validation/validator.rs
-- [ ] T052 [P] [US1] Add structured logging to cache loader in api/internal/cache/loader.go (log: tag, product count, duration)
-- [ ] T053 [P] [US1] Add error logging for invalid markdown files in api/internal/gitclient/parser.go
+- [X] T051 [P] [US1] Add structured logging to git validation pipeline in git-server/src/validation/validator.rs
+- [X] T052 [P] [US1] Add structured logging to cache loader in api/internal/cache/loader.go (log: tag, product count, duration)
+- [X] T053 [P] [US1] Add error logging for invalid markdown files in api/internal/gitclient/parser.go
 
 **Checkpoint**: At this point, User Story 1 should be fully functional and testable independently
 
@@ -183,6 +183,8 @@ Multi-service architecture:
 **Goal**: Provide web UI for CRUD operations with drag-and-drop ordering and git integration
 
 **Independent Test**: Login to admin UI, create/edit/delete entities, drag-and-drop reorder, publish, verify git commits and storefront updates
+
+**Note**: Admin UI uses **urql** instead of Apollo Client due to Astro compatibility issues. All GraphQL client references updated accordingly.
 
 ### Tests for User Story 3 (Test-First Development) ⚠️
 
@@ -249,6 +251,13 @@ Multi-service architecture:
 
 **Checkpoint**: All user stories should now be independently functional
 
+**⚠️ MANUAL TESTING STATUS (2026-03-22)**:
+- ✅ Admin UI functional
+- ✅ GraphQL schema and resolvers operational
+- ❌ **BLOCKING**: Repository access failing (T145-T146)
+- ❌ **BLOCKING**: Websocket notifications not working (T147-T148)
+- Phase 3 checkpoint cannot be validated until T145-T148 are resolved
+
 ---
 
 ## Phase 6: Polish & Cross-Cutting Concerns
@@ -273,6 +282,180 @@ Multi-service architecture:
 - [ ] T142 [P] Validate quickstart.md examples against running system
 - [ ] T143 [P] Write E2E integration test validating request ID propagation from admin-ui → api → git-server in tests/e2e/request_tracing.spec.ts (validates Constitution Principle IV - Observability)
 - [ ] T144 Run all tests across all three services (cargo test, go test, npm test)
+
+---
+
+## Phase 7: Bug Fixes & Investigation (Added 2026-03-22)
+
+**Purpose**: Address issues discovered during manual testing with Docker compose setup
+
+**Context**: Following scripts/README.md instructions, two critical issues were identified:
+1. GraphQL API returns "repository does not exist" error when querying products
+2. Websocket notifications not firing when creating git tags in Docker environment
+
+### Investigation Tasks - Repository Not Found
+
+- [X] T145 [CRITICAL] Investigate "repository does not exist" error in GraphQL API
+  - **Location**: api/internal/gitclient/ or api/internal/cache/
+  - **Symptoms**: GraphQL query fails with "failed to get products: failed to get catalog: failed to open repository: repository does not exist"
+  - **Test Query**: `query { products { edges { node { id sku title } } } }`
+  - **Environment**: Docker compose with GITSTORE_DATA_DIR volume mount
+  - **Root Cause Found**: Architecture mismatch - API received git:// URL but used git.PlainOpen() expecting local path, plus missing volume mount
+  - **Investigation Report**: specs/001-git-backed-ecommerce/T145-INVESTIGATION.md
+  - **Status**: ✅ RESOLVED - Quick fix applied (shared volume)
+
+- [X] T146 [CRITICAL] Fix repository initialization in Docker environment
+  - **Depends on**: T145 investigation findings
+  - **Solution Applied**: Option 2 (Shared Volume) quick fix
+    - [X] Added volume mount to API service in compose.yml
+    - [X] Changed GITSTORE_GIT_REPO from git:// URL to local path
+    - [X] API now has read-only access to /data/repos
+  - **Testing**: ✅ All pass conditions met (QUICK-TEST.md)
+  - **Status**: ✅ QUICK FIX COMPLETE
+  - **Future**: T152 will implement proper git protocol solution (Option 1)
+
+### Investigation Tasks - Websocket Notifications
+
+- [X] T147 [CRITICAL] Investigate websocket notification failure on tag creation
+  - **Status**: ✅ RESOLVED
+  - **Root Causes Found**:
+    1. README workflow out of order (services not started before clone)
+    2. Filesystem clone used instead of HTTP clone (bypassed git-server)
+    3. Git binary missing from git-server Docker image
+    4. Websocket message format mismatch (fixed to use GitEvent structure)
+  - **Fixes Applied**: All issues resolved, websocket notifications working end-to-end
+
+- [X] T148 [CRITICAL] Fix tag event detection and validation issues
+  - **Status**: ✅ RESOLVED
+  - **Issues Fixed**:
+    1. Init script missing required `product_ids` field in collections (added `product_ids: []`)
+    2. Websocket message format corrected to use `GitEvent::release_created()`
+    3. README.md and init script documentation updated with correct workflow
+  - **Remaining**: Validation error messages still use Rust debug format (see T153)
+
+- [ ] T153 [MEDIUM] Improve git validation error message formatting
+  - **Location**: git-server/src/http_git_server.rs:264-267
+  - **Issue**: Currently returns Rust debug format to git client
+  - **Current**:
+    ```
+    error: RPC failed; HTTP 422 curl 22 The requested URL returned error: 422
+    send-pack: unexpected disconnect while reading sideband packet
+    ```
+  - **Should return** (GitHub-style):
+    ```
+    remote: ========================================
+    remote: GitStore Catalog Validation Failed
+    remote: ========================================
+    remote:
+    remote: File: products/prod_book_001.md
+    remote:   - Invalid currency code: XYZ
+    remote:   - Price must be >= 0
+    remote:
+    ! [remote rejected] main -> main (validation failed)
+    ```
+  - **Implementation**: Create `format_validation_errors_for_git()` helper function
+  - **Priority**: Not blocking MVP, improves UX
+
+- [ ] T149 [P] Add websocket notification health check
+  - **Location**: git-server/src/websocket/server.rs and api/cmd/server/main.go
+  - **Purpose**: Verify websocket connectivity at startup
+  - **Implementation**:
+    - [ ] API logs websocket connection status on startup
+    - [ ] Git-server logs active websocket connections
+    - [ ] Add /websocket/health endpoint to git-server
+    - [ ] API retries websocket connection on failure with backoff
+
+### Integration Testing
+
+- [ ] T150 [P] Create end-to-end Docker compose test script
+  - **Location**: tests/e2e/docker-test.sh
+  - **Purpose**: Automated testing of Docker deployment workflow
+  - **Steps**:
+    1. Run scripts/init-demo-catalog.sh
+    2. Start docker compose
+    3. Wait for health checks
+    4. Create git tag v1.0.0
+    5. Query GraphQL API for products
+    6. Verify products returned
+    7. Verify API logs show websocket notification received
+  - **Expected**: End-to-end workflow completes successfully
+
+- [ ] T151 [P] Document Docker deployment troubleshooting
+  - **Location**: docs/docker-troubleshooting.md or README.md section
+  - **Content**:
+    - [ ] Repository initialization checklist
+    - [ ] Websocket connectivity verification steps
+    - [ ] Volume mount path debugging
+    - [ ] Common error messages and solutions
+    - [ ] Log locations for each service
+
+- [ ] T152 [P] Implement proper git protocol solution for catalog queries
+  - **Purpose**: Replace shared volume quick fix with production-ready git protocol (like GitLab/Gitea)
+  - **Location**: api/internal/catalog/loader.go
+  - **Current Issue**: API reads from shared volume `/data/repos/` (tight coupling, can't scale)
+  - **Changes**:
+    - [ ] Detect if repoPath is git:// URL or local path
+    - [ ] Implement git.Clone() for remote URLs
+    - [ ] Cache cloned repository in temporary directory
+    - [ ] Implement pull/update logic for repository refresh
+    - [ ] Support both remote and local repository modes
+  - **Benefits**: True microservices, remote git-server support, better scalability
+  - **Testing**: Verify both git:// and /data/repos/ paths work
+  - **Priority**: DEFERRED - Quick fix (T146) sufficient for MVP
+  - **Documentation**: See T152-PROPER-GIT-PROTOCOL.md for detailed implementation plan
+
+- [ ] T154 [MEDIUM] Use temporary clones for API mutations (GitLab/Gitea pattern)
+  - **Purpose**: API should not maintain persistent working copy for mutations
+  - **Current Issue**: API has persistent working directory (if implemented) - wrong architecture
+  - **Location**: api/internal/gitclient/ mutation handlers
+  - **Correct Pattern** (how GitLab/Gitea work):
+    ```go
+    func (s *MutationResolver) UpdateProduct(...) {
+        // 1. Create temp directory
+        tmpDir, _ := os.MkdirTemp("", "gitstore-*")
+        defer os.RemoveAll(tmpDir)  // Auto-cleanup
+
+        // 2. Clone from git-server
+        git.PlainClone(tmpDir, false, &git.CloneOptions{
+            URL: "git://git-server:9418/catalog.git",
+        })
+
+        // 3. Modify files in temp clone
+        writeProductFile(tmpDir, product)
+
+        // 4. Commit and push
+        repo.Worktree().Commit("Update product", ...)
+        repo.Push(...)
+
+        // 5. Temp clone deleted automatically
+    }
+    ```
+  - **Benefits**:
+    - No persistent state in API (stateless, scalable)
+    - Each mutation isolated (no file conflicts)
+    - Matches industry standard (GitLab, Gitea, GitHub)
+  - **Testing**: Verify mutations still work, check temp dirs cleaned up
+  - **Priority**: DEFERRED - Current approach works for MVP, refactor for production
+
+---
+
+## MVP Scope Clarification (Updated 2026-03-22)
+
+**Out of Scope for MVP** (Deferred to post-launch):
+- ❌ Image URL validation and CDN integration (FR-020 partial - basic URL format check sufficient)
+- ❌ AI agent validation testing (SC-006 - aspirational metric, not blocking)
+- ❌ Advanced metrics and monitoring (T136 - Prometheus exporters)
+- ❌ Accessibility enhancements (T137 - ARIA labels)
+- ❌ Rate limiting (T134 - not needed for initial deployment scale)
+
+**In Scope for MVP** (Must Complete):
+- ✅ User Stories 1, 2, 3 (P1, P2, P3)
+- ✅ Repository initialization and catalog loading (T145-T146 fixes)
+- ✅ Websocket notifications (T147-T148 fixes)
+- ✅ GraphQL filtering (T127 - required for storefront queries)
+- ✅ Basic documentation (T140-T142)
+- ✅ Health checks (T135 - already complete)
+- ✅ Demo catalog initialization (T131 - already complete)
 
 ---
 

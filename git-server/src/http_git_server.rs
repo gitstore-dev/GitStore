@@ -283,14 +283,21 @@ async fn receive_pack(
         for tag_name in tag_names {
             info!(tag = %tag_name, "Tag detected");
 
-            // Broadcast tag notification via websocket
-            let broadcaster = state.broadcaster.read().await;
-            let message = format!(
-                r#"{{"type":"tag","repository":"{}","tag":"{}","commit":"{}"}}"#,
-                repo, tag_name, new_oid_str
-            );
-            broadcaster.broadcast(&message).await;
-            info!(tag = %tag_name, "Broadcasted tag notification");
+            // Use proper event format
+            use crate::git::events;
+            let event = events::GitEvent::release_created(tag_name.clone(), new_oid_str.clone());
+
+            // Broadcast using proper JSON format
+            match event.to_json() {
+                Ok(json) => {
+                    let broadcaster = state.broadcaster.read().await;
+                    broadcaster.broadcast(&json).await;
+                    info!(tag = %tag_name, "Broadcasted tag notification");
+                }
+                Err(e) => {
+                    error!(tag = %tag_name, error = %e, "Failed to serialize event");
+                }
+            }
         }
     }
 

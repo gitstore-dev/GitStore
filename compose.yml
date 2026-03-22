@@ -30,13 +30,15 @@ services:
     container_name: gitstore-api
     ports:
       - "4000:4000"  # GraphQL API
+    volumes:
+      - ${GITSTORE_DATA_DIR:-git-data}:/data/repos:ro  # Read-only access to catalog
     depends_on:
       git-server:
         condition: service_healthy
     environment:
       - GITSTORE_API_PORT=4000
       - GITSTORE_GIT_WS=ws://git-server:8080
-      - GITSTORE_GIT_REPO=git://git-server:9418/catalog.git
+      - GITSTORE_GIT_REPO=/data/repos/catalog.git
       - GITSTORE_CACHE_TTL=300
       - GITSTORE_LOG_LEVEL=info
     networks:

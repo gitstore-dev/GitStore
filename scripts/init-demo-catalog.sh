@@ -124,6 +124,7 @@ id: coll_featured_001
 name: Featured Products
 slug: featured
 display_order: 0
+product_ids: []
 created_at: 2026-01-01T00:00:00Z
 updated_at: 2026-01-01T00:00:00Z
 ---
@@ -138,6 +139,7 @@ id: coll_new_001
 name: New Arrivals
 slug: new-arrivals
 display_order: 1
+product_ids: []
 created_at: 2026-01-01T00:00:00Z
 updated_at: 2026-01-01T00:00:00Z
 ---
@@ -152,6 +154,7 @@ id: coll_bestsellers_001
 name: Best Sellers
 slug: bestsellers
 display_order: 2
+product_ids: []
 created_at: 2026-01-01T00:00:00Z
 updated_at: 2026-01-01T00:00:00Z
 ---
@@ -469,12 +472,26 @@ echo "  - 4 categories (with 1 hierarchy: Electronics > Computers/Accessories)"
 echo "  - 3 collections (Featured, New Arrivals, Best Sellers)"
 echo "  - 7 products (laptops, accessories, books)"
 echo ""
-echo "To use with GitStore:"
-echo "  1. Point git-server data dir to: $CATALOG_PATH"
-echo "  2. Create a release tag: git tag -a v1.0.0 -m 'Initial release'"
-echo "  3. Git server will load and serve this catalog via GraphQL"
+echo "Next steps to use with GitStore:"
 echo ""
-echo "Example git operations:"
-echo "  cd $CATALOG_REPO_PATH"
-echo "  git tag -a v1.0.0 -m 'Initial catalog release'"
-echo "  git log --oneline"
+echo "  1. Start GitStore services:"
+echo "       docker compose up --build -d"
+echo ""
+echo "  2. Clone catalog via HTTP (not filesystem!):"
+echo "       git clone http://localhost:9418/catalog.git catalog-work"
+echo "       cd catalog-work"
+echo ""
+echo "  3. Create and push a release tag:"
+echo "       git tag -a v1.0.0 -m 'Initial catalog release'"
+echo "       git push origin v1.0.0"
+echo ""
+echo "  4. Verify websocket notification:"
+echo "       docker compose logs git-server | grep -i broadcast"
+echo ""
+echo "  5. Query via GraphQL playground:"
+echo "       http://localhost:4000/playground"
+echo ""
+echo "⚠️  Important: Clone from http://localhost:9418/ (not from filesystem)"
+echo "   This ensures git push triggers websocket notifications."
+echo ""
+echo "Bare repository location: $CATALOG_REPO_PATH"

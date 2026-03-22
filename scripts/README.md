@@ -61,24 +61,46 @@ The script initializes a git repository at `<CATALOG_PATH>/catalog.git` with:
 
 After running the script:
 
-1. **Point git-server to the catalog:**
+1. **Start GitStore services:**
    ```bash
-   # In terminal
-   export GITSTORE_DATA_DIR=/path/to/demo-catalog
+   # Start all services (git-server must be running before HTTP clone)
+   docker compose up --build -d
+
+   # Wait for services to be healthy (about 10-15 seconds)
+   docker compose ps
    ```
 
-2. **Create a release tag:**
+2. **Clone the catalog repository via HTTP:**
    ```bash
-   cd $GITSTORE_DATA_DIR/catalog.git
+   git clone http://localhost:9418/catalog.git catalog-work
+   cd catalog-work
+   ```
+
+   **Important**:
+   - Clone from `http://localhost:9418/` (git-server endpoint), NOT from filesystem path
+   - Git-server must be running before this step
+   - This ensures `git push` triggers websocket notifications
+
+3. **Create a release tag:**
+   ```bash
+   # Create annotated release tag
    git tag -a v1.0.0 -m "Initial catalog release"
    ```
 
-3. **Start GitStore services:**
+4. **Push the tag (triggers notification):**
    ```bash
-   docker compose up
+   # Push tag to git-server via HTTP (triggers websocket notification)
+   git push origin v1.0.0
+
+   # Check logs to verify notification
+   docker compose logs git-server | grep -i "broadcast"
+   # Should see: "Broadcasted tag notification tag=v1.0.0"
    ```
 
-4. **Query via GraphQL:**
+5. **Query via GraphQL:**
+
+   Open http://localhost:4000/playground and run:
+
    ```graphql
    query {
      products {
@@ -95,6 +117,40 @@ After running the script:
      }
    }
    ```
+
+### Important: Bare Repository vs Working Copy
+
+**Bare Repository** (`demo-catalog/catalog.git/`):
+- Created by `init-demo-catalog.sh`
+- Contains git objects and references (no working files)
+- Used by git-server for serving via git protocol
+- **Do NOT work directly in this directory**
+
+**Working Copy** (`catalog-work/`):
+- Cloned from bare repository
+- Contains actual markdown files you can edit
+- Used for making changes and creating tags
+- Push changes back to bare repository
+
+### Alternative: Quick Test Without Clone
+
+For quick testing without a working copy:
+
+```bash
+# Initialize catalog
+export GITSTORE_DATA_DIR=$(pwd)/demo-catalog
+./scripts/init-demo-catalog.sh
+
+# Tag directly in bare repo (works but not recommended for regular workflow)
+cd $GITSTORE_DATA_DIR/catalog.git
+git tag -a v1.0.0 HEAD -m "Initial release"
+cd ../..
+
+# Start services
+docker compose up --build
+```
+
+**Note**: This works for initial testing but is not the recommended workflow for making catalog changes.
 
 ### File Structure
 
