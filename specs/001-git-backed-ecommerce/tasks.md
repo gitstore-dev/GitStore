@@ -28,7 +28,7 @@ Multi-service architecture:
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Create root project structure with git-server/, api/, admin-ui/, shared/, docker/ directories
+- [X] T001 Create root project structure with git-server/, api/, admin-ui/, shared/, docker/ directories
 - [X] T002 [P] Initialize Rust project in git-server/ with Cargo.toml (dependencies: libgit2, tokio, tungstenite, serde, serde_yaml)
 - [X] T003 [P] Initialize Go module in api/ with go.mod (dependencies: gqlgen, graphql-relay-go, go-git)
 - [X] T004 [P] Initialize Node.js project in admin-ui/ with package.json (dependencies: astro, react, react-beautiful-dnd, urql)
@@ -264,7 +264,7 @@ Multi-service architecture:
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T127 [P] Add GraphQL filtering support including price range (ProductFilter with priceMin/priceMax parameters) to products query in api/internal/graph/products.resolvers.go
+- [X] T127 [P] Add GraphQL filtering support including price range (ProductFilter with priceMin/priceMax parameters) to products query in api/internal/graph/products.resolvers.go
 - [ ] T128 [P] Implement cursor pagination helpers in api/internal/graph/pagination.go (Relay connections)
 - [ ] T129 [P] Add git repository size monitoring in git-server/src/git/metrics.rs
 - [ ] T130 [P] Add catalog statistics to CatalogVersion type in api/internal/graph/catalog_version.resolvers.go
@@ -277,11 +277,11 @@ Multi-service architecture:
 - [ ] T137 [P] Add accessibility labels to admin UI components (ARIA attributes)
 - [ ] T138 [P] Implement loading states for all async operations in admin UI
 - [ ] T139 [P] Add error boundaries in admin UI React components
-- [ ] T140 [P] Create user documentation in docs/user-guide.md
-- [ ] T141 [P] Create API documentation in docs/api-reference.md
-- [ ] T142 [P] Validate quickstart.md examples against running system
+- [X] T140 [P] Create user documentation in docs/user-guide.md
+- [X] T141 [P] Create API documentation in docs/api-reference.md
+- [X] T142 [P] Validate quickstart.md examples against running system
 - [ ] T143 [P] Write E2E integration test validating request ID propagation from admin-ui → api → git-server in tests/e2e/request_tracing.spec.ts (validates Constitution Principle IV - Observability)
-- [ ] T144 Run all tests across all three services (cargo test, go test, npm test)
+- [X] T144 Run all tests across all three services (cargo test, go test, npm test)
 
 ---
 
