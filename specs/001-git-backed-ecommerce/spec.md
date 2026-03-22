@@ -107,11 +107,11 @@ A non-technical user (e.g., merchandiser, content editor) uses an admin interfac
 - **FR-017**: System MUST provide meaningful error messages when markdown parsing or validation fails
 - **FR-018**: System MUST support basic filtering on the storefront (by category, collection, price range, inventory status)
 - **FR-019**: Admin UI MUST implement single admin user authentication with password-based login
-- **FR-020**: System MUST support external storage for binary assets (product images hosted on CDN or cloud storage with URLs referenced in markdown front-matter)
+- **FR-020**: System MUST support external storage for binary assets (product images hosted on CDN or cloud storage with URLs referenced in markdown front-matter). Note: Detailed URL format validation (length, protocol restrictions) is deferred to post-MVP; MVP accepts any string in `images` array field
 - **FR-021**: Admin UI MUST reject push operations when merge conflicts are detected and display error message directing user to resolve conflicts manually via git
 - **FR-022**: Storefront MUST load all valid products from a release tag and skip invalid files, logging detailed validation errors for each failed file
 - **FR-023**: System MUST mark orphaned category/collection references as invalid when the referenced entity is deleted, allowing products to remain visible without the deleted assignment
-- **FR-024**: Admin UI MUST implement optimistic locking for concurrent edits, detecting modifications made since editing began, displaying a diff of conflicting changes, and allowing users to choose whether to overwrite or manually merge
+- **FR-024**: Admin UI MUST implement optimistic locking for concurrent edits using `updated_at` timestamp comparison, detecting modifications made since editing began, displaying a diff of conflicting changes, and allowing users to choose whether to overwrite or manually merge (conflict detected when current `updated_at` differs from initial load timestamp)
 - **FR-025**: Built-in git engine MUST validate catalog data on push operations before accepting commits
 - **FR-026**: Built-in git engine MUST provide websocket endpoint to broadcast real-time notifications when new release tags are created
 - **FR-027**: Storefront MUST subscribe to git engine websocket and reload catalog data immediately upon receiving release tag notification
@@ -570,12 +570,12 @@ When validation fails, error messages MUST include:
 
 ### Measurable Outcomes
 
-- **SC-001**: Technical users can create and publish a complete product catalog (100+ products with categories and collections) in under 30 minutes using git workflow
+- **SC-001**: Technical users can create and publish a complete product catalog (100+ products with categories and collections) in under 30 minutes using git workflow (measured for single technical user with git installed, excluding repository initialization time)
 - **SC-002**: Storefront updates to reflect catalog changes within 30 seconds of a new release tag being created
 - **SC-003**: Non-technical users can successfully create, edit, and publish products through the admin UI without any git knowledge in 90% of attempts
 - **SC-004**: System successfully parses and validates 99.9% of properly formatted markdown files with front-matter
 - **SC-005**: Catalog changes are version-controlled with full git history, enabling rollback to any previous release
-- **SC-006**: AI agents can programmatically generate and commit catalog files that are accepted by the system in 95% of attempts
+- **SC-006**: AI agents can programmatically generate and commit catalog files that are accepted by the system in 95% of attempts (when following documented format, excluding intentionally malformed input for testing)
 - **SC-007**: Storefront can serve catalog queries for 1,000+ products with response times under 500ms
 
 ## Assumptions
