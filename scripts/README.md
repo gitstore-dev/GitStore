@@ -9,11 +9,16 @@ Creates a sample product catalog with categories, collections, and products for 
 ### Usage
 
 ```bash
-./scripts/init-demo-catalog.sh [catalog-path]
+./scripts/init-demo-catalog.sh [--data-dir <catalog-path>]
 ```
 
 **Arguments:**
-- `catalog-path` (optional): Directory where catalog will be created. Default: `./demo-catalog`
+- `--data-dir <catalog-path>` (optional): Data directory where `catalog.git` will be created
+
+**Path Resolution Precedence:**
+1. `GITSTORE_DATA_DIR` environment variable
+2. `--data-dir` flag
+3. `./demo-catalog` (default)
 
 **Example:**
 
@@ -22,12 +27,15 @@ Creates a sample product catalog with categories, collections, and products for 
 ./scripts/init-demo-catalog.sh
 
 # Create demo catalog in custom location
-./scripts/init-demo-catalog.sh ./my-catalog
+./scripts/init-demo-catalog.sh --data-dir ./my-catalog
+
+# Environment variable takes precedence over CLI argument
+GITSTORE_DATA_DIR=./from-env ./scripts/init-demo-catalog.sh
 ```
 
 ### What It Creates
 
-The script initializes a git repository with:
+The script initializes a git repository at `<CATALOG_PATH>/catalog.git` with:
 
 **Categories (4):**
 - Electronics (root)
@@ -61,7 +69,7 @@ After running the script:
 
 2. **Create a release tag:**
    ```bash
-   cd demo-catalog
+   cd $GITSTORE_DATA_DIR/catalog.git
    git tag -a v1.0.0 -m "Initial catalog release"
    ```
 

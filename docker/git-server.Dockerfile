@@ -48,6 +48,12 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=builder /build/target/release/gitstore-server /app/gitstore-server
 
+# Allow libgit2 to open repositories in mounted volumes regardless of ownership.
+# libgit2 (used by the Rust git2 crate) enforces the same safe.directory check
+# as git >= 2.35.2; writing to /etc/gitconfig satisfies it without requiring
+# the git binary at runtime.
+RUN printf '[safe]\n\tdirectory = *\n' > /etc/gitconfig
+
 # Create data directory
 RUN mkdir -p /data/repos
 

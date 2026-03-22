@@ -3,20 +3,44 @@
 # Demo Catalog Initialization Script
 # Creates a sample product catalog with categories, collections, and products
 #
-# Usage: ./scripts/init-demo-catalog.sh [catalog-path]
+# Usage: ./scripts/init-demo-catalog.sh [--data-dir <catalog-path>]
 #
-# Example: ./scripts/init-demo-catalog.sh ./test-catalog
+# Example: ./scripts/init-demo-catalog.sh --data-dir ./test-catalog
 
 set -e
 
-# Default catalog path
-CATALOG_PATH="${1:-./demo-catalog}"
+# Parse command-line arguments
+CLI_DATA_DIR=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --data-dir)
+      if [ -z "$2" ]; then
+        echo "Error: --data-dir requires a value"
+        exit 1
+      fi
+      CLI_DATA_DIR="$2"
+      shift 2
+      ;;
+    *)
+      echo "Error: unexpected argument '$1'"
+      echo "Usage: $(basename "$0") [--data-dir <catalog-path>]"
+      exit 1
+      ;;
+  esac
+done
 
-echo "Initializing demo catalog at: $CATALOG_PATH"
+# Resolve catalog base directory with precedence:
+# 1) GITSTORE_DATA_DIR env var
+# 2) --data-dir flag
+# 3) ./demo-catalog
+CATALOG_PATH="${GITSTORE_DATA_DIR:-${CLI_DATA_DIR:-./demo-catalog}}"
+CATALOG_REPO_PATH="$CATALOG_PATH/catalog.git"
+
+echo "Initializing demo catalog at: $CATALOG_REPO_PATH"
 
 # Create catalog directory structure
-mkdir -p "$CATALOG_PATH"
-cd "$CATALOG_PATH"
+mkdir -p "$CATALOG_REPO_PATH"
+cd "$CATALOG_REPO_PATH"
 
 # Initialize git repository
 if [ ! -d .git ]; then
@@ -438,7 +462,7 @@ git commit -m "Add demo catalog with categories, collections, and products
 - Shows product-category-collection relationships"
 
 echo ""
-echo "✅ Demo catalog initialized successfully at: $CATALOG_PATH"
+echo "✅ Demo catalog initialized successfully at: $CATALOG_REPO_PATH"
 echo ""
 echo "Catalog contents:"
 echo "  - 4 categories (with 1 hierarchy: Electronics > Computers/Accessories)"
@@ -446,11 +470,11 @@ echo "  - 3 collections (Featured, New Arrivals, Best Sellers)"
 echo "  - 7 products (laptops, accessories, books)"
 echo ""
 echo "To use with GitStore:"
-echo "  1. Point git-server to this repository: $CATALOG_PATH"
+echo "  1. Point git-server data dir to: $CATALOG_PATH"
 echo "  2. Create a release tag: git tag -a v1.0.0 -m 'Initial release'"
 echo "  3. Git server will load and serve this catalog via GraphQL"
 echo ""
 echo "Example git operations:"
-echo "  cd $CATALOG_PATH"
+echo "  cd $CATALOG_REPO_PATH"
 echo "  git tag -a v1.0.0 -m 'Initial catalog release'"
 echo "  git log --oneline"
