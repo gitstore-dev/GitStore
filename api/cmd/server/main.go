@@ -20,6 +20,7 @@ import (
 	"github.com/commerce-projects/gitstore/api/internal/graph/generated"
 	"github.com/commerce-projects/gitstore/api/internal/handler"
 	"github.com/commerce-projects/gitstore/api/internal/health"
+	"github.com/commerce-projects/gitstore/api/internal/loader"
 	"github.com/commerce-projects/gitstore/api/internal/logger"
 	"github.com/commerce-projects/gitstore/api/internal/middleware"
 	"github.com/commerce-projects/gitstore/api/internal/websocket"
@@ -107,7 +108,25 @@ func main() {
 
 	// Create GraphQL resolver
 	resolver := graph.NewResolver(cacheManager, *gitRepo, *gitServerURL)
-	gqlServer := gqlhandler.NewDefaultServer(generated.NewExecutableSchema(generated.Config{Resolvers: resolver}))
+	schema := generated.NewExecutableSchema(generated.Config{Resolvers: resolver})
+	gqlServer := gqlhandler.NewDefaultServer(schema)
+
+	// Wrap GraphQL handler with DataLoader middleware
+	gqlHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Get current catalog for this request
+		cat, err := cacheManager.Get(r.Context())
+		if err != nil {
+			http.Error(w, "Failed to load catalog", http.StatusInternalServerError)
+			return
+		}
+
+		// Add DataLoaders to context
+		ctx := loader.Middleware(cat, logger.Log)(r.Context())
+		r = r.WithContext(ctx)
+
+		// Serve GraphQL
+		gqlServer.ServeHTTP(w, r)
+	})
 
 	// Create health check handler
 	healthHandler := health.NewHandler(cacheManager, logger.Log, "1.0.0")
@@ -119,8 +138,8 @@ func main() {
 	loginHandler := handler.NewLoginHandler(authMiddleware, logger.Log)
 	mux.Handle("/api/login", loginHandler)
 
-	// GraphQL endpoint
-	mux.Handle("/graphql", gqlServer)
+	// GraphQL endpoint (with DataLoader middleware)
+	mux.Handle("/graphql", gqlHandler)
 
 	// Playground endpoint
 	mux.Handle("/playground", playground.Handler("GraphQL Playground", "/graphql"))

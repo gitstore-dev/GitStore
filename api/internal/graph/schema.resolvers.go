@@ -350,38 +350,8 @@ func (r *queryResolver) Products(ctx context.Context, first *int32, after *strin
 		products = applyProductFilters(products, filter)
 	}
 
-	// Simple pagination: for now, return all products
-	// TODO: Implement proper cursor-based pagination
-	edges := make([]*model.ProductEdge, len(products))
-	for i, p := range products {
-		edges[i] = &model.ProductEdge{
-			Cursor: p.ID, // Use ID as cursor for simplicity
-			Node:   CatalogProductToGraphQL(p),
-		}
-	}
-
-	// Calculate pagination info
-	hasNextPage := false
-	hasPreviousPage := false
-	var startCursor, endCursor *string
-
-	if len(edges) > 0 {
-		start := edges[0].Cursor
-		end := edges[len(edges)-1].Cursor
-		startCursor = &start
-		endCursor = &end
-	}
-
-	return &model.ProductConnection{
-		Edges:      edges,
-		TotalCount: int32(len(products)),
-		PageInfo: &model.PageInfo{
-			HasNextPage:     hasNextPage,
-			HasPreviousPage: hasPreviousPage,
-			StartCursor:     startCursor,
-			EndCursor:       endCursor,
-		},
-	}, nil
+	// Apply Relay-style cursor pagination
+	return PaginateProducts(products, first, after, last, before)
 }
 
 // Category returns a category by slug

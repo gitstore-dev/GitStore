@@ -27,7 +27,20 @@ func (r *productResolver) Category(ctx context.Context, obj *model.Product) (*mo
 		return nil, nil
 	}
 
-	// Get the category
+	// Try to use DataLoader first (batches lookups to prevent N+1)
+	if loaders := r.getLoaders(ctx); loaders != nil && loaders.Category != nil {
+		catalogCategory, err := loaders.Category.Load(ctx, catalogProduct.CategoryID)
+		if err != nil || catalogCategory == nil {
+			// Category reference is orphaned - log but don't fail
+			r.logger.Warn("Product references non-existent category",
+				zap.String("product_id", obj.ID),
+				zap.String("category_id", catalogProduct.CategoryID))
+			return nil, nil
+		}
+		return CatalogCategoryToGraphQL(catalogCategory), nil
+	}
+
+	// Fallback to direct lookup if DataLoader not available
 	catalogCategory, err := r.service.GetCategoryByID(ctx, catalogProduct.CategoryID)
 	if err != nil {
 		// Category reference is orphaned - log but don't fail
@@ -53,7 +66,25 @@ func (r *productResolver) Collections(ctx context.Context, obj *model.Product) (
 		return []*model.Collection{}, nil
 	}
 
-	// Fetch all collections and filter to those containing this product
+	// Try to use DataLoader first (batches lookups to prevent N+1)
+	if loaders := r.getLoaders(ctx); loaders != nil && loaders.Collection != nil {
+		catalogCollections, errs := loaders.Collection.LoadMany(ctx, catalogProduct.CollectionIDs)
+
+		collections := make([]*model.Collection, 0, len(catalogProduct.CollectionIDs))
+		for i, catalogCollection := range catalogCollections {
+			if errs[i] != nil || catalogCollection == nil {
+				// Collection reference is orphaned - log but continue
+				r.logger.Warn("Product references non-existent collection",
+					zap.String("product_id", obj.ID),
+					zap.String("collection_id", catalogProduct.CollectionIDs[i]))
+				continue
+			}
+			collections = append(collections, CatalogCollectionToGraphQL(catalogCollection))
+		}
+		return collections, nil
+	}
+
+	// Fallback to direct lookup if DataLoader not available
 	collections := make([]*model.Collection, 0, len(catalogProduct.CollectionIDs))
 	for _, collectionID := range catalogProduct.CollectionIDs {
 		catalogCollection, err := r.service.GetCollectionByID(ctx, collectionID)

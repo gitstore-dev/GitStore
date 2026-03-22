@@ -170,9 +170,9 @@ Multi-service architecture:
 
 #### DataLoader for N+1 Prevention
 
-- [ ] T076 [P] [US2] Implement category DataLoader in api/internal/loader/category_loader.go (batch category lookups)
-- [ ] T077 [P] [US2] Implement collection DataLoader in api/internal/loader/collection_loader.go (batch collection lookups)
-- [ ] T078 [US2] Wire DataLoaders into GraphQL context in api/internal/graph/resolver.go
+- [X] T076 [P] [US2] Implement category DataLoader in api/internal/loader/category_loader.go (batch category lookups)
+- [X] T077 [P] [US2] Implement collection DataLoader in api/internal/loader/collection_loader.go (batch collection lookups)
+- [X] T078 [US2] Wire DataLoaders into GraphQL context in api/internal/graph/resolver.go
 
 **Checkpoint**: At this point, User Stories 1 AND 2 should both work independently
 
@@ -265,7 +265,7 @@ Multi-service architecture:
 **Purpose**: Improvements that affect multiple user stories
 
 - [X] T127 [P] Add GraphQL filtering support including price range (ProductFilter with priceMin/priceMax parameters) to products query in api/internal/graph/products.resolvers.go
-- [ ] T128 [P] Implement cursor pagination helpers in api/internal/graph/pagination.go (Relay connections)
+- [X] T128 [P] Implement cursor pagination helpers in api/internal/graph/pagination.go (Relay connections)
 - [ ] T129 [P] Add git repository size monitoring in git-server/src/git/metrics.rs
 - [ ] T130 [P] Add catalog statistics to CatalogVersion type in api/internal/graph/catalog_version.resolvers.go
 - [X] T131 [P] Create initialization script in scripts/init-demo-catalog.sh (creates sample products/categories/collections)
