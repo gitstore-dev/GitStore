@@ -285,10 +285,7 @@ async fn receive_pack(
 
             // Use proper event format
             use crate::git::events;
-            let event = events::GitEvent::release_created(
-                tag_name.clone(),
-                new_oid_str.clone()
-            );
+            let event = events::GitEvent::release_created(tag_name.clone(), new_oid_str.clone());
 
             // Broadcast using proper JSON format
             match event.to_json() {
