@@ -171,7 +171,7 @@ npx playwright show-report
 
 ### Verified CRUD Cycle
 ```bash
-# Test results from /Users/julius.krah/Documents/github/gitstore/test-catalog
+# Test results from test-catalog directory
 ee6c716 Create product: Test Product      # Initial creation
 549562d Update product: Updated Test Product  # Field updates
 4a362e7 Delete product: Updated Test Product  # File removal
