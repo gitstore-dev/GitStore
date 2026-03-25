@@ -5,29 +5,22 @@ GitStore is also a developer tool: catalogs are plain files in git, so developer
 
 ## Architecture
 
-```
-┌─────────────┐   Git Protocol    ┌─────────────┐
-│ Git Client  │   (push/pull)     │   Git       │
-│   (CLI)     │──────────────────→│   Server    │
-│             │←──────────────────│  (Rust)     │
-└─────────────┘   Validation      └──────┬──────┘
-                  Errors/Success          │
-                                         │ Websocket
-                                         │ Notification
-                                         ↓
-                                  ┌─────────────┐
-                                  │  GraphQL    │
-                                  │   API       │
-                                  │   (Go)      │
-                                  └──────┬──────┘
-                                         │
-                       ┌─────────────────┼─────────────────┐
-                       │ GraphQL         │                 │ GraphQL
-                       ↓                 ↓                 ↓
-                ┌─────────────┐   ┌─────────────┐  ┌─────────────┐
-                │  Admin UI   │   │ Storefront  │  │   Other     │
-                │  (Astro)    │   │  (Consumer) │  │   Clients   │
-                └─────────────┘   └─────────────┘  └─────────────┘
+```mermaid
+graph TD
+    GitClient["Git Client\n(CLI)"]
+    GitServer["Git Server\n(Rust)"]
+    GraphQLAPI["GraphQL API\n(Go)"]
+    AdminUI["Admin UI\n(Astro)"]
+    Storefront["Storefront\n(Consumer)"]
+    OtherClients["Other Clients"]
+
+    GitClient -- "Git Protocol (push/pull)" --> GitServer
+    GitServer -- "Validation Errors/Success" --> GitClient
+    GitServer -- "Websocket Notification" --> GraphQLAPI
+
+    GraphQLAPI -- "GraphQL" --> AdminUI
+    GraphQLAPI -- "GraphQL" --> Storefront
+    GraphQLAPI -- "GraphQL" --> OtherClients
 ```
 
 ## Components
@@ -54,7 +47,7 @@ GitStore is also a developer tool: catalogs are plain files in git, so developer
 
 ```bash
 # Clone repository
-git clone https://github.com/commerce-projects/gitstore
+git clone https://github.com/gitstore-dev/gitstore
 cd gitstore
 
 # Start all services
@@ -105,7 +98,7 @@ gitstore-admin-ui   running             0.0.0.0:3000->3000/tcp
 
 - **GraphQL Playground**: http://localhost:4000/graphql
 - **Admin UI**: http://localhost:3000
-- **Git Repository**: `git://localhost:9418/catalog.git`
+- **Git Repository**: http://localhost:9418/catalog.git
 
 ## Development Setup
 
@@ -159,8 +152,8 @@ npm run preview
 
 ```bash
 # Clone catalog repository
-git clone git://localhost:9418/catalog.git
-cd catalog
+git clone http://localhost:9418/catalog.git catalog-work
+cd catalog-work
 
 # Create a product
 mkdir -p products/electronics
