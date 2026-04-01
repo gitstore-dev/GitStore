@@ -16,7 +16,7 @@ tests/
 
 ## Commands
 
-# Add commands for 
+Add common development and testing commands here:
 
 ## Code Style
 
