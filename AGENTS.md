@@ -20,7 +20,7 @@ tests/
 
 ## Code Style
 
-: Follow standard conventions
+- Follow standard conventions
 
 ## Recent Changes
 
