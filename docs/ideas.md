@@ -70,6 +70,8 @@ Essential e-commerce operations: shopping carts, transactions, order lifecycle, 
 
 Platform ecosystem, AI-driven features, and deep customization.
 
+- **Enterprise SSO Support** (Initiative #47): Add enterprise single sign-on support through standards-based OIDC and SAML federation so organizations can use their existing identity providers. Include role and group claim mapping into GitStore authorization scopes.
+- **SCIM Provisioning** (Initiative #48): Add SCIM 2.0 user and group provisioning endpoints to automate enterprise identity lifecycle events (create, update, disable, and group sync) from external IdPs.
 - **Product Recommendations**: Implement a recommendation engine that suggests products based on user behavior and preferences. Requires vector database and recommendation module.
 - **App Marketplace**: Create an app marketplace where third-party developers can create and sell extensions and integrations for our platform.
   - **ERP Connectors**: Develop connectors for popular ERP systems to allow merchants to easily integrate their existing systems with our platform. Inventory management, order processing, and customer data synchronization will be key features of these connectors.
