@@ -1,0 +1,89 @@
+name: "[Roadmap] Feature"
+description: Propose a roadmap item for tracking in the OSS Roadmap project.
+title: "[Roadmap] "
+labels:
+  - roadmap
+  - enhancement
+projects:
+  - "gitstore-dev/1"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for roadmap items. Each item will be automatically added to the **OSS Roadmap Pilot** project.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A concise description of the feature and the problem it solves.
+      placeholder: "Implement X so that Y can Z..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope-in
+    attributes:
+      label: In Scope
+      description: What will be built as part of this item?
+      placeholder: |
+        - Feature A
+        - Feature B
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope-out
+    attributes:
+      label: Out of Scope
+      description: What is explicitly excluded from this item?
+      placeholder: |
+        - Feature C (tracked separately)
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: Checkboxes that define "done". Use `- [ ] criterion` format.
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] Criterion 2
+        - [ ] Criterion 3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the platform does this affect?
+      options:
+        - catalog
+        - basket
+        - checkout
+        - auth
+        - search
+        - agents
+        - extensions
+        - infra
+        - other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - p1 – critical
+        - p2 – high
+        - p3 – medium
+        - p4 – low
+    validations:
+      required: true
+
+  - type: input
+    id: milestone
+    attributes:
+      label: Target Milestone / Release
+      placeholder: "e.g. v0.4.0 or 2026-Q3"

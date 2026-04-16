@@ -57,35 +57,6 @@ docker compose up -d
 docker compose ps
 ```
 
-### Configure Catalog Data Storage
-
-The `git-server` volume mount in [compose.yml](compose.yml) is:
-
-```yaml
-${GITSTORE_DATA_DIR:-git-data}:/data/repos
-```
-
-Behavior:
-
-- If `GITSTORE_DATA_DIR` is unset, Docker uses the named volume `git-data`.
-- If `GITSTORE_DATA_DIR` is set to a host path, Docker uses a bind mount from that host path.
-
-Examples:
-
-```bash
-# Use default named volume (git-data)
-docker compose up -d
-
-# Use a host directory (recommended: absolute path)
-export GITSTORE_DATA_DIR=/Users/yourname/.gitstore/data/repos
-docker compose up -d
-```
-
-Important notes:
-
-- In shell exports, `~` usually expands (`export GITSTORE_DATA_DIR=~/.gitstore/data/repos`).
-- In `.env` files, `~` is not expanded by Docker Compose. Use an absolute path instead.
-
 **Expected Output**:
 ```
 NAME                STATUS              PORTS
@@ -100,7 +71,7 @@ gitstore-admin-ui   running             0.0.0.0:3000->3000/tcp
 - **Admin UI**: http://localhost:3000
 - **Git Repository**: http://localhost:9418/catalog.git
 
-## Development Setup
+## Contributing
 
 ### Prerequisites
 
@@ -212,15 +183,10 @@ curl http://localhost:4000/graphql \
 ## Testing
 
 ```bash
-# Run all tests
-docker compose run --rm git-server cargo test
-docker compose run --rm api go test ./...
-docker compose run --rm admin-ui npm test
-
 # Integration tests
 cd git-server && cargo test --test integration
-cd api && go test ./tests/integration/...
-cd admin-ui && npm run test:e2e
+cd ../api && go test ./tests/integration/...
+cd ../admin-ui && npm run test:e2e
 ```
 
 ## Documentation
