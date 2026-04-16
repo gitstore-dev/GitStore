@@ -1,8 +1,8 @@
-name: "[Roadmap] Feature"
-description: Propose a roadmap item for tracking in the OSS Roadmap project.
-title: "[Roadmap] "
+name: "[Initiative] Feature"
+description: Propose an initiative for tracking in the GitStore Roadmap project.
+title: "[Initiative] "
 labels:
-  - roadmap
+  - initiative
   - enhancement
 projects:
   - "gitstore-dev/1"
@@ -10,7 +10,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Use this template for roadmap items. Each item will be automatically added to the **OSS Roadmap Pilot** project.
+        Use this template for initiatives. Each item will be automatically added to the **GitStore Roadmap** project.
 
   - type: textarea
     id: summary
