@@ -2,6 +2,22 @@
 
 This document outlines the roadmap for the development of our project. It includes the planned features, milestones, and timelines for the upcoming releases.
 
+## Platform Shape (Core vs Optional)
+
+- **Core GitStore runtime (required):** `git-server` and `api` only.
+- **Optional capability modules:** recommendations, OIDC, user management, and other integrations are deployable add-ons.
+- **Local-first adoption principle:** a single bootstrap script should run GitStore locally with zero heavy infrastructure requirements.
+- **In-memory first defaults:** use in-memory storage/cache for local development by default.
+- **Production-ready upgrades (optional):** external infrastructure like ScyllaDB/Cassandra, Redis/Valkey, vector databases, and external identity services can be enabled incrementally.
+
+### Optional Modules and Dependencies
+
+- **Recommendation module:** requires an optional vector database (for example Qdrant or Typesense vector capabilities).
+- **OIDC module:** requires an optional OIDC service deployment.
+- **User management module:** requires an optional identity/user-management service deployment.
+- **Caching module:** optional Redis or Valkey, with in-memory fallback.
+- **Order management persistence acceleration:** optional distributed stores for high-scale deployments, with in-memory fallback.
+
 ## Planned Features
 
 - **Improvement to Catalog Frontmatter**: Kubernetes-style frontmatter for better configuration management and flexibility. `apiVersion`, `kind`, `metadata`, `spec` fields will be added to product, category, and collection files to enhance organization and maintainability.
@@ -36,6 +52,24 @@ This document outlines the roadmap for the development of our project. It includ
 - **Redis or Valkey**: KV store for caching and fast access?
 - **Qdrant or Typesense**: Vector search for product recommendations and search?
 - **ScyllaDB or Cassandra**: Distributed databases for scalability and high availability?
+
+### OIDC and User Management (OSS Options)
+
+- **Ory Hydra (OIDC/OAuth2 engine):** standards-focused OIDC/OAuth2 server that intentionally decouples protocol from user management.
+- **Dex (OIDC federation engine):** OIDC provider with connector-based federation to LDAP, SAML, OIDC, GitHub, and others.
+- **Keycloak (integrated IAM option):** full IAM suite with OIDC, SAML, user federation, admin UI, and built-in user management.
+
+### Headless User Management (OSS Options)
+
+- **Ory Kratos:** headless identity and user-management APIs for registration, login, account recovery, MFA, and profile lifecycle.
+- **ZITADEL (OSS self-hostable):** IAM platform with user and organization management, OIDC/OAuth2/SAML support.
+- **SuperTokens (OSS core):** modular auth stack for sign-in, sessions, and user account management with self-hosting support.
+
+### Suggested Pairings for GitStore
+
+- **Hydra + Kratos:** strict separation of OIDC protocol and user lifecycle, aligned with decoupled architecture.
+- **Dex + existing enterprise IdP/LDAP:** best when customers already have identity providers and need federation quickly.
+- **Keycloak only:** fastest single-service path when operational simplicity is preferred over service separation.
 
 ## Sandbox Environment
 
