@@ -71,7 +71,8 @@ jobs:
         labels: ${{ steps.meta-git-service.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        outputs: type=image,name=target,annotation-index.org.opencontainers.image.description=GitStore git service with built-in Git protocol handling, validation hooks, and websocket notifications
+        outputs: >-
+          type=image,name=target,"annotation-index.org.opencontainers.image.description=GitStore git service with built-in Git protocol handling, validation hooks, and websocket notifications"
 
     - name: Extract metadata for API
       id: meta-api
