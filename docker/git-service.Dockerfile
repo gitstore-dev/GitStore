@@ -5,6 +5,9 @@
 # producing a fully musl-linked binary that runs on Alpine without glibc.
 FROM rust:1.94-alpine AS builder
 
+# Expose the BuildKit-provided TARGETARCH so we can key per-architecture caches.
+ARG TARGETARCH
+
 # pkgconf   – pkg-config shim for openssl-sys
 # openssl-dev / openssl-libs-static – headers + static .a for OPENSSL_STATIC=1
 # cmake + make – required by libgit2-sys bundled build (no system libgit2)
@@ -31,9 +34,9 @@ RUN mkdir src && \
     echo "pub fn lib() {}" > src/lib.rs
 
 # Build dependencies
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/target \
+RUN --mount=type=cache,id=cargo-registry-$TARGETARCH,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-git-$TARGETARCH,target=/usr/local/cargo/git \
+    --mount=type=cache,id=cargo-target-$TARGETARCH,target=/build/target \
     cargo build --release && \
     rm -rf src
 
@@ -43,9 +46,9 @@ COPY git-server/src ./src
 # Build application.
 # Refresh mtimes for all source files so Cargo invalidates dummy artifacts
 # from the dependency-caching step and recompiles the real crate.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/target \
+RUN --mount=type=cache,id=cargo-registry-$TARGETARCH,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-git-$TARGETARCH,target=/usr/local/cargo/git \
+    --mount=type=cache,id=cargo-target-$TARGETARCH,target=/build/target \
     find src -type f -name '*.rs' -exec touch {} + && \
     cargo build --release && \
     cp /build/target/release/gitstore-server /build/gitstore-server && \
