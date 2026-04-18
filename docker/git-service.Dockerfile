@@ -50,8 +50,6 @@ RUN find src -type f -name '*.rs' -exec touch {} + && \
 # libgcc (for Rust/GCC stack unwinding) is needed alongside git.
 FROM alpine:3
 
-LABEL org.opencontainers.image.description="GitStore git service with built-in Git protocol handling, validation hooks, and websocket notifications"
-
 RUN apk add --no-cache \
     git \
     ca-certificates \

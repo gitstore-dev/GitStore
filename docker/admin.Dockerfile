@@ -1,5 +1,7 @@
 # Multi-stage build for Admin UI (Node.js/Astro)
-FROM node:22-alpine3.21 AS builder
+# Build static assets on the native BuildKit platform to avoid qemu npm crashes
+# during multi-arch builds (linux/amd64,linux/arm64).
+FROM --platform=$BUILDPLATFORM node:lts-alpine3.22 AS builder
 
 WORKDIR /build
 
