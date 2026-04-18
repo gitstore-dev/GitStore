@@ -86,7 +86,8 @@ Platform ecosystem, AI-driven features, and deep customization.
   - **ACP and UCP**: Agentic Commerce Protocol (ACP) and Universal Commerce Protocol (UCP) will be designed to enable entire shopping journeys and checkout flows to be executed by agents, providing a seamless and automated shopping experience for customers.
 - **Query Language**: Develop a powerful and flexible query language that allows users to easily retrieve and manipulate data within the platform. This will enable merchants and developers to create custom reports, dashboards, and integrations with ease.
 - **CI/CD**: Implement _GitStore Actions_, a CI/CD pipeline with a workflow canvas for designing the build, test, and deployment processes of product catalogs.
-- **Namespaces**: Introduce namespaces to allow for better organisation by userspace, organisation or enterprise. This will enable multiple teams or departments to manage their own catalogs and configurations within the same platform without conflicts.
+- **Namespaces**: Introduce namespaces to allow for better organisation by userspace, organisation (storefront) or enterprise (tenant). This will enable multiple teams or departments to manage their own catalogs and configurations within the same platform without conflicts.
+- **Custom Workflow**: Allow merchants and 3rd party developers to create custom workflows that can be triggered by specific events or conditions within the platform. This will enable a high degree of automation and customization for merchants, allowing them to tailor the platform to their specific needs and use cases. This is especially powerful when combined with new product types defined by extensions, allowing for custom lifecycle management and orchestration of products, orders, inventory, and more.
 
 ## Technology Exploration
 

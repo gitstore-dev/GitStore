@@ -1,9 +1,10 @@
 services:
-  git-server:
+  git-service:
+    image: ghcr.io/gitstore-dev/git-service
     build:
       context: .
-      dockerfile: docker/git-server.Dockerfile
-    container_name: gitstore-git-server
+      dockerfile: docker/git-service.Dockerfile
+    container_name: gitstore-git-service
     ports:
       - "9418:9418"  # Git protocol
       - "8080:8080"  # Websocket notifications
@@ -18,12 +19,13 @@ services:
     networks:
       - gitstore-network
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "9418"]
+      test: ["CMD-SHELL", "wget -qO /dev/null --tries=1 --timeout=3 http://127.0.0.1:9418/ 2>&1; test $? -ne 4"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   api:
+    image: ghcr.io/gitstore-dev/api
     build:
       context: .
       dockerfile: docker/api.Dockerfile
@@ -33,11 +35,11 @@ services:
     volumes:
       - ${GITSTORE_DATA_DIR:-git-data}:/data/repos:ro  # Read-only access to catalog
     depends_on:
-      git-server:
+      git-service:
         condition: service_healthy
     environment:
       - GITSTORE_API_PORT=4000
-      - GITSTORE_GIT_WS=ws://git-server:8080
+      - GITSTORE_GIT_WS=ws://git-service:8080
       - GITSTORE_GIT_REPO=/data/repos/catalog.git
       - GITSTORE_CACHE_TTL=300
       - GITSTORE_LOG_LEVEL=info
@@ -49,11 +51,12 @@ services:
       timeout: 5s
       retries: 5
 
-  admin-ui:
+  admin:
+    image: ghcr.io/gitstore-dev/admin
     build:
       context: .
-      dockerfile: docker/admin-ui.Dockerfile
-    container_name: gitstore-admin-ui
+      dockerfile: docker/admin.Dockerfile
+    container_name: gitstore-admin
     ports:
       - "3000:3000"  # Admin UI
     depends_on:
@@ -66,7 +69,7 @@ services:
     networks:
       - gitstore-network
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/"]
       interval: 10s
       timeout: 5s
       retries: 5

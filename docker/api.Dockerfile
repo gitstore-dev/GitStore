@@ -21,6 +21,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o api ./cmd/server
 # Runtime stage
 FROM alpine:3.23.3
 
+LABEL org.opencontainers.image.description="GitStore GraphQL API service for querying and publishing catalog data backed by the git service"
+
 RUN apk --no-cache add ca-certificates
 
 WORKDIR /app
@@ -33,7 +35,7 @@ COPY --from=builder /build/shared/schemas /app/schemas
 EXPOSE 4000
 
 ENV GITSTORE_API_PORT=4000
-ENV GITSTORE_GIT_WS=ws://git-server:8080
+ENV GITSTORE_GIT_WS=ws://git-service:8080
 ENV GITSTORE_CACHE_TTL=300
 ENV GITSTORE_LOG_LEVEL=info
 

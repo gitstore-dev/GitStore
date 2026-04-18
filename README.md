@@ -59,10 +59,10 @@ docker compose ps
 
 **Expected Output**:
 ```
-NAME                STATUS              PORTS
-gitstore-git-server running             0.0.0.0:9418->9418/tcp, 0.0.0.0:8080->8080/tcp
-gitstore-api        running             0.0.0.0:4000->4000/tcp
-gitstore-admin-ui   running             0.0.0.0:3000->3000/tcp
+NAME                 STATUS              PORTS
+gitstore-git-service running             0.0.0.0:9418->9418/tcp, 0.0.0.0:8080->8080/tcp
+gitstore-api         running             0.0.0.0:4000->4000/tcp
+gitstore-admin       running             0.0.0.0:3000->3000/tcp
 ```
 
 ### Access Services
