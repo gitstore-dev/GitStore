@@ -2,188 +2,119 @@
 
 ## Summary
 
-The E2E test suite is **fully implemented and ready**. Backend implementation is in progress with Product CRUD operations now fully functional with real git persistence.
+This status file reflects the codebase as of **2026-04-18**.
 
-## Test Coverage
+The Playwright suite is present and reasonably comprehensive in scope, but it is **not currently aligned with the implemented admin UI**. Some earlier notes in this file were stale: the backend is further along than they claimed, while parts of the admin UI are still using mock data and simulated mutations.
 
-### T082: Product CRUD Workflow
-- **File**: `product_crud.spec.ts`
-- **Scenarios**: 5 comprehensive tests
-- **Coverage**:
-  - Full product lifecycle (create, read, update, delete)
-  - Search and filtering
-  - Form validation errors
-  - Optimistic locking and concurrent edits
-  - Markdown preview
-  - Slug auto-generation
+## Current Assessment
 
-### T083: Category Drag-and-Drop Reordering
-- **File**: `category_reorder.spec.ts`
-- **Scenarios**: 6 comprehensive tests
-- **Coverage**:
-  - Drag and drop reordering
-  - Persistence after page reload
-  - Visual feedback during drag
-  - Hierarchical category reordering
-  - Keyboard controls (escape to cancel)
-  - Category count and hierarchy display
+- **Playwright infrastructure exists**: config, browser support, screenshots/traces, and test files are present.
+- **Login endpoint is implemented**: `POST /api/login` exists in the Go API and returns JWT session data.
+- **Core backend GraphQL functionality exists**: the API contains resolvers, git client logic, auth middleware, publish flow code, and catalog loading.
+- **Admin UI is only partially wired to live backend data**: several screens still use local mock state instead of real GraphQL queries and mutations.
+- **E2E specs are currently out of sync with the UI**: several selectors, route expectations, and field names in tests do not match the current pages/components.
 
-## Infrastructure Status
+## What Is Implemented
 
-✅ **Test Infrastructure**: Complete and working
-- Playwright configuration
-- Multi-browser support (Chromium, Firefox, WebKit)
-- Auto-start dev server
-- Screenshot on failure
-- Trace on retry
+### Backend
 
-✅ **Installation**: Fixed
-- npm install works (cache permission issue resolved)
-- Playwright browsers installed
-- All dependencies in place
+- **Authentication**
+  - `/api/login` is implemented and validates Basic Auth credentials.
+  - JWT session generation exists.
+- **Catalog/API**
+  - GraphQL server startup, catalog loading, caching, websocket invalidation, and mutation plumbing are present.
+  - Product, category, collection, and publish-related code exists in the API package.
+- **Git server**
+  - Repository init/open logic, validation, HTTP git routes, and websocket broadcasting code are present.
 
-✅ **Port Configuration**: Fixed
-- Playwright now uses port 3000 to match Astro config
-- Documentation updated
+### Frontend/Admin UI
 
-## Current Status
+- **Page shell and routing**
+  - Login page exists.
+  - Products, categories, collections, and product create/edit pages exist.
+  - Protected-route structure and auth context exist.
+- **Shared UI**
+  - Markdown editor exists.
+  - Conflict modal exists.
+  - Publish button/modal exist.
 
-✅ **Apollo Client → urql Migration Complete**: Vite/Apollo compatibility issue RESOLVED
-✅ **Product CRUD Backend Implemented**: Real git-backed persistence working
+## What Is Still Mocked or Partial
 
-**Date**: 2026-03-12
-**Status**: Product CRUD operational, Category/Collection CRUD pending
+### Admin UI data integration
 
-### Technical Details
+The following components still contain placeholder types, mock data, or simulated network behavior instead of live GraphQL-backed behavior:
 
-Apollo Client v3.x uses mixed CommonJS/ESM exports that Vite cannot properly resolve during static analysis. This prevents the dev server from starting when Playwright attempts to launch it for E2E tests.
+- `src/components/products/ProductList.tsx`
+- `src/components/products/CreateProductPage.tsx`
+- `src/components/products/EditProductPage.tsx`
+- `src/components/products/ProductForm.tsx`
+- `src/components/categories/CategoryList.tsx`
+- `src/components/collections/CollectionList.tsx`
+- `src/lib/publish.ts`
+- `src/graphql/generated.ts`
 
-**What Works**:
-- ✅ Backend GraphQL resolvers implemented with **real git persistence**
-- ✅ Authentication endpoint operational with JWT
-- ✅ All proxy routes configured (`/api`, `/graphql`)
-- ✅ React context hydration fixed
-- ✅ **urql client working perfectly with Vite/Astro 6**
-- ✅ Dev server starts cleanly without module resolution errors
-- ✅ Pages load correctly (/products, /categories, /collections)
-- ✅ Playwright webServer management working
-- ✅ GraphQL queries and mutations functional
-- ✅ **Product CRUD**: Create, Update, Delete with git commits working
-- ✅ **Catalog Loading**: Cache loads from HEAD commit (sees latest changes)
-- ✅ **Type Converters**: catalog.Product ↔ model.Product conversion working
+Specific gaps:
 
-**Minor Issue**:
-- ⚠️ SSR "useAuth must be used within an AuthProvider" warning
-- Does not block page loading in browser
-- Tests timeout waiting for navigation (investigating)
+- Product list uses mock sample products.
+- Product create simulates an API call, then redirects.
+- Product edit loads mock product data and simulates conflict handling.
+- Product form loads mock categories and collections.
+- Category list builds a mock hierarchy locally.
+- Collection list uses mock collections and simulated reorder/delete behavior.
+- Publish flow does not yet perform a real “uncommitted changes” check.
+- Generated GraphQL types/hooks file is still a placeholder.
 
-## What Tests Are Doing
+### Auth/session gaps
 
-1. Navigate to `/login`
-2. Fill in credentials (admin/admin)
-3. Submit login form
-4. **FAILS HERE**: Wait for redirect to `/products`
-   - Login mutation returns 404
-   - Authentication never succeeds
-   - Tests timeout after 30 seconds
+- Login is real.
+- Token refresh is **not fully wired**:
+  - the frontend calls `/api/refresh-token`
+  - no matching backend route was found in this pass
+- Token revocation is only a placeholder in the backend session manager.
 
-## Test Results (Current)
+## E2E Coverage vs Reality
 
-```
-Total: 30 tests (10 scenarios × 3 browsers)
-Failed: 30 (100%)
-Reason: GraphQL backend not implemented
-Timeout: Waiting for /products redirect after login
-```
+### Test files present
 
-## What's Needed to Pass Tests
+- `product_crud.spec.ts`
+- `category_reorder.spec.ts`
 
-### ✅ Completed
-1. **Product CRUD Resolvers**
-   - ✅ Create product with git commit
-   - ✅ Update product with version tracking
-   - ✅ Delete product with git commit
-   - ✅ Git integration with descriptive commit messages
-   - ✅ Catalog cache reload after mutations
+### Coverage intent
 
-### 🚧 In Progress / Remaining
-1. **Product Query Resolvers**
-   - ⏳ Products list query (filtering, pagination)
-   - ⏳ Product by ID/SKU lookup
+The tests aim to cover:
 
-2. **Category CRUD Resolvers**
-   - ⏳ Categories: list, get, create, update, delete, reorder
+- login
+- product create/read/update/delete
+- validation
+- optimistic locking
+- markdown preview
+- category drag-and-drop reorder
+- persistence after reload
 
-3. **Collection CRUD Resolvers**
-   - ⏳ Collections: list, get, create, update, delete
+### Current alignment issues
 
-4. **Authentication Flow**
-   - ✅ Login endpoint exists (`/api/login`)
-   - ⏳ Need to verify integration with frontend auth context
+The tests do not currently match the implemented UI in several places. Examples:
 
-## Workaround: Manual Server Management
+- Tests expect dynamic product edit routes like `/products/prod_...`, but the current UI uses `/products/edit?id=...`.
+- Tests fill fields like `slug`, `inventory`, and `status=published`, but the current product form does not match those names/options.
+- Tests assume fully live CRUD-backed list pages, while current list pages still use mock state.
+- Category reorder tests assume creation/reordering flows that are not fully wired to backend mutations yet.
 
-Until the Vite/Apollo Client issue is resolved, tests require manual dev server setup:
+Because of those mismatches, the suite should be treated as **authored but not currently reliable as an end-to-end implementation signal**.
 
-### Prerequisites
-```bash
-# Terminal 1: Start API server
-cd api
-ADMIN_PASSWORD_HASH='$2a$10$PKciUgKAQvveYxa5l8r.heSSsMDBkdKs9UzykD0QCU01UNmFPxhxi' go run cmd/server/main.go
+## Recommended Status
 
-# Terminal 2: Start Admin UI dev server manually
-cd admin-ui
-rm -rf node_modules/.vite .astro  # Clear Vite cache
-npm run dev
-```
-
-### Run Tests
-```bash
-# Terminal 3: Run tests (server must already be running)
-cd admin-ui
-ADMIN_PASSWORD_HASH='$2a$10$PKciUgKAQvveYxa5l8r.heSSsMDBkdKs9UzykD0QCU01UNmFPxhxi' npx playwright test
-```
-
-**Note**: The `ADMIN_PASSWORD_HASH` is the bcrypt hash for password "admin"
-
-### View Test Report
-```bash
-npx playwright show-report
-```
+- **E2E suite presence**: complete enough to guide intended workflows
+- **E2E suite readiness**: not production-ready
+- **Backend readiness for E2E**: partial to substantial
+- **Frontend readiness for E2E**: partial
+- **End-to-end readiness**: not yet verified
 
 ## Next Steps
 
-1. **Implement Product Query Resolvers**: Enable listing/filtering products
-2. **Implement Category CRUD**: Similar pattern to products (with reordering)
-3. **Implement Collection CRUD**: Same pattern for collections
-4. **Implement PublishCatalog**: Git tagging for versioning
-5. **Test E2E Flows**: Run tests against real backend
-6. **CI Integration**: Tests are already configured for CI/CD
-
-## Implementation Notes
-
-### Architecture
-- **Service Layer**: `internal/graph/service.go` handles business logic
-- **Type Converters**: `internal/graph/converters.go` for catalog ↔ GraphQL models
-- **Git Persistence**: Uses `CommitBuilder` pattern for atomic commits
-- **Cache Strategy**: Loads from HEAD (enables seeing uncommitted changes)
-- **File Format**: Markdown files with YAML frontmatter in `products/{uuid}.md`
-
-### Verified CRUD Cycle
-```bash
-# Test results from test-catalog directory
-ee6c716 Create product: Test Product      # Initial creation
-549562d Update product: Updated Test Product  # Field updates
-4a362e7 Delete product: Updated Test Product  # File removal
-```
-
-Each operation creates clean, descriptive git commits with proper file handling.
-
-## Notes
-
-- Test code is production-ready and follows best practices
-- Tests use proper data attributes and waiting strategies
-- Each test cleans up its own data
-- Tests are independent and can run in parallel
-- Comprehensive assertions with clear error messages
-- Browser compatibility tested (Chromium, Firefox, WebKit)
+1. Replace placeholder `src/graphql/generated.ts` with actual codegen output.
+2. Wire product, category, and collection pages to real GraphQL queries/mutations.
+3. Implement a real backend-backed pending-changes check for publish flow.
+4. Add or wire a real `/api/refresh-token` endpoint, or remove the frontend dependency on it.
+5. Update Playwright specs so routes, selectors, and field names match the current UI.
+6. Run the suite against the real stack and record actual pass/fail results here.

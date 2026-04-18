@@ -97,6 +97,8 @@ jobs:
         labels: ${{ steps.meta-api.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        outputs: >-
+          type=image,name=target,"annotation-index.org.opencontainers.image.description=GitStore GraphQL API service for querying and publishing catalog data backed by the git service"
 
     - name: Extract metadata for Admin
       id: meta-admin
@@ -121,6 +123,8 @@ jobs:
         labels: ${{ steps.meta-admin.outputs.labels }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        outputs: >-
+          type=image,name=target,"annotation-index.org.opencontainers.image.description=GitStore admin web interface for managing products, categories, collections, and catalog publishing"
       continue-on-error: true  # Admin UI may not be implemented yet
 
   deploy-staging:
