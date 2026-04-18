@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # Multi-stage build for Git Server (Rust)
 # rust:1.94-alpine targets aarch64-unknown-linux-musl on ARM64 by default,
 # producing a fully musl-linked binary that runs on Alpine without glibc.
@@ -29,7 +31,10 @@ RUN mkdir src && \
     echo "pub fn lib() {}" > src/lib.rs
 
 # Build dependencies
-RUN cargo build --release && \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
+    cargo build --release && \
     rm -rf src
 
 # Copy actual source code
@@ -38,7 +43,10 @@ COPY git-server/src ./src
 # Build application.
 # Refresh mtimes for all source files so Cargo invalidates dummy artifacts
 # from the dependency-caching step and recompiles the real crate.
-RUN find src -type f -name '*.rs' -exec touch {} + && \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
+    find src -type f -name '*.rs' -exec touch {} + && \
     cargo build --release && \
     strip /build/target/release/gitstore-server
 
