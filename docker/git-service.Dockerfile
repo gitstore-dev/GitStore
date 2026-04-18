@@ -48,7 +48,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     find src -type f -name '*.rs' -exec touch {} + && \
     cargo build --release && \
-    strip /build/target/release/gitstore-server
+    cp /build/target/release/gitstore-server /build/gitstore-server && \
+    strip /build/gitstore-server
 
 # Runtime stage
 # Alpine git has no perl dependency (unlike Debian), saving ~50 MB.
@@ -66,7 +67,7 @@ RUN apk add --no-cache \
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /build/target/release/gitstore-server /app/gitstore-server
+COPY --from=builder /build/gitstore-server /app/gitstore-server
 
 # Allow libgit2 to open repositories in mounted volumes regardless of ownership.
 # libgit2 (used by the Rust git2 crate) enforces the same safe.directory check
