@@ -25,8 +25,8 @@ env:
   ADMIN_IMAGE: ${{ github.repository_owner }}/admin
 
 jobs:
-  build-images:
-    name: Build and Push Docker Images
+  build-git-service-image:
+    name: Build and Push Git Service Image
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -69,10 +69,33 @@ jobs:
         push: true
         tags: ${{ steps.meta-git-service.outputs.tags }}
         labels: ${{ steps.meta-git-service.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        cache-from: type=gha,scope=git-service
+        cache-to: type=gha,mode=max,scope=git-service
         outputs: >-
           type=image,name=target,"annotation-index.org.opencontainers.image.description=GitStore git service with built-in Git protocol handling, validation hooks, and websocket notifications"
+
+  build-api-image:
+    name: Build and Push API Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v4
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Extract metadata for API
       id: meta-api
@@ -95,10 +118,33 @@ jobs:
         push: true
         tags: ${{ steps.meta-api.outputs.tags }}
         labels: ${{ steps.meta-api.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        cache-from: type=gha,scope=api
+        cache-to: type=gha,mode=max,scope=api
         outputs: >-
           type=image,name=target,"annotation-index.org.opencontainers.image.description=GitStore GraphQL API service for querying and publishing catalog data backed by the git service"
+
+  build-admin-image:
+    name: Build and Push Admin Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v4
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Extract metadata for Admin
       id: meta-admin
@@ -121,8 +167,8 @@ jobs:
         push: true
         tags: ${{ steps.meta-admin.outputs.tags }}
         labels: ${{ steps.meta-admin.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        cache-from: type=gha,scope=admin
+        cache-to: type=gha,mode=max,scope=admin
         outputs: >-
           type=image,name=target,"annotation-index.org.opencontainers.image.description=GitStore admin web interface for managing products, categories, collections, and catalog publishing"
       continue-on-error: true  # Admin UI may not be implemented yet
@@ -130,7 +176,7 @@ jobs:
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
-    needs: build-images
+    needs: [build-git-service-image, build-api-image, build-admin-image]
     if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'staging'
     environment:
       name: staging
@@ -156,7 +202,7 @@ jobs:
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: [build-images, deploy-staging]
+    needs: [build-git-service-image, build-api-image, build-admin-image, deploy-staging]
     if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.environment == 'production'
     environment:
       name: production

@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # Multi-stage build for GraphQL API (Go)
 FROM golang:1.26.1-alpine3.23 AS builder
 
@@ -9,14 +11,17 @@ WORKDIR /build
 COPY api/go.mod api/go.sum ./
 
 # Download dependencies
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 # Copy source code
 COPY api/ ./
 COPY shared/schemas /build/shared/schemas
 
 # Build application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o api ./cmd/server
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -o api ./cmd/server
 
 # Runtime stage
 FROM alpine:3.23.3

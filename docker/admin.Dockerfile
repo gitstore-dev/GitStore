@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # Multi-stage build for Admin UI (Node.js/Astro)
 # Build static assets on the native BuildKit platform to avoid qemu npm crashes
 # during multi-arch builds (linux/amd64,linux/arm64).
@@ -9,7 +11,8 @@ WORKDIR /build
 COPY admin-ui/package.json admin-ui/package-lock.json* ./
 
 # Install production dependencies only
-RUN npm ci --omit=dev
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --omit=dev
 
 # Copy source code
 COPY admin-ui/ ./

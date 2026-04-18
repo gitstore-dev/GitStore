@@ -1,7 +1,12 @@
+# syntax=docker/dockerfile:1.7
+
 # Multi-stage build for Git Server (Rust)
 # rust:1.94-alpine targets aarch64-unknown-linux-musl on ARM64 by default,
 # producing a fully musl-linked binary that runs on Alpine without glibc.
 FROM rust:1.94-alpine AS builder
+
+# Expose the BuildKit-provided TARGETARCH so we can key per-architecture caches.
+ARG TARGETARCH
 
 # pkgconf   – pkg-config shim for openssl-sys
 # openssl-dev / openssl-libs-static – headers + static .a for OPENSSL_STATIC=1
@@ -29,7 +34,10 @@ RUN mkdir src && \
     echo "pub fn lib() {}" > src/lib.rs
 
 # Build dependencies
-RUN cargo build --release && \
+RUN --mount=type=cache,id=cargo-registry-$TARGETARCH,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-git-$TARGETARCH,target=/usr/local/cargo/git \
+    --mount=type=cache,id=cargo-target-$TARGETARCH,target=/build/target \
+    cargo build --release && \
     rm -rf src
 
 # Copy actual source code
@@ -38,9 +46,13 @@ COPY git-server/src ./src
 # Build application.
 # Refresh mtimes for all source files so Cargo invalidates dummy artifacts
 # from the dependency-caching step and recompiles the real crate.
-RUN find src -type f -name '*.rs' -exec touch {} + && \
+RUN --mount=type=cache,id=cargo-registry-$TARGETARCH,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=cargo-git-$TARGETARCH,target=/usr/local/cargo/git \
+    --mount=type=cache,id=cargo-target-$TARGETARCH,target=/build/target \
+    find src -type f -name '*.rs' -exec touch {} + && \
     cargo build --release && \
-    strip /build/target/release/gitstore-server
+    cp /build/target/release/gitstore-server /build/gitstore-server && \
+    strip /build/gitstore-server
 
 # Runtime stage
 # Alpine git has no perl dependency (unlike Debian), saving ~50 MB.
@@ -58,7 +70,7 @@ RUN apk add --no-cache \
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /build/target/release/gitstore-server /app/gitstore-server
+COPY --from=builder /build/gitstore-server /app/gitstore-server
 
 # Allow libgit2 to open repositories in mounted volumes regardless of ownership.
 # libgit2 (used by the Rust git2 crate) enforces the same safe.directory check
