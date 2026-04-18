@@ -20,19 +20,19 @@ GitStore is a git-backed ecommerce headless engine with three main components:
 git clone https://github.com/commerce-projects/gitstore
 cd gitstore
 
-# Start all services with docker-compose
-docker-compose up -d
+# Start all services with docker compose
+docker compose up -d
 
 # Check service health
-docker-compose ps
+docker compose ps
 ```
 
 **Expected Output**:
 ```
 NAME                STATUS              PORTS
-gitstore-git-server running             0.0.0.0:9418->9418/tcp, 0.0.0.0:8080->8080/tcp
+gitstore-git-service running            0.0.0.0:9418->9418/tcp, 0.0.0.0:8080->8080/tcp
 gitstore-api        running             0.0.0.0:4000->4000/tcp
-gitstore-admin-ui   running             0.0.0.0:3000->3000/tcp
+gitstore-admin      running             0.0.0.0:3000->3000/tcp
 ```
 
 ### 2. Initialize Demo Catalog
@@ -474,7 +474,7 @@ GITSTORE_MAX_FILE_SIZE=52428800  # 50MB
 
 ```bash
 GITSTORE_API_PORT=4000
-GITSTORE_GIT_WS=ws://git-server:8080
+GITSTORE_GIT_WS=ws://git-service:8080
 GITSTORE_GIT_REPO=/data/repos/catalog.git
 GITSTORE_CACHE_TTL=300  # 5 minutes
 GITSTORE_LOG_LEVEL=info

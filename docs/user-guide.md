@@ -11,7 +11,7 @@ Welcome to GitStore, a git-backed ecommerce headless engine that lets you manage
 - [Managing Categories](#managing-categories)
 - [Managing Collections](#managing-collections)
 - [Publishing Changes](#publishing-changes)
-- [Using the Admin UI](#using-the-admin-ui)
+- [Using the Admin](#using-the-admin)
 - [Querying the GraphQL API](#querying-the-graphql-api)
 - [Troubleshooting](#troubleshooting)
 
@@ -20,7 +20,7 @@ Welcome to GitStore, a git-backed ecommerce headless engine that lets you manage
 GitStore provides two ways to manage your product catalog:
 
 1. **Git-based workflow**: Edit markdown files directly, commit changes, and push to publish
-2. **Admin UI**: Use a web interface to manage products, categories, and collections
+2. **Admin**: Use a web interface to manage products, categories, and collections
 
 Both workflows use git as the source of truth, ensuring version control, auditability, and collaboration.
 
@@ -40,6 +40,7 @@ Both workflows use git as the source of truth, ensuring version control, auditab
 
 2. **Start GitStore services**:
    ```bash
+   export COMPOSE_BAKE=true
    docker compose up --build -d
    ```
 
@@ -282,13 +283,13 @@ git push origin v1.0.2
 
 ### Tag Notifications
 
-When you push a tag, the git-server broadcasts a websocket notification to trigger catalog reload in the API.
+When you push a tag, the git-service broadcasts a websocket notification to trigger catalog reload in the API.
 
-## Using the Admin UI
+## Using the Admin
 
-The Admin UI provides a web interface for non-technical users.
+The Admin provides a web interface for non-technical users.
 
-### Accessing the Admin UI
+### Accessing the Admin
 
 Open http://localhost:3000 in your browser.
 
@@ -301,9 +302,9 @@ Open http://localhost:3000 in your browser.
 5. Click **Save Draft**
 6. When ready to publish, click **Publish Catalog**
 
-### Publishing from Admin UI
+### Publishing from Admin
 
-The Admin UI creates git commits and tags automatically:
+The Admin creates git commits and tags automatically:
 
 1. Make your changes in the UI
 2. Click **Publish** in the top navigation
@@ -315,9 +316,9 @@ This creates a git commit and tag behind the scenes.
 
 ### Handling Conflicts
 
-If someone else has made changes via git, the Admin UI will warn you:
+If someone else has made changes via git, the Admin will warn you:
 
-- **Merge conflicts**: Admin UI will reject the push. Resolve conflicts manually using git.
+- **Merge conflicts**: Admin will reject the push. Resolve conflicts manually using git.
 - **Concurrent edits**: If another user edited the same product, you'll see a diff and can choose to:
   - Overwrite (discard their changes)
   - Cancel (abandon your changes)
@@ -436,25 +437,25 @@ ls -la demo-catalog/catalog.git/
 
 Check Docker volume mounts in `docker-compose.yml`.
 
-### Admin UI shows stale data
+### Admin shows stale data
 
-**Problem**: Admin UI doesn't reflect recent git changes.
+**Problem**: Admin doesn't reflect recent git changes.
 
-**Solution**: The Admin UI caches data. To refresh:
+**Solution**: Admin caches data. To refresh:
 1. Make git changes
 2. Push and create a new tag
-3. Wait for websocket notification (check `docker compose logs git-server`)
-4. Refresh the Admin UI browser tab
+3. Wait for websocket notification (check `docker compose logs git-service`)
+4. Refresh the Admin browser tab
 
-### Merge conflicts when pushing from Admin UI
+### Merge conflicts when pushing from Admin
 
-**Problem**: Admin UI says "Push failed: merge conflicts detected."
+**Problem**: Admin says "Push failed: merge conflicts detected."
 
 **Solution**: Someone else made git changes. You must resolve manually:
 1. Clone or pull the latest changes
 2. Resolve conflicts using git
 3. Commit and push
-4. Refresh the Admin UI
+4. Refresh the Admin
 
 ### Validation errors
 

@@ -63,7 +63,7 @@ After running the script:
 
 1. **Start GitStore services:**
    ```bash
-   # Start all services (git-server must be running before HTTP clone)
+  # Start all services (git-service must be running before HTTP clone)
    docker compose up --build -d
 
    # Wait for services to be healthy (about 10-15 seconds)
@@ -77,8 +77,8 @@ After running the script:
    ```
 
    **Important**:
-   - Clone from `http://localhost:9418/` (git-server endpoint), NOT from filesystem path
-   - Git-server must be running before this step
+  - Clone from `http://localhost:9418/` (git-service endpoint), NOT from filesystem path
+  - Git service must be running before this step
    - This ensures `git push` triggers websocket notifications
 
 3. **Create a release tag:**
@@ -89,11 +89,11 @@ After running the script:
 
 4. **Push the tag (triggers notification):**
    ```bash
-   # Push tag to git-server via HTTP (triggers websocket notification)
+  # Push tag to git-service via HTTP (triggers websocket notification)
    git push origin v1.0.0
 
    # Check logs to verify notification
-   docker compose logs git-server | grep -i "broadcast"
+  docker compose logs git-service | grep -i "broadcast"
    # Should see: "Broadcasted tag notification tag=v1.0.0"
    ```
 
@@ -123,7 +123,7 @@ After running the script:
 **Bare Repository** (`demo-catalog/catalog.git/`):
 - Created by `init-demo-catalog.sh`
 - Contains git objects and references (no working files)
-- Used by git-server for serving via git protocol
+- Used by the git service for serving via git protocol
 - **Do NOT work directly in this directory**
 
 **Working Copy** (`catalog-work/`):
