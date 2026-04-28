@@ -505,15 +505,10 @@ Update the `images` array in product front-matter with the correct URLs.
 - Use branches for experimental catalog changes
 - Review diffs before creating release tags
 
-## Additional Resources
+## Support and Resources
 
-- [API Reference](./api-reference.md) - Detailed GraphQL schema documentation
-- [Quickstart Guide](../specs/001-git-backed-ecommerce/quickstart.md) - Integration scenarios
+- [Quickstart Guide](quickstart.md) - Integration scenarios
 - [Scripts README](../scripts/README.md) - Demo catalog initialization
-
-## Support
-
-For issues or questions:
-- Check the logs: `docker compose logs`
-- Review validation errors in API responses
-- Consult the troubleshooting section above
+- [Troubleshooting](#troubleshooting) - Common issues and solutions
+- [GraphQL API Reference](api-reference.md) - Complete API documentation
+- [GitHub Repository](https://github.com/gitstore-dev/gitstore) - Source code and issues

@@ -9,8 +9,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/commerce-projects/gitstore/api/internal/graph/generated"
-	"github.com/commerce-projects/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"go.uber.org/zap"
 )
 

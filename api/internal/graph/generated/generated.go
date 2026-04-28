@@ -13,8 +13,8 @@ import (
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/introspection"
-	"github.com/commerce-projects/gitstore/api/internal/graph/model"
-	"github.com/commerce-projects/gitstore/api/internal/graph/scalar"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/scalar"
 	gqlparser "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -2827,7 +2827,7 @@ func (ec *executionContext) field_Collection_products_args(ctx context.Context, 
 func (ec *executionContext) field_Mutation_createCategory_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNCreateCategoryInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCategoryInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNCreateCategoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCategoryInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2838,7 +2838,7 @@ func (ec *executionContext) field_Mutation_createCategory_args(ctx context.Conte
 func (ec *executionContext) field_Mutation_createCollection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNCreateCollectionInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNCreateCollectionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2849,7 +2849,7 @@ func (ec *executionContext) field_Mutation_createCollection_args(ctx context.Con
 func (ec *executionContext) field_Mutation_createProduct_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNCreateProductInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNCreateProductInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2860,7 +2860,7 @@ func (ec *executionContext) field_Mutation_createProduct_args(ctx context.Contex
 func (ec *executionContext) field_Mutation_deleteCategory_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNDeleteCategoryInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCategoryInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNDeleteCategoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCategoryInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2871,7 +2871,7 @@ func (ec *executionContext) field_Mutation_deleteCategory_args(ctx context.Conte
 func (ec *executionContext) field_Mutation_deleteCollection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNDeleteCollectionInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNDeleteCollectionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2882,7 +2882,7 @@ func (ec *executionContext) field_Mutation_deleteCollection_args(ctx context.Con
 func (ec *executionContext) field_Mutation_deleteProduct_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNDeleteProductInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteProductInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNDeleteProductInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteProductInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2893,7 +2893,7 @@ func (ec *executionContext) field_Mutation_deleteProduct_args(ctx context.Contex
 func (ec *executionContext) field_Mutation_login_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNLoginInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLoginInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNLoginInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLoginInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2904,7 +2904,7 @@ func (ec *executionContext) field_Mutation_login_args(ctx context.Context, rawAr
 func (ec *executionContext) field_Mutation_logout_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNLogoutInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLogoutInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNLogoutInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLogoutInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2915,7 +2915,7 @@ func (ec *executionContext) field_Mutation_logout_args(ctx context.Context, rawA
 func (ec *executionContext) field_Mutation_publishCatalog_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNPublishCatalogInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPublishCatalogInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNPublishCatalogInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPublishCatalogInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2926,7 +2926,7 @@ func (ec *executionContext) field_Mutation_publishCatalog_args(ctx context.Conte
 func (ec *executionContext) field_Mutation_refreshToken_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNRefreshTokenInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRefreshTokenInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNRefreshTokenInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRefreshTokenInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2937,7 +2937,7 @@ func (ec *executionContext) field_Mutation_refreshToken_args(ctx context.Context
 func (ec *executionContext) field_Mutation_reorderCategories_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNReorderCategoriesInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCategoriesInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNReorderCategoriesInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCategoriesInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2948,7 +2948,7 @@ func (ec *executionContext) field_Mutation_reorderCategories_args(ctx context.Co
 func (ec *executionContext) field_Mutation_reorderCollections_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNReorderCollectionsInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCollectionsInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNReorderCollectionsInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCollectionsInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2959,7 +2959,7 @@ func (ec *executionContext) field_Mutation_reorderCollections_args(ctx context.C
 func (ec *executionContext) field_Mutation_updateCategory_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNUpdateCategoryInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNUpdateCategoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2970,7 +2970,7 @@ func (ec *executionContext) field_Mutation_updateCategory_args(ctx context.Conte
 func (ec *executionContext) field_Mutation_updateCollection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNUpdateCollectionInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNUpdateCollectionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionInput)
 	if err != nil {
 		return nil, err
 	}
@@ -2981,7 +2981,7 @@ func (ec *executionContext) field_Mutation_updateCollection_args(ctx context.Con
 func (ec *executionContext) field_Mutation_updateProduct_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNUpdateProductInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductInput)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNUpdateProductInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductInput)
 	if err != nil {
 		return nil, err
 	}
@@ -3111,7 +3111,7 @@ func (ec *executionContext) field_Query_products_args(ctx context.Context, rawAr
 		return nil, err
 	}
 	args["before"] = arg3
-	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "filter", ec.unmarshalOProductFilter2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductFilter)
+	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "filter", ec.unmarshalOProductFilter2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -3239,7 +3239,7 @@ func (ec *executionContext) _AuthSession_user(ctx context.Context, field graphql
 			return obj.User, nil
 		},
 		nil,
-		ec.marshalNUser2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUser,
+		ec.marshalNUser2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUser,
 		true,
 		true,
 	)
@@ -3506,7 +3506,7 @@ func (ec *executionContext) _CatalogVersion_stats(ctx context.Context, field gra
 			return obj.Stats, nil
 		},
 		nil,
-		ec.marshalNCatalogStats2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogStats,
+		ec.marshalNCatalogStats2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogStats,
 		true,
 		true,
 	)
@@ -3632,7 +3632,7 @@ func (ec *executionContext) _Category_parent(ctx context.Context, field graphql.
 			return obj.Parent, nil
 		},
 		nil,
-		ec.marshalOCategory2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
+		ec.marshalOCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
 		true,
 		false,
 	)
@@ -3687,7 +3687,7 @@ func (ec *executionContext) _Category_children(ctx context.Context, field graphq
 			return obj.Children, nil
 		},
 		nil,
-		ec.marshalNCategory2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryᚄ,
+		ec.marshalNCategory2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryᚄ,
 		true,
 		true,
 	)
@@ -3772,7 +3772,7 @@ func (ec *executionContext) _Category_products(ctx context.Context, field graphq
 			return ec.Resolvers.Category().Products(ctx, obj, fc.Args["first"].(*int32), fc.Args["after"].(*string), fc.Args["last"].(*int32), fc.Args["before"].(*string))
 		},
 		nil,
-		ec.marshalNProductConnection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductConnection,
+		ec.marshalNProductConnection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductConnection,
 		true,
 		true,
 	)
@@ -4023,7 +4023,7 @@ func (ec *executionContext) _CategoryOptimisticLockConflict_current(ctx context.
 			return obj.Current, nil
 		},
 		nil,
-		ec.marshalNCategory2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
+		ec.marshalNCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
 		true,
 		true,
 	)
@@ -4224,7 +4224,7 @@ func (ec *executionContext) _Collection_products(ctx context.Context, field grap
 			return ec.Resolvers.Collection().Products(ctx, obj, fc.Args["first"].(*int32), fc.Args["after"].(*string), fc.Args["last"].(*int32), fc.Args["before"].(*string))
 		},
 		nil,
-		ec.marshalNProductConnection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductConnection,
+		ec.marshalNProductConnection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductConnection,
 		true,
 		true,
 	)
@@ -4446,7 +4446,7 @@ func (ec *executionContext) _CollectionOptimisticLockConflict_current(ctx contex
 			return obj.Current, nil
 		},
 		nil,
-		ec.marshalNCollection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection,
+		ec.marshalNCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection,
 		true,
 		true,
 	)
@@ -4553,7 +4553,7 @@ func (ec *executionContext) _CreateCategoryPayload_category(ctx context.Context,
 			return obj.Category, nil
 		},
 		nil,
-		ec.marshalOCategory2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
+		ec.marshalOCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
 		true,
 		false,
 	)
@@ -4637,7 +4637,7 @@ func (ec *executionContext) _CreateCollectionPayload_collection(ctx context.Cont
 			return obj.Collection, nil
 		},
 		nil,
-		ec.marshalOCollection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection,
+		ec.marshalOCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection,
 		true,
 		false,
 	)
@@ -4715,7 +4715,7 @@ func (ec *executionContext) _CreateProductPayload_product(ctx context.Context, f
 			return obj.Product, nil
 		},
 		nil,
-		ec.marshalOProduct2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct,
+		ec.marshalOProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct,
 		true,
 		false,
 	)
@@ -5006,7 +5006,7 @@ func (ec *executionContext) _LoginPayload_session(ctx context.Context, field gra
 			return obj.Session, nil
 		},
 		nil,
-		ec.marshalOAuthSession2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐAuthSession,
+		ec.marshalOAuthSession2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐAuthSession,
 		true,
 		false,
 	)
@@ -5102,7 +5102,7 @@ func (ec *executionContext) _Mutation_createProduct(ctx context.Context, field g
 			return ec.Resolvers.Mutation().CreateProduct(ctx, fc.Args["input"].(model.CreateProductInput))
 		},
 		nil,
-		ec.marshalNCreateProductPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductPayload,
+		ec.marshalNCreateProductPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductPayload,
 		true,
 		true,
 	)
@@ -5149,7 +5149,7 @@ func (ec *executionContext) _Mutation_updateProduct(ctx context.Context, field g
 			return ec.Resolvers.Mutation().UpdateProduct(ctx, fc.Args["input"].(model.UpdateProductInput))
 		},
 		nil,
-		ec.marshalNUpdateProductPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductPayload,
+		ec.marshalNUpdateProductPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductPayload,
 		true,
 		true,
 	)
@@ -5198,7 +5198,7 @@ func (ec *executionContext) _Mutation_deleteProduct(ctx context.Context, field g
 			return ec.Resolvers.Mutation().DeleteProduct(ctx, fc.Args["input"].(model.DeleteProductInput))
 		},
 		nil,
-		ec.marshalNDeleteProductPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteProductPayload,
+		ec.marshalNDeleteProductPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteProductPayload,
 		true,
 		true,
 	)
@@ -5245,7 +5245,7 @@ func (ec *executionContext) _Mutation_createCategory(ctx context.Context, field 
 			return ec.Resolvers.Mutation().CreateCategory(ctx, fc.Args["input"].(model.CreateCategoryInput))
 		},
 		nil,
-		ec.marshalNCreateCategoryPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCategoryPayload,
+		ec.marshalNCreateCategoryPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCategoryPayload,
 		true,
 		true,
 	)
@@ -5292,7 +5292,7 @@ func (ec *executionContext) _Mutation_updateCategory(ctx context.Context, field 
 			return ec.Resolvers.Mutation().UpdateCategory(ctx, fc.Args["input"].(model.UpdateCategoryInput))
 		},
 		nil,
-		ec.marshalNUpdateCategoryPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryPayload,
+		ec.marshalNUpdateCategoryPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryPayload,
 		true,
 		true,
 	)
@@ -5341,7 +5341,7 @@ func (ec *executionContext) _Mutation_deleteCategory(ctx context.Context, field 
 			return ec.Resolvers.Mutation().DeleteCategory(ctx, fc.Args["input"].(model.DeleteCategoryInput))
 		},
 		nil,
-		ec.marshalNDeleteCategoryPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCategoryPayload,
+		ec.marshalNDeleteCategoryPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCategoryPayload,
 		true,
 		true,
 	)
@@ -5390,7 +5390,7 @@ func (ec *executionContext) _Mutation_reorderCategories(ctx context.Context, fie
 			return ec.Resolvers.Mutation().ReorderCategories(ctx, fc.Args["input"].(model.ReorderCategoriesInput))
 		},
 		nil,
-		ec.marshalNReorderCategoriesPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCategoriesPayload,
+		ec.marshalNReorderCategoriesPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCategoriesPayload,
 		true,
 		true,
 	)
@@ -5437,7 +5437,7 @@ func (ec *executionContext) _Mutation_createCollection(ctx context.Context, fiel
 			return ec.Resolvers.Mutation().CreateCollection(ctx, fc.Args["input"].(model.CreateCollectionInput))
 		},
 		nil,
-		ec.marshalNCreateCollectionPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionPayload,
+		ec.marshalNCreateCollectionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionPayload,
 		true,
 		true,
 	)
@@ -5484,7 +5484,7 @@ func (ec *executionContext) _Mutation_updateCollection(ctx context.Context, fiel
 			return ec.Resolvers.Mutation().UpdateCollection(ctx, fc.Args["input"].(model.UpdateCollectionInput))
 		},
 		nil,
-		ec.marshalNUpdateCollectionPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionPayload,
+		ec.marshalNUpdateCollectionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionPayload,
 		true,
 		true,
 	)
@@ -5533,7 +5533,7 @@ func (ec *executionContext) _Mutation_deleteCollection(ctx context.Context, fiel
 			return ec.Resolvers.Mutation().DeleteCollection(ctx, fc.Args["input"].(model.DeleteCollectionInput))
 		},
 		nil,
-		ec.marshalNDeleteCollectionPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionPayload,
+		ec.marshalNDeleteCollectionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionPayload,
 		true,
 		true,
 	)
@@ -5580,7 +5580,7 @@ func (ec *executionContext) _Mutation_reorderCollections(ctx context.Context, fi
 			return ec.Resolvers.Mutation().ReorderCollections(ctx, fc.Args["input"].(model.ReorderCollectionsInput))
 		},
 		nil,
-		ec.marshalNReorderCollectionsPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCollectionsPayload,
+		ec.marshalNReorderCollectionsPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCollectionsPayload,
 		true,
 		true,
 	)
@@ -5627,7 +5627,7 @@ func (ec *executionContext) _Mutation_publishCatalog(ctx context.Context, field 
 			return ec.Resolvers.Mutation().PublishCatalog(ctx, fc.Args["input"].(model.PublishCatalogInput))
 		},
 		nil,
-		ec.marshalNPublishCatalogPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPublishCatalogPayload,
+		ec.marshalNPublishCatalogPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPublishCatalogPayload,
 		true,
 		true,
 	)
@@ -5674,7 +5674,7 @@ func (ec *executionContext) _Mutation_login(ctx context.Context, field graphql.C
 			return ec.Resolvers.Mutation().Login(ctx, fc.Args["input"].(model.LoginInput))
 		},
 		nil,
-		ec.marshalNLoginPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLoginPayload,
+		ec.marshalNLoginPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLoginPayload,
 		true,
 		true,
 	)
@@ -5721,7 +5721,7 @@ func (ec *executionContext) _Mutation_logout(ctx context.Context, field graphql.
 			return ec.Resolvers.Mutation().Logout(ctx, fc.Args["input"].(model.LogoutInput))
 		},
 		nil,
-		ec.marshalNLogoutPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLogoutPayload,
+		ec.marshalNLogoutPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLogoutPayload,
 		true,
 		true,
 	)
@@ -5768,7 +5768,7 @@ func (ec *executionContext) _Mutation_refreshToken(ctx context.Context, field gr
 			return ec.Resolvers.Mutation().RefreshToken(ctx, fc.Args["input"].(model.RefreshTokenInput))
 		},
 		nil,
-		ec.marshalNRefreshTokenPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRefreshTokenPayload,
+		ec.marshalNRefreshTokenPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRefreshTokenPayload,
 		true,
 		true,
 	)
@@ -5872,7 +5872,7 @@ func (ec *executionContext) _OptimisticLockConflict_current(ctx context.Context,
 			return obj.Current, nil
 		},
 		nil,
-		ec.marshalNProduct2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct,
+		ec.marshalNProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct,
 		true,
 		true,
 	)
@@ -6192,7 +6192,7 @@ func (ec *executionContext) _Product_price(ctx context.Context, field graphql.Co
 			return obj.Price, nil
 		},
 		nil,
-		ec.marshalNDecimal2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal,
+		ec.marshalNDecimal2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal,
 		true,
 		true,
 	)
@@ -6250,7 +6250,7 @@ func (ec *executionContext) _Product_inventoryStatus(ctx context.Context, field 
 			return obj.InventoryStatus, nil
 		},
 		nil,
-		ec.marshalNInventoryStatus2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus,
+		ec.marshalNInventoryStatus2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus,
 		true,
 		true,
 	)
@@ -6308,7 +6308,7 @@ func (ec *executionContext) _Product_category(ctx context.Context, field graphql
 			return ec.Resolvers.Product().Category(ctx, obj)
 		},
 		nil,
-		ec.marshalNCategory2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
+		ec.marshalNCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
 		true,
 		true,
 	)
@@ -6363,7 +6363,7 @@ func (ec *executionContext) _Product_collections(ctx context.Context, field grap
 			return ec.Resolvers.Product().Collections(ctx, obj)
 		},
 		nil,
-		ec.marshalNCollection2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionᚄ,
+		ec.marshalNCollection2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionᚄ,
 		true,
 		true,
 	)
@@ -6528,7 +6528,7 @@ func (ec *executionContext) _ProductConnection_edges(ctx context.Context, field 
 			return obj.Edges, nil
 		},
 		nil,
-		ec.marshalNProductEdge2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductEdgeᚄ,
+		ec.marshalNProductEdge2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductEdgeᚄ,
 		true,
 		true,
 	)
@@ -6563,7 +6563,7 @@ func (ec *executionContext) _ProductConnection_pageInfo(ctx context.Context, fie
 			return obj.PageInfo, nil
 		},
 		nil,
-		ec.marshalNPageInfo2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPageInfo,
+		ec.marshalNPageInfo2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPageInfo,
 		true,
 		true,
 	)
@@ -6660,7 +6660,7 @@ func (ec *executionContext) _ProductEdge_node(ctx context.Context, field graphql
 			return obj.Node, nil
 		},
 		nil,
-		ec.marshalNProduct2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct,
+		ec.marshalNProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct,
 		true,
 		true,
 	)
@@ -6748,7 +6748,7 @@ func (ec *executionContext) _PublishCatalogPayload_catalogVersion(ctx context.Co
 			return obj.CatalogVersion, nil
 		},
 		nil,
-		ec.marshalOCatalogVersion2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion,
+		ec.marshalOCatalogVersion2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion,
 		true,
 		false,
 	)
@@ -6790,7 +6790,7 @@ func (ec *executionContext) _Query_node(ctx context.Context, field graphql.Colle
 			return ec.Resolvers.Query().Node(ctx, fc.Args["id"].(string))
 		},
 		nil,
-		ec.marshalONode2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNode,
+		ec.marshalONode2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNode,
 		true,
 		false,
 	)
@@ -6831,7 +6831,7 @@ func (ec *executionContext) _Query_nodes(ctx context.Context, field graphql.Coll
 			return ec.Resolvers.Query().Nodes(ctx, fc.Args["ids"].([]string))
 		},
 		nil,
-		ec.marshalNNode2ᚕgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNode,
+		ec.marshalNNode2ᚕgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNode,
 		true,
 		true,
 	)
@@ -6872,7 +6872,7 @@ func (ec *executionContext) _Query_product(ctx context.Context, field graphql.Co
 			return ec.Resolvers.Query().Product(ctx, fc.Args["sku"].(string))
 		},
 		nil,
-		ec.marshalOProduct2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct,
+		ec.marshalOProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct,
 		true,
 		false,
 	)
@@ -6943,7 +6943,7 @@ func (ec *executionContext) _Query_productById(ctx context.Context, field graphq
 			return ec.Resolvers.Query().ProductByID(ctx, fc.Args["id"].(string))
 		},
 		nil,
-		ec.marshalOProduct2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct,
+		ec.marshalOProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct,
 		true,
 		false,
 	)
@@ -7014,7 +7014,7 @@ func (ec *executionContext) _Query_products(ctx context.Context, field graphql.C
 			return ec.Resolvers.Query().Products(ctx, fc.Args["first"].(*int32), fc.Args["after"].(*string), fc.Args["last"].(*int32), fc.Args["before"].(*string), fc.Args["filter"].(*model.ProductFilter))
 		},
 		nil,
-		ec.marshalNProductConnection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductConnection,
+		ec.marshalNProductConnection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductConnection,
 		true,
 		true,
 	)
@@ -7063,7 +7063,7 @@ func (ec *executionContext) _Query_category(ctx context.Context, field graphql.C
 			return ec.Resolvers.Query().Category(ctx, fc.Args["slug"].(string))
 		},
 		nil,
-		ec.marshalOCategory2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
+		ec.marshalOCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
 		true,
 		false,
 	)
@@ -7130,7 +7130,7 @@ func (ec *executionContext) _Query_categoryById(ctx context.Context, field graph
 			return ec.Resolvers.Query().CategoryByID(ctx, fc.Args["id"].(string))
 		},
 		nil,
-		ec.marshalOCategory2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
+		ec.marshalOCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
 		true,
 		false,
 	)
@@ -7196,7 +7196,7 @@ func (ec *executionContext) _Query_categories(ctx context.Context, field graphql
 			return ec.Resolvers.Query().Categories(ctx)
 		},
 		nil,
-		ec.marshalNCategory2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryᚄ,
+		ec.marshalNCategory2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryᚄ,
 		true,
 		true,
 	)
@@ -7252,7 +7252,7 @@ func (ec *executionContext) _Query_collection(ctx context.Context, field graphql
 			return ec.Resolvers.Query().Collection(ctx, fc.Args["slug"].(string))
 		},
 		nil,
-		ec.marshalOCollection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection,
+		ec.marshalOCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection,
 		true,
 		false,
 	)
@@ -7313,7 +7313,7 @@ func (ec *executionContext) _Query_collectionById(ctx context.Context, field gra
 			return ec.Resolvers.Query().CollectionByID(ctx, fc.Args["id"].(string))
 		},
 		nil,
-		ec.marshalOCollection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection,
+		ec.marshalOCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection,
 		true,
 		false,
 	)
@@ -7373,7 +7373,7 @@ func (ec *executionContext) _Query_collections(ctx context.Context, field graphq
 			return ec.Resolvers.Query().Collections(ctx)
 		},
 		nil,
-		ec.marshalNCollection2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionᚄ,
+		ec.marshalNCollection2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionᚄ,
 		true,
 		true,
 	)
@@ -7422,7 +7422,7 @@ func (ec *executionContext) _Query_catalogVersion(ctx context.Context, field gra
 			return ec.Resolvers.Query().CatalogVersion(ctx)
 		},
 		nil,
-		ec.marshalNCatalogVersion2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion,
+		ec.marshalNCatalogVersion2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion,
 		true,
 		true,
 	)
@@ -7600,7 +7600,7 @@ func (ec *executionContext) _RefreshTokenPayload_session(ctx context.Context, fi
 			return obj.Session, nil
 		},
 		nil,
-		ec.marshalOAuthSession2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐAuthSession,
+		ec.marshalOAuthSession2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐAuthSession,
 		true,
 		false,
 	)
@@ -7666,7 +7666,7 @@ func (ec *executionContext) _ReorderCategoriesPayload_categories(ctx context.Con
 			return obj.Categories, nil
 		},
 		nil,
-		ec.marshalOCategory2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryᚄ,
+		ec.marshalOCategory2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryᚄ,
 		true,
 		false,
 	)
@@ -7750,7 +7750,7 @@ func (ec *executionContext) _ReorderCollectionsPayload_collections(ctx context.C
 			return obj.Collections, nil
 		},
 		nil,
-		ec.marshalOCollection2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionᚄ,
+		ec.marshalOCollection2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionᚄ,
 		true,
 		false,
 	)
@@ -7828,7 +7828,7 @@ func (ec *executionContext) _UpdateCategoryPayload_category(ctx context.Context,
 			return obj.Category, nil
 		},
 		nil,
-		ec.marshalOCategory2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
+		ec.marshalOCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory,
 		true,
 		false,
 	)
@@ -7883,7 +7883,7 @@ func (ec *executionContext) _UpdateCategoryPayload_conflict(ctx context.Context,
 			return obj.Conflict, nil
 		},
 		nil,
-		ec.marshalOCategoryOptimisticLockConflict2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryOptimisticLockConflict,
+		ec.marshalOCategoryOptimisticLockConflict2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryOptimisticLockConflict,
 		true,
 		false,
 	)
@@ -7951,7 +7951,7 @@ func (ec *executionContext) _UpdateCollectionPayload_collection(ctx context.Cont
 			return obj.Collection, nil
 		},
 		nil,
-		ec.marshalOCollection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection,
+		ec.marshalOCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection,
 		true,
 		false,
 	)
@@ -8000,7 +8000,7 @@ func (ec *executionContext) _UpdateCollectionPayload_conflict(ctx context.Contex
 			return obj.Conflict, nil
 		},
 		nil,
-		ec.marshalOCollectionOptimisticLockConflict2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionOptimisticLockConflict,
+		ec.marshalOCollectionOptimisticLockConflict2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionOptimisticLockConflict,
 		true,
 		false,
 	)
@@ -8068,7 +8068,7 @@ func (ec *executionContext) _UpdateProductPayload_product(ctx context.Context, f
 			return obj.Product, nil
 		},
 		nil,
-		ec.marshalOProduct2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct,
+		ec.marshalOProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct,
 		true,
 		false,
 	)
@@ -8127,7 +8127,7 @@ func (ec *executionContext) _UpdateProductPayload_conflict(ctx context.Context, 
 			return obj.Conflict, nil
 		},
 		nil,
-		ec.marshalOOptimisticLockConflict2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐOptimisticLockConflict,
+		ec.marshalOOptimisticLockConflict2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐOptimisticLockConflict,
 		true,
 		false,
 	)
@@ -9838,7 +9838,7 @@ func (ec *executionContext) unmarshalInputCreateProductInput(ctx context.Context
 			it.Body = data
 		case "price":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("price"))
-			data, err := ec.unmarshalNDecimal2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx, v)
+			data, err := ec.unmarshalNDecimal2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -9852,7 +9852,7 @@ func (ec *executionContext) unmarshalInputCreateProductInput(ctx context.Context
 			it.Currency = data
 		case "inventoryStatus":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("inventoryStatus"))
-			data, err := ec.unmarshalOInventoryStatus2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx, v)
+			data, err := ec.unmarshalOInventoryStatus2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -10116,21 +10116,21 @@ func (ec *executionContext) unmarshalInputProductFilter(ctx context.Context, obj
 			it.CollectionID = data
 		case "inventoryStatus":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("inventoryStatus"))
-			data, err := ec.unmarshalOInventoryStatus2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx, v)
+			data, err := ec.unmarshalOInventoryStatus2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.InventoryStatus = data
 		case "priceMin":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("priceMin"))
-			data, err := ec.unmarshalODecimal2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx, v)
+			data, err := ec.unmarshalODecimal2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.PriceMin = data
 		case "priceMax":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("priceMax"))
-			data, err := ec.unmarshalODecimal2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx, v)
+			data, err := ec.unmarshalODecimal2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -10536,7 +10536,7 @@ func (ec *executionContext) unmarshalInputUpdateProductInput(ctx context.Context
 			it.Body = data
 		case "price":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("price"))
-			data, err := ec.unmarshalODecimal2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx, v)
+			data, err := ec.unmarshalODecimal2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -10550,7 +10550,7 @@ func (ec *executionContext) unmarshalInputUpdateProductInput(ctx context.Context
 			it.Currency = data
 		case "inventoryStatus":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("inventoryStatus"))
-			data, err := ec.unmarshalOInventoryStatus2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx, v)
+			data, err := ec.unmarshalOInventoryStatus2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -12905,7 +12905,7 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
-func (ec *executionContext) marshalNCatalogStats2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogStats(ctx context.Context, sel ast.SelectionSet, v *model.CatalogStats) graphql.Marshaler {
+func (ec *executionContext) marshalNCatalogStats2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogStats(ctx context.Context, sel ast.SelectionSet, v *model.CatalogStats) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -12915,11 +12915,11 @@ func (ec *executionContext) marshalNCatalogStats2ᚖgithubᚗcomᚋcommerceᚑpr
 	return ec._CatalogStats(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNCatalogVersion2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion(ctx context.Context, sel ast.SelectionSet, v model.CatalogVersion) graphql.Marshaler {
+func (ec *executionContext) marshalNCatalogVersion2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion(ctx context.Context, sel ast.SelectionSet, v model.CatalogVersion) graphql.Marshaler {
 	return ec._CatalogVersion(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNCatalogVersion2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion(ctx context.Context, sel ast.SelectionSet, v *model.CatalogVersion) graphql.Marshaler {
+func (ec *executionContext) marshalNCatalogVersion2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion(ctx context.Context, sel ast.SelectionSet, v *model.CatalogVersion) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -12929,15 +12929,15 @@ func (ec *executionContext) marshalNCatalogVersion2ᚖgithubᚗcomᚋcommerceᚑ
 	return ec._CatalogVersion(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNCategory2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx context.Context, sel ast.SelectionSet, v model.Category) graphql.Marshaler {
+func (ec *executionContext) marshalNCategory2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx context.Context, sel ast.SelectionSet, v model.Category) graphql.Marshaler {
 	return ec._Category(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNCategory2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Category) graphql.Marshaler {
+func (ec *executionContext) marshalNCategory2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Category) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNCategory2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx, sel, v[i])
+		return ec.marshalNCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -12949,7 +12949,7 @@ func (ec *executionContext) marshalNCategory2ᚕᚖgithubᚗcomᚋcommerceᚑpro
 	return ret
 }
 
-func (ec *executionContext) marshalNCategory2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx context.Context, sel ast.SelectionSet, v *model.Category) graphql.Marshaler {
+func (ec *executionContext) marshalNCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx context.Context, sel ast.SelectionSet, v *model.Category) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -12959,11 +12959,11 @@ func (ec *executionContext) marshalNCategory2ᚖgithubᚗcomᚋcommerceᚑprojec
 	return ec._Category(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNCollection2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Collection) graphql.Marshaler {
+func (ec *executionContext) marshalNCollection2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Collection) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNCollection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx, sel, v[i])
+		return ec.marshalNCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -12975,7 +12975,7 @@ func (ec *executionContext) marshalNCollection2ᚕᚖgithubᚗcomᚋcommerceᚑp
 	return ret
 }
 
-func (ec *executionContext) marshalNCollection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx context.Context, sel ast.SelectionSet, v *model.Collection) graphql.Marshaler {
+func (ec *executionContext) marshalNCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx context.Context, sel ast.SelectionSet, v *model.Collection) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -12985,16 +12985,16 @@ func (ec *executionContext) marshalNCollection2ᚖgithubᚗcomᚋcommerceᚑproj
 	return ec._Collection(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNCreateCategoryInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCategoryInput(ctx context.Context, v any) (model.CreateCategoryInput, error) {
+func (ec *executionContext) unmarshalNCreateCategoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCategoryInput(ctx context.Context, v any) (model.CreateCategoryInput, error) {
 	res, err := ec.unmarshalInputCreateCategoryInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNCreateCategoryPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCategoryPayload(ctx context.Context, sel ast.SelectionSet, v model.CreateCategoryPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNCreateCategoryPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCategoryPayload(ctx context.Context, sel ast.SelectionSet, v model.CreateCategoryPayload) graphql.Marshaler {
 	return ec._CreateCategoryPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNCreateCategoryPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCategoryPayload(ctx context.Context, sel ast.SelectionSet, v *model.CreateCategoryPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNCreateCategoryPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCategoryPayload(ctx context.Context, sel ast.SelectionSet, v *model.CreateCategoryPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13004,16 +13004,16 @@ func (ec *executionContext) marshalNCreateCategoryPayload2ᚖgithubᚗcomᚋcomm
 	return ec._CreateCategoryPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNCreateCollectionInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionInput(ctx context.Context, v any) (model.CreateCollectionInput, error) {
+func (ec *executionContext) unmarshalNCreateCollectionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionInput(ctx context.Context, v any) (model.CreateCollectionInput, error) {
 	res, err := ec.unmarshalInputCreateCollectionInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNCreateCollectionPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionPayload(ctx context.Context, sel ast.SelectionSet, v model.CreateCollectionPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNCreateCollectionPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionPayload(ctx context.Context, sel ast.SelectionSet, v model.CreateCollectionPayload) graphql.Marshaler {
 	return ec._CreateCollectionPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNCreateCollectionPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionPayload(ctx context.Context, sel ast.SelectionSet, v *model.CreateCollectionPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNCreateCollectionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateCollectionPayload(ctx context.Context, sel ast.SelectionSet, v *model.CreateCollectionPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13023,16 +13023,16 @@ func (ec *executionContext) marshalNCreateCollectionPayload2ᚖgithubᚗcomᚋco
 	return ec._CreateCollectionPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNCreateProductInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductInput(ctx context.Context, v any) (model.CreateProductInput, error) {
+func (ec *executionContext) unmarshalNCreateProductInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductInput(ctx context.Context, v any) (model.CreateProductInput, error) {
 	res, err := ec.unmarshalInputCreateProductInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNCreateProductPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductPayload(ctx context.Context, sel ast.SelectionSet, v model.CreateProductPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNCreateProductPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductPayload(ctx context.Context, sel ast.SelectionSet, v model.CreateProductPayload) graphql.Marshaler {
 	return ec._CreateProductPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNCreateProductPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductPayload(ctx context.Context, sel ast.SelectionSet, v *model.CreateProductPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNCreateProductPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductPayload(ctx context.Context, sel ast.SelectionSet, v *model.CreateProductPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13058,26 +13058,26 @@ func (ec *executionContext) marshalNDateTime2timeᚐTime(ctx context.Context, se
 	return res
 }
 
-func (ec *executionContext) unmarshalNDecimal2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx context.Context, v any) (scalar.Decimal, error) {
+func (ec *executionContext) unmarshalNDecimal2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx context.Context, v any) (scalar.Decimal, error) {
 	var res scalar.Decimal
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNDecimal2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx context.Context, sel ast.SelectionSet, v scalar.Decimal) graphql.Marshaler {
+func (ec *executionContext) marshalNDecimal2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx context.Context, sel ast.SelectionSet, v scalar.Decimal) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalNDeleteCategoryInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCategoryInput(ctx context.Context, v any) (model.DeleteCategoryInput, error) {
+func (ec *executionContext) unmarshalNDeleteCategoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCategoryInput(ctx context.Context, v any) (model.DeleteCategoryInput, error) {
 	res, err := ec.unmarshalInputDeleteCategoryInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNDeleteCategoryPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCategoryPayload(ctx context.Context, sel ast.SelectionSet, v model.DeleteCategoryPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNDeleteCategoryPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCategoryPayload(ctx context.Context, sel ast.SelectionSet, v model.DeleteCategoryPayload) graphql.Marshaler {
 	return ec._DeleteCategoryPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNDeleteCategoryPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCategoryPayload(ctx context.Context, sel ast.SelectionSet, v *model.DeleteCategoryPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNDeleteCategoryPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCategoryPayload(ctx context.Context, sel ast.SelectionSet, v *model.DeleteCategoryPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13087,16 +13087,16 @@ func (ec *executionContext) marshalNDeleteCategoryPayload2ᚖgithubᚗcomᚋcomm
 	return ec._DeleteCategoryPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNDeleteCollectionInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionInput(ctx context.Context, v any) (model.DeleteCollectionInput, error) {
+func (ec *executionContext) unmarshalNDeleteCollectionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionInput(ctx context.Context, v any) (model.DeleteCollectionInput, error) {
 	res, err := ec.unmarshalInputDeleteCollectionInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNDeleteCollectionPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionPayload(ctx context.Context, sel ast.SelectionSet, v model.DeleteCollectionPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNDeleteCollectionPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionPayload(ctx context.Context, sel ast.SelectionSet, v model.DeleteCollectionPayload) graphql.Marshaler {
 	return ec._DeleteCollectionPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNDeleteCollectionPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionPayload(ctx context.Context, sel ast.SelectionSet, v *model.DeleteCollectionPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNDeleteCollectionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCollectionPayload(ctx context.Context, sel ast.SelectionSet, v *model.DeleteCollectionPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13106,16 +13106,16 @@ func (ec *executionContext) marshalNDeleteCollectionPayload2ᚖgithubᚗcomᚋco
 	return ec._DeleteCollectionPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNDeleteProductInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteProductInput(ctx context.Context, v any) (model.DeleteProductInput, error) {
+func (ec *executionContext) unmarshalNDeleteProductInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteProductInput(ctx context.Context, v any) (model.DeleteProductInput, error) {
 	res, err := ec.unmarshalInputDeleteProductInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNDeleteProductPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteProductPayload(ctx context.Context, sel ast.SelectionSet, v model.DeleteProductPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNDeleteProductPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteProductPayload(ctx context.Context, sel ast.SelectionSet, v model.DeleteProductPayload) graphql.Marshaler {
 	return ec._DeleteProductPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNDeleteProductPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteProductPayload(ctx context.Context, sel ast.SelectionSet, v *model.DeleteProductPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNDeleteProductPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteProductPayload(ctx context.Context, sel ast.SelectionSet, v *model.DeleteProductPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13187,26 +13187,26 @@ func (ec *executionContext) marshalNInt2int32(ctx context.Context, sel ast.Selec
 	return res
 }
 
-func (ec *executionContext) unmarshalNInventoryStatus2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx context.Context, v any) (model.InventoryStatus, error) {
+func (ec *executionContext) unmarshalNInventoryStatus2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx context.Context, v any) (model.InventoryStatus, error) {
 	var res model.InventoryStatus
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNInventoryStatus2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx context.Context, sel ast.SelectionSet, v model.InventoryStatus) graphql.Marshaler {
+func (ec *executionContext) marshalNInventoryStatus2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx context.Context, sel ast.SelectionSet, v model.InventoryStatus) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalNLoginInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLoginInput(ctx context.Context, v any) (model.LoginInput, error) {
+func (ec *executionContext) unmarshalNLoginInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLoginInput(ctx context.Context, v any) (model.LoginInput, error) {
 	res, err := ec.unmarshalInputLoginInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNLoginPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLoginPayload(ctx context.Context, sel ast.SelectionSet, v model.LoginPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNLoginPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLoginPayload(ctx context.Context, sel ast.SelectionSet, v model.LoginPayload) graphql.Marshaler {
 	return ec._LoginPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNLoginPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLoginPayload(ctx context.Context, sel ast.SelectionSet, v *model.LoginPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNLoginPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLoginPayload(ctx context.Context, sel ast.SelectionSet, v *model.LoginPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13216,16 +13216,16 @@ func (ec *executionContext) marshalNLoginPayload2ᚖgithubᚗcomᚋcommerceᚑpr
 	return ec._LoginPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNLogoutInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLogoutInput(ctx context.Context, v any) (model.LogoutInput, error) {
+func (ec *executionContext) unmarshalNLogoutInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLogoutInput(ctx context.Context, v any) (model.LogoutInput, error) {
 	res, err := ec.unmarshalInputLogoutInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNLogoutPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLogoutPayload(ctx context.Context, sel ast.SelectionSet, v model.LogoutPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNLogoutPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLogoutPayload(ctx context.Context, sel ast.SelectionSet, v model.LogoutPayload) graphql.Marshaler {
 	return ec._LogoutPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNLogoutPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLogoutPayload(ctx context.Context, sel ast.SelectionSet, v *model.LogoutPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNLogoutPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLogoutPayload(ctx context.Context, sel ast.SelectionSet, v *model.LogoutPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13235,17 +13235,17 @@ func (ec *executionContext) marshalNLogoutPayload2ᚖgithubᚗcomᚋcommerceᚑp
 	return ec._LogoutPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNNode2ᚕgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNode(ctx context.Context, sel ast.SelectionSet, v []model.Node) graphql.Marshaler {
+func (ec *executionContext) marshalNNode2ᚕgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNode(ctx context.Context, sel ast.SelectionSet, v []model.Node) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalONode2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNode(ctx, sel, v[i])
+		return ec.marshalONode2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNode(ctx, sel, v[i])
 	})
 
 	return ret
 }
 
-func (ec *executionContext) marshalNPageInfo2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPageInfo(ctx context.Context, sel ast.SelectionSet, v *model.PageInfo) graphql.Marshaler {
+func (ec *executionContext) marshalNPageInfo2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPageInfo(ctx context.Context, sel ast.SelectionSet, v *model.PageInfo) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13255,7 +13255,7 @@ func (ec *executionContext) marshalNPageInfo2ᚖgithubᚗcomᚋcommerceᚑprojec
 	return ec._PageInfo(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNProduct2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct(ctx context.Context, sel ast.SelectionSet, v *model.Product) graphql.Marshaler {
+func (ec *executionContext) marshalNProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct(ctx context.Context, sel ast.SelectionSet, v *model.Product) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13265,11 +13265,11 @@ func (ec *executionContext) marshalNProduct2ᚖgithubᚗcomᚋcommerceᚑproject
 	return ec._Product(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNProductConnection2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductConnection(ctx context.Context, sel ast.SelectionSet, v model.ProductConnection) graphql.Marshaler {
+func (ec *executionContext) marshalNProductConnection2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductConnection(ctx context.Context, sel ast.SelectionSet, v model.ProductConnection) graphql.Marshaler {
 	return ec._ProductConnection(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNProductConnection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductConnection(ctx context.Context, sel ast.SelectionSet, v *model.ProductConnection) graphql.Marshaler {
+func (ec *executionContext) marshalNProductConnection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductConnection(ctx context.Context, sel ast.SelectionSet, v *model.ProductConnection) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13279,11 +13279,11 @@ func (ec *executionContext) marshalNProductConnection2ᚖgithubᚗcomᚋcommerce
 	return ec._ProductConnection(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNProductEdge2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ProductEdge) graphql.Marshaler {
+func (ec *executionContext) marshalNProductEdge2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ProductEdge) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNProductEdge2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductEdge(ctx, sel, v[i])
+		return ec.marshalNProductEdge2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductEdge(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -13295,7 +13295,7 @@ func (ec *executionContext) marshalNProductEdge2ᚕᚖgithubᚗcomᚋcommerceᚑ
 	return ret
 }
 
-func (ec *executionContext) marshalNProductEdge2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductEdge(ctx context.Context, sel ast.SelectionSet, v *model.ProductEdge) graphql.Marshaler {
+func (ec *executionContext) marshalNProductEdge2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductEdge(ctx context.Context, sel ast.SelectionSet, v *model.ProductEdge) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13305,16 +13305,16 @@ func (ec *executionContext) marshalNProductEdge2ᚖgithubᚗcomᚋcommerceᚑpro
 	return ec._ProductEdge(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNPublishCatalogInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPublishCatalogInput(ctx context.Context, v any) (model.PublishCatalogInput, error) {
+func (ec *executionContext) unmarshalNPublishCatalogInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPublishCatalogInput(ctx context.Context, v any) (model.PublishCatalogInput, error) {
 	res, err := ec.unmarshalInputPublishCatalogInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNPublishCatalogPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPublishCatalogPayload(ctx context.Context, sel ast.SelectionSet, v model.PublishCatalogPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNPublishCatalogPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPublishCatalogPayload(ctx context.Context, sel ast.SelectionSet, v model.PublishCatalogPayload) graphql.Marshaler {
 	return ec._PublishCatalogPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNPublishCatalogPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPublishCatalogPayload(ctx context.Context, sel ast.SelectionSet, v *model.PublishCatalogPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNPublishCatalogPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐPublishCatalogPayload(ctx context.Context, sel ast.SelectionSet, v *model.PublishCatalogPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13324,16 +13324,16 @@ func (ec *executionContext) marshalNPublishCatalogPayload2ᚖgithubᚗcomᚋcomm
 	return ec._PublishCatalogPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNRefreshTokenInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRefreshTokenInput(ctx context.Context, v any) (model.RefreshTokenInput, error) {
+func (ec *executionContext) unmarshalNRefreshTokenInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRefreshTokenInput(ctx context.Context, v any) (model.RefreshTokenInput, error) {
 	res, err := ec.unmarshalInputRefreshTokenInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNRefreshTokenPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRefreshTokenPayload(ctx context.Context, sel ast.SelectionSet, v model.RefreshTokenPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNRefreshTokenPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRefreshTokenPayload(ctx context.Context, sel ast.SelectionSet, v model.RefreshTokenPayload) graphql.Marshaler {
 	return ec._RefreshTokenPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNRefreshTokenPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRefreshTokenPayload(ctx context.Context, sel ast.SelectionSet, v *model.RefreshTokenPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNRefreshTokenPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRefreshTokenPayload(ctx context.Context, sel ast.SelectionSet, v *model.RefreshTokenPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13343,16 +13343,16 @@ func (ec *executionContext) marshalNRefreshTokenPayload2ᚖgithubᚗcomᚋcommer
 	return ec._RefreshTokenPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNReorderCategoriesInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCategoriesInput(ctx context.Context, v any) (model.ReorderCategoriesInput, error) {
+func (ec *executionContext) unmarshalNReorderCategoriesInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCategoriesInput(ctx context.Context, v any) (model.ReorderCategoriesInput, error) {
 	res, err := ec.unmarshalInputReorderCategoriesInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNReorderCategoriesPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCategoriesPayload(ctx context.Context, sel ast.SelectionSet, v model.ReorderCategoriesPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNReorderCategoriesPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCategoriesPayload(ctx context.Context, sel ast.SelectionSet, v model.ReorderCategoriesPayload) graphql.Marshaler {
 	return ec._ReorderCategoriesPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNReorderCategoriesPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCategoriesPayload(ctx context.Context, sel ast.SelectionSet, v *model.ReorderCategoriesPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNReorderCategoriesPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCategoriesPayload(ctx context.Context, sel ast.SelectionSet, v *model.ReorderCategoriesPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13362,16 +13362,16 @@ func (ec *executionContext) marshalNReorderCategoriesPayload2ᚖgithubᚗcomᚋc
 	return ec._ReorderCategoriesPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNReorderCollectionsInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCollectionsInput(ctx context.Context, v any) (model.ReorderCollectionsInput, error) {
+func (ec *executionContext) unmarshalNReorderCollectionsInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCollectionsInput(ctx context.Context, v any) (model.ReorderCollectionsInput, error) {
 	res, err := ec.unmarshalInputReorderCollectionsInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNReorderCollectionsPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCollectionsPayload(ctx context.Context, sel ast.SelectionSet, v model.ReorderCollectionsPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNReorderCollectionsPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCollectionsPayload(ctx context.Context, sel ast.SelectionSet, v model.ReorderCollectionsPayload) graphql.Marshaler {
 	return ec._ReorderCollectionsPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNReorderCollectionsPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCollectionsPayload(ctx context.Context, sel ast.SelectionSet, v *model.ReorderCollectionsPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNReorderCollectionsPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCollectionsPayload(ctx context.Context, sel ast.SelectionSet, v *model.ReorderCollectionsPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13427,16 +13427,16 @@ func (ec *executionContext) marshalNString2ᚕstringᚄ(ctx context.Context, sel
 	return ret
 }
 
-func (ec *executionContext) unmarshalNUpdateCategoryInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryInput(ctx context.Context, v any) (model.UpdateCategoryInput, error) {
+func (ec *executionContext) unmarshalNUpdateCategoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryInput(ctx context.Context, v any) (model.UpdateCategoryInput, error) {
 	res, err := ec.unmarshalInputUpdateCategoryInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNUpdateCategoryPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateCategoryPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNUpdateCategoryPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateCategoryPayload) graphql.Marshaler {
 	return ec._UpdateCategoryPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNUpdateCategoryPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateCategoryPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNUpdateCategoryPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCategoryPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateCategoryPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13446,16 +13446,16 @@ func (ec *executionContext) marshalNUpdateCategoryPayload2ᚖgithubᚗcomᚋcomm
 	return ec._UpdateCategoryPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNUpdateCollectionInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionInput(ctx context.Context, v any) (model.UpdateCollectionInput, error) {
+func (ec *executionContext) unmarshalNUpdateCollectionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionInput(ctx context.Context, v any) (model.UpdateCollectionInput, error) {
 	res, err := ec.unmarshalInputUpdateCollectionInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNUpdateCollectionPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateCollectionPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNUpdateCollectionPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateCollectionPayload) graphql.Marshaler {
 	return ec._UpdateCollectionPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNUpdateCollectionPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateCollectionPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNUpdateCollectionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateCollectionPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateCollectionPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13465,16 +13465,16 @@ func (ec *executionContext) marshalNUpdateCollectionPayload2ᚖgithubᚗcomᚋco
 	return ec._UpdateCollectionPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalNUpdateProductInput2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductInput(ctx context.Context, v any) (model.UpdateProductInput, error) {
+func (ec *executionContext) unmarshalNUpdateProductInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductInput(ctx context.Context, v any) (model.UpdateProductInput, error) {
 	res, err := ec.unmarshalInputUpdateProductInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNUpdateProductPayload2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateProductPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNUpdateProductPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateProductPayload) graphql.Marshaler {
 	return ec._UpdateProductPayload(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNUpdateProductPayload2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateProductPayload) graphql.Marshaler {
+func (ec *executionContext) marshalNUpdateProductPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateProductPayload) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13484,7 +13484,7 @@ func (ec *executionContext) marshalNUpdateProductPayload2ᚖgithubᚗcomᚋcomme
 	return ec._UpdateProductPayload(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNUser2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUser(ctx context.Context, sel ast.SelectionSet, v *model.User) graphql.Marshaler {
+func (ec *executionContext) marshalNUser2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUser(ctx context.Context, sel ast.SelectionSet, v *model.User) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -13635,7 +13635,7 @@ func (ec *executionContext) marshalN__TypeKind2string(ctx context.Context, sel a
 	return res
 }
 
-func (ec *executionContext) marshalOAuthSession2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐAuthSession(ctx context.Context, sel ast.SelectionSet, v *model.AuthSession) graphql.Marshaler {
+func (ec *executionContext) marshalOAuthSession2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐAuthSession(ctx context.Context, sel ast.SelectionSet, v *model.AuthSession) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -13672,21 +13672,21 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	return res
 }
 
-func (ec *executionContext) marshalOCatalogVersion2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion(ctx context.Context, sel ast.SelectionSet, v *model.CatalogVersion) graphql.Marshaler {
+func (ec *executionContext) marshalOCatalogVersion2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogVersion(ctx context.Context, sel ast.SelectionSet, v *model.CatalogVersion) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._CatalogVersion(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOCategory2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Category) graphql.Marshaler {
+func (ec *executionContext) marshalOCategory2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Category) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNCategory2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx, sel, v[i])
+		return ec.marshalNCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -13698,28 +13698,28 @@ func (ec *executionContext) marshalOCategory2ᚕᚖgithubᚗcomᚋcommerceᚑpro
 	return ret
 }
 
-func (ec *executionContext) marshalOCategory2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx context.Context, sel ast.SelectionSet, v *model.Category) graphql.Marshaler {
+func (ec *executionContext) marshalOCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx context.Context, sel ast.SelectionSet, v *model.Category) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Category(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOCategoryOptimisticLockConflict2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryOptimisticLockConflict(ctx context.Context, sel ast.SelectionSet, v *model.CategoryOptimisticLockConflict) graphql.Marshaler {
+func (ec *executionContext) marshalOCategoryOptimisticLockConflict2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryOptimisticLockConflict(ctx context.Context, sel ast.SelectionSet, v *model.CategoryOptimisticLockConflict) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._CategoryOptimisticLockConflict(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOCollection2ᚕᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Collection) graphql.Marshaler {
+func (ec *executionContext) marshalOCollection2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Collection) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNCollection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx, sel, v[i])
+		return ec.marshalNCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -13731,21 +13731,21 @@ func (ec *executionContext) marshalOCollection2ᚕᚖgithubᚗcomᚋcommerceᚑp
 	return ret
 }
 
-func (ec *executionContext) marshalOCollection2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx context.Context, sel ast.SelectionSet, v *model.Collection) graphql.Marshaler {
+func (ec *executionContext) marshalOCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx context.Context, sel ast.SelectionSet, v *model.Collection) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Collection(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOCollectionOptimisticLockConflict2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionOptimisticLockConflict(ctx context.Context, sel ast.SelectionSet, v *model.CollectionOptimisticLockConflict) graphql.Marshaler {
+func (ec *executionContext) marshalOCollectionOptimisticLockConflict2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionOptimisticLockConflict(ctx context.Context, sel ast.SelectionSet, v *model.CollectionOptimisticLockConflict) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._CollectionOptimisticLockConflict(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalODecimal2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx context.Context, v any) (*scalar.Decimal, error) {
+func (ec *executionContext) unmarshalODecimal2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx context.Context, v any) (*scalar.Decimal, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -13754,7 +13754,7 @@ func (ec *executionContext) unmarshalODecimal2ᚖgithubᚗcomᚋcommerceᚑproje
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalODecimal2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx context.Context, sel ast.SelectionSet, v *scalar.Decimal) graphql.Marshaler {
+func (ec *executionContext) marshalODecimal2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx context.Context, sel ast.SelectionSet, v *scalar.Decimal) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -13833,7 +13833,7 @@ func (ec *executionContext) marshalOInt2ᚖint32(ctx context.Context, sel ast.Se
 	return res
 }
 
-func (ec *executionContext) unmarshalOInventoryStatus2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx context.Context, v any) (*model.InventoryStatus, error) {
+func (ec *executionContext) unmarshalOInventoryStatus2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx context.Context, v any) (*model.InventoryStatus, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -13842,7 +13842,7 @@ func (ec *executionContext) unmarshalOInventoryStatus2ᚖgithubᚗcomᚋcommerce
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOInventoryStatus2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx context.Context, sel ast.SelectionSet, v *model.InventoryStatus) graphql.Marshaler {
+func (ec *executionContext) marshalOInventoryStatus2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx context.Context, sel ast.SelectionSet, v *model.InventoryStatus) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -13867,28 +13867,28 @@ func (ec *executionContext) marshalOJSON2map(ctx context.Context, sel ast.Select
 	return res
 }
 
-func (ec *executionContext) marshalONode2githubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNode(ctx context.Context, sel ast.SelectionSet, v model.Node) graphql.Marshaler {
+func (ec *executionContext) marshalONode2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNode(ctx context.Context, sel ast.SelectionSet, v model.Node) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Node(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOOptimisticLockConflict2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐOptimisticLockConflict(ctx context.Context, sel ast.SelectionSet, v *model.OptimisticLockConflict) graphql.Marshaler {
+func (ec *executionContext) marshalOOptimisticLockConflict2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐOptimisticLockConflict(ctx context.Context, sel ast.SelectionSet, v *model.OptimisticLockConflict) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._OptimisticLockConflict(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOProduct2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct(ctx context.Context, sel ast.SelectionSet, v *model.Product) graphql.Marshaler {
+func (ec *executionContext) marshalOProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct(ctx context.Context, sel ast.SelectionSet, v *model.Product) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Product(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOProductFilter2ᚖgithubᚗcomᚋcommerceᚑprojectsᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductFilter(ctx context.Context, v any) (*model.ProductFilter, error) {
+func (ec *executionContext) unmarshalOProductFilter2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductFilter(ctx context.Context, v any) (*model.ProductFilter, error) {
 	if v == nil {
 		return nil, nil
 	}

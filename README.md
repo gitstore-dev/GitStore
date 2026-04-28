@@ -1,7 +1,16 @@
-# GitStore - Git-Backed Ecommerce Engine
+# GitStore - Agent-safe Catalog Operations
 
-A git-backed headless ecommerce engine where product catalogs are managed as markdown files with YAML front-matter.
-GitStore is also a developer tool: catalogs are plain files in git, so developers and AI agents can generate, review, and evolve commerce data using familiar markdown workflows.
+Open-source Git-backed commerce platform where product catalogs are managed as plain files in Git instead of trapped inside a CMS/database admin interface.
+Products, categories, and collections are Markdown files with structured front matter. Changes can be created by developers, merchandisers, or AI agents, reviewed through normal Git workflows, validated on push, and published through release tags. 
+The platform already includes a Rust Git server, Go GraphQL API, Astro/React Admin UI, schema validation, release-tag publishing, and documentation.
+
+The broader thesis is that commerce operations are becoming increasingly agentic. AI agents will generate product descriptions, update prices, localize catalogs, prepare campaigns, and coordinate merchandising changes. 
+Existing commerce platforms were designed around human admin panels and opaque database state. GitStore makes commerce data auditable, reviewable, reversible, and automation-safe.
+
+## Why Now
+
+AI agents are becoming capable enough to modify commercial content, but businesses do not yet have safe operational rails for letting them touch production commerce data. Git already solved review, history, rollback, branching, and collaboration for code. 
+GitStore applies those primitives to commerce catalogs, then exposes the result through headless APIs and admin workflows. The timing is right because headless commerce, GitOps, and AI-assisted operations are converging.
 
 ## Architecture
 
@@ -191,11 +200,11 @@ cd ../admin-ui && npm run test:e2e
 
 ## Documentation
 
-- **Project Constitution**: [.specify/memory/constitution.md](.specify/memory/constitution.md) - Core principles and governance
-- **Full Specification**: [specs/001-git-backed-ecommerce/spec.md](specs/001-git-backed-ecommerce/spec.md)
-- **Implementation Plan**: [specs/001-git-backed-ecommerce/plan.md](specs/001-git-backed-ecommerce/plan.md)
-- **Quickstart Guide**: [specs/001-git-backed-ecommerce/quickstart.md](specs/001-git-backed-ecommerce/quickstart.md)
-- **Data Model**: [specs/001-git-backed-ecommerce/data-model.md](specs/001-git-backed-ecommerce/data-model.md)
+- **Quickstart Guide**: [docs/quickstart.md](docs/quickstart.md)
+- **Architecture**: [docs/architecture.md](docs/architecture.md)
+- **API Reference**: [docs/api-reference.md](docs/api-reference.md)
+- **User Guide**: [docs/user-guide.md](docs/user-guide.md)
+- **Storefront**: [docs/storefront.md](docs/storefront.md)
 - **GraphQL Contracts**: [shared/schemas/](shared/schemas/)
 
 ## License

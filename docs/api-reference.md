@@ -1184,6 +1184,6 @@ The API follows the catalog version from the latest release tag. Breaking schema
 
 ## Additional Resources
 
-- [User Guide](./user-guide.md) - Getting started and usage examples
+- [User Guide](user-guide.md) - Getting started and usage examples
 - [GraphQL Playground](http://localhost:4000/playground) - Interactive API explorer
 - [Relay Specification](https://relay.dev/docs/guides/graphql-server-specification/) - Pagination and connection patterns

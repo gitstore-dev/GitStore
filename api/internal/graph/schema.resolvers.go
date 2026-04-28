@@ -10,9 +10,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/commerce-projects/gitstore/api/internal/catalog"
-	"github.com/commerce-projects/gitstore/api/internal/graph/generated"
-	"github.com/commerce-projects/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 )
 
 // CreateProduct is the resolver for the createProduct field.
@@ -432,57 +431,6 @@ func (r *queryResolver) CatalogVersion(ctx context.Context) (*model.CatalogVersi
 		Message:     nil,
 		Stats:       nil,
 	}, nil
-}
-
-// applyProductFilters applies filtering logic to products based on ProductFilter
-func applyProductFilters(products []*catalog.Product, filter *model.ProductFilter) []*catalog.Product {
-	if filter == nil {
-		return products
-	}
-
-	filtered := make([]*catalog.Product, 0, len(products))
-
-	for _, p := range products {
-		// Filter by collection ID
-		if filter.CollectionID != nil {
-			found := false
-			for _, collID := range p.CollectionIDs {
-				if collID == *filter.CollectionID {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
-		}
-
-		// Filter by inventory status
-		if filter.InventoryStatus != nil {
-			if string(*filter.InventoryStatus) != p.InventoryStatus {
-				continue
-			}
-		}
-
-		// Filter by price range
-		if filter.PriceMin != nil {
-			minPrice, _ := filter.PriceMin.Float64()
-			if p.Price < minPrice {
-				continue
-			}
-		}
-
-		if filter.PriceMax != nil {
-			maxPrice, _ := filter.PriceMax.Float64()
-			if p.Price > maxPrice {
-				continue
-			}
-		}
-
-		filtered = append(filtered, p)
-	}
-
-	return filtered
 }
 
 // Mutation returns generated.MutationResolver implementation.

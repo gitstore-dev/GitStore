@@ -9,9 +9,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/commerce-projects/gitstore/api/internal/catalog"
-	"github.com/commerce-projects/gitstore/api/internal/graph/generated"
-	"github.com/commerce-projects/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 )
 
 // Products is the resolver for the products field.
@@ -60,51 +59,6 @@ func (r *categoryResolver) Products(ctx context.Context, obj *model.Category, fi
 			EndCursor:       endCursor,
 		},
 	}, nil
-}
-
-// getProductsInCategoryTree returns all products in a category and its subcategories
-func getProductsInCategoryTree(cat *catalog.Catalog, categoryID string) ([]*catalog.Product, error) {
-	// Build category hierarchy to find all descendant categories
-	cat.BuildCategoryHierarchy()
-
-	// Collect all category IDs (current + descendants)
-	categoryIDs := []string{categoryID}
-
-	// Get the category to access its children
-	category, ok := cat.GetCategory(categoryID)
-	if !ok {
-		return []*catalog.Product{}, nil
-	}
-
-	// Recursively collect all descendant category IDs
-	collectDescendantIDs(category, &categoryIDs)
-
-	// Filter products by category IDs
-	allProducts := cat.AllProducts()
-	result := make([]*catalog.Product, 0)
-
-	for _, product := range allProducts {
-		for _, catID := range categoryIDs {
-			if product.CategoryID == catID {
-				result = append(result, product)
-				break
-			}
-		}
-	}
-
-	return result, nil
-}
-
-// collectDescendantIDs recursively collects IDs of all descendant categories
-func collectDescendantIDs(category *catalog.Category, ids *[]string) {
-	if category.Children == nil {
-		return
-	}
-
-	for _, child := range category.Children {
-		*ids = append(*ids, child.ID)
-		collectDescendantIDs(child, ids)
-	}
 }
 
 // Category returns generated.CategoryResolver implementation.

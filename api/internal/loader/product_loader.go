@@ -6,7 +6,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/commerce-projects/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"go.uber.org/zap"
 )
 

@@ -9,7 +9,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/commerce-projects/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 )
 
 // Login is the resolver for the login field.
