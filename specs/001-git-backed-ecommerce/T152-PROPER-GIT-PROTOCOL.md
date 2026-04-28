@@ -31,14 +31,14 @@ api:
 
 ### Limitations of Shared Volume Approach
 
-| Aspect | Current (Shared Volume) | Desired (Git Protocol) |
-|--------|------------------------|------------------------|
-| **Deployment** | Single host only | Distributed ok |
-| **Coupling** | Tight (shared filesystem) | Loose (HTTP protocol) |
-| **Scalability** | Can't scale API independently | Can scale separately |
-| **Architecture** | Violates microservices | True microservices |
-| **Remote git-server** | Not possible | Supported |
-| **K8s/Cloud** | Complex volume sharing | Native support |
+| Aspect                | Current (Shared Volume)       | Desired (Git Protocol) |
+|-----------------------|-------------------------------|------------------------|
+| **Deployment**        | Single host only              | Distributed ok         |
+| **Coupling**          | Tight (shared filesystem)     | Loose (HTTP protocol)  |
+| **Scalability**       | Can't scale API independently | Can scale separately   |
+| **Architecture**      | Violates microservices        | True microservices     |
+| **Remote git-server** | Not possible                  | Supported              |
+| **K8s/Cloud**         | Complex volume sharing        | Native support         |
 
 ### What We Agreed On
 
@@ -412,13 +412,13 @@ You need:
 
 ## Estimated Effort
 
-| Task | Time | Complexity |
-|------|------|------------|
-| Update catalog loader | 2-3 hours | Medium |
-| Update compose.yml | 15 min | Low |
-| Testing | 1-2 hours | Medium |
-| Documentation | 30 min | Low |
-| **Total** | **4-6 hours** | **Medium** |
+| Task                  | Time          | Complexity |
+|-----------------------|---------------|------------|
+| Update catalog loader | 2-3 hours     | Medium     |
+| Update compose.yml    | 15 min        | Low        |
+| Testing               | 1-2 hours     | Medium     |
+| Documentation         | 30 min        | Low        |
+| **Total**             | **4-6 hours** | **Medium** |
 
 **Not urgent** - can be done anytime after MVP launch.
 
@@ -426,13 +426,13 @@ You need:
 
 ## Summary
 
-| Aspect | Current (T146) | Future (T152) |
-|--------|---------------|---------------|
-| **Status** | ✅ Working | 📝 Planned |
-| **Use case** | MVP, single host | Production, scale |
-| **Complexity** | Simple | Medium |
-| **Blocking** | No | No |
-| **Priority** | Done | Medium |
+| Aspect         | Current (T146)   | Future (T152)     |
+|----------------|------------------|-------------------|
+| **Status**     | ✅ Working        | 📝 Planned        |
+| **Use case**   | MVP, single host | Production, scale |
+| **Complexity** | Simple           | Medium            |
+| **Blocking**   | No               | No                |
+| **Priority**   | Done             | Medium            |
 
 **Recommendation**: Keep current solution for MVP, migrate to proper git protocol when scaling requirements arise or when deploying to production/Kubernetes.
 

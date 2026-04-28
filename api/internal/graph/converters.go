@@ -3,9 +3,9 @@
 package graph
 
 import (
-	"github.com/commerce-projects/gitstore/api/internal/catalog"
-	"github.com/commerce-projects/gitstore/api/internal/graph/model"
-	"github.com/commerce-projects/gitstore/api/internal/graph/scalar"
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/scalar"
 	"github.com/shopspring/decimal"
 )
 

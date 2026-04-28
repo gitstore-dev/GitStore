@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/commerce-projects/gitstore/api/internal/cache"
+	"github.com/gitstore-dev/gitstore/api/internal/cache"
 	"go.uber.org/zap"
 )
 

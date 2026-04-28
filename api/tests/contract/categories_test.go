@@ -5,7 +5,7 @@ package contract
 import (
 	"testing"
 
-	"github.com/commerce-projects/gitstore/api/tests/testutil"
+	"github.com/gitstore-dev/gitstore/api/tests/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

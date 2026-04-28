@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/commerce-projects/gitstore/api/internal/cache"
-	"github.com/commerce-projects/gitstore/api/internal/catalog"
-	"github.com/commerce-projects/gitstore/api/internal/gitclient"
+	"github.com/gitstore-dev/gitstore/api/internal/cache"
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )

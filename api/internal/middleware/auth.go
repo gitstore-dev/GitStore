@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/commerce-projects/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"golang.org/x/crypto/bcrypt"
 )
 

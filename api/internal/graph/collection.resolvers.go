@@ -9,9 +9,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/commerce-projects/gitstore/api/internal/catalog"
-	"github.com/commerce-projects/gitstore/api/internal/graph/generated"
-	"github.com/commerce-projects/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 )
 
 // Products is the resolver for the products field.
@@ -57,24 +56,6 @@ func (r *collectionResolver) Products(ctx context.Context, obj *model.Collection
 			EndCursor:       endCursor,
 		},
 	}, nil
-}
-
-// getProductsInCollection returns all products that belong to the given collection
-func getProductsInCollection(cat *catalog.Catalog, collectionID string) []*catalog.Product {
-	allProducts := cat.AllProducts()
-	result := make([]*catalog.Product, 0)
-
-	for _, product := range allProducts {
-		// Check if this product belongs to the collection
-		for _, colID := range product.CollectionIDs {
-			if colID == collectionID {
-				result = append(result, product)
-				break
-			}
-		}
-	}
-
-	return result
 }
 
 // Collection returns generated.CollectionResolver implementation.

@@ -157,7 +157,7 @@ call_argument_directives_with_null: true
 # gqlgen will search for any type names in the schema in these go packages
 # if they match it will use them, otherwise it will generate them.
 autobind:
-#  - "github.com/commerce-projects/gitstore/api/graph/model"
+#  - "github.com/gitstore-dev/gitstore/api/graph/model"
 
 # This section declares type mapping between the GraphQL and go type systems
 #
@@ -194,11 +194,11 @@ models:
       - github.com/99designs/gqlgen/graphql.Int
       - github.com/99designs/gqlgen/graphql.Int64
   DateTime:
-    model: github.com/commerce-projects/gitstore/api/internal/graph/scalar.DateTime
+    model: github.com/gitstore-dev/gitstore/api/internal/graph/scalar.DateTime
   Decimal:
-    model: github.com/commerce-projects/gitstore/api/internal/graph/scalar.Decimal
+    model: github.com/gitstore-dev/gitstore/api/internal/graph/scalar.Decimal
   JSON:
-    model: github.com/commerce-projects/gitstore/api/internal/graph/scalar.JSON
+    model: github.com/gitstore-dev/gitstore/api/internal/graph/scalar.JSON
 
   # Configure field resolvers for relationship fields
   Product:
