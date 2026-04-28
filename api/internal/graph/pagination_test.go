@@ -3,8 +3,8 @@ package graph
 import (
 	"testing"
 
-	"github.com/commerce-projects/gitstore/api/internal/catalog"
-	"github.com/commerce-projects/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

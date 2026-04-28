@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/commerce-projects/gitstore/api/internal/graph/scalar"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/scalar"
 )
 
 // An object with a globally unique ID

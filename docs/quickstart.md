@@ -17,7 +17,7 @@ GitStore is a git-backed ecommerce headless engine with three main components:
 
 ```bash
 # Clone repository
-git clone https://github.com/commerce-projects/gitstore
+git clone https://github.com/gitstore-dev/gitstore
 cd gitstore
 
 # Start all services with docker compose
@@ -42,7 +42,7 @@ gitstore-admin      running             0.0.0.0:3000->3000/tcp
 ./scripts/init-demo-catalog.sh
 
 # Output:
-# ✓ Created 10 products in 3 categories
+# ✓ Created 7 products in 4 categories
 # ✓ Created 2 collections
 # ✓ Created release tag v0.1.0
 # ✓ Catalog published to http://localhost:4000/graphql
@@ -52,7 +52,7 @@ gitstore-admin      running             0.0.0.0:3000->3000/tcp
 
 - **GraphQL Playground**: http://localhost:4000/graphql
 - **Admin UI**: http://localhost:3000
-- **Git Repository**: `git://localhost:9418/catalog.git`
+- **Git Repository**: `http://localhost:9418/catalog.git`
 
 ### 4. Test GraphQL Query
 
@@ -86,7 +86,7 @@ query {
 #### Step 1: Clone Catalog Repository
 
 ```bash
-git clone git://localhost:9418/catalog.git
+git clone http://localhost:9418/catalog.git
 cd catalog
 ```
 
@@ -146,9 +146,12 @@ Total 4 (delta 1), reused 0 (delta 0)
 ✓ Validation passed: LAPTOP-001.md
 ✓ SKU unique: LAPTOP-001
 ✓ Category exists: cat_electronics
-To git://localhost:9418/catalog.git
+To http://localhost:9418/catalog.git
    abc1234..def5678  main -> main
 ```
+
+> [!NOTE]
+> Validation output is illustrative and may vary by git-server version/configuration.
 
 #### Step 4: Create Release Tag
 
@@ -157,7 +160,7 @@ git tag -a v0.2.0 -m "Release v0.2.0: Added Premium Laptop"
 git push origin v0.2.0
 ```
 
-**Result**: Storefront updates within 30 seconds (websocket notification)
+**Result**: Storefront typically updates within ~30 seconds via websocket notification, but timing may vary.
 
 #### Step 5: Verify Product on Storefront
 
@@ -238,8 +241,7 @@ cat > collections/featured.md << 'EOF'
 id: coll_featured
 name: Featured Products
 description: Our hand-picked selection
-product_ids:
-  - prod_laptop001
+product_ids: []
 display_order: 1
 slug: featured
 created_at: 2026-03-09T09:00:00Z
@@ -251,6 +253,9 @@ updated_at: 2026-03-09T09:00:00Z
 This week's featured selection.
 EOF
 ```
+
+> [!NOTE]
+> Products reference collections via `collection_ids` in product files.
 
 #### Step 4: Commit, Tag, and Push
 
@@ -268,7 +273,6 @@ query CategoryTree {
   categories {
     name
     slug
-    depth
     children {
       name
       slug
@@ -285,7 +289,6 @@ query CategoryTree {
       {
         "name": "Electronics",
         "slug": "electronics",
-        "depth": 0,
         "children": [
           {
             "name": "Computers",
@@ -304,6 +307,9 @@ query CategoryTree {
 ### Journey 3: Admin UI Management (P3)
 
 **Goal**: Non-technical user manages catalog via web interface
+
+> [!NOTE]
+> The Admin UI currently uses dummy/mock data for some catalog flows; full end-to-end Git-backed integration is pending.
 
 #### Step 1: Login to Admin UI
 
@@ -492,6 +498,9 @@ GITSTORE_SESSION_TIMEOUT=3600  # 1 hour
 
 ## Testing
 
+> [!NOTE]
+> The sample tests below are illustrative. Some CI tests are currently placeholders and may differ from the eventual production test suite.
+
 ### Contract Tests (GraphQL Schema)
 
 ```bash
@@ -640,17 +649,17 @@ loader := dataloader.NewBatchedLoader(func(keys []string) []*Category {
 
 ## Next Steps
 
-1. **Read Specification**: [spec.md](./spec.md) - Full feature requirements
-2. **Review Contracts**: [contracts/](./contracts/) - GraphQL schema
-3. **Check Data Model**: [data-model.md](./data-model.md) - Entity definitions
-4. **Implementation Plan**: [plan.md](./plan.md) - Technical roadmap
-5. **Task Breakdown**: Run `/speckit.tasks` to generate implementation tasks
+1. **User Guide**: [user-guide.md](user-guide.md) - End-user and operator workflows
+2. **API Reference**: [api-reference.md](api-reference.md) - GraphQL and service API details
+3. **Architecture**: [architecture.md](architecture.md) - System components and data flow
+4. **Storefront**: [storefront.md](storefront.md) - Consumer experience notes
+5. **GraphQL Contracts**: [../shared/schemas/](../shared/schemas/) - Schema source of truth
 
 ---
 
 ## Support & Resources
 
-- **GitHub Issues**: https://github.com/commerce-projects/gitstore
+- **GitHub Issues**: https://github.com/gitstore-dev/gitstore/issues
 - **Documentation**: https://docs.gitstore.dev
 - **GraphQL Playground**: http://localhost:4000/graphql
-- **Constitution**: See `.specify/memory/constitution.md` for development principles
+- **Project Overview**: [README.md](../README.md)

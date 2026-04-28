@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/commerce-projects/gitstore/api/internal/middleware"
+	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	"go.uber.org/zap"
 )
 

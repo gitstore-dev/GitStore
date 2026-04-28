@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/commerce-projects/gitstore/api/internal/gitclient"
-	"github.com/commerce-projects/gitstore/api/internal/models"
+	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	"github.com/gitstore-dev/gitstore/api/internal/models"
 )
 
 // ProductMutationService handles product mutation operations

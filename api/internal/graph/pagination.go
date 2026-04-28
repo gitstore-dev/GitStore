@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/commerce-projects/gitstore/api/internal/catalog"
-	"github.com/commerce-projects/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 )
 
 // PaginateProducts applies Relay-style cursor pagination to a product list
