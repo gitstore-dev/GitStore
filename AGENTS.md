@@ -53,5 +53,3 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 
 - Prefer editor-based tools for file operations (read/edit/create/move) and reserve terminal commands primarily for build, lint, and test workflows.
 <!-- MANUAL ADDITIONS END -->
-
-````
