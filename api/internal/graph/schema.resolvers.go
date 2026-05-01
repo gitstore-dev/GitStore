@@ -12,6 +12,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"go.uber.org/zap"
 )
 
 // CreateProduct is the resolver for the createProduct field.
@@ -287,7 +288,10 @@ func (r *mutationResolver) PublishCatalog(ctx context.Context, input model.Publi
 	if message == "" {
 		message = "Published catalog"
 	}
-	cat, _ := r.service.GetCatalog(ctx)
+	cat, err := r.service.GetCatalog(ctx)
+	if err != nil {
+		r.logger.Warn("could not fetch catalog for publish stats", zap.Error(err))
+	}
 	var stats *model.CatalogStats
 	if cat != nil {
 		stats = &model.CatalogStats{
@@ -300,7 +304,7 @@ func (r *mutationResolver) PublishCatalog(ctx context.Context, input model.Publi
 
 	version := &model.CatalogVersion{
 		Tag:         input.Version,
-		Commit:      "abc123def456",
+		Commit:      "abc123def456", // TODO: resolve actual commit from git push result
 		PublishedAt: time.Now(),
 		Message:     &message,
 		Stats:       stats,
@@ -447,7 +451,7 @@ func (r *queryResolver) CatalogVersion(ctx context.Context) (*model.CatalogVersi
 	}
 
 	return &model.CatalogVersion{
-		Tag:         "v1.0.0",
+		Tag:         cat.Tag(), // latest release tag; empty string if no tags yet
 		Commit:      cat.Commit(),
 		PublishedAt: cat.LoadedAt(),
 		Message:     nil,

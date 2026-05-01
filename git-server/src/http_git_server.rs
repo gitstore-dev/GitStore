@@ -458,6 +458,7 @@ async fn websocket_health(State(state): State<GitServerState>) -> Json<Websocket
         {
             Ok(broadcaster) => {
                 let count = broadcaster.connection_count().await;
+                drop(broadcaster); // release read lock before returning
                 ("healthy", count)
             }
             Err(_) => ("degraded", 0),

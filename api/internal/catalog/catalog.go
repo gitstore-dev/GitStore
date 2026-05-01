@@ -63,6 +63,7 @@ type Collection struct {
 type Catalog struct {
 	mu                sync.RWMutex
 	commit            string
+	tag               string
 	products          map[string]*Product    // ID -> Product
 	categories        map[string]*Category   // ID -> Category
 	collections       map[string]*Collection // ID -> Collection
@@ -73,9 +74,10 @@ type Catalog struct {
 }
 
 // NewCatalog creates a new empty catalog
-func NewCatalog(commit string) *Catalog {
+func NewCatalog(commit, tag string) *Catalog {
 	return &Catalog{
 		commit:            commit,
+		tag:               tag,
 		products:          make(map[string]*Product),
 		categories:        make(map[string]*Category),
 		collections:       make(map[string]*Collection),
@@ -215,6 +217,11 @@ func (c *Catalog) CollectionCount() int {
 // Commit returns the git commit SHA
 func (c *Catalog) Commit() string {
 	return c.commit
+}
+
+// Tag returns the release tag associated with this catalog load; empty if loaded from HEAD
+func (c *Catalog) Tag() string {
+	return c.tag
 }
 
 // LoadedAt returns when the catalog was loaded

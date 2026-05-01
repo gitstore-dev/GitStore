@@ -1,12 +1,14 @@
 package middleware
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"sync"
 	"time"
 )
 
-// rateLimiter tracks requests per IP using a token-bucket approximation.
+// rateLimiter tracks requests per IP using a fixed-window counter.
 type rateLimiter struct {
 	mu       sync.Mutex
 	buckets  map[string]*bucket
@@ -72,9 +74,14 @@ func (rl *rateLimiter) cleanup() {
 
 // RateLimitMiddleware returns an HTTP middleware that limits requests to
 // `rate` per `window` per client IP. Requests that exceed the limit receive
-// 429 Too Many Requests.
-func RateLimitMiddleware(rate int, window time.Duration) func(http.Handler) http.Handler {
+// 429 Too Many Requests. The ctx controls the lifetime of the background
+// cleanup goroutine — pass the server's base context.
+func RateLimitMiddleware(ctx context.Context, rate int, window time.Duration) func(http.Handler) http.Handler {
 	rl := newRateLimiter(rate, window)
+	go func() {
+		<-ctx.Done()
+		close(rl.stopCh)
+	}()
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -89,7 +96,7 @@ func RateLimitMiddleware(rate int, window time.Duration) func(http.Handler) http
 }
 
 // clientIP extracts the real client IP, honouring X-Forwarded-For from trusted
-// proxies (first hop only).
+// proxies (first hop only). Falls back to the host portion of RemoteAddr.
 func clientIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		// Take only the first (leftmost) address — the actual client
@@ -100,5 +107,10 @@ func clientIP(r *http.Request) string {
 		}
 		return xff
 	}
-	return r.RemoteAddr
+	// RemoteAddr is "host:port" — strip the port
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
