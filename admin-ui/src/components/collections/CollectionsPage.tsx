@@ -3,6 +3,7 @@ import { App } from '../App';
 import { ProtectedRoute } from '../ProtectedRoute';
 import { Header } from '../Header';
 import { CollectionList } from './CollectionList';
+import { ErrorBoundary } from '../shared/ErrorBoundary';
 
 const styles: Record<string, React.CSSProperties> = {
   main: {
@@ -37,7 +38,9 @@ export function CollectionsPage() {
             <h1 style={styles.title}>Collections</h1>
             <p style={styles.subtitle}>Curate product collections for featured displays</p>
           </div>
-          <CollectionList />
+          <ErrorBoundary>
+            <CollectionList />
+          </ErrorBoundary>
         </main>
       </ProtectedRoute>
     </App>

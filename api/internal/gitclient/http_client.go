@@ -23,13 +23,13 @@ type HTTPGitClient struct {
 	logger     *zap.Logger
 }
 
-// NewHTTPGitClient creates a new HTTP git client
+// NewHTTPGitClient creates a new HTTP git client with a pooled transport.
 func NewHTTPGitClient(serverURL, repoName, localPath string, logger *zap.Logger) *HTTPGitClient {
 	return &HTTPGitClient{
 		serverURL:  strings.TrimSuffix(serverURL, "/"),
 		repoName:   repoName,
 		localPath:  localPath,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: newPooledHTTPClient(30 * time.Second),
 		logger:     logger,
 	}
 }

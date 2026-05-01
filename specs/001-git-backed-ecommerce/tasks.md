@@ -266,21 +266,21 @@ Multi-service architecture:
 
 - [X] T127 [P] Add GraphQL filtering support including price range (ProductFilter with priceMin/priceMax parameters) to products query in api/internal/graph/products.resolvers.go
 - [X] T128 [P] Implement cursor pagination helpers in api/internal/graph/pagination.go (Relay connections)
-- [ ] T129 [P] Add git repository size monitoring in git-server/src/git/metrics.rs
-- [ ] T130 [P] Add catalog statistics to CatalogVersion type in api/internal/graph/catalog_version.resolvers.go
+- [X] T129 [P] Add git repository size monitoring in git-server/src/git/metrics.rs
+- [X] T130 [P] Add catalog statistics to CatalogVersion type in api/internal/graph/catalog_version.resolvers.go
 - [X] T131 [P] Create initialization script in scripts/init-demo-catalog.sh (creates sample products/categories/collections)
-- [ ] T132 [P] Add graceful shutdown handling for websocket connections in git-server/src/websocket/server.rs
-- [ ] T133 [P] Add connection pooling for git operations in api/internal/gitclient/pool.go
-- [ ] T134 [P] Implement request rate limiting middleware in api/internal/middleware/rate_limit.go
+- [X] T132 [P] Add graceful shutdown handling for websocket connections in git-server/src/websocket/server.rs
+- [X] T133 [P] Add connection pooling for git operations in api/internal/gitclient/pool.go
+- [X] T134 [P] Implement request rate limiting middleware in api/internal/middleware/rate_limit.go
 - [X] T135 [P] Add health check endpoints for all three services (/health, /ready)
 - [ ] T136 [P] Create Prometheus metrics exporters for api and git-server
 - [ ] T137 [P] Add accessibility labels to admin UI components (ARIA attributes)
-- [ ] T138 [P] Implement loading states for all async operations in admin UI
-- [ ] T139 [P] Add error boundaries in admin UI React components
+- [X] T138 [P] Implement loading states for all async operations in admin UI
+- [X] T139 [P] Add error boundaries in admin UI React components
 - [X] T140 [P] Create user documentation in docs/user-guide.md
 - [X] T141 [P] Create API documentation in docs/api-reference.md
 - [X] T142 [P] Validate quickstart.md examples against running system
-- [ ] T143 [P] Write E2E integration test validating request ID propagation from admin-ui → api → git-server in tests/e2e/request_tracing.spec.ts (validates Constitution Principle IV - Observability)
+- [X] T143 [P] Write E2E integration test validating request ID propagation from admin-ui → api → git-server in tests/e2e/request_tracing.spec.ts (validates Constitution Principle IV - Observability)
 - [X] T144 Run all tests across all three services (cargo test, go test, npm test)
 
 ---
@@ -333,7 +333,7 @@ Multi-service architecture:
     3. README.md and init script documentation updated with correct workflow
   - **Remaining**: Validation error messages still use Rust debug format (see T153)
 
-- [ ] T153 [MEDIUM] Improve git validation error message formatting
+- [X] T153 [MEDIUM] Improve git validation error message formatting
   - **Location**: git-server/src/http_git_server.rs:264-267
   - **Issue**: Currently returns Rust debug format to git client
   - **Current**:
@@ -356,7 +356,7 @@ Multi-service architecture:
   - **Implementation**: Create `format_validation_errors_for_git()` helper function
   - **Priority**: Not blocking MVP, improves UX
 
-- [ ] T149 [P] Add websocket notification health check
+- [X] T149 [P] Add websocket notification health check
   - **Location**: git-server/src/websocket/server.rs and api/cmd/server/main.go
   - **Purpose**: Verify websocket connectivity at startup
   - **Implementation**:
@@ -367,7 +367,7 @@ Multi-service architecture:
 
 ### Integration Testing
 
-- [ ] T150 [P] Create end-to-end Docker compose test script
+- [X] T150 [P] Create end-to-end Docker compose test script
   - **Location**: tests/e2e/docker-test.sh
   - **Purpose**: Automated testing of Docker deployment workflow
   - **Steps**:
@@ -380,7 +380,7 @@ Multi-service architecture:
     7. Verify API logs show websocket notification received
   - **Expected**: End-to-end workflow completes successfully
 
-- [ ] T151 [P] Document Docker deployment troubleshooting
+- [X] T151 [P] Document Docker deployment troubleshooting
   - **Location**: docs/docker-troubleshooting.md or README.md section
   - **Content**:
     - [ ] Repository initialization checklist

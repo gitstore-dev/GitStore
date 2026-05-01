@@ -147,7 +147,6 @@ func main() {
 	// Health check endpoints
 	mux.HandleFunc("/health", healthHandler.Health)
 	mux.HandleFunc("/ready", healthHandler.Ready)
-	mux.HandleFunc("/healthz", healthHandler.Healthz) // Backwards compatibility
 
 	// Apply middleware
 	var handler http.Handler = mux

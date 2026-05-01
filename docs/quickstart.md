@@ -50,7 +50,7 @@ gitstore-admin      running             0.0.0.0:3000->3000/tcp
 
 ### 3. Access Services
 
-- **GraphQL Playground**: http://localhost:4000/graphql
+- **GraphQL Playground**: http://localhost:4000/playground
 - **Admin UI**: http://localhost:3000
 - **Git Repository**: `http://localhost:9418/catalog.git`
 
@@ -661,5 +661,5 @@ loader := dataloader.NewBatchedLoader(func(keys []string) []*Category {
 
 - **GitHub Issues**: https://github.com/gitstore-dev/gitstore/issues
 - **Documentation**: https://docs.gitstore.dev
-- **GraphQL Playground**: http://localhost:4000/graphql
+- **GraphQL Playground**: http://localhost:4000/playground
 - **Project Overview**: [README.md](../README.md)

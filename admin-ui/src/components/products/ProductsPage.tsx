@@ -3,6 +3,7 @@ import { App } from '../App';
 import { ProtectedRoute } from '../ProtectedRoute';
 import { Header } from '../Header';
 import { ProductList } from './ProductList';
+import { ErrorBoundary } from '../shared/ErrorBoundary';
 
 const styles: Record<string, React.CSSProperties> = {
   main: {
@@ -37,7 +38,9 @@ export function ProductsPage() {
             <h1 style={styles.title}>Products</h1>
             <p style={styles.subtitle}>Manage your product catalog</p>
           </div>
-          <ProductList />
+          <ErrorBoundary>
+            <ProductList />
+          </ErrorBoundary>
         </main>
       </ProtectedRoute>
     </App>

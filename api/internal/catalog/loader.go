@@ -59,7 +59,7 @@ func (l *Loader) LoadFromTag(ctx context.Context, tag string) (*Catalog, error) 
 	)
 
 	// Load catalog from commit
-	return l.loadFromCommit(ctx, repo, commit)
+	return l.loadFromCommit(ctx, repo, commit, tag)
 }
 
 // LoadFromHEAD loads catalog from the current HEAD commit
@@ -89,7 +89,7 @@ func (l *Loader) LoadFromHEAD(ctx context.Context) (*Catalog, error) {
 	)
 
 	// Load catalog from commit
-	return l.loadFromCommit(ctx, repo, commit)
+	return l.loadFromCommit(ctx, repo, commit, "")
 }
 
 // LoadFromLatestTag loads catalog from the latest release tag
@@ -136,8 +136,8 @@ func (l *Loader) LoadFromLatestTag(ctx context.Context) (*Catalog, error) {
 }
 
 // loadFromCommit loads catalog data from a specific commit
-func (l *Loader) loadFromCommit(ctx context.Context, repo *git.Repository, commit *object.Commit) (*Catalog, error) {
-	catalog := NewCatalog(commit.Hash.String())
+func (l *Loader) loadFromCommit(ctx context.Context, repo *git.Repository, commit *object.Commit, tag string) (*Catalog, error) {
+	catalog := NewCatalog(commit.Hash.String(), tag)
 
 	// Get tree from commit
 	tree, err := commit.Tree()

@@ -10,7 +10,7 @@ import (
 )
 
 func TestCategoryLoaderLoad(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit")
+	cat := catalog.NewCatalog("test-commit", "")
 
 	cat1 := &catalog.Category{
 		ID:        "cat_1",
@@ -62,7 +62,7 @@ func TestCategoryLoaderLoad(t *testing.T) {
 }
 
 func TestCategoryLoaderLoadMany(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit")
+	cat := catalog.NewCatalog("test-commit", "")
 
 	cat1 := &catalog.Category{
 		ID:        "cat_1",
@@ -121,7 +121,7 @@ func TestCategoryLoaderLoadMany(t *testing.T) {
 }
 
 func TestCategoryLoaderClear(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit")
+	cat := catalog.NewCatalog("test-commit", "")
 	logger := zap.NewNop()
 	loader := NewCategoryLoader(cat, logger)
 

@@ -76,7 +76,7 @@ gitstore-admin       running             0.0.0.0:3000->3000/tcp
 
 ### Access Services
 
-- **GraphQL Playground**: http://localhost:4000/graphql
+- **GraphQL Playground**: http://localhost:4000/playground
 - **Admin UI**: http://localhost:3000
 - **Git Repository**: http://localhost:9418/catalog.git
 

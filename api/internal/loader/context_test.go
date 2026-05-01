@@ -9,7 +9,7 @@ import (
 )
 
 func TestLoadersCreation(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit")
+	cat := catalog.NewCatalog("test-commit", "")
 	logger := zap.NewNop()
 
 	loaders := NewLoaders(cat, logger)
@@ -32,7 +32,7 @@ func TestLoadersCreation(t *testing.T) {
 }
 
 func TestLoadersFromContext(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit")
+	cat := catalog.NewCatalog("test-commit", "")
 	logger := zap.NewNop()
 
 	// Create context with loaders
@@ -71,7 +71,7 @@ func TestLoadersFromContextMissing(t *testing.T) {
 }
 
 func TestLoadersClear(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit")
+	cat := catalog.NewCatalog("test-commit", "")
 	logger := zap.NewNop()
 
 	loaders := NewLoaders(cat, logger)

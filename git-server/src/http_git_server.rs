@@ -41,6 +41,7 @@ pub fn create_git_routes(state: GitServerState) -> Router {
         // Health check endpoints
         .route("/health", get(health_check))
         .route("/ready", get(readiness_check))
+        .route("/websocket/health", get(websocket_health))
         .with_state(state)
 }
 
@@ -261,10 +262,9 @@ async fn receive_pack(
                 }
                 Err(errors) => {
                     error!(?errors, "Validation failed");
-                    return Err(GitError::ValidationFailed(format!(
-                        "Validation failed: {:?}",
-                        errors
-                    )));
+                    return Err(GitError::ValidationFailed(
+                        format_validation_errors_for_git(&errors),
+                    ));
                 }
             }
         }
@@ -442,6 +442,35 @@ async fn check_websocket(broadcaster: &Arc<RwLock<Broadcaster>>) -> CheckStatus 
     }
 }
 
+/// Websocket health check response
+#[derive(Serialize)]
+struct WebsocketHealthResponse {
+    status: String,
+    active_connections: usize,
+    timestamp: String,
+}
+
+/// Dedicated websocket health endpoint
+async fn websocket_health(State(state): State<GitServerState>) -> Json<WebsocketHealthResponse> {
+    let (status, active_connections) =
+        match tokio::time::timeout(std::time::Duration::from_secs(1), state.broadcaster.read())
+            .await
+        {
+            Ok(broadcaster) => {
+                let count = broadcaster.connection_count().await;
+                drop(broadcaster); // release read lock before returning
+                ("healthy", count)
+            }
+            Err(_) => ("degraded", 0),
+        };
+
+    Json(WebsocketHealthResponse {
+        status: status.to_string(),
+        active_connections,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
 /// Git server errors
 #[derive(Debug)]
 pub enum GitError {
@@ -460,4 +489,41 @@ impl IntoResponse for GitError {
 
         (status, message).into_response()
     }
+}
+
+/// Format validation errors in GitHub-style git output format.
+///
+/// Each line is prefixed with "remote: " so git clients display it cleanly.
+fn format_validation_errors_for_git(
+    errors: &crate::validation::errors::ValidationResult,
+) -> String {
+    let separator = "remote: ========================================";
+    let mut lines = vec![
+        separator.to_string(),
+        "remote: GitStore Catalog Validation Failed".to_string(),
+        separator.to_string(),
+        "remote: ".to_string(),
+    ];
+
+    let mut sorted_files: Vec<&String> = errors.get_errors().keys().collect();
+    sorted_files.sort();
+
+    for file_path in sorted_files {
+        let file_errors = &errors.get_errors()[file_path];
+        if !file_path.is_empty() {
+            lines.push(format!("remote: File: {}", file_path));
+        }
+        for err in file_errors {
+            lines.push(format!("remote:   - {}", err));
+        }
+        lines.push("remote: ".to_string());
+    }
+
+    lines.push(format!(
+        "remote: {} error(s) in {} file(s)",
+        errors.error_count(),
+        errors.get_errors().len()
+    ));
+
+    lines.join("\n")
 }

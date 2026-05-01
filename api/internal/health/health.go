@@ -166,9 +166,3 @@ func (h *Handler) checkUptime() Check {
 		Message: "service operational",
 	}
 }
-
-// Healthz is a simple health check endpoint for backwards compatibility
-func (h *Handler) Healthz(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
-}

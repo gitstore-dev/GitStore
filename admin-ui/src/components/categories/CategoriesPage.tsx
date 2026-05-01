@@ -3,6 +3,7 @@ import { App } from '../App';
 import { ProtectedRoute } from '../ProtectedRoute';
 import { Header } from '../Header';
 import { CategoryList } from './CategoryList';
+import { ErrorBoundary } from '../shared/ErrorBoundary';
 
 const styles: Record<string, React.CSSProperties> = {
   main: {
@@ -37,7 +38,9 @@ export function CategoriesPage() {
             <h1 style={styles.title}>Categories</h1>
             <p style={styles.subtitle}>Organize your products into hierarchical categories</p>
           </div>
-          <CategoryList />
+          <ErrorBoundary>
+            <CategoryList />
+          </ErrorBoundary>
         </main>
       </ProtectedRoute>
     </App>

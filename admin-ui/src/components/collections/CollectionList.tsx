@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
+import { LoadingSpinner } from '../shared/LoadingSpinner';
 
 // Placeholder types until codegen runs
 interface Collection {
@@ -182,11 +183,7 @@ export function CollectionList({ onEdit, onDelete }: CollectionListProps) {
   );
 
   if (loading) {
-    return (
-      <div style={styles.loading}>
-        <div>Loading collections...</div>
-      </div>
-    );
+    return <LoadingSpinner message="Loading collections..." fullPage />;
   }
 
   if (error) {
