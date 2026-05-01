@@ -279,7 +279,7 @@ Multi-service architecture:
 - [X] T139 [P] Add error boundaries in admin UI React components
 - [X] T140 [P] Create user documentation in docs/user-guide.md
 - [X] T141 [P] Create API documentation in docs/api-reference.md
-- [X] T142 [P] Validate quickstart.md examples against running system
+- [X] T142 [P] Validate developer-guide.md examples against running system
 - [X] T143 [P] Write E2E integration test validating request ID propagation from admin-ui → api → git-server in tests/e2e/request_tracing.spec.ts (validates Constitution Principle IV - Observability)
 - [X] T144 Run all tests across all three services (cargo test, go test, npm test)
 

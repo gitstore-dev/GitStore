@@ -41,7 +41,7 @@ Both workflows use git as the source of truth, ensuring version control, auditab
 2. **Start GitStore services**:
    ```bash
    export COMPOSE_BAKE=true
-   docker compose up --build -d
+   docker compose up -d
    ```
 
 3. **Wait for services to be healthy** (10-15 seconds):
@@ -507,7 +507,7 @@ Update the `images` array in product front-matter with the correct URLs.
 
 ## Support and Resources
 
-- [Quickstart Guide](quickstart.md) - Integration scenarios
+- [Developer Guide](developer-guide.md) - Integration scenarios and build instructions
 - [Scripts README](../scripts/README.md) - Demo catalog initialization
 - [Troubleshooting](#troubleshooting) - Common issues and solutions
 - [GraphQL API Reference](api-reference.md) - Complete API documentation

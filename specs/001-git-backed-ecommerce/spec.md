@@ -2,7 +2,7 @@
 
 **Feature Branch**: `001-git-backed-ecommerce`
 **Created**: 2026-03-09
-**Status**: Draft
+**Status**: Closed
 **Input**: User description: "Develop GitStore, a git-backed ecommerce headless engine. Users and AI agents can create product catalogues using markdown with front-matter. The markdown files can be pushed to the storefront via git commits and push. The following product catologues are supported: products, categories (category taxonomy), collections (to group products e.g. winter collection). Optionally non-technical users should be able to perform CRUD operations on product catalogues using an admin UI. The storefront shows data from the latest 'release' tag."
 
 ## Clarifications
