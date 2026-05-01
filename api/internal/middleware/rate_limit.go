@@ -95,19 +95,12 @@ func RateLimitMiddleware(ctx context.Context, rate int, window time.Duration) fu
 	}
 }
 
-// clientIP extracts the real client IP, honouring X-Forwarded-For from trusted
-// proxies (first hop only). Falls back to the host portion of RemoteAddr.
+// clientIP returns the host portion of r.RemoteAddr.
+// X-Forwarded-For is intentionally ignored: it is attacker-controlled and
+// cannot be trusted for rate-limiting decisions unless the service sits
+// exclusively behind a verified trusted proxy. Reverse proxies that need
+// per-client rate limiting should enforce it themselves.
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take only the first (leftmost) address — the actual client
-		for i := 0; i < len(xff); i++ {
-			if xff[i] == ',' {
-				return xff[:i]
-			}
-		}
-		return xff
-	}
-	// RemoteAddr is "host:port" — strip the port
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
