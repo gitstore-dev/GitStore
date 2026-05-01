@@ -287,12 +287,23 @@ func (r *mutationResolver) PublishCatalog(ctx context.Context, input model.Publi
 	if message == "" {
 		message = "Published catalog"
 	}
+	cat, _ := r.service.GetCatalog(ctx)
+	var stats *model.CatalogStats
+	if cat != nil {
+		stats = &model.CatalogStats{
+			ProductCount:       int32(cat.ProductCount()),
+			CategoryCount:      int32(cat.CategoryCount()),
+			CollectionCount:    int32(cat.CollectionCount()),
+			OrphanedReferences: 0,
+		}
+	}
+
 	version := &model.CatalogVersion{
 		Tag:         input.Version,
 		Commit:      "abc123def456",
 		PublishedAt: time.Now(),
 		Message:     &message,
-		Stats:       nil, // TODO: calculate stats
+		Stats:       stats,
 	}
 	return &model.PublishCatalogPayload{
 		ClientMutationID: input.ClientMutationID,
@@ -423,13 +434,24 @@ func (r *queryResolver) Collections(ctx context.Context) ([]*model.Collection, e
 
 // CatalogVersion is the resolver for the catalogVersion field.
 func (r *queryResolver) CatalogVersion(ctx context.Context) (*model.CatalogVersion, error) {
-	// TODO: Implement proper catalog version lookup
+	cat, err := r.service.GetCatalog(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get catalog: %w", err)
+	}
+
+	stats := &model.CatalogStats{
+		ProductCount:       int32(cat.ProductCount()),
+		CategoryCount:      int32(cat.CategoryCount()),
+		CollectionCount:    int32(cat.CollectionCount()),
+		OrphanedReferences: 0,
+	}
+
 	return &model.CatalogVersion{
 		Tag:         "v1.0.0",
-		Commit:      "abc123",
-		PublishedAt: time.Now(),
+		Commit:      cat.Commit(),
+		PublishedAt: cat.LoadedAt(),
 		Message:     nil,
-		Stats:       nil,
+		Stats:       stats,
 	}, nil
 }
 

@@ -37,7 +37,58 @@ impl WebsocketServer {
         Broadcaster::new(Arc::clone(&self.connection_manager))
     }
 
-    /// Start the websocket server
+    /// Return the number of active connections (for health checks)
+    pub async fn connection_count(&self) -> usize {
+        self.connection_manager.read().await.connection_count()
+    }
+
+    /// Start the websocket server with graceful shutdown support.
+    ///
+    /// The server stops accepting new connections and closes all active ones
+    /// when `shutdown` resolves.
+    pub async fn start_with_shutdown(
+        self,
+        shutdown: impl std::future::Future<Output = ()>,
+    ) -> Result<()> {
+        let listener = TcpListener::bind(&self.addr).await?;
+        info!(addr = %self.addr, "Websocket server listening");
+
+        tokio::pin!(shutdown);
+
+        loop {
+            tokio::select! {
+                result = listener.accept() => {
+                    match result {
+                        Ok((stream, peer_addr)) => {
+                            debug!(peer = %peer_addr, "New connection");
+                            let manager = Arc::clone(&self.connection_manager);
+                            tokio::spawn(async move {
+                                if let Err(e) = handle_connection(stream, peer_addr, manager).await {
+                                    error!(peer = %peer_addr, error = %e, "Connection error");
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            error!(error = %e, "Failed to accept connection");
+                        }
+                    }
+                }
+                _ = &mut shutdown => {
+                    info!("Websocket server shutting down gracefully");
+                    let count = self.connection_manager.read().await.connection_count();
+                    if count > 0 {
+                        info!(connections = count, "Closing active websocket connections");
+                        self.connection_manager.write().await.close_all();
+                    }
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Start the websocket server (runs until process exit)
     pub async fn start(self) -> Result<()> {
         let listener = TcpListener::bind(&self.addr).await?;
         info!(addr = %self.addr, "Websocket server listening");

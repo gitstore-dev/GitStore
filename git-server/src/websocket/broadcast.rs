@@ -25,6 +25,11 @@ impl Broadcaster {
         manager.broadcast(message.to_string());
     }
 
+    /// Return the number of active connections
+    pub async fn connection_count(&self) -> usize {
+        self.manager.read().await.connection_count()
+    }
+
     /// Broadcast a git event
     pub async fn broadcast_event(&self, event: GitEvent) -> Result<()> {
         let json = event.to_json()?;

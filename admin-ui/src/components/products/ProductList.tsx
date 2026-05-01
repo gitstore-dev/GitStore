@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { LoadingSpinner } from '../shared/LoadingSpinner';
 
 // Placeholder types until codegen runs
 interface Product {
@@ -82,11 +83,7 @@ export function ProductList({ onDelete }: ProductListProps) {
   );
 
   if (loading) {
-    return (
-      <div style={styles.loading}>
-        <div>Loading products...</div>
-      </div>
-    );
+    return <LoadingSpinner message="Loading products..." fullPage />;
   }
 
   if (error) {
