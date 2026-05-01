@@ -70,6 +70,16 @@ impl ConnectionManager {
     pub fn connected_addresses(&self) -> Vec<SocketAddr> {
         self.connections.keys().copied().collect()
     }
+
+    /// Close all connections by dropping their senders.
+    ///
+    /// Dropping the sender causes the corresponding receive task to stop,
+    /// which triggers the connection cleanup path.
+    pub fn close_all(&mut self) {
+        let count = self.connections.len();
+        self.connections.clear();
+        info!(count, "Closed all websocket connections");
+    }
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 use tracing::{error, info};
 
+use gitstore::git::metrics::log_repo_metrics;
 use gitstore::git::repo::init_or_open_repository;
 use gitstore::http_git_server::{create_git_routes, GitServerState};
 use gitstore::validation::Validator;
@@ -76,6 +77,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(repo) => {
             info!(path = %catalog_path.display(), "Catalog repository ready");
             drop(repo); // Close repository for now
+                        // Log initial size metrics; warn if repo exceeds 500 MiB
+            log_repo_metrics(&catalog_path, 500.0);
         }
         Err(e) => {
             error!(error = %e, "Failed to initialize catalog repository");

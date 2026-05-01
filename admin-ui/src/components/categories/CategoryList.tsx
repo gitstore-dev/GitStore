@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { CategoryTree } from './CategoryTree';
+import { LoadingSpinner } from '../shared/LoadingSpinner';
 
 // Placeholder types until codegen runs
 interface Category {
@@ -214,11 +215,7 @@ export function CategoryList({ onEdit, onDelete, onAddChild }: CategoryListProps
   };
 
   if (loading) {
-    return (
-      <div style={styles.loading}>
-        <div>Loading categories...</div>
-      </div>
-    );
+    return <LoadingSpinner message="Loading categories..." fullPage />;
   }
 
   if (error) {
