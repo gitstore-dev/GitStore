@@ -146,6 +146,8 @@ func main() {
 
 	// Health check endpoints
 	mux.HandleFunc("/health", healthHandler.Health)
+	// Backwards-compatible alias used by older docker health checks.
+	mux.HandleFunc("/healthz", healthHandler.Health)
 	mux.HandleFunc("/ready", healthHandler.Ready)
 
 	// Apply middleware
