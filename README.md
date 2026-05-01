@@ -200,7 +200,7 @@ cd ../admin-ui && npm run test:e2e
 
 ## Documentation
 
-- **Quickstart Guide**: [docs/quickstart.md](docs/quickstart.md)
+- **Developer Guide**: [docs/developer-guide.md](docs/developer-guide.md)
 - **Architecture**: [docs/architecture.md](docs/architecture.md)
 - **API Reference**: [docs/api-reference.md](docs/api-reference.md)
 - **User Guide**: [docs/user-guide.md](docs/user-guide.md)

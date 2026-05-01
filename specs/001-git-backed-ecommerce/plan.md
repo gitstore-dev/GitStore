@@ -108,7 +108,7 @@ GitStore is a self-contained git-backed ecommerce headless engine enabling catal
 
 ### Principle I: Test-First Development (NON-NEGOTIABLE)
 - ✅ **PASS**: Contract tests can be generated from GraphQL schema (gqlgen test harness)
-- ✅ **PASS**: Test file structure documented in quickstart.md
+- ✅ **PASS**: Test file structure documented in developer-guide.md
 - ✅ **PASS**: Integration test patterns defined in research.md
 
 ### Principle II: API-First Design

@@ -1,4 +1,4 @@
-# GitStore Quickstart Guide
+# GitStore Developer Guide
 
 **Date**: 2026-03-09
 **Target Audience**: Developers, DevOps, Technical Users
@@ -9,7 +9,7 @@
 GitStore is a git-backed ecommerce headless engine with three main components:
 1. **Git Server** (Rust) - Git repository with validation and websocket notifications
 2. **GraphQL API** (Go) - Headless API with Relay support
-3. **Admin UI** (Astro/React) - Drag-and-drop catalog management
+3. **Admin UI** (Astro/React) - Drag-and-drop catalogue management
 
 ## Quick Start (5 minutes)
 
@@ -21,7 +21,8 @@ git clone https://github.com/gitstore-dev/gitstore
 cd gitstore
 
 # Start all services with docker compose
-docker compose up -d
+export COMPOSE_BAKE=true
+docker compose up --build -d
 
 # Check service health
 docker compose ps
@@ -35,7 +36,7 @@ gitstore-api        running             0.0.0.0:4000->4000/tcp
 gitstore-admin      running             0.0.0.0:3000->3000/tcp
 ```
 
-### 2. Initialize Demo Catalog
+### 2. Initialise Demo Catalogue
 
 ```bash
 # Initialize with sample products
@@ -56,7 +57,7 @@ gitstore-admin      running             0.0.0.0:3000->3000/tcp
 
 ### 4. Test GraphQL Query
 
-Open http://localhost:4000/graphql and run:
+Open http://localhost:4000/playground and run:
 
 ```graphql
 query {
@@ -81,13 +82,13 @@ query {
 
 ### Journey 1: Technical User - Git Workflow (P1 MVP)
 
-**Goal**: Create and publish a product catalog using git
+**Goal**: Create and publish a product catalogue using git
 
-#### Step 1: Clone Catalog Repository
+#### Step 1: Clone Catalogue Repository
 
 ```bash
-git clone http://localhost:9418/catalog.git
-cd catalog
+git clone http://localhost:9418/catalog.git catalogue-work
+cd catalogue-work
 ```
 
 #### Step 2: Create a Product
@@ -187,7 +188,7 @@ curl http://localhost:4000/graphql \
 
 ---
 
-### Journey 2: Organize with Categories & Collections (P2)
+### Journey 2: Organise with Categories & Collections (P2)
 
 **Goal**: Create hierarchical categories and curated collections
 
@@ -304,53 +305,6 @@ query CategoryTree {
 
 ---
 
-### Journey 3: Admin UI Management (P3)
-
-**Goal**: Non-technical user manages catalog via web interface
-
-> [!NOTE]
-> The Admin UI currently uses dummy/mock data for some catalog flows; full end-to-end Git-backed integration is pending.
-
-#### Step 1: Login to Admin UI
-
-1. Navigate to http://localhost:3000
-2. Login with credentials (default: `admin` / `password`)
-
-#### Step 2: Create Product via UI
-
-1. Click **Products** → **New Product**
-2. Fill form:
-   - **SKU**: `MOUSE-001`
-   - **Title**: `Wireless Mouse`
-   - **Price**: `29.99`
-   - **Category**: Select "Computers" from dropdown
-   - **Collections**: Check "Featured"
-3. Click **Save Draft**
-
-**Result**: Product saved locally, markdown file generated (not yet committed)
-
-#### Step 3: Drag-and-Drop Category Ordering
-
-1. Click **Categories**
-2. Drag "Computers" above "Mobile Devices"
-3. Categories reorder, `display_order` fields updated
-
-#### Step 4: Publish Changes
-
-1. Click **Publish** button
-2. Enter version: `v0.4.0`
-3. Enter message: `Added Wireless Mouse and reordered categories`
-4. Click **Publish Catalog**
-
-**Result**:
-- Changes committed to git
-- Push to git server (validation occurs)
-- Release tag created
-- Websocket notification triggers storefront reload
-- Success message: "Catalog published as v0.4.0"
-
----
-
 ## Architecture Deep Dive
 
 ### Component Interaction Flow
@@ -358,10 +312,10 @@ query CategoryTree {
 ```
 ┌─────────────┐   Git Protocol    ┌─────────────┐
 │ Git Client  │   (push/pull)     │   Git       │
-│   (CLI)     │──────────────────→│   Server    │
+│   (CLI)     │──────────────────→│   Service   │
 │             │←──────────────────│  (Rust)     │
 └─────────────┘   Validation      └──────┬──────┘
-                  Errors/Success          │
+                  Errors/Success         │
                                          │ Websocket
                                          │ Notification
                                          │ (new tag)
@@ -377,7 +331,7 @@ query CategoryTree {
                        │                 │                 │
                        ↓                 ↓                 ↓
                 ┌─────────────┐   ┌─────────────┐  ┌─────────────┐
-                │  Admin UI   │   │ Storefront  │  │   Other     │
+                │  Admin      │   │ Storefront  │  │   Other     │
                 │  (Astro)    │   │  (Consumer) │  │   Clients   │
                 └─────────────┘   └─────────────┘  └─────────────┘
                        │
@@ -387,7 +341,7 @@ query CategoryTree {
                        ↓
                 ┌─────────────┐   Git Protocol    ┌─────────────┐
                 │  GraphQL    │   (commit/tag)    │   Git       │
-                │   API       │──────────────────→│   Server    │
+                │   API       │──────────────────→│   Service   │
                 │   (Go)      │←──────────────────│  (Rust)     │
                 └─────────────┘   Validation      └─────────────┘
 ```
@@ -395,25 +349,25 @@ query CategoryTree {
 ### Data Flow: Create Product
 
 **Path 1: Technical User (Git CLI)**
-1. **Git Client**: User creates markdown file locally
+1. **Git Client**: User creates Markdown file locally
 2. **Git Client**: `git commit` + `git push` to git server
-3. **Git Server**: Pre-push validation (Rust) → Accept/Reject
+3. **Git Service**: Pre-push validation (Rust) → Accept/Reject
 4. **Git Client**: Receives success/failure
 5. **Git Client**: `git tag v1.0.0` + `git push --tags`
-6. **Git Server**: Tag created → Websocket broadcast
-7. **GraphQL API**: Receives websocket → Invalidates cache → Reloads catalog
-8. **Storefront**: Queries API → Gets updated catalog
+6. **Git Service**: Tag created → Websocket broadcast
+7. **GraphQL API**: Receives websocket → Invalidates cache → Reloads catalogue
+8. **Storefront**: Queries API → Gets updated catalogue
 
 **Path 2: Non-Technical User (Admin UI)**
-1. **Admin UI**: User fills form → GraphQL mutation
-2. **GraphQL API**: Validate input → Generate markdown → Git commit (internal)
-3. **Admin UI**: Multiple edits accumulate (drafts in API memory)
-4. **Admin UI**: Click "Publish" → `publishCatalog` mutation
+1. **Admin**: User fills form → GraphQL mutation
+2. **GraphQL API**: Validate input → Generate Markdown → Git commit (internal)
+3. **Admin**: Multiple edits accumulate (drafts in API memory)
+4. **Admin**: Click "Publish" → `publishCatalog` mutation
 5. **GraphQL API**: Git push to server + tag creation (git protocol)
-6. **Git Server**: Pre-push validation → Accept/Reject
-7. **Git Server**: Websocket broadcast → Release tag notification
-8. **GraphQL API**: Receive websocket → Invalidate cache → Reload catalog
-9. **Admin UI + Storefront**: Query API → Cached catalog with new product
+6. **Git Service**: Pre-push validation → Accept/Reject
+7. **Git Service**: Websocket broadcast → Release tag notification
+8. **GraphQL API**: Receive websocket → Invalidate cache → Reload catalogue
+9. **Admin + Storefront**: Query API → Cached catalogue with new product
 
 ---
 
@@ -429,7 +383,7 @@ query CategoryTree {
 
 ### Build from Source
 
-#### Git Server (Rust)
+#### Git Service (Rust)
 
 ```bash
 cd git-server
@@ -452,21 +406,9 @@ go build -o bin/api ./cmd/server
 ./bin/api --port 4000 --git-ws ws://localhost:8080
 ```
 
-#### Admin UI (Astro/React)
-
-```bash
-cd admin-ui
-npm install
-npm run dev  # Development server
-
-# Production build
-npm run build
-npm run preview
-```
-
 ### Environment Variables
 
-#### Git Server
+#### Git Service
 
 ```bash
 GITSTORE_GIT_PORT=9418
@@ -484,14 +426,6 @@ GITSTORE_GIT_WS=ws://git-service:8080
 GITSTORE_GIT_REPO=/data/repos/catalog.git
 GITSTORE_CACHE_TTL=300  # 5 minutes
 GITSTORE_LOG_LEVEL=info
-```
-
-#### Admin UI
-
-```bash
-GITSTORE_GRAPHQL_URL=http://api:4000/graphql
-GITSTORE_AUTH_SECRET=your-secret-key
-GITSTORE_SESSION_TIMEOUT=3600  # 1 hour
 ```
 
 ---
@@ -538,25 +472,6 @@ fn test_create_product_workflow() {
 }
 ```
 
-### E2E Tests (Admin UI)
-
-```bash
-cd admin-ui
-npm run test:e2e
-```
-
-**Example Test** (Playwright):
-```typescript
-test('create product via admin UI', async ({ page }) => {
-  await page.goto('http://localhost:3000');
-  await page.click('text=New Product');
-  await page.fill('[name="sku"]', 'MOUSE-001');
-  await page.fill('[name="title"]', 'Wireless Mouse');
-  await page.click('text=Save Draft');
-  await expect(page.locator('text=Product saved')).toBeVisible();
-});
-```
-
 ---
 
 ## Troubleshooting
@@ -585,6 +500,7 @@ wscat -c ws://localhost:8080
 docker-compose logs api | grep websocket
 
 # Manual cache invalidation
+# TODO returns 404
 curl -X POST http://localhost:4000/admin/cache/invalidate
 ```
 
@@ -595,10 +511,16 @@ curl -X POST http://localhost:4000/admin/cache/invalidate
 {
   "data": {
     "product": {
-      "category": null,
-      "errors": ["Category cat_invalid not found"]
+      "category": null
     }
-  }
+  },
+  "errors": [
+    {
+      "message": "Category cat_invalid not found",
+      "locations": [{ "line": 7, "column": 7 }],
+      "path": ["product", "category"]
+    }
+  ]
 }
 ```
 
