@@ -247,7 +247,7 @@ generates:
 2. **Generate**: Run code generation for Go resolvers
 3. **Implement**: TDD approach - write contract tests first
 4. **Validate**: Contract tests verify schema compliance
-5. **Document**: Update quickstart.md with example queries
+5. **Document**: Update developer-guide.md with example queries
 
 ## References
 
