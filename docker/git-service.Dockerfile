@@ -26,7 +26,7 @@ WORKDIR /build
 ENV OPENSSL_STATIC=1
 
 # Copy manifests
-COPY git-server/Cargo.toml git-server/Cargo.lock* ./
+COPY gitstore-git-service/Cargo.toml gitstore-git-service/Cargo.lock* ./
 
 # Create dummy src to build dependencies
 RUN mkdir src && \
@@ -41,7 +41,7 @@ RUN --mount=type=cache,id=cargo-registry-$TARGETARCH,target=/usr/local/cargo/reg
     rm -rf src
 
 # Copy actual source code
-COPY git-server/src ./src
+COPY gitstore-git-service/src ./src
 
 # Build application.
 # Refresh mtimes for all source files so Cargo invalidates dummy artifacts

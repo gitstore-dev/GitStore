@@ -1,0 +1,8 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { ProductsPage } from '../../components/products/ProductsPage';
+---
+
+<Layout title="Products - GitStore Admin">
+  <ProductsPage client:only="react" />
+</Layout>

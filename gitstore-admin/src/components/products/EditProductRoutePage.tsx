@@ -1,0 +1,84 @@
+import React from 'react';
+import { App } from '../App';
+import { ProtectedRoute } from '../ProtectedRoute';
+import { Header } from '../Header';
+import { EditProductPage } from './EditProductPage';
+
+interface EditProductRoutePageProps {
+  productId?: string;
+}
+
+const styles: Record<string, React.CSSProperties> = {
+  main: {
+    minHeight: 'calc(100vh - 80px)',
+    backgroundColor: '#f7fafc',
+    paddingBottom: '2rem',
+  },
+  pageHeader: {
+    padding: '2rem 2rem 0',
+    maxWidth: '1440px',
+    margin: '0 auto',
+  },
+  breadcrumbs: {
+    marginBottom: '1rem',
+    fontSize: '0.875rem',
+    color: '#718096',
+  },
+  breadcrumbLink: {
+    color: '#667eea',
+    textDecoration: 'none',
+  },
+  separator: {
+    margin: '0 0.5rem',
+    color: '#cbd5e0',
+  },
+  current: {
+    color: '#4a5568',
+    fontWeight: 500,
+  },
+  title: {
+    margin: 0,
+    fontSize: '2rem',
+    fontWeight: 700,
+    color: '#1a202c',
+  },
+  subtitle: {
+    margin: '0.5rem 0 0',
+    color: '#718096',
+    fontSize: '1rem',
+  },
+};
+
+export function EditProductRoutePage({ productId }: Readonly<EditProductRoutePageProps>) {
+  const resolvedProductId = productId ?? (
+    globalThis.window?.location
+      ? new URLSearchParams(globalThis.window.location.search).get('id') ?? ''
+      : ''
+  );
+
+  return (
+    <App>
+      <ProtectedRoute>
+        <Header />
+        <main style={styles.main}>
+          <div style={styles.pageHeader}>
+            <div style={styles.breadcrumbs}>
+              <a href="/products" style={styles.breadcrumbLink}>Products</a>
+              <span style={styles.separator}>/</span>
+              <span style={styles.current}>Edit Product</span>
+            </div>
+            <h1 style={styles.title}>Edit Product</h1>
+            <p style={styles.subtitle}>Update product information</p>
+          </div>
+          {resolvedProductId ? (
+            <EditProductPage productId={resolvedProductId} />
+          ) : (
+            <div style={styles.pageHeader}>
+              <p style={styles.subtitle}>Product ID is missing. Return to products and select an item to edit.</p>
+            </div>
+          )}
+        </main>
+      </ProtectedRoute>
+    </App>
+  );
+}

@@ -8,14 +8,14 @@ FROM --platform=$BUILDPLATFORM node:lts-alpine3.22 AS builder
 WORKDIR /build
 
 # Copy package manifests
-COPY admin-ui/package.json admin-ui/package-lock.json* ./
+COPY gitstore-admin/package.json gitstore-admin/package-lock.json* ./
 
 # Install production dependencies only
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --omit=dev
 
 # Copy source code
-COPY admin-ui/ ./
+COPY gitstore-admin/ ./
 
 # Build application
 RUN npm run build

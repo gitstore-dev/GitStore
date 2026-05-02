@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./git-server
+        working-directory: ./gitstore-git-service
 
     steps:
     - uses: actions/checkout@v6
@@ -36,7 +36,7 @@ jobs:
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
-          git-server/target/
+          gitstore-git-service/target/
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
@@ -62,7 +62,7 @@ jobs:
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
-        files: ./git-server/coverage/cobertura.xml
+        files: ./gitstore-git-service/coverage/cobertura.xml
         flags: rust
         name: rust-coverage
       continue-on-error: true
@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./api
+        working-directory: ./gitstore-api
 
     steps:
     - uses: actions/checkout@v6
@@ -81,7 +81,7 @@ jobs:
       uses: actions/setup-go@v6
       with:
         go-version: '1.25.x'
-        cache-dependency-path: api/go.sum
+        cache-dependency-path: gitstore-api/go.sum
 
     - name: Install dependencies
       run: go mod download
@@ -114,7 +114,7 @@ jobs:
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
-        files: ./api/coverage.txt
+        files: ./gitstore-api/coverage.txt
         flags: go
         name: go-coverage
       continue-on-error: true
@@ -172,14 +172,14 @@ jobs:
       continue-on-error: true
 
     - name: Audit Rust dependencies
-      working-directory: ./git-server
+      working-directory: ./gitstore-git-service
       run: |
         cargo install cargo-audit || true
         cargo audit
       continue-on-error: true
 
     - name: Audit Go dependencies
-      working-directory: ./api
+      working-directory: ./gitstore-api
       run: |
         go install github.com/sonatype-nexus-community/nancy@latest
         go list -json -m all | nancy sleuth
