@@ -28,13 +28,13 @@ test('debug console errors', async ({ page }) => {
 
   // Login
   console.log('=== Logging in ===');
-  await page.fill('input[name="username"]', 'admin');
-  await page.fill('input[name="password"]', 'admin');
+  await page.fill('input[name="username"]', process.env.E2E_ADMIN_USERNAME ?? 'admin');
+  await page.fill('input[name="password"]', process.env.E2E_ADMIN_PASSWORD ?? 'admin123');
   await page.click('button[type="submit"]');
 
   // Wait for redirect
   console.log('=== Waiting for products page ===');
-  await page.waitForURL('/products', { timeout: 10000 }).catch(e => {
+  await page.waitForURL('**/products/**', { timeout: 10000 }).catch(e => {
     console.log('Failed to redirect to /products:', e.message);
   });
 

@@ -53,6 +53,9 @@ jobs:
 
     - name: Run E2E tests
       run: npm run test:e2e
+      env:
+        E2E_ADMIN_USERNAME: admin
+        E2E_ADMIN_PASSWORD: admin123
 
     - name: Tear down core stack
       if: always()
