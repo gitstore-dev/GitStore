@@ -113,7 +113,7 @@ See [research.md](research.md) for full findings. Key decisions:
 
 - **Folder rename**: `git mv` in a single structural commit, preserving history (`--follow` compatible).
 - **Integration tests**: Go tests in `tests/integration/`, cover four core interaction scenarios (valid push → WebSocket, tag push → GraphQL data, invalid push → rejection, health checks).
-- **CI path filtering**: Core jobs have NO `paths` filter (always run, required status checks). Only `admin-test` CI job and `build-admin-image` CD job carry `paths: ['gitstore-admin/**']`.
+- **CI path filtering**: Core jobs have NO `paths` filter (always run, required status checks). Only the new `admin-test` CI job carries `paths: ['gitstore-admin/**']`. CD has NO path filtering — all images always build together.
 - **compose.admin.yml**: Docker Compose override file (two-file invocation). Does not redefine networks, volumes, or core services.
 - **Admin docs**: `docs/admin/` directory with `overview.md`, `architecture.md`, `quickstart.md`.
 
@@ -131,15 +131,17 @@ No changes to the GraphQL schema, gRPC interfaces, or WebSocket protocol are int
 
 ### CI/CD Contract Changes
 
-| Job                      | Trigger change                                                        |
-|--------------------------|-----------------------------------------------------------------------|
-| `rust-test`              | No change — always runs                                               |
-| `go-test`                | No change — always runs                                               |
-| `integration-test`       | Test placeholder replaced with real `go test ./tests/integration/...` |
-| `security-scan`          | No change                                                             |
-| `build-status`           | No change                                                             |
-| `admin-test` *(new job)* | Path-filtered to `gitstore-admin/**`                                  |
-| `build-admin-image`      | Add path filter `gitstore-admin/**` to CD workflow                    |
+| Job                         | Trigger change                                                                                           |
+|-----------------------------|----------------------------------------------------------------------------------------------------------|
+| `rust-test`                 | No change — always runs                                                                                  |
+| `go-test`                   | No change — always runs                                                                                  |
+| `integration-test`          | Test placeholder replaced with real `go test ./tests/integration/...`                                    |
+| `security-scan`             | No change                                                                                                |
+| `build-status`              | No change                                                                                                |
+| `admin-test` *(new CI job)* | Path-filtered to `gitstore-admin/**` (informational only; not a required status check)                   |
+| `build-admin-image` (CD)    | No path filter — all service images always built and tagged together for release consistency; see GH#42. |
+
+**Docker Compose service names**: Service names (`git-service`, `api`, `admin`) are left as-is. Docker Compose prefixes them with the project name `gitstore`, already producing container names `gitstore-git-service`, `gitstore-api`, `gitstore-admin` via `container_name:`. No rename needed.
 
 ### Compose Contract Changes
 
