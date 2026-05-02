@@ -18,6 +18,8 @@ jobs:
   admin-test:
     name: Admin Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: ./gitstore-admin
@@ -38,8 +40,21 @@ jobs:
     - name: Build
       run: npm run build
 
+    - name: Start core stack
+      working-directory: .
+      run: |
+        ./scripts/init-demo-catalog.sh --data-dir ./data/repos
+        docker compose up -d --wait
+      env:
+        GITSTORE_DATA_DIR: ./data/repos
+
     - name: Install Playwright browsers
       run: npx playwright install --with-deps
 
     - name: Run E2E tests
       run: npm run test:e2e
+
+    - name: Tear down core stack
+      if: always()
+      working-directory: .
+      run: docker compose down --volumes

@@ -14,7 +14,7 @@ sku: INTTEST-001
 title: Integration Test Product
 price: 99.99
 currency: USD
-category_id: cat_test_001
+category_id: cat_electronics_001
 inventory_status: in_stock
 inventory_quantity: 10
 created_at: 2026-01-01T00:00:00Z
@@ -30,7 +30,7 @@ sku: INTTEST-BAD-001
 title: Invalid Price Product
 price: "not-a-number"
 currency: USD
-category_id: cat_test_001
+category_id: cat_electronics_001
 created_at: 2026-01-01T00:00:00Z
 updated_at: 2026-01-01T00:00:00Z
 ---
@@ -54,7 +54,7 @@ func newPushHelper(t *testing.T) *pushHelper {
 	remoteURL := fmt.Sprintf("%s/catalog.git", gitServerGitURL)
 
 	// Try a lightweight reachability check before cloning.
-	checkCmd := exec.Command("git", "ls-remote", "--exit-code", remoteURL)
+	checkCmd := exec.Command("git", "ls-remote", remoteURL)
 	if err := checkCmd.Run(); err != nil {
 		t.Skipf("gitstore-git-service catalog repo unreachable at %s: %v — is docker compose up?", remoteURL, err)
 	}
