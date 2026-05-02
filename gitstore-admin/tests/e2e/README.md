@@ -43,7 +43,7 @@ If you prefer to start servers manually:
 
 2. **Admin UI Dev Server**: Start on http://localhost:3000
    ```bash
-   cd admin-ui && npm run dev
+   cd gitstore-admin && npm run dev
    ```
 
 3. **Run tests with existing server**:
@@ -67,7 +67,7 @@ Tests use default credentials:
 
 ### Install Dependencies
 ```bash
-cd admin-ui
+cd gitstore-admin
 npm install
 npx playwright install
 ```
@@ -185,10 +185,10 @@ If auto-start isn't working, start servers manually:
 cd api && go run cmd/server/main.go
 
 # Terminal 2: Start Admin UI
-cd admin-ui && npm run dev
+cd gitstore-admin && npm run dev
 
 # Terminal 3: Run tests (server will be reused)
-cd admin-ui && npx playwright test
+cd gitstore-admin && npx playwright test
 ```
 
 ### Authentication Issues

@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./git-server
+        working-directory: ./gitstore-git-service
 
     steps:
     - uses: actions/checkout@v6
@@ -36,7 +36,7 @@ jobs:
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
-          git-server/target/
+          gitstore-git-service/target/
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
@@ -62,7 +62,7 @@ jobs:
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
-        files: ./git-server/coverage/cobertura.xml
+        files: ./gitstore-git-service/coverage/cobertura.xml
         flags: rust
         name: rust-coverage
       continue-on-error: true
@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./api
+        working-directory: ./gitstore-api
 
     steps:
     - uses: actions/checkout@v6
@@ -81,7 +81,7 @@ jobs:
       uses: actions/setup-go@v6
       with:
         go-version: '1.25.x'
-        cache-dependency-path: api/go.sum
+        cache-dependency-path: gitstore-api/go.sum
 
     - name: Install dependencies
       run: go mod download
@@ -114,7 +114,7 @@ jobs:
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
-        files: ./api/coverage.txt
+        files: ./gitstore-api/coverage.txt
         flags: go
         name: go-coverage
       continue-on-error: true
@@ -127,23 +127,41 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.x'
+        cache-dependency-path: tests/integration/go.sum
+
     - name: Set up Docker Compose
       uses: docker/setup-compose-action@v2
 
-    - name: Build and start services
+    - name: Initialise demo catalog
+      run: ./scripts/init-demo-catalog.sh --data-dir ./data/repos
+      env:
+        GITSTORE_DATA_DIR: ./data/repos
+
+    - name: Build and start core stack
       run: |
         docker compose up -d --build
-        sleep 10
+      env:
+        GITSTORE_DATA_DIR: ./data/repos
 
-    - name: Check services health
+    - name: Wait for services to be healthy
       run: |
+        echo "Waiting for gitstore-git-service..."
+        timeout 60 sh -c 'until curl -sf http://localhost:9418/health; do sleep 2; done'
+        echo "Waiting for gitstore-api..."
+        timeout 60 sh -c 'until curl -sf http://localhost:4000/health; do sleep 2; done'
         docker compose ps
-        docker compose logs
 
     - name: Run integration tests
-      run: |
-        # TODO: Add integration test commands when implemented
-        echo "Integration tests placeholder"
+      working-directory: ./tests/integration
+      run: go test -v -timeout 120s ./...
+
+    - name: Collect logs on failure
+      if: failure()
+      run: docker compose logs
 
     - name: Cleanup
       if: always()
@@ -172,14 +190,14 @@ jobs:
       continue-on-error: true
 
     - name: Audit Rust dependencies
-      working-directory: ./git-server
+      working-directory: ./gitstore-git-service
       run: |
         cargo install cargo-audit || true
         cargo audit
       continue-on-error: true
 
     - name: Audit Go dependencies
-      working-directory: ./api
+      working-directory: ./gitstore-api
       run: |
         go install github.com/sonatype-nexus-community/nancy@latest
         go list -json -m all | nancy sleuth

@@ -262,6 +262,17 @@ async fn receive_pack(
                 }
                 Err(errors) => {
                     error!(?errors, "Validation failed");
+                    // Roll back the ref to old_head so the invalid commits are not persisted.
+                    if let Some(old_oid_str) = &old_head {
+                        if let Ok(old_oid) = git2::Oid::from_str(old_oid_str) {
+                            let _ = repository.reference(
+                                "refs/heads/main",
+                                old_oid,
+                                true,
+                                "rollback after failed validation",
+                            );
+                        }
+                    }
                     return Err(GitError::ValidationFailed(
                         format_validation_errors_for_git(&errors),
                     ));
