@@ -178,7 +178,7 @@ curl http://localhost:4000/graphql \
 
 ```bash
 # Integration tests
-cd git-server && cargo test --test integration
+cd gitstore-git-service && cargo test --test integration
 cd ../api && go test ./tests/integration/...
 ```
 

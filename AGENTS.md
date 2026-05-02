@@ -25,14 +25,14 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 
 	```bash
 	# Check formatting and clippy for Rust
-	cd git-server
+	cd gitstore-git-service
 	cargo fmt --all -- --check
 	cargo clippy --all-targets --all-features -- -D warnings
 	cargo build --verbose
 	cargo test --verbose
 
 	# Check formatting and linting for Go
-	cd ../api
+	cd ../gitstore-api
 	if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
 		echo "The following files need formatting:"
 		gofmt -s -l .
