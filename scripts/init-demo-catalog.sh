@@ -44,7 +44,10 @@ cd "$CATALOG_REPO_PATH"
 
 # Initialize git repository
 if [ ! -d .git ]; then
-    git init
+    git init -b main
+    # Ensure a git identity is set for environments that have none (e.g. CI runners).
+    git config user.email "gitstore-init@localhost"
+    git config user.name "GitStore Init"
     echo "# Demo Catalog" > README.md
     echo "" >> README.md
     echo "Sample product catalog for GitStore demonstration." >> README.md
@@ -454,6 +457,10 @@ High-resolution display for creative professionals.
 EOF
 
 echo "Committing catalog to git..."
+
+# Ensure identity is set for CI environments (safe no-op if already configured).
+git config user.email "gitstore-init@localhost"
+git config user.name "GitStore Init"
 
 git add .
 git commit -m "Add demo catalog with categories, collections, and products
