@@ -11,6 +11,7 @@ target/
 # Go
 /bin/
 /api/bin/
+/gitstore-api/bin/
 *.exe
 *.exe~
 *.dll
