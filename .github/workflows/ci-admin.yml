@@ -14,6 +14,8 @@ on:
     paths:
       - 'gitstore-admin/**'
 
+permissions: {}
+
 jobs:
   admin-test:
     name: Admin Tests
