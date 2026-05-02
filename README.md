@@ -19,7 +19,6 @@ graph TD
     GitClient["Git Client\n(CLI)"]
     GitServer["Git Server\n(Rust)"]
     GraphQLAPI["GraphQL API\n(Go)"]
-    AdminUI["Admin UI\n(Astro)"]
     Storefront["Storefront\n(Consumer)"]
     OtherClients["Other Clients"]
 
@@ -27,7 +26,6 @@ graph TD
     GitServer -- "Validation Errors/Success" --> GitClient
     GitServer -- "Websocket Notification" --> GraphQLAPI
 
-    GraphQLAPI -- "GraphQL" --> AdminUI
     GraphQLAPI -- "GraphQL" --> Storefront
     GraphQLAPI -- "GraphQL" --> OtherClients
 ```
@@ -36,7 +34,8 @@ graph TD
 
 - **Git Server** (Rust): Built-in git repository with validation and websocket notifications
 - **GraphQL API** (Go): Headless API with Relay support
-- **Admin UI** (Astro/React): Drag-and-drop catalog management
+
+> **Admin**: For the optional web UI, see [docs/admin/](docs/admin/).
 
 ## Why This Works Well for Developers and AI Agents
 
@@ -71,13 +70,11 @@ docker compose ps
 NAME                 STATUS              PORTS
 gitstore-git-service running             0.0.0.0:9418->9418/tcp, 0.0.0.0:8080->8080/tcp
 gitstore-api         running             0.0.0.0:4000->4000/tcp
-gitstore-admin       running             0.0.0.0:3000->3000/tcp
 ```
 
 ### Access Services
 
 - **GraphQL Playground**: http://localhost:4000/playground
-- **Admin UI**: http://localhost:3000
 - **Git Repository**: http://localhost:9418/catalog.git
 
 ## Contributing
@@ -94,7 +91,7 @@ gitstore-admin       running             0.0.0.0:3000->3000/tcp
 #### Git Server (Rust)
 
 ```bash
-cd git-server
+cd gitstore-git-service
 cargo build --release
 cargo test
 
@@ -105,25 +102,13 @@ cargo run -- --port 9418 --ws-port 8080 --data-dir ./data
 #### GraphQL API (Go)
 
 ```bash
-cd api
+cd gitstore-api
 go mod download
 go generate ./...  # Run gqlgen code generation
 go build -o bin/api ./cmd/server
 
 # Run standalone
 ./bin/api --port 4000 --git-ws ws://localhost:8080
-```
-
-#### Admin UI (Astro/React)
-
-```bash
-cd admin-ui
-npm install
-npm run dev  # Development server
-
-# Production build
-npm run build
-npm run preview
 ```
 
 ## Usage
@@ -193,9 +178,8 @@ curl http://localhost:4000/graphql \
 
 ```bash
 # Integration tests
-cd git-server && cargo test --test integration
+cd gitstore-git-service && cargo test --test integration
 cd ../api && go test ./tests/integration/...
-cd ../admin-ui && npm run test:e2e
 ```
 
 ## Documentation

@@ -8,14 +8,14 @@ RUN apk add --no-cache git
 WORKDIR /build
 
 # Copy go modules manifests
-COPY api/go.mod api/go.sum ./
+COPY gitstore-api/go.mod gitstore-api/go.sum ./
 
 # Download dependencies
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 # Copy source code
-COPY api/ ./
+COPY gitstore-api/ ./
 COPY shared/schemas /build/shared/schemas
 
 # Build application

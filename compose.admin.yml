@@ -1,0 +1,23 @@
+services:
+  admin:
+    image: ghcr.io/gitstore-dev/admin
+    build:
+      context: .
+      dockerfile: docker/admin.Dockerfile
+    container_name: gitstore-admin
+    ports:
+      - "3000:3000"  # Admin UI
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      - GITSTORE_GRAPHQL_URL=http://api:4000/graphql
+      - GITSTORE_AUTH_SECRET=change-me-in-production
+      - GITSTORE_SESSION_TIMEOUT=3600
+    networks:
+      - gitstore-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

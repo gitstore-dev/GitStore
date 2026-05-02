@@ -1,0 +1,65 @@
+name: CI Admin
+
+# Runs ONLY when files in gitstore-admin/ change.
+# This job is informational and is NOT a required branch-protection status check.
+# Core CI (ci.yml) always runs unconditionally and gates merge.
+
+on:
+  push:
+    branches: [ main, 'feature/**', '[0-9]+-*' ]
+    paths:
+      - 'gitstore-admin/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'gitstore-admin/**'
+
+permissions: {}
+
+jobs:
+  admin-test:
+    name: Admin Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ./gitstore-admin
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 'lts/*'
+        cache: 'npm'
+        cache-dependency-path: gitstore-admin/package-lock.json
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Build
+      run: npm run build
+
+    - name: Start core stack
+      working-directory: .
+      run: |
+        ./scripts/init-demo-catalog.sh --data-dir ./data/repos
+        docker compose up -d --wait
+      env:
+        GITSTORE_DATA_DIR: ./data/repos
+
+    - name: Install Playwright browsers
+      run: npx playwright install --with-deps
+
+    - name: Run E2E tests
+      run: npm run test:e2e
+      env:
+        E2E_ADMIN_USERNAME: admin
+        E2E_ADMIN_PASSWORD: admin123
+
+    - name: Tear down core stack
+      if: always()
+      working-directory: .
+      run: docker compose down --volumes

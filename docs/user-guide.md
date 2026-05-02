@@ -20,7 +20,7 @@ Welcome to GitStore, a git-backed ecommerce headless engine that lets you manage
 GitStore provides two ways to manage your product catalog:
 
 1. **Git-based workflow**: Edit markdown files directly, commit changes, and push to publish
-2. **Admin**: Use a web interface to manage products, categories, and collections
+2. **Admin**: Use an optional web interface — see [docs/admin/](admin/)
 
 Both workflows use git as the source of truth, ensuring version control, auditability, and collaboration.
 
@@ -287,42 +287,7 @@ When you push a tag, the git-service broadcasts a websocket notification to trig
 
 ## Using the Admin
 
-The Admin provides a web interface for non-technical users.
-
-### Accessing the Admin
-
-Open http://localhost:3000 in your browser.
-
-### Creating Products
-
-1. Navigate to **Products** → **New Product**
-2. Fill in the product details form
-3. Select a category
-4. Optionally add to collections
-5. Click **Save Draft**
-6. When ready to publish, click **Publish Catalog**
-
-### Publishing from Admin
-
-The Admin creates git commits and tags automatically:
-
-1. Make your changes in the UI
-2. Click **Publish** in the top navigation
-3. Enter a version tag (e.g., `v1.0.3`)
-4. Enter a commit message
-5. Click **Publish Catalog**
-
-This creates a git commit and tag behind the scenes.
-
-### Handling Conflicts
-
-If someone else has made changes via git, the Admin will warn you:
-
-- **Merge conflicts**: Admin will reject the push. Resolve conflicts manually using git.
-- **Concurrent edits**: If another user edited the same product, you'll see a diff and can choose to:
-  - Overwrite (discard their changes)
-  - Cancel (abandon your changes)
-  - Merge manually
+> For Admin UI setup and usage, see [docs/admin/quickstart.md](admin/quickstart.md).
 
 ## Querying the GraphQL API
 
@@ -437,25 +402,9 @@ ls -la demo-catalog/catalog.git/
 
 Check Docker volume mounts in `docker-compose.yml`.
 
-### Admin shows stale data
+### Admin shows stale data or merge conflicts
 
-**Problem**: Admin doesn't reflect recent git changes.
-
-**Solution**: Admin caches data. To refresh:
-1. Make git changes
-2. Push and create a new tag
-3. Wait for websocket notification (check `docker compose logs git-service`)
-4. Refresh the Admin browser tab
-
-### Merge conflicts when pushing from Admin
-
-**Problem**: Admin says "Push failed: merge conflicts detected."
-
-**Solution**: Someone else made git changes. You must resolve manually:
-1. Clone or pull the latest changes
-2. Resolve conflicts using git
-3. Commit and push
-4. Refresh the Admin
+> For Admin-specific troubleshooting, see [docs/admin/quickstart.md](admin/quickstart.md).
 
 ### Validation errors
 

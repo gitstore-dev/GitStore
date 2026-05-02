@@ -20,10 +20,11 @@ Both proposals use the same core building blocks, arranged with different contro
 
 ## Implementation Baseline (Current Repository)
 
-- `api/`: Go API gateway, GraphQL surface, and gRPC client/server boundaries.
-- `git-server/`: Rust Git engine, receive hooks, and repository access logic.
-- `admin-ui/`: Operational and merchandising interface for catalog workflows.
-- `shared/schemas/`: GraphQL schema contracts consumed by admin-ui/api paths.
+- `gitstore-api/`: Go API gateway, GraphQL surface, and gRPC client/server boundaries.
+- `gitstore-git-service/`: Rust Git engine, receive hooks, and repository access logic.
+- `shared/schemas/`: GraphQL schema contracts consumed by the API layer.
+
+> **Admin**: For the optional web interface, see [`docs/admin/architecture.md`](admin/architecture.md).
 
 These folders map directly to the control, storage, and distribution planes described below.
 
@@ -129,8 +130,8 @@ graph LR
 
 ### Implementation Sequence
 
-1. Wire GraphQL mutation handlers in `api/` to a single gRPC `CommitChange` boundary.
-2. Implement post-receive event publication in `git-server/` with correlation IDs.
+1. Wire GraphQL mutation handlers in `gitstore-api/` to a single gRPC `CommitChange` boundary.
+2. Implement post-receive event publication in `gitstore-git-service/` with correlation IDs.
 3. Add parser worker consumers that validate and upsert KV documents.
 4. Add observability: mutation latency, queue lag, validation failure rate, and KV upsert latency.
 5. Gate rollout with shadow indexing before switching storefront reads fully to KV.
@@ -250,10 +251,10 @@ graph TD
 
 ### Implementation Sequence
 
-1. Implement SSH/HTTP receive entrypoints and pre-receive checks in `git-server/`.
+1. Implement SSH/HTTP receive entrypoints and pre-receive checks in `gitstore-git-service/`.
 2. Persist accepted draft refs to disk and log audit metadata for every ref update.
 3. Trigger publish events only from tag updates and process them in parser workers.
-4. Update `api/` read resolvers to fetch only published keys from KV.
+4. Update `gitstore-api/` read resolvers to fetch only published keys from KV.
 5. Add release runbooks for promote, rollback, and replay operations.
 
 ---

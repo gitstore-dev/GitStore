@@ -6,10 +6,11 @@
 
 ## Overview
 
-GitStore is a git-backed ecommerce headless engine with three main components:
-1. **Git Server** (Rust) - Git repository with validation and websocket notifications
-2. **GraphQL API** (Go) - Headless API with Relay support
-3. **Admin UI** (Astro/React) - Drag-and-drop catalogue management
+GitStore is a git-backed ecommerce headless engine with two core services:
+1. **Git Service** (`gitstore-git-service`, Rust) - Git repository with validation and websocket notifications
+2. **GraphQL API** (`gitstore-api`, Go) - Headless API with Relay support
+
+> **Admin**: For the optional web interface, see [docs/admin/](admin/).
 
 ## Quick Start (5 minutes)
 
@@ -30,10 +31,9 @@ docker compose ps
 
 **Expected Output**:
 ```
-NAME                STATUS              PORTS
-gitstore-git-service running            0.0.0.0:9418->9418/tcp, 0.0.0.0:8080->8080/tcp
-gitstore-api        running             0.0.0.0:4000->4000/tcp
-gitstore-admin      running             0.0.0.0:3000->3000/tcp
+NAME                 STATUS              PORTS
+gitstore-git-service running             0.0.0.0:9418->9418/tcp, 0.0.0.0:8080->8080/tcp
+gitstore-api         running             0.0.0.0:4000->4000/tcp
 ```
 
 ### 2. Initialise Demo Catalogue
@@ -52,7 +52,6 @@ gitstore-admin      running             0.0.0.0:3000->3000/tcp
 ### 3. Access Services
 
 - **GraphQL Playground**: http://localhost:4000/playground
-- **Admin UI**: http://localhost:3000
 - **Git Repository**: `http://localhost:9418/catalog.git`
 
 ### 4. Test GraphQL Query
@@ -358,16 +357,9 @@ query CategoryTree {
 7. **GraphQL API**: Receives websocket → Invalidates cache → Reloads catalogue
 8. **Storefront**: Queries API → Gets updated catalogue
 
-**Path 2: Non-Technical User (Admin UI)**
-1. **Admin**: User fills form → GraphQL mutation
-2. **GraphQL API**: Validate input → Generate Markdown → Git commit (internal)
-3. **Admin**: Multiple edits accumulate (drafts in API memory)
-4. **Admin**: Click "Publish" → `publishCatalog` mutation
-5. **GraphQL API**: Git push to server + tag creation (git protocol)
-6. **Git Service**: Pre-push validation → Accept/Reject
-7. **Git Service**: Websocket broadcast → Release tag notification
-8. **GraphQL API**: Receive websocket → Invalidate cache → Reload catalogue
-9. **Admin + Storefront**: Query API → Cached catalogue with new product
+**Path 2: Admin (optional web UI)**
+
+> See [docs/admin/](admin/) for the Admin setup and usage.
 
 ---
 
@@ -386,7 +378,7 @@ query CategoryTree {
 #### Git Service (Rust)
 
 ```bash
-cd git-server
+cd gitstore-git-service
 cargo build --release
 cargo test
 
@@ -397,7 +389,7 @@ cargo run -- --port 9418 --ws-port 8080 --data-dir ./data
 #### GraphQL API (Go)
 
 ```bash
-cd api
+cd gitstore-api
 go mod download
 go generate ./...  # Run gqlgen code generation
 go build -o bin/api ./cmd/server
@@ -438,7 +430,7 @@ GITSTORE_LOG_LEVEL=info
 ### Contract Tests (GraphQL Schema)
 
 ```bash
-cd api
+cd gitstore-api
 go test ./tests/contract/...
 ```
 
@@ -455,7 +447,7 @@ func TestProductSchema(t *testing.T) {
 ### Integration Tests (User Journeys)
 
 ```bash
-cd git-server
+cd gitstore-git-service
 cargo test --test integration
 ```
 

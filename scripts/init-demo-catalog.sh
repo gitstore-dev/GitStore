@@ -34,23 +34,36 @@ done
 # 2) --data-dir flag
 # 3) ./demo-catalog
 CATALOG_PATH="${GITSTORE_DATA_DIR:-${CLI_DATA_DIR:-./demo-catalog}}"
+# Resolve to absolute path before any cd so relative paths remain valid.
+CATALOG_PATH="$(mkdir -p "$CATALOG_PATH" && cd "$CATALOG_PATH" && pwd)"
 CATALOG_REPO_PATH="$CATALOG_PATH/catalog.git"
 
 echo "Initializing demo catalog at: $CATALOG_REPO_PATH"
 
-# Create catalog directory structure
-mkdir -p "$CATALOG_REPO_PATH"
-cd "$CATALOG_REPO_PATH"
-
-# Initialize git repository
-if [ ! -d .git ]; then
-    git init
-    echo "# Demo Catalog" > README.md
-    echo "" >> README.md
-    echo "Sample product catalog for GitStore demonstration." >> README.md
-    git add README.md
-    git commit -m "Initial commit"
+# Skip if the bare repo already exists.
+if [ -f "$CATALOG_REPO_PATH/HEAD" ]; then
+    echo "Bare repository already exists at $CATALOG_REPO_PATH — skipping init."
+    exit 0
 fi
+
+# Build the catalog in a temporary working directory, then clone it bare.
+# A bare repo is required so that git push from clients is accepted.
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "$WORK_DIR"' EXIT
+
+cd "$WORK_DIR"
+
+# Initialize a normal (non-bare) repo as the staging area.
+git init -b main
+# Ensure a git identity is set for environments that have none (e.g. CI runners).
+git config user.email "gitstore-init@localhost"
+git config user.name "GitStore Init"
+
+echo "# Demo Catalog" > README.md
+echo "" >> README.md
+echo "Sample product catalog for GitStore demonstration." >> README.md
+git add README.md
+git commit -m "Initial commit"
 
 # Create directory structure
 mkdir -p products categories collections
@@ -463,6 +476,12 @@ git commit -m "Add demo catalog with categories, collections, and products
 - 7 products with various price points and inventory statuses
 - Demonstrates category hierarchy (Computers and Accessories under Electronics)
 - Shows product-category-collection relationships"
+
+# Clone the staging repo as a bare repository into the final destination.
+# A bare repo is required: git push from external clients is rejected by
+# a non-bare repo that has the branch currently checked out.
+mkdir -p "$(dirname "$CATALOG_REPO_PATH")"
+git clone --bare "$WORK_DIR" "$CATALOG_REPO_PATH"
 
 echo ""
 echo "✅ Demo catalog initialized successfully at: $CATALOG_REPO_PATH"

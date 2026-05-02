@@ -1,8 +1,8 @@
 # Docker Deployment Troubleshooting
 
-## Repository initialization checklist
+## Repository initialisation checklist
 
-Before starting the stack, the catalog repository must exist on disk:
+Before starting the stack, the catalogue repository must exist on disk:
 
 ```bash
 # Create and seed the demo catalog
@@ -83,10 +83,12 @@ docker compose logs git-server | grep -i "validation"
 
 ### `error: RPC failed; HTTP 422`
 
-**Cause**: Catalog validation failed on push (invalid YAML frontmatter, missing required fields, duplicate SKU, etc.).  
-**Fix**: Read the error detail from git-server logs, then correct the markdown files in your working tree before pushing again.
+**Cause**: Catalogue validation failed on push (invalid YAML frontmatter, missing required fields, duplicate SKU, etc.).  
+**Fix**: Read the error detail from git-server logs, then correct the Markdown files in your working tree before pushing again.
 
-### Admin UI shows blank page after login
+### Admin shows blank page after login
+
+> For Admin-specific troubleshooting, see [docs/admin/quickstart.md](admin/quickstart.md).
 
 **Cause**: The API is unreachable from the browser or GraphQL returned an error.  
 **Fix**:
@@ -102,12 +104,12 @@ curl -s -X POST http://localhost:4000/graphql \
 
 ## Log locations for each service
 
-| Service    | How to view                         |
-|------------|-------------------------------------|
-| git-server | `docker compose logs -f git-server` |
-| api        | `docker compose logs -f api`        |
-| admin-ui   | `docker compose logs -f admin-ui`   |
-| All        | `docker compose logs -f`            |
+| Service              | How to view                                                        |
+|----------------------|--------------------------------------------------------------------|
+| gitstore-git-service | `docker compose logs -f git-service`                               |
+| gitstore-api         | `docker compose logs -f api`                                       |
+| gitstore-admin       | `docker compose -f compose.yml -f compose.admin.yml logs -f admin` |
+| All (core)           | `docker compose logs -f`                                           |
 
 All services emit structured JSON logs. Pipe through `jq` for readability:
 
