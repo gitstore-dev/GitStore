@@ -250,13 +250,12 @@ Task T024: write tests/integration/websocket_health_test.go
 
 ### Incremental Delivery
 
-7. Add Phase 6: CI path-filter for admin (US4)
-8. Add Phase 7: Documentation audit + `docs/admin/` (US5)
-9. Add Phase 8: Polish + final audit
+1. Add Phase 6: CI path-filter for admin (US4)
+2. Add Phase 7: Documentation audit + `docs/admin/` (US5)
+3. Add Phase 8: Polish + final audit
 
 ### Notes
 
 - Each phase produces a standalone, committable increment
 - `AGENTS.md` is the canonical dev-guidelines file; `CLAUDE.md` is a symlink — only edit `AGENTS.md`
-- GH#42 tracks the `release-please` work that will change when docker push occurs (tag-only); do NOT implement that here
 - Docker Compose service names (`git-service`, `api`, `admin`) are intentionally left unchanged; `container_name:` in compose already sets them to `gitstore-git-service`, `gitstore-api`, `gitstore-admin`

@@ -24,7 +24,7 @@ Both proposals use the same core building blocks, arranged with different contro
 - `gitstore-git-service/`: Rust Git engine, receive hooks, and repository access logic.
 - `shared/schemas/`: GraphQL schema contracts consumed by the API layer.
 
-> **Admin add-on**: For the optional web interface, see [`docs/admin/architecture.md`](admin/architecture.md).
+> **Admin**: For the optional web interface, see [`docs/admin/architecture.md`](admin/architecture.md).
 
 These folders map directly to the control, storage, and distribution planes described below.
 

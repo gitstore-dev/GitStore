@@ -1,6 +1,6 @@
 # GitStore Admin — Quickstart
 
-`gitstore-admin` is an optional add-on that provides a web UI for managing the product catalog.
+`gitstore-admin` is an optional layer that provides a web UI for managing the product catalogue.
 
 ## Prerequisites
 
@@ -34,7 +34,7 @@ gitstore-admin       running             0.0.0.0:3000->3000/tcp
 
 Open **http://localhost:3000** in your browser.
 
-Log in with the credentials configured in `GITSTORE_AUTH_SECRET` (default: `change-me-in-production` — change this before any real deployment).
+Log in with the credentials configured in `GITSTORE_AUTH_SECRET` (default: `admin123` — change this before any real deployment).
 
 ## Managing Products
 
@@ -60,16 +60,16 @@ Log in with the credentials configured in `GITSTORE_AUTH_SECRET` (default: `chan
 
 ## Publishing Changes
 
-`gitstore-admin` accumulates draft changes in memory. Publishing creates a git commit and a release tag, which triggers the catalog to update.
+`gitstore-admin` accumulates draft changes in memory. Publishing creates a git commit and a release tag, which triggers the catalogue to update.
 
 1. Click **Publish** in the top navigation
 2. Enter a version tag (e.g., `v1.0.3`)
 3. Enter a commit message describing what changed
-4. Click **Publish Catalog**
+4. Click **Publish Catalogue**
 
-This creates a git commit and annotated tag in `gitstore-git-service`, which broadcasts a websocket notification. `gitstore-api` receives the notification and reloads the catalog.
+This creates a git commit and annotated tag in `gitstore-git-service`, which broadcasts a websocket notification. `gitstore-api` receives the notification and reloads the catalogue.
 
-## Stopping the Admin Add-On
+## Stopping the Admin
 
 ```bash
 docker compose -f compose.yml -f compose.admin.yml down
@@ -87,7 +87,7 @@ docker compose -f compose.yml -f compose.admin.yml stop admin
 
 **Problem**: Admin UI doesn't reflect recent git changes.
 
-**Solution**: The admin caches catalog data. To refresh:
+**Solution**: The admin caches catalogue data. To refresh:
 1. Make git changes via CLI or AI agent
 2. Push and create a new release tag
 3. Wait for the websocket notification (check: `docker compose logs git-service`)

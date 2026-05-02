@@ -11,7 +11,7 @@ Welcome to GitStore, a git-backed ecommerce headless engine that lets you manage
 - [Managing Categories](#managing-categories)
 - [Managing Collections](#managing-collections)
 - [Publishing Changes](#publishing-changes)
-- [Using the Admin (Add-On)](#using-the-admin-add-on)
+- [Using the Admin](#using-the-admin)
 - [Querying the GraphQL API](#querying-the-graphql-api)
 - [Troubleshooting](#troubleshooting)
 
@@ -20,7 +20,7 @@ Welcome to GitStore, a git-backed ecommerce headless engine that lets you manage
 GitStore provides two ways to manage your product catalog:
 
 1. **Git-based workflow**: Edit markdown files directly, commit changes, and push to publish
-2. **Admin add-on**: Use an optional web interface — see [docs/admin/](admin/)
+2. **Admin**: Use an optional web interface — see [docs/admin/](admin/)
 
 Both workflows use git as the source of truth, ensuring version control, auditability, and collaboration.
 
@@ -285,7 +285,7 @@ git push origin v1.0.2
 
 When you push a tag, the git-service broadcasts a websocket notification to trigger catalog reload in the API.
 
-## Using the Admin (Add-On)
+## Using the Admin
 
 > For Admin UI setup and usage, see [docs/admin/quickstart.md](admin/quickstart.md).
 

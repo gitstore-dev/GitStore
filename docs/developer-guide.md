@@ -10,7 +10,7 @@ GitStore is a git-backed ecommerce headless engine with two core services:
 1. **Git Service** (`gitstore-git-service`, Rust) - Git repository with validation and websocket notifications
 2. **GraphQL API** (`gitstore-api`, Go) - Headless API with Relay support
 
-> **Admin add-on**: For the optional web interface, see [docs/admin/](admin/).
+> **Admin**: For the optional web interface, see [docs/admin/](admin/).
 
 ## Quick Start (5 minutes)
 
@@ -357,9 +357,9 @@ query CategoryTree {
 7. **GraphQL API**: Receives websocket → Invalidates cache → Reloads catalogue
 8. **Storefront**: Queries API → Gets updated catalogue
 
-**Path 2: Admin add-on (optional web UI)**
+**Path 2: Admin (optional web UI)**
 
-> See [docs/admin/](admin/) for the Admin add-on setup and usage.
+> See [docs/admin/](admin/) for the Admin setup and usage.
 
 ---
 

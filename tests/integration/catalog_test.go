@@ -15,22 +15,28 @@ import (
 // After pushing a valid commit + release tag, the product must appear in
 // the gitstore-api GraphQL catalog within 10 seconds.
 func TestTagPushPublishesToGraphQL(t *testing.T) {
+	// Use a timestamp suffix so repeated runs never collide on filename or SKU.
+	ts := time.Now().UnixMilli()
+	filename := fmt.Sprintf("inttest-catalog-%d.md", ts)
+	sku := fmt.Sprintf("INTTEST-%d", ts)
+	content := uniqueValidProduct(ts)
+
 	h := newPushHelper(t)
-	h.commitProduct("inttest-catalog.md", validProductFrontmatter)
+	h.commitProduct(filename, content)
 
 	out, err := h.push()
 	if err != nil {
 		t.Fatalf("push failed: %v\n%s", err, out)
 	}
 
-	tag := fmt.Sprintf("v0.0.1-inttest-%d", time.Now().UnixMilli())
+	tag := fmt.Sprintf("v0.0.1-inttest-%d", ts)
 	out, err = h.pushTag(tag)
 	if err != nil {
 		t.Fatalf("tag push failed: %v\n%s", err, out)
 	}
 
 	// Poll GraphQL up to 10 seconds for the product to appear.
-	const targetSKU = "INTTEST-001"
+	targetSKU := sku
 	deadline := time.Now().Add(10 * time.Second)
 	found := false
 
@@ -59,8 +65,12 @@ func TestTagPushPublishesToGraphQL(t *testing.T) {
 // A commit with invalid front-matter (non-numeric price) must be rejected.
 // The invalid product must NOT appear in the GraphQL catalog.
 func TestInvalidPushIsRejected(t *testing.T) {
+	ts := time.Now().UnixMilli()
+	filename := fmt.Sprintf("inttest-invalid-%d.md", ts)
+	content := uniqueInvalidProduct(ts)
+
 	h := newPushHelper(t)
-	h.commitProduct("inttest-invalid.md", invalidProductFrontmatter)
+	h.commitProduct(filename, content)
 
 	out, err := h.push()
 	if err == nil {
@@ -68,19 +78,25 @@ func TestInvalidPushIsRejected(t *testing.T) {
 		return
 	}
 
+	// The git transport layer surfaces the 422 as "HTTP 422" or "send-pack" error.
+	// The human-readable validation message is in the git-service logs.
+	// We accept any non-zero exit code with 422 in the output as a valid rejection.
 	combined := strings.ToLower(out)
-	if !strings.Contains(combined, "price") && !strings.Contains(combined, "validation") {
-		t.Errorf("rejection message should mention 'price' or 'validation', got:\n%s", out)
+	if !strings.Contains(combined, "422") &&
+		!strings.Contains(combined, "price") &&
+		!strings.Contains(combined, "validation") {
+		t.Errorf("rejection output should contain '422', 'price', or 'validation', got:\n%s", out)
 	}
 
 	// Confirm the invalid SKU is absent from GraphQL.
-	skus, err := queryProductSKUs(t)
-	if err != nil {
-		t.Logf("could not query GraphQL to verify absence (skipping absence check): %v", err)
+	invalidSKU := fmt.Sprintf("INTTEST-BAD-%d", ts)
+	skus, queryErr := queryProductSKUs(t)
+	if queryErr != nil {
+		t.Logf("could not query GraphQL to verify absence (skipping absence check): %v", queryErr)
 		return
 	}
 	for _, sku := range skus {
-		if sku == "INTTEST-BAD-001" {
+		if sku == invalidSKU {
 			t.Errorf("invalid product SKU %q appeared in GraphQL catalog after rejected push", sku)
 		}
 	}

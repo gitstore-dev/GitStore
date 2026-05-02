@@ -12,8 +12,9 @@ import (
 )
 
 // TestValidPushEmitsWebSocketNotification covers contract C-002:
-// A valid commit pushed to gitstore-git-service must trigger a WebSocket
-// notification containing repository, ref, and commit_sha fields within 5s.
+// Pushing a v-prefixed annotated tag to gitstore-git-service must broadcast a
+// WebSocket notification with event="release_created", a non-empty tag, and a
+// 40-char commit SHA within 5 seconds.
 func TestValidPushEmitsWebSocketNotification(t *testing.T) {
 	// Subscribe to WebSocket before pushing so we don't miss the event.
 	wsURL := fmt.Sprintf("%s/ws", gitServerWSURL)
@@ -25,19 +26,27 @@ func TestValidPushEmitsWebSocketNotification(t *testing.T) {
 	}
 	defer ws.Close()
 
-	// Push a valid product commit.
+	// Push a valid product commit then an annotated v-tag to trigger the event.
+	// The git-service only broadcasts for v-prefixed annotated tags.
+	ts := time.Now().UnixMilli()
 	h := newPushHelper(t)
-	h.commitProduct("inttest-valid.md", validProductFrontmatter)
+	h.commitProduct(fmt.Sprintf("inttest-ws-%d.md", ts), uniqueValidProduct(ts))
 	out, err := h.push()
 	if err != nil {
 		t.Fatalf("push failed unexpectedly: %v\n%s", err, out)
 	}
+	tag := fmt.Sprintf("v0.0.1-ws-%d", ts)
+	out, err = h.pushTag(tag)
+	if err != nil {
+		t.Fatalf("tag push failed unexpectedly: %v\n%s", err, out)
+	}
 
-	// Wait for notification.
+	// The actual event JSON is: {"event":"release_created","tag":"...","commit":"<40-char SHA>","timestamp":"..."}
 	type notification struct {
-		Repository string `json:"repository"`
-		Ref        string `json:"ref"`
-		CommitSHA  string `json:"commit_sha"`
+		Event     string `json:"event"`
+		Tag       string `json:"tag"`
+		Commit    string `json:"commit"`
+		Timestamp string `json:"timestamp"`
 	}
 
 	done := make(chan notification, 1)
@@ -54,17 +63,17 @@ func TestValidPushEmitsWebSocketNotification(t *testing.T) {
 
 	select {
 	case n := <-done:
-		if n.Repository == "" {
-			t.Error("WebSocket notification missing 'repository' field")
+		if n.Event != "release_created" {
+			t.Errorf("WebSocket notification 'event' expected %q, got %q", "release_created", n.Event)
 		}
-		if n.Ref == "" {
-			t.Error("WebSocket notification missing 'ref' field")
+		if n.Tag == "" {
+			t.Error("WebSocket notification missing 'tag' field")
 		}
-		if len(n.CommitSHA) != 40 {
-			t.Errorf("WebSocket notification 'commit_sha' expected 40-char hex, got %q", n.CommitSHA)
+		if len(n.Commit) != 40 {
+			t.Errorf("WebSocket notification 'commit' expected 40-char hex, got %q", n.Commit)
 		}
 	case <-time.After(5 * time.Second):
-		t.Error("no WebSocket notification received within 5 seconds after push")
+		t.Error("no WebSocket notification received within 5 seconds after tag push")
 	}
 }
 

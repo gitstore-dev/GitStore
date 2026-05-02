@@ -35,7 +35,7 @@ graph TD
 - **Git Server** (Rust): Built-in git repository with validation and websocket notifications
 - **GraphQL API** (Go): Headless API with Relay support
 
-> **Admin add-on**: For the optional web UI, see [docs/admin/](docs/admin/).
+> **Admin**: For the optional web UI, see [docs/admin/](docs/admin/).
 
 ## Why This Works Well for Developers and AI Agents
 

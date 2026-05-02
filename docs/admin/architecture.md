@@ -1,6 +1,6 @@
 # GitStore Admin — Architecture
 
-`gitstore-admin` is an optional add-on that attaches to the API layer of the core GitStore stack.
+`gitstore-admin` is the backoffice layer of the core GitStore stack.
 
 ## Architecture Diagram
 
@@ -9,12 +9,12 @@
 graph TD
     Merchandiser[("🧑‍💼 Merchandiser\n(Browser)")]:::external
     GitClient[("👩‍💻 Git Client\n(CLI / AI Agent)")]:::external
-    Storefront[("🌐 Headless Storefront")]:::external
+    Storefront[("🌐 Storefront")]:::external
 
-    Admin[("🖥️ gitstore-admin\n(Astro/React)\n[Add-On]")]:::addon
+    Admin[("🖥️ gitstore-admin\n(Astro/React)")]:::addon
     API[("🐹 gitstore-api\n(Go GraphQL)")]:::go
     Git[("🦀 gitstore-git-service\n(Rust Git Engine)")]:::rust
-    Disk[("💾 Disk Storage\n(Bare .git Repos)")]:::infra
+    Disk[("💾 Storage\n(Bare .git Repos)")]:::infra
 
     Merchandiser -->|"Browser UI"| Admin
     Admin -->|"GraphQL mutations\n(products, categories, tags)"| API
@@ -30,7 +30,7 @@ graph TD
     classDef external fill:#fff,stroke:#111,stroke-width:1px,stroke-dasharray: 5 5,color:#000;
 ```
 
-## How the Admin Add-On Fits In
+## How the Admin Fits In
 
 The core stack (`gitstore-api` + `gitstore-git-service`) operates independently. `gitstore-admin`:
 

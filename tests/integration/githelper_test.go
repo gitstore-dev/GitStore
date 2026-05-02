@@ -8,13 +8,19 @@ import (
 	"testing"
 )
 
-const validProductFrontmatter = `---
-id: prod_inttest_001
-sku: INTTEST-001
+
+// uniqueValidProduct returns a valid product fixture with a timestamp-unique ID and SKU
+// so repeated test runs never collide on filename or SKU in the catalog.
+func uniqueValidProduct(ts int64) string {
+	return fmt.Sprintf(`---
+id: prod_inttest_%d
+sku: INTTEST-%d
 title: Integration Test Product
 price: 99.99
 currency: USD
 category_id: cat_electronics_001
+collection_ids: []
+images: []
 inventory_status: in_stock
 inventory_quantity: 10
 created_at: 2026-01-01T00:00:00Z
@@ -22,21 +28,30 @@ updated_at: 2026-01-01T00:00:00Z
 ---
 
 Integration test product for core-stack contract verification.
-`
+`, ts, ts)
+}
 
-const invalidProductFrontmatter = `---
-id: prod_inttest_bad_001
-sku: INTTEST-BAD-001
+// uniqueInvalidProduct returns a product with a negative price that must be rejected
+// by the git-service validator.
+func uniqueInvalidProduct(ts int64) string {
+	return fmt.Sprintf(`---
+id: prod_inttest_bad_%d
+sku: INTTEST-BAD-%d
 title: Invalid Price Product
-price: "not-a-number"
+price: -1.00
 currency: USD
 category_id: cat_electronics_001
+collection_ids: []
+images: []
+inventory_status: in_stock
+inventory_quantity: 10
 created_at: 2026-01-01T00:00:00Z
 updated_at: 2026-01-01T00:00:00Z
 ---
 
-This product has an invalid price field to trigger validation rejection.
-`
+This product has a negative price to trigger validation rejection.
+`, ts, ts)
+}
 
 // pushHelper holds state for a single test push scenario.
 type pushHelper struct {

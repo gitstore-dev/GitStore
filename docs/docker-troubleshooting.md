@@ -83,10 +83,10 @@ docker compose logs git-server | grep -i "validation"
 
 ### `error: RPC failed; HTTP 422`
 
-**Cause**: Catalog validation failed on push (invalid YAML frontmatter, missing required fields, duplicate SKU, etc.).  
-**Fix**: Read the error detail from git-server logs, then correct the markdown files in your working tree before pushing again.
+**Cause**: Catalogue validation failed on push (invalid YAML frontmatter, missing required fields, duplicate SKU, etc.).  
+**Fix**: Read the error detail from git-server logs, then correct the Markdown files in your working tree before pushing again.
 
-### Admin add-on shows blank page after login
+### Admin shows blank page after login
 
 > For Admin-specific troubleshooting, see [docs/admin/quickstart.md](admin/quickstart.md).
 
@@ -104,12 +104,12 @@ curl -s -X POST http://localhost:4000/graphql \
 
 ## Log locations for each service
 
-| Service             | How to view                                  |
-|---------------------|----------------------------------------------|
-| gitstore-git-service | `docker compose logs -f git-service`        |
-| gitstore-api        | `docker compose logs -f api`                |
-| gitstore-admin      | `docker compose -f compose.yml -f compose.admin.yml logs -f admin` |
-| All (core)          | `docker compose logs -f`                    |
+| Service              | How to view                                                        |
+|----------------------|--------------------------------------------------------------------|
+| gitstore-git-service | `docker compose logs -f git-service`                               |
+| gitstore-api         | `docker compose logs -f api`                                       |
+| gitstore-admin       | `docker compose -f compose.yml -f compose.admin.yml logs -f admin` |
+| All (core)           | `docker compose logs -f`                                           |
 
 All services emit structured JSON logs. Pipe through `jq` for readability:
 
