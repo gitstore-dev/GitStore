@@ -51,7 +51,7 @@ RUN --mount=type=cache,id=cargo-registry-$TARGETARCH,target=/usr/local/cargo/reg
     --mount=type=cache,id=cargo-target-$TARGETARCH,target=/build/target \
     find src -type f -name '*.rs' -exec touch {} + && \
     cargo build --release && \
-    cp /build/target/release/gitstore-server /build/gitstore-server && \
+    cp /build/target/release/git-service /build/gitstore-server && \
     strip /build/gitstore-server
 
 # Runtime stage
