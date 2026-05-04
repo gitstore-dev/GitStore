@@ -4,7 +4,6 @@
 pub mod git;
 pub mod http_git_server;
 pub mod models;
-pub mod validation;
 pub mod websocket;
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};

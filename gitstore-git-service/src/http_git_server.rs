@@ -19,14 +19,12 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
-use crate::validation::validator::Validator;
 use crate::websocket::broadcast::Broadcaster;
 
 /// Git server state shared across handlers
 #[derive(Clone)]
 pub struct GitServerState {
     pub repo_path: PathBuf,
-    pub validator: Arc<Validator>,
     pub broadcaster: Arc<RwLock<Broadcaster>>,
     pub start_time: Instant,
 }
@@ -183,7 +181,8 @@ async fn upload_pack(
 
 /// Handle POST /:repo/git-receive-pack
 ///
-/// Handles git push with pre-receive validation hooks
+/// Handles git push
+/// TODO pre-receive validation hooks
 #[axum::debug_handler]
 async fn receive_pack(
     State(state): State<GitServerState>,
@@ -193,15 +192,6 @@ async fn receive_pack(
     info!(repo = %repo, "receive_pack request (git push)");
 
     let repo_path = state.repo_path.join(&repo);
-    let repository = Repository::open(&repo_path)
-        .map_err(|e| GitError::NotFound(format!("Repository not found: {}", e)))?;
-
-    // Get old HEAD for validation
-    let old_head = repository
-        .head()
-        .ok()
-        .and_then(|h| h.target())
-        .map(|oid| oid.to_string());
 
     // Execute git-receive-pack
     let mut child = std::process::Command::new("git")
@@ -248,37 +238,6 @@ async fn receive_pack(
             .ok()
             .and_then(|h| h.target())
             .map(|oid| oid.to_string());
-
-        // Run validation on pushed commits
-        if let Some(new_oid_str) = &new_head {
-            info!(old_head = ?old_head, new_head = %new_oid_str, "Validating pushed commits");
-
-            match state
-                .validator
-                .validate_push(&repository, old_head.as_deref(), new_oid_str)
-            {
-                Ok(()) => {
-                    info!("Validation passed");
-                }
-                Err(errors) => {
-                    error!(?errors, "Validation failed");
-                    // Roll back the ref to old_head so the invalid commits are not persisted.
-                    if let Some(old_oid_str) = &old_head {
-                        if let Ok(old_oid) = git2::Oid::from_str(old_oid_str) {
-                            let _ = repository.reference(
-                                "refs/heads/main",
-                                old_oid,
-                                true,
-                                "rollback after failed validation",
-                            );
-                        }
-                    }
-                    return Err(GitError::ValidationFailed(
-                        format_validation_errors_for_git(&errors),
-                    ));
-                }
-            }
-        }
 
         // Collect tag names before repository goes out of scope
         let tag_names: Vec<String> = repository
@@ -500,41 +459,4 @@ impl IntoResponse for GitError {
 
         (status, message).into_response()
     }
-}
-
-/// Format validation errors in GitHub-style git output format.
-///
-/// Each line is prefixed with "remote: " so git clients display it cleanly.
-fn format_validation_errors_for_git(
-    errors: &crate::validation::errors::ValidationResult,
-) -> String {
-    let separator = "remote: ========================================";
-    let mut lines = vec![
-        separator.to_string(),
-        "remote: GitStore Catalog Validation Failed".to_string(),
-        separator.to_string(),
-        "remote: ".to_string(),
-    ];
-
-    let mut sorted_files: Vec<&String> = errors.get_errors().keys().collect();
-    sorted_files.sort();
-
-    for file_path in sorted_files {
-        let file_errors = &errors.get_errors()[file_path];
-        if !file_path.is_empty() {
-            lines.push(format!("remote: File: {}", file_path));
-        }
-        for err in file_errors {
-            lines.push(format!("remote:   - {}", err));
-        }
-        lines.push("remote: ".to_string());
-    }
-
-    lines.push(format!(
-        "remote: {} error(s) in {} file(s)",
-        errors.error_count(),
-        errors.get_errors().len()
-    ));
-
-    lines.join("\n")
 }

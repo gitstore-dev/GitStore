@@ -10,7 +10,6 @@ use tracing::{error, info};
 use gitstore::git::metrics::log_repo_metrics;
 use gitstore::git::repo::init_or_open_repository;
 use gitstore::http_git_server::{create_git_routes, GitServerState};
-use gitstore::validation::Validator;
 use gitstore::websocket::server::WebsocketServer;
 
 #[derive(Parser, Debug)]
@@ -103,7 +102,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create HTTP Git server state
     let git_state = GitServerState {
         repo_path: data_path.clone(),
-        validator: std::sync::Arc::new(Validator::new()),
         broadcaster: std::sync::Arc::new(tokio::sync::RwLock::new(broadcaster)),
         start_time,
     };

@@ -2,7 +2,7 @@
 
 **Feature Branch**: `003-oss-alignment`  
 **Created**: 2026-05-01  
-**Status**: Draft  
+**Status**: Closed  
 **Input**: User description: "Better OSS alignment. The services folders should be named distinctly from other backing folders. api → gitstore-api, admin-ui → gitstore-admin, git-server → gitstore-git-service. The core stack is gitstore-api and gitstore-git-service. Gitstore-admin is an add-on service, the core documentation should only focus on the core stack. Gitstore-admin documentation can be moved to dedicated documentation files. CI for gitstore-admin should only run when files in gitstore-admin changes. Integration tests in CI should only focus on gitstore-api and gitstore-git-service and should be implemented (currently TODO). Remove gitstore-admin from core architecture diagrams, add only to architecture diagrams in dedicated documentation pages. Current compose file should only focus on core stack. An override compose file e.g. compose.admin.yml should be used instead and dedicated documentation should reference it."
 
 ## User Scenarios & Testing *(mandatory)*

@@ -29,7 +29,7 @@ http-body-util = "0.1.3"
 tempfile = "3.8"
 
 [[bin]]
-name = "gitstore-server"
+name = "git-service"
 path = "src/main.rs"
 
 [lib]
