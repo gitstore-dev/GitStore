@@ -341,7 +341,7 @@ query CategoryTree {
                 │  GraphQL    │   (commit/tag)    │   Git       │
                 │   API       │──────────────────→│   Service   │
                 │   (Go)      │←──────────────────│  (Rust)     │
-                └─────────────┘ Hook / Policy    └─────────────┘
+                └─────────────┘ Hook / Policy     └─────────────┘
 ```
 
 ### Data Flow: Create Product
