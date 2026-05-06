@@ -136,20 +136,24 @@ check_file() {
     content="$(cat "$file")"
   fi
 
-  if grep -Eq 'Code generated|DO NOT EDIT' <<<"$(printf '%s' "$content" | head -n 8)"; then
+  local head8 head12
+  head8="$(head -n 8  <<<"$content")"
+  head12="$(head -n 12 <<<"$content")"
+
+  if grep -Eq 'Code generated|DO NOT EDIT' <<<"$head8"; then
     return
   fi
 
   checked=$((checked + 1))
 
-  if ! printf '%s' "$content" | head -n 12 | grep -Fxq "$LICENSE_ID_LINE"; then
+  if ! grep -Fxq "$LICENSE_ID_LINE" <<<"$head12"; then
     echo "[FAIL] $file: missing SPDX license identifier" >&2
     failures=$((failures + 1))
     return
   fi
 
   local copyright_line
-  copyright_line="$(printf '%s' "$content" | head -n 12 | grep -E '^// Copyright \(c\) ' | head -n 1 || true)"
+  copyright_line="$(grep -E '^// Copyright \(c\) ' <<<"$head12" | head -n 1 || true)"
 
   if [[ -z "$copyright_line" ]]; then
     echo "[FAIL] $file: missing copyright line" >&2
