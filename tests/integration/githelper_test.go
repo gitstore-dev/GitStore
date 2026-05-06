@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 package integration
 
 import (
@@ -28,28 +31,6 @@ updated_at: 2026-01-01T00:00:00Z
 ---
 
 Integration test product for core-stack contract verification.
-`, ts, ts)
-}
-
-// uniqueInvalidProduct returns a product with a negative price that must be rejected
-// by the git-service validator.
-func uniqueInvalidProduct(ts int64) string {
-	return fmt.Sprintf(`---
-id: prod_inttest_bad_%d
-sku: INTTEST-BAD-%d
-title: Invalid Price Product
-price: -1.00
-currency: USD
-category_id: cat_electronics_001
-collection_ids: []
-images: []
-inventory_status: in_stock
-inventory_quantity: 10
-created_at: 2026-01-01T00:00:00Z
-updated_at: 2026-01-01T00:00:00Z
----
-
-This product has a negative price to trigger validation rejection.
 `, ts, ts)
 }
 

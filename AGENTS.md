@@ -44,6 +44,25 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 	staticcheck ./...
 	go build -v ./...
 	go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+	# Check Go license headers (all files + branch diff)
+	cd ..
+	./scripts/check-go-license-headers.sh --all
+	./scripts/check-go-license-headers.sh --diff-base origin/main
+
+	# Check Rust license headers (all files + branch diff)
+	./scripts/check-rust-license-headers.sh --all
+	./scripts/check-rust-license-headers.sh --diff-base origin/main
+
+	# Check TypeScript/JavaScript license headers (all files + branch diff)
+	./scripts/check-js-license-headers.sh --all
+	./scripts/check-js-license-headers.sh --diff-base origin/main
+	```
+
+- Install git hooks once per clone so staged Go/Rust/TS/JS files are checked automatically:
+
+	```bash
+	./scripts/install-git-hooks.sh
 	```
 
 - Use Conventional Commits

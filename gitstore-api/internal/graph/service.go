@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 // Service layer for GraphQL resolvers
 // Handles CRUD operations with git persistence
 

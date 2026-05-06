@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 // HTTP Git Server Implementation
 //
 // Implements git push/pull over HTTP with smart protocol support

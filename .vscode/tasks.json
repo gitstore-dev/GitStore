@@ -1,0 +1,42 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "go:check-license-headers-staged",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/check-go-license-headers.sh --staged",
+      "problemMatcher": []
+    },
+    {
+      "label": "go:check-license-headers-all",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/check-go-license-headers.sh --all",
+      "problemMatcher": []
+    },
+    {
+      "label": "rust:check-license-headers-staged",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/check-rust-license-headers.sh --staged",
+      "problemMatcher": []
+    },
+    {
+      "label": "rust:check-license-headers-all",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/check-rust-license-headers.sh --all",
+      "problemMatcher": []
+    },
+    {
+      "label": "js:check-license-headers-staged",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/check-js-license-headers.sh --staged",
+      "problemMatcher": []
+    },
+    {
+      "label": "js:check-license-headers-all",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/check-js-license-headers.sh --all",
+      "problemMatcher": []
+    }
+  ]
+}
+

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 // urql Client setup for GraphQL API
 
 import { createClient, fetchExchange, cacheExchange, type Client } from 'urql';

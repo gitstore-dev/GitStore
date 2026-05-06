@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 
 interface Props {

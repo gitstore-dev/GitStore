@@ -1,0 +1,14 @@
+{
+  "Rust AGPL Header": {
+    "prefix": "gitrusthdr",
+    "scope": "rust",
+    "description": "Insert GitStore AGPL header",
+    "body": [
+      "// SPDX-License-Identifier: AGPL-3.0-or-later",
+      "// Copyright (c) ${CURRENT_YEAR} GitStore contributors",
+      "",
+      "${0}"
+    ]
+  }
+}
+

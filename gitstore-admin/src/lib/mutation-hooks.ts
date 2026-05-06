@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 /**
  * Custom hooks for mutations with urql
  * These hooks wrap urql useMutation for consistent error handling

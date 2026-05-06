@@ -2,9 +2,91 @@
 
 Utility scripts for GitStore development and demonstration.
 
+## check-go-license-headers.sh
+
+Validates that Go files include the required AGPL header and that changed files include the current year in their copyright line.
+
+### Usage
+
+```bash
+# Check all tracked Go files
+./scripts/check-go-license-headers.sh --all
+
+# Check only staged added/modified Go files
+./scripts/check-go-license-headers.sh --staged
+
+# Check added/modified Go files between a base ref and HEAD
+./scripts/check-go-license-headers.sh --diff-base origin/main
+```
+
+The required file header is:
+
+```go
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+```
+
+## install-git-hooks.sh
+
+Configures repository-local git hooks and enables automatic staged-file licence checks on each commit.
+
+### Usage
+
+```bash
+./scripts/install-git-hooks.sh
+```
+
+This sets `core.hooksPath=.githooks` and installs the `pre-commit` hook.
+
+In CI, `.github/workflows/go-license-headers.yml` runs:
+- `--all` checks on pushes to `main`
+- `--diff-base` checks on pull requests
+
+## check-rust-license-headers.sh
+
+Validates that Rust files include the required AGPL header and that changed files include the current year in their copyright line.
+
+### Usage
+
+```bash
+# Check all tracked Rust files
+./scripts/check-rust-license-headers.sh --all
+
+# Check only staged added/modified Rust files
+./scripts/check-rust-license-headers.sh --staged
+
+# Check added/modified Rust files between a base ref and HEAD
+./scripts/check-rust-license-headers.sh --diff-base origin/main
+```
+
+In CI, `.github/workflows/rust-license-headers.yml` runs:
+- `--all` checks on pushes to `main`
+- `--diff-base` checks on pull requests
+
+## check-js-license-headers.sh
+
+Validates that JavaScript/TypeScript files include the required AGPL header and that changed files include the current year in their copyright line.
+
+### Usage
+
+```bash
+# Check all tracked JS/TS files
+./scripts/check-js-license-headers.sh --all
+
+# Check only staged added/modified JS/TS files
+./scripts/check-js-license-headers.sh --staged
+
+# Check added/modified JS/TS files between a base ref and HEAD
+./scripts/check-js-license-headers.sh --diff-base origin/main
+```
+
+In CI, `.github/workflows/js-license-headers.yml` runs:
+- `--all` checks on pushes to `main`
+- `--diff-base` checks on pull requests
+
 ## init-demo-catalog.sh
 
-Creates a sample product catalog with categories, collections, and products for demonstration and testing purposes.
+Creates a sample product catalogue with categories, collections, and products for demonstration and testing purposes.
 
 ### Usage
 

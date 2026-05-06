@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 /**
  * Client-side validation library
  * Validates required fields, formats, and constraints before mutation submission

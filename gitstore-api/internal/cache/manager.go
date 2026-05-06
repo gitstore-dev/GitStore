@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 // Cache manager - manages catalog cache with TTL and websocket invalidation
 
 package cache
