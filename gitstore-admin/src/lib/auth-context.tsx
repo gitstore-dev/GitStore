@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 import React, { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { logger } from './logger';
 

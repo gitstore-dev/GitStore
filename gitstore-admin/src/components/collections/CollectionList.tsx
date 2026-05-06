@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 import React, { useState, useEffect } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
 import { LoadingSpinner } from '../shared/LoadingSpinner';

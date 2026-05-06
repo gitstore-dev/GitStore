@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 /**
  * Example usage of validation library
  * This file demonstrates how to use validators in components

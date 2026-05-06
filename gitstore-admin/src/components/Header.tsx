@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../lib/auth-context';
 import { PublishButton } from './shared/PublishButton';

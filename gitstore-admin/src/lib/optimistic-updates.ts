@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 // NOTE: This file contains optimistic update helpers that were originally for Apollo Client.
 // With urql, optimistic updates are handled differently. These functions are kept for
 // reference but may not be actively used. urql uses simpler cache updates.

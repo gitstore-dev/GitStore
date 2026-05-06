@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 import { defineConfig } from 'astro/config';
 import react from '@astrojs/react';
 

@@ -1,0 +1,14 @@
+{
+  "JS TS AGPL Header": {
+    "prefix": "gitjshdr",
+    "scope": "javascript,typescript,javascriptreact,typescriptreact",
+    "description": "Insert GitStore AGPL header",
+    "body": [
+      "// SPDX-License-Identifier: AGPL-3.0-or-later",
+      "// Copyright (c) ${CURRENT_YEAR} GitStore contributors",
+      "",
+      "${0}"
+    ]
+  }
+}
+
