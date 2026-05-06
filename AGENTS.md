@@ -49,9 +49,23 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 	cd ..
 	./scripts/check-go-license-headers.sh --all
 	./scripts/check-go-license-headers.sh --diff-base origin/main
+<<<<<<< HEAD
 	```
 
 - Install git hooks once per clone so staged Go files are checked automatically:
+=======
+
+	# Check Rust license headers (all files + branch diff)
+	./scripts/check-rust-license-headers.sh --all
+	./scripts/check-rust-license-headers.sh --diff-base origin/main
+
+	# Check TypeScript/JavaScript license headers (all files + branch diff)
+	./scripts/check-js-license-headers.sh --all
+	./scripts/check-js-license-headers.sh --diff-base origin/main
+	```
+
+- Install git hooks once per clone so staged Go/Rust/TS/JS files are checked automatically:
+>>>>>>> 2453b52 (docs(agents): add rust and ts js license check commands)
 
 	```bash
 	./scripts/install-git-hooks.sh
