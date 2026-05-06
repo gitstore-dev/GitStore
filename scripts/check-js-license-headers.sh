@@ -74,18 +74,6 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 2
 fi
 
-is_generated_file() {
-  local file="$1"
-  local head_lines
-  head_lines="$(head -n 12 "$file" 2>/dev/null || true)"
-  grep -Eqi 'Code generated|AUTO-GENERATED|DO NOT EDIT' <<<"$head_lines"
-}
-
-extract_copyright_line() {
-  local file="$1"
-  head -n 14 "$file" | grep -E '^// Copyright \(c\) ' | head -n 1 || true
-}
-
 current_year_present() {
   local line="$1"
   if [[ "$line" =~ ^//\ Copyright\ \(c\)\ ([0-9]{4})(-([0-9]{4}))?\ GitStore\ contributors$ ]]; then
@@ -117,7 +105,7 @@ collect_files_staged_or_diff() {
 
   git_cmd+=(-- '*.ts' '*.tsx' '*.js' '*.jsx' '*.mjs' '*.cjs')
 
-  "${git_cmd[@]}" | while read -r status p1 p2; do
+  "${git_cmd[@]}" | while IFS=$'\t' read -r status p1 p2; do
     case "$status" in
       A|M)
         printf '%s\t%s\n' "$status" "$p1"
@@ -136,24 +124,34 @@ check_file() {
   local status="$1"
   local file="$2"
 
-  if [[ ! -f "$file" ]]; then
-    return
+  # In --staged mode read the blob from the index so staged content is checked,
+  # not the working-tree file (which may differ from what will be committed).
+  local content
+  if [[ "$MODE" == "staged" ]]; then
+    if ! content="$(git show ":$file" 2>/dev/null)"; then
+      return  # removed from index; nothing to check
+    fi
+  else
+    if [[ ! -f "$file" ]]; then
+      return
+    fi
+    content="$(cat "$file")"
   fi
 
-  if is_generated_file "$file"; then
+  if grep -Eqi 'Code generated|AUTO-GENERATED|DO NOT EDIT' <<<"$(printf '%s' "$content" | head -n 12)"; then
     return
   fi
 
   checked=$((checked + 1))
 
-  if ! head -n 14 "$file" | grep -Fxq "$LICENSE_ID_LINE"; then
+  if ! printf '%s' "$content" | head -n 14 | grep -Fxq "$LICENSE_ID_LINE"; then
     echo "[FAIL] $file: missing SPDX license identifier" >&2
     failures=$((failures + 1))
     return
   fi
 
   local copyright_line
-  copyright_line="$(extract_copyright_line "$file")"
+  copyright_line="$(printf '%s' "$content" | head -n 14 | grep -E '^// Copyright \(c\) ' | head -n 1 || true)"
 
   if [[ -z "$copyright_line" ]]; then
     echo "[FAIL] $file: missing copyright line" >&2

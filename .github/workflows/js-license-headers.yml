@@ -24,6 +24,9 @@ on:
       - 'scripts/check-js-license-headers.sh'
       - '.github/workflows/js-license-headers.yml'
 
+permissions:
+  contents: read
+
 jobs:
   check-js-license-headers:
     runs-on: ubuntu-latest
