@@ -5,4 +5,5 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 
 "$REPO_ROOT/scripts/check-go-license-headers.sh" --staged
 "$REPO_ROOT/scripts/check-rust-license-headers.sh" --staged
+"$REPO_ROOT/scripts/check-js-license-headers.sh" --staged
 

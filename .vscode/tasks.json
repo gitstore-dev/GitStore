@@ -24,6 +24,18 @@
       "type": "shell",
       "command": "${workspaceFolder}/scripts/check-rust-license-headers.sh --all",
       "problemMatcher": []
+    },
+    {
+      "label": "js:check-license-headers-staged",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/check-js-license-headers.sh --staged",
+      "problemMatcher": []
+    },
+    {
+      "label": "js:check-license-headers-all",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/check-js-license-headers.sh --all",
+      "problemMatcher": []
     }
   ]
 }

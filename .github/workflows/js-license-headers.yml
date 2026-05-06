@@ -1,0 +1,47 @@
+name: JavaScript TypeScript License Headers
+
+on:
+  pull_request:
+    paths:
+      - '**/*.ts'
+      - '**/*.tsx'
+      - '**/*.js'
+      - '**/*.jsx'
+      - '**/*.mjs'
+      - '**/*.cjs'
+      - 'scripts/check-js-license-headers.sh'
+      - '.github/workflows/js-license-headers.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - '**/*.ts'
+      - '**/*.tsx'
+      - '**/*.js'
+      - '**/*.jsx'
+      - '**/*.mjs'
+      - '**/*.cjs'
+      - 'scripts/check-js-license-headers.sh'
+      - '.github/workflows/js-license-headers.yml'
+
+jobs:
+  check-js-license-headers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify all JS and TS files include headers (push)
+        if: github.event_name == 'push'
+        run: ./scripts/check-js-license-headers.sh --all
+
+      - name: Fetch pull request base branch
+        if: github.event_name == 'pull_request'
+        run: git fetch origin "${{ github.base_ref }}"
+
+      - name: Verify changed JS and TS files include current-year headers (pull request)
+        if: github.event_name == 'pull_request'
+        run: ./scripts/check-js-license-headers.sh --diff-base "origin/${{ github.base_ref }}"
+
