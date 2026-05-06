@@ -28,7 +28,7 @@ The required file header is:
 
 ## install-git-hooks.sh
 
-Configures repository-local git hooks and enables automatic staged-file license checks on each commit.
+Configures repository-local git hooks and enables automatic staged-file licence checks on each commit.
 
 ### Usage
 
@@ -60,6 +60,27 @@ Validates that Rust files include the required AGPL header and that changed file
 ```
 
 In CI, `.github/workflows/rust-license-headers.yml` runs:
+- `--all` checks on pushes to `main`
+- `--diff-base` checks on pull requests
+
+## check-js-license-headers.sh
+
+Validates that JavaScript/TypeScript files include the required AGPL header and that changed files include the current year in their copyright line.
+
+### Usage
+
+```bash
+# Check all tracked JS/TS files
+./scripts/check-js-license-headers.sh --all
+
+# Check only staged added/modified JS/TS files
+./scripts/check-js-license-headers.sh --staged
+
+# Check added/modified JS/TS files between a base ref and HEAD
+./scripts/check-js-license-headers.sh --diff-base origin/main
+```
+
+In CI, `.github/workflows/js-license-headers.yml` runs:
 - `--all` checks on pushes to `main`
 - `--diff-base` checks on pull requests
 
