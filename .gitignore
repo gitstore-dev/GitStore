@@ -37,6 +37,7 @@ yarn-error.log*
 .vscode/*
 !.vscode/tasks.json
 !.vscode/go.code-snippets
+!.vscode/rust.code-snippets
 .idea/
 *.swp
 *.swo

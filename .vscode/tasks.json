@@ -12,6 +12,18 @@
       "type": "shell",
       "command": "${workspaceFolder}/scripts/check-go-license-headers.sh --all",
       "problemMatcher": []
+    },
+    {
+      "label": "rust:check-license-headers-staged",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/check-rust-license-headers.sh --staged",
+      "problemMatcher": []
+    },
+    {
+      "label": "rust:check-license-headers-all",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/check-rust-license-headers.sh --all",
+      "problemMatcher": []
     }
   ]
 }

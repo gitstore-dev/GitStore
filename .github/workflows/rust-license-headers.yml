@@ -1,0 +1,37 @@
+name: Rust License Headers
+
+on:
+  pull_request:
+    paths:
+      - '**/*.rs'
+      - 'scripts/check-rust-license-headers.sh'
+      - '.github/workflows/rust-license-headers.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - '**/*.rs'
+      - 'scripts/check-rust-license-headers.sh'
+      - '.github/workflows/rust-license-headers.yml'
+
+jobs:
+  check-rust-license-headers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify all Rust files include headers (push)
+        if: github.event_name == 'push'
+        run: ./scripts/check-rust-license-headers.sh --all
+
+      - name: Fetch pull request base branch
+        if: github.event_name == 'pull_request'
+        run: git fetch origin "${{ github.base_ref }}"
+
+      - name: Verify changed Rust files include current-year headers (pull request)
+        if: github.event_name == 'pull_request'
+        run: ./scripts/check-rust-license-headers.sh --diff-base "origin/${{ github.base_ref }}"
+
