@@ -439,6 +439,11 @@ Use the checker script for enforcement:
 
 # Added/modified files compared to your base branch
 ./scripts/check-go-license-headers.sh --diff-base origin/main
+
+# Rust files (same modes)
+./scripts/check-rust-license-headers.sh --all
+./scripts/check-rust-license-headers.sh --staged
+./scripts/check-rust-license-headers.sh --diff-base origin/main
 ```
 
 Install repository hooks once per clone:
@@ -449,18 +454,23 @@ Install repository hooks once per clone:
 
 This enables `.githooks/pre-commit`, which blocks commits when staged Go files are missing headers or use an outdated year.
 
-CI also enforces this via `.github/workflows/go-license-headers.yml`.
+CI also enforces this via:
+- `.github/workflows/go-license-headers.yml`
+- `.github/workflows/rust-license-headers.yml`
 
 ### IDE Setup (GoLand and VS Code)
 
 - **VS Code**
   - Use the `gostorehdr` snippet from `.vscode/go.code-snippets` to insert the standard header quickly.
+  - Use the `gitrusthdr` snippet from `.vscode/rust.code-snippets` for Rust headers.
   - Run the task `go:check-license-headers-staged` before commit (or `go:check-license-headers-all` for a full scan) from `.vscode/tasks.json`.
+  - Run `rust:check-license-headers-staged` (or `rust:check-license-headers-all`) for Rust files.
 
 - **GoLand / JetBrains IDEs**
   - Configure a Copyright profile with the same SPDX + copyright text.
   - Enable "Before Commit" execution of:
     - `./scripts/check-go-license-headers.sh --staged`
+    - `./scripts/check-rust-license-headers.sh --staged`
   - Optionally add an External Tool that runs the same command for one-click validation.
 
 ---
