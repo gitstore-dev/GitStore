@@ -32,6 +32,6 @@
     "@types/react-dom": "^18.2.19",
     "@types/uuid": "^9.0.8",
     "typescript": "^5.3.3",
-    "vitest": "^1.2.2"
+    "vitest": "^4.1.5"
   }
 }
