@@ -1,7 +1,7 @@
 // HTTP Git Server Implementation
 //
 // Implements git push/pull over HTTP with smart protocol support
-// Includes pre-receive hooks for validation
+// Hook extension points are reserved for future policy enforcement
 
 use axum::{
     body::{Body, Bytes},
@@ -182,7 +182,7 @@ async fn upload_pack(
 /// Handle POST /:repo/git-receive-pack
 ///
 /// Handles git push
-/// TODO pre-receive validation hooks
+/// TODO add pre/post-receive hook execution pipeline
 #[axum::debug_handler]
 async fn receive_pack(
     State(state): State<GitServerState>,
@@ -192,6 +192,11 @@ async fn receive_pack(
     info!(repo = %repo, "receive_pack request (git push)");
 
     let repo_path = state.repo_path.join(&repo);
+
+    // Validate the repository exists before spawning git-receive-pack so that
+    // a missing/unknown repo returns 404 rather than falling through to 422.
+    Repository::open(&repo_path)
+        .map_err(|e| GitError::NotFound(format!("Repository not found: {}", e)))?;
 
     // Execute git-receive-pack
     let mut child = std::process::Command::new("git")

@@ -72,19 +72,19 @@ unless you have implemented the full git-protocol loader (T152).
 
 ### `send-pack: unexpected disconnect while reading sideband packet`
 
-**Cause**: The git-server rejected a push with HTTP 422 (validation error),
-but the error message was in Rust debug format.  
-**Fix**: Upgrade to a version that includes T153 (human-readable error
-output). The full error is in the git-server container logs:
+**Cause**: The server rejected a push with HTTP 422 (often from hook/policy evaluation),
+and the client surfaced a transport-level disconnect message.
+**Fix**: Inspect hook/policy diagnostics in push output and service logs:
 
 ```bash
-docker compose logs git-server | grep -i "validation"
+docker compose logs git-service
+docker compose logs api
 ```
 
 ### `error: RPC failed; HTTP 422`
 
-**Cause**: Catalogue validation failed on push (invalid YAML frontmatter, missing required fields, duplicate SKU, etc.).  
-**Fix**: Read the error detail from git-server logs, then correct the Markdown files in your working tree before pushing again.
+**Cause**: A server-side hook/policy rejected the push (for example branch protection, tag policy, signature policy, or API-managed catalogue rules).
+**Fix**: Read the rejection detail in command output and logs, fix the issue locally, then push again.
 
 ### Admin shows blank page after login
 

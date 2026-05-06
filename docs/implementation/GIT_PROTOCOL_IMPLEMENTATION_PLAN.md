@@ -8,6 +8,8 @@
 
 ## Overview
 
+> **Scope update**: `gitstore-git-service` should remain focused on Git protocol transport, repository operations, and hook execution points. Any schema-aware catalogue parsing or validation referenced below should be interpreted as work performed by external/API-managed hook workers, not by in-process domain models inside the git service.
+
 The git:// protocol (also called "git daemon protocol") is a TCP-based protocol running on port 9418. It uses a packet-line format for all communication and supports both read operations (fetch/clone) and write operations (push).
 
 ### Architecture
@@ -19,7 +21,7 @@ Client (git CLI)  ←→  TCP Socket (9418)  ←→  Git Protocol Server  ←→
                            ↓
                     upload-pack / receive-pack
                            ↓
-                    Pre-receive hooks (validation)
+                    Pre-receive hooks / policy workers
                            ↓
                     Websocket broadcast
 ```
@@ -193,21 +195,21 @@ use tracing::{debug, error, info};
 use anyhow::{Context, Result};
 
 use crate::git::packet_line::{read_packet, write_packet, PacketType};
-use crate::validation::Validator;
+use crate::hooks::HookExecutor;
 
 /// Git protocol server
 pub struct GitProtocolServer {
     addr: SocketAddr,
     repo_base_path: PathBuf,
-    validator: Arc<Validator>,
+    hook_executor: Arc<HookExecutor>,
 }
 
 impl GitProtocolServer {
-    pub fn new(addr: SocketAddr, repo_base_path: PathBuf, validator: Arc<Validator>) -> Self {
+    pub fn new(addr: SocketAddr, repo_base_path: PathBuf, hook_executor: Arc<HookExecutor>) -> Self {
         Self {
             addr,
             repo_base_path,
-            validator,
+            hook_executor,
         }
     }
 
@@ -221,10 +223,10 @@ impl GitProtocolServer {
                 Ok((stream, peer_addr)) => {
                     debug!(peer = %peer_addr, "New git connection");
                     let repo_base = self.repo_base_path.clone();
-                    let validator = Arc::clone(&self.validator);
+                    let hook_executor = Arc::clone(&self.hook_executor);
 
                     tokio::spawn(async move {
-                        if let Err(e) = handle_git_connection(stream, repo_base, validator).await {
+                        if let Err(e) = handle_git_connection(stream, repo_base, hook_executor).await {
                             error!(peer = %peer_addr, error = %e, "Git connection error");
                         }
                     });
@@ -241,7 +243,7 @@ impl GitProtocolServer {
 async fn handle_git_connection(
     mut stream: TcpStream,
     repo_base_path: PathBuf,
-    validator: Arc<Validator>,
+    hook_executor: Arc<HookExecutor>,
 ) -> Result<()> {
     // Read initial request
     let mut buf = vec![0u8; 4096];
@@ -270,7 +272,7 @@ async fn handle_git_connection(
             handle_upload_pack(&mut stream, &repo_base_path, repo_path).await
         }
         "git-receive-pack" => {
-            handle_receive_pack(&mut stream, &repo_base_path, repo_path, validator).await
+            handle_receive_pack(&mut stream, &repo_base_path, repo_path, hook_executor).await
         }
         _ => anyhow::bail!("Unknown git command: {}", command),
     }
@@ -308,7 +310,7 @@ async fn handle_receive_pack(
     stream: &mut TcpStream,
     repo_base: &Path,
     repo_path: &str,
-    validator: Arc<Validator>,
+    hook_executor: Arc<HookExecutor>,
 ) -> Result<()> {
     let full_path = repo_base.join(repo_path);
     info!(repo = %repo_path, "Handling receive-pack request");
@@ -335,15 +337,41 @@ async fn handle_receive_pack(
         .and_then(|h| h.target())
         .map(|oid| oid.to_string());
 
-    // Run validation
+    // Execute pre-receive hooks
     if let Some(new_oid) = &new_head {
-        validator.validate_push(&repo, old_head.as_deref(), new_oid)?;
+        match hook_executor.run_pre_receive(&repo, old_head.as_deref(), new_oid) {
+            Ok(()) => {
+                send_status_report(stream, true).await?;
+
+                // Check for tags and broadcast
+                if let Ok(tags) = repo.tag_names(None) {
+                    for tag_name in tags.iter().flatten() {
+                        let broadcaster = broadcaster.read().await;
+                        let message = format!(
+                            r#"{{"type":"tag","repository":"{}","tag":"{}","commit":"{}"}}"#,
+                            repo_path, tag_name, new_oid
+                        );
+                        broadcaster.broadcast(&message).await;
+                    }
+                }
+            }
+            Err(hook_result) => {
+                // Send hook/policy errors to client
+                send_error_report(stream, &hook_result).await?;
+            }
+        }
     }
 
-    // Send success response
-    send_status_report(stream, true).await?;
+    Ok(())
+}
 
-    info!("Receive-pack complete");
+async fn send_error_report(
+    stream: &mut TcpStream,
+    hook_result: &HookResult,
+) -> Result<()> {
+    let error_msg = hook_result.format_for_git();
+    write_packet(stream, format!("unpack {}\n", error_msg).as_bytes()).await?;
+    write_packet(stream, &[]).await?;  // Flush
     Ok(())
 }
 
@@ -512,17 +540,16 @@ async fn stream_pack_file(
 
 ---
 
-## Phase 4: Integration with Validation
+## Phase 4: Integration with Hooks
 
-Update the `handle_receive_pack` to properly integrate with the validator:
+Update the `handle_receive_pack` to properly integrate with the hook executor:
 
 ```rust
 async fn handle_receive_pack(
     stream: &mut TcpStream,
     repo_base: &Path,
     repo_path: &str,
-    validator: Arc<Validator>,
-    broadcaster: Arc<RwLock<Broadcaster>>,
+    hook_executor: Arc<HookExecutor>,
 ) -> Result<()> {
     let full_path = repo_base.join(repo_path);
     let repo = git2::Repository::open(&full_path)?;
@@ -545,9 +572,9 @@ async fn handle_receive_pack(
         .and_then(|h| h.target())
         .map(|oid| oid.to_string());
 
-    // VALIDATION
+    // Execute pre-receive hooks
     if let Some(new_oid) = &new_head {
-        match validator.validate_push(&repo, old_head.as_deref(), new_oid) {
+        match hook_executor.run_pre_receive(&repo, old_head.as_deref(), new_oid) {
             Ok(()) => {
                 send_status_report(stream, true).await?;
 
@@ -563,23 +590,13 @@ async fn handle_receive_pack(
                     }
                 }
             }
-            Err(validation_result) => {
-                // Send validation errors to client
-                send_error_report(stream, &validation_result).await?;
+            Err(hook_result) => {
+                // Send hook/policy errors to client
+                send_error_report(stream, &hook_result).await?;
             }
         }
     }
 
-    Ok(())
-}
-
-async fn send_error_report(
-    stream: &mut TcpStream,
-    validation_result: &ValidationResult,
-) -> Result<()> {
-    let error_msg = validation_result.format_for_git();
-    write_packet(stream, format!("unpack {}\n", error_msg).as_bytes()).await?;
-    write_packet(stream, &[]).await?;  // Flush
     Ok(())
 }
 ```
@@ -644,7 +661,7 @@ async fn test_full_clone_flow() {
     let server = GitProtocolServer::new(
         "127.0.0.1:9418".parse().unwrap(),
         PathBuf::from("/tmp/test-repos"),
-        Arc::new(Validator::new()),
+        Arc::new(HookExecutor::new()),
     );
 
     tokio::spawn(async move {
@@ -680,7 +697,7 @@ async fn test_full_clone_flow() {
 
 - Clone 1000-file repo: < 2 seconds
 - Push 100 file changes: < 5 seconds
-- Validate push: < 3 seconds
+- Pre-receive hook evaluation: < 3 seconds
 - Memory usage: < 100MB per connection
 
 ---
@@ -690,7 +707,7 @@ async fn test_full_clone_flow() {
 1. **Authentication**: Add SSH-like authentication layer
 2. **Authorization**: Per-repository access control
 3. **Rate Limiting**: Prevent DOS attacks
-4. **Input Validation**: Sanitize all packet data
+4. **Input Validation**: Sanitise all packet data
 5. **Resource Limits**: Max pack size, connection timeouts
 
 ---

@@ -1,5 +1,7 @@
 // Websocket server setup
 
+use crate::websocket::broadcast::Broadcaster;
+use crate::websocket::connections::ConnectionManager;
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
@@ -8,9 +10,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{debug, error, info};
-
-use crate::websocket::broadcast::Broadcaster;
-use crate::websocket::connections::ConnectionManager;
+use tungstenite::Utf8Bytes;
 
 /// Websocket server for broadcasting git events
 pub struct WebsocketServer {
@@ -135,7 +135,10 @@ async fn handle_connection(
     // Spawn task to send messages to this client
     let send_task = tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
-            if let Err(e) = ws_sender.send(Message::Text(message)).await {
+            if let Err(e) = ws_sender
+                .send(Message::Text(Utf8Bytes::from(message)))
+                .await
+            {
                 error!(peer = %peer_addr, error = %e, "Failed to send message");
                 break;
             }

@@ -7,8 +7,10 @@
 ## Overview
 
 GitStore is a git-backed ecommerce headless engine with two core services:
-1. **Git Service** (`gitstore-git-service`, Rust) - Git repository with validation and websocket notifications
-2. **GraphQL API** (`gitstore-api`, Go) - Headless API with Relay support
+1. **Git Service** (`gitstore-git-service`, Rust) - Git protocol transport and websocket notifications
+2. **GraphQL API** (`gitstore-api`, Go) - Headless API with Relay support and catalogue validation/policy hooks
+
+> **Catalogue schema note**: `gitstore-git-service` does not parse or validate markdown/frontmatter content. Schema-aware validation and policy enforcement are owned by the API layer and future `git-receive-pack` hooks.
 
 > **Admin**: For the optional web interface, see [docs/admin/](admin/).
 
@@ -143,15 +145,12 @@ Delta compression using up to 8 threads.
 Compressing objects: 100% (3/3), done.
 Writing objects: 100% (4/4), 512 bytes | 512.00 KiB/s, done.
 Total 4 (delta 1), reused 0 (delta 0)
-✓ Validation passed: LAPTOP-001.md
-✓ SKU unique: LAPTOP-001
-✓ Category exists: cat_electronics
 To http://localhost:9418/catalog.git
    abc1234..def5678  main -> main
 ```
 
 > [!NOTE]
-> Validation output is illustrative and may vary by git-server version/configuration.
+> If policy hooks are enabled in your deployment, push output may also include hook diagnostics emitted by the API/policy layer.
 
 #### Step 4: Create Release Tag
 
@@ -313,8 +312,8 @@ query CategoryTree {
 │ Git Client  │   (push/pull)     │   Git       │
 │   (CLI)     │──────────────────→│   Service   │
 │             │←──────────────────│  (Rust)     │
-└─────────────┘   Validation      └──────┬──────┘
-                  Errors/Success         │
+└─────────────┘ Hook / Policy Err.└──────┬──────┘
+                  or Success             │
                                          │ Websocket
                                          │ Notification
                                          │ (new tag)
@@ -342,7 +341,7 @@ query CategoryTree {
                 │  GraphQL    │   (commit/tag)    │   Git       │
                 │   API       │──────────────────→│   Service   │
                 │   (Go)      │←──────────────────│  (Rust)     │
-                └─────────────┘   Validation      └─────────────┘
+                └─────────────┘ Hook / Policy     └─────────────┘
 ```
 
 ### Data Flow: Create Product
@@ -350,7 +349,7 @@ query CategoryTree {
 **Path 1: Technical User (Git CLI)**
 1. **Git Client**: User creates Markdown file locally
 2. **Git Client**: `git commit` + `git push` to git server
-3. **Git Service**: Pre-push validation (Rust) → Accept/Reject
+3. **Git Service**: Git transport accepts/rejects based on git protocol state (no frontmatter schema rewrite)
 4. **Git Client**: Receives success/failure
 5. **Git Client**: `git tag v1.0.0` + `git push --tags`
 6. **Git Service**: Tag created → Websocket broadcast
@@ -472,12 +471,15 @@ fn test_create_product_workflow() {
 
 **Error**:
 ```
-! [remote rejected] main -> main (validation failed: SKU LAPTOP-001 already exists)
+! [remote rejected] main -> main (pre-receive hook declined)
 ```
 
+**Cause**:
+- A server-side hook rejected the ref update (for example branch/tag policy, signing policy, or API-managed catalogue rules)
+
 **Solution**:
-- Check SKU uniqueness: `grep -r "LAPTOP-001" products/`
-- Use different SKU or update existing product
+- Read hook output from the push response and from service logs
+- Correct the issue in your local branch, then push again
 
 ### Issue: Websocket Notification Not Received
 

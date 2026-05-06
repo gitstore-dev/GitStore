@@ -2,6 +2,8 @@
 
 Welcome to GitStore, a git-backed ecommerce headless engine that lets you manage product catalogs using markdown files with YAML front-matter.
 
+> **Format note**: Markdown/front-matter is the catalogue content format. `gitstore-git-service` transports Git data and exposes hook points; catalogue parsing and schema-aware validation live in higher layers such as the API and policy workers.
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -408,14 +410,15 @@ Check Docker volume mounts in `docker-compose.yml`.
 
 ### Validation errors
 
-**Problem**: Push rejected with validation errors.
+**Problem**: Push rejected by a server-side hook or policy check.
 
-**Solution**: Check the error message for specific issues:
+**Solution**: Check the rejection message for the specific issue. Depending on your deployment, this may come from API-managed catalogue rules or other policy hooks, for example:
 - Missing required fields (id, sku, title, price, category_id)
 - Invalid data types (price must be numeric)
 - Invalid YAML syntax in front-matter
+- Protected branch or tag policy violations
 
-Fix the markdown files and try again.
+Fix the files or workflow issue locally and try again.
 
 ### Images not loading
 

@@ -1,9 +1,7 @@
 // Git hooks handler
 
-use anyhow::{Context, Result};
-use git2::{DiffOptions, Repository};
-use std::path::Path;
-use tracing::{debug, warn};
+use anyhow::Result;
+use tracing::warn;
 
 /// Information about a reference update
 pub struct RefUpdate {
@@ -32,74 +30,6 @@ pub fn parse_pre_receive_input(input: &str) -> Result<Vec<RefUpdate>> {
     }
 
     Ok(updates)
-}
-
-/// Get list of modified markdown files in a commit range
-pub fn get_modified_markdown_files(
-    repo: &Repository,
-    old_oid: &str,
-    new_oid: &str,
-) -> Result<Vec<String>> {
-    let old_tree = if old_oid == "0000000000000000000000000000000000000000" {
-        // Initial commit - no old tree
-        None
-    } else {
-        let old_commit = repo.find_commit(git2::Oid::from_str(old_oid)?)?;
-        Some(old_commit.tree()?)
-    };
-
-    let new_commit = repo.find_commit(git2::Oid::from_str(new_oid)?)?;
-    let new_tree = new_commit.tree()?;
-
-    let mut diff_opts = DiffOptions::new();
-    let diff = repo.diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), Some(&mut diff_opts))?;
-
-    let mut markdown_files = Vec::new();
-
-    diff.foreach(
-        &mut |delta, _progress| {
-            if let Some(path) = delta.new_file().path() {
-                if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                    markdown_files.push(path.to_string_lossy().to_string());
-                }
-            }
-            true // Continue iteration
-        },
-        None,
-        None,
-        None,
-    )?;
-
-    debug!(
-        old_oid = old_oid,
-        new_oid = new_oid,
-        file_count = markdown_files.len(),
-        "Found modified markdown files"
-    );
-
-    Ok(markdown_files)
-}
-
-/// Get file content at a specific commit
-pub fn get_file_content_at_commit(
-    repo: &Repository,
-    commit_oid: &str,
-    file_path: &str,
-) -> Result<String> {
-    let commit = repo.find_commit(git2::Oid::from_str(commit_oid)?)?;
-    let tree = commit.tree()?;
-
-    let tree_entry = tree
-        .get_path(Path::new(file_path))
-        .context(format!("File not found: {}", file_path))?;
-
-    let blob = repo
-        .find_blob(tree_entry.id())
-        .context("Failed to load blob")?;
-
-    let content = std::str::from_utf8(blob.content()).context("File content is not valid UTF-8")?;
-
-    Ok(content.to_string())
 }
 
 /// Check if update is a tag creation

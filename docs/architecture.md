@@ -140,12 +140,12 @@ graph LR
 
 ## Proposal 2 - Git-Native Ingress with Tag-Gated Publishing
 
-Proposal 2 starts at Git transport boundaries, validates during receive, and only publishes customer-visible state on explicit release tags.
+Proposal 2 starts at Git transport boundaries, executes hooks during receive, and only publishes customer-visible state on explicit release tags.
 
 ### Top-Down Flow
 
 1. **Entry**: Engineers and AI agents push via SSH or Smart HTTP/API.
-2. **Control**: Rust Git server runs pre-receive validation checks.
+2. **Control**: Rust Git server executes pre- / post-receive hook pipelines.
 3. **Persist draft**: Accepted changes are written to disk as draft state.
 4. **Publish release**: Tag events trigger queue-to-parser publish workflow.
 5. **Serve**: Storefront reads published state from KV and revalidates pages.
@@ -153,7 +153,7 @@ Proposal 2 starts at Git transport boundaries, validates during receive, and onl
 ### Implementation Focus
 
 - **Ingress policy**: Enforce branch/tag naming rules and signer checks in pre-receive hooks.
-- **Quarantine validation**: Parse staged objects before accepting refs; reject pushes that violate schema.
+- **Hook contract**: Git service emits pre- / post-receive hook events; policy workers/API decide allow/deny semantics.
   ```bash
   $ git push origin main
   Enumerating objects: 5, done.
@@ -161,12 +161,12 @@ Proposal 2 starts at Git transport boundaries, validates during receive, and onl
   Writing objects: 100% (3/3), 342 bytes | 342.00 KiB/s, done.
   Total 3 (delta 2), reused 0 (delta 0)
   remote: -------------------------------------------------
-  remote: ❌ COMMERCE ENGINE VALIDATION FAILED
+  remote: ❌ POLICY CHECK FAILED
   remote: -------------------------------------------------
-  remote: File: catalog/shoes/sneaker-v2.md
-  remote: Error: 'price' field must be a Float. Received String ("forty").
+  remote: Rule: validation-failed
+  remote: Error: see hook diagnostics above.
   remote:
-  remote: Please fix the YAML front-matter and push again.
+  remote: Please fix policy violations and push again.
   remote: -------------------------------------------------
   To ssh://git.yourstore.com/brand/catalog.git
   ! [remote rejected] main -> main (pre-receive hook declined)
@@ -235,7 +235,7 @@ graph TD
   - Engineers and AI agents can both submit changes through Git-native channels.
   - Storefront reads only published release state.
 - **Core services**
-  - Rust Git server enforces receive-time policy and repository integrity.
+  - Rust Git server provides Git protocol transport, hook execution points, and repository integrity.
   - Parser worker validates and projects tagged releases into KV.
   - Go API endpoint remains available for GraphQL reads and controlled write APIs.
 - **Infrastructure**
