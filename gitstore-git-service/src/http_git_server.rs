@@ -193,6 +193,11 @@ async fn receive_pack(
 
     let repo_path = state.repo_path.join(&repo);
 
+    // Validate the repository exists before spawning git-receive-pack so that
+    // a missing/unknown repo returns 404 rather than falling through to 422.
+    Repository::open(&repo_path)
+        .map_err(|e| GitError::NotFound(format!("Repository not found: {}", e)))?;
+
     // Execute git-receive-pack
     let mut child = std::process::Command::new("git")
         .args([
