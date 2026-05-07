@@ -151,29 +151,30 @@ func (x *GetFileResponse) GetSizeBytes() uint64 {
 	return 0
 }
 
-type FileChunk struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ChunkIndex    uint32                 `protobuf:"varint,1,opt,name=chunk_index,json=chunkIndex,proto3" json:"chunk_index,omitempty"`
-	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"` // max 256 KiB per chunk
-	IsLast        bool                   `protobuf:"varint,3,opt,name=is_last,json=isLast,proto3" json:"is_last,omitempty"`
+type GetFileStreamRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// path is the file path relative to the repository root.
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// ref is a tag name, branch name, or full commit SHA.
+	Ref           string `protobuf:"bytes,2,opt,name=ref,proto3" json:"ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *FileChunk) Reset() {
-	*x = FileChunk{}
+func (x *GetFileStreamRequest) Reset() {
+	*x = GetFileStreamRequest{}
 	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *FileChunk) String() string {
+func (x *GetFileStreamRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*FileChunk) ProtoMessage() {}
+func (*GetFileStreamRequest) ProtoMessage() {}
 
-func (x *FileChunk) ProtoReflect() protoreflect.Message {
+func (x *GetFileStreamRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -185,26 +186,79 @@ func (x *FileChunk) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use FileChunk.ProtoReflect.Descriptor instead.
-func (*FileChunk) Descriptor() ([]byte, []int) {
+// Deprecated: Use GetFileStreamRequest.ProtoReflect.Descriptor instead.
+func (*GetFileStreamRequest) Descriptor() ([]byte, []int) {
 	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *FileChunk) GetChunkIndex() uint32 {
+func (x *GetFileStreamRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *GetFileStreamRequest) GetRef() string {
+	if x != nil {
+		return x.Ref
+	}
+	return ""
+}
+
+type GetFileStreamResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ChunkIndex    uint32                 `protobuf:"varint,1,opt,name=chunk_index,json=chunkIndex,proto3" json:"chunk_index,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"` // max 256 KiB per chunk
+	IsLast        bool                   `protobuf:"varint,3,opt,name=is_last,json=isLast,proto3" json:"is_last,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetFileStreamResponse) Reset() {
+	*x = GetFileStreamResponse{}
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetFileStreamResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetFileStreamResponse) ProtoMessage() {}
+
+func (x *GetFileStreamResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetFileStreamResponse.ProtoReflect.Descriptor instead.
+func (*GetFileStreamResponse) Descriptor() ([]byte, []int) {
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *GetFileStreamResponse) GetChunkIndex() uint32 {
 	if x != nil {
 		return x.ChunkIndex
 	}
 	return 0
 }
 
-func (x *FileChunk) GetData() []byte {
+func (x *GetFileStreamResponse) GetData() []byte {
 	if x != nil {
 		return x.Data
 	}
 	return nil
 }
 
-func (x *FileChunk) GetIsLast() bool {
+func (x *GetFileStreamResponse) GetIsLast() bool {
 	if x != nil {
 		return x.IsLast
 	}
@@ -222,7 +276,7 @@ type ListFilesRequest struct {
 
 func (x *ListFilesRequest) Reset() {
 	*x = ListFilesRequest{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[3]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -234,7 +288,7 @@ func (x *ListFilesRequest) String() string {
 func (*ListFilesRequest) ProtoMessage() {}
 
 func (x *ListFilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[3]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -247,7 +301,7 @@ func (x *ListFilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListFilesRequest.ProtoReflect.Descriptor instead.
 func (*ListFilesRequest) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{3}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ListFilesRequest) GetRef() string {
@@ -281,7 +335,7 @@ type ListFilesResponse struct {
 
 func (x *ListFilesResponse) Reset() {
 	*x = ListFilesResponse{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[4]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -293,7 +347,7 @@ func (x *ListFilesResponse) String() string {
 func (*ListFilesResponse) ProtoMessage() {}
 
 func (x *ListFilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[4]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -306,7 +360,7 @@ func (x *ListFilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListFilesResponse.ProtoReflect.Descriptor instead.
 func (*ListFilesResponse) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{4}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ListFilesResponse) GetFiles() []*FileEntry {
@@ -334,7 +388,7 @@ type FileEntry struct {
 
 func (x *FileEntry) Reset() {
 	*x = FileEntry{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[5]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -346,7 +400,7 @@ func (x *FileEntry) String() string {
 func (*FileEntry) ProtoMessage() {}
 
 func (x *FileEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[5]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -359,7 +413,7 @@ func (x *FileEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileEntry.ProtoReflect.Descriptor instead.
 func (*FileEntry) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{5}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *FileEntry) GetPath() string {
@@ -396,7 +450,7 @@ type CommitFileRequest struct {
 
 func (x *CommitFileRequest) Reset() {
 	*x = CommitFileRequest{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[6]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -408,7 +462,7 @@ func (x *CommitFileRequest) String() string {
 func (*CommitFileRequest) ProtoMessage() {}
 
 func (x *CommitFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[6]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -421,7 +475,7 @@ func (x *CommitFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitFileRequest.ProtoReflect.Descriptor instead.
 func (*CommitFileRequest) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{6}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CommitFileRequest) GetPath() string {
@@ -469,7 +523,7 @@ type CommitFileResponse struct {
 
 func (x *CommitFileResponse) Reset() {
 	*x = CommitFileResponse{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[7]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -481,7 +535,7 @@ func (x *CommitFileResponse) String() string {
 func (*CommitFileResponse) ProtoMessage() {}
 
 func (x *CommitFileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[7]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -494,7 +548,7 @@ func (x *CommitFileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitFileResponse.ProtoReflect.Descriptor instead.
 func (*CommitFileResponse) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{7}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CommitFileResponse) GetCommitSha() string {
@@ -523,7 +577,7 @@ type DeleteFileRequest struct {
 
 func (x *DeleteFileRequest) Reset() {
 	*x = DeleteFileRequest{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[8]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -535,7 +589,7 @@ func (x *DeleteFileRequest) String() string {
 func (*DeleteFileRequest) ProtoMessage() {}
 
 func (x *DeleteFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[8]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -548,7 +602,7 @@ func (x *DeleteFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteFileRequest.ProtoReflect.Descriptor instead.
 func (*DeleteFileRequest) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{8}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *DeleteFileRequest) GetPath() string {
@@ -588,7 +642,7 @@ type DeleteFileResponse struct {
 
 func (x *DeleteFileResponse) Reset() {
 	*x = DeleteFileResponse{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[9]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -600,7 +654,7 @@ func (x *DeleteFileResponse) String() string {
 func (*DeleteFileResponse) ProtoMessage() {}
 
 func (x *DeleteFileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[9]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -613,7 +667,7 @@ func (x *DeleteFileResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteFileResponse.ProtoReflect.Descriptor instead.
 func (*DeleteFileResponse) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{9}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *DeleteFileResponse) GetCommitSha() string {
@@ -634,7 +688,7 @@ type CreateTagRequest struct {
 
 func (x *CreateTagRequest) Reset() {
 	*x = CreateTagRequest{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[10]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -646,7 +700,7 @@ func (x *CreateTagRequest) String() string {
 func (*CreateTagRequest) ProtoMessage() {}
 
 func (x *CreateTagRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[10]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -659,7 +713,7 @@ func (x *CreateTagRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTagRequest.ProtoReflect.Descriptor instead.
 func (*CreateTagRequest) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{10}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *CreateTagRequest) GetTagName() string {
@@ -693,7 +747,7 @@ type CreateTagResponse struct {
 
 func (x *CreateTagResponse) Reset() {
 	*x = CreateTagResponse{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[11]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -705,7 +759,7 @@ func (x *CreateTagResponse) String() string {
 func (*CreateTagResponse) ProtoMessage() {}
 
 func (x *CreateTagResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[11]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -718,7 +772,7 @@ func (x *CreateTagResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTagResponse.ProtoReflect.Descriptor instead.
 func (*CreateTagResponse) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{11}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *CreateTagResponse) GetTagName() string {
@@ -744,7 +798,7 @@ type ListTagsRequest struct {
 
 func (x *ListTagsRequest) Reset() {
 	*x = ListTagsRequest{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[12]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -756,7 +810,7 @@ func (x *ListTagsRequest) String() string {
 func (*ListTagsRequest) ProtoMessage() {}
 
 func (x *ListTagsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[12]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -769,7 +823,7 @@ func (x *ListTagsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTagsRequest.ProtoReflect.Descriptor instead.
 func (*ListTagsRequest) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{12}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ListTagsRequest) GetPrefix() string {
@@ -788,7 +842,7 @@ type ListTagsResponse struct {
 
 func (x *ListTagsResponse) Reset() {
 	*x = ListTagsResponse{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[13]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -800,7 +854,7 @@ func (x *ListTagsResponse) String() string {
 func (*ListTagsResponse) ProtoMessage() {}
 
 func (x *ListTagsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[13]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -813,7 +867,7 @@ func (x *ListTagsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTagsResponse.ProtoReflect.Descriptor instead.
 func (*ListTagsResponse) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{13}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ListTagsResponse) GetTags() []*TagEntry {
@@ -832,7 +886,7 @@ type GetLatestTagRequest struct {
 
 func (x *GetLatestTagRequest) Reset() {
 	*x = GetLatestTagRequest{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[14]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -844,7 +898,7 @@ func (x *GetLatestTagRequest) String() string {
 func (*GetLatestTagRequest) ProtoMessage() {}
 
 func (x *GetLatestTagRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[14]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -857,7 +911,7 @@ func (x *GetLatestTagRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLatestTagRequest.ProtoReflect.Descriptor instead.
 func (*GetLatestTagRequest) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{14}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetLatestTagRequest) GetPrefix() string {
@@ -877,7 +931,7 @@ type GetLatestTagResponse struct {
 
 func (x *GetLatestTagResponse) Reset() {
 	*x = GetLatestTagResponse{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[15]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -889,7 +943,7 @@ func (x *GetLatestTagResponse) String() string {
 func (*GetLatestTagResponse) ProtoMessage() {}
 
 func (x *GetLatestTagResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[15]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -902,7 +956,7 @@ func (x *GetLatestTagResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetLatestTagResponse.ProtoReflect.Descriptor instead.
 func (*GetLatestTagResponse) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{15}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetLatestTagResponse) GetTag() *TagEntry {
@@ -930,7 +984,7 @@ type TagEntry struct {
 
 func (x *TagEntry) Reset() {
 	*x = TagEntry{}
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[16]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -942,7 +996,7 @@ func (x *TagEntry) String() string {
 func (*TagEntry) ProtoMessage() {}
 
 func (x *TagEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[16]
+	mi := &file_gitstore_git_v1_git_service_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -955,7 +1009,7 @@ func (x *TagEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TagEntry.ProtoReflect.Descriptor instead.
 func (*TagEntry) Descriptor() ([]byte, []int) {
-	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{16}
+	return file_gitstore_git_v1_git_service_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *TagEntry) GetName() string {
@@ -992,8 +1046,11 @@ const file_gitstore_git_v1_git_service_proto_rawDesc = "" +
 	"\acontent\x18\x02 \x01(\fR\acontent\x12\x19\n" +
 	"\bblob_sha\x18\x03 \x01(\tR\ablobSha\x12\x1d\n" +
 	"\n" +
-	"size_bytes\x18\x04 \x01(\x04R\tsizeBytes\"Y\n" +
-	"\tFileChunk\x12\x1f\n" +
+	"size_bytes\x18\x04 \x01(\x04R\tsizeBytes\"<\n" +
+	"\x14GetFileStreamRequest\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x10\n" +
+	"\x03ref\x18\x02 \x01(\tR\x03ref\"e\n" +
+	"\x15GetFileStreamResponse\x12\x1f\n" +
 	"\vchunk_index\x18\x01 \x01(\rR\n" +
 	"chunkIndex\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x17\n" +
@@ -1051,11 +1108,11 @@ const file_gitstore_git_v1_git_service_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
 	"commit_sha\x18\x02 \x01(\tR\tcommitSha\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage2\xae\x05\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage2\xc0\x05\n" +
 	"\n" +
 	"GitService\x12L\n" +
-	"\aGetFile\x12\x1f.gitstore.git.v1.GetFileRequest\x1a .gitstore.git.v1.GetFileResponse\x12N\n" +
-	"\rGetFileStream\x12\x1f.gitstore.git.v1.GetFileRequest\x1a\x1a.gitstore.git.v1.FileChunk0\x01\x12R\n" +
+	"\aGetFile\x12\x1f.gitstore.git.v1.GetFileRequest\x1a .gitstore.git.v1.GetFileResponse\x12`\n" +
+	"\rGetFileStream\x12%.gitstore.git.v1.GetFileStreamRequest\x1a&.gitstore.git.v1.GetFileStreamResponse0\x01\x12R\n" +
 	"\tListFiles\x12!.gitstore.git.v1.ListFilesRequest\x1a\".gitstore.git.v1.ListFilesResponse\x12U\n" +
 	"\n" +
 	"CommitFile\x12\".gitstore.git.v1.CommitFileRequest\x1a#.gitstore.git.v1.CommitFileResponse\x12U\n" +
@@ -1077,46 +1134,47 @@ func file_gitstore_git_v1_git_service_proto_rawDescGZIP() []byte {
 	return file_gitstore_git_v1_git_service_proto_rawDescData
 }
 
-var file_gitstore_git_v1_git_service_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_gitstore_git_v1_git_service_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_gitstore_git_v1_git_service_proto_goTypes = []any{
-	(*GetFileRequest)(nil),       // 0: gitstore.git.v1.GetFileRequest
-	(*GetFileResponse)(nil),      // 1: gitstore.git.v1.GetFileResponse
-	(*FileChunk)(nil),            // 2: gitstore.git.v1.FileChunk
-	(*ListFilesRequest)(nil),     // 3: gitstore.git.v1.ListFilesRequest
-	(*ListFilesResponse)(nil),    // 4: gitstore.git.v1.ListFilesResponse
-	(*FileEntry)(nil),            // 5: gitstore.git.v1.FileEntry
-	(*CommitFileRequest)(nil),    // 6: gitstore.git.v1.CommitFileRequest
-	(*CommitFileResponse)(nil),   // 7: gitstore.git.v1.CommitFileResponse
-	(*DeleteFileRequest)(nil),    // 8: gitstore.git.v1.DeleteFileRequest
-	(*DeleteFileResponse)(nil),   // 9: gitstore.git.v1.DeleteFileResponse
-	(*CreateTagRequest)(nil),     // 10: gitstore.git.v1.CreateTagRequest
-	(*CreateTagResponse)(nil),    // 11: gitstore.git.v1.CreateTagResponse
-	(*ListTagsRequest)(nil),      // 12: gitstore.git.v1.ListTagsRequest
-	(*ListTagsResponse)(nil),     // 13: gitstore.git.v1.ListTagsResponse
-	(*GetLatestTagRequest)(nil),  // 14: gitstore.git.v1.GetLatestTagRequest
-	(*GetLatestTagResponse)(nil), // 15: gitstore.git.v1.GetLatestTagResponse
-	(*TagEntry)(nil),             // 16: gitstore.git.v1.TagEntry
+	(*GetFileRequest)(nil),        // 0: gitstore.git.v1.GetFileRequest
+	(*GetFileResponse)(nil),       // 1: gitstore.git.v1.GetFileResponse
+	(*GetFileStreamRequest)(nil),  // 2: gitstore.git.v1.GetFileStreamRequest
+	(*GetFileStreamResponse)(nil), // 3: gitstore.git.v1.GetFileStreamResponse
+	(*ListFilesRequest)(nil),      // 4: gitstore.git.v1.ListFilesRequest
+	(*ListFilesResponse)(nil),     // 5: gitstore.git.v1.ListFilesResponse
+	(*FileEntry)(nil),             // 6: gitstore.git.v1.FileEntry
+	(*CommitFileRequest)(nil),     // 7: gitstore.git.v1.CommitFileRequest
+	(*CommitFileResponse)(nil),    // 8: gitstore.git.v1.CommitFileResponse
+	(*DeleteFileRequest)(nil),     // 9: gitstore.git.v1.DeleteFileRequest
+	(*DeleteFileResponse)(nil),    // 10: gitstore.git.v1.DeleteFileResponse
+	(*CreateTagRequest)(nil),      // 11: gitstore.git.v1.CreateTagRequest
+	(*CreateTagResponse)(nil),     // 12: gitstore.git.v1.CreateTagResponse
+	(*ListTagsRequest)(nil),       // 13: gitstore.git.v1.ListTagsRequest
+	(*ListTagsResponse)(nil),      // 14: gitstore.git.v1.ListTagsResponse
+	(*GetLatestTagRequest)(nil),   // 15: gitstore.git.v1.GetLatestTagRequest
+	(*GetLatestTagResponse)(nil),  // 16: gitstore.git.v1.GetLatestTagResponse
+	(*TagEntry)(nil),              // 17: gitstore.git.v1.TagEntry
 }
 var file_gitstore_git_v1_git_service_proto_depIdxs = []int32{
-	5,  // 0: gitstore.git.v1.ListFilesResponse.files:type_name -> gitstore.git.v1.FileEntry
-	16, // 1: gitstore.git.v1.ListTagsResponse.tags:type_name -> gitstore.git.v1.TagEntry
-	16, // 2: gitstore.git.v1.GetLatestTagResponse.tag:type_name -> gitstore.git.v1.TagEntry
+	6,  // 0: gitstore.git.v1.ListFilesResponse.files:type_name -> gitstore.git.v1.FileEntry
+	17, // 1: gitstore.git.v1.ListTagsResponse.tags:type_name -> gitstore.git.v1.TagEntry
+	17, // 2: gitstore.git.v1.GetLatestTagResponse.tag:type_name -> gitstore.git.v1.TagEntry
 	0,  // 3: gitstore.git.v1.GitService.GetFile:input_type -> gitstore.git.v1.GetFileRequest
-	0,  // 4: gitstore.git.v1.GitService.GetFileStream:input_type -> gitstore.git.v1.GetFileRequest
-	3,  // 5: gitstore.git.v1.GitService.ListFiles:input_type -> gitstore.git.v1.ListFilesRequest
-	6,  // 6: gitstore.git.v1.GitService.CommitFile:input_type -> gitstore.git.v1.CommitFileRequest
-	8,  // 7: gitstore.git.v1.GitService.DeleteFile:input_type -> gitstore.git.v1.DeleteFileRequest
-	10, // 8: gitstore.git.v1.GitService.CreateTag:input_type -> gitstore.git.v1.CreateTagRequest
-	12, // 9: gitstore.git.v1.GitService.ListTags:input_type -> gitstore.git.v1.ListTagsRequest
-	14, // 10: gitstore.git.v1.GitService.GetLatestTag:input_type -> gitstore.git.v1.GetLatestTagRequest
+	2,  // 4: gitstore.git.v1.GitService.GetFileStream:input_type -> gitstore.git.v1.GetFileStreamRequest
+	4,  // 5: gitstore.git.v1.GitService.ListFiles:input_type -> gitstore.git.v1.ListFilesRequest
+	7,  // 6: gitstore.git.v1.GitService.CommitFile:input_type -> gitstore.git.v1.CommitFileRequest
+	9,  // 7: gitstore.git.v1.GitService.DeleteFile:input_type -> gitstore.git.v1.DeleteFileRequest
+	11, // 8: gitstore.git.v1.GitService.CreateTag:input_type -> gitstore.git.v1.CreateTagRequest
+	13, // 9: gitstore.git.v1.GitService.ListTags:input_type -> gitstore.git.v1.ListTagsRequest
+	15, // 10: gitstore.git.v1.GitService.GetLatestTag:input_type -> gitstore.git.v1.GetLatestTagRequest
 	1,  // 11: gitstore.git.v1.GitService.GetFile:output_type -> gitstore.git.v1.GetFileResponse
-	2,  // 12: gitstore.git.v1.GitService.GetFileStream:output_type -> gitstore.git.v1.FileChunk
-	4,  // 13: gitstore.git.v1.GitService.ListFiles:output_type -> gitstore.git.v1.ListFilesResponse
-	7,  // 14: gitstore.git.v1.GitService.CommitFile:output_type -> gitstore.git.v1.CommitFileResponse
-	9,  // 15: gitstore.git.v1.GitService.DeleteFile:output_type -> gitstore.git.v1.DeleteFileResponse
-	11, // 16: gitstore.git.v1.GitService.CreateTag:output_type -> gitstore.git.v1.CreateTagResponse
-	13, // 17: gitstore.git.v1.GitService.ListTags:output_type -> gitstore.git.v1.ListTagsResponse
-	15, // 18: gitstore.git.v1.GitService.GetLatestTag:output_type -> gitstore.git.v1.GetLatestTagResponse
+	3,  // 12: gitstore.git.v1.GitService.GetFileStream:output_type -> gitstore.git.v1.GetFileStreamResponse
+	5,  // 13: gitstore.git.v1.GitService.ListFiles:output_type -> gitstore.git.v1.ListFilesResponse
+	8,  // 14: gitstore.git.v1.GitService.CommitFile:output_type -> gitstore.git.v1.CommitFileResponse
+	10, // 15: gitstore.git.v1.GitService.DeleteFile:output_type -> gitstore.git.v1.DeleteFileResponse
+	12, // 16: gitstore.git.v1.GitService.CreateTag:output_type -> gitstore.git.v1.CreateTagResponse
+	14, // 17: gitstore.git.v1.GitService.ListTags:output_type -> gitstore.git.v1.ListTagsResponse
+	16, // 18: gitstore.git.v1.GitService.GetLatestTag:output_type -> gitstore.git.v1.GetLatestTagResponse
 	11, // [11:19] is the sub-list for method output_type
 	3,  // [3:11] is the sub-list for method input_type
 	3,  // [3:3] is the sub-list for extension type_name
@@ -1135,7 +1193,7 @@ func file_gitstore_git_v1_git_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gitstore_git_v1_git_service_proto_rawDesc), len(file_gitstore_git_v1_git_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   17,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

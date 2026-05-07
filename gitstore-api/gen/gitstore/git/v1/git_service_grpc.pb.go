@@ -53,7 +53,7 @@ type GitServiceClient interface {
 	GetFile(ctx context.Context, in *GetFileRequest, opts ...grpc.CallOption) (*GetFileResponse, error)
 	// GetFileStream returns a file as a stream of byte chunks.
 	// Use for files larger than 1 MiB to avoid message size limits.
-	GetFileStream(ctx context.Context, in *GetFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FileChunk], error)
+	GetFileStream(ctx context.Context, in *GetFileStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetFileStreamResponse], error)
 	// ListFiles enumerates file paths under an optional prefix at the given ref.
 	ListFiles(ctx context.Context, in *ListFilesRequest, opts ...grpc.CallOption) (*ListFilesResponse, error)
 	// CommitFile writes a single file and commits it to the default branch.
@@ -87,13 +87,13 @@ func (c *gitServiceClient) GetFile(ctx context.Context, in *GetFileRequest, opts
 	return out, nil
 }
 
-func (c *gitServiceClient) GetFileStream(ctx context.Context, in *GetFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FileChunk], error) {
+func (c *gitServiceClient) GetFileStream(ctx context.Context, in *GetFileStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetFileStreamResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &GitService_ServiceDesc.Streams[0], GitService_GetFileStream_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[GetFileRequest, FileChunk]{ClientStream: stream}
+	x := &grpc.GenericClientStream[GetFileStreamRequest, GetFileStreamResponse]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -104,7 +104,7 @@ func (c *gitServiceClient) GetFileStream(ctx context.Context, in *GetFileRequest
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type GitService_GetFileStreamClient = grpc.ServerStreamingClient[FileChunk]
+type GitService_GetFileStreamClient = grpc.ServerStreamingClient[GetFileStreamResponse]
 
 func (c *gitServiceClient) ListFiles(ctx context.Context, in *ListFilesRequest, opts ...grpc.CallOption) (*ListFilesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -182,7 +182,7 @@ type GitServiceServer interface {
 	GetFile(context.Context, *GetFileRequest) (*GetFileResponse, error)
 	// GetFileStream returns a file as a stream of byte chunks.
 	// Use for files larger than 1 MiB to avoid message size limits.
-	GetFileStream(*GetFileRequest, grpc.ServerStreamingServer[FileChunk]) error
+	GetFileStream(*GetFileStreamRequest, grpc.ServerStreamingServer[GetFileStreamResponse]) error
 	// ListFiles enumerates file paths under an optional prefix at the given ref.
 	ListFiles(context.Context, *ListFilesRequest) (*ListFilesResponse, error)
 	// CommitFile writes a single file and commits it to the default branch.
@@ -209,7 +209,7 @@ type UnimplementedGitServiceServer struct{}
 func (UnimplementedGitServiceServer) GetFile(context.Context, *GetFileRequest) (*GetFileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetFile not implemented")
 }
-func (UnimplementedGitServiceServer) GetFileStream(*GetFileRequest, grpc.ServerStreamingServer[FileChunk]) error {
+func (UnimplementedGitServiceServer) GetFileStream(*GetFileStreamRequest, grpc.ServerStreamingServer[GetFileStreamResponse]) error {
 	return status.Error(codes.Unimplemented, "method GetFileStream not implemented")
 }
 func (UnimplementedGitServiceServer) ListFiles(context.Context, *ListFilesRequest) (*ListFilesResponse, error) {
@@ -270,15 +270,15 @@ func _GitService_GetFile_Handler(srv interface{}, ctx context.Context, dec func(
 }
 
 func _GitService_GetFileStream_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(GetFileRequest)
+	m := new(GetFileStreamRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(GitServiceServer).GetFileStream(m, &grpc.GenericServerStream[GetFileRequest, FileChunk]{ServerStream: stream})
+	return srv.(GitServiceServer).GetFileStream(m, &grpc.GenericServerStream[GetFileStreamRequest, GetFileStreamResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type GitService_GetFileStreamServer = grpc.ServerStreamingServer[FileChunk]
+type GitService_GetFileStreamServer = grpc.ServerStreamingServer[GetFileStreamResponse]
 
 func _GitService_ListFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListFilesRequest)

@@ -25,7 +25,7 @@ service GitService {
 
   // GetFileStream returns a file as a stream of byte chunks.
   // Use for files larger than 1 MiB to avoid message size limits.
-  rpc GetFileStream(GetFileRequest) returns (stream FileChunk);
+  rpc GetFileStream(GetFileStreamRequest) returns (stream GetFileStreamResponse);
 
   // ListFiles enumerates file paths under an optional prefix at the given ref.
   rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
@@ -63,7 +63,14 @@ message GetFileResponse {
   uint64 size_bytes = 4;
 }
 
-message FileChunk {
+message GetFileStreamRequest {
+  // path is the file path relative to the repository root.
+  string path = 1;
+  // ref is a tag name, branch name, or full commit SHA.
+  string ref  = 2;
+}
+
+message GetFileStreamResponse {
   uint32 chunk_index = 1;
   bytes  data        = 2; // max 256 KiB per chunk
   bool   is_last     = 3;

@@ -142,11 +142,11 @@ impl GitService for GitServiceImpl {
         .map_err(|e| Status::internal(format!("task join error: {}", e)))?
     }
 
-    type GetFileStreamStream = tokio_stream::wrappers::ReceiverStream<Result<FileChunk, Status>>;
+    type GetFileStreamStream = tokio_stream::wrappers::ReceiverStream<Result<GetFileStreamResponse, Status>>;
 
     async fn get_file_stream(
         &self,
-        request: Request<GetFileRequest>,
+        request: Request<GetFileStreamRequest>,
     ) -> Result<Response<Self::GetFileStreamStream>, Status> {
         let req = request.into_inner();
         let repo_path = Arc::clone(&self.repo_path);
@@ -154,7 +154,7 @@ impl GitService for GitServiceImpl {
         let (tx, rx) = tokio::sync::mpsc::channel(16);
 
         tokio::task::spawn_blocking(move || {
-            let send = |chunk: Result<FileChunk, Status>| {
+            let send = |chunk: Result<GetFileStreamResponse, Status>| {
                 // ignore send errors — client disconnected
                 let _ = tx.blocking_send(chunk);
             };
@@ -212,7 +212,7 @@ impl GitService for GitServiceImpl {
             let chunks: Vec<&[u8]> = content.chunks(CHUNK).collect();
             let last = chunks.len().saturating_sub(1);
             for (i, chunk) in chunks.into_iter().enumerate() {
-                send(Ok(FileChunk {
+                send(Ok(GetFileStreamResponse {
                     data: chunk.to_vec(),
                     chunk_index: i as u32,
                     is_last: i == last,

@@ -4,7 +4,7 @@ modules:
     name: buf.build/gitstore-dev/gitstore-git
 lint:
   use:
-    - DEFAULT
+    - STANDARD
 breaking:
   use:
     - FILE
