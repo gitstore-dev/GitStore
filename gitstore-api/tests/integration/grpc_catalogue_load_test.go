@@ -33,7 +33,7 @@ func TestGRPCCatalogueLoad(t *testing.T) {
 		Image:        "gitstore-git-service:latest",
 		ExposedPorts: []string{"50051/tcp", "8080/tcp"},
 		Env: map[string]string{
-			"GITSTORE_DATA_DIR": "/data/repos",
+			"GITSTORE_DATA_DIR":  "/data/repos",
 			"GITSTORE_GRPC_PORT": "50051",
 		},
 		WaitingFor: wait.ForLog("gRPC server listening").

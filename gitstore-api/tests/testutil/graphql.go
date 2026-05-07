@@ -13,8 +13,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

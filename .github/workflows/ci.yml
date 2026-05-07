@@ -23,7 +23,7 @@ jobs:
     - name: Install buf
       uses: bufbuild/buf-action@v1
       with:
-        version: latest
+        version: 1.69.0
 
     - name: Lint proto files
       run: buf lint shared/proto/
