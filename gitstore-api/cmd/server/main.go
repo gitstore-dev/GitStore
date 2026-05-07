@@ -120,8 +120,8 @@ func main() {
 		logger.Log.Fatal("Failed to create auth middleware", zap.Error(err))
 	}
 
-	// Create GraphQL resolver
-	resolver := graph.NewResolver(cacheManager, *gitGRPC, *gitServerURL)
+	// Create GraphQL resolver (backed by the same gRPC client used for reads)
+	resolver := graph.NewResolver(cacheManager, gitClient, logger.Log)
 	schema := generated.NewExecutableSchema(generated.Config{Resolvers: resolver})
 	gqlServer := gqlhandler.NewDefaultServer(schema)
 

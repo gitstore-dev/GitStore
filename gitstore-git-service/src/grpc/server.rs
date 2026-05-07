@@ -222,23 +222,186 @@ impl GitService for GitServiceImpl {
 
     async fn commit_file(
         &self,
-        _request: Request<CommitFileRequest>,
+        request: Request<CommitFileRequest>,
     ) -> Result<Response<CommitFileResponse>, Status> {
-        Err(Status::unimplemented("CommitFile not yet implemented"))
+        let req = request.into_inner();
+        let repo_path = Arc::clone(&self.repo_path);
+        let _guard = self.write_lock.write().await;
+
+        tokio::task::spawn_blocking(move || {
+            let tmp = tempfile::tempdir()
+                .map_err(|e| Status::internal(format!("failed to create tempdir: {}", e)))?;
+
+            // Clone the bare repo into a working directory.
+            let work_repo = git2::Repository::clone(
+                repo_path.to_str().unwrap_or_default(),
+                tmp.path(),
+            )
+            .map_err(|e| Status::internal(format!("failed to clone: {}", e)))?;
+
+            // Write the file.
+            let file_path = tmp.path().join(&req.path);
+            if let Some(parent) = file_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| Status::internal(format!("mkdir: {}", e)))?;
+            }
+            std::fs::write(&file_path, &req.content)
+                .map_err(|e| Status::internal(format!("write file: {}", e)))?;
+
+            // Stage and commit.
+            let mut index = work_repo.index()
+                .map_err(|e| Status::internal(format!("index: {}", e)))?;
+            index.add_path(std::path::Path::new(&req.path))
+                .map_err(|e| Status::internal(format!("stage: {}", e)))?;
+            index.write()
+                .map_err(|e| Status::internal(format!("index write: {}", e)))?;
+
+            let tree_oid = index.write_tree()
+                .map_err(|e| Status::internal(format!("write tree: {}", e)))?;
+            let tree = work_repo.find_tree(tree_oid)
+                .map_err(|e| Status::internal(format!("find tree: {}", e)))?;
+
+            let author_name = if req.author_name.is_empty() { "GitStore" } else { &req.author_name };
+            let author_email = if req.author_email.is_empty() { "gitstore@localhost" } else { &req.author_email };
+            let sig = git2::Signature::now(author_name, author_email)
+                .map_err(|e| Status::internal(format!("signature: {}", e)))?;
+
+            let parent_commit = crate::git::repo::get_head_commit(&work_repo)
+                .map_err(|e| Status::internal(format!("head commit: {}", e)))?;
+
+            let commit_oid = work_repo.commit(
+                Some("HEAD"),
+                &sig, &sig,
+                &req.commit_message,
+                &tree,
+                &[&parent_commit],
+            )
+            .map_err(|e| Status::internal(format!("commit: {}", e)))?;
+
+            // Push back to the bare repo.
+            let mut remote = work_repo.find_remote("origin")
+                .map_err(|e| Status::internal(format!("find remote: {}", e)))?;
+            remote.push(&["refs/heads/main:refs/heads/main"], None)
+                .map_err(|e| Status::internal(format!("push: {}", e)))?;
+
+            let branch = "main".to_string();
+            // tmp is dropped here, cleaning up the working directory.
+            Ok(Response::new(CommitFileResponse {
+                commit_sha: commit_oid.to_string(),
+                branch,
+            }))
+        })
+        .await
+        .map_err(|e| Status::internal(format!("task join error: {}", e)))?
     }
 
     async fn delete_file(
         &self,
-        _request: Request<DeleteFileRequest>,
+        request: Request<DeleteFileRequest>,
     ) -> Result<Response<DeleteFileResponse>, Status> {
-        Err(Status::unimplemented("DeleteFile not yet implemented"))
+        let req = request.into_inner();
+        let repo_path = Arc::clone(&self.repo_path);
+        let _guard = self.write_lock.write().await;
+
+        tokio::task::spawn_blocking(move || {
+            let tmp = tempfile::tempdir()
+                .map_err(|e| Status::internal(format!("failed to create tempdir: {}", e)))?;
+
+            let work_repo = git2::Repository::clone(
+                repo_path.to_str().unwrap_or_default(),
+                tmp.path(),
+            )
+            .map_err(|e| Status::internal(format!("failed to clone: {}", e)))?;
+
+            let file_path = tmp.path().join(&req.path);
+            if !file_path.exists() {
+                return Err(Status::not_found(format!("file '{}' not found", req.path)));
+            }
+            std::fs::remove_file(&file_path)
+                .map_err(|e| Status::internal(format!("remove: {}", e)))?;
+
+            let mut index = work_repo.index()
+                .map_err(|e| Status::internal(format!("index: {}", e)))?;
+            index.remove_path(std::path::Path::new(&req.path))
+                .map_err(|e| Status::internal(format!("unstage: {}", e)))?;
+            index.write()
+                .map_err(|e| Status::internal(format!("index write: {}", e)))?;
+
+            let tree_oid = index.write_tree()
+                .map_err(|e| Status::internal(format!("write tree: {}", e)))?;
+            let tree = work_repo.find_tree(tree_oid)
+                .map_err(|e| Status::internal(format!("find tree: {}", e)))?;
+
+            let author_name = if req.author_name.is_empty() { "GitStore" } else { &req.author_name };
+            let author_email = if req.author_email.is_empty() { "gitstore@localhost" } else { &req.author_email };
+            let sig = git2::Signature::now(author_name, author_email)
+                .map_err(|e| Status::internal(format!("signature: {}", e)))?;
+
+            let parent_commit = crate::git::repo::get_head_commit(&work_repo)
+                .map_err(|e| Status::internal(format!("head commit: {}", e)))?;
+
+            let commit_oid = work_repo.commit(
+                Some("HEAD"),
+                &sig, &sig,
+                &req.commit_message,
+                &tree,
+                &[&parent_commit],
+            )
+            .map_err(|e| Status::internal(format!("commit: {}", e)))?;
+
+            let mut remote = work_repo.find_remote("origin")
+                .map_err(|e| Status::internal(format!("find remote: {}", e)))?;
+            remote.push(&["refs/heads/main:refs/heads/main"], None)
+                .map_err(|e| Status::internal(format!("push: {}", e)))?;
+
+            Ok(Response::new(DeleteFileResponse {
+                commit_sha: commit_oid.to_string(),
+            }))
+        })
+        .await
+        .map_err(|e| Status::internal(format!("task join error: {}", e)))?
     }
 
     async fn create_tag(
         &self,
-        _request: Request<CreateTagRequest>,
+        request: Request<CreateTagRequest>,
     ) -> Result<Response<CreateTagResponse>, Status> {
-        Err(Status::unimplemented("CreateTag not yet implemented"))
+        let req = request.into_inner();
+        let repo_path = Arc::clone(&self.repo_path);
+        let _guard = self.write_lock.write().await;
+
+        tokio::task::spawn_blocking(move || {
+            let repo = init_or_open_repository(&repo_path)
+                .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
+
+            // Resolve target: use provided SHA or HEAD.
+            let target_obj = if req.target_commit_sha.is_empty() {
+                repo.revparse_single("HEAD")
+                    .map_err(|e| Status::not_found(format!("HEAD not found: {}", e)))?
+            } else {
+                repo.revparse_single(&req.target_commit_sha)
+                    .map_err(|e| Status::not_found(format!("target '{}' not found: {}", req.target_commit_sha, e)))?
+            };
+
+            // Check for existing tag.
+            let ref_name = format!("refs/tags/{}", req.tag_name);
+            if repo.find_reference(&ref_name).is_ok() {
+                return Err(Status::already_exists(format!("tag '{}' already exists", req.tag_name)));
+            }
+
+            let sig = git2::Signature::now("GitStore", "gitstore@localhost")
+                .map_err(|e| Status::internal(format!("signature: {}", e)))?;
+
+            let tag_oid = repo.tag(&req.tag_name, &target_obj, &sig, &req.message, false)
+                .map_err(|e| Status::internal(format!("tag: {}", e)))?;
+
+            Ok(Response::new(CreateTagResponse {
+                tag_name: req.tag_name,
+                tag_sha: tag_oid.to_string(),
+            }))
+        })
+        .await
+        .map_err(|e| Status::internal(format!("task join error: {}", e)))?
     }
 
     async fn list_tags(
@@ -485,5 +648,80 @@ mod tests {
         assert_eq!(cmp_semver_str("1.0.0", "1.10.0"), Less);
         assert_eq!(cmp_semver_str("2.0.0", "1.9.9"), Greater);
         assert_eq!(cmp_semver_str("1.2.3", "1.2.10"), Less);
+    }
+
+    // --- write RPC tests ---
+
+    /// Helper: create a bare repo with one commit accessible as refs/heads/main.
+    fn bare_repo_with_main(dir: &std::path::Path) {
+        let repo = git2::Repository::init_bare(dir).unwrap();
+        let blob_oid = repo.blob(b"initial").unwrap();
+        let tree_oid = {
+            let mut b = repo.treebuilder(None).unwrap();
+            b.insert("README.md", blob_oid, 0o100644).unwrap();
+            b.write().unwrap()
+        };
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+        let oid = repo.commit(None, &sig, &sig, "init", &tree, &[]).unwrap();
+        // Create refs/heads/main pointing to this commit.
+        repo.reference("refs/heads/main", oid, false, "init").unwrap();
+        // Point HEAD to main.
+        repo.set_head("refs/heads/main").unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_commit_file_creates_real_commit() {
+        let bare_dir = TempDir::new().unwrap();
+        bare_repo_with_main(bare_dir.path());
+
+        let svc = make_test_service(bare_dir.path());
+        let req = Request::new(CommitFileRequest {
+            path: "products/new.md".to_string(),
+            content: b"---\nid: new\n---".to_vec(),
+            commit_message: "add new product".to_string(),
+            author_name: "Tester".to_string(),
+            author_email: "test@example.com".to_string(),
+        });
+        let resp = svc.commit_file(req).await.unwrap().into_inner();
+        assert!(!resp.commit_sha.is_empty());
+        assert_eq!(resp.branch, "main");
+
+        // Verify the file appears in the bare repo at HEAD.
+        let bare_repo2 = git2::Repository::open_bare(bare_dir.path()).unwrap();
+        let commit = bare_repo2.revparse_single("HEAD").unwrap().peel_to_commit().unwrap();
+        let tree = commit.tree().unwrap();
+        assert!(tree.get_path(std::path::Path::new("products/new.md")).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_file_on_nonexistent_file_returns_not_found() {
+        let bare_dir = TempDir::new().unwrap();
+        bare_repo_with_main(bare_dir.path());
+
+        let svc = make_test_service(bare_dir.path());
+        let req = Request::new(DeleteFileRequest {
+            path: "products/missing.md".to_string(),
+            commit_message: "delete".to_string(),
+            author_name: "T".to_string(),
+            author_email: "t@t.com".to_string(),
+        });
+        let err = svc.delete_file(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_create_tag_already_exists_returns_already_exists() {
+        let dir = TempDir::new().unwrap();
+        repo_with_commit(dir.path()); // creates v1.0.0
+
+        let svc = make_test_service(dir.path());
+        let req = Request::new(CreateTagRequest {
+            tag_name: "v1.0.0".to_string(),
+            message: "duplicate".to_string(),
+            target_commit_sha: "".to_string(),
+        });
+        let err = svc.create_tag(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::AlreadyExists);
     }
 }

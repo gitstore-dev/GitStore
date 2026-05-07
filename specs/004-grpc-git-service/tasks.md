@@ -94,20 +94,20 @@
 
 ### Tests for User Story 2 ⚠️ Write FIRST — verify FAIL before implementing
 
-- [ ] T030 [P] [US2] Write integration test `gitstore-api/tests/integration/grpc_mutations_test.go` — uses testcontainers-go; exercises concurrent `CommitFile` and `DeleteFile` calls; asserts no filesystem artefacts on API side (tag: `integration`)
-- [ ] T031 [P] [US2] Write unit test `gitstore-api/internal/gitclient/write_test.go` — bufconn stub; tests `CommitFile` and `DeleteFile` client calls, error surface, and retry behaviour on transient failures
-- [ ] T032 [P] [US2] Write unit tests for mutations in `gitstore-api/internal/graph/mutations_test.go` — assert mutations call gRPC client methods (not CommitBuilder) and correctly propagate errors
+- [x] T030 [P] [US2] Write integration test `gitstore-api/tests/integration/grpc_mutations_test.go` — uses testcontainers-go; exercises concurrent `CommitFile` and `DeleteFile` calls; asserts no filesystem artefacts on API side (tag: `integration`)
+- [x] T031 [P] [US2] Write unit test `gitstore-api/internal/gitclient/write_test.go` — bufconn stub; tests `CommitFile` and `DeleteFile` client calls, error surface, and retry behaviour on transient failures
+- [x] T032 [P] [US2] Write unit tests for mutations in `gitstore-api/internal/graph/mutations_test.go` — assert mutations call gRPC client methods (not CommitBuilder) and correctly propagate errors
 
 ### Implementation for User Story 2
 
-- [ ] T033 [US2] Implement `CommitFile` in `gitstore-git-service/src/grpc/server.rs` — acquire write lock on repo, apply file write to a temporary worktree clone, commit, push to bare repo, return commit SHA; clean up temp dir on success and failure
-- [ ] T034 [US2] Implement `DeleteFile` in `gitstore-git-service/src/grpc/server.rs` — same pattern as CommitFile but removes the file before committing
-- [ ] T035 [US2] Implement `CreateTag` in `gitstore-git-service/src/grpc/server.rs` — create annotated tag on HEAD (or supplied commit SHA) using `git2`
-- [ ] T036 [P] [US2] Create `gitstore-api/internal/gitclient/write.go` — `CommitFile(ctx, path, content, message, author)`, `DeleteFile(ctx, path, message, author)`, `CreateTag(ctx, name, message, target)` wrapping generated gRPC stubs
-- [ ] T037 [US2] Update `gitstore-api/internal/graph/mutations.go` — replace all `CommitBuilder` usages with calls to `gitclient.Client` write methods; keep existing GraphQL resolver signatures unchanged
-- [ ] T038 [US2] Delete `gitstore-api/internal/gitclient/commit.go`, `push.go`, `pool.go`, `tag.go`, `http_client.go` — replaced by gRPC client; update any remaining import references
-- [ ] T039 [US2] Move markdown generation helpers (`ProductFrontMatter`, `CategoryFrontMatter`, `CollectionFrontMatter`, `GenerateProductMarkdown`, etc.) from `gitstore-api/internal/gitclient/writer.go` to `gitstore-api/internal/catalog/writer.go` — pure serialisation, no I/O, no git dependency
-- [ ] T040 [US2] Delete `gitstore-api/internal/gitclient/writer.go` after helpers are moved; run `go build ./...` to confirm no broken imports
+- [x] T033 [US2] Implement `CommitFile` in `gitstore-git-service/src/grpc/server.rs` — acquire write lock on repo, apply file write to a temporary worktree clone, commit, push to bare repo, return commit SHA; clean up temp dir on success and failure
+- [x] T034 [US2] Implement `DeleteFile` in `gitstore-git-service/src/grpc/server.rs` — same pattern as CommitFile but removes the file before committing
+- [x] T035 [US2] Implement `CreateTag` in `gitstore-git-service/src/grpc/server.rs` — create annotated tag on HEAD (or supplied commit SHA) using `git2`
+- [x] T036 [P] [US2] Create `gitstore-api/internal/gitclient/write.go` — `CommitFile(ctx, path, content, message, author)`, `DeleteFile(ctx, path, message, author)`, `CreateTag(ctx, name, message, target)` wrapping generated gRPC stubs
+- [x] T037 [US2] Update `gitstore-api/internal/graph/mutations.go` — replace all `CommitBuilder` usages with calls to `gitclient.Client` write methods; keep existing GraphQL resolver signatures unchanged
+- [x] T038 [US2] Delete `gitstore-api/internal/gitclient/commit.go`, `push.go`, `pool.go`, `tag.go`, `http_client.go` — replaced by gRPC client; update any remaining import references
+- [x] T039 [US2] Move markdown generation helpers (`ProductFrontMatter`, `CategoryFrontMatter`, `CollectionFrontMatter`, `GenerateProductMarkdown`, etc.) from `gitstore-api/internal/gitclient/writer.go` to `gitstore-api/internal/catalog/writer.go` — pure serialisation, no I/O, no git dependency
+- [x] T040 [US2] Delete `gitstore-api/internal/gitclient/writer.go` after helpers are moved; run `go build ./...` to confirm no broken imports
 
 **Checkpoint**: All mutations route through gRPC. `go test ./internal/graph/...` passes. Concurrent mutation integration test passes. `gitclient/` contains only `grpc_client.go`, `read.go`, `write.go`, `metrics.go`.
 
@@ -164,7 +164,7 @@
 - [ ] T055 Run `staticcheck ./...` and `go vet ./...` on `gitstore-api` and fix any warnings
 - [ ] T056 [P] Verify all new Go files carry the AGPL license header (run `./scripts/check-go-license-headers.sh --all`)
 - [ ] T057 [P] Verify all new Rust files carry the AGPL license header (run `./scripts/check-rust-license-headers.sh --all`)
-- [ ] T058 Run `go mod tidy` in `gitstore-api/` and confirm `go-git` and all its transitive deps are absent from `go.sum`
+- [x] T058 Run `go mod tidy` in `gitstore-api/` and confirm `go-git` and all its transitive deps are absent from `go.sum`
 - [ ] T059 Validate `quickstart.md` end-to-end: follow every step in `specs/004-grpc-git-service/quickstart.md` from a clean checkout and confirm all commands succeed
 
 ---
