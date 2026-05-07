@@ -23,8 +23,22 @@ Both proposals use the same core building blocks, arranged with different contro
 - `gitstore-api/`: Go API gateway, GraphQL surface, and gRPC client/server boundaries.
 - `gitstore-git-service/`: Rust Git engine, receive hooks, and repository access logic.
 - `shared/schemas/`: GraphQL schema contracts consumed by the API layer.
+- `shared/proto/gitstore/git/v1/`: Canonical `.proto` definition for the gRPC Git service contract.
 
 > **Admin**: For the optional web interface, see [`docs/admin/architecture.md`](admin/architecture.md).
+
+### Service Boundary
+
+The API gateway (`gitstore-api`) and the Git server (`gitstore-git-service`) communicate exclusively through gRPC on port `50051`. **No shared volume mount is required.** The API holds no local git state; every read (catalogue load) and every write (commit, delete, tag) is an RPC call to the Git service.
+
+Key environment variables:
+
+| Service | Variable | Purpose |
+|---------|----------|---------|
+| `gitstore-api` | `GITSTORE_GIT_GRPC` | gRPC address of git-service (e.g. `git-service:50051`) |
+| `gitstore-api` | `GITSTORE_GIT_WS` | WebSocket URL for catalogue-reload notifications |
+| `gitstore-git-service` | `GITSTORE_GRPC_PORT` | Port the gRPC server binds on (default `50051`) |
+| `gitstore-git-service` | `GITSTORE_DATA_DIR` | Path to the bare repository directory |
 
 These folders map directly to the control, storage, and distribution planes described below.
 

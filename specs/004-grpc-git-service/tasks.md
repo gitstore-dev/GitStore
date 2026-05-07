@@ -121,14 +121,14 @@
 
 ### Tests for User Story 3 ⚠️ Write FIRST — verify FAIL before implementing
 
-- [ ] T041 [P] [US3] Write integration test `gitstore-api/tests/integration/grpc_reload_test.go` — pushes a tag via testcontainers-go git-service; verifies API receives WS notification and reloads catalogue via gRPC within 30s (tag: `integration`)
-- [ ] T042 [P] [US3] Write unit test `gitstore-api/internal/cache/manager_test.go` — asserts that on WS `tag_push` event the cache manager calls gRPC read methods (not local git pull); tests coalescing of rapid-fire notifications
+- [x] T041 [P] [US3] Write integration test `gitstore-api/tests/integration/grpc_reload_test.go` — pushes a tag via testcontainers-go git-service; verifies API receives WS notification and reloads catalogue via gRPC within 30s (tag: `integration`)
+- [x] T042 [P] [US3] Write unit test `gitstore-api/internal/cache/manager_test.go` — asserts that on WS `tag_push` event the cache manager calls gRPC read methods (not local git pull); tests coalescing of rapid-fire notifications
 
 ### Implementation for User Story 3
 
-- [ ] T043 [US3] Update `gitstore-api/internal/cache/manager.go` — replace local git pull/fetch logic (if any) in the WS event handler with a call to `gitclient.Client.GetLatestTag()` + `LoadFromTag()`; preserve exponential-backoff retry on gRPC error
-- [ ] T044 [US3] Implement notification coalescing in `gitstore-api/internal/cache/manager.go` — if a reload is in progress when a new WS notification arrives, queue it once; subsequent arrivals while queued are dropped (last-writer-wins)
-- [ ] T045 [US3] Verify `gitstore-api/internal/websocket/client.go` requires no changes — it delivers `GitEvent` to the handler; the handler is updated in T043
+- [x] T043 [US3] Update `gitstore-api/internal/cache/manager.go` — replace local git pull/fetch logic (if any) in the WS event handler with a call to `gitclient.Client.GetLatestTag()` + `LoadFromTag()`; preserve exponential-backoff retry on gRPC error
+- [x] T044 [US3] Implement notification coalescing in `gitstore-api/internal/cache/manager.go` — if a reload is in progress when a new WS notification arrives, queue it once; subsequent arrivals while queued are dropped (last-writer-wins)
+- [x] T045 [US3] Verify `gitstore-api/internal/websocket/client.go` requires no changes — it delivers `GitEvent` to the handler; the handler is updated in T043
 
 **Checkpoint**: Push a tag → websocket fires → API reloads via gRPC → updated catalogue served. No shared volume anywhere in the flow.
 
@@ -142,15 +142,15 @@
 
 ### Tests for User Story 4 ⚠️ Write FIRST — verify FAIL before implementing
 
-- [ ] T046 [P] [US4] Write contract error-path test `gitstore-api/tests/integration/grpc_errors_test.go` — covers: file not found, ref not found, commit on read-only state, tag already exists (tag: `integration`)
-- [ ] T047 [P] [US4] Write concurrency test `gitstore-api/tests/integration/grpc_concurrency_test.go` — 10 simultaneous `CommitFile` calls; asserts all succeed with distinct commit SHAs; no conflicts (tag: `integration`)
+- [x] T046 [P] [US4] Write contract error-path test `gitstore-api/tests/integration/grpc_errors_test.go` — covers: file not found, ref not found, commit on read-only state, tag already exists (tag: `integration`)
+- [x] T047 [P] [US4] Write concurrency test `gitstore-api/tests/integration/grpc_concurrency_test.go` — 10 simultaneous `CommitFile` calls; asserts all succeed with distinct commit SHAs; no conflicts (tag: `integration`)
 
 ### Implementation for User Story 4
 
-- [ ] T048 [US4] Add `buf breaking shared/proto/ --against '.git#branch=main'` step to CI workflow `.github/workflows/ci.yml` — fails PR if proto contract has breaking changes
-- [ ] T049 [US4] Add integration test step to CI workflow `.github/workflows/ci.yml` — `go test ./gitstore-api/tests/integration/... -tags integration -timeout 5m` using testcontainers-go (Docker required on CI runner)
-- [ ] T050 [US4] Add Rust gRPC server unit tests in `gitstore-git-service/src/grpc/server.rs` (`#[cfg(test)]`) — covers: `GetFile` happy path, `GetFile` with unknown ref returns NOT_FOUND, `CommitFile` creates a real commit in a temp repo, `DeleteFile` on nonexistent file returns NOT_FOUND
-- [ ] T051 [US4] Update `gitstore-api/tests/testutil/graphql.go` — add `grpcAddr` helper to start an in-process gRPC stub server using `bufconn` for unit-level contract tests that don't need Docker
+- [x] T048 [US4] Add `buf breaking shared/proto/ --against '.git#branch=main'` step to CI workflow `.github/workflows/ci.yml` — fails PR if proto contract has breaking changes
+- [x] T049 [US4] Add integration test step to CI workflow `.github/workflows/ci.yml` — `go test ./gitstore-api/tests/integration/... -tags integration -timeout 5m` using testcontainers-go (Docker required on CI runner)
+- [x] T050 [US4] Add Rust gRPC server unit tests in `gitstore-git-service/src/grpc/server.rs` (`#[cfg(test)]`) — covers: `GetFile` happy path, `GetFile` with unknown ref returns NOT_FOUND, `CommitFile` creates a real commit in a temp repo, `DeleteFile` on nonexistent file returns NOT_FOUND
+- [x] T051 [US4] Update `gitstore-api/tests/testutil/graphql.go` — add `grpcAddr` helper to start an in-process gRPC stub server using `bufconn` for unit-level contract tests that don't need Docker
 
 **Checkpoint**: `buf breaking` runs in CI. Integration test suite passes in CI with testcontainers-go. All error paths and concurrency scenarios covered.
 
@@ -158,14 +158,14 @@
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T052 [P] Update architecture docs in `docs/` — add service boundary diagram showing API → gRPC → git-service; document that API no longer mounts a git volume
-- [ ] T053 [P] Update `docs/` developer setup guide — replace `GITSTORE_GIT_REPO` with `GITSTORE_GIT_GRPC`; add buf toolchain setup instructions from `quickstart.md`
-- [ ] T054 Run `cargo clippy --all-targets --all-features -- -D warnings` on `gitstore-git-service` and fix any warnings introduced by gRPC code
-- [ ] T055 Run `staticcheck ./...` and `go vet ./...` on `gitstore-api` and fix any warnings
-- [ ] T056 [P] Verify all new Go files carry the AGPL license header (run `./scripts/check-go-license-headers.sh --all`)
-- [ ] T057 [P] Verify all new Rust files carry the AGPL license header (run `./scripts/check-rust-license-headers.sh --all`)
+- [x] T052 [P] Update architecture docs in `docs/` — add service boundary diagram showing API → gRPC → git-service; document that API no longer mounts a git volume
+- [x] T053 [P] Update `docs/` developer setup guide — replace `GITSTORE_GIT_REPO` with `GITSTORE_GIT_GRPC`; add buf toolchain setup instructions from `quickstart.md`
+- [x] T054 Run `cargo clippy --all-targets --all-features -- -D warnings` on `gitstore-git-service` and fix any warnings introduced by gRPC code
+- [x] T055 Run `staticcheck ./...` and `go vet ./...` on `gitstore-api` and fix any warnings
+- [x] T056 [P] Verify all new Go files carry the AGPL license header (run `./scripts/check-go-license-headers.sh --all`)
+- [x] T057 [P] Verify all new Rust files carry the AGPL license header (run `./scripts/check-rust-license-headers.sh --all`)
 - [x] T058 Run `go mod tidy` in `gitstore-api/` and confirm `go-git` and all its transitive deps are absent from `go.sum`
-- [ ] T059 Validate `quickstart.md` end-to-end: follow every step in `specs/004-grpc-git-service/quickstart.md` from a clean checkout and confirm all commands succeed
+- [x] T059 Validate `quickstart.md` end-to-end: follow every step in `specs/004-grpc-git-service/quickstart.md` from a clean checkout and confirm all commands succeed
 
 ---
 

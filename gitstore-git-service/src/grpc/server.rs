@@ -3,7 +3,11 @@
 
 // gRPC service implementation for the GitService contract (gitstore.git.v1).
 
-use std::path::PathBuf;
+// tonic-generated Status is large by nature; boxing it everywhere would
+// obscure the code without meaningful benefit.
+#![allow(clippy::result_large_err)]
+
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
@@ -510,7 +514,7 @@ fn get_tag_message(repo: &git2::Repository, tag_name: &str) -> Option<String> {
 }
 
 /// Verify the repo is accessible at startup; returns error if not.
-pub fn verify_repo(repo_path: &PathBuf) -> anyhow::Result<()> {
+pub fn verify_repo(repo_path: &Path) -> anyhow::Result<()> {
     init_or_open_repository(repo_path)?;
     Ok(())
 }
