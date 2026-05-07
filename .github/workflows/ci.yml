@@ -19,6 +19,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
 
     - name: Install buf
       uses: bufbuild/buf-action@v1
@@ -45,6 +47,9 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt, clippy
+
+    - name: Install protoc
+      run: sudo apt-get update -qq && sudo apt-get install -y protobuf-compiler
 
     - name: Cache Rust dependencies
       uses: actions/cache@v4
