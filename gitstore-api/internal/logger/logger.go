@@ -8,20 +8,14 @@ package logger
 import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"os"
 )
 
 var Log *zap.Logger
 
-// InitLogger initializes the global structured logger
-func InitLogger() error {
+// InitLogger initializes the global structured logger with the given log level string.
+// If logLevel is empty or invalid, INFO level is used.
+func InitLogger(logLevel string) error {
 	config := zap.NewProductionConfig()
-
-	// Set log level from environment or default to info
-	logLevel := os.Getenv("GITSTORE_LOG_LEVEL")
-	if logLevel == "" {
-		logLevel = "info"
-	}
 
 	level, err := zapcore.ParseLevel(logLevel)
 	if err != nil {

@@ -7,7 +7,6 @@ package gitclient
 
 import (
 	"fmt"
-	"os"
 
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
 	grpcprom "github.com/grpc-ecosystem/go-grpc-prometheus"
@@ -21,18 +20,7 @@ type Client struct {
 	Git  gitv1.GitServiceClient
 }
 
-// NewClient dials the git-service gRPC endpoint. The address is read from
-// the GITSTORE_GIT_GRPC environment variable (format: host:port).
-// Call Close() when done.
-func NewClient() (*Client, error) {
-	addr := os.Getenv("GITSTORE_GIT_GRPC")
-	if addr == "" {
-		return nil, fmt.Errorf("GITSTORE_GIT_GRPC environment variable is not set")
-	}
-	return NewClientWithAddr(addr)
-}
-
-// NewClientWithAddr dials the given address directly (useful for tests).
+// NewClientWithAddr dials the given address directly.
 func NewClientWithAddr(addr string) (*Client, error) {
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),

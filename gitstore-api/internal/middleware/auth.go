@@ -6,7 +6,6 @@ package middleware
 import (
 	"context"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
@@ -31,27 +30,9 @@ type AuthMiddleware struct {
 	sessionManager    *auth.SessionManager
 }
 
-// NewAuthMiddleware creates a new authentication middleware
-// Expects ADMIN_USERNAME and ADMIN_PASSWORD_HASH environment variables
-func NewAuthMiddleware() (*AuthMiddleware, error) {
-	username := os.Getenv("ADMIN_USERNAME")
-	if username == "" {
-		username = "admin" // Default username
-	}
-
-	passwordHash := os.Getenv("ADMIN_PASSWORD_HASH")
-	if passwordHash == "" {
-		// Generate default hash for "admin123" - ONLY FOR DEVELOPMENT
-		// In production, this should be set via environment variable
-		hash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.DefaultCost)
-		if err != nil {
-			return nil, err
-		}
-		passwordHash = string(hash)
-	}
-
-	// Create session manager
-	sessionManager, err := auth.NewSessionManager()
+// NewAuthMiddleware creates a new authentication middleware from explicit config values.
+func NewAuthMiddleware(username, passwordHash, jwtSecret, jwtDuration, jwtIssuer string) (*AuthMiddleware, error) {
+	sessionManager, err := auth.NewSessionManager(jwtSecret, jwtDuration, jwtIssuer)
 	if err != nil {
 		return nil, err
 	}

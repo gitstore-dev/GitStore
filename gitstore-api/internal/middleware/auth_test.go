@@ -6,35 +6,37 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// newTestAuthMiddleware creates an AuthMiddleware with a known password hash for tests.
+func newTestAuthMiddleware(t *testing.T) *AuthMiddleware {
+	t.Helper()
+	hash, err := HashPassword("admin123")
+	require.NoError(t, err)
+	am, err := NewAuthMiddleware("admin", hash, "dev-secret-change-in-production", "24h", "gitstore")
+	require.NoError(t, err)
+	return am
+}
+
 func TestNewAuthMiddleware(t *testing.T) {
-	t.Run("should create with default credentials", func(t *testing.T) {
-		am, err := NewAuthMiddleware()
+	t.Run("should create with provided credentials", func(t *testing.T) {
+		hash, err := HashPassword("testpass123")
+		require.NoError(t, err)
+		am, err := NewAuthMiddleware("admin", hash, "dev-secret-change-in-production", "24h", "gitstore")
 		require.NoError(t, err)
 		require.NotNil(t, am)
 		assert.Equal(t, "admin", am.adminUsername)
-		assert.NotEmpty(t, am.adminPasswordHash)
+		assert.Equal(t, hash, am.adminPasswordHash)
 	})
 
-	t.Run("should use environment variables", func(t *testing.T) {
-		// Set environment variables
-		os.Setenv("ADMIN_USERNAME", "testadmin")
+	t.Run("should use injected credentials", func(t *testing.T) {
 		hash, err := HashPassword("testpass123")
 		require.NoError(t, err)
-		os.Setenv("ADMIN_PASSWORD_HASH", hash)
-
-		defer func() {
-			os.Unsetenv("ADMIN_USERNAME")
-			os.Unsetenv("ADMIN_PASSWORD_HASH")
-		}()
-
-		am, err := NewAuthMiddleware()
+		am, err := NewAuthMiddleware("testadmin", hash, "dev-secret-change-in-production", "24h", "gitstore")
 		require.NoError(t, err)
 		assert.Equal(t, "testadmin", am.adminUsername)
 		assert.Equal(t, hash, am.adminPasswordHash)
@@ -73,8 +75,7 @@ func TestValidateCredentials(t *testing.T) {
 }
 
 func TestRequireAuth(t *testing.T) {
-	am, err := NewAuthMiddleware()
-	require.NoError(t, err)
+	am := newTestAuthMiddleware(t)
 
 	// Handler that checks for user in context
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -139,8 +140,7 @@ func TestRequireAuth(t *testing.T) {
 }
 
 func TestOptionalAuth(t *testing.T) {
-	am, err := NewAuthMiddleware()
-	require.NoError(t, err)
+	am := newTestAuthMiddleware(t)
 
 	// Handler that checks for user in context
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -195,8 +195,7 @@ func TestOptionalAuth(t *testing.T) {
 
 func TestGetUserFromContext(t *testing.T) {
 	t.Run("should return user from context", func(t *testing.T) {
-		am, err := NewAuthMiddleware()
-		require.NoError(t, err)
+		am := newTestAuthMiddleware(t)
 
 		req := httptest.NewRequest("GET", "/test", nil)
 		req.Header.Set("Authorization", "Bearer token123")

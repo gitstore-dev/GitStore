@@ -12,7 +12,7 @@ services:
     volumes:
       - ${GITSTORE_DATA_DIR:-git-data}:/data/repos
     environment:
-      - GITSTORE_GIT_PORT=9418
+      - GITSTORE_HTTP_PORT=9418
       - GITSTORE_WS_PORT=8080
       - GITSTORE_GRPC_PORT=50051
       - GITSTORE_DATA_DIR=/data/repos
@@ -39,8 +39,12 @@ services:
         condition: service_healthy
     environment:
       - GITSTORE_API_PORT=4000
-      - GITSTORE_GIT_WS=ws://git-service:8080
       - GITSTORE_GIT_GRPC=git-service:50051
+      - GITSTORE_GIT_WS=ws://git-service:8080
+      - GITSTORE_GIT_HTTP_URL=http://git-service:9418
+      - GITSTORE_AUTH_ADMIN_USERNAME=${GITSTORE_AUTH_ADMIN_USERNAME:-admin}
+      - GITSTORE_AUTH_ADMIN_PASSWORD_HASH=${GITSTORE_AUTH_ADMIN_PASSWORD_HASH}
+      - GITSTORE_AUTH_JWT_SECRET=${GITSTORE_AUTH_JWT_SECRET}
       - GITSTORE_CACHE_TTL=300
       - GITSTORE_LOG_LEVEL=info
     networks:

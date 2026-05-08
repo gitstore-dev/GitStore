@@ -3,6 +3,8 @@
 Auto-generated from all feature plans. Last updated: 2026-03-26
 
 ## Active Technologies
+- Go 1.25 (`gitstore-api`), Rust edition 2021 (`gitstore-git-service`) (005-structured-config-mgmt)
+- N/A — configuration is in-memory after startup load (005-structured-config-mgmt)
 
 - (001-git-backed-ecommerce)
 
@@ -15,6 +17,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 : Follow standard conventions
 
 ## Recent Changes
+- 005-structured-config-mgmt: Added Go 1.25 (`gitstore-api`), Rust edition 2021 (`gitstore-git-service`)
 
 - 001-git-backed-ecommerce: Added
 
@@ -23,47 +26,47 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 
 - Before creating a PR do the following checks:
 
-	```bash
-	# Check formatting and clippy for Rust
-	cd gitstore-git-service
-	cargo fmt --all -- --check
-	cargo clippy --all-targets --all-features -- -D warnings
-	cargo build --verbose
-	cargo test --verbose
+  ```bash
+  # Check formatting and clippy for Rust
+  cd gitstore-git-service
+  cargo fmt --all -- --check
+  cargo clippy --all-targets --all-features -- -D warnings
+  cargo build --verbose
+  cargo test --verbose
 
-	# Check formatting and linting for Go
-	cd ../gitstore-api
-	if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
-		echo "The following files need formatting:"
-		gofmt -s -l .
-		exit 1
-	fi
-	go vet ./...
-	# Setup $GOPATH/bin in PATH if not already
-	go install honnef.co/go/tools/cmd/staticcheck@latest
-	staticcheck ./...
-	go build -v ./...
-	go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+  # Check formatting and linting for Go
+  cd ../gitstore-api
+  if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+      echo "The following files need formatting:"
+      gofmt -s -l .
+      exit 1
+  fi
+  go vet ./...
+  # Setup $GOPATH/bin in PATH if not already
+  go install honnef.co/go/tools/cmd/staticcheck@latest
+  staticcheck ./...
+  go build -v ./...
+  go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
-	# Check Go license headers (all files + branch diff)
-	cd ..
-	./scripts/check-go-license-headers.sh --all
-	./scripts/check-go-license-headers.sh --diff-base origin/main
+  # Check Go license headers (all files + branch diff)
+  cd ..
+  ./scripts/check-go-license-headers.sh --all
+  ./scripts/check-go-license-headers.sh --diff-base origin/main
 
-	# Check Rust license headers (all files + branch diff)
-	./scripts/check-rust-license-headers.sh --all
-	./scripts/check-rust-license-headers.sh --diff-base origin/main
+  # Check Rust license headers (all files + branch diff)
+  ./scripts/check-rust-license-headers.sh --all
+  ./scripts/check-rust-license-headers.sh --diff-base origin/main
 
-	# Check TypeScript/JavaScript license headers (all files + branch diff)
-	./scripts/check-js-license-headers.sh --all
-	./scripts/check-js-license-headers.sh --diff-base origin/main
-	```
+  # Check TypeScript/JavaScript license headers (all files + branch diff)
+  ./scripts/check-js-license-headers.sh --all
+  ./scripts/check-js-license-headers.sh --diff-base origin/main
+  ```
 
 - Install git hooks once per clone so staged Go/Rust/TS/JS files are checked automatically:
 
-	```bash
-	./scripts/install-git-hooks.sh
-	```
+  ```bash
+  ./scripts/install-git-hooks.sh
+  ```
 
 - Use Conventional Commits
 - After implementing a feature update the documentation in [`docs/`](docs/).

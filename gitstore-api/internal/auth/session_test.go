@@ -4,7 +4,6 @@
 package auth
 
 import (
-	"os"
 	"testing"
 	"time"
 
@@ -14,26 +13,16 @@ import (
 )
 
 func TestNewSessionManager(t *testing.T) {
-	t.Run("should create with default settings", func(t *testing.T) {
-		sm, err := NewSessionManager()
+	t.Run("should create with provided settings", func(t *testing.T) {
+		sm, err := NewSessionManager("dev-secret-change-in-production", "24h", "gitstore")
 		require.NoError(t, err)
 		require.NotNil(t, sm)
 		assert.Equal(t, 24*time.Hour, sm.tokenDuration)
 		assert.Equal(t, "gitstore", sm.issuer)
 	})
 
-	t.Run("should use environment variables", func(t *testing.T) {
-		os.Setenv("JWT_SECRET", "test-secret-key")
-		os.Setenv("JWT_DURATION", "2h")
-		os.Setenv("JWT_ISSUER", "test-issuer")
-
-		defer func() {
-			os.Unsetenv("JWT_SECRET")
-			os.Unsetenv("JWT_DURATION")
-			os.Unsetenv("JWT_ISSUER")
-		}()
-
-		sm, err := NewSessionManager()
+	t.Run("should use injected duration and issuer", func(t *testing.T) {
+		sm, err := NewSessionManager("test-secret-key", "2h", "test-issuer")
 		require.NoError(t, err)
 		assert.Equal(t, 2*time.Hour, sm.tokenDuration)
 		assert.Equal(t, "test-issuer", sm.issuer)
@@ -41,7 +30,7 @@ func TestNewSessionManager(t *testing.T) {
 }
 
 func TestGenerateToken(t *testing.T) {
-	sm, err := NewSessionManager()
+	sm, err := NewSessionManager("dev-secret-change-in-production", "24h", "gitstore")
 	require.NoError(t, err)
 
 	t.Run("should generate valid JWT token", func(t *testing.T) {
@@ -95,7 +84,7 @@ func TestGenerateToken(t *testing.T) {
 }
 
 func TestValidateToken(t *testing.T) {
-	sm, err := NewSessionManager()
+	sm, err := NewSessionManager("dev-secret-change-in-production", "24h", "gitstore")
 	require.NoError(t, err)
 
 	t.Run("should validate correct token", func(t *testing.T) {
@@ -175,7 +164,7 @@ func TestValidateToken(t *testing.T) {
 }
 
 func TestRefreshToken(t *testing.T) {
-	sm, err := NewSessionManager()
+	sm, err := NewSessionManager("dev-secret-change-in-production", "24h", "gitstore")
 	require.NoError(t, err)
 
 	t.Run("should refresh valid token", func(t *testing.T) {
@@ -227,7 +216,7 @@ func TestRefreshToken(t *testing.T) {
 }
 
 func TestGetTokenExpiry(t *testing.T) {
-	sm, err := NewSessionManager()
+	sm, err := NewSessionManager("dev-secret-change-in-production", "24h", "gitstore")
 	require.NoError(t, err)
 
 	t.Run("should return token expiry time", func(t *testing.T) {
@@ -250,7 +239,7 @@ func TestGetTokenExpiry(t *testing.T) {
 }
 
 func TestRevokeToken(t *testing.T) {
-	sm, err := NewSessionManager()
+	sm, err := NewSessionManager("dev-secret-change-in-production", "24h", "gitstore")
 	require.NoError(t, err)
 
 	t.Run("should revoke valid token", func(t *testing.T) {
@@ -271,7 +260,7 @@ func TestRevokeToken(t *testing.T) {
 }
 
 func TestGetTokenDuration(t *testing.T) {
-	sm, err := NewSessionManager()
+	sm, err := NewSessionManager("dev-secret-change-in-production", "24h", "gitstore")
 	require.NoError(t, err)
 
 	duration := sm.GetTokenDuration()
