@@ -20,14 +20,14 @@ GitStore applies those primitives to commerce catalogues, then exposes the resul
 ```mermaid
 graph TD
     GitClient["Git Client\n(CLI)"]
-    GitServer["Git Server\n(Rust)"]
+    GitService["Git Service\n(Rust)"]
     GraphQLAPI["GraphQL API\n(Go)"]
     Storefront["Storefront\n(Consumer)"]
     OtherClients["Other Clients"]
 
-    GitClient -- "Git Protocol (push/pull)" --> GitServer
-    GitServer -- "Hook / Policy Errors" --> GitClient
-    GitServer -- "Websocket Notification" --> GraphQLAPI
+    GitClient -- "Git Protocol (push/pull)" --> GitService
+    GitService -- "Hook / Policy Errors" --> GitClient
+    GitService -- "Websocket Notification" --> GraphQLAPI
 
     GraphQLAPI -- "GraphQL" --> Storefront
     GraphQLAPI -- "GraphQL" --> OtherClients
@@ -35,7 +35,7 @@ graph TD
 
 ## Components
 
-- **Git Server** (Rust): Built-in git repository transport with hook extension points and websocket notifications
+- **Git Service** (Rust): Built-in git repository transport with hook extension points and websocket notifications
 - **GraphQL API** (Go): Headless API with Relay support
 
 > **Admin**: For the optional web UI, see [docs/admin/](docs/admin/).

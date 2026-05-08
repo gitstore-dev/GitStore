@@ -1,0 +1,107 @@
+name: CI Integration
+
+# Runs ONLY when files relevant to the gRPC contract or service implementations change.
+# This workflow is NOT a required branch-protection status check.
+# Core CI (ci.yml) gates merge; these tests provide deeper validation when warranted.
+
+on:
+  push:
+    branches: [ main, 'feature/**', '[0-9]+-*' ]
+    paths:
+      - 'gitstore-api/**'
+      - 'gitstore-git-service/**'
+      - 'shared/proto/**'
+      - 'docker/git-service.Dockerfile'
+      - 'docker/api.Dockerfile'
+      - 'compose.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'gitstore-api/**'
+      - 'gitstore-git-service/**'
+      - 'shared/proto/**'
+      - 'docker/git-service.Dockerfile'
+      - 'docker/api.Dockerfile'
+      - 'compose.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.x'
+        cache-dependency-path: tests/integration/go.sum
+
+    - name: Set up Docker Compose
+      uses: docker/setup-compose-action@v2
+
+    - name: Initialise demo catalog
+      run: ./scripts/init-demo-catalog.sh --data-dir ./data/repos
+      env:
+        GITSTORE_DATA_DIR: ./data/repos
+
+    - name: Build and start core stack
+      run: docker compose up -d --build
+      env:
+        GITSTORE_DATA_DIR: ./data/repos
+
+    - name: Wait for services to be healthy
+      run: |
+        echo "Waiting for gitstore-git-service..."
+        timeout 60 sh -c 'until curl -sf http://localhost:9418/health; do sleep 2; done'
+        echo "Waiting for gitstore-api..."
+        timeout 60 sh -c 'until curl -sf http://localhost:4000/health; do sleep 2; done'
+        docker compose ps
+
+    - name: Run integration tests
+      working-directory: ./tests/integration
+      run: go test -v -timeout 120s ./...
+
+    - name: Collect logs on failure
+      if: failure()
+      run: docker compose logs
+
+    - name: Cleanup
+      if: always()
+      run: docker compose down -v
+
+  grpc-integration-test:
+    name: gRPC Integration Tests (testcontainers)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.x'
+        cache-dependency-path: gitstore-api/go.sum
+
+    - name: Build git-service Docker image
+      run: docker build -f docker/git-service.Dockerfile -t gitstore-git-service:latest .
+
+    - name: Run gRPC integration tests
+      working-directory: ./gitstore-api
+      run: go test -tags integration -v -timeout 5m ./tests/integration/...

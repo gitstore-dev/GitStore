@@ -21,10 +21,20 @@ COPY gitstore-admin/ ./
 RUN npm run build
 
 # Runtime stage
-FROM nginx:1.27-alpine
+FROM nginx:1.30.0-alpine
 
 # Serve static output on port 3000 to match compose mapping.
-RUN printf 'server {\n    listen 3000;\n    server_name _;\n\n    root /usr/share/nginx/html;\n    index index.html;\n\n    location / {\n        try_files $uri $uri/ /index.html;\n    }\n}\n' > /etc/nginx/conf.d/default.conf
+RUN printf '\
+    server {\n \
+        listen 3000;\n \
+        server_name _;\n\n \
+        root /usr/share/nginx/html;\n \
+        index index.html;\n\n \
+        location / {\n \
+            try_files $uri $uri/ /index.html;\n \
+        }\n \
+    }\n' \
+    > /etc/nginx/conf.d/default.conf
 
 # Copy built application
 COPY --from=builder /build/dist/ /usr/share/nginx/html/

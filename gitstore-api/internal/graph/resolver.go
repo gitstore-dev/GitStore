@@ -10,7 +10,6 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/cache"
 	"github.com/gitstore-dev/gitstore/api/internal/loader"
-	"github.com/gitstore-dev/gitstore/api/internal/logger"
 	"go.uber.org/zap"
 )
 
@@ -21,12 +20,14 @@ type Resolver struct {
 	service *Service
 }
 
-// NewResolver creates a new GraphQL resolver
-func NewResolver(cacheManager *cache.Manager, repoPath string, gitServerURL string) *Resolver {
+// NewResolver creates a new GraphQL resolver.
+// writer is the GitWriter backed by the gRPC client; pass nil to disable writes.
+func NewResolver(cacheManager *cache.Manager, writer GitWriter, logger *zap.Logger) *Resolver {
+	svc := NewServiceWithWriter(cacheManager, writer, logger)
 	return &Resolver{
-		logger:  logger.Log,
+		logger:  logger,
 		cache:   cacheManager,
-		service: NewService(cacheManager, repoPath, gitServerURL, logger.Log),
+		service: svc,
 	}
 }
 

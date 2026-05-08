@@ -2,14 +2,13 @@
 // Copyright (c) 2026 GitStore contributors
 
 // Service layer for GraphQL resolvers
-// Handles CRUD operations with git persistence
+// Handles CRUD operations with git persistence via gRPC git-service.
 
 package graph
 
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/cache"
@@ -22,22 +21,38 @@ import (
 // Service provides business logic for GraphQL operations
 type Service struct {
 	cacheManager *cache.Manager
-	repoPath     string
-	gitClient    *gitclient.HTTPGitClient
+	gitWriter    GitWriter
 	logger       *zap.Logger
 }
 
-// NewService creates a new service instance
-func NewService(cacheManager *cache.Manager, repoPath string, gitServerURL string, logger *zap.Logger) *Service {
-	// Create HTTP git client
-	gitClient := gitclient.NewHTTPGitClient(gitServerURL, "catalog.git", repoPath, logger)
+// GitWriter is the write subset of gitclient.Client used by the Service.
+// Defined here to keep the graph package testable without a real gRPC connection.
+type GitWriter interface {
+	CommitFile(ctx context.Context, p gitclient.CommitFileParams) (string, error)
+	DeleteFile(ctx context.Context, p gitclient.DeleteFileParams) (string, error)
+	CreateTag(ctx context.Context, p gitclient.CreateTagParams) (string, error)
+}
 
+// NewService creates a new service instance backed by the gRPC git client.
+func NewService(cacheManager *cache.Manager, _ string, _ string, logger *zap.Logger) *Service {
 	return &Service{
 		cacheManager: cacheManager,
-		repoPath:     repoPath,
-		gitClient:    gitClient,
 		logger:       logger,
 	}
+}
+
+// NewServiceWithWriter creates a service with an explicit GitWriter (for tests).
+func NewServiceWithWriter(cacheManager *cache.Manager, writer GitWriter, logger *zap.Logger) *Service {
+	return &Service{
+		cacheManager: cacheManager,
+		gitWriter:    writer,
+		logger:       logger,
+	}
+}
+
+// SetGitWriter wires the gRPC client after construction (called from main.go).
+func (s *Service) SetGitWriter(w GitWriter) {
+	s.gitWriter = w
 }
 
 // GetCatalog retrieves the current catalog from cache
@@ -58,7 +73,6 @@ func (s *Service) GetProducts(ctx context.Context, categoryID *string) ([]*catal
 
 	products := cat.AllProducts()
 
-	// Filter by category if specified
 	if categoryID != nil && *categoryID != "" {
 		var filtered []*catalog.Product
 		for _, p := range products {
@@ -182,12 +196,9 @@ func (s *Service) GetCollectionBySlug(ctx context.Context, slug string) (*catalo
 	return collection, nil
 }
 
-// CreateProduct creates a new product and commits to git
+// CreateProduct creates a new product and commits to git via gRPC.
 func (s *Service) CreateProduct(ctx context.Context, input map[string]interface{}) (*catalog.Product, error) {
-	// Generate ID
 	id := uuid.New().String()
-
-	// Create product struct
 	now := time.Now()
 	product := &catalog.Product{
 		ID:        id,
@@ -200,7 +211,6 @@ func (s *Service) CreateProduct(ctx context.Context, input map[string]interface{
 		UpdatedAt: now,
 	}
 
-	// Handle optional fields
 	if status, ok := input["inventoryStatus"].(string); ok {
 		product.InventoryStatus = status
 	}
@@ -220,12 +230,10 @@ func (s *Service) CreateProduct(ctx context.Context, input map[string]interface{
 		product.Metadata = metadata
 	}
 
-	// Write to git
 	if err := s.writeProductToGit(ctx, product, "Create product: "+product.Title); err != nil {
 		return nil, err
 	}
 
-	// Reload catalog
 	if _, err := s.cacheManager.Reload(ctx); err != nil {
 		s.logger.Error("Failed to reload catalog after create", zap.Error(err))
 	}
@@ -233,9 +241,8 @@ func (s *Service) CreateProduct(ctx context.Context, input map[string]interface{
 	return product, nil
 }
 
-// UpdateProduct updates an existing product
+// UpdateProduct updates an existing product.
 func (s *Service) UpdateProduct(ctx context.Context, id string, input map[string]interface{}) (*catalog.Product, error) {
-	// Get existing product
 	cat, err := s.GetCatalog(ctx)
 	if err != nil {
 		return nil, err
@@ -246,11 +253,9 @@ func (s *Service) UpdateProduct(ctx context.Context, id string, input map[string
 		return nil, fmt.Errorf("product not found: %s", id)
 	}
 
-	// Create updated product
 	product := *existing
 	product.UpdatedAt = time.Now()
 
-	// Update fields if provided
 	if title, ok := input["title"].(string); ok {
 		product.Title = title
 	}
@@ -285,12 +290,10 @@ func (s *Service) UpdateProduct(ctx context.Context, id string, input map[string
 		product.Metadata = metadata
 	}
 
-	// Write to git
 	if err := s.writeProductToGit(ctx, &product, "Update product: "+product.Title); err != nil {
 		return nil, err
 	}
 
-	// Reload catalog
 	if _, err := s.cacheManager.Reload(ctx); err != nil {
 		s.logger.Error("Failed to reload catalog after update", zap.Error(err))
 	}
@@ -298,9 +301,8 @@ func (s *Service) UpdateProduct(ctx context.Context, id string, input map[string
 	return &product, nil
 }
 
-// DeleteProduct deletes a product
+// DeleteProduct deletes a product via gRPC.
 func (s *Service) DeleteProduct(ctx context.Context, id string) error {
-	// Get existing product
 	cat, err := s.GetCatalog(ctx)
 	if err != nil {
 		return err
@@ -311,13 +313,15 @@ func (s *Service) DeleteProduct(ctx context.Context, id string) error {
 		return fmt.Errorf("product not found: %s", id)
 	}
 
-	// Delete file via git-server HTTP
-	filePath := filepath.Join("products", id+".md")
-	if err := s.gitClient.PushDelete(ctx, filePath, "Delete product: "+product.Title); err != nil {
-		return fmt.Errorf("failed to push deletion to git-server: %w", err)
+	filePath := fmt.Sprintf("products/%s.md", id)
+	_, err = s.gitWriter.DeleteFile(ctx, gitclient.DeleteFileParams{
+		Path:          filePath,
+		CommitMessage: "Delete product: " + product.Title,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete product via git-service: %w", err)
 	}
 
-	// Reload catalog
 	if _, err := s.cacheManager.Reload(ctx); err != nil {
 		s.logger.Error("Failed to reload catalog after delete", zap.Error(err))
 	}
@@ -325,17 +329,19 @@ func (s *Service) DeleteProduct(ctx context.Context, id string) error {
 	return nil
 }
 
-// writeProductToGit writes a product to git as markdown with YAML frontmatter
+// writeProductToGit writes a product to git via gRPC CommitFile.
 func (s *Service) writeProductToGit(ctx context.Context, product *catalog.Product, commitMessage string) error {
-	// Create markdown content
 	content := formatProductMarkdown(product)
+	filePath := fmt.Sprintf("products/%s.md", product.ID)
 
-	// Push to git-server via HTTP
-	filePath := filepath.Join("products", product.ID+".md")
-	if err := s.gitClient.PushChange(ctx, filePath, content, commitMessage); err != nil {
-		return fmt.Errorf("failed to push to git-server: %w", err)
+	_, err := s.gitWriter.CommitFile(ctx, gitclient.CommitFileParams{
+		Path:          filePath,
+		Content:       []byte(content),
+		CommitMessage: commitMessage,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to commit product via git-service: %w", err)
 	}
-
 	return nil
 }
 

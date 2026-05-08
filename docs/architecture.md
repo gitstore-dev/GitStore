@@ -4,7 +4,7 @@ This document presents two end-to-end architecture options for the AI-native com
 
 ## System Goals
 
-- Keep catalog history auditable and reversible.
+- Keep catalogue history auditable and reversible.
 - Allow AI agents to perform safe, structured mutations.
 - Serve storefront reads from low-latency indexed data.
 - Decouple write acceptance from heavy validation and indexing work.
@@ -23,8 +23,22 @@ Both proposals use the same core building blocks, arranged with different contro
 - `gitstore-api/`: Go API gateway, GraphQL surface, and gRPC client/server boundaries.
 - `gitstore-git-service/`: Rust Git engine, receive hooks, and repository access logic.
 - `shared/schemas/`: GraphQL schema contracts consumed by the API layer.
+- `shared/proto/gitstore/git/v1/`: Canonical `.proto` definition for the gRPC Git service contract.
 
 > **Admin**: For the optional web interface, see [`docs/admin/architecture.md`](admin/architecture.md).
+
+### Service Boundary
+
+The API gateway (`gitstore-api`) and the Git server (`gitstore-git-service`) communicate exclusively through gRPC on port `50051`. **No shared volume mount is required.** The API holds no local git state; every read (catalogue load) and every write (commit, delete, tag) is an RPC call to the Git service.
+
+Key environment variables:
+
+| Service                | Variable             | Purpose                                                |
+|------------------------|----------------------|--------------------------------------------------------|
+| `gitstore-api`         | `GITSTORE_GIT_GRPC`  | gRPC address of git-service (e.g. `git-service:50051`) |
+| `gitstore-api`         | `GITSTORE_GIT_WS`    | WebSocket URL for catalogue-reload notifications       |
+| `gitstore-git-service` | `GITSTORE_GRPC_PORT` | Port the gRPC server binds on (default `50051`)        |
+| `gitstore-git-service` | `GITSTORE_DATA_DIR`  | Path to the bare repository directory                  |
 
 These folders map directly to the control, storage, and distribution planes described below.
 
@@ -47,7 +61,7 @@ Proposal 1 starts at the API boundary, commits to Git immediately, and then inde
 - **Request contract**: GraphQL mutations should include idempotency keys so retries do not create duplicate commits.
 - **Commit metadata**: Persist actor identity, request ID, and schema version in commit message/footer for traceability.
 - **Queue payload**: Emit repository path, commit SHA, changed blob paths, and correlation ID on each post-receive event.
-- **Validation contract**: Parser worker validates changed blobs against the catalog content schema (product/category/collection frontmatter) and returns structured errors.
+- **Validation contract**: Parser worker validates changed blobs against the catalogue content schema (product/category/collection frontmatter) and returns structured errors.
 - **KV write model**: Use deterministic keys (`catalog:{env}:{entity}:{id}`) and version stamps (`etag` or commit SHA).
 
 ### Architecture Diagram
@@ -61,7 +75,7 @@ graph LR
 
     %% Infrastructure & Data Storage Nodes %%
     Disk[("💾 Disk Storage\n(Bare .git Repos)")]:::infra
-    KV[("⚡ Edge-KV Store\n(Redis / Valkey)\n[Fast State]")]:::infra
+    KV[("⚡ Cache Store\n(Redis / Valkey)\n[Fast State]")]:::infra
     Queue[("📨 Event Queue\n(Redis Streams / NATS)")]:::infra
 
     %% Core Services Subgraph (Your System) %%
@@ -109,14 +123,14 @@ graph LR
 ### Responsibilities by Layer
 
 - **Actors**
-  - AI agents submit mutations and receive fast acknowledgments.
+  - AI agents submit mutations and receive fast acknowledgements.
   - Storefront 
-    - reads indexed catalog state from KV for low-latency queries.
+    - reads indexed catalogue state from KV for low-latency queries.
     - triggers ISR revalidation on webhook event from API.
 - **Core services**
   - Go API gateway handles GraphQL writes and reads.
   - Rust Git server executes durable commit operations.
-  - Parser worker validates changed blobs and writes read-optimized JSON.
+  - Parser worker validates changed blobs and writes read-optimised JSON.
 - **Infrastructure**
   - Disk stores canonical Git history.
   - Queue carries asynchronous indexing work.
@@ -124,7 +138,7 @@ graph LR
 
 ### Operational Notes
 
-- Write acknowledgments are fast because indexing is asynchronous.
+- Write acknowledgements are fast because indexing is asynchronous.
 - Validation failures are surfaced operationally without rewriting accepted Git commits.
 - Multiple parser workers can scale out independently as event volume grows.
 
@@ -174,7 +188,7 @@ Proposal 2 starts at Git transport boundaries, executes hooks during receive, an
   ```
 - **Release contract**: Only tags matching a release pattern (for example `release/*` or `v*`) emit publish events.
 - **Publication payload**: Include tag name, target commit SHA, repository, and release timestamp.
-- **KV projection**: Parser materializes only tagged state, keeping draft commits invisible to storefront queries.
+- **KV projection**: Parser materialises only tagged state, keeping draft commits invisible to storefront queries.
 
 ### Architecture Diagram
 
@@ -192,7 +206,7 @@ graph TD
 
     %% Infrastructure & Data Storage Nodes %%
     Disk[("💾 Disk Storage\n(Bare .git Repos)")]:::infra
-    KV[("⚡ Edge-KV Store\n(Production State)")]:::infra
+    KV[("⚡ Cache Store\n(Production State)")]:::infra
     Queue[("📨 Event Queue\n(Releases/Tags Only)")]:::infra
 
     %% Core Services Subgraph %%
@@ -241,11 +255,11 @@ graph TD
 - **Infrastructure**
   - Disk stores draft and released Git history.
   - Queue carries release publication events.
-  - KV contains only customer-visible published catalog data.
+  - KV contains only customer-visible published catalogue data.
 
 ### Operational Notes
 
-- Release tags become the explicit publish contract.
+- Release tags become the explicit publishing contract.
 - Draft branch activity is isolated from customer-facing reads.
 - Rollbacks can be executed by moving release tags and replaying publish events.
 
@@ -263,5 +277,5 @@ graph TD
 
 - Choose **Proposal 1** if mutation throughput and agent ergonomics at the API layer are the primary priority.
 - Choose **Proposal 2** if strict release control and Git-native operational workflows are the primary priority.
-- In both cases, Git remains authoritative and KV remains the read-optimized projection layer.
+- In both cases, Git remains authoritative and KV remains the read-optimised projection layer.
 

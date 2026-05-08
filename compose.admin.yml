@@ -12,7 +12,6 @@ services:
         condition: service_healthy
     environment:
       - GITSTORE_GRAPHQL_URL=http://api:4000/graphql
-      - GITSTORE_AUTH_SECRET=change-me-in-production
       - GITSTORE_SESSION_TIMEOUT=3600
     networks:
       - gitstore-network

@@ -19,6 +19,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/playground"
 	"github.com/gitstore-dev/gitstore/api/internal/cache"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/handler"
@@ -34,7 +35,7 @@ func main() {
 	// Parse command-line flags
 	port := flag.Int("port", getEnvInt("GITSTORE_API_PORT", 4000), "API server port")
 	gitWS := flag.String("git-ws", getEnv("GITSTORE_GIT_WS", "ws://localhost:8080"), "Git server websocket URL")
-	gitRepo := flag.String("git-repo", getEnv("GITSTORE_GIT_REPO", "/data/repos/catalog.git"), "Git repository path")
+	gitGRPC := flag.String("git-grpc", getEnv("GITSTORE_GIT_GRPC", ""), "Git service gRPC address (host:port)")
 	gitServerURL := flag.String("git-server-url", getEnv("GITSTORE_GIT_SERVER_URL", "http://localhost:9418"), "Git server HTTP URL")
 	cacheTTL := flag.Int("cache-ttl", getEnvInt("GITSTORE_CACHE_TTL", 300), "Cache TTL in seconds")
 	flag.Parse()
@@ -49,13 +50,23 @@ func main() {
 	logger.Log.Info("Starting GitStore GraphQL API",
 		zap.Int("port", *port),
 		zap.String("git_ws", *gitWS),
-		zap.String("git_repo", *gitRepo),
+		zap.String("git_grpc", *gitGRPC),
 		zap.String("git_server_url", *gitServerURL),
 		zap.Int("cache_ttl", *cacheTTL),
 	)
 
-	// Create catalog loader
-	catalogLoader := catalog.NewLoader(*gitRepo, logger.Log)
+	// Dial git-service via gRPC
+	if *gitGRPC == "" {
+		logger.Log.Fatal("GITSTORE_GIT_GRPC is required; set to git-service host:port")
+	}
+	gitClient, err := gitclient.NewClientWithAddr(*gitGRPC)
+	if err != nil {
+		logger.Log.Fatal("Failed to connect to git-service", zap.Error(err))
+	}
+	defer gitClient.Close()
+
+	// Create catalog loader backed by gRPC
+	catalogLoader := catalog.NewGRPCLoader(gitClient, logger.Log)
 
 	// Create cache manager
 	cacheManager := cache.NewManager(
@@ -70,7 +81,7 @@ func main() {
 	if _, err := cacheManager.Get(ctx); err != nil {
 		logger.Log.Error("Failed to load initial catalog",
 			zap.Error(err),
-			zap.String("repo", *gitRepo),
+			zap.String("grpc", *gitGRPC),
 		)
 		logger.Log.Warn("API will continue but queries will fail until catalog loads")
 	} else {
@@ -109,8 +120,8 @@ func main() {
 		logger.Log.Fatal("Failed to create auth middleware", zap.Error(err))
 	}
 
-	// Create GraphQL resolver
-	resolver := graph.NewResolver(cacheManager, *gitRepo, *gitServerURL)
+	// Create GraphQL resolver (backed by the same gRPC client used for reads)
+	resolver := graph.NewResolver(cacheManager, gitClient, logger.Log)
 	schema := generated.NewExecutableSchema(generated.Config{Resolvers: resolver})
 	gqlServer := gqlhandler.NewDefaultServer(schema)
 
@@ -152,14 +163,14 @@ func main() {
 	mux.HandleFunc("/ready", healthHandler.Ready)
 
 	// Apply middleware
-	var handler http.Handler = mux
-	handler = middleware.CORSMiddleware(handler)
-	handler = middleware.RequestIDMiddleware(handler)
+	var httpHandler http.Handler = mux
+	httpHandler = middleware.CORSMiddleware(httpHandler)
+	httpHandler = middleware.RequestIDMiddleware(httpHandler)
 
 	// Create HTTP server
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", *port),
-		Handler:      handler,
+		Handler:      httpHandler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,

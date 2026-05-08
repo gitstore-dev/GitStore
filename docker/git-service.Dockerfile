@@ -16,24 +16,30 @@ RUN apk add --no-cache \
     pkgconf \
     openssl-dev \
     openssl-libs-static \
+    zlib-dev \
+    zlib-static \
     cmake \
     make \
-    musl-dev
+    musl-dev \
+    protobuf-dev
 
 WORKDIR /build
 
 # Tell openssl-sys to link the static Alpine openssl instead of dynamic.
 ENV OPENSSL_STATIC=1
 
-# Copy manifests
+# Copy manifests and build script
 COPY gitstore-git-service/Cargo.toml gitstore-git-service/Cargo.lock* ./
+COPY gitstore-git-service/build.rs ./build.rs
+# Copy proto to the path build.rs expects: ../shared/proto relative to /build → /shared/proto
+COPY shared/proto /shared/proto
 
 # Create dummy src to build dependencies
 RUN mkdir src && \
     echo "fn main() {}" > src/main.rs && \
     echo "pub fn lib() {}" > src/lib.rs
 
-# Build dependencies
+# Build dependencies (and regenerate proto stubs for the current tonic version)
 RUN --mount=type=cache,id=cargo-registry-$TARGETARCH,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-git-$TARGETARCH,target=/usr/local/cargo/git \
     --mount=type=cache,id=cargo-target-$TARGETARCH,target=/build/target \
@@ -44,12 +50,16 @@ RUN --mount=type=cache,id=cargo-registry-$TARGETARCH,target=/usr/local/cargo/reg
 COPY gitstore-git-service/src ./src
 
 # Build application.
-# Refresh mtimes for all source files so Cargo invalidates dummy artifacts
-# from the dependency-caching step and recompiles the real crate.
+# Refresh mtimes for all source files and build.rs so Cargo invalidates dummy
+# artifacts from the dependency-caching step and recompiles the real crate.
+# Also remove stale build-script output dirs so proto stubs are regenerated.
 RUN --mount=type=cache,id=cargo-registry-$TARGETARCH,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-git-$TARGETARCH,target=/usr/local/cargo/git \
     --mount=type=cache,id=cargo-target-$TARGETARCH,target=/build/target \
     find src -type f -name '*.rs' -exec touch {} + && \
+    touch build.rs && \
+    find /build/target -name 'build' -type d \
+      -path '*/gitstore-server-*/build' -exec rm -rf {} + 2>/dev/null || true && \
     cargo build --release && \
     cp /build/target/release/git-service /build/git-service && \
     strip /build/git-service

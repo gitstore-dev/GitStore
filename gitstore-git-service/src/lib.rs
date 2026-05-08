@@ -5,6 +5,7 @@
 // Structured logging setup using tracing
 
 pub mod git;
+pub mod grpc;
 pub mod http_git_server;
 pub mod websocket;
 
