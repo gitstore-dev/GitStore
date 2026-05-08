@@ -19,6 +19,7 @@ pub fn init_or_open_repository(path: &Path) -> Result<Repository> {
         let mut opts = RepositoryInitOptions::new();
         opts.bare(true);
         opts.mkdir(true);
+        opts.initial_head("main");
 
         Repository::init_opts(path, &opts)
             .with_context(|| format!("Failed to initialize repository at {}", path.display()))

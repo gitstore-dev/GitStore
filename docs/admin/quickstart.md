@@ -34,7 +34,7 @@ gitstore-admin       running             0.0.0.0:3000->3000/tcp
 
 Open **http://localhost:3000** in your browser.
 
-Log in with the credentials configured in `GITSTORE_AUTH_SECRET` (default: `admin123` — change this before any real deployment).
+Log in with the credentials configured in `ADMIN_PASSWORD_HASH` (default: `admin123` — change this before any real deployment).
 
 ## Managing Products
 

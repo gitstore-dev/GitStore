@@ -6,12 +6,19 @@ package testutil
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"testing"
 
+	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 // GraphQLRequest represents a GraphQL query request
@@ -91,4 +98,39 @@ func AssertNoErrors(t *testing.T, resp *GraphQLResponse) {
 func GetTestServerURL() string {
 	// TODO: Read from environment variable
 	return "http://localhost:4000"
+}
+
+const grpcBufSize = 1 << 20 // 1 MiB
+
+// StartGRPCStub starts an in-process gRPC stub server using bufconn.
+// svc is a GitServiceServer implementation (e.g. a struct embedding UnimplementedGitServiceServer).
+// Returns a *gitclient.Client dialled against the stub and a cleanup function.
+//
+// Use this for unit-level contract tests that don't need Docker:
+//
+//	client, cleanup := testutil.StartGRPCStub(t, &myStub{})
+//	defer cleanup()
+func StartGRPCStub(t *testing.T, svc gitv1.GitServiceServer) (*gitclient.Client, func()) {
+	t.Helper()
+	lis := bufconn.Listen(grpcBufSize)
+	srv := grpc.NewServer()
+	gitv1.RegisterGitServiceServer(srv, svc)
+	go func() { _ = srv.Serve(lis) }()
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufconn",
+		grpc.WithContextDialer(func(_ context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(context.Background())
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+
+	client := gitclient.NewClientFromConn(conn)
+	cleanup := func() {
+		conn.Close()
+		srv.Stop()
+		lis.Close()
+	}
+	return client, cleanup
 }

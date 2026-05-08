@@ -18,14 +18,14 @@ import (
 type Manager struct {
 	mu       sync.RWMutex
 	catalog  *catalog.Catalog
-	loader   *catalog.Loader
+	loader   catalog.Loader
 	logger   *zap.Logger
 	ttl      time.Duration
 	loadedAt time.Time
 }
 
 // NewManager creates a new cache manager
-func NewManager(loader *catalog.Loader, logger *zap.Logger, ttl time.Duration) *Manager {
+func NewManager(loader catalog.Loader, logger *zap.Logger, ttl time.Duration) *Manager {
 	return &Manager{
 		loader: loader,
 		logger: logger,
@@ -43,9 +43,9 @@ func (m *Manager) Get(ctx context.Context) (*catalog.Catalog, error) {
 			zap.Time("loaded_at", m.loadedAt),
 			zap.Duration("age", time.Since(m.loadedAt)),
 		)
-		catalog := m.catalog
+		cat := m.catalog
 		m.mu.RUnlock()
-		return catalog, nil
+		return cat, nil
 	}
 
 	m.mu.RUnlock()
@@ -59,10 +59,9 @@ func (m *Manager) Reload(ctx context.Context) (*catalog.Catalog, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.logger.Info("Reloading catalog from git")
+	m.logger.Info("Reloading catalog from latest tag")
 
-	// Load catalog from HEAD (includes uncommitted work)
-	newCatalog, err := m.loader.LoadFromHEAD(ctx)
+	newCatalog, err := m.loader.LoadFromLatestTag(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -72,6 +71,7 @@ func (m *Manager) Reload(ctx context.Context) (*catalog.Catalog, error) {
 
 	m.logger.Info("Catalog reloaded successfully",
 		zap.String("commit", newCatalog.Commit()),
+		zap.String("tag", newCatalog.Tag()),
 		zap.Int("products", newCatalog.ProductCount()),
 		zap.Int("categories", newCatalog.CategoryCount()),
 		zap.Int("collections", newCatalog.CollectionCount()),

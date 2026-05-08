@@ -12,6 +12,7 @@ use tracing::{error, info};
 
 use gitstore::git::metrics::log_repo_metrics;
 use gitstore::git::repo::init_or_open_repository;
+use gitstore::grpc::server::{proto::git_service_server::GitServiceServer, GitServiceImpl};
 use gitstore::http_git_server::{create_git_routes, GitServerState};
 use gitstore::websocket::server::WebsocketServer;
 
@@ -25,6 +26,10 @@ struct Args {
     /// Websocket notification port
     #[arg(long, default_value = "8080")]
     ws_port: u16,
+
+    /// gRPC service port
+    #[arg(long, default_value = "50051")]
+    grpc_port: u16,
 
     /// Data directory for repositories
     #[arg(long, default_value = "/data/repos")]
@@ -46,6 +51,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(ws_port) = env::var("GITSTORE_WS_PORT") {
         args.ws_port = ws_port.parse().unwrap_or(args.ws_port);
     }
+    if let Ok(grpc_port) = env::var("GITSTORE_GRPC_PORT") {
+        args.grpc_port = grpc_port.parse().unwrap_or(args.grpc_port);
+    }
     if let Ok(data_dir) = env::var("GITSTORE_DATA_DIR") {
         args.data_dir = data_dir;
     }
@@ -62,6 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(
         git_port = args.port,
         ws_port = args.ws_port,
+        grpc_port = args.grpc_port,
         data_dir = %args.data_dir,
         "Starting GitStore Server"
     );
@@ -102,6 +111,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Start gRPC server
+    let grpc_addr: SocketAddr = format!("0.0.0.0:{}", args.grpc_port).parse()?;
+    let grpc_service = GitServiceImpl::new(data_path.join("catalog.git"));
+    info!(
+        grpc_port = args.grpc_port,
+        "gRPC server starting on {}", grpc_addr
+    );
+    let grpc_handle = tokio::spawn(async move {
+        if let Err(e) = tonic::transport::Server::builder()
+            .add_service(GitServiceServer::new(grpc_service))
+            .serve(grpc_addr)
+            .await
+        {
+            error!(error = %e, "gRPC server error");
+        }
+    });
+
     // Create HTTP Git server state
     let git_state = GitServerState {
         repo_path: data_path.clone(),
@@ -134,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ws_handle.abort();
     http_handle.abort();
+    grpc_handle.abort();
 
     Ok(())
 }

@@ -1,0 +1,49 @@
+name: CI Proto
+
+# Runs ONLY when proto definitions change.
+# This workflow is NOT a required branch-protection status check.
+# Core CI (ci.yml) gates merge; this check provides contract validation when proto files change.
+
+on:
+  push:
+    branches: [ main, 'feature/**', '[0-9]+-*' ]
+    paths:
+      - 'shared/proto/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'shared/proto/**'
+
+permissions:
+  contents: read
+
+jobs:
+  proto-breaking:
+    name: Proto Breaking Change Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Install buf
+      uses: bufbuild/buf-action@v1
+      with:
+        version: 1.69.0
+        setup_only: true
+
+    - name: Lint proto files
+      run: buf lint shared/proto/
+
+    - name: Check for breaking changes
+      run: |
+        # Only run the breaking check if the proto already exists on main.
+        # On a branch that first introduces the proto there is nothing to compare against.
+        if git show main:shared/proto/gitstore/git/v1/git_service.proto >/dev/null 2>&1; then
+          buf breaking shared/proto/ --against '.git#branch=main'
+        else
+          echo "Proto not yet on main — skipping breaking change check."
+        fi

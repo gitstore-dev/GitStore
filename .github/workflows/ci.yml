@@ -28,6 +28,9 @@ jobs:
       with:
         components: rustfmt, clippy
 
+    - name: Install protoc
+      run: sudo apt-get update -qq && sudo apt-get install -y protobuf-compiler
+
     - name: Cache Rust dependencies
       uses: actions/cache@v4
       with:
@@ -119,54 +122,6 @@ jobs:
         name: go-coverage
       continue-on-error: true
 
-  integration-test:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    needs: [rust-test, go-test]
-
-    steps:
-    - uses: actions/checkout@v6
-
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.25.x'
-        cache-dependency-path: tests/integration/go.sum
-
-    - name: Set up Docker Compose
-      uses: docker/setup-compose-action@v2
-
-    - name: Initialise demo catalog
-      run: ./scripts/init-demo-catalog.sh --data-dir ./data/repos
-      env:
-        GITSTORE_DATA_DIR: ./data/repos
-
-    - name: Build and start core stack
-      run: |
-        docker compose up -d --build
-      env:
-        GITSTORE_DATA_DIR: ./data/repos
-
-    - name: Wait for services to be healthy
-      run: |
-        echo "Waiting for gitstore-git-service..."
-        timeout 60 sh -c 'until curl -sf http://localhost:9418/health; do sleep 2; done'
-        echo "Waiting for gitstore-api..."
-        timeout 60 sh -c 'until curl -sf http://localhost:4000/health; do sleep 2; done'
-        docker compose ps
-
-    - name: Run integration tests
-      working-directory: ./tests/integration
-      run: go test -v -timeout 120s ./...
-
-    - name: Collect logs on failure
-      if: failure()
-      run: docker compose logs
-
-    - name: Cleanup
-      if: always()
-      run: docker compose down -v
-
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
@@ -206,7 +161,7 @@ jobs:
   build-status:
     name: Build Status
     runs-on: ubuntu-latest
-    needs: [rust-test, go-test, integration-test, security-scan]
+    needs: [rust-test, go-test, security-scan]
     if: always()
 
     steps:

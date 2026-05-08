@@ -1,0 +1,150 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+//
+// GitStore gRPC Git Service contract — v1
+//
+// Source of truth: shared/proto/gitstore/git/v1/git_service.proto
+// This copy is for spec documentation only.
+// Generated code lives in gitstore-git-service/gen/ and gitstore-api/gen/.
+
+syntax = "proto3";
+
+package gitstore.git.v1;
+
+option go_package = "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1;gitv1";
+
+// GitService provides raw git primitive operations over gRPC.
+// The contract operates exclusively on file bytes and git metadata.
+// Catalogue entity parsing is the caller's responsibility.
+//
+// Contract versioning: this package is gitstore.git.v1. Breaking changes
+// require a new gitstore.git.v2 package and atomic co-deployment of both
+// gitstore-api and gitstore-git-service.
+service GitService {
+  // GetFile returns the raw bytes of a single file at the given ref.
+  rpc GetFile(GetFileRequest) returns (GetFileResponse);
+
+  // GetFileStream returns a file as a stream of byte chunks.
+  // Use for files larger than 1 MiB to avoid message size limits.
+  rpc GetFileStream(GetFileRequest) returns (stream FileChunk);
+
+  // ListFiles enumerates file paths under an optional prefix at the given ref.
+  rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
+
+  // CommitFile writes a single file and commits it to the default branch.
+  // git-service handles isolation internally.
+  rpc CommitFile(CommitFileRequest) returns (CommitFileResponse);
+
+  // DeleteFile removes a file and commits the deletion to the default branch.
+  rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
+
+  // CreateTag creates an annotated tag on HEAD (or the specified commit).
+  rpc CreateTag(CreateTagRequest) returns (CreateTagResponse);
+
+  // ListTags enumerates tags with an optional prefix filter.
+  rpc ListTags(ListTagsRequest) returns (ListTagsResponse);
+
+  // GetLatestTag returns the latest semver release tag by version ordering.
+  rpc GetLatestTag(GetLatestTagRequest) returns (GetLatestTagResponse);
+}
+
+// ─── Read messages ────────────────────────────────────────────────────────────
+
+message GetFileRequest {
+  // path is the file path relative to the repository root.
+  string path = 1;
+  // ref is a tag name, branch name, or full commit SHA.
+  string ref  = 2;
+}
+
+message GetFileResponse {
+  string path       = 1;
+  bytes  content    = 2; // raw file bytes; UTF-8 for markdown but treated opaque
+  string blob_sha   = 3; // 40-char hex SHA-1
+  uint64 size_bytes = 4;
+}
+
+message FileChunk {
+  uint32 chunk_index = 1;
+  bytes  data        = 2; // max 256 KiB per chunk
+  bool   is_last     = 3;
+}
+
+message ListFilesRequest {
+  string ref         = 1;
+  string path_prefix = 2; // empty = repo root; e.g. "products/"
+  bool   recursive   = 3; // default true
+}
+
+message ListFilesResponse {
+  repeated FileEntry files          = 1;
+  string             ref_commit_sha = 2; // commit SHA the ref resolved to
+}
+
+message FileEntry {
+  string path       = 1;
+  uint64 size_bytes = 2;
+  string blob_sha   = 3;
+}
+
+// ─── Write messages ───────────────────────────────────────────────────────────
+
+message CommitFileRequest {
+  string path           = 1;
+  bytes  content        = 2;
+  string commit_message = 3;
+  string author_name    = 4;
+  string author_email   = 5;
+}
+
+message CommitFileResponse {
+  string commit_sha = 1; // 40-char hex
+  string branch     = 2; // branch the commit was applied to
+}
+
+message DeleteFileRequest {
+  string path           = 1;
+  string commit_message = 2;
+  string author_name    = 3;
+  string author_email   = 4;
+}
+
+message DeleteFileResponse {
+  string commit_sha = 1;
+}
+
+// ─── Tag messages ─────────────────────────────────────────────────────────────
+
+message CreateTagRequest {
+  string tag_name          = 1; // semver e.g. "v1.2.0"
+  string message           = 2; // annotated tag message
+  string target_commit_sha = 3; // empty = HEAD
+}
+
+message CreateTagResponse {
+  string tag_name = 1;
+  string tag_sha  = 2; // tag object SHA
+}
+
+message ListTagsRequest {
+  string prefix = 1; // e.g. "v"; empty = all tags
+}
+
+message ListTagsResponse {
+  repeated TagEntry tags = 1;
+}
+
+message GetLatestTagRequest {
+  string prefix = 1; // default "v"
+}
+
+message GetLatestTagResponse {
+  TagEntry tag   = 1;
+  bool     found = 2; // false if no matching tags exist
+}
+
+message TagEntry {
+  string name       = 1; // short name e.g. "v1.2.0"
+  string commit_sha = 2; // peeled commit SHA
+  string message    = 3; // annotated tag message; empty for lightweight tags
+}

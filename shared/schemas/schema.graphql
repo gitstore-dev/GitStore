@@ -1,5 +1,4 @@
 # GitStore GraphQL Schema
-# API-First Design: Contract defined before implementation
 # Relay Specification: Node interface, Connection pattern, Mutation pattern
 
 schema {
