@@ -3,6 +3,8 @@
 
 // Contract test for products query filtered by categoryId
 
+//go:build contract
+
 package contract
 
 import (

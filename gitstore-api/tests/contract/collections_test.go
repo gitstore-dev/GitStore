@@ -3,6 +3,8 @@
 
 // Contract test for collections query
 
+//go:build contract
+
 package contract
 
 import (

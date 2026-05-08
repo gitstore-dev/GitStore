@@ -3,9 +3,9 @@
 
 // Integration test: concurrent gRPC CommitFile calls.
 // 10 simultaneous commits must all succeed with distinct SHAs and no conflicts.
-// Requires Docker. Run with: go test -tags integration ./tests/integration/...
+// Requires Docker. Run with: go test -tags grpc ./tests/integration/...
 
-//go:build integration
+//go:build grpc
 
 package integration
 

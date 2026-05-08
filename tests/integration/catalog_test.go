@@ -63,16 +63,6 @@ func TestTagPushPublishesToGraphQL(t *testing.T) {
 	}
 }
 
-// TestInvalidPushIsRejected covers contract C-004.
-//
-// git-service is a transport-only layer; schema/policy enforcement is
-// delegated to API-managed hook workers (not yet implemented). Until a
-// pre-receive hook worker rejects invalid content, this contract cannot be
-// verified end-to-end and the test is skipped.
-func TestInvalidPushIsRejected(t *testing.T) {
-	t.Skip("C-004: push-time schema rejection requires a pre-receive hook worker (not yet implemented)")
-}
-
 // queryProductSKUs returns all product SKUs currently in the GraphQL catalog.
 func queryProductSKUs(t *testing.T) ([]string, error) {
 	t.Helper()

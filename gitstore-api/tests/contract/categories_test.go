@@ -3,6 +3,8 @@
 
 // Contract test for categories query
 
+//go:build contract
+
 package contract
 
 import (

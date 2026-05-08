@@ -3,9 +3,9 @@
 
 // Integration test: CommitFile and DeleteFile via gRPC against a real git-service container.
 // Exercises concurrent mutations and asserts no filesystem artefacts remain on the API side.
-// Requires Docker. Run with: go test -tags integration ./tests/integration/...
+// Requires Docker. Run with: go test -tags grpc ./tests/integration/...
 
-//go:build integration
+//go:build grpc
 
 package integration
 
@@ -16,54 +16,26 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// startMutationContainer starts a git-service container and returns a connected client.
-// Skips the test if Docker is unavailable or the image is missing.
+// startMutationContainer returns a connected client to the shared git-service container.
+// The container lifecycle is managed once per package in TestMain.
 func startMutationContainer(t *testing.T) (*gitclient.Client, func()) {
 	t.Helper()
-	ctx := context.Background()
 
-	req := testcontainers.ContainerRequest{
-		Image:        "gitstore-git-service:latest",
-		ExposedPorts: []string{"9418/tcp", "50051/tcp"},
-		Env: map[string]string{
-			"GITSTORE_DATA_DIR":  "/data/repos",
-			"GITSTORE_GRPC_PORT": "50051",
-		},
-		// Wait for the HTTP health endpoint — gRPC binds concurrently so TCP-open
-		// on 50051 is not sufficient; the health response confirms all servers are up.
-		WaitingFor: wait.ForHTTP("/health").WithPort("9418/tcp").
-			WithStartupTimeout(60 * time.Second),
+	if sharedGRPCAddr == "" {
+		t.Fatalf("shared gRPC test container is not initialized")
 	}
 
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		t.Skipf("git-service container unavailable (Docker not running or image missing): %v", err)
-	}
-
-	grpcPort, err := container.MappedPort(ctx, "50051")
-	require.NoError(t, err)
-
-	addr := fmt.Sprintf("localhost:%s", grpcPort.Port())
-	client, err := gitclient.NewClientWithAddr(addr)
+	client, err := gitclient.NewClientWithAddr(sharedGRPCAddr)
 	require.NoError(t, err)
 
 	cleanup := func() {
 		client.Close()
-		if termErr := container.Terminate(ctx); termErr != nil {
-			t.Logf("failed to terminate container: %v", termErr)
-		}
 	}
 	return client, cleanup
 }
@@ -179,16 +151,16 @@ func TestGRPCCreateTag(t *testing.T) {
 	require.NoError(t, err)
 
 	sha, err := client.CreateTag(ctx, gitclient.CreateTagParams{
-		Name:    "v1.0.0",
-		Message: "Release v1.0.0",
+		Name:    "v9.9.9",
+		Message: "Release v9.9.9",
 	})
 	require.NoError(t, err)
 	assert.NotEmpty(t, sha)
 
-	// GetLatestTag must now return v1.0.0.
+	// In shared-container mode, this test should still publish the highest release tag.
 	tag, err := client.GetLatestTag(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, "v1.0.0", tag.Name)
+	assert.Equal(t, "v9.9.9", tag.Name)
 }
 
 // assertNoGitArtefacts checks that no unexpected git working directories or

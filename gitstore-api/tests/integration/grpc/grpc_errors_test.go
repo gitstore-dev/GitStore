@@ -3,9 +3,9 @@
 
 // Integration test: gRPC error-path scenarios against a real git-service container.
 // Covers: file not found, ref not found, commit on missing file (delete), tag already exists.
-// Requires Docker. Run with: go test -tags integration ./tests/integration/...
+// Requires Docker. Run with: go test -tags grpc ./tests/integration/...
 
-//go:build integration
+//go:build grpc
 
 package integration
 
