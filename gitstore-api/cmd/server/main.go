@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -19,6 +18,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/playground"
 	"github.com/gitstore-dev/gitstore/api/internal/cache"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
@@ -32,34 +32,30 @@ import (
 )
 
 func main() {
-	// Parse command-line flags
-	port := flag.Int("port", getEnvInt("GITSTORE_API_PORT", 4000), "API server port")
-	gitWS := flag.String("git-ws", getEnv("GITSTORE_GIT_WS", "ws://localhost:8080"), "Git server websocket URL")
-	gitGRPC := flag.String("git-grpc", getEnv("GITSTORE_GIT_GRPC", ""), "Git service gRPC address (host:port)")
-	gitServerURL := flag.String("git-server-url", getEnv("GITSTORE_GIT_SERVER_URL", "http://localhost:9418"), "Git server HTTP URL")
-	cacheTTL := flag.Int("cache-ttl", getEnvInt("GITSTORE_CACHE_TTL", 300), "Cache TTL in seconds")
-	flag.Parse()
+	// Load all configuration first — single source of truth.
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Initialize structured logging
-	if err := logger.InitLogger(); err != nil {
+	if err := logger.InitLogger(cfg.LogLevel); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
 	defer logger.Sync()
 
 	logger.Log.Info("Starting GitStore GraphQL API",
-		zap.Int("port", *port),
-		zap.String("git_ws", *gitWS),
-		zap.String("git_grpc", *gitGRPC),
-		zap.String("git_server_url", *gitServerURL),
-		zap.Int("cache_ttl", *cacheTTL),
+		zap.Int("port", cfg.Api.Port),
+		zap.String("git_ws", cfg.Git.WS),
+		zap.String("git_grpc", cfg.Git.GRPC),
+		zap.String("git_http_url", cfg.Git.HttpURL),
+		zap.Int("cache_ttl", cfg.Cache.TTL),
 	)
 
 	// Dial git-service via gRPC
-	if *gitGRPC == "" {
-		logger.Log.Fatal("GITSTORE_GIT_GRPC is required; set to git-service host:port")
-	}
-	gitClient, err := gitclient.NewClientWithAddr(*gitGRPC)
+	gitClient, err := gitclient.NewClientWithAddr(cfg.Git.GRPC)
 	if err != nil {
 		logger.Log.Fatal("Failed to connect to git-service", zap.Error(err))
 	}
@@ -72,7 +68,7 @@ func main() {
 	cacheManager := cache.NewManager(
 		catalogLoader,
 		logger.Log,
-		time.Duration(*cacheTTL)*time.Second,
+		time.Duration(cfg.Cache.TTL)*time.Second,
 	)
 
 	// Pre-load catalog
@@ -81,7 +77,7 @@ func main() {
 	if _, err := cacheManager.Get(ctx); err != nil {
 		logger.Log.Error("Failed to load initial catalog",
 			zap.Error(err),
-			zap.String("grpc", *gitGRPC),
+			zap.String("grpc", cfg.Git.GRPC),
 		)
 		logger.Log.Warn("API will continue but queries will fail until catalog loads")
 	} else {
@@ -89,7 +85,7 @@ func main() {
 	}
 
 	// Start websocket client for git notifications
-	wsClient := websocket.NewClient(*gitWS, func(event websocket.GitEvent) {
+	wsClient := websocket.NewClient(cfg.Git.WS, func(event websocket.GitEvent) {
 		logger.Log.Info("Received git event, invalidating cache",
 			zap.String("event", event.Event),
 			zap.String("tag", event.Tag),
@@ -115,7 +111,13 @@ func main() {
 	}()
 
 	// Create auth middleware
-	authMiddleware, err := middleware.NewAuthMiddleware()
+	authMiddleware, err := middleware.NewAuthMiddleware(
+		cfg.Auth.AdminUsername,
+		cfg.Auth.AdminPasswordHash,
+		cfg.Auth.JWTSecret,
+		cfg.Auth.JWTDuration,
+		cfg.Auth.JWTIssuer,
+	)
 	if err != nil {
 		logger.Log.Fatal("Failed to create auth middleware", zap.Error(err))
 	}
@@ -169,7 +171,7 @@ func main() {
 
 	// Create HTTP server
 	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%d", *port),
+		Addr:         fmt.Sprintf(":%d", cfg.Api.Port),
 		Handler:      httpHandler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
@@ -178,17 +180,17 @@ func main() {
 
 	// Start server in background
 	go func() {
-		logger.Log.Info("GraphQL API server starting", zap.Int("port", *port))
+		logger.Log.Info("GraphQL API server starting", zap.Int("port", cfg.Api.Port))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Log.Fatal("Server error", zap.Error(err))
 		}
 	}()
 
 	logger.Log.Info("Server ready",
-		zap.String("graphql", fmt.Sprintf("http://localhost:%d/graphql", *port)),
-		zap.String("playground", fmt.Sprintf("http://localhost:%d/playground", *port)),
-		zap.String("health", fmt.Sprintf("http://localhost:%d/health", *port)),
-		zap.String("ready", fmt.Sprintf("http://localhost:%d/ready", *port)),
+		zap.String("graphql", fmt.Sprintf("http://localhost:%d/graphql", cfg.Api.Port)),
+		zap.String("playground", fmt.Sprintf("http://localhost:%d/playground", cfg.Api.Port)),
+		zap.String("health", fmt.Sprintf("http://localhost:%d/health", cfg.Api.Port)),
+		zap.String("ready", fmt.Sprintf("http://localhost:%d/ready", cfg.Api.Port)),
 	)
 
 	// Wait for interrupt signal
@@ -210,21 +212,4 @@ func main() {
 	wsClient.Close()
 
 	logger.Log.Info("Server stopped")
-}
-
-func getEnv(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func getEnvInt(key string, fallback int) int {
-	if value := os.Getenv(key); value != "" {
-		var intVal int
-		if _, err := fmt.Sscanf(value, "%d", &intVal); err == nil {
-			return intVal
-		}
-	}
-	return fallback
 }

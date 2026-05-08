@@ -20,14 +20,13 @@ axum = { version = "0.8.8", features = ["http2", "macros"] }
 tonic = { version = "0.14.6", features = ["transport"] }
 tonic-prost = "0.14"
 prost = "0.14.3"
-prost-types = "0.14.3"
 prometheus = { version = "0.14.0", features = ["process"] }
-tower = "0.5"
 tokio-stream = "0.1.18"
 tempfile = "3.8"
+config = "0.15.22"
+dotenvy = "0.15"
 
 [dev-dependencies]
-tonic-health = "0.14"
 
 [build-dependencies]
 tonic-prost-build = "0.14"

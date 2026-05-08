@@ -103,11 +103,11 @@ func TestGRPCGetLatestTagEmptyRepo(t *testing.T) {
 
 	req := testcontainers.ContainerRequest{
 		Image:        "gitstore-git-service:latest",
-		ExposedPorts: []string{"50051/tcp"},
+		ExposedPorts: []string{"9418/tcp", "50051/tcp"},
 		Env: map[string]string{
 			"GITSTORE_GRPC_PORT": "50051",
 		},
-		WaitingFor: wait.ForListeningPort("50051/tcp").
+		WaitingFor: wait.ForHTTP("/health").WithPort("9418/tcp").
 			WithStartupTimeout(60 * time.Second),
 	}
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

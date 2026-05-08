@@ -4,7 +4,6 @@
 // GitStore Server Main Entry Point
 
 use clap::Parser;
-use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -19,46 +18,35 @@ use gitstore::websocket::server::WebsocketServer;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Git protocol port
-    #[arg(long, default_value = "9418")]
-    port: u16,
+    /// Path to a custom config file (default: gitstore.toml in working directory)
+    #[arg(long)]
+    config_file: Option<String>,
 
-    /// Websocket notification port
-    #[arg(long, default_value = "8080")]
-    ws_port: u16,
-
-    /// gRPC service port
-    #[arg(long, default_value = "50051")]
-    grpc_port: u16,
-
-    /// Data directory for repositories
-    #[arg(long, default_value = "/data/repos")]
-    data_dir: String,
-
-    /// Log level
-    #[arg(long, default_value = "info")]
-    log_level: String,
+    /// Override log level (highest priority — overrides all other sources)
+    #[arg(long)]
+    log_level: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = Args::parse();
+    // Load .env file before anything else so env vars are populated
+    dotenvy::dotenv().ok();
 
-    // Override with environment variables if present
-    if let Ok(port) = env::var("GITSTORE_GIT_PORT") {
-        args.port = port.parse().unwrap_or(args.port);
+    let args = Args::parse();
+
+    // Load structured configuration (--config-file overrides default gitstore.toml)
+    let mut cfg = gitstore::config::load_config_from(args.config_file.as_deref())
+        .map_err(|e| format!("Configuration error: {e}"))?;
+
+    // Apply CLI overrides (highest priority)
+    if let Some(level) = args.log_level {
+        cfg.log_level = level;
     }
-    if let Ok(ws_port) = env::var("GITSTORE_WS_PORT") {
-        args.ws_port = ws_port.parse().unwrap_or(args.ws_port);
-    }
-    if let Ok(grpc_port) = env::var("GITSTORE_GRPC_PORT") {
-        args.grpc_port = grpc_port.parse().unwrap_or(args.grpc_port);
-    }
-    if let Ok(data_dir) = env::var("GITSTORE_DATA_DIR") {
-        args.data_dir = data_dir;
-    }
-    if let Ok(log_level) = env::var("GITSTORE_LOG_LEVEL") {
-        args.log_level = log_level;
+
+    // Fail fast if config is invalid
+    if let Err(e) = cfg.validate() {
+        eprintln!("{e}");
+        std::process::exit(1);
     }
 
     // Record start time for health checks
@@ -68,15 +56,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     gitstore::init_logging();
 
     info!(
-        git_port = args.port,
-        ws_port = args.ws_port,
-        grpc_port = args.grpc_port,
-        data_dir = %args.data_dir,
+        http_port = cfg.http_port,
+        ws_port = cfg.ws_port,
+        grpc_port = cfg.grpc_port,
+        data_dir = %cfg.data_dir,
         "Starting GitStore Server"
     );
 
     // Create data directory if it doesn't exist
-    let data_path = PathBuf::from(&args.data_dir);
+    let data_path = PathBuf::from(&cfg.data_dir);
     if !data_path.exists() {
         std::fs::create_dir_all(&data_path)?;
         info!(path = %data_path.display(), "Created data directory");
@@ -87,8 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match init_or_open_repository(&catalog_path) {
         Ok(repo) => {
             info!(path = %catalog_path.display(), "Catalog repository ready");
-            drop(repo); // Close repository for now
-                        // Log initial size metrics; warn if repo exceeds 500 MiB
+            drop(repo);
             log_repo_metrics(&catalog_path, 500.0);
         }
         Err(e) => {
@@ -98,13 +85,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Start websocket server
-    let ws_addr: SocketAddr = format!("0.0.0.0:{}", args.ws_port).parse()?;
+    let ws_addr: SocketAddr = format!("0.0.0.0:{}", cfg.ws_port).parse()?;
     let ws_server = WebsocketServer::new(ws_addr);
     let broadcaster = ws_server.broadcaster();
 
     info!("Websocket server starting on {}", ws_addr);
 
-    // Spawn websocket server in background
     let ws_handle = tokio::spawn(async move {
         if let Err(e) = ws_server.start().await {
             error!(error = %e, "Websocket server error");
@@ -112,10 +98,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Start gRPC server
-    let grpc_addr: SocketAddr = format!("0.0.0.0:{}", args.grpc_port).parse()?;
+    let grpc_addr: SocketAddr = format!("0.0.0.0:{}", cfg.grpc_port).parse()?;
     let grpc_service = GitServiceImpl::new(data_path.join("catalog.git"));
     info!(
-        grpc_port = args.grpc_port,
+        grpc_port = cfg.grpc_port,
         "gRPC server starting on {}", grpc_addr
     );
     let grpc_handle = tokio::spawn(async move {
@@ -135,19 +121,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         start_time,
     };
 
-    // Create HTTP git server routes
     let app = create_git_routes(git_state);
 
     // Start HTTP server for git operations
-    let http_addr: SocketAddr = format!("0.0.0.0:{}", args.port).parse()?;
+    let http_addr: SocketAddr = format!("0.0.0.0:{}", cfg.http_port).parse()?;
     info!(
-        http_port = args.port,
+        http_port = cfg.http_port,
         "HTTP Git server starting on http://{}", http_addr
     );
 
     let listener = tokio::net::TcpListener::bind(http_addr).await?;
 
-    // Serve HTTP git server
     let http_handle = tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
             error!(error = %e, "HTTP server error");

@@ -6,7 +6,6 @@ package auth
 import (
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -35,27 +34,13 @@ type SessionManager struct {
 	issuer        string
 }
 
-// NewSessionManager creates a new session manager
-// Expects JWT_SECRET environment variable for production
-func NewSessionManager() (*SessionManager, error) {
-	// Get JWT secret from environment
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		// Default secret for development only - MUST be set in production
-		secret = "dev-secret-change-in-production"
-	}
-
-	// Get token duration from environment (default: 24 hours)
+// NewSessionManager creates a new session manager from explicit config values.
+func NewSessionManager(secret, durationStr, issuer string) (*SessionManager, error) {
 	duration := 24 * time.Hour
-	if durationStr := os.Getenv("JWT_DURATION"); durationStr != "" {
+	if durationStr != "" {
 		if d, err := time.ParseDuration(durationStr); err == nil {
 			duration = d
 		}
-	}
-
-	issuer := os.Getenv("JWT_ISSUER")
-	if issuer == "" {
-		issuer = "gitstore"
 	}
 
 	return &SessionManager{

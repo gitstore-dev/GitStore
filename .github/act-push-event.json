@@ -1,0 +1,18 @@
+{
+  "ref": "refs/heads/main",
+  "repository": {
+    "name": "GitStore",
+    "full_name": "gitstore-dev/GitStore",
+    "clone_url": "https://github.com/gitstore-dev/GitStore.git",
+    "ssh_url": "git@github.com:gitstore-dev/GitStore.git",
+    "html_url": "https://github.com/gitstore-dev/GitStore",
+    "owner": {
+      "login": "gitstore-dev"
+    },
+    "private": false,
+    "default_branch": "main"
+  },
+  "sender": {
+    "login": "julius.krah"
+  }
+}

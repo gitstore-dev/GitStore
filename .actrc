@@ -1,0 +1,14 @@
+# act configuration for local CI runs
+# See: https://nektosact.com/usage/index.html#configuration-file
+
+# Use amd64 to match GitHub-hosted runners and avoid M-series ARM issues
+--container-architecture linux/amd64
+
+# Platform mappings
+-P ubuntu-latest=catthehacker/ubuntu:act-latest
+-P ubuntu-24.04=catthehacker/ubuntu:act-latest
+-P ubuntu-22.04=catthehacker/ubuntu:act-22.04
+-P ubuntu-20.04=catthehacker/ubuntu:act-20.04
+
+# Default event file so actions that read github.event.repository work locally
+--eventpath .github/act-push-event.json

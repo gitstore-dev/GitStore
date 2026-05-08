@@ -33,12 +33,14 @@ func startMutationContainer(t *testing.T) (*gitclient.Client, func()) {
 
 	req := testcontainers.ContainerRequest{
 		Image:        "gitstore-git-service:latest",
-		ExposedPorts: []string{"50051/tcp"},
+		ExposedPorts: []string{"9418/tcp", "50051/tcp"},
 		Env: map[string]string{
 			"GITSTORE_DATA_DIR":  "/data/repos",
 			"GITSTORE_GRPC_PORT": "50051",
 		},
-		WaitingFor: wait.ForListeningPort("50051/tcp").
+		// Wait for the HTTP health endpoint — gRPC binds concurrently so TCP-open
+		// on 50051 is not sufficient; the health response confirms all servers are up.
+		WaitingFor: wait.ForHTTP("/health").WithPort("9418/tcp").
 			WithStartupTimeout(60 * time.Second),
 	}
 
