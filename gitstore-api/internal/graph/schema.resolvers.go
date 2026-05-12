@@ -12,7 +12,6 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"go.uber.org/zap"
 )
 
 // CreateProduct is the resolver for the createProduct field.
@@ -288,19 +287,8 @@ func (r *mutationResolver) PublishCatalog(ctx context.Context, input model.Publi
 	if message == "" {
 		message = "Published catalog"
 	}
-	cat, err := r.service.GetCatalog(ctx)
-	if err != nil {
-		r.logger.Warn("could not fetch catalog for publish stats", zap.Error(err))
-	}
-	var stats *model.CatalogStats
-	if cat != nil {
-		stats = &model.CatalogStats{
-			ProductCount:       int32(cat.ProductCount()),
-			CategoryCount:      int32(cat.CategoryCount()),
-			CollectionCount:    int32(cat.CollectionCount()),
-			OrphanedReferences: 0,
-		}
-	}
+
+	stats := r.getCatalogStats(ctx)
 
 	version := &model.CatalogVersion{
 		Tag:         input.Version,
@@ -438,22 +426,11 @@ func (r *queryResolver) Collections(ctx context.Context) ([]*model.Collection, e
 
 // CatalogVersion is the resolver for the catalogVersion field.
 func (r *queryResolver) CatalogVersion(ctx context.Context) (*model.CatalogVersion, error) {
-	cat, err := r.service.GetCatalog(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get catalog: %w", err)
-	}
-
-	stats := &model.CatalogStats{
-		ProductCount:       int32(cat.ProductCount()),
-		CategoryCount:      int32(cat.CategoryCount()),
-		CollectionCount:    int32(cat.CollectionCount()),
-		OrphanedReferences: 0,
-	}
-
+	stats := r.getCatalogStats(ctx)
 	return &model.CatalogVersion{
-		Tag:         cat.Tag(), // latest release tag; empty string if no tags yet
-		Commit:      cat.Commit(),
-		PublishedAt: cat.LoadedAt(),
+		Tag:         "",
+		Commit:      "",
+		PublishedAt: time.Now(),
 		Message:     nil,
 		Stats:       stats,
 	}, nil

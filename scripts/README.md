@@ -21,14 +21,14 @@ Validates that Go files include the required AGPL header and that changed files 
 
 The required file header is:
 
-```go
+```
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 ```
 
 ## install-git-hooks.sh
 
-Configures repository-local git hooks and enables automatic staged-file licence checks on each commit.
+Installs repository-local git hooks into the standard `.git/hooks` directory, enabling automatic staged-file licence checks and Conventional Commits validation.
 
 ### Usage
 
@@ -36,7 +36,7 @@ Configures repository-local git hooks and enables automatic staged-file licence 
 ./scripts/install-git-hooks.sh
 ```
 
-This sets `core.hooksPath=.githooks` and installs the `pre-commit` hook.
+This installs the `pre-commit` and `commit-msg` hooks into `.git/hooks`.
 
 In CI, `.github/workflows/go-license-headers.yml` runs:
 - `--all` checks on pushes to `main`
@@ -145,7 +145,7 @@ After running the script:
 
 1. **Start GitStore services:**
    ```bash
-  # Start all services (git-service must be running before HTTP clone)
+  # Build and start core services (git-service must be running before HTTP clone)
    docker compose up --build -d
 
    # Wait for services to be healthy (about 10-15 seconds)

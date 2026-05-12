@@ -27,6 +27,12 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_AUTH_JWT_SECRET",
 		"GITSTORE_AUTH_JWT_DURATION",
 		"GITSTORE_AUTH_JWT_ISSUER",
+		"GITSTORE_DATASTORE_BACKEND",
+		"GITSTORE_DATASTORE_SCYLLA_HOSTS",
+		"GITSTORE_DATASTORE_SCYLLA_KEYSPACE",
+		"GITSTORE_DATASTORE_SCYLLA_USERNAME",
+		"GITSTORE_DATASTORE_SCYLLA_PASSWORD",
+		"GITSTORE_DATASTORE_SCYLLA_TLS",
 	}
 	saved := make(map[string]string, len(keys))
 	for _, k := range keys {
@@ -289,4 +295,65 @@ func TestLoad_UnknownKeyInConfigFileDoesNotAbortStartup(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
+}
+
+// T009: datastore backend config validation tests
+
+func TestLoad_DatastoreBackendDefaultsToMemdb(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "memdb", cfg.Datastore.Backend)
+}
+
+func TestLoad_DatastoreBackendMemdbIsValid(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	os.Setenv("GITSTORE_DATASTORE_BACKEND", "memdb")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "memdb", cfg.Datastore.Backend)
+}
+
+func TestLoad_DatastoreBackendScyllaIsValid(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	os.Setenv("GITSTORE_DATASTORE_BACKEND", "scylla")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "scylla", cfg.Datastore.Backend)
+}
+
+func TestLoad_DatastoreBackendUnknownValueReturnsError(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	os.Setenv("GITSTORE_DATASTORE_BACKEND", "badvalue")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "badvalue")
+	assert.Contains(t, err.Error(), "memdb")
+	assert.Contains(t, err.Error(), "scylla")
+}
+
+func TestLoad_DatastoreScyllaPasswordLoadedAndRedactable(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	os.Setenv("GITSTORE_DATASTORE_SCYLLA_PASSWORD", "s3cr3t")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	// The raw value must be populated from env
+	assert.Equal(t, "s3cr3t", cfg.Datastore.Scylla.Password)
+	// And redact() must mask it in logs
+	assert.Equal(t, "<redacted>", redact(cfg.Datastore.Scylla.Password))
 }

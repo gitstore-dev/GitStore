@@ -10,13 +10,14 @@ import (
 	"sync"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"go.uber.org/zap"
 )
 
 // CategoryLoader batches category lookups
 type CategoryLoader struct {
-	catalog *catalog.Catalog
-	logger  *zap.Logger
+	store  datastore.Datastore
+	logger *zap.Logger
 
 	// Batch state
 	mu      sync.Mutex
@@ -30,10 +31,10 @@ type categoryResult struct {
 }
 
 // NewCategoryLoader creates a new category data loader
-func NewCategoryLoader(cat *catalog.Catalog, logger *zap.Logger) *CategoryLoader {
+func NewCategoryLoader(store datastore.Datastore, logger *zap.Logger) *CategoryLoader {
 	return &CategoryLoader{
-		catalog: cat,
-		logger:  logger,
+		store:  store,
+		logger: logger,
 	}
 }
 
@@ -41,25 +42,20 @@ func NewCategoryLoader(cat *catalog.Catalog, logger *zap.Logger) *CategoryLoader
 func (l *CategoryLoader) Load(ctx context.Context, id string) (*catalog.Category, error) {
 	l.mu.Lock()
 
-	// Add this ID to the batch
 	index := len(l.batch)
 	l.batch = append(l.batch, id)
 
-	// Create a channel to receive results
 	resultChan := make(chan []*categoryResult, 1)
 	l.waiting = append(l.waiting, resultChan)
 
-	// If this is the first request in the batch, schedule execution
 	if len(l.batch) == 1 {
-		go l.executeBatch()
+		go l.executeBatch(ctx)
 	}
 
 	l.mu.Unlock()
 
-	// Wait for batch to complete
 	results := <-resultChan
 
-	// Get our result by index
 	if index < len(results) {
 		return results[index].category, results[index].err
 	}
@@ -81,23 +77,19 @@ func (l *CategoryLoader) LoadMany(ctx context.Context, ids []string) ([]*catalog
 	return categories, errs
 }
 
-// executeBatch executes the batched lookups
-func (l *CategoryLoader) executeBatch() {
+func (l *CategoryLoader) executeBatch(ctx context.Context) {
 	l.mu.Lock()
 
-	// Copy batch and waiting list
 	ids := make([]string, len(l.batch))
 	copy(ids, l.batch)
 	waiting := make([]chan []*categoryResult, len(l.waiting))
 	copy(waiting, l.waiting)
 
-	// Reset for next batch
 	l.batch = nil
 	l.waiting = nil
 
 	l.mu.Unlock()
 
-	// Execute batch lookup
 	results := make([]*categoryResult, len(ids))
 
 	l.logger.Debug("Executing category batch lookup",
@@ -106,32 +98,44 @@ func (l *CategoryLoader) executeBatch() {
 	)
 
 	for i, id := range ids {
-		cat, ok := l.catalog.GetCategory(id)
-		if ok {
-			results[i] = &categoryResult{category: cat, err: nil}
-		} else {
+		c, err := l.store.GetCategory(ctx, id)
+		if err != nil {
 			results[i] = &categoryResult{category: nil, err: nil}
+			continue
+		}
+		results[i] = &categoryResult{
+			category: datastoreCategoryToCatalog(c),
 		}
 	}
 
-	// Send results to all waiting channels
 	for _, ch := range waiting {
 		ch <- results
 		close(ch)
 	}
 }
 
-// Prime preloads a category into the cache
-func (l *CategoryLoader) Prime(id string, category *catalog.Category) {
-	// For in-memory catalog, priming isn't necessary
-	// This method is included for DataLoader interface compatibility
-}
+// Prime is included for DataLoader interface compatibility.
+func (l *CategoryLoader) Prime(_ string, _ *catalog.Category) {}
 
-// Clear clears the loader state (called on catalog reload)
+// Clear resets the loader state.
 func (l *CategoryLoader) Clear() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	l.batch = nil
 	l.waiting = nil
+}
+
+// datastoreCategoryToCatalog converts a datastore.Category to a catalog.Category.
+func datastoreCategoryToCatalog(c *datastore.Category) *catalog.Category {
+	return &catalog.Category{
+		ID:           c.ID,
+		Name:         c.Name,
+		Slug:         c.Slug,
+		ParentID:     c.ParentID,
+		DisplayOrder: c.DisplayOrder,
+		CreatedAt:    c.CreatedAt,
+		UpdatedAt:    c.UpdatedAt,
+		Body:         c.Body,
+	}
 }

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gitstore-dev/gitstore/api/internal/cache"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"go.uber.org/zap"
 )
 
@@ -40,19 +40,19 @@ type Check struct {
 
 // Handler provides health check endpoints
 type Handler struct {
-	cacheManager *cache.Manager
-	logger       *zap.Logger
-	version      string
-	startTime    time.Time
+	store     datastore.Datastore
+	logger    *zap.Logger
+	version   string
+	startTime time.Time
 }
 
 // NewHandler creates a new health check handler
-func NewHandler(cacheManager *cache.Manager, logger *zap.Logger, version string) *Handler {
+func NewHandler(store datastore.Datastore, logger *zap.Logger, version string) *Handler {
 	return &Handler{
-		cacheManager: cacheManager,
-		logger:       logger,
-		version:      version,
-		startTime:    time.Now(),
+		store:     store,
+		logger:    logger,
+		version:   version,
+		startTime: time.Now(),
 	}
 }
 
@@ -78,7 +78,6 @@ func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
 
 	checks := h.performChecks(ctx)
 
-	// Determine overall status
 	overallStatus := StatusHealthy
 	httpStatus := http.StatusOK
 
@@ -89,7 +88,6 @@ func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
 			break
 		} else if check.Status == StatusDegraded {
 			overallStatus = StatusDegraded
-			httpStatus = http.StatusOK // Still ready, but degraded
 		}
 	}
 
@@ -105,23 +103,20 @@ func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
-// performChecks runs all health checks in parallel
 func (h *Handler) performChecks(ctx context.Context) map[string]Check {
 	checks := make(map[string]Check)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	// Check 1: Catalog cache availability
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		check := h.checkCatalogCache(ctx)
+		check := h.checkDatastore(ctx)
 		mu.Lock()
-		checks["catalog_cache"] = check
+		checks["datastore"] = check
 		mu.Unlock()
 	}()
 
-	// Check 2: Service uptime
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -135,29 +130,24 @@ func (h *Handler) performChecks(ctx context.Context) map[string]Check {
 	return checks
 }
 
-// checkCatalogCache verifies catalog cache is accessible
-func (h *Handler) checkCatalogCache(ctx context.Context) Check {
-	_, err := h.cacheManager.Get(ctx)
+func (h *Handler) checkDatastore(ctx context.Context) Check {
+	_, err := h.store.ListProducts(ctx, datastore.ProductFilter{First: 1})
 	if err != nil {
-		h.logger.Warn("Catalog cache check failed", zap.Error(err))
+		h.logger.Warn("Datastore check failed", zap.Error(err))
 		return Check{
 			Status:  StatusUnhealthy,
-			Message: "catalog cache unavailable",
+			Message: "datastore unavailable",
 		}
 	}
 
 	return Check{
 		Status:  StatusHealthy,
-		Message: "catalog cache operational",
+		Message: "datastore operational",
 	}
 }
 
-// checkUptime verifies service has been running for reasonable duration
 func (h *Handler) checkUptime() Check {
-	uptime := time.Since(h.startTime)
-
-	// Consider degraded if service just started (< 5 seconds)
-	if uptime < 5*time.Second {
+	if time.Since(h.startTime) < 5*time.Second {
 		return Check{
 			Status:  StatusDegraded,
 			Message: "service warming up",
