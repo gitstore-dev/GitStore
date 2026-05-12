@@ -1,7 +1,7 @@
 # T152: Implement Proper Git Protocol Solution (Production Architecture)
 
-**Date**: 2026-03-22
-**Status**: 📝 PLANNED (Deferred to post-MVP)
+**Date Updated**: 2026-05-09
+**Status**: 🚫 SUPERSEDED by 004 (gRPC git service)
 **Priority**: MEDIUM (not blocking MVP, but needed for production)
 
 ---
@@ -22,7 +22,7 @@ api:
 
 **How it works**:
 - Both git-server and API mount same volume
-- API reads catalog directly from filesystem
+- API reads catalogue directly from filesystem
 - Fast and simple for single-host deployment
 
 ---
@@ -46,7 +46,7 @@ From T145 investigation:
 
 > **Option 1: Git Protocol (Network-Based)** ✅ RECOMMENDED
 > - API clones from `git://git-server:9418/catalog.git`
-> - Requires implementing clone logic in catalog loader
+> - Requires implementing clone logic in catalogue loader
 > - True microservices architecture
 > - Works in distributed deployment
 
@@ -89,7 +89,7 @@ From T145 investigation:
 
 ### Changes Required
 
-#### 1. Update API Catalog Loader
+#### 1. Update API Catalogue Loader
 
 **File**: `api/internal/catalog/loader.go`
 
@@ -367,7 +367,7 @@ docker compose up --scale api=3
 
 ### Phase 1: Make Code Support Both (Backward Compatible)
 
-1. Update catalog loader to detect URL type
+1. Update catalogue loader to detect URL type
 2. Support both filesystem and git protocol
 3. Test with filesystem path (current setup)
 4. Test with git protocol

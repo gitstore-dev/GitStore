@@ -8,143 +8,100 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"go.uber.org/zap"
 )
 
+const (
+	catID1 = "11111111-1111-1111-1111-111111111111"
+	catID2 = "22222222-2222-2222-2222-222222222222"
+)
+
 func TestCategoryLoaderLoad(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit", "")
-
-	cat1 := &catalog.Category{
-		ID:        "cat_1",
-		Name:      "Category 1",
-		Slug:      "cat-1",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+	store, err := memdb.New()
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
 	}
-
-	cat2 := &catalog.Category{
-		ID:        "cat_2",
-		Name:      "Category 2",
-		Slug:      "cat-2",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-
-	cat.AddCategory(cat1)
-	cat.AddCategory(cat2)
-
-	logger := zap.NewNop()
-	loader := NewCategoryLoader(cat, logger)
 
 	ctx := context.Background()
+	_ = store.CreateCategory(ctx, &datastore.Category{ID: catID1, Name: "Category 1", Slug: "cat-1", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	_ = store.CreateCategory(ctx, &datastore.Category{ID: catID2, Name: "Category 2", Slug: "cat-2", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	// Load single category
-	result, err := loader.Load(ctx, "cat_1")
+	loader := NewCategoryLoader(store, zap.NewNop())
+
+	result, err := loader.Load(ctx, catID1)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-
 	if result == nil {
 		t.Fatal("Expected category, got nil")
 	}
-
-	if result.ID != "cat_1" {
-		t.Errorf("Expected cat_1, got %s", result.ID)
+	if result.ID != catID1 {
+		t.Errorf("Expected %s, got %s", catID1, result.ID)
 	}
 
-	// Load non-existent category
-	result, err = loader.Load(ctx, "cat_nonexistent")
+	result, err = loader.Load(ctx, "00000000-0000-0000-0000-000000000000")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-
 	if result != nil {
 		t.Errorf("Expected nil for non-existent category, got %v", result)
 	}
 }
 
 func TestCategoryLoaderLoadMany(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit", "")
-
-	cat1 := &catalog.Category{
-		ID:        "cat_1",
-		Name:      "Category 1",
-		Slug:      "cat-1",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+	store, err := memdb.New()
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
 	}
-
-	cat2 := &catalog.Category{
-		ID:        "cat_2",
-		Name:      "Category 2",
-		Slug:      "cat-2",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-
-	cat.AddCategory(cat1)
-	cat.AddCategory(cat2)
-
-	logger := zap.NewNop()
-	loader := NewCategoryLoader(cat, logger)
 
 	ctx := context.Background()
+	_ = store.CreateCategory(ctx, &datastore.Category{ID: catID1, Name: "Category 1", Slug: "cat-1", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	_ = store.CreateCategory(ctx, &datastore.Category{ID: catID2, Name: "Category 2", Slug: "cat-2", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	// Load multiple categories
-	ids := []string{"cat_1", "cat_2", "cat_nonexistent"}
+	loader := NewCategoryLoader(store, zap.NewNop())
+
+	ids := []string{catID1, catID2, "00000000-0000-0000-0000-000000000000"}
 	results, errs := loader.LoadMany(ctx, ids)
 
 	if len(results) != 3 {
 		t.Fatalf("Expected 3 results, got %d", len(results))
 	}
-
 	if len(errs) != 3 {
 		t.Fatalf("Expected 3 errors, got %d", len(errs))
 	}
-
-	// Check first result
-	if results[0] == nil {
-		t.Error("Expected cat_1, got nil")
-	} else if results[0].ID != "cat_1" {
-		t.Errorf("Expected cat_1, got %s", results[0].ID)
+	if results[0] == nil || results[0].ID != catID1 {
+		t.Errorf("Expected catID1 at index 0, got %v", results[0])
 	}
-
-	// Check second result
-	if results[1] == nil {
-		t.Error("Expected cat_2, got nil")
-	} else if results[1].ID != "cat_2" {
-		t.Errorf("Expected cat_2, got %s", results[1].ID)
+	if results[1] == nil || results[1].ID != catID2 {
+		t.Errorf("Expected catID2 at index 1, got %v", results[1])
 	}
-
-	// Check third result (non-existent)
 	if results[2] != nil {
 		t.Errorf("Expected nil for non-existent category, got %v", results[2])
 	}
 }
 
 func TestCategoryLoaderClear(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit", "")
-	logger := zap.NewNop()
-	loader := NewCategoryLoader(cat, logger)
+	store, err := memdb.New()
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	loader := NewCategoryLoader(store, zap.NewNop())
 
-	// Add some state
 	loader.mu.Lock()
-	loader.batch = []string{"cat_1", "cat_2"}
+	loader.batch = []string{catID1, catID2}
 	loader.waiting = make([]chan []*categoryResult, 2)
 	loader.mu.Unlock()
 
-	// Clear
 	loader.Clear()
 
-	// Verify cleared
 	loader.mu.Lock()
 	defer loader.mu.Unlock()
 
 	if len(loader.batch) != 0 {
 		t.Errorf("Expected empty batch after clear, got %d items", len(loader.batch))
 	}
-
 	if len(loader.waiting) != 0 {
 		t.Errorf("Expected empty waiting list after clear, got %d items", len(loader.waiting))
 	}

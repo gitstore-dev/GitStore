@@ -7,15 +7,25 @@ import (
 	"context"
 	"testing"
 
-	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"go.uber.org/zap"
 )
 
+func newTestStore(t *testing.T) datastore.Datastore {
+	t.Helper()
+	store, err := memdb.New()
+	if err != nil {
+		t.Fatalf("Failed to create memdb store: %v", err)
+	}
+	return store
+}
+
 func TestLoadersCreation(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit", "")
+	store := newTestStore(t)
 	logger := zap.NewNop()
 
-	loaders := NewLoaders(cat, logger)
+	loaders := NewLoaders(store, logger)
 
 	if loaders == nil {
 		t.Fatal("Expected loaders, got nil")
@@ -35,14 +45,12 @@ func TestLoadersCreation(t *testing.T) {
 }
 
 func TestLoadersFromContext(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit", "")
+	store := newTestStore(t)
 	logger := zap.NewNop()
 
-	// Create context with loaders
-	middleware := Middleware(cat, logger)
+	middleware := Middleware(store, logger)
 	ctx := middleware(context.Background())
 
-	// Retrieve loaders
 	loaders := FromContext(ctx)
 
 	if loaders == nil {
@@ -65,7 +73,6 @@ func TestLoadersFromContext(t *testing.T) {
 func TestLoadersFromContextMissing(t *testing.T) {
 	ctx := context.Background()
 
-	// Try to retrieve loaders from empty context
 	loaders := FromContext(ctx)
 
 	if loaders != nil {
@@ -74,12 +81,11 @@ func TestLoadersFromContextMissing(t *testing.T) {
 }
 
 func TestLoadersClear(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit", "")
+	store := newTestStore(t)
 	logger := zap.NewNop()
 
-	loaders := NewLoaders(cat, logger)
+	loaders := NewLoaders(store, logger)
 
-	// Add some state to loaders
 	loaders.Product.mu.Lock()
 	loaders.Product.batch = []string{"prod_1"}
 	loaders.Product.mu.Unlock()
@@ -92,10 +98,8 @@ func TestLoadersClear(t *testing.T) {
 	loaders.Collection.batch = []string{"coll_1"}
 	loaders.Collection.mu.Unlock()
 
-	// Clear all loaders
 	loaders.Clear()
 
-	// Verify all cleared
 	loaders.Product.mu.Lock()
 	productBatchLen := len(loaders.Product.batch)
 	loaders.Product.mu.Unlock()

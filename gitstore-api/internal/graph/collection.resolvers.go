@@ -15,30 +15,31 @@ import (
 
 // Products is the resolver for the products field.
 func (r *collectionResolver) Products(ctx context.Context, obj *model.Collection, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
-	// Get catalog
-	cat, err := r.service.GetCatalog(ctx)
+	// Get all products and filter to those belonging to this collection.
+	// The datastore doesn't yet have a direct collection-filter; we fetch all
+	// and filter client-side. This matches the previous behaviour.
+	all, err := r.service.GetProducts(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get catalog: %w", err)
+		return nil, fmt.Errorf("failed to get products: %w", err)
 	}
 
-	// Find all products that belong to this collection
-	products := getProductsInCollection(cat, obj.ID)
-
-	// Simple pagination: for now, return all products
-	// TODO: Implement proper cursor-based pagination
-	edges := make([]*model.ProductEdge, len(products))
-	for i, p := range products {
-		edges[i] = &model.ProductEdge{
-			Cursor: p.ID, // Use ID as cursor for simplicity
-			Node:   CatalogProductToGraphQL(p),
+	// Build edges from catalog products filtered by collection ID
+	edges := make([]*model.ProductEdge, 0)
+	for _, p := range all {
+		for _, cid := range p.CollectionIDs {
+			if cid == obj.ID {
+				edges = append(edges, &model.ProductEdge{
+					Cursor: p.ID,
+					Node:   CatalogProductToGraphQL(p),
+				})
+				break
+			}
 		}
 	}
 
-	// Calculate pagination info
 	hasNextPage := false
 	hasPreviousPage := false
 	var startCursor, endCursor *string
-
 	if len(edges) > 0 {
 		start := edges[0].Cursor
 		end := edges[len(edges)-1].Cursor
@@ -48,7 +49,7 @@ func (r *collectionResolver) Products(ctx context.Context, obj *model.Collection
 
 	return &model.ProductConnection{
 		Edges:      edges,
-		TotalCount: int32(len(products)),
+		TotalCount: int32(len(edges)),
 		PageInfo: &model.PageInfo{
 			HasNextPage:     hasNextPage,
 			HasPreviousPage: hasPreviousPage,

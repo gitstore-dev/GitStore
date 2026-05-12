@@ -17,11 +17,12 @@ import (
 
 // Config holds the complete application configuration.
 type Config struct {
-	Api      ApiConfig   `mapstructure:"api"`
-	Git      GitConfig   `mapstructure:"git"`
-	Auth     AuthConfig  `mapstructure:"auth"`
-	Cache    CacheConfig `mapstructure:"cache"`
-	LogLevel string      `mapstructure:"log_level"`
+	Api       ApiConfig       `mapstructure:"api"`
+	Git       GitConfig       `mapstructure:"git"`
+	Auth      AuthConfig      `mapstructure:"auth"`
+	Cache     CacheConfig     `mapstructure:"cache"`
+	Datastore DatastoreConfig `mapstructure:"datastore"`
+	LogLevel  string          `mapstructure:"log_level"`
 }
 
 // ApiConfig holds HTTP API server settings.
@@ -50,6 +51,23 @@ type CacheConfig struct {
 	TTL int `mapstructure:"ttl"`
 }
 
+// DatastoreConfig selects the active storage backend.
+type DatastoreConfig struct {
+	Backend string       `mapstructure:"backend"`
+	Scylla  ScyllaConfig `mapstructure:"scylla"`
+}
+
+// ScyllaConfig holds ScyllaDB connection parameters.
+// Credentials and TLS are optional (FR-013).
+type ScyllaConfig struct {
+	Hosts                 []string `mapstructure:"hosts"`
+	Keyspace              string   `mapstructure:"keyspace"`
+	Username              string   `mapstructure:"username"`
+	Password              string   `mapstructure:"password"`
+	TLS                   bool     `mapstructure:"tls"`
+	DisableShardAwarePort bool     `mapstructure:"disable_shard_aware_port"`
+}
+
 // Load reads configuration from all sources (defaults → config file → env vars)
 // and returns the resolved, validated Config.
 func Load() (*Config, error) {
@@ -71,6 +89,12 @@ func Load() (*Config, error) {
 	v.SetDefault("auth.jwt_secret", "")
 	v.SetDefault("auth.jwt_duration", "24h")
 	v.SetDefault("auth.jwt_issuer", "gitstore")
+	v.SetDefault("datastore.backend", "memdb")
+	v.SetDefault("datastore.scylla.hosts", []string{"localhost:9042"})
+	v.SetDefault("datastore.scylla.keyspace", "gitstore")
+	v.SetDefault("datastore.scylla.username", "")
+	v.SetDefault("datastore.scylla.password", "")
+	v.SetDefault("datastore.scylla.tls", false)
 
 	// Config file (optional)
 	v.SetConfigName("config")
@@ -106,6 +130,9 @@ func Load() (*Config, error) {
 		"cache.ttl": true, "log_level": true,
 		"auth.admin_username": true, "auth.admin_password_hash": true,
 		"auth.jwt_secret": true, "auth.jwt_duration": true, "auth.jwt_issuer": true,
+		"datastore.backend": true, "datastore.scylla.hosts": true,
+		"datastore.scylla.keyspace": true, "datastore.scylla.username": true,
+		"datastore.scylla.password": true, "datastore.scylla.tls": true,
 	}
 	for _, k := range v.AllKeys() {
 		if !knownKeys[k] {
@@ -135,7 +162,21 @@ func validateConfig(cfg *Config) error {
 		}
 		return err
 	}
-	return nil
+	return validateDatastoreConfig(&cfg.Datastore)
+}
+
+// validateDatastoreConfig validates backend selection and ScyllaDB settings.
+func validateDatastoreConfig(ds *DatastoreConfig) error {
+	switch strings.ToLower(ds.Backend) {
+	case "memdb":
+		ds.Backend = "memdb"
+		return nil
+	case "scylla":
+		ds.Backend = "scylla"
+		return nil
+	default:
+		return fmt.Errorf("invalid datastore backend %q; valid values: memdb, scylla", ds.Backend)
+	}
 }
 
 // MarshalLogObject implements zap.ObjectMarshaler for structured startup logging.
@@ -152,6 +193,8 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddString("auth.jwt_issuer", c.Auth.JWTIssuer)
 	enc.AddInt("cache.ttl", c.Cache.TTL)
 	enc.AddString("log_level", c.LogLevel)
+	enc.AddString("datastore.backend", c.Datastore.Backend)
+	enc.AddString("datastore.scylla.password", redact(c.Datastore.Scylla.Password))
 	return nil
 }
 

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+commit_msg_file="${1:-}"
+
+if [[ -z "$commit_msg_file" ]]; then
+  echo "ERROR: commit-msg hook requires a message file path." >&2
+  exit 1
+fi
+
+if [[ ! -f "$commit_msg_file" ]]; then
+  echo "ERROR: Commit message file not found: $commit_msg_file" >&2
+  exit 1
+fi
+
+subject_line=""
+while IFS= read -r line || [[ -n "$line" ]]; do
+  [[ -z "$line" ]] && continue
+  [[ "$line" == \#* ]] && continue
+  subject_line="$line"
+  break
+done < "$commit_msg_file"
+
+if [[ -z "$subject_line" ]]; then
+  echo "ERROR: Commit message cannot be empty." >&2
+  exit 1
+fi
+
+if ! printf '%s\n' "$subject_line" | grep -Eq '^[a-z][a-z0-9-]*(\([^)]+\))?!?:[[:space:]].+'; then
+  cat >&2 <<'EOF'
+ERROR: Commit message must follow Conventional Commits.
+
+Examples:
+  feat: add product search
+  fix(api): handle empty catalog response
+  chore!: drop deprecated endpoint
+EOF
+  exit 1
+fi

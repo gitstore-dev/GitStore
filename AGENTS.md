@@ -5,6 +5,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 ## Active Technologies
 - Go 1.25 (`gitstore-api`), Rust edition 2021 (`gitstore-git-service`) (005-structured-config-mgmt)
 - N/A — configuration is in-memory after startup load (005-structured-config-mgmt)
+- `go-memdb` (in-memory backend) / ScyllaDB 5.x+ (production backend) (006-api-datastore-abstraction)
 
 - (001-git-backed-ecommerce)
 
@@ -17,6 +18,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 : Follow standard conventions
 
 ## Recent Changes
+- 006-api-datastore-abstraction: Added Go 1.25 (`gitstore-api`)
 - 005-structured-config-mgmt: Added Go 1.25 (`gitstore-api`), Rust edition 2021 (`gitstore-git-service`)
 
 - 001-git-backed-ecommerce: Added

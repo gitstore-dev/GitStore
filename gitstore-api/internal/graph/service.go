@@ -2,7 +2,7 @@
 // Copyright (c) 2026 GitStore contributors
 
 // Service layer for GraphQL resolvers
-// Handles CRUD operations with git persistence via gRPC git-service.
+// Handles CRUD operations via the datastore abstraction layer.
 
 package graph
 
@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gitstore-dev/gitstore/api/internal/cache"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -20,9 +20,9 @@ import (
 
 // Service provides business logic for GraphQL operations
 type Service struct {
-	cacheManager *cache.Manager
-	gitWriter    GitWriter
-	logger       *zap.Logger
+	store     datastore.Datastore
+	gitWriter GitWriter
+	logger    *zap.Logger
 }
 
 // GitWriter is the write subset of gitclient.Client used by the Service.
@@ -33,20 +33,20 @@ type GitWriter interface {
 	CreateTag(ctx context.Context, p gitclient.CreateTagParams) (string, error)
 }
 
-// NewService creates a new service instance backed by the gRPC git client.
-func NewService(cacheManager *cache.Manager, _ string, _ string, logger *zap.Logger) *Service {
+// NewService creates a new service instance backed by the datastore.
+func NewService(store datastore.Datastore, logger *zap.Logger) *Service {
 	return &Service{
-		cacheManager: cacheManager,
-		logger:       logger,
+		store:  store,
+		logger: logger,
 	}
 }
 
 // NewServiceWithWriter creates a service with an explicit GitWriter (for tests).
-func NewServiceWithWriter(cacheManager *cache.Manager, writer GitWriter, logger *zap.Logger) *Service {
+func NewServiceWithWriter(store datastore.Datastore, writer GitWriter, logger *zap.Logger) *Service {
 	return &Service{
-		cacheManager: cacheManager,
-		gitWriter:    writer,
-		logger:       logger,
+		store:     store,
+		gitWriter: writer,
+		logger:    logger,
 	}
 }
 
@@ -55,152 +55,110 @@ func (s *Service) SetGitWriter(w GitWriter) {
 	s.gitWriter = w
 }
 
-// GetCatalog retrieves the current catalog from cache
-func (s *Service) GetCatalog(ctx context.Context) (*catalog.Catalog, error) {
-	cat, err := s.cacheManager.Get(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get catalog: %w", err)
-	}
-	return cat, nil
-}
-
-// GetProducts retrieves all products from catalog with optional filtering
+// GetProducts retrieves all products from the datastore with optional filtering.
 func (s *Service) GetProducts(ctx context.Context, categoryID *string) ([]*catalog.Product, error) {
-	cat, err := s.GetCatalog(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	products := cat.AllProducts()
-
+	filter := datastore.ProductFilter{}
 	if categoryID != nil && *categoryID != "" {
-		var filtered []*catalog.Product
-		for _, p := range products {
-			if p.CategoryID == *categoryID {
-				filtered = append(filtered, p)
-			}
-		}
-		products = filtered
+		filter.CategoryID = *categoryID
 	}
 
+	ds_products, err := s.store.ListProducts(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list products: %w", err)
+	}
+
+	products := make([]*catalog.Product, len(ds_products))
+	for i, p := range ds_products {
+		products[i] = datastoreProductToCatalog(p)
+	}
 	return products, nil
 }
 
-// GetProductByID retrieves a product by ID
+// GetProductByID retrieves a product by ID.
 func (s *Service) GetProductByID(ctx context.Context, id string) (*catalog.Product, error) {
-	cat, err := s.GetCatalog(ctx)
+	p, err := s.store.GetProduct(ctx, id)
 	if err != nil {
-		return nil, err
-	}
-
-	product, ok := cat.GetProduct(id)
-	if !ok {
 		return nil, fmt.Errorf("product not found: %s", id)
 	}
-
-	return product, nil
+	return datastoreProductToCatalog(p), nil
 }
 
-// GetProductBySKU retrieves a product by SKU
+// GetProductBySKU retrieves a product by SKU.
 func (s *Service) GetProductBySKU(ctx context.Context, sku string) (*catalog.Product, error) {
-	cat, err := s.GetCatalog(ctx)
+	p, err := s.store.GetProductBySKU(ctx, sku)
 	if err != nil {
-		return nil, err
-	}
-
-	product, ok := cat.GetProductBySKU(sku)
-	if !ok {
 		return nil, fmt.Errorf("product not found with SKU: %s", sku)
 	}
-
-	return product, nil
+	return datastoreProductToCatalog(p), nil
 }
 
-// GetCategories returns all categories
+// GetCategories returns all categories.
 func (s *Service) GetCategories(ctx context.Context) ([]*catalog.Category, error) {
-	cat, err := s.GetCatalog(ctx)
+	cats, err := s.store.ListCategories(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list categories: %w", err)
 	}
-
-	return cat.AllCategories(), nil
+	result := make([]*catalog.Category, len(cats))
+	for i, c := range cats {
+		result[i] = datastoreCategoryToCatalog(c)
+	}
+	return result, nil
 }
 
-// GetCategoryByID returns a category by ID
+// GetCategoryByID returns a category by ID.
 func (s *Service) GetCategoryByID(ctx context.Context, id string) (*catalog.Category, error) {
-	cat, err := s.GetCatalog(ctx)
+	c, err := s.store.GetCategory(ctx, id)
 	if err != nil {
-		return nil, err
-	}
-
-	category, ok := cat.GetCategory(id)
-	if !ok {
 		return nil, fmt.Errorf("category not found: %s", id)
 	}
-
-	return category, nil
+	return datastoreCategoryToCatalog(c), nil
 }
 
-// GetCategoryBySlug returns a category by slug
+// GetCategoryBySlug returns a category by slug.
 func (s *Service) GetCategoryBySlug(ctx context.Context, slug string) (*catalog.Category, error) {
-	cat, err := s.GetCatalog(ctx)
+	c, err := s.store.GetCategoryBySlug(ctx, slug)
 	if err != nil {
-		return nil, err
-	}
-
-	category, ok := cat.GetCategoryBySlug(slug)
-	if !ok {
 		return nil, fmt.Errorf("category not found with slug: %s", slug)
 	}
-
-	return category, nil
+	return datastoreCategoryToCatalog(c), nil
 }
 
-// GetCollections returns all collections
+// GetCollections returns all collections.
 func (s *Service) GetCollections(ctx context.Context) ([]*catalog.Collection, error) {
-	cat, err := s.GetCatalog(ctx)
+	colls, err := s.store.ListCollections(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to list collections: %w", err)
 	}
-
-	return cat.AllCollections(), nil
+	result := make([]*catalog.Collection, len(colls))
+	for i, c := range colls {
+		result[i] = datastoreCollectionToCatalog(c)
+	}
+	return result, nil
 }
 
-// GetCollectionByID returns a collection by ID
+// GetCollectionByID returns a collection by ID.
 func (s *Service) GetCollectionByID(ctx context.Context, id string) (*catalog.Collection, error) {
-	cat, err := s.GetCatalog(ctx)
+	c, err := s.store.GetCollection(ctx, id)
 	if err != nil {
-		return nil, err
-	}
-
-	collection, ok := cat.GetCollection(id)
-	if !ok {
 		return nil, fmt.Errorf("collection not found: %s", id)
 	}
-
-	return collection, nil
+	return datastoreCollectionToCatalog(c), nil
 }
 
-// GetCollectionBySlug returns a collection by slug
+// GetCollectionBySlug returns a collection by slug.
 func (s *Service) GetCollectionBySlug(ctx context.Context, slug string) (*catalog.Collection, error) {
-	cat, err := s.GetCatalog(ctx)
+	c, err := s.store.GetCollectionBySlug(ctx, slug)
 	if err != nil {
-		return nil, err
-	}
-
-	collection, ok := cat.GetCollectionBySlug(slug)
-	if !ok {
 		return nil, fmt.Errorf("collection not found with slug: %s", slug)
 	}
-
-	return collection, nil
+	return datastoreCollectionToCatalog(c), nil
 }
 
-// CreateProduct creates a new product and commits to git via gRPC.
+// CreateProduct creates a new product in the datastore.
 func (s *Service) CreateProduct(ctx context.Context, input map[string]interface{}) (*catalog.Product, error) {
 	id := uuid.New().String()
 	now := time.Now()
-	product := &catalog.Product{
+	p := &datastore.Product{
 		ID:        id,
 		SKU:       getStringOrEmpty(input, "sku"),
 		Title:     getStringOrEmpty(input, "title"),
@@ -212,179 +170,249 @@ func (s *Service) CreateProduct(ctx context.Context, input map[string]interface{
 	}
 
 	if status, ok := input["inventoryStatus"].(string); ok {
-		product.InventoryStatus = status
+		p.InventoryStatus = status
 	}
 	if qty, ok := input["inventoryQuantity"].(int); ok {
-		product.InventoryQuantity = &qty
+		p.InventoryQuantity = &qty
 	}
 	if categoryID, ok := input["categoryId"].(string); ok {
-		product.CategoryID = categoryID
+		p.CategoryID = categoryID
 	}
 	if collectionIDs, ok := input["collectionIds"].([]string); ok {
-		product.CollectionIDs = collectionIDs
+		p.CollectionIDs = collectionIDs
 	}
 	if images, ok := input["images"].([]string); ok {
-		product.Images = images
+		p.Images = images
 	}
 	if metadata, ok := input["metadata"].(map[string]interface{}); ok {
-		product.Metadata = metadata
+		converted := make(map[string]any, len(metadata))
+		for k, v := range metadata {
+			converted[k] = v
+		}
+		p.Metadata = converted
 	}
 
-	if err := s.writeProductToGit(ctx, product, "Create product: "+product.Title); err != nil {
-		return nil, err
+	if err := s.store.CreateProduct(ctx, p); err != nil {
+		return nil, fmt.Errorf("failed to create product: %w", err)
 	}
 
-	if _, err := s.cacheManager.Reload(ctx); err != nil {
-		s.logger.Error("Failed to reload catalog after create", zap.Error(err))
-	}
-
-	return product, nil
+	return datastoreProductToCatalog(p), nil
 }
 
-// UpdateProduct updates an existing product.
+// UpdateProduct updates an existing product in the datastore.
 func (s *Service) UpdateProduct(ctx context.Context, id string, input map[string]interface{}) (*catalog.Product, error) {
-	cat, err := s.GetCatalog(ctx)
+	existing, err := s.store.GetProduct(ctx, id)
 	if err != nil {
-		return nil, err
-	}
-
-	existing, ok := cat.GetProduct(id)
-	if !ok {
 		return nil, fmt.Errorf("product not found: %s", id)
 	}
 
-	product := *existing
-	product.UpdatedAt = time.Now()
+	p := *existing
+	p.UpdatedAt = time.Now()
 
 	if title, ok := input["title"].(string); ok {
-		product.Title = title
+		p.Title = title
 	}
 	if sku, ok := input["sku"].(string); ok {
-		product.SKU = sku
+		p.SKU = sku
 	}
 	if price, ok := input["price"].(float64); ok {
-		product.Price = price
+		p.Price = price
 	}
 	if currency, ok := input["currency"].(string); ok {
-		product.Currency = currency
+		p.Currency = currency
 	}
 	if body, ok := input["body"].(string); ok {
-		product.Body = body
+		p.Body = body
 	}
 	if status, ok := input["inventoryStatus"].(string); ok {
-		product.InventoryStatus = status
+		p.InventoryStatus = status
 	}
 	if qty, ok := input["inventoryQuantity"].(int); ok {
-		product.InventoryQuantity = &qty
+		p.InventoryQuantity = &qty
 	}
 	if categoryID, ok := input["categoryId"].(string); ok {
-		product.CategoryID = categoryID
+		p.CategoryID = categoryID
 	}
 	if collectionIDs, ok := input["collectionIds"].([]string); ok {
-		product.CollectionIDs = collectionIDs
+		p.CollectionIDs = collectionIDs
 	}
 	if images, ok := input["images"].([]string); ok {
-		product.Images = images
+		p.Images = images
 	}
 	if metadata, ok := input["metadata"].(map[string]interface{}); ok {
-		product.Metadata = metadata
+		converted := make(map[string]any, len(metadata))
+		for k, v := range metadata {
+			converted[k] = v
+		}
+		p.Metadata = converted
 	}
 
-	if err := s.writeProductToGit(ctx, &product, "Update product: "+product.Title); err != nil {
-		return nil, err
+	if err := s.store.UpdateProduct(ctx, &p); err != nil {
+		return nil, fmt.Errorf("failed to update product: %w", err)
 	}
 
-	if _, err := s.cacheManager.Reload(ctx); err != nil {
-		s.logger.Error("Failed to reload catalog after update", zap.Error(err))
-	}
-
-	return &product, nil
+	return datastoreProductToCatalog(&p), nil
 }
 
-// DeleteProduct deletes a product via gRPC.
+// DeleteProduct deletes a product from the datastore.
 func (s *Service) DeleteProduct(ctx context.Context, id string) error {
-	cat, err := s.GetCatalog(ctx)
-	if err != nil {
-		return err
-	}
-
-	product, ok := cat.GetProduct(id)
-	if !ok {
+	if err := s.store.DeleteProduct(ctx, id); err != nil {
 		return fmt.Errorf("product not found: %s", id)
 	}
-
-	filePath := fmt.Sprintf("products/%s.md", id)
-	_, err = s.gitWriter.DeleteFile(ctx, gitclient.DeleteFileParams{
-		Path:          filePath,
-		CommitMessage: "Delete product: " + product.Title,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to delete product via git-service: %w", err)
-	}
-
-	if _, err := s.cacheManager.Reload(ctx); err != nil {
-		s.logger.Error("Failed to reload catalog after delete", zap.Error(err))
-	}
-
 	return nil
 }
 
-// writeProductToGit writes a product to git via gRPC CommitFile.
-func (s *Service) writeProductToGit(ctx context.Context, product *catalog.Product, commitMessage string) error {
-	content := formatProductMarkdown(product)
-	filePath := fmt.Sprintf("products/%s.md", product.ID)
-
-	_, err := s.gitWriter.CommitFile(ctx, gitclient.CommitFileParams{
-		Path:          filePath,
-		Content:       []byte(content),
-		CommitMessage: commitMessage,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to commit product via git-service: %w", err)
+// CreateCategory creates a new category in the datastore.
+func (s *Service) CreateCategory(ctx context.Context, input map[string]interface{}) (*catalog.Category, error) {
+	now := time.Now()
+	c := &datastore.Category{
+		ID:        uuid.New().String(),
+		Name:      getStringOrEmpty(input, "name"),
+		Slug:      getStringOrEmpty(input, "slug"),
+		Body:      getStringOrEmpty(input, "body"),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
-	return nil
+	if parentID, ok := input["parentId"].(string); ok && parentID != "" {
+		c.ParentID = &parentID
+	}
+	if order, ok := input["displayOrder"].(int); ok {
+		c.DisplayOrder = order
+	}
+
+	if err := s.store.CreateCategory(ctx, c); err != nil {
+		return nil, fmt.Errorf("failed to create category: %w", err)
+	}
+	return datastoreCategoryToCatalog(c), nil
 }
 
-// formatProductMarkdown formats a product as markdown with YAML frontmatter
-func formatProductMarkdown(p *catalog.Product) string {
-	content := "---\n"
-	content += fmt.Sprintf("id: %s\n", p.ID)
-	content += fmt.Sprintf("sku: %s\n", p.SKU)
-	content += fmt.Sprintf("title: %s\n", p.Title)
-	content += fmt.Sprintf("price: %.2f\n", p.Price)
-	content += fmt.Sprintf("currency: %s\n", p.Currency)
+// UpdateCategory updates an existing category.
+func (s *Service) UpdateCategory(ctx context.Context, id string, input map[string]interface{}) (*catalog.Category, error) {
+	existing, err := s.store.GetCategory(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("category not found: %s", id)
+	}
+	c := *existing
+	c.UpdatedAt = time.Now()
+	if name, ok := input["name"].(string); ok {
+		c.Name = name
+	}
+	if slug, ok := input["slug"].(string); ok {
+		c.Slug = slug
+	}
+	if body, ok := input["body"].(string); ok {
+		c.Body = body
+	}
+	if order, ok := input["displayOrder"].(int); ok {
+		c.DisplayOrder = order
+	}
+	if err := s.store.UpdateCategory(ctx, &c); err != nil {
+		return nil, fmt.Errorf("failed to update category: %w", err)
+	}
+	return datastoreCategoryToCatalog(&c), nil
+}
 
-	if p.InventoryStatus != "" {
-		content += fmt.Sprintf("inventory_status: %s\n", p.InventoryStatus)
-	}
-	if p.InventoryQuantity != nil {
-		content += fmt.Sprintf("inventory_quantity: %d\n", *p.InventoryQuantity)
-	}
-	if p.CategoryID != "" {
-		content += fmt.Sprintf("category_id: %s\n", p.CategoryID)
-	}
-	if len(p.CollectionIDs) > 0 {
-		content += "collection_ids:\n"
-		for _, id := range p.CollectionIDs {
-			content += fmt.Sprintf("  - %s\n", id)
-		}
-	}
-	if len(p.Images) > 0 {
-		content += "images:\n"
-		for _, img := range p.Images {
-			content += fmt.Sprintf("  - %s\n", img)
-		}
-	}
+// DeleteCategory deletes a category from the datastore.
+func (s *Service) DeleteCategory(ctx context.Context, id string) error {
+	return s.store.DeleteCategory(ctx, id)
+}
 
-	content += fmt.Sprintf("created_at: %s\n", p.CreatedAt.Format(time.RFC3339))
-	content += fmt.Sprintf("updated_at: %s\n", p.UpdatedAt.Format(time.RFC3339))
-	content += "---\n\n"
-
-	if p.Body != "" {
-		content += p.Body + "\n"
+// CreateCollection creates a new collection in the datastore.
+func (s *Service) CreateCollection(ctx context.Context, input map[string]interface{}) (*catalog.Collection, error) {
+	now := time.Now()
+	c := &datastore.Collection{
+		ID:        uuid.New().String(),
+		Name:      getStringOrEmpty(input, "name"),
+		Slug:      getStringOrEmpty(input, "slug"),
+		Body:      getStringOrEmpty(input, "body"),
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
+	if order, ok := input["displayOrder"].(int); ok {
+		c.DisplayOrder = order
+	}
+	if err := s.store.CreateCollection(ctx, c); err != nil {
+		return nil, fmt.Errorf("failed to create collection: %w", err)
+	}
+	return datastoreCollectionToCatalog(c), nil
+}
 
-	return content
+// UpdateCollection updates an existing collection.
+func (s *Service) UpdateCollection(ctx context.Context, id string, input map[string]interface{}) (*catalog.Collection, error) {
+	existing, err := s.store.GetCollection(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("collection not found: %s", id)
+	}
+	c := *existing
+	c.UpdatedAt = time.Now()
+	if name, ok := input["name"].(string); ok {
+		c.Name = name
+	}
+	if slug, ok := input["slug"].(string); ok {
+		c.Slug = slug
+	}
+	if body, ok := input["body"].(string); ok {
+		c.Body = body
+	}
+	if order, ok := input["displayOrder"].(int); ok {
+		c.DisplayOrder = order
+	}
+	if err := s.store.UpdateCollection(ctx, &c); err != nil {
+		return nil, fmt.Errorf("failed to update collection: %w", err)
+	}
+	return datastoreCollectionToCatalog(&c), nil
+}
+
+// DeleteCollection deletes a collection from the datastore.
+func (s *Service) DeleteCollection(ctx context.Context, id string) error {
+	return s.store.DeleteCollection(ctx, id)
+}
+
+// ── catalog ↔ datastore conversion helpers ────────────────────────────────────
+
+func datastoreProductToCatalog(p *datastore.Product) *catalog.Product {
+	return &catalog.Product{
+		ID:                p.ID,
+		SKU:               p.SKU,
+		Title:             p.Title,
+		Price:             p.Price,
+		Currency:          p.Currency,
+		InventoryStatus:   p.InventoryStatus,
+		InventoryQuantity: p.InventoryQuantity,
+		CategoryID:        p.CategoryID,
+		CollectionIDs:     p.CollectionIDs,
+		Images:            p.Images,
+		Metadata:          p.Metadata,
+		CreatedAt:         p.CreatedAt,
+		UpdatedAt:         p.UpdatedAt,
+		Body:              p.Body,
+	}
+}
+
+func datastoreCategoryToCatalog(c *datastore.Category) *catalog.Category {
+	return &catalog.Category{
+		ID:           c.ID,
+		Name:         c.Name,
+		Slug:         c.Slug,
+		ParentID:     c.ParentID,
+		DisplayOrder: c.DisplayOrder,
+		CreatedAt:    c.CreatedAt,
+		UpdatedAt:    c.UpdatedAt,
+		Body:         c.Body,
+	}
+}
+
+func datastoreCollectionToCatalog(c *datastore.Collection) *catalog.Collection {
+	return &catalog.Collection{
+		ID:           c.ID,
+		Name:         c.Name,
+		Slug:         c.Slug,
+		DisplayOrder: c.DisplayOrder,
+		ProductIDs:   c.ProductIDs,
+		CreatedAt:    c.CreatedAt,
+		UpdatedAt:    c.UpdatedAt,
+		Body:         c.Body,
+	}
 }
 
 // Helper functions

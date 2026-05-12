@@ -8,7 +8,7 @@ package graph
 import (
 	"context"
 
-	"github.com/gitstore-dev/gitstore/api/internal/cache"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/loader"
 	"go.uber.org/zap"
 )
@@ -16,17 +16,17 @@ import (
 // Resolver is the root GraphQL resolver
 type Resolver struct {
 	logger  *zap.Logger
-	cache   *cache.Manager
+	store   datastore.Datastore
 	service *Service
 }
 
 // NewResolver creates a new GraphQL resolver.
 // writer is the GitWriter backed by the gRPC client; pass nil to disable writes.
-func NewResolver(cacheManager *cache.Manager, writer GitWriter, logger *zap.Logger) *Resolver {
-	svc := NewServiceWithWriter(cacheManager, writer, logger)
+func NewResolver(store datastore.Datastore, writer GitWriter, logger *zap.Logger) *Resolver {
+	svc := NewServiceWithWriter(store, writer, logger)
 	return &Resolver{
 		logger:  logger,
-		cache:   cacheManager,
+		store:   store,
 		service: svc,
 	}
 }

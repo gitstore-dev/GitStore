@@ -8,7 +8,7 @@ package loader
 import (
 	"context"
 
-	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"go.uber.org/zap"
 )
 
@@ -23,34 +23,33 @@ type contextKey string
 
 const loadersKey contextKey = "dataloaders"
 
-// NewLoaders creates a new set of data loaders for a catalog
-func NewLoaders(cat *catalog.Catalog, logger *zap.Logger) *Loaders {
+// NewLoaders creates a new set of data loaders backed by the datastore.
+func NewLoaders(store datastore.Datastore, logger *zap.Logger) *Loaders {
 	return &Loaders{
-		Product:    NewProductLoader(cat, logger),
-		Category:   NewCategoryLoader(cat, logger),
-		Collection: NewCollectionLoader(cat, logger),
+		Product:    NewProductLoader(store, logger),
+		Category:   NewCategoryLoader(store, logger),
+		Collection: NewCollectionLoader(store, logger),
 	}
 }
 
-// Middleware creates a middleware that adds loaders to the context
-func Middleware(cat *catalog.Catalog, logger *zap.Logger) func(context.Context) context.Context {
+// Middleware creates a middleware that adds loaders to the context.
+func Middleware(store datastore.Datastore, logger *zap.Logger) func(context.Context) context.Context {
 	return func(ctx context.Context) context.Context {
-		loaders := NewLoaders(cat, logger)
+		loaders := NewLoaders(store, logger)
 		return context.WithValue(ctx, loadersKey, loaders)
 	}
 }
 
-// FromContext retrieves loaders from the context
+// FromContext retrieves loaders from the context.
 func FromContext(ctx context.Context) *Loaders {
 	loaders, ok := ctx.Value(loadersKey).(*Loaders)
 	if !ok {
-		// Return nil loaders - callers should handle this gracefully
 		return nil
 	}
 	return loaders
 }
 
-// Clear clears all loader state (should be called on catalog reload)
+// Clear clears all loader state.
 func (l *Loaders) Clear() {
 	if l.Product != nil {
 		l.Product.Clear()

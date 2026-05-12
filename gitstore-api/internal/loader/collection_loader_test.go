@@ -8,147 +8,100 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"go.uber.org/zap"
 )
 
+const (
+	collID1 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	collID2 = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+)
+
 func TestCollectionLoaderLoad(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit", "")
-
-	coll1 := &catalog.Collection{
-		ID:         "coll_1",
-		Name:       "Collection 1",
-		Slug:       "coll-1",
-		ProductIDs: []string{"prod_1"},
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+	store, err := memdb.New()
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
 	}
-
-	coll2 := &catalog.Collection{
-		ID:         "coll_2",
-		Name:       "Collection 2",
-		Slug:       "coll-2",
-		ProductIDs: []string{"prod_2"},
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-
-	cat.AddCollection(coll1)
-	cat.AddCollection(coll2)
-
-	logger := zap.NewNop()
-	loader := NewCollectionLoader(cat, logger)
 
 	ctx := context.Background()
+	_ = store.CreateCollection(ctx, &datastore.Collection{ID: collID1, Name: "Collection 1", Slug: "coll-1", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	_ = store.CreateCollection(ctx, &datastore.Collection{ID: collID2, Name: "Collection 2", Slug: "coll-2", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	// Load single collection
-	result, err := loader.Load(ctx, "coll_1")
+	loader := NewCollectionLoader(store, zap.NewNop())
+
+	result, err := loader.Load(ctx, collID1)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-
 	if result == nil {
 		t.Fatal("Expected collection, got nil")
 	}
-
-	if result.ID != "coll_1" {
-		t.Errorf("Expected coll_1, got %s", result.ID)
+	if result.ID != collID1 {
+		t.Errorf("Expected %s, got %s", collID1, result.ID)
 	}
 
-	// Load non-existent collection
-	result, err = loader.Load(ctx, "coll_nonexistent")
+	result, err = loader.Load(ctx, "00000000-0000-0000-0000-000000000000")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-
 	if result != nil {
 		t.Errorf("Expected nil for non-existent collection, got %v", result)
 	}
 }
 
 func TestCollectionLoaderLoadMany(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit", "")
-
-	coll1 := &catalog.Collection{
-		ID:         "coll_1",
-		Name:       "Collection 1",
-		Slug:       "coll-1",
-		ProductIDs: []string{"prod_1"},
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+	store, err := memdb.New()
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
 	}
-
-	coll2 := &catalog.Collection{
-		ID:         "coll_2",
-		Name:       "Collection 2",
-		Slug:       "coll-2",
-		ProductIDs: []string{"prod_2"},
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-
-	cat.AddCollection(coll1)
-	cat.AddCollection(coll2)
-
-	logger := zap.NewNop()
-	loader := NewCollectionLoader(cat, logger)
 
 	ctx := context.Background()
+	_ = store.CreateCollection(ctx, &datastore.Collection{ID: collID1, Name: "Collection 1", Slug: "coll-1", CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	_ = store.CreateCollection(ctx, &datastore.Collection{ID: collID2, Name: "Collection 2", Slug: "coll-2", CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	// Load multiple collections
-	ids := []string{"coll_1", "coll_2", "coll_nonexistent"}
+	loader := NewCollectionLoader(store, zap.NewNop())
+
+	ids := []string{collID1, collID2, "00000000-0000-0000-0000-000000000000"}
 	results, errs := loader.LoadMany(ctx, ids)
 
 	if len(results) != 3 {
 		t.Fatalf("Expected 3 results, got %d", len(results))
 	}
-
 	if len(errs) != 3 {
 		t.Fatalf("Expected 3 errors, got %d", len(errs))
 	}
-
-	// Check first result
-	if results[0] == nil {
-		t.Error("Expected coll_1, got nil")
-	} else if results[0].ID != "coll_1" {
-		t.Errorf("Expected coll_1, got %s", results[0].ID)
+	if results[0] == nil || results[0].ID != collID1 {
+		t.Errorf("Expected collID1 at index 0, got %v", results[0])
 	}
-
-	// Check second result
-	if results[1] == nil {
-		t.Error("Expected coll_2, got nil")
-	} else if results[1].ID != "coll_2" {
-		t.Errorf("Expected coll_2, got %s", results[1].ID)
+	if results[1] == nil || results[1].ID != collID2 {
+		t.Errorf("Expected collID2 at index 1, got %v", results[1])
 	}
-
-	// Check third result (non-existent)
 	if results[2] != nil {
 		t.Errorf("Expected nil for non-existent collection, got %v", results[2])
 	}
 }
 
 func TestCollectionLoaderClear(t *testing.T) {
-	cat := catalog.NewCatalog("test-commit", "")
-	logger := zap.NewNop()
-	loader := NewCollectionLoader(cat, logger)
+	store, err := memdb.New()
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	loader := NewCollectionLoader(store, zap.NewNop())
 
-	// Add some state
 	loader.mu.Lock()
-	loader.batch = []string{"coll_1", "coll_2"}
+	loader.batch = []string{collID1, collID2}
 	loader.waiting = make([]chan []*collectionResult, 2)
 	loader.mu.Unlock()
 
-	// Clear
 	loader.Clear()
 
-	// Verify cleared
 	loader.mu.Lock()
 	defer loader.mu.Unlock()
 
 	if len(loader.batch) != 0 {
 		t.Errorf("Expected empty batch after clear, got %d items", len(loader.batch))
 	}
-
 	if len(loader.waiting) != 0 {
 		t.Errorf("Expected empty waiting list after clear, got %d items", len(loader.waiting))
 	}

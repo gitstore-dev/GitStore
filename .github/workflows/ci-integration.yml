@@ -1,6 +1,6 @@
 name: CI Integration
 
-# Runs ONLY when files relevant to the gRPC contract or service implementations change.
+# Runs ONLY when files relevant to the gRPC/datastore contracts or service implementations change.
 # This workflow is NOT a required branch-protection status check.
 # Core CI (ci.yml) gates merge; these tests provide deeper validation when warranted.
 
@@ -30,10 +30,6 @@ permissions:
 concurrency:
   group: integration-${{ github.ref }}
   cancel-in-progress: true
-
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
 
 jobs:
   integration-test:
@@ -88,8 +84,46 @@ jobs:
       if: always()
       run: docker compose down -v
 
-  grpc-integration-test:
-    name: gRPC Integration Tests (testcontainers)
+  datastore-contract-test:
+    name: Datastore Contract Tests (memdb)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.x'
+        cache-dependency-path: gitstore-api/go.sum
+
+    - name: Run datastore contract tests
+      working-directory: ./gitstore-api
+      run: go test -v -race -timeout 120s ./tests/contract/datastore/...
+
+  datastore-contract-test-scylla:
+    name: Datastore Contract Tests (ScyllaDB)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.x'
+        cache-dependency-path: gitstore-api/go.sum
+
+    - name: Run ScyllaDB contract tests
+      working-directory: ./gitstore-api
+      run: go test -tags scylla -v -timeout 10m ./tests/contract/datastore/... ./internal/datastore/scylla/...
+
+  grpc-contract-test:
+    name: gRPC Contract Tests (testcontainers)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -106,6 +140,6 @@ jobs:
     - name: Build git-service Docker image
       run: docker build -f docker/git-service.Dockerfile -t gitstore-git-service:latest .
 
-    - name: Run gRPC integration tests
+    - name: Run gRPC contract tests
       working-directory: ./gitstore-api
-      run: go test -tags grpc -v -timeout 5m ./tests/integration/...
+      run: go test -tags grpc -v -timeout 5m ./tests/contract/grpc/...
