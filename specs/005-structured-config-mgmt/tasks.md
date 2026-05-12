@@ -48,7 +48,7 @@
 
 - [x] T005 [P] [US1] Write failing Go tests for layered loading: defaults applied when no source set, env var overrides default, config file value applied when no env var, env var overrides config file — in `gitstore-api/internal/config/config_test.go`
 - [x] T006 [P] [US1] Write failing Rust tests for layered loading: same four scenarios — in `gitstore-git-service/src/config.rs` (`#[cfg(test)]` inline module)
-- [x] T007 [P] [US1] Write failing Go test: startup log output contains all non-sensitive keys and shows `<redacted>` for `AdminPasswordHash` and `JWTSecret` — in `gitstore-api/internal/config/config_test.go`
+- [x] T007 [P] [US1] Write failing Go test: startup log output contains all non-sensitive keys and shows `<redacted>` for `Admin.Password` and `JWTSecret` — in `gitstore-api/internal/config/config_test.go`
 - [x] T008 [P] [US1] Write failing Rust test: `AppConfig` debug/display output shows all fields without exposing sensitive values — in `gitstore-git-service/src/config.rs`
 
 ### Implementation for User Story 1

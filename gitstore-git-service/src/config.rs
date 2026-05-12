@@ -5,14 +5,34 @@ use config::{Config, Environment, File, FileFormat};
 
 #[derive(Debug, serde::Deserialize)]
 pub struct AppConfig {
-    pub http_port: u16,
-    pub ws_port: u16,
-    pub grpc_port: u16,
-    pub data_dir: String,
-    pub log_level: String,
-    pub max_file_size: u64,
+    pub http: PortConfig,
+    pub ws: PortConfig,
+    pub grpc: PortConfig,
+    pub git: GitConfig,
+    pub log: LogConfig,
     pub hooks: HooksConfig,
     pub admission_control: AdmissionControlConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct PortConfig {
+    pub port: u16,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct GitConfig {
+    pub data_dir: String,
+    pub repo: RepoConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RepoConfig {
+    pub max_file_size: u64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct LogConfig {
+    pub level: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -67,38 +87,41 @@ impl AppConfig {
     pub fn validate(&self) -> Result<(), ConfigErrors> {
         let mut errors = Vec::new();
 
-        if self.http_port == 0 {
+        if self.http.port == 0 {
             errors.push(format!(
-                "http_port must be between 1 and 65535 (got: {})",
-                self.http_port
+                "http.port must be between 1 and 65535 (got: {})",
+                self.http.port
             ));
         }
-        if self.ws_port == 0 {
+        if self.ws.port == 0 {
             errors.push(format!(
-                "ws_port must be between 1 and 65535 (got: {})",
-                self.ws_port
+                "ws.port must be between 1 and 65535 (got: {})",
+                self.ws.port
             ));
         }
-        if self.grpc_port == 0 {
+        if self.grpc.port == 0 {
             errors.push(format!(
-                "grpc_port must be between 1 and 65535 (got: {})",
-                self.grpc_port
+                "grpc.port must be between 1 and 65535 (got: {})",
+                self.grpc.port
             ));
         }
-        if self.data_dir.is_empty() {
-            errors.push("data_dir must not be empty".to_string());
+        if self.git.data_dir.is_empty() {
+            errors.push("git.data_dir must not be empty".to_string());
+        }
+        if self.git.repo.max_file_size == 0 {
+            errors.push("git.repo.max_file_size must be positive".to_string());
         }
         // All three ports must be distinct
-        if self.http_port != 0
-            && self.ws_port != 0
-            && self.grpc_port != 0
-            && (self.http_port == self.ws_port
-                || self.http_port == self.grpc_port
-                || self.ws_port == self.grpc_port)
+        if self.http.port != 0
+            && self.ws.port != 0
+            && self.grpc.port != 0
+            && (self.http.port == self.ws.port
+                || self.http.port == self.grpc.port
+                || self.ws.port == self.grpc.port)
         {
             errors.push(format!(
-                "all three ports (http_port={}, ws_port={}, grpc_port={}) must be distinct",
-                self.http_port, self.ws_port, self.grpc_port
+                "all three ports (http.port={}, ws.port={}, grpc.port={}) must be distinct",
+                self.http.port, self.ws.port, self.grpc.port
             ));
         }
 
@@ -124,13 +147,9 @@ pub fn load_config_from(config_file: Option<&str>) -> Result<AppConfig, config::
         .add_source(
             File::with_name(config_file.unwrap_or("gitstore")).required(config_file.is_some()),
         )
-        // Environment variables: GITSTORE_HTTP_PORT → http_port, etc.
-        // prefix_separator("_") strips the GITSTORE_ prefix using a single
-        // underscore. separator("__") then splits nested config-key levels using
-        // double underscores, so single underscores within a field name
-        // (http_port, log_level, data_dir) are preserved as part of the key
-        // name rather than being treated as nesting separators.
-        // Nested keys (hooks, admission_control) must be set via config file.
+        // Environment variables use double underscores between config-key levels,
+        // so dotted keys map cleanly without splitting internal underscores in
+        // field names (for example, GITSTORE_GIT__REPO__MAX_FILE_SIZE).
         .add_source(
             Environment::with_prefix("GITSTORE")
                 .prefix_separator("_")
@@ -140,12 +159,12 @@ pub fn load_config_from(config_file: Option<&str>) -> Result<AppConfig, config::
 
     let cfg = builder.build()?.try_deserialize::<AppConfig>()?;
     tracing::info!(
-        http_port = cfg.http_port,
-        ws_port = cfg.ws_port,
-        grpc_port = cfg.grpc_port,
-        data_dir = %cfg.data_dir,
-        log_level = %cfg.log_level,
-        max_file_size = cfg.max_file_size,
+        http_port = cfg.http.port,
+        ws_port = cfg.ws.port,
+        grpc_port = cfg.grpc.port,
+        data_dir = %cfg.git.data_dir,
+        log_level = %cfg.log.level,
+        max_file_size = cfg.git.repo.max_file_size,
         "resolved configuration"
     );
     Ok(cfg)
@@ -153,12 +172,23 @@ pub fn load_config_from(config_file: Option<&str>) -> Result<AppConfig, config::
 
 fn default_toml() -> String {
     r#"
-http_port = 9418
-ws_port = 8080
-grpc_port = 50051
+[http]
+port = 9418
+
+[ws]
+port = 8080
+
+[grpc]
+port = 50051
+
+[git]
 data_dir = "/data/repos"
-log_level = "info"
+
+[git.repo]
 max_file_size = 52428800
+
+[log]
+level = "info"
 
 [hooks.git_receive_pack]
 pre_receive  = { enabled = false }
@@ -184,12 +214,12 @@ mod tests {
 
     fn clear_env() {
         let keys = [
-            "GITSTORE_HTTP_PORT",
-            "GITSTORE_WS_PORT",
-            "GITSTORE_GRPC_PORT",
-            "GITSTORE_DATA_DIR",
-            "GITSTORE_LOG_LEVEL",
-            "GITSTORE_MAX_FILE_SIZE",
+            "GITSTORE_HTTP__PORT",
+            "GITSTORE_WS__PORT",
+            "GITSTORE_GRPC__PORT",
+            "GITSTORE_GIT__DATA_DIR",
+            "GITSTORE_LOG__LEVEL",
+            "GITSTORE_GIT__REPO__MAX_FILE_SIZE",
         ];
         for k in &keys {
             env::remove_var(k);
@@ -203,23 +233,23 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
         let cfg = load_config_from(None).expect("load_config failed");
-        assert_eq!(cfg.http_port, 9418);
-        assert_eq!(cfg.ws_port, 8080);
-        assert_eq!(cfg.grpc_port, 50051);
-        assert_eq!(cfg.data_dir, "/data/repos");
-        assert_eq!(cfg.log_level, "info");
-        assert_eq!(cfg.max_file_size, 52428800);
+        assert_eq!(cfg.http.port, 9418);
+        assert_eq!(cfg.ws.port, 8080);
+        assert_eq!(cfg.grpc.port, 50051);
+        assert_eq!(cfg.git.data_dir, "/data/repos");
+        assert_eq!(cfg.log.level, "info");
+        assert_eq!(cfg.git.repo.max_file_size, 52428800);
     }
 
     #[test]
     fn test_env_var_overrides_default() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        env::set_var("GITSTORE_HTTP_PORT", "8000");
-        env::set_var("GITSTORE_LOG_LEVEL", "debug");
+        env::set_var("GITSTORE_HTTP__PORT", "8000");
+        env::set_var("GITSTORE_LOG__LEVEL", "debug");
         let cfg = load_config_from(None).expect("load_config failed");
-        assert_eq!(cfg.http_port, 8000);
-        assert_eq!(cfg.log_level, "debug");
+        assert_eq!(cfg.http.port, 8000);
+        assert_eq!(cfg.log.level, "debug");
         clear_env();
     }
 
@@ -233,30 +263,30 @@ mod tests {
         let file_path = dir.path().join("custom_config.toml");
         std::fs::write(
             &file_path,
-            "http_port = 7777\nws_port = 7778\nlog_level = \"warn\"\n",
+            "[http]\nport = 7777\n[ws]\nport = 7778\n[log]\nlevel = \"warn\"\n",
         )
         .expect("write config");
         // Strip the .toml extension — File::with_name adds it when probing
         let stem = dir.path().join("custom_config");
         let path_str = stem.to_str().expect("path str");
         let cfg = load_config_from(Some(path_str)).expect("load_config failed");
-        assert_eq!(cfg.http_port, 7777);
-        assert_eq!(cfg.ws_port, 7778);
-        assert_eq!(cfg.log_level, "warn");
+        assert_eq!(cfg.http.port, 7777);
+        assert_eq!(cfg.ws.port, 7778);
+        assert_eq!(cfg.log.level, "warn");
     }
 
     #[test]
     fn test_env_var_overrides_config_file() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        env::set_var("GITSTORE_HTTP_PORT", "6666");
+        env::set_var("GITSTORE_HTTP__PORT", "6666");
         let dir = tempfile::tempdir().expect("tempdir");
         let file_path = dir.path().join("custom_config.toml");
-        std::fs::write(&file_path, "http_port = 7777\n").expect("write config");
+        std::fs::write(&file_path, "[http]\nport = 7777\n").expect("write config");
         let stem = dir.path().join("custom_config");
         let path_str = stem.to_str().expect("path str");
         let cfg = load_config_from(Some(path_str)).expect("load_config failed");
-        assert_eq!(cfg.http_port, 6666);
+        assert_eq!(cfg.http.port, 6666);
         clear_env();
     }
 
@@ -268,8 +298,8 @@ mod tests {
         clear_env();
         let cfg = load_config_from(None).expect("load_config failed");
         let debug_str = format!("{:?}", cfg);
-        assert!(debug_str.contains("http_port"));
-        assert!(debug_str.contains("log_level"));
+        assert!(debug_str.contains("http"));
+        assert!(debug_str.contains("log"));
     }
 
     // T028: .env loading tests (US3)
@@ -281,10 +311,10 @@ mod tests {
     fn test_env_file_values_are_loaded() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        // Simulate dotenvy having loaded GITSTORE_LOG_LEVEL=trace from .env
-        env::set_var("GITSTORE_LOG_LEVEL", "trace");
+        // Simulate dotenvy having loaded GITSTORE_LOG__LEVEL=trace from .env
+        env::set_var("GITSTORE_LOG__LEVEL", "trace");
         let cfg = load_config_from(None).expect("load failed");
-        assert_eq!(cfg.log_level, "trace");
+        assert_eq!(cfg.log.level, "trace");
         clear_env();
     }
 
@@ -295,9 +325,9 @@ mod tests {
         // Simulate: dotenvy sets trace, but shell already had debug set.
         // dotenvy does not overwrite existing env vars — shell wins.
         // We model that here by just having debug set (the shell value).
-        env::set_var("GITSTORE_LOG_LEVEL", "debug");
+        env::set_var("GITSTORE_LOG__LEVEL", "debug");
         let cfg = load_config_from(None).expect("load failed");
-        assert_eq!(cfg.log_level, "debug");
+        assert_eq!(cfg.log.level, "debug");
         clear_env();
     }
 
@@ -307,7 +337,7 @@ mod tests {
         clear_env();
         // No env vars set and no .env file — defaults must apply
         let cfg = load_config_from(None).expect("load failed");
-        assert_eq!(cfg.http_port, 9418);
+        assert_eq!(cfg.http.port, 9418);
     }
 
     // T022: unknown keys in config file must not abort startup
@@ -323,7 +353,7 @@ mod tests {
         let path_str = stem.to_str().expect("path str");
         // config-rs ignores unknown keys by default — load must succeed
         let cfg = load_config_from(Some(path_str)).expect("should load despite unknown key");
-        assert_eq!(cfg.http_port, 9418);
+        assert_eq!(cfg.http.port, 9418);
     }
 
     // Explicit --config-file with a missing path must fail, not silently use defaults.
@@ -345,14 +375,14 @@ mod tests {
     fn test_validate_port_out_of_range() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        env::set_var("GITSTORE_HTTP_PORT", "0");
+        env::set_var("GITSTORE_HTTP__PORT", "0");
         let cfg = load_config_from(None).expect("load failed");
         let result = cfg.validate();
         assert!(result.is_err(), "expected validation error for port 0");
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("http_port"),
-            "error should mention http_port, got: {err}"
+            err.to_string().contains("http.port"),
+            "error should mention http.port, got: {err}"
         );
         clear_env();
     }
@@ -361,7 +391,7 @@ mod tests {
     fn test_validate_data_dir_empty_fails() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        env::set_var("GITSTORE_DATA_DIR", "");
+        env::set_var("GITSTORE_GIT__DATA_DIR", "");
         let cfg = load_config_from(None).expect("load failed");
         let result = cfg.validate();
         assert!(
@@ -369,7 +399,7 @@ mod tests {
             "expected validation error for empty data_dir"
         );
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("data_dir"));
+        assert!(err.to_string().contains("git.data_dir"));
         clear_env();
     }
 
@@ -377,9 +407,9 @@ mod tests {
     fn test_validate_port_uniqueness_constraint() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
-        // Make http_port == ws_port
-        env::set_var("GITSTORE_HTTP_PORT", "8080");
-        env::set_var("GITSTORE_WS_PORT", "8080");
+        // Make http.port == ws.port
+        env::set_var("GITSTORE_HTTP__PORT", "8080");
+        env::set_var("GITSTORE_WS__PORT", "8080");
         let cfg = load_config_from(None).expect("load failed");
         let result = cfg.validate();
         assert!(result.is_err(), "expected port uniqueness error");
@@ -393,8 +423,9 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
         // Port 0 is invalid and same port across http/ws triggers uniqueness — multiple errors
-        env::set_var("GITSTORE_HTTP_PORT", "0");
-        env::set_var("GITSTORE_DATA_DIR", "");
+        env::set_var("GITSTORE_HTTP__PORT", "0");
+        env::set_var("GITSTORE_GIT__DATA_DIR", "");
+        env::set_var("GITSTORE_GIT__REPO__MAX_FILE_SIZE", "0");
         let cfg = load_config_from(None).expect("load failed");
         let result = cfg.validate();
         assert!(result.is_err());
@@ -402,7 +433,9 @@ mod tests {
         // Both failures should appear in the single error string
         let s = err.to_string();
         assert!(
-            s.contains("http_port") || s.contains("data_dir"),
+            s.contains("http.port")
+                || s.contains("git.data_dir")
+                || s.contains("git.repo.max_file_size"),
             "got: {s}"
         );
         clear_env();

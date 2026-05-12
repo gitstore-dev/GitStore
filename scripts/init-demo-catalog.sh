@@ -30,10 +30,11 @@ while [ "$#" -gt 0 ]; do
 done
 
 # Resolve catalog base directory with precedence:
-# 1) GITSTORE_DATA_DIR env var
-# 2) --data-dir flag
-# 3) ./demo-catalog
-CATALOG_PATH="${GITSTORE_DATA_DIR:-${CLI_DATA_DIR:-./demo-catalog}}"
+# 1) GITSTORE_GIT__DATA_DIR env var
+# 2) GITSTORE_DATA_DIR env var (backward compatibility)
+# 3) --data-dir flag
+# 4) ./demo-catalog
+CATALOG_PATH="${GITSTORE_GIT__DATA_DIR:-${GITSTORE_DATA_DIR:-${CLI_DATA_DIR:-./demo-catalog}}}"
 # Resolve to absolute path before any cd so relative paths remain valid.
 CATALOG_PATH="$(mkdir -p "$CATALOG_PATH" && cd "$CATALOG_PATH" && pwd)"
 CATALOG_REPO_PATH="$CATALOG_PATH/catalog.git"

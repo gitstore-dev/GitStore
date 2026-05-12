@@ -18,7 +18,7 @@
 
 **Key implementation notes**:
 - All env vars now share the `GITSTORE_` prefix; `AutomaticEnv` with `SetEnvPrefix("GITSTORE")` and `SetEnvKeyReplacer(strings.NewReplacer(".", "_"))` handles all keys uniformly — no explicit `BindEnv` calls needed
-- Key mapping examples: `GITSTORE_API_PORT` → `api.port`, `GITSTORE_GIT_GRPC` → `git.grpc`, `GITSTORE_GIT_HTTP_URL` → `git.http_url`, `GITSTORE_AUTH_JWT_SECRET` → `auth.jwt_secret`
+- Key mapping examples: `GITSTORE_API__PORT` → `api.port`, `GITSTORE_GIT__GRPC__URI` → `git.grpc.uri`, `GITSTORE_GIT__HTTP__URI` → `git.http.uri`, `GITSTORE_AUTH__JWT__SECRET` → `auth.jwt.secret`
 - `v.SetConfigType("toml")` must be set explicitly since viper defaults to YAML; `ReadInConfig()` returns `viper.ConfigFileNotFoundError` when no file is found — this must be allowed (config file is optional)
 - `validate:"required"` from go-playground rejects both absent keys and empty-string values, satisfying the clarified empty-string-as-absent requirement
 - `UnmarshalExact` (viper 1.19+) catches unknown config file keys and surfaces them as errors; pair with FR-010 warning behaviour
@@ -94,22 +94,22 @@
 
 *Note: `GITSTORE_GIT_GRPC` is read in two files (main.go and grpc_client.go) — this duplicate call-site is eliminated by the single config entry point.*
 
-### gitstore-git-service (Rust) — 5 keys
+### gitstore-git-service (Rust) — 12 keys
 
 | Env Var Key                                                    | Default       | Required | Sensitive |
 |----------------------------------------------------------------|---------------|----------|-----------|
-| `GITSTORE_HTTP_PORT`                                           | `9418`        | No       | No        |
-| `GITSTORE_WS_PORT`                                             | `8080`        | No       | No        |
-| `GITSTORE_GRPC_PORT`                                           | `50051`       | No       | No        |
-| `GITSTORE_DATA_DIR`                                            | `/data/repos` | No       | No        |
-| `GITSTORE_LOG_LEVEL`                                           | `info`        | No       | No        |
-| `GITSTORE_MAX_FILE_SIZE`                                       | `52428800`    | No       | No        |
-| `GITSTORE_HOOKS_GIT_RECEIVE_PACK_PRE_RECEIVE_ENABLED`          | `false`       | No       | No        |
-| `GITSTORE_HOOKS_GIT_RECEIVE_PACK_UPDATE_ENABLED`               | `false`       | No       | No        |
-| `GITSTORE_HOOKS_GIT_RECEIVE_PACK_POST_RECEIVE_ENABLED`         | `false`       | No       | No        |
-| `GITSTORE_HOOKS_GIT_RECEIVE_PACK_PROC_RECEIVE_ENABLED`         | `false`       | No       | No        |
-| `GITSTORE_HOOKS_GIT_RECEIVE_PACK_POST_UPDATE_ENABLED`          | `false`       | No       | No        |
-| `GITSTORE_ADMISSION_CONTROL_VALIDATING_ADMISSION_POLICY_PHASE` | `pre-receive` | No       | No        |
+| `GITSTORE_HTTP__PORT`                                           | `9418`        | No       | No        |
+| `GITSTORE_WS__PORT`                                             | `8080`        | No       | No        |
+| `GITSTORE_GRPC__PORT`                                           | `50051`       | No       | No        |
+| `GITSTORE_GIT__DATA_DIR`                                        | `/data/repos` | No       | No        |
+| `GITSTORE_LOG__LEVEL`                                           | `info`        | No       | No        |
+| `GITSTORE_GIT__REPO__MAX_FILE_SIZE`                             | `52428800`    | No       | No        |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED`       | `false`       | No       | No        |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__UPDATE__ENABLED`            | `false`       | No       | No        |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_RECEIVE__ENABLED`      | `false`       | No       | No        |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PROC_RECEIVE__ENABLED`      | `false`       | No       | No        |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_UPDATE__ENABLED`       | `false`       | No       | No        |
+| `GITSTORE_ADMISSION_CONTROL__VALIDATING_ADMISSION_POLICY__PHASE` | `pre-receive` | No       | No        |
 
 *Note: All current Rust config keys have defaults; no required-without-default keys exist. Future keys (auth tokens, KV layer) will introduce required sensitive fields.*
 

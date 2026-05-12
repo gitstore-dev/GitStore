@@ -12,7 +12,7 @@ Before starting the stack, the catalogue repository must exist on disk:
 ls ./data/repos/catalog.git/HEAD   # should print "ref: refs/heads/main"
 ```
 
-The `GITSTORE_DATA_DIR` environment variable (or the `--data-dir` flag) must
+The `GITSTORE_GIT__DATA_DIR` environment variable (or the `--data-dir` flag) must
 point to the **parent** of `catalog.git`, not to `catalog.git` itself.
 
 ```

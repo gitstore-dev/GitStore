@@ -40,7 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Apply CLI overrides (highest priority)
     if let Some(level) = args.log_level {
-        cfg.log_level = level;
+        cfg.log.level = level;
     }
 
     // Fail fast if config is invalid
@@ -56,15 +56,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     gitstore::init_logging();
 
     info!(
-        http_port = cfg.http_port,
-        ws_port = cfg.ws_port,
-        grpc_port = cfg.grpc_port,
-        data_dir = %cfg.data_dir,
+        http_port = cfg.http.port,
+        ws_port = cfg.ws.port,
+        grpc_port = cfg.grpc.port,
+        data_dir = %cfg.git.data_dir,
         "Starting GitStore Server"
     );
 
     // Create data directory if it doesn't exist
-    let data_path = PathBuf::from(&cfg.data_dir);
+    let data_path = PathBuf::from(&cfg.git.data_dir);
     if !data_path.exists() {
         std::fs::create_dir_all(&data_path)?;
         info!(path = %data_path.display(), "Created data directory");
@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Start websocket server
-    let ws_addr: SocketAddr = format!("0.0.0.0:{}", cfg.ws_port).parse()?;
+    let ws_addr: SocketAddr = format!("0.0.0.0:{}", cfg.ws.port).parse()?;
     let ws_server = WebsocketServer::new(ws_addr);
     let broadcaster = ws_server.broadcaster();
 
@@ -98,10 +98,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Start gRPC server
-    let grpc_addr: SocketAddr = format!("0.0.0.0:{}", cfg.grpc_port).parse()?;
+    let grpc_addr: SocketAddr = format!("0.0.0.0:{}", cfg.grpc.port).parse()?;
     let grpc_service = GitServiceImpl::new(data_path.join("catalog.git"));
     info!(
-        grpc_port = cfg.grpc_port,
+        grpc_port = cfg.grpc.port,
         "gRPC server starting on {}", grpc_addr
     );
     let grpc_handle = tokio::spawn(async move {
@@ -124,9 +124,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = create_git_routes(git_state);
 
     // Start HTTP server for git operations
-    let http_addr: SocketAddr = format!("0.0.0.0:{}", cfg.http_port).parse()?;
+    let http_addr: SocketAddr = format!("0.0.0.0:{}", cfg.http.port).parse()?;
     info!(
-        http_port = cfg.http_port,
+        http_port = cfg.http.port,
         "HTTP Git server starting on http://{}", http_addr
     );
 

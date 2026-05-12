@@ -22,7 +22,7 @@ type Config struct {
 	Auth      AuthConfig      `mapstructure:"auth"`
 	Cache     CacheConfig     `mapstructure:"cache"`
 	Datastore DatastoreConfig `mapstructure:"datastore"`
-	LogLevel  string          `mapstructure:"log_level"`
+	Log       LogConfig       `mapstructure:"log"`
 }
 
 // ApiConfig holds HTTP API server settings.
@@ -32,23 +32,43 @@ type ApiConfig struct {
 
 // GitConfig holds addresses for the git service backends.
 type GitConfig struct {
-	GRPC    string `mapstructure:"grpc"     validate:"required"`
-	WS      string `mapstructure:"ws"       validate:"required"`
-	HttpURL string `mapstructure:"http_url" validate:"required"`
+	Grpc GitEndpointConfig `mapstructure:"grpc"`
+	Ws   GitEndpointConfig `mapstructure:"ws"`
+	Http GitEndpointConfig `mapstructure:"http"`
+}
+
+// GitEndpointConfig holds a single git-service endpoint URI.
+type GitEndpointConfig struct {
+	Uri string `mapstructure:"uri" validate:"required"`
 }
 
 // AuthConfig holds authentication and JWT settings.
 type AuthConfig struct {
-	AdminUsername     string `mapstructure:"admin_username"     validate:"required"`
-	AdminPasswordHash string `mapstructure:"admin_password_hash" validate:"required"`
-	JWTSecret         string `mapstructure:"jwt_secret"          validate:"required"`
-	JWTDuration       string `mapstructure:"jwt_duration"`
-	JWTIssuer         string `mapstructure:"jwt_issuer"`
+	Admin UserConfig `mapstructure:"admin"`
+	JWT   JWTConfig  `mapstructure:"jwt"`
+}
+
+// JWTConfig holds JWT token settings.
+type JWTConfig struct {
+	Secret   string `mapstructure:"secret"   validate:"required"`
+	Duration string `mapstructure:"duration"`
+	Issuer   string `mapstructure:"issuer"`
+}
+
+// UserConfig in-memory users
+type UserConfig struct {
+	Username string `mapstructure:"username" validate:"required"`
+	Password string `mapstructure:"password_hash" validate:"required"`
 }
 
 // CacheConfig holds cache settings.
 type CacheConfig struct {
 	TTL int `mapstructure:"ttl"`
+}
+
+// LogConfig holds logger settings.
+type LogConfig struct {
+	Level string `mapstructure:"level"`
 }
 
 // DatastoreConfig selects the active storage backend.
@@ -79,16 +99,16 @@ func Load() (*Config, error) {
 	// Defaults — all known keys must have a default so AutomaticEnv populates them
 	// during Unmarshal, even if the default is an empty string.
 	v.SetDefault("api.port", 4000)
-	v.SetDefault("git.grpc", "localhost:50051")
-	v.SetDefault("git.ws", "ws://localhost:8080")
-	v.SetDefault("git.http_url", "http://localhost:9418")
+	v.SetDefault("git.grpc.uri", "dns:///localhost:50051")
+	v.SetDefault("git.ws.uri", "ws://localhost:8080")
+	v.SetDefault("git.http.uri", "http://localhost:9418")
 	v.SetDefault("cache.ttl", 300)
-	v.SetDefault("log_level", "info")
-	v.SetDefault("auth.admin_username", "")
-	v.SetDefault("auth.admin_password_hash", "")
-	v.SetDefault("auth.jwt_secret", "")
-	v.SetDefault("auth.jwt_duration", "24h")
-	v.SetDefault("auth.jwt_issuer", "gitstore")
+	v.SetDefault("log.level", "info")
+	v.SetDefault("auth.admin.username", "")
+	v.SetDefault("auth.admin.password_hash", "")
+	v.SetDefault("auth.jwt.secret", "")
+	v.SetDefault("auth.jwt.duration", "24h")
+	v.SetDefault("auth.jwt.issuer", "gitstore")
 	v.SetDefault("datastore.backend", "memdb")
 	v.SetDefault("datastore.scylla.hosts", []string{"localhost:9042"})
 	v.SetDefault("datastore.scylla.keyspace", "gitstore")
@@ -109,7 +129,7 @@ func Load() (*Config, error) {
 
 	// Environment variables
 	v.SetEnvPrefix("GITSTORE")
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
 	v.AutomaticEnv()
 
 	var cfg Config
@@ -126,10 +146,10 @@ func Load() (*Config, error) {
 
 	// Warn about keys present in the config file that are not in the known schema.
 	knownKeys := map[string]bool{
-		"api.port": true, "git.grpc": true, "git.ws": true, "git.http_url": true,
-		"cache.ttl": true, "log_level": true,
-		"auth.admin_username": true, "auth.admin_password_hash": true,
-		"auth.jwt_secret": true, "auth.jwt_duration": true, "auth.jwt_issuer": true,
+		"api.port": true, "git.grpc.uri": true, "git.ws.uri": true, "git.http.uri": true,
+		"cache.ttl": true, "log.level": true,
+		"auth.admin.username": true, "auth.admin.password_hash": true,
+		"auth.jwt.secret": true, "auth.jwt.duration": true, "auth.jwt.issuer": true,
 		"datastore.backend": true, "datastore.scylla.hosts": true,
 		"datastore.scylla.keyspace": true, "datastore.scylla.username": true,
 		"datastore.scylla.password": true, "datastore.scylla.tls": true,
@@ -183,16 +203,16 @@ func validateDatastoreConfig(ds *DatastoreConfig) error {
 // Sensitive fields are always redacted.
 func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddInt("api.port", c.Api.Port)
-	enc.AddString("git.grpc", c.Git.GRPC)
-	enc.AddString("git.ws", c.Git.WS)
-	enc.AddString("git.http_url", c.Git.HttpURL)
-	enc.AddString("auth.admin_username", c.Auth.AdminUsername)
-	enc.AddString("auth.admin_password_hash", redact(c.Auth.AdminPasswordHash))
-	enc.AddString("auth.jwt_secret", redact(c.Auth.JWTSecret))
-	enc.AddString("auth.jwt_duration", c.Auth.JWTDuration)
-	enc.AddString("auth.jwt_issuer", c.Auth.JWTIssuer)
+	enc.AddString("git.grpc.uri", c.Git.Grpc.Uri)
+	enc.AddString("git.ws.uri", c.Git.Ws.Uri)
+	enc.AddString("git.http.uri", c.Git.Http.Uri)
+	enc.AddString("auth.admin.username", c.Auth.Admin.Username)
+	enc.AddString("auth.admin.password_hash", redact(c.Auth.Admin.Password))
+	enc.AddString("auth.jwt.secret", redact(c.Auth.JWT.Secret))
+	enc.AddString("auth.jwt.duration", c.Auth.JWT.Duration)
+	enc.AddString("auth.jwt.issuer", c.Auth.JWT.Issuer)
 	enc.AddInt("cache.ttl", c.Cache.TTL)
-	enc.AddString("log_level", c.LogLevel)
+	enc.AddString("log.level", c.Log.Level)
 	enc.AddString("datastore.backend", c.Datastore.Backend)
 	enc.AddString("datastore.scylla.password", redact(c.Datastore.Scylla.Password))
 	return nil

@@ -39,33 +39,47 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 
 ### Git Service Connection
 
-| Key            | Env Var                 | Type   | Default                 | Required | Sensitive | Description                                |
-|----------------|-------------------------|--------|-------------------------|----------|-----------|--------------------------------------------|
-| `git.grpc`     | `GITSTORE_GIT_GRPC`     | string | `localhost:50051`       | Yes      | No        | gRPC address of gitstore-git-service       |
-| `git.ws`       | `GITSTORE_GIT_WS`       | string | `ws://localhost:8080`   | Yes      | No        | WebSocket address of gitstore-git-service  |
-| `git.http_url` | `GITSTORE_GIT_HTTP_URL` | string | `http://localhost:9418` | Yes      | No        | Smart HTTP address of gitstore-git-service |
+| Key                | Env Var                           | Type   | Default                  | Required | Sensitive | Description                                |
+|--------------------|-----------------------------------|--------|--------------------------|----------|-----------|--------------------------------------------|
+| `git.grpc.uri`     | `GITSTORE_GIT__GRPC__URI`        | string | `dns:///localhost:50051` | Yes      | No        | gRPC address of gitstore-git-service       |
+| `git.ws.uri`       | `GITSTORE_GIT__WS__URI`          | string | `ws://localhost:8080`    | Yes      | No        | WebSocket address of gitstore-git-service  |
+| `git.http.uri`     | `GITSTORE_GIT__HTTP__URI`        | string | `http://localhost:9418`  | Yes      | No        | Smart HTTP address of gitstore-git-service |
 
 ### Authentication
 
-| Key                        | Env Var                             | Type     | Default    | Required | Sensitive | Description                             |
-|----------------------------|-------------------------------------|----------|------------|----------|-----------|-----------------------------------------|
-| `auth.admin_username`      | `GITSTORE_AUTH_ADMIN_USERNAME`      | string   | —          | **Yes**  | No        | Admin portal username                   |
-| `auth.admin_password_hash` | `GITSTORE_AUTH_ADMIN_PASSWORD_HASH` | string   | —          | **Yes**  | **Yes**   | bcrypt hash of the admin password       |
-| `auth.jwt_secret`          | `GITSTORE_AUTH_JWT_SECRET`          | string   | —          | **Yes**  | **Yes**   | JWT signing key (minimum 32 characters) |
-| `auth.jwt_duration`        | `GITSTORE_AUTH_JWT_DURATION`        | duration | `24h`      | No       | No        | JWT token validity (e.g. `12h`, `30m`)  |
-| `auth.jwt_issuer`          | `GITSTORE_AUTH_JWT_ISSUER`          | string   | `gitstore` | No       | No        | JWT `iss` claim value                   |
+| Key                          | Env Var                               | Type     | Default    | Required | Sensitive | Description                             |
+|------------------------------|---------------------------------------|----------|------------|----------|-----------|-----------------------------------------|
+| `auth.admin.username`        | `GITSTORE_AUTH__ADMIN__USERNAME`      | string   | —          | **Yes**  | No        | Admin portal username                   |
+| `auth.admin.password_hash`   | `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | string   | —          | **Yes**  | **Yes**   | bcrypt hash of the admin password       |
+| `auth.jwt.secret`            | `GITSTORE_AUTH__JWT__SECRET`          | string   | —          | **Yes**  | **Yes**   | JWT signing key (minimum 32 characters) |
+| `auth.jwt.duration`          | `GITSTORE_AUTH__JWT__DURATION`        | duration | `24h`      | No       | No        | JWT token validity (e.g. `12h`, `30m`)  |
+| `auth.jwt.issuer`            | `GITSTORE_AUTH__JWT__ISSUER`          | string   | `gitstore` | No       | No        | JWT `iss` claim value                   |
+
+For config files, admin auth keys are nested under `[auth.admin]` (for example, `username = "admin"`) and JWT keys are nested under `[auth.jwt]`.
 
 ### Cache
 
-| Key         | Env Var              | Type    | Default | Required | Sensitive | Description                            |
-|-------------|----------------------|---------|---------|----------|-----------|----------------------------------------|
-| `cache.ttl` | `GITSTORE_CACHE_TTL` | integer | `300`   | No       | No        | In-memory catalog cache TTL in seconds |
+| Key         | Env Var               | Type    | Default | Required | Sensitive | Description                            |
+|-------------|-----------------------|---------|---------|----------|-----------|----------------------------------------|
+| `cache.ttl` | `GITSTORE_CACHE__TTL` | integer | `300`   | No       | No        | In-memory catalog cache TTL in seconds |
 
 ### Logging
 
-| Key         | Env Var              | Type   | Default | Required | Sensitive | Description                            |
-|-------------|----------------------|--------|---------|----------|-----------|----------------------------------------|
-| `log_level` | `GITSTORE_LOG_LEVEL` | string | `info`  | No       | No        | `debug` \| `info` \| `warn` \| `error` |
+| Key         | Env Var               | Type   | Default | Required | Sensitive | Description                            |
+|-------------|-----------------------|--------|---------|----------|-----------|----------------------------------------|
+| `log.level` | `GITSTORE_LOG__LEVEL` | string | `info`  | No       | No        | `debug` \| `info` \| `warn` \| `error` |
+
+### Datastore
+
+| Key                                         | Env Var                                                   | Type            | Default          | Required | Sensitive | Description                                    |
+|---------------------------------------------|-----------------------------------------------------------|-----------------|------------------|----------|-----------|------------------------------------------------|
+| `datastore.backend`                         | `GITSTORE_DATASTORE__BACKEND`                             | string          | `memdb`          | No       | No        | Active datastore backend: `memdb` or `scylla`  |
+| `datastore.scylla.hosts`                    | `GITSTORE_DATASTORE__SCYLLA__HOSTS`                       | list of strings | `localhost:9042` | No       | No        | Comma-separated Scylla endpoints (`host:port`) |
+| `datastore.scylla.keyspace`                 | `GITSTORE_DATASTORE__SCYLLA__KEYSPACE`                    | string          | `gitstore`       | No       | No        | Scylla keyspace name                           |
+| `datastore.scylla.username`                 | `GITSTORE_DATASTORE__SCYLLA__USERNAME`                    | string          | —                | No       | No        | Scylla username (optional)                     |
+| `datastore.scylla.password`                 | `GITSTORE_DATASTORE__SCYLLA__PASSWORD`                    | string          | —                | No       | **Yes**   | Scylla password (optional, redacted in logs)   |
+| `datastore.scylla.tls`                      | `GITSTORE_DATASTORE__SCYLLA__TLS`                         | boolean         | `false`          | No       | No        | Enable TLS for Scylla connections              |
+| `datastore.scylla.disable_shard_aware_port` | `GITSTORE_DATASTORE__SCYLLA__DISABLE_SHARD_AWARE_PORT`    | boolean         | `false`          | No       | No        | Disable shard-aware Scylla port discovery      |
 
 ### Example `config.toml`
 
@@ -73,21 +87,35 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 [api]
 port = 4000
 
-[git]
-ws       = "ws://localhost:8080"
-http_url = "http://localhost:9418"
+[git.grpc]
+uri = "dns:///localhost:50051"
+
+[git.ws]
+uri = "ws://localhost:8080"
+
+[git.http]
+uri = "http://localhost:9418"
+
+[auth.jwt]
+duration = "24h"
+issuer = "gitstore"
+
+[log]
+level = "debug"
 
 [cache]
 ttl = 300
 
-log_level = "debug"
+[datastore]
+backend = "memdb"
+
+[datastore.scylla]
+hosts = ["localhost:9042"]
+keyspace = "gitstore"
+tls = false
 ```
 
-Secrets (`admin_password_hash`, `jwt_secret`) must remain in environment variables or `.env`, never in `config.toml`.
-
----
-
-## gitstore-git-service
+Secrets (`auth.admin.password_hash`, `auth.jwt.secret`) must remain in environment variables or `.env`, never in `config.toml`.
 
 **Config file**: `gitstore.toml` (optional, current working directory)  
 **`.env` file**: `.env` (optional, current working directory)  
@@ -95,16 +123,16 @@ Secrets (`admin_password_hash`, `jwt_secret`) must remain in environment variabl
 
 ### Core
 
-| Key             | Env Var                  | Type   | Default       | Required | Sensitive | Description                                       |
-|-----------------|--------------------------|--------|---------------|----------|-----------|---------------------------------------------------|
-| `http_port`     | `GITSTORE_HTTP_PORT`     | u16    | `9418`        | No       | No        | Smart HTTP git server port (1–65535)              |
-| `ws_port`       | `GITSTORE_WS_PORT`       | u16    | `8080`        | No       | No        | WebSocket notification port (1–65535)             |
-| `grpc_port`     | `GITSTORE_GRPC_PORT`     | u16    | `50051`       | No       | No        | gRPC server port (1–65535)                        |
-| `data_dir`      | `GITSTORE_DATA_DIR`      | string | `/data/repos` | No       | No        | Repository storage directory                      |
-| `log_level`     | `GITSTORE_LOG_LEVEL`     | string | `info`        | No       | No        | `trace` \| `debug` \| `info` \| `warn` \| `error` |
-| `max_file_size` | `GITSTORE_MAX_FILE_SIZE` | u64    | `52428800`    | No       | No        | Max upload size in bytes (default: 50 MB)         |
+| Key                      | Env Var                              | Type   | Default       | Required | Sensitive | Description                                       |
+|--------------------------|--------------------------------------|--------|---------------|----------|-----------|---------------------------------------------------|
+| `http.port`              | `GITSTORE_HTTP__PORT`                | u16    | `9418`        | No       | No        | Smart HTTP git server port (1–65535)              |
+| `ws.port`                | `GITSTORE_WS__PORT`                  | u16    | `8080`        | No       | No        | WebSocket notification port (1–65535)             |
+| `grpc.port`              | `GITSTORE_GRPC__PORT`                | u16    | `50051`       | No       | No        | gRPC server port (1–65535)                        |
+| `git.data_dir`           | `GITSTORE_GIT__DATA_DIR`             | string | `/data/repos` | No       | No        | Repository storage directory                      |
+| `log.level`              | `GITSTORE_LOG__LEVEL`                | string | `info`        | No       | No        | `trace` \| `debug` \| `info` \| `warn` \| `error` |
+| `git.repo.max_file_size` | `GITSTORE_GIT__REPO__MAX_FILE_SIZE`  | u64    | `52428800`    | No       | No        | Max size per repo in bytes (default: 50 MB)       |
 
-> **Constraint**: `http_port`, `ws_port`, and `grpc_port` must all be distinct values.
+> **Constraint**: `http.port`, `ws.port`, and `grpc.port` must all be distinct values.
 
 ### Hook Phase Toggles
 
@@ -134,12 +162,23 @@ All hook toggles default to `false`. Nested keys must be set via `gitstore.toml`
 ### Example `gitstore.toml`
 
 ```toml
-http_port    = 9418
-ws_port      = 8080
-grpc_port    = 50051
-data_dir     = "/data/repos"
-log_level    = "info"
+[http]
+port = 9418
+
+[ws]
+port = 8080
+
+[grpc]
+port = 50051
+
+[git]
+data_dir = "/data/repos"
+
+[git.repo]
 max_file_size = 52428800
+
+[log]
+level = "info"
 
 [hooks.git_receive_pack]
 pre_receive  = { enabled = false }

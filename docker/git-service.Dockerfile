@@ -92,9 +92,10 @@ RUN printf '[safe]\n\tdirectory = *\n' > /etc/gitconfig && \
 # Expose git protocol and websocket ports
 EXPOSE 9418 8080
 
-ENV GITSTORE_GIT_PORT=9418
-ENV GITSTORE_WS_PORT=8080
-ENV GITSTORE_DATA_DIR=/data/repos
-ENV GITSTORE_LOG_LEVEL=info
+ENV GITSTORE_HTTP__PORT=9418
+ENV GITSTORE_WS__PORT=8080
+ENV GITSTORE_GIT__DATA_DIR=/data/repos
+ENV GITSTORE_LOG__LEVEL=info
+ENV GITSTORE_GIT__REPO__MAX_FILE_SIZE=52428800
 
 CMD ["/app/git-service"]

@@ -18,15 +18,20 @@ Config
 ├── Api: ApiConfig
 │   └── Port: int          [default: 4000, env: GITSTORE_API_PORT]
 ├── Git: GitConfig
-│   ├── GRPC: string       [required, default: localhost:50051, env: GITSTORE_GIT_GRPC]
-│   ├── WS: string         [required, default: ws://localhost:8080, env: GITSTORE_GIT_WS]
-│   └── HttpURL: string    [required, default: http://localhost:9418, env: GITSTORE_GIT_HTTP_URL]
+│   ├── Grpc: GitEndpointConfig
+│   │   └── Uri: string    [required, default: dns:///localhost:50051, env: GITSTORE_GIT__GRPC__URI]
+│   ├── Ws: GitEndpointConfig
+│   │   └── Uri: string    [required, default: ws://localhost:8080, env: GITSTORE_GIT__WS__URI]
+│   └── Http: GitEndpointConfig
+│       └── Uri: string    [required, default: http://localhost:9418, env: GITSTORE_GIT__HTTP__URI]
 ├── Auth: AuthConfig
-│   ├── AdminUsername: string      [required, env: GITSTORE_AUTH_ADMIN_USERNAME]
-│   ├── AdminPasswordHash: string  [required, sensitive, env: GITSTORE_AUTH_ADMIN_PASSWORD_HASH]
-│   ├── JWTSecret: string          [required, sensitive, env: GITSTORE_AUTH_JWT_SECRET]
-│   ├── JWTDuration: string        [default: 24h, env: GITSTORE_AUTH_JWT_DURATION]
-│   └── JWTIssuer: string          [default: gitstore, env: GITSTORE_AUTH_JWT_ISSUER]
+│   ├── Admin: UserConfig
+│   │   ├── Username: string       [required, env: GITSTORE_AUTH_ADMIN_USERNAME]
+│   │   └── Password: string       [required, sensitive, env: GITSTORE_AUTH_ADMIN_PASSWORD_HASH]
+│   └── JWT: JWTConfig
+│       ├── Secret: string         [required, sensitive, env: GITSTORE_AUTH_JWT_SECRET]
+│       ├── Duration: string       [default: 24h, env: GITSTORE_AUTH_JWT_DURATION]
+│       └── Issuer: string         [default: gitstore, env: GITSTORE_AUTH_JWT_ISSUER]
 ├── Cache: CacheConfig
 │   └── TTL: int           [default: 300, env: GITSTORE_CACHE_TTL]
 └── LogLevel: string       [default: info, env: GITSTORE_LOG_LEVEL]
@@ -36,13 +41,13 @@ Config
 
 | Field                    | Rule                                                   | Error                                 |
 |--------------------------|--------------------------------------------------------|---------------------------------------|
-| `Git.GRPC`               | `required` — non-empty string (host:port)              | `git.grpc: required`                  |
-| `Git.WS`                 | `required` — valid URL (`ws://` or `wss://`)           | `git.ws: required, url`               |
-| `Git.HttpURL`            | `required` — valid URL (`http://` or `https://`)       | `git.http_url: required, url`         |
-| `Auth.AdminUsername`     | `required` — non-empty string                          | `auth.admin_username: required`       |
-| `Auth.AdminPasswordHash` | `required` — non-empty string                          | `auth.admin_password_hash: required`  |
-| `Auth.JWTSecret`         | `required`, `min=32` — minimum 32 characters           | `auth.jwt_secret: required, min=32`   |
-| `Auth.JWTDuration`       | `omitempty,duration` — valid Go duration string if set | `auth.jwt_duration: invalid duration` |
+| `Git.Grpc.Uri`           | `required` — non-empty string (host:port)              | `git.grpc.uri: required`              |
+| `Git.Ws.Uri`             | `required` — valid URL (`ws://` or `wss://`)           | `git.ws.uri: required, url`           |
+| `Git.Http.Uri`           | `required` — valid URL (`http://` or `https://`)       | `git.http.uri: required, url`         |
+| `Auth.Admin.Username`    | `required` — non-empty string                          | `auth.admin.username: required`       |
+| `Auth.Admin.Password`    | `required` — non-empty string                          | `auth.admin.password_hash: required`  |
+| `Auth.JWT.Secret`        | `required`, `min=32` — minimum 32 characters           | `auth.jwt.secret: required, min=32`   |
+| `Auth.JWT.Duration`      | `omitempty,duration` — valid Go duration string if set | `auth.jwt.duration: invalid duration` |
 | `Api.Port`               | `min=1,max=65535`                                      | `api.port: out of range`              |
 
 Empty string is treated as absent for all `required` fields (go-playground `required` tag rejects `""`).
@@ -51,8 +56,8 @@ Empty string is treated as absent for all `required` fields (go-playground `requ
 
 Fields marked sensitive are always logged as `<redacted>` (set) or `<unset>` (empty):
 
-- `Auth.AdminPasswordHash`
-- `Auth.JWTSecret`
+- `Auth.Admin.Password`
+- `Auth.JWT.Secret`
 
 ### State Transitions
 
@@ -76,23 +81,29 @@ environment variables (highest priority)
 
 ```
 AppConfig
-├── http_port: u16         [default: 9418, env: GITSTORE_HTTP_PORT]
-├── ws_port: u16           [default: 8080, env: GITSTORE_WS_PORT]
-├── grpc_port: u16         [default: 50051, env: GITSTORE_GRPC_PORT]
-├── data_dir: String       [default: /data/repos, env: GITSTORE_DATA_DIR]
-├── log_level: String      [default: info, env: GITSTORE_LOG_LEVEL]
-├── max_file_size: u64     [default: 52428800 (50MB), env: GITSTORE_MAX_FILE_SIZE]
+├── http: PortConfig
+│   └── port: u16         [default: 9418, env: GITSTORE_HTTP__PORT]
+├── ws: PortConfig
+│   └── port: u16         [default: 8080, env: GITSTORE_WS__PORT]
+├── grpc: PortConfig
+│   └── port: u16         [default: 50051, env: GITSTORE_GRPC__PORT]
+├── git: GitConfig
+│   ├── data_dir: String   [default: /data/repos, env: GITSTORE_GIT__DATA_DIR]
+│   └── repo: RepoConfig
+│       └── max_file_size: u64 [default: 52428800 (50MB), env: GITSTORE_GIT__REPO__MAX_FILE_SIZE]
+├── log: LogConfig
+│   └── level: String      [default: info, env: GITSTORE_LOG__LEVEL]
 ├── hooks: HooksConfig
 │   └── git_receive_pack: GitReceivePackHooks
-│       ├── pre_receive: HookToggle   [default: disabled, env: GITSTORE_HOOKS_GIT_RECEIVE_PACK_PRE_RECEIVE_ENABLED]
-│       ├── update: HookToggle        [default: disabled, env: GITSTORE_HOOKS_GIT_RECEIVE_PACK_UPDATE_ENABLED]
-│       ├── post_receive: HookToggle  [default: disabled, env: GITSTORE_HOOKS_GIT_RECEIVE_PACK_POST_RECEIVE_ENABLED]
-│       ├── proc_receive: HookToggle  [default: disabled, env: GITSTORE_HOOKS_GIT_RECEIVE_PACK_PROC_RECEIVE_ENABLED]
-│       └── post_update: HookToggle   [default: disabled, env: GITSTORE_HOOKS_GIT_RECEIVE_PACK_POST_UPDATE_ENABLED]
+│       ├── pre_receive: HookToggle   [default: disabled, env: GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED]
+│       ├── update: HookToggle        [default: disabled, env: GITSTORE_HOOKS__GIT_RECEIVE_PACK__UPDATE__ENABLED]
+│       ├── post_receive: HookToggle  [default: disabled, env: GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_RECEIVE__ENABLED]
+│       ├── proc_receive: HookToggle  [default: disabled, env: GITSTORE_HOOKS__GIT_RECEIVE_PACK__PROC_RECEIVE__ENABLED]
+│       └── post_update: HookToggle   [default: disabled, env: GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_UPDATE__ENABLED]
 └── admission_control: AdmissionControlConfig
-    └── validating_admission_policy: ValidatingAdmissionPolicyConfig
-        └── phase: String  [default: pre-receive, env: GITSTORE_ADMISSION_CONTROL_VALIDATING_ADMISSION_POLICY_PHASE]
-                           [only meaningful when hooks.git_receive_pack.pre_receive.enabled = true]
+  └── validating_admission_policy: ValidatingAdmissionPolicyConfig
+    └── phase: String  [default: pre-receive, env: GITSTORE_ADMISSION_CONTROL__VALIDATING_ADMISSION_POLICY__PHASE]
+               [only meaningful when hooks.git_receive_pack.pre_receive.enabled = true]
 ```
 
 `HookToggle` is a single-field struct `{ enabled: bool }`.  
@@ -102,13 +113,13 @@ AppConfig
 
 | Field                                                 | Rule                                                                                                      |
 |-------------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
-| `http_port`                                           | `range(min = 1, max = 65535)`                                                                             |
-| `ws_port`                                             | `range(min = 1, max = 65535)`                                                                             |
-| `grpc_port`                                           | `range(min = 1, max = 65535)`                                                                             |
-| All three ports                                       | `custom` — `http_port`, `ws_port`, and `grpc_port` must be distinct                                       |
-| `data_dir`                                            | `length(min = 1)` — must not be empty                                                                     |
-| `log_level`                                           | `custom` — must be one of: `trace`, `debug`, `info`, `warn`, `error`                                      |
-| `max_file_size`                                       | `range(min = 1)` — must be positive                                                                       |
+| `http.port`                                           | `range(min = 1, max = 65535)`                                                                             |
+| `ws.port`                                             | `range(min = 1, max = 65535)`                                                                             |
+| `grpc.port`                                           | `range(min = 1, max = 65535)`                                                                             |
+| All three ports                                       | `custom` — `http.port`, `ws.port`, and `grpc.port` must be distinct                                       |
+| `git.data_dir`                                        | `length(min = 1)` — must not be empty                                                                     |
+| `log.level`                                           | `custom` — must be one of: `trace`, `debug`, `info`, `warn`, `error`                                      |
+| `git.repo.max_file_size`                              | `range(min = 1)` — must be positive                                                                       |
 | `admission_control.validating_admission_policy.phase` | `custom` — must be `pre-receive`; only validated when `hooks.git_receive_pack.pre_receive.enabled = true` |
 
 ### Sensitive Fields (Rust)

@@ -22,33 +22,33 @@ Env var prefix: `GITSTORE_` (all keys)
 
 ### Git Service Connection
 
-| Key              | Env Var                   | Type   | Default                 | Required | Sensitive | Description                                                    |
-|------------------|---------------------------|--------|-------------------------|----------|-----------|----------------------------------------------------------------|
-| `git.grpc`       | `GITSTORE_GIT_GRPC`       | string | `localhost:50051`       | **Yes**  | No        | gRPC address of gitstore-git-service (e.g., `localhost:50051`) |
-| `git.ws`         | `GITSTORE_GIT_WS`         | string | `ws://localhost:8080`   | **Yes**  | No        | WebSocket address of gitstore-git-service                      |
-| `git.http_url`   | `GITSTORE_GIT_HTTP_URL`   | string | `http://localhost:9418` | **Yes**  | No        | Smart HTTP address of gitstore-git-service                     |
+| Key            | Env Var                       | Type   | Default                  | Required | Sensitive | Description                                                    |
+|----------------|-------------------------------|--------|--------------------------|----------|-----------|----------------------------------------------------------------|
+| `git.grpc.uri` | `GITSTORE_GIT__GRPC__URI`     | string | `dns:///localhost:50051` | **Yes**  | No        | gRPC address of gitstore-git-service (e.g., `dns:///localhost:50051`) |
+| `git.ws.uri`   | `GITSTORE_GIT__WS__URI`       | string | `ws://localhost:8080`    | **Yes**  | No        | WebSocket address of gitstore-git-service                      |
+| `git.http.uri` | `GITSTORE_GIT__HTTP__URI`     | string | `http://localhost:9418`  | **Yes**  | No        | Smart HTTP address of gitstore-git-service                     |
 
 ### Authentication
 
-| Key                        | Env Var                             | Type     | Default    | Required | Sensitive | Description                                                        |
-|----------------------------|-------------------------------------|----------|------------|----------|-----------|--------------------------------------------------------------------|
-| `auth.admin_username`      | `GITSTORE_AUTH_ADMIN_USERNAME`      | string   | —          | **Yes**  | No        | Admin portal username                                              |
-| `auth.admin_password_hash` | `GITSTORE_AUTH_ADMIN_PASSWORD_HASH` | string   | —          | **Yes**  | **Yes**   | bcrypt hash of the admin password                                  |
-| `auth.jwt_secret`          | `GITSTORE_AUTH_JWT_SECRET`          | string   | —          | **Yes**  | **Yes**   | Secret key for JWT signing (minimum 32 characters)                 |
-| `auth.jwt_duration`        | `GITSTORE_AUTH_JWT_DURATION`        | duration | `24h`      | No       | No        | JWT token validity period (Go duration string, e.g., `12h`, `30m`) |
-| `auth.jwt_issuer`          | `GITSTORE_AUTH_JWT_ISSUER`          | string   | `gitstore` | No       | No        | JWT `iss` claim value                                              |
+| Key                          | Env Var                             | Type     | Default    | Required | Sensitive | Description                                                        |
+|------------------------------|-------------------------------------|----------|------------|----------|-----------|--------------------------------------------------------------------|
+| `auth.admin.username`        | `GITSTORE_AUTH__ADMIN__USERNAME`    | string   | —          | **Yes**  | No        | Admin portal username                                              |
+| `auth.admin.password_hash`   | `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | string | —          | **Yes**  | **Yes**   | bcrypt hash of the admin password                                  |
+| `auth.jwt.secret`            | `GITSTORE_AUTH__JWT__SECRET`        | string   | —          | **Yes**  | **Yes**   | Secret key for JWT signing (minimum 32 characters)                 |
+| `auth.jwt.duration`          | `GITSTORE_AUTH__JWT__DURATION`      | duration | `24h`      | No       | No        | JWT token validity period (Go duration string, e.g., `12h`, `30m`) |
+| `auth.jwt.issuer`            | `GITSTORE_AUTH__JWT__ISSUER`        | string   | `gitstore` | No       | No        | JWT `iss` claim value                                              |
 
 ### Cache
 
 | Key         | Env Var              | Type    | Default | Required | Sensitive | Description                    |
 |-------------|----------------------|---------|---------|----------|-----------|--------------------------------|
-| `cache.ttl` | `GITSTORE_CACHE_TTL` | integer | `300`   | No       | No        | In-memory cache TTL in seconds |
+| `cache.ttl` | `GITSTORE_CACHE__TTL` | integer | `300`   | No       | No        | In-memory cache TTL in seconds |
 
 ### Logging
 
 | Key         | Env Var              | Type   | Default | Required | Sensitive | Description                                     |
 |-------------|----------------------|--------|---------|----------|-----------|-------------------------------------------------|
-| `log_level` | `GITSTORE_LOG_LEVEL` | string | `info`  | No       | No        | Log verbosity: `debug`, `info`, `warn`, `error` |
+| `log.level` | `GITSTORE_LOG__LEVEL` | string | `info`  | No       | No        | Log verbosity: `debug`, `info`, `warn`, `error` |
 
 ---
 
@@ -60,16 +60,16 @@ Env var prefix: `GITSTORE_` (all keys)
 
 ### Core
 
-| Key             | Env Var                  | Type          | Default       | Required | Sensitive | Description                                              |
-|-----------------|--------------------------|---------------|---------------|----------|-----------|----------------------------------------------------------|
-| `http_port`     | `GITSTORE_HTTP_PORT`     | integer (u16) | `9418`        | No       | No        | Port for smart HTTP git protocol (1–65535)               |
-| `ws_port`       | `GITSTORE_WS_PORT`       | integer (u16) | `8080`        | No       | No        | WebSocket notification port (1–65535)                    |
-| `grpc_port`     | `GITSTORE_GRPC_PORT`     | integer (u16) | `50051`       | No       | No        | gRPC server port (1–65535)                               |
-| `data_dir`      | `GITSTORE_DATA_DIR`      | string        | `/data/repos` | No       | No        | Path to git repository storage directory                 |
-| `log_level`     | `GITSTORE_LOG_LEVEL`     | string        | `info`        | No       | No        | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
-| `max_file_size` | `GITSTORE_MAX_FILE_SIZE` | integer (u64) | `52428800`    | No       | No        | Maximum allowed file size in bytes (default: 50 MB)      |
+| Key                      | Env Var                              | Type          | Default       | Required | Sensitive | Description                                              |
+|--------------------------|--------------------------------------|---------------|---------------|----------|-----------|----------------------------------------------------------|
+| `http.port`              | `GITSTORE_HTTP__PORT`                | integer (u16) | `9418`        | No       | No        | Port for smart HTTP git protocol (1–65535)               |
+| `ws.port`                | `GITSTORE_WS__PORT`                  | integer (u16) | `8080`        | No       | No        | WebSocket notification port (1–65535)                    |
+| `grpc.port`              | `GITSTORE_GRPC__PORT`                | integer (u16) | `50051`       | No       | No        | gRPC server port (1–65535)                               |
+| `git.data_dir`           | `GITSTORE_GIT__DATA_DIR`             | string        | `/data/repos` | No       | No        | Path to git repository storage directory                 |
+| `log.level`              | `GITSTORE_LOG__LEVEL`                | string        | `info`        | No       | No        | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
+| `git.repo.max_file_size` | `GITSTORE_GIT__REPO__MAX_FILE_SIZE`  | integer (u64) | `52428800`    | No       | No        | Maximum allowed file size in bytes (default: 50 MB)      |
 
-> **Constraint**: `http_port`, `ws_port`, and `grpc_port` must all be distinct values.
+> **Constraint**: `http.port`, `ws.port`, and `grpc.port` must all be distinct values.
 
 ### Hook Phase Toggles (`git-receive-pack`)
 
@@ -77,11 +77,11 @@ All hook toggles default to `false` (disabled). The env var value is a boolean (
 
 | Key                                                        | Env Var                                                      | Default | Description                           |
 |------------------------------------------------------------|--------------------------------------------------------------|---------|---------------------------------------|
-| `hooks.git_receive_pack.pre_receive.enabled`               | `GITSTORE_HOOKS_GIT_RECEIVE_PACK_PRE_RECEIVE_ENABLED`        | `false` | Enable the `pre-receive` hook phase   |
-| `hooks.git_receive_pack.update.enabled`                    | `GITSTORE_HOOKS_GIT_RECEIVE_PACK_UPDATE_ENABLED`             | `false` | Enable the `update` hook phase        |
-| `hooks.git_receive_pack.post_receive.enabled`              | `GITSTORE_HOOKS_GIT_RECEIVE_PACK_POST_RECEIVE_ENABLED`       | `false` | Enable the `post-receive` hook phase  |
-| `hooks.git_receive_pack.proc_receive.enabled`              | `GITSTORE_HOOKS_GIT_RECEIVE_PACK_PROC_RECEIVE_ENABLED`       | `false` | Enable the `proc-receive` hook phase  |
-| `hooks.git_receive_pack.post_update.enabled`               | `GITSTORE_HOOKS_GIT_RECEIVE_PACK_POST_UPDATE_ENABLED`        | `false` | Enable the `post-update` hook phase   |
+| `hooks.git_receive_pack.pre_receive.enabled`               | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED`     | `false` | Enable the `pre-receive` hook phase   |
+| `hooks.git_receive_pack.update.enabled`                    | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__UPDATE__ENABLED`          | `false` | Enable the `update` hook phase        |
+| `hooks.git_receive_pack.post_receive.enabled`              | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_RECEIVE__ENABLED`    | `false` | Enable the `post-receive` hook phase  |
+| `hooks.git_receive_pack.proc_receive.enabled`              | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PROC_RECEIVE__ENABLED`    | `false` | Enable the `proc-receive` hook phase  |
+| `hooks.git_receive_pack.post_update.enabled`               | `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_UPDATE__ENABLED`     | `false` | Enable the `post-update` hook phase   |
 
 > **Note**: Enabling a hook phase activates the corresponding processing logic during a `git push`. Disabled phases are skipped entirely.
 
@@ -89,7 +89,7 @@ All hook toggles default to `false` (disabled). The env var value is a boolean (
 
 | Key                                                   | Env Var                                                        | Default       | Required | Description                                                                                                                                                  |
 |-------------------------------------------------------|----------------------------------------------------------------|---------------|----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `admission_control.validating_admission_policy.phase` | `GITSTORE_ADMISSION_CONTROL_VALIDATING_ADMISSION_POLICY_PHASE` | `pre-receive` | No       | Hook phase that runs the validating admission policy. Valid values: `pre-receive`. Only meaningful when `hooks.git_receive_pack.pre_receive.enabled = true`. |
+| `admission_control.validating_admission_policy.phase` | `GITSTORE_ADMISSION_CONTROL__VALIDATING_ADMISSION_POLICY__PHASE` | `pre-receive` | No       | Hook phase that runs the validating admission policy. Valid values: `pre-receive`. Only meaningful when `hooks.git_receive_pack.pre_receive.enabled = true`. |
 
 ---
 

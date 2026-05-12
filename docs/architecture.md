@@ -35,10 +35,10 @@ Key environment variables:
 
 | Service                | Variable             | Purpose                                                |
 |------------------------|----------------------|--------------------------------------------------------|
-| `gitstore-api`         | `GITSTORE_GIT_GRPC`  | gRPC address of git-service (e.g. `git-service:50051`) |
-| `gitstore-api`         | `GITSTORE_GIT_WS`    | WebSocket URL for catalogue-reload notifications       |
-| `gitstore-git-service` | `GITSTORE_GRPC_PORT` | Port the gRPC server binds on (default `50051`)        |
-| `gitstore-git-service` | `GITSTORE_DATA_DIR`  | Path to the bare repository directory                  |
+| `gitstore-api`         | `GITSTORE_GIT__GRPC__URI`  | gRPC address of git-service (e.g. `dns:///git-service:50051`) |
+| `gitstore-api`         | `GITSTORE_GIT__WS__URI`    | WebSocket URL for catalogue-reload notifications       |
+| `gitstore-git-service` | `GITSTORE_GRPC__PORT` | Port the gRPC server binds on (default `50051`)        |
+| `gitstore-git-service` | `GITSTORE_GIT__DATA_DIR`  | Path to the bare repository directory                  |
 
 These folders map directly to the control, storage, and distribution planes described below.
 

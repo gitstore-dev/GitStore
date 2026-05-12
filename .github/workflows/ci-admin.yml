@@ -48,7 +48,7 @@ jobs:
         ./scripts/init-demo-catalog.sh --data-dir ./data/repos
         docker compose up -d --wait
       env:
-        GITSTORE_DATA_DIR: ./data/repos
+        GITSTORE_GIT__DATA_DIR: ./data/repos
 
     - name: Install Playwright browsers
       run: npx playwright install --with-deps

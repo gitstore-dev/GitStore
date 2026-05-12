@@ -16,23 +16,23 @@ import (
 func clearEnv(t *testing.T) func() {
 	t.Helper()
 	keys := []string{
-		"GITSTORE_API_PORT",
-		"GITSTORE_GIT_GRPC",
-		"GITSTORE_GIT_WS",
-		"GITSTORE_GIT_HTTP_URL",
-		"GITSTORE_CACHE_TTL",
-		"GITSTORE_LOG_LEVEL",
-		"GITSTORE_AUTH_ADMIN_USERNAME",
-		"GITSTORE_AUTH_ADMIN_PASSWORD_HASH",
-		"GITSTORE_AUTH_JWT_SECRET",
-		"GITSTORE_AUTH_JWT_DURATION",
-		"GITSTORE_AUTH_JWT_ISSUER",
-		"GITSTORE_DATASTORE_BACKEND",
-		"GITSTORE_DATASTORE_SCYLLA_HOSTS",
-		"GITSTORE_DATASTORE_SCYLLA_KEYSPACE",
-		"GITSTORE_DATASTORE_SCYLLA_USERNAME",
-		"GITSTORE_DATASTORE_SCYLLA_PASSWORD",
-		"GITSTORE_DATASTORE_SCYLLA_TLS",
+		"GITSTORE_API__PORT",
+		"GITSTORE_GIT__GRPC__URI",
+		"GITSTORE_GIT__WS__URI",
+		"GITSTORE_GIT__HTTP__URI",
+		"GITSTORE_CACHE__TTL",
+		"GITSTORE_LOG__LEVEL",
+		"GITSTORE_AUTH__ADMIN__USERNAME",
+		"GITSTORE_AUTH__ADMIN__PASSWORD_HASH",
+		"GITSTORE_AUTH__JWT__SECRET",
+		"GITSTORE_AUTH__JWT__DURATION",
+		"GITSTORE_AUTH__JWT__ISSUER",
+		"GITSTORE_DATASTORE__BACKEND",
+		"GITSTORE_DATASTORE__SCYLLA__HOSTS",
+		"GITSTORE_DATASTORE__SCYLLA__KEYSPACE",
+		"GITSTORE_DATASTORE__SCYLLA__USERNAME",
+		"GITSTORE_DATASTORE__SCYLLA__PASSWORD",
+		"GITSTORE_DATASTORE__SCYLLA__TLS",
 	}
 	saved := make(map[string]string, len(keys))
 	for _, k := range keys {
@@ -53,9 +53,9 @@ func clearEnv(t *testing.T) func() {
 // setRequiredAuth sets the three required auth env vars.
 func setRequiredAuth(t *testing.T) {
 	t.Helper()
-	os.Setenv("GITSTORE_AUTH_ADMIN_USERNAME", "admin")
-	os.Setenv("GITSTORE_AUTH_ADMIN_PASSWORD_HASH", "$2a$12$hash")
-	os.Setenv("GITSTORE_AUTH_JWT_SECRET", "supersecretkey-minimum-32-chars!!")
+	os.Setenv("GITSTORE_AUTH__ADMIN__USERNAME", "admin")
+	os.Setenv("GITSTORE_AUTH__ADMIN__PASSWORD_HASH", "$2a$12$hash")
+	os.Setenv("GITSTORE_AUTH__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
 }
 
 // T005: layered loading tests
@@ -70,28 +70,28 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	require.NotNil(t, cfg)
 
 	assert.Equal(t, 4000, cfg.Api.Port)
-	assert.Equal(t, "localhost:50051", cfg.Git.GRPC)
-	assert.Equal(t, "ws://localhost:8080", cfg.Git.WS)
-	assert.Equal(t, "http://localhost:9418", cfg.Git.HttpURL)
+	assert.Equal(t, "dns:///localhost:50051", cfg.Git.Grpc.Uri)
+	assert.Equal(t, "ws://localhost:8080", cfg.Git.Ws.Uri)
+	assert.Equal(t, "http://localhost:9418", cfg.Git.Http.Uri)
 	assert.Equal(t, 300, cfg.Cache.TTL)
-	assert.Equal(t, "info", cfg.LogLevel)
-	assert.Equal(t, "24h", cfg.Auth.JWTDuration)
-	assert.Equal(t, "gitstore", cfg.Auth.JWTIssuer)
+	assert.Equal(t, "info", cfg.Log.Level)
+	assert.Equal(t, "24h", cfg.Auth.JWT.Duration)
+	assert.Equal(t, "gitstore", cfg.Auth.JWT.Issuer)
 }
 
 func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	os.Setenv("GITSTORE_API_PORT", "8888")
-	os.Setenv("GITSTORE_LOG_LEVEL", "debug")
+	os.Setenv("GITSTORE_API__PORT", "8888")
+	os.Setenv("GITSTORE_LOG__LEVEL", "debug")
 
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
 	assert.Equal(t, 8888, cfg.Api.Port)
-	assert.Equal(t, "debug", cfg.LogLevel)
+	assert.Equal(t, "debug", cfg.Log.Level)
 }
 
 func TestLoad_ConfigFileValueAppliedWhenNoEnvVar(t *testing.T) {
@@ -100,7 +100,8 @@ func TestLoad_ConfigFileValueAppliedWhenNoEnvVar(t *testing.T) {
 	setRequiredAuth(t)
 
 	dir := t.TempDir()
-	content := `log_level = "warn"
+	content := `[log]
+level = "warn"
 
 [api]
 port = 7777
@@ -121,7 +122,7 @@ ttl = 600
 
 	assert.Equal(t, 7777, cfg.Api.Port)
 	assert.Equal(t, 600, cfg.Cache.TTL)
-	assert.Equal(t, "warn", cfg.LogLevel)
+	assert.Equal(t, "warn", cfg.Log.Level)
 }
 
 func TestLoad_EnvVarOverridesConfigFile(t *testing.T) {
@@ -137,7 +138,7 @@ func TestLoad_EnvVarOverridesConfigFile(t *testing.T) {
 	require.NoError(t, os.Chdir(dir))
 	defer os.Chdir(orig)
 
-	os.Setenv("GITSTORE_API_PORT", "9999")
+	os.Setenv("GITSTORE_API__PORT", "9999")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -159,12 +160,12 @@ func TestLoad_StartupLogRedactsSensitiveFields(t *testing.T) {
 
 	// Sensitive fields must not appear in the log representation.
 	// We test via the MarshalLogObject-based redact helper indirectly:
-	// cfg.Auth.AdminPasswordHash and cfg.Auth.JWTSecret must be redacted.
-	assert.Equal(t, "<redacted>", redact(cfg.Auth.AdminPasswordHash))
-	assert.Equal(t, "<redacted>", redact(cfg.Auth.JWTSecret))
+	// cfg.Auth.Admin.Password and cfg.Auth.JWT.Secret must be redacted.
+	assert.Equal(t, "<redacted>", redact(cfg.Auth.Admin.Password))
+	assert.Equal(t, "<redacted>", redact(cfg.Auth.JWT.Secret))
 
 	// Non-sensitive field must pass through.
-	assert.Equal(t, "admin", cfg.Auth.AdminUsername)
+	assert.Equal(t, "admin", cfg.Auth.Admin.Username)
 }
 
 // T027: .env loading tests (US3)
@@ -174,10 +175,10 @@ func TestLoad_EnvFileLoadsWithoutShellVars(t *testing.T) {
 	defer restore()
 
 	dir := t.TempDir()
-	envContent := `GITSTORE_AUTH_ADMIN_USERNAME=envfileuser
-GITSTORE_AUTH_ADMIN_PASSWORD_HASH=$2a$12$hash
-GITSTORE_AUTH_JWT_SECRET=supersecretkey-minimum-32-chars!!
-GITSTORE_LOG_LEVEL=warn
+	envContent := `GITSTORE_AUTH__ADMIN__USERNAME=envfileuser
+GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$2a$12$hash
+GITSTORE_AUTH__JWT__SECRET=supersecretkey-minimum-32-chars!!
+GITSTORE_LOG__LEVEL=warn
 `
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(envContent), 0600))
 
@@ -188,8 +189,8 @@ GITSTORE_LOG_LEVEL=warn
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
-	assert.Equal(t, "envfileuser", cfg.Auth.AdminUsername)
-	assert.Equal(t, "warn", cfg.LogLevel)
+	assert.Equal(t, "envfileuser", cfg.Auth.Admin.Username)
+	assert.Equal(t, "warn", cfg.Log.Level)
 }
 
 func TestLoad_ShellVarOverridesEnvFile(t *testing.T) {
@@ -197,7 +198,7 @@ func TestLoad_ShellVarOverridesEnvFile(t *testing.T) {
 	defer restore()
 
 	dir := t.TempDir()
-	envContent := "GITSTORE_LOG_LEVEL=warn\n"
+	envContent := "GITSTORE_LOG__LEVEL=warn\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(envContent), 0600))
 
 	orig, _ := os.Getwd()
@@ -206,11 +207,11 @@ func TestLoad_ShellVarOverridesEnvFile(t *testing.T) {
 
 	// Shell var takes priority over .env
 	setRequiredAuth(t)
-	os.Setenv("GITSTORE_LOG_LEVEL", "debug")
+	os.Setenv("GITSTORE_LOG__LEVEL", "debug")
 
 	cfg, err := Load()
 	require.NoError(t, err)
-	assert.Equal(t, "debug", cfg.LogLevel)
+	assert.Equal(t, "debug", cfg.Log.Level)
 }
 
 func TestLoad_AbsentEnvFileIsNoOp(t *testing.T) {
@@ -239,15 +240,15 @@ func TestLoad_MissingRequiredKeyReturnsError(t *testing.T) {
 
 	_, err := Load()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "AdminUsername")
+	assert.Contains(t, err.Error(), "Admin.Username")
 }
 
 func TestLoad_EmptyStringForRequiredKeyIsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
-	os.Setenv("GITSTORE_AUTH_ADMIN_USERNAME", "")
-	os.Setenv("GITSTORE_AUTH_ADMIN_PASSWORD_HASH", "")
-	os.Setenv("GITSTORE_AUTH_JWT_SECRET", "")
+	os.Setenv("GITSTORE_AUTH__ADMIN__USERNAME", "")
+	os.Setenv("GITSTORE_AUTH__ADMIN__PASSWORD_HASH", "")
+	os.Setenv("GITSTORE_AUTH__JWT__SECRET", "")
 
 	_, err := Load()
 	require.Error(t, err)
@@ -257,7 +258,7 @@ func TestLoad_InvalidPortReturnsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	os.Setenv("GITSTORE_API_PORT", "99999")
+	os.Setenv("GITSTORE_API__PORT", "99999")
 
 	_, err := Load()
 	require.Error(t, err)
@@ -272,9 +273,9 @@ func TestLoad_MultipleValidationErrorsReportedTogether(t *testing.T) {
 	_, err := Load()
 	require.Error(t, err)
 	// All three required fields should appear in the single error string
-	assert.Contains(t, err.Error(), "AdminUsername")
-	assert.Contains(t, err.Error(), "AdminPasswordHash")
-	assert.Contains(t, err.Error(), "JWTSecret")
+	assert.Contains(t, err.Error(), "Admin.Username")
+	assert.Contains(t, err.Error(), "Admin.Password")
+	assert.Contains(t, err.Error(), "JWT.Secret")
 }
 
 // T021: unknown keys in config file produce a log warning and do not abort startup
@@ -313,7 +314,7 @@ func TestLoad_DatastoreBackendMemdbIsValid(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	os.Setenv("GITSTORE_DATASTORE_BACKEND", "memdb")
+	os.Setenv("GITSTORE_DATASTORE__BACKEND", "memdb")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -324,7 +325,7 @@ func TestLoad_DatastoreBackendScyllaIsValid(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	os.Setenv("GITSTORE_DATASTORE_BACKEND", "scylla")
+	os.Setenv("GITSTORE_DATASTORE__BACKEND", "scylla")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -335,7 +336,7 @@ func TestLoad_DatastoreBackendUnknownValueReturnsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	os.Setenv("GITSTORE_DATASTORE_BACKEND", "badvalue")
+	os.Setenv("GITSTORE_DATASTORE__BACKEND", "badvalue")
 
 	_, err := Load()
 	require.Error(t, err)
@@ -348,7 +349,7 @@ func TestLoad_DatastoreScyllaPasswordLoadedAndRedactable(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	os.Setenv("GITSTORE_DATASTORE_SCYLLA_PASSWORD", "s3cr3t")
+	os.Setenv("GITSTORE_DATASTORE__SCYLLA__PASSWORD", "s3cr3t")
 
 	cfg, err := Load()
 	require.NoError(t, err)

@@ -28,7 +28,7 @@ services:
       cqlsh scylla -e "
         CREATE KEYSPACE IF NOT EXISTS gitstore
           WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
-          AND durable_writes = true;
+          AND durable_writes = true
       "
     restart: "no"
 
@@ -37,9 +37,9 @@ services:
       scylla-init:
         condition: service_completed_successfully
     environment:
-      - GITSTORE_DATASTORE_BACKEND=scylla
-      - GITSTORE_DATASTORE_SCYLLA_HOSTS=scylla:9042
-      - GITSTORE_DATASTORE_SCYLLA_KEYSPACE=gitstore
+      - GITSTORE_DATASTORE__BACKEND=scylla
+      - GITSTORE_DATASTORE__SCYLLA__HOSTS=scylla:9042
+      - GITSTORE_DATASTORE__SCYLLA__KEYSPACE=gitstore
 
 volumes:
   scylla-data:

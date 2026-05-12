@@ -402,21 +402,28 @@ go build -o bin/api ./cmd/server
 #### Git Service
 
 ```bash
-GITSTORE_GIT_PORT=9418
-GITSTORE_WS_PORT=8080
-GITSTORE_DATA_DIR=/data/repos
-GITSTORE_LOG_LEVEL=info
-GITSTORE_MAX_FILE_SIZE=52428800  # 50MB
+GITSTORE_HTTP__PORT=9418
+GITSTORE_WS__PORT=8080
+GITSTORE_GIT__DATA_DIR=/data/repos
+GITSTORE_LOG__LEVEL=info
+GITSTORE_GRPC__PORT=50051
+GITSTORE_GIT__REPO__MAX_FILE_SIZE=52428800  # 50MB
 ```
 
 #### GraphQL API
 
 ```bash
 GITSTORE_API_PORT=4000
-GITSTORE_GIT_WS=ws://git-service:8080
-GITSTORE_GIT_GRPC=git-service:50051
-GITSTORE_CACHE_TTL=300  # 5 minutes
-GITSTORE_LOG_LEVEL=info
+GITSTORE_GIT__WS__URI=ws://git-service:8080
+GITSTORE_GIT__GRPC__URI=dns:///git-service:50051
+GITSTORE_CACHE__TTL=300  # 5 minutes
+GITSTORE_LOG__LEVEL=info
+```
+
+#### Start ScyllaDB (optional, for database-backed development)
+
+```bash
+docker compose -f compose.yml -f compose.scylla.yml up -d scylla scylla-init
 ```
 
 ### Go Licence Headers

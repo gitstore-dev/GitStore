@@ -37,7 +37,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := logger.InitLogger(cfg.LogLevel); err != nil {
+	if err := logger.InitLogger(cfg.Log.Level); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
@@ -45,7 +45,7 @@ func main() {
 
 	logger.Log.Info("Starting GitStore GraphQL API",
 		zap.Int("port", cfg.Api.Port),
-		zap.String("git_grpc", cfg.Git.GRPC),
+		zap.String("git.grpc.uri", cfg.Git.Grpc.Uri),
 		zap.String("datastore_backend", cfg.Datastore.Backend),
 	)
 
@@ -58,7 +58,7 @@ func main() {
 	defer store.Close()
 
 	// Dial git-service via gRPC
-	gitClient, err := gitclient.NewClientWithAddr(cfg.Git.GRPC)
+	gitClient, err := gitclient.NewClientWithAddr(cfg.Git.Grpc.Uri)
 	if err != nil {
 		logger.Log.Fatal("Failed to connect to git-service", zap.Error(err))
 	}
@@ -66,11 +66,11 @@ func main() {
 
 	// Create auth middleware
 	authMiddleware, err := middleware.NewAuthMiddleware(
-		cfg.Auth.AdminUsername,
-		cfg.Auth.AdminPasswordHash,
-		cfg.Auth.JWTSecret,
-		cfg.Auth.JWTDuration,
-		cfg.Auth.JWTIssuer,
+		cfg.Auth.Admin.Username,
+		cfg.Auth.Admin.Password,
+		cfg.Auth.JWT.Secret,
+		cfg.Auth.JWT.Duration,
+		cfg.Auth.JWT.Issuer,
 	)
 	if err != nil {
 		logger.Log.Fatal("Failed to create auth middleware", zap.Error(err))
