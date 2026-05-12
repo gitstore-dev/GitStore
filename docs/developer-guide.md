@@ -457,7 +457,7 @@ Install repository hooks once per clone:
 ./scripts/install-git-hooks.sh
 ```
 
-This enables `.githooks/pre-commit`, which blocks commits when staged Go files are missing headers or use an outdated year.
+This installs `.git/hooks/pre-commit`, which blocks commits when staged Go files are missing headers or use an outdated year, and `.git/hooks/commit-msg`, which rejects non-Conventional Commit messages.
 
 CI also enforces this via:
 - `.github/workflows/go-license-headers.yml`
@@ -481,6 +481,7 @@ CI also enforces this via:
     - `./scripts/check-rust-license-headers.sh --staged`
     - `./scripts/check-js-license-headers.sh --staged`
   - Optionally add an External Tool that runs the same command for one-click validation.
+  - Use Conventional Commits for the commit summary, for example `feat: add product search`.
 
 ---
 

@@ -4,6 +4,8 @@
 package graph
 
 import (
+	"context"
+
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/google/uuid"
@@ -29,49 +31,17 @@ func intOrDefault(i *int32, def int32) int32 {
 	return def
 }
 
-// getProductsInCategoryTree returns all products belonging to a category or any of its descendants.
-func getProductsInCategoryTree(cat *catalog.Catalog, categoryID string) ([]*catalog.Product, error) {
-	// Collect all category IDs in the subtree rooted at categoryID.
-	subIDs := map[string]struct{}{categoryID: {}}
-	for _, c := range cat.AllCategories() {
-		if isDescendantOf(c, categoryID) {
-			subIDs[c.ID] = struct{}{}
-		}
+// getCatalogStats returns product/category/collection counts from the datastore.
+func (r *Resolver) getCatalogStats(ctx context.Context) *model.CatalogStats {
+	products, _ := r.service.GetProducts(ctx, nil)
+	categories, _ := r.service.GetCategories(ctx)
+	collections, _ := r.service.GetCollections(ctx)
+	return &model.CatalogStats{
+		ProductCount:       int32(len(products)),
+		CategoryCount:      int32(len(categories)),
+		CollectionCount:    int32(len(collections)),
+		OrphanedReferences: 0,
 	}
-
-	var products []*catalog.Product
-	for _, p := range cat.AllProducts() {
-		if _, ok := subIDs[p.CategoryID]; ok {
-			products = append(products, p)
-		}
-	}
-	return products, nil
-}
-
-// isDescendantOf reports whether c is a descendant of the category with the given ID.
-func isDescendantOf(c *catalog.Category, ancestorID string) bool {
-	cur := c.Parent
-	for cur != nil {
-		if cur.ID == ancestorID {
-			return true
-		}
-		cur = cur.Parent
-	}
-	return false
-}
-
-// getProductsInCollection returns all products that list the given collection ID.
-func getProductsInCollection(cat *catalog.Catalog, collectionID string) []*catalog.Product {
-	var products []*catalog.Product
-	for _, p := range cat.AllProducts() {
-		for _, cid := range p.CollectionIDs {
-			if cid == collectionID {
-				products = append(products, p)
-				break
-			}
-		}
-	}
-	return products
 }
 
 // applyProductFilters filters a product slice by the fields set in ProductFilter.

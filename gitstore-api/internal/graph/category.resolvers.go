@@ -15,33 +15,22 @@ import (
 
 // Products is the resolver for the products field.
 func (r *categoryResolver) Products(ctx context.Context, obj *model.Category, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
-	// Get catalog
-	cat, err := r.service.GetCatalog(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get catalog: %w", err)
-	}
-
-	// Get all products in this category and its subcategories
-	products, err := getProductsInCategoryTree(cat, obj.ID)
+	products, err := r.service.GetProducts(ctx, &obj.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get products: %w", err)
 	}
 
-	// Simple pagination: for now, return all products
-	// TODO: Implement proper cursor-based pagination
 	edges := make([]*model.ProductEdge, len(products))
 	for i, p := range products {
 		edges[i] = &model.ProductEdge{
-			Cursor: p.ID, // Use ID as cursor for simplicity
+			Cursor: p.ID,
 			Node:   CatalogProductToGraphQL(p),
 		}
 	}
 
-	// Calculate pagination info
 	hasNextPage := false
 	hasPreviousPage := false
 	var startCursor, endCursor *string
-
 	if len(edges) > 0 {
 		start := edges[0].Cursor
 		end := edges[len(edges)-1].Cursor
