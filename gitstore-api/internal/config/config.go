@@ -60,11 +60,12 @@ type DatastoreConfig struct {
 // ScyllaConfig holds ScyllaDB connection parameters.
 // Credentials and TLS are optional (FR-013).
 type ScyllaConfig struct {
-	Hosts    []string `mapstructure:"hosts"`
-	Keyspace string   `mapstructure:"keyspace"`
-	Username string   `mapstructure:"username"`
-	Password string   `mapstructure:"password"`
-	TLS      bool     `mapstructure:"tls"`
+	Hosts                 []string `mapstructure:"hosts"`
+	Keyspace              string   `mapstructure:"keyspace"`
+	Username              string   `mapstructure:"username"`
+	Password              string   `mapstructure:"password"`
+	TLS                   bool     `mapstructure:"tls"`
+	DisableShardAwarePort bool     `mapstructure:"disable_shard_aware_port"`
 }
 
 // Load reads configuration from all sources (defaults → config file → env vars)

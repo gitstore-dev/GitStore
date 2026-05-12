@@ -11,7 +11,9 @@ package datastore_contract_test
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -34,11 +36,9 @@ func TestMain(m *testing.M) {
 		Image:        "scylladb/scylla:5.4",
 		ExposedPorts: []string{"9042/tcp"},
 		Cmd:          []string{"--developer-mode=1", "--overprovisioned=1", "--smp=1"},
-		WaitingFor: wait.ForAll(
-			wait.ForListeningPort("9042/tcp"),
-			wait.ForLog("Starting listening for CQL clients").
-				WithStartupTimeout(120*time.Second),
-		),
+		// ForExec verifies cqlsh can actually connect, not just that the log appeared.
+		WaitingFor: wait.ForExec([]string{"cqlsh", "-e", "describe cluster"}).
+			WithStartupTimeout(120 * time.Second),
 	}
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
@@ -61,13 +61,36 @@ func TestMain(m *testing.M) {
 }
 
 func provisionKeyspace(addr, keyspace string) {
-	cluster := gocql.NewCluster(addr)
+	host, portStr, splitErr := net.SplitHostPort(addr)
+	if splitErr != nil {
+		host = addr
+		portStr = "9042"
+	}
+	port, _ := strconv.Atoi(portStr)
+	cluster := gocql.NewCluster(host)
+	if port > 0 {
+		cluster.Port = port
+	}
 	cluster.Consistency = gocql.Quorum
-	session, err := cluster.CreateSession()
+	cluster.ConnectTimeout = 5 * time.Second
+	cluster.Timeout = 5 * time.Second
+	cluster.DisableShardAwarePort = true
+
+	var session *gocql.Session
+	var err error
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		session, err = cluster.CreateSession()
+		if err == nil {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
 	if err != nil {
 		panic("provisionKeyspace: open session: " + err.Error())
 	}
 	defer session.Close()
+
 	stmt := fmt.Sprintf(
 		`CREATE KEYSPACE IF NOT EXISTS %s `+
 			`WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'} `+
@@ -82,8 +105,9 @@ func provisionKeyspace(addr, keyspace string) {
 func newScyllaDatastore(t *testing.T) datastore.Datastore {
 	t.Helper()
 	cfg := config.ScyllaConfig{
-		Hosts:    []string{scyllaContainerAddr},
-		Keyspace: "gitstore",
+		Hosts:                 []string{scyllaContainerAddr},
+		Keyspace:              "gitstore",
+		DisableShardAwarePort: true,
 	}
 	store, err := scylla.New(cfg, zap.NewNop())
 	require.NoError(t, err)

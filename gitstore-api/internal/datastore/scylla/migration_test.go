@@ -9,6 +9,8 @@ package scylla_test
 
 import (
 	"context"
+	"net"
+	"strconv"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
@@ -21,11 +23,21 @@ import (
 
 func newRawSession(t *testing.T) *gocql.Session {
 	t.Helper()
-	cluster := gocql.NewCluster(scyllaAddr)
+	host, portStr, err := net.SplitHostPort(scyllaAddr)
+	if err != nil {
+		host = scyllaAddr
+		portStr = "9042"
+	}
+	port, _ := strconv.Atoi(portStr)
+	cluster := gocql.NewCluster(host)
+	if port > 0 {
+		cluster.Port = port
+	}
 	cluster.Keyspace = "gitstore" // keyspace provisioned by TestMain in backend_test.go
 	cluster.Consistency = gocql.Quorum
-	session, err := cluster.CreateSession()
-	require.NoError(t, err)
+	cluster.DisableShardAwarePort = true
+	session, sessErr := cluster.CreateSession()
+	require.NoError(t, sessErr)
 	t.Cleanup(session.Close)
 	return session
 }

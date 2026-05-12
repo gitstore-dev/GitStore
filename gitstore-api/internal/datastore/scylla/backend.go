@@ -6,6 +6,8 @@ package scylla
 import (
 	"context"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 
 	"github.com/gitstore-dev/gitstore/api/internal/config"
@@ -16,6 +18,7 @@ import (
 	"github.com/scylladb/gocqlx/v3/qb"
 	"github.com/scylladb/gocqlx/v3/table"
 	"go.uber.org/zap"
+	"gopkg.in/inf.v0"
 )
 
 // scyllaDatastore implements datastore.Datastore backed by ScyllaDB.
@@ -62,7 +65,7 @@ type productRow struct {
 	ID                string            `db:"id"`
 	SKU               string            `db:"sku"`
 	Title             string            `db:"title"`
-	Price             float64           `db:"price"`
+	Price             *inf.Dec          `db:"price"`
 	Currency          string            `db:"currency"`
 	InventoryStatus   string            `db:"inventory_status"`
 	InventoryQuantity *int              `db:"inventory_quantity"`
@@ -100,9 +103,14 @@ type collectionRow struct {
 // New opens a ScyllaDB connection, runs pending migrations, and returns a Datastore.
 // The keyspace must already exist; it is the operator's responsibility to provision it.
 func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) {
-	cluster := gocql.NewCluster(parseHosts(cfg.Hosts)...)
+	parsedHosts, port := parseHosts(cfg.Hosts)
+	cluster := gocql.NewCluster(parsedHosts...)
 	cluster.Keyspace = cfg.Keyspace
 	cluster.Consistency = gocql.Quorum
+	cluster.DisableShardAwarePort = cfg.DisableShardAwarePort
+	if port > 0 {
+		cluster.Port = port
+	}
 	if cfg.Username != "" {
 		cluster.Authenticator = gocql.PasswordAuthenticator{
 			Username: cfg.Username,
@@ -127,12 +135,24 @@ func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) 
 	}, nil
 }
 
-func parseHosts(hosts []string) []string {
+// parseHosts splits "host:port" entries into plain hostnames and returns
+// them alongside the port (0 meaning "use the default CQL port 9042").
+// gocql.NewCluster only accepts hostnames; the port is set via cluster.Port.
+func parseHosts(hosts []string) ([]string, int) {
 	out := make([]string, 0, len(hosts))
+	port := 0
 	for _, h := range hosts {
-		out = append(out, strings.TrimSpace(h))
+		h = strings.TrimSpace(h)
+		if host, portStr, err := net.SplitHostPort(h); err == nil {
+			if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+				port = p
+			}
+			out = append(out, host)
+		} else {
+			out = append(out, h)
+		}
 	}
-	return out
+	return out, port
 }
 
 func (s *scyllaDatastore) Close() error {
@@ -214,7 +234,12 @@ func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Produc
 		return fmt.Errorf("%w: product id %s", datastore.ErrNotFound, p.ID)
 	}
 	row := toProductRow(p)
-	stmt, names := productTable.Update()
+	stmt, names := productTable.Update(
+		"sku", "title", "price", "currency",
+		"inventory_status", "inventory_quantity",
+		"category_id", "collection_ids", "images",
+		"metadata", "created_at", "updated_at", "body",
+	)
 	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
 		return fmt.Errorf("scylla: update product: %w", err)
 	}
@@ -290,7 +315,10 @@ func (s *scyllaDatastore) UpdateCategory(ctx context.Context, c *datastore.Categ
 		return fmt.Errorf("%w: category id %s", datastore.ErrNotFound, c.ID)
 	}
 	row := toCategoryRow(c)
-	stmt, names := categoryTable.Update()
+	stmt, names := categoryTable.Update(
+		"name", "slug", "parent_id", "display_order",
+		"created_at", "updated_at", "body",
+	)
 	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
 		return fmt.Errorf("scylla: update category: %w", err)
 	}
@@ -366,7 +394,10 @@ func (s *scyllaDatastore) UpdateCollection(ctx context.Context, c *datastore.Col
 		return fmt.Errorf("%w: collection id %s", datastore.ErrNotFound, c.ID)
 	}
 	row := toCollectionRow(c)
-	stmt, names := collectionTable.Update()
+	stmt, names := collectionTable.Update(
+		"name", "slug", "display_order", "product_ids",
+		"created_at", "updated_at", "body",
+	)
 	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
 		return fmt.Errorf("scylla: update collection: %w", err)
 	}
@@ -395,7 +426,7 @@ func toProductRow(p *datastore.Product) *productRow {
 		ID:                p.ID,
 		SKU:               p.SKU,
 		Title:             p.Title,
-		Price:             p.Price,
+		Price:             inf.NewDec(int64(p.Price*1e8), 8),
 		Currency:          p.Currency,
 		InventoryStatus:   p.InventoryStatus,
 		InventoryQuantity: p.InventoryQuantity,
@@ -414,11 +445,16 @@ func fromProductRow(r *productRow) *datastore.Product {
 	for k, v := range r.Metadata {
 		meta[k] = v
 	}
+	var price float64
+	if r.Price != nil {
+		f, _ := strconv.ParseFloat(r.Price.String(), 64)
+		price = f
+	}
 	return &datastore.Product{
 		ID:                r.ID,
 		SKU:               r.SKU,
 		Title:             r.Title,
-		Price:             r.Price,
+		Price:             price,
 		Currency:          r.Currency,
 		InventoryStatus:   r.InventoryStatus,
 		InventoryQuantity: r.InventoryQuantity,
