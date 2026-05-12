@@ -87,10 +87,14 @@ For config files, admin auth keys are nested under `[auth.admin]` (for example, 
 [api]
 port = 4000
 
-[git]
-grpc_uri = "dns:///localhost:50051"
-ws_uri   = "ws://localhost:8080"
-http_uri = "http://localhost:9418"
+[git.grpc]
+uri = "dns:///localhost:50051"
+
+[git.ws]
+uri = "ws://localhost:8080"
+
+[git.http]
+uri = "http://localhost:9418"
 
 [auth.jwt]
 duration = "24h"
@@ -113,20 +117,10 @@ tls = false
 
 Secrets (`auth.admin.password_hash`, `auth.jwt.secret`) must remain in environment variables or `.env`, never in `config.toml`.
 
-[git.grpc]
-uri = "dns:///localhost:50051"
-
-[git.ws]
-uri = "ws://localhost:8080"
-
-[git.http]
-uri = "http://localhost:9418"
-
 **Config file**: `gitstore.toml` (optional, current working directory)  
 **`.env` file**: `.env` (optional, current working directory)  
 **Env var prefix**: `GITSTORE_`
-[log]
-level = "debug"
+
 ### Core
 
 | Key                      | Env Var                              | Type   | Default       | Required | Sensitive | Description                                       |

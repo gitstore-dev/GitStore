@@ -60,9 +60,9 @@ jobs:
       env:
         GITSTORE_GIT__DATA_DIR: ./data/repos
         # Stub credentials — integration tests exercise the API but don't verify auth secrets
-        GITSTORE_AUTH_ADMIN_USERNAME: admin
-        GITSTORE_AUTH_ADMIN_PASSWORD_HASH: $2a$12$test.hash.for.ci.only.not.a.real.secret.AAAA
-        GITSTORE_AUTH_JWT_SECRET: ci-test-jwt-secret-minimum-32-characters-long
+        GITSTORE_AUTH__ADMIN__USERNAME: admin
+        GITSTORE_AUTH__ADMIN__PASSWORD_HASH: $2a$12$test.hash.for.ci.only.not.a.real.secret.AAAA
+        GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
 
     - name: Wait for services to be healthy
       run: |
