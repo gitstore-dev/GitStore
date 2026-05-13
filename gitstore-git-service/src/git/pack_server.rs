@@ -65,14 +65,7 @@ impl HttpPackServer {
         write_pkt_line(&mut response, b"NAK\n")?;
 
         let pack_data = build_pack_for_wants(&repo, &wants)?;
-        // Chunk pack into sideband pkt-lines: pkt-line max data = 65512 bytes,
-        // minus 1 sideband-channel byte leaves 65511 bytes of pack per packet.
-        const SIDEBAND_CHUNK: usize = 65511;
-        for chunk in pack_data.chunks(SIDEBAND_CHUNK) {
-            let mut sideband = vec![0x01u8]; // channel 1 = data
-            sideband.extend_from_slice(chunk);
-            write_pkt_line(&mut response, &sideband)?;
-        }
+        append_sideband_data(&mut response, 0x01, &pack_data)?;
 
         response.extend_from_slice(b"0000");
         emit_span("upload-pack-rpc", &self.repo_path, start, "ok", 0);
@@ -230,6 +223,20 @@ fn write_pkt_line(out: &mut Vec<u8>, data: &[u8]) -> Result<()> {
     let hex = format!("{:04x}", len);
     out.extend_from_slice(hex.as_bytes());
     out.extend_from_slice(data);
+    Ok(())
+}
+
+/// Write sideband payload as one or more pkt-lines.
+///
+/// pkt-line max payload is 65516 - 4 = 65512 bytes. Sideband adds a one-byte
+/// channel prefix, so the maximum content payload per pkt-line is 65511 bytes.
+fn append_sideband_data(out: &mut Vec<u8>, channel: u8, payload: &[u8]) -> Result<()> {
+    const MAX_SIDEBAND_PAYLOAD: usize = 65511;
+    for chunk in payload.chunks(MAX_SIDEBAND_PAYLOAD) {
+        let mut sideband = vec![channel];
+        sideband.extend_from_slice(chunk);
+        write_pkt_line(out, &sideband)?;
+    }
     Ok(())
 }
 
@@ -436,6 +443,52 @@ fn build_pack_for_wants(repo: &gix::Repository, wants: &[String]) -> Result<Vec<
     }
 
     Ok(pack_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{append_sideband_data, write_pkt_line};
+
+    #[test]
+    fn append_sideband_data_splits_large_payload_into_valid_pkt_lines() {
+        // 2 full sideband chunks + 1 partial chunk
+        let payload = vec![0xabu8; 140_000];
+        let mut out = Vec::new();
+
+        append_sideband_data(&mut out, 0x01, &payload).expect("sideband chunking should succeed");
+
+        // Ensure packet parsing succeeds and no packet exceeds max pkt-line size.
+        let mut pos = 0usize;
+        let mut packets = 0usize;
+        let mut received_payload_len = 0usize;
+        while pos + 4 <= out.len() {
+            let len = usize::from_str_radix(std::str::from_utf8(&out[pos..pos + 4]).unwrap(), 16)
+                .unwrap();
+            assert!(len <= 65516, "pkt-line must not exceed protocol max");
+            assert!(len >= 5, "sideband packet must include channel + data");
+
+            let packet = &out[pos + 4..pos + len];
+            assert_eq!(packet[0], 0x01, "channel byte should be preserved");
+            received_payload_len += packet.len() - 1;
+            packets += 1;
+            pos += len;
+        }
+
+        assert_eq!(pos, out.len(), "all encoded data must be consumed");
+        assert!(
+            packets >= 3,
+            "large payload should require multiple packets"
+        );
+        assert_eq!(received_payload_len, payload.len());
+    }
+
+    #[test]
+    fn write_pkt_line_rejects_oversized_data() {
+        let mut out = Vec::new();
+        let oversized = vec![0u8; 65513];
+        let err = write_pkt_line(&mut out, &oversized).expect_err("must reject oversized pkt-line");
+        assert!(err.to_string().contains("pkt-line data too long"));
+    }
 }
 
 type RefUpdates<'a> = (Vec<(String, String, String)>, &'a [u8]);
