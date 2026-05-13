@@ -54,7 +54,7 @@ gitstore-api         running             0.0.0.0:4000->4000/tcp
 ### 3. Access Services
 
 - **GraphQL Playground**: http://localhost:4000/playground
-- **Git Repository**: `http://localhost:9418/catalog.git`
+- **Git Repository (example)**: `http://localhost:9418/<repository_id>` — repositories are created on demand via the `CreateRepository` gRPC call; replace `<repository_id>` with the name provisioned for your catalogue.
 
 ### 4. Test GraphQL Query
 
@@ -85,10 +85,19 @@ query {
 
 **Goal**: Create and publish a product catalogue using git
 
-#### Step 1: Clone Catalogue Repository
+#### Step 1: Create and Clone a Catalogue Repository
+
+First, provision a named repository via gRPC (e.g. using `grpcurl`):
 
 ```bash
-git clone http://localhost:9418/catalog.git catalogue-work
+grpcurl -plaintext -d '{"repository_id":"catalog"}' \
+  localhost:50051 gitstore.git.v1.GitService/CreateRepository
+```
+
+Then clone over Smart HTTP:
+
+```bash
+git clone http://localhost:9418/catalog catalogue-work
 cd catalogue-work
 ```
 
@@ -145,7 +154,7 @@ Delta compression using up to 8 threads.
 Compressing objects: 100% (3/3), done.
 Writing objects: 100% (4/4), 512 bytes | 512.00 KiB/s, done.
 Total 4 (delta 1), reused 0 (delta 0)
-To http://localhost:9418/catalog.git
+To http://localhost:9418/catalog
    abc1234..def5678  main -> main
 ```
 
@@ -601,7 +610,7 @@ curl -X POST http://localhost:4000/admin/cache/invalidate
 
 ```bash
 # Check repository size
-du -sh /data/repos/catalog.git
+du -sh /data/repos/<repository_id>.git
 
 # Git garbage collection
 git gc --aggressive --prune=now

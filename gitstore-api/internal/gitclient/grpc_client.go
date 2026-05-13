@@ -15,9 +15,11 @@ import (
 )
 
 // Client wraps the generated GitServiceClient with connection lifecycle management.
+// RepositoryID is the target repository for all RPC calls; set before use.
 type Client struct {
-	conn *grpc.ClientConn
-	Git  gitv1.GitServiceClient
+	conn         *grpc.ClientConn
+	Git          gitv1.GitServiceClient
+	RepositoryID string
 }
 
 // NewClientWithAddr dials the given address directly.

@@ -25,7 +25,11 @@ func NewClientFromConn(conn *grpc.ClientConn) *Client {
 
 // ReadFile fetches the raw bytes of a single file at the given ref.
 func (c *Client) ReadFile(ctx context.Context, path, ref string) ([]byte, error) {
-	resp, err := c.Git.GetFile(ctx, &gitv1.GetFileRequest{Path: path, Ref: ref})
+	resp, err := c.Git.GetFile(ctx, &gitv1.GetFileRequest{
+		RepositoryId: c.RepositoryID,
+		Path:         path,
+		Ref:          ref,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -36,9 +40,10 @@ func (c *Client) ReadFile(ctx context.Context, path, ref string) ([]byte, error)
 // prefix should end with "/" (e.g. "products/"); empty string means repo root.
 func (c *Client) ListFiles(ctx context.Context, prefix, ref string) ([]*gitv1.FileEntry, error) {
 	resp, err := c.Git.ListFiles(ctx, &gitv1.ListFilesRequest{
-		Ref:        ref,
-		PathPrefix: prefix,
-		Recursive:  true,
+		RepositoryId: c.RepositoryID,
+		Ref:          ref,
+		PathPrefix:   prefix,
+		Recursive:    true,
 	})
 	if err != nil {
 		return nil, err
@@ -49,7 +54,10 @@ func (c *Client) ListFiles(ctx context.Context, prefix, ref string) ([]*gitv1.Fi
 // GetLatestTag returns the latest semver release tag.
 // Returns an error (wrapping codes.NotFound) if no tags exist.
 func (c *Client) GetLatestTag(ctx context.Context) (*gitv1.TagEntry, error) {
-	resp, err := c.Git.GetLatestTag(ctx, &gitv1.GetLatestTagRequest{Prefix: "v"})
+	resp, err := c.Git.GetLatestTag(ctx, &gitv1.GetLatestTagRequest{
+		RepositoryId: c.RepositoryID,
+		Prefix:       "v",
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +72,10 @@ func (c *Client) GetLatestTag(ctx context.Context) (*gitv1.TagEntry, error) {
 
 // ListTags enumerates tags with an optional prefix filter.
 func (c *Client) ListTags(ctx context.Context, prefix string) ([]*gitv1.TagEntry, error) {
-	resp, err := c.Git.ListTags(ctx, &gitv1.ListTagsRequest{Prefix: prefix})
+	resp, err := c.Git.ListTags(ctx, &gitv1.ListTagsRequest{
+		RepositoryId: c.RepositoryID,
+		Prefix:       prefix,
+	})
 	if err != nil {
 		return nil, err
 	}

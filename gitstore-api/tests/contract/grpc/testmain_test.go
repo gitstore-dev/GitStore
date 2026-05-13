@@ -19,12 +19,20 @@ import (
 
 var sharedGRPCAddr string
 
+const sharedRepoID = "shared-catalog"
+
+// startSharedClient returns a client targeting the shared repository provisioned in TestMain.
 func startSharedClient(t *testing.T) (*gitclient.Client, error) {
 	t.Helper()
 	if sharedGRPCAddr == "" {
 		return nil, fmt.Errorf("shared gRPC test container is not initialized")
 	}
-	return gitclient.NewClientWithAddr(sharedGRPCAddr)
+	c, err := gitclient.NewClientWithAddr(sharedGRPCAddr)
+	if err != nil {
+		return nil, err
+	}
+	c.RepositoryID = sharedRepoID
+	return c, nil
 }
 
 func TestMain(m *testing.M) {
@@ -58,6 +66,14 @@ func TestMain(m *testing.M) {
 	}
 
 	sharedGRPCAddr = fmt.Sprintf("localhost:%s", grpcPort.Port())
+
+	// Provision the shared repository used by catalogue load and reload tests.
+	setupClient, err := gitclient.NewClientWithAddr(sharedGRPCAddr)
+	if err == nil {
+		_ = setupClient.CreateRepository(ctx, sharedRepoID)
+		_ = setupClient.Close()
+	}
+
 	code := m.Run()
 
 	if termErr := container.Terminate(ctx); termErr != nil {

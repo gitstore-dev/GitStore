@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-git2 = "0.20.4"
+gix = { version = "0.83.0", features = ["max-performance-safe", "tree-editor", "blocking-network-client", "worktree-mutation"] }
+dashmap = "6"
 tokio = { version = "1.35", features = ["full"] }
 tokio-tungstenite = "0.29.0"
 tungstenite = "0.29.0"

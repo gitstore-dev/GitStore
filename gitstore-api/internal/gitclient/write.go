@@ -35,10 +35,27 @@ type CreateTagParams struct {
 	TargetCommitSha string // empty = HEAD
 }
 
+// CreateRepository provisions a new named repository on the git service.
+func (c *Client) CreateRepository(ctx context.Context, repositoryID string) error {
+	_, err := c.Git.CreateRepository(ctx, &gitv1.CreateRepositoryRequest{
+		RepositoryId: repositoryID,
+	})
+	return err
+}
+
+// DeleteRepository removes a named repository from the git service.
+func (c *Client) DeleteRepository(ctx context.Context, repositoryID string) error {
+	_, err := c.Git.DeleteRepository(ctx, &gitv1.DeleteRepositoryRequest{
+		RepositoryId: repositoryID,
+	})
+	return err
+}
+
 // CommitFile writes a single file and commits it to the default branch.
 // Returns the new commit SHA on success.
 func (c *Client) CommitFile(ctx context.Context, p CommitFileParams) (string, error) {
 	resp, err := c.Git.CommitFile(ctx, &gitv1.CommitFileRequest{
+		RepositoryId:  c.RepositoryID,
 		Path:          p.Path,
 		Content:       p.Content,
 		CommitMessage: p.CommitMessage,
@@ -55,6 +72,7 @@ func (c *Client) CommitFile(ctx context.Context, p CommitFileParams) (string, er
 // Returns the new commit SHA on success.
 func (c *Client) DeleteFile(ctx context.Context, p DeleteFileParams) (string, error) {
 	resp, err := c.Git.DeleteFile(ctx, &gitv1.DeleteFileRequest{
+		RepositoryId:  c.RepositoryID,
 		Path:          p.Path,
 		CommitMessage: p.CommitMessage,
 		AuthorName:    p.AuthorName,
@@ -70,6 +88,7 @@ func (c *Client) DeleteFile(ctx context.Context, p DeleteFileParams) (string, er
 // Returns the tag object SHA on success.
 func (c *Client) CreateTag(ctx context.Context, p CreateTagParams) (string, error) {
 	resp, err := c.Git.CreateTag(ctx, &gitv1.CreateTagRequest{
+		RepositoryId:    c.RepositoryID,
 		TagName:         p.Name,
 		Message:         p.Message,
 		TargetCommitSha: p.TargetCommitSha,
