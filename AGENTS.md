@@ -8,6 +8,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `go-memdb` (in-memory backend) / ScyllaDB 5.x+ (production backend) (006-api-datastore-abstraction)
 - Rust edition 2021, MSRV 1.82 (required by gix 0.83.0) + `gix 0.83.0` (replaces `git2 0.20.4`), `tokio 1.35`, `axum 0.8`, `tonic 0.14`, `tracing 0.1`, `anyhow 1.0` (007-migrate-gitoxide)
 - Bare Git repositories on local filesystem (unchanged) (007-migrate-gitoxide)
+- Rust edition 2021, MSRV 1.82 + `gix 0.83.0`, `gix-packetline` (compatible version), `gix-pack` (compatible version), `gix-protocol` (compatible version), `axum 0.8`, `tokio 1.35`, `tracing 0.1`, `tempfile 3.8` (dev) (008-remove-git-shellouts)
 
 - (001-git-backed-ecommerce)
 
@@ -20,9 +21,9 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 : Follow standard conventions
 
 ## Recent Changes
+- 008-remove-git-shellouts: Added Rust edition 2021, MSRV 1.82 + `gix 0.83.0`, `gix-packetline` (compatible version), `gix-pack` (compatible version), `gix-protocol` (compatible version), `axum 0.8`, `tokio 1.35`, `tracing 0.1`, `tempfile 3.8` (dev)
 - 007-migrate-gitoxide: Added Rust edition 2021, MSRV 1.82 (required by gix 0.83.0) + `gix 0.83.0` (replaces `git2 0.20.4`), `tokio 1.35`, `axum 0.8`, `tonic 0.14`, `tracing 0.1`, `anyhow 1.0`
 - 006-api-datastore-abstraction: Added Go 1.25 (`gitstore-api`)
-- 005-structured-config-mgmt: Added Go 1.25 (`gitstore-api`), Rust edition 2021 (`gitstore-git-service`)
 
 
 <!-- MANUAL ADDITIONS START -->

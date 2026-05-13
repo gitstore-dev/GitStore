@@ -34,25 +34,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ─── Step 1: Initialize demo catalog ─────────────────────────────────────────
-log "Step 1: Initialize demo catalog"
+# ─── Step 1: Start Docker compose ────────────────────────────────────────────
+log "Step 1: Starting Docker compose"
 DATA_DIR="$(mktemp -d)"
-"$REPO_ROOT/scripts/init-demo-catalog.sh" --data-dir "$DATA_DIR"
-pass "Demo catalog initialized at $DATA_DIR"
-
-# ─── Step 2: Start Docker compose ────────────────────────────────────────────
-log "Step 2: Starting Docker compose"
 GITSTORE_DATA_DIR="$DATA_DIR" docker compose -f "$REPO_ROOT/compose.yml" up -d --build
 pass "Docker compose started"
 
-# ─── Step 3: Wait for health checks ──────────────────────────────────────────
-log "Step 3: Waiting for services to become healthy"
+# ─── Step 2: Wait for health checks ──────────────────────────────────────────
+log "Step 2: Waiting for services to become healthy"
 wait_healthy "http://localhost:9418/health"    "git-server"  90
 wait_healthy "http://localhost:4000/health"    "api"         90
 wait_healthy "http://localhost:3000"           "admin-ui"    90
 
-# ─── Step 4: Verify websocket health ─────────────────────────────────────────
-log "Step 4: Check websocket health endpoint"
+# ─── Step 3: Verify websocket health ─────────────────────────────────────────
+log "Step 3: Check websocket health endpoint"
 WS_HEALTH=$(curl -sf "http://localhost:9418/websocket/health" 2>/dev/null || echo '{}')
 WS_STATUS=$(echo "$WS_HEALTH" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
 if [ "$WS_STATUS" = "healthy" ]; then
@@ -61,8 +56,8 @@ else
   fail "Websocket health returned unexpected status: $WS_STATUS (body: $WS_HEALTH)"
 fi
 
-# ─── Step 5: Query GraphQL for products ──────────────────────────────────────
-log "Step 5: Query GraphQL API for products"
+# ─── Step 4: Query GraphQL for products ──────────────────────────────────────
+log "Step 4: Query GraphQL API for products"
 GQL_RESPONSE=$(curl -sf -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -d '{"query":"{ products { edges { node { id sku title } } } }"}' 2>/dev/null || echo '{}')
@@ -74,8 +69,8 @@ else
   fail "GraphQL products query returned no products. Response: $GQL_RESPONSE"
 fi
 
-# ─── Step 6: Create a release tag and verify cache reload ────────────────────
-log "Step 6: Create release tag and verify cache reload via API logs"
+# ─── Step 5: Create a release tag and verify cache reload ────────────────────
+log "Step 5: Create release tag and verify cache reload via API logs"
 CLONE_DIR="$(mktemp -d)"
 git clone "http://localhost:9418/catalog.git" "$CLONE_DIR" 2>/dev/null || {
   fail "Could not clone catalog repo"

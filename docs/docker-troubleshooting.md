@@ -2,15 +2,9 @@
 
 ## Repository initialisation checklist
 
-Before starting the stack, the catalogue repository must exist on disk:
+Before starting the stack, the catalogue repository must exist on disk.
 
-```bash
-# Create and seed the demo catalog
-./scripts/init-demo-catalog.sh --data-dir ./data/repos
-
-# Verify the bare git repo was created
-ls ./data/repos/catalog.git/HEAD   # should print "ref: refs/heads/main"
-```
+Demo data seeding will be provided in a future feature.
 
 The `GITSTORE_GIT__DATA_DIR` environment variable (or the `--data-dir` flag) must
 point to the **parent** of `catalog.git`, not to `catalog.git` itself.
@@ -125,9 +119,7 @@ docker compose logs -f api 2>&1 | grep '{' | jq .
 # Stop everything and remove volumes
 docker compose down --volumes
 
-# Re-initialize catalog
-./scripts/init-demo-catalog.sh --data-dir ./data/repos
-
+# Demo data seeding will be provided in a future feature.
 # Start fresh
 docker compose up --build
 ```

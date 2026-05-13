@@ -35,12 +35,9 @@ Both workflows use git as the source of truth, ensuring version control, auditab
 
 ### Quick Start
 
-1. **Initialize a demo catalog**:
-   ```bash
-   ./scripts/init-demo-catalog.sh
-   ```
+Demo data seeding will be provided in a future feature.
 
-2. **Start GitStore services**:
+1. **Start GitStore services**:
    ```bash
    export COMPOSE_BAKE=true
    docker compose up -d

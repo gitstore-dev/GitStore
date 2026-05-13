@@ -158,17 +158,46 @@ jobs:
         go list -json -m all | nancy sleuth
       continue-on-error: true
 
+  shellout-guards:
+    name: Shell-out Guards
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Ensure no git binary shell-outs in git-service
+      run: |
+        if grep -rn 'Command::new("git")' gitstore-git-service/src/; then
+          echo "ERROR: git binary shell-out found in gitstore-git-service/src/" >&2
+          exit 1
+        fi
+        echo "No git shell-outs found. ✅"
+
+    - name: Ensure init-demo-catalog references are removed
+      run: |
+        if grep -rn 'init-demo-catalog' \
+            --exclude-dir='.git' \
+            --exclude-dir='specs' \
+            --exclude-dir='.claude' \
+            --exclude='ci.yml' \
+            .; then
+          echo "ERROR: init-demo-catalog reference found in source files" >&2
+          exit 1
+        fi
+        echo "No init-demo-catalog references found. ✅"
+
   build-status:
     name: Build Status
     runs-on: ubuntu-latest
-    needs: [rust-test, go-test, security-scan]
+    needs: [rust-test, go-test, security-scan, shellout-guards]
     if: always()
 
     steps:
     - name: Check build status
       run: |
         if [ "${{ needs.rust-test.result }}" != "success" ] || \
-           [ "${{ needs.go-test.result }}" != "success" ]; then
+           [ "${{ needs.go-test.result }}" != "success" ] || \
+           [ "${{ needs.shellout-guards.result }}" != "success" ]; then
           echo "Build failed!"
           exit 1
         fi

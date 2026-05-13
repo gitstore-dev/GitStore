@@ -6,4 +6,5 @@
 pub mod events;
 pub mod hooks;
 pub mod metrics;
+pub mod pack_server;
 pub mod repo;

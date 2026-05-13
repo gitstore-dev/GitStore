@@ -44,9 +44,7 @@ jobs:
 
     - name: Start core stack
       working-directory: .
-      run: |
-        ./scripts/init-demo-catalog.sh --data-dir ./data/repos
-        docker compose up -d --wait
+      run: docker compose up -d --wait
       env:
         GITSTORE_GIT__DATA_DIR: ./data/repos
 

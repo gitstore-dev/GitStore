@@ -8,7 +8,7 @@
 
 use axum::{
     body::{Body, Bytes},
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -21,6 +21,7 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
+use crate::git::pack_server::HttpPackServer;
 use crate::websocket::broadcast::Broadcaster;
 
 /// Git server state shared across handlers
@@ -29,6 +30,7 @@ pub struct GitServerState {
     pub data_root: PathBuf,
     pub broadcaster: Arc<RwLock<Broadcaster>>,
     pub start_time: Instant,
+    pub max_pack_size: u64,
 }
 
 /// Validate a repo name segment from the URL path.
@@ -61,11 +63,15 @@ fn confine_repo_path(data_root: &StdPath, repo: &str) -> Result<PathBuf, GitErro
 
 /// Create HTTP git server routes
 pub fn create_git_routes(state: GitServerState) -> Router {
+    let max_pack = state.max_pack_size as usize;
     Router::new()
         // Smart HTTP protocol endpoints
         .route("/{repo}/info/refs", get(info_refs))
         .route("/{repo}/git-upload-pack", post(upload_pack))
-        .route("/{repo}/git-receive-pack", post(receive_pack))
+        .route(
+            "/{repo}/git-receive-pack",
+            post(receive_pack).layer(DefaultBodyLimit::max(max_pack)),
+        )
         // Health check endpoints
         .route("/health", get(health_check))
         .route("/ready", get(readiness_check))
@@ -98,18 +104,9 @@ async fn info_refs(
 
     match service {
         "git-upload-pack" => {
-            let output = std::process::Command::new("git")
-                .args([
-                    "upload-pack",
-                    "--advertise-refs",
-                    repo_path.to_str().unwrap(),
-                ])
-                .output()
-                .map_err(|e| GitError::Internal(format!("Failed to run git-upload-pack: {}", e)))?;
-
-            let mut body = Vec::new();
-            body.extend_from_slice(b"001e# service=git-upload-pack\n0000");
-            body.extend_from_slice(&output.stdout);
+            let body = HttpPackServer::new(repo_path, state.max_pack_size)
+                .advertise_upload_pack_refs()
+                .map_err(|e| GitError::Internal(format!("upload-pack advertise failed: {e}")))?;
 
             Ok(Response::builder()
                 .status(StatusCode::OK)
@@ -121,20 +118,9 @@ async fn info_refs(
                 .unwrap())
         }
         "git-receive-pack" => {
-            let output = std::process::Command::new("git")
-                .args([
-                    "receive-pack",
-                    "--advertise-refs",
-                    repo_path.to_str().unwrap(),
-                ])
-                .output()
-                .map_err(|e| {
-                    GitError::Internal(format!("Failed to run git-receive-pack: {}", e))
-                })?;
-
-            let mut body = Vec::new();
-            body.extend_from_slice(b"001f# service=git-receive-pack\n0000");
-            body.extend_from_slice(&output.stdout);
+            let body = HttpPackServer::new(repo_path, state.max_pack_size)
+                .advertise_receive_pack_refs()
+                .map_err(|e| GitError::Internal(format!("receive-pack advertise failed: {e}")))?;
 
             Ok(Response::builder()
                 .status(StatusCode::OK)
@@ -179,33 +165,14 @@ async fn upload_pack(
     validate_repo_name(&repo).map_err(|_| GitError::NotFound("invalid repository name".into()))?;
     let repo_path = confine_repo_path(&state.data_root, &repo)?;
 
-    let mut output = std::process::Command::new("git")
-        .args([
-            "upload-pack",
-            "--stateless-rpc",
-            repo_path.to_str().unwrap(),
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| GitError::Internal(format!("Failed to spawn git-upload-pack: {}", e)))?;
-
-    use std::io::Write;
-    if let Some(ref mut stdin) = output.stdin {
-        stdin.write_all(&body_bytes).map_err(|e| {
-            GitError::Internal(format!("Failed to write to git-upload-pack: {}", e))
-        })?;
-    }
-
-    let output = output
-        .wait_with_output()
-        .map_err(|e| GitError::Internal(format!("git-upload-pack failed: {}", e)))?;
+    let response = HttpPackServer::new(repo_path, state.max_pack_size)
+        .handle_upload_pack(&body_bytes)
+        .map_err(|e| GitError::Internal(format!("upload-pack failed: {e}")))?;
 
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/x-git-upload-pack-result")
-        .body(Body::from(output.stdout))
+        .body(Body::from(response))
         .unwrap())
 }
 
@@ -221,42 +188,9 @@ async fn receive_pack(
     validate_repo_name(&repo).map_err(|_| GitError::NotFound("invalid repository name".into()))?;
     let repo_path = confine_repo_path(&state.data_root, &repo)?;
 
-    // Validate repository exists before spawning git-receive-pack
-    gix::open(&repo_path)
-        .map_err(|e| GitError::NotFound(format!("Repository not found: {}", e)))?;
-
-    let mut child = std::process::Command::new("git")
-        .args([
-            "receive-pack",
-            "--stateless-rpc",
-            repo_path.to_str().unwrap(),
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| GitError::Internal(format!("Failed to spawn git-receive-pack: {}", e)))?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        stdin.write_all(&body_bytes).map_err(|e| {
-            GitError::Internal(format!("Failed to write to git-receive-pack: {}", e))
-        })?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| GitError::Internal(format!("git-receive-pack failed: {}", e)))?;
-
-    if !output.status.success() {
-        error!(
-            stderr = %String::from_utf8_lossy(&output.stderr),
-            "git-receive-pack failed"
-        );
-        return Err(GitError::ValidationFailed(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
-    }
+    let pack_response = HttpPackServer::new(repo_path.clone(), state.max_pack_size)
+        .handle_receive_pack(&body_bytes)
+        .map_err(|e| GitError::ValidationFailed(e.to_string()))?;
 
     // Get new HEAD and tag names after push for broadcast
     let (new_head, tag_names) = {
@@ -308,7 +242,7 @@ async fn receive_pack(
             header::CONTENT_TYPE,
             "application/x-git-receive-pack-result",
         )
-        .body(Body::from(output.stdout))
+        .body(Body::from(pack_response))
         .unwrap())
 }
 
