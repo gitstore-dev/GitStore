@@ -39,7 +39,8 @@ impl HttpPackServer {
         body.extend_from_slice(b"001e# service=git-upload-pack\n0000");
 
         let refs = collect_refs(&repo)?;
-        write_ref_advertisement(&mut body, &refs, UPLOAD_PACK_CAPS)?;
+        let caps = build_upload_pack_caps(&repo);
+        write_ref_advertisement(&mut body, &refs, &caps)?;
 
         emit_span("upload-pack-advertise", &self.repo_path, start, "ok", 0);
         Ok(body)
@@ -217,6 +218,17 @@ fn write_pkt_line(out: &mut Vec<u8>, data: &[u8]) -> Result<()> {
     out.extend_from_slice(hex.as_bytes());
     out.extend_from_slice(data);
     Ok(())
+}
+
+/// Build upload-pack capability string, including `symref=HEAD:<target>` when HEAD is symbolic.
+fn build_upload_pack_caps(repo: &gix::Repository) -> String {
+    let symref = repo
+        .head_ref()
+        .ok()
+        .flatten()
+        .map(|r| format!(" symref=HEAD:{}", r.name().as_bstr()))
+        .unwrap_or_default();
+    format!("{}{}", UPLOAD_PACK_CAPS, symref)
 }
 
 /// Write protocol v1 ref advertisement (used by both upload-pack and receive-pack).
