@@ -188,20 +188,20 @@ fn collect_tree_entries(
                     }
                 }
             }
-            gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable => {
-                if prefix.is_empty() || full_path.starts_with(prefix) {
-                    if !recursive {
-                        let suffix = full_path.strip_prefix(prefix).unwrap_or(&full_path);
-                        if suffix.contains('/') {
-                            continue;
-                        }
+            gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable
+                if prefix.is_empty() || full_path.starts_with(prefix) =>
+            {
+                if !recursive {
+                    let suffix = full_path.strip_prefix(prefix).unwrap_or(&full_path);
+                    if suffix.contains('/') {
+                        continue;
                     }
-                    files.push(FileEntry {
-                        path: full_path,
-                        size_bytes: 0,
-                        blob_sha: entry.oid.to_string(),
-                    });
                 }
+                files.push(FileEntry {
+                    path: full_path,
+                    size_bytes: 0,
+                    blob_sha: entry.oid.to_string(),
+                });
             }
             _ => {}
         }

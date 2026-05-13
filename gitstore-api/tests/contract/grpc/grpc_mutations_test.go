@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -22,8 +23,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// startMutationContainer returns a connected client to the shared git-service container.
-// The container lifecycle is managed once per package in TestMain.
+// startMutationContainer returns a connected client targeting a fresh repository
+// on the shared git-service container. Each call provisions a unique repo so
+// tests are fully isolated from one another.
 func startMutationContainer(t *testing.T) (*gitclient.Client, func()) {
 	t.Helper()
 
@@ -34,10 +36,28 @@ func startMutationContainer(t *testing.T) (*gitclient.Client, func()) {
 	client, err := gitclient.NewClientWithAddr(sharedGRPCAddr)
 	require.NoError(t, err)
 
+	// Use the test name as repo ID (sanitised to be a valid name).
+	repoID := sanitiseRepoID(t.Name())
+	client.RepositoryID = repoID
+	require.NoError(t, client.CreateRepository(context.Background(), repoID),
+		"failed to create test repository %q", repoID)
+
 	cleanup := func() {
+		_ = client.DeleteRepository(context.Background(), repoID)
 		client.Close()
 	}
 	return client, cleanup
+}
+
+// sanitiseRepoID converts a test name to a valid repository ID by replacing
+// characters that are rejected by validate_repository_name.
+func sanitiseRepoID(name string) string {
+	r := strings.NewReplacer("/", "-", "\\", "-", " ", "-")
+	s := strings.Trim(r.Replace(name), "-")
+	if s == "" {
+		return "default"
+	}
+	return s
 }
 
 // TestGRPCCommitFile verifies CommitFile creates a commit and returns a SHA.
