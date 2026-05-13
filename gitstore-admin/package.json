@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@astrojs/react": "^5.0.0",
-    "astro": "^6.1.6",
+    "astro": "^6.1.10",
     "graphql": "^16.13.1",
     "react": "^18.2.0",
     "react-beautiful-dnd": "^13.1.1",
