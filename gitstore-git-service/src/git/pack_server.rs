@@ -10,6 +10,8 @@ use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 use gix::refs::TargetRef;
 use tracing::info;
 
+use super::hooks::{run_post_receive, run_pre_receive, run_update_hooks, RefUpdate};
+
 /// In-process replacement for the four `git upload-pack` / `git receive-pack`
 /// shell-out call sites in the HTTP git server.
 pub struct HttpPackServer {
@@ -50,7 +52,7 @@ impl HttpPackServer {
     pub fn handle_upload_pack(&self, body: &[u8]) -> Result<Vec<u8>> {
         let start = Instant::now();
         let repo = open_repo(&self.repo_path)?;
-        let wants = parse_wants(body);
+        let (wants, haves) = parse_wants_and_haves(body);
         let mut response = Vec::new();
 
         if wants.is_empty() {
@@ -64,7 +66,7 @@ impl HttpPackServer {
         // NAK then pack stream
         write_pkt_line(&mut response, b"NAK\n")?;
 
-        let pack_data = build_pack_for_wants(&repo, &wants)?;
+        let pack_data = build_pack_for_wants(&repo, &wants, &haves)?;
         // Chunk pack into sideband pkt-lines: pkt-line max data = 65512 bytes,
         // minus 1 sideband-channel byte leaves 65511 bytes of pack per packet.
         const SIDEBAND_CHUNK: usize = 65511;
@@ -114,22 +116,50 @@ impl HttpPackServer {
             None
         };
 
-        // Build atomic ref transaction
+        // Build RefUpdate list (shared with hook runners and ref transaction).
+        let hook_updates: Vec<RefUpdate> = ref_updates
+            .iter()
+            .map(|(refname, old_oid, new_oid)| RefUpdate {
+                ref_name: refname.clone(),
+                old_oid: old_oid.clone(),
+                new_oid: new_oid.clone(),
+            })
+            .collect();
+
+        // pre-receive: non-zero exit rejects the entire push before any mutation.
+        run_pre_receive(&self.repo_path, &hook_updates).context("pre-receive hook")?;
+
+        // update: called per-ref; collects accepted indices for the ref transaction.
+        let accepted_indices =
+            run_update_hooks(&self.repo_path, &hook_updates).context("update hooks")?;
+
+        // Build atomic ref transaction for accepted refs only.
         let mut ref_edits: Vec<RefEdit> = Vec::new();
-        for (refname, old_oid, new_oid) in &ref_updates {
+        for i in &accepted_indices {
+            let (refname, old_oid, new_oid) = &ref_updates[*i];
             let new_id = gix::ObjectId::from_hex(new_oid.as_bytes())
                 .with_context(|| format!("parse new oid {new_oid}"))?;
             let old_id = gix::ObjectId::from_hex(old_oid.as_bytes())
                 .with_context(|| format!("parse old oid {old_oid}"))?;
 
-            let previous_value = if old_id.is_null() {
-                PreviousValue::MustNotExist
+            let change = if new_id.is_null() {
+                // Delete: `git push origin :branch`
+                let expected = if old_id.is_null() {
+                    PreviousValue::Any
+                } else {
+                    PreviousValue::MustExistAndMatch(gix::refs::Target::Object(old_id))
+                };
+                Change::Delete {
+                    expected,
+                    log: RefLog::AndReference,
+                }
             } else {
-                PreviousValue::MustExistAndMatch(gix::refs::Target::Object(old_id))
-            };
-
-            ref_edits.push(RefEdit {
-                change: Change::Update {
+                let previous_value = if old_id.is_null() {
+                    PreviousValue::MustNotExist
+                } else {
+                    PreviousValue::MustExistAndMatch(gix::refs::Target::Object(old_id))
+                };
+                Change::Update {
                     log: LogChange {
                         mode: RefLog::AndReference,
                         force_create_reflog: false,
@@ -137,7 +167,11 @@ impl HttpPackServer {
                     },
                     expected: previous_value,
                     new: gix::refs::Target::Object(new_id),
-                },
+                }
+            };
+
+            ref_edits.push(RefEdit {
+                change,
                 name: refname
                     .as_str()
                     .try_into()
@@ -160,14 +194,34 @@ impl HttpPackServer {
             promote_quarantine(&repo, q).context("promoting quarantined pack to ODB")?;
         }
 
+        // post-receive: informational only, exit code ignored.
+        let accepted_set: std::collections::HashSet<usize> =
+            accepted_indices.iter().copied().collect();
+        let accepted_updates: Vec<RefUpdate> = accepted_indices
+            .iter()
+            .map(|i| RefUpdate {
+                ref_name: hook_updates[*i].ref_name.clone(),
+                old_oid: hook_updates[*i].old_oid.clone(),
+                new_oid: hook_updates[*i].new_oid.clone(),
+            })
+            .collect();
+        run_post_receive(&self.repo_path, &accepted_updates);
+
         // Build report-status response.
         // With side-band-64k: ALL report-status pkt-lines are bundled into ONE sideband
         // channel-1 payload, followed by a sideband flush pkt-line (0000).
         // Format: pkt-line(\x01 <inner-pkt-lines> <inner-0000>)  then outer 0000
         let mut inner = Vec::new();
         write_pkt_line(&mut inner, b"unpack ok\n")?;
-        for (refname, _, _) in &ref_updates {
-            write_pkt_line(&mut inner, format!("ok {}\n", refname).as_bytes())?;
+        for (i, (refname, _, _)) in ref_updates.iter().enumerate() {
+            if accepted_set.contains(&i) {
+                write_pkt_line(&mut inner, format!("ok {refname}\n").as_bytes())?;
+            } else {
+                write_pkt_line(
+                    &mut inner,
+                    format!("ng {refname} rejected by update hook\n").as_bytes(),
+                )?;
+            }
         }
         inner.extend_from_slice(b"0000");
 
@@ -329,9 +383,13 @@ fn collect_refs(repo: &gix::Repository) -> Result<Vec<(String, String)>> {
     Ok(refs)
 }
 
-/// Parse `want <hex-oid>` lines from a pkt-line request body.
-fn parse_wants(body: &[u8]) -> Vec<String> {
+/// Parse `want` and `have` lines from a pkt-line upload-pack request body.
+///
+/// Returns `(wants, haves)`. `haves` are objects the client already has; the
+/// pack builder uses them as cut-off points so only the delta is sent.
+fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>) {
     let mut wants = Vec::new();
+    let mut haves = Vec::new();
     let mut pos = 0;
 
     while pos + 4 <= body.len() {
@@ -355,20 +413,31 @@ fn parse_wants(body: &[u8]) -> Vec<String> {
         if let Ok(s) = std::str::from_utf8(line) {
             let s = s.trim_end_matches('\n').split('\0').next().unwrap_or("");
             if let Some(rest) = s.strip_prefix("want ") {
-                // Only take the first token (caps may follow after a space)
                 let oid = rest.split_whitespace().next().unwrap_or("").to_string();
                 if !oid.is_empty() {
                     wants.push(oid);
+                }
+            } else if let Some(rest) = s.strip_prefix("have ") {
+                let oid = rest.split_whitespace().next().unwrap_or("").to_string();
+                if !oid.is_empty() {
+                    haves.push(oid);
                 }
             }
         }
         pos += len;
     }
-    wants
+    (wants, haves)
 }
 
-/// Build a pack file containing all objects reachable from the requested OIDs.
-fn build_pack_for_wants(repo: &gix::Repository, wants: &[String]) -> Result<Vec<u8>> {
+/// Build a pack file containing objects reachable from `wants` but not from `haves`.
+///
+/// `haves` are commit OIDs the client already has; they act as boundary commits so
+/// only the incremental delta is included, matching normal upload-pack negotiation.
+fn build_pack_for_wants(
+    repo: &gix::Repository,
+    wants: &[String],
+    haves: &[String],
+) -> Result<Vec<u8>> {
     use gix_pack::data::output;
     use gix_pack::data::output::count::objects::ObjectExpansion;
 
@@ -381,6 +450,13 @@ fn build_pack_for_wants(repo: &gix::Repository, wants: &[String]) -> Result<Vec<
         return Ok(Vec::new());
     }
 
+    // Resolve have OIDs; unknown/invalid ones are silently ignored.
+    let have_ids: Vec<gix::ObjectId> = haves
+        .iter()
+        .filter_map(|h| gix::ObjectId::from_hex(h.as_bytes()).ok())
+        .filter(|id| repo.find_object(*id).is_ok())
+        .collect();
+
     let interrupt = AtomicBool::new(false);
 
     // Clone and prepare ODB handle: prevent_pack_unload ensures pack location data
@@ -388,7 +464,25 @@ fn build_pack_for_wants(repo: &gix::Repository, wants: &[String]) -> Result<Vec<
     let mut odb = (*repo.objects).clone();
     odb.prevent_pack_unload();
 
-    let mut ids_iter = want_ids
+    // Walk commits from wants, stopping at have boundaries so only the
+    // incremental delta is included rather than the full history.
+    let walk_ids: Vec<gix::ObjectId> = if have_ids.is_empty() {
+        // No client haves — send everything reachable from wants.
+        want_ids.clone()
+    } else {
+        repo.rev_walk(want_ids.iter().copied())
+            .with_boundary(have_ids.iter().copied())
+            .all()
+            .context("rev walk for pack generation")?
+            .filter_map(|r| r.ok().map(|info| info.id))
+            .collect()
+    };
+
+    if walk_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut ids_iter = walk_ids
         .iter()
         .map(|id| Ok::<_, Box<dyn std::error::Error + Send + Sync>>(*id));
 
