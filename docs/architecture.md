@@ -42,6 +42,34 @@ Key environment variables:
 
 These folders map directly to the control, storage, and distribution planes described below.
 
+### Git Engine — gitoxide (gix)
+
+`gitstore-git-service` uses [gitoxide (`gix 0.83.0`)](https://github.com/Byron/gitoxide), a pure-Rust Git implementation, as its only Git library. The `git2` / libgit2 C binding was removed entirely in feature `007-migrate-gitoxide`.
+
+Key consequences of this change:
+
+- **No native library dependency**: the service binary links only Rust crates; no libgit2 or OpenSSL linkage.
+- **Tree-editor writes**: `commit_file` and `delete_file` use gix's built-in tree-editor API to mutate bare repository trees directly, eliminating the previous clone-to-tmpdir pattern.
+- **MSRV 1.82**: required by `gix 0.83.0`; the Rust toolchain must be ≥ 1.82.
+
+### Multi-Repository Hosting
+
+The git service supports **named repositories** created and deleted at runtime via gRPC — no service restart is required.
+
+- Each repository is stored as `<GITSTORE_GIT__DATA_DIR>/<repository_id>.git` on disk.
+- Every gRPC request carries a `repository_id` field that identifies the target repository.
+- Requests with an unknown or invalid `repository_id` return `NOT_FOUND` or `INVALID_ARGUMENT` respectively.
+- Concurrent requests to different repositories are isolated via a per-repository `RwLock`.
+
+**There is no longer a default `catalog.git` repository.** Repositories must be created explicitly via the `CreateRepository` RPC before any other operation can be performed on them.
+
+New RPCs (defined in `shared/proto/gitstore/git/v1/git_service.proto`):
+
+| RPC                  | Description                                               |
+|----------------------|-----------------------------------------------------------|
+| `CreateRepository`   | Provisions a new named bare repository on disk.           |
+| `DeleteRepository`   | Removes a named repository and all its data.              |
+
 ---
 
 ## Proposal 1 - API-Led Mutations with Asynchronous Indexing

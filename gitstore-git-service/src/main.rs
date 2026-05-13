@@ -9,8 +9,6 @@ use std::path::PathBuf;
 use std::time::Instant;
 use tracing::{error, info};
 
-use gitstore::git::metrics::log_repo_metrics;
-use gitstore::git::repo::init_or_open_repository;
 use gitstore::grpc::server::{proto::git_service_server::GitServiceServer, GitServiceImpl};
 use gitstore::http_git_server::{create_git_routes, GitServerState};
 use gitstore::websocket::server::WebsocketServer;
@@ -29,30 +27,24 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Load .env file before anything else so env vars are populated
     dotenvy::dotenv().ok();
 
     let args = Args::parse();
 
-    // Load structured configuration (--config-file overrides default gitstore.toml)
     let mut cfg = gitstore::config::load_config_from(args.config_file.as_deref())
         .map_err(|e| format!("Configuration error: {e}"))?;
 
-    // Apply CLI overrides (highest priority)
     if let Some(level) = args.log_level {
         cfg.log.level = level;
     }
 
-    // Fail fast if config is invalid
     if let Err(e) = cfg.validate() {
         eprintln!("{e}");
         std::process::exit(1);
     }
 
-    // Record start time for health checks
     let start_time = Instant::now();
 
-    // Initialize structured logging
     gitstore::init_logging();
 
     info!(
@@ -63,25 +55,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Starting GitStore Server"
     );
 
-    // Create data directory if it doesn't exist
+    // Create data directory if it doesn't exist (no default repo provisioned)
     let data_path = PathBuf::from(&cfg.git.data_dir);
     if !data_path.exists() {
         std::fs::create_dir_all(&data_path)?;
         info!(path = %data_path.display(), "Created data directory");
-    }
-
-    // Initialize catalog repository
-    let catalog_path = data_path.join("catalog.git");
-    match init_or_open_repository(&catalog_path) {
-        Ok(repo) => {
-            info!(path = %catalog_path.display(), "Catalog repository ready");
-            drop(repo);
-            log_repo_metrics(&catalog_path, 500.0);
-        }
-        Err(e) => {
-            error!(error = %e, "Failed to initialize catalog repository");
-            return Err(e.into());
-        }
     }
 
     // Start websocket server
@@ -99,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start gRPC server
     let grpc_addr: SocketAddr = format!("0.0.0.0:{}", cfg.grpc.port).parse()?;
-    let grpc_service = GitServiceImpl::new(data_path.join("catalog.git"));
+    let grpc_service = GitServiceImpl::new(data_path.clone());
     info!(
         grpc_port = cfg.grpc.port,
         "gRPC server starting on {}", grpc_addr
@@ -116,14 +94,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create HTTP Git server state
     let git_state = GitServerState {
-        repo_path: data_path.clone(),
+        data_root: data_path.clone(),
         broadcaster: std::sync::Arc::new(tokio::sync::RwLock::new(broadcaster)),
         start_time,
     };
 
     let app = create_git_routes(git_state);
 
-    // Start HTTP server for git operations
     let http_addr: SocketAddr = format!("0.0.0.0:{}", cfg.http.port).parse()?;
     info!(
         http_port = cfg.http.port,
@@ -138,7 +115,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Wait for shutdown signal
     tokio::signal::ctrl_c().await?;
     info!("Shutting down...");
 

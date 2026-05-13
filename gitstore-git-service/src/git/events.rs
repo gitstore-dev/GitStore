@@ -4,7 +4,6 @@
 // Git event detection
 
 use anyhow::Result;
-use git2::Repository;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
@@ -62,17 +61,15 @@ impl GitEvent {
     }
 }
 
-/// Detect if a tag creation should trigger a release event
-pub fn should_notify_tag_creation(tag_name: &str, repo: &Repository) -> bool {
-    // Only notify for tags starting with 'v' (version tags)
+/// Detect if a tag creation should trigger a release event.
+pub fn should_notify_tag_creation(tag_name: &str, repo: &gix::Repository) -> bool {
     if !tag_name.starts_with('v') {
         debug!(tag = tag_name, "Skipping non-version tag");
         return false;
     }
 
-    // Check if it's an annotated tag (not lightweight)
     match repo.find_reference(&format!("refs/tags/{}", tag_name)) {
-        Ok(reference) => {
+        Ok(mut reference) => {
             let is_annotated = reference.peel_to_tag().is_ok();
             if !is_annotated {
                 debug!(tag = tag_name, "Skipping lightweight tag");
@@ -83,9 +80,9 @@ pub fn should_notify_tag_creation(tag_name: &str, repo: &Repository) -> bool {
     }
 }
 
-/// Create a release event from a tag creation
-pub fn create_release_event(tag_name: &str, repo: &Repository) -> Result<GitEvent> {
-    let reference = repo.find_reference(&format!("refs/tags/{}", tag_name))?;
+/// Create a release event from a tag creation.
+pub fn create_release_event(tag_name: &str, repo: &gix::Repository) -> Result<GitEvent> {
+    let mut reference = repo.find_reference(&format!("refs/tags/{}", tag_name))?;
     let commit = reference.peel_to_commit()?;
     let commit_sha = commit.id().to_string();
 
@@ -142,12 +139,10 @@ mod tests {
 
     #[test]
     fn test_should_notify_non_version_tag() {
-        // Create a temporary repo for testing
         use tempfile::TempDir;
         let temp_dir = TempDir::new().unwrap();
-        let repo = Repository::init_bare(temp_dir.path()).unwrap();
+        let repo = gix::init_bare(temp_dir.path()).unwrap();
 
-        // Non-version tags should not trigger notifications
         assert!(!should_notify_tag_creation("latest", &repo));
         assert!(!should_notify_tag_creation("release-candidate", &repo));
     }

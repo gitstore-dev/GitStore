@@ -10,7 +10,7 @@ services:
       - "8080:8080"  # Websocket notifications
       - "50051:50051"  # gRPC
     volumes:
-      - ${GITSTORE_GIT__DATA_DIR:-git-data}:/data/repos
+      - git-repo-data-root:/data/repos
     environment:
       - GITSTORE_HTTP__PORT=9418
       - GITSTORE_WS__PORT=8080
@@ -56,7 +56,7 @@ services:
       retries: 5
 
 volumes:
-  git-data:
+  git-repo-data-root:
     driver: local
 
 networks:
