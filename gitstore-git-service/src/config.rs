@@ -23,6 +23,7 @@ pub struct PortConfig {
 pub struct GitConfig {
     pub data_dir: String,
     pub repo: RepoConfig,
+    pub max_pack_size_bytes: u64,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -165,6 +166,7 @@ pub fn load_config_from(config_file: Option<&str>) -> Result<AppConfig, config::
         data_dir = %cfg.git.data_dir,
         log_level = %cfg.log.level,
         max_file_size = cfg.git.repo.max_file_size,
+        max_pack_size_bytes = cfg.git.max_pack_size_bytes,
         "resolved configuration"
     );
     Ok(cfg)
@@ -183,6 +185,7 @@ port = 50051
 
 [git]
 data_dir = "/data/repos"
+max_pack_size_bytes = 52428800
 
 [git.repo]
 max_file_size = 52428800

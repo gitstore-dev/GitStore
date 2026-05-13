@@ -50,11 +50,6 @@ jobs:
     - name: Set up Docker Compose
       uses: docker/setup-compose-action@v2
 
-    - name: Initialise demo catalog
-      run: ./scripts/init-demo-catalog.sh --data-dir ./data/repos
-      env:
-        GITSTORE_GIT__DATA_DIR: ./data/repos
-
     - name: Build and start core stack
       run: docker compose up -d --build
       env:

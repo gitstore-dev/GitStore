@@ -65,29 +65,23 @@ RUN --mount=type=cache,id=cargo-registry-$TARGETARCH,target=/usr/local/cargo/reg
     strip /build/git-service
 
 # Runtime stage
-# Alpine git has no perl dependency (unlike Debian), saving ~50 MB.
 # The musl binary produced above is ABI-compatible with Alpine's musl libc.
 # busybox nc (already in Alpine) replaces netcat-openbsd for healthchecks.
 # openssl, zlib, and libssh2 are statically linked into the binary so only
-# libgcc (for Rust/GCC stack unwinding) is needed alongside git.
+# libgcc (for Rust/GCC stack unwinding) is needed at runtime.
+# The git binary is NOT required: all git protocol operations are handled
+# in-process via gix (gitoxide).
 FROM alpine:3
 
 RUN apk add --no-cache \
-    git \
     ca-certificates \
-    libgcc
+    libgcc && \
+    mkdir -p /data/repos
 
 WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /build/git-service /app/git-service
-
-# Allow libgit2 to open repositories in mounted volumes regardless of ownership.
-# libgit2 (used by the Rust git2 crate) enforces the same safe.directory check
-# as git >= 2.35.2; writing to /etc/gitconfig satisfies it without requiring
-# the git binary at runtime.
-RUN printf '[safe]\n\tdirectory = *\n' > /etc/gitconfig && \
-    mkdir -p /data/repos
 
 # Expose git protocol and websocket ports
 EXPOSE 9418 8080

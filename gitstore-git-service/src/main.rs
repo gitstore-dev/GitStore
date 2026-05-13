@@ -97,6 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         data_root: data_path.clone(),
         broadcaster: std::sync::Arc::new(tokio::sync::RwLock::new(broadcaster)),
         start_time,
+        max_pack_size: cfg.git.max_pack_size_bytes,
     };
 
     let app = create_git_routes(git_state);

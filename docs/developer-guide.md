@@ -38,20 +38,7 @@ gitstore-git-service running             0.0.0.0:9418->9418/tcp, 0.0.0.0:8080->8
 gitstore-api         running             0.0.0.0:4000->4000/tcp
 ```
 
-### 2. Initialise Demo Catalogue
-
-```bash
-# Initialize with sample products
-./scripts/init-demo-catalog.sh
-
-# Output:
-# ✓ Created 7 products in 4 categories
-# ✓ Created 2 collections
-# ✓ Created release tag v0.1.0
-# ✓ Catalog published to http://localhost:4000/graphql
-```
-
-### 3. Access Services
+### 2. Access Services
 
 - **GraphQL Playground**: http://localhost:4000/playground
 - **Git Repository (example)**: `http://localhost:9418/<repository_id>` — repositories are created on demand via the `CreateRepository` gRPC call; replace `<repository_id>` with the name provisioned for your catalogue.
@@ -91,7 +78,9 @@ First, provision a named repository via gRPC (e.g. using `grpcurl`):
 
 ```bash
 grpcurl -plaintext -d '{"repository_id":"catalog"}' \
-  localhost:50051 gitstore.git.v1.GitService/CreateRepository
+  -import-path shared/proto/gitstore/git/v1/ \
+  -proto git_service.proto localhost:50051 \
+  gitstore.git.v1.GitService.CreateRepository
 ```
 
 Then clone over Smart HTTP:
