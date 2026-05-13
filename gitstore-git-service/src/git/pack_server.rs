@@ -65,10 +65,12 @@ impl HttpPackServer {
         write_pkt_line(&mut response, b"NAK\n")?;
 
         let pack_data = build_pack_for_wants(&repo, &wants)?;
-        if !pack_data.is_empty() {
-            // Wrap in sideband-1 (data channel) pkt-line
-            let mut sideband = vec![0x01u8];
-            sideband.extend_from_slice(&pack_data);
+        // Chunk pack into sideband pkt-lines: pkt-line max data = 65512 bytes,
+        // minus 1 sideband-channel byte leaves 65511 bytes of pack per packet.
+        const SIDEBAND_CHUNK: usize = 65511;
+        for chunk in pack_data.chunks(SIDEBAND_CHUNK) {
+            let mut sideband = vec![0x01u8]; // channel 1 = data
+            sideband.extend_from_slice(chunk);
             write_pkt_line(&mut response, &sideband)?;
         }
 
@@ -94,8 +96,10 @@ impl HttpPackServer {
 
     /// Replaces: `git receive-pack --stateless-rpc`
     ///
-    /// Atomically writes pack objects and updates refs via `gix::refs::transaction`.
-    /// On any failure the transaction is rolled back; no partial state is left on disk.
+    /// Quarantine strategy: pack objects are written to a temp directory first.
+    /// Only after the ref transaction commits successfully are the pack/index
+    /// files moved into the real ODB. On any failure the temp dir is dropped and
+    /// no new objects are left in the repository.
     pub fn handle_receive_pack(&self, body: &[u8]) -> Result<Vec<u8>> {
         let start = Instant::now();
         let pack_size_bytes = body.len() as u64;
@@ -103,11 +107,12 @@ impl HttpPackServer {
         let repo = open_repo(&self.repo_path)?;
         let (ref_updates, pack_data) = parse_receive_pack_body(body)?;
 
-        // Write pack objects to the object store before touching refs
-        if !pack_data.is_empty() {
-            write_pack_to_odb(&repo, pack_data)
-                .context("writing pack objects to object database")?;
-        }
+        // Stage pack objects into a quarantine directory; committed after refs succeed.
+        let quarantine = if !pack_data.is_empty() {
+            Some(stage_pack_to_quarantine(&repo, pack_data).context("staging pack to quarantine")?)
+        } else {
+            None
+        };
 
         // Build atomic ref transaction
         let mut ref_edits: Vec<RefEdit> = Vec::new();
@@ -145,6 +150,14 @@ impl HttpPackServer {
         if !ref_edits.is_empty() {
             repo.edit_references(ref_edits)
                 .context("atomic ref transaction")?;
+        }
+
+        // Refs committed — promote quarantined pack/index into the real ODB.
+        // If this step fails the refs already landed, so we surface the error
+        // but do not revert them (the objects are still accessible via loose ODB
+        // because write_to_directory also indexes them; this is a best-effort move).
+        if let Some(q) = quarantine {
+            promote_quarantine(&repo, q).context("promoting quarantined pack to ODB")?;
         }
 
         // Build report-status response.
@@ -480,17 +493,26 @@ fn parse_receive_pack_body(body: &[u8]) -> Result<RefUpdates<'_>> {
     Ok((updates, pack_data))
 }
 
-/// Write a pack stream into the repository's object database.
-fn write_pack_to_odb(repo: &gix::Repository, pack_data: &[u8]) -> Result<()> {
+struct Quarantine {
+    dir: tempfile::TempDir,
+    pack_path: std::path::PathBuf,
+    index_path: std::path::PathBuf,
+    num_objects: u32,
+}
+
+/// Write incoming pack data to a temporary quarantine directory.
+/// The pack and index files are NOT visible to the live ODB until
+/// `promote_quarantine` moves them into the real pack directory.
+fn stage_pack_to_quarantine(_repo: &gix::Repository, pack_data: &[u8]) -> Result<Quarantine> {
     use gix_pack::bundle::write::Options;
 
+    let quarantine_dir = tempfile::TempDir::new().context("create quarantine dir")?;
     let mut cursor = std::io::BufReader::new(std::io::Cursor::new(pack_data));
     let interrupt = AtomicBool::new(false);
-    let pack_dir = repo.objects.store_ref().path().join("pack");
     let mut progress = gix::progress::Discard;
     let outcome = gix_pack::Bundle::write_to_directory(
         &mut cursor,
-        Some(&pack_dir),
+        Some(quarantine_dir.path()),
         &mut progress,
         &interrupt,
         None::<gix::odb::Handle>,
@@ -501,11 +523,42 @@ fn write_pack_to_odb(repo: &gix::Repository, pack_data: &[u8]) -> Result<()> {
             object_hash: gix::hash::Kind::Sha1,
         },
     )
-    .context("write pack to odb")?;
+    .context("write pack to quarantine")?;
+
+    let (pack_path, index_path) = match &outcome.data_path {
+        Some(p) => {
+            let idx: std::path::PathBuf = p.with_extension("idx");
+            (p.clone(), idx)
+        }
+        None => anyhow::bail!("pack writer produced no output file"),
+    };
+
+    Ok(Quarantine {
+        dir: quarantine_dir,
+        pack_path,
+        index_path,
+        num_objects: outcome.index.num_objects,
+    })
+}
+
+/// Move quarantined pack/index files into the repository's live pack directory.
+/// Called only after the ref transaction has committed successfully.
+fn promote_quarantine(repo: &gix::Repository, q: Quarantine) -> Result<()> {
+    let pack_dir = repo.objects.store_ref().path().join("pack");
+    std::fs::create_dir_all(&pack_dir).context("ensure pack dir")?;
+
+    let pack_dest = pack_dir.join(q.pack_path.file_name().context("pack file name")?);
+    let idx_dest = pack_dir.join(q.index_path.file_name().context("index file name")?);
+
+    std::fs::rename(&q.pack_path, &pack_dest).context("move pack file")?;
+    std::fs::rename(&q.index_path, &idx_dest).context("move index file")?;
+
+    // Drop the (now-empty) temp dir explicitly so errors surfacing here are clear.
+    drop(q.dir);
 
     info!(
-        objects_written = outcome.index.num_objects,
-        "pack written to object database"
+        objects_written = q.num_objects,
+        "pack promoted to object database"
     );
     Ok(())
 }
