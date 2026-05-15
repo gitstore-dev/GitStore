@@ -32,7 +32,9 @@ jobs:
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: 'lts/*'
+        # Astro 6.x requires Node >=22.12.0.
+        # Pin to Node 22 to avoid LTS rollover surprises breaking Admin CI.
+        node-version: '22.12.0'
         cache: 'npm'
         cache-dependency-path: gitstore-admin/package-lock.json
 
@@ -47,6 +49,9 @@ jobs:
       run: docker compose up -d --wait
       env:
         GITSTORE_GIT__DATA_DIR: ./data/repos
+        GITSTORE_AUTH__ADMIN__USERNAME: admin
+        GITSTORE_AUTH__ADMIN__PASSWORD_HASH: $2a$12$test.hash.for.ci.only.not.a.real.secret.AAAA
+        GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
 
     - name: Install Playwright browsers
       run: npx playwright install --with-deps
