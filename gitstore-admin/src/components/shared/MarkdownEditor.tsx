@@ -2,6 +2,7 @@
 // Copyright (c) 2026 GitStore contributors
 
 import React, { useState } from 'react';
+import DOMPurify from 'dompurify';
 
 interface MarkdownEditorProps {
   value: string;
@@ -94,6 +95,8 @@ export function MarkdownEditor({
 
     return html;
   };
+
+  const sanitizedPreviewHtml = DOMPurify.sanitize(renderMarkdown(value));
 
   return (
     <div style={styles.container}>
@@ -220,7 +223,7 @@ export function MarkdownEditor({
         ) : (
           <div
             style={styles.preview}
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(value) }}
+            dangerouslySetInnerHTML={{ __html: sanitizedPreviewHtml }}
           />
         )}
       </div>
