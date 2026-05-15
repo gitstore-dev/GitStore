@@ -1,5 +1,8 @@
 name: CD
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ main ]
@@ -201,6 +204,8 @@ jobs:
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     needs: [build-git-service-image, build-api-image, build-admin-image, deploy-staging]
     if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.environment == 'production'
     environment:
