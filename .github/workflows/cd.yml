@@ -178,6 +178,8 @@ jobs:
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [build-git-service-image, build-api-image, build-admin-image]
     if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'staging'
     environment:
