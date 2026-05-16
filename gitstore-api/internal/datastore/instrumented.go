@@ -181,6 +181,43 @@ func (d *InstrumentedDatastore) DeleteCollection(ctx context.Context, id string)
 	return err
 }
 
+// ── Namespace ─────────────────────────────────────────────────────────────
+
+func (d *InstrumentedDatastore) CreateNamespace(ctx context.Context, ns *Namespace) error {
+	start := time.Now()
+	err := d.next.CreateNamespace(ctx, ns)
+	d.observe("CreateNamespace", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) GetNamespace(ctx context.Context, id string) (*Namespace, error) {
+	start := time.Now()
+	v, err := d.next.GetNamespace(ctx, id)
+	d.observe("GetNamespace", start, err)
+	return v, err
+}
+
+func (d *InstrumentedDatastore) GetNamespaceByIdentifier(ctx context.Context, identifier string) (*Namespace, error) {
+	start := time.Now()
+	v, err := d.next.GetNamespaceByIdentifier(ctx, identifier)
+	d.observe("GetNamespaceByIdentifier", start, err)
+	return v, err
+}
+
+func (d *InstrumentedDatastore) ListNamespaces(ctx context.Context) ([]*Namespace, error) {
+	start := time.Now()
+	v, err := d.next.ListNamespaces(ctx)
+	d.observe("ListNamespaces", start, err)
+	return v, err
+}
+
+func (d *InstrumentedDatastore) DeleteNamespace(ctx context.Context, id string) error {
+	start := time.Now()
+	err := d.next.DeleteNamespace(ctx, id)
+	d.observe("DeleteNamespace", start, err)
+	return err
+}
+
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 
 func (d *InstrumentedDatastore) Close() error {

@@ -42,8 +42,8 @@ func TestMain(m *testing.M) {
 		Image:        "gitstore-git-service:latest",
 		ExposedPorts: []string{"9418/tcp", "50051/tcp"},
 		Env: map[string]string{
-			"GITSTORE_DATA_DIR":  "/data/repos",
-			"GITSTORE_GRPC_PORT": "50051",
+			"GITSTORE_GIT__DATA_DIR": "/data/repos",
+			"GITSTORE_GRPC__PORT":    "50051",
 		},
 		WaitingFor: wait.ForHTTP("/health").WithPort("9418/tcp").
 			WithStartupTimeout(60 * time.Second),

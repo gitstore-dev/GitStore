@@ -296,3 +296,78 @@ func (m *memdbDatastore) DeleteCollection(_ context.Context, id string) error {
 	txn.Commit()
 	return nil
 }
+
+// ── Namespace ─────────────────────────────────────────────────────────────────
+
+func (m *memdbDatastore) CreateNamespace(_ context.Context, ns *datastore.Namespace) error {
+	if ns == nil {
+		return fmt.Errorf("%w: namespace is nil", datastore.ErrInvalidArgument)
+	}
+	if ns.ID == "" {
+		return fmt.Errorf("%w: namespace id is empty", datastore.ErrInvalidArgument)
+	}
+	txn := m.db.Txn(true)
+	if raw, _ := txn.First("namespaces", "id", ns.ID); raw != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: namespace id %s", datastore.ErrAlreadyExists, ns.ID)
+	}
+	if raw, _ := txn.First("namespaces", "identifier", ns.Identifier); raw != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: namespace identifier %s", datastore.ErrAlreadyExists, ns.Identifier)
+	}
+	if err := txn.Insert("namespaces", ns); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: insert namespace: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) GetNamespace(_ context.Context, id string) (*datastore.Namespace, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("namespaces", "id", id)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return raw.(*datastore.Namespace), nil
+}
+
+func (m *memdbDatastore) GetNamespaceByIdentifier(_ context.Context, identifier string) (*datastore.Namespace, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("namespaces", "identifier", identifier)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return raw.(*datastore.Namespace), nil
+}
+
+func (m *memdbDatastore) ListNamespaces(_ context.Context) ([]*datastore.Namespace, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	it, err := txn.Get("namespaces", "id")
+	if err != nil {
+		return nil, fmt.Errorf("memdb: list namespaces: %w", err)
+	}
+	var results []*datastore.Namespace
+	for obj := it.Next(); obj != nil; obj = it.Next() {
+		results = append(results, obj.(*datastore.Namespace))
+	}
+	return results, nil
+}
+
+func (m *memdbDatastore) DeleteNamespace(_ context.Context, id string) error {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("namespaces", "id", id)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: namespace id %s", datastore.ErrNotFound, id)
+	}
+	if err := txn.Delete("namespaces", raw); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: delete namespace: %w", err)
+	}
+	txn.Commit()
+	return nil
+}

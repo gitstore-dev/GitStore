@@ -78,6 +78,7 @@ func main() {
 
 	// Create GraphQL resolver
 	resolver := graph.NewResolver(store, gitClient, logger.Log)
+	resolver.WithAuthMiddleware(authMiddleware)
 	schema := generated.NewExecutableSchema(generated.Config{Resolvers: resolver})
 	gqlServer := gqlhandler.NewDefaultServer(schema)
 

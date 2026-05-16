@@ -33,14 +33,41 @@ The API gateway (`gitstore-api`) and the Git server (`gitstore-git-service`) com
 
 Key environment variables:
 
-| Service                | Variable             | Purpose                                                |
-|------------------------|----------------------|--------------------------------------------------------|
-| `gitstore-api`         | `GITSTORE_GIT__GRPC__URI`  | gRPC address of git-service (e.g. `dns:///git-service:50051`) |
-| `gitstore-api`         | `GITSTORE_GIT__WS__URI`    | WebSocket URL for catalogue-reload notifications       |
-| `gitstore-git-service` | `GITSTORE_GRPC__PORT` | Port the gRPC server binds on (default `50051`)        |
-| `gitstore-git-service` | `GITSTORE_GIT__DATA_DIR`  | Path to the bare repository directory                  |
+| Service                | Variable                  | Purpose                                                       |
+|------------------------|---------------------------|---------------------------------------------------------------|
+| `gitstore-api`         | `GITSTORE_GIT__GRPC__URI` | gRPC address of git-service (e.g. `dns:///git-service:50051`) |
+| `gitstore-api`         | `GITSTORE_GIT__WS__URI`   | WebSocket URL for catalogue-reload notifications              |
+| `gitstore-git-service` | `GITSTORE_GRPC__PORT`     | Port the gRPC server binds on (default `50051`)               |
+| `gitstore-git-service` | `GITSTORE_GIT__DATA_DIR`  | Path to the bare repository directory                         |
 
 These folders map directly to the control, storage, and distribution planes described below.
+
+### Dynamic GraphQL Schema for CRD-Style Kinds
+
+The platform supports CRD-style kinds, so GraphQL schema shape cannot be treated as fully static.
+
+- `gitstore-api` should watch kind/definition registry updates from Git and trigger schema refresh.
+- Runtime synthesis should translate JSON Schema-backed kind definitions into GraphQL object types and fields.
+- Generated query roots should stay namespaced by domain (for example `query { catalog { product(id: "...") } }`).
+
+Schema lifecycle should follow a safe publish pattern:
+
+1. Build a candidate schema from current registry state.
+2. Validate and wire resolvers.
+3. Atomically publish if valid.
+4. Keep the last known-good schema active on failure.
+
+### Direct Synthesis vs Federation
+
+For core kinds, prefer direct synthesis inside `gitstore-api` to reduce network hops and keep resolver behaviour predictable.
+
+Federation is an optional path for externally owned integrations:
+
+- External apps can expose independent subgraphs and extend shared entities.
+- Composition uses federation ownership directives such as `@key`, `@extends`, and `@external`.
+- Composition may run through an edge router/gateway when extension boundaries justify service isolation.
+
+Use federation when an extension owns its own service boundary or datastore and must participate in cross-entity graph relationships. Keep core catalogue/resource kinds on direct synthesis by default.
 
 ### Git Engine — gitoxide (gix)
 
@@ -306,4 +333,66 @@ graph TD
 - Choose **Proposal 1** if mutation throughput and agent ergonomics at the API layer are the primary priority.
 - Choose **Proposal 2** if strict release control and Git-native operational workflows are the primary priority.
 - In both cases, Git remains authoritative and KV remains the read-optimised projection layer.
+
+---
+
+## Namespace Lifecycle Management (feature 009-api-namespaces)
+
+Namespaces are the primary isolation boundary for repositories in GitStore. They are managed exclusively through the GraphQL API in `gitstore-api`; `gitstore-git-service` is unchanged (FR-011).
+
+### Three Tiers
+
+| Tier           | Who can create              | Owns repositories | Can have parent enterprise |
+|----------------|-----------------------------|-------------------|----------------------------|
+| `USER`         | Any authenticated caller    | Yes               | No                         |
+| `ORGANISATION` | Any authenticated caller    | Yes               | Optional                   |
+| `ENTERPRISE`   | Callers with `isAdmin` only | No                | No                         |
+
+### Global Identifier Uniqueness
+
+Namespace identifiers are globally unique across all tiers. The same identifier cannot exist as both a user-space and an organisation namespace. Identifiers follow DNS label rules: lowercase alphanumeric + hyphens, 1–63 characters, no leading or trailing hyphen.
+
+### Authorization Model
+
+- **`isAdmin`** (JWT claim) is the elevated platform role. Callers with `isAdmin == true` may create enterprise namespaces and delete any namespace.
+- **Ownership** for deletion is checked at query time via `CreatedBy == callerUsername || isAdmin`. No mutable ownership state is embedded in the JWT.
+
+### API Surface
+
+All namespace operations are GraphQL, consistent with the rest of the domain API. See `shared/schemas/namespace.graphqls` for the full contract.
+
+```graphql
+# Create a user namespace
+mutation {
+  createNamespace(input: { identifier: "acme-corp", tier: USER }) {
+    namespace { id identifier tier createdAt createdBy }
+  }
+}
+
+# List all namespaces
+query {
+  namespaces { id identifier tier createdBy }
+}
+
+# Get namespace by identifier
+query {
+  namespace(identifier: "acme-corp") {
+    id identifier displayName tier parentEnterpriseId
+    createdAt createdBy updatedAt updatedBy
+  }
+}
+
+# Delete a namespace (owner or admin only)
+mutation {
+  deleteNamespace(input: { identifier: "acme-corp" }) {
+    deletedIdentifier
+  }
+}
+```
+
+### Deletion Guard
+
+Deletion is blocked when the namespace contains repositories (enforced in the service layer). The guard is a no-op stub in this release (repositories table is out of scope); it will be enforced when the repository spec lands.
+
+For quickstart examples and `curl`-based testing, see [`specs/009-api-namespaces/quickstart.md`](../specs/009-api-namespaces/quickstart.md).
 

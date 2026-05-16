@@ -10,14 +10,16 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/loader"
+	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	"go.uber.org/zap"
 )
 
 // Resolver is the root GraphQL resolver
 type Resolver struct {
-	logger  *zap.Logger
-	store   datastore.Datastore
-	service *Service
+	logger         *zap.Logger
+	store          datastore.Datastore
+	service        *Service
+	authMiddleware *middleware.AuthMiddleware
 }
 
 // NewResolver creates a new GraphQL resolver.
@@ -29,6 +31,11 @@ func NewResolver(store datastore.Datastore, writer GitWriter, logger *zap.Logger
 		store:   store,
 		service: svc,
 	}
+}
+
+// WithAuthMiddleware wires the auth middleware into the resolver (called from main.go).
+func (r *Resolver) WithAuthMiddleware(am *middleware.AuthMiddleware) {
+	r.authMiddleware = am
 }
 
 // getLoaders retrieves data loaders from context

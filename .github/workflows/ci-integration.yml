@@ -113,9 +113,23 @@ jobs:
         go-version: '1.25.x'
         cache-dependency-path: gitstore-api/go.sum
 
+    - name: Start ScyllaDB
+      run: |
+        docker run -d --name gitstore-scylla-test \
+          -p 9042:9042 \
+          scylladb/scylla:5.4 \
+          --developer-mode=1 --overprovisioned=1 --smp=1
+        timeout 120 sh -c 'until docker exec gitstore-scylla-test cqlsh -e "describe cluster"; do sleep 2; done'
+
     - name: Run ScyllaDB contract tests
       working-directory: ./gitstore-api
-      run: go test -tags scylla -v -timeout 10m ./tests/contract/datastore/... ./internal/datastore/scylla/...
+      env:
+        GITSTORE_TEST_SCYLLA_ADDR: 127.0.0.1:9042
+      run: go test -tags scylla -v -timeout 120s ./tests/contract/datastore/... ./internal/datastore/scylla/...
+
+    - name: Stop ScyllaDB
+      if: always()
+      run: docker rm -f gitstore-scylla-test || true
 
   grpc-contract-test:
     name: gRPC Contract Tests (testcontainers)

@@ -26,16 +26,16 @@ import (
 type scyllaDatastore struct {
 	session         gocqlx.Session
 	log             *zap.Logger
-	keyspace        string
 	productTable    *table.Table
 	categoryTable   *table.Table
 	collectionTable *table.Table
+	namespaceTable  *table.Table
 }
 
 // row structs mirror the CQL columns.
 
 type productRow struct {
-	ID                string            `db:"id"`
+	ID                gocql.UUID        `db:"id"`
 	SKU               string            `db:"sku"`
 	Title             string            `db:"title"`
 	Price             *inf.Dec          `db:"price"`
@@ -52,25 +52,37 @@ type productRow struct {
 }
 
 type categoryRow struct {
-	ID           string  `db:"id"`
-	Name         string  `db:"name"`
-	Slug         string  `db:"slug"`
-	ParentID     *string `db:"parent_id"`
-	DisplayOrder int     `db:"display_order"`
-	CreatedAt    int64   `db:"created_at"`
-	UpdatedAt    int64   `db:"updated_at"`
-	Body         string  `db:"body"`
+	ID           gocql.UUID `db:"id"`
+	Name         string     `db:"name"`
+	Slug         string     `db:"slug"`
+	ParentID     *string    `db:"parent_id"`
+	DisplayOrder int        `db:"display_order"`
+	CreatedAt    int64      `db:"created_at"`
+	UpdatedAt    int64      `db:"updated_at"`
+	Body         string     `db:"body"`
 }
 
 type collectionRow struct {
-	ID           string   `db:"id"`
-	Name         string   `db:"name"`
-	Slug         string   `db:"slug"`
-	DisplayOrder int      `db:"display_order"`
-	ProductIDs   []string `db:"product_ids"`
-	CreatedAt    int64    `db:"created_at"`
-	UpdatedAt    int64    `db:"updated_at"`
-	Body         string   `db:"body"`
+	ID           gocql.UUID `db:"id"`
+	Name         string     `db:"name"`
+	Slug         string     `db:"slug"`
+	DisplayOrder int        `db:"display_order"`
+	ProductIDs   []string   `db:"product_ids"`
+	CreatedAt    int64      `db:"created_at"`
+	UpdatedAt    int64      `db:"updated_at"`
+	Body         string     `db:"body"`
+}
+
+type namespaceRow struct {
+	ID                 gocql.UUID `db:"id"`
+	Identifier         string     `db:"identifier"`
+	DisplayName        string     `db:"display_name"`
+	Tier               string     `db:"tier"`
+	ParentEnterpriseID *string    `db:"parent_enterprise_id"`
+	CreatedAt          int64      `db:"created_at"`
+	CreatedBy          string     `db:"created_by"`
+	UpdatedAt          int64      `db:"updated_at"`
+	UpdatedBy          string     `db:"updated_by"`
 }
 
 // New opens a ScyllaDB connection, runs pending migrations, and returns a Datastore.
@@ -97,42 +109,18 @@ func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) 
 	}
 
 	instanceID := uuid.New().String()
-	if err := RunMigrations(context.Background(), rawSession, instanceID, cfg.Keyspace, log); err != nil {
+	if err := RunMigrations(context.Background(), rawSession, cfg.Keyspace, instanceID, log); err != nil {
 		rawSession.Close()
 		return nil, fmt.Errorf("scylla: migrations: %w", err)
 	}
 
-	ks := cfg.Keyspace
 	return &scyllaDatastore{
-		session:  gocqlx.NewSession(rawSession),
-		log:      log,
-		keyspace: ks,
-		productTable: table.New(table.Metadata{
-			Name: ks + ".products",
-			Columns: []string{
-				"id", "sku", "title", "price", "currency",
-				"inventory_status", "inventory_quantity",
-				"category_id", "collection_ids", "images",
-				"metadata", "created_at", "updated_at", "body",
-			},
-			PartKey: []string{"id"},
-		}),
-		categoryTable: table.New(table.Metadata{
-			Name: ks + ".categories",
-			Columns: []string{
-				"id", "name", "slug", "parent_id",
-				"display_order", "created_at", "updated_at", "body",
-			},
-			PartKey: []string{"id"},
-		}),
-		collectionTable: table.New(table.Metadata{
-			Name: ks + ".collections",
-			Columns: []string{
-				"id", "name", "slug", "display_order",
-				"product_ids", "created_at", "updated_at", "body",
-			},
-			PartKey: []string{"id"},
-		}),
+		session:         gocqlx.NewSession(rawSession),
+		log:             log,
+		productTable:    Product,
+		categoryTable:   Category,
+		collectionTable: Collection,
+		namespaceTable:  Namespace,
 	}, nil
 }
 
@@ -193,7 +181,7 @@ func (s *scyllaDatastore) GetProduct(_ context.Context, id string) (*datastore.P
 }
 
 func (s *scyllaDatastore) GetProductBySKU(_ context.Context, sku string) (*datastore.Product, error) {
-	stmt, names := qb.Select(s.keyspace + ".products").
+	stmt, names := qb.Select("products").
 		Columns(s.productTable.Metadata().Columns...).
 		Where(qb.Eq("sku")).
 		ToCql()
@@ -213,13 +201,13 @@ func (s *scyllaDatastore) ListProducts(_ context.Context, filter datastore.Produ
 	var bindMap qb.M
 
 	if filter.CategoryID != "" {
-		stmt, names = qb.Select(s.keyspace + ".products").
+		stmt, names = qb.Select("products").
 			Columns(s.productTable.Metadata().Columns...).
 			Where(qb.Eq("category_id")).
 			ToCql()
 		bindMap = qb.M{"category_id": filter.CategoryID}
 	} else {
-		stmt, names = qb.Select(s.keyspace + ".products").
+		stmt, names = qb.Select("products").
 			Columns(s.productTable.Metadata().Columns...).
 			ToCql()
 		bindMap = qb.M{}
@@ -294,7 +282,7 @@ func (s *scyllaDatastore) GetCategory(_ context.Context, id string) (*datastore.
 }
 
 func (s *scyllaDatastore) GetCategoryBySlug(_ context.Context, slug string) (*datastore.Category, error) {
-	stmt, names := qb.Select(s.keyspace + ".categories").
+	stmt, names := qb.Select("categories").
 		Columns(s.categoryTable.Metadata().Columns...).
 		Where(qb.Eq("slug")).
 		ToCql()
@@ -309,7 +297,7 @@ func (s *scyllaDatastore) GetCategoryBySlug(_ context.Context, slug string) (*da
 }
 
 func (s *scyllaDatastore) ListCategories(_ context.Context) ([]*datastore.Category, error) {
-	stmt, names := qb.Select(s.keyspace + ".categories").
+	stmt, names := qb.Select("categories").
 		Columns(s.categoryTable.Metadata().Columns...).
 		ToCql()
 	var rows []categoryRow
@@ -379,7 +367,7 @@ func (s *scyllaDatastore) GetCollection(_ context.Context, id string) (*datastor
 }
 
 func (s *scyllaDatastore) GetCollectionBySlug(_ context.Context, slug string) (*datastore.Collection, error) {
-	stmt, names := qb.Select(s.keyspace + ".collections").
+	stmt, names := qb.Select("collections").
 		Columns(s.collectionTable.Metadata().Columns...).
 		Where(qb.Eq("slug")).
 		ToCql()
@@ -394,7 +382,7 @@ func (s *scyllaDatastore) GetCollectionBySlug(_ context.Context, slug string) (*
 }
 
 func (s *scyllaDatastore) ListCollections(_ context.Context) ([]*datastore.Collection, error) {
-	stmt, names := qb.Select(s.keyspace + ".collections").
+	stmt, names := qb.Select("collections").
 		Columns(s.collectionTable.Metadata().Columns...).
 		ToCql()
 	var rows []collectionRow
@@ -434,6 +422,82 @@ func (s *scyllaDatastore) DeleteCollection(ctx context.Context, id string) error
 	return nil
 }
 
+// ── Namespace ─────────────────────────────────────────────────────────────────
+
+func (s *scyllaDatastore) CreateNamespace(ctx context.Context, ns *datastore.Namespace) error {
+	if ns == nil {
+		return fmt.Errorf("%w: namespace is nil", datastore.ErrInvalidArgument)
+	}
+	if ns.ID == "" {
+		return fmt.Errorf("%w: namespace id is empty", datastore.ErrInvalidArgument)
+	}
+	if _, err := s.GetNamespace(ctx, ns.ID); err == nil {
+		return fmt.Errorf("%w: namespace id %s", datastore.ErrAlreadyExists, ns.ID)
+	}
+	if existing, err := s.GetNamespaceByIdentifier(ctx, ns.Identifier); err == nil && existing.ID != ns.ID {
+		return fmt.Errorf("%w: namespace identifier %s", datastore.ErrAlreadyExists, ns.Identifier)
+	}
+	row := toNamespaceRow(ns)
+	stmt, names := s.namespaceTable.Insert()
+	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
+		return fmt.Errorf("scylla: create namespace: %w", err)
+	}
+	return nil
+}
+
+func (s *scyllaDatastore) GetNamespace(_ context.Context, id string) (*datastore.Namespace, error) {
+	var row namespaceRow
+	stmt, names := s.namespaceTable.Get()
+	if err := s.session.Query(stmt, names).BindMap(qb.M{"id": id}).GetRelease(&row); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, fmt.Errorf("%w: namespace id %s", datastore.ErrNotFound, id)
+		}
+		return nil, fmt.Errorf("scylla: get namespace: %w", err)
+	}
+	return fromNamespaceRow(&row), nil
+}
+
+func (s *scyllaDatastore) GetNamespaceByIdentifier(_ context.Context, identifier string) (*datastore.Namespace, error) {
+	stmt, names := qb.Select("namespaces").
+		Columns(s.namespaceTable.Metadata().Columns...).
+		Where(qb.Eq("identifier")).
+		ToCql()
+	var row namespaceRow
+	if err := s.session.Query(stmt, names).BindMap(qb.M{"identifier": identifier}).GetRelease(&row); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, fmt.Errorf("%w: namespace identifier %s", datastore.ErrNotFound, identifier)
+		}
+		return nil, fmt.Errorf("scylla: get namespace by identifier: %w", err)
+	}
+	return fromNamespaceRow(&row), nil
+}
+
+func (s *scyllaDatastore) ListNamespaces(_ context.Context) ([]*datastore.Namespace, error) {
+	stmt, names := qb.Select("namespaces").
+		Columns(s.namespaceTable.Metadata().Columns...).
+		ToCql()
+	var rows []namespaceRow
+	if err := s.session.Query(stmt, names).SelectRelease(&rows); err != nil {
+		return nil, fmt.Errorf("scylla: list namespaces: %w", err)
+	}
+	nss := make([]*datastore.Namespace, len(rows))
+	for i := range rows {
+		nss[i] = fromNamespaceRow(&rows[i])
+	}
+	return nss, nil
+}
+
+func (s *scyllaDatastore) DeleteNamespace(ctx context.Context, id string) error {
+	if _, err := s.GetNamespace(ctx, id); err != nil {
+		return err
+	}
+	stmt, names := s.namespaceTable.Delete()
+	if err := s.session.Query(stmt, names).BindMap(qb.M{"id": id}).ExecRelease(); err != nil {
+		return fmt.Errorf("scylla: delete namespace: %w", err)
+	}
+	return nil
+}
+
 // ── row conversion helpers ────────────────────────────────────────────────────
 
 func toProductRow(p *datastore.Product) *productRow {
@@ -442,7 +506,7 @@ func toProductRow(p *datastore.Product) *productRow {
 		meta[k] = fmt.Sprintf("%v", v)
 	}
 	return &productRow{
-		ID:                p.ID,
+		ID:                mustParseUUID(p.ID),
 		SKU:               p.SKU,
 		Title:             p.Title,
 		Price:             inf.NewDec(int64(p.Price*1e8), 8),
@@ -470,7 +534,7 @@ func fromProductRow(r *productRow) *datastore.Product {
 		price = f
 	}
 	return &datastore.Product{
-		ID:                r.ID,
+		ID:                r.ID.String(),
 		SKU:               r.SKU,
 		Title:             r.Title,
 		Price:             price,
@@ -489,7 +553,7 @@ func fromProductRow(r *productRow) *datastore.Product {
 
 func toCategoryRow(c *datastore.Category) *categoryRow {
 	return &categoryRow{
-		ID:           c.ID,
+		ID:           mustParseUUID(c.ID),
 		Name:         c.Name,
 		Slug:         c.Slug,
 		ParentID:     c.ParentID,
@@ -502,7 +566,7 @@ func toCategoryRow(c *datastore.Category) *categoryRow {
 
 func fromCategoryRow(r *categoryRow) *datastore.Category {
 	return &datastore.Category{
-		ID:           r.ID,
+		ID:           r.ID.String(),
 		Name:         r.Name,
 		Slug:         r.Slug,
 		ParentID:     r.ParentID,
@@ -515,7 +579,7 @@ func fromCategoryRow(r *categoryRow) *datastore.Category {
 
 func toCollectionRow(c *datastore.Collection) *collectionRow {
 	return &collectionRow{
-		ID:           c.ID,
+		ID:           mustParseUUID(c.ID),
 		Name:         c.Name,
 		Slug:         c.Slug,
 		DisplayOrder: c.DisplayOrder,
@@ -528,7 +592,7 @@ func toCollectionRow(c *datastore.Collection) *collectionRow {
 
 func fromCollectionRow(r *collectionRow) *datastore.Collection {
 	return &datastore.Collection{
-		ID:           r.ID,
+		ID:           r.ID.String(),
 		Name:         r.Name,
 		Slug:         r.Slug,
 		DisplayOrder: r.DisplayOrder,
@@ -536,5 +600,42 @@ func fromCollectionRow(r *collectionRow) *datastore.Collection {
 		CreatedAt:    millisToTime(r.CreatedAt),
 		UpdatedAt:    millisToTime(r.UpdatedAt),
 		Body:         r.Body,
+	}
+}
+
+func mustParseUUID(s string) gocql.UUID {
+	u, err := gocql.ParseUUID(s)
+	if err != nil {
+		panic(err)
+	}
+	return u
+}
+
+func toNamespaceRow(ns *datastore.Namespace) *namespaceRow {
+	displayName := ns.DisplayName
+	return &namespaceRow{
+		ID:                 mustParseUUID(ns.ID),
+		Identifier:         ns.Identifier,
+		DisplayName:        displayName,
+		Tier:               string(ns.Tier),
+		ParentEnterpriseID: ns.ParentEnterpriseID,
+		CreatedAt:          ns.CreatedAt.UnixMilli(),
+		CreatedBy:          ns.CreatedBy,
+		UpdatedAt:          ns.UpdatedAt.UnixMilli(),
+		UpdatedBy:          ns.UpdatedBy,
+	}
+}
+
+func fromNamespaceRow(r *namespaceRow) *datastore.Namespace {
+	return &datastore.Namespace{
+		ID:                 r.ID.String(),
+		Identifier:         r.Identifier,
+		DisplayName:        r.DisplayName,
+		Tier:               datastore.NamespaceTier(r.Tier),
+		ParentEnterpriseID: r.ParentEnterpriseID,
+		CreatedAt:          millisToTime(r.CreatedAt),
+		CreatedBy:          r.CreatedBy,
+		UpdatedAt:          millisToTime(r.UpdatedAt),
+		UpdatedBy:          r.UpdatedBy,
 	}
 }

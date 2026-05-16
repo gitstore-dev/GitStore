@@ -52,6 +52,13 @@ type Datastore interface {
 	UpdateCollection(ctx context.Context, c *Collection) error
 	DeleteCollection(ctx context.Context, id string) error
 
+	// Namespace operations
+	CreateNamespace(ctx context.Context, ns *Namespace) error
+	GetNamespace(ctx context.Context, id string) (*Namespace, error)
+	GetNamespaceByIdentifier(ctx context.Context, identifier string) (*Namespace, error)
+	ListNamespaces(ctx context.Context) ([]*Namespace, error)
+	DeleteNamespace(ctx context.Context, id string) error
+
 	// Lifecycle
 	Close() error
 }
