@@ -24,12 +24,12 @@ import (
 
 // scyllaDatastore implements datastore.Datastore backed by ScyllaDB.
 type scyllaDatastore struct {
-	session          gocqlx.Session
-	log              *zap.Logger
-	productTable     *table.Table
-	categoryTable    *table.Table
-	collectionTable  *table.Table
-	namespaceTable   *table.Table
+	session         gocqlx.Session
+	log             *zap.Logger
+	productTable    *table.Table
+	categoryTable   *table.Table
+	collectionTable *table.Table
+	namespaceTable  *table.Table
 }
 
 // row structs mirror the CQL columns.
