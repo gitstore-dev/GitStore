@@ -8,15 +8,34 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/google/uuid"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
+
+// identifierRegex matches valid namespace identifiers: DNS label, 1-63 chars.
+var identifierRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$|^[a-z0-9]$`)
+
+// reservedIdentifiers is the set of identifiers that cannot be used as namespace names.
+var reservedIdentifiers = map[string]struct{}{
+	"admin": {}, "root": {}, "system": {}, "default": {}, "api": {}, "git": {},
+	"www": {}, "mail": {}, "smtp": {}, "ftp": {}, "org": {}, "orgs": {},
+	"static": {}, "assets": {}, "cdn": {}, "docs": {}, "help": {}, "support": {},
+	"billing": {}, "status": {}, "health": {}, "internal": {}, "local": {},
+	"localhost": {}, "null": {}, "undefined": {}, "true": {}, "false": {},
+	"new": {}, "test": {}, "gitstore": {}, "enterprise": {}, "user": {},
+	"namespace": {}, "namespaces": {}, "repo": {}, "repos": {},
+}
 
 // Service provides business logic for GraphQL operations
 type Service struct {
@@ -366,6 +385,161 @@ func (s *Service) UpdateCollection(ctx context.Context, id string, input map[str
 // DeleteCollection deletes a collection from the datastore.
 func (s *Service) DeleteCollection(ctx context.Context, id string) error {
 	return s.store.DeleteCollection(ctx, id)
+}
+
+// ── Namespace ─────────────────────────────────────────────────────────────────
+
+// CreateNamespace validates and creates a new namespace.
+func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespaceInput, callerUsername string, isAdmin bool) (*datastore.Namespace, error) {
+	identifier := strings.ToLower(strings.TrimSpace(input.Identifier))
+
+	if !identifierRegex.MatchString(identifier) {
+		return nil, gqlerror.Errorf("invalid identifier: must match DNS label format (lowercase alphanumeric and hyphens, 1–63 chars, no leading/trailing hyphen)")
+	}
+	if _, reserved := reservedIdentifiers[identifier]; reserved {
+		return nil, gqlerror.Errorf("identifier %q is reserved", identifier)
+	}
+
+	tier := datastoreNamespaceTierFromModel(input.Tier)
+	if tier == datastore.NamespaceTierEnterprise && !isAdmin {
+		return nil, gqlerror.Errorf("creating enterprise namespaces requires elevated permissions")
+	}
+
+	var parentEnterpriseID *string
+	if input.ParentEnterpriseIdentifier != nil && *input.ParentEnterpriseIdentifier != "" {
+		if tier != datastore.NamespaceTierOrganisation {
+			return nil, gqlerror.Errorf("parentEnterpriseIdentifier may only be set for ORGANISATION tier namespaces")
+		}
+		parent, err := s.store.GetNamespaceByIdentifier(ctx, *input.ParentEnterpriseIdentifier)
+		if err != nil {
+			if errors.Is(err, datastore.ErrNotFound) {
+				return nil, gqlerror.Errorf("parent enterprise namespace %q not found", *input.ParentEnterpriseIdentifier)
+			}
+			return nil, gqlerror.Errorf("failed to resolve parent enterprise namespace")
+		}
+		if parent.Tier != datastore.NamespaceTierEnterprise {
+			return nil, gqlerror.Errorf("parent namespace %q is not an enterprise namespace", *input.ParentEnterpriseIdentifier)
+		}
+		parentEnterpriseID = &parent.ID
+	}
+
+	now := time.Now()
+	var displayName string
+	if input.DisplayName != nil {
+		displayName = *input.DisplayName
+	}
+	ns := &datastore.Namespace{
+		ID:                 uuid.New().String(),
+		Identifier:         identifier,
+		DisplayName:        displayName,
+		Tier:               tier,
+		ParentEnterpriseID: parentEnterpriseID,
+		CreatedAt:          now,
+		CreatedBy:          callerUsername,
+		UpdatedAt:          now,
+		UpdatedBy:          callerUsername,
+	}
+
+	if err := s.store.CreateNamespace(ctx, ns); err != nil {
+		if errors.Is(err, datastore.ErrAlreadyExists) {
+			return nil, gqlerror.Errorf("namespace with identifier %q already exists", identifier)
+		}
+		s.logger.Error("failed to create namespace",
+			zap.String("identifier", identifier),
+			zap.Error(err),
+		)
+		return nil, gqlerror.Errorf("failed to create namespace")
+	}
+
+	return ns, nil
+}
+
+// GetNamespaceByIdentifier retrieves a namespace by its identifier.
+func (s *Service) GetNamespaceByIdentifier(ctx context.Context, identifier string) (*datastore.Namespace, error) {
+	ns, err := s.store.GetNamespaceByIdentifier(ctx, identifier)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			s.logger.Debug("namespace not found", zap.String("identifier", identifier))
+			return nil, gqlerror.Errorf("namespace %q not found", identifier)
+		}
+		return nil, gqlerror.Errorf("failed to retrieve namespace")
+	}
+	return ns, nil
+}
+
+// GetNamespaceByID retrieves a namespace by its system ID.
+func (s *Service) GetNamespaceByID(ctx context.Context, id string) (*datastore.Namespace, error) {
+	ns, err := s.store.GetNamespace(ctx, id)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			s.logger.Debug("namespace not found", zap.String("id", id))
+			return nil, gqlerror.Errorf("namespace with id %q not found", id)
+		}
+		return nil, gqlerror.Errorf("failed to retrieve namespace")
+	}
+	return ns, nil
+}
+
+// ListNamespaces returns all namespaces.
+func (s *Service) ListNamespaces(ctx context.Context) ([]*datastore.Namespace, error) {
+	nss, err := s.store.ListNamespaces(ctx)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to list namespaces")
+	}
+	if nss == nil {
+		return []*datastore.Namespace{}, nil
+	}
+	return nss, nil
+}
+
+// DeleteNamespace deletes a namespace after authorisation and safety checks.
+func (s *Service) DeleteNamespace(ctx context.Context, identifier string, callerUsername string, isAdmin bool) error {
+	ns, err := s.store.GetNamespaceByIdentifier(ctx, identifier)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return gqlerror.Errorf("namespace %q not found", identifier)
+		}
+		return gqlerror.Errorf("failed to retrieve namespace")
+	}
+
+	if ns.CreatedBy != callerUsername && !isAdmin {
+		return gqlerror.Errorf("permission denied: only the namespace owner or an admin may delete this namespace")
+	}
+
+	// TODO: enforce when repositories table exists
+	if hasRepositories(ns.ID) {
+		return gqlerror.Errorf("namespace %q contains repositories and cannot be deleted", identifier)
+	}
+
+	if err := s.store.DeleteNamespace(ctx, ns.ID); err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return gqlerror.Errorf("namespace %q not found", identifier)
+		}
+		s.logger.Error("failed to delete namespace",
+			zap.String("identifier", identifier),
+			zap.Error(err),
+		)
+		return gqlerror.Errorf("failed to delete namespace")
+	}
+
+	return nil
+}
+
+// hasRepositories is a no-op stub; always returns false until the repository table exists.
+func hasRepositories(_ string) bool {
+	// TODO: enforce when repositories table exists
+	return false
+}
+
+func datastoreNamespaceTierFromModel(t model.NamespaceTier) datastore.NamespaceTier {
+	switch t {
+	case model.NamespaceTierOrganisation:
+		return datastore.NamespaceTierOrganisation
+	case model.NamespaceTierEnterprise:
+		return datastore.NamespaceTierEnterprise
+	default:
+		return datastore.NamespaceTierUser
+	}
 }
 
 // ── catalog ↔ datastore conversion helpers ────────────────────────────────────

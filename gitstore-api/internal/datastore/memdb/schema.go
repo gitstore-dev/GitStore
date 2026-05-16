@@ -61,5 +61,25 @@ var schema = &memdb.DBSchema{
 				},
 			},
 		},
+		"namespaces": {
+			Name: "namespaces",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {
+					Name:    "id",
+					Unique:  true,
+					Indexer: &memdb.StringFieldIndex{Field: "ID"},
+				},
+				"identifier": {
+					Name:    "identifier",
+					Unique:  true,
+					Indexer: &memdb.StringFieldIndex{Field: "Identifier"},
+				},
+				"tier": {
+					Name:    "tier",
+					Unique:  false,
+					Indexer: &memdb.StringFieldIndex{Field: "Tier"},
+				},
+			},
+		},
 	},
 }

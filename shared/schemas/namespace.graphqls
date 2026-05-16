@@ -1,0 +1,178 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 GitStore contributors
+
+"""
+The tier of a namespace, which determines ownership and repository capabilities.
+"""
+enum NamespaceTier {
+  """
+  User-space namespace: owned by an individual, directly owns repositories.
+  Any authenticated user may create one.
+  """
+  USER
+
+  """
+  Organisation namespace: owned by a team or company, directly owns repositories.
+  May declare a parent enterprise at creation time.
+  Any authenticated user may create one.
+  """
+  ORGANISATION
+
+  """
+  Enterprise namespace: organises organisations, does NOT own repositories directly.
+  Only callers with an elevated platform role (isAdmin) may create one.
+  """
+  ENTERPRISE
+}
+
+"""
+A namespace is the primary isolation boundary for repositories in GitStore.
+Namespaces are globally unique across all tiers — the same identifier cannot
+exist as both a user-space and an organisation namespace.
+"""
+type Namespace implements Node {
+  """
+  Globally unique system-generated ID (UUID).
+  """
+  id: ID!
+
+  """
+  Human-readable identifier, globally unique across all tiers.
+  DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
+  Cannot begin or end with a hyphen.
+  """
+  identifier: String!
+
+  """
+  Optional human-friendly display name.
+  """
+  displayName: String
+
+  """
+  The tier of this namespace.
+  """
+  tier: NamespaceTier!
+
+  """
+  For ORGANISATION tier namespaces: the ID of the parent enterprise namespace,
+  if one was declared at creation time.
+  Null for USER and ENTERPRISE tier namespaces.
+  """
+  parentEnterpriseId: ID
+
+  """
+  Timestamp when this namespace was created.
+  """
+  createdAt: DateTime!
+
+  """
+  Username of the caller who created this namespace.
+  """
+  createdBy: String!
+
+  """
+  Timestamp when this namespace was last modified.
+  """
+  updatedAt: DateTime!
+
+  """
+  Username of the caller who last modified this namespace.
+  """
+  updatedBy: String!
+}
+
+"""
+Input for creating a new namespace.
+"""
+input CreateNamespaceInput {
+  """
+  The human-readable identifier for the namespace.
+  Must be globally unique across all tiers.
+  DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
+  Cannot begin or end with a hyphen. Cannot be a reserved name.
+  """
+  identifier: String!
+
+  """
+  Optional human-friendly display name.
+  """
+  displayName: String
+
+  """
+  The tier of the namespace being created.
+  USER and ORGANISATION tiers may be created by any authenticated user.
+  ENTERPRISE tier requires isAdmin == true in the caller's JWT.
+  """
+  tier: NamespaceTier!
+
+  """
+  For ORGANISATION tier only: the identifier of the parent enterprise namespace.
+  The referenced namespace must exist and have tier ENTERPRISE.
+  Omit for USER and ENTERPRISE tier namespaces.
+  """
+  parentEnterpriseIdentifier: String
+}
+
+"""
+Input for deleting a namespace.
+"""
+input DeleteNamespaceInput {
+  """
+  The identifier of the namespace to delete.
+  Deletion is blocked if any repositories exist within the namespace.
+  Requires the caller to be the namespace owner (createdBy) or isAdmin.
+  """
+  identifier: String!
+}
+
+"""
+Payload returned after successfully creating a namespace.
+"""
+type CreateNamespacePayload {
+  """
+  The newly created namespace.
+  """
+  namespace: Namespace!
+}
+
+"""
+Payload returned after successfully deleting a namespace.
+"""
+type DeleteNamespacePayload {
+  """
+  The identifier of the deleted namespace.
+  """
+  deletedIdentifier: String!
+}
+
+extend type Query {
+  """
+  Get a namespace by its human-readable identifier.
+  """
+  namespace(identifier: String!): Namespace
+
+  """
+  Get a namespace by its system-generated ID.
+  """
+  namespaceById(id: ID!): Namespace
+
+  """
+  List all namespaces.
+  """
+  namespaces: [Namespace!]!
+}
+
+extend type Mutation {
+  """
+  Create a new namespace.
+  Requires authentication. ENTERPRISE tier requires isAdmin.
+  """
+  createNamespace(input: CreateNamespaceInput!): CreateNamespacePayload!
+
+  """
+  Delete a namespace.
+  Requires authentication. Caller must be the namespace owner or isAdmin.
+  Deletion is blocked when the namespace contains repositories.
+  """
+  deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
+}

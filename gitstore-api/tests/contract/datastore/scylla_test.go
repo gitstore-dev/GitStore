@@ -3,13 +3,11 @@
 
 //go:build scylla
 
-// Wires the contract suite against the ScyllaDB backend using testcontainers.
-// A single container is started in TestMain and shared across all tests.
+// Wires the contract suite against an externally managed ScyllaDB instance.
 
 package datastore_contract_test
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"os"
@@ -22,41 +20,25 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
 	"github.com/gocql/gocql"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 	"go.uber.org/zap"
 )
 
-// scyllaContainerAddr is set by TestMain before any test runs.
-var scyllaContainerAddr string
+var (
+	scyllaAddr     string
+	scyllaKeyspace string
+)
 
 func TestMain(m *testing.M) {
-	ctx := context.Background()
-	req := testcontainers.ContainerRequest{
-		Image:        "scylladb/scylla:5.4",
-		ExposedPorts: []string{"9042/tcp"},
-		Cmd:          []string{"--developer-mode=1", "--overprovisioned=1", "--smp=1"},
-		// ForExec verifies cqlsh can actually connect, not just that the log appeared.
-		WaitingFor: wait.ForExec([]string{"cqlsh", "-e", "describe cluster"}).
-			WithStartupTimeout(120 * time.Second),
+	scyllaAddr = os.Getenv("GITSTORE_TEST_SCYLLA_ADDR")
+	if scyllaAddr == "" {
+		scyllaAddr = "127.0.0.1:9042"
 	}
-	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		panic("failed to start ScyllaDB container: " + err.Error())
-	}
+	scyllaKeyspace = fmt.Sprintf("gitstore_contract_test_%d", os.Getpid())
 
-	host, _ := c.Host(ctx)
-	port, _ := c.MappedPort(ctx, "9042")
-	scyllaContainerAddr = host + ":" + port.Port()
-
-	// Provision keyspace — mirrors the compose scylla-init service.
-	provisionKeyspace(scyllaContainerAddr, "gitstore")
-
+	provisionKeyspace(scyllaAddr, scyllaKeyspace)
 	code := m.Run()
-	_ = c.Terminate(ctx)
+	dropKeyspace(scyllaAddr, scyllaKeyspace)
+
 	os.Exit(code)
 }
 
@@ -102,11 +84,38 @@ func provisionKeyspace(addr, keyspace string) {
 	}
 }
 
+func dropKeyspace(addr, keyspace string) {
+	session, err := openRootSession(addr)
+	if err != nil {
+		return
+	}
+	defer session.Close()
+	_ = session.Query(fmt.Sprintf(`DROP KEYSPACE IF EXISTS %s`, keyspace)).Exec()
+}
+
+func openRootSession(addr string) (*gocql.Session, error) {
+	host, portStr, splitErr := net.SplitHostPort(addr)
+	if splitErr != nil {
+		host = addr
+		portStr = "9042"
+	}
+	port, _ := strconv.Atoi(portStr)
+	cluster := gocql.NewCluster(host)
+	if port > 0 {
+		cluster.Port = port
+	}
+	cluster.Consistency = gocql.Quorum
+	cluster.ConnectTimeout = 5 * time.Second
+	cluster.Timeout = 5 * time.Second
+	cluster.DisableShardAwarePort = true
+	return cluster.CreateSession()
+}
+
 func newScyllaDatastore(t *testing.T) datastore.Datastore {
 	t.Helper()
 	cfg := config.ScyllaConfig{
-		Hosts:                 []string{scyllaContainerAddr},
-		Keyspace:              "gitstore",
+		Hosts:                 []string{scyllaAddr},
+		Keyspace:              scyllaKeyspace,
 		DisableShardAwarePort: true,
 	}
 	store, err := scylla.New(cfg, zap.NewNop())

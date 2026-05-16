@@ -187,6 +187,31 @@ type CreateCollectionPayload struct {
 	Collection *Collection `json:"collection,omitempty"`
 }
 
+// Input for creating a new namespace.
+type CreateNamespaceInput struct {
+	// The human-readable identifier for the namespace.
+	// Must be globally unique across all tiers.
+	// DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
+	// Cannot begin or end with a hyphen. Cannot be a reserved name.
+	Identifier string `json:"identifier"`
+	// Optional human-friendly display name.
+	DisplayName *string `json:"displayName,omitempty"`
+	// The tier of the namespace being created.
+	// USER and ORGANISATION tiers may be created by any authenticated user.
+	// ENTERPRISE tier requires isAdmin == true in the caller's JWT.
+	Tier NamespaceTier `json:"tier"`
+	// For ORGANISATION tier only: the identifier of the parent enterprise namespace.
+	// The referenced namespace must exist and have tier ENTERPRISE.
+	// Omit for USER and ENTERPRISE tier namespaces.
+	ParentEnterpriseIdentifier *string `json:"parentEnterpriseIdentifier,omitempty"`
+}
+
+// Payload returned after successfully creating a namespace.
+type CreateNamespacePayload struct {
+	// The newly created namespace.
+	Namespace *Namespace `json:"namespace"`
+}
+
 // Input for creating a product
 type CreateProductInput struct {
 	// Client mutation ID (Relay pattern)
@@ -257,6 +282,20 @@ type DeleteCollectionPayload struct {
 	DeletedCollectionID *string `json:"deletedCollectionId,omitempty"`
 }
 
+// Input for deleting a namespace.
+type DeleteNamespaceInput struct {
+	// The identifier of the namespace to delete.
+	// Deletion is blocked if any repositories exist within the namespace.
+	// Requires the caller to be the namespace owner (createdBy) or isAdmin.
+	Identifier string `json:"identifier"`
+}
+
+// Payload returned after successfully deleting a namespace.
+type DeleteNamespacePayload struct {
+	// The identifier of the deleted namespace.
+	DeletedIdentifier string `json:"deletedIdentifier"`
+}
+
 // Input for deleting a product
 type DeleteProductInput struct {
 	// Client mutation ID (Relay pattern)
@@ -307,6 +346,39 @@ type LogoutPayload struct {
 
 type Mutation struct {
 }
+
+// A namespace is the primary isolation boundary for repositories in GitStore.
+// Namespaces are globally unique across all tiers — the same identifier cannot
+// exist as both a user-space and an organisation namespace.
+type Namespace struct {
+	// Globally unique system-generated ID (UUID).
+	ID string `json:"id"`
+	// Human-readable identifier, globally unique across all tiers.
+	// DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
+	// Cannot begin or end with a hyphen.
+	Identifier string `json:"identifier"`
+	// Optional human-friendly display name.
+	DisplayName *string `json:"displayName,omitempty"`
+	// The tier of this namespace.
+	Tier NamespaceTier `json:"tier"`
+	// For ORGANISATION tier namespaces: the ID of the parent enterprise namespace,
+	// if one was declared at creation time.
+	// Null for USER and ENTERPRISE tier namespaces.
+	ParentEnterpriseID *string `json:"parentEnterpriseId,omitempty"`
+	// Timestamp when this namespace was created.
+	CreatedAt time.Time `json:"createdAt"`
+	// Username of the caller who created this namespace.
+	CreatedBy string `json:"createdBy"`
+	// Timestamp when this namespace was last modified.
+	UpdatedAt time.Time `json:"updatedAt"`
+	// Username of the caller who last modified this namespace.
+	UpdatedBy string `json:"updatedBy"`
+}
+
+func (Namespace) IsNode() {}
+
+// Globally unique identifier (format: [type]_[base62])
+func (this Namespace) GetID() string { return this.ID }
 
 // Optimistic lock conflict information
 type OptimisticLockConflict struct {
@@ -643,6 +715,71 @@ func (e *InventoryStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e InventoryStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// The tier of a namespace, which determines ownership and repository capabilities.
+type NamespaceTier string
+
+const (
+	// User-space namespace: owned by an individual, directly owns repositories.
+	// Any authenticated user may create one.
+	NamespaceTierUser NamespaceTier = "USER"
+	// Organisation namespace: owned by a team or company, directly owns repositories.
+	// May declare a parent enterprise at creation time.
+	// Any authenticated user may create one.
+	NamespaceTierOrganisation NamespaceTier = "ORGANISATION"
+	// Enterprise namespace: organises organisations, does NOT own repositories directly.
+	// Only callers with an elevated platform role (isAdmin) may create one.
+	NamespaceTierEnterprise NamespaceTier = "ENTERPRISE"
+)
+
+var AllNamespaceTier = []NamespaceTier{
+	NamespaceTierUser,
+	NamespaceTierOrganisation,
+	NamespaceTierEnterprise,
+}
+
+func (e NamespaceTier) IsValid() bool {
+	switch e {
+	case NamespaceTierUser, NamespaceTierOrganisation, NamespaceTierEnterprise:
+		return true
+	}
+	return false
+}
+
+func (e NamespaceTier) String() string {
+	return string(e)
+}
+
+func (e *NamespaceTier) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = NamespaceTier(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid NamespaceTier", str)
+	}
+	return nil
+}
+
+func (e NamespaceTier) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *NamespaceTier) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e NamespaceTier) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

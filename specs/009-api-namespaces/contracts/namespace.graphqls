@@ -1,0 +1,262 @@
+# GraphQL Contract: Namespace Lifecycle Management
+# Feature: 009-api-namespaces
+# Status: Design artifact — not deployed; add to shared/schemas/ during implementation.
+#
+# Add the following to shared/schemas/schema.graphql (Query and Mutation roots):
+#
+# In Query:
+#   namespace(identifier: String!): Namespace
+#   namespaceById(id: ID!): Namespace
+#   namespaces: [Namespace!]!
+#
+# In Mutation:
+#   createNamespace(input: CreateNamespaceInput!): CreateNamespacePayload!
+#   deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
+
+# ============================================================================
+# Enums
+# ============================================================================
+
+"""
+The tier of a namespace, which determines ownership and repository capabilities.
+"""
+enum NamespaceTier {
+  """
+  User-space namespace: owned by an individual, directly owns repositories.
+  Any authenticated user may create one.
+  """
+  USER
+
+  """
+  Organisation namespace: owned by a team or company, directly owns repositories.
+  May declare a parent enterprise at creation time.
+  Any authenticated user may create one.
+  """
+  ORGANISATION
+
+  """
+  Enterprise namespace: organises organisations, does NOT own repositories directly.
+  Only callers with an elevated platform role (isAdmin) may create one.
+  """
+  ENTERPRISE
+}
+
+# ============================================================================
+# Types
+# ============================================================================
+
+"""
+A namespace is the primary isolation boundary for repositories in GitStore.
+Namespaces are globally unique across all tiers — the same identifier cannot
+exist as both a user-space and an organisation namespace.
+"""
+type Namespace implements Node {
+  """
+  Globally unique system-generated ID (UUID).
+  """
+  id: ID!
+
+  """
+  Human-readable identifier, globally unique across all tiers.
+  DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
+  Cannot begin or end with a hyphen.
+  """
+  identifier: String!
+
+  """
+  Optional human-friendly display name.
+  """
+  displayName: String
+
+  """
+  The tier of this namespace.
+  """
+  tier: NamespaceTier!
+
+  """
+  For ORGANISATION tier namespaces: the ID of the parent enterprise namespace,
+  if one was declared at creation time.
+  Null for USER and ENTERPRISE tier namespaces.
+  """
+  parentEnterpriseId: ID
+
+  """
+  Timestamp when this namespace was created.
+  """
+  createdAt: DateTime!
+
+  """
+  Username of the caller who created this namespace.
+  """
+  createdBy: String!
+
+  """
+  Timestamp when this namespace was last modified.
+  """
+  updatedAt: DateTime!
+
+  """
+  Username of the caller who last modified this namespace.
+  """
+  updatedBy: String!
+}
+
+# ============================================================================
+# Inputs
+# ============================================================================
+
+"""
+Input for creating a new namespace.
+"""
+input CreateNamespaceInput {
+  """
+  The human-readable identifier for the namespace.
+  Must be globally unique across all tiers.
+  DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
+  Cannot begin or end with a hyphen. Cannot be a reserved name.
+  """
+  identifier: String!
+
+  """
+  Optional human-friendly display name.
+  """
+  displayName: String
+
+  """
+  The tier of the namespace being created.
+  USER and ORGANISATION tiers may be created by any authenticated user.
+  ENTERPRISE tier requires isAdmin == true in the caller's JWT.
+  """
+  tier: NamespaceTier!
+
+  """
+  For ORGANISATION tier only: the identifier of the parent enterprise namespace.
+  The referenced namespace must exist and have tier ENTERPRISE.
+  Omit for USER and ENTERPRISE tier namespaces.
+  """
+  parentEnterpriseIdentifier: String
+}
+
+"""
+Input for deleting a namespace.
+"""
+input DeleteNamespaceInput {
+  """
+  The identifier of the namespace to delete.
+  Deletion is blocked if any repositories exist within the namespace.
+  Requires the caller to be the namespace owner (createdBy) or isAdmin.
+  """
+  identifier: String!
+}
+
+# ============================================================================
+# Payloads
+# ============================================================================
+
+"""
+Payload returned after successfully creating a namespace.
+"""
+type CreateNamespacePayload {
+  """
+  The newly created namespace.
+  """
+  namespace: Namespace!
+}
+
+"""
+Payload returned after successfully deleting a namespace.
+"""
+type DeleteNamespacePayload {
+  """
+  The identifier of the deleted namespace.
+  """
+  deletedIdentifier: String!
+}
+
+# ============================================================================
+# Example Operations (for documentation)
+# ============================================================================
+
+# --- Create a user namespace ---
+# mutation CreateUserNamespace {
+#   createNamespace(input: {
+#     identifier: "acme-corp"
+#     displayName: "Acme Corporation"
+#     tier: USER
+#   }) {
+#     namespace {
+#       id
+#       identifier
+#       tier
+#       createdAt
+#       createdBy
+#     }
+#   }
+# }
+
+# --- Create an enterprise namespace (requires isAdmin) ---
+# mutation CreateEnterpriseNamespace {
+#   createNamespace(input: {
+#     identifier: "acme-enterprise"
+#     displayName: "Acme Enterprise"
+#     tier: ENTERPRISE
+#   }) {
+#     namespace {
+#       id
+#       identifier
+#       tier
+#       createdAt
+#       createdBy
+#     }
+#   }
+# }
+
+# --- Create an org namespace with parent enterprise ---
+# mutation CreateOrgWithEnterprise {
+#   createNamespace(input: {
+#     identifier: "acme-engineering"
+#     tier: ORGANISATION
+#     parentEnterpriseIdentifier: "acme-enterprise"
+#   }) {
+#     namespace {
+#       id
+#       identifier
+#       tier
+#       parentEnterpriseId
+#     }
+#   }
+# }
+
+# --- List all namespaces ---
+# query ListNamespaces {
+#   namespaces {
+#     id
+#     identifier
+#     displayName
+#     tier
+#     createdAt
+#     createdBy
+#   }
+# }
+
+# --- Get namespace by identifier ---
+# query GetNamespace {
+#   namespace(identifier: "acme-corp") {
+#     id
+#     identifier
+#     displayName
+#     tier
+#     parentEnterpriseId
+#     createdAt
+#     createdBy
+#     updatedAt
+#     updatedBy
+#   }
+# }
+
+# --- Delete a namespace ---
+# mutation DeleteNamespace {
+#   deleteNamespace(input: { identifier: "acme-corp" }) {
+#     deletedIdentifier
+#   }
+# }

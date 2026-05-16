@@ -60,6 +60,21 @@ func newCollection() *datastore.Collection {
 	}
 }
 
+func newNamespace(tier datastore.NamespaceTier) *datastore.Namespace {
+	now := time.Now()
+	id := newID()
+	identifier := "ns-" + newID()[:8]
+	return &datastore.Namespace{
+		ID:         id,
+		Identifier: identifier,
+		Tier:       tier,
+		CreatedAt:  now,
+		CreatedBy:  "test-user",
+		UpdatedAt:  now,
+		UpdatedBy:  "test-user",
+	}
+}
+
 // RunContractSuite runs the full contract suite against any Datastore implementation.
 // Callers should pass a freshly initialised, empty store.
 func RunContractSuite(t *testing.T, ds datastore.Datastore) {
@@ -333,5 +348,111 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	t.Run("Collection/DeleteNotFound", func(t *testing.T) {
 		err := ds.DeleteCollection(ctx, newID())
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	// ── Namespace ─────────────────────────────────────────────────────────────
+
+	t.Run("Namespace/TestCreateNamespace_success", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+
+		got, err := ds.GetNamespace(ctx, ns.ID)
+		require.NoError(t, err)
+		assert.Equal(t, ns.ID, got.ID)
+		assert.Equal(t, ns.Identifier, got.Identifier)
+		assert.Equal(t, ns.Tier, got.Tier)
+		assert.Equal(t, ns.CreatedBy, got.CreatedBy)
+	})
+
+	t.Run("Namespace/TestCreateNamespace_duplicateIdentifier", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierOrganisation)
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+
+		ns2 := newNamespace(datastore.NamespaceTierUser)
+		ns2.Identifier = ns.Identifier // same identifier
+		err := ds.CreateNamespace(ctx, ns2)
+		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
+	})
+
+	t.Run("Namespace/TestCreateNamespace_acrossAllTiers", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierEnterprise)
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+
+		// same identifier, different tier — must still conflict
+		nsOrg := newNamespace(datastore.NamespaceTierOrganisation)
+		nsOrg.Identifier = ns.Identifier
+		err := ds.CreateNamespace(ctx, nsOrg)
+		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
+	})
+
+	t.Run("Namespace/TestGetNamespaceByIdentifier_notFound", func(t *testing.T) {
+		_, err := ds.GetNamespaceByIdentifier(ctx, "does-not-exist-"+newID()[:8])
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	t.Run("Namespace/TestListNamespaces_empty", func(t *testing.T) {
+		// fresh store or just verify list succeeds
+		nss, err := ds.ListNamespaces(ctx)
+		require.NoError(t, err)
+		assert.NotNil(t, nss)
+	})
+
+	t.Run("Namespace/TestListNamespaces_multiple", func(t *testing.T) {
+		before, err := ds.ListNamespaces(ctx)
+		require.NoError(t, err)
+
+		ns1 := newNamespace(datastore.NamespaceTierUser)
+		ns2 := newNamespace(datastore.NamespaceTierOrganisation)
+		require.NoError(t, ds.CreateNamespace(ctx, ns1))
+		require.NoError(t, ds.CreateNamespace(ctx, ns2))
+
+		after, err := ds.ListNamespaces(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, len(before)+2, len(after))
+	})
+
+	t.Run("Namespace/TestGetNamespace_byID_success", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+
+		got, err := ds.GetNamespace(ctx, ns.ID)
+		require.NoError(t, err)
+		assert.Equal(t, ns.ID, got.ID)
+	})
+
+	t.Run("Namespace/TestGetNamespaceByIdentifier_success", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+
+		got, err := ds.GetNamespaceByIdentifier(ctx, ns.Identifier)
+		require.NoError(t, err)
+		assert.Equal(t, ns.ID, got.ID)
+		assert.Equal(t, ns.Identifier, got.Identifier)
+	})
+
+	t.Run("Namespace/TestDeleteNamespace_success", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+		require.NoError(t, ds.DeleteNamespace(ctx, ns.ID))
+
+		_, err := ds.GetNamespace(ctx, ns.ID)
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	t.Run("Namespace/TestDeleteNamespace_notFound", func(t *testing.T) {
+		err := ds.DeleteNamespace(ctx, newID())
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	t.Run("Namespace/TestDeleteNamespace_thenGetReturnsNotFound", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierOrganisation)
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+		require.NoError(t, ds.DeleteNamespace(ctx, ns.ID))
+
+		_, errID := ds.GetNamespace(ctx, ns.ID)
+		assert.ErrorIs(t, errID, datastore.ErrNotFound)
+
+		_, errIdent := ds.GetNamespaceByIdentifier(ctx, ns.Identifier)
+		assert.ErrorIs(t, errIdent, datastore.ErrNotFound)
 	})
 }

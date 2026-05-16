@@ -7,6 +7,7 @@ package graph
 
 import (
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/scalar"
 	"github.com/shopspring/decimal"
@@ -75,5 +76,39 @@ func CatalogCollectionToGraphQL(c *catalog.Collection) *model.Collection {
 		Products:  nil, // TODO: Will be resolved by GraphQL field resolver
 		CreatedAt: c.CreatedAt,
 		UpdatedAt: c.UpdatedAt,
+	}
+}
+
+// datastoreNamespaceToModel converts a datastore Namespace to a GraphQL model Namespace.
+func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
+	if ns == nil {
+		return nil
+	}
+	var displayName *string
+	if ns.DisplayName != "" {
+		dn := ns.DisplayName
+		displayName = &dn
+	}
+	return &model.Namespace{
+		ID:                 ns.ID,
+		Identifier:         ns.Identifier,
+		DisplayName:        displayName,
+		Tier:               datastoreNamespaceTierToModel(ns.Tier),
+		ParentEnterpriseID: ns.ParentEnterpriseID,
+		CreatedAt:          ns.CreatedAt,
+		CreatedBy:          ns.CreatedBy,
+		UpdatedAt:          ns.UpdatedAt,
+		UpdatedBy:          ns.UpdatedBy,
+	}
+}
+
+func datastoreNamespaceTierToModel(t datastore.NamespaceTier) model.NamespaceTier {
+	switch t {
+	case datastore.NamespaceTierOrganisation:
+		return model.NamespaceTierOrganisation
+	case datastore.NamespaceTierEnterprise:
+		return model.NamespaceTierEnterprise
+	default:
+		return model.NamespaceTierUser
 	}
 }

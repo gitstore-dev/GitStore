@@ -76,6 +76,21 @@ func (s *stubDatastore) UpdateCollection(_ context.Context, _ *datastore.Collect
 func (s *stubDatastore) DeleteCollection(_ context.Context, _ string) error {
 	return s.getProductErr
 }
+func (s *stubDatastore) CreateNamespace(_ context.Context, _ *datastore.Namespace) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) GetNamespace(_ context.Context, _ string) (*datastore.Namespace, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) GetNamespaceByIdentifier(_ context.Context, _ string) (*datastore.Namespace, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) ListNamespaces(_ context.Context) ([]*datastore.Namespace, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) DeleteNamespace(_ context.Context, _ string) error {
+	return s.getProductErr
+}
 func (s *stubDatastore) Close() error { return nil }
 
 // newTestInstrumented creates an InstrumentedDatastore with an observer logger

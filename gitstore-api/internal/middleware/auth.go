@@ -7,6 +7,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"golang.org/x/crypto/bcrypt"
@@ -136,6 +137,11 @@ func (am *AuthMiddleware) GenerateSessionToken(username string, isAdmin bool) (s
 // RefreshSessionToken refreshes an existing token
 func (am *AuthMiddleware) RefreshSessionToken(token string) (string, error) {
 	return am.sessionManager.RefreshToken(token)
+}
+
+// GetTokenDuration returns the configured token lifetime.
+func (am *AuthMiddleware) GetTokenDuration() time.Duration {
+	return am.sessionManager.GetTokenDuration()
 }
 
 // HashPassword generates a bcrypt hash from a plain text password

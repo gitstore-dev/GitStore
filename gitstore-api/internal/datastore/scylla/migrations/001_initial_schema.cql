@@ -3,7 +3,7 @@
 -- UUID fields use text for Go string compatibility. Price uses decimal;
 
 CREATE TABLE IF NOT EXISTS products (
-    id                 text       PRIMARY KEY,
+    id                 uuid       PRIMARY KEY,
     sku                text,
     title              text,
     price              decimal,
@@ -20,30 +20,35 @@ CREATE TABLE IF NOT EXISTS products (
 );
 
 CREATE TABLE IF NOT EXISTS categories (
-    id            text  PRIMARY KEY,
-    name          text,
-    slug          text,
-    parent_id     text,
-    display_order int,
-    created_at    timestamp,
-    updated_at    timestamp,
-    body          text
+    id                 uuid       PRIMARY KEY,
+    name               text,
+    slug               text,
+    parent_id          text,
+    display_order      int,
+    created_at         timestamp,
+    updated_at         timestamp,
+    body               text
 );
 
 CREATE TABLE IF NOT EXISTS collections (
-    id            text  PRIMARY KEY,
-    name          text,
-    slug          text,
-    display_order int,
-    product_ids   set<text>,
-    created_at    timestamp,
-    updated_at    timestamp,
-    body          text
+    id                 uuid       PRIMARY KEY,
+    name               text,
+    slug               text,
+    display_order      int,
+    product_ids        set<text>,
+    created_at         timestamp,
+    updated_at         timestamp,
+    body               text
 );
 
--- CALL await_tables;
-
-CREATE INDEX IF NOT EXISTS products_by_sku      ON products  (sku);
-CREATE INDEX IF NOT EXISTS products_by_category ON products  (category_id);
-CREATE INDEX IF NOT EXISTS categories_by_slug   ON categories(slug);
-CREATE INDEX IF NOT EXISTS collections_by_slug  ON collections(slug);
+CREATE TABLE IF NOT EXISTS namespaces (
+    id                   uuid       PRIMARY KEY,
+    identifier           text,
+    display_name         text,
+    tier                 text,
+    parent_enterprise_id text,
+    created_at           bigint,
+    created_by           text,
+    updated_at           bigint,
+    updated_by           text
+);
