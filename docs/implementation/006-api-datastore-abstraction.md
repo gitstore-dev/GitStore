@@ -86,15 +86,14 @@ behavioural parity between backends:
 # memdb (no external services)
 go test ./tests/contract/datastore/...
 
-# ScyllaDB (testcontainers — pulls image automatically)
-go test -tags scylla -timeout 10m ./tests/contract/datastore/...
+# ScyllaDB contract tests (requires an external ScyllaDB on 127.0.0.1:9042)
+GITSTORE_TEST_SCYLLA_ADDR=127.0.0.1:9042 go test -tags scylla -timeout 10m ./tests/contract/datastore/...
 
 # ScyllaDB backend unit tests + migration tests
-go test -tags scylla -timeout 10m ./internal/datastore/scylla/...
+GITSTORE_TEST_SCYLLA_ADDR=127.0.0.1:9042 go test -tags scylla -timeout 10m ./internal/datastore/scylla/...
 ```
 
-To run against a pre-started ScyllaDB instance instead of testcontainers,
-start the override compose stack at the repo root:
+Start the override compose stack at the repo root before running ScyllaDB tests:
 
 ```bash
 docker compose -f compose.yml -f compose.scylla.yml up -d scylla

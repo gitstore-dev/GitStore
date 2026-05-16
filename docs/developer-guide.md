@@ -424,6 +424,15 @@ GITSTORE_LOG__LEVEL=info
 docker compose -f compose.yml -f compose.scylla.yml up -d scylla scylla-init
 ```
 
+Scylla-backed Go tests use an externally managed ScyllaDB instance. Start
+ScyllaDB first, then point the tests at its CQL address:
+
+```bash
+cd gitstore-api
+GITSTORE_TEST_SCYLLA_ADDR=127.0.0.1:9042 \
+  go test -tags scylla -v -timeout 10m ./tests/contract/datastore/... ./internal/datastore/scylla/...
+```
+
 ### Go Licence Headers
 
 All Go source files in this repository should include this header near the top of the file:

@@ -9,6 +9,7 @@ package scylla_test
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strconv"
 	"testing"
@@ -33,7 +34,7 @@ func newRawSession(t *testing.T) *gocql.Session {
 	if port > 0 {
 		cluster.Port = port
 	}
-	cluster.Keyspace = "gitstore" // keyspace provisioned by TestMain in backend_test.go
+	cluster.Keyspace = scyllaKeyspace // keyspace provisioned by TestMain in backend_test.go
 	cluster.Consistency = gocql.Quorum
 	cluster.DisableShardAwarePort = true
 	session, sessErr := cluster.CreateSession()
@@ -46,21 +47,20 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 	session := newRawSession(t)
 	log := zap.NewNop()
 
-	err := scylla.RunMigrations(context.Background(), session, uuid.New().String(), "gitstore", log)
+	err := scylla.RunMigrations(context.Background(), session, uuid.New().String(), scyllaKeyspace, log)
 	require.NoError(t, err)
 
 	// Verify keyspace exists.
 	var ksName string
-	err = session.Query(
-		`SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = 'gitstore'`,
-	).Scan(&ksName)
+	err = session.Query(`SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = ?`, scyllaKeyspace).Scan(&ksName)
 	require.NoError(t, err)
-	assert.Equal(t, "gitstore", ksName)
+	assert.Equal(t, scyllaKeyspace, ksName)
 
 	// Verify products table exists.
 	var tblName string
 	err = session.Query(
-		`SELECT table_name FROM system_schema.tables WHERE keyspace_name = 'gitstore' AND table_name = 'products'`,
+		`SELECT table_name FROM system_schema.tables WHERE keyspace_name = ? AND table_name = 'products'`,
+		scyllaKeyspace,
 	).Scan(&tblName)
 	require.NoError(t, err)
 	assert.Equal(t, "products", tblName)
@@ -72,8 +72,8 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 	ctx := context.Background()
 
 	// Running migrations twice must not return an error.
-	require.NoError(t, scylla.RunMigrations(ctx, session, uuid.New().String(), "gitstore", log))
-	require.NoError(t, scylla.RunMigrations(ctx, session, uuid.New().String(), "gitstore", log))
+	require.NoError(t, scylla.RunMigrations(ctx, session, uuid.New().String(), scyllaKeyspace, log))
+	require.NoError(t, scylla.RunMigrations(ctx, session, uuid.New().String(), scyllaKeyspace, log))
 }
 
 func TestRunMigrations_LockReleasedAfterSuccess(t *testing.T) {
@@ -81,12 +81,12 @@ func TestRunMigrations_LockReleasedAfterSuccess(t *testing.T) {
 	log := zap.NewNop()
 	ctx := context.Background()
 
-	require.NoError(t, scylla.RunMigrations(ctx, session, uuid.New().String(), "gitstore", log))
+	require.NoError(t, scylla.RunMigrations(ctx, session, uuid.New().String(), scyllaKeyspace, log))
 
 	// After success the lock row must be gone (deleted by releaseLock).
 	var holder string
 	err := session.Query(
-		`SELECT holder FROM gitstore.schema_migrations_lock WHERE lock_key = 'migration'`,
+		fmt.Sprintf(`SELECT holder FROM %s.schema_migrations_lock WHERE lock_key = 'migration'`, scyllaKeyspace),
 	).Scan(&holder)
 	// ErrNotFound means the row was deleted, which is what we want.
 	assert.ErrorIs(t, err, gocql.ErrNotFound)
