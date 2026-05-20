@@ -15,6 +15,8 @@ Complete reference documentation for the GitStore GraphQL API.
 - [Filtering and Pagination](#filtering-and-pagination)
 - [Error Handling](#error-handling)
 - [Examples](#examples)
+- [Controller Watch Stream (Proposal)](#controller-watch-stream-proposal)
+- [Versioning](#versioning)
 
 ## Overview
 
@@ -1166,6 +1168,57 @@ mutation PublishCatalog {
 }
 ```
 
+## Controller Watch Stream (Proposal)
+
+GitStore remains GraphQL-first, but controller loops for core resources and CRD kinds need Kubernetes-like watch semantics. The watch stream is exposed as GraphQL subscriptions over HTTP-compatible streaming transport (GraphQL-over-SSE).
+
+### Event Model
+
+- Event types follow `ADDED`, `MODIFIED`, and `DELETED`.
+- Each event carries the full reconciled resource (`metadata`, `.spec`, `.status`).
+- `metadata.resourceVersion` is monotonic and used as a resume token.
+
+### Subscription Shape
+
+```graphql
+subscription WatchProducts($after: String) {
+  watchProducts(afterResourceVersion: $after) {
+    type
+    resourceVersion
+    object {
+      metadata {
+        uid
+        resourceVersion
+      }
+      spec {
+        title
+        price
+      }
+      status {
+        inventory
+        lastReconciledAt
+      }
+    }
+  }
+}
+```
+
+### Resume and Recovery
+
+Controllers should use a list-then-watch pattern:
+
+1. Query current state snapshot.
+2. Start subscription with `afterResourceVersion` from the snapshot.
+3. On disconnect, reconnect with the last applied resource version.
+4. If the server reports the resume point is too old, relist and restart the watch from a fresh snapshot.
+
+### Controller Write-Back Pattern
+
+- Controllers observe events from the stream.
+- Controllers perform side effects out-of-band.
+- Controllers write observed state via GraphQL status mutations.
+- API persists the new status and emits the next watch event.
+
 ## Rate Limiting
 
 The API currently does not enforce rate limits. Future versions will implement rate limiting with the following headers:
@@ -1176,11 +1229,37 @@ The API currently does not enforce rate limits. Future versions will implement r
 
 ## Versioning
 
-The API follows the catalog version from the latest release tag. Breaking schema changes will be communicated via:
+The GraphQL API uses a single endpoint with schema evolution rather than versioned GraphQL paths.
 
-- Deprecation notices in schema
-- Migration guides in documentation
-- Backward-compatible transitions where possible
+For CRD-style kinds, the platform applies a hub-and-spoke conversion model:
+
+- Each kind has one designated hub version (storage state), such as `gitstore.dev/v2`.
+- Inbound manifests using older versions are converted to the hub version during the write pipeline.
+- KV projections and core synthesised GraphQL types reflect hub-version shape.
+
+### Conversion Hooks
+
+When a kind introduces a breaking version, the owner provides WASI conversion hooks:
+
+- Upgrade conversion (for example `v1 -> v2`)
+- Downgrade conversion (for example `v2 -> v1`)
+
+Write-time flow:
+
+1. Client pushes a resource with non-hub `apiVersion`.
+2. Orchestrator invokes the conversion hook.
+3. Converted hub resource is validated and projected.
+4. Read models remain normalised on hub version.
+
+### GraphQL Backward Compatibility
+
+Backward compatibility is maintained through field deprecation instead of endpoint versioning:
+
+- Keep old fields available during migration windows.
+- Mark legacy fields with `@deprecated(reason: "...")`.
+- Resolve deprecated fields from hub state in resolver logic.
+
+Example: if `price` is replaced by `pricingMatrix`, schema can expose both fields while clients migrate.
 
 ## Additional Resources
 

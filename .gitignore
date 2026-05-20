@@ -64,7 +64,7 @@ coverage/
 *.log
 logs/
 
-
+.claude/settings.json
 test-repos/
 demo-catalog/
 demo-catalogue/

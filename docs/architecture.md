@@ -1,6 +1,6 @@
 # Architecture
 
-This document presents two end-to-end architecture options for the AI-native commerce engine. Both options treat Git as the authoritative system of record, then project customer-facing state into a fast read layer.
+This document describes the architecture of the AI-native commerce engine: the service topology, GraphQL API design principles, write pipeline proposals, and the controller-manager model for reconciling catalogue state.
 
 ## System Goals
 
@@ -9,16 +9,18 @@ This document presents two end-to-end architecture options for the AI-native com
 - Serve storefront reads from low-latency indexed data.
 - Decouple write acceptance from heavy validation and indexing work.
 
-## Shared Building Blocks
+## Platform Building Blocks
 
-Both proposals use the same core building blocks, arranged with different control points:
+All proposals share the same core building blocks, arranged with different control points:
 
 - **Actors**: AI agents, human engineers, and the storefront.
 - **Control plane**: Go API gateway and/or Rust Git server.
 - **Storage plane**: Bare Git repositories on disk as source of truth.
 - **Distribution plane**: Event queue plus KV store for published read state.
 
-## Implementation Baseline (Current Repository)
+---
+
+## Service Topology
 
 - `gitstore-api/`: Go API gateway, GraphQL surface, and gRPC client/server boundaries.
 - `gitstore-git-service/`: Rust Git engine, receive hooks, and repository access logic.
@@ -36,38 +38,8 @@ Key environment variables:
 | Service                | Variable                  | Purpose                                                       |
 |------------------------|---------------------------|---------------------------------------------------------------|
 | `gitstore-api`         | `GITSTORE_GIT__GRPC__URI` | gRPC address of git-service (e.g. `dns:///git-service:50051`) |
-| `gitstore-api`         | `GITSTORE_GIT__WS__URI`   | WebSocket URL for catalogue-reload notifications              |
 | `gitstore-git-service` | `GITSTORE_GRPC__PORT`     | Port the gRPC server binds on (default `50051`)               |
 | `gitstore-git-service` | `GITSTORE_GIT__DATA_DIR`  | Path to the bare repository directory                         |
-
-These folders map directly to the control, storage, and distribution planes described below.
-
-### Dynamic GraphQL Schema for CRD-Style Kinds
-
-The platform supports CRD-style kinds, so GraphQL schema shape cannot be treated as fully static.
-
-- `gitstore-api` should watch kind/definition registry updates from Git and trigger schema refresh.
-- Runtime synthesis should translate JSON Schema-backed kind definitions into GraphQL object types and fields.
-- Generated query roots should stay namespaced by domain (for example `query { catalog { product(id: "...") } }`).
-
-Schema lifecycle should follow a safe publish pattern:
-
-1. Build a candidate schema from current registry state.
-2. Validate and wire resolvers.
-3. Atomically publish if valid.
-4. Keep the last known-good schema active on failure.
-
-### Direct Synthesis vs Federation
-
-For core kinds, prefer direct synthesis inside `gitstore-api` to reduce network hops and keep resolver behaviour predictable.
-
-Federation is an optional path for externally owned integrations:
-
-- External apps can expose independent subgraphs and extend shared entities.
-- Composition uses federation ownership directives such as `@key`, `@extends`, and `@external`.
-- Composition may run through an edge router/gateway when extension boundaries justify service isolation.
-
-Use federation when an extension owns its own service boundary or datastore and must participate in cross-entity graph relationships. Keep core catalogue/resource kinds on direct synthesis by default.
 
 ### Git Engine — gitoxide (gix)
 
@@ -99,7 +71,71 @@ New RPCs (defined in `shared/proto/gitstore/git/v1/git_service.proto`):
 
 ---
 
-## Proposal 1 - API-Led Mutations with Asynchronous Indexing
+## GraphQL API Design
+
+### Dynamic Schema for CRD-Style Kinds
+
+The platform supports CRD-style kinds, so GraphQL schema shape cannot be treated as fully static.
+
+- `gitstore-api` should watch kind/definition registry updates from Git and trigger schema refresh.
+- Runtime synthesis should translate JSON Schema-backed kind definitions into GraphQL object types and fields.
+- Generated query roots should stay namespaced by domain (for example `query { catalog { product(id: "...") } }`).
+
+Schema lifecycle should follow a safe publish pattern:
+
+1. Build a candidate schema from current registry state.
+2. Validate and wire resolvers.
+3. Atomically publish if valid.
+4. Keep the last known-good schema active on failure.
+
+### Direct Synthesis vs Federation
+
+For core kinds, prefer direct synthesis inside `gitstore-api` to reduce network hops and keep resolver behaviour predictable.
+
+Federation is an optional path for externally owned integrations:
+
+- External apps can expose independent subgraphs and extend shared entities.
+- Composition uses federation ownership directives such as `@key`, `@extends`, and `@external`.
+- Composition may run through an edge router/gateway when extension boundaries justify service isolation.
+
+Use federation when an extension owns its own service boundary or datastore and must participate in cross-entity graph relationships. Keep core catalogue/resource kinds on direct synthesis by default.
+
+### API Versioning and Evolution (Hub-and-Spoke Conversion)
+
+CRD-style resources introduce a versioning tension: Kubernetes-style APIs expose explicit versions (for example `v1`, `v2`), while GraphQL favours one continuously evolving graph. The platform resolves this with a hub-and-spoke conversion model.
+
+- Each kind designates one hub version as the internal storage state (for example `gitstore.dev/v2`).
+- KV projections and synthesised core GraphQL types reflect the hub version.
+- Older or alternate API versions are treated as spoke versions that convert to and from the hub.
+
+Conversion is implemented as explicit WASI conversion hooks supplied by the kind owner:
+
+- Hooks must support both upgrade and downgrade paths (for example `v1 -> v2` and `v2 -> v1`).
+- Hooks execute in the write pipeline when inbound manifests are not in the hub version.
+- The orchestrator stores only hub-version projections after successful conversion.
+
+Write path behaviour:
+
+1. Admin or agent pushes a manifest using an older `apiVersion`.
+2. Orchestrator detects the version mismatch against the kind hub version.
+3. Orchestrator runs the WASI hook to up-convert the parsed resource to hub form.
+4. Validation, indexing, and KV projection proceed on hub-version data.
+
+GraphQL evolution remains endpoint-stable and schema-driven:
+
+- The endpoint is not versioned (no GraphQL `/v1` and `/v2` split).
+- Breaking field renames are handled by transitional schema evolution.
+- Deprecated fields remain available with GraphQL `@deprecated` metadata and are resolved from hub state for backward compatibility.
+
+Example migration pattern:
+
+- Hub model introduces `pricingMatrix`.
+- Legacy `price` field remains in GraphQL as `@deprecated(reason: "Use pricingMatrix")`.
+- Resolver maps `price` from the hub representation until clients migrate.
+
+---
+
+## Proposal 1 — API-Led Mutations with Asynchronous Indexing
 
 Proposal 1 starts at the API boundary, commits to Git immediately, and then indexes validated state asynchronously.
 
@@ -179,9 +215,7 @@ graph LR
 
 - **Actors**
   - AI agents submit mutations and receive fast acknowledgements.
-  - Storefront 
-    - reads indexed catalogue state from KV for low-latency queries.
-    - triggers ISR revalidation on webhook event from API.
+  - Storefront reads indexed catalogue state from KV for low-latency queries, and triggers ISR revalidation on webhook event from API.
 - **Core services**
   - Go API gateway handles GraphQL writes and reads.
   - Rust Git server executes durable commit operations.
@@ -207,7 +241,7 @@ graph LR
 
 ---
 
-## Proposal 2 - Git-Native Ingress with Tag-Gated Publishing
+## Proposal 2 — Git-Native Ingress with Tag-Gated Publishing
 
 Proposal 2 starts at Git transport boundaries, executes hooks during receive, and only publishes customer-visible state on explicit release tags.
 
@@ -396,3 +430,84 @@ Deletion is blocked when the namespace contains repositories (enforced in the se
 
 For quickstart examples and `curl`-based testing, see [`specs/009-api-namespaces/quickstart.md`](../specs/009-api-namespaces/quickstart.md).
 
+---
+
+## Controller Manager, Reconciliation Loop, and AI Integration (Proposal)
+
+This model applies to both core resources and CRD-defined kinds. It avoids a split-brain read path by treating ScyllaDB as the unified serving state for reconciled resources while keeping Git as the audited intent log for `.spec`.
+
+### End-to-End Flow
+
+1. Desired state enters via Git.
+2. API validates and projects `.spec` into hub-version storage.
+3. Controller manager watches reconciled objects and drives side effects.
+4. Controllers report `.status` through API mutations.
+5. API increments `resourceVersion` and publishes the next watch event.
+
+### Ownership and Write Boundaries
+
+- Users and AI agents own desired state (`.spec`) and submit it exclusively through Git push/PR workflows.
+- Standard controllers own observed state (`.status`) and write it through GraphQL status mutations on the API server, which then persists to ScyllaDB.
+- No actor writes directly to ScyllaDB; every write is gated through the API to ensure resource versioning and watch-cache consistency.
+
+### Git Ingest Contract
+
+- **Pre-receive hook** (gRPC): validation and policy checks only. No durable state write.
+- **Post-receive hook** (gRPC): parse, convert-to-hub version when needed, then persist `.spec` projection.
+- Each accepted write increments `resourceVersion` and publishes a watch event.
+
+### Watch Protocol over GraphQL
+
+The API surface stays GraphQL-first while preserving Kubernetes-style watch semantics:
+
+- Controllers subscribe through GraphQL-over-SSE (HTTP/2 friendly) backed by an in-process watch cache.
+- Events are emitted as `ADDED`, `MODIFIED`, and `DELETED` envelopes containing full reconciled objects (`metadata`, `.spec`, `.status`).
+- Watch streams support resume from `resourceVersion` so disconnected controllers can continue without full resync.
+- On restart, the API rebuilds cache state from ScyllaDB before opening new watch streams.
+
+### Reconciliation Model
+
+1. Controller receives a watch event with latest `.spec` and `.status`.
+2. Controller compares desired and observed state and executes external side effects.
+3. Controller reports observed outcome via GraphQL status mutation (`update...Status`) with optimistic preconditions.
+4. API writes new `.status`, increments `resourceVersion`, and fans out the next watch event.
+
+AI controllers follow the same observation loop but act by proposing new `.spec` via Git (branch + PR). They do not bypass status ownership or admission boundaries.
+
+```mermaid
+sequenceDiagram
+    participant U as Human / CI / AI Author
+    participant G as Git Service (Rust)
+    participant API as API Server (Go, GraphQL)
+    participant DB as ScyllaDB
+    participant WC as Watch Cache
+    participant RC as Controller Manager
+
+    rect rgb(30, 40, 60)
+    note right of U: 1. Desired state update via Git
+    U->>G: git push (manifest change)
+    G->>API: gRPC pre-receive (validate only)
+    API-->>G: allow/reject
+    G->>G: persist accepted commit
+    G->>API: gRPC post-receive (accepted refs + blobs)
+    API->>API: parse + convert to hub version
+    API->>DB: UPSERT .spec (resourceVersion++)
+    API->>WC: apply reconciled object
+    WC--)RC: ADDED/MODIFIED event
+    end
+
+    rect rgb(40, 50, 40)
+    note right of RC: 2. Reconcile and report status
+    RC->>RC: compare .spec with external state
+    RC->>API: GraphQL mutation (update status)
+    API->>DB: UPSERT .status (resourceVersion++)
+    API->>WC: apply reconciled object
+    WC--)RC: MODIFIED event (resume-safe)
+    end
+
+    rect rgb(50, 40, 50)
+    note right of U: 3. AI controller proposes new intent
+    U->>G: open PR with .spec update
+    note right of U: loops back to step 1 after merge
+    end
+```
