@@ -5,8 +5,7 @@
 # Add the following to shared/schemas/schema.graphql (Query and Mutation roots):
 #
 # In Query:
-#   namespace(identifier: String!): Namespace
-#   namespaceById(id: ID!): Namespace
+#   namespace(by: NamespaceBy!): Namespace
 #   namespaces(first: Int, after: String, last: Int, before: String): NamespaceConnection!
 #
 # In Mutation:
@@ -139,6 +138,14 @@ type NamespaceConnection {
 # ============================================================================
 # Inputs
 # ============================================================================
+
+"""
+Selector for looking up a namespace by exactly one unique key.
+"""
+input NamespaceBy @oneOf {
+  id: ID
+  identifier: String
+}
 
 """
 Input for creating a new namespace.
@@ -312,7 +319,7 @@ type DeleteNamespacePayload {
 
 # --- Get namespace by identifier ---
 # query GetNamespace {
-#   namespace(identifier: "acme-corp") {
+#   namespace(by: {identifier: "acme-corp"}) {
 #     id
 #     identifier
 #     displayName

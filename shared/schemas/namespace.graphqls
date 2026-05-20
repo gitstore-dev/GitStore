@@ -117,6 +117,14 @@ type NamespaceConnection {
 }
 
 """
+Selector for looking up a namespace by exactly one unique key.
+"""
+input NamespaceBy @oneOf {
+  id: ID
+  identifier: String
+}
+
+"""
 Input for creating a new namespace.
 """
 input CreateNamespaceInput {
@@ -202,14 +210,9 @@ type DeleteNamespacePayload {
 
 extend type Query {
   """
-  Get a namespace by its human-readable identifier.
+  Get a namespace by one unique selector.
   """
-  namespace(identifier: String!): Namespace
-
-  """
-  Get a namespace by its system-generated ID.
-  """
-  namespaceById(id: ID!): Namespace
+  namespace(by: NamespaceBy!): Namespace
 
   """
   List all namespaces.

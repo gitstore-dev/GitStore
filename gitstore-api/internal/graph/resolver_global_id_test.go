@@ -63,28 +63,32 @@ func TestQueryNodesPreservesOrderAndSkipsInvalidIDs(t *testing.T) {
 	assert.Nil(t, nodes[5])
 }
 
-func TestByIDQueriesAcceptGlobalIDs(t *testing.T) {
+func TestLookupQueriesAcceptGlobalIDs(t *testing.T) {
 	ctx := context.Background()
 	store, resolver := newGlobalIDTestResolver(t)
 	seedGlobalIDTestData(t, ctx, store)
 	query := &queryResolver{Resolver: resolver}
 
-	product, err := query.ProductByID(ctx, mustEncodeNodeID(nodeKindProduct, globalIDTestProductID))
+	productID := mustEncodeNodeID(nodeKindProduct, globalIDTestProductID)
+	product, err := query.Product(ctx, model.ProductBy{ID: &productID})
 	require.NoError(t, err)
 	require.NotNil(t, product)
 	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductID), product.ID)
 
-	category, err := query.CategoryByID(ctx, mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryID))
+	categoryID := mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryID)
+	category, err := query.Category(ctx, model.CategoryBy{ID: &categoryID})
 	require.NoError(t, err)
 	require.NotNil(t, category)
 	assert.Equal(t, mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryID), category.ID)
 
-	collection, err := query.CollectionByID(ctx, mustEncodeNodeID(nodeKindCollection, globalIDTestCollectionID))
+	collectionID := mustEncodeNodeID(nodeKindCollection, globalIDTestCollectionID)
+	collection, err := query.Collection(ctx, model.CollectionBy{ID: &collectionID})
 	require.NoError(t, err)
 	require.NotNil(t, collection)
 	assert.Equal(t, mustEncodeNodeID(nodeKindCollection, globalIDTestCollectionID), collection.ID)
 
-	namespace, err := query.NamespaceByID(ctx, mustEncodeNodeID(nodeKindNamespace, globalIDTestNamespaceID))
+	namespaceID := mustEncodeNodeID(nodeKindNamespace, globalIDTestNamespaceID)
+	namespace, err := query.Namespace(ctx, model.NamespaceBy{ID: &namespaceID})
 	require.NoError(t, err)
 	require.NotNil(t, namespace)
 	assert.Equal(t, mustEncodeNodeID(nodeKindNamespace, globalIDTestNamespaceID), namespace.ID)
@@ -135,7 +139,8 @@ func TestMalformedGlobalIDReturnsError(t *testing.T) {
 	_, resolver := newGlobalIDTestResolver(t)
 	query := &queryResolver{Resolver: resolver}
 
-	product, err := query.ProductByID(context.Background(), "not-base64!")
+	id := "not-base64!"
+	product, err := query.Product(context.Background(), model.ProductBy{ID: &id})
 	assert.Nil(t, product)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid global ID")
@@ -147,22 +152,26 @@ func TestBusinessIdentifiersAreNotDecoded(t *testing.T) {
 	seedGlobalIDTestData(t, ctx, store)
 	query := &queryResolver{Resolver: resolver}
 
-	product, err := query.Product(ctx, "SKU-1")
+	sku := "SKU-1"
+	product, err := query.Product(ctx, model.ProductBy{Sku: &sku})
 	require.NoError(t, err)
 	require.NotNil(t, product)
 	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductID), product.ID)
 
-	category, err := query.Category(ctx, "category-1")
+	categorySlug := "category-1"
+	category, err := query.Category(ctx, model.CategoryBy{Slug: &categorySlug})
 	require.NoError(t, err)
 	require.NotNil(t, category)
 	assert.Equal(t, mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryID), category.ID)
 
-	collection, err := query.Collection(ctx, "collection-1")
+	collectionSlug := "collection-1"
+	collection, err := query.Collection(ctx, model.CollectionBy{Slug: &collectionSlug})
 	require.NoError(t, err)
 	require.NotNil(t, collection)
 	assert.Equal(t, mustEncodeNodeID(nodeKindCollection, globalIDTestCollectionID), collection.ID)
 
-	namespace, err := query.Namespace(ctx, "namespace-1")
+	namespaceIdentifier := "namespace-1"
+	namespace, err := query.Namespace(ctx, model.NamespaceBy{Identifier: &namespaceIdentifier})
 	require.NoError(t, err)
 	require.NotNil(t, namespace)
 	assert.Equal(t, mustEncodeNodeID(nodeKindNamespace, globalIDTestNamespaceID), namespace.ID)

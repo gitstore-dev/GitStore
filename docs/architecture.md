@@ -418,7 +418,7 @@ query {
 
 # Get namespace by identifier
 query {
-  namespace(identifier: "acme-corp") {
+  namespace(by: {identifier: "acme-corp"}) {
     id identifier displayName tier parentEnterpriseId
     createdAt createdBy updatedAt updatedBy
   }
@@ -426,7 +426,7 @@ query {
 
 # Get namespace by opaque global Node ID
 query {
-  namespaceById(id: "Z2lkOi8vR2l0U3RvcmUvTmFtZXNwYWNlL25hbWVzcGFjZS11dWlk") {
+  namespace(by: {id: "Z2lkOi8vR2l0U3RvcmUvTmFtZXNwYWNlL25hbWVzcGFjZS11dWlk"}) {
     id identifier displayName tier parentEnterpriseId
     createdAt createdBy updatedAt updatedBy
   }

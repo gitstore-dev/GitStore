@@ -88,6 +88,12 @@ func (Category) IsNode() {}
 // Globally unique identifier (format: [type]_[base62])
 func (this Category) GetID() string { return this.ID }
 
+// Selector for looking up a category by exactly one unique key.
+type CategoryBy struct {
+	ID   *string `json:"id,omitempty"`
+	Slug *string `json:"slug,omitempty"`
+}
+
 // Connection type for paginated categories (Relay pattern)
 type CategoryConnection struct {
 	// List of category edges
@@ -144,6 +150,12 @@ func (Collection) IsNode() {}
 
 // Globally unique identifier (format: [type]_[base62])
 func (this Collection) GetID() string { return this.ID }
+
+// Selector for looking up a collection by exactly one unique key.
+type CollectionBy struct {
+	ID   *string `json:"id,omitempty"`
+	Slug *string `json:"slug,omitempty"`
+}
 
 // Connection type for paginated collections (Relay pattern)
 type CollectionConnection struct {
@@ -424,6 +436,12 @@ func (Namespace) IsNode() {}
 // Globally unique identifier (format: [type]_[base62])
 func (this Namespace) GetID() string { return this.ID }
 
+// Selector for looking up a namespace by exactly one unique key.
+type NamespaceBy struct {
+	ID         *string `json:"id,omitempty"`
+	Identifier *string `json:"identifier,omitempty"`
+}
+
 // Connection type for paginated namespaces (Relay pattern).
 type NamespaceConnection struct {
 	// List of namespace edges.
@@ -502,6 +520,12 @@ func (Product) IsNode() {}
 
 // Globally unique identifier (format: [type]_[base62])
 func (this Product) GetID() string { return this.ID }
+
+// Selector for looking up a product by exactly one unique key.
+type ProductBy struct {
+	ID  *string `json:"id,omitempty"`
+	Sku *string `json:"sku,omitempty"`
+}
 
 // Connection type for paginated products (Relay pattern)
 type ProductConnection struct {

@@ -165,7 +165,7 @@ git push origin v0.2.0
 curl http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "{ product(sku: \"LAPTOP-001\") { title price } }"
+    "query": "{ product(by: {sku: \"LAPTOP-001\"}) { title price } }"
   }'
 ```
 
@@ -522,7 +522,7 @@ go test ./tests/contract/...
 **Example Test**:
 ```go
 func TestProductSchema(t *testing.T) {
-    query := `{ product(sku: "TEST-001") { id title } }`
+    query := `{ product(by: {sku: "TEST-001"}) { id title } }`
     resp := executeQuery(query)
     assert.NoError(t, resp.Errors)
     assert.Equal(t, "TEST-001", resp.Data.Product.SKU)

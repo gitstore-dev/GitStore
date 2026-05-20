@@ -49,21 +49,20 @@ func (r *mutationResolver) DeleteNamespace(ctx context.Context, input model.Dele
 }
 
 // Namespace is the resolver for the namespace field.
-func (r *queryResolver) Namespace(ctx context.Context, identifier string) (*model.Namespace, error) {
-	ns, err := r.service.GetNamespaceByIdentifier(ctx, identifier)
-	if err != nil {
-		return nil, err
+func (r *queryResolver) Namespace(ctx context.Context, by model.NamespaceBy) (*model.Namespace, error) {
+	if by.ID != nil {
+		namespaceID, err := decodeNodeIDAs(nodeKindNamespace, *by.ID)
+		if err != nil {
+			return nil, err
+		}
+		ns, err := r.service.GetNamespaceByID(ctx, namespaceID)
+		if err != nil {
+			return nil, err
+		}
+		return datastoreNamespaceToModel(ns), nil
 	}
-	return datastoreNamespaceToModel(ns), nil
-}
 
-// NamespaceByID is the resolver for the namespaceById field.
-func (r *queryResolver) NamespaceByID(ctx context.Context, id string) (*model.Namespace, error) {
-	namespaceID, err := decodeNodeIDAs(nodeKindNamespace, id)
-	if err != nil {
-		return nil, err
-	}
-	ns, err := r.service.GetNamespaceByID(ctx, namespaceID)
+	ns, err := r.service.GetNamespaceByIdentifier(ctx, *by.Identifier)
 	if err != nil {
 		return nil, err
 	}

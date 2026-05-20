@@ -411,21 +411,20 @@ func (r *queryResolver) Nodes(ctx context.Context, ids []string) ([]model.Node, 
 }
 
 // Product is the resolver for the product field.
-func (r *queryResolver) Product(ctx context.Context, sku string) (*model.Product, error) {
-	catalogProduct, err := r.service.GetProductBySKU(ctx, sku)
-	if err != nil {
-		return nil, nil // Return nil instead of error for not found
+func (r *queryResolver) Product(ctx context.Context, by model.ProductBy) (*model.Product, error) {
+	if by.ID != nil {
+		productID, err := decodeNodeIDAs(nodeKindProduct, *by.ID)
+		if err != nil {
+			return nil, err
+		}
+		catalogProduct, err := r.service.GetProductByID(ctx, productID)
+		if err != nil {
+			return nil, nil // Return nil instead of error for not found
+		}
+		return CatalogProductToGraphQL(catalogProduct), nil
 	}
-	return CatalogProductToGraphQL(catalogProduct), nil
-}
 
-// ProductByID is the resolver for the productById field.
-func (r *queryResolver) ProductByID(ctx context.Context, id string) (*model.Product, error) {
-	productID, err := decodeNodeIDAs(nodeKindProduct, id)
-	if err != nil {
-		return nil, err
-	}
-	catalogProduct, err := r.service.GetProductByID(ctx, productID)
+	catalogProduct, err := r.service.GetProductBySKU(ctx, *by.Sku)
 	if err != nil {
 		return nil, nil // Return nil instead of error for not found
 	}
@@ -465,24 +464,23 @@ func (r *queryResolver) Products(ctx context.Context, first *int32, after *strin
 	return PaginateProducts(products, first, after, last, before)
 }
 
-// Category returns a category by slug
-func (r *queryResolver) Category(ctx context.Context, slug string) (*model.Category, error) {
-	catalogCategory, err := r.service.GetCategoryBySlug(ctx, slug)
+// Category is the resolver for the category field.
+func (r *queryResolver) Category(ctx context.Context, by model.CategoryBy) (*model.Category, error) {
+	if by.ID != nil {
+		categoryID, err := decodeNodeIDAs(nodeKindCategory, *by.ID)
+		if err != nil {
+			return nil, err
+		}
+		catalogCategory, err := r.service.GetCategoryByID(ctx, categoryID)
+		if err != nil {
+			return nil, nil // Return nil for not found (not an error)
+		}
+		return CatalogCategoryToGraphQL(catalogCategory), nil
+	}
+
+	catalogCategory, err := r.service.GetCategoryBySlug(ctx, *by.Slug)
 	if err != nil {
 		return nil, nil // Return nil for not found (not an error)
-	}
-	return CatalogCategoryToGraphQL(catalogCategory), nil
-}
-
-// CategoryByID is the resolver for the categoryById field.
-func (r *queryResolver) CategoryByID(ctx context.Context, id string) (*model.Category, error) {
-	categoryID, err := decodeNodeIDAs(nodeKindCategory, id)
-	if err != nil {
-		return nil, err
-	}
-	catalogCategory, err := r.service.GetCategoryByID(ctx, categoryID)
-	if err != nil {
-		return nil, nil // Return nil for not found
 	}
 	return CatalogCategoryToGraphQL(catalogCategory), nil
 }
@@ -497,22 +495,21 @@ func (r *queryResolver) Categories(ctx context.Context, first *int32, after *str
 	return PaginateCategories(catalogCategories, first, after, last, before)
 }
 
-// Collection returns a collection by slug
-func (r *queryResolver) Collection(ctx context.Context, slug string) (*model.Collection, error) {
-	catalogCollection, err := r.service.GetCollectionBySlug(ctx, slug)
-	if err != nil {
-		return nil, nil // Return nil for not found
+// Collection is the resolver for the collection field.
+func (r *queryResolver) Collection(ctx context.Context, by model.CollectionBy) (*model.Collection, error) {
+	if by.ID != nil {
+		collectionID, err := decodeNodeIDAs(nodeKindCollection, *by.ID)
+		if err != nil {
+			return nil, err
+		}
+		catalogCollection, err := r.service.GetCollectionByID(ctx, collectionID)
+		if err != nil {
+			return nil, nil // Return nil for not found
+		}
+		return CatalogCollectionToGraphQL(catalogCollection), nil
 	}
-	return CatalogCollectionToGraphQL(catalogCollection), nil
-}
 
-// CollectionByID is the resolver for the collectionById field.
-func (r *queryResolver) CollectionByID(ctx context.Context, id string) (*model.Collection, error) {
-	collectionID, err := decodeNodeIDAs(nodeKindCollection, id)
-	if err != nil {
-		return nil, err
-	}
-	catalogCollection, err := r.service.GetCollectionByID(ctx, collectionID)
+	catalogCollection, err := r.service.GetCollectionBySlug(ctx, *by.Slug)
 	if err != nil {
 		return nil, nil // Return nil for not found
 	}
@@ -549,42 +546,3 @@ func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
-
-func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (model.Node, error) {
-	switch kind {
-	case nodeKindProduct:
-		product, err := r.service.GetProductByID(ctx, rawID)
-		if err != nil {
-			return nil, nil
-		}
-		return CatalogProductToGraphQL(product), nil
-	case nodeKindCategory:
-		category, err := r.service.GetCategoryByID(ctx, rawID)
-		if err != nil {
-			return nil, nil
-		}
-		return CatalogCategoryToGraphQL(category), nil
-	case nodeKindCollection:
-		collection, err := r.service.GetCollectionByID(ctx, rawID)
-		if err != nil {
-			return nil, nil
-		}
-		return CatalogCollectionToGraphQL(collection), nil
-	case nodeKindNamespace:
-		namespace, err := r.service.GetNamespaceByID(ctx, rawID)
-		if err != nil {
-			return nil, nil
-		}
-		return datastoreNamespaceToModel(namespace), nil
-	default:
-		return nil, nil
-	}
-}
-
-func copyProductFilter(filter *model.ProductFilter) *model.ProductFilter {
-	if filter == nil {
-		return nil
-	}
-	copied := *filter
-	return &copied
-}

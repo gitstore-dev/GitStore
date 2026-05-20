@@ -81,7 +81,7 @@ Multi-service architecture:
 > This enforces Test-First Development. No implementation code may be written until corresponding tests exist and fail.
 
 - [X] T025 [P] [US1] Write contract test for products query in api/tests/contract/products_test.go
-- [X] T026 [P] [US1] Write contract test for product(sku) query in api/tests/contract/product_test.go
+- [X] T026 [P] [US1] Write contract test for product(by: {sku}) query in api/tests/contract/product_test.go
 - [X] T027 [P] [US1] Write integration test for git push → validation → accept in git-server/tests/integration/push_validation_test.rs
 - [X] T028 [P] [US1] Write integration test for release tag → websocket notification in git-server/tests/integration/tag_notification_test.rs
 - [X] T029 [P] [US1] Write integration test for websocket → cache reload in api/tests/integration/cache_reload_test.go
@@ -111,7 +111,7 @@ Multi-service architecture:
 - [X] T045 [P] [US1] Implement websocket client in api/internal/websocket/client.go (connect to git-server:8080)
 - [X] T046 [US1] Implement cache invalidation on websocket notification in api/internal/cache/invalidator.go
 - [X] T047 [US1] Implement products query resolver in api/internal/graph/products.resolvers.go (Relay connection pattern)
-- [X] T048 [US1] Implement product(sku) query resolver in api/internal/graph/product.resolvers.go
+- [X] T048 [US1] Implement product(by: {sku}) query resolver in api/internal/graph/product.resolvers.go
 - [X] T049 [US1] Implement Node interface resolver for Product in api/internal/graph/node.resolvers.go
 - [X] T050 [US1] Wire up API server in api/cmd/server/main.go (GraphQL endpoint, websocket client startup)
 
@@ -159,9 +159,9 @@ Multi-service architecture:
 - [X] T065 [US2] Update catalog loader to parse categories and collections in api/internal/cache/loader.go
 - [X] T066 [US2] Implement category hierarchy builder in api/internal/models/category_tree.go (parent-child linking)
 - [X] T067 [US2] Implement categories query resolver in api/internal/graph/categories.resolvers.go
-- [X] T068 [US2] Implement category(slug) query resolver in api/internal/graph/category.resolvers.go
+- [X] T068 [US2] Implement category(by: {slug}) query resolver in api/internal/graph/category.resolvers.go
 - [X] T069 [US2] Implement collections query resolver in api/internal/graph/collections.resolvers.go
-- [X] T070 [US2] Implement collection(slug) query resolver in api/internal/graph/collection.resolvers.go
+- [X] T070 [US2] Implement collection(by: {slug}) query resolver in api/internal/graph/collection.resolvers.go
 - [X] T071 [US2] Implement Product.category field resolver (single category lookup) in api/internal/graph/product.resolvers.go
 - [X] T072 [US2] Implement Product.collections field resolver (multiple collection lookup) in api/internal/graph/product.resolvers.go
 - [X] T073 [US2] Implement Category.products field resolver with subcategory product inclusion in api/internal/graph/category.resolvers.go
@@ -500,7 +500,7 @@ Multi-service architecture:
 ```bash
 # Launch all tests for User Story 1 together (Test-First):
 Task: "Write contract test for products query in api/tests/contract/products_test.go" [T025]
-Task: "Write contract test for product(sku) query in api/tests/contract/product_test.go" [T026]
+Task: "Write contract test for product(by: {sku}) query in api/tests/contract/product_test.go" [T026]
 Task: "Write integration test for git push validation in git-server/tests/integration/push_validation_test.rs" [T027]
 
 # After tests are written and failing, launch parallel implementations:

@@ -63,14 +63,9 @@ type Query {
   nodes(ids: [ID!]!): [Node]!
 
   """
-  Get product by SKU
+  Get product by one unique selector.
   """
-  product(sku: String!): Product
-
-  """
-  Get product by ID
-  """
-  productById(id: ID!): Product
+  product(by: ProductBy!): Product
 
   """
   List products with Relay cursor-based pagination
@@ -84,14 +79,9 @@ type Query {
   ): ProductConnection!
 
   """
-  Get category by slug
+  Get category by one unique selector.
   """
-  category(slug: String!): Category
-
-  """
-  Get category by ID
-  """
-  categoryById(id: ID!): Category
+  category(by: CategoryBy!): Category
 
   """
   List all categories (hierarchical structure)
@@ -99,14 +89,9 @@ type Query {
   categories: [Category!]!
 
   """
-  Get collection by slug
+  Get collection by one unique selector.
   """
-  collection(slug: String!): Collection
-
-  """
-  Get collection by ID
-  """
-  collectionById(id: ID!): Collection
+  collection(by: CollectionBy!): Collection
 
   """
   List all collections
@@ -203,6 +188,30 @@ scalar DateTime
 JSON metadata object
 """
 scalar JSON
+
+"""
+Selector for looking up a product by exactly one unique key.
+"""
+input ProductBy @oneOf {
+  id: ID
+  sku: String
+}
+
+"""
+Selector for looking up a category by exactly one unique key.
+"""
+input CategoryBy @oneOf {
+  id: ID
+  slug: String
+}
+
+"""
+Selector for looking up a collection by exactly one unique key.
+"""
+input CollectionBy @oneOf {
+  id: ID
+  slug: String
+}
 
 """
 Product inventory status

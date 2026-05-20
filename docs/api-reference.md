@@ -67,7 +67,7 @@ Namespace create and delete mutations require authentication. Creating `ENTERPRI
 
 All GraphQL types that implement `Node` expose opaque global IDs. The ID format is base64-encoded `gid://GitStore/{NodeType}/{rawID}`. For example, product raw ID `123` is returned as `Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC8xMjM=`.
 
-Clients should treat these values as opaque and pass them back unchanged to `node`, `nodes`, `*ById` queries, filters, and mutation fields typed as `ID`. Business identifiers such as `product(sku:)`, `category(slug:)`, `collection(slug:)`, `namespace(identifier:)`, and namespace `parentEnterpriseIdentifier` are not global IDs.
+Clients should treat these values as opaque and pass them back unchanged to `node`, `nodes`, lookup selectors such as `product(by: {id: ...})`, filters, and mutation fields typed as `ID`. Business identifiers such as `product(by: {sku: ...})`, `category(by: {slug: ...})`, `collection(by: {slug: ...})`, `namespace(by: {identifier: ...})`, and namespace `parentEnterpriseIdentifier` are not global IDs.
 
 ### node
 
@@ -117,13 +117,13 @@ query {
 
 ---
 
-### namespaceById
+### namespace
 
-Get a namespace by its system-generated ID.
+Get a namespace by exactly one unique selector: `id` or `identifier`.
 
 ```graphql
 query {
-  namespaceById(id: "Z2lkOi8vR2l0U3RvcmUvTmFtZXNwYWNlL25hbWVzcGFjZS11dWlk") {
+  namespace(by: {identifier: "acme-corp"}) {
     id
     identifier
     displayName
@@ -138,7 +138,7 @@ query {
 ```
 
 **Arguments**:
-- `id: ID!` - Namespace global ID
+- `by: NamespaceBy!` - One of `id` (global ID) or `identifier`
 
 **Returns**: `Namespace` (nullable)
 
@@ -146,11 +146,11 @@ query {
 
 ### product
 
-Get a single product by SKU.
+Get a single product by exactly one unique selector: `id` or `sku`.
 
 ```graphql
 query {
-  product(sku: "MBP-16-M3-2024") {
+  product(by: {sku: "MBP-16-M3-2024"}) {
     id
     title
     price
@@ -160,28 +160,7 @@ query {
 ```
 
 **Arguments**:
-- `sku: String!` - Stock Keeping Unit
-
-**Returns**: `Product` (nullable)
-
----
-
-### productById
-
-Get a single product by ID.
-
-```graphql
-query {
-  productById(id: "Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC8xMjM=") {
-    id
-    sku
-    title
-  }
-}
-```
-
-**Arguments**:
-- `id: ID!` - Product global ID
+- `by: ProductBy!` - One of `id` (global ID) or `sku`
 
 **Returns**: `Product` (nullable)
 
@@ -233,11 +212,11 @@ query {
 
 ### category
 
-Get a category by slug.
+Get a category by exactly one unique selector: `id` or `slug`.
 
 ```graphql
 query {
-  category(slug: "electronics") {
+  category(by: {slug: "electronics"}) {
     id
     name
     children {
@@ -248,30 +227,7 @@ query {
 ```
 
 **Arguments**:
-- `slug: String!` - URL-friendly category identifier
-
-**Returns**: `Category` (nullable)
-
----
-
-### categoryById
-
-Get a category by ID.
-
-```graphql
-query {
-  categoryById(id: "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvMTIz") {
-    id
-    name
-    parent {
-      name
-    }
-  }
-}
-```
-
-**Arguments**:
-- `id: ID!` - Category global ID
+- `by: CategoryBy!` - One of `id` (global ID) or `slug`
 
 **Returns**: `Category` (nullable)
 
@@ -313,11 +269,11 @@ query {
 
 ### collection
 
-Get a collection by slug.
+Get a collection by exactly one unique selector: `id` or `slug`.
 
 ```graphql
 query {
-  collection(slug: "featured") {
+  collection(by: {slug: "featured"}) {
     id
     name
     products {
@@ -332,27 +288,7 @@ query {
 ```
 
 **Arguments**:
-- `slug: String!` - URL-friendly collection identifier
-
-**Returns**: `Collection` (nullable)
-
----
-
-### collectionById
-
-Get a collection by ID.
-
-```graphql
-query {
-  collectionById(id: "Z2lkOi8vR2l0U3RvcmUvQ29sbGVjdGlvbi8xMjM=") {
-    id
-    name
-  }
-}
-```
-
-**Arguments**:
-- `id: ID!` - Collection global ID
+- `by: CollectionBy!` - One of `id` (global ID) or `slug`
 
 **Returns**: `Collection` (nullable)
 
@@ -1160,7 +1096,7 @@ Queries that fetch single entities return `null` if not found:
 
 ```graphql
 query {
-  product(sku: "NONEXISTENT") {
+  product(by: {sku: "NONEXISTENT"}) {
     id  # Returns null if product not found
   }
 }
@@ -1183,7 +1119,7 @@ if (result.data.product) {
 
 ```graphql
 query GetProductDetails($sku: String!) {
-  product(sku: $sku) {
+  product(by: {sku: $sku}) {
     id
     sku
     title

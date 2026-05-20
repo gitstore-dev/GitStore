@@ -78,17 +78,17 @@
 
 **Goal**: A caller can list all namespaces and retrieve one by identifier; not-found is returned deterministically.
 
-**Independent Test**: Create two namespaces, call `namespaces` query, verify both appear; call `namespace(identifier: "...")` query, verify full metadata is returned; call `namespace(identifier: "unknown-ns")`, verify not-found error.
+**Independent Test**: Create two namespaces, call `namespaces` query, verify both appear; call `namespace(by: {identifier: "..."})` query, verify full metadata is returned; call `namespace(by: {identifier: "unknown-ns"})`, verify not-found error.
 
 ### Tests for User Story 2 ⚠️ Write FIRST — verify they FAIL before T018
 
 - [X] T016 [P] [US2] Extend `gitstore-api/tests/contract/datastore/contract_test.go` with `TestListNamespaces_empty`, `TestListNamespaces_multiple`, `TestGetNamespace_byID_success`, `TestGetNamespaceByIdentifier_success`, `TestGetNamespaceByIdentifier_notFound`
-- [X] T017 [P] [US2] Add `namespaces` query and `namespace(identifier)` query integration tests to `gitstore-api/internal/graph/namespace_service_test.go`: list returns all created namespaces, get by identifier returns correct metadata, get unknown identifier returns not-found error
+- [X] T017 [P] [US2] Add `namespaces` query and `namespace(by: {identifier})` query integration tests to `gitstore-api/internal/graph/namespace_service_test.go`: list returns all created namespaces, get by identifier returns correct metadata, get unknown identifier returns not-found error
 
 ### Implementation for User Story 2
 
 - [X] T018 [US2] Add `GetNamespaceByIdentifier(ctx, identifier)`, `GetNamespaceByID(ctx, id)`, and `ListNamespaces(ctx)` service methods to `gitstore-api/internal/graph/service.go` — map `ErrNotFound` to GraphQL not-found error; log `zap.String("identifier", ...)` on not-found
-- [X] T019 [US2] Implement `namespace`, `namespaceById`, and `namespaces` query resolver bodies in `gitstore-api/internal/graph/namespace.resolvers.go` — all three are unauthenticated reads (no auth gate needed per spec); call respective service methods; return `nil, gqlerror` on not-found
+- [X] T019 [US2] Implement `namespace(by:)` and `namespaces` query resolver bodies in `gitstore-api/internal/graph/namespace.resolvers.go` — all reads are unauthenticated (no auth gate needed per spec); call respective service methods; return `nil, gqlerror` on not-found
 
 **Checkpoint**: All three query resolvers work; T016/T017 tests pass; User Stories 1 and 2 are independently functional.
 

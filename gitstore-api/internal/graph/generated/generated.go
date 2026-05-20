@@ -269,18 +269,14 @@ type ComplexityRoot struct {
 	Query struct {
 		CatalogVersion func(childComplexity int) int
 		Categories     func(childComplexity int, first *int32, after *string, last *int32, before *string) int
-		Category       func(childComplexity int, slug string) int
-		CategoryByID   func(childComplexity int, id string) int
-		Collection     func(childComplexity int, slug string) int
-		CollectionByID func(childComplexity int, id string) int
+		Category       func(childComplexity int, by model.CategoryBy) int
+		Collection     func(childComplexity int, by model.CollectionBy) int
 		Collections    func(childComplexity int, first *int32, after *string, last *int32, before *string) int
-		Namespace      func(childComplexity int, identifier string) int
-		NamespaceByID  func(childComplexity int, id string) int
+		Namespace      func(childComplexity int, by model.NamespaceBy) int
 		Namespaces     func(childComplexity int, first *int32, after *string, last *int32, before *string) int
 		Node           func(childComplexity int, id string) int
 		Nodes          func(childComplexity int, ids []string) int
-		Product        func(childComplexity int, sku string) int
-		ProductByID    func(childComplexity int, id string) int
+		Product        func(childComplexity int, by model.ProductBy) int
 		Products       func(childComplexity int, first *int32, after *string, last *int32, before *string, filter *model.ProductFilter) int
 	}
 
@@ -355,18 +351,14 @@ type ProductResolver interface {
 type QueryResolver interface {
 	Node(ctx context.Context, id string) (model.Node, error)
 	Nodes(ctx context.Context, ids []string) ([]model.Node, error)
-	Product(ctx context.Context, sku string) (*model.Product, error)
-	ProductByID(ctx context.Context, id string) (*model.Product, error)
+	Product(ctx context.Context, by model.ProductBy) (*model.Product, error)
 	Products(ctx context.Context, first *int32, after *string, last *int32, before *string, filter *model.ProductFilter) (*model.ProductConnection, error)
-	Category(ctx context.Context, slug string) (*model.Category, error)
-	CategoryByID(ctx context.Context, id string) (*model.Category, error)
+	Category(ctx context.Context, by model.CategoryBy) (*model.Category, error)
 	Categories(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.CategoryConnection, error)
-	Collection(ctx context.Context, slug string) (*model.Collection, error)
-	CollectionByID(ctx context.Context, id string) (*model.Collection, error)
+	Collection(ctx context.Context, by model.CollectionBy) (*model.Collection, error)
 	Collections(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.CollectionConnection, error)
 	CatalogVersion(ctx context.Context) (*model.CatalogVersion, error)
-	Namespace(ctx context.Context, identifier string) (*model.Namespace, error)
-	NamespaceByID(ctx context.Context, id string) (*model.Namespace, error)
+	Namespace(ctx context.Context, by model.NamespaceBy) (*model.Namespace, error)
 	Namespaces(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.NamespaceConnection, error)
 }
 
@@ -1329,18 +1321,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.Category(childComplexity, args["slug"].(string)), true
-	case "Query.categoryById":
-		if e.ComplexityRoot.Query.CategoryByID == nil {
-			break
-		}
-
-		args, err := ec.field_Query_categoryById_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Query.CategoryByID(childComplexity, args["id"].(string)), true
+		return e.ComplexityRoot.Query.Category(childComplexity, args["by"].(model.CategoryBy)), true
 	case "Query.collection":
 		if e.ComplexityRoot.Query.Collection == nil {
 			break
@@ -1351,18 +1332,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.Collection(childComplexity, args["slug"].(string)), true
-	case "Query.collectionById":
-		if e.ComplexityRoot.Query.CollectionByID == nil {
-			break
-		}
-
-		args, err := ec.field_Query_collectionById_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Query.CollectionByID(childComplexity, args["id"].(string)), true
+		return e.ComplexityRoot.Query.Collection(childComplexity, args["by"].(model.CollectionBy)), true
 	case "Query.collections":
 		if e.ComplexityRoot.Query.Collections == nil {
 			break
@@ -1385,18 +1355,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.Namespace(childComplexity, args["identifier"].(string)), true
-	case "Query.namespaceById":
-		if e.ComplexityRoot.Query.NamespaceByID == nil {
-			break
-		}
-
-		args, err := ec.field_Query_namespaceById_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Query.NamespaceByID(childComplexity, args["id"].(string)), true
+		return e.ComplexityRoot.Query.Namespace(childComplexity, args["by"].(model.NamespaceBy)), true
 	case "Query.namespaces":
 		if e.ComplexityRoot.Query.Namespaces == nil {
 			break
@@ -1440,18 +1399,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.Product(childComplexity, args["sku"].(string)), true
-	case "Query.productById":
-		if e.ComplexityRoot.Query.ProductByID == nil {
-			break
-		}
-
-		args, err := ec.field_Query_productById_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Query.ProductByID(childComplexity, args["id"].(string)), true
+		return e.ComplexityRoot.Query.Product(childComplexity, args["by"].(model.ProductBy)), true
 	case "Query.products":
 		if e.ComplexityRoot.Query.Products == nil {
 			break
@@ -1581,6 +1529,8 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputCategoryBy,
+		ec.unmarshalInputCollectionBy,
 		ec.unmarshalInputCreateCategoryInput,
 		ec.unmarshalInputCreateCollectionInput,
 		ec.unmarshalInputCreateNamespaceInput,
@@ -1591,6 +1541,8 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputDeleteProductInput,
 		ec.unmarshalInputLoginInput,
 		ec.unmarshalInputLogoutInput,
+		ec.unmarshalInputNamespaceBy,
+		ec.unmarshalInputProductBy,
 		ec.unmarshalInputProductFilter,
 		ec.unmarshalInputPublishCatalogInput,
 		ec.unmarshalInputRefreshTokenInput,
@@ -2654,6 +2606,14 @@ type NamespaceConnection {
 }
 
 """
+Selector for looking up a namespace by exactly one unique key.
+"""
+input NamespaceBy @oneOf {
+  id: ID
+  identifier: String
+}
+
+"""
 Input for creating a new namespace.
 """
 input CreateNamespaceInput {
@@ -2739,14 +2699,9 @@ type DeleteNamespacePayload {
 
 extend type Query {
   """
-  Get a namespace by its human-readable identifier.
+  Get a namespace by one unique selector.
   """
-  namespace(identifier: String!): Namespace
-
-  """
-  Get a namespace by its system-generated ID.
-  """
-  namespaceById(id: ID!): Namespace
+  namespace(by: NamespaceBy!): Namespace
 
   """
   List all namespaces.
@@ -3189,14 +3144,9 @@ type Query {
   nodes(ids: [ID!]!): [Node]!
 
   """
-  Get product by SKU
+  Get product by one unique selector.
   """
-  product(sku: String!): Product
-
-  """
-  Get product by ID
-  """
-  productById(id: ID!): Product
+  product(by: ProductBy!): Product
 
   """
   List products with Relay cursor-based pagination
@@ -3210,14 +3160,9 @@ type Query {
   ): ProductConnection!
 
   """
-  Get category by slug
+  Get category by one unique selector.
   """
-  category(slug: String!): Category
-
-  """
-  Get category by ID
-  """
-  categoryById(id: ID!): Category
+  category(by: CategoryBy!): Category
 
   """
   List categories with Relay cursor-based pagination
@@ -3230,14 +3175,9 @@ type Query {
   ): CategoryConnection!
 
   """
-  Get collection by slug
+  Get collection by one unique selector.
   """
-  collection(slug: String!): Collection
-
-  """
-  Get collection by ID
-  """
-  collectionById(id: ID!): Collection
+  collection(by: CollectionBy!): Collection
 
   """
   List collections with Relay cursor-based pagination
@@ -3339,6 +3279,30 @@ scalar DateTime
 JSON metadata object
 """
 scalar JSON
+
+"""
+Selector for looking up a product by exactly one unique key.
+"""
+input ProductBy @oneOf {
+  id: ID
+  sku: String
+}
+
+"""
+Selector for looking up a category by exactly one unique key.
+"""
+input CategoryBy @oneOf {
+  id: ID
+  slug: String
+}
+
+"""
+Selector for looking up a collection by exactly one unique key.
+"""
+input CollectionBy @oneOf {
+  id: ID
+  slug: String
+}
 
 """
 Product inventory status
@@ -4368,59 +4332,31 @@ func (ec *executionContext) field_Query_categories_args(ctx context.Context, raw
 	return args, nil
 }
 
-func (ec *executionContext) field_Query_categoryById_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNID2string(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["id"] = arg0
-	return args, nil
-}
-
 func (ec *executionContext) field_Query_category_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "slug",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNString2string(ctx, v)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "by",
+		func(ctx context.Context, v any) (model.CategoryBy, error) {
+			return ec.unmarshalNCategoryBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryBy(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["slug"] = arg0
-	return args, nil
-}
-
-func (ec *executionContext) field_Query_collectionById_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNID2string(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["id"] = arg0
+	args["by"] = arg0
 	return args, nil
 }
 
 func (ec *executionContext) field_Query_collection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "slug",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNString2string(ctx, v)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "by",
+		func(ctx context.Context, v any) (model.CollectionBy, error) {
+			return ec.unmarshalNCollectionBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionBy(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["slug"] = arg0
+	args["by"] = arg0
 	return args, nil
 }
 
@@ -4462,31 +4398,17 @@ func (ec *executionContext) field_Query_collections_args(ctx context.Context, ra
 	return args, nil
 }
 
-func (ec *executionContext) field_Query_namespaceById_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNID2string(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["id"] = arg0
-	return args, nil
-}
-
 func (ec *executionContext) field_Query_namespace_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "identifier",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNString2string(ctx, v)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "by",
+		func(ctx context.Context, v any) (model.NamespaceBy, error) {
+			return ec.unmarshalNNamespaceBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceBy(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["identifier"] = arg0
+	args["by"] = arg0
 	return args, nil
 }
 
@@ -4556,31 +4478,17 @@ func (ec *executionContext) field_Query_nodes_args(ctx context.Context, rawArgs 
 	return args, nil
 }
 
-func (ec *executionContext) field_Query_productById_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "id",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNID2string(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["id"] = arg0
-	return args, nil
-}
-
 func (ec *executionContext) field_Query_product_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "sku",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNString2string(ctx, v)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "by",
+		func(ctx context.Context, v any) (model.ProductBy, error) {
+			return ec.unmarshalNProductBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductBy(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["sku"] = arg0
+	args["by"] = arg0
 	return args, nil
 }
 
@@ -8470,7 +8378,7 @@ func (ec *executionContext) _Query_product(ctx context.Context, field graphql.Co
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Product(ctx, fc.Args["sku"].(string))
+			return ec.Resolvers.Query().Product(ctx, fc.Args["by"].(model.ProductBy))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.Product) graphql.Marshaler {
@@ -8498,50 +8406,6 @@ func (ec *executionContext) fieldContext_Query_product(ctx context.Context, fiel
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_product_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Query_productById(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Query_productById(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().ProductByID(ctx, fc.Args["id"].(string))
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.Product) graphql.Marshaler {
-			return ec.marshalOProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_Query_productById(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_Product(ctx, field)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_productById_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -8602,7 +8466,7 @@ func (ec *executionContext) _Query_category(ctx context.Context, field graphql.C
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Category(ctx, fc.Args["slug"].(string))
+			return ec.Resolvers.Query().Category(ctx, fc.Args["by"].(model.CategoryBy))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.Category) graphql.Marshaler {
@@ -8630,50 +8494,6 @@ func (ec *executionContext) fieldContext_Query_category(ctx context.Context, fie
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_category_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Query_categoryById(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Query_categoryById(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().CategoryByID(ctx, fc.Args["id"].(string))
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.Category) graphql.Marshaler {
-			return ec.marshalOCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategory(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_Query_categoryById(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_Category(ctx, field)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_categoryById_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -8734,7 +8554,7 @@ func (ec *executionContext) _Query_collection(ctx context.Context, field graphql
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Collection(ctx, fc.Args["slug"].(string))
+			return ec.Resolvers.Query().Collection(ctx, fc.Args["by"].(model.CollectionBy))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.Collection) graphql.Marshaler {
@@ -8762,50 +8582,6 @@ func (ec *executionContext) fieldContext_Query_collection(ctx context.Context, f
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_collection_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Query_collectionById(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Query_collectionById(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().CollectionByID(ctx, fc.Args["id"].(string))
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.Collection) graphql.Marshaler {
-			return ec.marshalOCollection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollection(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_Query_collectionById(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_Collection(ctx, field)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_collectionById_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -8898,7 +8674,7 @@ func (ec *executionContext) _Query_namespace(ctx context.Context, field graphql.
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Namespace(ctx, fc.Args["identifier"].(string))
+			return ec.Resolvers.Query().Namespace(ctx, fc.Args["by"].(model.NamespaceBy))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.Namespace) graphql.Marshaler {
@@ -8926,50 +8702,6 @@ func (ec *executionContext) fieldContext_Query_namespace(ctx context.Context, fi
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_namespace_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Query_namespaceById(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Query_namespaceById(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().NamespaceByID(ctx, fc.Args["id"].(string))
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.Namespace) graphql.Marshaler {
-			return ec.marshalONamespace2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespace(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_Query_namespaceById(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_Namespace(ctx, field)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_namespaceById_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -10627,6 +10359,80 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** input.gotpl *****************************
 
+func (ec *executionContext) unmarshalInputCategoryBy(ctx context.Context, obj any) (model.CategoryBy, error) {
+	var it model.CategoryBy
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"id", "slug"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
+		case "slug":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("slug"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Slug = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputCollectionBy(ctx context.Context, obj any) (model.CollectionBy, error) {
+	var it model.CollectionBy
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"id", "slug"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
+		case "slug":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("slug"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Slug = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputCreateCategoryInput(ctx context.Context, obj any) (model.CreateCategoryInput, error) {
 	var it model.CreateCategoryInput
 	if obj == nil {
@@ -11139,6 +10945,80 @@ func (ec *executionContext) unmarshalInputLogoutInput(ctx context.Context, obj a
 				return it, err
 			}
 			it.ClientMutationID = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputNamespaceBy(ctx context.Context, obj any) (model.NamespaceBy, error) {
+	var it model.NamespaceBy
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"id", "identifier"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
+		case "identifier":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("identifier"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Identifier = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputProductBy(ctx context.Context, obj any) (model.ProductBy, error) {
+	var it model.ProductBy
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"id", "sku"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
+		case "sku":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sku"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Sku = data
 		}
 	}
 	return it, nil
@@ -13579,25 +13459,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "productById":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_productById(ctx, field)
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "products":
 			field := field
 
@@ -13639,25 +13500,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "categoryById":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_categoryById(ctx, field)
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "categories":
 			field := field
 
@@ -13690,25 +13532,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_collection(ctx, field)
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "collectionById":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_collectionById(ctx, field)
 				return res
 			}
 
@@ -13772,25 +13595,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_namespace(ctx, field)
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "namespaceById":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_namespaceById(ctx, field)
 				return res
 			}
 
@@ -14536,6 +14340,11 @@ func (ec *executionContext) marshalNCategory2ᚖgithubᚗcomᚋgitstoreᚑdevᚋ
 	return ec._Category(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNCategoryBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryBy(ctx context.Context, v any) (model.CategoryBy, error) {
+	res, err := ec.unmarshalInputCategoryBy(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalNCategoryConnection2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryConnection(ctx context.Context, sel ast.SelectionSet, v model.CategoryConnection) graphql.Marshaler {
 	return ec._CategoryConnection(ctx, sel, &v)
 }
@@ -14600,6 +14409,11 @@ func (ec *executionContext) marshalNCollection2ᚖgithubᚗcomᚋgitstoreᚑdev�
 		return graphql.Null
 	}
 	return ec._Collection(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNCollectionBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionBy(ctx context.Context, v any) (model.CollectionBy, error) {
+	res, err := ec.unmarshalInputCollectionBy(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalNCollectionConnection2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionConnection(ctx context.Context, sel ast.SelectionSet, v model.CollectionConnection) graphql.Marshaler {
@@ -14940,6 +14754,11 @@ func (ec *executionContext) marshalNNamespace2ᚖgithubᚗcomᚋgitstoreᚑdev�
 	return ec._Namespace(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNNamespaceBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceBy(ctx context.Context, v any) (model.NamespaceBy, error) {
+	res, err := ec.unmarshalInputNamespaceBy(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalNNamespaceConnection2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceConnection(ctx context.Context, sel ast.SelectionSet, v model.NamespaceConnection) graphql.Marshaler {
 	return ec._NamespaceConnection(ctx, sel, &v)
 }
@@ -15018,6 +14837,11 @@ func (ec *executionContext) marshalNProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋg
 		return graphql.Null
 	}
 	return ec._Product(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNProductBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductBy(ctx context.Context, v any) (model.ProductBy, error) {
+	res, err := ec.unmarshalInputProductBy(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalNProductConnection2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductConnection(ctx context.Context, sel ast.SelectionSet, v model.ProductConnection) graphql.Marshaler {

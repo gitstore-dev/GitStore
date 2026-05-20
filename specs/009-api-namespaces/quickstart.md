@@ -132,7 +132,7 @@ curl -s -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "query": "query { namespace(identifier: \"alice\") { id identifier tier createdAt createdBy updatedAt updatedBy } }"
+    "query": "query { namespace(by: {identifier: \"alice\"}) { id identifier tier createdAt createdBy updatedAt updatedBy } }"
   }' | jq .
 ```
 
@@ -140,14 +140,14 @@ curl -s -X POST http://localhost:4000/graphql \
 
 ## Get a Namespace by ID
 
-Use the `id` returned by `createNamespace`, `namespaces`, or `namespace(identifier:)`.
+Use the `id` returned by `createNamespace`, `namespaces`, or `namespace(by: {identifier: ...})`.
 
 ```bash
 curl -s -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "query": "query { namespaceById(id: \"<namespace-id>\") { id identifier tier createdAt createdBy updatedAt updatedBy } }"
+    "query": "query { namespace(by: {id: \"<namespace-id>\"}) { id identifier tier createdAt createdBy updatedAt updatedBy } }"
   }' | jq .
 ```
 
