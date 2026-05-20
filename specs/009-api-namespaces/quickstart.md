@@ -43,10 +43,12 @@ The server starts at `http://localhost:4000`. The GraphQL Playground is at `http
 Namespace mutations require authentication. Obtain a JWT token:
 
 ```bash
-curl -s -X POST http://localhost:4000/api/login \
+curl -s -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"<your-password>"}' \
-  | jq -r '.token'
+  -d '{
+    "query": "mutation { login(input: { username: \"admin\", password: \"<your-password>\" }) { session { token user { username isAdmin } } } }"
+  }' \
+  | jq -r '.data.login.session.token'
 ```
 
 Export the token:
@@ -130,6 +132,21 @@ curl -s -X POST http://localhost:4000/graphql \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
     "query": "query { namespace(identifier: \"alice\") { id identifier tier createdAt createdBy updatedAt updatedBy } }"
+  }' | jq .
+```
+
+---
+
+## Get a Namespace by ID
+
+Use the `id` returned by `createNamespace`, `namespaces`, or `namespace(identifier:)`.
+
+```bash
+curl -s -X POST http://localhost:4000/graphql \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "query": "query { namespaceById(id: \"<namespace-id>\") { id identifier tier createdAt createdBy updatedAt updatedBy } }"
   }' | jq .
 ```
 

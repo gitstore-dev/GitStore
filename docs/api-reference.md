@@ -36,7 +36,30 @@ GitStore provides a GraphQL API following the [Relay specification](https://rela
 
 ## Authentication
 
-The current version does not require authentication for read operations. Mutations will require authentication in future versions.
+Read operations are public unless a resolver documents otherwise. Protected mutations require a JWT bearer token in the `Authorization` header:
+
+```http
+Authorization: Bearer <token>
+```
+
+Obtain a token with the GraphQL `login` mutation:
+
+```graphql
+mutation {
+  login(input: { username: "admin", password: "<password>" }) {
+    session {
+      token
+      expiresAt
+      user {
+        username
+        isAdmin
+      }
+    }
+  }
+}
+```
+
+Namespace create and delete mutations require authentication. Creating `ENTERPRISE` namespaces requires `session.user.isAdmin == true`.
 
 ## Query Operations
 
@@ -85,6 +108,33 @@ query {
 - `ids: [ID!]!` - Array of globally unique identifiers
 
 **Returns**: `[Node]!`
+
+---
+
+### namespaceById
+
+Get a namespace by its system-generated ID.
+
+```graphql
+query {
+  namespaceById(id: "namespace-uuid") {
+    id
+    identifier
+    displayName
+    tier
+    parentEnterpriseId
+    createdAt
+    createdBy
+    updatedAt
+    updatedBy
+  }
+}
+```
+
+**Arguments**:
+- `id: ID!` - System-generated namespace ID
+
+**Returns**: `Namespace` (nullable)
 
 ---
 
@@ -329,6 +379,34 @@ query {
 **Returns**: `CatalogVersion!`
 
 ## Mutation Operations
+
+### login
+
+Authenticate and return a JWT session.
+
+```graphql
+mutation {
+  login(input: { username: "admin", password: "<password>" }) {
+    session {
+      token
+      expiresAt
+      user {
+        username
+        isAdmin
+      }
+    }
+  }
+}
+```
+
+**Input Fields**:
+- `username: String!` - Configured admin username
+- `password: String!` - Configured admin password
+- `clientMutationId: String` - Client-side mutation tracking
+
+**Returns**: `LoginPayload!`
+
+---
 
 ### createProduct
 

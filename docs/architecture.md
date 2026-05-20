@@ -388,6 +388,7 @@ Namespace identifiers are globally unique across all tiers. The same identifier 
 
 ### Authorization Model
 
+- Callers obtain JWTs with the GraphQL `login` mutation and pass them as `Authorization: Bearer <token>` on protected mutations.
 - **`isAdmin`** (JWT claim) is the elevated platform role. Callers with `isAdmin == true` may create enterprise namespaces and delete any namespace.
 - **Ownership** for deletion is checked at query time via `CreatedBy == callerUsername || isAdmin`. No mutable ownership state is embedded in the JWT.
 
@@ -411,6 +412,14 @@ query {
 # Get namespace by identifier
 query {
   namespace(identifier: "acme-corp") {
+    id identifier displayName tier parentEnterpriseId
+    createdAt createdBy updatedAt updatedBy
+  }
+}
+
+# Get namespace by system-generated ID
+query {
+  namespaceById(id: "namespace-uuid") {
     id identifier displayName tier parentEnterpriseId
     createdAt createdBy updatedAt updatedBy
   }

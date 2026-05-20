@@ -77,17 +77,7 @@ func main() {
 	}
 
 	// Create GraphQL resolver
-	resolver := graph.NewResolver(store, gitClient, logger.Log)
-	resolver.WithAuthMiddleware(authMiddleware)
-	schema := generated.NewExecutableSchema(generated.Config{Resolvers: resolver})
-	gqlServer := gqlhandler.NewDefaultServer(schema)
-
-	// Wrap GraphQL handler with DataLoader middleware
-	gqlHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := loader.Middleware(store, logger.Log)(r.Context())
-		r = r.WithContext(ctx)
-		gqlServer.ServeHTTP(w, r)
-	})
+	gqlHandler := newGraphQLHandler(store, gitClient, logger.Log, authMiddleware)
 
 	// Create health check handler
 	healthHandler := health.NewHandler(store, logger.Log, "1.0.0")
@@ -142,4 +132,19 @@ func main() {
 	}
 
 	logger.Log.Info("Server stopped")
+}
+
+func newGraphQLHandler(store datastore.Datastore, writer graph.GitWriter, log *zap.Logger, authMiddleware *middleware.AuthMiddleware) http.Handler {
+	resolver := graph.NewResolver(store, writer, log)
+	resolver.WithAuthMiddleware(authMiddleware)
+	schema := generated.NewExecutableSchema(generated.Config{Resolvers: resolver})
+	gqlServer := gqlhandler.NewDefaultServer(schema)
+
+	gqlHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := loader.Middleware(store, log)(r.Context())
+		r = r.WithContext(ctx)
+		gqlServer.ServeHTTP(w, r)
+	})
+
+	return authMiddleware.OptionalAuth(gqlHandler)
 }
