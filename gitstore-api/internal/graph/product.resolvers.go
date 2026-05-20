@@ -16,8 +16,13 @@ import (
 
 // Category is the resolver for the category field.
 func (r *productResolver) Category(ctx context.Context, obj *model.Product) (*model.Category, error) {
+	productID, err := decodeNodeIDAs(nodeKindProduct, obj.ID)
+	if err != nil {
+		return nil, err
+	}
+
 	// Get product from catalog to find category ID
-	catalogProduct, err := r.service.GetProductByID(ctx, obj.ID)
+	catalogProduct, err := r.service.GetProductByID(ctx, productID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get product: %w", err)
 	}
@@ -33,7 +38,7 @@ func (r *productResolver) Category(ctx context.Context, obj *model.Product) (*mo
 		if err != nil || catalogCategory == nil {
 			// Category reference is orphaned - log but don't fail
 			r.logger.Warn("Product references non-existent category",
-				zap.String("product_id", obj.ID),
+				zap.String("product_id", productID),
 				zap.String("category_id", catalogProduct.CategoryID))
 			return nil, nil
 		}
@@ -45,7 +50,7 @@ func (r *productResolver) Category(ctx context.Context, obj *model.Product) (*mo
 	if err != nil {
 		// Category reference is orphaned - log but don't fail
 		r.logger.Warn("Product references non-existent category",
-			zap.String("product_id", obj.ID),
+			zap.String("product_id", productID),
 			zap.String("category_id", catalogProduct.CategoryID))
 		return nil, nil
 	}
@@ -55,8 +60,13 @@ func (r *productResolver) Category(ctx context.Context, obj *model.Product) (*mo
 
 // Collections is the resolver for the collections field.
 func (r *productResolver) Collections(ctx context.Context, obj *model.Product) ([]*model.Collection, error) {
+	productID, err := decodeNodeIDAs(nodeKindProduct, obj.ID)
+	if err != nil {
+		return nil, err
+	}
+
 	// Get product from catalog to find collection IDs
-	catalogProduct, err := r.service.GetProductByID(ctx, obj.ID)
+	catalogProduct, err := r.service.GetProductByID(ctx, productID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get product: %w", err)
 	}
@@ -75,7 +85,7 @@ func (r *productResolver) Collections(ctx context.Context, obj *model.Product) (
 			if errs[i] != nil || catalogCollection == nil {
 				// Collection reference is orphaned - log but continue
 				r.logger.Warn("Product references non-existent collection",
-					zap.String("product_id", obj.ID),
+					zap.String("product_id", productID),
 					zap.String("collection_id", catalogProduct.CollectionIDs[i]))
 				continue
 			}
@@ -91,7 +101,7 @@ func (r *productResolver) Collections(ctx context.Context, obj *model.Product) (
 		if err != nil {
 			// Collection reference is orphaned - log but continue
 			r.logger.Warn("Product references non-existent collection",
-				zap.String("product_id", obj.ID),
+				zap.String("product_id", productID),
 				zap.String("collection_id", collectionID))
 			continue
 		}

@@ -27,7 +27,7 @@ func CatalogProductToGraphQL(p *catalog.Product) *model.Product {
 	}
 
 	return &model.Product{
-		ID:                p.ID,
+		ID:                mustEncodeNodeID(nodeKindProduct, p.ID),
 		Title:             p.Title,
 		Sku:               p.SKU,
 		Price:             scalar.Decimal{Decimal: decimal.NewFromFloat(p.Price)},
@@ -51,7 +51,7 @@ func CatalogCategoryToGraphQL(c *catalog.Category) *model.Category {
 	}
 
 	return &model.Category{
-		ID:        c.ID,
+		ID:        mustEncodeNodeID(nodeKindCategory, c.ID),
 		Name:      c.Name,
 		Slug:      c.Slug,
 		Body:      &c.Body,
@@ -69,7 +69,7 @@ func CatalogCollectionToGraphQL(c *catalog.Collection) *model.Collection {
 	}
 
 	return &model.Collection{
-		ID:        c.ID,
+		ID:        mustEncodeNodeID(nodeKindCollection, c.ID),
 		Name:      c.Name,
 		Slug:      c.Slug,
 		Body:      &c.Body,
@@ -89,12 +89,17 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 		dn := ns.DisplayName
 		displayName = &dn
 	}
+	var parentEnterpriseID *string
+	if ns.ParentEnterpriseID != nil {
+		encoded := mustEncodeNodeID(nodeKindNamespace, *ns.ParentEnterpriseID)
+		parentEnterpriseID = &encoded
+	}
 	return &model.Namespace{
-		ID:                 ns.ID,
+		ID:                 mustEncodeNodeID(nodeKindNamespace, ns.ID),
 		Identifier:         ns.Identifier,
 		DisplayName:        displayName,
 		Tier:               datastoreNamespaceTierToModel(ns.Tier),
-		ParentEnterpriseID: ns.ParentEnterpriseID,
+		ParentEnterpriseID: parentEnterpriseID,
 		CreatedAt:          ns.CreatedAt,
 		CreatedBy:          ns.CreatedBy,
 		UpdatedAt:          ns.UpdatedAt,

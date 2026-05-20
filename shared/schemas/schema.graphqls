@@ -62,14 +62,9 @@ type Query {
   nodes(ids: [ID!]!): [Node]!
 
   """
-  Get product by SKU
+  Get product by one unique selector.
   """
-  product(sku: String!): Product
-
-  """
-  Get product by ID
-  """
-  productById(id: ID!): Product
+  product(by: ProductBy!): Product
 
   """
   List products with Relay cursor-based pagination
@@ -83,34 +78,34 @@ type Query {
   ): ProductConnection!
 
   """
-  Get category by slug
+  Get category by one unique selector.
   """
-  category(slug: String!): Category
+  category(by: CategoryBy!): Category
 
   """
-  Get category by ID
+  List categories with Relay cursor-based pagination
   """
-  categoryById(id: ID!): Category
+  categories(
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): CategoryConnection!
 
   """
-  List all categories (hierarchical structure)
+  Get collection by one unique selector.
   """
-  categories: [Category!]!
+  collection(by: CollectionBy!): Collection
 
   """
-  Get collection by slug
+  List collections with Relay cursor-based pagination
   """
-  collection(slug: String!): Collection
-
-  """
-  Get collection by ID
-  """
-  collectionById(id: ID!): Collection
-
-  """
-  List all collections
-  """
-  collections: [Collection!]!
+  collections(
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): CollectionConnection!
 
   """
   Get current catalog version (release tag)
@@ -202,6 +197,30 @@ scalar DateTime
 JSON metadata object
 """
 scalar JSON
+
+"""
+Selector for looking up a product by exactly one unique key.
+"""
+input ProductBy @oneOf {
+  id: ID
+  sku: String
+}
+
+"""
+Selector for looking up a category by exactly one unique key.
+"""
+input CategoryBy @oneOf {
+  id: ID
+  slug: String
+}
+
+"""
+Selector for looking up a collection by exactly one unique key.
+"""
+input CollectionBy @oneOf {
+  id: ID
+  slug: String
+}
 
 """
 Product inventory status

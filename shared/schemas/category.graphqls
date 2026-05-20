@@ -70,6 +70,41 @@ type Category implements Node {
   depth: Int!
 }
 
+"""
+Edge type for Category connection (Relay pattern)
+"""
+type CategoryEdge {
+  """
+  Cursor for pagination
+  """
+  cursor: String!
+
+  """
+  The category node
+  """
+  node: Category!
+}
+
+"""
+Connection type for paginated categories (Relay pattern)
+"""
+type CategoryConnection {
+  """
+  List of category edges
+  """
+  edges: [CategoryEdge!]!
+
+  """
+  Pagination information
+  """
+  pageInfo: PageInfo!
+
+  """
+  Total count of categories
+  """
+  totalCount: Int!
+}
+
 # ============================================================================
 # Mutations
 # ============================================================================

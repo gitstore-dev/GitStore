@@ -55,6 +55,41 @@ type Collection implements Node {
   productCount: Int!
 }
 
+"""
+Edge type for Collection connection (Relay pattern)
+"""
+type CollectionEdge {
+  """
+  Cursor for pagination
+  """
+  cursor: String!
+
+  """
+  The collection node
+  """
+  node: Collection!
+}
+
+"""
+Connection type for paginated collections (Relay pattern)
+"""
+type CollectionConnection {
+  """
+  List of collection edges
+  """
+  edges: [CollectionEdge!]!
+
+  """
+  Pagination information
+  """
+  pageInfo: PageInfo!
+
+  """
+  Total count of collections
+  """
+  totalCount: Int!
+}
+
 # ============================================================================
 # Mutations
 # ============================================================================

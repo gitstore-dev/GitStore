@@ -88,6 +88,30 @@ func (Category) IsNode() {}
 // Globally unique identifier (format: [type]_[base62])
 func (this Category) GetID() string { return this.ID }
 
+// Selector for looking up a category by exactly one unique key.
+type CategoryBy struct {
+	ID   *string `json:"id,omitempty"`
+	Slug *string `json:"slug,omitempty"`
+}
+
+// Connection type for paginated categories (Relay pattern)
+type CategoryConnection struct {
+	// List of category edges
+	Edges []*CategoryEdge `json:"edges"`
+	// Pagination information
+	PageInfo *PageInfo `json:"pageInfo"`
+	// Total count of categories
+	TotalCount int32 `json:"totalCount"`
+}
+
+// Edge type for Category connection (Relay pattern)
+type CategoryEdge struct {
+	// Cursor for pagination
+	Cursor string `json:"cursor"`
+	// The category node
+	Node *Category `json:"node"`
+}
+
 // Optimistic lock conflict for category
 type CategoryOptimisticLockConflict struct {
 	// Current version in database
@@ -126,6 +150,30 @@ func (Collection) IsNode() {}
 
 // Globally unique identifier (format: [type]_[base62])
 func (this Collection) GetID() string { return this.ID }
+
+// Selector for looking up a collection by exactly one unique key.
+type CollectionBy struct {
+	ID   *string `json:"id,omitempty"`
+	Slug *string `json:"slug,omitempty"`
+}
+
+// Connection type for paginated collections (Relay pattern)
+type CollectionConnection struct {
+	// List of collection edges
+	Edges []*CollectionEdge `json:"edges"`
+	// Pagination information
+	PageInfo *PageInfo `json:"pageInfo"`
+	// Total count of collections
+	TotalCount int32 `json:"totalCount"`
+}
+
+// Edge type for Collection connection (Relay pattern)
+type CollectionEdge struct {
+	// Cursor for pagination
+	Cursor string `json:"cursor"`
+	// The collection node
+	Node *Collection `json:"node"`
+}
 
 // Optimistic lock conflict for collection
 type CollectionOptimisticLockConflict struct {
@@ -189,6 +237,8 @@ type CreateCollectionPayload struct {
 
 // Input for creating a new namespace.
 type CreateNamespaceInput struct {
+	// Client mutation ID for request tracking (Relay pattern).
+	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The human-readable identifier for the namespace.
 	// Must be globally unique across all tiers.
 	// DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
@@ -208,6 +258,8 @@ type CreateNamespaceInput struct {
 
 // Payload returned after successfully creating a namespace.
 type CreateNamespacePayload struct {
+	// Client mutation ID for request tracking (Relay pattern).
+	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The newly created namespace.
 	Namespace *Namespace `json:"namespace"`
 }
@@ -284,6 +336,8 @@ type DeleteCollectionPayload struct {
 
 // Input for deleting a namespace.
 type DeleteNamespaceInput struct {
+	// Client mutation ID for request tracking (Relay pattern).
+	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The identifier of the namespace to delete.
 	// Deletion is blocked if any repositories exist within the namespace.
 	// Requires the caller to be the namespace owner (createdBy) or isAdmin.
@@ -292,6 +346,8 @@ type DeleteNamespaceInput struct {
 
 // Payload returned after successfully deleting a namespace.
 type DeleteNamespacePayload struct {
+	// Client mutation ID for request tracking (Relay pattern).
+	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The identifier of the deleted namespace.
 	DeletedIdentifier string `json:"deletedIdentifier"`
 }
@@ -380,6 +436,30 @@ func (Namespace) IsNode() {}
 // Globally unique identifier (format: [type]_[base62])
 func (this Namespace) GetID() string { return this.ID }
 
+// Selector for looking up a namespace by exactly one unique key.
+type NamespaceBy struct {
+	ID         *string `json:"id,omitempty"`
+	Identifier *string `json:"identifier,omitempty"`
+}
+
+// Connection type for paginated namespaces (Relay pattern).
+type NamespaceConnection struct {
+	// List of namespace edges.
+	Edges []*NamespaceEdge `json:"edges"`
+	// Pagination information.
+	PageInfo *PageInfo `json:"pageInfo"`
+	// Total count of namespaces.
+	TotalCount int32 `json:"totalCount"`
+}
+
+// Edge type for Namespace connection (Relay pattern).
+type NamespaceEdge struct {
+	// Cursor for pagination.
+	Cursor string `json:"cursor"`
+	// The namespace node.
+	Node *Namespace `json:"node"`
+}
+
 // Optimistic lock conflict information
 type OptimisticLockConflict struct {
 	// Current version in database
@@ -440,6 +520,12 @@ func (Product) IsNode() {}
 
 // Globally unique identifier (format: [type]_[base62])
 func (this Product) GetID() string { return this.ID }
+
+// Selector for looking up a product by exactly one unique key.
+type ProductBy struct {
+	ID  *string `json:"id,omitempty"`
+	Sku *string `json:"sku,omitempty"`
+}
 
 // Connection type for paginated products (Relay pattern)
 type ProductConnection struct {

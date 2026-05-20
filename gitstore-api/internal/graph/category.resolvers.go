@@ -15,7 +15,11 @@ import (
 
 // Products is the resolver for the products field.
 func (r *categoryResolver) Products(ctx context.Context, obj *model.Category, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
-	products, err := r.service.GetProducts(ctx, &obj.ID)
+	categoryID, err := decodeNodeIDAs(nodeKindCategory, obj.ID)
+	if err != nil {
+		return nil, err
+	}
+	products, err := r.service.GetProducts(ctx, &categoryID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get products: %w", err)
 	}

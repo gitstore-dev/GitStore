@@ -16,13 +16,22 @@ import (
 
 // CreateProduct is the resolver for the createProduct field.
 func (r *mutationResolver) CreateProduct(ctx context.Context, input model.CreateProductInput) (*model.CreateProductPayload, error) {
+	categoryID, err := decodeNodeIDAs(nodeKindCategory, input.CategoryID)
+	if err != nil {
+		return nil, err
+	}
+	collectionIDs, err := decodeNodeIDsAs(nodeKindCollection, input.CollectionIds)
+	if err != nil {
+		return nil, err
+	}
+
 	// Build input map for service
 	priceFloat, _ := input.Price.Float64()
 	serviceInput := map[string]interface{}{
 		"title":      input.Title,
 		"sku":        input.Sku,
 		"price":      priceFloat,
-		"categoryId": input.CategoryID,
+		"categoryId": categoryID,
 	}
 
 	if input.Currency != nil {
@@ -38,7 +47,7 @@ func (r *mutationResolver) CreateProduct(ctx context.Context, input model.Create
 		serviceInput["inventoryQuantity"] = int(*input.InventoryQuantity)
 	}
 	if len(input.CollectionIds) > 0 {
-		serviceInput["collectionIds"] = input.CollectionIds
+		serviceInput["collectionIds"] = collectionIDs
 	}
 	if len(input.Images) > 0 {
 		serviceInput["images"] = input.Images
@@ -64,6 +73,19 @@ func (r *mutationResolver) CreateProduct(ctx context.Context, input model.Create
 
 // UpdateProduct is the resolver for the updateProduct field.
 func (r *mutationResolver) UpdateProduct(ctx context.Context, input model.UpdateProductInput) (*model.UpdateProductPayload, error) {
+	productID, err := decodeNodeIDAs(nodeKindProduct, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	categoryID, err := decodeOptionalNodeIDAs(nodeKindCategory, input.CategoryID)
+	if err != nil {
+		return nil, err
+	}
+	collectionIDs, err := decodeNodeIDsAs(nodeKindCollection, input.CollectionIds)
+	if err != nil {
+		return nil, err
+	}
+
 	// Build input map for service
 	serviceInput := map[string]interface{}{}
 
@@ -90,10 +112,10 @@ func (r *mutationResolver) UpdateProduct(ctx context.Context, input model.Update
 		serviceInput["inventoryQuantity"] = int(*input.InventoryQuantity)
 	}
 	if input.CategoryID != nil {
-		serviceInput["categoryId"] = *input.CategoryID
+		serviceInput["categoryId"] = *categoryID
 	}
 	if len(input.CollectionIds) > 0 {
-		serviceInput["collectionIds"] = input.CollectionIds
+		serviceInput["collectionIds"] = collectionIDs
 	}
 	if len(input.Images) > 0 {
 		serviceInput["images"] = input.Images
@@ -103,7 +125,7 @@ func (r *mutationResolver) UpdateProduct(ctx context.Context, input model.Update
 	}
 
 	// Update product via service
-	catalogProduct, err := r.service.UpdateProduct(ctx, input.ID, serviceInput)
+	catalogProduct, err := r.service.UpdateProduct(ctx, productID, serviceInput)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update product: %w", err)
 	}
@@ -120,13 +142,18 @@ func (r *mutationResolver) UpdateProduct(ctx context.Context, input model.Update
 
 // DeleteProduct is the resolver for the deleteProduct field.
 func (r *mutationResolver) DeleteProduct(ctx context.Context, input model.DeleteProductInput) (*model.DeleteProductPayload, error) {
+	productID, err := decodeNodeIDAs(nodeKindProduct, input.ID)
+	if err != nil {
+		return nil, err
+	}
+
 	// Delete product via service
-	err := r.service.DeleteProduct(ctx, input.ID)
+	err = r.service.DeleteProduct(ctx, productID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to delete product: %w", err)
 	}
 
-	idCopy := input.ID
+	idCopy := mustEncodeNodeID(nodeKindProduct, productID)
 	return &model.DeleteProductPayload{
 		ClientMutationID: input.ClientMutationID,
 		DeletedProductID: &idCopy,
@@ -135,10 +162,15 @@ func (r *mutationResolver) DeleteProduct(ctx context.Context, input model.Delete
 
 // CreateCategory is the resolver for the createCategory field.
 func (r *mutationResolver) CreateCategory(ctx context.Context, input model.CreateCategoryInput) (*model.CreateCategoryPayload, error) {
+	if _, err := decodeOptionalNodeIDAs(nodeKindCategory, input.ParentID); err != nil {
+		return nil, err
+	}
+	rawID := generateID()
+
 	// TODO: Implement proper git-backed category creation
 	// For now, return mock response to unblock E2E tests
 	category := &model.Category{
-		ID:           generateID(),
+		ID:           mustEncodeNodeID(nodeKindCategory, rawID),
 		Name:         input.Name,
 		Slug:         input.Slug,
 		Body:         input.Body,
@@ -158,10 +190,18 @@ func (r *mutationResolver) CreateCategory(ctx context.Context, input model.Creat
 
 // UpdateCategory is the resolver for the updateCategory field.
 func (r *mutationResolver) UpdateCategory(ctx context.Context, input model.UpdateCategoryInput) (*model.UpdateCategoryPayload, error) {
+	categoryID, err := decodeNodeIDAs(nodeKindCategory, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := decodeOptionalNodeIDAs(nodeKindCategory, input.ParentID); err != nil {
+		return nil, err
+	}
+
 	// TODO: Implement proper git-backed category update
 	// For now, return mock response to unblock E2E tests
 	category := &model.Category{
-		ID:           input.ID,
+		ID:           mustEncodeNodeID(nodeKindCategory, categoryID),
 		Name:         stringOrDefault(input.Name, "Updated Category"),
 		Slug:         stringOrDefault(input.Slug, "updated-category"),
 		Body:         input.Body,
@@ -182,9 +222,14 @@ func (r *mutationResolver) UpdateCategory(ctx context.Context, input model.Updat
 
 // DeleteCategory is the resolver for the deleteCategory field.
 func (r *mutationResolver) DeleteCategory(ctx context.Context, input model.DeleteCategoryInput) (*model.DeleteCategoryPayload, error) {
+	categoryID, err := decodeNodeIDAs(nodeKindCategory, input.ID)
+	if err != nil {
+		return nil, err
+	}
+
 	// TODO: Implement proper git-backed category deletion
 	// For now, return mock response to unblock E2E tests
-	idCopy := input.ID
+	idCopy := mustEncodeNodeID(nodeKindCategory, categoryID)
 	return &model.DeleteCategoryPayload{
 		ClientMutationID:  input.ClientMutationID,
 		DeletedCategoryID: &idCopy,
@@ -193,12 +238,26 @@ func (r *mutationResolver) DeleteCategory(ctx context.Context, input model.Delet
 
 // ReorderCategories is the resolver for the reorderCategories field.
 func (r *mutationResolver) ReorderCategories(ctx context.Context, input model.ReorderCategoriesInput) (*model.ReorderCategoriesPayload, error) {
+	orderedIDs, err := decodeNodeIDsAs(nodeKindCategory, input.OrderedIds)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := decodeOptionalNodeIDAs(nodeKindCategory, input.ParentID); err != nil {
+		return nil, err
+	}
+	if _, err := decodeOptionalNodeIDAs(nodeKindCategory, input.MovedCategoryID); err != nil {
+		return nil, err
+	}
+	if _, err := decodeOptionalNodeIDAs(nodeKindCategory, input.NewParentID); err != nil {
+		return nil, err
+	}
+
 	// TODO: Implement proper git-backed category reordering
 	// For now, return mock response with updated display orders
-	categories := make([]*model.Category, len(input.OrderedIds))
-	for i, id := range input.OrderedIds {
+	categories := make([]*model.Category, len(orderedIDs))
+	for i, id := range orderedIDs {
 		categories[i] = &model.Category{
-			ID:           id,
+			ID:           mustEncodeNodeID(nodeKindCategory, id),
 			Name:         fmt.Sprintf("Category %d", i+1),
 			Slug:         fmt.Sprintf("category-%d", i+1),
 			DisplayOrder: int32(i),
@@ -217,8 +276,13 @@ func (r *mutationResolver) ReorderCategories(ctx context.Context, input model.Re
 
 // CreateCollection is the resolver for the createCollection field.
 func (r *mutationResolver) CreateCollection(ctx context.Context, input model.CreateCollectionInput) (*model.CreateCollectionPayload, error) {
+	if _, err := decodeNodeIDsAs(nodeKindProduct, input.ProductIds); err != nil {
+		return nil, err
+	}
+	rawID := generateID()
+
 	collection := &model.Collection{
-		ID:           generateID(),
+		ID:           mustEncodeNodeID(nodeKindCollection, rawID),
 		Name:         input.Name,
 		Slug:         input.Slug,
 		Body:         input.Body,
@@ -235,8 +299,16 @@ func (r *mutationResolver) CreateCollection(ctx context.Context, input model.Cre
 
 // UpdateCollection is the resolver for the updateCollection field.
 func (r *mutationResolver) UpdateCollection(ctx context.Context, input model.UpdateCollectionInput) (*model.UpdateCollectionPayload, error) {
+	collectionID, err := decodeNodeIDAs(nodeKindCollection, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := decodeNodeIDsAs(nodeKindProduct, input.ProductIds); err != nil {
+		return nil, err
+	}
+
 	collection := &model.Collection{
-		ID:           input.ID,
+		ID:           mustEncodeNodeID(nodeKindCollection, collectionID),
 		Name:         stringOrDefault(input.Name, "Updated Collection"),
 		Slug:         stringOrDefault(input.Slug, "updated-collection"),
 		Body:         input.Body,
@@ -254,7 +326,11 @@ func (r *mutationResolver) UpdateCollection(ctx context.Context, input model.Upd
 
 // DeleteCollection is the resolver for the deleteCollection field.
 func (r *mutationResolver) DeleteCollection(ctx context.Context, input model.DeleteCollectionInput) (*model.DeleteCollectionPayload, error) {
-	idCopy := input.ID
+	collectionID, err := decodeNodeIDAs(nodeKindCollection, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	idCopy := mustEncodeNodeID(nodeKindCollection, collectionID)
 	return &model.DeleteCollectionPayload{
 		ClientMutationID:    input.ClientMutationID,
 		DeletedCollectionID: &idCopy,
@@ -263,10 +339,15 @@ func (r *mutationResolver) DeleteCollection(ctx context.Context, input model.Del
 
 // ReorderCollections is the resolver for the reorderCollections field.
 func (r *mutationResolver) ReorderCollections(ctx context.Context, input model.ReorderCollectionsInput) (*model.ReorderCollectionsPayload, error) {
-	collections := make([]*model.Collection, len(input.OrderedIds))
-	for i, id := range input.OrderedIds {
+	orderedIDs, err := decodeNodeIDsAs(nodeKindCollection, input.OrderedIds)
+	if err != nil {
+		return nil, err
+	}
+
+	collections := make([]*model.Collection, len(orderedIDs))
+	for i, id := range orderedIDs {
 		collections[i] = &model.Collection{
-			ID:           id,
+			ID:           mustEncodeNodeID(nodeKindCollection, id),
 			Name:         fmt.Sprintf("Collection %d", i+1),
 			Slug:         fmt.Sprintf("collection-%d", i+1),
 			DisplayOrder: int32(i),
@@ -305,28 +386,45 @@ func (r *mutationResolver) PublishCatalog(ctx context.Context, input model.Publi
 
 // Node is the resolver for the node field.
 func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error) {
-	// TODO: Implement proper node resolution
-	return nil, fmt.Errorf("node not found")
+	kind, rawID, err := DecodeNodeID(id)
+	if err != nil {
+		return nil, invalidGlobalIDError(err)
+	}
+	return r.resolveNode(ctx, kind, rawID)
 }
 
 // Nodes is the resolver for the nodes field.
 func (r *queryResolver) Nodes(ctx context.Context, ids []string) ([]model.Node, error) {
-	// TODO: Implement proper nodes resolution
-	return []model.Node{}, nil
+	nodes := make([]model.Node, len(ids))
+	for i, id := range ids {
+		kind, rawID, err := DecodeNodeID(id)
+		if err != nil {
+			continue
+		}
+		node, err := r.resolveNode(ctx, kind, rawID)
+		if err != nil {
+			continue
+		}
+		nodes[i] = node
+	}
+	return nodes, nil
 }
 
 // Product is the resolver for the product field.
-func (r *queryResolver) Product(ctx context.Context, sku string) (*model.Product, error) {
-	catalogProduct, err := r.service.GetProductBySKU(ctx, sku)
-	if err != nil {
-		return nil, nil // Return nil instead of error for not found
+func (r *queryResolver) Product(ctx context.Context, by model.ProductBy) (*model.Product, error) {
+	if by.ID != nil {
+		productID, err := decodeNodeIDAs(nodeKindProduct, *by.ID)
+		if err != nil {
+			return nil, err
+		}
+		catalogProduct, err := r.service.GetProductByID(ctx, productID)
+		if err != nil {
+			return nil, nil // Return nil instead of error for not found
+		}
+		return CatalogProductToGraphQL(catalogProduct), nil
 	}
-	return CatalogProductToGraphQL(catalogProduct), nil
-}
 
-// ProductByID is the resolver for the productById field.
-func (r *queryResolver) ProductByID(ctx context.Context, id string) (*model.Product, error) {
-	catalogProduct, err := r.service.GetProductByID(ctx, id)
+	catalogProduct, err := r.service.GetProductBySKU(ctx, *by.Sku)
 	if err != nil {
 		return nil, nil // Return nil instead of error for not found
 	}
@@ -338,7 +436,17 @@ func (r *queryResolver) Products(ctx context.Context, first *int32, after *strin
 	// Get category filter if specified
 	var categoryID *string
 	if filter != nil {
-		categoryID = filter.CategoryID
+		var err error
+		categoryID, err = decodeOptionalNodeIDAs(nodeKindCategory, filter.CategoryID)
+		if err != nil {
+			return nil, err
+		}
+		filter = copyProductFilter(filter)
+		filter.CategoryID = categoryID
+		filter.CollectionID, err = decodeOptionalNodeIDAs(nodeKindCollection, filter.CollectionID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Get products from service
@@ -356,72 +464,66 @@ func (r *queryResolver) Products(ctx context.Context, first *int32, after *strin
 	return PaginateProducts(products, first, after, last, before)
 }
 
-// Category returns a category by slug
-func (r *queryResolver) Category(ctx context.Context, slug string) (*model.Category, error) {
-	catalogCategory, err := r.service.GetCategoryBySlug(ctx, slug)
+// Category is the resolver for the category field.
+func (r *queryResolver) Category(ctx context.Context, by model.CategoryBy) (*model.Category, error) {
+	if by.ID != nil {
+		categoryID, err := decodeNodeIDAs(nodeKindCategory, *by.ID)
+		if err != nil {
+			return nil, err
+		}
+		catalogCategory, err := r.service.GetCategoryByID(ctx, categoryID)
+		if err != nil {
+			return nil, nil // Return nil for not found (not an error)
+		}
+		return CatalogCategoryToGraphQL(catalogCategory), nil
+	}
+
+	catalogCategory, err := r.service.GetCategoryBySlug(ctx, *by.Slug)
 	if err != nil {
 		return nil, nil // Return nil for not found (not an error)
 	}
 	return CatalogCategoryToGraphQL(catalogCategory), nil
 }
 
-// CategoryByID is the resolver for the categoryById field.
-func (r *queryResolver) CategoryByID(ctx context.Context, id string) (*model.Category, error) {
-	catalogCategory, err := r.service.GetCategoryByID(ctx, id)
-	if err != nil {
-		return nil, nil // Return nil for not found
-	}
-	return CatalogCategoryToGraphQL(catalogCategory), nil
-}
-
-// Categories returns all categories in hierarchical structure
-func (r *queryResolver) Categories(ctx context.Context) ([]*model.Category, error) {
+// Categories returns categories as a Relay connection.
+func (r *queryResolver) Categories(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.CategoryConnection, error) {
 	catalogCategories, err := r.service.GetCategories(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get categories: %w", err)
 	}
 
-	// Convert to GraphQL models
-	categories := make([]*model.Category, len(catalogCategories))
-	for i, cat := range catalogCategories {
-		categories[i] = CatalogCategoryToGraphQL(cat)
-	}
-
-	return categories, nil
+	return PaginateCategories(catalogCategories, first, after, last, before)
 }
 
-// Collection returns a collection by slug
-func (r *queryResolver) Collection(ctx context.Context, slug string) (*model.Collection, error) {
-	catalogCollection, err := r.service.GetCollectionBySlug(ctx, slug)
+// Collection is the resolver for the collection field.
+func (r *queryResolver) Collection(ctx context.Context, by model.CollectionBy) (*model.Collection, error) {
+	if by.ID != nil {
+		collectionID, err := decodeNodeIDAs(nodeKindCollection, *by.ID)
+		if err != nil {
+			return nil, err
+		}
+		catalogCollection, err := r.service.GetCollectionByID(ctx, collectionID)
+		if err != nil {
+			return nil, nil // Return nil for not found
+		}
+		return CatalogCollectionToGraphQL(catalogCollection), nil
+	}
+
+	catalogCollection, err := r.service.GetCollectionBySlug(ctx, *by.Slug)
 	if err != nil {
 		return nil, nil // Return nil for not found
 	}
 	return CatalogCollectionToGraphQL(catalogCollection), nil
 }
 
-// CollectionByID is the resolver for the collectionById field.
-func (r *queryResolver) CollectionByID(ctx context.Context, id string) (*model.Collection, error) {
-	catalogCollection, err := r.service.GetCollectionByID(ctx, id)
-	if err != nil {
-		return nil, nil // Return nil for not found
-	}
-	return CatalogCollectionToGraphQL(catalogCollection), nil
-}
-
-// Collections returns all collections
-func (r *queryResolver) Collections(ctx context.Context) ([]*model.Collection, error) {
+// Collections returns collections as a Relay connection.
+func (r *queryResolver) Collections(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.CollectionConnection, error) {
 	catalogCollections, err := r.service.GetCollections(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get collections: %w", err)
 	}
 
-	// Convert to GraphQL models
-	collections := make([]*model.Collection, len(catalogCollections))
-	for i, coll := range catalogCollections {
-		collections[i] = CatalogCollectionToGraphQL(coll)
-	}
-
-	return collections, nil
+	return PaginateCollections(catalogCollections, first, after, last, before)
 }
 
 // CatalogVersion is the resolver for the catalogVersion field.

@@ -22,7 +22,7 @@ Add your queries and mutations to the `.graphql` files:
 **queries.graphql:**
 ```graphql
 query GetProduct($sku: String!) {
-  product(sku: $sku) {
+  product(by: {sku: $sku}) {
     id
     title
     sku

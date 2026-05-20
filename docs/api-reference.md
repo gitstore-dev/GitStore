@@ -15,6 +15,8 @@ Complete reference documentation for the GitStore GraphQL API.
 - [Filtering and Pagination](#filtering-and-pagination)
 - [Error Handling](#error-handling)
 - [Examples](#examples)
+- [Controller Watch Stream (Proposal)](#controller-watch-stream-proposal)
+- [Versioning](#versioning)
 
 ## Overview
 
@@ -34,9 +36,38 @@ GitStore provides a GraphQL API following the [Relay specification](https://rela
 
 ## Authentication
 
-The current version does not require authentication for read operations. Mutations will require authentication in future versions.
+Read operations are public unless a resolver documents otherwise. Protected mutations require a JWT bearer token in the `Authorization` header:
+
+```http
+Authorization: Bearer <token>
+```
+
+Obtain a token with the GraphQL `login` mutation:
+
+```graphql
+mutation {
+  login(input: { username: "admin", password: "<password>" }) {
+    session {
+      token
+      expiresAt
+      user {
+        username
+        isAdmin
+      }
+    }
+  }
+}
+```
+
+Namespace create and delete mutations require authentication. Creating `ENTERPRISE` namespaces requires `session.user.isAdmin == true`.
 
 ## Query Operations
+
+### Global Node IDs
+
+All GraphQL types that implement `Node` expose opaque global IDs. The ID format is base64-encoded `gid://GitStore/{NodeType}/{rawID}`. For example, product raw ID `123` is returned as `Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC8xMjM=`.
+
+Clients should treat these values as opaque and pass them back unchanged to `node`, `nodes`, lookup selectors such as `product(by: {id: ...})`, filters, and mutation fields typed as `ID`. Business identifiers such as `product(by: {sku: ...})`, `category(by: {slug: ...})`, `collection(by: {slug: ...})`, `namespace(by: {identifier: ...})`, and namespace `parentEnterpriseIdentifier` are not global IDs.
 
 ### node
 
@@ -44,7 +75,7 @@ Fetch any object by its globally unique ID (Relay Node interface).
 
 ```graphql
 query {
-  node(id: "prod_macbook_001") {
+  node(id: "Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC8xMjM=") {
     id
     ... on Product {
       title
@@ -57,7 +88,7 @@ query {
 **Arguments**:
 - `id: ID!` - Globally unique identifier
 
-**Returns**: `Node` (can be cast to Product, Category, or Collection)
+**Returns**: `Node` (can be cast to Product, Category, Collection, or Namespace)
 
 ---
 
@@ -67,7 +98,7 @@ Fetch multiple objects by their IDs.
 
 ```graphql
 query {
-  nodes(ids: ["prod_macbook_001", "cat_electronics_001"]) {
+  nodes(ids: ["Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC8xMjM=", "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvMTIz"]) {
     id
     ... on Product {
       title
@@ -86,13 +117,40 @@ query {
 
 ---
 
-### product
+### namespace
 
-Get a single product by SKU.
+Get a namespace by exactly one unique selector: `id` or `identifier`.
 
 ```graphql
 query {
-  product(sku: "MBP-16-M3-2024") {
+  namespace(by: {identifier: "acme-corp"}) {
+    id
+    identifier
+    displayName
+    tier
+    parentEnterpriseId
+    createdAt
+    createdBy
+    updatedAt
+    updatedBy
+  }
+}
+```
+
+**Arguments**:
+- `by: NamespaceBy!` - One of `id` (global ID) or `identifier`
+
+**Returns**: `Namespace` (nullable)
+
+---
+
+### product
+
+Get a single product by exactly one unique selector: `id` or `sku`.
+
+```graphql
+query {
+  product(by: {sku: "MBP-16-M3-2024"}) {
     id
     title
     price
@@ -102,28 +160,7 @@ query {
 ```
 
 **Arguments**:
-- `sku: String!` - Stock Keeping Unit
-
-**Returns**: `Product` (nullable)
-
----
-
-### productById
-
-Get a single product by ID.
-
-```graphql
-query {
-  productById(id: "prod_macbook_001") {
-    id
-    sku
-    title
-  }
-}
-```
-
-**Arguments**:
-- `id: ID!` - Product ID
+- `by: ProductBy!` - One of `id` (global ID) or `sku`
 
 **Returns**: `Product` (nullable)
 
@@ -139,7 +176,7 @@ query {
     first: 10
     after: "cursor_abc"
     filter: {
-      categoryId: "cat_computers_001"
+      categoryId: "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvMTIz"
       priceMin: "100"
       priceMax: "5000"
       inventoryStatus: IN_STOCK
@@ -175,11 +212,11 @@ query {
 
 ### category
 
-Get a category by slug.
+Get a category by exactly one unique selector: `id` or `slug`.
 
 ```graphql
 query {
-  category(slug: "electronics") {
+  category(by: {slug: "electronics"}) {
     id
     name
     children {
@@ -190,30 +227,7 @@ query {
 ```
 
 **Arguments**:
-- `slug: String!` - URL-friendly category identifier
-
-**Returns**: `Category` (nullable)
-
----
-
-### categoryById
-
-Get a category by ID.
-
-```graphql
-query {
-  categoryById(id: "cat_electronics_001") {
-    id
-    name
-    parent {
-      name
-    }
-  }
-}
-```
-
-**Arguments**:
-- `id: ID!` - Category ID
+- `by: CategoryBy!` - One of `id` (global ID) or `slug`
 
 **Returns**: `Category` (nullable)
 
@@ -221,35 +235,45 @@ query {
 
 ### categories
 
-Get all categories in hierarchical structure.
+Get categories in hierarchical structure with Relay cursor-based pagination.
 
 ```graphql
 query {
-  categories {
-    id
-    name
-    displayOrder
-    parent {
-      name
+  categories(first: 20) {
+    edges {
+      cursor
+      node {
+        id
+        name
+        displayOrder
+        parent {
+          name
+        }
+        children {
+          name
+        }
+      }
     }
-    children {
-      name
+    pageInfo {
+      hasNextPage
+      endCursor
     }
+    totalCount
   }
 }
 ```
 
-**Returns**: `[Category!]!`
+**Returns**: `CategoryConnection!`
 
 ---
 
 ### collection
 
-Get a collection by slug.
+Get a collection by exactly one unique selector: `id` or `slug`.
 
 ```graphql
 query {
-  collection(slug: "featured") {
+  collection(by: {slug: "featured"}) {
     id
     name
     products {
@@ -264,27 +288,7 @@ query {
 ```
 
 **Arguments**:
-- `slug: String!` - URL-friendly collection identifier
-
-**Returns**: `Collection` (nullable)
-
----
-
-### collectionById
-
-Get a collection by ID.
-
-```graphql
-query {
-  collectionById(id: "coll_featured_001") {
-    id
-    name
-  }
-}
-```
-
-**Arguments**:
-- `id: ID!` - Collection ID
+- `by: CollectionBy!` - One of `id` (global ID) or `slug`
 
 **Returns**: `Collection` (nullable)
 
@@ -292,20 +296,30 @@ query {
 
 ### collections
 
-Get all collections.
+Get collections with Relay cursor-based pagination.
 
 ```graphql
 query {
-  collections {
-    id
-    name
-    slug
-    displayOrder
+  collections(first: 20) {
+    edges {
+      cursor
+      node {
+        id
+        name
+        slug
+        displayOrder
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
   }
 }
 ```
 
-**Returns**: `[Collection!]!`
+**Returns**: `CollectionConnection!`
 
 ---
 
@@ -328,6 +342,98 @@ query {
 
 ## Mutation Operations
 
+### login
+
+Authenticate and return a JWT session.
+
+```graphql
+mutation {
+  login(input: { username: "admin", password: "<password>" }) {
+    session {
+      token
+      expiresAt
+      user {
+        username
+        isAdmin
+      }
+    }
+  }
+}
+```
+
+**Input Fields**:
+- `username: String!` - Configured admin username
+- `password: String!` - Configured admin password
+- `clientMutationId: String` - Client-side mutation tracking
+
+**Returns**: `LoginPayload!`
+
+---
+
+### createNamespace
+
+Create a namespace. Requires authentication; `ENTERPRISE` requires an admin token.
+
+```graphql
+mutation {
+  createNamespace(
+    input: {
+      clientMutationId: "create-acme-corp"
+      identifier: "acme-corp"
+      displayName: "Acme Corporation"
+      tier: USER
+    }
+  ) {
+    clientMutationId
+    namespace {
+      id
+      identifier
+      displayName
+      tier
+      createdAt
+      createdBy
+    }
+  }
+}
+```
+
+**Input Fields**:
+- `clientMutationId: String` - Client-side mutation tracking
+- `identifier: String!` - Globally unique namespace identifier
+- `displayName: String` - Optional human-friendly display name
+- `tier: NamespaceTier!` - `USER`, `ORGANISATION`, or `ENTERPRISE`
+- `parentEnterpriseIdentifier: String` - Optional parent enterprise identifier for `ORGANISATION`
+
+**Returns**: `CreateNamespacePayload!`
+
+---
+
+### deleteNamespace
+
+Delete an empty namespace. Requires the namespace owner or an admin token.
+
+```graphql
+mutation {
+  deleteNamespace(
+    input: {
+      clientMutationId: "delete-acme-corp"
+      identifier: "acme-corp"
+    }
+  ) {
+    clientMutationId
+    deletedIdentifier
+  }
+}
+```
+
+**Input Fields**:
+- `clientMutationId: String` - Client-side mutation tracking
+- `identifier: String!` - Namespace identifier to delete
+
+**Returns**: `DeleteNamespacePayload!`
+
+---
+
 ### createProduct
 
 Create a new product.
@@ -340,7 +446,7 @@ mutation {
       sku: "PROD-001"
       price: "99.99"
       currency: "USD"
-      categoryId: "cat_electronics_001"
+      categoryId: "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvMTIz"
       inventoryStatus: IN_STOCK
       inventoryQuantity: 50
       clientMutationId: "create-product-1"
@@ -360,9 +466,9 @@ mutation {
 - `sku: String!` - Stock Keeping Unit (must be unique)
 - `price: Decimal!` - Product price
 - `currency: String!` - ISO currency code
-- `categoryId: ID!` - Category assignment
+- `categoryId: ID!` - Category global ID
 - `body: String` - Product description (markdown)
-- `collectionIds: [ID!]` - Collections to add product to
+- `collectionIds: [ID!]` - Collection global IDs to add product to
 - `images: [String!]` - Array of image URLs
 - `inventoryStatus: InventoryStatus` - Stock status
 - `inventoryQuantity: Int` - Available quantity
@@ -381,7 +487,7 @@ Update an existing product.
 mutation {
   updateProduct(
     input: {
-      id: "prod_macbook_001"
+      id: "Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC8xMjM="
       title: "Updated Title"
       price: "3599.00"
       clientMutationId: "update-product-1"
@@ -404,7 +510,7 @@ mutation {
 ```
 
 **Input Fields**:
-- `id: ID!` - Product ID
+- `id: ID!` - Product global ID
 - All other fields optional (only provided fields are updated)
 
 **Returns**: `UpdateProductPayload!` with optional `conflict` field for concurrent edit detection
@@ -419,7 +525,7 @@ Delete a product.
 mutation {
   deleteProduct(
     input: {
-      id: "prod_macbook_001"
+      id: "Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC8xMjM="
       clientMutationId: "delete-product-1"
     }
   ) {
@@ -430,7 +536,7 @@ mutation {
 ```
 
 **Input Fields**:
-- `id: ID!` - Product ID to delete
+- `id: ID!` - Product global ID to delete
 - `clientMutationId: String`
 
 **Returns**: `DeleteProductPayload!`
@@ -447,7 +553,7 @@ mutation {
     input: {
       name: "Laptops"
       slug: "laptops"
-      parentId: "cat_electronics_001"
+      parentId: "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvMTIz"
       displayOrder: 1
       clientMutationId: "create-category-1"
     }
@@ -468,7 +574,7 @@ mutation {
 - `name: String!` - Category name
 - `slug: String!` - URL-friendly identifier
 - `body: String` - Description (markdown)
-- `parentId: ID` - Parent category for hierarchy
+- `parentId: ID` - Parent category global ID for hierarchy
 - `displayOrder: Int` - Sort order
 - `clientMutationId: String`
 
@@ -484,7 +590,7 @@ Update an existing category.
 mutation {
   updateCategory(
     input: {
-      id: "cat_electronics_001"
+      id: "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvMTIz"
       name: "Electronics & Gadgets"
       displayOrder: 0
     }
@@ -510,7 +616,7 @@ Delete a category.
 mutation {
   deleteCategory(
     input: {
-      id: "cat_electronics_001"
+      id: "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvMTIz"
     }
   ) {
     deletedCategoryId
@@ -531,9 +637,9 @@ mutation {
   reorderCategories(
     input: {
       orderedIds: [
-        "cat_electronics_001",
-        "cat_books_001",
-        "cat_clothing_001"
+        "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvMTIz",
+        "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvMTI0",
+        "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvMTI1"
       ]
     }
   ) {
@@ -582,7 +688,7 @@ Update an existing collection.
 mutation {
   updateCollection(
     input: {
-      id: "coll_featured_001"
+      id: "Z2lkOi8vR2l0U3RvcmUvQ29sbGVjdGlvbi8xMjM="
       name: "Featured Items"
     }
   ) {
@@ -607,7 +713,7 @@ Delete a collection.
 mutation {
   deleteCollection(
     input: {
-      id: "coll_featured_001"
+      id: "Z2lkOi8vR2l0U3RvcmUvQ29sbGVjdGlvbi8xMjM="
     }
   ) {
     deletedCollectionId
@@ -628,9 +734,9 @@ mutation {
   reorderCollections(
     input: {
       orderedIds: [
-        "coll_featured_001",
-        "coll_new_001",
-        "coll_bestsellers_001"
+        "Z2lkOi8vR2l0U3RvcmUvQ29sbGVjdGlvbi8xMjM=",
+        "Z2lkOi8vR2l0U3RvcmUvQ29sbGVjdGlvbi8xMjQ=",
+        "Z2lkOi8vR2l0U3RvcmUvQ29sbGVjdGlvbi8xMjU="
       ]
     }
   ) {
@@ -738,9 +844,9 @@ type Collection implements Node {
 }
 ```
 
-### ProductConnection
+### Connections
 
-Relay-style connection for cursor-based pagination.
+Relay-style connections for cursor-based pagination.
 
 ```graphql
 type ProductConnection {
@@ -752,6 +858,39 @@ type ProductConnection {
 type ProductEdge {
   cursor: String!
   node: Product!
+}
+
+type CategoryConnection {
+  edges: [CategoryEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type CategoryEdge {
+  cursor: String!
+  node: Category!
+}
+
+type CollectionConnection {
+  edges: [CollectionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type CollectionEdge {
+  cursor: String!
+  node: Collection!
+}
+
+type NamespaceConnection {
+  edges: [NamespaceEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type NamespaceEdge {
+  cursor: String!
+  node: Namespace!
 }
 
 type PageInfo {
@@ -866,12 +1005,12 @@ input ProductFilter {
 
 **By category**:
 ```graphql
-filter: { categoryId: "cat_electronics_001" }
+filter: { categoryId: "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvMTIz" }
 ```
 
 **By collection**:
 ```graphql
-filter: { collectionId: "coll_featured_001" }
+filter: { collectionId: "Z2lkOi8vR2l0U3RvcmUvQ29sbGVjdGlvbi8xMjM=" }
 ```
 
 **By price range**:
@@ -887,7 +1026,7 @@ filter: { inventoryStatus: IN_STOCK }
 **Multiple filters** (AND logic):
 ```graphql
 filter: {
-  categoryId: "cat_electronics_001"
+  categoryId: "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvMTIz"
   priceMax: "1000"
   inventoryStatus: IN_STOCK
 }
@@ -957,7 +1096,7 @@ Queries that fetch single entities return `null` if not found:
 
 ```graphql
 query {
-  product(sku: "NONEXISTENT") {
+  product(by: {sku: "NONEXISTENT"}) {
     id  # Returns null if product not found
   }
 }
@@ -980,7 +1119,7 @@ if (result.data.product) {
 
 ```graphql
 query GetProductDetails($sku: String!) {
-  product(sku: $sku) {
+  product(by: {sku: $sku}) {
     id
     sku
     title
@@ -1057,24 +1196,28 @@ query ListProducts(
 
 ```graphql
 query GetCategoryHierarchy {
-  categories {
-    id
-    name
-    displayOrder
-    parent {
-      id
-      name
-    }
-    children {
-      id
-      name
-      displayOrder
-    }
-    products(first: 5) {
-      totalCount
-      edges {
-        node {
-          title
+  categories(first: 50) {
+    edges {
+      node {
+        id
+        name
+        displayOrder
+        parent {
+          id
+          name
+        }
+        children {
+          id
+          name
+          displayOrder
+        }
+        products(first: 5) {
+          totalCount
+          edges {
+            node {
+              title
+            }
+          }
         }
       }
     }
@@ -1110,8 +1253,8 @@ mutation CreateProductComplete($input: CreateProductInput!) {
     "sku": "MOUSE-WIRELESS-001",
     "price": "29.99",
     "currency": "USD",
-    "categoryId": "cat_accessories_001",
-    "collectionIds": ["coll_featured_001", "coll_new_001"],
+    "categoryId": "Z2lkOi8vR2l0U3RvcmUvQ2F0ZWdvcnkvMTIz",
+    "collectionIds": ["Z2lkOi8vR2l0U3RvcmUvQ29sbGVjdGlvbi8xMjM=", "Z2lkOi8vR2l0U3RvcmUvQ29sbGVjdGlvbi8xMjQ="],
     "inventoryStatus": "IN_STOCK",
     "inventoryQuantity": 100,
     "images": ["https://cdn.example.com/mouse.jpg"],
@@ -1166,6 +1309,57 @@ mutation PublishCatalog {
 }
 ```
 
+## Controller Watch Stream (Proposal)
+
+GitStore remains GraphQL-first, but controller loops for core resources and CRD kinds need Kubernetes-like watch semantics. The watch stream is exposed as GraphQL subscriptions over HTTP-compatible streaming transport (GraphQL-over-SSE).
+
+### Event Model
+
+- Event types follow `ADDED`, `MODIFIED`, and `DELETED`.
+- Each event carries the full reconciled resource (`metadata`, `.spec`, `.status`).
+- `metadata.resourceVersion` is monotonic and used as a resume token.
+
+### Subscription Shape
+
+```graphql
+subscription WatchProducts($after: String) {
+  watchProducts(afterResourceVersion: $after) {
+    type
+    resourceVersion
+    object {
+      metadata {
+        uid
+        resourceVersion
+      }
+      spec {
+        title
+        price
+      }
+      status {
+        inventory
+        lastReconciledAt
+      }
+    }
+  }
+}
+```
+
+### Resume and Recovery
+
+Controllers should use a list-then-watch pattern:
+
+1. Query current state snapshot.
+2. Start subscription with `afterResourceVersion` from the snapshot.
+3. On disconnect, reconnect with the last applied resource version.
+4. If the server reports the resume point is too old, relist and restart the watch from a fresh snapshot.
+
+### Controller Write-Back Pattern
+
+- Controllers observe events from the stream.
+- Controllers perform side effects out-of-band.
+- Controllers write observed state via GraphQL status mutations.
+- API persists the new status and emits the next watch event.
+
 ## Rate Limiting
 
 The API currently does not enforce rate limits. Future versions will implement rate limiting with the following headers:
@@ -1176,11 +1370,37 @@ The API currently does not enforce rate limits. Future versions will implement r
 
 ## Versioning
 
-The API follows the catalog version from the latest release tag. Breaking schema changes will be communicated via:
+The GraphQL API uses a single endpoint with schema evolution rather than versioned GraphQL paths.
 
-- Deprecation notices in schema
-- Migration guides in documentation
-- Backward-compatible transitions where possible
+For CRD-style kinds, the platform applies a hub-and-spoke conversion model:
+
+- Each kind has one designated hub version (storage state), such as `gitstore.dev/v2`.
+- Inbound manifests using older versions are converted to the hub version during the write pipeline.
+- KV projections and core synthesised GraphQL types reflect hub-version shape.
+
+### Conversion Hooks
+
+When a kind introduces a breaking version, the owner provides WASI conversion hooks:
+
+- Upgrade conversion (for example `v1 -> v2`)
+- Downgrade conversion (for example `v2 -> v1`)
+
+Write-time flow:
+
+1. Client pushes a resource with non-hub `apiVersion`.
+2. Orchestrator invokes the conversion hook.
+3. Converted hub resource is validated and projected.
+4. Read models remain normalised on hub version.
+
+### GraphQL Backward Compatibility
+
+Backward compatibility is maintained through field deprecation instead of endpoint versioning:
+
+- Keep old fields available during migration windows.
+- Mark legacy fields with `@deprecated(reason: "...")`.
+- Resolve deprecated fields from hub state in resolver logic.
+
+Example: if `price` is replaced by `pricingMatrix`, schema can expose both fields while clients migrate.
 
 ## Additional Resources
 

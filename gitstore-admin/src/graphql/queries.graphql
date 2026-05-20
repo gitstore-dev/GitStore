@@ -32,7 +32,7 @@ query GetProducts($first: Int, $after: String, $filter: ProductFilter) {
 }
 
 query GetProduct($sku: String!) {
-  product(sku: $sku) {
+  product(by: {sku: $sku}) {
     id
     title
     sku
@@ -52,7 +52,7 @@ query GetProduct($sku: String!) {
 }
 
 query GetProductById($id: ID!) {
-  productById(id: $id) {
+  product(by: {id: $id}) {
     id
     title
     sku
@@ -89,7 +89,7 @@ query GetCategories {
 }
 
 query GetCategory($slug: String!) {
-  category(slug: $slug) {
+  category(by: {slug: $slug}) {
     id
     name
     slug
@@ -104,7 +104,7 @@ query GetCategory($slug: String!) {
 }
 
 query GetCategoryById($id: ID!) {
-  categoryById(id: $id) {
+  category(by: {id: $id}) {
     id
     name
     slug
@@ -136,7 +136,7 @@ query GetCollections {
 }
 
 query GetCollection($slug: String!) {
-  collection(slug: $slug) {
+  collection(by: {slug: $slug}) {
     id
     name
     slug
@@ -151,7 +151,7 @@ query GetCollection($slug: String!) {
 }
 
 query GetCollectionById($id: ID!) {
-  collectionById(id: $id) {
+  collection(by: {id: $id}) {
     id
     name
     slug

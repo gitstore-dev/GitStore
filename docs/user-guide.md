@@ -321,7 +321,7 @@ query {
 **Get a specific product by SKU**:
 ```graphql
 query {
-  product(sku: "MBP-16-M3-2024") {
+  product(by: {sku: "MBP-16-M3-2024"}) {
     id
     title
     price
@@ -364,13 +364,17 @@ query {
 ```graphql
 query {
   categories {
-    id
-    name
-    parent {
-      name
-    }
-    children {
-      name
+    edges {
+      node {
+        id
+        name
+        parent {
+          name
+        }
+        children {
+          name
+        }
+      }
     }
   }
 }

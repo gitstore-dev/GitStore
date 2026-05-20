@@ -43,10 +43,12 @@ The server starts at `http://localhost:4000`. The GraphQL Playground is at `http
 Namespace mutations require authentication. Obtain a JWT token:
 
 ```bash
-curl -s -X POST http://localhost:4000/api/login \
+curl -s -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"<your-password>"}' \
-  | jq -r '.token'
+  -d '{
+    "query": "mutation { login(input: { username: \"admin\", password: \"<your-password>\" }) { session { token user { username isAdmin } } } }"
+  }' \
+  | jq -r '.data.login.session.token'
 ```
 
 Export the token:
@@ -64,7 +66,7 @@ curl -s -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "query": "mutation { createNamespace(input: { identifier: \"alice\", tier: USER }) { namespace { id identifier tier createdAt createdBy } } }"
+    "query": "mutation { createNamespace(input: { clientMutationId: \"create-alice\", identifier: \"alice\", tier: USER }) { clientMutationId namespace { id identifier tier createdAt createdBy } } }"
   }' | jq .
 ```
 
@@ -73,6 +75,7 @@ Expected response:
 {
   "data": {
     "createNamespace": {
+      "clientMutationId": "create-alice",
       "namespace": {
         "id": "<uuid>",
         "identifier": "alice",
@@ -95,7 +98,7 @@ curl -s -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "query": "mutation { createNamespace(input: { identifier: \"acme-enterprise\", tier: ENTERPRISE, displayName: \"Acme Enterprise\" }) { namespace { id identifier tier } } }"
+    "query": "mutation { createNamespace(input: { clientMutationId: \"create-acme-enterprise\", identifier: \"acme-enterprise\", tier: ENTERPRISE, displayName: \"Acme Enterprise\" }) { clientMutationId namespace { id identifier tier } } }"
   }' | jq .
 
 # 2. Create the org namespace with the parent enterprise
@@ -103,7 +106,7 @@ curl -s -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "query": "mutation { createNamespace(input: { identifier: \"acme-engineering\", tier: ORGANISATION, parentEnterpriseIdentifier: \"acme-enterprise\" }) { namespace { id identifier tier parentEnterpriseId } } }"
+    "query": "mutation { createNamespace(input: { clientMutationId: \"create-acme-engineering\", identifier: \"acme-engineering\", tier: ORGANISATION, parentEnterpriseIdentifier: \"acme-enterprise\" }) { clientMutationId namespace { id identifier tier parentEnterpriseId } } }"
   }' | jq .
 ```
 
@@ -116,7 +119,7 @@ curl -s -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "query": "query { namespaces { id identifier displayName tier createdAt createdBy } }"
+    "query": "query { namespaces(first: 20) { edges { cursor node { id identifier displayName tier createdAt createdBy } } pageInfo { hasNextPage endCursor } totalCount } }"
   }' | jq .
 ```
 
@@ -129,7 +132,22 @@ curl -s -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "query": "query { namespace(identifier: \"alice\") { id identifier tier createdAt createdBy updatedAt updatedBy } }"
+    "query": "query { namespace(by: {identifier: \"alice\"}) { id identifier tier createdAt createdBy updatedAt updatedBy } }"
+  }' | jq .
+```
+
+---
+
+## Get a Namespace by ID
+
+Use the `id` returned by `createNamespace`, `namespaces`, or `namespace(by: {identifier: ...})`.
+
+```bash
+curl -s -X POST http://localhost:4000/graphql \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "query": "query { namespace(by: {id: \"<namespace-id>\"}) { id identifier tier createdAt createdBy updatedAt updatedBy } }"
   }' | jq .
 ```
 
@@ -142,7 +160,7 @@ curl -s -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "query": "mutation { deleteNamespace(input: { identifier: \"alice\" }) { deletedIdentifier } }"
+    "query": "mutation { deleteNamespace(input: { clientMutationId: \"delete-alice\", identifier: \"alice\" }) { clientMutationId deletedIdentifier } }"
   }' | jq .
 ```
 
@@ -151,6 +169,7 @@ Expected:
 {
   "data": {
     "deleteNamespace": {
+      "clientMutationId": "delete-alice",
       "deletedIdentifier": "alice"
     }
   }
@@ -168,7 +187,7 @@ Expected:
 curl -s -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"query": "mutation { createNamespace(input: { identifier: \"alice\", tier: USER }) { namespace { id } } }"}' | jq .
+  -d '{"query": "mutation { createNamespace(input: { clientMutationId: \"create-alice-duplicate\", identifier: \"alice\", tier: USER }) { clientMutationId namespace { id } } }"}' | jq .
 # Expected: errors[0].message contains "already exists"
 ```
 
@@ -179,7 +198,7 @@ curl -s -X POST http://localhost:4000/graphql \
 curl -s -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"query": "mutation { createNamespace(input: { identifier: \"Invalid Name!\", tier: USER }) { namespace { id } } }"}' | jq .
+  -d '{"query": "mutation { createNamespace(input: { clientMutationId: \"create-invalid\", identifier: \"Invalid Name!\", tier: USER }) { clientMutationId namespace { id } } }"}' | jq .
 # Expected: errors[0].message contains "invalid identifier"
 ```
 
@@ -193,7 +212,7 @@ Any authenticated user attempting to create an `ENTERPRISE` tier namespace when 
 curl -s -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"query": "mutation { deleteNamespace(input: { identifier: \"unknown-ns\" }) { deletedIdentifier } }"}' | jq .
+  -d '{"query": "mutation { deleteNamespace(input: { clientMutationId: \"delete-unknown\", identifier: \"unknown-ns\" }) { clientMutationId deletedIdentifier } }"}' | jq .
 # Expected: errors[0].message contains "not found"
 ```
 

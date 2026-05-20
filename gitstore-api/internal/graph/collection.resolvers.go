@@ -15,6 +15,11 @@ import (
 
 // Products is the resolver for the products field.
 func (r *collectionResolver) Products(ctx context.Context, obj *model.Collection, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
+	collectionID, err := decodeNodeIDAs(nodeKindCollection, obj.ID)
+	if err != nil {
+		return nil, err
+	}
+
 	// Get all products and filter to those belonging to this collection.
 	// The datastore doesn't yet have a direct collection-filter; we fetch all
 	// and filter client-side. This matches the previous behaviour.
@@ -27,7 +32,7 @@ func (r *collectionResolver) Products(ctx context.Context, obj *model.Collection
 	edges := make([]*model.ProductEdge, 0)
 	for _, p := range all {
 		for _, cid := range p.CollectionIDs {
-			if cid == obj.ID {
+			if cid == collectionID {
 				edges = append(edges, &model.ProductEdge{
 					Cursor: p.ID,
 					Node:   CatalogProductToGraphQL(p),

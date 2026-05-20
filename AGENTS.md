@@ -29,7 +29,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 
 
 <!-- MANUAL ADDITIONS START -->
-## GitOps
+## Development Guidelines
 
 - Before creating a PR do the following checks:
 
@@ -53,7 +53,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
   go install honnef.co/go/tools/cmd/staticcheck@latest
   staticcheck ./...
   go build -v ./...
-  go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+  go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
   # Check Go license headers (all files + branch diff)
   cd ..

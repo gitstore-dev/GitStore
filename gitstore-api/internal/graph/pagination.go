@@ -73,20 +73,41 @@ func applyCursorPagination(
 	last *int32,
 	before *string,
 ) ([]*model.ProductEdge, bool, bool, error) {
+	start, end, hasNextPage, hasPreviousPage, err := applyCursorWindow(len(allEdges), first, after, last, before)
+	if err != nil {
+		return nil, false, false, err
+	}
+	return allEdges[start:end], hasNextPage, hasPreviousPage, nil
+}
+
+func applyCursorWindow(
+	totalCount int,
+	first *int32,
+	after *string,
+	last *int32,
+	before *string,
+) (int, int, bool, bool, error) {
+	if first != nil && *first < 0 {
+		return 0, 0, false, false, fmt.Errorf("first must be non-negative")
+	}
+	if last != nil && *last < 0 {
+		return 0, 0, false, false, fmt.Errorf("last must be non-negative")
+	}
+
 	// Start with all edges
-	edges := allEdges
-	totalCount := len(allEdges)
+	start := 0
+	end := totalCount
 
 	// Apply 'after' cursor
 	if after != nil {
 		afterIndex, err := decodeCursor(*after)
 		if err != nil {
-			return nil, false, false, fmt.Errorf("invalid after cursor: %w", err)
+			return 0, 0, false, false, fmt.Errorf("invalid after cursor: %w", err)
 		}
 		if afterIndex+1 < totalCount {
-			edges = edges[afterIndex+1:]
+			start = afterIndex + 1
 		} else {
-			edges = []*model.ProductEdge{}
+			start = totalCount
 		}
 	}
 
@@ -94,25 +115,22 @@ func applyCursorPagination(
 	if before != nil {
 		beforeIndex, err := decodeCursor(*before)
 		if err != nil {
-			return nil, false, false, fmt.Errorf("invalid before cursor: %w", err)
+			return 0, 0, false, false, fmt.Errorf("invalid before cursor: %w", err)
 		}
-		// Adjust index if we've already sliced with 'after'
-		adjustedIndex := beforeIndex
-		if after != nil {
-			afterIndex, _ := decodeCursor(*after)
-			adjustedIndex = beforeIndex - (afterIndex + 1)
+		if beforeIndex < end {
+			end = beforeIndex
 		}
-		if adjustedIndex > 0 && adjustedIndex <= len(edges) {
-			edges = edges[:adjustedIndex]
-		}
+	}
+	if end < start {
+		end = start
 	}
 
 	// Apply 'first' limit
 	hasNextPage := false
 	if first != nil {
 		limit := int(*first)
-		if limit < len(edges) {
-			edges = edges[:limit]
+		if limit < end-start {
+			end = start + limit
 			hasNextPage = true
 		}
 	}
@@ -121,8 +139,8 @@ func applyCursorPagination(
 	hasPreviousPage := false
 	if last != nil {
 		limit := int(*last)
-		if limit < len(edges) {
-			edges = edges[len(edges)-limit:]
+		if limit < end-start {
+			start = end - limit
 			hasPreviousPage = true
 		}
 	}
@@ -144,7 +162,7 @@ func applyCursorPagination(
 		}
 	}
 
-	return edges, hasNextPage, hasPreviousPage, nil
+	return start, end, hasNextPage, hasPreviousPage, nil
 }
 
 // encodeCursor creates a base64-encoded cursor from an index
@@ -174,28 +192,128 @@ func decodeCursor(cursor string) (int, error) {
 	return index, nil
 }
 
-// PaginateCategories applies pagination to categories (future extension)
+// PaginateCategories applies Relay-style cursor pagination to a category list.
 func PaginateCategories(
 	categories []*catalog.Category,
 	first *int32,
 	after *string,
 	last *int32,
 	before *string,
-) ([]*catalog.Category, error) {
-	// For now, return all categories (categories are typically small)
-	// Future: implement cursor pagination if needed
-	return categories, nil
+) (*model.CategoryConnection, error) {
+	allEdges := make([]*model.CategoryEdge, len(categories))
+	for i, c := range categories {
+		allEdges[i] = &model.CategoryEdge{
+			Cursor: encodeCursor(i),
+			Node:   CatalogCategoryToGraphQL(c),
+		}
+	}
+
+	start, end, hasNextPage, hasPreviousPage, err := applyCursorWindow(len(allEdges), first, after, last, before)
+	if err != nil {
+		return nil, err
+	}
+	edges := allEdges[start:end]
+
+	var startCursor, endCursor *string
+	if len(edges) > 0 {
+		start := edges[0].Cursor
+		end := edges[len(edges)-1].Cursor
+		startCursor = &start
+		endCursor = &end
+	}
+
+	return &model.CategoryConnection{
+		Edges:      edges,
+		TotalCount: int32(len(categories)),
+		PageInfo: &model.PageInfo{
+			HasNextPage:     hasNextPage,
+			HasPreviousPage: hasPreviousPage,
+			StartCursor:     startCursor,
+			EndCursor:       endCursor,
+		},
+	}, nil
 }
 
-// PaginateCollections applies pagination to collections (future extension)
+// PaginateCollections applies Relay-style cursor pagination to a collection list.
 func PaginateCollections(
 	collections []*catalog.Collection,
 	first *int32,
 	after *string,
 	last *int32,
 	before *string,
-) ([]*catalog.Collection, error) {
-	// For now, return all collections (collections are typically small)
-	// Future: implement cursor pagination if needed
-	return collections, nil
+) (*model.CollectionConnection, error) {
+	allEdges := make([]*model.CollectionEdge, len(collections))
+	for i, c := range collections {
+		allEdges[i] = &model.CollectionEdge{
+			Cursor: encodeCursor(i),
+			Node:   CatalogCollectionToGraphQL(c),
+		}
+	}
+
+	start, end, hasNextPage, hasPreviousPage, err := applyCursorWindow(len(allEdges), first, after, last, before)
+	if err != nil {
+		return nil, err
+	}
+	edges := allEdges[start:end]
+
+	var startCursor, endCursor *string
+	if len(edges) > 0 {
+		start := edges[0].Cursor
+		end := edges[len(edges)-1].Cursor
+		startCursor = &start
+		endCursor = &end
+	}
+
+	return &model.CollectionConnection{
+		Edges:      edges,
+		TotalCount: int32(len(collections)),
+		PageInfo: &model.PageInfo{
+			HasNextPage:     hasNextPage,
+			HasPreviousPage: hasPreviousPage,
+			StartCursor:     startCursor,
+			EndCursor:       endCursor,
+		},
+	}, nil
+}
+
+// PaginateNamespaces applies Relay-style cursor pagination to a namespace list.
+func PaginateNamespaces(
+	namespaces []*model.Namespace,
+	first *int32,
+	after *string,
+	last *int32,
+	before *string,
+) (*model.NamespaceConnection, error) {
+	allEdges := make([]*model.NamespaceEdge, len(namespaces))
+	for i, ns := range namespaces {
+		allEdges[i] = &model.NamespaceEdge{
+			Cursor: encodeCursor(i),
+			Node:   ns,
+		}
+	}
+
+	start, end, hasNextPage, hasPreviousPage, err := applyCursorWindow(len(allEdges), first, after, last, before)
+	if err != nil {
+		return nil, err
+	}
+	edges := allEdges[start:end]
+
+	var startCursor, endCursor *string
+	if len(edges) > 0 {
+		start := edges[0].Cursor
+		end := edges[len(edges)-1].Cursor
+		startCursor = &start
+		endCursor = &end
+	}
+
+	return &model.NamespaceConnection{
+		Edges:      edges,
+		TotalCount: int32(len(namespaces)),
+		PageInfo: &model.PageInfo{
+			HasNextPage:     hasNextPage,
+			HasPreviousPage: hasPreviousPage,
+			StartCursor:     startCursor,
+			EndCursor:       endCursor,
+		},
+	}, nil
 }

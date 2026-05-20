@@ -5,9 +5,8 @@
 # Add the following to shared/schemas/schema.graphql (Query and Mutation roots):
 #
 # In Query:
-#   namespace(identifier: String!): Namespace
-#   namespaceById(id: ID!): Namespace
-#   namespaces: [Namespace!]!
+#   namespace(by: NamespaceBy!): Namespace
+#   namespaces(first: Int, after: String, last: Int, before: String): NamespaceConnection!
 #
 # In Mutation:
 #   createNamespace(input: CreateNamespaceInput!): CreateNamespacePayload!
@@ -101,14 +100,62 @@ type Namespace implements Node {
   updatedBy: String!
 }
 
+"""
+Edge type for Namespace connection (Relay pattern).
+"""
+type NamespaceEdge {
+  """
+  Cursor for pagination.
+  """
+  cursor: String!
+
+  """
+  The namespace node.
+  """
+  node: Namespace!
+}
+
+"""
+Connection type for paginated namespaces (Relay pattern).
+"""
+type NamespaceConnection {
+  """
+  List of namespace edges.
+  """
+  edges: [NamespaceEdge!]!
+
+  """
+  Pagination information.
+  """
+  pageInfo: PageInfo!
+
+  """
+  Total count of namespaces.
+  """
+  totalCount: Int!
+}
+
 # ============================================================================
 # Inputs
 # ============================================================================
 
 """
+Selector for looking up a namespace by exactly one unique key.
+"""
+input NamespaceBy @oneOf {
+  id: ID
+  identifier: String
+}
+
+"""
 Input for creating a new namespace.
 """
 input CreateNamespaceInput {
+  """
+  Client mutation ID for request tracking (Relay pattern).
+  """
+  clientMutationId: String
+
   """
   The human-readable identifier for the namespace.
   Must be globally unique across all tiers.
@@ -142,6 +189,11 @@ Input for deleting a namespace.
 """
 input DeleteNamespaceInput {
   """
+  Client mutation ID for request tracking (Relay pattern).
+  """
+  clientMutationId: String
+
+  """
   The identifier of the namespace to delete.
   Deletion is blocked if any repositories exist within the namespace.
   Requires the caller to be the namespace owner (createdBy) or isAdmin.
@@ -158,6 +210,11 @@ Payload returned after successfully creating a namespace.
 """
 type CreateNamespacePayload {
   """
+  Client mutation ID for request tracking (Relay pattern).
+  """
+  clientMutationId: String
+
+  """
   The newly created namespace.
   """
   namespace: Namespace!
@@ -167,6 +224,11 @@ type CreateNamespacePayload {
 Payload returned after successfully deleting a namespace.
 """
 type DeleteNamespacePayload {
+  """
+  Client mutation ID for request tracking (Relay pattern).
+  """
+  clientMutationId: String
+
   """
   The identifier of the deleted namespace.
   """
@@ -180,10 +242,12 @@ type DeleteNamespacePayload {
 # --- Create a user namespace ---
 # mutation CreateUserNamespace {
 #   createNamespace(input: {
+#     clientMutationId: "create-acme-corp"
 #     identifier: "acme-corp"
 #     displayName: "Acme Corporation"
 #     tier: USER
 #   }) {
+#     clientMutationId
 #     namespace {
 #       id
 #       identifier
@@ -197,10 +261,12 @@ type DeleteNamespacePayload {
 # --- Create an enterprise namespace (requires isAdmin) ---
 # mutation CreateEnterpriseNamespace {
 #   createNamespace(input: {
+#     clientMutationId: "create-acme-enterprise"
 #     identifier: "acme-enterprise"
 #     displayName: "Acme Enterprise"
 #     tier: ENTERPRISE
 #   }) {
+#     clientMutationId
 #     namespace {
 #       id
 #       identifier
@@ -214,10 +280,12 @@ type DeleteNamespacePayload {
 # --- Create an org namespace with parent enterprise ---
 # mutation CreateOrgWithEnterprise {
 #   createNamespace(input: {
+#     clientMutationId: "create-acme-engineering"
 #     identifier: "acme-engineering"
 #     tier: ORGANISATION
 #     parentEnterpriseIdentifier: "acme-enterprise"
 #   }) {
+#     clientMutationId
 #     namespace {
 #       id
 #       identifier
@@ -229,19 +297,29 @@ type DeleteNamespacePayload {
 
 # --- List all namespaces ---
 # query ListNamespaces {
-#   namespaces {
-#     id
-#     identifier
-#     displayName
-#     tier
-#     createdAt
-#     createdBy
+#   namespaces(first: 20) {
+#     edges {
+#       cursor
+#       node {
+#         id
+#         identifier
+#         displayName
+#         tier
+#         createdAt
+#         createdBy
+#       }
+#     }
+#     pageInfo {
+#       hasNextPage
+#       endCursor
+#     }
+#     totalCount
 #   }
 # }
 
 # --- Get namespace by identifier ---
 # query GetNamespace {
-#   namespace(identifier: "acme-corp") {
+#   namespace(by: {identifier: "acme-corp"}) {
 #     id
 #     identifier
 #     displayName
@@ -256,7 +334,8 @@ type DeleteNamespacePayload {
 
 # --- Delete a namespace ---
 # mutation DeleteNamespace {
-#   deleteNamespace(input: { identifier: "acme-corp" }) {
+#   deleteNamespace(input: { clientMutationId: "delete-acme-corp", identifier: "acme-corp" }) {
+#     clientMutationId
 #     deletedIdentifier
 #   }
 # }
