@@ -43,7 +43,7 @@ Key environment variables:
 
 ### Git Engine — gitoxide (gix)
 
-`gitstore-git-service` uses [gitoxide (`gix 0.83.0`)](https://github.com/Byron/gitoxide), a pure-Rust Git implementation, as its only Git library. The `git2` / libgit2 C binding was removed entirely in feature `007-migrate-gitoxide`.
+`gitstore-git-service` uses [gitoxide (`gix 0.83.0`)](https://github.com/GitoxideLabs/gitoxide), a pure-Rust Git implementation, as its only Git library. The `git2` / libgit2 C binding was removed entirely in feature `007-migrate-gitoxide`.
 
 Key consequences of this change:
 
@@ -79,7 +79,7 @@ The platform supports CRD-style kinds, so GraphQL schema shape cannot be treated
 
 - `gitstore-api` should watch kind/definition registry updates from Git and trigger schema refresh.
 - Runtime synthesis should translate JSON Schema-backed kind definitions into GraphQL object types and fields.
-- Generated query roots should stay namespaced by domain (for example `query { catalog { product(id: "...") } }`).
+- Generated query roots should stay namespaced by domain (for example `query { catalog { product(by: {id: "..."}) } }`).
 
 Schema lifecycle should follow a safe publish pattern:
 
@@ -230,6 +230,7 @@ graph LR
 - Write acknowledgements are fast because indexing is asynchronous.
 - Validation failures are surfaced operationally without rewriting accepted Git commits.
 - Multiple parser workers can scale out independently as event volume grows.
+- At the current stage ScyllaDB serves storefront reads directly. The KV cache layer (Redis/Valkey) is deferred until ScyllaDB read throughput is a measured constraint.
 
 ### Implementation Sequence
 
@@ -351,6 +352,7 @@ graph TD
 - Release tags become the explicit publishing contract.
 - Draft branch activity is isolated from customer-facing reads.
 - Rollbacks can be executed by moving release tags and replaying publish events.
+- At the current stage ScyllaDB serves storefront reads directly. A KV cache layer is a future read-optimisation, not a correctness requirement.
 
 ### Implementation Sequence
 
@@ -366,7 +368,7 @@ graph TD
 
 - Choose **Proposal 1** if mutation throughput and agent ergonomics at the API layer are the primary priority.
 - Choose **Proposal 2** if strict release control and Git-native operational workflows are the primary priority.
-- In both cases, Git remains authoritative and KV remains the read-optimised projection layer.
+- In both cases, Git remains authoritative and ScyllaDB is the read layer. A KV cache (Redis/Valkey) is optional and should only be introduced once ScyllaDB read throughput is a measured constraint.
 
 ---
 
@@ -467,11 +469,55 @@ This model applies to both core resources and CRD-defined kinds. It avoids a spl
 - Standard controllers own observed state (`.status`) and write it through GraphQL status mutations on the API server, which then persists to ScyllaDB.
 - No actor writes directly to ScyllaDB; every write is gated through the API to ensure resource versioning and watch-cache consistency.
 
+### Validation Pipeline
+
+Validation is layered, not monolithic. The layers map to the Kubernetes model:
+
+| Layer        | Timing                   | Gate                                                            | Notes                                    |
+|--------------|--------------------------|-----------------------------------------------------------------|------------------------------------------|
+| Structural   | Pre-receive, synchronous | Decoding: is it valid YAML with recognised top-level fields?    | Fast-fail, no full parse                 |
+| Schema       | Post-receive, async      | Field types, constraints, CRD rules, CEL expressions            | Equivalent to OpenAPI/CRD schema         |
+| Built-in API | Post-receive, async      | Cross-object logic: sku uniqueness, parent reference resolution | Compiled API handler logic               |
+| Admission    | Post-receive, async      | Policy: org rules, quota, external system checks                | Dynamic, may call external policy engine |
+
+Pre-receive must return quickly (< ~200ms). Full schema and admission validation run asynchronously in the post-receive pipeline so that large pushes are not blocked by per-file parsing cost.
+
+Git-originated and API-originated mutations converge at the schema and admission layers — they are evaluated identically.
+
+### Resource Status — Conditions
+
+Resources use typed `.status.conditions` rather than a `phase` field. A `phase` enum is an antipattern ([kubernetes/kubernetes#7856](https://github.com/kubernetes/kubernetes/issues/7856)) because it is opaque, hard to extend, and cannot represent concurrent states.
+
+Standard conditions for catalogue resources:
+
+| Condition type      | Meaning                                                                      |
+|---------------------|------------------------------------------------------------------------------|
+| `AdmissionAccepted` | Resource passed all schema and admission validation layers                   |
+| `Published`         | Resource is live to storefront (set when a release tag targets the resource) |
+| `Ready`             | Resource is projected and queryable                                          |
+
+Example:
+
+```yaml
+status:
+  conditions:
+    - type: AdmissionAccepted
+      status: "False"
+      reason: SchemaMismatch
+      message: "spec.pricing.priceSet.prices[0].money.amount must be > 0"
+      lastTransitionTime: "2026-05-22T10:00:00Z"
+    - type: Published
+      status: "False"
+      reason: NoReleaseTag
+      lastTransitionTime: "2026-05-22T10:00:00Z"
+```
+
 ### Git Ingest Contract
 
-- **Pre-receive hook** (gRPC): validation and policy checks only. No durable state write.
-- **Post-receive hook** (gRPC): parse, convert-to-hub version when needed, then persist `.spec` projection.
+- **Pre-receive hook** (gRPC): auth, branch/tag protection, quota, and lightweight structural decoding. No durable state write.
+- **Post-receive hook** (gRPC): full schema validation, admission policy evaluation, hub-version conversion, `.spec` and `.status.conditions` persistence.
 - Each accepted write increments `resourceVersion` and publishes a watch event.
+- If post-receive admission fails, the commit is persisted in Git (audit trail) but the resource carries `AdmissionAccepted=False` in `.status.conditions`. It is invisible to controllers and storefront until corrected.
 
 ### Watch Protocol over GraphQL
 
