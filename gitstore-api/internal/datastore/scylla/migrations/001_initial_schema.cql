@@ -1,6 +1,6 @@
 -- Migration 001: initial schema.
 -- Assumes the keyspace already exists (provisioned by the operator / compose init).
--- UUID fields use text for Go string compatibility. Price uses decimal;
+-- Updated: 010-repo-storage-identity — added repositories and namespace_mappings tables.
 
 CREATE TABLE IF NOT EXISTS products (
     id                 uuid       PRIMARY KEY,
@@ -47,8 +47,29 @@ CREATE TABLE IF NOT EXISTS namespaces (
     display_name         text,
     tier                 text,
     parent_enterprise_id text,
-    created_at           bigint,
+    created_at           timestamp,
     created_by           text,
-    updated_at           bigint,
+    updated_at           timestamp,
     updated_by           text
+);
+
+CREATE TABLE IF NOT EXISTS repositories (
+    id              uuid      PRIMARY KEY,
+    namespace_id    uuid,
+    name            text,
+    default_branch  text,
+    storage_class   text,
+    created_at      timestamp,
+    created_by      text,
+    updated_at      timestamp,
+    updated_by      text
+);
+
+-- namespace_mappings: composite primary key enables O(1) lookup by (namespace_id, name).
+-- Storage path is derived from repo_id using the fanout formula; it is NOT stored here.
+CREATE TABLE IF NOT EXISTS namespace_mappings (
+    namespace_id uuid,
+    name         text,
+    repo_id      uuid,
+    PRIMARY KEY  (namespace_id, name)
 );
