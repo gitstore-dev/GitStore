@@ -9,6 +9,19 @@ This document describes the architecture of the AI-native commerce engine: the s
 - Serve storefront reads from low-latency indexed data.
 - Decouple write acceptance from heavy validation and indexing work.
 
+## Roadmap Alignment (Current Direction)
+
+The current architecture target is **Proposal 3**. Use this table as the quick index from capability area to tracking initiatives.
+
+| Capability Area           | Tracking Initiatives                                           |
+|---------------------------|----------------------------------------------------------------|
+| Git events and ingestion  | [#169][gh-169], [#139][gh-139]                                 |
+| Parsing and admission     | [#134][gh-134], [#123][gh-123], [#106][gh-106]                 |
+| Storage and versioning    | [#140][gh-140], [#141][gh-141], [#137][gh-137], [#164][gh-164] |
+| Controller loop and watch | [#165][gh-165], [#166][gh-166], [#131][gh-131]                 |
+| Query and schema runtime  | [#148][gh-148], [#149][gh-149], [#162][gh-162]                 |
+| Agent orchestration       | [#150][gh-150]                                                 |
+
 ## Platform Building Blocks
 
 All proposals share the same core building blocks, arranged with different control points:
@@ -43,7 +56,7 @@ Key environment variables:
 
 ### Git Engine — gitoxide (gix)
 
-`gitstore-git-service` uses [gitoxide (`gix 0.83.0`)](https://github.com/Byron/gitoxide), a pure-Rust Git implementation, as its only Git library. The `git2` / libgit2 C binding was removed entirely in feature `007-migrate-gitoxide`.
+`gitstore-git-service` uses [gitoxide (`gix 0.83.0`)](https://github.com/GitoxideLabs/gitoxide), a pure-Rust Git implementation, as its only Git library. The `git2` / libgit2 C binding was removed entirely in feature `007-migrate-gitoxide`.
 
 Key consequences of this change:
 
@@ -79,7 +92,7 @@ The platform supports CRD-style kinds, so GraphQL schema shape cannot be treated
 
 - `gitstore-api` should watch kind/definition registry updates from Git and trigger schema refresh.
 - Runtime synthesis should translate JSON Schema-backed kind definitions into GraphQL object types and fields.
-- Generated query roots should stay namespaced by domain (for example `query { catalog { product(id: "...") } }`).
+- Generated query roots should stay namespaced by domain (for example `query { catalog { product(by: {id: "..."}) } }`).
 
 Schema lifecycle should follow a safe publish pattern:
 
@@ -230,6 +243,7 @@ graph LR
 - Write acknowledgements are fast because indexing is asynchronous.
 - Validation failures are surfaced operationally without rewriting accepted Git commits.
 - Multiple parser workers can scale out independently as event volume grows.
+- At the current stage ScyllaDB serves storefront reads directly. The KV cache layer (Redis/Valkey) is deferred until ScyllaDB read throughput is a measured constraint.
 
 ### Implementation Sequence
 
@@ -351,6 +365,7 @@ graph TD
 - Release tags become the explicit publishing contract.
 - Draft branch activity is isolated from customer-facing reads.
 - Rollbacks can be executed by moving release tags and replaying publish events.
+- At the current stage ScyllaDB serves storefront reads directly. A KV cache layer is a future read-optimisation, not a correctness requirement.
 
 ### Implementation Sequence
 
@@ -362,11 +377,112 @@ graph TD
 
 ---
 
+## Proposal 3 — Initiative-Aligned Control Plane (Current Direction)
+
+Proposal 3 reflects the current roadmap initiatives and supersedes Proposals 1 and 2 as the active target architecture.
+
+### Top-Down Flow
+
+1. **Ingress**: Git and GraphQL writes enter through `gitstore-api` (protocol and API front door).
+2. **Git event emission**: `gitstore-git-service` publishes normalised Git ref events (`branch-*`, `tag-*`, `push-rejected`) through the GitEvent contract.
+3. **Validation pipeline**: parsing, hub-version conversion, schema/CEL checks, and admission policies run in `gitstore-api`.
+4. **Persistence**: validated resources are projected into the universal ScyllaDB resource model with monotonic `resourceVersion`.
+5. **Reconciliation**: controller manager consumes watch streams, executes side effects, and writes status conditions via status subresource mutations.
+6. **Graph serving**: dynamic GraphQL schema synthesis serves core and CRD kinds from unified storage; federation is optional for external app subgraphs.
+
+### Initiative Mapping
+
+- **Git events and ingestion**: [#169][gh-169], [#139][gh-139]
+- **Parsing and admission**: [#134][gh-134], [#123][gh-123], [#106][gh-106]
+- **Storage and versioning**: [#140][gh-140], [#141][gh-141], [#137][gh-137], [#164][gh-164]
+- **Controller loop and watch**: [#165][gh-165], [#166][gh-166], [#131][gh-131]
+- **Query and schema runtime**: [#148][gh-148], [#149][gh-149], [#162][gh-162]
+- **Agent orchestration**: [#150][gh-150]
+
+[gh-106]: https://github.com/gitstore-dev/GitStore/issues/106
+[gh-123]: https://github.com/gitstore-dev/GitStore/issues/123
+[gh-131]: https://github.com/gitstore-dev/GitStore/issues/131
+[gh-134]: https://github.com/gitstore-dev/GitStore/issues/134
+[gh-137]: https://github.com/gitstore-dev/GitStore/issues/137
+[gh-139]: https://github.com/gitstore-dev/GitStore/issues/139
+[gh-140]: https://github.com/gitstore-dev/GitStore/issues/140
+[gh-141]: https://github.com/gitstore-dev/GitStore/issues/141
+[gh-148]: https://github.com/gitstore-dev/GitStore/issues/148
+[gh-149]: https://github.com/gitstore-dev/GitStore/issues/149
+[gh-150]: https://github.com/gitstore-dev/GitStore/issues/150
+[gh-162]: https://github.com/gitstore-dev/GitStore/issues/162
+[gh-164]: https://github.com/gitstore-dev/GitStore/issues/164
+[gh-165]: https://github.com/gitstore-dev/GitStore/issues/165
+[gh-166]: https://github.com/gitstore-dev/GitStore/issues/166
+[gh-169]: https://github.com/gitstore-dev/GitStore/issues/169
+
+### Architecture Diagram
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#E5E7EB', 'edgeLabelBackground':'#ffffff', 'tertiaryColor': '#fff'}}}%%
+graph TD
+    Actor[("👩‍💻 Human / 🤖 AI")]
+    API[("🐹 gitstore-api\nGraphQL + Git ingress")]
+    GitSvc[("🦀 gitstore-git-service\nStorage + hook callbacks")]
+    Events[("📨 GitEvent stream")]
+    Parse[("🧩 Parsing layer")]
+    Convert[("🔁 Hub conversion (WASI)")]
+    Admit[("✅ Admission pipeline")]
+    Store[("🗄️ ScyllaDB universal resources")]
+    Watch[("👀 Watch API\nresourceVersion resume")]
+    Ctl[("⚙️ Controller manager")]
+    Status[("📝 Status subresource")]
+    Query[("🔎 Query handlers")]
+    Schema[("🧬 Dynamic schema synthesis")]
+    Fed[("🌐 Optional federation gateway")]
+    Agent[("🧠 Agent workers")]
+    Storefront[("🌐 Storefront / Admin")]
+
+    Actor ---> API
+    API <----> GitSvc
+    GitSvc --> Events
+    Events --> Parse --> Convert --> Admit --> Store
+
+    Store --> Watch --> Ctl --> Status --> API --> Store
+    Watch --> Agent
+    Agent --> API
+
+    Store --> Query --> Schema --> API --> Storefront
+    Fed -. external subgraphs .-> Schema
+
+    classDef core fill:#BAE6FD,stroke:#0284C7,stroke-width:2px,color:#000;
+    classDef rust fill:#FCA5A5,stroke:#DC2626,stroke-width:2px,color:#000;
+    classDef data fill:#E5E7EB,stroke:#4B5563,stroke-width:2px,color:#000;
+    classDef control fill:#C7D2FE,stroke:#4F46E5,stroke-width:2px,color:#000;
+
+    class API,Query,Schema core;
+    class GitSvc rust;
+    class Store,Events data;
+    class Parse,Convert,Admit,Watch,Ctl,Status,Agent,Fed control;
+```
+
+### Initiative Legend
+
+- **Git events and stream** (`Events`): [#169][gh-169], [#139][gh-139]
+- **Parsing and admission** (`Parse`, `Convert`, `Admit`): [#134][gh-134], [#164][gh-164], [#123][gh-123], [#106][gh-106]
+- **Storage and versioning** (`Store`): [#140][gh-140], [#141][gh-141], [#137][gh-137]
+- **Watch and reconciliation** (`Watch`, `Ctl`, `Status`): [#131][gh-131], [#165][gh-165], [#166][gh-166]
+- **Query and graph runtime** (`Query`, `Schema`, `Fed`): [#148][gh-148], [#149][gh-149], [#162][gh-162]
+- **Agent orchestration** (`Agent`): [#150][gh-150]
+
+### Operational Notes
+
+- Controller-visible state is derived from ScyllaDB projections and status conditions, not directly from Git blobs.
+- Release semantics should be event-driven (`tag-created` / `release-created`) and reflected via `Published` conditions.
+- Redis/Valkey remains optional and should be introduced only if measured read pressure exceeds ScyllaDB tuning headroom.
+
+---
+
 ## Choosing Between Proposals
 
-- Choose **Proposal 1** if mutation throughput and agent ergonomics at the API layer are the primary priority.
-- Choose **Proposal 2** if strict release control and Git-native operational workflows are the primary priority.
-- In both cases, Git remains authoritative and KV remains the read-optimised projection layer.
+- **Current target**: choose **Proposal 3**. It aligns with the active initiative set and current service boundary decisions.
+- Treat **Proposal 1** and **Proposal 2** as historical alternatives retained for design context.
+- In all variants, Git remains the source of intent and ScyllaDB is the serving read layer; a KV cache is optional and data-driven.
 
 ---
 
@@ -467,11 +583,55 @@ This model applies to both core resources and CRD-defined kinds. It avoids a spl
 - Standard controllers own observed state (`.status`) and write it through GraphQL status mutations on the API server, which then persists to ScyllaDB.
 - No actor writes directly to ScyllaDB; every write is gated through the API to ensure resource versioning and watch-cache consistency.
 
+### Validation Pipeline
+
+Validation is layered, not monolithic. The layers map to the Kubernetes model:
+
+| Layer        | Timing                   | Gate                                                            | Notes                                    |
+|--------------|--------------------------|-----------------------------------------------------------------|------------------------------------------|
+| Structural   | Pre-receive, synchronous | Decoding: is it valid YAML with recognised top-level fields?    | Fast-fail, no full parse                 |
+| Schema       | Post-receive, async      | Field types, constraints, CRD rules, CEL expressions            | Equivalent to OpenAPI/CRD schema         |
+| Built-in API | Post-receive, async      | Cross-object logic: sku uniqueness, parent reference resolution | Compiled API handler logic               |
+| Admission    | Post-receive, async      | Policy: org rules, quota, external system checks                | Dynamic, may call external policy engine |
+
+Pre-receive must return quickly (< ~200ms). Full schema and admission validation run asynchronously in the post-receive pipeline so that large pushes are not blocked by per-file parsing cost.
+
+Git-originated and API-originated mutations converge at the schema and admission layers — they are evaluated identically.
+
+### Resource Status — Conditions
+
+Resources use typed `.status.conditions` rather than a `phase` field. A `phase` enum is an antipattern ([kubernetes/kubernetes#7856](https://github.com/kubernetes/kubernetes/issues/7856)) because it is opaque, hard to extend, and cannot represent concurrent states.
+
+Standard conditions for catalogue resources:
+
+| Condition type      | Meaning                                                                      |
+|---------------------|------------------------------------------------------------------------------|
+| `AdmissionAccepted` | Resource passed all schema and admission validation layers                   |
+| `Published`         | Resource is live to storefront (set when a release tag targets the resource) |
+| `Ready`             | Resource is projected and queryable                                          |
+
+Example:
+
+```yaml
+status:
+  conditions:
+    - type: AdmissionAccepted
+      status: "False"
+      reason: SchemaMismatch
+      message: "spec.pricing.priceSet.prices[0].money.amount must be > 0"
+      lastTransitionTime: "2026-05-22T10:00:00Z"
+    - type: Published
+      status: "False"
+      reason: NoReleaseTag
+      lastTransitionTime: "2026-05-22T10:00:00Z"
+```
+
 ### Git Ingest Contract
 
-- **Pre-receive hook** (gRPC): validation and policy checks only. No durable state write.
-- **Post-receive hook** (gRPC): parse, convert-to-hub version when needed, then persist `.spec` projection.
+- **Pre-receive hook** (gRPC): auth, branch/tag protection, quota, and lightweight structural decoding. No durable state write.
+- **Post-receive hook** (gRPC): full schema validation, admission policy evaluation, hub-version conversion, `.spec` and `.status.conditions` persistence.
 - Each accepted write increments `resourceVersion` and publishes a watch event.
+- If post-receive admission fails, the commit is persisted in Git (audit trail) but the resource carries `AdmissionAccepted=False` in `.status.conditions`. It is invisible to controllers and storefront until corrected.
 
 ### Watch Protocol over GraphQL
 
