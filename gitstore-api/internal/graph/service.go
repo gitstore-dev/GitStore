@@ -589,6 +589,14 @@ func (s *Service) CreateRepository(ctx context.Context, namespaceID, name, defau
 		Name:        name,
 		RepoID:      repo.ID,
 	}); err != nil {
+		// Roll back the repository row so it does not orphan a name slot.
+		if delErr := s.store.DeleteRepository(ctx, repo.ID); delErr != nil {
+			s.logger.Error("rollback DeleteRepository failed after mapping create failure",
+				zap.String("repo_id", repo.ID), zap.Error(delErr))
+		}
+		if errors.Is(err, datastore.ErrAlreadyExists) {
+			return nil, gqlerror.Errorf("repository already exists")
+		}
 		s.logger.Error("failed to create namespace mapping", zap.String("repo_id", repo.ID), zap.Error(err))
 		return nil, gqlerror.Errorf("failed to create namespace mapping")
 	}
@@ -604,6 +612,16 @@ func (s *Service) CreateRepository(ctx context.Context, namespaceID, name, defau
 				zap.String("rpc", "CreateRepository"),
 				zap.Error(err),
 			)
+			// Compensate: drop both metadata rows so a retry can re-create
+			// cleanly instead of resolving a name with no backing storage.
+			if delErr := s.store.DeleteNamespaceMapping(ctx, namespaceID, name); delErr != nil {
+				s.logger.Error("rollback DeleteNamespaceMapping failed after storage provision failure",
+					zap.String("repo_id", repo.ID), zap.Error(delErr))
+			}
+			if delErr := s.store.DeleteRepository(ctx, repo.ID); delErr != nil {
+				s.logger.Error("rollback DeleteRepository failed after storage provision failure",
+					zap.String("repo_id", repo.ID), zap.Error(delErr))
+			}
 			return nil, gqlerror.Errorf("failed to provision repository storage")
 		}
 		s.logger.Info("gRPC CreateRepository succeeded",
@@ -743,6 +761,10 @@ func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespaceID,
 }
 
 // DeleteRepository deletes a repository, its mapping, and its storage via gRPC.
+//
+// Storage is removed first; only on success do we drop the metadata rows. This
+// avoids leaving an orphaned .git directory when the gRPC call transiently
+// fails, since the caller can retry against the still-resolvable repo_id.
 func (s *Service) DeleteRepository(ctx context.Context, repoID, callerUsername string) error {
 	repo, err := s.store.GetRepository(ctx, repoID)
 	if err != nil {
@@ -750,14 +772,6 @@ func (s *Service) DeleteRepository(ctx context.Context, repoID, callerUsername s
 			return gqlerror.Errorf("repository not found")
 		}
 		return gqlerror.Errorf("failed to retrieve repository")
-	}
-	if err := s.store.DeleteNamespaceMapping(ctx, repo.NamespaceID, repo.Name); err != nil && !errors.Is(err, datastore.ErrNotFound) {
-		s.logger.Error("failed to delete namespace mapping", zap.String("repo_id", repoID), zap.Error(err))
-		return gqlerror.Errorf("failed to delete namespace mapping")
-	}
-	if err := s.store.DeleteRepository(ctx, repoID); err != nil && !errors.Is(err, datastore.ErrNotFound) {
-		s.logger.Error("failed to delete repository record", zap.String("repo_id", repoID), zap.Error(err))
-		return gqlerror.Errorf("failed to delete repository")
 	}
 	if s.gitWriter != nil {
 		if err := s.gitWriter.DeleteRepository(ctx, repoID); err != nil {
@@ -772,6 +786,14 @@ func (s *Service) DeleteRepository(ctx context.Context, repoID, callerUsername s
 			zap.String("repo_id", repoID),
 			zap.String("rpc", "DeleteRepository"),
 		)
+	}
+	if err := s.store.DeleteNamespaceMapping(ctx, repo.NamespaceID, repo.Name); err != nil && !errors.Is(err, datastore.ErrNotFound) {
+		s.logger.Error("failed to delete namespace mapping", zap.String("repo_id", repoID), zap.Error(err))
+		return gqlerror.Errorf("failed to delete namespace mapping")
+	}
+	if err := s.store.DeleteRepository(ctx, repoID); err != nil && !errors.Is(err, datastore.ErrNotFound) {
+		s.logger.Error("failed to delete repository record", zap.String("repo_id", repoID), zap.Error(err))
+		return gqlerror.Errorf("failed to delete repository")
 	}
 	return nil
 }
