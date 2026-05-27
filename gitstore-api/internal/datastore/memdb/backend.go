@@ -5,7 +5,10 @@ package memdb
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	gomemdb "github.com/hashicorp/go-memdb"
@@ -99,7 +102,117 @@ func (m *memdbDatastore) ListProducts(_ context.Context, filter datastore.Produc
 	for obj := it.Next(); obj != nil; obj = it.Next() {
 		results = append(results, obj.(*datastore.Product))
 	}
+
+	// Sort by created_at + id for stable keyset pagination
+	sortByCreatedAtThenID(results)
+
+	// Apply keyset pagination
+	results = applyKeysetPagination(results, filter.After, filter.Before, filter.First, filter.Last)
+
 	return results, nil
+}
+
+// sortByCreatedAtThenID sorts products by created_at ascending, then by id as tie-breaker
+func sortByCreatedAtThenID(products []*datastore.Product) {
+	for i := 0; i < len(products); i++ {
+		for j := i + 1; j < len(products); j++ {
+			pi, pj := products[i], products[j]
+			cmpTime := pi.CreatedAt.Compare(pj.CreatedAt)
+			if cmpTime > 0 || (cmpTime == 0 && pi.ID > pj.ID) {
+				products[i], products[j] = products[j], products[i]
+			}
+		}
+	}
+}
+
+// applyKeysetPagination applies forward/backward pagination using keyset cursors
+func applyKeysetPagination(products []*datastore.Product, after, before string, first, last int) []*datastore.Product {
+	if len(products) == 0 {
+		return products
+	}
+
+	start, end := 0, len(products)
+
+	// Apply "after" cursor: find first product after the cursor
+	if after != "" {
+		for i, p := range products {
+			if compareKeysetPosition(p, after) > 0 {
+				start = i
+				break
+			}
+		}
+	}
+
+	// Apply "before" cursor: find first product before the cursor
+	if before != "" {
+		for i, p := range products {
+			if compareKeysetPosition(p, before) >= 0 {
+				end = i
+				break
+			}
+		}
+	}
+
+	if start >= end {
+		return []*datastore.Product{}
+	}
+
+	// Apply "first" limit
+	if first > 0 && first < end-start {
+		end = start + first
+	}
+
+	// Apply "last" limit
+	if last > 0 && last < end-start {
+		start = end - last
+	}
+
+	return products[start:end]
+}
+
+// compareKeysetPosition returns:
+// < 0 if product is before cursor
+// = 0 if product is at cursor
+// > 0 if product is after cursor
+func compareKeysetPosition(product *datastore.Product, cursor string) int {
+	kc, err := decodeKeysetCursorInternal(cursor)
+	if err != nil {
+		return 0 // Treat invalid cursors as "at position"
+	}
+
+	cmpTime := product.CreatedAt.Compare(kc.CreatedAt)
+	if cmpTime != 0 {
+		return cmpTime
+	}
+	if product.ID < kc.ID {
+		return -1
+	}
+	if product.ID > kc.ID {
+		return 1
+	}
+	return 0
+}
+
+// decodeKeysetCursorInternal is internal to memdb; callers use the graph package's DecodeKeysetCursor
+type keysetCursor struct {
+	CreatedAt time.Time
+	ID        string
+}
+
+func decodeKeysetCursorInternal(cursor string) (*keysetCursor, error) {
+	decoded, err := base64.StdEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base64: %w", err)
+	}
+	parts := strings.SplitN(string(decoded), "|", 3)
+	if len(parts) != 3 || parts[0] != "keyset" {
+		return nil, fmt.Errorf("invalid cursor format")
+	}
+	ts, err := time.Parse(time.RFC3339Nano, parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("invalid timestamp: %w", err)
+	}
+	return &keysetCursor{CreatedAt: ts, ID: parts[2]}, nil
 }
 
 func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product) error {
@@ -182,6 +295,7 @@ func (m *memdbDatastore) ListCategories(_ context.Context) ([]*datastore.Categor
 	for obj := it.Next(); obj != nil; obj = it.Next() {
 		results = append(results, obj.(*datastore.Category))
 	}
+	sortCategoriesByCreatedAtThenID(results)
 	return results, nil
 }
 
@@ -265,6 +379,7 @@ func (m *memdbDatastore) ListCollections(_ context.Context) ([]*datastore.Collec
 	for obj := it.Next(); obj != nil; obj = it.Next() {
 		results = append(results, obj.(*datastore.Collection))
 	}
+	sortCollectionsByCreatedAtThenID(results)
 	return results, nil
 }
 
@@ -540,4 +655,30 @@ func (m *memdbDatastore) DeleteNamespaceMapping(_ context.Context, namespaceID, 
 	}
 	txn.Commit()
 	return nil
+}
+
+// sortCategoriesByCreatedAtThenID sorts categories by created_at ascending, then by id as tie-breaker
+func sortCategoriesByCreatedAtThenID(categories []*datastore.Category) {
+	for i := 0; i < len(categories); i++ {
+		for j := i + 1; j < len(categories); j++ {
+			ci, cj := categories[i], categories[j]
+			cmpTime := ci.CreatedAt.Compare(cj.CreatedAt)
+			if cmpTime > 0 || (cmpTime == 0 && ci.ID > cj.ID) {
+				categories[i], categories[j] = categories[j], categories[i]
+			}
+		}
+	}
+}
+
+// sortCollectionsByCreatedAtThenID sorts collections by created_at ascending, then by id as tie-breaker
+func sortCollectionsByCreatedAtThenID(collections []*datastore.Collection) {
+	for i := 0; i < len(collections); i++ {
+		for j := i + 1; j < len(collections); j++ {
+			ci, cj := collections[i], collections[j]
+			cmpTime := ci.CreatedAt.Compare(cj.CreatedAt)
+			if cmpTime > 0 || (cmpTime == 0 && ci.ID > cj.ID) {
+				collections[i], collections[j] = collections[j], collections[i]
+			}
+		}
+	}
 }

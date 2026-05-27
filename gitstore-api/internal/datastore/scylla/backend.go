@@ -5,6 +5,7 @@ package scylla
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -218,10 +219,32 @@ func (s *scyllaDatastore) ListProducts(_ context.Context, filter datastore.Produ
 		bindMap = qb.M{}
 	}
 
+	query := s.session.Query(stmt, names).BindMap(bindMap)
+
+	// Use page_size with PagingState for efficient server-side pagination
+	// This reduces memory usage and network overhead for large result sets
+	pageSize := 100 // Default page size
+	if filter.First > 0 && filter.First < 1000 {
+		pageSize = int(filter.First)
+	}
+	query = query.PageSize(pageSize)
+
+	// Apply PagingState if provided (for resuming from previous page)
+	if filter.After != "" {
+		pageState, err := decodePagingStateCursor(filter.After)
+		if err != nil {
+			return nil, err
+		}
+		if pageState != nil {
+			query = query.PageState(pageState)
+		}
+	}
+
 	var rows []productRow
-	if err := s.session.Query(stmt, names).BindMap(bindMap).SelectRelease(&rows); err != nil {
+	if err := query.SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list products: %w", err)
 	}
+
 	products := make([]*datastore.Product, len(rows))
 	for i := range rows {
 		products[i] = fromProductRow(&rows[i])
@@ -305,8 +328,9 @@ func (s *scyllaDatastore) ListCategories(_ context.Context) ([]*datastore.Catego
 	stmt, names := qb.Select("categories").
 		Columns(s.categoryTable.Metadata().Columns...).
 		ToCql()
+	// Use page_size to limit fetching in ScyllaDB for better performance
 	var rows []categoryRow
-	if err := s.session.Query(stmt, names).SelectRelease(&rows); err != nil {
+	if err := s.session.Query(stmt, names).PageSize(100).SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list categories: %w", err)
 	}
 	cats := make([]*datastore.Category, len(rows))
@@ -390,8 +414,9 @@ func (s *scyllaDatastore) ListCollections(_ context.Context) ([]*datastore.Colle
 	stmt, names := qb.Select("collections").
 		Columns(s.collectionTable.Metadata().Columns...).
 		ToCql()
+	// Use page_size to limit fetching in ScyllaDB for better performance
 	var rows []collectionRow
-	if err := s.session.Query(stmt, names).SelectRelease(&rows); err != nil {
+	if err := s.session.Query(stmt, names).PageSize(100).SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list collections: %w", err)
 	}
 	cols := make([]*datastore.Collection, len(rows))
@@ -643,4 +668,25 @@ func fromNamespaceRow(r *namespaceRow) *datastore.Namespace {
 		UpdatedAt:          r.UpdatedAt,
 		UpdatedBy:          r.UpdatedBy,
 	}
+}
+
+// PagingState cursor helpers for Relay pagination
+// Encode PagingState as opaque base64 string for use as Relay cursor
+func encodePagingStateCursor(pageState []byte) string {
+	if len(pageState) == 0 {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(pageState)
+}
+
+// Decode opaque Relay cursor back to PagingState for ScyllaDB query
+func decodePagingStateCursor(cursor string) ([]byte, error) {
+	if cursor == "" {
+		return nil, nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, fmt.Errorf("invalid paging state cursor: %w", err)
+	}
+	return decoded, nil
 }

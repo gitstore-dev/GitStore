@@ -1,21 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 
-// Relay-style cursor pagination helpers
+// Relay-style cursor pagination helpers using keyset-based cursors
 
 package graph
 
 import (
-	"encoding/base64"
-	"fmt"
-	"strconv"
-	"strings"
-
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 )
 
-// PaginateProducts applies Relay-style cursor pagination to a product list
+// PaginateProducts applies Relay-style cursor pagination to a product list using keyset cursors
 func PaginateProducts(
 	products []*catalog.Product,
 	first *int32,
@@ -23,34 +18,43 @@ func PaginateProducts(
 	last *int32,
 	before *string,
 ) (*model.ProductConnection, error) {
-	// Build edges for all products
+	if len(products) == 0 {
+		return &model.ProductConnection{
+			Edges:      []*model.ProductEdge{},
+			TotalCount: 0,
+			PageInfo: &model.PageInfo{
+				HasNextPage:     false,
+				HasPreviousPage: false,
+				StartCursor:     nil,
+				EndCursor:       nil,
+			},
+		}, nil
+	}
+
+	// Build edges for all products with keyset cursors
 	allEdges := make([]*model.ProductEdge, len(products))
 	for i, p := range products {
 		allEdges[i] = &model.ProductEdge{
-			Cursor: encodeCursor(i),
+			Cursor: EncodeKeysetCursor(p.CreatedAt, p.ID),
 			Node:   CatalogProductToGraphQL(p),
 		}
 	}
 
-	// Apply cursor-based slicing
-	edges, hasNextPage, hasPreviousPage, err := applyCursorPagination(
-		allEdges,
-		first,
-		after,
-		last,
-		before,
-	)
-	if err != nil {
-		return nil, err
-	}
+	// Apply keyset-based slicing
+	start, end, hasNextPage, hasPreviousPage := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
+		p := products[i]
+		return EncodeKeysetCursor(p.CreatedAt, p.ID)
+	})
+
+	edges := allEdges[start:end]
 
 	// Calculate pagination info
 	var startCursor, endCursor *string
 	if len(edges) > 0 {
-		start := edges[0].Cursor
-		end := edges[len(edges)-1].Cursor
-		startCursor = &start
-		endCursor = &end
+		sc := edges[0].Cursor
+		ec := edges[len(edges)-1].Cursor
+		startCursor = &sc
+		endCursor = &ec
 	}
 
 	return &model.ProductConnection{
@@ -65,63 +69,46 @@ func PaginateProducts(
 	}, nil
 }
 
-// applyCursorPagination applies Relay cursor pagination to edges
-func applyCursorPagination(
-	allEdges []*model.ProductEdge,
-	first *int32,
-	after *string,
-	last *int32,
-	before *string,
-) ([]*model.ProductEdge, bool, bool, error) {
-	start, end, hasNextPage, hasPreviousPage, err := applyCursorWindow(len(allEdges), first, after, last, before)
-	if err != nil {
-		return nil, false, false, err
-	}
-	return allEdges[start:end], hasNextPage, hasPreviousPage, nil
-}
-
-func applyCursorWindow(
+// applyKeysetWindow applies keyset-based pagination window slicing
+func applyKeysetWindow(
 	totalCount int,
 	first *int32,
 	after *string,
 	last *int32,
 	before *string,
-) (int, int, bool, bool, error) {
+	getCursor func(int) string,
+) (int, int, bool, bool) {
 	if first != nil && *first < 0 {
-		return 0, 0, false, false, fmt.Errorf("first must be non-negative")
+		return 0, 0, false, false
 	}
 	if last != nil && *last < 0 {
-		return 0, 0, false, false, fmt.Errorf("last must be non-negative")
+		return 0, 0, false, false
 	}
 
-	// Start with all edges
 	start := 0
 	end := totalCount
 
-	// Apply 'after' cursor
+	// Apply 'after' cursor: find first position after the cursor
 	if after != nil {
-		afterIndex, err := decodeCursor(*after)
-		if err != nil {
-			return 0, 0, false, false, fmt.Errorf("invalid after cursor: %w", err)
-		}
-		if afterIndex+1 < totalCount {
-			start = afterIndex + 1
-		} else {
-			start = totalCount
+		for i := 0; i < totalCount; i++ {
+			if getCursor(i) > *after {
+				start = i
+				break
+			}
 		}
 	}
 
-	// Apply 'before' cursor
+	// Apply 'before' cursor: find first position at or after the cursor
 	if before != nil {
-		beforeIndex, err := decodeCursor(*before)
-		if err != nil {
-			return 0, 0, false, false, fmt.Errorf("invalid before cursor: %w", err)
-		}
-		if beforeIndex < end {
-			end = beforeIndex
+		for i := 0; i < totalCount; i++ {
+			if getCursor(i) >= *before {
+				end = i
+				break
+			}
 		}
 	}
-	if end < start {
+
+	if start >= end {
 		end = start
 	}
 
@@ -145,54 +132,18 @@ func applyCursorWindow(
 		}
 	}
 
-	// Check if there are more pages
-	if after != nil {
-		afterIndex, _ := decodeCursor(*after)
-		// If we sliced after a cursor, there's always a previous page
-		if afterIndex >= 0 {
-			hasPreviousPage = true
-		}
+	// Adjust hasPreviousPage/hasNextPage based on cursor position
+	if after != nil && start > 0 {
+		hasPreviousPage = true
+	}
+	if before != nil && end < totalCount {
+		hasNextPage = true
 	}
 
-	if before != nil {
-		beforeIndex, _ := decodeCursor(*before)
-		// If we sliced before a cursor and it's not the end, there's a next page
-		if beforeIndex < totalCount-1 {
-			hasNextPage = true
-		}
-	}
-
-	return start, end, hasNextPage, hasPreviousPage, nil
+	return start, end, hasNextPage, hasPreviousPage
 }
 
-// encodeCursor creates a base64-encoded cursor from an index
-func encodeCursor(index int) string {
-	cursor := fmt.Sprintf("arrayconnection:%d", index)
-	return base64.StdEncoding.EncodeToString([]byte(cursor))
-}
-
-// decodeCursor decodes a base64 cursor to an index
-func decodeCursor(cursor string) (int, error) {
-	decoded, err := base64.StdEncoding.DecodeString(cursor)
-	if err != nil {
-		return 0, fmt.Errorf("invalid base64 encoding: %w", err)
-	}
-
-	// Parse cursor format: "arrayconnection:INDEX"
-	parts := strings.Split(string(decoded), ":")
-	if len(parts) != 2 || parts[0] != "arrayconnection" {
-		return 0, fmt.Errorf("invalid cursor format")
-	}
-
-	index, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return 0, fmt.Errorf("invalid cursor index: %w", err)
-	}
-
-	return index, nil
-}
-
-// PaginateCategories applies Relay-style cursor pagination to a category list.
+// PaginateCategories applies Relay-style cursor pagination to a category list using keyset cursors
 func PaginateCategories(
 	categories []*catalog.Category,
 	first *int32,
@@ -200,26 +151,39 @@ func PaginateCategories(
 	last *int32,
 	before *string,
 ) (*model.CategoryConnection, error) {
+	if len(categories) == 0 {
+		return &model.CategoryConnection{
+			Edges:      []*model.CategoryEdge{},
+			TotalCount: 0,
+			PageInfo: &model.PageInfo{
+				HasNextPage:     false,
+				HasPreviousPage: false,
+				StartCursor:     nil,
+				EndCursor:       nil,
+			},
+		}, nil
+	}
+
 	allEdges := make([]*model.CategoryEdge, len(categories))
 	for i, c := range categories {
 		allEdges[i] = &model.CategoryEdge{
-			Cursor: encodeCursor(i),
+			Cursor: EncodeKeysetCursor(c.CreatedAt, c.ID),
 			Node:   CatalogCategoryToGraphQL(c),
 		}
 	}
 
-	start, end, hasNextPage, hasPreviousPage, err := applyCursorWindow(len(allEdges), first, after, last, before)
-	if err != nil {
-		return nil, err
-	}
+	start, end, hasNextPage, hasPreviousPage := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
+		c := categories[i]
+		return EncodeKeysetCursor(c.CreatedAt, c.ID)
+	})
 	edges := allEdges[start:end]
 
 	var startCursor, endCursor *string
 	if len(edges) > 0 {
-		start := edges[0].Cursor
-		end := edges[len(edges)-1].Cursor
-		startCursor = &start
-		endCursor = &end
+		sc := edges[0].Cursor
+		ec := edges[len(edges)-1].Cursor
+		startCursor = &sc
+		endCursor = &ec
 	}
 
 	return &model.CategoryConnection{
@@ -234,7 +198,7 @@ func PaginateCategories(
 	}, nil
 }
 
-// PaginateCollections applies Relay-style cursor pagination to a collection list.
+// PaginateCollections applies Relay-style cursor pagination to a collection list using keyset cursors
 func PaginateCollections(
 	collections []*catalog.Collection,
 	first *int32,
@@ -242,26 +206,39 @@ func PaginateCollections(
 	last *int32,
 	before *string,
 ) (*model.CollectionConnection, error) {
+	if len(collections) == 0 {
+		return &model.CollectionConnection{
+			Edges:      []*model.CollectionEdge{},
+			TotalCount: 0,
+			PageInfo: &model.PageInfo{
+				HasNextPage:     false,
+				HasPreviousPage: false,
+				StartCursor:     nil,
+				EndCursor:       nil,
+			},
+		}, nil
+	}
+
 	allEdges := make([]*model.CollectionEdge, len(collections))
 	for i, c := range collections {
 		allEdges[i] = &model.CollectionEdge{
-			Cursor: encodeCursor(i),
+			Cursor: EncodeKeysetCursor(c.CreatedAt, c.ID),
 			Node:   CatalogCollectionToGraphQL(c),
 		}
 	}
 
-	start, end, hasNextPage, hasPreviousPage, err := applyCursorWindow(len(allEdges), first, after, last, before)
-	if err != nil {
-		return nil, err
-	}
+	start, end, hasNextPage, hasPreviousPage := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
+		c := collections[i]
+		return EncodeKeysetCursor(c.CreatedAt, c.ID)
+	})
 	edges := allEdges[start:end]
 
 	var startCursor, endCursor *string
 	if len(edges) > 0 {
-		start := edges[0].Cursor
-		end := edges[len(edges)-1].Cursor
-		startCursor = &start
-		endCursor = &end
+		sc := edges[0].Cursor
+		ec := edges[len(edges)-1].Cursor
+		startCursor = &sc
+		endCursor = &ec
 	}
 
 	return &model.CollectionConnection{
@@ -276,7 +253,7 @@ func PaginateCollections(
 	}, nil
 }
 
-// PaginateNamespaces applies Relay-style cursor pagination to a namespace list.
+// PaginateNamespaces applies Relay-style cursor pagination to a namespace list using keyset cursors
 func PaginateNamespaces(
 	namespaces []*model.Namespace,
 	first *int32,
@@ -284,26 +261,39 @@ func PaginateNamespaces(
 	last *int32,
 	before *string,
 ) (*model.NamespaceConnection, error) {
+	if len(namespaces) == 0 {
+		return &model.NamespaceConnection{
+			Edges:      []*model.NamespaceEdge{},
+			TotalCount: 0,
+			PageInfo: &model.PageInfo{
+				HasNextPage:     false,
+				HasPreviousPage: false,
+				StartCursor:     nil,
+				EndCursor:       nil,
+			},
+		}, nil
+	}
+
 	allEdges := make([]*model.NamespaceEdge, len(namespaces))
 	for i, ns := range namespaces {
 		allEdges[i] = &model.NamespaceEdge{
-			Cursor: encodeCursor(i),
+			Cursor: EncodeKeysetCursor(ns.CreatedAt, ns.ID),
 			Node:   ns,
 		}
 	}
 
-	start, end, hasNextPage, hasPreviousPage, err := applyCursorWindow(len(allEdges), first, after, last, before)
-	if err != nil {
-		return nil, err
-	}
+	start, end, hasNextPage, hasPreviousPage := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
+		ns := namespaces[i]
+		return EncodeKeysetCursor(ns.CreatedAt, ns.ID)
+	})
 	edges := allEdges[start:end]
 
 	var startCursor, endCursor *string
 	if len(edges) > 0 {
-		start := edges[0].Cursor
-		end := edges[len(edges)-1].Cursor
-		startCursor = &start
-		endCursor = &end
+		sc := edges[0].Cursor
+		ec := edges[len(edges)-1].Cursor
+		startCursor = &sc
+		endCursor = &ec
 	}
 
 	return &model.NamespaceConnection{

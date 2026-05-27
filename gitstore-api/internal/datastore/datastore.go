@@ -15,11 +15,19 @@ var (
 	ErrInvalidArgument = errors.New("datastore: invalid argument")
 )
 
+// PaginationCursor represents a keyset-based cursor with createdAt + id for stable ordering.
+type PaginationCursor struct {
+	CreatedAt string // RFC3339 timestamp
+	ID        string // Unique ID as tie-breaker
+}
+
 // ProductFilter scopes ListProducts. All fields are optional.
 type ProductFilter struct {
-	CategoryID string // empty = no filter
-	After      string // cursor for forward pagination
-	First      int    // 0 = no limit
+	CategoryID string                // empty = no filter
+	After      string                // opaque cursor for forward pagination
+	Before     string                // opaque cursor for backward pagination
+	First      int                   // 0 = no limit; positive = forward page size
+	Last       int                   // 0 = no limit; positive = backward page size
 }
 
 // Datastore is the persistence contract for all backends.

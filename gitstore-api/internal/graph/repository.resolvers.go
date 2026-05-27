@@ -9,6 +9,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
@@ -167,17 +168,20 @@ func (r *queryResolver) Repositories(ctx context.Context, namespaceID string, fi
 		return nil, err
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
+	// Sort by created_at + id for keyset pagination
+	sortReposByCreatedAtThenID(repos)
+
 	allEdges := make([]*model.RepositoryEdge, len(repos))
 	for i, repo := range repos {
 		allEdges[i] = &model.RepositoryEdge{
-			Cursor: encodeCursor(i),
+			Cursor: EncodeKeysetCursor(repo.CreatedAt, repo.ID),
 			Node:   datastoreRepositoryToModel(repo, ns, r.storageDataDir),
 		}
 	}
-	start, end, hasNextPage, hasPreviousPage, err := applyCursorWindow(len(allEdges), first, after, last, before)
-	if err != nil {
-		return nil, err
-	}
+	start, end, hasNextPage, hasPreviousPage := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
+		repo := repos[i]
+		return EncodeKeysetCursor(repo.CreatedAt, repo.ID)
+	})
 	edges := allEdges[start:end]
 	var startCursor, endCursor *string
 	if len(edges) > 0 {
@@ -203,4 +207,17 @@ func callerUsernameOrAnon(ctx context.Context, r *mutationResolver) string {
 		return "anon"
 	}
 	return "anon"
+}
+
+// sortReposByCreatedAtThenID sorts repositories by created_at ascending, then by id as tie-breaker
+func sortReposByCreatedAtThenID(repos []*datastore.Repository) {
+	for i := 0; i < len(repos); i++ {
+		for j := i + 1; j < len(repos); j++ {
+			ri, rj := repos[i], repos[j]
+			cmpTime := ri.CreatedAt.Compare(rj.CreatedAt)
+			if cmpTime > 0 || (cmpTime == 0 && ri.ID > rj.ID) {
+				repos[i], repos[j] = repos[j], repos[i]
+			}
+		}
+	}
 }
