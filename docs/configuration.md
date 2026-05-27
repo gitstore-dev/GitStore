@@ -65,9 +65,10 @@ For config files, admin auth keys are nested under `[auth.admin]` (for example, 
 
 ### Logging
 
-| Key         | Env Var               | Type   | Default | Required | Sensitive | Description                            |
-|-------------|-----------------------|--------|---------|----------|-----------|----------------------------------------|
-| `log.level` | `GITSTORE_LOG__LEVEL` | string | `info`  | No       | No        | `debug` \| `info` \| `warn` \| `error` |
+| Key          | Env Var                | Type   | Default | Required | Sensitive | Description                            |
+|--------------|------------------------|--------|---------|----------|-----------|----------------------------------------|
+| `log.level`  | `GITSTORE_LOG__LEVEL`  | string | `info`  | No       | No        | `debug` \| `info` \| `warn` \| `error` |
+| `log.format` | `GITSTORE_LOG__FORMAT` | string | `json`  | No       | No        | `json` \| `text`                       |
 
 ### Datastore
 
@@ -102,6 +103,7 @@ issuer = "gitstore"
 
 [log]
 level = "debug"
+format = "json"
 
 [cache]
 ttl = 300
@@ -130,6 +132,7 @@ Secrets (`auth.admin.password_hash`, `auth.jwt.secret`) must remain in environme
 | `grpc.port`              | `GITSTORE_GRPC__PORT`                | u16    | `50051`       | No       | No        | gRPC server port (1–65535)                        |
 | `git.data_dir`           | `GITSTORE_GIT__DATA_DIR`             | string | `/data/repos` | No       | No        | Repository storage directory                      |
 | `log.level`              | `GITSTORE_LOG__LEVEL`                | string | `info`        | No       | No        | `trace` \| `debug` \| `info` \| `warn` \| `error` |
+| `log.format`             | `GITSTORE_LOG__FORMAT`               | string | `json`        | No       | No        | `json` \| `text`                                  |
 | `git.repo.max_file_size` | `GITSTORE_GIT__REPO__MAX_FILE_SIZE`  | u64    | `52428800`    | No       | No        | Max size per repo in bytes (default: 50 MB)       |
 
 > **Constraint**: `http.port`, `ws.port`, and `grpc.port` must all be distinct values.
@@ -179,6 +182,7 @@ max_file_size = 52428800
 
 [log]
 level = "info"
+format = "json"
 
 [hooks.git_receive_pack]
 pre_receive  = { enabled = false }

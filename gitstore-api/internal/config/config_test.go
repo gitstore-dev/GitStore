@@ -22,6 +22,7 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_GIT__HTTP__URI",
 		"GITSTORE_CACHE__TTL",
 		"GITSTORE_LOG__LEVEL",
+		"GITSTORE_LOG__FORMAT",
 		"GITSTORE_AUTH__ADMIN__USERNAME",
 		"GITSTORE_AUTH__ADMIN__PASSWORD_HASH",
 		"GITSTORE_AUTH__JWT__SECRET",
@@ -75,6 +76,7 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	assert.Equal(t, "http://localhost:9418", cfg.Git.Http.Uri)
 	assert.Equal(t, 300, cfg.Cache.TTL)
 	assert.Equal(t, "info", cfg.Log.Level)
+	assert.Equal(t, "json", cfg.Log.Format)
 	assert.Equal(t, "24h", cfg.Auth.JWT.Duration)
 	assert.Equal(t, "gitstore", cfg.Auth.JWT.Issuer)
 }
@@ -85,6 +87,7 @@ func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	setRequiredAuth(t)
 	os.Setenv("GITSTORE_API__PORT", "8888")
 	os.Setenv("GITSTORE_LOG__LEVEL", "debug")
+	os.Setenv("GITSTORE_LOG__FORMAT", "text")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -92,6 +95,7 @@ func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 
 	assert.Equal(t, 8888, cfg.Api.Port)
 	assert.Equal(t, "debug", cfg.Log.Level)
+	assert.Equal(t, "text", cfg.Log.Format)
 }
 
 func TestLoad_ConfigFileValueAppliedWhenNoEnvVar(t *testing.T) {
@@ -102,6 +106,7 @@ func TestLoad_ConfigFileValueAppliedWhenNoEnvVar(t *testing.T) {
 	dir := t.TempDir()
 	content := `[log]
 level = "warn"
+format = "text"
 
 [api]
 port = 7777
@@ -123,6 +128,7 @@ ttl = 600
 	assert.Equal(t, 7777, cfg.Api.Port)
 	assert.Equal(t, 600, cfg.Cache.TTL)
 	assert.Equal(t, "warn", cfg.Log.Level)
+	assert.Equal(t, "text", cfg.Log.Format)
 }
 
 func TestLoad_EnvVarOverridesConfigFile(t *testing.T) {
@@ -263,6 +269,18 @@ func TestLoad_InvalidPortReturnsError(t *testing.T) {
 	_, err := Load()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "Port")
+}
+
+func TestLoad_InvalidLogFormatReturnsError(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	os.Setenv("GITSTORE_LOG__FORMAT", "xml")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid log format")
+	assert.Contains(t, err.Error(), "json, text")
 }
 
 func TestLoad_MultipleValidationErrorsReportedTogether(t *testing.T) {
