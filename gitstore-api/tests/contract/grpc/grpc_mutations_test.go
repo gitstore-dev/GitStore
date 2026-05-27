@@ -14,11 +14,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,8 +36,8 @@ func startMutationContainer(t *testing.T) (*gitclient.Client, func()) {
 	client, err := gitclient.NewClientWithAddr(sharedGRPCAddr)
 	require.NoError(t, err)
 
-	// Use the test name as repo ID (sanitised to be a valid name).
-	repoID := sanitiseRepoID(t.Name())
+	// git-service requires repo_id to be a 36-character UUID for fanout pathing.
+	repoID := uuid.New().String()
 	client.RepositoryID = repoID
 	_, err = client.CreateRepository(context.Background(), repoID, "default")
 	require.NoError(t, err, "failed to create test repository %q", repoID)
@@ -47,17 +47,6 @@ func startMutationContainer(t *testing.T) (*gitclient.Client, func()) {
 		client.Close()
 	}
 	return client, cleanup
-}
-
-// sanitiseRepoID converts a test name to a valid repository ID by replacing
-// characters that are rejected by validate_repository_name.
-func sanitiseRepoID(name string) string {
-	r := strings.NewReplacer("/", "-", "\\", "-", " ", "-")
-	s := strings.Trim(r.Replace(name), "-")
-	if s == "" {
-		return "default"
-	}
-	return s
 }
 
 // TestGRPCCommitFile verifies CommitFile creates a commit and returns a SHA.
