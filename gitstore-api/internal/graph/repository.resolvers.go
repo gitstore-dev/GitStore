@@ -167,18 +167,32 @@ func (r *queryResolver) Repositories(ctx context.Context, namespaceID string, fi
 		return nil, err
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
-	edges := make([]*model.RepositoryEdge, len(repos))
+	allEdges := make([]*model.RepositoryEdge, len(repos))
 	for i, repo := range repos {
-		edges[i] = &model.RepositoryEdge{
-			Cursor: mustEncodeNodeID(nodeKindRepository, repo.ID),
+		allEdges[i] = &model.RepositoryEdge{
+			Cursor: encodeCursor(i),
 			Node:   datastoreRepositoryToModel(repo, ns, r.storageDataDir),
 		}
+	}
+	start, end, hasNextPage, hasPreviousPage, err := applyCursorWindow(len(allEdges), first, after, last, before)
+	if err != nil {
+		return nil, err
+	}
+	edges := allEdges[start:end]
+	var startCursor, endCursor *string
+	if len(edges) > 0 {
+		s := edges[0].Cursor
+		e := edges[len(edges)-1].Cursor
+		startCursor = &s
+		endCursor = &e
 	}
 	return &model.RepositoryConnection{
 		Edges: edges,
 		PageInfo: &model.PageInfo{
-			HasNextPage:     false,
-			HasPreviousPage: false,
+			HasNextPage:     hasNextPage,
+			HasPreviousPage: hasPreviousPage,
+			StartCursor:     startCursor,
+			EndCursor:       endCursor,
 		},
 	}, nil
 }
