@@ -68,7 +68,7 @@ func RunMigrations(ctx context.Context, rawSession *gocql.Session, keyspace, ins
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(2 * time.Second):
 			return nil
 		}
 	})
