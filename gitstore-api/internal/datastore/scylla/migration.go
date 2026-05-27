@@ -61,6 +61,12 @@ func RunMigrations(ctx context.Context, rawSession *gocql.Session, keyspace, ins
 	reg.Add(migrate.CallComment, "log_tables", callbackLog)
 	migrate.Callback = reg.Callback
 
+	// Await schema agreement before each statement so DDL changes (CREATE TABLE)
+	// are fully visible before dependent DDL (CREATE INDEX) runs. On single-node
+	// Scylla with developer mode this is the only reliable way to prevent
+	// 'unconfigured table' errors when an index immediately follows its table.
+	migrate.DefaultAwaitSchemaAgreement = migrate.AwaitSchemaAgreementBeforeEachStatement
+
 	session := gocqlx.NewSession(rawSession)
 
 	pending, err := migrate.Pending(ctx, session, migrations.Files)
