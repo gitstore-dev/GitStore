@@ -23,12 +23,14 @@ GitStore is a git-backed ecommerce headless engine with two core services:
 git clone https://github.com/gitstore-dev/gitstore
 cd gitstore
 
-# Start all services with docker compose
-export COMPOSE_BAKE=true
-docker compose up --build -d
+# Start all core services
+make compose DETACH=1
 
 # Check service health
-docker compose ps
+make ps
+
+# Create a starter namespace and repository
+make bootstrap ADMIN_PASSWORD=<admin-password>
 ```
 
 **Expected Output**:
@@ -41,9 +43,9 @@ gitstore-api         running             0.0.0.0:4000->4000/tcp
 ### 2. Access Services
 
 - **GraphQL Playground**: http://localhost:4000/playground
-- **Git Repository (example)**: `http://localhost:9418/<repository_id>` — repositories are created on demand via the `CreateRepository` gRPC call; replace `<repository_id>` with the name provisioned for your catalogue.
+- **Git Repository (example)**: use the clone URL printed by `make bootstrap`. Git HTTP transport is keyed by the internal repository ID.
 
-### 4. Test GraphQL Query
+### 3. Test GraphQL Query
 
 Open http://localhost:4000/playground and run:
 
@@ -74,19 +76,16 @@ query {
 
 #### Step 1: Create and Clone a Catalogue Repository
 
-First, provision a named repository via gRPC (e.g. using `grpcurl`):
+Provision a namespace and repository through the running API:
 
 ```bash
-grpcurl -plaintext -d '{"repository_id":"catalog"}' \
-  -import-path shared/proto/gitstore/git/v1/ \
-  -proto git_service.proto localhost:50051 \
-  gitstore.git.v1.GitService.CreateRepository
+make bootstrap NAMESPACE=gitstore REPOSITORY=catalog ADMIN_PASSWORD=<admin-password>
 ```
 
-Then clone over Smart HTTP:
+Then clone over Smart HTTP using the clone URL printed by `make bootstrap`:
 
 ```bash
-git clone http://localhost:9418/catalog catalogue-work
+git clone http://localhost:9418/<repository-id> catalogue-work
 cd catalogue-work
 ```
 
@@ -377,30 +376,36 @@ query CategoryTree {
 - **Node.js**: 18+ (`node --version`)
 - **Docker**: 24+ (for local development)
 - **Git**: 2.40+
+- **Make, curl, jq**: required for root command wrappers and bootstrap targets
 
 ### Build from Source
+
+Run aggregate build and test checks from the repository root:
+
+```bash
+make build
+make test
+```
 
 #### Git Service (Rust)
 
 ```bash
-cd gitstore-git-service
-cargo build --release
-cargo test
-
-# Run standalone
-cargo run -- --port 9418 --ws-port 8080 --data-dir ./data
+# Run standalone in the foreground
+make git
 ```
 
 #### GraphQL API (Go)
 
 ```bash
-cd gitstore-api
-go mod download
-go generate ./...  # Run gqlgen code generation
-go build -o bin/api ./cmd/server
+# Run standalone in the foreground.
+# Requires gitstore-api/.env or shell env for required auth secrets.
+make api
+```
 
-# Run standalone
-./bin/api --port 4000 --git-ws ws://localhost:8080
+Run both native services together:
+
+```bash
+make dev
 ```
 
 ### Environment Variables
@@ -429,7 +434,11 @@ GITSTORE_LOG__LEVEL=info
 #### Start ScyllaDB (optional, for database-backed development)
 
 ```bash
-docker compose -f compose.yml -f compose.scylla.yml up -d scylla scylla-init
+# Scylla services only
+make scylla DETACH=1
+
+# Full core stack with Scylla
+make compose-scylla DETACH=1
 ```
 
 Scylla-backed Go tests use an externally managed ScyllaDB instance. Start
@@ -441,6 +450,36 @@ GITSTORE_TEST_SCYLLA_ADDR=127.0.0.1:9042 \
   go test -tags scylla -v -timeout 10m ./tests/contract/datastore/... ./internal/datastore/scylla/...
 ```
 
+### Bootstrap and Clean-up
+
+Bootstrap creates resources through the running GraphQL API. It is create-oriented: existing namespaces or repositories fail clearly instead of being updated.
+
+```bash
+# Login and cache a bearer token for later bootstrap commands
+make bootstrap-token ADMIN_PASSWORD=<admin-password>
+
+# Create namespace + repository
+make bootstrap ADMIN_PASSWORD=<admin-password>
+
+# Or create them separately
+make bootstrap-namespace ADMIN_PASSWORD=<admin-password>
+make bootstrap-repository ADMIN_PASSWORD=<admin-password>
+```
+
+Useful bootstrap variables include `API_URL`, `ADMIN_USERNAME`, `BOOTSTRAP_TOKEN`, `NAMESPACE`, `NAMESPACE_DISPLAY_NAME`, `NAMESPACE_TIER`, `REPOSITORY`, and `DEFAULT_BRANCH`.
+
+For native local service data only:
+
+```bash
+make git-clean-data CONFIRM=1
+```
+
+For Docker Compose services:
+
+```bash
+make down
+```
+
 ### Go Licence Headers
 
 All Go source files in this repository should include this header near the top of the file:
@@ -450,27 +489,10 @@ All Go source files in this repository should include this header near the top o
 // Copyright (c) 2026 GitStore contributors
 ```
 
-Use the checker script for enforcement:
+Run the repository license checks through Make:
 
 ```bash
-# All tracked Go files
-./scripts/check-go-license-headers.sh --all
-
-# Only staged added/modified Go files (used by pre-commit)
-./scripts/check-go-license-headers.sh --staged
-
-# Added/modified files compared to your base branch
-./scripts/check-go-license-headers.sh --diff-base origin/main
-
-# Rust files (same modes)
-./scripts/check-rust-license-headers.sh --all
-./scripts/check-rust-license-headers.sh --staged
-./scripts/check-rust-license-headers.sh --diff-base origin/main
-
-# TypeScript/JavaScript files (same modes)
-./scripts/check-js-license-headers.sh --all
-./scripts/check-js-license-headers.sh --staged
-./scripts/check-js-license-headers.sh --diff-base origin/main
+make license-check
 ```
 
 Install repository hooks once per clone:
@@ -509,44 +531,16 @@ CI also enforces this via:
 
 ## Testing
 
-> [!NOTE]
-> The sample tests below are illustrative. Some CI tests are currently placeholders and may differ from the eventual production test suite.
-
-### Contract Tests (GraphQL Schema)
+Run the standard Rust and Go test suites from the repository root:
 
 ```bash
-cd gitstore-api
-go test ./tests/contract/...
+make test
 ```
 
-**Example Test**:
-```go
-func TestProductSchema(t *testing.T) {
-    query := `{ product(by: {sku: "TEST-001"}) { id title } }`
-    resp := executeQuery(query)
-    assert.NoError(t, resp.Errors)
-    assert.Equal(t, "TEST-001", resp.Data.Product.SKU)
-}
-```
-
-### Integration Tests (User Journeys)
+Before opening a PR, run the full readiness workflow:
 
 ```bash
-cd gitstore-git-service
-cargo test --test integration
-```
-
-**Example Test**:
-```rust
-#[test]
-fn test_create_product_workflow() {
-    let repo = TestRepo::new();
-    let product = create_test_product("LAPTOP-001");
-    repo.commit_file("products/electronics/LAPTOP-001.md", product);
-    repo.push().unwrap();
-    let tag = repo.tag("v0.1.0");
-    assert_eq!(tag, "v0.1.0");
-}
+make pr-ready
 ```
 
 ---
@@ -577,7 +571,7 @@ fn test_create_product_workflow() {
 wscat -c ws://localhost:8080
 
 # Check API logs
-docker compose logs api | grep websocket
+make logs SERVICE=api
 
 # Manual cache invalidation
 # TODO returns 404

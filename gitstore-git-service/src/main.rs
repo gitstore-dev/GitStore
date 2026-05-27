@@ -116,12 +116,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    tokio::signal::ctrl_c().await?;
+    shutdown_signal().await?;
     info!("Shutting down...");
 
     ws_handle.abort();
     http_handle.abort();
     grpc_handle.abort();
 
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn shutdown_signal() -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let mut terminate = signal(SignalKind::terminate())?;
+
+    tokio::select! {
+        _ = interrupt.recv() => info!("Received SIGINT"),
+        _ = terminate.recv() => info!("Received SIGTERM"),
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() -> Result<(), Box<dyn std::error::Error>> {
+    tokio::signal::ctrl_c().await?;
+    info!("Received Ctrl-C");
     Ok(())
 }

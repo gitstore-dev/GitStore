@@ -6,20 +6,20 @@
 
 - The core stack must be running. Start it first:
   ```bash
-  docker compose up -d
+  make compose DETACH=1
   ```
 - Verify both core services are healthy:
   ```bash
-  docker compose ps
+  make ps
   # Expected: gitstore-git-service and gitstore-api both "running"
   ```
 
 ## Starting the Full Stack (Core + Admin)
 
-Use the `compose.admin.yml` override together with the base `compose.yml`:
+Use the root Make wrapper:
 
 ```bash
-docker compose -f compose.yml -f compose.admin.yml up -d
+make admin-compose DETACH=1
 ```
 
 **Expected output**:
@@ -34,7 +34,7 @@ gitstore-admin       running             0.0.0.0:3000->3000/tcp
 
 Open **http://localhost:3000** in your browser.
 
-Log in with the credentials configured in `ADMIN_PASSWORD_HASH` (default: `admin123` — change this before any real deployment).
+Log in with the admin credentials configured for `gitstore-api`.
 
 ## Managing Products
 
@@ -72,13 +72,13 @@ This creates a git commit and annotated tag in `gitstore-git-service`, which bro
 ## Stopping the Admin
 
 ```bash
-docker compose -f compose.yml -f compose.admin.yml down
+make admin-down
 ```
 
 To stop only the admin container while keeping the core stack running:
 
 ```bash
-docker compose -f compose.yml -f compose.admin.yml stop admin
+make admin-stop
 ```
 
 ## Troubleshooting
@@ -90,7 +90,7 @@ docker compose -f compose.yml -f compose.admin.yml stop admin
 **Solution**: The admin caches catalogue data. To refresh:
 1. Make git changes via CLI or AI agent
 2. Push and create a new release tag
-3. Wait for the websocket notification (check: `docker compose logs git-service`)
+3. Wait for the websocket notification (check: `make logs SERVICE=git-service`)
 4. Refresh the Admin browser tab
 
 ### Merge conflicts when publishing
@@ -108,7 +108,7 @@ docker compose -f compose.yml -f compose.admin.yml stop admin
 **Problem**: `gitstore-admin` fails to start or exits immediately.
 
 **Checklist**:
-- Is the core stack healthy? Run `docker compose ps` first.
+- Is the core stack healthy? Run `make ps` first.
 - Is `gitstore-api` reachable on port 4000? The admin has a `depends_on: api` health check.
 - Is `GITSTORE_GRAPHQL_URL` set correctly in `compose.admin.yml`? Default: `http://api:4000/graphql`.
 

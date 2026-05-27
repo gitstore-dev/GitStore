@@ -49,7 +49,20 @@ graph TD
 
 ## Quick Start
 
-See [quickstart](docs/user-guide.md) for a Docker-based quick start.
+Run the core stack from the repository root:
+
+```bash
+make compose DETACH=1
+make ps
+```
+
+Use `make compose` without `DETACH=1` to keep the compose stack in the foreground. After the API is healthy, create a starter namespace and repository:
+
+```bash
+make bootstrap ADMIN_PASSWORD=<admin-password>
+```
+
+See [quickstart](docs/user-guide.md) for the full Docker-based workflow and bootstrap variables.
 
 ## Contributing
 
