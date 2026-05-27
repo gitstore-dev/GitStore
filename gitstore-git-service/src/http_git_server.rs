@@ -22,6 +22,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
 use crate::git::pack_server::HttpPackServer;
+use crate::git::repo::fanout_path;
 use crate::websocket::broadcast::Broadcaster;
 
 /// Git server state shared across handlers
@@ -33,32 +34,19 @@ pub struct GitServerState {
     pub max_pack_size: u64,
 }
 
-/// Validate a repo name segment from the URL path.
-/// Rejects empty, path separators, and ".." components (mirrors FR-020).
-fn validate_repo_name(name: &str) -> Result<(), StatusCode> {
-    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
-        return Err(StatusCode::BAD_REQUEST);
+/// Build the fanout path for `repo_id` inside `data_root` and verify the
+/// directory already exists.  Returns NOT_FOUND if absent, INVALID_ARGUMENT if
+/// `repo_id` is not a valid 36-character UUID.
+fn confine_repo_path(data_root: &StdPath, repo_id: &str) -> Result<PathBuf, GitError> {
+    let candidate = fanout_path(data_root, repo_id)
+        .map_err(|_| GitError::NotFound(format!("repository '{}' not found", repo_id)))?;
+    if !candidate.exists() {
+        return Err(GitError::NotFound(format!(
+            "repository '{}' not found",
+            repo_id
+        )));
     }
-    Ok(())
-}
-
-/// Build a canonicalized path for `repo` inside `data_root` and verify that it
-/// stays within `data_root` (prevents path-traversal / injection).
-///
-/// The directory must already exist; `canonicalize` follows symlinks and
-/// resolves `.` / `..`, so any attempt to escape the root is caught here.
-fn confine_repo_path(data_root: &StdPath, repo: &str) -> Result<PathBuf, GitError> {
-    let candidate = data_root.join(format!("{}.git", repo));
-    let canonical = candidate
-        .canonicalize()
-        .map_err(|_| GitError::NotFound(format!("repository '{}' not found", repo)))?;
-    let root = data_root
-        .canonicalize()
-        .map_err(|e| GitError::Internal(format!("data root inaccessible: {}", e)))?;
-    if !canonical.starts_with(&root) {
-        return Err(GitError::NotFound("invalid repository name".into()));
-    }
-    Ok(canonical)
+    Ok(candidate)
 }
 
 /// Create HTTP git server routes
@@ -92,8 +80,6 @@ async fn info_refs(
     Query(query): Query<InfoRefsQuery>,
 ) -> Result<Response, GitError> {
     debug!(repo = %repo, "info_refs request");
-
-    validate_repo_name(&repo).map_err(|_| GitError::NotFound("invalid repository name".into()))?;
 
     let service = query.service.as_deref().unwrap_or("");
     let repo_path = confine_repo_path(&state.data_root, &repo)?;
@@ -162,7 +148,6 @@ async fn upload_pack(
 ) -> Result<Response, GitError> {
     debug!(repo = %repo, "upload_pack request");
 
-    validate_repo_name(&repo).map_err(|_| GitError::NotFound("invalid repository name".into()))?;
     let repo_path = confine_repo_path(&state.data_root, &repo)?;
 
     let response = HttpPackServer::new(repo_path, state.max_pack_size)
@@ -185,7 +170,6 @@ async fn receive_pack(
 ) -> Result<Response, GitError> {
     info!(repo = %repo, "receive_pack request (git push)");
 
-    validate_repo_name(&repo).map_err(|_| GitError::NotFound("invalid repository name".into()))?;
     let repo_path = confine_repo_path(&state.data_root, &repo)?;
 
     let pack_response = HttpPackServer::new(repo_path.clone(), state.max_pack_size)

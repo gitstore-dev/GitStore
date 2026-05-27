@@ -1,0 +1,192 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 GitStore contributors
+
+# Repository and NamespaceMapping GraphQL schema additions
+# Feature: 010-repo-storage-identity
+
+"""
+A git repository. Has a stable internal identity (id) that is independent of
+its human-readable namespace path. Renaming or transferring a repository does
+not change its id.
+"""
+type Repository implements Node {
+  """
+  Globally unique Relay ID.
+  """
+  id: ID!
+
+  """
+  Human-readable name within the namespace (e.g., "my-catalog").
+  Mutable on rename.
+  """
+  name: String!
+
+  """
+  The namespace that owns this repository.
+  """
+  namespace: Namespace!
+
+  """
+  Default branch name (e.g., "main").
+  """
+  defaultBranch: String!
+
+  """
+  Storage class tag. Reserved for future multi-storage-root use.
+  """
+  storageClass: String!
+
+  """
+  Absolute filesystem path derived from the internal repo_id using the fanout formula.
+  Informational — for operator use. Example: /data/01/96/0196f3a2-4b1c-7e9d-a301-8b2c4d5e6f7a.git
+  """
+  storagePath: String!
+
+  createdAt: DateTime!
+  createdBy: String!
+  updatedAt: DateTime!
+  updatedBy: String!
+}
+
+type RepositoryEdge {
+  cursor: String!
+  node: Repository!
+}
+
+type RepositoryConnection {
+  edges: [RepositoryEdge!]!
+  pageInfo: PageInfo!
+}
+
+# ============================================================================
+# Query additions
+# ============================================================================
+
+extend type Query {
+  """
+  Look up a repository by its namespace identifier and name.
+  Returns null if not found.
+  """
+  repository(by: RepositoryBy!): Repository
+
+  """
+  List repositories within a namespace.
+  """
+  repositories(
+    namespaceId: ID!
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): RepositoryConnection!
+}
+
+"""
+Selector for a single repository lookup.
+Exactly one field must be set.
+"""
+input RepositoryBy @oneOf {
+  """
+  Look up by globally unique Relay ID.
+  """
+  id: ID
+
+  """
+  Look up by namespace identifier + repository name.
+  """
+  namespacePath: RepositoryNamespacePath
+}
+
+"""
+Composite selector: namespace identifier (human-readable slug) + repository name.
+"""
+input RepositoryNamespacePath {
+  """
+  Namespace identifier slug (e.g., "acme").
+  """
+  namespace: String!
+
+  """
+  Repository name (e.g., "my-catalog").
+  """
+  name: String!
+}
+
+# ============================================================================
+# Mutation additions
+# ============================================================================
+
+extend type Mutation {
+  """
+  Create a new repository within a namespace.
+  """
+  createRepository(input: CreateRepositoryInput!): CreateRepositoryPayload!
+
+  """
+  Rename a repository within its namespace. Does not move storage.
+  """
+  renameRepository(input: RenameRepositoryInput!): RenameRepositoryPayload!
+
+  """
+  Transfer a repository to a different namespace. Does not move storage.
+  """
+  transferRepository(input: TransferRepositoryInput!): TransferRepositoryPayload!
+
+  """
+  Delete a repository and its storage.
+  """
+  deleteRepository(input: DeleteRepositoryInput!): DeleteRepositoryPayload!
+}
+
+input CreateRepositoryInput {
+  clientMutationId: String
+  namespaceId: ID!
+  name: String!
+  defaultBranch: String
+}
+
+type CreateRepositoryPayload {
+  clientMutationId: String
+  repository: Repository!
+}
+
+input RenameRepositoryInput {
+  clientMutationId: String
+  """
+  Relay ID of the repository to rename.
+  """
+  repositoryId: ID!
+  newName: String!
+}
+
+type RenameRepositoryPayload {
+  clientMutationId: String
+  repository: Repository!
+}
+
+input TransferRepositoryInput {
+  clientMutationId: String
+  """
+  Relay ID of the repository to transfer.
+  """
+  repositoryId: ID!
+  """
+  Relay ID of the destination namespace.
+  """
+  targetNamespaceId: ID!
+}
+
+type TransferRepositoryPayload {
+  clientMutationId: String
+  repository: Repository!
+}
+
+input DeleteRepositoryInput {
+  clientMutationId: String
+  repositoryId: ID!
+}
+
+type DeleteRepositoryPayload {
+  clientMutationId: String
+  deletedRepositoryId: ID!
+}

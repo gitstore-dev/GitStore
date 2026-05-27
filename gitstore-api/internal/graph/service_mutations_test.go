@@ -23,8 +23,30 @@ type mockGitWriter struct {
 	deleteCalls    []gitclient.DeleteFileParams
 	createTagCalls []gitclient.CreateTagParams
 
-	commitErr error
-	deleteErr error
+	createRepoCalls []string
+	deleteRepoCalls []string
+
+	commitErr      error
+	deleteErr      error
+	createRepoErr  error
+	deleteRepoErr  error
+}
+
+func (m *mockGitWriter) CreateRepository(_ context.Context, repositoryID, _ string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.createRepoCalls = append(m.createRepoCalls, repositoryID)
+	if m.createRepoErr != nil {
+		return "", m.createRepoErr
+	}
+	return "/data/xx/yy/" + repositoryID + ".git", nil
+}
+
+func (m *mockGitWriter) DeleteRepository(_ context.Context, repositoryID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleteRepoCalls = append(m.deleteRepoCalls, repositoryID)
+	return m.deleteRepoErr
 }
 
 func (m *mockGitWriter) CommitFile(_ context.Context, p gitclient.CommitFileParams) (string, error) {

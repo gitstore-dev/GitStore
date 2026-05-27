@@ -1,16 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 //
-// GitStore gRPC Git Service contract — v1 (007-migrate-gitoxide revision)
+// GitStore gRPC Git Service contract — v1 (010-repo-storage-identity revision)
 //
-// Changes from current baseline:
-//   - All existing request messages gain a `repository_id` field (field 15,
-//     reserved to avoid collisions with future fields 1–14).
-//   - New RPCs: CreateRepository, DeleteRepository.
-//   - No existing fields, RPCs, or status codes are removed.
+// Changes from 007 baseline:
+//   - `repository_id` semantics clarified: the field now carries an opaque
+//     UUIDv7 (the internal repo_id), never a namespace-path string.
+//     gitstore-git-service MUST NOT interpret this value as a filesystem path
+//     component directly; it MUST derive the path using the fanout formula.
+//   - `CreateRepository` request gains `storage_class` field (optional, default
+//     "default") to support future multi-storage-root routing.
+//   - `CreateRepository` response gains `storage_path` field (informational).
+//   - No field numbers, RPCs, or status codes removed (additive only).
 //
-// Callers that do not set `repository_id` receive Status::NOT_FOUND rather
-// than silently targeting any default repository.
+// Path derivation (gitstore-git-service internal):
+//   repo_id  = "0196f3a2-4b1c-7e9d-a301-8b2c4d5e6f7a"
+//   hex      = "0196f3a24b1c7e9da3018b2c4d5e6f7a"
+//   path     = {data_dir}/01/96/0196f3a2-4b1c-7e9d-a301-8b2c4d5e6f7a.git
 
 syntax = "proto3";
 
@@ -19,19 +25,17 @@ package gitstore.git.v1;
 option go_package = "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1;gitv1";
 
 // GitService provides raw git primitive operations over gRPC.
-// All operations are scoped to a named repository identified by repository_id.
-//
-// Contract versioning: this package is gitstore.git.v1. Breaking changes
-// require a new gitstore.git.v2 package and atomic co-deployment of both
-// gitstore-api and gitstore-git-service.
+// All operations are scoped to a repository identified by its stable repo_id (UUIDv7).
+// Callers (gitstore-api) MUST resolve namespace/name → repo_id before calling any RPC.
+// gitstore-git-service never receives or interprets namespace strings.
 service GitService {
   // ── Repository lifecycle ───────────────────────────────────────────────────
 
-  // CreateRepository provisions a new, empty bare repository.
-  // Returns ALREADY_EXISTS if a repository with the same name already exists.
+  // CreateRepository provisions a new, empty bare repository at the fanout path.
+  // Returns ALREADY_EXISTS if a repository with the given repo_id already exists on disk.
   rpc CreateRepository(CreateRepositoryRequest) returns (CreateRepositoryResponse);
 
-  // DeleteRepository removes a named repository and all its data.
+  // DeleteRepository removes the repository directory and all its data.
   // Returns NOT_FOUND if the repository does not exist.
   rpc DeleteRepository(DeleteRepositoryRequest) returns (DeleteRepositoryResponse);
 
@@ -70,31 +74,35 @@ service GitService {
 // ─── Repository lifecycle messages ────────────────────────────────────────────
 
 message CreateRepositoryRequest {
-  // repository_id is the unique name for the new repository.
-  // Must be non-empty and must not contain '/', '\', or '..' components.
+  // repository_id is the stable UUIDv7 for the new repository.
+  // Must be a valid 36-char hyphenated UUID. Must not contain path separators.
   string repository_id = 1;
+
+  // storage_class is an optional routing hint for future multi-root storage.
+  // Defaults to "default" when empty.
+  string storage_class = 2;
 }
 
 message CreateRepositoryResponse {
-  // repository_id echoes the name of the created repository.
   string repository_id = 1;
+  // storage_path is the absolute filesystem path where the repository was created.
+  // Informational only — callers must not depend on this for routing.
+  string storage_path  = 2;
 }
 
 message DeleteRepositoryRequest {
-  // repository_id identifies the repository to remove.
+  // repository_id is the stable UUIDv7 of the repository to remove.
   string repository_id = 1;
 }
 
 message DeleteRepositoryResponse {
-  // repository_id echoes the name of the deleted repository.
   string repository_id = 1;
 }
 
 // ─── Read messages ─────────────────────────────────────────────────────────────
 
 message GetFileRequest {
-  // repository_id identifies the target repository.
-  // Returns NOT_FOUND if the repository does not exist.
+  // repository_id is the stable UUIDv7. See service-level contract note.
   string repository_id = 15;
 
   // path is the file path relative to the repository root.

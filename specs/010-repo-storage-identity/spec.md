@@ -2,7 +2,7 @@
 
 **Feature Branch**: `010-repo-storage-identity`  
 **Created**: 2026-05-26  
-**Status**: Draft  
+**Status**: Closed  
 **Input**: GH#70 — GitLab-style repository storage identity and path strategy, with subtasks #71–#75. No backwards compatibility required (early ALPHA).
 
 ## Clarifications

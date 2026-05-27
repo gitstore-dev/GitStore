@@ -285,3 +285,173 @@ func TestMemdb_DataIsGoneAfterNewInstance(t *testing.T) {
 	_, err := ds2.GetProduct(ctx, p.ID)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
+
+// ── Repository tests ──────────────────────────────────────────────────────────
+
+const (
+	repoID1 = "01960000-0000-7000-8000-000000000001"
+	repoID2 = "01960000-0000-7000-8000-000000000002"
+	nsID1   = "01960000-0000-7000-8000-000000000010"
+	nsID2   = "01960000-0000-7000-8000-000000000011"
+)
+
+func repoFixture(id, nsID, name string) *datastore.Repository {
+	return &datastore.Repository{
+		ID:            id,
+		NamespaceID:   nsID,
+		Name:          name,
+		DefaultBranch: "main",
+		StorageClass:  "default",
+		CreatedAt:     time.Now(),
+		CreatedBy:     "test",
+		UpdatedAt:     time.Now(),
+		UpdatedBy:     "test",
+	}
+}
+
+func mappingFixture(nsID, name, repoID string) *datastore.NamespaceMapping {
+	return &datastore.NamespaceMapping{
+		NamespaceID: nsID,
+		Name:        name,
+		RepoID:      repoID,
+	}
+}
+
+func TestMemdb_CreateAndGetRepository(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	r := repoFixture(repoID1, nsID1, "my-repo")
+
+	require.NoError(t, ds.CreateRepository(ctx, r))
+
+	got, err := ds.GetRepository(ctx, repoID1)
+	require.NoError(t, err)
+	assert.Equal(t, repoID1, got.ID)
+	assert.Equal(t, "my-repo", got.Name)
+	assert.Equal(t, nsID1, got.NamespaceID)
+}
+
+func TestMemdb_GetRepository_NotFound(t *testing.T) {
+	ds := newBackend(t)
+	_, err := ds.GetRepository(context.Background(), "01960000-0000-7000-8000-000000000099")
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestMemdb_CreateRepository_DuplicateReturnsAlreadyExists(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	r := repoFixture(repoID1, nsID1, "dup-repo")
+	require.NoError(t, ds.CreateRepository(ctx, r))
+
+	err := ds.CreateRepository(ctx, repoFixture(repoID1, nsID1, "dup-repo"))
+	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
+}
+
+func TestMemdb_ListRepositoriesByNamespace(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+
+	require.NoError(t, ds.CreateRepository(ctx, repoFixture(repoID1, nsID1, "repo-a")))
+	require.NoError(t, ds.CreateRepository(ctx, repoFixture(repoID2, nsID1, "repo-b")))
+	require.NoError(t, ds.CreateRepository(ctx, repoFixture("01960000-0000-7000-8000-000000000003", nsID2, "repo-c")))
+
+	results, err := ds.ListRepositoriesByNamespace(ctx, nsID1)
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+}
+
+func TestMemdb_UpdateRepository(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	r := repoFixture(repoID1, nsID1, "original-name")
+	require.NoError(t, ds.CreateRepository(ctx, r))
+
+	r.Name = "renamed"
+	require.NoError(t, ds.UpdateRepository(ctx, r))
+
+	got, err := ds.GetRepository(ctx, repoID1)
+	require.NoError(t, err)
+	assert.Equal(t, "renamed", got.Name)
+}
+
+func TestMemdb_DeleteRepository(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	r := repoFixture(repoID1, nsID1, "to-delete")
+	require.NoError(t, ds.CreateRepository(ctx, r))
+	require.NoError(t, ds.DeleteRepository(ctx, repoID1))
+
+	_, err := ds.GetRepository(ctx, repoID1)
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+// ── NamespaceMapping tests ─────────────────────────────────────────────────────
+
+func TestMemdb_CreateAndLookupMapping(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	m := mappingFixture(nsID1, "my-repo", repoID1)
+
+	require.NoError(t, ds.CreateNamespaceMapping(ctx, m))
+
+	got, err := ds.LookupRepository(ctx, nsID1, "my-repo")
+	require.NoError(t, err)
+	assert.Equal(t, repoID1, got.RepoID)
+}
+
+func TestMemdb_LookupRepository_NotFound(t *testing.T) {
+	ds := newBackend(t)
+	_, err := ds.LookupRepository(context.Background(), nsID1, "missing")
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestMemdb_LookupNamespaceByRepoID(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(nsID1, "configs", repoID1)))
+
+	got, err := ds.LookupNamespaceByRepoID(ctx, repoID1)
+	require.NoError(t, err)
+	assert.Equal(t, nsID1, got.NamespaceID)
+	assert.Equal(t, "configs", got.Name)
+}
+
+func TestMemdb_RenameRepository_OldNameNotFoundNewNameReturnsOriginalRepoID(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(nsID1, "old-name", repoID1)))
+
+	require.NoError(t, ds.RenameRepository(ctx, nsID1, "old-name", "new-name"))
+
+	_, err := ds.LookupRepository(ctx, nsID1, "old-name")
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+
+	got, err := ds.LookupRepository(ctx, nsID1, "new-name")
+	require.NoError(t, err)
+	assert.Equal(t, repoID1, got.RepoID)
+}
+
+func TestMemdb_TransferRepository_OldNSNotFoundNewNSReturnsSameRepoID(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(nsID1, "app", repoID1)))
+
+	require.NoError(t, ds.TransferRepository(ctx, repoID1, nsID1, nsID2))
+
+	_, err := ds.LookupRepository(ctx, nsID1, "app")
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+
+	got, err := ds.LookupRepository(ctx, nsID2, "app")
+	require.NoError(t, err)
+	assert.Equal(t, repoID1, got.RepoID)
+}
+
+func TestMemdb_DeleteNamespaceMapping(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(nsID1, "to-delete", repoID1)))
+	require.NoError(t, ds.DeleteNamespaceMapping(ctx, nsID1, "to-delete"))
+
+	_, err := ds.LookupRepository(ctx, nsID1, "to-delete")
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+}

@@ -23,12 +23,12 @@ description: "Task list for Repository Storage Identity and Path Strategy"
 
 **Purpose**: API-First gate (Constitution Principle II). All contracts must be committed before any implementation.
 
-- [ ] T001 Update `shared/proto/gitstore/git/v1/git_service.proto` from `specs/010-repo-storage-identity/contracts/grpc.git_service.proto` — add `storage_class` field to `CreateRepositoryRequest`, `storage_path` to `CreateRepositoryResponse`, and update `repository_id` comments to reflect UUIDv7 semantics
-- [ ] T002 [P] Add `specs/010-repo-storage-identity/contracts/graphql.repository.graphqls` content to `shared/schemas/repository.graphqls` (new file) — `Repository` type, `RepositoryEdge`, `RepositoryConnection`, `RepositoryBy`, `RepositoryNamespacePath`, all four mutations (`createRepository`, `renameRepository`, `transferRepository`, `deleteRepository`) with their input/payload types; add `clientMutationId: String` to every mutation input and payload type
-- [ ] T003 Update `gitstore-api/internal/datastore/scylla/migrations/001_initial_schema.cql` in-place — add `repositories` table and `namespace_mappings` table as defined in `specs/010-repo-storage-identity/data-model.md` (D-003: no new migration files)
-- [ ] T004 [P] Update `gitstore-api/internal/datastore/scylla/migrations/002_add_initial_indices.cql` in-place — add `repositories_by_namespace` and `mappings_by_repo_id` indices
-- [ ] T005 Regenerate gRPC Go bindings from `shared/proto/gitstore/git/v1/git_service.proto` using `protoc` — verify generated files in `api/gen/gitstore/git/v1/`
-- [ ] T006 Regenerate gqlgen model/resolver stubs (`go generate ./...` in `gitstore-api/`) — verify new `Repository`, `NamespaceMapping` types and resolver interfaces appear in `gitstore-api/internal/graph/`
+- [X] T001 Update `shared/proto/gitstore/git/v1/git_service.proto` from `specs/010-repo-storage-identity/contracts/grpc.git_service.proto` — add `storage_class` field to `CreateRepositoryRequest`, `storage_path` to `CreateRepositoryResponse`, and update `repository_id` comments to reflect UUIDv7 semantics
+- [X] T002 [P] Add `specs/010-repo-storage-identity/contracts/graphql.repository.graphqls` content to `shared/schemas/repository.graphqls` (new file) — `Repository` type, `RepositoryEdge`, `RepositoryConnection`, `RepositoryBy`, `RepositoryNamespacePath`, all four mutations (`createRepository`, `renameRepository`, `transferRepository`, `deleteRepository`) with their input/payload types; add `clientMutationId: String` to every mutation input and payload type
+- [X] T003 Update `gitstore-api/internal/datastore/scylla/migrations/001_initial_schema.cql` in-place — add `repositories` table and `namespace_mappings` table as defined in `specs/010-repo-storage-identity/data-model.md` (D-003: no new migration files)
+- [X] T004 [P] Update `gitstore-api/internal/datastore/scylla/migrations/002_add_initial_indices.cql` in-place — add `repositories_by_namespace` and `mappings_by_repo_id` indices
+- [X] T005 Regenerate gRPC Go bindings from `shared/proto/gitstore/git/v1/git_service.proto` using `protoc` — verify generated files in `api/gen/gitstore/git/v1/`
+- [X] T006 Regenerate gqlgen model/resolver stubs (`go generate ./...` in `gitstore-api/`) — verify new `Repository`, `NamespaceMapping` types and resolver interfaces appear in `gitstore-api/internal/graph/`
 
 **Checkpoint**: Contracts committed; generated stubs compile. No implementation yet.
 
@@ -40,15 +40,15 @@ description: "Task list for Repository Storage Identity and Path Strategy"
 
 **⚠️ CRITICAL**: Test-First — write failing tests before each implementation step.
 
-- [ ] T007 Write failing tests for `Repository` and `NamespaceMapping` CRUD operations in `gitstore-api/internal/datastore/memdb/backend_test.go` — cover `CreateRepository`, `GetRepository`, `ListRepositoriesByNamespace`, `CreateNamespaceMapping`, `LookupRepository` (found + not-found), `LookupNamespaceByRepoID`, `RenameRepository` (old name returns `ErrNotFound`, new name returns original `repo_id`), `TransferRepository` (old ns returns `ErrNotFound`, new ns returns same `repo_id`)
-- [ ] T008 Add `Repository` and `NamespaceMapping` structs to `gitstore-api/internal/datastore/entities.go` — fields exactly as in `specs/010-repo-storage-identity/data-model.md` (`ID`, `NamespaceID`, `Name`, `DefaultBranch`, `StorageClass`, `CreatedAt`, `CreatedBy`, `UpdatedAt`, `UpdatedBy` for Repository; `NamespaceID`, `Name`, `RepoID` for NamespaceMapping)
-- [ ] T009 Add repository and mapping interface methods to `gitstore-api/internal/datastore/datastore.go` — exactly the eleven methods defined in `specs/010-repo-storage-identity/data-model.md` under "Datastore Interface Additions"
-- [ ] T010 Add `repository` and `namespace_mapping` table schemas to `gitstore-api/internal/datastore/memdb/schema.go` — use `memdb.UUIDFieldIndex` for the `id` index on `repository`, `memdb.CompoundIndex` with `UUIDFieldIndex{Field:"NamespaceID"}` + `StringFieldIndex{Field:"Name"}` for the `id` index on `namespace_mapping`, and `memdb.UUIDFieldIndex{Field:"RepoID"}` for the `repo_id` index; exactly matching `specs/010-repo-storage-identity/data-model.md`
-- [ ] T011 Implement all eleven datastore interface methods on the memdb backend in `gitstore-api/internal/datastore/memdb/backend.go` — `CreateRepository`, `GetRepository`, `ListRepositoriesByNamespace`, `UpdateRepository`, `DeleteRepository`, `CreateNamespaceMapping`, `LookupRepository`, `LookupNamespaceByRepoID`, `RenameRepository` (delete-old + insert-new), `TransferRepository` (delete-old-ns + insert-new-ns), `DeleteNamespaceMapping`
-- [ ] T012 [P] Add Scylla table models for `Repository` and `NamespaceMapping` to `gitstore-api/internal/datastore/scylla/models.go` — mirror Go struct tags compatible with `gocqlx/v3`
-- [ ] T013 [P] Implement repository CRUD operations in new file `gitstore-api/internal/datastore/scylla/repository.go` — `CreateRepository`, `GetRepository`, `ListRepositoriesByNamespace`, `UpdateRepository`, `DeleteRepository`
-- [ ] T014 [P] Implement mapping operations in new file `gitstore-api/internal/datastore/scylla/namespace_mapping.go` — `CreateNamespaceMapping`, `LookupRepository`, `LookupNamespaceByRepoID`, `RenameRepository`, `TransferRepository`, `DeleteNamespaceMapping`
-- [ ] T015 Confirm T007 tests now pass: `cd gitstore-api && go test -count=1 -v -race ./internal/datastore/...`
+- [X] T007 Write failing tests for `Repository` and `NamespaceMapping` CRUD operations in `gitstore-api/internal/datastore/memdb/backend_test.go` — cover `CreateRepository`, `GetRepository`, `ListRepositoriesByNamespace`, `CreateNamespaceMapping`, `LookupRepository` (found + not-found), `LookupNamespaceByRepoID`, `RenameRepository` (old name returns `ErrNotFound`, new name returns original `repo_id`), `TransferRepository` (old ns returns `ErrNotFound`, new ns returns same `repo_id`)
+- [X] T008 Add `Repository` and `NamespaceMapping` structs to `gitstore-api/internal/datastore/entities.go` — fields exactly as in `specs/010-repo-storage-identity/data-model.md` (`ID`, `NamespaceID`, `Name`, `DefaultBranch`, `StorageClass`, `CreatedAt`, `CreatedBy`, `UpdatedAt`, `UpdatedBy` for Repository; `NamespaceID`, `Name`, `RepoID` for NamespaceMapping)
+- [X] T009 Add repository and mapping interface methods to `gitstore-api/internal/datastore/datastore.go` — exactly the eleven methods defined in `specs/010-repo-storage-identity/data-model.md` under "Datastore Interface Additions"
+- [X] T010 Add `repository` and `namespace_mapping` table schemas to `gitstore-api/internal/datastore/memdb/schema.go` — use `memdb.UUIDFieldIndex` for the `id` index on `repository`, `memdb.CompoundIndex` with `UUIDFieldIndex{Field:"NamespaceID"}` + `StringFieldIndex{Field:"Name"}` for the `id` index on `namespace_mapping`, and `memdb.UUIDFieldIndex{Field:"RepoID"}` for the `repo_id` index; exactly matching `specs/010-repo-storage-identity/data-model.md`
+- [X] T011 Implement all eleven datastore interface methods on the memdb backend in `gitstore-api/internal/datastore/memdb/backend.go` — `CreateRepository`, `GetRepository`, `ListRepositoriesByNamespace`, `UpdateRepository`, `DeleteRepository`, `CreateNamespaceMapping`, `LookupRepository`, `LookupNamespaceByRepoID`, `RenameRepository` (delete-old + insert-new), `TransferRepository` (delete-old-ns + insert-new-ns), `DeleteNamespaceMapping`
+- [X] T012 [P] Add Scylla table models for `Repository` and `NamespaceMapping` to `gitstore-api/internal/datastore/scylla/models.go` — mirror Go struct tags compatible with `gocqlx/v3`
+- [X] T013 [P] Implement repository CRUD operations in new file `gitstore-api/internal/datastore/scylla/repository.go` — `CreateRepository`, `GetRepository`, `ListRepositoriesByNamespace`, `UpdateRepository`, `DeleteRepository`
+- [X] T014 [P] Implement mapping operations in new file `gitstore-api/internal/datastore/scylla/namespace_mapping.go` — `CreateNamespaceMapping`, `LookupRepository`, `LookupNamespaceByRepoID`, `RenameRepository`, `TransferRepository`, `DeleteNamespaceMapping`
+- [X] T015 Confirm T007 tests now pass: `cd gitstore-api && go test -count=1 -v -race ./internal/datastore/...`
 
 **Checkpoint**: `go test ./internal/datastore/...` green. Foundation ready — US1–US3 can proceed.
 
@@ -64,17 +64,17 @@ description: "Task list for Repository Storage Identity and Path Strategy"
 
 > **NOTE: Write these FIRST and confirm they FAIL before implementation**
 
-- [ ] T016 [P] [US1] Write failing resolver test for `renameRepository` mutation in `gitstore-api/internal/graph/repository_resolver_test.go` — verify `renameRepository` updates the mapping, old name returns not-found, new name returns the same repository
-- [ ] T017 [P] [US1] Write failing resolver test that `createRepository` produces a `Repository` with a UUIDv7 `id` and calls gRPC `CreateRepository` with that UUID as `repository_id` in `gitstore-api/internal/graph/repository_resolver_test.go`
+- [X] T016 [P] [US1] Write failing resolver test for `renameRepository` mutation in `gitstore-api/internal/graph/repository_resolver_test.go` — verify `renameRepository` updates the mapping, old name returns not-found, new name returns the same repository
+- [X] T017 [P] [US1] Write failing resolver test that `createRepository` produces a `Repository` with a UUIDv7 `id` and calls gRPC `CreateRepository` with that UUID as `repository_id` in `gitstore-api/internal/graph/repository_resolver_test.go`
 
 ### Implementation for User Story 1
 
-- [ ] T018 [US1] Implement `createRepository` resolver in `gitstore-api/internal/graph/repository.resolvers.go` — generate UUIDv7 via `uuid.NewV7()`, call `datastore.CreateRepository`, call `datastore.CreateNamespaceMapping`, call gRPC `CreateRepository(repository_id=repo_id, storage_class)`, log lookup call (namespace_id, name, resolved repo_id) per Principle IV
-- [ ] T019 [US1] Implement `renameRepository` resolver in `gitstore-api/internal/graph/repository.resolvers.go` — fetch `Repository` by Relay ID, call `datastore.RenameRepository(namespaceID, oldName, newName)`, no gRPC call (storage unchanged), log rename (old path, new path, repo_id)
-- [ ] T020 [US1] Implement `repository` query resolver (`RepositoryBy.namespacePath` and `RepositoryBy.id` lookup) in `gitstore-api/internal/graph/repository.resolvers.go` — resolve namespace slug via `GetNamespaceByIdentifier`, then `LookupRepository(namespace_id, name)`, log lookup per Principle IV
-- [ ] T021 [US1] Implement `repositories` query resolver in `gitstore-api/internal/graph/repository.resolvers.go` — call `ListRepositoriesByNamespace`, return `RepositoryConnection` with pagination
-- [ ] T022 [US1] Wire the `Repository.namespace` field resolver to return the owning `Namespace` object in `gitstore-api/internal/graph/repository.resolvers.go`
-- [ ] T023 [US1] Confirm T016–T017 tests now pass: `cd gitstore-api && go test -count=1 -v -race ./internal/graph/...`
+- [X] T018 [US1] Implement `createRepository` resolver in `gitstore-api/internal/graph/repository.resolvers.go` — generate UUIDv7 via `uuid.NewV7()`, call `datastore.CreateRepository`, call `datastore.CreateNamespaceMapping`, call gRPC `CreateRepository(repository_id=repo_id, storage_class)`, log lookup call (namespace_id, name, resolved repo_id) per Principle IV
+- [X] T019 [US1] Implement `renameRepository` resolver in `gitstore-api/internal/graph/repository.resolvers.go` — fetch `Repository` by Relay ID, call `datastore.RenameRepository(namespaceID, oldName, newName)`, no gRPC call (storage unchanged), log rename (old path, new path, repo_id)
+- [X] T020 [US1] Implement `repository` query resolver (`RepositoryBy.namespacePath` and `RepositoryBy.id` lookup) in `gitstore-api/internal/graph/repository.resolvers.go` — resolve namespace slug via `GetNamespaceByIdentifier`, then `LookupRepository(namespace_id, name)`, log lookup per Principle IV
+- [X] T021 [US1] Implement `repositories` query resolver in `gitstore-api/internal/graph/repository.resolvers.go` — call `ListRepositoriesByNamespace`, return `RepositoryConnection` with pagination
+- [X] T022 [US1] Wire the `Repository.namespace` field resolver to return the owning `Namespace` object in `gitstore-api/internal/graph/repository.resolvers.go`
+- [X] T023 [US1] Confirm T016–T017 tests now pass: `cd gitstore-api && go test -count=1 -v -race ./internal/graph/...`
 
 **Checkpoint**: `createRepository` and `renameRepository` work end-to-end. US1 independently testable.
 
@@ -90,16 +90,16 @@ description: "Task list for Repository Storage Identity and Path Strategy"
 
 > **NOTE: Write these FIRST and confirm they FAIL before implementation**
 
-- [ ] T024 [P] [US2] Write failing Rust unit tests for `fanout_path(data_dir, repo_id)` in `gitstore-git-service/src/git/repo.rs` — cover: same UUID → same path (stability), two distinct UUIDs → distinct paths (collision-free), malformed inputs (`""`, wrong-length, `/`-containing, `..`-containing) → `Status::invalid_argument`
-- [ ] T025 [P] [US2] Write failing Rust integration test in `gitstore-git-service/src/grpc/server.rs` (or a `tests/` file) — `CreateRepository` with a valid UUIDv7 creates the fanout directory structure and returns `storage_path` matching the formula
+- [X] T024 [P] [US2] Write failing Rust unit tests for `fanout_path(data_dir, repo_id)` in `gitstore-git-service/src/git/repo.rs` — cover: same UUID → same path (stability), two distinct UUIDs → distinct paths (collision-free), malformed inputs (`""`, wrong-length, `/`-containing, `..`-containing) → `Status::invalid_argument`
+- [X] T025 [P] [US2] Write failing Rust integration test in `gitstore-git-service/src/grpc/server.rs` (or a `tests/` file) — `CreateRepository` with a valid UUIDv7 creates the fanout directory structure and returns `storage_path` matching the formula
 
 ### Implementation for User Story 2
 
-- [ ] T026 [US2] Extract `fanout_path(data_root: &Path, repo_id: &str) -> Result<PathBuf, Status>` into `gitstore-git-service/src/git/repo.rs` — strip hyphens, take `hex[0..2]` as `l1` and `hex[2..4]` as `l2`, return `data_root/l1/l2/{repo_id}.git`; add UUID-format validation (36-char hyphenated) rejecting non-UUID strings
-- [ ] T027 [US2] Replace `resolve_repo_path` in `gitstore-git-service/src/grpc/server.rs` with calls to `fanout_path` from `git/repo.rs` — update `CreateRepository`, `DeleteRepository`, `GetFile`, `GetFileStream`, `ListFiles`, `CommitFile`, `DeleteFile`, `CreateTag`, `ListTags`, `GetLatestTag` handlers to use the new function
-- [ ] T028 [US2] Update `gitstore-git-service/src/grpc/server.rs` `CreateRepository` handler to create the two-level fanout directory structure (`data_root/l1/l2/`) if it does not exist before calling `git init --bare` and return `storage_path` in the response
-- [ ] T029 [US2] Add structured tracing spans to `gitstore-git-service/src/grpc/server.rs` for each RPC handler — include `repo_id` and derived `storage_path` in span fields per Principle IV
-- [ ] T030 [US2] Confirm T024–T025 tests pass: `cd gitstore-git-service && cargo test --verbose`
+- [X] T026 [US2] Extract `fanout_path(data_root: &Path, repo_id: &str) -> Result<PathBuf, Status>` into `gitstore-git-service/src/git/repo.rs` — strip hyphens, take `hex[0..2]` as `l1` and `hex[2..4]` as `l2`, return `data_root/l1/l2/{repo_id}.git`; add UUID-format validation (36-char hyphenated) rejecting non-UUID strings
+- [X] T027 [US2] Replace `resolve_repo_path` in `gitstore-git-service/src/grpc/server.rs` with calls to `fanout_path` from `git/repo.rs` — update `CreateRepository`, `DeleteRepository`, `GetFile`, `GetFileStream`, `ListFiles`, `CommitFile`, `DeleteFile`, `CreateTag`, `ListTags`, `GetLatestTag` handlers to use the new function
+- [X] T028 [US2] Update `gitstore-git-service/src/grpc/server.rs` `CreateRepository` handler to create the two-level fanout directory structure (`data_root/l1/l2/`) if it does not exist before calling `git init --bare` and return `storage_path` in the response
+- [X] T029 [US2] Add structured tracing spans to `gitstore-git-service/src/grpc/server.rs` for each RPC handler — include `repo_id` and derived `storage_path` in span fields per Principle IV
+- [X] T030 [US2] Confirm T024–T025 tests pass: `cd gitstore-git-service && cargo test --verbose`
 
 **Checkpoint**: Fanout path resolver stable and all gRPC handlers use UUIDv7-based paths. US2 independently testable.
 
@@ -115,14 +115,14 @@ description: "Task list for Repository Storage Identity and Path Strategy"
 
 > **NOTE: Write these FIRST and confirm they FAIL before implementation**
 
-- [ ] T031 [P] [US3] Write failing resolver test for `transferRepository` mutation in `gitstore-api/internal/graph/repository_resolver_test.go` — verify old namespace lookup returns not-found, new namespace lookup returns same repository, storage path unchanged (no gRPC call)
-- [ ] T032 [P] [US3] Write failing resolver test for `deleteRepository` mutation in `gitstore-api/internal/graph/repository_resolver_test.go` — verify mapping deleted, repository record deleted, gRPC `DeleteRepository` called
+- [X] T031 [P] [US3] Write failing resolver test for `transferRepository` mutation in `gitstore-api/internal/graph/repository_resolver_test.go` — verify old namespace lookup returns not-found, new namespace lookup returns same repository, storage path unchanged (no gRPC call)
+- [X] T032 [P] [US3] Write failing resolver test for `deleteRepository` mutation in `gitstore-api/internal/graph/repository_resolver_test.go` — verify mapping deleted, repository record deleted, gRPC `DeleteRepository` called
 
 ### Implementation for User Story 3
 
-- [ ] T033 [US3] Implement `transferRepository` resolver in `gitstore-api/internal/graph/repository.resolvers.go` — call `datastore.TransferRepository(repoID, fromNamespaceID, toNamespaceID)` + update `Repository.NamespaceID` via `UpdateRepository`, no gRPC call, log transfer (old namespace_id, new namespace_id, repo_id) per Principle IV
-- [ ] T034 [US3] Implement `deleteRepository` resolver in `gitstore-api/internal/graph/repository.resolvers.go` — call `datastore.DeleteNamespaceMapping`, call `datastore.DeleteRepository`, call gRPC `DeleteRepository(repository_id=repo_id)`, log deletion
-- [ ] T035 [US3] Confirm T031–T032 tests pass: `cd gitstore-api && go test -count=1 -v -race ./internal/graph/...`
+- [X] T033 [US3] Implement `transferRepository` resolver in `gitstore-api/internal/graph/repository.resolvers.go` — call `datastore.TransferRepository(repoID, fromNamespaceID, toNamespaceID)` + update `Repository.NamespaceID` via `UpdateRepository`, no gRPC call, log transfer (old namespace_id, new namespace_id, repo_id) per Principle IV
+- [X] T034 [US3] Implement `deleteRepository` resolver in `gitstore-api/internal/graph/repository.resolvers.go` — call `datastore.DeleteNamespaceMapping`, call `datastore.DeleteRepository`, call gRPC `DeleteRepository(repository_id=repo_id)`, log deletion
+- [X] T035 [US3] Confirm T031–T032 tests pass: `cd gitstore-api && go test -count=1 -v -race ./internal/graph/...`
 
 **Checkpoint**: Transfer and delete mutations work end-to-end. US3 independently testable.
 
@@ -138,13 +138,13 @@ description: "Task list for Repository Storage Identity and Path Strategy"
 
 > **NOTE: Write these FIRST and confirm they FAIL before implementation**
 
-- [ ] T036 [P] [US4] Write failing resolver test for `LookupNamespaceByRepoID` reverse lookup via `repositoryById`/admin path in `gitstore-api/internal/graph/repository_resolver_test.go` — given a `repo_id`, resolver returns namespace path
+- [X] T036 [P] [US4] Write failing resolver test for `LookupNamespaceByRepoID` reverse lookup via `repositoryById`/admin path in `gitstore-api/internal/graph/repository_resolver_test.go` — given a `repo_id`, resolver returns namespace path
 
 ### Implementation for User Story 4
 
-- [ ] T037 [US4] Implement `storagePath` derived field on the `Repository` GraphQL type in `gitstore-api/internal/graph/repository.resolvers.go` — compute `{data_dir}/{xx}/{yy}/{repo_id}.git` in the resolver using the same fanout formula (hyphens stripped for prefix, full UUID with hyphens for filename) and return as `String`
-- [ ] T038 [US4] Add `storagePath: String!` field to the `Repository` type in `shared/schemas/repository.graphqls` and regenerate gqlgen stubs
-- [ ] T039 [US4] Confirm T036 test passes: `cd gitstore-api && go test -count=1 -v -race ./internal/graph/...`
+- [X] T037 [US4] Implement `storagePath` derived field on the `Repository` GraphQL type in `gitstore-api/internal/graph/repository.resolvers.go` — compute `{data_dir}/{xx}/{yy}/{repo_id}.git` in the resolver using the same fanout formula (hyphens stripped for prefix, full UUID with hyphens for filename) and return as `String`
+- [X] T038 [US4] Add `storagePath: String!` field to the `Repository` type in `shared/schemas/repository.graphqls` and regenerate gqlgen stubs
+- [X] T039 [US4] Confirm T036 test passes: `cd gitstore-api && go test -count=1 -v -race ./internal/graph/...`
 
 **Checkpoint**: Operators can query storage path via GraphQL. US4 independently testable.
 
@@ -154,9 +154,9 @@ description: "Task list for Repository Storage Identity and Path Strategy"
 
 **Purpose**: Documentation, observability completeness, and pre-PR quality checks.
 
-- [ ] T040 [P] Update `docs/` with storage architecture documentation — add diagram: `namespace → namespace_id → (namespace_id, name) → repo_id → fanout path`, lookup flow description, operator runbook (how to find a repository's storage path from namespace path), common failure modes (orphaned storage, missing mapping, malformed UUID) per FR-012
-- [ ] T041 [P] Update `specs/010-repo-storage-identity/quickstart.md` with any implementation deviations found during T018–T039
-- [ ] T042 Run full pre-PR checklist per AGENTS.md:
+- [X] T040 [P] Update `docs/` with storage architecture documentation — add diagram: `namespace → namespace_id → (namespace_id, name) → repo_id → fanout path`, lookup flow description, operator runbook (how to find a repository's storage path from namespace path), common failure modes (orphaned storage, missing mapping, malformed UUID) per FR-012
+- [X] T041 [P] Update `specs/010-repo-storage-identity/quickstart.md` with any implementation deviations found during T018–T039
+- [X] T042 Run full pre-PR checklist per AGENTS.md:
   ```bash
   cd gitstore-git-service && cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo build --verbose && cargo test --verbose
   cd ../gitstore-api && go vet ./... && staticcheck ./... && go build -v ./... && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...

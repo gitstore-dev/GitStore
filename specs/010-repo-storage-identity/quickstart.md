@@ -64,13 +64,25 @@ gitstore-git-service:
   7. Open path, serve response
 ```
 
+## Implementation deviations
+
+The following were discovered or decided during implementation:
+
+- **`memdb` backend implementation location**: Methods were added to `gitstore-api/internal/datastore/memdb/backend.go` (not a separate `memdb.go` as referenced in the quickstart table above).
+- **Scylla row struct timestamps**: All `created_at`/`updated_at` fields use `time.Time` (not `int64` epoch millis). The `gocqlx` driver marshals CQL `timestamp` ↔ `time.Time` natively, so no conversion helper is needed.
+- **`storagePath` derived field**: Computed in the GraphQL resolver (`datastoreRepositoryToModel`) via the same two-level fanout formula. The field is `storagePath: String!` in `shared/schemas/repository.graphqls`.
+- **HTTP Git server**: `gitstore-git-service/src/http_git_server.rs` was updated to use `fanout_path` for all three smart-protocol endpoints (info/refs, upload-pack, receive-pack). The old flat-path `validate_repo_name` function was removed entirely.
+- **Relay global IDs**: Repository global IDs are encoded as `gid://GitStore/Repository/{uuid}` (base64). The `RepositoryBy` input type supports both `namespacePath` and `id` (Relay global ID) lookups.
+- **`callerUsernameOrAnon`**: The function reads the authenticated user from the JWT middleware context. If no claim is present it falls back to `"anon"`.
+- **`namespace_mappings` Scylla index**: `mappings_by_repo_id` secondary index is defined on `repo_id` to support `LookupNamespaceByRepoID` without a full table scan.
+
 ## Running tests
 
 ```bash
 # Go (gitstore-api)
 cd gitstore-api
 go test -count=1 -v -race ./internal/datastore/...
-go test -count=1 -v -race ./graph/...
+go test -count=1 -v -race ./internal/graph/...
 
 # Rust (gitstore-git-service)
 cd gitstore-git-service

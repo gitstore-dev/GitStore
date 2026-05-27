@@ -22,7 +22,7 @@ const (
 	globalIDTestCategoryID   = "00000000-0000-0000-0000-000000000001"
 	globalIDTestCollectionID = "00000000-0000-0000-0000-000000000002"
 	globalIDTestProductID    = "00000000-0000-0000-0000-000000000003"
-	globalIDTestNamespaceID  = "ns-1"
+	globalIDTestNamespaceID  = "00000000-0000-0000-0000-000000000004"
 )
 
 func TestQueryNodeResolvesByGlobalID(t *testing.T) {
