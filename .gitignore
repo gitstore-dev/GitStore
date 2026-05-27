@@ -63,6 +63,7 @@ coverage/
 # Logs
 *.log
 logs/
+.gitstore/
 
 .claude/settings.json
 test-repos/

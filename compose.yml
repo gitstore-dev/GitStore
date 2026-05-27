@@ -21,10 +21,11 @@ services:
     networks:
       - gitstore-network
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO /dev/null --tries=1 --timeout=3 http://127.0.0.1:9418/ 2>&1; test $? -ne 4"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=1", "--spider", "http://127.0.0.1:9418/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
 
   api:
     image: ghcr.io/gitstore-dev/api

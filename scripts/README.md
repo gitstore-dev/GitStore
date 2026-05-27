@@ -2,6 +2,14 @@
 
 Utility scripts for GitStore development and demonstration.
 
+For normal repository checks, run the licence scripts through the root Make target:
+
+```bash
+make license-check
+```
+
+Use the scripts directly only when you need a narrower mode such as `--staged`.
+
 ## check-go-license-headers.sh
 
 Validates that Go files include the required AGPL header and that changed files include the current year in their copyright line.
