@@ -26,10 +26,10 @@ type mockGitWriter struct {
 	createRepoCalls []string
 	deleteRepoCalls []string
 
-	commitErr      error
-	deleteErr      error
-	createRepoErr  error
-	deleteRepoErr  error
+	commitErr     error
+	deleteErr     error
+	createRepoErr error
+	deleteRepoErr error
 }
 
 func (m *mockGitWriter) CreateRepository(_ context.Context, repositoryID, _ string) (string, error) {

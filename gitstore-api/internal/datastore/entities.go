@@ -74,11 +74,11 @@ type Collection struct {
 // Repository represents a git repository with a stable internal identity.
 // The physical storage path is derived from ID using the fanout formula and is never stored.
 type Repository struct {
-	ID            string    // UUIDv7 stable identifier (repo_id)
-	NamespaceID   string    // UUIDv7 of the owning namespace
-	Name          string    // Human-readable name within the namespace (mutable on rename)
-	DefaultBranch string    // e.g. "main"
-	StorageClass  string    // Storage tier tag; default "default"
+	ID            string // UUIDv7 stable identifier (repo_id)
+	NamespaceID   string // UUIDv7 of the owning namespace
+	Name          string // Human-readable name within the namespace (mutable on rename)
+	DefaultBranch string // e.g. "main"
+	StorageClass  string // Storage tier tag; default "default"
 	CreatedAt     time.Time
 	CreatedBy     string
 	UpdatedAt     time.Time
