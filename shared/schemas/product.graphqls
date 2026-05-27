@@ -55,6 +55,7 @@ type Product implements Node {
   collections: [Collection!]!
 
   """
+  TODO: Add a scalar for URI
   Product image URLs (external CDN)
   """
   images: [String!]!
@@ -169,6 +170,7 @@ input CreateProductInput {
   collectionIds: [ID!]
 
   """
+  TODO: Add a scalar for URI
   Product image URLs
   """
   images: [String!]
@@ -234,6 +236,7 @@ input UpdateProductInput {
   price: Decimal
 
   """
+  TODO: Add a scalar for CurrencyCode
   New currency
   """
   currency: String
@@ -259,6 +262,7 @@ input UpdateProductInput {
   collectionIds: [ID!]
 
   """
+  TODO: Add a scalar for URI
   New image URLs (replaces all)
   """
   images: [String!]
@@ -269,6 +273,7 @@ input UpdateProductInput {
   metadata: JSON
 
   """
+  TODO: Should this be a datetime?
   Version for optimistic locking (updated_at timestamp)
   """
   version: DateTime!
@@ -329,11 +334,13 @@ Optimistic lock conflict information
 """
 type OptimisticLockConflict {
   """
+  TODO: Should this be a datetime?
   Current version in database
   """
   currentVersion: DateTime!
 
   """
+  TODO: Should this be a datetime?
   Version client attempted to update
   """
   attemptedVersion: DateTime!

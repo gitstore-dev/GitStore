@@ -48,6 +48,14 @@ func (m *mockGitWriter) CreateTag(_ context.Context, p gitclient.CreateTagParams
 	return "tag123", nil
 }
 
+func (m *mockGitWriter) CreateRepository(_ context.Context, repositoryID, _ string) (string, error) {
+	return "/data/00/00/" + repositoryID + ".git", nil
+}
+
+func (m *mockGitWriter) DeleteRepository(_ context.Context, _ string) error {
+	return nil
+}
+
 func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)

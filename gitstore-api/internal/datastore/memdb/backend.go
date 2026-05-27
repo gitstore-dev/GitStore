@@ -371,3 +371,173 @@ func (m *memdbDatastore) DeleteNamespace(_ context.Context, id string) error {
 	txn.Commit()
 	return nil
 }
+
+// ── Repository ────────────────────────────────────────────────────────────────
+
+func (m *memdbDatastore) CreateRepository(_ context.Context, r *datastore.Repository) error {
+	txn := m.db.Txn(true)
+	if raw, _ := txn.First("repository", "id", r.ID); raw != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: repository id %s", datastore.ErrAlreadyExists, r.ID)
+	}
+	if err := txn.Insert("repository", r); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: insert repository: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) GetRepository(_ context.Context, id string) (*datastore.Repository, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("repository", "id", id)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return raw.(*datastore.Repository), nil
+}
+
+func (m *memdbDatastore) ListRepositoriesByNamespace(_ context.Context, namespaceID string) ([]*datastore.Repository, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	it, err := txn.Get("repository", "namespace_id", namespaceID)
+	if err != nil {
+		return nil, fmt.Errorf("memdb: list repositories by namespace: %w", err)
+	}
+	var results []*datastore.Repository
+	for obj := it.Next(); obj != nil; obj = it.Next() {
+		results = append(results, obj.(*datastore.Repository))
+	}
+	return results, nil
+}
+
+func (m *memdbDatastore) UpdateRepository(_ context.Context, r *datastore.Repository) error {
+	txn := m.db.Txn(true)
+	if raw, _ := txn.First("repository", "id", r.ID); raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: repository id %s", datastore.ErrNotFound, r.ID)
+	}
+	if err := txn.Insert("repository", r); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: update repository: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) DeleteRepository(_ context.Context, id string) error {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("repository", "id", id)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: repository id %s", datastore.ErrNotFound, id)
+	}
+	if err := txn.Delete("repository", raw); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: delete repository: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
+// ── NamespaceMapping ──────────────────────────────────────────────────────────
+
+func (m *memdbDatastore) CreateNamespaceMapping(_ context.Context, mp *datastore.NamespaceMapping) error {
+	txn := m.db.Txn(true)
+	if raw, _ := txn.First("namespace_mapping", "id", mp.NamespaceID, mp.Name); raw != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: namespace_mapping (%s, %s)", datastore.ErrAlreadyExists, mp.NamespaceID, mp.Name)
+	}
+	if err := txn.Insert("namespace_mapping", mp); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: insert namespace_mapping: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) LookupRepository(_ context.Context, namespaceID, name string) (*datastore.NamespaceMapping, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("namespace_mapping", "id", namespaceID, name)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return raw.(*datastore.NamespaceMapping), nil
+}
+
+func (m *memdbDatastore) LookupNamespaceByRepoID(_ context.Context, repoID string) (*datastore.NamespaceMapping, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("namespace_mapping", "repo_id", repoID)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return raw.(*datastore.NamespaceMapping), nil
+}
+
+func (m *memdbDatastore) RenameRepository(_ context.Context, namespaceID, oldName, newName string) error {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("namespace_mapping", "id", namespaceID, oldName)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: namespace_mapping (%s, %s)", datastore.ErrNotFound, namespaceID, oldName)
+	}
+	old := raw.(*datastore.NamespaceMapping)
+	if err := txn.Delete("namespace_mapping", old); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: rename delete old mapping: %w", err)
+	}
+	updated := &datastore.NamespaceMapping{
+		NamespaceID: namespaceID,
+		Name:        newName,
+		RepoID:      old.RepoID,
+	}
+	if err := txn.Insert("namespace_mapping", updated); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: rename insert new mapping: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) TransferRepository(_ context.Context, repoID, fromNamespaceID, toNamespaceID string) error {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("namespace_mapping", "repo_id", repoID)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: namespace_mapping repo_id %s", datastore.ErrNotFound, repoID)
+	}
+	old := raw.(*datastore.NamespaceMapping)
+	if err := txn.Delete("namespace_mapping", old); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: transfer delete old mapping: %w", err)
+	}
+	updated := &datastore.NamespaceMapping{
+		NamespaceID: toNamespaceID,
+		Name:        old.Name,
+		RepoID:      repoID,
+	}
+	if err := txn.Insert("namespace_mapping", updated); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: transfer insert new mapping: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) DeleteNamespaceMapping(_ context.Context, namespaceID, name string) error {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("namespace_mapping", "id", namespaceID, name)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: namespace_mapping (%s, %s)", datastore.ErrNotFound, namespaceID, name)
+	}
+	if err := txn.Delete("namespace_mapping", raw); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: delete namespace_mapping: %w", err)
+	}
+	txn.Commit()
+	return nil
+}

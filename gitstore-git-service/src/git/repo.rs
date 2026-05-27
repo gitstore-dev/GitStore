@@ -5,8 +5,47 @@
 
 use anyhow::{Context, Result};
 use gix::refs::transaction::PreviousValue;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use tonic::Status;
 use tracing::{debug, info};
+
+/// Compute the two-level fanout path for a repository given its UUIDv7 `repo_id`.
+///
+/// Formula: `{data_root}/{hex[0..2]}/{hex[2..4]}/{repo_id}.git`
+/// where `hex` is the repo_id with all hyphens stripped.
+///
+/// Returns `Status::invalid_argument` for any repo_id that is not exactly
+/// a 36-character hyphenated UUID (8-4-4-4-12 format).
+pub fn fanout_path(data_root: &Path, repo_id: &str) -> Result<PathBuf, Status> {
+    // A canonical UUID is exactly 36 characters: 8-4-4-4-12 with hyphens
+    if repo_id.len() != 36 {
+        return Err(Status::invalid_argument(format!(
+            "repo_id must be a 36-character UUID, got length {}",
+            repo_id.len()
+        )));
+    }
+    if repo_id.contains('/') || repo_id.contains('\\') {
+        return Err(Status::invalid_argument(
+            "repo_id must not contain path separators",
+        ));
+    }
+    if repo_id.contains("..") {
+        return Err(Status::invalid_argument(
+            "repo_id must not contain '..' components",
+        ));
+    }
+    // Strip hyphens and validate we have exactly 32 hex characters
+    let hex: String = repo_id.chars().filter(|&c| c != '-').collect();
+    if hex.len() != 32 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(Status::invalid_argument(format!(
+            "repo_id '{}' is not a valid UUID",
+            repo_id
+        )));
+    }
+    let l1 = &hex[0..2];
+    let l2 = &hex[2..4];
+    Ok(data_root.join(l1).join(l2).join(format!("{}.git", repo_id)))
+}
 
 /// Initialize a new bare repository at `path`.
 /// Sets HEAD to refs/heads/main via a post-init edit_reference call.
@@ -113,7 +152,82 @@ pub fn get_tag_commit(repo: &gix::Repository, tag_name: &str) -> Result<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use tempfile::TempDir;
+
+    // ── fanout_path ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn fanout_path_stability_same_uuid_same_path() {
+        let root = PathBuf::from("/data");
+        let id = "01960000-0000-7000-8000-000000000010";
+        let p1 = fanout_path(&root, id).unwrap();
+        let p2 = fanout_path(&root, id).unwrap();
+        assert_eq!(p1, p2);
+    }
+
+    #[test]
+    fn fanout_path_collision_free_distinct_uuids() {
+        let root = PathBuf::from("/data");
+        let id_a = "01960000-0000-7000-8000-000000000010";
+        let id_b = "01960000-0000-7000-8000-000000000011";
+        let pa = fanout_path(&root, id_a).unwrap();
+        let pb = fanout_path(&root, id_b).unwrap();
+        assert_ne!(pa, pb);
+    }
+
+    #[test]
+    fn fanout_path_formula_prefix_extraction() {
+        let root = PathBuf::from("/data");
+        // Strip hyphens: "01960000000070008000000000000010" → l1="01" l2="96"
+        let id = "01960000-0000-7000-8000-000000000010";
+        let path = fanout_path(&root, id).unwrap();
+        assert_eq!(
+            path,
+            PathBuf::from("/data/01/96/01960000-0000-7000-8000-000000000010.git")
+        );
+    }
+
+    #[test]
+    fn fanout_path_rejects_empty_string() {
+        let root = PathBuf::from("/data");
+        let err = fanout_path(&root, "").unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn fanout_path_rejects_wrong_length() {
+        let root = PathBuf::from("/data");
+        // 35 chars — one short
+        let err = fanout_path(&root, "01960000-0000-7000-8000-00000000001").unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn fanout_path_rejects_slash_in_id() {
+        let root = PathBuf::from("/data");
+        // 36 chars but contains '/'
+        let err = fanout_path(&root, "01960000-0000-7000-8000-0000000/0010").unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn fanout_path_rejects_dotdot_in_id() {
+        let root = PathBuf::from("/data");
+        // 36 chars but contains ".."
+        let err = fanout_path(&root, "01960000-0000-7000-8000-000000..0010").unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn fanout_path_rejects_non_hex_uuid() {
+        let root = PathBuf::from("/data");
+        // 36 chars, right hyphen positions, but non-hex characters
+        let err = fanout_path(&root, "ZZZZZZZZ-ZZZZ-ZZZZ-ZZZZ-ZZZZZZZZZZZZ").unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    // ── create/open/list ──────────────────────────────────────────────────────
 
     #[test]
     fn test_init_repository() {

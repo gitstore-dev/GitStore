@@ -11,7 +11,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
-use crate::git::repo::{create_repository, delete_repository, list_tags};
+use crate::git::repo::{create_repository, delete_repository, fanout_path, list_tags};
+use tracing::info;
 
 pub mod proto {
     tonic::include_proto!("gitstore.git.v1");
@@ -36,33 +37,9 @@ impl GitServiceImpl {
 
 // --- helpers -----------------------------------------------------------------
 
-/// Validate a repository name: non-empty, no path separators, no "..".
-fn validate_repository_name(name: &str) -> Result<(), Status> {
-    if name.is_empty() {
-        return Err(Status::invalid_argument("repository_id must not be empty"));
-    }
-    if name.contains('/') || name.contains('\\') {
-        return Err(Status::invalid_argument(
-            "repository_id must not contain path separators",
-        ));
-    }
-    if name.split('.').any(|c| c.is_empty() && name.contains("..")) || name.contains("..") {
-        return Err(Status::invalid_argument(
-            "repository_id must not contain '..' components",
-        ));
-    }
-    if Path::new(name).is_absolute() {
-        return Err(Status::invalid_argument(
-            "repository_id must not be an absolute path",
-        ));
-    }
-    Ok(())
-}
-
-/// Resolve repository_id to an absolute path; returns NOT_FOUND if absent.
+/// Resolve repository_id to its fanout path; returns NOT_FOUND if absent.
 fn resolve_repo_path(data_root: &Path, id: &str) -> Result<PathBuf, Status> {
-    validate_repository_name(id)?;
-    let path = data_root.join(format!("{}.git", id));
+    let path = fanout_path(data_root, id)?;
     if !path.exists() {
         return Err(Status::not_found(format!("repository '{}' not found", id)));
     }
@@ -221,9 +198,7 @@ impl GitService for GitServiceImpl {
         request: Request<CreateRepositoryRequest>,
     ) -> Result<Response<CreateRepositoryResponse>, Status> {
         let req = request.into_inner();
-        validate_repository_name(&req.repository_id)?;
-
-        let repo_path = self.data_root.join(format!("{}.git", req.repository_id));
+        let repo_path = fanout_path(&self.data_root, &req.repository_id)?;
 
         if repo_path.exists() {
             return Err(Status::already_exists(format!(
@@ -232,13 +207,28 @@ impl GitService for GitServiceImpl {
             )));
         }
 
+        // Ensure two-level fanout directory exists before initialising the repo
+        if let Some(parent) = repo_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                Status::internal(format!("failed to create fanout directories: {}", e))
+            })?;
+        }
+
         create_repository(&repo_path)
             .map_err(|e| Status::internal(format!("failed to create repository: {}", e)))?;
 
         get_or_insert_lock(&self.repo_locks, &req.repository_id);
 
+        let storage_path = repo_path.to_string_lossy().into_owned();
+        info!(
+            repo_id = %req.repository_id,
+            storage_path = %storage_path,
+            "created repository"
+        );
+
         Ok(Response::new(CreateRepositoryResponse {
             repository_id: req.repository_id,
+            storage_path,
         }))
     }
 
@@ -247,19 +237,16 @@ impl GitService for GitServiceImpl {
         request: Request<DeleteRepositoryRequest>,
     ) -> Result<Response<DeleteRepositoryResponse>, Status> {
         let req = request.into_inner();
-        validate_repository_name(&req.repository_id)?;
-
-        let repo_path = self.data_root.join(format!("{}.git", req.repository_id));
-
-        if !repo_path.exists() {
-            return Err(Status::not_found(format!(
-                "repository '{}' not found",
-                req.repository_id
-            )));
-        }
+        let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
 
         let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
         let _guard = lock.write().await;
+
+        info!(
+            repo_id = %req.repository_id,
+            storage_path = %repo_path.display(),
+            "deleting repository"
+        );
 
         delete_repository(&repo_path)
             .map_err(|e| Status::internal(format!("failed to delete repository: {}", e)))?;
@@ -867,9 +854,10 @@ mod tests {
         GitServiceImpl::new(data_root.to_path_buf())
     }
 
-    /// Create a bare repo under `data_root/<name>.git` with one commit.
-    fn repo_with_commit(data_root: &std::path::Path, name: &str) {
-        let repo_path = data_root.join(format!("{}.git", name));
+    /// Create a bare repo at the fanout path for `repo_id` with one commit.
+    fn repo_with_commit(data_root: &std::path::Path, repo_id: &str) {
+        let repo_path = fanout_path(data_root, repo_id).unwrap();
+        std::fs::create_dir_all(repo_path.parent().unwrap()).unwrap();
         let repo = gix::init_bare(&repo_path).unwrap();
 
         let sig = gix::actor::Signature {
@@ -963,8 +951,9 @@ mod tests {
     }
 
     /// Create a bare repo with one commit accessible as refs/heads/main.
-    fn bare_repo_with_main(data_root: &std::path::Path, name: &str) {
-        let repo_path = data_root.join(format!("{}.git", name));
+    fn bare_repo_with_main(data_root: &std::path::Path, repo_id: &str) {
+        let repo_path = fanout_path(data_root, repo_id).unwrap();
+        std::fs::create_dir_all(repo_path.parent().unwrap()).unwrap();
         let repo = gix::init_bare(&repo_path).unwrap();
 
         let sig = gix::actor::Signature {
@@ -1029,31 +1018,57 @@ mod tests {
         .unwrap();
     }
 
+    // Fixed UUIDv7 repository IDs used across tests
+    const TEST_REPO_A: &str = "01960000-0000-7000-8000-000000000010";
+    const TEST_REPO_B: &str = "01960000-0000-7000-8000-000000000011";
+    const TEST_REPO_C: &str = "01960000-0000-7000-8000-000000000012";
+
+    fn make_create_req(id: &str) -> Request<CreateRepositoryRequest> {
+        Request::new(CreateRepositoryRequest {
+            repository_id: id.to_string(),
+            storage_class: String::new(),
+        })
+    }
+
     // --- create/delete repository tests ---
 
     #[tokio::test]
     async fn test_create_repository_succeeds() {
         let dir = TempDir::new().unwrap();
         let svc = make_test_service(dir.path());
-        let req = Request::new(CreateRepositoryRequest {
-            repository_id: "myrepo".to_string(),
-        });
-        let resp = svc.create_repository(req).await.unwrap().into_inner();
-        assert_eq!(resp.repository_id, "myrepo");
-        assert!(dir.path().join("myrepo.git").exists());
+        let resp = svc
+            .create_repository(make_create_req(TEST_REPO_A))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(resp.repository_id, TEST_REPO_A);
+        let expected = fanout_path(dir.path(), TEST_REPO_A).unwrap();
+        assert!(expected.exists());
+        assert!(resp.storage_path.ends_with(".git"));
+    }
+
+    #[tokio::test]
+    async fn test_create_repository_fanout_dirs_created() {
+        let dir = TempDir::new().unwrap();
+        let svc = make_test_service(dir.path());
+        svc.create_repository(make_create_req(TEST_REPO_A))
+            .await
+            .unwrap();
+        // Strip hyphens: "01960000..." → l1="01", l2="96"
+        assert!(dir.path().join("01").join("96").exists());
     }
 
     #[tokio::test]
     async fn test_create_repository_already_exists() {
         let dir = TempDir::new().unwrap();
         let svc = make_test_service(dir.path());
-        let mk = || {
-            Request::new(CreateRepositoryRequest {
-                repository_id: "dup".to_string(),
-            })
-        };
-        svc.create_repository(mk()).await.unwrap();
-        let err = svc.create_repository(mk()).await.unwrap_err();
+        svc.create_repository(make_create_req(TEST_REPO_B))
+            .await
+            .unwrap();
+        let err = svc
+            .create_repository(make_create_req(TEST_REPO_B))
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), tonic::Code::AlreadyExists);
     }
 
@@ -1061,20 +1076,21 @@ mod tests {
     async fn test_delete_repository_succeeds() {
         let dir = TempDir::new().unwrap();
         let svc = make_test_service(dir.path());
-        svc.create_repository(Request::new(CreateRepositoryRequest {
-            repository_id: "todelete".to_string(),
-        }))
-        .await
-        .unwrap();
+        svc.create_repository(make_create_req(TEST_REPO_C))
+            .await
+            .unwrap();
+        let repo_path = fanout_path(dir.path(), TEST_REPO_C).unwrap();
+        assert!(repo_path.exists());
+
         let resp = svc
             .delete_repository(Request::new(DeleteRepositoryRequest {
-                repository_id: "todelete".to_string(),
+                repository_id: TEST_REPO_C.to_string(),
             }))
             .await
             .unwrap()
             .into_inner();
-        assert_eq!(resp.repository_id, "todelete");
-        assert!(!dir.path().join("todelete.git").exists());
+        assert_eq!(resp.repository_id, TEST_REPO_C);
+        assert!(!repo_path.exists());
     }
 
     #[tokio::test]
@@ -1083,7 +1099,7 @@ mod tests {
         let svc = make_test_service(dir.path());
         let err = svc
             .delete_repository(Request::new(DeleteRepositoryRequest {
-                repository_id: "missing".to_string(),
+                repository_id: TEST_REPO_A.to_string(),
             }))
             .await
             .unwrap_err();
@@ -1096,7 +1112,7 @@ mod tests {
         let svc = make_test_service(dir.path());
         let err = svc
             .get_file(Request::new(GetFileRequest {
-                repository_id: "unknown".to_string(),
+                repository_id: TEST_REPO_A.to_string(),
                 path: "README.md".to_string(),
                 r#ref: "HEAD".to_string(),
             }))
@@ -1106,11 +1122,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_invalid_repo_name_rejected() {
+    async fn test_invalid_repo_id_rejected() {
         let dir = TempDir::new().unwrap();
         let svc = make_test_service(dir.path());
 
-        for bad_name in &["", "../etc", "a/b", "a\\b"] {
+        // Non-UUID names must be rejected with INVALID_ARGUMENT
+        for bad_name in &["", "myrepo", "../etc", "a/b", "a\\b"] {
             let err = svc
                 .get_file(Request::new(GetFileRequest {
                     repository_id: bad_name.to_string(),
@@ -1122,20 +1139,26 @@ mod tests {
             assert_eq!(
                 err.code(),
                 tonic::Code::InvalidArgument,
-                "expected INVALID_ARGUMENT for name {:?}",
+                "expected INVALID_ARGUMENT for id {:?}",
                 bad_name
             );
         }
     }
 
+    // Additional UUIDs for tests that need pre-seeded repos
+    const TEST_REPO_D: &str = "01960000-0000-7000-8000-000000000020";
+    const TEST_REPO_E: &str = "01960000-0000-7000-8000-000000000021";
+    const TEST_REPO_F: &str = "01960000-0000-7000-8000-000000000022";
+    const TEST_REPO_G: &str = "01960000-0000-7000-8000-000000000023";
+
     #[tokio::test]
     async fn test_get_file_happy_path() {
         let dir = TempDir::new().unwrap();
-        repo_with_commit(dir.path(), "testrepo");
+        repo_with_commit(dir.path(), TEST_REPO_D);
 
         let svc = make_test_service(dir.path());
         let req = Request::new(GetFileRequest {
-            repository_id: "testrepo".to_string(),
+            repository_id: TEST_REPO_D.to_string(),
             path: "products/p1.md".to_string(),
             r#ref: "HEAD".to_string(),
         });
@@ -1146,11 +1169,11 @@ mod tests {
     #[tokio::test]
     async fn test_get_file_unknown_ref_returns_not_found() {
         let dir = TempDir::new().unwrap();
-        repo_with_commit(dir.path(), "testrepo");
+        repo_with_commit(dir.path(), TEST_REPO_D);
 
         let svc = make_test_service(dir.path());
         let req = Request::new(GetFileRequest {
-            repository_id: "testrepo".to_string(),
+            repository_id: TEST_REPO_D.to_string(),
             path: "products/p1.md".to_string(),
             r#ref: "nonexistent-branch".to_string(),
         });
@@ -1161,11 +1184,11 @@ mod tests {
     #[tokio::test]
     async fn test_get_file_missing_file_returns_not_found() {
         let dir = TempDir::new().unwrap();
-        repo_with_commit(dir.path(), "testrepo");
+        repo_with_commit(dir.path(), TEST_REPO_D);
 
         let svc = make_test_service(dir.path());
         let req = Request::new(GetFileRequest {
-            repository_id: "testrepo".to_string(),
+            repository_id: TEST_REPO_D.to_string(),
             path: "products/nonexistent.md".to_string(),
             r#ref: "HEAD".to_string(),
         });
@@ -1176,11 +1199,11 @@ mod tests {
     #[tokio::test]
     async fn test_list_files_returns_tree_entries() {
         let dir = TempDir::new().unwrap();
-        repo_with_commit(dir.path(), "testrepo");
+        repo_with_commit(dir.path(), TEST_REPO_D);
 
         let svc = make_test_service(dir.path());
         let req = Request::new(ListFilesRequest {
-            repository_id: "testrepo".to_string(),
+            repository_id: TEST_REPO_D.to_string(),
             r#ref: "HEAD".to_string(),
             path_prefix: "products/".to_string(),
             recursive: true,
@@ -1194,11 +1217,11 @@ mod tests {
     #[tokio::test]
     async fn test_get_latest_tag_returns_correct_tag() {
         let dir = TempDir::new().unwrap();
-        repo_with_commit(dir.path(), "testrepo");
+        repo_with_commit(dir.path(), TEST_REPO_D);
 
         let svc = make_test_service(dir.path());
         let req = Request::new(GetLatestTagRequest {
-            repository_id: "testrepo".to_string(),
+            repository_id: TEST_REPO_D.to_string(),
             prefix: "v".to_string(),
         });
         let resp = svc.get_latest_tag(req).await.unwrap().into_inner();
@@ -1212,12 +1235,14 @@ mod tests {
     #[tokio::test]
     async fn test_get_latest_tag_empty_repo_returns_found_false() {
         let dir = TempDir::new().unwrap();
-        let repo_path = dir.path().join("empty.git");
+        // Create an empty repo directly at the fanout path
+        let repo_path = fanout_path(dir.path(), TEST_REPO_A).unwrap();
+        std::fs::create_dir_all(repo_path.parent().unwrap()).unwrap();
         gix::init_bare(&repo_path).unwrap();
 
         let svc = make_test_service(dir.path());
         let req = Request::new(GetLatestTagRequest {
-            repository_id: "empty".to_string(),
+            repository_id: TEST_REPO_A.to_string(),
             prefix: "v".to_string(),
         });
         let resp = svc.get_latest_tag(req).await.unwrap().into_inner();
@@ -1238,11 +1263,11 @@ mod tests {
     #[tokio::test]
     async fn test_commit_file_creates_real_commit() {
         let dir = TempDir::new().unwrap();
-        bare_repo_with_main(dir.path(), "testrepo");
+        bare_repo_with_main(dir.path(), TEST_REPO_E);
 
         let svc = make_test_service(dir.path());
         let req = Request::new(CommitFileRequest {
-            repository_id: "testrepo".to_string(),
+            repository_id: TEST_REPO_E.to_string(),
             path: "products/new.md".to_string(),
             content: b"---\nid: new\n---".to_vec(),
             commit_message: "add new product".to_string(),
@@ -1254,7 +1279,8 @@ mod tests {
         assert_eq!(resp.branch, "main");
 
         // Verify the file appears in the bare repo at HEAD
-        let repo = gix::open(dir.path().join("testrepo.git")).unwrap();
+        let repo_path = fanout_path(dir.path(), TEST_REPO_E).unwrap();
+        let repo = gix::open(repo_path).unwrap();
         let commit_id = resolve_ref_to_commit_id(&repo, "HEAD").unwrap();
         let tree_id = repo
             .find_object(commit_id)
@@ -1270,11 +1296,11 @@ mod tests {
     #[tokio::test]
     async fn test_delete_file_on_nonexistent_file_returns_not_found() {
         let dir = TempDir::new().unwrap();
-        bare_repo_with_main(dir.path(), "testrepo");
+        bare_repo_with_main(dir.path(), TEST_REPO_E);
 
         let svc = make_test_service(dir.path());
         let req = Request::new(DeleteFileRequest {
-            repository_id: "testrepo".to_string(),
+            repository_id: TEST_REPO_E.to_string(),
             path: "products/missing.md".to_string(),
             commit_message: "delete".to_string(),
             author_name: "T".to_string(),
@@ -1287,11 +1313,11 @@ mod tests {
     #[tokio::test]
     async fn test_create_tag_already_exists_returns_already_exists() {
         let dir = TempDir::new().unwrap();
-        repo_with_commit(dir.path(), "testrepo"); // creates v1.0.0
+        repo_with_commit(dir.path(), TEST_REPO_D); // creates v1.0.0
 
         let svc = make_test_service(dir.path());
         let req = Request::new(CreateTagRequest {
-            repository_id: "testrepo".to_string(),
+            repository_id: TEST_REPO_D.to_string(),
             tag_name: "v1.0.0".to_string(),
             message: "duplicate".to_string(),
             target_commit_sha: "".to_string(),
@@ -1303,8 +1329,8 @@ mod tests {
     #[tokio::test]
     async fn test_concurrent_repos_are_isolated() {
         let dir = TempDir::new().unwrap();
-        bare_repo_with_main(dir.path(), "repo-a");
-        bare_repo_with_main(dir.path(), "repo-b");
+        bare_repo_with_main(dir.path(), TEST_REPO_F);
+        bare_repo_with_main(dir.path(), TEST_REPO_G);
 
         let svc = std::sync::Arc::new(make_test_service(dir.path()));
         let svc_a = std::sync::Arc::clone(&svc);
@@ -1313,7 +1339,7 @@ mod tests {
         let h_a = tokio::spawn(async move {
             svc_a
                 .commit_file(Request::new(CommitFileRequest {
-                    repository_id: "repo-a".to_string(),
+                    repository_id: TEST_REPO_F.to_string(),
                     path: "file-a.md".to_string(),
                     content: b"a".to_vec(),
                     commit_message: "from a".to_string(),
@@ -1327,7 +1353,7 @@ mod tests {
         let h_b = tokio::spawn(async move {
             svc_b
                 .commit_file(Request::new(CommitFileRequest {
-                    repository_id: "repo-b".to_string(),
+                    repository_id: TEST_REPO_G.to_string(),
                     path: "file-b.md".to_string(),
                     content: b"b".to_vec(),
                     commit_message: "from b".to_string(),

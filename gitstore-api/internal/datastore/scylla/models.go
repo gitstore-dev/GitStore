@@ -81,4 +81,37 @@ var (
 			"id",
 		},
 	})
+
+	Repository = table.New(table.Metadata{
+		Name: "repositories",
+		Columns: []string{
+			"id",
+			"namespace_id",
+			"name",
+			"default_branch",
+			"storage_class",
+			"created_at",
+			"created_by",
+			"updated_at",
+			"updated_by",
+		},
+		PartKey: []string{
+			"id",
+		},
+	})
+
+	NamespaceMapping = table.New(table.Metadata{
+		Name: "namespace_mappings",
+		Columns: []string{
+			"namespace_id",
+			"name",
+			"repo_id",
+		},
+		PartKey: []string{
+			"namespace_id",
+		},
+		SortKey: []string{
+			"name",
+		},
+	})
 )

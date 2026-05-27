@@ -91,6 +91,39 @@ func (s *stubDatastore) ListNamespaces(_ context.Context) ([]*datastore.Namespac
 func (s *stubDatastore) DeleteNamespace(_ context.Context, _ string) error {
 	return s.getProductErr
 }
+func (s *stubDatastore) CreateRepository(_ context.Context, _ *datastore.Repository) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) GetRepository(_ context.Context, _ string) (*datastore.Repository, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) ListRepositoriesByNamespace(_ context.Context, _ string) ([]*datastore.Repository, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) UpdateRepository(_ context.Context, _ *datastore.Repository) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) DeleteRepository(_ context.Context, _ string) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) CreateNamespaceMapping(_ context.Context, _ *datastore.NamespaceMapping) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) LookupRepository(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) LookupNamespaceByRepoID(_ context.Context, _ string) (*datastore.NamespaceMapping, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) RenameRepository(_ context.Context, _, _, _ string) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) TransferRepository(_ context.Context, _, _, _ string) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) DeleteNamespaceMapping(_ context.Context, _, _ string) error {
+	return s.getProductErr
+}
 func (s *stubDatastore) Close() error { return nil }
 
 // newTestInstrumented creates an InstrumentedDatastore with an observer logger

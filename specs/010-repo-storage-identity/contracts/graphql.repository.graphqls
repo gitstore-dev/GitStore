@@ -1,0 +1,182 @@
+# Repository and NamespaceMapping GraphQL contract additions
+# Feature: 010-repo-storage-identity
+#
+# These types and operations extend the existing GitStore GraphQL schema.
+# All repository operations are scoped to a namespace via its stable ID.
+
+# ============================================================================
+# Repository type
+# ============================================================================
+
+"""
+A git repository. Has a stable internal identity (id) that is independent of
+its human-readable namespace path. Renaming or transferring a repository does
+not change its id.
+"""
+type Repository implements Node {
+  """
+  Globally unique Relay ID.
+  """
+  id: ID!
+
+  """
+  Human-readable name within the namespace (e.g., "my-catalog").
+  Mutable on rename.
+  """
+  name: String!
+
+  """
+  The namespace that owns this repository.
+  """
+  namespace: Namespace!
+
+  """
+  Default branch name (e.g., "main").
+  """
+  defaultBranch: String!
+
+  """
+  Storage class tag. Reserved for future multi-storage-root use.
+  """
+  storageClass: String!
+
+  createdAt: DateTime!
+  createdBy: String!
+  updatedAt: DateTime!
+  updatedBy: String!
+}
+
+type RepositoryEdge {
+  cursor: String!
+  node: Repository!
+}
+
+type RepositoryConnection {
+  edges: [RepositoryEdge!]!
+  pageInfo: PageInfo!
+}
+
+# ============================================================================
+# Query additions
+# ============================================================================
+
+extend type Query {
+  """
+  Look up a repository by its namespace identifier and name.
+  Returns null if not found.
+  """
+  repository(by: RepositoryBy!): Repository
+
+  """
+  List repositories within a namespace.
+  """
+  repositories(
+    namespaceId: ID!
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): RepositoryConnection!
+}
+
+"""
+Selector for a single repository lookup.
+Exactly one field must be set.
+"""
+input RepositoryBy @oneOf {
+  """
+  Look up by globally unique Relay ID.
+  """
+  id: ID
+
+  """
+  Look up by namespace identifier + repository name.
+  """
+  namespacePath: RepositoryNamespacePath
+}
+
+"""
+Composite selector: namespace identifier (human-readable slug) + repository name.
+"""
+input RepositoryNamespacePath {
+  """
+  Namespace identifier slug (e.g., "acme").
+  """
+  namespace: String!
+
+  """
+  Repository name (e.g., "my-catalog").
+  """
+  name: String!
+}
+
+# ============================================================================
+# Mutation additions
+# ============================================================================
+
+extend type Mutation {
+  """
+  Create a new repository within a namespace.
+  """
+  createRepository(input: CreateRepositoryInput!): CreateRepositoryPayload!
+
+  """
+  Rename a repository within its namespace. Does not move storage.
+  """
+  renameRepository(input: RenameRepositoryInput!): RenameRepositoryPayload!
+
+  """
+  Transfer a repository to a different namespace. Does not move storage.
+  """
+  transferRepository(input: TransferRepositoryInput!): TransferRepositoryPayload!
+
+  """
+  Delete a repository and its storage.
+  """
+  deleteRepository(input: DeleteRepositoryInput!): DeleteRepositoryPayload!
+}
+
+input CreateRepositoryInput {
+  namespaceId: ID!
+  name: String!
+  defaultBranch: String
+}
+
+type CreateRepositoryPayload {
+  repository: Repository!
+}
+
+input RenameRepositoryInput {
+  """
+  Relay ID of the repository to rename.
+  """
+  repositoryId: ID!
+  newName: String!
+}
+
+type RenameRepositoryPayload {
+  repository: Repository!
+}
+
+input TransferRepositoryInput {
+  """
+  Relay ID of the repository to transfer.
+  """
+  repositoryId: ID!
+  """
+  Relay ID of the destination namespace.
+  """
+  targetNamespaceId: ID!
+}
+
+type TransferRepositoryPayload {
+  repository: Repository!
+}
+
+input DeleteRepositoryInput {
+  repositoryId: ID!
+}
+
+type DeleteRepositoryPayload {
+  deletedRepositoryId: ID!
+}

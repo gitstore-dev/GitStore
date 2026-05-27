@@ -13,13 +13,15 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	"github.com/google/uuid"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-var sharedGRPCAddr string
-
-const sharedRepoID = "shared-catalog"
+var (
+	sharedGRPCAddr string
+	sharedRepoID   string
+)
 
 // startSharedClient returns a client targeting the shared repository provisioned in TestMain.
 func startSharedClient(t *testing.T) (*gitclient.Client, error) {
@@ -66,11 +68,12 @@ func TestMain(m *testing.M) {
 	}
 
 	sharedGRPCAddr = fmt.Sprintf("localhost:%s", grpcPort.Port())
+	sharedRepoID = uuid.New().String()
 
 	// Provision the shared repository used by catalogue load and reload tests.
 	setupClient, err := gitclient.NewClientWithAddr(sharedGRPCAddr)
 	if err == nil {
-		_ = setupClient.CreateRepository(ctx, sharedRepoID)
+		_, _ = setupClient.CreateRepository(ctx, sharedRepoID, "default")
 		_ = setupClient.Close()
 	}
 

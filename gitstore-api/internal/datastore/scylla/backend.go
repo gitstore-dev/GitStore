@@ -10,6 +10,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -24,12 +25,14 @@ import (
 
 // scyllaDatastore implements datastore.Datastore backed by ScyllaDB.
 type scyllaDatastore struct {
-	session         gocqlx.Session
-	log             *zap.Logger
-	productTable    *table.Table
-	categoryTable   *table.Table
-	collectionTable *table.Table
-	namespaceTable  *table.Table
+	session               gocqlx.Session
+	log                   *zap.Logger
+	productTable          *table.Table
+	categoryTable         *table.Table
+	collectionTable       *table.Table
+	namespaceTable        *table.Table
+	repositoryTable       *table.Table
+	namespaceMappingTable *table.Table
 }
 
 // row structs mirror the CQL columns.
@@ -46,8 +49,8 @@ type productRow struct {
 	CollectionIDs     []string          `db:"collection_ids"`
 	Images            []string          `db:"images"`
 	Metadata          map[string]string `db:"metadata"`
-	CreatedAt         int64             `db:"created_at"`
-	UpdatedAt         int64             `db:"updated_at"`
+	CreatedAt         time.Time         `db:"created_at"`
+	UpdatedAt         time.Time         `db:"updated_at"`
 	Body              string            `db:"body"`
 }
 
@@ -57,8 +60,8 @@ type categoryRow struct {
 	Slug         string     `db:"slug"`
 	ParentID     *string    `db:"parent_id"`
 	DisplayOrder int        `db:"display_order"`
-	CreatedAt    int64      `db:"created_at"`
-	UpdatedAt    int64      `db:"updated_at"`
+	CreatedAt    time.Time  `db:"created_at"`
+	UpdatedAt    time.Time  `db:"updated_at"`
 	Body         string     `db:"body"`
 }
 
@@ -68,8 +71,8 @@ type collectionRow struct {
 	Slug         string     `db:"slug"`
 	DisplayOrder int        `db:"display_order"`
 	ProductIDs   []string   `db:"product_ids"`
-	CreatedAt    int64      `db:"created_at"`
-	UpdatedAt    int64      `db:"updated_at"`
+	CreatedAt    time.Time  `db:"created_at"`
+	UpdatedAt    time.Time  `db:"updated_at"`
 	Body         string     `db:"body"`
 }
 
@@ -79,9 +82,9 @@ type namespaceRow struct {
 	DisplayName        string     `db:"display_name"`
 	Tier               string     `db:"tier"`
 	ParentEnterpriseID *string    `db:"parent_enterprise_id"`
-	CreatedAt          int64      `db:"created_at"`
+	CreatedAt          time.Time  `db:"created_at"`
 	CreatedBy          string     `db:"created_by"`
-	UpdatedAt          int64      `db:"updated_at"`
+	UpdatedAt          time.Time  `db:"updated_at"`
 	UpdatedBy          string     `db:"updated_by"`
 }
 
@@ -115,12 +118,14 @@ func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) 
 	}
 
 	return &scyllaDatastore{
-		session:         gocqlx.NewSession(rawSession),
-		log:             log,
-		productTable:    Product,
-		categoryTable:   Category,
-		collectionTable: Collection,
-		namespaceTable:  Namespace,
+		session:               gocqlx.NewSession(rawSession),
+		log:                   log,
+		productTable:          Product,
+		categoryTable:         Category,
+		collectionTable:       Collection,
+		namespaceTable:        Namespace,
+		repositoryTable:       Repository,
+		namespaceMappingTable: NamespaceMapping,
 	}, nil
 }
 
@@ -517,8 +522,8 @@ func toProductRow(p *datastore.Product) *productRow {
 		CollectionIDs:     p.CollectionIDs,
 		Images:            p.Images,
 		Metadata:          meta,
-		CreatedAt:         p.CreatedAt.UnixMilli(),
-		UpdatedAt:         p.UpdatedAt.UnixMilli(),
+		CreatedAt:         p.CreatedAt,
+		UpdatedAt:         p.UpdatedAt,
 		Body:              p.Body,
 	}
 }
@@ -545,8 +550,8 @@ func fromProductRow(r *productRow) *datastore.Product {
 		CollectionIDs:     r.CollectionIDs,
 		Images:            r.Images,
 		Metadata:          meta,
-		CreatedAt:         millisToTime(r.CreatedAt),
-		UpdatedAt:         millisToTime(r.UpdatedAt),
+		CreatedAt:         r.CreatedAt,
+		UpdatedAt:         r.UpdatedAt,
 		Body:              r.Body,
 	}
 }
@@ -558,8 +563,8 @@ func toCategoryRow(c *datastore.Category) *categoryRow {
 		Slug:         c.Slug,
 		ParentID:     c.ParentID,
 		DisplayOrder: c.DisplayOrder,
-		CreatedAt:    c.CreatedAt.UnixMilli(),
-		UpdatedAt:    c.UpdatedAt.UnixMilli(),
+		CreatedAt:    c.CreatedAt,
+		UpdatedAt:    c.UpdatedAt,
 		Body:         c.Body,
 	}
 }
@@ -571,8 +576,8 @@ func fromCategoryRow(r *categoryRow) *datastore.Category {
 		Slug:         r.Slug,
 		ParentID:     r.ParentID,
 		DisplayOrder: r.DisplayOrder,
-		CreatedAt:    millisToTime(r.CreatedAt),
-		UpdatedAt:    millisToTime(r.UpdatedAt),
+		CreatedAt:    r.CreatedAt,
+		UpdatedAt:    r.UpdatedAt,
 		Body:         r.Body,
 	}
 }
@@ -584,8 +589,8 @@ func toCollectionRow(c *datastore.Collection) *collectionRow {
 		Slug:         c.Slug,
 		DisplayOrder: c.DisplayOrder,
 		ProductIDs:   c.ProductIDs,
-		CreatedAt:    c.CreatedAt.UnixMilli(),
-		UpdatedAt:    c.UpdatedAt.UnixMilli(),
+		CreatedAt:    c.CreatedAt,
+		UpdatedAt:    c.UpdatedAt,
 		Body:         c.Body,
 	}
 }
@@ -597,8 +602,8 @@ func fromCollectionRow(r *collectionRow) *datastore.Collection {
 		Slug:         r.Slug,
 		DisplayOrder: r.DisplayOrder,
 		ProductIDs:   r.ProductIDs,
-		CreatedAt:    millisToTime(r.CreatedAt),
-		UpdatedAt:    millisToTime(r.UpdatedAt),
+		CreatedAt:    r.CreatedAt,
+		UpdatedAt:    r.UpdatedAt,
 		Body:         r.Body,
 	}
 }
@@ -619,9 +624,9 @@ func toNamespaceRow(ns *datastore.Namespace) *namespaceRow {
 		DisplayName:        displayName,
 		Tier:               string(ns.Tier),
 		ParentEnterpriseID: ns.ParentEnterpriseID,
-		CreatedAt:          ns.CreatedAt.UnixMilli(),
+		CreatedAt:          ns.CreatedAt,
 		CreatedBy:          ns.CreatedBy,
-		UpdatedAt:          ns.UpdatedAt.UnixMilli(),
+		UpdatedAt:          ns.UpdatedAt,
 		UpdatedBy:          ns.UpdatedBy,
 	}
 }
@@ -633,9 +638,9 @@ func fromNamespaceRow(r *namespaceRow) *datastore.Namespace {
 		DisplayName:        r.DisplayName,
 		Tier:               datastore.NamespaceTier(r.Tier),
 		ParentEnterpriseID: r.ParentEnterpriseID,
-		CreatedAt:          millisToTime(r.CreatedAt),
+		CreatedAt:          r.CreatedAt,
 		CreatedBy:          r.CreatedBy,
-		UpdatedAt:          millisToTime(r.UpdatedAt),
+		UpdatedAt:          r.UpdatedAt,
 		UpdatedBy:          r.UpdatedBy,
 	}
 }

@@ -114,8 +114,10 @@ type CategoryEdge struct {
 
 // Optimistic lock conflict for category
 type CategoryOptimisticLockConflict struct {
+	// TODO: Should this be a datetime?
 	// Current version in database
 	CurrentVersion time.Time `json:"currentVersion"`
+	// TODO: Should this be a datetime?
 	// Version client attempted to update
 	AttemptedVersion time.Time `json:"attemptedVersion"`
 	// Current state of the category
@@ -177,8 +179,10 @@ type CollectionEdge struct {
 
 // Optimistic lock conflict for collection
 type CollectionOptimisticLockConflict struct {
+	// TODO: Should this be a datetime?
 	// Current version in database
 	CurrentVersion time.Time `json:"currentVersion"`
+	// TODO: Should this be a datetime?
 	// Version client attempted to update
 	AttemptedVersion time.Time `json:"attemptedVersion"`
 	// Current state of the collection
@@ -286,6 +290,7 @@ type CreateProductInput struct {
 	CategoryID string `json:"categoryId"`
 	// Collection IDs (optional)
 	CollectionIds []string `json:"collectionIds,omitempty"`
+	// TODO: Add a scalar for URI
 	// Product image URLs
 	Images []string `json:"images,omitempty"`
 	// Custom metadata
@@ -298,6 +303,18 @@ type CreateProductPayload struct {
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The created product
 	Product *Product `json:"product,omitempty"`
+}
+
+type CreateRepositoryInput struct {
+	ClientMutationID *string `json:"clientMutationId,omitempty"`
+	NamespaceID      string  `json:"namespaceId"`
+	Name             string  `json:"name"`
+	DefaultBranch    *string `json:"defaultBranch,omitempty"`
+}
+
+type CreateRepositoryPayload struct {
+	ClientMutationID *string     `json:"clientMutationId,omitempty"`
+	Repository       *Repository `json:"repository"`
 }
 
 // Input for deleting a category
@@ -366,6 +383,16 @@ type DeleteProductPayload struct {
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Deleted product ID
 	DeletedProductID *string `json:"deletedProductId,omitempty"`
+}
+
+type DeleteRepositoryInput struct {
+	ClientMutationID *string `json:"clientMutationId,omitempty"`
+	RepositoryID     string  `json:"repositoryId"`
+}
+
+type DeleteRepositoryPayload struct {
+	ClientMutationID    *string `json:"clientMutationId,omitempty"`
+	DeletedRepositoryID string  `json:"deletedRepositoryId"`
 }
 
 // Login mutation input (Relay pattern)
@@ -462,8 +489,10 @@ type NamespaceEdge struct {
 
 // Optimistic lock conflict information
 type OptimisticLockConflict struct {
+	// TODO: Should this be a datetime?
 	// Current version in database
 	CurrentVersion time.Time `json:"currentVersion"`
+	// TODO: Should this be a datetime?
 	// Version client attempted to update
 	AttemptedVersion time.Time `json:"attemptedVersion"`
 	// Current state of the entity
@@ -506,6 +535,7 @@ type Product struct {
 	Category *Category `json:"category"`
 	// Collections this product belongs to (multiple allowed)
 	Collections []*Collection `json:"collections"`
+	// TODO: Add a scalar for URI
 	// Product image URLs (external CDN)
 	Images []string `json:"images"`
 	// Custom metadata (free-form JSON)
@@ -596,6 +626,18 @@ type RefreshTokenPayload struct {
 	Session *AuthSession `json:"session,omitempty"`
 }
 
+type RenameRepositoryInput struct {
+	ClientMutationID *string `json:"clientMutationId,omitempty"`
+	// Relay ID of the repository to rename.
+	RepositoryID string `json:"repositoryId"`
+	NewName      string `json:"newName"`
+}
+
+type RenameRepositoryPayload struct {
+	ClientMutationID *string     `json:"clientMutationId,omitempty"`
+	Repository       *Repository `json:"repository"`
+}
+
 // Input for reordering categories (drag-and-drop)
 type ReorderCategoriesInput struct {
 	// Client mutation ID (Relay pattern)
@@ -634,6 +676,75 @@ type ReorderCollectionsPayload struct {
 	Collections []*Collection `json:"collections,omitempty"`
 }
 
+// A git repository. Has a stable internal identity (id) that is independent of
+// its human-readable namespace path. Renaming or transferring a repository does
+// not change its id.
+type Repository struct {
+	// Globally unique Relay ID.
+	ID string `json:"id"`
+	// Human-readable name within the namespace (e.g., "my-catalog").
+	// Mutable on rename.
+	Name string `json:"name"`
+	// The namespace that owns this repository.
+	Namespace *Namespace `json:"namespace"`
+	// Default branch name (e.g., "main").
+	DefaultBranch string `json:"defaultBranch"`
+	// Storage class tag. Reserved for future multi-storage-root use.
+	StorageClass string `json:"storageClass"`
+	// Absolute filesystem path derived from the internal repo_id using the fanout formula.
+	// Informational — for operator use. Example: /data/01/96/0196f3a2-4b1c-7e9d-a301-8b2c4d5e6f7a.git
+	StoragePath string    `json:"storagePath"`
+	CreatedAt   time.Time `json:"createdAt"`
+	CreatedBy   string    `json:"createdBy"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+	UpdatedBy   string    `json:"updatedBy"`
+}
+
+func (Repository) IsNode() {}
+
+// Globally unique identifier (format: [type]_[base62])
+func (this Repository) GetID() string { return this.ID }
+
+// Selector for a single repository lookup.
+// Exactly one field must be set.
+type RepositoryBy struct {
+	// Look up by globally unique Relay ID.
+	ID *string `json:"id,omitempty"`
+	// Look up by namespace identifier + repository name.
+	NamespacePath *RepositoryNamespacePath `json:"namespacePath,omitempty"`
+}
+
+type RepositoryConnection struct {
+	Edges    []*RepositoryEdge `json:"edges"`
+	PageInfo *PageInfo         `json:"pageInfo"`
+}
+
+type RepositoryEdge struct {
+	Cursor string      `json:"cursor"`
+	Node   *Repository `json:"node"`
+}
+
+// Composite selector: namespace identifier (human-readable slug) + repository name.
+type RepositoryNamespacePath struct {
+	// Namespace identifier slug (e.g., "acme").
+	Namespace string `json:"namespace"`
+	// Repository name (e.g., "my-catalog").
+	Name string `json:"name"`
+}
+
+type TransferRepositoryInput struct {
+	ClientMutationID *string `json:"clientMutationId,omitempty"`
+	// Relay ID of the repository to transfer.
+	RepositoryID string `json:"repositoryId"`
+	// Relay ID of the destination namespace.
+	TargetNamespaceID string `json:"targetNamespaceId"`
+}
+
+type TransferRepositoryPayload struct {
+	ClientMutationID *string     `json:"clientMutationId,omitempty"`
+	Repository       *Repository `json:"repository"`
+}
+
 // Input for updating a category
 type UpdateCategoryInput struct {
 	// Client mutation ID (Relay pattern)
@@ -650,6 +761,7 @@ type UpdateCategoryInput struct {
 	DisplayOrder *int32 `json:"displayOrder,omitempty"`
 	// New body content
 	Body *string `json:"body,omitempty"`
+	// TODO: Should this be a datetime?
 	// Version for optimistic locking
 	Version time.Time `json:"version"`
 }
@@ -680,6 +792,7 @@ type UpdateCollectionInput struct {
 	ProductIds []string `json:"productIds,omitempty"`
 	// New body content
 	Body *string `json:"body,omitempty"`
+	// TODO: Should this be a datatime?
 	// Version for optimistic locking
 	Version time.Time `json:"version"`
 }
@@ -710,6 +823,7 @@ type UpdateProductInput struct {
 	Body *string `json:"body,omitempty"`
 	// New price
 	Price *scalar.Decimal `json:"price,omitempty"`
+	// TODO: Add a scalar for CurrencyCode
 	// New currency
 	Currency *string `json:"currency,omitempty"`
 	// New inventory status
@@ -720,10 +834,12 @@ type UpdateProductInput struct {
 	CategoryID *string `json:"categoryId,omitempty"`
 	// New collection IDs (replaces all)
 	CollectionIds []string `json:"collectionIds,omitempty"`
+	// TODO: Add a scalar for URI
 	// New image URLs (replaces all)
 	Images []string `json:"images,omitempty"`
 	// New metadata (replaces all)
 	Metadata map[string]any `json:"metadata,omitempty"`
+	// TODO: Should this be a datetime?
 	// Version for optimistic locking (updated_at timestamp)
 	Version time.Time `json:"version"`
 }

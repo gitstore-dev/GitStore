@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -126,8 +127,10 @@ func TestGRPCGetLatestTagEmptyRepo(t *testing.T) {
 	defer c.Close()
 
 	// Provision a fresh (empty) repository — no tags in it.
-	c.RepositoryID = "empty-repo"
-	require.NoError(t, c.CreateRepository(ctx, "empty-repo"))
+	emptyRepoID := uuid.New().String()
+	c.RepositoryID = emptyRepoID
+	_, err = c.CreateRepository(ctx, emptyRepoID, "default")
+	require.NoError(t, err)
 
 	_, err = c.GetLatestTag(ctx)
 	assert.Error(t, err, "GetLatestTag on empty repo should return an error")

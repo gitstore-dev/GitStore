@@ -31,20 +31,29 @@ The `password` field is always redacted in structured startup logs.
 ## Schema migrations (ScyllaDB only)
 
 Migrations are embedded via `//go:embed migrations/*.cql` and applied
-automatically at startup via `gocqlx/v3/migrate.FromFS`.
+automatically at startup via `gocqlx/v3/migrate.FromFS`. The keyspace is
+operator-provisioned; migrations own tables and indexes inside that keyspace.
+
+Migration files are plain ordered CQL files. `gocqlx/migrate` stores checksums
+and statement progress in `gocqlx_migrate`. GitStore configures the library to
+wait for schema agreement before each statement so dependent DDL waits for
+Scylla's distributed schema metadata to converge. Keep migration files to CQL
+statements only; leading `--` comments can be parsed by `gocqlx/migrate` as a
+comment statement and skip the following CQL in the same semicolon-delimited
+chunk.
 
 **Distributed lock** — before applying migrations each instance acquires
-a lease with `INSERT INTO gitstore.schema_migrations_lock … IF NOT EXISTS USING TTL 120`.
+a lease in `schema_migrations_lock` with `INSERT ... IF NOT EXISTS USING TTL 120`.
 If the lock is already held, the runner retries up to 3 times with
 exponential back-off (2 s, 4 s, 8 s). After success the lock row is deleted.
 The 120-second TTL self-expires if the holder crashes before releasing.
 
 Migration files live in `internal/datastore/scylla/migrations/`:
 
-| File                     | Purpose                                                                                                |
-|--------------------------|--------------------------------------------------------------------------------------------------------|
-| `001_initial_schema.cql` | Creates `gitstore` keyspace + `products`, `categories`, `collections`, `schema_migrations_lock` tables |
-| `002_add_indexes.cql`    | Secondary indexes for SKU, category, and slug lookups                                                  |
+| File                          | Purpose                                                                                           |
+|-------------------------------|---------------------------------------------------------------------------------------------------|
+| `001_initial_schema.cql`      | Creates product, category, collection, namespace, repository, and namespace mapping tables        |
+| `002_add_initial_indices.cql` | Secondary indexes for SKU, category, slug, namespace identifier, and repository mapping lookups   |
 
 ---
 

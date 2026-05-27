@@ -20,6 +20,7 @@ type Resolver struct {
 	store          datastore.Datastore
 	service        *Service
 	authMiddleware *middleware.AuthMiddleware
+	storageDataDir string // data_dir used to build storagePath in responses; defaults to "/data"
 }
 
 // NewResolver creates a new GraphQL resolver.
@@ -27,10 +28,17 @@ type Resolver struct {
 func NewResolver(store datastore.Datastore, writer GitWriter, logger *zap.Logger) *Resolver {
 	svc := NewServiceWithWriter(store, writer, logger)
 	return &Resolver{
-		logger:  logger,
-		store:   store,
-		service: svc,
+		logger:         logger,
+		store:          store,
+		service:        svc,
+		storageDataDir: "/data",
 	}
+}
+
+// WithStorageDataDir sets the data directory for deriving storage paths.
+func (r *Resolver) WithStorageDataDir(dir string) *Resolver {
+	r.storageDataDir = dir
+	return r
 }
 
 // WithAuthMiddleware wires the auth middleware into the resolver (called from main.go).
