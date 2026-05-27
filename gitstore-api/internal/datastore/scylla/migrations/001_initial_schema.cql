@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS repositories (
     updated_by      text
 );
 
+-- CALL wait_schema;
 CREATE INDEX IF NOT EXISTS repositories_by_namespace ON repositories (namespace_id);
 
 -- namespace_mappings: composite primary key enables O(1) lookup by (namespace_id, name).
@@ -76,4 +77,5 @@ CREATE TABLE IF NOT EXISTS namespace_mappings (
     PRIMARY KEY  (namespace_id, name)
 );
 
+-- CALL wait_schema;
 CREATE INDEX IF NOT EXISTS mappings_by_repo_id ON namespace_mappings (repo_id);

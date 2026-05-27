@@ -56,16 +56,23 @@ func RunMigrations(ctx context.Context, rawSession *gocql.Session, keyspace, ins
 	callbackLog := newMigrationCallbackLogger(log, keyspace)
 	log.Info("running CQL migrations")
 
-	// Register a callback for "-- CALL log_tables;" in the migration file.
+	// Register callbacks used in migration files.
 	reg := migrate.CallbackRegister{}
 	reg.Add(migrate.CallComment, "log_tables", callbackLog)
+	// wait_schema: used between CREATE TABLE and CREATE INDEX in migration files.
+	// On single-node Scylla with developer mode, AwaitSchemaAgreement returns
+	// immediately (no peers to agree with), so gocql's schema cache may lag.
+	// A brief sleep allows the schema event handler goroutine to process the
+	// preceding CREATE TABLE before the CREATE INDEX references the new table.
+	reg.Add(migrate.CallComment, "wait_schema", func(ctx context.Context, _ gocqlx.Session, _ migrate.CallbackEvent, _ string) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+			return nil
+		}
+	})
 	migrate.Callback = reg.Callback
-
-	// Await schema agreement before each statement so DDL changes (CREATE TABLE)
-	// are fully visible before dependent DDL (CREATE INDEX) runs. On single-node
-	// Scylla with developer mode this is the only reliable way to prevent
-	// 'unconfigured table' errors when an index immediately follows its table.
-	migrate.DefaultAwaitSchemaAgreement = migrate.AwaitSchemaAgreementBeforeEachStatement
 
 	session := gocqlx.NewSession(rawSession)
 
