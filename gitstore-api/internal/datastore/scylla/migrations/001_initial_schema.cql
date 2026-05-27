@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS repositories (
     updated_by      text
 );
 
+CREATE INDEX IF NOT EXISTS repositories_by_namespace ON repositories (namespace_id);
+
 -- namespace_mappings: composite primary key enables O(1) lookup by (namespace_id, name).
 -- Storage path is derived from repo_id using the fanout formula and is NOT stored here.
 CREATE TABLE IF NOT EXISTS namespace_mappings (
@@ -73,3 +75,5 @@ CREATE TABLE IF NOT EXISTS namespace_mappings (
     repo_id      uuid,
     PRIMARY KEY  (namespace_id, name)
 );
+
+CREATE INDEX IF NOT EXISTS mappings_by_repo_id ON namespace_mappings (repo_id);

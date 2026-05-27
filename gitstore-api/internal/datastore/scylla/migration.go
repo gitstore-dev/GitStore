@@ -61,10 +61,6 @@ func RunMigrations(ctx context.Context, rawSession *gocql.Session, keyspace, ins
 	reg.Add(migrate.CallComment, "log_tables", callbackLog)
 	migrate.Callback = reg.Callback
 
-	// Wait for schema agreement between migration files so that tables created
-	// in 001 are visible in Scylla's schema cache before 002's index statements run.
-	migrate.DefaultAwaitSchemaAgreement = migrate.AwaitSchemaAgreementBeforeEachFile
-
 	session := gocqlx.NewSession(rawSession)
 
 	pending, err := migrate.Pending(ctx, session, migrations.Files)
