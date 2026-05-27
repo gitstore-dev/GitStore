@@ -1,7 +1,3 @@
--- Migration 001: initial schema.
--- Assumes the keyspace already exists (provisioned by the operator / compose init).
--- UUID fields use text for Go string compatibility. Price uses decimal;
-
 CREATE TABLE IF NOT EXISTS products (
     id                 uuid       PRIMARY KEY,
     sku                text,
@@ -47,8 +43,27 @@ CREATE TABLE IF NOT EXISTS namespaces (
     display_name         text,
     tier                 text,
     parent_enterprise_id text,
-    created_at           bigint,
+    created_at           timestamp,
     created_by           text,
-    updated_at           bigint,
+    updated_at           timestamp,
     updated_by           text
+);
+
+CREATE TABLE IF NOT EXISTS repositories (
+    id              uuid      PRIMARY KEY,
+    namespace_id    uuid,
+    name            text,
+    default_branch  text,
+    storage_class   text,
+    created_at      timestamp,
+    created_by      text,
+    updated_at      timestamp,
+    updated_by      text
+);
+
+CREATE TABLE IF NOT EXISTS namespace_mappings (
+    namespace_id uuid,
+    name         text,
+    repo_id      uuid,
+    PRIMARY KEY  (namespace_id, name)
 );

@@ -117,3 +117,27 @@ func datastoreNamespaceTierToModel(t datastore.NamespaceTier) model.NamespaceTie
 		return model.NamespaceTierUser
 	}
 }
+
+// datastoreRepositoryToModel converts a datastore Repository to the GraphQL model.
+// ns may be nil if the namespace resolver has not been called yet; in that case
+// the Namespace field is left nil and must be resolved via a field resolver.
+func datastoreRepositoryToModel(r *datastore.Repository, ns *datastore.Namespace, dataDir string) *model.Repository {
+	if r == nil {
+		return nil
+	}
+	repo := &model.Repository{
+		ID:            mustEncodeNodeID(nodeKindRepository, r.ID),
+		Name:          r.Name,
+		DefaultBranch: r.DefaultBranch,
+		StorageClass:  r.StorageClass,
+		StoragePath:   fanoutStoragePath(dataDir, r.ID),
+		CreatedAt:     r.CreatedAt,
+		CreatedBy:     r.CreatedBy,
+		UpdatedAt:     r.UpdatedAt,
+		UpdatedBy:     r.UpdatedBy,
+	}
+	if ns != nil {
+		repo.Namespace = datastoreNamespaceToModel(ns)
+	}
+	return repo
+}

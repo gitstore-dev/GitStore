@@ -35,15 +35,20 @@ type CreateTagParams struct {
 	TargetCommitSha string // empty = HEAD
 }
 
-// CreateRepository provisions a new named repository on the git service.
-func (c *Client) CreateRepository(ctx context.Context, repositoryID string) error {
-	_, err := c.Git.CreateRepository(ctx, &gitv1.CreateRepositoryRequest{
+// CreateRepository provisions a new repository on the git service.
+// Returns the storage path reported by gitstore-git-service.
+func (c *Client) CreateRepository(ctx context.Context, repositoryID, storageClass string) (string, error) {
+	resp, err := c.Git.CreateRepository(ctx, &gitv1.CreateRepositoryRequest{
 		RepositoryId: repositoryID,
+		StorageClass: storageClass,
 	})
-	return err
+	if err != nil {
+		return "", err
+	}
+	return resp.StoragePath, nil
 }
 
-// DeleteRepository removes a named repository from the git service.
+// DeleteRepository removes a repository from the git service.
 func (c *Client) DeleteRepository(ctx context.Context, repositoryID string) error {
 	_, err := c.Git.DeleteRepository(ctx, &gitv1.DeleteRepositoryRequest{
 		RepositoryId: repositoryID,

@@ -67,7 +67,7 @@ var schema = &memdb.DBSchema{
 				"id": {
 					Name:    "id",
 					Unique:  true,
-					Indexer: &memdb.StringFieldIndex{Field: "ID"},
+					Indexer: &memdb.UUIDFieldIndex{Field: "ID"},
 				},
 				"identifier": {
 					Name:    "identifier",
@@ -78,6 +78,41 @@ var schema = &memdb.DBSchema{
 					Name:    "tier",
 					Unique:  false,
 					Indexer: &memdb.StringFieldIndex{Field: "Tier"},
+				},
+			},
+		},
+		"repository": {
+			Name: "repository",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {
+					Name:    "id",
+					Unique:  true,
+					Indexer: &memdb.UUIDFieldIndex{Field: "ID"},
+				},
+				"namespace_id": {
+					Name:    "namespace_id",
+					Unique:  false,
+					Indexer: &memdb.StringFieldIndex{Field: "NamespaceID"},
+				},
+			},
+		},
+		"namespace_mapping": {
+			Name: "namespace_mapping",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {
+					Name:   "id",
+					Unique: true,
+					Indexer: &memdb.CompoundIndex{
+						Indexes: []memdb.Indexer{
+							&memdb.UUIDFieldIndex{Field: "NamespaceID"},
+							&memdb.StringFieldIndex{Field: "Name"},
+						},
+					},
+				},
+				"repo_id": {
+					Name:    "repo_id",
+					Unique:  true,
+					Indexer: &memdb.UUIDFieldIndex{Field: "RepoID"},
 				},
 			},
 		},

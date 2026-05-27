@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 //
-// GitStore gRPC Git Service contract — v1 (010-repo-storage-identity revision)
+// Feature 010: Repository Storage Identity
 //
-// Changes from 007 baseline:
+// Changes from 007 baseline (shared/proto/gitstore/git/v1/git_service.proto):
+//
 //   - `repository_id` semantics clarified: the field now carries an opaque
-//     UUIDv7 (the internal repo_id), never a namespace-path string.
+//     UUIDv7 (the internal `repo_id`), never a namespace-path string.
 //     gitstore-git-service MUST NOT interpret this value as a filesystem path
 //     component directly; it MUST derive the path using the fanout formula.
+//
 //   - `CreateRepository` request gains `storage_class` field (optional, default
 //     "default") to support future multi-storage-root routing.
-//   - `CreateRepository` response gains `storage_path` field (informational).
+//
 //   - No field numbers, RPCs, or status codes removed (additive only).
 //
 // Path derivation (gitstore-git-service internal):
@@ -41,33 +43,19 @@ service GitService {
 
   // ── Read operations ────────────────────────────────────────────────────────
 
-  // GetFile returns the raw bytes of a single file at the given ref.
   rpc GetFile(GetFileRequest) returns (GetFileResponse);
-
-  // GetFileStream returns a file as a stream of byte chunks.
-  // Use for files larger than 1 MiB to avoid message size limits.
   rpc GetFileStream(GetFileStreamRequest) returns (stream GetFileStreamResponse);
-
-  // ListFiles enumerates file paths under an optional prefix at the given ref.
   rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
 
   // ── Write operations ───────────────────────────────────────────────────────
 
-  // CommitFile writes a single file and commits it to the default branch.
   rpc CommitFile(CommitFileRequest) returns (CommitFileResponse);
-
-  // DeleteFile removes a file and commits the deletion to the default branch.
   rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
 
   // ── Tag operations ─────────────────────────────────────────────────────────
 
-  // CreateTag creates an annotated tag on HEAD (or the specified commit).
   rpc CreateTag(CreateTagRequest) returns (CreateTagResponse);
-
-  // ListTags enumerates tags with an optional prefix filter.
   rpc ListTags(ListTagsRequest) returns (ListTagsResponse);
-
-  // GetLatestTag returns the latest semver release tag by version ordering.
   rpc GetLatestTag(GetLatestTagRequest) returns (GetLatestTagResponse);
 }
 
@@ -91,7 +79,6 @@ message CreateRepositoryResponse {
 }
 
 message DeleteRepositoryRequest {
-  // repository_id is the stable UUIDv7 of the repository to remove.
   string repository_id = 1;
 }
 
@@ -104,48 +91,39 @@ message DeleteRepositoryResponse {
 message GetFileRequest {
   // repository_id is the stable UUIDv7. See service-level contract note.
   string repository_id = 15;
-
-  // path is the file path relative to the repository root.
-  string path = 1;
-  // ref is a tag name, branch name, or full commit SHA.
-  string ref  = 2;
+  string path          = 1;
+  string ref           = 2;
 }
 
 message GetFileResponse {
   string path       = 1;
-  bytes  content    = 2; // raw file bytes; UTF-8 for markdown but treated opaque
-  string blob_sha   = 3; // 40-char hex SHA-1
+  bytes  content    = 2;
+  string blob_sha   = 3;
   uint64 size_bytes = 4;
 }
 
 message GetFileStreamRequest {
-  // repository_id identifies the target repository.
   string repository_id = 15;
-
-  // path is the file path relative to the repository root.
-  string path = 1;
-  // ref is a tag name, branch name, or full commit SHA.
-  string ref  = 2;
+  string path          = 1;
+  string ref           = 2;
 }
 
 message GetFileStreamResponse {
   uint32 chunk_index = 1;
-  bytes  data        = 2; // max 256 KiB per chunk
+  bytes  data        = 2;
   bool   is_last     = 3;
 }
 
 message ListFilesRequest {
-  // repository_id identifies the target repository.
   string repository_id = 15;
-
-  string ref         = 1;
-  string path_prefix = 2; // empty = repo root; e.g. "products/"
-  bool   recursive   = 3; // default true
+  string ref           = 1;
+  string path_prefix   = 2;
+  bool   recursive     = 3;
 }
 
 message ListFilesResponse {
   repeated FileEntry files          = 1;
-  string             ref_commit_sha = 2; // commit SHA the ref resolved to
+  string             ref_commit_sha = 2;
 }
 
 message FileEntry {
@@ -157,9 +135,7 @@ message FileEntry {
 // ─── Write messages ────────────────────────────────────────────────────────────
 
 message CommitFileRequest {
-  // repository_id identifies the target repository.
-  string repository_id = 15;
-
+  string repository_id  = 15;
   string path           = 1;
   bytes  content        = 2;
   string commit_message = 3;
@@ -168,14 +144,12 @@ message CommitFileRequest {
 }
 
 message CommitFileResponse {
-  string commit_sha = 1; // 40-char hex
-  string branch     = 2; // branch the commit was applied to
+  string commit_sha = 1;
+  string branch     = 2;
 }
 
 message DeleteFileRequest {
-  // repository_id identifies the target repository.
-  string repository_id = 15;
-
+  string repository_id  = 15;
   string path           = 1;
   string commit_message = 2;
   string author_name    = 3;
@@ -189,24 +163,20 @@ message DeleteFileResponse {
 // ─── Tag messages ──────────────────────────────────────────────────────────────
 
 message CreateTagRequest {
-  // repository_id identifies the target repository.
-  string repository_id = 15;
-
-  string tag_name          = 1; // semver e.g. "v1.2.0"
-  string message           = 2; // annotated tag message
-  string target_commit_sha = 3; // empty = HEAD
+  string repository_id     = 15;
+  string tag_name          = 1;
+  string message           = 2;
+  string target_commit_sha = 3;
 }
 
 message CreateTagResponse {
   string tag_name = 1;
-  string tag_sha  = 2; // tag object SHA
+  string tag_sha  = 2;
 }
 
 message ListTagsRequest {
-  // repository_id identifies the target repository.
   string repository_id = 15;
-
-  string prefix = 1; // e.g. "v"; empty = all tags
+  string prefix        = 1;
 }
 
 message ListTagsResponse {
@@ -214,19 +184,17 @@ message ListTagsResponse {
 }
 
 message GetLatestTagRequest {
-  // repository_id identifies the target repository.
   string repository_id = 15;
-
-  string prefix = 1; // default "v"
+  string prefix        = 1;
 }
 
 message GetLatestTagResponse {
   TagEntry tag   = 1;
-  bool     found = 2; // false if no matching tags exist
+  bool     found = 2;
 }
 
 message TagEntry {
-  string name       = 1; // short name e.g. "v1.2.0"
-  string commit_sha = 2; // peeled commit SHA
-  string message    = 3; // annotated tag message; empty for lightweight tags
+  string name       = 1;
+  string commit_sha = 2;
+  string message    = 3;
 }

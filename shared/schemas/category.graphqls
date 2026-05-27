@@ -199,6 +199,7 @@ input UpdateCategoryInput {
   body: String
 
   """
+  TODO: Should this be a datetime?
   Version for optimistic locking
   """
   version: DateTime!
@@ -309,11 +310,13 @@ Optimistic lock conflict for category
 """
 type CategoryOptimisticLockConflict {
   """
+  TODO: Should this be a datetime?
   Current version in database
   """
   currentVersion: DateTime!
 
   """
+  TODO: Should this be a datetime?
   Version client attempted to update
   """
   attemptedVersion: DateTime!

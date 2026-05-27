@@ -218,6 +218,87 @@ func (d *InstrumentedDatastore) DeleteNamespace(ctx context.Context, id string) 
 	return err
 }
 
+// ── Repository ────────────────────────────────────────────────────────────
+
+func (d *InstrumentedDatastore) CreateRepository(ctx context.Context, r *Repository) error {
+	start := time.Now()
+	err := d.next.CreateRepository(ctx, r)
+	d.observe("CreateRepository", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) GetRepository(ctx context.Context, id string) (*Repository, error) {
+	start := time.Now()
+	v, err := d.next.GetRepository(ctx, id)
+	d.observe("GetRepository", start, err)
+	return v, err
+}
+
+func (d *InstrumentedDatastore) ListRepositoriesByNamespace(ctx context.Context, namespaceID string) ([]*Repository, error) {
+	start := time.Now()
+	v, err := d.next.ListRepositoriesByNamespace(ctx, namespaceID)
+	d.observe("ListRepositoriesByNamespace", start, err)
+	return v, err
+}
+
+func (d *InstrumentedDatastore) UpdateRepository(ctx context.Context, r *Repository) error {
+	start := time.Now()
+	err := d.next.UpdateRepository(ctx, r)
+	d.observe("UpdateRepository", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) DeleteRepository(ctx context.Context, id string) error {
+	start := time.Now()
+	err := d.next.DeleteRepository(ctx, id)
+	d.observe("DeleteRepository", start, err)
+	return err
+}
+
+// ── NamespaceMapping ──────────────────────────────────────────────────────
+
+func (d *InstrumentedDatastore) CreateNamespaceMapping(ctx context.Context, m *NamespaceMapping) error {
+	start := time.Now()
+	err := d.next.CreateNamespaceMapping(ctx, m)
+	d.observe("CreateNamespaceMapping", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) LookupRepository(ctx context.Context, namespaceID, name string) (*NamespaceMapping, error) {
+	start := time.Now()
+	v, err := d.next.LookupRepository(ctx, namespaceID, name)
+	d.observe("LookupRepository", start, err)
+	return v, err
+}
+
+func (d *InstrumentedDatastore) LookupNamespaceByRepoID(ctx context.Context, repoID string) (*NamespaceMapping, error) {
+	start := time.Now()
+	v, err := d.next.LookupNamespaceByRepoID(ctx, repoID)
+	d.observe("LookupNamespaceByRepoID", start, err)
+	return v, err
+}
+
+func (d *InstrumentedDatastore) RenameRepository(ctx context.Context, namespaceID, oldName, newName string) error {
+	start := time.Now()
+	err := d.next.RenameRepository(ctx, namespaceID, oldName, newName)
+	d.observe("RenameRepository", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) TransferRepository(ctx context.Context, repoID, fromNamespaceID, toNamespaceID string) error {
+	start := time.Now()
+	err := d.next.TransferRepository(ctx, repoID, fromNamespaceID, toNamespaceID)
+	d.observe("TransferRepository", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) DeleteNamespaceMapping(ctx context.Context, namespaceID, name string) error {
+	start := time.Now()
+	err := d.next.DeleteNamespaceMapping(ctx, namespaceID, name)
+	d.observe("DeleteNamespaceMapping", start, err)
+	return err
+}
+
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 
 func (d *InstrumentedDatastore) Close() error {

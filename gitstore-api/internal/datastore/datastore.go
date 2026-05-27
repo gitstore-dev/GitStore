@@ -59,6 +59,21 @@ type Datastore interface {
 	ListNamespaces(ctx context.Context) ([]*Namespace, error)
 	DeleteNamespace(ctx context.Context, id string) error
 
+	// Repository operations
+	CreateRepository(ctx context.Context, r *Repository) error
+	GetRepository(ctx context.Context, id string) (*Repository, error)
+	ListRepositoriesByNamespace(ctx context.Context, namespaceID string) ([]*Repository, error)
+	UpdateRepository(ctx context.Context, r *Repository) error
+	DeleteRepository(ctx context.Context, id string) error
+
+	// NamespaceMapping operations (lookup contract)
+	CreateNamespaceMapping(ctx context.Context, m *NamespaceMapping) error
+	LookupRepository(ctx context.Context, namespaceID, name string) (*NamespaceMapping, error)
+	LookupNamespaceByRepoID(ctx context.Context, repoID string) (*NamespaceMapping, error)
+	RenameRepository(ctx context.Context, namespaceID, oldName, newName string) error
+	TransferRepository(ctx context.Context, repoID, fromNamespaceID, toNamespaceID string) error
+	DeleteNamespaceMapping(ctx context.Context, namespaceID, name string) error
+
 	// Lifecycle
 	Close() error
 }
