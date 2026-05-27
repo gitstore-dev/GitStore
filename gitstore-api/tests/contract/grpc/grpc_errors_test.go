@@ -127,7 +127,8 @@ func TestGRPCGetLatestTagEmptyRepo(t *testing.T) {
 
 	// Provision a fresh (empty) repository — no tags in it.
 	c.RepositoryID = "empty-repo"
-	require.NoError(t, c.CreateRepository(ctx, "empty-repo"))
+	_, err = c.CreateRepository(ctx, "empty-repo", "default")
+	require.NoError(t, err)
 
 	_, err = c.GetLatestTag(ctx)
 	assert.Error(t, err, "GetLatestTag on empty repo should return an error")

@@ -70,7 +70,7 @@ func TestMain(m *testing.M) {
 	// Provision the shared repository used by catalogue load and reload tests.
 	setupClient, err := gitclient.NewClientWithAddr(sharedGRPCAddr)
 	if err == nil {
-		_ = setupClient.CreateRepository(ctx, sharedRepoID)
+		_, _ = setupClient.CreateRepository(ctx, sharedRepoID, "default")
 		_ = setupClient.Close()
 	}
 

@@ -39,8 +39,8 @@ func startMutationContainer(t *testing.T) (*gitclient.Client, func()) {
 	// Use the test name as repo ID (sanitised to be a valid name).
 	repoID := sanitiseRepoID(t.Name())
 	client.RepositoryID = repoID
-	require.NoError(t, client.CreateRepository(context.Background(), repoID),
-		"failed to create test repository %q", repoID)
+	_, err = client.CreateRepository(context.Background(), repoID, "default")
+	require.NoError(t, err, "failed to create test repository %q", repoID)
 
 	cleanup := func() {
 		_ = client.DeleteRepository(context.Background(), repoID)
