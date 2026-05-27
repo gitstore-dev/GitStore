@@ -37,9 +37,18 @@ func fromMappingRow(r *namespaceMappingRow) *datastore.NamespaceMapping {
 
 func (s *scyllaDatastore) CreateNamespaceMapping(_ context.Context, m *datastore.NamespaceMapping) error {
 	row := toMappingRow(m)
-	stmt, names := s.namespaceMappingTable.Insert()
-	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
+	// LWT: INSERT IF NOT EXISTS so a duplicate (namespace_id, name) returns
+	// ErrAlreadyExists instead of silently overwriting another repo's mapping.
+	stmt, names := qb.Insert("namespace_mappings").
+		Columns(s.namespaceMappingTable.Metadata().Columns...).
+		Unique().
+		ToCql()
+	applied, err := s.session.Query(stmt, names).BindStruct(row).ExecCASRelease()
+	if err != nil {
 		return fmt.Errorf("scylla: create namespace_mapping: %w", err)
+	}
+	if !applied {
+		return fmt.Errorf("%w: namespace_mapping (%s, %s)", datastore.ErrAlreadyExists, m.NamespaceID, m.Name)
 	}
 	return nil
 }
@@ -76,14 +85,16 @@ func (s *scyllaDatastore) RenameRepository(ctx context.Context, namespaceID, old
 	if err != nil {
 		return err
 	}
-	if err := s.DeleteNamespaceMapping(ctx, namespaceID, oldName); err != nil {
-		return err
-	}
-	return s.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
+	// Insert the new name first via LWT; if the target name is already taken,
+	// CreateNamespaceMapping returns ErrAlreadyExists and the old mapping stays intact.
+	if err := s.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
 		NamespaceID: namespaceID,
 		Name:        newName,
 		RepoID:      old.RepoID,
-	})
+	}); err != nil {
+		return err
+	}
+	return s.DeleteNamespaceMapping(ctx, namespaceID, oldName)
 }
 
 func (s *scyllaDatastore) TransferRepository(ctx context.Context, repoID, fromNamespaceID, toNamespaceID string) error {
@@ -91,14 +102,16 @@ func (s *scyllaDatastore) TransferRepository(ctx context.Context, repoID, fromNa
 	if err != nil {
 		return err
 	}
-	if err := s.DeleteNamespaceMapping(ctx, fromNamespaceID, old.Name); err != nil {
-		return err
-	}
-	return s.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
+	// Insert the destination mapping first via LWT so we don't clobber an
+	// existing repo with the same name in the target namespace.
+	if err := s.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
 		NamespaceID: toNamespaceID,
 		Name:        old.Name,
 		RepoID:      repoID,
-	})
+	}); err != nil {
+		return err
+	}
+	return s.DeleteNamespaceMapping(ctx, fromNamespaceID, old.Name)
 }
 
 func (s *scyllaDatastore) DeleteNamespaceMapping(_ context.Context, namespaceID, name string) error {
