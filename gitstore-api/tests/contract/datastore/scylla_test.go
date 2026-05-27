@@ -82,6 +82,9 @@ func provisionKeyspace(addr, keyspace string) {
 	if err := session.Query(stmt).Exec(); err != nil {
 		panic("provisionKeyspace: create keyspace: " + err.Error())
 	}
+	if err := session.AwaitSchemaAgreement(); err != nil {
+		panic("provisionKeyspace: await schema agreement: " + err.Error())
+	}
 }
 
 func dropKeyspace(addr, keyspace string) {
