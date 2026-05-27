@@ -17,6 +17,7 @@ services:
       - GITSTORE_GRPC__PORT=50051
       - GITSTORE_GIT__DATA_DIR=/data/repos
       - GITSTORE_LOG__LEVEL=info
+      - GITSTORE_LOG__FORMAT=json
       - GITSTORE_GIT__REPO__MAX_FILE_SIZE=52428800
     networks:
       - gitstore-network
@@ -48,6 +49,7 @@ services:
       - GITSTORE_AUTH__JWT__SECRET=${GITSTORE_AUTH__JWT__SECRET}
       - GITSTORE_CACHE__TTL=300
       - GITSTORE_LOG__LEVEL=info
+      - GITSTORE_LOG__FORMAT=json
     networks:
       - gitstore-network
     healthcheck:

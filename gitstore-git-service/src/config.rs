@@ -34,6 +34,7 @@ pub struct RepoConfig {
 #[derive(Debug, serde::Deserialize)]
 pub struct LogConfig {
     pub level: String,
+    pub format: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -112,6 +113,13 @@ impl AppConfig {
         if self.git.repo.max_file_size == 0 {
             errors.push("git.repo.max_file_size must be positive".to_string());
         }
+        match self.log.format.to_ascii_lowercase().as_str() {
+            "json" | "text" => {}
+            _ => errors.push(format!(
+                "log.format must be one of: json, text (got: {})",
+                self.log.format
+            )),
+        }
         // All three ports must be distinct
         if self.http.port != 0
             && self.ws.port != 0
@@ -165,6 +173,7 @@ pub fn load_config_from(config_file: Option<&str>) -> Result<AppConfig, config::
         grpc_port = cfg.grpc.port,
         data_dir = %cfg.git.data_dir,
         log_level = %cfg.log.level,
+        log_format = %cfg.log.format,
         max_file_size = cfg.git.repo.max_file_size,
         max_pack_size_bytes = cfg.git.max_pack_size_bytes,
         "resolved configuration"
@@ -192,6 +201,7 @@ max_file_size = 52428800
 
 [log]
 level = "info"
+format = "json"
 
 [hooks.git_receive_pack]
 pre_receive  = { enabled = false }
@@ -222,6 +232,7 @@ mod tests {
             "GITSTORE_GRPC__PORT",
             "GITSTORE_GIT__DATA_DIR",
             "GITSTORE_LOG__LEVEL",
+            "GITSTORE_LOG__FORMAT",
             "GITSTORE_GIT__REPO__MAX_FILE_SIZE",
         ];
         for k in &keys {
@@ -241,6 +252,7 @@ mod tests {
         assert_eq!(cfg.grpc.port, 50051);
         assert_eq!(cfg.git.data_dir, "/data/repos");
         assert_eq!(cfg.log.level, "info");
+        assert_eq!(cfg.log.format, "json");
         assert_eq!(cfg.git.repo.max_file_size, 52428800);
     }
 
@@ -250,9 +262,11 @@ mod tests {
         clear_env();
         env::set_var("GITSTORE_HTTP__PORT", "8000");
         env::set_var("GITSTORE_LOG__LEVEL", "debug");
+        env::set_var("GITSTORE_LOG__FORMAT", "text");
         let cfg = load_config_from(None).expect("load_config failed");
         assert_eq!(cfg.http.port, 8000);
         assert_eq!(cfg.log.level, "debug");
+        assert_eq!(cfg.log.format, "text");
         clear_env();
     }
 
@@ -266,7 +280,7 @@ mod tests {
         let file_path = dir.path().join("custom_config.toml");
         std::fs::write(
             &file_path,
-            "[http]\nport = 7777\n[ws]\nport = 7778\n[log]\nlevel = \"warn\"\n",
+            "[http]\nport = 7777\n[ws]\nport = 7778\n[log]\nlevel = \"warn\"\nformat = \"text\"\n",
         )
         .expect("write config");
         // Strip the .toml extension — File::with_name adds it when probing
@@ -276,6 +290,7 @@ mod tests {
         assert_eq!(cfg.http.port, 7777);
         assert_eq!(cfg.ws.port, 7778);
         assert_eq!(cfg.log.level, "warn");
+        assert_eq!(cfg.log.format, "text");
     }
 
     #[test]
@@ -387,6 +402,19 @@ mod tests {
             err.to_string().contains("http.port"),
             "error should mention http.port, got: {err}"
         );
+        clear_env();
+    }
+
+    #[test]
+    fn test_validate_invalid_log_format() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var("GITSTORE_LOG__FORMAT", "xml");
+        let cfg = load_config_from(None).expect("load failed");
+        let result = cfg.validate();
+        assert!(result.is_err(), "expected validation error for log.format");
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("log.format"));
         clear_env();
     }
 

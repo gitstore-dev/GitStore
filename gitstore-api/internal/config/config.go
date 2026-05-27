@@ -68,7 +68,8 @@ type CacheConfig struct {
 
 // LogConfig holds logger settings.
 type LogConfig struct {
-	Level string `mapstructure:"level"`
+	Level  string `mapstructure:"level"`
+	Format string `mapstructure:"format"`
 }
 
 // DatastoreConfig selects the active storage backend.
@@ -104,6 +105,7 @@ func Load() (*Config, error) {
 	v.SetDefault("git.http.uri", "http://localhost:9418")
 	v.SetDefault("cache.ttl", 300)
 	v.SetDefault("log.level", "info")
+	v.SetDefault("log.format", "json")
 	v.SetDefault("auth.admin.username", "")
 	v.SetDefault("auth.admin.password_hash", "")
 	v.SetDefault("auth.jwt.secret", "")
@@ -147,7 +149,7 @@ func Load() (*Config, error) {
 	// Warn about keys present in the config file that are not in the known schema.
 	knownKeys := map[string]bool{
 		"api.port": true, "git.grpc.uri": true, "git.ws.uri": true, "git.http.uri": true,
-		"cache.ttl": true, "log.level": true,
+		"cache.ttl": true, "log.level": true, "log.format": true,
 		"auth.admin.username": true, "auth.admin.password_hash": true,
 		"auth.jwt.secret": true, "auth.jwt.duration": true, "auth.jwt.issuer": true,
 		"datastore.backend": true, "datastore.scylla.hosts": true,
@@ -182,7 +184,10 @@ func validateConfig(cfg *Config) error {
 		}
 		return err
 	}
-	return validateDatastoreConfig(&cfg.Datastore)
+	if err := validateDatastoreConfig(&cfg.Datastore); err != nil {
+		return err
+	}
+	return validateLogFormat(&cfg.Log)
 }
 
 // validateDatastoreConfig validates backend selection and ScyllaDB settings.
@@ -196,6 +201,20 @@ func validateDatastoreConfig(ds *DatastoreConfig) error {
 		return nil
 	default:
 		return fmt.Errorf("invalid datastore backend %q; valid values: memdb, scylla", ds.Backend)
+	}
+}
+
+// validateLogFormat validates and normalizes the configured log encoding.
+func validateLogFormat(log *LogConfig) error {
+	switch strings.ToLower(log.Format) {
+	case "json":
+		log.Format = "json"
+		return nil
+	case "text":
+		log.Format = "text"
+		return nil
+	default:
+		return fmt.Errorf("invalid log format %q; valid values: json, text", log.Format)
 	}
 }
 
@@ -213,6 +232,7 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddString("auth.jwt.issuer", c.Auth.JWT.Issuer)
 	enc.AddInt("cache.ttl", c.Cache.TTL)
 	enc.AddString("log.level", c.Log.Level)
+	enc.AddString("log.format", c.Log.Format)
 	enc.AddString("datastore.backend", c.Datastore.Backend)
 	enc.AddString("datastore.scylla.password", redact(c.Datastore.Scylla.Password))
 	return nil

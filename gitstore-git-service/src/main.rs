@@ -45,7 +45,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let start_time = Instant::now();
 
-    gitstore::init_logging();
+    gitstore::init_logging(&cfg.log.level, &cfg.log.format)
+        .map_err(|e| format!("Failed to initialize logger: {e}"))?;
 
     info!(
         http_port = cfg.http.port,

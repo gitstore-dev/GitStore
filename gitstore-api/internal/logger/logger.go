@@ -6,15 +6,18 @@
 package logger
 
 import (
+	"fmt"
+	"strings"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 var Log *zap.Logger
 
-// InitLogger initializes the global structured logger with the given log level string.
+// InitLogger initializes the global structured logger with the given log level and format.
 // If logLevel is empty or invalid, INFO level is used.
-func InitLogger(logLevel string) error {
+func InitLogger(logLevel, logFormat string) error {
 	config := zap.NewProductionConfig()
 
 	level, err := zapcore.ParseLevel(logLevel)
@@ -23,8 +26,15 @@ func InitLogger(logLevel string) error {
 	}
 	config.Level = zap.NewAtomicLevelAt(level)
 
-	// JSON encoding for structured logs
-	config.Encoding = "json"
+	switch strings.ToLower(logFormat) {
+	case "", "json":
+		config.Encoding = "json"
+	case "text":
+		config.Encoding = "console"
+	default:
+		return fmt.Errorf("invalid log format %q; valid values: json, text", logFormat)
+	}
+
 	config.EncoderConfig.TimeKey = "timestamp"
 	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 
