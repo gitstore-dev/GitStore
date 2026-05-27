@@ -19,6 +19,33 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 ## Commands
 
 ### Workspace
+- `make help` — list root commands and common variables.
+- `make git` — run `gitstore-git-service` locally in the foreground using `GIT_DATA_DIR` (default: `.gitstore/repos`).
+- `make api` — run `gitstore-api` locally in the foreground. Requires `gitstore-api/.env` or shell env for required auth secrets.
+- `make dev` — run the native git service and API together in the foreground with shutdown trapping.
+- `make compose` — run the core Docker Compose stack (API + git service) in the foreground.
+- `DETACH=1 make compose` — run the core Docker Compose stack in the background.
+- `make scylla` — run only local Scylla services from `compose.yml` + `compose.scylla.yml`.
+- `make compose-scylla` — run the full core stack with Scylla from `compose.yml` + `compose.scylla.yml`.
+- `DETACH=1 make scylla` and `DETACH=1 make compose-scylla` — run those compose targets in the background.
+- `make ps`, `make logs`, `make stop`, `make down` — compose lifecycle helpers. Use `SERVICE=<name>` with `logs` or `stop` to scope the command.
+- `make bootstrap-token ADMIN_PASSWORD=<password>` — authenticate against GraphQL and print/cache a bootstrap bearer token.
+- `make bootstrap ADMIN_PASSWORD=<password>` — create the default namespace and repository through the running API.
+- `make bootstrap-namespace` / `make bootstrap-repository` — create only one bootstrap resource. `bootstrap-repository` requires the namespace to exist.
+- `make git-clean-data CONFIRM=1` — remove the native local git-service repository data directory only; does not remove Docker volumes.
+- `make build`, `make test`, `make lint`, `make license-check`, `make pr-ready` — aggregate development and PR readiness checks.
+- `make admin-compose`, `make admin-stop`, `make admin-down`, `make admin-logs` — optional admin compose wrappers.
+
+Common bootstrap variables:
+- `API_URL ?= http://localhost:4000/graphql`
+- `ADMIN_USERNAME ?= admin`
+- `ADMIN_PASSWORD` is required unless `BOOTSTRAP_TOKEN` is provided or a cached bootstrap token exists.
+- `BOOTSTRAP_TOKEN` overrides login/cached-token lookup.
+- `NAMESPACE ?= gitstore`
+- `NAMESPACE_DISPLAY_NAME ?= GitStore`
+- `NAMESPACE_TIER ?= USER`
+- `REPOSITORY ?= catalog`
+- `DEFAULT_BRANCH ?= main`
 
 ## Code Style
 
@@ -33,42 +60,12 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 <!-- MANUAL ADDITIONS START -->
 ## Development Guidelines
 
-- Before creating a PR do the following checks:
+- The root `Makefile` is the canonical command interface for this repository. Future repo-level commands must be added to the root `Makefile` and documented in this file.
+
+- Before creating a PR run:
 
   ```bash
-  # Check formatting and clippy for Rust
-  cd gitstore-git-service
-  cargo fmt --all -- --check
-  cargo clippy --all-targets --all-features -- -D warnings
-  cargo build --verbose
-  cargo test --verbose
-
-  # Check formatting and linting for Go
-  cd ../gitstore-api
-  if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
-      echo "The following files need formatting:"
-      gofmt -s -l .
-      exit 1
-  fi
-  go vet ./...
-  # Setup $GOPATH/bin in PATH if not already
-  go install honnef.co/go/tools/cmd/staticcheck@latest
-  staticcheck ./...
-  go build -v ./...
-  go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-
-  # Check Go license headers (all files + branch diff)
-  cd ..
-  ./scripts/check-go-license-headers.sh --all
-  ./scripts/check-go-license-headers.sh --diff-base origin/main
-
-  # Check Rust license headers (all files + branch diff)
-  ./scripts/check-rust-license-headers.sh --all
-  ./scripts/check-rust-license-headers.sh --diff-base origin/main
-
-  # Check TypeScript/JavaScript license headers (all files + branch diff)
-  ./scripts/check-js-license-headers.sh --all
-  ./scripts/check-js-license-headers.sh --diff-base origin/main
+  make pr-ready
   ```
 
 - Install git hooks once per clone so staged Go/Rust/TS/JS files are checked automatically:

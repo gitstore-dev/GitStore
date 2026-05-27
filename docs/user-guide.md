@@ -31,6 +31,7 @@ Both workflows use git as the source of truth, ensuring version control, auditab
 ### Prerequisites
 
 - Git installed on your system
+- Make, curl, and jq
 - Docker and Docker Compose (for running GitStore services)
 
 ### Quick Start
@@ -39,18 +40,22 @@ Demo data seeding will be provided in a future feature.
 
 1. **Start GitStore services**:
    ```bash
-   export COMPOSE_BAKE=true
-   docker compose up -d
+   make compose DETACH=1
    ```
 
-3. **Wait for services to be healthy** (10-15 seconds):
+2. **Wait for services to be healthy** (10-15 seconds):
    ```bash
-   docker compose ps
+   make ps
    ```
 
-4. **Clone the catalog repository**:
+3. **Create a namespace and catalog repository**:
    ```bash
-   git clone http://localhost:9418/catalog.git catalog-work
+   make bootstrap ADMIN_PASSWORD=<admin-password>
+   ```
+
+4. **Clone the catalog repository** using the clone URL printed by `make bootstrap`:
+   ```bash
+   git clone http://localhost:9418/<repository-id> catalog-work
    cd catalog-work
    ```
 
@@ -398,12 +403,13 @@ GitStore only reads from release tags, not from main/HEAD.
 
 **Problem**: GraphQL API returns "repository does not exist" error.
 
-**Solution**: Verify the catalog repository is initialized:
+**Solution**: Verify the repository was bootstrapped and the git service is healthy:
 ```bash
-ls -la demo-catalog/catalog.git/
+make ps
+make logs SERVICE=git-service
 ```
 
-Check Docker volume mounts in `docker-compose.yml`.
+If you are using native services, check `GIT_DATA_DIR` and recreate the starter repository with `make bootstrap`.
 
 ### Admin shows stale data or merge conflicts
 
