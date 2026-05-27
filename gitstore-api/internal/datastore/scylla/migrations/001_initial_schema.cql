@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS repositories (
 );
 
 -- namespace_mappings: composite primary key enables O(1) lookup by (namespace_id, name).
--- Storage path is derived from repo_id using the fanout formula; it is NOT stored here.
+-- Storage path is derived from repo_id using the fanout formula and is NOT stored here.
 CREATE TABLE IF NOT EXISTS namespace_mappings (
     namespace_id uuid,
     name         text,
