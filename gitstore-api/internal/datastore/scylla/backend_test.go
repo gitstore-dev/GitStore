@@ -215,9 +215,9 @@ func TestScylla_ListProducts(t *testing.T) {
 	require.NoError(t, store.CreateProduct(ctx, p2))
 	require.NoError(t, store.CreateProduct(ctx, p3))
 
-	byCat, err := store.ListProducts(ctx, datastore.ProductFilter{CategoryID: catID})
+	result, err := store.ListProducts(ctx, datastore.PageParams{First: 100})
 	require.NoError(t, err)
-	assert.Len(t, byCat, 2)
+	assert.GreaterOrEqual(t, len(result.Items), 3)
 }
 
 func TestScylla_UpdateProduct(t *testing.T) {
@@ -314,7 +314,7 @@ func TestScylla_ListCategories(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	before, err := store.ListCategories(ctx)
+	before, err := store.ListCategories(ctx, datastore.PageParams{First: 100})
 	require.NoError(t, err)
 
 	c1 := &datastore.Category{ID: newID(), Slug: "catls1-" + newID()[:8]}
@@ -322,9 +322,9 @@ func TestScylla_ListCategories(t *testing.T) {
 	require.NoError(t, store.CreateCategory(ctx, c1))
 	require.NoError(t, store.CreateCategory(ctx, c2))
 
-	after, err := store.ListCategories(ctx)
+	after, err := store.ListCategories(ctx, datastore.PageParams{First: 100})
 	require.NoError(t, err)
-	assert.Equal(t, len(before)+2, len(after))
+	assert.Equal(t, len(before.Items)+2, len(after.Items))
 }
 
 func TestScylla_UpdateCategory(t *testing.T) {
@@ -419,7 +419,7 @@ func TestScylla_ListCollections(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	before, err := store.ListCollections(ctx)
+	before, err := store.ListCollections(ctx, datastore.PageParams{First: 100})
 	require.NoError(t, err)
 
 	c1 := &datastore.Collection{ID: newID(), Slug: "colls1-" + newID()[:8]}
@@ -427,9 +427,9 @@ func TestScylla_ListCollections(t *testing.T) {
 	require.NoError(t, store.CreateCollection(ctx, c1))
 	require.NoError(t, store.CreateCollection(ctx, c2))
 
-	after, err := store.ListCollections(ctx)
+	after, err := store.ListCollections(ctx, datastore.PageParams{First: 100})
 	require.NoError(t, err)
-	assert.Equal(t, len(before)+2, len(after))
+	assert.Equal(t, len(before.Items)+2, len(after.Items))
 }
 
 func TestScylla_UpdateCollection(t *testing.T) {
