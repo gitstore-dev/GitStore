@@ -21,41 +21,24 @@ func (r *productResolver) Category(ctx context.Context, obj *model.Product) (*mo
 		return nil, err
 	}
 
-	// Get product from catalog to find category ID
-	catalogProduct, err := r.service.GetProductByID(ctx, productID)
+	product, err := r.service.GetProductByID(ctx, productID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get product: %w", err)
 	}
 
-	// If no category assigned, return nil (should not happen per schema, but handle gracefully)
-	if catalogProduct.CategoryID == "" {
+	if product.CategoryID == "" {
 		return nil, nil
 	}
 
-	// Try to use DataLoader first (batches lookups to prevent N+1)
-	if loaders := r.getLoaders(ctx); loaders != nil && loaders.Category != nil {
-		catalogCategory, err := loaders.Category.Load(ctx, catalogProduct.CategoryID)
-		if err != nil || catalogCategory == nil {
-			// Category reference is orphaned - log but don't fail
-			r.logger.Warn("Product references non-existent category",
-				zap.String("product_id", productID),
-				zap.String("category_id", catalogProduct.CategoryID))
-			return nil, nil
-		}
-		return CatalogCategoryToGraphQL(catalogCategory), nil
-	}
-
-	// Fallback to direct lookup if DataLoader not available
-	catalogCategory, err := r.service.GetCategoryByID(ctx, catalogProduct.CategoryID)
+	category, err := r.service.GetCategoryByID(ctx, product.CategoryID)
 	if err != nil {
-		// Category reference is orphaned - log but don't fail
 		r.logger.Warn("Product references non-existent category",
 			zap.String("product_id", productID),
-			zap.String("category_id", catalogProduct.CategoryID))
+			zap.String("category_id", product.CategoryID))
 		return nil, nil
 	}
 
-	return CatalogCategoryToGraphQL(catalogCategory), nil
+	return DatastoreCategoryToGraphQL(category), nil
 }
 
 // Collections is the resolver for the collections field.
@@ -65,47 +48,25 @@ func (r *productResolver) Collections(ctx context.Context, obj *model.Product) (
 		return nil, err
 	}
 
-	// Get product from catalog to find collection IDs
-	catalogProduct, err := r.service.GetProductByID(ctx, productID)
+	product, err := r.service.GetProductByID(ctx, productID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get product: %w", err)
 	}
 
-	// If no collections assigned, return empty list
-	if len(catalogProduct.CollectionIDs) == 0 {
+	if len(product.CollectionIDs) == 0 {
 		return []*model.Collection{}, nil
 	}
 
-	// Try to use DataLoader first (batches lookups to prevent N+1)
-	if loaders := r.getLoaders(ctx); loaders != nil && loaders.Collection != nil {
-		catalogCollections, errs := loaders.Collection.LoadMany(ctx, catalogProduct.CollectionIDs)
-
-		collections := make([]*model.Collection, 0, len(catalogProduct.CollectionIDs))
-		for i, catalogCollection := range catalogCollections {
-			if errs[i] != nil || catalogCollection == nil {
-				// Collection reference is orphaned - log but continue
-				r.logger.Warn("Product references non-existent collection",
-					zap.String("product_id", productID),
-					zap.String("collection_id", catalogProduct.CollectionIDs[i]))
-				continue
-			}
-			collections = append(collections, CatalogCollectionToGraphQL(catalogCollection))
-		}
-		return collections, nil
-	}
-
-	// Fallback to direct lookup if DataLoader not available
-	collections := make([]*model.Collection, 0, len(catalogProduct.CollectionIDs))
-	for _, collectionID := range catalogProduct.CollectionIDs {
-		catalogCollection, err := r.service.GetCollectionByID(ctx, collectionID)
+	collections := make([]*model.Collection, 0, len(product.CollectionIDs))
+	for _, collectionID := range product.CollectionIDs {
+		collection, err := r.service.GetCollectionByID(ctx, collectionID)
 		if err != nil {
-			// Collection reference is orphaned - log but continue
 			r.logger.Warn("Product references non-existent collection",
 				zap.String("product_id", productID),
 				zap.String("collection_id", collectionID))
 			continue
 		}
-		collections = append(collections, CatalogCollectionToGraphQL(catalogCollection))
+		collections = append(collections, DatastoreCollectionToGraphQL(collection))
 	}
 
 	return collections, nil

@@ -575,22 +575,6 @@ type ProductEdge struct {
 	Node *Product `json:"node"`
 }
 
-// Product filter options
-type ProductFilter struct {
-	// Filter by category ID (includes subcategory products)
-	CategoryID *string `json:"categoryId,omitempty"`
-	// Filter by collection ID
-	CollectionID *string `json:"collectionId,omitempty"`
-	// Filter by inventory status
-	InventoryStatus *InventoryStatus `json:"inventoryStatus,omitempty"`
-	// Filter by minimum price
-	PriceMin *scalar.Decimal `json:"priceMin,omitempty"`
-	// Filter by maximum price
-	PriceMax *scalar.Decimal `json:"priceMax,omitempty"`
-	// Search query (title, description, SKU)
-	Search *string `json:"search,omitempty"`
-}
-
 // Input for publishing catalog changes
 type PublishCatalogInput struct {
 	// Client mutation ID (Relay pattern)
@@ -715,8 +699,9 @@ type RepositoryBy struct {
 }
 
 type RepositoryConnection struct {
-	Edges    []*RepositoryEdge `json:"edges"`
-	PageInfo *PageInfo         `json:"pageInfo"`
+	Edges      []*RepositoryEdge `json:"edges"`
+	PageInfo   *PageInfo         `json:"pageInfo"`
+	TotalCount int32             `json:"totalCount"`
 }
 
 type RepositoryEdge struct {

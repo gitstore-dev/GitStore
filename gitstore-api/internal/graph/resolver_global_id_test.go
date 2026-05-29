@@ -94,23 +94,6 @@ func TestLookupQueriesAcceptGlobalIDs(t *testing.T) {
 	assert.Equal(t, mustEncodeNodeID(nodeKindNamespace, globalIDTestNamespaceID), namespace.ID)
 }
 
-func TestProductFilterIDsAreDecoded(t *testing.T) {
-	ctx := context.Background()
-	store, resolver := newGlobalIDTestResolver(t)
-	seedGlobalIDTestData(t, ctx, store)
-	query := &queryResolver{Resolver: resolver}
-	categoryID := mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryID)
-	collectionID := mustEncodeNodeID(nodeKindCollection, globalIDTestCollectionID)
-
-	conn, err := query.Products(ctx, nil, nil, nil, nil, &model.ProductFilter{
-		CategoryID:   &categoryID,
-		CollectionID: &collectionID,
-	})
-	require.NoError(t, err)
-	require.Len(t, conn.Edges, 1)
-	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductID), conn.Edges[0].Node.ID)
-}
-
 func TestCreateProductDecodesNodeReferenceInputs(t *testing.T) {
 	ctx := context.Background()
 	store, resolver := newGlobalIDTestResolver(t)

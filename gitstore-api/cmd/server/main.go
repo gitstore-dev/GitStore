@@ -24,7 +24,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/handler"
 	"github.com/gitstore-dev/gitstore/api/internal/health"
-	"github.com/gitstore-dev/gitstore/api/internal/loader"
 	"github.com/gitstore-dev/gitstore/api/internal/logger"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	"go.uber.org/zap"
@@ -141,8 +140,6 @@ func newGraphQLHandler(store datastore.Datastore, writer graph.GitWriter, log *z
 	gqlServer := gqlhandler.NewDefaultServer(schema)
 
 	gqlHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := loader.Middleware(store, log)(r.Context())
-		r = r.WithContext(ctx)
 		gqlServer.ServeHTTP(w, r)
 	})
 

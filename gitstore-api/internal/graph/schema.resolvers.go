@@ -57,17 +57,14 @@ func (r *mutationResolver) CreateProduct(ctx context.Context, input model.Create
 	}
 
 	// Create product via service
-	catalogProduct, err := r.service.CreateProduct(ctx, serviceInput)
+	product, err := r.service.CreateProduct(ctx, serviceInput)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create product: %w", err)
 	}
 
-	// Convert to GraphQL model
-	product := CatalogProductToGraphQL(catalogProduct)
-
 	return &model.CreateProductPayload{
 		ClientMutationID: input.ClientMutationID,
-		Product:          product,
+		Product:          DatastoreProductToGraphQL(product),
 	}, nil
 }
 
@@ -125,17 +122,14 @@ func (r *mutationResolver) UpdateProduct(ctx context.Context, input model.Update
 	}
 
 	// Update product via service
-	catalogProduct, err := r.service.UpdateProduct(ctx, productID, serviceInput)
+	product, err := r.service.UpdateProduct(ctx, productID, serviceInput)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update product: %w", err)
 	}
 
-	// Convert to GraphQL model
-	product := CatalogProductToGraphQL(catalogProduct)
-
 	return &model.UpdateProductPayload{
 		ClientMutationID: input.ClientMutationID,
-		Product:          product,
+		Product:          DatastoreProductToGraphQL(product),
 		Conflict:         nil, // TODO: Implement optimistic locking
 	}, nil
 }
@@ -417,51 +411,28 @@ func (r *queryResolver) Product(ctx context.Context, by model.ProductBy) (*model
 		if err != nil {
 			return nil, err
 		}
-		catalogProduct, err := r.service.GetProductByID(ctx, productID)
+		p, err := r.service.GetProductByID(ctx, productID)
 		if err != nil {
-			return nil, nil // Return nil instead of error for not found
+			return nil, nil
 		}
-		return CatalogProductToGraphQL(catalogProduct), nil
+		return DatastoreProductToGraphQL(p), nil
 	}
 
-	catalogProduct, err := r.service.GetProductBySKU(ctx, *by.Sku)
+	p, err := r.service.GetProductBySKU(ctx, *by.Sku)
 	if err != nil {
-		return nil, nil // Return nil instead of error for not found
+		return nil, nil
 	}
-	return CatalogProductToGraphQL(catalogProduct), nil
+	return DatastoreProductToGraphQL(p), nil
 }
 
 // Products is the resolver for the products field.
-func (r *queryResolver) Products(ctx context.Context, first *int32, after *string, last *int32, before *string, filter *model.ProductFilter) (*model.ProductConnection, error) {
-	// Get category filter if specified
-	var categoryID *string
-	if filter != nil {
-		var err error
-		categoryID, err = decodeOptionalNodeIDAs(nodeKindCategory, filter.CategoryID)
-		if err != nil {
-			return nil, err
-		}
-		filter = copyProductFilter(filter)
-		filter.CategoryID = categoryID
-		filter.CollectionID, err = decodeOptionalNodeIDAs(nodeKindCollection, filter.CollectionID)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Get products from service
-	products, err := r.service.GetProducts(ctx, categoryID)
+func (r *queryResolver) Products(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
+	params := toPageParams(first, after, last, before)
+	result, err := r.service.GetProducts(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get products: %w", err)
 	}
-
-	// Apply additional filters
-	if filter != nil {
-		products = applyProductFilters(products, filter)
-	}
-
-	// Apply Relay-style cursor pagination
-	return PaginateProducts(products, first, after, last, before)
+	return BuildProductConnection(result), nil
 }
 
 // Category is the resolver for the category field.
@@ -471,28 +442,28 @@ func (r *queryResolver) Category(ctx context.Context, by model.CategoryBy) (*mod
 		if err != nil {
 			return nil, err
 		}
-		catalogCategory, err := r.service.GetCategoryByID(ctx, categoryID)
+		c, err := r.service.GetCategoryByID(ctx, categoryID)
 		if err != nil {
-			return nil, nil // Return nil for not found (not an error)
+			return nil, nil
 		}
-		return CatalogCategoryToGraphQL(catalogCategory), nil
+		return DatastoreCategoryToGraphQL(c), nil
 	}
 
-	catalogCategory, err := r.service.GetCategoryBySlug(ctx, *by.Slug)
+	c, err := r.service.GetCategoryBySlug(ctx, *by.Slug)
 	if err != nil {
-		return nil, nil // Return nil for not found (not an error)
+		return nil, nil
 	}
-	return CatalogCategoryToGraphQL(catalogCategory), nil
+	return DatastoreCategoryToGraphQL(c), nil
 }
 
 // Categories returns categories as a Relay connection.
 func (r *queryResolver) Categories(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.CategoryConnection, error) {
-	catalogCategories, err := r.service.GetCategories(ctx)
+	params := toPageParams(first, after, last, before)
+	result, err := r.service.GetCategories(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get categories: %w", err)
 	}
-
-	return PaginateCategories(catalogCategories, first, after, last, before)
+	return BuildCategoryConnection(result), nil
 }
 
 // Collection is the resolver for the collection field.
@@ -502,28 +473,28 @@ func (r *queryResolver) Collection(ctx context.Context, by model.CollectionBy) (
 		if err != nil {
 			return nil, err
 		}
-		catalogCollection, err := r.service.GetCollectionByID(ctx, collectionID)
+		c, err := r.service.GetCollectionByID(ctx, collectionID)
 		if err != nil {
-			return nil, nil // Return nil for not found
+			return nil, nil
 		}
-		return CatalogCollectionToGraphQL(catalogCollection), nil
+		return DatastoreCollectionToGraphQL(c), nil
 	}
 
-	catalogCollection, err := r.service.GetCollectionBySlug(ctx, *by.Slug)
+	c, err := r.service.GetCollectionBySlug(ctx, *by.Slug)
 	if err != nil {
-		return nil, nil // Return nil for not found
+		return nil, nil
 	}
-	return CatalogCollectionToGraphQL(catalogCollection), nil
+	return DatastoreCollectionToGraphQL(c), nil
 }
 
 // Collections returns collections as a Relay connection.
 func (r *queryResolver) Collections(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.CollectionConnection, error) {
-	catalogCollections, err := r.service.GetCollections(ctx)
+	params := toPageParams(first, after, last, before)
+	result, err := r.service.GetCollections(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get collections: %w", err)
 	}
-
-	return PaginateCollections(catalogCollections, first, after, last, before)
+	return BuildCollectionConnection(result), nil
 }
 
 // CatalogVersion is the resolver for the catalogVersion field.

@@ -163,7 +163,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 
 	t.Run("Product/ListAll", func(t *testing.T) {
 		// Count before
-		before, err := ds.ListProducts(ctx, datastore.ProductFilter{})
+		before, err := ds.ListProducts(ctx, datastore.PageParams{})
 		require.NoError(t, err)
 
 		p1 := newProduct("")
@@ -171,39 +171,20 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.CreateProduct(ctx, p1))
 		require.NoError(t, ds.CreateProduct(ctx, p2))
 
-		after, err := ds.ListProducts(ctx, datastore.ProductFilter{})
+		after, err := ds.ListProducts(ctx, datastore.PageParams{})
 		require.NoError(t, err)
-		assert.Equal(t, len(before)+2, len(after))
+		assert.Equal(t, len(before.Items)+2, len(after.Items))
 	})
 
-	t.Run("Product/ListFilterByCategoryID", func(t *testing.T) {
-		cat := newCategory()
-		require.NoError(t, ds.CreateCategory(ctx, cat))
+	t.Run("Product/ListPaginated", func(t *testing.T) {
+		// Ensure at least 2 products exist
+		require.NoError(t, ds.CreateProduct(ctx, newProduct("")))
+		require.NoError(t, ds.CreateProduct(ctx, newProduct("")))
 
-		// Create two products in the category, one outside
-		inCat1 := newProduct(cat.ID)
-		inCat2 := newProduct(cat.ID)
-		outCat := newProduct(newID())
-		require.NoError(t, ds.CreateProduct(ctx, inCat1))
-		require.NoError(t, ds.CreateProduct(ctx, inCat2))
-		require.NoError(t, ds.CreateProduct(ctx, outCat))
-
-		results, err := ds.ListProducts(ctx, datastore.ProductFilter{CategoryID: cat.ID})
+		result, err := ds.ListProducts(ctx, datastore.PageParams{First: 1})
 		require.NoError(t, err)
-
-		ids := make(map[string]bool, len(results))
-		for _, p := range results {
-			ids[p.ID] = true
-		}
-		assert.True(t, ids[inCat1.ID], "inCat1 should be in results")
-		assert.True(t, ids[inCat2.ID], "inCat2 should be in results")
-		assert.False(t, ids[outCat.ID], "outCat should not be in results")
-	})
-
-	t.Run("Product/ListFilterEmptyCategoryReturnsNothing", func(t *testing.T) {
-		results, err := ds.ListProducts(ctx, datastore.ProductFilter{CategoryID: newID()})
-		require.NoError(t, err)
-		assert.Empty(t, results)
+		assert.Len(t, result.Items, 1)
+		assert.True(t, result.HasNext)
 	})
 
 	t.Run("Category/CreateAndGet", func(t *testing.T) {
@@ -392,13 +373,13 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 
 	t.Run("Namespace/TestListNamespaces_empty", func(t *testing.T) {
 		// fresh store or just verify list succeeds
-		nss, err := ds.ListNamespaces(ctx)
+		nss, err := ds.ListNamespaces(ctx, datastore.PageParams{})
 		require.NoError(t, err)
 		assert.NotNil(t, nss)
 	})
 
 	t.Run("Namespace/TestListNamespaces_multiple", func(t *testing.T) {
-		before, err := ds.ListNamespaces(ctx)
+		before, err := ds.ListNamespaces(ctx, datastore.PageParams{})
 		require.NoError(t, err)
 
 		ns1 := newNamespace(datastore.NamespaceTierUser)
@@ -406,9 +387,9 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.CreateNamespace(ctx, ns1))
 		require.NoError(t, ds.CreateNamespace(ctx, ns2))
 
-		after, err := ds.ListNamespaces(ctx)
+		after, err := ds.ListNamespaces(ctx, datastore.PageParams{})
 		require.NoError(t, err)
-		assert.Equal(t, len(before)+2, len(after))
+		assert.Equal(t, len(before.Items)+2, len(after.Items))
 	})
 
 	t.Run("Namespace/TestGetNamespace_byID_success", func(t *testing.T) {

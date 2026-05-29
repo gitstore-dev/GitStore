@@ -7,9 +7,7 @@ package graph
 
 import (
 	"context"
-	"sort"
 
-	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
@@ -159,68 +157,13 @@ func (r *queryResolver) Repositories(ctx context.Context, namespaceID string, fi
 	if err != nil {
 		return nil, err
 	}
-	ns, err := r.service.GetNamespaceByID(ctx, rawNsID)
+	if _, err := r.service.GetNamespaceByID(ctx, rawNsID); err != nil {
+		return nil, err
+	}
+	params := toPageParams(first, after, last, before)
+	result, err := r.service.ListRepositoriesByNamespace(ctx, rawNsID, params)
 	if err != nil {
 		return nil, err
 	}
-	repos, err := r.service.ListRepositoriesByNamespace(ctx, rawNsID)
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
-	// Sort by created_at + id for keyset pagination
-	sortReposByCreatedAtThenID(repos)
-
-	allEdges := make([]*model.RepositoryEdge, len(repos))
-	for i, repo := range repos {
-		allEdges[i] = &model.RepositoryEdge{
-			Cursor: EncodeKeysetCursor(repo.CreatedAt, repo.ID),
-			Node:   datastoreRepositoryToModel(repo, ns, r.storageDataDir),
-		}
-	}
-	start, end, hasNextPage, hasPreviousPage, err := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
-		repo := repos[i]
-		return EncodeKeysetCursor(repo.CreatedAt, repo.ID)
-	})
-	if err != nil {
-		return nil, err
-	}
-	edges := allEdges[start:end]
-	var startCursor, endCursor *string
-	if len(edges) > 0 {
-		s := edges[0].Cursor
-		e := edges[len(edges)-1].Cursor
-		startCursor = &s
-		endCursor = &e
-	}
-	return &model.RepositoryConnection{
-		Edges: edges,
-		PageInfo: &model.PageInfo{
-			HasNextPage:     hasNextPage,
-			HasPreviousPage: hasPreviousPage,
-			StartCursor:     startCursor,
-			EndCursor:       endCursor,
-		},
-	}, nil
-}
-
-// callerUsernameOrAnon returns the authenticated user's username or "anon".
-func callerUsernameOrAnon(ctx context.Context, r *mutationResolver) string {
-	if r.authMiddleware == nil {
-		return "anon"
-	}
-	return "anon"
-}
-
-// sortReposByCreatedAtThenID sorts repositories by created_at ascending, then by id as tie-breaker
-func sortReposByCreatedAtThenID(repos []*datastore.Repository) {
-	for i := 0; i < len(repos); i++ {
-		for j := i + 1; j < len(repos); j++ {
-			ri, rj := repos[i], repos[j]
-			cmpTime := ri.CreatedAt.Compare(rj.CreatedAt)
-			if cmpTime > 0 || (cmpTime == 0 && ri.ID > rj.ID) {
-				repos[i], repos[j] = repos[j], repos[i]
-			}
-		}
-	}
+	return BuildRepositoryConnection(result), nil
 }

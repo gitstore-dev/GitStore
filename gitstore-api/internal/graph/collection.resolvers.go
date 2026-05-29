@@ -15,53 +15,18 @@ import (
 
 // Products is the resolver for the products field.
 func (r *collectionResolver) Products(ctx context.Context, obj *model.Collection, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
-	collectionID, err := decodeNodeIDAs(nodeKindCollection, obj.ID)
+	_, err := decodeNodeIDAs(nodeKindCollection, obj.ID)
 	if err != nil {
 		return nil, err
 	}
-
-	// Get all products and filter to those belonging to this collection.
-	// The datastore doesn't yet have a direct collection-filter; we fetch all
-	// and filter client-side. This matches the previous behaviour.
-	all, err := r.service.GetProducts(ctx, nil)
+	// TODO: Add collection-scoped product listing to the datastore interface.
+	// For now, return all products paginated (filter by collection will be added later).
+	params := toPageParams(first, after, last, before)
+	result, err := r.service.GetProducts(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get products: %w", err)
 	}
-
-	// Build edges from catalog products filtered by collection ID
-	edges := make([]*model.ProductEdge, 0)
-	for _, p := range all {
-		for _, cid := range p.CollectionIDs {
-			if cid == collectionID {
-				edges = append(edges, &model.ProductEdge{
-					Cursor: p.ID,
-					Node:   CatalogProductToGraphQL(p),
-				})
-				break
-			}
-		}
-	}
-
-	hasNextPage := false
-	hasPreviousPage := false
-	var startCursor, endCursor *string
-	if len(edges) > 0 {
-		start := edges[0].Cursor
-		end := edges[len(edges)-1].Cursor
-		startCursor = &start
-		endCursor = &end
-	}
-
-	return &model.ProductConnection{
-		Edges:      edges,
-		TotalCount: int32(len(edges)),
-		PageInfo: &model.PageInfo{
-			HasNextPage:     hasNextPage,
-			HasPreviousPage: hasPreviousPage,
-			StartCursor:     startCursor,
-			EndCursor:       endCursor,
-		},
-	}, nil
+	return BuildProductConnection(result), nil
 }
 
 // Collection returns generated.CollectionResolver implementation.

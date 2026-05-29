@@ -7,7 +7,6 @@ package graph
 
 import (
 	"context"
-	"sort"
 
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
@@ -72,16 +71,10 @@ func (r *queryResolver) Namespace(ctx context.Context, by model.NamespaceBy) (*m
 
 // Namespaces is the resolver for the namespaces field.
 func (r *queryResolver) Namespaces(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.NamespaceConnection, error) {
-	nss, err := r.service.ListNamespaces(ctx)
+	params := toPageParams(first, after, last, before)
+	result, err := r.service.ListNamespaces(ctx, params)
 	if err != nil {
 		return nil, err
 	}
-	sort.SliceStable(nss, func(i, j int) bool {
-		return nss[i].Identifier < nss[j].Identifier
-	})
-	result := make([]*model.Namespace, len(nss))
-	for i, ns := range nss {
-		result[i] = datastoreNamespaceToModel(ns)
-	}
-	return PaginateNamespaces(result, first, after, last, before)
+	return BuildNamespaceConnection(result), nil
 }

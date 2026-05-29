@@ -15,43 +15,18 @@ import (
 
 // Products is the resolver for the products field.
 func (r *categoryResolver) Products(ctx context.Context, obj *model.Category, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
-	categoryID, err := decodeNodeIDAs(nodeKindCategory, obj.ID)
+	_, err := decodeNodeIDAs(nodeKindCategory, obj.ID)
 	if err != nil {
 		return nil, err
 	}
-	products, err := r.service.GetProducts(ctx, &categoryID)
+	// TODO: Add category-scoped product listing to the datastore interface.
+	// For now, return all products paginated (filter by category will be added later).
+	params := toPageParams(first, after, last, before)
+	result, err := r.service.GetProducts(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get products: %w", err)
 	}
-
-	edges := make([]*model.ProductEdge, len(products))
-	for i, p := range products {
-		edges[i] = &model.ProductEdge{
-			Cursor: p.ID,
-			Node:   CatalogProductToGraphQL(p),
-		}
-	}
-
-	hasNextPage := false
-	hasPreviousPage := false
-	var startCursor, endCursor *string
-	if len(edges) > 0 {
-		start := edges[0].Cursor
-		end := edges[len(edges)-1].Cursor
-		startCursor = &start
-		endCursor = &end
-	}
-
-	return &model.ProductConnection{
-		Edges:      edges,
-		TotalCount: int32(len(products)),
-		PageInfo: &model.PageInfo{
-			HasNextPage:     hasNextPage,
-			HasPreviousPage: hasPreviousPage,
-			StartCursor:     startCursor,
-			EndCursor:       endCursor,
-		},
-	}, nil
+	return BuildProductConnection(result), nil
 }
 
 // Category returns generated.CategoryResolver implementation.

@@ -16,19 +16,19 @@ func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (mo
 		if err != nil {
 			return nil, nil
 		}
-		return CatalogProductToGraphQL(product), nil
+		return DatastoreProductToGraphQL(product), nil
 	case nodeKindCategory:
 		category, err := r.service.GetCategoryByID(ctx, rawID)
 		if err != nil {
 			return nil, nil
 		}
-		return CatalogCategoryToGraphQL(category), nil
+		return DatastoreCategoryToGraphQL(category), nil
 	case nodeKindCollection:
 		collection, err := r.service.GetCollectionByID(ctx, rawID)
 		if err != nil {
 			return nil, nil
 		}
-		return CatalogCollectionToGraphQL(collection), nil
+		return DatastoreCollectionToGraphQL(collection), nil
 	case nodeKindNamespace:
 		namespace, err := r.service.GetNamespaceByID(ctx, rawID)
 		if err != nil {
@@ -38,12 +38,4 @@ func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (mo
 	default:
 		return nil, nil
 	}
-}
-
-func copyProductFilter(filter *model.ProductFilter) *model.ProductFilter {
-	if filter == nil {
-		return nil
-	}
-	copied := *filter
-	return &copied
 }

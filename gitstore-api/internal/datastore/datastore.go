@@ -6,6 +6,7 @@ package datastore
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // Sentinel errors returned by all backends.
@@ -15,19 +16,40 @@ var (
 	ErrInvalidArgument = errors.New("datastore: invalid argument")
 )
 
-// PaginationCursor represents a keyset-based cursor with createdAt + id for stable ordering.
-type PaginationCursor struct {
-	CreatedAt string // RFC3339 timestamp
-	ID        string // Unique ID as tie-breaker
+// DefaultPageSize is used when First/Last is zero.
+const DefaultPageSize = 100
+
+// PageParams defines keyset pagination parameters for any list operation.
+type PageParams struct {
+	First  int    // forward page size (0 = DefaultPageSize)
+	After  string // opaque cursor for forward pagination (items older than this)
+	Last   int    // backward page size (0 = unused)
+	Before string // opaque cursor for backward pagination (items newer than this)
 }
 
-// ProductFilter scopes ListProducts. All fields are optional.
-type ProductFilter struct {
-	CategoryID string // empty = no filter
-	After      string // opaque cursor for forward pagination
-	Before     string // opaque cursor for backward pagination
-	First      int    // 0 = no limit; positive = forward page size
-	Last       int    // 0 = no limit; positive = backward page size
+// Limit returns the effective page size.
+func (p PageParams) Limit() int {
+	if p.Last > 0 {
+		return p.Last
+	}
+	if p.First > 0 {
+		return p.First
+	}
+	return DefaultPageSize
+}
+
+// PageCursor is a decoded keyset cursor position.
+type PageCursor struct {
+	CreatedAt time.Time
+	ID        string
+}
+
+// PageResult wraps a paginated result from the datastore.
+type PageResult[T any] struct {
+	Items       []*T
+	HasNext     bool
+	HasPrevious bool
+	TotalCount  int32 // -1 if unknown/expensive to compute
 }
 
 // Datastore is the persistence contract for all backends.
@@ -40,7 +62,7 @@ type Datastore interface {
 	CreateProduct(ctx context.Context, p *Product) error
 	GetProduct(ctx context.Context, id string) (*Product, error)
 	GetProductBySKU(ctx context.Context, sku string) (*Product, error)
-	ListProducts(ctx context.Context, filter ProductFilter) ([]*Product, error)
+	ListProducts(ctx context.Context, page PageParams) (*PageResult[Product], error)
 	UpdateProduct(ctx context.Context, p *Product) error
 	DeleteProduct(ctx context.Context, id string) error
 
@@ -48,7 +70,7 @@ type Datastore interface {
 	CreateCategory(ctx context.Context, c *Category) error
 	GetCategory(ctx context.Context, id string) (*Category, error)
 	GetCategoryBySlug(ctx context.Context, slug string) (*Category, error)
-	ListCategories(ctx context.Context) ([]*Category, error)
+	ListCategories(ctx context.Context, page PageParams) (*PageResult[Category], error)
 	UpdateCategory(ctx context.Context, c *Category) error
 	DeleteCategory(ctx context.Context, id string) error
 
@@ -56,7 +78,7 @@ type Datastore interface {
 	CreateCollection(ctx context.Context, c *Collection) error
 	GetCollection(ctx context.Context, id string) (*Collection, error)
 	GetCollectionBySlug(ctx context.Context, slug string) (*Collection, error)
-	ListCollections(ctx context.Context) ([]*Collection, error)
+	ListCollections(ctx context.Context, page PageParams) (*PageResult[Collection], error)
 	UpdateCollection(ctx context.Context, c *Collection) error
 	DeleteCollection(ctx context.Context, id string) error
 
@@ -64,13 +86,13 @@ type Datastore interface {
 	CreateNamespace(ctx context.Context, ns *Namespace) error
 	GetNamespace(ctx context.Context, id string) (*Namespace, error)
 	GetNamespaceByIdentifier(ctx context.Context, identifier string) (*Namespace, error)
-	ListNamespaces(ctx context.Context) ([]*Namespace, error)
+	ListNamespaces(ctx context.Context, page PageParams) (*PageResult[Namespace], error)
 	DeleteNamespace(ctx context.Context, id string) error
 
 	// Repository operations
 	CreateRepository(ctx context.Context, r *Repository) error
 	GetRepository(ctx context.Context, id string) (*Repository, error)
-	ListRepositoriesByNamespace(ctx context.Context, namespaceID string) ([]*Repository, error)
+	ListRepositoriesByNamespace(ctx context.Context, namespaceID string, page PageParams) (*PageResult[Repository], error)
 	UpdateRepository(ctx context.Context, r *Repository) error
 	DeleteRepository(ctx context.Context, id string) error
 
