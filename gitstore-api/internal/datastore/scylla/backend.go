@@ -221,7 +221,7 @@ func (s *scyllaDatastore) ListProducts(_ context.Context, page datastore.PagePar
 		return nil, fmt.Errorf("scylla: list products: %w", err)
 	}
 
-	if page.Last > 0 && page.Before != "" {
+	if page.Last > 0 {
 		reverseRows(rows)
 	}
 
@@ -327,7 +327,7 @@ func (s *scyllaDatastore) ListCategories(_ context.Context, page datastore.PageP
 		return nil, fmt.Errorf("scylla: list categories: %w", err)
 	}
 
-	if page.Last > 0 && page.Before != "" {
+	if page.Last > 0 {
 		reverseRows(rows)
 	}
 
@@ -431,7 +431,7 @@ func (s *scyllaDatastore) ListCollections(_ context.Context, page datastore.Page
 		return nil, fmt.Errorf("scylla: list collections: %w", err)
 	}
 
-	if page.Last > 0 && page.Before != "" {
+	if page.Last > 0 {
 		reverseRows(rows)
 	}
 
@@ -541,7 +541,7 @@ func (s *scyllaDatastore) ListNamespaces(_ context.Context, page datastore.PageP
 		return nil, fmt.Errorf("scylla: list namespaces: %w", err)
 	}
 
-	if page.Last > 0 && page.Before != "" {
+	if page.Last > 0 {
 		reverseRows(rows)
 	}
 

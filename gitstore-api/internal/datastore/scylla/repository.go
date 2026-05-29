@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -95,27 +96,32 @@ func (s *scyllaDatastore) ListRepositoriesByNamespace(_ context.Context, namespa
 		return nil, fmt.Errorf("%w: invalid namespace_id", datastore.ErrInvalidArgument)
 	}
 
-	limit := page.Limit()
-	pq := buildPaginatedSelect(s.repositoryTable, page,
-		[]string{"namespace_id = ?"},
-		[]any{nsUUID},
-	)
+	// Secondary index query — ORDER BY is not supported, so fetch all and paginate in-memory.
+	cols := s.repositoryTable.Metadata().Columns
+	stmt, names := qb.Select("repositories").
+		Columns(cols...).
+		Where(qb.Eq("namespace_id")).
+		ToCql()
 
 	var rows []repositoryRow
-	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
+	if err := s.session.Query(stmt, names).BindMap(qb.M{"namespace_id": nsUUID}).SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list repositories by namespace: %w", err)
 	}
 
-	if page.Last > 0 && page.Before != "" {
-		reverseRows(rows)
-	}
+	// Sort descending by (created_at, id) — matching partition table ordering
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].CreatedAt.Equal(rows[j].CreatedAt) {
+			return rows[i].ID.String() > rows[j].ID.String()
+		}
+		return rows[i].CreatedAt.After(rows[j].CreatedAt)
+	})
 
 	repos := make([]*datastore.Repository, len(rows))
 	for i := range rows {
 		repos[i] = fromRepositoryRow(&rows[i])
 	}
 
-	return buildPageResult(repos, limit, page), nil
+	return paginateInMemory(repos, page), nil
 }
 
 func (s *scyllaDatastore) UpdateRepository(_ context.Context, r *datastore.Repository) error {
@@ -135,7 +141,6 @@ func (s *scyllaDatastore) DeleteRepository(ctx context.Context, id string) error
 	if err != nil {
 		return err
 	}
-	// Need the full primary key (bucket, created_at, id) to delete
 	stmt, names := s.repositoryTable.Delete()
 	if err := s.session.Query(stmt, names).BindMap(qb.M{
 		"bucket":     BucketAll,

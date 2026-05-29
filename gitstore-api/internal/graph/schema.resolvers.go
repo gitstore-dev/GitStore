@@ -156,29 +156,33 @@ func (r *mutationResolver) DeleteProduct(ctx context.Context, input model.Delete
 
 // CreateCategory is the resolver for the createCategory field.
 func (r *mutationResolver) CreateCategory(ctx context.Context, input model.CreateCategoryInput) (*model.CreateCategoryPayload, error) {
-	if _, err := decodeOptionalNodeIDAs(nodeKindCategory, input.ParentID); err != nil {
+	parentID, err := decodeOptionalNodeIDAs(nodeKindCategory, input.ParentID)
+	if err != nil {
 		return nil, err
 	}
-	rawID := generateID()
 
-	// TODO: Implement proper git-backed category creation
-	// For now, return mock response to unblock E2E tests
-	category := &model.Category{
-		ID:           mustEncodeNodeID(nodeKindCategory, rawID),
-		Name:         input.Name,
-		Slug:         input.Slug,
-		Body:         input.Body,
-		Parent:       nil, // TODO: lookup parent
-		Children:     []*model.Category{},
-		DisplayOrder: intOrDefault(input.DisplayOrder, 0),
-		Products:     &model.ProductConnection{Edges: []*model.ProductEdge{}, PageInfo: &model.PageInfo{}},
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+	serviceInput := map[string]interface{}{
+		"name": input.Name,
+		"slug": input.Slug,
+	}
+	if input.Body != nil {
+		serviceInput["body"] = *input.Body
+	}
+	if parentID != nil {
+		serviceInput["parentId"] = *parentID
+	}
+	if input.DisplayOrder != nil {
+		serviceInput["displayOrder"] = *input.DisplayOrder
+	}
+
+	category, err := r.service.CreateCategory(ctx, serviceInput)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create category: %w", err)
 	}
 
 	return &model.CreateCategoryPayload{
 		ClientMutationID: input.ClientMutationID,
-		Category:         category,
+		Category:         DatastoreCategoryToGraphQL(category),
 	}, nil
 }
 
@@ -273,21 +277,26 @@ func (r *mutationResolver) CreateCollection(ctx context.Context, input model.Cre
 	if _, err := decodeNodeIDsAs(nodeKindProduct, input.ProductIds); err != nil {
 		return nil, err
 	}
-	rawID := generateID()
 
-	collection := &model.Collection{
-		ID:           mustEncodeNodeID(nodeKindCollection, rawID),
-		Name:         input.Name,
-		Slug:         input.Slug,
-		Body:         input.Body,
-		DisplayOrder: intOrDefault(input.DisplayOrder, 0),
-		Products:     &model.ProductConnection{Edges: []*model.ProductEdge{}, PageInfo: &model.PageInfo{}},
-		CreatedAt:    time.Now(),
-		UpdatedAt:    time.Now(),
+	serviceInput := map[string]interface{}{
+		"name": input.Name,
+		"slug": input.Slug,
 	}
+	if input.Body != nil {
+		serviceInput["body"] = *input.Body
+	}
+	if input.DisplayOrder != nil {
+		serviceInput["displayOrder"] = *input.DisplayOrder
+	}
+
+	collection, err := r.service.CreateCollection(ctx, serviceInput)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create collection: %w", err)
+	}
+
 	return &model.CreateCollectionPayload{
 		ClientMutationID: input.ClientMutationID,
-		Collection:       collection,
+		Collection:       DatastoreCollectionToGraphQL(collection),
 	}, nil
 }
 

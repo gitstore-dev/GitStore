@@ -8,14 +8,9 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"github.com/google/uuid"
 )
 
 // Helper functions for GraphQL resolvers
-
-func generateID() string {
-	return uuid.New().String()
-}
 
 func stringOrDefault(s *string, def string) string {
 	if s != nil {

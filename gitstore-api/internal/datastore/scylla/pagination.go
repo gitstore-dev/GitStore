@@ -62,14 +62,14 @@ func buildPaginatedSelect(tbl *table.Table, page datastore.PageParams, extraWher
 	args = append(args, extraArgs...)
 
 	// Cursor-based tuple inequality
-	backward := page.Last > 0 && page.Before != ""
+	backward := page.Last > 0
 	if page.After != "" && !backward {
 		cursor, err := parsePageCursor(page.After)
 		if err == nil {
 			whereParts = append(whereParts, "(created_at, id) < (?, ?)")
 			args = append(args, cursor.CreatedAt, mustParseUUID(cursor.ID))
 		}
-	} else if backward {
+	} else if backward && page.Before != "" {
 		cursor, err := parsePageCursor(page.Before)
 		if err == nil {
 			whereParts = append(whereParts, "(created_at, id) > (?, ?)")
@@ -119,5 +119,70 @@ func buildPageResult[T any](items []*T, limit int, page datastore.PageParams) *d
 		HasNext:     hasNext,
 		HasPrevious: hasPrevious,
 		TotalCount:  -1, // expensive to compute in ScyllaDB
+	}
+}
+
+// paginateInMemory applies cursor-based keyset pagination to a pre-sorted slice
+// (sorted by created_at DESC, id DESC). Used when ORDER BY is not supported in CQL
+// (e.g., secondary index queries).
+func paginateInMemory(items []*datastore.Repository, page datastore.PageParams) *datastore.PageResult[datastore.Repository] {
+	total := len(items)
+	limit := page.Limit()
+
+	// Apply cursor filtering
+	if page.After != "" {
+		cursor, err := parsePageCursor(page.After)
+		if err == nil {
+			idx := -1
+			for i, item := range items {
+				if item.CreatedAt.Equal(cursor.CreatedAt) && item.ID == cursor.ID {
+					idx = i
+					break
+				}
+			}
+			if idx >= 0 {
+				items = items[idx+1:]
+			}
+		}
+	} else if page.Before != "" {
+		cursor, err := parsePageCursor(page.Before)
+		if err == nil {
+			idx := -1
+			for i, item := range items {
+				if item.CreatedAt.Equal(cursor.CreatedAt) && item.ID == cursor.ID {
+					idx = i
+					break
+				}
+			}
+			if idx >= 0 {
+				items = items[:idx]
+			}
+		}
+	}
+
+	hasNext := false
+	hasPrevious := false
+
+	if page.Last > 0 {
+		// Take the last N items
+		if len(items) > limit {
+			items = items[len(items)-limit:]
+			hasPrevious = true
+		}
+		hasNext = page.Before != ""
+	} else {
+		// Take the first N items
+		if len(items) > limit {
+			items = items[:limit]
+			hasNext = true
+		}
+		hasPrevious = page.After != ""
+	}
+
+	return &datastore.PageResult[datastore.Repository]{
+		Items:       items,
+		HasNext:     hasNext,
+		HasPrevious: hasPrevious,
+		TotalCount:  int32(total),
 	}
 }
