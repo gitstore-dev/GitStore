@@ -23,11 +23,11 @@ type PaginationCursor struct {
 
 // ProductFilter scopes ListProducts. All fields are optional.
 type ProductFilter struct {
-	CategoryID string                // empty = no filter
-	After      string                // opaque cursor for forward pagination
-	Before     string                // opaque cursor for backward pagination
-	First      int                   // 0 = no limit; positive = forward page size
-	Last       int                   // 0 = no limit; positive = backward page size
+	CategoryID string // empty = no filter
+	After      string // opaque cursor for forward pagination
+	Before     string // opaque cursor for backward pagination
+	First      int    // 0 = no limit; positive = forward page size
+	Last       int    // 0 = no limit; positive = backward page size
 }
 
 // Datastore is the persistence contract for all backends.

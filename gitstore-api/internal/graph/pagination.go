@@ -6,6 +6,8 @@
 package graph
 
 import (
+	"fmt"
+
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 )
@@ -41,10 +43,13 @@ func PaginateProducts(
 	}
 
 	// Apply keyset-based slicing
-	start, end, hasNextPage, hasPreviousPage := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
+	start, end, hasNextPage, hasPreviousPage, err := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
 		p := products[i]
 		return EncodeKeysetCursor(p.CreatedAt, p.ID)
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	edges := allEdges[start:end]
 
@@ -77,31 +82,50 @@ func applyKeysetWindow(
 	last *int32,
 	before *string,
 	getCursor func(int) string,
-) (int, int, bool, bool) {
+) (int, int, bool, bool, error) {
 	if first != nil && *first < 0 {
-		return 0, 0, false, false
+		return 0, 0, false, false, nil
 	}
 	if last != nil && *last < 0 {
-		return 0, 0, false, false
+		return 0, 0, false, false, nil
 	}
 
 	start := 0
 	end := totalCount
 
 	// Apply 'after' cursor: find first position after the cursor
-	if after != nil {
+	if after != nil && *after != "" {
+		if _, err := DecodeKeysetCursor(*after); err != nil {
+			return 0, 0, false, false, fmt.Errorf("invalid after cursor: %w", err)
+		}
+		found := false
 		for i := 0; i < totalCount; i++ {
-			if getCursor(i) > *after {
+			cmp, err := compareEncodedKeysetCursors(getCursor(i), *after)
+			if err != nil {
+				return 0, 0, false, false, err
+			}
+			if cmp > 0 {
 				start = i
+				found = true
 				break
 			}
+		}
+		if !found {
+			start = end
 		}
 	}
 
 	// Apply 'before' cursor: find first position at or after the cursor
-	if before != nil {
+	if before != nil && *before != "" {
+		if _, err := DecodeKeysetCursor(*before); err != nil {
+			return 0, 0, false, false, fmt.Errorf("invalid before cursor: %w", err)
+		}
 		for i := 0; i < totalCount; i++ {
-			if getCursor(i) >= *before {
+			cmp, err := compareEncodedKeysetCursors(getCursor(i), *before)
+			if err != nil {
+				return 0, 0, false, false, err
+			}
+			if cmp >= 0 {
 				end = i
 				break
 			}
@@ -140,7 +164,30 @@ func applyKeysetWindow(
 		hasNextPage = true
 	}
 
-	return start, end, hasNextPage, hasPreviousPage
+	return start, end, hasNextPage, hasPreviousPage, nil
+}
+
+func compareEncodedKeysetCursors(left, right string) (int, error) {
+	lc, err := DecodeKeysetCursor(left)
+	if err != nil {
+		return 0, fmt.Errorf("invalid generated cursor: %w", err)
+	}
+	rc, err := DecodeKeysetCursor(right)
+	if err != nil {
+		return 0, fmt.Errorf("invalid pagination cursor: %w", err)
+	}
+	cmpTime := lc.CreatedAt.Compare(rc.CreatedAt)
+	if cmpTime != 0 {
+		return cmpTime, nil
+	}
+	switch {
+	case lc.ID < rc.ID:
+		return -1, nil
+	case lc.ID > rc.ID:
+		return 1, nil
+	default:
+		return 0, nil
+	}
 }
 
 // PaginateCategories applies Relay-style cursor pagination to a category list using keyset cursors
@@ -172,10 +219,13 @@ func PaginateCategories(
 		}
 	}
 
-	start, end, hasNextPage, hasPreviousPage := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
+	start, end, hasNextPage, hasPreviousPage, err := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
 		c := categories[i]
 		return EncodeKeysetCursor(c.CreatedAt, c.ID)
 	})
+	if err != nil {
+		return nil, err
+	}
 	edges := allEdges[start:end]
 
 	var startCursor, endCursor *string
@@ -227,10 +277,13 @@ func PaginateCollections(
 		}
 	}
 
-	start, end, hasNextPage, hasPreviousPage := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
+	start, end, hasNextPage, hasPreviousPage, err := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
 		c := collections[i]
 		return EncodeKeysetCursor(c.CreatedAt, c.ID)
 	})
+	if err != nil {
+		return nil, err
+	}
 	edges := allEdges[start:end]
 
 	var startCursor, endCursor *string
@@ -282,10 +335,13 @@ func PaginateNamespaces(
 		}
 	}
 
-	start, end, hasNextPage, hasPreviousPage := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
+	start, end, hasNextPage, hasPreviousPage, err := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
 		ns := namespaces[i]
 		return EncodeKeysetCursor(ns.CreatedAt, ns.ID)
 	})
+	if err != nil {
+		return nil, err
+	}
 	edges := allEdges[start:end]
 
 	var startCursor, endCursor *string

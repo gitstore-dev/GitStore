@@ -178,10 +178,13 @@ func (r *queryResolver) Repositories(ctx context.Context, namespaceID string, fi
 			Node:   datastoreRepositoryToModel(repo, ns, r.storageDataDir),
 		}
 	}
-	start, end, hasNextPage, hasPreviousPage := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
+	start, end, hasNextPage, hasPreviousPage, err := applyKeysetWindow(len(allEdges), first, after, last, before, func(i int) string {
 		repo := repos[i]
 		return EncodeKeysetCursor(repo.CreatedAt, repo.ID)
 	})
+	if err != nil {
+		return nil, err
+	}
 	edges := allEdges[start:end]
 	var startCursor, endCursor *string
 	if len(edges) > 0 {

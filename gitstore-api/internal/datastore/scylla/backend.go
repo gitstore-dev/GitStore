@@ -5,7 +5,6 @@ package scylla
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -219,29 +218,8 @@ func (s *scyllaDatastore) ListProducts(_ context.Context, filter datastore.Produ
 		bindMap = qb.M{}
 	}
 
-	query := s.session.Query(stmt, names).BindMap(bindMap)
-
-	// Use page_size with PagingState for efficient server-side pagination
-	// This reduces memory usage and network overhead for large result sets
-	pageSize := 100 // Default page size
-	if filter.First > 0 && filter.First < 1000 {
-		pageSize = int(filter.First)
-	}
-	query = query.PageSize(pageSize)
-
-	// Apply PagingState if provided (for resuming from previous page)
-	if filter.After != "" {
-		pageState, err := decodePagingStateCursor(filter.After)
-		if err != nil {
-			return nil, err
-		}
-		if pageState != nil {
-			query = query.PageState(pageState)
-		}
-	}
-
 	var rows []productRow
-	if err := query.SelectRelease(&rows); err != nil {
+	if err := s.session.Query(stmt, names).BindMap(bindMap).SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list products: %w", err)
 	}
 
@@ -668,25 +646,4 @@ func fromNamespaceRow(r *namespaceRow) *datastore.Namespace {
 		UpdatedAt:          r.UpdatedAt,
 		UpdatedBy:          r.UpdatedBy,
 	}
-}
-
-// PagingState cursor helpers for Relay pagination
-// Encode PagingState as opaque base64 string for use as Relay cursor
-func encodePagingStateCursor(pageState []byte) string {
-	if len(pageState) == 0 {
-		return ""
-	}
-	return base64.StdEncoding.EncodeToString(pageState)
-}
-
-// Decode opaque Relay cursor back to PagingState for ScyllaDB query
-func decodePagingStateCursor(cursor string) ([]byte, error) {
-	if cursor == "" {
-		return nil, nil
-	}
-	decoded, err := base64.StdEncoding.DecodeString(cursor)
-	if err != nil {
-		return nil, fmt.Errorf("invalid paging state cursor: %w", err)
-	}
-	return decoded, nil
 }

@@ -132,21 +132,43 @@ func applyKeysetPagination(products []*datastore.Product, after, before string, 
 	}
 
 	start, end := 0, len(products)
+	var afterCursor *keysetCursor
+	var beforeCursor *keysetCursor
+
+	if after != "" {
+		decoded, err := decodeKeysetCursorInternal(after)
+		if err != nil {
+			return []*datastore.Product{}
+		}
+		afterCursor = decoded
+	}
+	if before != "" {
+		decoded, err := decodeKeysetCursorInternal(before)
+		if err != nil {
+			return []*datastore.Product{}
+		}
+		beforeCursor = decoded
+	}
 
 	// Apply "after" cursor: find first product after the cursor
-	if after != "" {
+	if afterCursor != nil {
+		found := false
 		for i, p := range products {
-			if compareKeysetPosition(p, after) > 0 {
+			if compareProductToKeyset(p, afterCursor) > 0 {
 				start = i
+				found = true
 				break
 			}
+		}
+		if !found {
+			start = end
 		}
 	}
 
 	// Apply "before" cursor: find first product before the cursor
-	if before != "" {
+	if beforeCursor != nil {
 		for i, p := range products {
-			if compareKeysetPosition(p, before) >= 0 {
+			if compareProductToKeyset(p, beforeCursor) >= 0 {
 				end = i
 				break
 			}
@@ -170,16 +192,11 @@ func applyKeysetPagination(products []*datastore.Product, after, before string, 
 	return products[start:end]
 }
 
-// compareKeysetPosition returns:
+// compareProductToKeyset returns:
 // < 0 if product is before cursor
 // = 0 if product is at cursor
 // > 0 if product is after cursor
-func compareKeysetPosition(product *datastore.Product, cursor string) int {
-	kc, err := decodeKeysetCursorInternal(cursor)
-	if err != nil {
-		return 0 // Treat invalid cursors as "at position"
-	}
-
+func compareProductToKeyset(product *datastore.Product, kc *keysetCursor) int {
 	cmpTime := product.CreatedAt.Compare(kc.CreatedAt)
 	if cmpTime != 0 {
 		return cmpTime
