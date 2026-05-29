@@ -35,6 +35,16 @@ func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (mo
 			return nil, nil
 		}
 		return datastoreNamespaceToModel(namespace), nil
+	case nodeKindRepository:
+		repo, err := r.service.GetRepository(ctx, rawID)
+		if err != nil {
+			return nil, nil
+		}
+		ns, err := r.service.GetNamespaceByID(ctx, repo.NamespaceID)
+		if err != nil {
+			return nil, nil
+		}
+		return datastoreRepositoryToModel(repo, ns, r.storageDataDir), nil
 	default:
 		return nil, nil
 	}
