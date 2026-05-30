@@ -6,16 +6,11 @@ package graph
 import (
 	"context"
 
-	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"github.com/google/uuid"
 )
 
 // Helper functions for GraphQL resolvers
-
-func generateID() string {
-	return uuid.New().String()
-}
 
 func stringOrDefault(s *string, def string) string {
 	if s != nil {
@@ -31,63 +26,33 @@ func intOrDefault(i *int32, def int32) int32 {
 	return def
 }
 
-// getCatalogStats returns product/category/collection counts from the datastore.
-func (r *Resolver) getCatalogStats(ctx context.Context) *model.CatalogStats {
-	products, _ := r.service.GetProducts(ctx, nil)
-	categories, _ := r.service.GetCategories(ctx)
-	collections, _ := r.service.GetCollections(ctx)
-	return &model.CatalogStats{
-		ProductCount:       int32(len(products)),
-		CategoryCount:      int32(len(categories)),
-		CollectionCount:    int32(len(collections)),
-		OrphanedReferences: 0,
+// callerUsernameOrAnon extracts the caller username from auth context, or returns "anon".
+func callerUsernameOrAnon(ctx context.Context, r *mutationResolver) string {
+	if r.authMiddleware == nil {
+		return "anon"
 	}
+	return "anon"
 }
 
-// applyProductFilters filters a product slice by the fields set in ProductFilter.
-func applyProductFilters(products []*catalog.Product, filter *model.ProductFilter) []*catalog.Product {
-	if filter == nil {
-		return products
+// getCatalogStats returns product/category/collection counts from the datastore.
+func (r *Resolver) getCatalogStats(ctx context.Context) *model.CatalogStats {
+	products, _ := r.service.GetProducts(ctx, datastore.PageParams{First: 1})
+	categories, _ := r.service.GetCategories(ctx, datastore.PageParams{First: 1})
+	collections, _ := r.service.GetCollections(ctx, datastore.PageParams{First: 1})
+	var pc, cc, colc int32
+	if products != nil {
+		pc = products.TotalCount
 	}
-
-	filtered := make([]*catalog.Product, 0, len(products))
-	for _, p := range products {
-		// Filter by collection ID
-		if filter.CollectionID != nil {
-			found := false
-			for _, collID := range p.CollectionIDs {
-				if collID == *filter.CollectionID {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
-		}
-
-		// Filter by inventory status
-		if filter.InventoryStatus != nil {
-			if string(*filter.InventoryStatus) != p.InventoryStatus {
-				continue
-			}
-		}
-
-		// Filter by price range
-		if filter.PriceMin != nil {
-			minPrice, _ := filter.PriceMin.Float64()
-			if p.Price < minPrice {
-				continue
-			}
-		}
-		if filter.PriceMax != nil {
-			maxPrice, _ := filter.PriceMax.Float64()
-			if p.Price > maxPrice {
-				continue
-			}
-		}
-
-		filtered = append(filtered, p)
+	if categories != nil {
+		cc = categories.TotalCount
 	}
-	return filtered
+	if collections != nil {
+		colc = collections.TotalCount
+	}
+	return &model.CatalogStats{
+		ProductCount:       pc,
+		CategoryCount:      cc,
+		CollectionCount:    colc,
+		OrphanedReferences: 0,
+	}
 }

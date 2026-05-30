@@ -291,7 +291,7 @@ type ComplexityRoot struct {
 		Node           func(childComplexity int, id string) int
 		Nodes          func(childComplexity int, ids []string) int
 		Product        func(childComplexity int, by model.ProductBy) int
-		Products       func(childComplexity int, first *int32, after *string, last *int32, before *string, filter *model.ProductFilter) int
+		Products       func(childComplexity int, first *int32, after *string, last *int32, before *string) int
 		Repositories   func(childComplexity int, namespaceID string, first *int32, after *string, last *int32, before *string) int
 		Repository     func(childComplexity int, by model.RepositoryBy) int
 	}
@@ -330,8 +330,9 @@ type ComplexityRoot struct {
 	}
 
 	RepositoryConnection struct {
-		Edges    func(childComplexity int) int
-		PageInfo func(childComplexity int) int
+		Edges      func(childComplexity int) int
+		PageInfo   func(childComplexity int) int
+		TotalCount func(childComplexity int) int
 	}
 
 	RepositoryEdge struct {
@@ -405,7 +406,7 @@ type QueryResolver interface {
 	Node(ctx context.Context, id string) (model.Node, error)
 	Nodes(ctx context.Context, ids []string) ([]model.Node, error)
 	Product(ctx context.Context, by model.ProductBy) (*model.Product, error)
-	Products(ctx context.Context, first *int32, after *string, last *int32, before *string, filter *model.ProductFilter) (*model.ProductConnection, error)
+	Products(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error)
 	Category(ctx context.Context, by model.CategoryBy) (*model.Category, error)
 	Categories(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.CategoryConnection, error)
 	Collection(ctx context.Context, by model.CollectionBy) (*model.Collection, error)
@@ -1535,7 +1536,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.Products(childComplexity, args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string), args["filter"].(*model.ProductFilter)), true
+		return e.ComplexityRoot.Query.Products(childComplexity, args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
 	case "Query.repositories":
 		if e.ComplexityRoot.Query.Repositories == nil {
 			break
@@ -1684,6 +1685,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.RepositoryConnection.PageInfo(childComplexity), true
+	case "RepositoryConnection.totalCount":
+		if e.ComplexityRoot.RepositoryConnection.TotalCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryConnection.TotalCount(childComplexity), true
 
 	case "RepositoryEdge.cursor":
 		if e.ComplexityRoot.RepositoryEdge.Cursor == nil {
@@ -1805,7 +1812,6 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputLogoutInput,
 		ec.unmarshalInputNamespaceBy,
 		ec.unmarshalInputProductBy,
-		ec.unmarshalInputProductFilter,
 		ec.unmarshalInputPublishCatalogInput,
 		ec.unmarshalInputRefreshTokenInput,
 		ec.unmarshalInputRenameRepositoryInput,
@@ -3417,6 +3423,7 @@ type RepositoryEdge {
 type RepositoryConnection {
   edges: [RepositoryEdge!]!
   pageInfo: PageInfo!
+  totalCount: Int!
 }
 
 # ============================================================================
@@ -3628,7 +3635,6 @@ type Query {
     after: String
     last: Int
     before: String
-    filter: ProductFilter
   ): ProductConnection!
 
   """
@@ -3786,40 +3792,6 @@ enum InventoryStatus {
   DISCONTINUED
 }
 
-"""
-Product filter options
-"""
-input ProductFilter {
-  """
-  Filter by category ID (includes subcategory products)
-  """
-  categoryId: ID
-
-  """
-  Filter by collection ID
-  """
-  collectionId: ID
-
-  """
-  Filter by inventory status
-  """
-  inventoryStatus: InventoryStatus
-
-  """
-  Filter by minimum price
-  """
-  priceMin: Decimal
-
-  """
-  Filter by maximum price
-  """
-  priceMax: Decimal
-
-  """
-  Search query (title, description, SKU)
-  """
-  search: String
-}
 
 # ============================================================================
 # Include entity type definitions
@@ -4338,6 +4310,8 @@ func (ec *executionContext) childFields_RepositoryConnection(ctx context.Context
 		return ec.fieldContext_RepositoryConnection_edges(ctx, field)
 	case "pageInfo":
 		return ec.fieldContext_RepositoryConnection_pageInfo(ctx, field)
+	case "totalCount":
+		return ec.fieldContext_RepositoryConnection_totalCount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type RepositoryConnection", field.Name)
 }
@@ -5141,14 +5115,6 @@ func (ec *executionContext) field_Query_products_args(ctx context.Context, rawAr
 		return nil, err
 	}
 	args["before"] = arg3
-	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "filter",
-		func(ctx context.Context, v any) (*model.ProductFilter, error) {
-			return ec.unmarshalOProductFilter2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductFilter(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["filter"] = arg4
 	return args, nil
 }
 
@@ -9373,7 +9339,7 @@ func (ec *executionContext) _Query_products(ctx context.Context, field graphql.C
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Products(ctx, fc.Args["first"].(*int32), fc.Args["after"].(*string), fc.Args["last"].(*int32), fc.Args["before"].(*string), fc.Args["filter"].(*model.ProductFilter))
+			return ec.Resolvers.Query().Products(ctx, fc.Args["first"].(*int32), fc.Args["after"].(*string), fc.Args["last"].(*int32), fc.Args["before"].(*string))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.ProductConnection) graphql.Marshaler {
@@ -10388,6 +10354,29 @@ func (ec *executionContext) fieldContext_RepositoryConnection_pageInfo(_ context
 		},
 	}
 	return fc, nil
+}
+
+func (ec *executionContext) _RepositoryConnection_totalCount(ctx context.Context, field graphql.CollectedField, obj *model.RepositoryConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RepositoryConnection_totalCount(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TotalCount, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
+			return ec.marshalNInt2int32(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_RepositoryConnection_totalCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RepositoryConnection", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _RepositoryEdge_cursor(ctx context.Context, field graphql.CollectedField, obj *model.RepositoryEdge) (ret graphql.Marshaler) {
@@ -12614,71 +12603,6 @@ func (ec *executionContext) unmarshalInputProductBy(ctx context.Context, obj any
 				return it, err
 			}
 			it.Sku = data
-		}
-	}
-	return it, nil
-}
-
-func (ec *executionContext) unmarshalInputProductFilter(ctx context.Context, obj any) (model.ProductFilter, error) {
-	var it model.ProductFilter
-	if obj == nil {
-		return it, nil
-	}
-
-	asMap := map[string]any{}
-	for k, v := range obj.(map[string]any) {
-		asMap[k] = v
-	}
-
-	fieldsInOrder := [...]string{"categoryId", "collectionId", "inventoryStatus", "priceMin", "priceMax", "search"}
-	for _, k := range fieldsInOrder {
-		v, ok := asMap[k]
-		if !ok {
-			continue
-		}
-		switch k {
-		case "categoryId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("categoryId"))
-			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.CategoryID = data
-		case "collectionId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("collectionId"))
-			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.CollectionID = data
-		case "inventoryStatus":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("inventoryStatus"))
-			data, err := ec.unmarshalOInventoryStatus2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐInventoryStatus(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.InventoryStatus = data
-		case "priceMin":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("priceMin"))
-			data, err := ec.unmarshalODecimal2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.PriceMin = data
-		case "priceMax":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("priceMax"))
-			data, err := ec.unmarshalODecimal2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.PriceMax = data
-		case "search":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("search"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Search = data
 		}
 	}
 	return it, nil
@@ -15832,6 +15756,11 @@ func (ec *executionContext) _RepositoryConnection(ctx context.Context, sel ast.S
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "totalCount":
+			out.Values[i] = ec._RepositoryConnection_totalCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -16737,13 +16666,19 @@ func (ec *executionContext) marshalNDateTime2timeᚐTime(ctx context.Context, se
 }
 
 func (ec *executionContext) unmarshalNDecimal2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx context.Context, v any) (scalar.Decimal, error) {
-	var res scalar.Decimal
-	err := res.UnmarshalGQL(v)
+	res, err := scalar.UnmarshalDecimal(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalNDecimal2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx context.Context, sel ast.SelectionSet, v scalar.Decimal) graphql.Marshaler {
-	return v
+	_ = sel
+	res := scalar.MarshalDecimal(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return res
 }
 
 func (ec *executionContext) unmarshalNDeleteCategoryInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteCategoryInput(ctx context.Context, v any) (model.DeleteCategoryInput, error) {
@@ -17628,16 +17563,18 @@ func (ec *executionContext) unmarshalODecimal2ᚖgithubᚗcomᚋgitstoreᚑdev�
 	if v == nil {
 		return nil, nil
 	}
-	var res = new(scalar.Decimal)
-	err := res.UnmarshalGQL(v)
-	return res, graphql.ErrorOnPath(ctx, err)
+	res, err := scalar.UnmarshalDecimal(v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalODecimal2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋscalarᚐDecimal(ctx context.Context, sel ast.SelectionSet, v *scalar.Decimal) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
-	return v
+	_ = sel
+	_ = ctx
+	res := scalar.MarshalDecimal(*v)
+	return res
 }
 
 func (ec *executionContext) unmarshalOID2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {
@@ -17772,14 +17709,6 @@ func (ec *executionContext) marshalOProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋg
 		return graphql.Null
 	}
 	return ec._Product(ctx, sel, v)
-}
-
-func (ec *executionContext) unmarshalOProductFilter2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductFilter(ctx context.Context, v any) (*model.ProductFilter, error) {
-	if v == nil {
-		return nil, nil
-	}
-	res, err := ec.unmarshalInputProductFilter(ctx, v)
-	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalORepository2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepository(ctx context.Context, sel ast.SelectionSet, v *model.Repository) graphql.Marshaler {

@@ -5,11 +5,16 @@ package scylla
 
 import "github.com/scylladb/gocqlx/v3/table"
 
+// BucketAll is the sentinel partition key for global listing tables.
+const BucketAll = "all"
+
 // Table models
 var (
 	Product = table.New(table.Metadata{
 		Name: "products",
 		Columns: []string{
+			"bucket",
+			"created_at",
 			"id",
 			"sku",
 			"title",
@@ -21,11 +26,14 @@ var (
 			"collection_ids",
 			"images",
 			"metadata",
-			"created_at",
 			"updated_at",
 			"body",
 		},
 		PartKey: []string{
+			"bucket",
+		},
+		SortKey: []string{
+			"created_at",
 			"id",
 		},
 	})
@@ -33,16 +41,21 @@ var (
 	Category = table.New(table.Metadata{
 		Name: "categories",
 		Columns: []string{
+			"bucket",
+			"created_at",
 			"id",
 			"name",
 			"slug",
 			"parent_id",
 			"display_order",
-			"created_at",
 			"updated_at",
 			"body",
 		},
 		PartKey: []string{
+			"bucket",
+		},
+		SortKey: []string{
+			"created_at",
 			"id",
 		},
 	})
@@ -50,16 +63,21 @@ var (
 	Collection = table.New(table.Metadata{
 		Name: "collections",
 		Columns: []string{
+			"bucket",
+			"created_at",
 			"id",
 			"name",
 			"slug",
 			"display_order",
 			"product_ids",
-			"created_at",
 			"updated_at",
 			"body",
 		},
 		PartKey: []string{
+			"bucket",
+		},
+		SortKey: []string{
+			"created_at",
 			"id",
 		},
 	})
@@ -67,17 +85,22 @@ var (
 	Namespace = table.New(table.Metadata{
 		Name: "namespaces",
 		Columns: []string{
+			"bucket",
+			"created_at",
 			"id",
 			"identifier",
 			"display_name",
 			"tier",
 			"parent_enterprise_id",
-			"created_at",
 			"created_by",
 			"updated_at",
 			"updated_by",
 		},
 		PartKey: []string{
+			"bucket",
+		},
+		SortKey: []string{
+			"created_at",
 			"id",
 		},
 	})
@@ -85,17 +108,22 @@ var (
 	Repository = table.New(table.Metadata{
 		Name: "repositories",
 		Columns: []string{
+			"bucket",
+			"created_at",
 			"id",
 			"namespace_id",
 			"name",
 			"default_branch",
 			"storage_class",
-			"created_at",
 			"created_by",
 			"updated_at",
 			"updated_by",
 		},
 		PartKey: []string{
+			"bucket",
+		},
+		SortKey: []string{
+			"created_at",
 			"id",
 		},
 	})

@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -131,9 +132,9 @@ func TestListNamespaces_returnsAll(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	nss, err := svc.ListNamespaces(context.Background())
+	result, err := svc.ListNamespaces(context.Background(), datastore.PageParams{})
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(nss), 3)
+	assert.GreaterOrEqual(t, len(result.Items), 3)
 }
 
 // ── namespace query ────────────────────────────────────────────────────────────

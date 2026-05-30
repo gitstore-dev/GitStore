@@ -18,14 +18,21 @@ type Decimal struct {
 	decimal.Decimal
 }
 
-// UnmarshalGQL implements the graphql.Unmarshaler interface found in gqlgen,
-// allowing the type to be received by a graphql client and unmarshaled.
-func (d *Decimal) UnmarshalGQL(v interface{}) error {
+// MarshalDecimal serializes a Decimal value as a quoted string GraphQL scalar.
+func MarshalDecimal(d Decimal) graphql.Marshaler {
+	return graphql.WriterFunc(func(w io.Writer) {
+		_, _ = io.WriteString(w, `"`+d.String()+`"`)
+	})
+}
+
+// UnmarshalDecimal parses supported GraphQL Decimal input values.
+func UnmarshalDecimal(v interface{}) (Decimal, error) {
+	var d Decimal
 	switch value := v.(type) {
 	case string:
 		dec, err := decimal.NewFromString(value)
 		if err != nil {
-			return fmt.Errorf("invalid decimal value: %w", err)
+			return d, fmt.Errorf("invalid decimal value: %w", err)
 		}
 		d.Decimal = dec
 	case float64:
@@ -34,23 +41,24 @@ func (d *Decimal) UnmarshalGQL(v interface{}) error {
 		d.Decimal = decimal.NewFromInt(int64(value))
 	case int64:
 		d.Decimal = decimal.NewFromInt(value)
+	case json.Number:
+		dec, err := decimal.NewFromString(value.String())
+		if err != nil {
+			return d, fmt.Errorf("invalid decimal value: %w", err)
+		}
+		d.Decimal = dec
 	default:
-		return errors.New("invalid type for Decimal")
+		return d, errors.New("invalid type for Decimal")
 	}
-	return nil
+	return d, nil
 }
 
-// MarshalGQL implements the graphql.Marshaler interface found in gqlgen,
-// allowing the type to be marshaled by gqlgen and sent over the wire.
-// This will convert the Decimal to a JSON number as a string.
-func (d Decimal) MarshalGQL(w io.Writer) {
-	io.WriteString(w, `"`+d.String()+`"`) // Wrap in quotes to ensure it's treated as a string
-}
-
+// MarshalDateTime serializes a time.Time value as a GraphQL DateTime scalar.
 func MarshalDateTime(t time.Time) graphql.Marshaler {
 	return graphql.MarshalTime(t)
 }
 
+// UnmarshalDateTime parses supported GraphQL DateTime input values.
 func UnmarshalDateTime(v interface{}) (time.Time, error) {
 	switch value := v.(type) {
 	case time.Time:
@@ -66,6 +74,7 @@ func UnmarshalDateTime(v interface{}) (time.Time, error) {
 	}
 }
 
+// MarshalJSON serializes a JSON object scalar value.
 func MarshalJSON(j map[string]interface{}) graphql.Marshaler {
 	return graphql.WriterFunc(func(w io.Writer) {
 		payload, err := json.Marshal(j)
@@ -78,6 +87,7 @@ func MarshalJSON(j map[string]interface{}) graphql.Marshaler {
 	})
 }
 
+// UnmarshalJSON parses supported GraphQL JSON scalar input values.
 func UnmarshalJSON(v interface{}) (map[string]interface{}, error) {
 	switch value := v.(type) {
 	case nil:

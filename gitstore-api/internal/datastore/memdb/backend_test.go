@@ -114,27 +114,25 @@ func TestMemdb_CreateProduct_DuplicateSKUReturnsAlreadyExists(t *testing.T) {
 	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
 }
 
-func TestMemdb_ListProducts_FilterByCategoryID(t *testing.T) {
+func TestMemdb_ListProducts_Paginated(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
 
 	p1 := productFixture("a0000000-0000-0000-0000-000000000010", "SKU-010")
-	p1.CategoryID = "cat-A"
 	p2 := productFixture("a0000000-0000-0000-0000-000000000011", "SKU-011")
-	p2.CategoryID = "cat-B"
 	p3 := productFixture("a0000000-0000-0000-0000-000000000012", "SKU-012")
-	p3.CategoryID = "cat-A"
 
 	require.NoError(t, ds.CreateProduct(ctx, p1))
 	require.NoError(t, ds.CreateProduct(ctx, p2))
 	require.NoError(t, ds.CreateProduct(ctx, p3))
 
-	results, err := ds.ListProducts(ctx, datastore.ProductFilter{CategoryID: "cat-A"})
+	result, err := ds.ListProducts(ctx, datastore.PageParams{First: 2})
 	require.NoError(t, err)
-	assert.Len(t, results, 2)
+	assert.Len(t, result.Items, 2)
+	assert.True(t, result.HasNext)
 }
 
-func TestMemdb_ListProducts_EmptyFilterReturnsAll(t *testing.T) {
+func TestMemdb_ListProducts_ReturnsAll(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
 	for i, sku := range []string{"SKU-A", "SKU-B", "SKU-C"} {
@@ -142,9 +140,9 @@ func TestMemdb_ListProducts_EmptyFilterReturnsAll(t *testing.T) {
 		require.NoError(t, ds.CreateProduct(ctx, productFixture(id, sku)))
 	}
 
-	results, err := ds.ListProducts(ctx, datastore.ProductFilter{})
+	result, err := ds.ListProducts(ctx, datastore.PageParams{})
 	require.NoError(t, err)
-	assert.Len(t, results, 3)
+	assert.Len(t, result.Items, 3)
 }
 
 func TestMemdb_UpdateProduct(t *testing.T) {
@@ -355,9 +353,9 @@ func TestMemdb_ListRepositoriesByNamespace(t *testing.T) {
 	require.NoError(t, ds.CreateRepository(ctx, repoFixture(repoID2, nsID1, "repo-b")))
 	require.NoError(t, ds.CreateRepository(ctx, repoFixture("01960000-0000-7000-8000-000000000003", nsID2, "repo-c")))
 
-	results, err := ds.ListRepositoriesByNamespace(ctx, nsID1)
+	result, err := ds.ListRepositoriesByNamespace(ctx, nsID1, datastore.PageParams{})
 	require.NoError(t, err)
-	assert.Len(t, results, 2)
+	assert.Len(t, result.Items, 2)
 }
 
 func TestMemdb_UpdateRepository(t *testing.T) {

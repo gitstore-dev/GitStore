@@ -74,7 +74,6 @@ type Query {
     after: String
     last: Int
     before: String
-    filter: ProductFilter
   ): ProductConnection!
 
   """
@@ -232,40 +231,6 @@ enum InventoryStatus {
   DISCONTINUED
 }
 
-"""
-Product filter options
-"""
-input ProductFilter {
-  """
-  Filter by category ID (includes subcategory products)
-  """
-  categoryId: ID
-
-  """
-  Filter by collection ID
-  """
-  collectionId: ID
-
-  """
-  Filter by inventory status
-  """
-  inventoryStatus: InventoryStatus
-
-  """
-  Filter by minimum price
-  """
-  priceMin: Decimal
-
-  """
-  Filter by maximum price
-  """
-  priceMax: Decimal
-
-  """
-  Search query (title, description, SKU)
-  """
-  search: String
-}
 
 # ============================================================================
 # Include entity type definitions

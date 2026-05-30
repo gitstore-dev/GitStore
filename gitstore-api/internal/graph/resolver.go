@@ -6,10 +6,7 @@
 package graph
 
 import (
-	"context"
-
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/loader"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	"go.uber.org/zap"
 )
@@ -44,9 +41,4 @@ func (r *Resolver) WithStorageDataDir(dir string) *Resolver {
 // WithAuthMiddleware wires the auth middleware into the resolver (called from main.go).
 func (r *Resolver) WithAuthMiddleware(am *middleware.AuthMiddleware) {
 	r.authMiddleware = am
-}
-
-// getLoaders retrieves data loaders from context
-func (r *Resolver) getLoaders(ctx context.Context) *loader.Loaders {
-	return loader.FromContext(ctx)
 }

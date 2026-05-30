@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -77,106 +76,88 @@ func (s *Service) SetGitWriter(w GitWriter) {
 }
 
 // GetProducts retrieves all products from the datastore with optional filtering.
-func (s *Service) GetProducts(ctx context.Context, categoryID *string) ([]*catalog.Product, error) {
-	filter := datastore.ProductFilter{}
-	if categoryID != nil && *categoryID != "" {
-		filter.CategoryID = *categoryID
-	}
-
-	ds_products, err := s.store.ListProducts(ctx, filter)
+func (s *Service) GetProducts(ctx context.Context, params datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+	result, err := s.store.ListProducts(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list products: %w", err)
 	}
-
-	products := make([]*catalog.Product, len(ds_products))
-	for i, p := range ds_products {
-		products[i] = datastoreProductToCatalog(p)
-	}
-	return products, nil
+	return result, nil
 }
 
 // GetProductByID retrieves a product by ID.
-func (s *Service) GetProductByID(ctx context.Context, id string) (*catalog.Product, error) {
+func (s *Service) GetProductByID(ctx context.Context, id string) (*datastore.Product, error) {
 	p, err := s.store.GetProduct(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("product not found: %s", id)
 	}
-	return datastoreProductToCatalog(p), nil
+	return p, nil
 }
 
 // GetProductBySKU retrieves a product by SKU.
-func (s *Service) GetProductBySKU(ctx context.Context, sku string) (*catalog.Product, error) {
+func (s *Service) GetProductBySKU(ctx context.Context, sku string) (*datastore.Product, error) {
 	p, err := s.store.GetProductBySKU(ctx, sku)
 	if err != nil {
 		return nil, fmt.Errorf("product not found with SKU: %s", sku)
 	}
-	return datastoreProductToCatalog(p), nil
+	return p, nil
 }
 
-// GetCategories returns all categories.
-func (s *Service) GetCategories(ctx context.Context) ([]*catalog.Category, error) {
-	cats, err := s.store.ListCategories(ctx)
+// GetCategories returns paginated categories.
+func (s *Service) GetCategories(ctx context.Context, params datastore.PageParams) (*datastore.PageResult[datastore.Category], error) {
+	result, err := s.store.ListCategories(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list categories: %w", err)
-	}
-	result := make([]*catalog.Category, len(cats))
-	for i, c := range cats {
-		result[i] = datastoreCategoryToCatalog(c)
 	}
 	return result, nil
 }
 
 // GetCategoryByID returns a category by ID.
-func (s *Service) GetCategoryByID(ctx context.Context, id string) (*catalog.Category, error) {
+func (s *Service) GetCategoryByID(ctx context.Context, id string) (*datastore.Category, error) {
 	c, err := s.store.GetCategory(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("category not found: %s", id)
 	}
-	return datastoreCategoryToCatalog(c), nil
+	return c, nil
 }
 
 // GetCategoryBySlug returns a category by slug.
-func (s *Service) GetCategoryBySlug(ctx context.Context, slug string) (*catalog.Category, error) {
+func (s *Service) GetCategoryBySlug(ctx context.Context, slug string) (*datastore.Category, error) {
 	c, err := s.store.GetCategoryBySlug(ctx, slug)
 	if err != nil {
 		return nil, fmt.Errorf("category not found with slug: %s", slug)
 	}
-	return datastoreCategoryToCatalog(c), nil
+	return c, nil
 }
 
-// GetCollections returns all collections.
-func (s *Service) GetCollections(ctx context.Context) ([]*catalog.Collection, error) {
-	colls, err := s.store.ListCollections(ctx)
+// GetCollections returns paginated collections.
+func (s *Service) GetCollections(ctx context.Context, params datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
+	result, err := s.store.ListCollections(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list collections: %w", err)
-	}
-	result := make([]*catalog.Collection, len(colls))
-	for i, c := range colls {
-		result[i] = datastoreCollectionToCatalog(c)
 	}
 	return result, nil
 }
 
 // GetCollectionByID returns a collection by ID.
-func (s *Service) GetCollectionByID(ctx context.Context, id string) (*catalog.Collection, error) {
+func (s *Service) GetCollectionByID(ctx context.Context, id string) (*datastore.Collection, error) {
 	c, err := s.store.GetCollection(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("collection not found: %s", id)
 	}
-	return datastoreCollectionToCatalog(c), nil
+	return c, nil
 }
 
 // GetCollectionBySlug returns a collection by slug.
-func (s *Service) GetCollectionBySlug(ctx context.Context, slug string) (*catalog.Collection, error) {
+func (s *Service) GetCollectionBySlug(ctx context.Context, slug string) (*datastore.Collection, error) {
 	c, err := s.store.GetCollectionBySlug(ctx, slug)
 	if err != nil {
 		return nil, fmt.Errorf("collection not found with slug: %s", slug)
 	}
-	return datastoreCollectionToCatalog(c), nil
+	return c, nil
 }
 
 // CreateProduct creates a new product in the datastore.
-func (s *Service) CreateProduct(ctx context.Context, input map[string]interface{}) (*catalog.Product, error) {
+func (s *Service) CreateProduct(ctx context.Context, input map[string]interface{}) (*datastore.Product, error) {
 	id := uuid.New().String()
 	now := time.Now()
 	p := &datastore.Product{
@@ -217,11 +198,11 @@ func (s *Service) CreateProduct(ctx context.Context, input map[string]interface{
 		return nil, fmt.Errorf("failed to create product: %w", err)
 	}
 
-	return datastoreProductToCatalog(p), nil
+	return p, nil
 }
 
 // UpdateProduct updates an existing product in the datastore.
-func (s *Service) UpdateProduct(ctx context.Context, id string, input map[string]interface{}) (*catalog.Product, error) {
+func (s *Service) UpdateProduct(ctx context.Context, id string, input map[string]interface{}) (*datastore.Product, error) {
 	existing, err := s.store.GetProduct(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("product not found: %s", id)
@@ -272,7 +253,7 @@ func (s *Service) UpdateProduct(ctx context.Context, id string, input map[string
 		return nil, fmt.Errorf("failed to update product: %w", err)
 	}
 
-	return datastoreProductToCatalog(&p), nil
+	return &p, nil
 }
 
 // DeleteProduct deletes a product from the datastore.
@@ -284,7 +265,7 @@ func (s *Service) DeleteProduct(ctx context.Context, id string) error {
 }
 
 // CreateCategory creates a new category in the datastore.
-func (s *Service) CreateCategory(ctx context.Context, input map[string]interface{}) (*catalog.Category, error) {
+func (s *Service) CreateCategory(ctx context.Context, input map[string]interface{}) (*datastore.Category, error) {
 	now := time.Now()
 	c := &datastore.Category{
 		ID:        uuid.New().String(),
@@ -304,11 +285,11 @@ func (s *Service) CreateCategory(ctx context.Context, input map[string]interface
 	if err := s.store.CreateCategory(ctx, c); err != nil {
 		return nil, fmt.Errorf("failed to create category: %w", err)
 	}
-	return datastoreCategoryToCatalog(c), nil
+	return c, nil
 }
 
 // UpdateCategory updates an existing category.
-func (s *Service) UpdateCategory(ctx context.Context, id string, input map[string]interface{}) (*catalog.Category, error) {
+func (s *Service) UpdateCategory(ctx context.Context, id string, input map[string]interface{}) (*datastore.Category, error) {
 	existing, err := s.store.GetCategory(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("category not found: %s", id)
@@ -330,7 +311,7 @@ func (s *Service) UpdateCategory(ctx context.Context, id string, input map[strin
 	if err := s.store.UpdateCategory(ctx, &c); err != nil {
 		return nil, fmt.Errorf("failed to update category: %w", err)
 	}
-	return datastoreCategoryToCatalog(&c), nil
+	return &c, nil
 }
 
 // DeleteCategory deletes a category from the datastore.
@@ -339,7 +320,7 @@ func (s *Service) DeleteCategory(ctx context.Context, id string) error {
 }
 
 // CreateCollection creates a new collection in the datastore.
-func (s *Service) CreateCollection(ctx context.Context, input map[string]interface{}) (*catalog.Collection, error) {
+func (s *Service) CreateCollection(ctx context.Context, input map[string]interface{}) (*datastore.Collection, error) {
 	now := time.Now()
 	c := &datastore.Collection{
 		ID:        uuid.New().String(),
@@ -355,11 +336,11 @@ func (s *Service) CreateCollection(ctx context.Context, input map[string]interfa
 	if err := s.store.CreateCollection(ctx, c); err != nil {
 		return nil, fmt.Errorf("failed to create collection: %w", err)
 	}
-	return datastoreCollectionToCatalog(c), nil
+	return c, nil
 }
 
 // UpdateCollection updates an existing collection.
-func (s *Service) UpdateCollection(ctx context.Context, id string, input map[string]interface{}) (*catalog.Collection, error) {
+func (s *Service) UpdateCollection(ctx context.Context, id string, input map[string]interface{}) (*datastore.Collection, error) {
 	existing, err := s.store.GetCollection(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("collection not found: %s", id)
@@ -381,7 +362,7 @@ func (s *Service) UpdateCollection(ctx context.Context, id string, input map[str
 	if err := s.store.UpdateCollection(ctx, &c); err != nil {
 		return nil, fmt.Errorf("failed to update collection: %w", err)
 	}
-	return datastoreCollectionToCatalog(&c), nil
+	return &c, nil
 }
 
 // DeleteCollection deletes a collection from the datastore.
@@ -482,16 +463,13 @@ func (s *Service) GetNamespaceByID(ctx context.Context, id string) (*datastore.N
 	return ns, nil
 }
 
-// ListNamespaces returns all namespaces.
-func (s *Service) ListNamespaces(ctx context.Context) ([]*datastore.Namespace, error) {
-	nss, err := s.store.ListNamespaces(ctx)
+// ListNamespaces returns paginated namespaces.
+func (s *Service) ListNamespaces(ctx context.Context, params datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {
+	result, err := s.store.ListNamespaces(ctx, params)
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to list namespaces")
 	}
-	if nss == nil {
-		return []*datastore.Namespace{}, nil
-	}
-	return nss, nil
+	return result, nil
 }
 
 // DeleteNamespace deletes a namespace after authorisation and safety checks.
@@ -677,13 +655,13 @@ func (s *Service) LookupNamespaceByRepoID(ctx context.Context, repoID string) (*
 	return m, nil
 }
 
-// ListRepositoriesByNamespace lists all repositories in a namespace.
-func (s *Service) ListRepositoriesByNamespace(ctx context.Context, namespaceID string) ([]*datastore.Repository, error) {
-	repos, err := s.store.ListRepositoriesByNamespace(ctx, namespaceID)
+// ListRepositoriesByNamespace lists paginated repositories in a namespace.
+func (s *Service) ListRepositoriesByNamespace(ctx context.Context, namespaceID string, params datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
+	result, err := s.store.ListRepositoriesByNamespace(ctx, namespaceID, params)
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to list repositories")
 	}
-	return repos, nil
+	return result, nil
 }
 
 // RenameRepository renames a repository within its namespace. Storage is not moved.
@@ -806,53 +784,6 @@ func datastoreNamespaceTierFromModel(t model.NamespaceTier) datastore.NamespaceT
 		return datastore.NamespaceTierEnterprise
 	default:
 		return datastore.NamespaceTierUser
-	}
-}
-
-// ── catalog ↔ datastore conversion helpers ────────────────────────────────────
-
-func datastoreProductToCatalog(p *datastore.Product) *catalog.Product {
-	return &catalog.Product{
-		ID:                p.ID,
-		SKU:               p.SKU,
-		Title:             p.Title,
-		Price:             p.Price,
-		Currency:          p.Currency,
-		InventoryStatus:   p.InventoryStatus,
-		InventoryQuantity: p.InventoryQuantity,
-		CategoryID:        p.CategoryID,
-		CollectionIDs:     p.CollectionIDs,
-		Images:            p.Images,
-		Metadata:          p.Metadata,
-		CreatedAt:         p.CreatedAt,
-		UpdatedAt:         p.UpdatedAt,
-		Body:              p.Body,
-	}
-}
-
-func datastoreCategoryToCatalog(c *datastore.Category) *catalog.Category {
-	return &catalog.Category{
-		ID:           c.ID,
-		Name:         c.Name,
-		Slug:         c.Slug,
-		ParentID:     c.ParentID,
-		DisplayOrder: c.DisplayOrder,
-		CreatedAt:    c.CreatedAt,
-		UpdatedAt:    c.UpdatedAt,
-		Body:         c.Body,
-	}
-}
-
-func datastoreCollectionToCatalog(c *datastore.Collection) *catalog.Collection {
-	return &catalog.Collection{
-		ID:           c.ID,
-		Name:         c.Name,
-		Slug:         c.Slug,
-		DisplayOrder: c.DisplayOrder,
-		ProductIDs:   c.ProductIDs,
-		CreatedAt:    c.CreatedAt,
-		UpdatedAt:    c.UpdatedAt,
-		Body:         c.Body,
 	}
 }
 
