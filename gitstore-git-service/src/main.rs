@@ -6,12 +6,9 @@
 use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::time::Instant;
 use tracing::{error, info};
 
 use gitstore::grpc::server::{proto::git_service_server::GitServiceServer, GitServiceImpl};
-use gitstore::http_git_server::{create_git_routes, GitServerState};
-use gitstore::websocket::server::WebsocketServer;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -43,14 +40,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    let start_time = Instant::now();
-
     gitstore::init_logging(&cfg.log.level, &cfg.log.format)
         .map_err(|e| format!("Failed to initialize logger: {e}"))?;
 
     info!(
-        http_port = cfg.http.port,
-        ws_port = cfg.ws.port,
         grpc_port = cfg.grpc.port,
         data_dir = %cfg.git.data_dir,
         "Starting GitStore Server"
@@ -62,19 +55,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::create_dir_all(&data_path)?;
         info!(path = %data_path.display(), "Created data directory");
     }
-
-    // Start websocket server
-    let ws_addr: SocketAddr = format!("0.0.0.0:{}", cfg.ws.port).parse()?;
-    let ws_server = WebsocketServer::new(ws_addr);
-    let broadcaster = ws_server.broadcaster();
-
-    info!("Websocket server starting on {}", ws_addr);
-
-    let ws_handle = tokio::spawn(async move {
-        if let Err(e) = ws_server.start().await {
-            error!(error = %e, "Websocket server error");
-        }
-    });
 
     // Start gRPC server
     let grpc_addr: SocketAddr = format!("0.0.0.0:{}", cfg.grpc.port).parse()?;
@@ -93,35 +73,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Create HTTP Git server state
-    let git_state = GitServerState {
-        data_root: data_path.clone(),
-        broadcaster: std::sync::Arc::new(tokio::sync::RwLock::new(broadcaster)),
-        start_time,
-        max_pack_size: cfg.git.max_pack_size_bytes,
-    };
-
-    let app = create_git_routes(git_state);
-
-    let http_addr: SocketAddr = format!("0.0.0.0:{}", cfg.http.port).parse()?;
-    info!(
-        http_port = cfg.http.port,
-        "HTTP Git server starting on http://{}", http_addr
-    );
-
-    let listener = tokio::net::TcpListener::bind(http_addr).await?;
-
-    let http_handle = tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app).await {
-            error!(error = %e, "HTTP server error");
-        }
-    });
-
     shutdown_signal().await?;
     info!("Shutting down...");
 
-    ws_handle.abort();
-    http_handle.abort();
     grpc_handle.abort();
 
     Ok(())

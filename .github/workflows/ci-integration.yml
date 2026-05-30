@@ -56,19 +56,24 @@ jobs:
         GITSTORE_GIT__DATA_DIR: ./data/repos
         # Stub credentials — integration tests exercise the API but don't verify auth secrets
         GITSTORE_AUTH__ADMIN__USERNAME: admin
-        GITSTORE_AUTH__ADMIN__PASSWORD_HASH: $2a$12$test.hash.for.ci.only.not.a.real.secret.AAAA
+        GITSTORE_AUTH__ADMIN__PASSWORD_HASH: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
         GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
 
     - name: Wait for services to be healthy
       run: |
-        echo "Waiting for gitstore-git-service..."
-        timeout 60 sh -c 'until curl -sf http://localhost:9418/health; do sleep 2; done'
-        echo "Waiting for gitstore-api..."
+        echo "Waiting for gitstore-api (GraphQL + git HTTP)..."
         timeout 60 sh -c 'until curl -sf http://localhost:4000/health; do sleep 2; done'
+        timeout 60 sh -c 'until curl -sf http://localhost:5000/health; do sleep 2; done'
         docker compose ps
+
+    - name: Bootstrap namespace and repository
+      run: make bootstrap ADMIN_PASSWORD=admin123 NAMESPACE=gitci NAMESPACE_DISPLAY_NAME=CI NAMESPACE_TIER=USER REPOSITORY=catalog
 
     - name: Run integration tests
       working-directory: ./tests/integration
+      env:
+        NAMESPACE: gitci
+        REPOSITORY: catalog
       run: go test -v -timeout 120s ./...
 
     - name: Collect logs on failure

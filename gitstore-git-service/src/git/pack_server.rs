@@ -111,7 +111,11 @@ impl HttpPackServer {
 
         // Stage pack objects into a quarantine directory; committed after refs succeed.
         let quarantine = if !pack_data.is_empty() {
-            Some(stage_pack_to_quarantine(&repo, pack_data).context("staging pack to quarantine")?)
+            let odb = (*repo.objects).clone();
+            Some(
+                stage_pack_from_reader(std::io::Cursor::new(pack_data), Some(odb))
+                    .context("staging pack to quarantine")?,
+            )
         } else {
             None
         };
@@ -387,7 +391,7 @@ fn collect_refs(repo: &gix::Repository) -> Result<Vec<(String, String)>> {
 ///
 /// Returns `(wants, haves)`. `haves` are objects the client already has; the
 /// pack builder uses them as cut-off points so only the delta is sent.
-fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>) {
+pub fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>) {
     let mut wants = Vec::new();
     let mut haves = Vec::new();
     let mut pos = 0;
@@ -433,7 +437,7 @@ fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>) {
 ///
 /// `haves` are commit OIDs the client already has; they act as boundary commits so
 /// only the incremental delta is included, matching normal upload-pack negotiation.
-fn build_pack_for_wants(
+pub fn build_pack_for_wants(
     repo: &gix::Repository,
     wants: &[String],
     haves: &[String],
@@ -466,17 +470,15 @@ fn build_pack_for_wants(
 
     // Walk commits from wants, stopping at have boundaries so only the
     // incremental delta is included rather than the full history.
-    let walk_ids: Vec<gix::ObjectId> = if have_ids.is_empty() {
-        // No client haves — send everything reachable from wants.
-        want_ids.clone()
-    } else {
-        repo.rev_walk(want_ids.iter().copied())
-            .with_boundary(have_ids.iter().copied())
-            .all()
-            .context("rev walk for pack generation")?
-            .filter_map(|r| r.ok().map(|info| info.id))
-            .collect()
-    };
+    // Walk all commits reachable from wants, stopping at have boundaries.
+    // Always use rev_walk so parent commits are included in full clones (empty haves).
+    let walk_ids: Vec<gix::ObjectId> = repo
+        .rev_walk(want_ids.iter().copied())
+        .with_boundary(have_ids.iter().copied())
+        .all()
+        .context("rev walk for pack generation")?
+        .filter_map(|r| r.ok().map(|info| info.id))
+        .collect();
 
     if walk_ids.is_empty() {
         return Ok(Vec::new());
@@ -587,29 +589,71 @@ fn parse_receive_pack_body(body: &[u8]) -> Result<RefUpdates<'_>> {
     Ok((updates, pack_data))
 }
 
-struct Quarantine {
-    dir: tempfile::TempDir,
-    pack_path: std::path::PathBuf,
-    index_path: std::path::PathBuf,
-    num_objects: u32,
+pub struct Quarantine {
+    pub dir: tempfile::TempDir,
+    pub pack_path: std::path::PathBuf,
+    pub index_path: std::path::PathBuf,
+    pub num_objects: u32,
 }
 
-/// Write incoming pack data to a temporary quarantine directory.
+/// A `Read` impl that drains a sync_channel receiver of `Vec<u8>` chunks.
+pub struct ChannelReader {
+    pub rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    buf: Vec<u8>,
+    pos: usize,
+}
+
+impl ChannelReader {
+    pub fn new(rx: std::sync::mpsc::Receiver<Vec<u8>>) -> Self {
+        Self {
+            rx,
+            buf: Vec::new(),
+            pos: 0,
+        }
+    }
+}
+
+impl std::io::Read for ChannelReader {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            if self.pos < self.buf.len() {
+                let n = std::cmp::min(out.len(), self.buf.len() - self.pos);
+                out[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
+                self.pos += n;
+                return Ok(n);
+            }
+            match self.rx.recv() {
+                Ok(chunk) => {
+                    self.buf = chunk;
+                    self.pos = 0;
+                }
+                Err(_) => return Ok(0), // channel closed = EOF
+            }
+        }
+    }
+}
+
+/// Write incoming pack data to a temporary quarantine directory from any `Read`.
 /// The pack and index files are NOT visible to the live ODB until
 /// `promote_quarantine` moves them into the real pack directory.
-fn stage_pack_to_quarantine(_repo: &gix::Repository, pack_data: &[u8]) -> Result<Quarantine> {
+///
+/// Pass `odb` to resolve base objects for thin packs sent by incremental pushes.
+pub fn stage_pack_from_reader<R: std::io::Read, O: gix_pack::Find + gix::prelude::Find>(
+    reader: R,
+    odb: Option<O>,
+) -> Result<Quarantine> {
     use gix_pack::bundle::write::Options;
 
     let quarantine_dir = tempfile::TempDir::new().context("create quarantine dir")?;
-    let mut cursor = std::io::BufReader::new(std::io::Cursor::new(pack_data));
+    let mut reader = std::io::BufReader::new(reader);
     let interrupt = AtomicBool::new(false);
     let mut progress = gix::progress::Discard;
     let outcome = gix_pack::Bundle::write_to_directory(
-        &mut cursor,
+        &mut reader,
         Some(quarantine_dir.path()),
         &mut progress,
         &interrupt,
-        None::<gix::odb::Handle>,
+        odb,
         Options {
             thread_limit: Some(1),
             iteration_mode: gix_pack::data::input::Mode::Verify,
@@ -637,22 +681,31 @@ fn stage_pack_to_quarantine(_repo: &gix::Repository, pack_data: &[u8]) -> Result
 
 /// Move quarantined pack/index files into the repository's live pack directory.
 /// Called only after the ref transaction has committed successfully.
-fn promote_quarantine(repo: &gix::Repository, q: Quarantine) -> Result<()> {
+/// Falls back to copy+delete when rename fails across filesystem boundaries (e.g. Docker overlay).
+pub fn promote_quarantine(repo: &gix::Repository, q: Quarantine) -> Result<()> {
     let pack_dir = repo.objects.store_ref().path().join("pack");
     std::fs::create_dir_all(&pack_dir).context("ensure pack dir")?;
 
     let pack_dest = pack_dir.join(q.pack_path.file_name().context("pack file name")?);
     let idx_dest = pack_dir.join(q.index_path.file_name().context("index file name")?);
 
-    std::fs::rename(&q.pack_path, &pack_dest).context("move pack file")?;
-    std::fs::rename(&q.index_path, &idx_dest).context("move index file")?;
+    move_file(&q.pack_path, &pack_dest).context("move pack file")?;
+    move_file(&q.index_path, &idx_dest).context("move index file")?;
 
-    // Drop the (now-empty) temp dir explicitly so errors surfacing here are clear.
     drop(q.dir);
 
     info!(
         objects_written = q.num_objects,
         "pack promoted to object database"
     );
+    Ok(())
+}
+
+fn move_file(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    if std::fs::rename(src, dst).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(src, dst).context("copy file")?;
+    std::fs::remove_file(src).context("remove source file")?;
     Ok(())
 }
