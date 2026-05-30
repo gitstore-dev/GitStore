@@ -7,8 +7,8 @@
 ## Overview
 
 GitStore is a git-backed ecommerce headless engine with two core services:
-1. **Git Service** (`gitstore-git-service`, Rust) - Git protocol transport and websocket notifications
-2. **GraphQL API** (`gitstore-api`, Go) - Headless API with Relay support and catalogue validation/policy hooks
+1. **Git Service** (`gitstore-git-service`, Rust) - Git protocol transport via gRPC (port 50051)
+2. **GraphQL API** (`gitstore-api`, Go) - Headless API with Relay support, catalogue validation/policy hooks, and Git smart HTTP (port 5000)
 
 > **Catalogue schema note**: `gitstore-git-service` does not parse or validate markdown/frontmatter content. Schema-aware validation and policy enforcement are owned by the API layer and future `git-receive-pack` hooks.
 
@@ -36,14 +36,14 @@ make bootstrap ADMIN_PASSWORD=<admin-password>
 **Expected Output**:
 ```
 NAME                 STATUS              PORTS
-gitstore-git-service running             0.0.0.0:9418->9418/tcp, 0.0.0.0:8080->8080/tcp
-gitstore-api         running             0.0.0.0:4000->4000/tcp
+gitstore-git-service running             0.0.0.0:50051->50051/tcp
+gitstore-api         running             0.0.0.0:4000->4000/tcp, 0.0.0.0:5000->5000/tcp
 ```
 
 ### 2. Access Services
 
 - **GraphQL Playground**: http://localhost:4000/playground
-- **Git Repository (example)**: use the clone URL printed by `make bootstrap`. Git HTTP transport is keyed by the internal repository ID.
+- **Git smart HTTP**: http://localhost:5000/{namespace}/{repo} — use with `git clone`, `git fetch`, `git push`
 
 ### 3. Test GraphQL Query
 
@@ -85,7 +85,7 @@ make bootstrap NAMESPACE=gitstore REPOSITORY=catalog ADMIN_PASSWORD=<admin-passw
 Then clone over Smart HTTP using the clone URL printed by `make bootstrap`:
 
 ```bash
-git clone http://localhost:9418/<repository-id> catalogue-work
+git clone http://localhost:5000/gitstore/catalog catalogue-work
 cd catalogue-work
 ```
 
@@ -142,7 +142,7 @@ Delta compression using up to 8 threads.
 Compressing objects: 100% (3/3), done.
 Writing objects: 100% (4/4), 512 bytes | 512.00 KiB/s, done.
 Total 4 (delta 1), reused 0 (delta 0)
-To http://localhost:9418/catalog
+To http://localhost:5000/gitstore/catalog
    abc1234..def5678  main -> main
 ```
 
@@ -156,7 +156,7 @@ git tag -a v0.2.0 -m "Release v0.2.0: Added Premium Laptop"
 git push origin v0.2.0
 ```
 
-**Result**: Storefront typically updates within ~30 seconds via websocket notification, but timing may vary.
+**Result**: Storefront typically updates within ~30 seconds via gRPC event stream, but timing may vary.
 
 #### Step 5: Verify Product on Storefront
 
@@ -313,21 +313,12 @@ query CategoryTree {
 ### Component Interaction Flow
 
 ```
-┌─────────────┐   Git Protocol    ┌─────────────┐
-│ Git Client  │   (push/pull)     │   Git       │
-│   (CLI)     │──────────────────→│   Service   │
-│             │←──────────────────│  (Rust)     │
-└─────────────┘ Hook / Policy Err.└──────┬──────┘
-                  or Success             │
-                                         │ Websocket
-                                         │ Notification
-                                         │ (new tag)
-                                         ↓
-                                  ┌─────────────┐
-                                  │  GraphQL    │
-                                  │   API       │
-                                  │   (Go)      │
-                                  └──────┬──────┘
+┌─────────────┐   Git smart HTTP  ┌─────────────┐   gRPC         ┌─────────────┐
+│ Git Client  │   (push/pull)     │   GraphQL   │   (port 50051) │   Git       │
+│   (CLI)     │──────────────────→│   API       │───────────────→│   Service   │
+│             │←──────────────────│  (Go)       │←───────────────│  (Rust)     │
+└─────────────┘ Hook / Policy Err.│  port 5000  │                └─────────────┘
+                  or Success      └──────┬──────┘
                                          │
                        ┌─────────────────┼─────────────────┐
                        │ GraphQL         │                 │ GraphQL
@@ -342,8 +333,8 @@ query CategoryTree {
                        │ (create/update/delete)
                        │ + publishCatalog
                        ↓
-                ┌─────────────┐   Git Protocol    ┌─────────────┐
-                │  GraphQL    │   (commit/tag)    │   Git       │
+                ┌─────────────┐   gRPC             ┌─────────────┐
+                │  GraphQL    │   (commit/tag)     │   Git       │
                 │   API       │──────────────────→│   Service   │
                 │   (Go)      │←──────────────────│  (Rust)     │
                 └─────────────┘ Hook / Policy     └─────────────┘
@@ -353,12 +344,12 @@ query CategoryTree {
 
 **Path 1: Technical User (Git CLI)**
 1. **Git Client**: User creates Markdown file locally
-2. **Git Client**: `git commit` + `git push` to git server
-3. **Git Service**: Git transport accepts/rejects based on git protocol state (no frontmatter schema rewrite)
-4. **Git Client**: Receives success/failure
-5. **Git Client**: `git tag v1.0.0` + `git push --tags`
-6. **Git Service**: Tag created → Websocket broadcast
-7. **GraphQL API**: Receives websocket → Invalidates cache → Reloads catalogue
+2. **Git Client**: `git commit` + `git push` to `http://localhost:5000/{namespace}/{repo}`
+3. **GraphQL API (port 5000)**: Proxies Git smart HTTP to `gitstore-git-service` via gRPC
+4. **Git Service**: Git transport accepts/rejects based on git protocol state (no frontmatter schema rewrite)
+5. **Git Client**: Receives success/failure
+6. **Git Client**: `git tag v1.0.0` + `git push --tags`
+7. **Git Service**: Tag created → gRPC event stream notification (pending GH#139)
 8. **Storefront**: Queries API → Gets updated catalogue
 
 **Path 2: Admin (optional web UI)**
@@ -413,12 +404,10 @@ make dev
 #### Git Service
 
 ```bash
-GITSTORE_HTTP__PORT=9418
-GITSTORE_WS__PORT=8080
+GITSTORE_GRPC__PORT=50051
 GITSTORE_GIT__DATA_DIR=/data/repos
 GITSTORE_LOG__LEVEL=info
 GITSTORE_LOG__FORMAT=json
-GITSTORE_GRPC__PORT=50051
 GITSTORE_GIT__REPO__MAX_FILE_SIZE=52428800  # 50MB
 ```
 
@@ -426,7 +415,7 @@ GITSTORE_GIT__REPO__MAX_FILE_SIZE=52428800  # 50MB
 
 ```bash
 GITSTORE_API_PORT=4000
-GITSTORE_GIT__WS__URI=ws://git-service:8080
+GITSTORE_API__GIT_PORT=5000
 GITSTORE_GIT__GRPC__URI=dns:///git-service:50051
 GITSTORE_CACHE__TTL=300  # 5 minutes
 GITSTORE_LOG__LEVEL=info
@@ -563,15 +552,12 @@ make pr-ready
 - Read hook output from the push response and from service logs
 - Correct the issue in your local branch, then push again
 
-### Issue: Websocket Notification Not Received
+### Issue: Storefront Not Updating After Release Tag
 
 **Symptoms**: Storefront not updating after release tag
 
 **Debug**:
 ```bash
-# Check websocket connection
-wscat -c ws://localhost:8080
-
 # Check API logs
 make logs SERVICE=api
 

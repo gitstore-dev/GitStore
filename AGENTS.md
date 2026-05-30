@@ -52,9 +52,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 012-smart-http-api: Go 1.25 (`gitstore-api`) + `net/http` second server on port 5000 · Rust edition 2021, MSRV 1.82 (`gitstore-git-service`) — adds `ReceivePack` (client-streaming), `UploadPack` (server-streaming), `InfoRefs` gRPC RPCs; removes `axum`/HTTP server, `tokio_tungstenite`/`tungstenite` WebSocket deps; removes `gorilla/websocket` and `internal/websocket` from `gitstore-api`
 - 010-repo-storage-identity: Added Go 1.25 (`gitstore-api`) · Rust edition 2021, MSRV 1.82 (`gitstore-git-service`) + `gqlgen v0.17.90`, `go-memdb v1.3.5`, `gocqlx/v3 v3.0.4`, `google/uuid v1.6.0` (Go) · `gix 0.83.0`, `tonic 0.14.6`, `prost 0.14.3` (Rust)
 - 009-api-namespaces: Added Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90`, `go-memdb v1.3.5`, `gocqlx/v3 v3.0.4` (ScyllaDB), `go-playground/validator/v10`, `go.uber.org/zap`, `google/uuid`
-- 008-remove-git-shellouts: Added Rust edition 2021, MSRV 1.82 + `gix 0.83.0`, `gix-packetline` (compatible version), `gix-pack` (compatible version), `gix-protocol` (compatible version), `axum 0.8`, `tokio 1.35`, `tracing 0.1`, `tempfile 3.8` (dev)
 
 
 <!-- MANUAL ADDITIONS START -->

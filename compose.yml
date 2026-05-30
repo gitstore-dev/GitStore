@@ -6,14 +6,10 @@ services:
       dockerfile: docker/git-service.Dockerfile
     container_name: gitstore-git-service
     ports:
-      - "9418:9418"  # Git protocol
-      - "8080:8080"  # Websocket notifications
       - "50051:50051"  # gRPC
     volumes:
       - git-repo-data-root:/data/repos
     environment:
-      - GITSTORE_HTTP__PORT=9418
-      - GITSTORE_WS__PORT=8080
       - GITSTORE_GRPC__PORT=50051
       - GITSTORE_GIT__DATA_DIR=/data/repos
       - GITSTORE_LOG__LEVEL=info
@@ -21,12 +17,6 @@ services:
       - GITSTORE_GIT__REPO__MAX_FILE_SIZE=52428800
     networks:
       - gitstore-network
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=1", "--spider", "http://127.0.0.1:9418/health"]
-      interval: 2s
-      timeout: 2s
-      retries: 10
-      start_period: 2s
 
   api:
     image: ghcr.io/gitstore-dev/api
@@ -36,14 +26,14 @@ services:
     container_name: gitstore-api
     ports:
       - "4000:4000"  # GraphQL API
+      - "5000:5000"  # Git smart HTTP
     depends_on:
       git-service:
-        condition: service_healthy
+        condition: service_started
     environment:
       - GITSTORE_API_PORT=4000
+      - GITSTORE_API__GIT_PORT=5000
       - GITSTORE_GIT__GRPC__URI=dns:///git-service:50051
-      - GITSTORE_GIT__WS__URI=ws://git-service:8080
-      - GITSTORE_GIT__HTTP__URI=http://git-service:9418
       - GITSTORE_AUTH__ADMIN__USERNAME=${GITSTORE_AUTH__ADMIN__USERNAME:-admin}
       - GITSTORE_AUTH__ADMIN__PASSWORD_HASH=${GITSTORE_AUTH__ADMIN__PASSWORD_HASH}
       - GITSTORE_AUTH__JWT__SECRET=${GITSTORE_AUTH__JWT__SECRET}
@@ -53,10 +43,11 @@ services:
     networks:
       - gitstore-network
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5000/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
 
 volumes:
   git-repo-data-root:

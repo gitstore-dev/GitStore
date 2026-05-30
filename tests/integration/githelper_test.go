@@ -47,7 +47,9 @@ func newPushHelper(t *testing.T) *pushHelper {
 	t.Helper()
 
 	workDir := t.TempDir()
-	remoteURL := fmt.Sprintf("%s/catalog.git", gitServerGitURL)
+	namespace := getEnv("NAMESPACE", "gitstore")
+	repository := getEnv("REPOSITORY", "catalog")
+	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitServerGitURL, namespace, repository)
 
 	// Try a lightweight reachability check before cloning.
 	checkCmd := exec.Command("git", "ls-remote", remoteURL)
