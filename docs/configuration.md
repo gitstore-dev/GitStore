@@ -33,9 +33,9 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 
 ### API Server
 
-| Key        | Env Var             | Type    | Default | Required | Sensitive | Description                                   |
-|------------|---------------------|---------|---------|----------|-----------|-----------------------------------------------|
-| `api.port` | `GITSTORE_API_PORT` | integer | `4000`  | No       | No        | HTTP port the API server listens on (1–65535) |
+| Key        | Env Var              | Type    | Default | Required | Sensitive | Description                                   |
+|------------|----------------------|---------|---------|----------|-----------|-----------------------------------------------|
+| `api.port` | `GITSTORE_API__PORT` | integer | `4000`  | No       | No        | HTTP port the API server listens on (1–65535) |
 
 ### Git Service Connection
 
