@@ -169,6 +169,13 @@ func (s *scyllaDatastore) CreateProduct(ctx context.Context, p *datastore.Produc
 	if existing, err := s.GetProductBySKU(ctx, p.SKU); err == nil && existing.ID != p.ID {
 		return fmt.Errorf("%w: product sku %s", datastore.ErrAlreadyExists, p.SKU)
 	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if p.CreatedAt.IsZero() {
+		p.CreatedAt = now
+	}
+	if p.UpdatedAt.IsZero() {
+		p.UpdatedAt = now
+	}
 	row := toProductRow(p)
 	stmt, names := s.productTable.Insert()
 	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
@@ -242,7 +249,7 @@ func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Produc
 		"sku", "title", "price", "currency",
 		"inventory_status", "inventory_quantity",
 		"category_id", "collection_ids", "images",
-		"metadata", "created_at", "updated_at", "body",
+		"metadata", "updated_at", "body",
 	)
 	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
 		return fmt.Errorf("scylla: update product: %w", err)
@@ -274,6 +281,13 @@ func (s *scyllaDatastore) CreateCategory(ctx context.Context, c *datastore.Categ
 	}
 	if existing, err := s.GetCategoryBySlug(ctx, c.Slug); err == nil && existing.ID != c.ID {
 		return fmt.Errorf("%w: category slug %s", datastore.ErrAlreadyExists, c.Slug)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = now
+	}
+	if c.UpdatedAt.IsZero() {
+		c.UpdatedAt = now
 	}
 	row := toCategoryRow(c)
 	stmt, names := s.categoryTable.Insert()
@@ -346,7 +360,7 @@ func (s *scyllaDatastore) UpdateCategory(ctx context.Context, c *datastore.Categ
 	row := toCategoryRow(c)
 	stmt, names := s.categoryTable.Update(
 		"name", "slug", "parent_id", "display_order",
-		"created_at", "updated_at", "body",
+		"updated_at", "body",
 	)
 	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
 		return fmt.Errorf("scylla: update category: %w", err)
@@ -378,6 +392,13 @@ func (s *scyllaDatastore) CreateCollection(ctx context.Context, c *datastore.Col
 	}
 	if existing, err := s.GetCollectionBySlug(ctx, c.Slug); err == nil && existing.ID != c.ID {
 		return fmt.Errorf("%w: collection slug %s", datastore.ErrAlreadyExists, c.Slug)
+	}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = now
+	}
+	if c.UpdatedAt.IsZero() {
+		c.UpdatedAt = now
 	}
 	row := toCollectionRow(c)
 	stmt, names := s.collectionTable.Insert()
@@ -450,7 +471,7 @@ func (s *scyllaDatastore) UpdateCollection(ctx context.Context, c *datastore.Col
 	row := toCollectionRow(c)
 	stmt, names := s.collectionTable.Update(
 		"name", "slug", "display_order", "product_ids",
-		"created_at", "updated_at", "body",
+		"updated_at", "body",
 	)
 	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
 		return fmt.Errorf("scylla: update collection: %w", err)
