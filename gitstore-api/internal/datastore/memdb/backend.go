@@ -5,11 +5,144 @@ package memdb
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	gomemdb "github.com/hashicorp/go-memdb"
 )
+
+// paginateSlice applies keyset pagination to an in-memory slice.
+// Items are sorted by (created_at DESC, id DESC) — newest first.
+// The getKey function extracts (createdAt, id) from each item.
+func paginateSlice[T any](items []*T, page datastore.PageParams, getKey func(*T) (time.Time, string)) *datastore.PageResult[T] {
+	totalCount := int32(len(items))
+
+	// Sort by created_at DESC, id DESC (newest first)
+	sort.Slice(items, func(i, j int) bool {
+		iTime, iID := getKey(items[i])
+		jTime, jID := getKey(items[j])
+		cmp := iTime.Compare(jTime)
+		if cmp != 0 {
+			return cmp > 0 // DESC
+		}
+		return iID > jID // DESC
+	})
+
+	if len(items) == 0 {
+		return &datastore.PageResult[T]{Items: []*T{}, TotalCount: totalCount}
+	}
+
+	limit := page.Limit()
+	start, end := 0, len(items)
+
+	// Apply "after" cursor: skip items until we pass the cursor position
+	// In DESC order, "after" means items that are OLDER (come after in the list)
+	if page.After != "" {
+		cursor, err := decodeCursor(page.After)
+		if err == nil {
+			found := false
+			for i, item := range items {
+				itemTime, itemID := getKey(item)
+				if compareKeyset(itemTime, itemID, cursor.CreatedAt, cursor.ID) < 0 {
+					start = i
+					found = true
+					break
+				}
+			}
+			if !found {
+				start = end
+			}
+		}
+	}
+
+	// Apply "before" cursor: stop items before we reach the cursor position
+	// In DESC order, "before" means items that are NEWER (come before in the list)
+	if page.Before != "" {
+		cursor, err := decodeCursor(page.Before)
+		if err == nil {
+			for i, item := range items {
+				itemTime, itemID := getKey(item)
+				if compareKeyset(itemTime, itemID, cursor.CreatedAt, cursor.ID) <= 0 {
+					end = i
+					break
+				}
+			}
+		}
+	}
+
+	if start >= end {
+		return &datastore.PageResult[T]{
+			Items:       []*T{},
+			HasPrevious: start > 0,
+			TotalCount:  totalCount,
+		}
+	}
+
+	window := items[start:end]
+	hasNext := false
+	hasPrevious := start > 0
+
+	if page.Last > 0 {
+		// Backward pagination: take last N items from the window
+		if len(window) > limit {
+			window = window[len(window)-limit:]
+			hasPrevious = true
+		}
+		hasNext = end < len(items)
+	} else {
+		// Forward pagination: take first N items from the window
+		if len(window) > limit {
+			window = window[:limit]
+			hasNext = true
+		}
+		hasPrevious = start > 0
+	}
+
+	return &datastore.PageResult[T]{
+		Items:       window,
+		HasNext:     hasNext,
+		HasPrevious: hasPrevious,
+		TotalCount:  totalCount,
+	}
+}
+
+// compareKeyset compares two keyset positions in DESC order.
+// Returns < 0 if (aTime, aID) is "after" (older than) (bTime, bID) in DESC order.
+func compareKeyset(aTime time.Time, aID string, bTime time.Time, bID string) int {
+	cmp := aTime.Compare(bTime)
+	if cmp != 0 {
+		return cmp
+	}
+	switch {
+	case aID < bID:
+		return -1
+	case aID > bID:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// decodeCursor decodes an opaque base64 keyset cursor.
+func decodeCursor(cursor string) (*datastore.PageCursor, error) {
+	decoded, err := base64.StdEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base64: %w", err)
+	}
+	parts := strings.SplitN(string(decoded), "|", 3)
+	if len(parts) != 3 || parts[0] != "keyset" {
+		return nil, fmt.Errorf("invalid cursor format")
+	}
+	ts, err := time.Parse(time.RFC3339Nano, parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("invalid timestamp: %w", err)
+	}
+	return &datastore.PageCursor{CreatedAt: ts, ID: parts[2]}, nil
+}
 
 // memdbDatastore implements datastore.Datastore using hashicorp/go-memdb.
 type memdbDatastore struct {
@@ -80,26 +213,23 @@ func (m *memdbDatastore) GetProductBySKU(_ context.Context, sku string) (*datast
 	return raw.(*datastore.Product), nil
 }
 
-func (m *memdbDatastore) ListProducts(_ context.Context, filter datastore.ProductFilter) ([]*datastore.Product, error) {
+func (m *memdbDatastore) ListProducts(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
-	var it gomemdb.ResultIterator
-	var err error
-	if filter.CategoryID != "" {
-		it, err = txn.Get("product", "category_id", filter.CategoryID)
-	} else {
-		it, err = txn.Get("product", "id")
-	}
+	it, err := txn.Get("product", "id")
 	if err != nil {
 		return nil, fmt.Errorf("memdb: list products: %w", err)
 	}
 
-	var results []*datastore.Product
+	var all []*datastore.Product
 	for obj := it.Next(); obj != nil; obj = it.Next() {
-		results = append(results, obj.(*datastore.Product))
+		all = append(all, obj.(*datastore.Product))
 	}
-	return results, nil
+
+	return paginateSlice(all, page, func(p *datastore.Product) (time.Time, string) {
+		return p.CreatedAt, p.ID
+	}), nil
 }
 
 func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product) error {
@@ -171,18 +301,20 @@ func (m *memdbDatastore) GetCategoryBySlug(_ context.Context, slug string) (*dat
 	return raw.(*datastore.Category), nil
 }
 
-func (m *memdbDatastore) ListCategories(_ context.Context) ([]*datastore.Category, error) {
+func (m *memdbDatastore) ListCategories(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Category], error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 	it, err := txn.Get("category", "id")
 	if err != nil {
 		return nil, fmt.Errorf("memdb: list categories: %w", err)
 	}
-	var results []*datastore.Category
+	var all []*datastore.Category
 	for obj := it.Next(); obj != nil; obj = it.Next() {
-		results = append(results, obj.(*datastore.Category))
+		all = append(all, obj.(*datastore.Category))
 	}
-	return results, nil
+	return paginateSlice(all, page, func(c *datastore.Category) (time.Time, string) {
+		return c.CreatedAt, c.ID
+	}), nil
 }
 
 func (m *memdbDatastore) UpdateCategory(_ context.Context, c *datastore.Category) error {
@@ -254,18 +386,20 @@ func (m *memdbDatastore) GetCollectionBySlug(_ context.Context, slug string) (*d
 	return raw.(*datastore.Collection), nil
 }
 
-func (m *memdbDatastore) ListCollections(_ context.Context) ([]*datastore.Collection, error) {
+func (m *memdbDatastore) ListCollections(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 	it, err := txn.Get("collection", "id")
 	if err != nil {
 		return nil, fmt.Errorf("memdb: list collections: %w", err)
 	}
-	var results []*datastore.Collection
+	var all []*datastore.Collection
 	for obj := it.Next(); obj != nil; obj = it.Next() {
-		results = append(results, obj.(*datastore.Collection))
+		all = append(all, obj.(*datastore.Collection))
 	}
-	return results, nil
+	return paginateSlice(all, page, func(c *datastore.Collection) (time.Time, string) {
+		return c.CreatedAt, c.ID
+	}), nil
 }
 
 func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collection) error {
@@ -343,18 +477,20 @@ func (m *memdbDatastore) GetNamespaceByIdentifier(_ context.Context, identifier 
 	return raw.(*datastore.Namespace), nil
 }
 
-func (m *memdbDatastore) ListNamespaces(_ context.Context) ([]*datastore.Namespace, error) {
+func (m *memdbDatastore) ListNamespaces(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 	it, err := txn.Get("namespaces", "id")
 	if err != nil {
 		return nil, fmt.Errorf("memdb: list namespaces: %w", err)
 	}
-	var results []*datastore.Namespace
+	var all []*datastore.Namespace
 	for obj := it.Next(); obj != nil; obj = it.Next() {
-		results = append(results, obj.(*datastore.Namespace))
+		all = append(all, obj.(*datastore.Namespace))
 	}
-	return results, nil
+	return paginateSlice(all, page, func(ns *datastore.Namespace) (time.Time, string) {
+		return ns.CreatedAt, ns.ID
+	}), nil
 }
 
 func (m *memdbDatastore) DeleteNamespace(_ context.Context, id string) error {
@@ -398,18 +534,20 @@ func (m *memdbDatastore) GetRepository(_ context.Context, id string) (*datastore
 	return raw.(*datastore.Repository), nil
 }
 
-func (m *memdbDatastore) ListRepositoriesByNamespace(_ context.Context, namespaceID string) ([]*datastore.Repository, error) {
+func (m *memdbDatastore) ListRepositoriesByNamespace(_ context.Context, namespaceID string, page datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 	it, err := txn.Get("repository", "namespace_id", namespaceID)
 	if err != nil {
 		return nil, fmt.Errorf("memdb: list repositories by namespace: %w", err)
 	}
-	var results []*datastore.Repository
+	var all []*datastore.Repository
 	for obj := it.Next(); obj != nil; obj = it.Next() {
-		results = append(results, obj.(*datastore.Repository))
+		all = append(all, obj.(*datastore.Repository))
 	}
-	return results, nil
+	return paginateSlice(all, page, func(r *datastore.Repository) (time.Time, string) {
+		return r.CreatedAt, r.ID
+	}), nil
 }
 
 func (m *memdbDatastore) UpdateRepository(_ context.Context, r *datastore.Repository) error {

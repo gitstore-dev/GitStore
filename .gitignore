@@ -12,6 +12,7 @@ target/
 /bin/
 /api/bin/
 /gitstore-api/bin/
+/gitstore-api/server
 *.exe
 *.exe~
 *.dll

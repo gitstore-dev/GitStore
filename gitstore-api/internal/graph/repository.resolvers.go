@@ -7,7 +7,6 @@ package graph
 
 import (
 	"context"
-	"sort"
 
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -158,49 +157,13 @@ func (r *queryResolver) Repositories(ctx context.Context, namespaceID string, fi
 	if err != nil {
 		return nil, err
 	}
-	ns, err := r.service.GetNamespaceByID(ctx, rawNsID)
+	if _, err := r.service.GetNamespaceByID(ctx, rawNsID); err != nil {
+		return nil, err
+	}
+	params := toPageParams(first, after, last, before)
+	result, err := r.service.ListRepositoriesByNamespace(ctx, rawNsID, params)
 	if err != nil {
 		return nil, err
 	}
-	repos, err := r.service.ListRepositoriesByNamespace(ctx, rawNsID)
-	if err != nil {
-		return nil, err
-	}
-	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
-	allEdges := make([]*model.RepositoryEdge, len(repos))
-	for i, repo := range repos {
-		allEdges[i] = &model.RepositoryEdge{
-			Cursor: encodeCursor(i),
-			Node:   datastoreRepositoryToModel(repo, ns, r.storageDataDir),
-		}
-	}
-	start, end, hasNextPage, hasPreviousPage, err := applyCursorWindow(len(allEdges), first, after, last, before)
-	if err != nil {
-		return nil, err
-	}
-	edges := allEdges[start:end]
-	var startCursor, endCursor *string
-	if len(edges) > 0 {
-		s := edges[0].Cursor
-		e := edges[len(edges)-1].Cursor
-		startCursor = &s
-		endCursor = &e
-	}
-	return &model.RepositoryConnection{
-		Edges: edges,
-		PageInfo: &model.PageInfo{
-			HasNextPage:     hasNextPage,
-			HasPreviousPage: hasPreviousPage,
-			StartCursor:     startCursor,
-			EndCursor:       endCursor,
-		},
-	}, nil
-}
-
-// callerUsernameOrAnon returns the authenticated user's username or "anon".
-func callerUsernameOrAnon(ctx context.Context, r *mutationResolver) string {
-	if r.authMiddleware == nil {
-		return "anon"
-	}
-	return "anon"
+	return BuildRepositoryConnection(result), nil
 }

@@ -72,9 +72,9 @@ func (d *InstrumentedDatastore) GetProductBySKU(ctx context.Context, sku string)
 	return v, err
 }
 
-func (d *InstrumentedDatastore) ListProducts(ctx context.Context, filter ProductFilter) ([]*Product, error) {
+func (d *InstrumentedDatastore) ListProducts(ctx context.Context, params PageParams) (*PageResult[Product], error) {
 	start := time.Now()
-	v, err := d.next.ListProducts(ctx, filter)
+	v, err := d.next.ListProducts(ctx, params)
 	d.observe("ListProducts", start, err)
 	return v, err
 }
@@ -116,9 +116,9 @@ func (d *InstrumentedDatastore) GetCategoryBySlug(ctx context.Context, slug stri
 	return v, err
 }
 
-func (d *InstrumentedDatastore) ListCategories(ctx context.Context) ([]*Category, error) {
+func (d *InstrumentedDatastore) ListCategories(ctx context.Context, params PageParams) (*PageResult[Category], error) {
 	start := time.Now()
-	v, err := d.next.ListCategories(ctx)
+	v, err := d.next.ListCategories(ctx, params)
 	d.observe("ListCategories", start, err)
 	return v, err
 }
@@ -160,9 +160,9 @@ func (d *InstrumentedDatastore) GetCollectionBySlug(ctx context.Context, slug st
 	return v, err
 }
 
-func (d *InstrumentedDatastore) ListCollections(ctx context.Context) ([]*Collection, error) {
+func (d *InstrumentedDatastore) ListCollections(ctx context.Context, params PageParams) (*PageResult[Collection], error) {
 	start := time.Now()
-	v, err := d.next.ListCollections(ctx)
+	v, err := d.next.ListCollections(ctx, params)
 	d.observe("ListCollections", start, err)
 	return v, err
 }
@@ -204,9 +204,9 @@ func (d *InstrumentedDatastore) GetNamespaceByIdentifier(ctx context.Context, id
 	return v, err
 }
 
-func (d *InstrumentedDatastore) ListNamespaces(ctx context.Context) ([]*Namespace, error) {
+func (d *InstrumentedDatastore) ListNamespaces(ctx context.Context, params PageParams) (*PageResult[Namespace], error) {
 	start := time.Now()
-	v, err := d.next.ListNamespaces(ctx)
+	v, err := d.next.ListNamespaces(ctx, params)
 	d.observe("ListNamespaces", start, err)
 	return v, err
 }
@@ -234,9 +234,9 @@ func (d *InstrumentedDatastore) GetRepository(ctx context.Context, id string) (*
 	return v, err
 }
 
-func (d *InstrumentedDatastore) ListRepositoriesByNamespace(ctx context.Context, namespaceID string) ([]*Repository, error) {
+func (d *InstrumentedDatastore) ListRepositoriesByNamespace(ctx context.Context, namespaceID string, params PageParams) (*PageResult[Repository], error) {
 	start := time.Now()
-	v, err := d.next.ListRepositoriesByNamespace(ctx, namespaceID)
+	v, err := d.next.ListRepositoriesByNamespace(ctx, namespaceID, params)
 	d.observe("ListRepositoriesByNamespace", start, err)
 	return v, err
 }

@@ -31,7 +31,7 @@ func (s *stubDatastore) GetProduct(_ context.Context, _ string) (*datastore.Prod
 func (s *stubDatastore) GetProductBySKU(_ context.Context, _ string) (*datastore.Product, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) ListProducts(_ context.Context, _ datastore.ProductFilter) ([]*datastore.Product, error) {
+func (s *stubDatastore) ListProducts(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
 	return nil, s.getProductErr
 }
 func (s *stubDatastore) UpdateProduct(_ context.Context, _ *datastore.Product) error {
@@ -49,7 +49,7 @@ func (s *stubDatastore) GetCategory(_ context.Context, _ string) (*datastore.Cat
 func (s *stubDatastore) GetCategoryBySlug(_ context.Context, _ string) (*datastore.Category, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) ListCategories(_ context.Context) ([]*datastore.Category, error) {
+func (s *stubDatastore) ListCategories(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.Category], error) {
 	return nil, s.getProductErr
 }
 func (s *stubDatastore) UpdateCategory(_ context.Context, _ *datastore.Category) error {
@@ -67,7 +67,7 @@ func (s *stubDatastore) GetCollection(_ context.Context, _ string) (*datastore.C
 func (s *stubDatastore) GetCollectionBySlug(_ context.Context, _ string) (*datastore.Collection, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) ListCollections(_ context.Context) ([]*datastore.Collection, error) {
+func (s *stubDatastore) ListCollections(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
 	return nil, s.getProductErr
 }
 func (s *stubDatastore) UpdateCollection(_ context.Context, _ *datastore.Collection) error {
@@ -85,7 +85,7 @@ func (s *stubDatastore) GetNamespace(_ context.Context, _ string) (*datastore.Na
 func (s *stubDatastore) GetNamespaceByIdentifier(_ context.Context, _ string) (*datastore.Namespace, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) ListNamespaces(_ context.Context) ([]*datastore.Namespace, error) {
+func (s *stubDatastore) ListNamespaces(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {
 	return nil, s.getProductErr
 }
 func (s *stubDatastore) DeleteNamespace(_ context.Context, _ string) error {
@@ -97,7 +97,7 @@ func (s *stubDatastore) CreateRepository(_ context.Context, _ *datastore.Reposit
 func (s *stubDatastore) GetRepository(_ context.Context, _ string) (*datastore.Repository, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) ListRepositoriesByNamespace(_ context.Context, _ string) ([]*datastore.Repository, error) {
+func (s *stubDatastore) ListRepositoriesByNamespace(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
 	return nil, s.getProductErr
 }
 func (s *stubDatastore) UpdateRepository(_ context.Context, _ *datastore.Repository) error {
