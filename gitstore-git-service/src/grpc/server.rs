@@ -925,7 +925,8 @@ impl GitService for GitServiceImpl {
         Ok(Response::new(ReceivePackResponse { report_status }))
     }
 
-    type UploadPackStream = tokio_stream::wrappers::ReceiverStream<Result<UploadPackResponse, Status>>;
+    type UploadPackStream =
+        tokio_stream::wrappers::ReceiverStream<Result<UploadPackResponse, Status>>;
 
     async fn upload_pack(
         &self,
