@@ -63,9 +63,11 @@ func newPushHelper(t *testing.T) *pushHelper {
 		t.Skipf("could not clone catalog repo: %v\n%s", err, out)
 	}
 
-	// Configure git identity inside the work dir for commits.
+	// Configure git identity and ensure the default branch is "main"
+	// regardless of the system-level init.defaultBranch setting.
 	run(t, workDir, "git", "config", "user.email", "inttest@gitstore.dev")
 	run(t, workDir, "git", "config", "user.name", "Integration Test")
+	run(t, workDir, "git", "symbolic-ref", "HEAD", "refs/heads/main")
 
 	return &pushHelper{t: t, workDir: workDir, remoteURL: remoteURL}
 }

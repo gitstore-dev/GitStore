@@ -66,8 +66,24 @@ jobs:
         timeout 60 sh -c 'until curl -sf http://localhost:5000/health; do sleep 2; done'
         docker compose ps
 
+    - name: Wait for git-service gRPC to be ready
+      run: timeout 30 sh -c 'until nc -z localhost 50051; do sleep 1; done'
+
     - name: Bootstrap namespace and repository
+      # admin123 is the plaintext for the stub bcrypt hash set in GITSTORE_AUTH__ADMIN__PASSWORD_HASH above
       run: make bootstrap ADMIN_PASSWORD=admin123 NAMESPACE=gitci NAMESPACE_DISPLAY_NAME=CI NAMESPACE_TIER=USER REPOSITORY=catalog
+
+    - name: Seed repository with initial commit
+      run: |
+        git config --global user.email "ci@gitstore.dev"
+        git config --global user.name "CI"
+        git config --global init.defaultBranch main
+        tmpdir=$(mktemp -d)
+        git clone http://localhost:5000/gitci/catalog.git "$tmpdir"
+        echo "# CI seed" > "$tmpdir/README.md"
+        git -C "$tmpdir" add README.md
+        git -C "$tmpdir" commit -m "ci: seed initial commit"
+        git -C "$tmpdir" push origin main
 
     - name: Run integration tests
       working-directory: ./tests/integration
