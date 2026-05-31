@@ -16,7 +16,7 @@ Sync Impact Report:
 
 **Tests MUST be written before implementation code.** All user stories require contract tests and integration tests written first, verified to fail, then implementation follows (Red-Green-Refactor cycle). No implementation task may begin until its corresponding test task is complete and failing. This is strictly enforced and cannot be bypassed.
 
-**Rationale:** Test-first development ensures requirements are testable, prevents scope creep, documents expected behavior, and catches regressions early. For a multi-service architecture with git validation on the critical path, test-first is essential to prevent data corruption and maintain system integrity.
+**Rationale:** Test-first development ensures requirements are testable, prevents scope creep, documents expected behaviour, and catches regressions early. For a multiservice architecture with git validation on the critical path, test-first is essential to prevent data corruption and maintain system integrity.
 
 ### II. API-First Design
 
@@ -28,31 +28,31 @@ Sync Impact Report:
 
 **All public interfaces MUST follow semantic versioning.** Breaking changes require MAJOR version bump, new features MINOR, bug fixes PATCH. GraphQL schema changes follow schema evolution principles (additive changes preferred, deprecation before removal). Release tags MUST use semantic versioning (v1.0.0) or date-based tags (YYYY-MM-DD).
 
-**Rationale:** Git-backed catalog management requires stable versioning for rollback capabilities. Storefronts depend on consistent API contracts. Clear versioning prevents breaking changes from reaching production and enables safe rollback to previous catalog versions.
+**Rationale:** Git-backed catalogue management requires stable versioning for rollback capabilities. Storefronts depend on consistent API contracts. Clear versioning prevents breaking changes from reaching production and enables safe rollback to previous catalogue versions.
 
 ### IV. Observability & Debuggability
 
-**Structured logging MUST be implemented in all services.** Every service (git-server, API, admin-ui) requires structured logging with consistent format, request ID propagation across service boundaries, and error context capture. All validation failures, git operations, and catalog updates MUST be logged with sufficient detail for debugging.
+**Structured logging MUST be implemented in all services.** Every service (git-server, API, admin-ui) requires structured logging with consistent format, request ID propagation across service boundaries, and error context capture. All validation failures, git operations, and catalogue updates MUST be logged with sufficient detail for debugging.
 
 **Rationale:** Multi-service architecture requires distributed tracing capabilities. Git operations and validation errors must be auditable. Request IDs enable end-to-end transaction tracking from admin UI → GraphQL API → git server.
 
 ### V. User Story Driven Development
 
-**All work MUST map to user stories with independent test criteria.** Features are organized by user story (P1, P2, P3) with each story independently completable and testable. Tasks include [Story] labels (US1, US2, US3) for traceability. No speculative features outside defined user stories.
+**All work MUST map to user stories with independent test criteria.** Features are organised by user story (P1, P2, P3) with each story independently completable and testable. Tasks include [Story] labels (US1, US2, US3) for traceability. No speculative features outside defined user stories.
 
-**Rationale:** User story organization enables incremental delivery, parallel development, and clear acceptance criteria. Each story delivers measurable user value and can be deployed independently without breaking other stories.
+**Rationale:** User story organisation enables incremental delivery, parallel development, and clear acceptance criteria. Each story delivers measurable user value and can be deployed independently without breaking other stories.
 
 ### VI. Incremental Delivery
 
 **MVP MUST deliver minimal viable user story (P1).** Development follows P1 (git workflow) → P2 (categories/collections) → P3 (admin UI) priority order. Each user story adds value without requiring subsequent stories. Features can be deployed incrementally with P1 providing core functionality.
 
-**Rationale:** GitStore's git-based approach provides value even without admin UI (P3). Technical users and AI agents can use the system with just P1. Incremental delivery reduces risk, enables earlier feedback, and allows prioritization adjustments based on user feedback.
+**Rationale:** GitStore's git-based approach provides value even without admin UI (P3). Technical users and AI agents can use the system with just P1. Incremental delivery reduces risk, enables earlier feedback, and allows prioritisation adjustments based on user feedback.
 
 ### VII. Simplicity & YAGNI (You Aren't Gonna Need It)
 
 **Start simple, justify complexity.** No speculative features, premature abstractions, or multi-tenant capabilities until proven necessary. Single admin user model initially (RBAC deferred). In-memory caching preferred over external dependencies. Architecture complexity (polyglot Rust/Go/TypeScript) MUST be justified with clear technical rationale.
 
-**Rationale:** Complexity is a liability. Every dependency, abstraction, and feature adds maintenance burden. GitStore's core value proposition (git-backed catalogs) should not be obscured by premature optimization or speculative features.
+**Rationale:** Complexity is a liability. Every dependency, abstraction, and feature adds maintenance burden. GitStore's core value proposition (git-backed catalogues) should not be obscured by premature optimisation or speculative features.
 
 ## Architecture Constraints
 
@@ -60,8 +60,8 @@ Sync Impact Report:
 
 GitStore comprises three independent services:
 
-1. **Git Server (Rust)**: Built-in git engine with pre-push validation and websocket notifications
-2. **GraphQL API (Go)**: Relay-compliant API layer exposing catalog data with in-memory caching
+1. **Git Server (Rust)**: Built-in git engine with pre-push validation and gRPC notification stream (pending GH#139)
+2. **GraphQL API (Go)**: Relay-compliant API layer exposing catalogue data with in-memory caching
 3. **Admin UI (Astro/React)**: Optional web interface for non-technical users
 
 **Justification for Polyglot Architecture:**
@@ -75,16 +75,14 @@ GitStore comprises three independent services:
 
 ### Performance Targets
 
-- Storefront catalog queries: < 500ms for 1000+ products
+- Storefront catalogue queries: < 500ms for 1000+ products
 - Storefront update latency: < 30 seconds from release tag creation
 - Git push validation: < 5 seconds for 100 file push
-- Websocket notification delivery: < 100ms from tag creation
 
 ### Scale Constraints
 
-- Product catalog size: up to 10,000 products initially
-- Git repository size: < 500MB for markdown + metadata
-- Websocket connections: up to 100 concurrent storefront subscribers
+- Product catalogue size: up to 10,000 products initially
+- Git repository size: < 500MB for Markdown + metadata
 - Concurrent admin UI users: 1-5 initially (single admin user authentication)
 
 ## Development Workflow
@@ -100,7 +98,7 @@ GitStore comprises three independent services:
 
 ### Task Execution Order
 
-1. **Setup Phase**: Initialize project structure and dependencies
+1. **Setup Phase**: Initialise project structure and dependencies
 2. **Foundational Phase**: Core infrastructure (BLOCKS all user stories)
 3. **User Story Phases**: Implement P1 → P2 → P3 in priority order
 4. **Polish Phase**: Cross-cutting concerns after story completion

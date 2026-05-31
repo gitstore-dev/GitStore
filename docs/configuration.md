@@ -33,17 +33,28 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 
 ### API Server
 
-| Key        | Env Var              | Type    | Default | Required | Sensitive | Description                                   |
-|------------|----------------------|---------|---------|----------|-----------|-----------------------------------------------|
-| `api.port` | `GITSTORE_API__PORT` | integer | `4000`  | No       | No        | HTTP port the API server listens on (1–65535) |
+| Key            | Env Var                  | Type    | Default | Required | Sensitive | Description                                        |
+|----------------|--------------------------|---------|---------|----------|-----------|----------------------------------------------------|
+| `api.port`     | `GITSTORE_API__PORT`     | integer | `4000`  | No       | No        | HTTP port the API server listens on (1–65535)      |
+| `api.git_port` | `GITSTORE_API__GIT_PORT` | integer | `5000`  | No       | No        | Git smart HTTP port the API server listens on (1–65535) |
 
 ### Git Service Connection
 
-| Key                | Env Var                           | Type   | Default                  | Required | Sensitive | Description                                |
-|--------------------|-----------------------------------|--------|--------------------------|----------|-----------|--------------------------------------------|
-| `git.grpc.uri`     | `GITSTORE_GIT__GRPC__URI`        | string | `dns:///localhost:50051` | Yes      | No        | gRPC address of gitstore-git-service       |
-| `git.ws.uri`       | `GITSTORE_GIT__WS__URI`          | string | `ws://localhost:8080`    | Yes      | No        | WebSocket address of gitstore-git-service  |
-| `git.http.uri`     | `GITSTORE_GIT__HTTP__URI`        | string | `http://localhost:9418`  | Yes      | No        | Smart HTTP address of gitstore-git-service |
+| Key            | Env Var                   | Type   | Default                  | Required | Sensitive | Description                          |
+|----------------|---------------------------|--------|--------------------------|----------|-----------|--------------------------------------|
+| `git.grpc.uri` | `GITSTORE_GIT__GRPC__URI` | string | `dns:///localhost:50051` | Yes      | No        | gRPC address of gitstore-git-service |
+
+### Git Smart HTTP Endpoints
+
+The following endpoints are served on port `api.git_port` (default `5000`):
+
+| Method | Path                                                              | Description                                       |
+|--------|-------------------------------------------------------------------|---------------------------------------------------|
+| `GET`  | `/{namespace}/{repo}/info/refs?service=git-upload-pack`           | Advertise refs for fetch/clone                    |
+| `GET`  | `/{namespace}/{repo}/info/refs?service=git-receive-pack`          | Advertise refs for push                           |
+| `POST` | `/{namespace}/{repo}/git-upload-pack`                             | Upload pack (fetch/clone data transfer)           |
+| `POST` | `/{namespace}/{repo}/git-receive-pack`                            | Receive pack (push data transfer)                 |
+| `GET`  | `/health`                                                         | Health probe — returns `{"status":"ok"}`          |
 
 ### Authentication
 
@@ -87,15 +98,10 @@ For config files, admin auth keys are nested under `[auth.admin]` (for example, 
 ```toml
 [api]
 port = 4000
+git_port = 5000
 
 [git.grpc]
 uri = "dns:///localhost:50051"
-
-[git.ws]
-uri = "ws://localhost:8080"
-
-[git.http]
-uri = "http://localhost:9418"
 
 [auth.jwt]
 duration = "24h"
@@ -127,15 +133,11 @@ Secrets (`auth.admin.password_hash`, `auth.jwt.secret`) must remain in environme
 
 | Key                      | Env Var                              | Type   | Default       | Required | Sensitive | Description                                       |
 |--------------------------|--------------------------------------|--------|---------------|----------|-----------|---------------------------------------------------|
-| `http.port`              | `GITSTORE_HTTP__PORT`                | u16    | `9418`        | No       | No        | Smart HTTP git server port (1–65535)              |
-| `ws.port`                | `GITSTORE_WS__PORT`                  | u16    | `8080`        | No       | No        | WebSocket notification port (1–65535)             |
 | `grpc.port`              | `GITSTORE_GRPC__PORT`                | u16    | `50051`       | No       | No        | gRPC server port (1–65535)                        |
 | `git.data_dir`           | `GITSTORE_GIT__DATA_DIR`             | string | `/data/repos` | No       | No        | Repository storage directory                      |
 | `log.level`              | `GITSTORE_LOG__LEVEL`                | string | `info`        | No       | No        | `trace` \| `debug` \| `info` \| `warn` \| `error` |
 | `log.format`             | `GITSTORE_LOG__FORMAT`               | string | `json`        | No       | No        | `json` \| `text`                                  |
 | `git.repo.max_file_size` | `GITSTORE_GIT__REPO__MAX_FILE_SIZE`  | u64    | `52428800`    | No       | No        | Max size per repo in bytes (default: 50 MB)       |
-
-> **Constraint**: `http.port`, `ws.port`, and `grpc.port` must all be distinct values.
 
 ### Hook Phase Toggles
 
@@ -165,12 +167,6 @@ All hook toggles default to `false`. Nested keys must be set via `gitstore.toml`
 ### Example `gitstore.toml`
 
 ```toml
-[http]
-port = 9418
-
-[ws]
-port = 8080
-
 [grpc]
 port = 50051
 

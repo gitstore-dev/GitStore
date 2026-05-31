@@ -4,21 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-gix = { version = "0.83.0", features = ["max-performance-safe", "tree-editor", "blocking-network-client", "worktree-mutation"] }
-gix-pack = "0.70.0"
+gix = { version = "0.84.0", features = ["max-performance-safe", "tree-editor", "blocking-network-client", "worktree-mutation"] }
+gix-pack = "0.71.0"
 dashmap = "6"
 tokio = { version = "1.35", features = ["full"] }
-tokio-tungstenite = "0.29.0"
-tungstenite = "0.29.0"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 anyhow = "1.0"
 clap = { version = "4.4", features = ["derive"] }
-futures-util = "0.3"
-chrono = { version = "0.4", features = ["serde"] }
-axum = { version = "0.8.8", features = ["http2", "macros"] }
 tonic = { version = "0.14.6", features = ["transport"] }
 tonic-prost = "0.14"
 prost = "0.14.3"
@@ -29,7 +23,6 @@ config = "0.15.22"
 dotenvy = "0.15"
 
 [dev-dependencies]
-reqwest = { version = "0.13.3" }
 
 [build-dependencies]
 tonic-prost-build = "0.14"
@@ -45,7 +38,3 @@ path = "src/lib.rs"
 [[test]]
 name = "integration"
 path = "tests/integration/mod.rs"
-
-[[test]]
-name = "http_smart_protocol"
-path = "tests/integration/http_smart_protocol.rs"

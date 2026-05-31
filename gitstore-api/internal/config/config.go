@@ -27,14 +27,13 @@ type Config struct {
 
 // ApiConfig holds HTTP API server settings.
 type ApiConfig struct {
-	Port int `mapstructure:"port" validate:"min=1,max=65535"`
+	Port    int `mapstructure:"port"     validate:"min=1,max=65535"`
+	GitPort int `mapstructure:"git_port" validate:"min=1,max=65535"`
 }
 
 // GitConfig holds addresses for the git service backends.
 type GitConfig struct {
 	Grpc GitEndpointConfig `mapstructure:"grpc"`
-	Ws   GitEndpointConfig `mapstructure:"ws"`
-	Http GitEndpointConfig `mapstructure:"http"`
 }
 
 // GitEndpointConfig holds a single git-service endpoint URI.
@@ -100,9 +99,8 @@ func Load() (*Config, error) {
 	// Defaults — all known keys must have a default so AutomaticEnv populates them
 	// during Unmarshal, even if the default is an empty string.
 	v.SetDefault("api.port", 4000)
+	v.SetDefault("api.git_port", 5000)
 	v.SetDefault("git.grpc.uri", "dns:///localhost:50051")
-	v.SetDefault("git.ws.uri", "ws://localhost:8080")
-	v.SetDefault("git.http.uri", "http://localhost:9418")
 	v.SetDefault("cache.ttl", 300)
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
@@ -148,7 +146,7 @@ func Load() (*Config, error) {
 
 	// Warn about keys present in the config file that are not in the known schema.
 	knownKeys := map[string]bool{
-		"api.port": true, "git.grpc.uri": true, "git.ws.uri": true, "git.http.uri": true,
+		"api.port": true, "api.git_port": true, "git.grpc.uri": true,
 		"cache.ttl": true, "log.level": true, "log.format": true,
 		"auth.admin.username": true, "auth.admin.password_hash": true,
 		"auth.jwt.secret": true, "auth.jwt.duration": true, "auth.jwt.issuer": true,
@@ -222,9 +220,8 @@ func validateLogFormat(log *LogConfig) error {
 // Sensitive fields are always redacted.
 func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddInt("api.port", c.Api.Port)
+	enc.AddInt("api.git_port", c.Api.GitPort)
 	enc.AddString("git.grpc.uri", c.Git.Grpc.Uri)
-	enc.AddString("git.ws.uri", c.Git.Ws.Uri)
-	enc.AddString("git.http.uri", c.Git.Http.Uri)
 	enc.AddString("auth.admin.username", c.Auth.Admin.Username)
 	enc.AddString("auth.admin.password_hash", redact(c.Auth.Admin.Password))
 	enc.AddString("auth.jwt.secret", redact(c.Auth.JWT.Secret))

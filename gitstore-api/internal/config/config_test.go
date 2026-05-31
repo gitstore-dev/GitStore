@@ -71,9 +71,8 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	require.NotNil(t, cfg)
 
 	assert.Equal(t, 4000, cfg.Api.Port)
+	assert.Equal(t, 5000, cfg.Api.GitPort)
 	assert.Equal(t, "dns:///localhost:50051", cfg.Git.Grpc.Uri)
-	assert.Equal(t, "ws://localhost:8080", cfg.Git.Ws.Uri)
-	assert.Equal(t, "http://localhost:9418", cfg.Git.Http.Uri)
 	assert.Equal(t, 300, cfg.Cache.TTL)
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.Equal(t, "json", cfg.Log.Format)

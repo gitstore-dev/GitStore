@@ -11,8 +11,8 @@
 //   - Added `UploadPack` RPC: server-streaming clone/fetch; streams the PACK
 //     response back in chunks.
 //   - Added `Service` enum, `InfoRefsRequest`, `InfoRefsResponse`,
-//     `ReceivePackRequest`, `ReceivePackResponse`, `UploadPackRequest`,
-//     `UploadPackResponse` messages.
+//     `ReceivePackChunk`, `ReceivePackResponse`, `UploadPackRequest`,
+//     `UploadPackChunk` messages.
 //   - `repository_id` field convention (field 15) preserved for all new
 //     request messages, consistent with the 010 baseline.
 //   - No existing RPCs, messages, or field numbers removed (additive only).
@@ -58,11 +58,11 @@ service GitService {
   // gitstore-git-service stages objects in quarantine and promotes them
   // atomically only after all chunks are received and refs validated.
   // On stream error, quarantine is discarded and no objects are promoted.
-  rpc ReceivePack(stream ReceivePackRequest) returns (ReceivePackResponse);
+  rpc ReceivePack(stream ReceivePackChunk) returns (ReceivePackResponse);
 
   // UploadPack handles a git clone or fetch. The full want/have negotiation
   // body is sent in a single request; the PACK response is streamed back.
-  rpc UploadPack(UploadPackRequest) returns (stream UploadPackResponse);
+  rpc UploadPack(UploadPackRequest) returns (stream UploadPackChunk);
 
   // ── Read operations ────────────────────────────────────────────────────────
 
@@ -100,8 +100,8 @@ service GitService {
 // Service identifies which git smart HTTP service an InfoRefs or pack RPC targets.
 enum Service {
   SERVICE_UNSPECIFIED    = 0;
-  SERVICE_GIT_UPLOAD_PACK  = 1; // clone / fetch
-  SERVICE_GIT_RECEIVE_PACK = 2; // push
+  GIT_UPLOAD_PACK        = 1; // clone / fetch
+  GIT_RECEIVE_PACK       = 2; // push
 }
 
 message InfoRefsRequest {
@@ -121,8 +121,8 @@ message InfoRefsResponse {
   Service service       = 2;
 }
 
-// ReceivePackRequest is one chunk of a client-streaming git push.
-message ReceivePackRequest {
+// ReceivePackChunk is one chunk of a client-streaming git push.
+message ReceivePackChunk {
   // repository_id MUST be set on the first chunk only. Ignored on subsequent chunks.
   string repository_id = 15;
 
@@ -146,7 +146,7 @@ message RefCommand {
   string ref_name = 3; // e.g. "refs/heads/main"
 }
 
-// ReceivePackResponse is returned after all ReceivePackRequest messages are received.
+// ReceivePackResponse is returned after all ReceivePackChunk messages are received.
 message ReceivePackResponse {
   // report_status contains the complete pkt-line report-status payload, ready
   // to be written verbatim into the HTTP response body.
@@ -162,8 +162,8 @@ message UploadPackRequest {
   bytes body = 1;
 }
 
-// UploadPackResponse is one chunk of the server-streaming PACK response.
-message UploadPackResponse {
+// UploadPackChunk is one chunk of the server-streaming PACK response.
+message UploadPackChunk {
   uint32 chunk_index = 1;
   // data contains sideband-encoded pkt-line bytes; max 64 KiB per chunk.
   bytes  data        = 2;

@@ -9,6 +9,7 @@ use anyhow::Result;
 use tracing::warn;
 
 /// Information about a reference update passed to receive lifecycle hooks.
+#[derive(Clone)]
 pub struct RefUpdate {
     pub ref_name: String,
     pub old_oid: String,

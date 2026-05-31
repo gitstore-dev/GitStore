@@ -11,14 +11,15 @@ import (
 )
 
 // TestHealthEndpoints covers contract C-001:
-// Both gitstore-git-service and gitstore-api must respond 200 with {"status":"healthy"}.
+// Both gitstore-api HTTP endpoints must respond 200 with {"status":"healthy"}.
+// gitstore-git-service exposes only gRPC (port 50051) and has no HTTP health endpoint.
 func TestHealthEndpoints(t *testing.T) {
 	endpoints := []struct {
 		name string
 		url  string
 	}{
-		{"gitstore-git-service", fmt.Sprintf("%s/health", gitServerURL)},
 		{"gitstore-api", fmt.Sprintf("%s/health", apiURL)},
+		{"gitstore-api-git-http", fmt.Sprintf("%s/health", gitServerGitURL)},
 	}
 
 	for _, ep := range endpoints {

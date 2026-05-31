@@ -20,6 +20,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	dsfactory "github.com/gitstore-dev/gitstore/api/internal/datastore/factory"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	"github.com/gitstore-dev/gitstore/api/internal/githttp"
 	"github.com/gitstore-dev/gitstore/api/internal/graph"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/handler"
@@ -110,11 +111,42 @@ func main() {
 		}
 	}()
 
+	// Git smart HTTP server on port cfg.Api.GitPort
+	gitResolver := func(namespace, repo string) (string, bool) {
+		ctx := context.Background()
+		ns, err := store.GetNamespaceByIdentifier(ctx, namespace)
+		if err != nil || ns == nil {
+			return "", false
+		}
+		mapping, err := store.LookupRepository(ctx, ns.ID, repo)
+		if err != nil || mapping == nil {
+			return "", false
+		}
+		return mapping.RepoID, true
+	}
+
+	gitMux := githttp.NewMux(gitClient, gitResolver, logger.Log, http.HandlerFunc(healthHandler.Health))
+	gitSrv := &http.Server{
+		Addr:         fmt.Sprintf(":%d", cfg.Api.GitPort),
+		Handler:      middleware.RequestIDMiddleware(gitMux),
+		ReadTimeout:  0,
+		WriteTimeout: 0,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	go func() {
+		logger.Log.Info("Git smart HTTP server starting", zap.Int("port", cfg.Api.GitPort))
+		if err := gitSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Log.Error("Git HTTP server error", zap.Error(err))
+		}
+	}()
+
 	logger.Log.Info("Server ready",
 		zap.String("graphql", fmt.Sprintf("http://localhost:%d/graphql", cfg.Api.Port)),
 		zap.String("playground", fmt.Sprintf("http://localhost:%d/playground", cfg.Api.Port)),
 		zap.String("health", fmt.Sprintf("http://localhost:%d/health", cfg.Api.Port)),
 		zap.String("ready", fmt.Sprintf("http://localhost:%d/ready", cfg.Api.Port)),
+		zap.String("git_http", fmt.Sprintf("http://localhost:%d", cfg.Api.GitPort)),
 	)
 
 	sigChan := make(chan os.Signal, 1)
@@ -128,6 +160,10 @@ func main() {
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Log.Error("Server shutdown error", zap.Error(err))
+	}
+
+	if err := gitSrv.Shutdown(shutdownCtx); err != nil {
+		logger.Log.Error("Git HTTP server shutdown error", zap.Error(err))
 	}
 
 	logger.Log.Info("Server stopped")

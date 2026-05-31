@@ -7,8 +7,6 @@
 pub mod config;
 pub mod git;
 pub mod grpc;
-pub mod http_git_server;
-pub mod websocket;
 
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
