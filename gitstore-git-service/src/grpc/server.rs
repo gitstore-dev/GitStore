@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
 use crate::git::repo::{create_repository, delete_repository, fanout_path, list_tags};
-use tracing::info;
+use tracing::{error, info};
 
 pub mod proto {
     tonic::include_proto!("gitstore.git.v1");
@@ -715,6 +715,273 @@ impl GitService for GitServiceImpl {
         .map_err(|e| Status::internal(format!("task join error: {}", e)))?
     }
 
+    async fn info_refs(
+        &self,
+        request: Request<InfoRefsRequest>,
+    ) -> Result<Response<InfoRefsResponse>, Status> {
+        let req = request.into_inner();
+        let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
+        let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
+        let _guard = lock.read().await;
+        let service_enum = req.service;
+
+        let advertisement = tokio::task::spawn_blocking(move || {
+            let pack_server = crate::git::pack_server::HttpPackServer::new(repo_path, 0);
+            let svc = proto::Service::try_from(service_enum).unwrap_or(proto::Service::Unspecified);
+            match svc {
+                proto::Service::GitUploadPack => pack_server
+                    .advertise_upload_pack_refs()
+                    .map_err(|e| Status::internal(format!("upload-pack advertise: {}", e))),
+                proto::Service::GitReceivePack => pack_server
+                    .advertise_receive_pack_refs()
+                    .map_err(|e| Status::internal(format!("receive-pack advertise: {}", e))),
+                _ => Err(Status::invalid_argument("unknown service")),
+            }
+        })
+        .await
+        .map_err(|e| Status::internal(format!("task join: {}", e)))??;
+
+        info!(
+            repo_id = %req.repository_id,
+            service = service_enum,
+            "info_refs complete"
+        );
+
+        Ok(Response::new(InfoRefsResponse {
+            advertisement,
+            service: service_enum,
+        }))
+    }
+
+    async fn receive_pack(
+        &self,
+        request: Request<tonic::Streaming<ReceivePackRequest>>,
+    ) -> Result<Response<ReceivePackResponse>, Status> {
+        let mut stream = request.into_inner();
+
+        // First chunk carries repo_id + ref_commands + optional initial pack_data
+        let first = stream
+            .message()
+            .await
+            .map_err(|e| Status::internal(format!("recv first chunk: {}", e)))?
+            .ok_or_else(|| Status::invalid_argument("empty stream"))?;
+
+        let repo_id = first.repository_id.clone();
+        let repo_path = resolve_repo_path(&self.data_root, &repo_id)?;
+        let lock = get_or_insert_lock(&self.repo_locks, &repo_id);
+        let _guard = lock.write().await;
+
+        info!(repo_id = %repo_id, "receive_pack: stream start");
+
+        let ref_commands = first.ref_commands.clone();
+        let initial_pack = first.pack_data.clone();
+        let is_last = first.is_last;
+
+        // Channel bridge: tokio async stream → sync Read
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(16);
+
+        if !initial_pack.is_empty() {
+            tx.send(initial_pack)
+                .map_err(|_| Status::internal("channel send failed"))?;
+        }
+
+        if !is_last {
+            let tx2 = tx.clone();
+            tokio::spawn(async move {
+                let mut idx = 1u32;
+                while let Ok(Some(chunk)) = stream.message().await {
+                    let bytes = chunk.pack_data.len();
+                    if !chunk.pack_data.is_empty() && tx2.send(chunk.pack_data).is_err() {
+                        break;
+                    }
+                    info!(chunk_index = idx, bytes, "receive_pack: chunk received");
+                    idx += 1;
+                    if chunk.is_last {
+                        break;
+                    }
+                }
+                drop(tx2);
+            });
+        }
+        drop(tx);
+
+        // Open repo now to obtain ODB handle for thin pack resolution.
+        let repo_for_odb =
+            gix::open(&repo_path).map_err(|e| Status::internal(format!("open repo: {}", e)))?;
+        let odb = (*repo_for_odb.objects).clone();
+
+        // Stage pack from channel reader in a blocking thread
+        let quarantine = tokio::task::spawn_blocking(move || {
+            let reader = crate::git::pack_server::ChannelReader::new(rx);
+            crate::git::pack_server::stage_pack_from_reader(reader, Some(odb))
+        })
+        .await
+        .map_err(|e| Status::internal(format!("spawn_blocking join: {}", e)))?
+        .map_err(|e| Status::internal(format!("stage pack: {}", e)))?;
+
+        info!(repo_id = %repo_id, "receive_pack: pack staged in quarantine");
+
+        // Build ref_updates from ref_commands
+        let ref_updates: Vec<crate::git::hooks::RefUpdate> = ref_commands
+            .iter()
+            .map(|c| crate::git::hooks::RefUpdate {
+                ref_name: c.ref_name.clone(),
+                old_oid: c.old_oid.clone(),
+                new_oid: c.new_oid.clone(),
+            })
+            .collect();
+
+        let repo =
+            gix::open(&repo_path).map_err(|e| Status::internal(format!("open repo: {}", e)))?;
+
+        crate::git::hooks::run_pre_receive(&repo_path, &ref_updates)
+            .map_err(|e| Status::internal(format!("pre-receive: {}", e)))?;
+
+        let mut validated_updates: Vec<crate::git::hooks::RefUpdate> = Vec::new();
+        let mut rejected: Vec<String> = Vec::new();
+        for update in &ref_updates {
+            let is_non_ff = validate_ref_command(&repo, &update.ref_name, &update.old_oid)
+                .map_err(|e| Status::internal(e.to_string()))?;
+            if is_non_ff {
+                rejected.push(update.ref_name.clone());
+            } else {
+                validated_updates.push(update.clone());
+            }
+        }
+
+        let accepted_indices = crate::git::hooks::run_update_hooks(&repo_path, &validated_updates)
+            .map_err(|e| Status::internal(format!("update hooks: {}", e)))?;
+
+        use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
+        let mut ref_edits: Vec<RefEdit> = Vec::new();
+        for i in &accepted_indices {
+            let u = &validated_updates[*i];
+            let new_id = gix::ObjectId::from_hex(u.new_oid.as_bytes())
+                .map_err(|e| Status::invalid_argument(format!("parse new oid: {}", e)))?;
+            let old_id = gix::ObjectId::from_hex(u.old_oid.as_bytes())
+                .map_err(|e| Status::invalid_argument(format!("parse old oid: {}", e)))?;
+
+            let change = if new_id.is_null() {
+                let expected = if old_id.is_null() {
+                    PreviousValue::Any
+                } else {
+                    PreviousValue::MustExistAndMatch(gix::refs::Target::Object(old_id))
+                };
+                Change::Delete {
+                    expected,
+                    log: RefLog::AndReference,
+                }
+            } else {
+                let previous_value = if old_id.is_null() {
+                    PreviousValue::MustNotExist
+                } else {
+                    PreviousValue::MustExistAndMatch(gix::refs::Target::Object(old_id))
+                };
+                Change::Update {
+                    log: LogChange {
+                        mode: RefLog::AndReference,
+                        force_create_reflog: false,
+                        message: "push".into(),
+                    },
+                    expected: previous_value,
+                    new: gix::refs::Target::Object(new_id),
+                }
+            };
+            ref_edits.push(RefEdit {
+                change,
+                name: u
+                    .ref_name
+                    .as_str()
+                    .try_into()
+                    .map_err(|e: gix::refs::name::Error| {
+                        Status::invalid_argument(format!("parse refname: {}", e))
+                    })?,
+                deref: false,
+            });
+        }
+
+        // Promote pack objects first so refs never point to missing objects.
+        crate::git::pack_server::promote_quarantine(&repo, quarantine)
+            .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
+
+        if !ref_edits.is_empty() {
+            repo.edit_references(ref_edits)
+                .map_err(|e| Status::internal(format!("ref transaction: {}", e)))?;
+        }
+
+        info!(repo_id = %repo_id, "receive_pack: quarantine promoted, refs committed");
+
+        crate::git::hooks::run_post_receive(&repo_path, &validated_updates);
+
+        let report_status = build_report_status(&ref_updates, &accepted_indices, &rejected);
+
+        info!(
+            repo_id = %repo_id,
+            refs_accepted = accepted_indices.len(),
+            refs_rejected = rejected.len(),
+            "receive_pack: complete"
+        );
+
+        Ok(Response::new(ReceivePackResponse { report_status }))
+    }
+
+    type UploadPackStream =
+        tokio_stream::wrappers::ReceiverStream<Result<UploadPackResponse, Status>>;
+
+    async fn upload_pack(
+        &self,
+        request: Request<UploadPackRequest>,
+    ) -> Result<Response<Self::UploadPackStream>, Status> {
+        let req = request.into_inner();
+        let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
+        let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
+        let _guard = lock.read().await;
+
+        info!(repo_id = %req.repository_id, "upload_pack: start");
+
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+
+        tokio::task::spawn_blocking(move || {
+            let pack_server = crate::git::pack_server::HttpPackServer::new(repo_path, 0);
+            match pack_server.handle_upload_pack(&req.body) {
+                Ok(pack_bytes) => {
+                    const CHUNK_SIZE: usize = 64 * 1024;
+                    let chunks: Vec<&[u8]> = pack_bytes.chunks(CHUNK_SIZE).collect();
+                    let last = chunks.len().saturating_sub(1);
+                    for (i, chunk) in chunks.iter().enumerate() {
+                        let is_last = i == last;
+                        let msg = Ok(UploadPackResponse {
+                            chunk_index: i as u32,
+                            data: chunk.to_vec(),
+                            is_last,
+                        });
+                        info!(
+                            chunk_index = i,
+                            bytes = chunk.len(),
+                            "upload_pack: chunk sent"
+                        );
+                        let _ = tx.blocking_send(msg);
+                    }
+                    if pack_bytes.is_empty() {
+                        let _ = tx.blocking_send(Ok(UploadPackResponse {
+                            chunk_index: 0,
+                            data: vec![],
+                            is_last: true,
+                        }));
+                    }
+                }
+                Err(e) => {
+                    error!(error = %e, "upload_pack error");
+                    let _ = tx.blocking_send(Err(Status::internal(format!("upload-pack: {}", e))));
+                }
+            }
+        });
+
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+            rx,
+        )))
+    }
+
     async fn get_latest_tag(
         &self,
         request: Request<GetLatestTagRequest>,
@@ -775,6 +1042,82 @@ impl GitService for GitServiceImpl {
 }
 
 // --- free functions ----------------------------------------------------------
+
+/// Validate a single ref command's old_oid against the current ref tip.
+/// Returns true if the command is a non-fast-forward (should be rejected).
+fn validate_ref_command(
+    repo: &gix::Repository,
+    ref_name: &str,
+    old_oid: &str,
+) -> Result<bool, Status> {
+    let zero = "0000000000000000000000000000000000000000";
+    if old_oid == zero {
+        return Ok(false);
+    }
+    match repo.find_reference(ref_name) {
+        Ok(r) => {
+            let current_oid = r
+                .target()
+                .try_id()
+                .map(|id| id.to_string())
+                .unwrap_or_default();
+            if current_oid != old_oid {
+                return Ok(true);
+            }
+            Ok(false)
+        }
+        Err(_) => Ok(false),
+    }
+}
+
+/// Build a report-status pkt-line payload.
+fn build_report_status(
+    all_updates: &[crate::git::hooks::RefUpdate],
+    accepted_indices: &[usize],
+    rejected_refs: &[String],
+) -> Vec<u8> {
+    use std::collections::HashSet;
+    let accepted_set: HashSet<usize> = accepted_indices.iter().copied().collect();
+    let rejected_set: HashSet<&str> = rejected_refs.iter().map(|s| s.as_str()).collect();
+
+    let mut inner = Vec::new();
+    let _ = write_pkt_line_buf(&mut inner, b"unpack ok\n");
+    for (i, u) in all_updates.iter().enumerate() {
+        if rejected_set.contains(u.ref_name.as_str()) {
+            let _ = write_pkt_line_buf(
+                &mut inner,
+                format!("ng {} non-fast-forward\n", u.ref_name).as_bytes(),
+            );
+        } else if accepted_set.contains(&i) {
+            let _ = write_pkt_line_buf(&mut inner, format!("ok {}\n", u.ref_name).as_bytes());
+        } else {
+            let _ = write_pkt_line_buf(
+                &mut inner,
+                format!("ng {} rejected by update hook\n", u.ref_name).as_bytes(),
+            );
+        }
+    }
+    inner.extend_from_slice(b"0000");
+
+    let mut sideband_data = vec![0x01u8];
+    sideband_data.extend_from_slice(&inner);
+
+    let mut response = Vec::new();
+    let _ = write_pkt_line_buf(&mut response, &sideband_data);
+    response.extend_from_slice(b"0000");
+    response
+}
+
+fn write_pkt_line_buf(out: &mut Vec<u8>, data: &[u8]) -> Result<(), ()> {
+    let len = data.len() + 4;
+    if len > 65516 {
+        return Err(());
+    }
+    let hex = format!("{:04x}", len);
+    out.extend_from_slice(hex.as_bytes());
+    out.extend_from_slice(data);
+    Ok(())
+}
 
 /// Compare two semver version strings (e.g. "1.2.3" vs "1.10.0").
 fn cmp_semver_str(a: &str, b: &str) -> std::cmp::Ordering {

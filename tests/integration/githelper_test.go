@@ -47,7 +47,9 @@ func newPushHelper(t *testing.T) *pushHelper {
 	t.Helper()
 
 	workDir := t.TempDir()
-	remoteURL := fmt.Sprintf("%s/catalog.git", gitServerGitURL)
+	namespace := getEnv("NAMESPACE", "gitstore")
+	repository := getEnv("REPOSITORY", "catalog")
+	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitServerGitURL, namespace, repository)
 
 	// Try a lightweight reachability check before cloning.
 	checkCmd := exec.Command("git", "ls-remote", remoteURL)
@@ -61,9 +63,11 @@ func newPushHelper(t *testing.T) *pushHelper {
 		t.Skipf("could not clone catalog repo: %v\n%s", err, out)
 	}
 
-	// Configure git identity inside the work dir for commits.
+	// Configure git identity and ensure the default branch is "main"
+	// regardless of the system-level init.defaultBranch setting.
 	run(t, workDir, "git", "config", "user.email", "inttest@gitstore.dev")
 	run(t, workDir, "git", "config", "user.name", "Integration Test")
+	run(t, workDir, "git", "symbolic-ref", "HEAD", "refs/heads/main")
 
 	return &pushHelper{t: t, workDir: workDir, remoteURL: remoteURL}
 }
