@@ -755,7 +755,7 @@ impl GitService for GitServiceImpl {
 
     async fn receive_pack(
         &self,
-        request: Request<tonic::Streaming<ReceivePackChunk>>,
+        request: Request<tonic::Streaming<ReceivePackRequest>>,
     ) -> Result<Response<ReceivePackResponse>, Status> {
         let mut stream = request.into_inner();
 
@@ -925,7 +925,7 @@ impl GitService for GitServiceImpl {
         Ok(Response::new(ReceivePackResponse { report_status }))
     }
 
-    type UploadPackStream = tokio_stream::wrappers::ReceiverStream<Result<UploadPackChunk, Status>>;
+    type UploadPackStream = tokio_stream::wrappers::ReceiverStream<Result<UploadPackResponse, Status>>;
 
     async fn upload_pack(
         &self,
@@ -949,7 +949,7 @@ impl GitService for GitServiceImpl {
                     let last = chunks.len().saturating_sub(1);
                     for (i, chunk) in chunks.iter().enumerate() {
                         let is_last = i == last;
-                        let msg = Ok(UploadPackChunk {
+                        let msg = Ok(UploadPackResponse {
                             chunk_index: i as u32,
                             data: chunk.to_vec(),
                             is_last,
@@ -962,7 +962,7 @@ impl GitService for GitServiceImpl {
                         let _ = tx.blocking_send(msg);
                     }
                     if pack_bytes.is_empty() {
-                        let _ = tx.blocking_send(Ok(UploadPackChunk {
+                        let _ = tx.blocking_send(Ok(UploadPackResponse {
                             chunk_index: 0,
                             data: vec![],
                             is_last: true,

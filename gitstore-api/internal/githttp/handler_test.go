@@ -52,10 +52,10 @@ func TestInfoRefsHandler_UploadPack(t *testing.T) {
 	advertisement := []byte("001e# service=git-upload-pack\n0000")
 	client := &mockGitClient{
 		infoRefsFunc: func(_ context.Context, _ string, svc gitv1.Service) ([]byte, gitv1.Service, error) {
-			if svc != gitv1.Service_GIT_UPLOAD_PACK {
+			if svc != gitv1.Service_SERVICE_GIT_UPLOAD_PACK {
 				t.Errorf("expected GIT_UPLOAD_PACK, got %v", svc)
 			}
-			return advertisement, gitv1.Service_GIT_UPLOAD_PACK, nil
+			return advertisement, gitv1.Service_SERVICE_GIT_UPLOAD_PACK, nil
 		},
 	}
 	resolver := mockResolver(func(ns, repo string) (string, bool) {
@@ -89,7 +89,7 @@ func TestInfoRefsHandler_ReceivePack(t *testing.T) {
 	advertisement := []byte("001f# service=git-receive-pack\n0000")
 	client := &mockGitClient{
 		infoRefsFunc: func(_ context.Context, _ string, svc gitv1.Service) ([]byte, gitv1.Service, error) {
-			return advertisement, gitv1.Service_GIT_RECEIVE_PACK, nil
+			return advertisement, gitv1.Service_SERVICE_GIT_RECEIVE_PACK, nil
 		},
 	}
 	resolver := mockResolver(func(ns, repo string) (string, bool) {

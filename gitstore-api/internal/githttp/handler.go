@@ -76,10 +76,10 @@ func (h *handler) infoRefsHandler(w http.ResponseWriter, r *http.Request) {
 	var contentType string
 	switch svcParam {
 	case "git-upload-pack":
-		service = gitv1.Service_GIT_UPLOAD_PACK
+		service = gitv1.Service_SERVICE_GIT_UPLOAD_PACK
 		contentType = "application/x-git-upload-pack-advertisement"
 	case "git-receive-pack":
-		service = gitv1.Service_GIT_RECEIVE_PACK
+		service = gitv1.Service_SERVICE_GIT_RECEIVE_PACK
 		contentType = "application/x-git-receive-pack-advertisement"
 	default:
 		gitPktLineError(w, http.StatusBadRequest, "unknown service")

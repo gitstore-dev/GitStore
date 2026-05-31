@@ -100,9 +100,9 @@ func (c *Client) ReceivePack(ctx context.Context, repoID string, body io.Reader)
 	for {
 		n, readErr := br.Read(buf)
 		if n > 0 {
-			var chunk *gitv1.ReceivePackChunk
+			var chunk *gitv1.ReceivePackRequest
 			if first {
-				chunk = &gitv1.ReceivePackChunk{
+				chunk = &gitv1.ReceivePackRequest{
 					RepositoryId: repoID,
 					RefCommands:  refCmds,
 					PackData:     buf[:n],
@@ -110,7 +110,7 @@ func (c *Client) ReceivePack(ctx context.Context, repoID string, body io.Reader)
 				}
 				first = false
 			} else {
-				chunk = &gitv1.ReceivePackChunk{
+				chunk = &gitv1.ReceivePackRequest{
 					PackData: buf[:n],
 					IsLast:   readErr == io.EOF,
 				}
@@ -129,7 +129,7 @@ func (c *Client) ReceivePack(ctx context.Context, repoID string, body io.Reader)
 
 	// If no pack data was read (e.g. delete-only push), send the first chunk with just ref commands.
 	if first {
-		if err := stream.Send(&gitv1.ReceivePackChunk{
+		if err := stream.Send(&gitv1.ReceivePackRequest{
 			RepositoryId: repoID,
 			RefCommands:  refCmds,
 			IsLast:       true,
