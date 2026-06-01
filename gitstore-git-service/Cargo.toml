@@ -21,6 +21,7 @@ tokio-stream = "0.1.18"
 tempfile = "3.8"
 config = "0.15.22"
 dotenvy = "0.15"
+async-trait = "0.1"
 
 [dev-dependencies]
 
