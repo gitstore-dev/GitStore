@@ -8,6 +8,9 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use tracing::{error, info};
 
+use std::sync::Arc;
+
+use gitstore::git::hooks::{HookPipeline, NoopAdmissionHandler};
 use gitstore::grpc::server::{proto::git_service_server::GitServiceServer, GitServiceImpl};
 
 #[derive(Parser, Debug)]
@@ -58,7 +61,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start gRPC server
     let grpc_addr: SocketAddr = format!("0.0.0.0:{}", cfg.grpc.port).parse()?;
-    let grpc_service = GitServiceImpl::new(data_path.clone());
+    let hook_pipeline = Arc::new(HookPipeline::new(
+        cfg.hooks.git_receive_pack.clone(),
+        cfg.admission_control
+            .validating_admission_policy
+            .phase
+            .clone(),
+        Arc::new(NoopAdmissionHandler),
+    ));
+    let grpc_service = GitServiceImpl::with_pipeline(data_path.clone(), hook_pipeline);
     info!(
         grpc_port = cfg.grpc.port,
         "gRPC server starting on {}", grpc_addr

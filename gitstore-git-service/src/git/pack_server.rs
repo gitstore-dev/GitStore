@@ -10,7 +10,7 @@ use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 use gix::refs::TargetRef;
 use tracing::info;
 
-use super::hooks::{run_post_receive, run_pre_receive, run_update_hooks, RefUpdate};
+use super::hooks::RefUpdate;
 
 /// In-process replacement for the four `git upload-pack` / `git receive-pack`
 /// shell-out call sites in the HTTP git server.
@@ -102,7 +102,15 @@ impl HttpPackServer {
     /// Only after the ref transaction commits successfully are the pack/index
     /// files moved into the real ODB. On any failure the temp dir is dropped and
     /// no new objects are left in the repository.
-    pub fn handle_receive_pack(&self, body: &[u8]) -> Result<Vec<u8>> {
+    ///
+    /// `pipeline` is called synchronously via `block_in_place` since this method
+    /// runs inside a `spawn_blocking` context. The HTTP path uses `NoopAdmissionHandler`
+    /// by default; real admission logic runs in the async gRPC path.
+    pub fn handle_receive_pack(
+        &self,
+        body: &[u8],
+        pipeline: &crate::git::hooks::HookPipeline,
+    ) -> Result<Vec<u8>> {
         let start = Instant::now();
         let pack_size_bytes = body.len() as u64;
 
@@ -120,7 +128,7 @@ impl HttpPackServer {
             None
         };
 
-        // Build RefUpdate list (shared with hook runners and ref transaction).
+        // Build RefUpdate list.
         let hook_updates: Vec<RefUpdate> = ref_updates
             .iter()
             .map(|(refname, old_oid, new_oid)| RefUpdate {
@@ -130,12 +138,33 @@ impl HttpPackServer {
             })
             .collect();
 
-        // pre-receive: non-zero exit rejects the entire push before any mutation.
-        run_pre_receive(&self.repo_path, &hook_updates).context("pre-receive hook")?;
+        // Run pre-receive → proc-receive → update phases via the pipeline.
+        // block_in_place lets us .await inside spawn_blocking.
+        let pipeline_result = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(pipeline.run(&self.repo_path, &hook_updates))
+        });
 
-        // update: called per-ref; collects accepted indices for the ref transaction.
-        let accepted_indices =
-            run_update_hooks(&self.repo_path, &hook_updates).context("update hooks")?;
+        let accepted_indices = match pipeline_result {
+            Ok(indices) => indices,
+            Err(rejection) => {
+                // Whole-push rejection (pre-receive or proc-receive).
+                let mut inner = Vec::new();
+                write_pkt_line(&mut inner, b"unpack ok\n")?;
+                for (refname, _, _) in &ref_updates {
+                    write_pkt_line(
+                        &mut inner,
+                        format!("ng {refname} {}\n", rejection.reason).as_bytes(),
+                    )?;
+                }
+                inner.extend_from_slice(b"0000");
+                let mut sideband_data = vec![0x01u8];
+                sideband_data.extend_from_slice(&inner);
+                let mut response = Vec::new();
+                write_pkt_line(&mut response, &sideband_data)?;
+                response.extend_from_slice(b"0000");
+                return Ok(response);
+            }
+        };
 
         // Build atomic ref transaction for accepted refs only.
         let mut ref_edits: Vec<RefEdit> = Vec::new();
@@ -147,7 +176,6 @@ impl HttpPackServer {
                 .with_context(|| format!("parse old oid {old_oid}"))?;
 
             let change = if new_id.is_null() {
-                // Delete: `git push origin :branch`
                 let expected = if old_id.is_null() {
                     PreviousValue::Any
                 } else {
@@ -184,37 +212,74 @@ impl HttpPackServer {
             });
         }
 
-        // Commit atomically — gix uses lock files; any failure rolls back
-        if !ref_edits.is_empty() {
-            repo.edit_references(ref_edits)
-                .context("atomic ref transaction")?;
-        }
-
-        // Refs committed — promote quarantined pack/index into the real ODB.
-        // If this step fails the refs already landed, so we surface the error
-        // but do not revert them (the objects are still accessible via loose ODB
-        // because write_to_directory also indexes them; this is a best-effort move).
-        if let Some(q) = quarantine {
-            promote_quarantine(&repo, q).context("promoting quarantined pack to ODB")?;
-        }
-
-        // post-receive: informational only, exit code ignored.
-        let accepted_set: std::collections::HashSet<usize> =
-            accepted_indices.iter().copied().collect();
+        // Two-phase gix ref transaction: prepare (locks acquired) → reference-transaction hook
+        // → commit or rollback.
         let accepted_updates: Vec<RefUpdate> = accepted_indices
             .iter()
-            .map(|i| RefUpdate {
-                ref_name: hook_updates[*i].ref_name.clone(),
-                old_oid: hook_updates[*i].old_oid.clone(),
-                new_oid: hook_updates[*i].new_oid.clone(),
-            })
+            .map(|i| hook_updates[*i].clone())
             .collect();
-        run_post_receive(&self.repo_path, &accepted_updates);
+
+        if !ref_edits.is_empty() {
+            let file_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
+                std::time::Duration::from_millis(100),
+            );
+            let packed_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
+                std::time::Duration::from_millis(1000),
+            );
+            let txn = repo
+                .refs
+                .transaction()
+                .prepare(ref_edits, file_lock_fail, packed_lock_fail)
+                .context("prepare ref transaction")?;
+
+            // reference-transaction/prepared veto check (sync path uses NoopAdmissionHandler).
+            let veto_result = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(
+                    pipeline.run_reference_transaction_prepared(&self.repo_path, &accepted_updates),
+                )
+            });
+
+            match veto_result {
+                Ok(()) => {
+                    // Promote quarantined pack before committing refs.
+                    if let Some(q) = quarantine {
+                        promote_quarantine(&repo, q)
+                            .context("promoting quarantined pack to ODB")?;
+                    }
+                    txn.commit(None).context("commit ref transaction")?;
+                    pipeline
+                        .run_reference_transaction_committed(&self.repo_path, &accepted_updates);
+                }
+                Err(rejection) => {
+                    drop(txn); // releases all lock files
+                    pipeline.run_reference_transaction_aborted(&self.repo_path, &accepted_updates);
+                    let mut inner = Vec::new();
+                    write_pkt_line(&mut inner, b"unpack ok\n")?;
+                    for (refname, _, _) in &ref_updates {
+                        write_pkt_line(
+                            &mut inner,
+                            format!("ng {refname} {}\n", rejection.reason).as_bytes(),
+                        )?;
+                    }
+                    inner.extend_from_slice(b"0000");
+                    let mut sideband_data = vec![0x01u8];
+                    sideband_data.extend_from_slice(&inner);
+                    let mut response = Vec::new();
+                    write_pkt_line(&mut response, &sideband_data)?;
+                    response.extend_from_slice(b"0000");
+                    return Ok(response);
+                }
+            }
+        } else {
+            // No ref edits: drop quarantine safely.
+            drop(quarantine);
+        }
+
+        pipeline.run_post_receive(&self.repo_path, &accepted_updates);
 
         // Build report-status response.
-        // With side-band-64k: ALL report-status pkt-lines are bundled into ONE sideband
-        // channel-1 payload, followed by a sideband flush pkt-line (0000).
-        // Format: pkt-line(\x01 <inner-pkt-lines> <inner-0000>)  then outer 0000
+        let accepted_set: std::collections::HashSet<usize> =
+            accepted_indices.iter().copied().collect();
         let mut inner = Vec::new();
         write_pkt_line(&mut inner, b"unpack ok\n")?;
         for (i, (refname, _, _)) in ref_updates.iter().enumerate() {
@@ -229,7 +294,7 @@ impl HttpPackServer {
         }
         inner.extend_from_slice(b"0000");
 
-        let mut sideband_data = vec![0x01u8]; // channel 1 = data
+        let mut sideband_data = vec![0x01u8];
         sideband_data.extend_from_slice(&inner);
 
         let mut response = Vec::new();

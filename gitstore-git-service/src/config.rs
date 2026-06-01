@@ -35,21 +35,22 @@ pub struct LogConfig {
     pub format: String,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct HooksConfig {
     pub git_receive_pack: GitReceivePackHooks,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct GitReceivePackHooks {
     pub pre_receive: HookToggle,
     pub update: HookToggle,
     pub post_receive: HookToggle,
     pub proc_receive: HookToggle,
     pub post_update: HookToggle,
+    pub reference_transaction: HookToggle,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct HookToggle {
     pub enabled: bool,
 }
@@ -169,11 +170,12 @@ level = "info"
 format = "json"
 
 [hooks.git_receive_pack]
-pre_receive  = { enabled = false }
-update       = { enabled = false }
-post_receive = { enabled = false }
-proc_receive = { enabled = false }
-post_update  = { enabled = false }
+pre_receive           = { enabled = false }
+update                = { enabled = false }
+post_receive          = { enabled = false }
+proc_receive          = { enabled = false }
+post_update           = { enabled = false }
+reference_transaction = { enabled = false }
 
 [admission_control.validating_admission_policy]
 phase = "pre-receive"
@@ -409,5 +411,17 @@ mod tests {
             "got: {s}"
         );
         clear_env();
+    }
+
+    // T034: reference_transaction toggle defaults to false
+    #[test]
+    fn test_reference_transaction_toggle_defaults_to_false() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        let cfg = load_config_from(None).expect("load_config failed");
+        assert!(
+            !cfg.hooks.git_receive_pack.reference_transaction.enabled,
+            "reference_transaction should default to disabled"
+        );
     }
 }
