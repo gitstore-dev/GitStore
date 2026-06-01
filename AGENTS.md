@@ -13,6 +13,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `go-memdb` (development / in-memory backend) / ScyllaDB 5.x+ (production backend) — via the `datastore.Datastore` interface from feature 006 (009-api-namespaces)
 - Go 1.25 (`gitstore-api`) · Rust edition 2021, MSRV 1.82 (`gitstore-git-service`) + `gqlgen v0.17.90`, `go-memdb v1.3.5`, `gocqlx/v3 v3.0.4`, `google/uuid v1.6.0` (Go) · `gix 0.83.0`, `tonic 0.14.6`, `prost 0.14.3` (Rust) (010-repo-storage-identity)
 - `go-memdb` (development) · ScyllaDB 5.x+ (production) — via `datastore.Datastore` interface (feature #006) (010-repo-storage-identity)
+- Rust edition 2021, MSRV 1.82; actual gix version is `0.84.0` (Cargo.lock canonical) + `gix 0.84.0`, `gix-ref 0.64.0` (two-phase transaction API), `tokio 1.35` (full features), `tonic 0.14`, `tracing 0.1`, `anyhow 1.0`, `async-trait 0.1` (to add) (013-receive-pack-hooks)
 
 - (001-git-backed-ecommerce)
 
@@ -52,9 +53,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 013-receive-pack-hooks: Added Rust edition 2021, MSRV 1.82; actual gix version is `0.84.0` (Cargo.lock canonical) + `gix 0.84.0`, `gix-ref 0.64.0` (two-phase transaction API), `tokio 1.35` (full features), `tonic 0.14`, `tracing 0.1`, `anyhow 1.0`, `async-trait 0.1` (to add)
 - 012-smart-http-api: Go 1.25 (`gitstore-api`) + `net/http` second server on port 5000 · Rust edition 2021, MSRV 1.82 (`gitstore-git-service`) — adds `ReceivePack` (client-streaming), `UploadPack` (server-streaming), `InfoRefs` gRPC RPCs; removes `axum`/HTTP server, `tokio_tungstenite`/`tungstenite` WebSocket deps; removes `gorilla/websocket` and `internal/websocket` from `gitstore-api`
 - 010-repo-storage-identity: Added Go 1.25 (`gitstore-api`) · Rust edition 2021, MSRV 1.82 (`gitstore-git-service`) + `gqlgen v0.17.90`, `go-memdb v1.3.5`, `gocqlx/v3 v3.0.4`, `google/uuid v1.6.0` (Go) · `gix 0.83.0`, `tonic 0.14.6`, `prost 0.14.3` (Rust)
-- 009-api-namespaces: Added Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90`, `go-memdb v1.3.5`, `gocqlx/v3 v3.0.4` (ScyllaDB), `go-playground/validator/v10`, `go.uber.org/zap`, `google/uuid`
 
 
 <!-- MANUAL ADDITIONS START -->

@@ -3,6 +3,9 @@
 
 // Integration tests: full repository lifecycle without service restart (SC-008)
 
+pub mod helpers;
+pub mod hook_pipeline;
+
 use gitstore::grpc::server::{proto, GitServiceImpl};
 use proto::git_service_server::GitService;
 use tempfile::TempDir;

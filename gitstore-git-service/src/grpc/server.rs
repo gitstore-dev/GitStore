@@ -11,6 +11,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
+use crate::git::hooks::{HookPipeline, NoopAdmissionHandler, RefUpdate};
 use crate::git::repo::{create_repository, delete_repository, fanout_path, list_tags};
 use tracing::{error, info};
 
@@ -24,13 +25,35 @@ use proto::*;
 pub struct GitServiceImpl {
     pub data_root: Arc<PathBuf>,
     pub repo_locks: Arc<DashMap<String, Arc<RwLock<()>>>>,
+    pub hook_pipeline: Arc<HookPipeline>,
 }
 
 impl GitServiceImpl {
     pub fn new(data_root: PathBuf) -> Self {
+        use crate::config::{GitReceivePackHooks, HookToggle};
+        let default_hooks = GitReceivePackHooks {
+            pre_receive: HookToggle { enabled: false },
+            update: HookToggle { enabled: false },
+            post_receive: HookToggle { enabled: false },
+            proc_receive: HookToggle { enabled: false },
+            post_update: HookToggle { enabled: false },
+            reference_transaction: HookToggle { enabled: false },
+        };
+        Self::with_pipeline(
+            data_root,
+            Arc::new(HookPipeline::new(
+                default_hooks,
+                "pre-receive".to_string(),
+                Arc::new(NoopAdmissionHandler),
+            )),
+        )
+    }
+
+    pub fn with_pipeline(data_root: PathBuf, hook_pipeline: Arc<HookPipeline>) -> Self {
         Self {
             data_root: Arc::new(data_root),
             repo_locks: Arc::new(DashMap::new()),
+            hook_pipeline,
         }
     }
 }
@@ -822,103 +845,165 @@ impl GitService for GitServiceImpl {
         info!(repo_id = %repo_id, "receive_pack: pack staged in quarantine");
 
         // Build ref_updates from ref_commands
-        let ref_updates: Vec<crate::git::hooks::RefUpdate> = ref_commands
+        let ref_updates: Vec<RefUpdate> = ref_commands
             .iter()
-            .map(|c| crate::git::hooks::RefUpdate {
+            .map(|c| RefUpdate {
                 ref_name: c.ref_name.clone(),
                 old_oid: c.old_oid.clone(),
                 new_oid: c.new_oid.clone(),
             })
             .collect();
 
-        let repo =
-            gix::open(&repo_path).map_err(|e| Status::internal(format!("open repo: {}", e)))?;
-
-        crate::git::hooks::run_pre_receive(&repo_path, &ref_updates)
-            .map_err(|e| Status::internal(format!("pre-receive: {}", e)))?;
-
-        let mut validated_updates: Vec<crate::git::hooks::RefUpdate> = Vec::new();
-        let mut rejected: Vec<String> = Vec::new();
-        for update in &ref_updates {
-            let is_non_ff = validate_ref_command(&repo, &update.ref_name, &update.old_oid)
-                .map_err(|e| Status::internal(e.to_string()))?;
-            if is_non_ff {
-                rejected.push(update.ref_name.clone());
-            } else {
-                validated_updates.push(update.clone());
+        // Non-fast-forward validation in blocking context (gix::Repository is !Send).
+        let ref_updates_clone = ref_updates.clone();
+        let repo_path_nff = repo_path.clone();
+        let (nff_rejected, pipeline_updates) = tokio::task::spawn_blocking(move || {
+            let repo = gix::open(&repo_path_nff)
+                .map_err(|e| Status::internal(format!("open repo for nff: {}", e)))?;
+            let mut rejected = Vec::new();
+            let mut valid = Vec::new();
+            for update in &ref_updates_clone {
+                let is_non_ff = validate_ref_command(&repo, &update.ref_name, &update.old_oid)
+                    .map_err(|e| Status::internal(e.to_string()))?;
+                if is_non_ff {
+                    rejected.push(update.ref_name.clone());
+                } else {
+                    valid.push(update.clone());
+                }
             }
+            Ok::<_, Status>((rejected, valid))
+        })
+        .await
+        .map_err(|e| Status::internal(format!("nff join: {}", e)))??;
+
+        // Run hook pipeline async (pre-receive → proc-receive → update).
+        let pipeline = Arc::clone(&self.hook_pipeline);
+        let repo_path_pipeline = repo_path.clone();
+        let accepted_indices = match pipeline.run(&repo_path_pipeline, &pipeline_updates).await {
+            Ok(indices) => indices,
+            Err(rejection) => {
+                let all_refs: Vec<&str> = ref_updates.iter().map(|u| u.ref_name.as_str()).collect();
+                let report_status = build_rejection_status(&all_refs, &rejection.reason);
+                return Ok(Response::new(ReceivePackResponse { report_status }));
+            }
+        };
+
+        let accepted_updates: Vec<RefUpdate> = accepted_indices
+            .iter()
+            .map(|i| pipeline_updates[*i].clone())
+            .collect();
+
+        // reference-transaction/prepared veto (async).
+        let repo_path_reftxn = repo_path.clone();
+        let rt_result = pipeline
+            .run_reference_transaction_prepared(&repo_path_reftxn, &accepted_updates)
+            .await;
+
+        if let Err(rejection) = rt_result {
+            pipeline.run_reference_transaction_aborted(&repo_path, &accepted_updates);
+            let all_refs: Vec<&str> = ref_updates.iter().map(|u| u.ref_name.as_str()).collect();
+            let report_status = build_rejection_status(&all_refs, &rejection.reason);
+            return Ok(Response::new(ReceivePackResponse { report_status }));
         }
 
-        let accepted_indices = crate::git::hooks::run_update_hooks(&repo_path, &validated_updates)
-            .map_err(|e| Status::internal(format!("update hooks: {}", e)))?;
+        // Build ref_edits and commit transaction in blocking context.
+        let pipeline_updates_for_txn = pipeline_updates.clone();
+        let accepted_indices_clone = accepted_indices.clone();
+        let accepted_updates_clone = accepted_updates.clone();
+        let repo_path_commit = repo_path.clone();
+        tokio::task::spawn_blocking(move || {
+            use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 
-        use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
-        let mut ref_edits: Vec<RefEdit> = Vec::new();
-        for i in &accepted_indices {
-            let u = &validated_updates[*i];
-            let new_id = gix::ObjectId::from_hex(u.new_oid.as_bytes())
-                .map_err(|e| Status::invalid_argument(format!("parse new oid: {}", e)))?;
-            let old_id = gix::ObjectId::from_hex(u.old_oid.as_bytes())
-                .map_err(|e| Status::invalid_argument(format!("parse old oid: {}", e)))?;
+            let repo = gix::open(&repo_path_commit)
+                .map_err(|e| Status::internal(format!("open repo for commit: {}", e)))?;
 
-            let change = if new_id.is_null() {
-                let expected = if old_id.is_null() {
-                    PreviousValue::Any
+            let mut ref_edits: Vec<RefEdit> = Vec::new();
+            for i in &accepted_indices_clone {
+                let u = &pipeline_updates_for_txn[*i];
+                let new_id = gix::ObjectId::from_hex(u.new_oid.as_bytes())
+                    .map_err(|e| Status::invalid_argument(format!("parse new oid: {}", e)))?;
+                let old_id = gix::ObjectId::from_hex(u.old_oid.as_bytes())
+                    .map_err(|e| Status::invalid_argument(format!("parse old oid: {}", e)))?;
+
+                let change = if new_id.is_null() {
+                    let expected = if old_id.is_null() {
+                        PreviousValue::Any
+                    } else {
+                        PreviousValue::MustExistAndMatch(gix::refs::Target::Object(old_id))
+                    };
+                    Change::Delete {
+                        expected,
+                        log: RefLog::AndReference,
+                    }
                 } else {
-                    PreviousValue::MustExistAndMatch(gix::refs::Target::Object(old_id))
+                    let previous_value = if old_id.is_null() {
+                        PreviousValue::MustNotExist
+                    } else {
+                        PreviousValue::MustExistAndMatch(gix::refs::Target::Object(old_id))
+                    };
+                    Change::Update {
+                        log: LogChange {
+                            mode: RefLog::AndReference,
+                            force_create_reflog: false,
+                            message: "push".into(),
+                        },
+                        expected: previous_value,
+                        new: gix::refs::Target::Object(new_id),
+                    }
                 };
-                Change::Delete {
-                    expected,
-                    log: RefLog::AndReference,
-                }
-            } else {
-                let previous_value = if old_id.is_null() {
-                    PreviousValue::MustNotExist
-                } else {
-                    PreviousValue::MustExistAndMatch(gix::refs::Target::Object(old_id))
-                };
-                Change::Update {
-                    log: LogChange {
-                        mode: RefLog::AndReference,
-                        force_create_reflog: false,
-                        message: "push".into(),
-                    },
-                    expected: previous_value,
-                    new: gix::refs::Target::Object(new_id),
-                }
-            };
-            ref_edits.push(RefEdit {
-                change,
-                name: u
-                    .ref_name
-                    .as_str()
-                    .try_into()
-                    .map_err(|e: gix::refs::name::Error| {
-                        Status::invalid_argument(format!("parse refname: {}", e))
-                    })?,
-                deref: false,
-            });
-        }
+                ref_edits.push(RefEdit {
+                    change,
+                    name: u
+                        .ref_name
+                        .as_str()
+                        .try_into()
+                        .map_err(|e: gix::refs::name::Error| {
+                            Status::invalid_argument(format!("parse refname: {}", e))
+                        })?,
+                    deref: false,
+                });
+            }
 
-        // Promote pack objects first so refs never point to missing objects.
-        crate::git::pack_server::promote_quarantine(&repo, quarantine)
-            .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
+            if !ref_edits.is_empty() {
+                let file_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
+                    std::time::Duration::from_millis(100),
+                );
+                let packed_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
+                    std::time::Duration::from_millis(1000),
+                );
+                let txn = repo
+                    .refs
+                    .transaction()
+                    .prepare(ref_edits, file_lock_fail, packed_lock_fail)
+                    .map_err(|e| Status::internal(format!("prepare ref transaction: {}", e)))?;
 
-        if !ref_edits.is_empty() {
-            repo.edit_references(ref_edits)
-                .map_err(|e| Status::internal(format!("ref transaction: {}", e)))?;
-        }
+                crate::git::pack_server::promote_quarantine(&repo, quarantine)
+                    .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
+                txn.commit(None)
+                    .map_err(|e| Status::internal(format!("commit ref transaction: {}", e)))?;
+            }
+            Ok::<_, Status>(())
+        })
+        .await
+        .map_err(|e| Status::internal(format!("commit join: {}", e)))??;
 
-        info!(repo_id = %repo_id, "receive_pack: quarantine promoted, refs committed");
+        pipeline.run_reference_transaction_committed(&repo_path, &accepted_updates_clone);
 
-        crate::git::hooks::run_post_receive(&repo_path, &validated_updates);
+        info!(repo_id = %repo_id, "receive_pack: refs committed");
 
-        let report_status = build_report_status(&ref_updates, &accepted_indices, &rejected);
+        pipeline.run_post_receive(&repo_path, &accepted_updates_clone);
+
+        let report_status = build_report_status(
+            &ref_updates,
+            &pipeline_updates,
+            &accepted_indices,
+            &nff_rejected,
+        );
 
         info!(
             repo_id = %repo_id,
             refs_accepted = accepted_indices.len(),
-            refs_rejected = rejected.len(),
+            refs_rejected = nff_rejected.len(),
             "receive_pack: complete"
         );
 
@@ -1070,25 +1155,50 @@ fn validate_ref_command(
     }
 }
 
+/// Build a report-status payload where every ref is rejected with the same reason.
+fn build_rejection_status(all_ref_names: &[&str], reason: &str) -> Vec<u8> {
+    let mut inner = Vec::new();
+    let _ = write_pkt_line_buf(&mut inner, b"unpack ok\n");
+    for ref_name in all_ref_names {
+        let _ = write_pkt_line_buf(&mut inner, format!("ng {ref_name} {reason}\n").as_bytes());
+    }
+    inner.extend_from_slice(b"0000");
+    let mut sideband_data = vec![0x01u8];
+    sideband_data.extend_from_slice(&inner);
+    let mut response = Vec::new();
+    let _ = write_pkt_line_buf(&mut response, &sideband_data);
+    response.extend_from_slice(b"0000");
+    response
+}
+
 /// Build a report-status pkt-line payload.
+///
+/// `all_updates` — original full list of requested ref updates (for reporting).
+/// `pipeline_updates` — subset that passed nff validation (passed to hook pipeline).
+/// `accepted_indices` — indices into `pipeline_updates` that were accepted.
+/// `nff_rejected` — ref names rejected as non-fast-forward before the pipeline.
 fn build_report_status(
-    all_updates: &[crate::git::hooks::RefUpdate],
+    all_updates: &[RefUpdate],
+    pipeline_updates: &[RefUpdate],
     accepted_indices: &[usize],
-    rejected_refs: &[String],
+    nff_rejected: &[String],
 ) -> Vec<u8> {
     use std::collections::HashSet;
-    let accepted_set: HashSet<usize> = accepted_indices.iter().copied().collect();
-    let rejected_set: HashSet<&str> = rejected_refs.iter().map(|s| s.as_str()).collect();
+    let accepted_names: HashSet<&str> = accepted_indices
+        .iter()
+        .map(|i| pipeline_updates[*i].ref_name.as_str())
+        .collect();
+    let nff_set: HashSet<&str> = nff_rejected.iter().map(|s| s.as_str()).collect();
 
     let mut inner = Vec::new();
     let _ = write_pkt_line_buf(&mut inner, b"unpack ok\n");
-    for (i, u) in all_updates.iter().enumerate() {
-        if rejected_set.contains(u.ref_name.as_str()) {
+    for u in all_updates {
+        if nff_set.contains(u.ref_name.as_str()) {
             let _ = write_pkt_line_buf(
                 &mut inner,
                 format!("ng {} non-fast-forward\n", u.ref_name).as_bytes(),
             );
-        } else if accepted_set.contains(&i) {
+        } else if accepted_names.contains(u.ref_name.as_str()) {
             let _ = write_pkt_line_buf(&mut inner, format!("ok {}\n", u.ref_name).as_bytes());
         } else {
             let _ = write_pkt_line_buf(
