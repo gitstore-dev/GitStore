@@ -5,7 +5,9 @@
 
 ROOT := $(CURDIR)
 API_DIR := $(ROOT)/gitstore-api
+CONTROLLER_MANAGER_DIR := $(ROOT)/gitstore-controller-manager
 GIT_SERVICE_DIR := $(ROOT)/gitstore-git-service
+GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR)
 
 API_ENV_FILE ?= $(API_DIR)/.env
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
@@ -122,23 +124,32 @@ down: ## Stop and remove compose services and networks.
 
 build: ## Build Rust and Go services.
 	@cd "$(GIT_SERVICE_DIR)" && cargo build --verbose
-	@cd "$(API_DIR)" && go build -v ./...
+	@for dir in $(GO_MODULE_DIRS); do \
+		cd "$$dir" && go build -v ./...; \
+	done
 
 test: ## Run Rust and Go test suites.
 	@cd "$(GIT_SERVICE_DIR)" && cargo test --verbose
 	@cd "$(API_DIR)" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+	@cd "$(CONTROLLER_MANAGER_DIR)" && go test -count=1 -v ./...
 
 lint: ## Run Rust formatting/clippy and Go formatting/vet/staticcheck.
 	@cd "$(GIT_SERVICE_DIR)" && cargo fmt --all -- --check
 	@cd "$(GIT_SERVICE_DIR)" && cargo clippy --all-targets --all-features -- -D warnings
-	@if [ "$$(cd "$(API_DIR)" && gofmt -s -l . | wc -l | tr -d ' ')" != "0" ]; then \
-		echo "The following files need formatting:"; \
-		cd "$(API_DIR)" && gofmt -s -l .; \
-		exit 1; \
-	fi
-	@cd "$(API_DIR)" && go vet ./...
+	@for dir in $(GO_MODULE_DIRS); do \
+		if [ "$$(cd "$$dir" && gofmt -s -l . | wc -l | tr -d ' ')" != "0" ]; then \
+			echo "The following files need formatting in $$dir:"; \
+			cd "$$dir" && gofmt -s -l .; \
+			exit 1; \
+		fi; \
+	done
+	@for dir in $(GO_MODULE_DIRS); do \
+		cd "$$dir" && go vet ./...; \
+	done
 	@cd "$(API_DIR)" && go install honnef.co/go/tools/cmd/staticcheck@latest
-	@cd "$(API_DIR)" && "$$(go env GOPATH)"/bin/staticcheck ./...
+	@for dir in $(GO_MODULE_DIRS); do \
+		cd "$$dir" && "$$(go env GOPATH)"/bin/staticcheck ./...; \
+	done
 
 license-check: ## Run Go, Rust, and JS/TS license header checks.
 	@./scripts/check-go-license-headers.sh --all
