@@ -893,25 +893,23 @@ impl GitService for GitServiceImpl {
             .map(|i| pipeline_updates[*i].clone())
             .collect();
 
-        // reference-transaction/prepared veto (async).
-        let repo_path_reftxn = repo_path.clone();
-        let rt_result = pipeline
-            .run_reference_transaction_prepared(&repo_path_reftxn, &accepted_updates)
-            .await;
-
-        if let Err(rejection) = rt_result {
-            pipeline.run_reference_transaction_aborted(&repo_path, &accepted_updates);
-            let all_refs: Vec<&str> = ref_updates.iter().map(|u| u.ref_name.as_str()).collect();
-            let report_status = build_rejection_status(&all_refs, &rejection.reason);
-            return Ok(Response::new(ReceivePackResponse { report_status }));
-        }
-
-        // Build ref_edits and commit transaction in blocking context.
+        // Build ref_edits, prepare the gix transaction (acquires lock files), run the
+        // reference-transaction/prepared veto *while locks are held*, then commit or rollback.
+        // All of this runs in spawn_blocking because gix::Repository is !Send.
+        // block_in_place is used inside to drive the async veto call.
         let pipeline_updates_for_txn = pipeline_updates.clone();
         let accepted_indices_clone = accepted_indices.clone();
         let accepted_updates_clone = accepted_updates.clone();
+        let accepted_updates_for_callbacks = accepted_updates.clone();
         let repo_path_commit = repo_path.clone();
-        tokio::task::spawn_blocking(move || {
+        let pipeline_clone = Arc::clone(&pipeline);
+        // Result is either Ok(rt_committed) or Err(Status); we also need to know if the
+        // reference-transaction veto fired so we can call the right observation callback.
+        enum TxnOutcome {
+            Committed,
+            RejectedByHook(String), // veto reason
+        }
+        let txn_result: Result<TxnOutcome, Status> = tokio::task::spawn_blocking(move || {
             use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 
             let repo = gix::open(&repo_path_commit)
@@ -964,34 +962,69 @@ impl GitService for GitServiceImpl {
                 });
             }
 
-            if !ref_edits.is_empty() {
-                let file_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
-                    std::time::Duration::from_millis(100),
-                );
-                let packed_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
-                    std::time::Duration::from_millis(1000),
-                );
-                let txn = repo
-                    .refs
-                    .transaction()
-                    .prepare(ref_edits, file_lock_fail, packed_lock_fail)
-                    .map_err(|e| Status::internal(format!("prepare ref transaction: {}", e)))?;
-
-                crate::git::pack_server::promote_quarantine(&repo, quarantine)
-                    .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
-                txn.commit(None)
-                    .map_err(|e| Status::internal(format!("commit ref transaction: {}", e)))?;
+            if ref_edits.is_empty() {
+                return Ok(TxnOutcome::Committed);
             }
-            Ok::<_, Status>(())
+
+            let file_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
+                std::time::Duration::from_millis(100),
+            );
+            let packed_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
+                std::time::Duration::from_millis(1000),
+            );
+            // Ref lock files are acquired here — this is the "prepared" state.
+            let txn = repo
+                .refs
+                .transaction()
+                .prepare(ref_edits, file_lock_fail, packed_lock_fail)
+                .map_err(|e| Status::internal(format!("prepare ref transaction: {}", e)))?;
+
+            // Run the veto hook while locks are held (matches the prepared state semantics).
+            let veto = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(
+                    pipeline_clone.run_reference_transaction_prepared(
+                        &repo_path_commit,
+                        &accepted_updates_clone,
+                    ),
+                )
+            });
+
+            match veto {
+                Err(rejection) => {
+                    drop(txn); // releases all lock files
+                    Ok(TxnOutcome::RejectedByHook(rejection.reason))
+                }
+                Ok(()) => {
+                    crate::git::pack_server::promote_quarantine(&repo, quarantine)
+                        .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
+                    txn.commit(None)
+                        .map_err(|e| Status::internal(format!("commit ref transaction: {}", e)))?;
+                    Ok(TxnOutcome::Committed)
+                }
+            }
         })
         .await
-        .map_err(|e| Status::internal(format!("commit join: {}", e)))??;
+        .map_err(|e| Status::internal(format!("commit join: {}", e)))?;
 
-        pipeline.run_reference_transaction_committed(&repo_path, &accepted_updates_clone);
+        match txn_result? {
+            TxnOutcome::Committed => {
+                pipeline.run_reference_transaction_committed(
+                    &repo_path,
+                    &accepted_updates_for_callbacks,
+                );
+            }
+            TxnOutcome::RejectedByHook(reason) => {
+                pipeline
+                    .run_reference_transaction_aborted(&repo_path, &accepted_updates_for_callbacks);
+                let all_refs: Vec<&str> = ref_updates.iter().map(|u| u.ref_name.as_str()).collect();
+                let report_status = build_rejection_status(&all_refs, &reason);
+                return Ok(Response::new(ReceivePackResponse { report_status }));
+            }
+        }
 
         info!(repo_id = %repo_id, "receive_pack: refs committed");
 
-        pipeline.run_post_receive(&repo_path, &accepted_updates_clone);
+        pipeline.run_post_receive(&repo_path, &accepted_updates_for_callbacks);
 
         let report_status = build_report_status(
             &ref_updates,
