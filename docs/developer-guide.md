@@ -333,8 +333,8 @@ query CategoryTree {
                        │ (create/update/delete)
                        │ + publishCatalog
                        ↓
-                ┌─────────────┐   gRPC             ┌─────────────┐
-                │  GraphQL    │   (commit/tag)     │   Git       │
+                ┌─────────────┐   gRPC            ┌─────────────┐
+                │  GraphQL    │   (commit/tag)    │   Git       │
                 │   API       │──────────────────→│   Service   │
                 │   (Go)      │←──────────────────│  (Rust)     │
                 └─────────────┘ Hook / Policy     └─────────────┘
@@ -377,6 +377,8 @@ Run aggregate build and test checks from the repository root:
 make build
 make test
 ```
+
+These targets build and test the Rust git service plus Go modules in `gitstore-api` and `gitstore-controller-manager`.
 
 #### Git Service (Rust)
 

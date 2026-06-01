@@ -23,8 +23,6 @@ target/
 coverage.out
 cover.out
 .coverprofile
-go.work
-go.work.sum
 
 # Node.js
 node_modules/
@@ -72,3 +70,4 @@ demo-catalog/
 demo-catalogue/
 catalog-work/
 catalogue-work/
+/gitstore-controller-manager/controller
