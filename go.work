@@ -3,4 +3,5 @@ go 1.25.0
 use (
 	./gitstore-api
 	./gitstore-controller-manager
+	./tests/integration
 )
