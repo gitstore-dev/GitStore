@@ -8,8 +8,6 @@ package graph
 import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/scalar"
-	"github.com/shopspring/decimal"
 )
 
 // datastoreNamespaceToModel converts a datastore Namespace to a GraphQL model Namespace.
@@ -50,26 +48,39 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 	if p == nil {
 		return nil
 	}
-	var invQty *int32
-	if p.InventoryQuantity != nil {
-		qty32 := int32(*p.InventoryQuantity)
-		invQty = &qty32
+	gen := int32(p.Generation)
+	meta := &model.ProductObjectMeta{
+		Name:              p.Name,
+		Namespace:         p.Namespace,
+		UID:               mustEncodeNodeID(nodeKindProduct, p.UID),
+		ResourceVersion:   p.ResourceVersion,
+		Generation:        gen,
+		CreationTimestamp: p.CreationTimestamp,
+		OwnerReferences:   []*model.OwnerReference{},
+	}
+	if p.Revision != "" {
+		meta.Revision = &p.Revision
+	}
+	if len(p.Labels) > 0 {
+		labels := make(map[string]any, len(p.Labels))
+		for k, v := range p.Labels {
+			labels[k] = v
+		}
+		meta.Labels = labels
+	}
+	if len(p.Annotations) > 0 {
+		annotations := make(map[string]any, len(p.Annotations))
+		for k, v := range p.Annotations {
+			annotations[k] = v
+		}
+		meta.Annotations = annotations
 	}
 	return &model.Product{
-		ID:                mustEncodeNodeID(nodeKindProduct, p.ID),
-		Title:             p.Title,
-		Sku:               p.SKU,
-		Price:             scalar.Decimal{Decimal: decimal.NewFromFloat(p.Price)},
-		Currency:          p.Currency,
-		Body:              &p.Body,
-		InventoryStatus:   model.InventoryStatus(p.InventoryStatus),
-		InventoryQuantity: invQty,
-		Category:          nil,
-		Collections:       []*model.Collection{},
-		Images:            p.Images,
-		Metadata:          p.Metadata,
-		CreatedAt:         p.CreatedAt,
-		UpdatedAt:         p.UpdatedAt,
+		ID:         mustEncodeNodeID(nodeKindProduct, p.UID),
+		APIVersion: p.APIVersion,
+		Kind:       p.Kind,
+		Metadata:   meta,
+		Spec:       &model.ProductSpec{Tags: []string{}, Media: []*model.MediaDefinition{}, Options: []*model.ProductOptionDefinition{}},
 	}
 }
 

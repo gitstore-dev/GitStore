@@ -1,7 +1,3 @@
-CREATE INDEX IF NOT EXISTS products_by_id             ON products           (id);
-CREATE INDEX IF NOT EXISTS products_by_sku            ON products           (sku);
-CREATE INDEX IF NOT EXISTS products_by_category       ON products           (category_id);
-
 CREATE INDEX IF NOT EXISTS categories_by_id           ON categories         (id);
 CREATE INDEX IF NOT EXISTS categories_by_slug         ON categories         (slug);
 

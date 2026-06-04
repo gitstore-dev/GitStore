@@ -134,45 +134,51 @@ func newTestStore(t *testing.T) datastore.Datastore {
 
 func newID() string { return uuid.New().String() }
 
+func newProduct(namespace, name string) *datastore.Product {
+	return &datastore.Product{
+		UID:               newID(),
+		Namespace:         namespace,
+		Name:              name,
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "Product",
+		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+	}
+}
+
 // ── Product ───────────────────────────────────────────────────────────────────
 
 func TestScylla_CreateGetProduct(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	p := &datastore.Product{
-		ID: newID(), SKU: "SKU-" + newID()[:8], Title: "Widget",
-		Price: 9.99, Currency: "USD", InventoryStatus: "in_stock",
-		CreatedAt: time.Now().UTC().Truncate(time.Millisecond),
-		UpdatedAt: time.Now().UTC().Truncate(time.Millisecond),
-	}
+	p := newProduct("test-ns", "widget-"+newID()[:8])
 	require.NoError(t, store.CreateProduct(ctx, p))
 
-	got, err := store.GetProduct(ctx, p.ID)
+	got, err := store.GetProduct(ctx, p.UID)
 	require.NoError(t, err)
-	assert.Equal(t, p.ID, got.ID)
-	assert.Equal(t, p.SKU, got.SKU)
-	assert.Equal(t, p.Price, got.Price)
+	assert.Equal(t, p.UID, got.UID)
+	assert.Equal(t, p.Name, got.Name)
+	assert.Equal(t, p.Namespace, got.Namespace)
 }
 
-func TestScylla_CreateProduct_DuplicateID(t *testing.T) {
+func TestScylla_CreateProduct_DuplicateUID(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	p := &datastore.Product{ID: newID(), SKU: "D1-" + newID()[:8]}
+	p := newProduct("test-ns", "dup-uid-"+newID()[:8])
 	require.NoError(t, store.CreateProduct(ctx, p))
 	err := store.CreateProduct(ctx, p)
 	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
 }
 
-func TestScylla_CreateProduct_DuplicateSKU(t *testing.T) {
+func TestScylla_CreateProduct_DuplicateName(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	sku := "DUPSKU-" + newID()[:8]
-	p1 := &datastore.Product{ID: newID(), SKU: sku}
+	name := "dup-name-" + newID()[:8]
+	p1 := newProduct("test-ns", name)
 	require.NoError(t, store.CreateProduct(ctx, p1))
-	p2 := &datastore.Product{ID: newID(), SKU: sku}
+	p2 := newProduct("test-ns", name)
 	err := store.CreateProduct(ctx, p2)
 	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
 }
@@ -183,22 +189,22 @@ func TestScylla_GetProduct_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
-func TestScylla_GetProductBySKU(t *testing.T) {
+func TestScylla_GetProductByName(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	sku := "FIND-" + newID()[:8]
-	p := &datastore.Product{ID: newID(), SKU: sku, Title: "Findable"}
+	name := "findable-" + newID()[:8]
+	p := newProduct("test-ns", name)
 	require.NoError(t, store.CreateProduct(ctx, p))
 
-	got, err := store.GetProductBySKU(ctx, sku)
+	got, err := store.GetProductByName(ctx, "test-ns", name)
 	require.NoError(t, err)
-	assert.Equal(t, p.ID, got.ID)
+	assert.Equal(t, p.UID, got.UID)
 }
 
-func TestScylla_GetProductBySKU_NotFound(t *testing.T) {
+func TestScylla_GetProductByName_NotFound(t *testing.T) {
 	store := newTestStore(t)
-	_, err := store.GetProductBySKU(context.Background(), "NO-SUCH-SKU-"+newID()[:8])
+	_, err := store.GetProductByName(context.Background(), "test-ns", "no-such-product-"+newID()[:8])
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
@@ -206,16 +212,16 @@ func TestScylla_ListProducts(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	catID := newID()
-	p1 := &datastore.Product{ID: newID(), SKU: "LS1-" + newID()[:8], CategoryID: catID}
-	p2 := &datastore.Product{ID: newID(), SKU: "LS2-" + newID()[:8], CategoryID: catID}
-	p3 := &datastore.Product{ID: newID(), SKU: "LS3-" + newID()[:8]}
+	ns := "list-ns-" + newID()[:8]
+	p1 := newProduct(ns, "p1-"+newID()[:8])
+	p2 := newProduct(ns, "p2-"+newID()[:8])
+	p3 := newProduct(ns, "p3-"+newID()[:8])
 
 	require.NoError(t, store.CreateProduct(ctx, p1))
 	require.NoError(t, store.CreateProduct(ctx, p2))
 	require.NoError(t, store.CreateProduct(ctx, p3))
 
-	result, err := store.ListProducts(ctx, datastore.PageParams{First: 100})
+	result, err := store.ListProducts(ctx, ns, datastore.PageParams{First: 100})
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(result.Items), 3)
 }
@@ -224,19 +230,20 @@ func TestScylla_UpdateProduct(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	p := &datastore.Product{ID: newID(), SKU: "UPD-" + newID()[:8], Title: "Before"}
+	p := newProduct("test-ns", "upd-"+newID()[:8])
 	require.NoError(t, store.CreateProduct(ctx, p))
-	p.Title = "After"
+	p.GitRef = "main"
 	require.NoError(t, store.UpdateProduct(ctx, p))
 
-	got, err := store.GetProduct(ctx, p.ID)
+	got, err := store.GetProduct(ctx, p.UID)
 	require.NoError(t, err)
-	assert.Equal(t, "After", got.Title)
+	assert.Equal(t, "main", got.GitRef)
 }
 
 func TestScylla_UpdateProduct_NotFound(t *testing.T) {
 	store := newTestStore(t)
-	p := &datastore.Product{ID: newID(), SKU: "GHOST-" + newID()[:8]}
+	p := newProduct("test-ns", "ghost-"+newID()[:8])
+	p.UID = newID() // does not exist
 	err := store.UpdateProduct(context.Background(), p)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
@@ -245,11 +252,11 @@ func TestScylla_DeleteProduct(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	p := &datastore.Product{ID: newID(), SKU: "DEL-" + newID()[:8]}
+	p := newProduct("test-ns", "del-"+newID()[:8])
 	require.NoError(t, store.CreateProduct(ctx, p))
-	require.NoError(t, store.DeleteProduct(ctx, p.ID))
+	require.NoError(t, store.DeleteProduct(ctx, p.UID))
 
-	_, err := store.GetProduct(ctx, p.ID)
+	_, err := store.GetProduct(ctx, p.UID)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 

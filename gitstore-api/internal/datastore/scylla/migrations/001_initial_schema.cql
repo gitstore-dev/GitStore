@@ -1,21 +1,44 @@
 CREATE TABLE IF NOT EXISTS products (
-    bucket             text,
-    created_at         timestamp,
-    id                 uuid,
-    sku                text,
-    title              text,
-    price              decimal,
-    currency           text,
-    inventory_status   text,
-    inventory_quantity int,
-    category_id        text,
-    collection_ids     set<text>,
-    images             set<text>,
-    metadata           map<text, text>,
-    updated_at         timestamp,
+    -- Partition + clustering key
+    namespace          text,
+    name               text,
+
+    -- Immutable identity
+    uid                uuid,
+    api_version        text,
+    kind               text,
+
+    -- Versioning / optimistic concurrency
+    generation         bigint,
+    resource_version   text,
+    creation_timestamp timestamp,
+    revision           text,
+
+    -- Author-supplied classification
+    labels             map<text, text>,
+    annotations        map<text, text>,
+
+    -- Ownership (serialized JSON — rarely queried directly)
+    owner_refs         text,
+
+    -- Git provenance
+    git_commit_sha     text,
+    git_ref            text,
+
+    -- Spec (complex nested structure — serialized JSON)
+    spec               text,
+
+    -- Markdown body content
     body               text,
-    PRIMARY KEY (bucket, created_at, id)
-) WITH CLUSTERING ORDER BY (created_at DESC, id DESC);
+
+    -- Status (system-only — serialized JSON)
+    status             text,
+
+    PRIMARY KEY (namespace, name)
+) WITH CLUSTERING ORDER BY (name ASC);
+
+-- Secondary index for UID lookups (global ID resolution)
+CREATE INDEX IF NOT EXISTS products_by_uid ON products (uid);
 
 CREATE TABLE IF NOT EXISTS categories (
     bucket             text,

@@ -75,29 +75,29 @@ func (s *Service) SetGitWriter(w GitWriter) {
 	s.gitWriter = w
 }
 
-// GetProducts retrieves all products from the datastore with optional filtering.
-func (s *Service) GetProducts(ctx context.Context, params datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
-	result, err := s.store.ListProducts(ctx, params)
+// GetProducts retrieves all products in a namespace from the datastore.
+func (s *Service) GetProducts(ctx context.Context, namespace string, params datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+	result, err := s.store.ListProducts(ctx, namespace, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list products: %w", err)
 	}
 	return result, nil
 }
 
-// GetProductByID retrieves a product by ID.
-func (s *Service) GetProductByID(ctx context.Context, id string) (*datastore.Product, error) {
-	p, err := s.store.GetProduct(ctx, id)
+// GetProductByUID retrieves a product by UID.
+func (s *Service) GetProductByUID(ctx context.Context, uid string) (*datastore.Product, error) {
+	p, err := s.store.GetProduct(ctx, uid)
 	if err != nil {
-		return nil, fmt.Errorf("product not found: %s", id)
+		return nil, fmt.Errorf("product not found: %s", uid)
 	}
 	return p, nil
 }
 
-// GetProductBySKU retrieves a product by SKU.
-func (s *Service) GetProductBySKU(ctx context.Context, sku string) (*datastore.Product, error) {
-	p, err := s.store.GetProductBySKU(ctx, sku)
+// GetProductByName retrieves a product by namespace and name.
+func (s *Service) GetProductByName(ctx context.Context, namespace, name string) (*datastore.Product, error) {
+	p, err := s.store.GetProductByName(ctx, namespace, name)
 	if err != nil {
-		return nil, fmt.Errorf("product not found with SKU: %s", sku)
+		return nil, fmt.Errorf("product not found: %s/%s", namespace, name)
 	}
 	return p, nil
 }
@@ -156,110 +156,11 @@ func (s *Service) GetCollectionBySlug(ctx context.Context, slug string) (*datast
 	return c, nil
 }
 
-// CreateProduct creates a new product in the datastore.
-func (s *Service) CreateProduct(ctx context.Context, input map[string]interface{}) (*datastore.Product, error) {
-	id := uuid.New().String()
-	now := time.Now()
-	p := &datastore.Product{
-		ID:        id,
-		SKU:       getStringOrEmpty(input, "sku"),
-		Title:     getStringOrEmpty(input, "title"),
-		Price:     getFloatOrZero(input, "price"),
-		Currency:  getStringOr(input, "currency", "USD"),
-		Body:      getStringOrEmpty(input, "body"),
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	if status, ok := input["inventoryStatus"].(string); ok {
-		p.InventoryStatus = status
-	}
-	if qty, ok := input["inventoryQuantity"].(int); ok {
-		p.InventoryQuantity = &qty
-	}
-	if categoryID, ok := input["categoryId"].(string); ok {
-		p.CategoryID = categoryID
-	}
-	if collectionIDs, ok := input["collectionIds"].([]string); ok {
-		p.CollectionIDs = collectionIDs
-	}
-	if images, ok := input["images"].([]string); ok {
-		p.Images = images
-	}
-	if metadata, ok := input["metadata"].(map[string]interface{}); ok {
-		converted := make(map[string]any, len(metadata))
-		for k, v := range metadata {
-			converted[k] = v
-		}
-		p.Metadata = converted
-	}
-
-	if err := s.store.CreateProduct(ctx, p); err != nil {
-		return nil, fmt.Errorf("failed to create product: %w", err)
-	}
-
-	return p, nil
-}
-
-// UpdateProduct updates an existing product in the datastore.
-func (s *Service) UpdateProduct(ctx context.Context, id string, input map[string]interface{}) (*datastore.Product, error) {
-	existing, err := s.store.GetProduct(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("product not found: %s", id)
-	}
-
-	p := *existing
-	p.UpdatedAt = time.Now()
-
-	if title, ok := input["title"].(string); ok {
-		p.Title = title
-	}
-	if sku, ok := input["sku"].(string); ok {
-		p.SKU = sku
-	}
-	if price, ok := input["price"].(float64); ok {
-		p.Price = price
-	}
-	if currency, ok := input["currency"].(string); ok {
-		p.Currency = currency
-	}
-	if body, ok := input["body"].(string); ok {
-		p.Body = body
-	}
-	if status, ok := input["inventoryStatus"].(string); ok {
-		p.InventoryStatus = status
-	}
-	if qty, ok := input["inventoryQuantity"].(int); ok {
-		p.InventoryQuantity = &qty
-	}
-	if categoryID, ok := input["categoryId"].(string); ok {
-		p.CategoryID = categoryID
-	}
-	if collectionIDs, ok := input["collectionIds"].([]string); ok {
-		p.CollectionIDs = collectionIDs
-	}
-	if images, ok := input["images"].([]string); ok {
-		p.Images = images
-	}
-	if metadata, ok := input["metadata"].(map[string]interface{}); ok {
-		converted := make(map[string]any, len(metadata))
-		for k, v := range metadata {
-			converted[k] = v
-		}
-		p.Metadata = converted
-	}
-
-	if err := s.store.UpdateProduct(ctx, &p); err != nil {
-		return nil, fmt.Errorf("failed to update product: %w", err)
-	}
-
-	return &p, nil
-}
-
-// DeleteProduct deletes a product from the datastore.
-func (s *Service) DeleteProduct(ctx context.Context, id string) error {
-	if err := s.store.DeleteProduct(ctx, id); err != nil {
-		return fmt.Errorf("product not found: %s", id)
+// DeleteProduct deletes a product from the datastore by UID.
+// Products are authored via git push; this is used for cleanup only.
+func (s *Service) DeleteProduct(ctx context.Context, uid string) error {
+	if err := s.store.DeleteProduct(ctx, uid); err != nil {
+		return fmt.Errorf("product not found: %s", uid)
 	}
 	return nil
 }
@@ -793,18 +694,4 @@ func getStringOrEmpty(m map[string]interface{}, key string) string {
 		return v
 	}
 	return ""
-}
-
-func getStringOr(m map[string]interface{}, key, defaultVal string) string {
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return defaultVal
-}
-
-func getFloatOrZero(m map[string]interface{}, key string) float64 {
-	if v, ok := m[key].(float64); ok {
-		return v
-	}
-	return 0.0
 }

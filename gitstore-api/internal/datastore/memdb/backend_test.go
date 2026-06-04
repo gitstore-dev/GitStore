@@ -22,15 +22,14 @@ func newBackend(t *testing.T) datastore.Datastore {
 	return ds
 }
 
-func productFixture(id, sku string) *datastore.Product {
+func productFixture(uid, namespace, name string) *datastore.Product {
 	return &datastore.Product{
-		ID:        id,
-		SKU:       sku,
-		Title:     "Test Product",
-		Price:     9.99,
-		Currency:  "USD",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		UID:               uid,
+		Namespace:         namespace,
+		Name:              name,
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "Product",
+		CreationTimestamp: time.Now(),
 	}
 }
 
@@ -59,14 +58,15 @@ func collectionFixture(id, slug string) *datastore.Collection {
 func TestMemdb_CreateAndGetProduct(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
-	p := productFixture("a0000000-0000-0000-0000-000000000001", "SKU-001")
+	p := productFixture("a0000000-0000-0000-0000-000000000001", "my-store", "macbook-pro")
 
 	require.NoError(t, ds.CreateProduct(ctx, p))
 
-	got, err := ds.GetProduct(ctx, p.ID)
+	got, err := ds.GetProduct(ctx, p.UID)
 	require.NoError(t, err)
-	assert.Equal(t, p.ID, got.ID)
-	assert.Equal(t, p.SKU, got.SKU)
+	assert.Equal(t, p.UID, got.UID)
+	assert.Equal(t, p.Name, got.Name)
+	assert.Equal(t, p.Namespace, got.Namespace)
 }
 
 func TestMemdb_GetProduct_NotFound(t *testing.T) {
@@ -75,39 +75,39 @@ func TestMemdb_GetProduct_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
-func TestMemdb_GetProductBySKU(t *testing.T) {
+func TestMemdb_GetProductByName(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
-	p := productFixture("a0000000-0000-0000-0000-000000000002", "SKU-002")
+	p := productFixture("a0000000-0000-0000-0000-000000000002", "my-store", "iphone-16")
 	require.NoError(t, ds.CreateProduct(ctx, p))
 
-	got, err := ds.GetProductBySKU(ctx, "SKU-002")
+	got, err := ds.GetProductByName(ctx, "my-store", "iphone-16")
 	require.NoError(t, err)
-	assert.Equal(t, p.ID, got.ID)
+	assert.Equal(t, p.UID, got.UID)
 }
 
-func TestMemdb_GetProductBySKU_NotFound(t *testing.T) {
+func TestMemdb_GetProductByName_NotFound(t *testing.T) {
 	ds := newBackend(t)
-	_, err := ds.GetProductBySKU(context.Background(), "MISSING")
+	_, err := ds.GetProductByName(context.Background(), "my-store", "missing")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
-func TestMemdb_CreateProduct_DuplicateIDReturnsAlreadyExists(t *testing.T) {
+func TestMemdb_CreateProduct_DuplicateUIDReturnsAlreadyExists(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
-	p := productFixture("a0000000-0000-0000-0000-000000000003", "SKU-003")
+	p := productFixture("a0000000-0000-0000-0000-000000000003", "my-store", "product-a")
 	require.NoError(t, ds.CreateProduct(ctx, p))
 
-	p2 := productFixture("a0000000-0000-0000-0000-000000000003", "SKU-004")
+	p2 := productFixture("a0000000-0000-0000-0000-000000000003", "my-store", "product-b")
 	err := ds.CreateProduct(ctx, p2)
 	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
 }
 
-func TestMemdb_CreateProduct_DuplicateSKUReturnsAlreadyExists(t *testing.T) {
+func TestMemdb_CreateProduct_DuplicateNameReturnsAlreadyExists(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
-	p1 := productFixture("a0000000-0000-0000-0000-000000000004", "SKU-DUP")
-	p2 := productFixture("a0000000-0000-0000-0000-000000000005", "SKU-DUP")
+	p1 := productFixture("a0000000-0000-0000-0000-000000000004", "my-store", "dup-name")
+	p2 := productFixture("a0000000-0000-0000-0000-000000000005", "my-store", "dup-name")
 	require.NoError(t, ds.CreateProduct(ctx, p1))
 
 	err := ds.CreateProduct(ctx, p2)
@@ -118,15 +118,15 @@ func TestMemdb_ListProducts_Paginated(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
 
-	p1 := productFixture("a0000000-0000-0000-0000-000000000010", "SKU-010")
-	p2 := productFixture("a0000000-0000-0000-0000-000000000011", "SKU-011")
-	p3 := productFixture("a0000000-0000-0000-0000-000000000012", "SKU-012")
+	p1 := productFixture("a0000000-0000-0000-0000-000000000010", "my-store", "product-10")
+	p2 := productFixture("a0000000-0000-0000-0000-000000000011", "my-store", "product-11")
+	p3 := productFixture("a0000000-0000-0000-0000-000000000012", "my-store", "product-12")
 
 	require.NoError(t, ds.CreateProduct(ctx, p1))
 	require.NoError(t, ds.CreateProduct(ctx, p2))
 	require.NoError(t, ds.CreateProduct(ctx, p3))
 
-	result, err := ds.ListProducts(ctx, datastore.PageParams{First: 2})
+	result, err := ds.ListProducts(ctx, "my-store", datastore.PageParams{First: 2})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.True(t, result.HasNext)
@@ -135,12 +135,13 @@ func TestMemdb_ListProducts_Paginated(t *testing.T) {
 func TestMemdb_ListProducts_ReturnsAll(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
-	for i, sku := range []string{"SKU-A", "SKU-B", "SKU-C"} {
-		id := "a0000000-0000-0000-0000-00000000002" + string(rune('0'+i))
-		require.NoError(t, ds.CreateProduct(ctx, productFixture(id, sku)))
+	names := []string{"product-a", "product-b", "product-c"}
+	for i, name := range names {
+		uid := "a0000000-0000-0000-0000-00000000002" + string(rune('0'+i))
+		require.NoError(t, ds.CreateProduct(ctx, productFixture(uid, "my-store", name)))
 	}
 
-	result, err := ds.ListProducts(ctx, datastore.PageParams{})
+	result, err := ds.ListProducts(ctx, "my-store", datastore.PageParams{})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 3)
 }
@@ -148,20 +149,20 @@ func TestMemdb_ListProducts_ReturnsAll(t *testing.T) {
 func TestMemdb_UpdateProduct(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
-	p := productFixture("a0000000-0000-0000-0000-000000000030", "SKU-030")
+	p := productFixture("a0000000-0000-0000-0000-000000000030", "my-store", "product-30")
 	require.NoError(t, ds.CreateProduct(ctx, p))
 
-	p.Title = "Updated"
+	p.GitRef = "main"
 	require.NoError(t, ds.UpdateProduct(ctx, p))
 
-	got, err := ds.GetProduct(ctx, p.ID)
+	got, err := ds.GetProduct(ctx, p.UID)
 	require.NoError(t, err)
-	assert.Equal(t, "Updated", got.Title)
+	assert.Equal(t, "main", got.GitRef)
 }
 
 func TestMemdb_UpdateProduct_NotFound(t *testing.T) {
 	ds := newBackend(t)
-	p := productFixture("a0000000-0000-0000-0000-000000000099", "SKU-NX")
+	p := productFixture("a0000000-0000-0000-0000-000000000099", "my-store", "no-such")
 	err := ds.UpdateProduct(context.Background(), p)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
@@ -169,11 +170,11 @@ func TestMemdb_UpdateProduct_NotFound(t *testing.T) {
 func TestMemdb_DeleteProduct(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
-	p := productFixture("a0000000-0000-0000-0000-000000000040", "SKU-040")
+	p := productFixture("a0000000-0000-0000-0000-000000000040", "my-store", "product-40")
 	require.NoError(t, ds.CreateProduct(ctx, p))
-	require.NoError(t, ds.DeleteProduct(ctx, p.ID))
+	require.NoError(t, ds.DeleteProduct(ctx, p.UID))
 
-	_, err := ds.GetProduct(ctx, p.ID)
+	_, err := ds.GetProduct(ctx, p.UID)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
@@ -274,13 +275,13 @@ func TestMemdb_GetCollectionBySlug_NotFound(t *testing.T) {
 func TestMemdb_DataIsGoneAfterNewInstance(t *testing.T) {
 	ctx := context.Background()
 	ds1, _ := memdb.New()
-	p := productFixture("a0000000-0000-0000-0000-000000000050", "SKU-050")
+	p := productFixture("a0000000-0000-0000-0000-000000000050", "my-store", "product-50")
 	require.NoError(t, ds1.CreateProduct(ctx, p))
 	ds1.Close() //nolint:errcheck
 
 	ds2, _ := memdb.New()
 	defer ds2.Close() //nolint:errcheck
-	_, err := ds2.GetProduct(ctx, p.ID)
+	_, err := ds2.GetProduct(ctx, p.UID)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 

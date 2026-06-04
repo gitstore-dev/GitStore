@@ -131,7 +131,7 @@ func (h *Handler) performChecks(ctx context.Context) map[string]Check {
 }
 
 func (h *Handler) checkDatastore(ctx context.Context) Check {
-	_, err := h.store.ListProducts(ctx, datastore.PageParams{First: 1})
+	_, err := h.store.ListProducts(ctx, "", datastore.PageParams{First: 1})
 	if err != nil {
 		h.logger.Warn("Datastore check failed", zap.Error(err))
 		return Check{

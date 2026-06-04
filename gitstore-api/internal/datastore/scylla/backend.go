@@ -20,7 +20,6 @@ import (
 	"github.com/scylladb/gocqlx/v3/qb"
 	"github.com/scylladb/gocqlx/v3/table"
 	"go.uber.org/zap"
-	"gopkg.in/inf.v0"
 )
 
 // scyllaDatastore implements datastore.Datastore backed by ScyllaDB.
@@ -38,21 +37,23 @@ type scyllaDatastore struct {
 // row structs mirror the CQL columns.
 
 type productRow struct {
-	Bucket            string            `db:"bucket"`
-	CreatedAt         time.Time         `db:"created_at"`
-	ID                gocql.UUID        `db:"id"`
-	SKU               string            `db:"sku"`
-	Title             string            `db:"title"`
-	Price             *inf.Dec          `db:"price"`
-	Currency          string            `db:"currency"`
-	InventoryStatus   string            `db:"inventory_status"`
-	InventoryQuantity *int              `db:"inventory_quantity"`
-	CategoryID        string            `db:"category_id"`
-	CollectionIDs     []string          `db:"collection_ids"`
-	Images            []string          `db:"images"`
-	Metadata          map[string]string `db:"metadata"`
-	UpdatedAt         time.Time         `db:"updated_at"`
+	Namespace         string            `db:"namespace"`
+	Name              string            `db:"name"`
+	UID               gocql.UUID        `db:"uid"`
+	APIVersion        string            `db:"api_version"`
+	Kind              string            `db:"kind"`
+	Generation        int64             `db:"generation"`
+	ResourceVersion   string            `db:"resource_version"`
+	CreationTimestamp time.Time         `db:"creation_timestamp"`
+	Revision          string            `db:"revision"`
+	Labels            map[string]string `db:"labels"`
+	Annotations       map[string]string `db:"annotations"`
+	OwnerRefs         string            `db:"owner_refs"`
+	GitCommitSHA      string            `db:"git_commit_sha"`
+	GitRef            string            `db:"git_ref"`
+	Spec              string            `db:"spec"`
 	Body              string            `db:"body"`
+	Status            string            `db:"status"`
 }
 
 type categoryRow struct {
@@ -161,20 +162,14 @@ func (s *scyllaDatastore) Close() error {
 // ── Product ───────────────────────────────────────────────────────────────────
 
 func (s *scyllaDatastore) CreateProduct(ctx context.Context, p *datastore.Product) error {
-	// Check for existing ID.
-	if _, err := s.GetProduct(ctx, p.ID); err == nil {
-		return fmt.Errorf("%w: product id %s", datastore.ErrAlreadyExists, p.ID)
+	if _, err := s.GetProduct(ctx, p.UID); err == nil {
+		return fmt.Errorf("%w: product uid %s", datastore.ErrAlreadyExists, p.UID)
 	}
-	// Check for duplicate SKU via secondary index.
-	if existing, err := s.GetProductBySKU(ctx, p.SKU); err == nil && existing.ID != p.ID {
-		return fmt.Errorf("%w: product sku %s", datastore.ErrAlreadyExists, p.SKU)
+	if _, err := s.GetProductByName(ctx, p.Namespace, p.Name); err == nil {
+		return fmt.Errorf("%w: product %s/%s", datastore.ErrAlreadyExists, p.Namespace, p.Name)
 	}
-	now := time.Now().UTC().Truncate(time.Millisecond)
-	if p.CreatedAt.IsZero() {
-		p.CreatedAt = now
-	}
-	if p.UpdatedAt.IsZero() {
-		p.UpdatedAt = now
+	if p.CreationTimestamp.IsZero() {
+		p.CreationTimestamp = time.Now().UTC().Truncate(time.Millisecond)
 	}
 	row := toProductRow(p)
 	stmt, names := s.productTable.Insert()
@@ -184,52 +179,50 @@ func (s *scyllaDatastore) CreateProduct(ctx context.Context, p *datastore.Produc
 	return nil
 }
 
-func (s *scyllaDatastore) GetProduct(_ context.Context, id string) (*datastore.Product, error) {
-	uid, err := gocql.ParseUUID(id)
-	if err != nil {
-		return nil, fmt.Errorf("%w: invalid product id %s", datastore.ErrNotFound, id)
-	}
+func (s *scyllaDatastore) GetProduct(_ context.Context, uid string) (*datastore.Product, error) {
 	stmt, names := qb.Select("products").
 		Columns(s.productTable.Metadata().Columns...).
-		Where(qb.Eq("id")).
+		Where(qb.Eq("uid")).
 		Limit(1).
+		AllowFiltering().
 		ToCql()
+	parsedUID, err := gocql.ParseUUID(uid)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid product uid %s", datastore.ErrNotFound, uid)
+	}
 	var row productRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"id": uid}).GetRelease(&row); err != nil {
+	if err := s.session.Query(stmt, names).BindMap(qb.M{"uid": parsedUID}).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, fmt.Errorf("%w: product id %s", datastore.ErrNotFound, id)
+			return nil, fmt.Errorf("%w: product uid %s", datastore.ErrNotFound, uid)
 		}
 		return nil, fmt.Errorf("scylla: get product: %w", err)
 	}
 	return fromProductRow(&row), nil
 }
 
-func (s *scyllaDatastore) GetProductBySKU(_ context.Context, sku string) (*datastore.Product, error) {
-	stmt, names := qb.Select("products").
-		Columns(s.productTable.Metadata().Columns...).
-		Where(qb.Eq("sku")).
-		ToCql()
+func (s *scyllaDatastore) GetProductByName(_ context.Context, namespace, name string) (*datastore.Product, error) {
+	stmt, names := s.productTable.Get()
 	var row productRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"sku": sku}).GetRelease(&row); err != nil {
+	if err := s.session.Query(stmt, names).BindMap(qb.M{"namespace": namespace, "name": name}).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, fmt.Errorf("%w: product sku %s", datastore.ErrNotFound, sku)
+			return nil, fmt.Errorf("%w: product %s/%s", datastore.ErrNotFound, namespace, name)
 		}
-		return nil, fmt.Errorf("scylla: get product by sku: %w", err)
+		return nil, fmt.Errorf("scylla: get product by name: %w", err)
 	}
 	return fromProductRow(&row), nil
 }
 
-func (s *scyllaDatastore) ListProducts(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+func (s *scyllaDatastore) ListProducts(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
 	limit := page.Limit()
-	pq := buildPaginatedSelect(s.productTable, page, nil, nil)
+	stmt, names := qb.Select("products").
+		Columns(s.productTable.Metadata().Columns...).
+		Where(qb.Eq("namespace")).
+		Limit(uint(limit + 1)).
+		ToCql()
 
 	var rows []productRow
-	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
+	if err := s.session.Query(stmt, names).BindMap(qb.M{"namespace": namespace}).SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list products: %w", err)
-	}
-
-	if page.Last > 0 {
-		reverseRows(rows)
 	}
 
 	products := make([]*datastore.Product, len(rows))
@@ -241,15 +234,14 @@ func (s *scyllaDatastore) ListProducts(_ context.Context, page datastore.PagePar
 }
 
 func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Product) error {
-	if _, err := s.GetProduct(ctx, p.ID); err != nil {
+	if _, err := s.GetProductByName(ctx, p.Namespace, p.Name); err != nil {
 		return err
 	}
 	row := toProductRow(p)
 	stmt, names := s.productTable.Update(
-		"sku", "title", "price", "currency",
-		"inventory_status", "inventory_quantity",
-		"category_id", "collection_ids", "images",
-		"metadata", "updated_at", "body",
+		"uid", "api_version", "kind", "generation", "resource_version",
+		"revision", "labels", "annotations", "owner_refs",
+		"git_commit_sha", "git_ref", "spec", "body", "status",
 	)
 	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
 		return fmt.Errorf("scylla: update product: %w", err)
@@ -257,16 +249,15 @@ func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Produc
 	return nil
 }
 
-func (s *scyllaDatastore) DeleteProduct(ctx context.Context, id string) error {
-	product, err := s.GetProduct(ctx, id)
+func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
+	p, err := s.GetProduct(ctx, uid)
 	if err != nil {
 		return err
 	}
 	stmt, names := s.productTable.Delete()
 	if err := s.session.Query(stmt, names).BindMap(qb.M{
-		"bucket":     BucketAll,
-		"created_at": product.CreatedAt,
-		"id":         mustParseUUID(id),
+		"namespace": p.Namespace,
+		"name":      p.Name,
 	}).ExecRelease(); err != nil {
 		return fmt.Errorf("scylla: delete product: %w", err)
 	}
@@ -593,55 +584,66 @@ func (s *scyllaDatastore) DeleteNamespace(ctx context.Context, id string) error 
 // ── row conversion helpers ────────────────────────────────────────────────────
 
 func toProductRow(p *datastore.Product) *productRow {
-	meta := make(map[string]string, len(p.Metadata))
-	for k, v := range p.Metadata {
-		meta[k] = fmt.Sprintf("%v", v)
+	ownerRefs := ""
+	if len(p.OwnerRefs) > 0 {
+		ownerRefs = string(p.OwnerRefs)
+	}
+	spec := ""
+	if len(p.Spec) > 0 {
+		spec = string(p.Spec)
+	}
+	status := ""
+	if len(p.Status) > 0 {
+		status = string(p.Status)
 	}
 	return &productRow{
-		Bucket:            BucketAll,
-		CreatedAt:         p.CreatedAt,
-		ID:                mustParseUUID(p.ID),
-		SKU:               p.SKU,
-		Title:             p.Title,
-		Price:             inf.NewDec(int64(p.Price*1e8), 8),
-		Currency:          p.Currency,
-		InventoryStatus:   p.InventoryStatus,
-		InventoryQuantity: p.InventoryQuantity,
-		CategoryID:        p.CategoryID,
-		CollectionIDs:     p.CollectionIDs,
-		Images:            p.Images,
-		Metadata:          meta,
-		UpdatedAt:         p.UpdatedAt,
+		Namespace:         p.Namespace,
+		Name:              p.Name,
+		UID:               mustParseUUID(p.UID),
+		APIVersion:        p.APIVersion,
+		Kind:              p.Kind,
+		Generation:        p.Generation,
+		ResourceVersion:   p.ResourceVersion,
+		CreationTimestamp: p.CreationTimestamp,
+		Revision:          p.Revision,
+		Labels:            p.Labels,
+		Annotations:       p.Annotations,
+		OwnerRefs:         ownerRefs,
+		GitCommitSHA:      p.GitCommitSHA,
+		GitRef:            p.GitRef,
+		Spec:              spec,
 		Body:              p.Body,
+		Status:            status,
 	}
 }
 
 func fromProductRow(r *productRow) *datastore.Product {
-	meta := make(map[string]any, len(r.Metadata))
-	for k, v := range r.Metadata {
-		meta[k] = v
-	}
-	var price float64
-	if r.Price != nil {
-		f, _ := strconv.ParseFloat(r.Price.String(), 64)
-		price = f
-	}
 	return &datastore.Product{
-		ID:                r.ID.String(),
-		SKU:               r.SKU,
-		Title:             r.Title,
-		Price:             price,
-		Currency:          r.Currency,
-		InventoryStatus:   r.InventoryStatus,
-		InventoryQuantity: r.InventoryQuantity,
-		CategoryID:        r.CategoryID,
-		CollectionIDs:     r.CollectionIDs,
-		Images:            r.Images,
-		Metadata:          meta,
-		CreatedAt:         r.CreatedAt,
-		UpdatedAt:         r.UpdatedAt,
+		Namespace:         r.Namespace,
+		Name:              r.Name,
+		UID:               r.UID.String(),
+		APIVersion:        r.APIVersion,
+		Kind:              r.Kind,
+		Generation:        r.Generation,
+		ResourceVersion:   r.ResourceVersion,
+		CreationTimestamp: r.CreationTimestamp,
+		Revision:          r.Revision,
+		Labels:            r.Labels,
+		Annotations:       r.Annotations,
+		OwnerRefs:         jsonOrNil(r.OwnerRefs),
+		GitCommitSHA:      r.GitCommitSHA,
+		GitRef:            r.GitRef,
+		Spec:              jsonOrNil(r.Spec),
 		Body:              r.Body,
+		Status:            jsonOrNil(r.Status),
 	}
+}
+
+func jsonOrNil(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	return []byte(s)
 }
 
 func toCategoryRow(c *datastore.Category) *categoryRow {

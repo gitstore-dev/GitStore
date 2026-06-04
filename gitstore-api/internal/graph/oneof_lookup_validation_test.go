@@ -16,12 +16,23 @@ import (
 func TestLookupOneOfSelectorsValidateExactlyOneKey(t *testing.T) {
 	schema := generated.NewExecutableSchema(generated.Config{Resolvers: &Resolver{}}).Schema()
 
+	// product uses positional args (namespace, name), not a oneof selector.
+	t.Run("product/valid_args", func(t *testing.T) {
+		assertQueryValidation(t, schema, `query { product(namespace: "my-store", name: "my-product") { id } }`, true)
+	})
+	t.Run("product/missing_namespace", func(t *testing.T) {
+		assertQueryValidation(t, schema, `query { product(name: "my-product") { id } }`, false)
+	})
+	t.Run("product/missing_name", func(t *testing.T) {
+		assertQueryValidation(t, schema, `query { product(namespace: "my-store") { id } }`, false)
+	})
+
+	// category, collection, namespace still use oneof selectors.
 	tests := []struct {
 		field     string
 		natural   string
 		selection string
 	}{
-		{field: "product", natural: `sku: "SKU-1"`, selection: "id"},
 		{field: "category", natural: `slug: "category-1"`, selection: "id"},
 		{field: "collection", natural: `slug: "collection-1"`, selection: "id"},
 		{field: "namespace", natural: `identifier: "namespace-1"`, selection: "id"},

@@ -9,70 +9,24 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"go.uber.org/zap"
 )
 
-// Category is the resolver for the category field.
-func (r *productResolver) Category(ctx context.Context, obj *model.Product) (*model.Category, error) {
-	productID, err := decodeNodeIDAs(nodeKindProduct, obj.ID)
+// Product is the resolver for the product field.
+func (r *queryResolver) Product(ctx context.Context, namespace string, name string) (*model.Product, error) {
+	p, err := r.service.GetProductByName(ctx, namespace, name)
 	if err != nil {
-		return nil, err
-	}
-
-	product, err := r.service.GetProductByID(ctx, productID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get product: %w", err)
-	}
-
-	if product.CategoryID == "" {
 		return nil, nil
 	}
-
-	category, err := r.service.GetCategoryByID(ctx, product.CategoryID)
-	if err != nil {
-		r.logger.Warn("Product references non-existent category",
-			zap.String("product_id", productID),
-			zap.String("category_id", product.CategoryID))
-		return nil, nil
-	}
-
-	return DatastoreCategoryToGraphQL(category), nil
+	return DatastoreProductToGraphQL(p), nil
 }
 
-// Collections is the resolver for the collections field.
-func (r *productResolver) Collections(ctx context.Context, obj *model.Product) ([]*model.Collection, error) {
-	productID, err := decodeNodeIDAs(nodeKindProduct, obj.ID)
+// Products is the resolver for the products field.
+func (r *queryResolver) Products(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
+	params := toPageParams(first, after, last, before)
+	result, err := r.service.GetProducts(ctx, namespace, params)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get products: %w", err)
 	}
-
-	product, err := r.service.GetProductByID(ctx, productID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get product: %w", err)
-	}
-
-	if len(product.CollectionIDs) == 0 {
-		return []*model.Collection{}, nil
-	}
-
-	collections := make([]*model.Collection, 0, len(product.CollectionIDs))
-	for _, collectionID := range product.CollectionIDs {
-		collection, err := r.service.GetCollectionByID(ctx, collectionID)
-		if err != nil {
-			r.logger.Warn("Product references non-existent collection",
-				zap.String("product_id", productID),
-				zap.String("collection_id", collectionID))
-			continue
-		}
-		collections = append(collections, DatastoreCollectionToGraphQL(collection))
-	}
-
-	return collections, nil
+	return BuildProductConnection(result), nil
 }
-
-// Product returns generated.ProductResolver implementation.
-func (r *Resolver) Product() generated.ProductResolver { return &productResolver{r} }
-
-type productResolver struct{ *Resolver }

@@ -21,18 +21,14 @@ import (
 
 func newID() string { return uuid.New().String() }
 
-func newProduct(categoryID string) *datastore.Product {
-	now := time.Now()
+func newProduct() *datastore.Product {
 	return &datastore.Product{
-		ID:              newID(),
-		SKU:             "SKU-" + newID()[:8],
-		Title:           "Test Product",
-		Price:           9.99,
-		Currency:        "USD",
-		InventoryStatus: "in_stock",
-		CategoryID:      categoryID,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		UID:               newID(),
+		Namespace:         "test-ns",
+		Name:              "product-" + newID()[:8],
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "Product",
+		CreationTimestamp: time.Now(),
 	}
 }
 
@@ -82,14 +78,14 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	ctx := context.Background()
 
 	t.Run("Product/CreateAndGet", func(t *testing.T) {
-		p := newProduct("")
+		p := newProduct()
 		require.NoError(t, ds.CreateProduct(ctx, p))
 
-		got, err := ds.GetProduct(ctx, p.ID)
+		got, err := ds.GetProduct(ctx, p.UID)
 		require.NoError(t, err)
-		assert.Equal(t, p.ID, got.ID)
-		assert.Equal(t, p.SKU, got.SKU)
-		assert.Equal(t, p.Title, got.Title)
+		assert.Equal(t, p.UID, got.UID)
+		assert.Equal(t, p.Name, got.Name)
+		assert.Equal(t, p.Namespace, got.Namespace)
 	})
 
 	t.Run("Product/GetNotFound", func(t *testing.T) {
@@ -97,62 +93,62 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
-	t.Run("Product/GetBySKU", func(t *testing.T) {
-		p := newProduct("")
+	t.Run("Product/GetByName", func(t *testing.T) {
+		p := newProduct()
 		require.NoError(t, ds.CreateProduct(ctx, p))
 
-		got, err := ds.GetProductBySKU(ctx, p.SKU)
+		got, err := ds.GetProductByName(ctx, p.Namespace, p.Name)
 		require.NoError(t, err)
-		assert.Equal(t, p.ID, got.ID)
+		assert.Equal(t, p.UID, got.UID)
 	})
 
-	t.Run("Product/GetBySKUNotFound", func(t *testing.T) {
-		_, err := ds.GetProductBySKU(ctx, "SKU-DOES-NOT-EXIST-"+newID()[:8])
+	t.Run("Product/GetByNameNotFound", func(t *testing.T) {
+		_, err := ds.GetProductByName(ctx, "test-ns", "does-not-exist-"+newID()[:8])
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
-	t.Run("Product/DuplicateIDReturnsAlreadyExists", func(t *testing.T) {
-		p := newProduct("")
+	t.Run("Product/DuplicateUIDReturnsAlreadyExists", func(t *testing.T) {
+		p := newProduct()
 		require.NoError(t, ds.CreateProduct(ctx, p))
 		err := ds.CreateProduct(ctx, p)
 		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
 	})
 
-	t.Run("Product/DuplicateSKUReturnsAlreadyExists", func(t *testing.T) {
-		p := newProduct("")
+	t.Run("Product/DuplicateNameReturnsAlreadyExists", func(t *testing.T) {
+		p := newProduct()
 		require.NoError(t, ds.CreateProduct(ctx, p))
 
-		p2 := newProduct("")
-		p2.SKU = p.SKU // same SKU, different ID
+		p2 := newProduct()
+		p2.Name = p.Name // same name, different UID
 		err := ds.CreateProduct(ctx, p2)
 		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
 	})
 
 	t.Run("Product/Update", func(t *testing.T) {
-		p := newProduct("")
+		p := newProduct()
 		require.NoError(t, ds.CreateProduct(ctx, p))
 
-		p.Title = "Updated Title"
+		p.GitRef = "main"
 		require.NoError(t, ds.UpdateProduct(ctx, p))
 
-		got, err := ds.GetProduct(ctx, p.ID)
+		got, err := ds.GetProduct(ctx, p.UID)
 		require.NoError(t, err)
-		assert.Equal(t, "Updated Title", got.Title)
+		assert.Equal(t, "main", got.GitRef)
 	})
 
 	t.Run("Product/UpdateNotFound", func(t *testing.T) {
-		p := newProduct("")
-		p.ID = newID() // does not exist
+		p := newProduct()
+		p.UID = newID() // does not exist
 		err := ds.UpdateProduct(ctx, p)
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
 	t.Run("Product/Delete", func(t *testing.T) {
-		p := newProduct("")
+		p := newProduct()
 		require.NoError(t, ds.CreateProduct(ctx, p))
-		require.NoError(t, ds.DeleteProduct(ctx, p.ID))
+		require.NoError(t, ds.DeleteProduct(ctx, p.UID))
 
-		_, err := ds.GetProduct(ctx, p.ID)
+		_, err := ds.GetProduct(ctx, p.UID)
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
@@ -162,26 +158,24 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	})
 
 	t.Run("Product/ListAll", func(t *testing.T) {
-		// Count before
-		before, err := ds.ListProducts(ctx, datastore.PageParams{})
+		before, err := ds.ListProducts(ctx, "test-ns", datastore.PageParams{})
 		require.NoError(t, err)
 
-		p1 := newProduct("")
-		p2 := newProduct("")
+		p1 := newProduct()
+		p2 := newProduct()
 		require.NoError(t, ds.CreateProduct(ctx, p1))
 		require.NoError(t, ds.CreateProduct(ctx, p2))
 
-		after, err := ds.ListProducts(ctx, datastore.PageParams{})
+		after, err := ds.ListProducts(ctx, "test-ns", datastore.PageParams{})
 		require.NoError(t, err)
 		assert.Equal(t, len(before.Items)+2, len(after.Items))
 	})
 
 	t.Run("Product/ListPaginated", func(t *testing.T) {
-		// Ensure at least 2 products exist
-		require.NoError(t, ds.CreateProduct(ctx, newProduct("")))
-		require.NoError(t, ds.CreateProduct(ctx, newProduct("")))
+		require.NoError(t, ds.CreateProduct(ctx, newProduct()))
+		require.NoError(t, ds.CreateProduct(ctx, newProduct()))
 
-		result, err := ds.ListProducts(ctx, datastore.PageParams{First: 1})
+		result, err := ds.ListProducts(ctx, "test-ns", datastore.PageParams{First: 1})
 		require.NoError(t, err)
 		assert.Len(t, result.Items, 1)
 		assert.True(t, result.HasNext)

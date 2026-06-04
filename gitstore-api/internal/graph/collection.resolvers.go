@@ -8,6 +8,7 @@ package graph
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -22,11 +23,135 @@ func (r *collectionResolver) Products(ctx context.Context, obj *model.Collection
 	// TODO: Add collection-scoped product listing to the datastore interface.
 	// For now, return all products paginated (filter by collection will be added later).
 	params := toPageParams(first, after, last, before)
-	result, err := r.service.GetProducts(ctx, params)
+	result, err := r.service.GetProducts(ctx, "", params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get products: %w", err)
 	}
 	return BuildProductConnection(result), nil
+}
+
+// CreateCollection is the resolver for the createCollection field.
+func (r *mutationResolver) CreateCollection(ctx context.Context, input model.CreateCollectionInput) (*model.CreateCollectionPayload, error) {
+	if _, err := decodeNodeIDsAs(nodeKindProduct, input.ProductIds); err != nil {
+		return nil, err
+	}
+
+	serviceInput := map[string]interface{}{
+		"name": input.Name,
+		"slug": input.Slug,
+	}
+	if input.Body != nil {
+		serviceInput["body"] = *input.Body
+	}
+	if input.DisplayOrder != nil {
+		serviceInput["displayOrder"] = *input.DisplayOrder
+	}
+
+	collection, err := r.service.CreateCollection(ctx, serviceInput)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create collection: %w", err)
+	}
+
+	return &model.CreateCollectionPayload{
+		ClientMutationID: input.ClientMutationID,
+		Collection:       DatastoreCollectionToGraphQL(collection),
+	}, nil
+}
+
+// UpdateCollection is the resolver for the updateCollection field.
+func (r *mutationResolver) UpdateCollection(ctx context.Context, input model.UpdateCollectionInput) (*model.UpdateCollectionPayload, error) {
+	collectionID, err := decodeNodeIDAs(nodeKindCollection, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := decodeNodeIDsAs(nodeKindProduct, input.ProductIds); err != nil {
+		return nil, err
+	}
+
+	collection := &model.Collection{
+		ID:           mustEncodeNodeID(nodeKindCollection, collectionID),
+		Name:         stringOrDefault(input.Name, "Updated Collection"),
+		Slug:         stringOrDefault(input.Slug, "updated-collection"),
+		Body:         input.Body,
+		DisplayOrder: intOrDefault(input.DisplayOrder, 0),
+		Products:     &model.ProductConnection{Edges: []*model.ProductEdge{}, PageInfo: &model.PageInfo{}},
+		CreatedAt:    time.Now().Add(-24 * time.Hour),
+		UpdatedAt:    time.Now(),
+	}
+	return &model.UpdateCollectionPayload{
+		ClientMutationID: input.ClientMutationID,
+		Collection:       collection,
+		Conflict:         nil,
+	}, nil
+}
+
+// DeleteCollection is the resolver for the deleteCollection field.
+func (r *mutationResolver) DeleteCollection(ctx context.Context, input model.DeleteCollectionInput) (*model.DeleteCollectionPayload, error) {
+	collectionID, err := decodeNodeIDAs(nodeKindCollection, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	idCopy := mustEncodeNodeID(nodeKindCollection, collectionID)
+	return &model.DeleteCollectionPayload{
+		ClientMutationID:    input.ClientMutationID,
+		DeletedCollectionID: &idCopy,
+	}, nil
+}
+
+// ReorderCollections is the resolver for the reorderCollections field.
+func (r *mutationResolver) ReorderCollections(ctx context.Context, input model.ReorderCollectionsInput) (*model.ReorderCollectionsPayload, error) {
+	orderedIDs, err := decodeNodeIDsAs(nodeKindCollection, input.OrderedIds)
+	if err != nil {
+		return nil, err
+	}
+
+	collections := make([]*model.Collection, len(orderedIDs))
+	for i, id := range orderedIDs {
+		collections[i] = &model.Collection{
+			ID:           mustEncodeNodeID(nodeKindCollection, id),
+			Name:         fmt.Sprintf("Collection %d", i+1),
+			Slug:         fmt.Sprintf("collection-%d", i+1),
+			DisplayOrder: int32(i),
+			Products:     &model.ProductConnection{Edges: []*model.ProductEdge{}, PageInfo: &model.PageInfo{}},
+			CreatedAt:    time.Now(),
+			UpdatedAt:    time.Now(),
+		}
+	}
+	return &model.ReorderCollectionsPayload{
+		ClientMutationID: input.ClientMutationID,
+		Collections:      collections,
+	}, nil
+}
+
+// Collection is the resolver for the collection field.
+func (r *queryResolver) Collection(ctx context.Context, by model.CollectionBy) (*model.Collection, error) {
+	if by.ID != nil {
+		collectionID, err := decodeNodeIDAs(nodeKindCollection, *by.ID)
+		if err != nil {
+			return nil, err
+		}
+		c, err := r.service.GetCollectionByID(ctx, collectionID)
+		if err != nil {
+			return nil, nil
+		}
+		return DatastoreCollectionToGraphQL(c), nil
+	}
+
+	c, err := r.service.GetCollectionBySlug(ctx, *by.Slug)
+	if err != nil {
+		return nil, nil
+	}
+	return DatastoreCollectionToGraphQL(c), nil
+}
+
+// Collections returns collections as a Relay connection.
+func (r *queryResolver) Collections(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.CollectionConnection, error) {
+	params := toPageParams(first, after, last, before)
+	result, err := r.service.GetCollections(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get collections: %w", err)
+	}
+	return BuildCollectionConnection(result), nil
 }
 
 // Collection returns generated.CollectionResolver implementation.

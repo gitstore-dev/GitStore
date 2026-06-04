@@ -1,5 +1,46 @@
 # Collection Entity GraphQL Types
 
+extend type Query {
+  """
+  Get collection by one unique selector.
+  """
+  collection(by: CollectionBy!): Collection
+
+  """
+  List collections with Relay cursor-based pagination
+  """
+  collections(
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): CollectionConnection!
+}
+
+extend type Mutation {
+
+  """
+  Create a new collection
+  """
+  createCollection(input: CreateCollectionInput!): CreateCollectionPayload!
+
+  """
+  Update an existing collection
+  """
+  updateCollection(input: UpdateCollectionInput!): UpdateCollectionPayload!
+
+  """
+  Delete a collection
+  """
+  deleteCollection(input: DeleteCollectionInput!): DeleteCollectionPayload!
+
+  """
+  Reorder collections (drag-and-drop)
+  """
+  reorderCollections(input: ReorderCollectionsInput!): ReorderCollectionsPayload!
+
+}
+
 """
 Collection represents a curated grouping of products (flat, non-hierarchical)
 """

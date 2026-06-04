@@ -48,14 +48,14 @@ func BuildProductConnection(result *datastore.PageResult[datastore.Product]) *mo
 	edges := make([]*model.ProductEdge, len(result.Items))
 	for i, p := range result.Items {
 		edges[i] = &model.ProductEdge{
-			Cursor: EncodeKeysetCursor(p.CreatedAt, p.ID),
+			Cursor: EncodeKeysetCursor(p.CreationTimestamp, p.UID),
 			Node:   DatastoreProductToGraphQL(p),
 		}
 	}
 	return &model.ProductConnection{
 		Edges:      edges,
 		TotalCount: result.TotalCount,
-		PageInfo:   buildPageInfo(result, func(p *datastore.Product) string { return EncodeKeysetCursor(p.CreatedAt, p.ID) }),
+		PageInfo:   buildPageInfo(result, func(p *datastore.Product) string { return EncodeKeysetCursor(p.CreationTimestamp, p.UID) }),
 	}
 }
 
