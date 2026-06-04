@@ -157,8 +157,8 @@ github.com/prometheus/client_golang v1.23.2 h1:Je96obch5RDVy3FDMndoUsjAhG5Edi49h
 github.com/prometheus/client_golang v1.23.2/go.mod h1:Tb1a6LWHB3/SPIzCoaDXI4I8UHKeFTEQ1YCr+0Gyqmg=
 github.com/prometheus/client_model v0.6.2 h1:oBsgwpGs7iVziMvrGhE53c/GrLUsZdHnqNwqPLxwZyk=
 github.com/prometheus/client_model v0.6.2/go.mod h1:y3m2F6Gdpfy6Ut/GBsUqTWZqCUvMVzSfMLjcu6wAwpE=
-github.com/prometheus/common v0.68.0 h1:8rQJvQmYltsR2L7h8Zw0Iyj8WYNNmpwikoQTZXwfVeA=
-github.com/prometheus/common v0.68.0/go.mod h1:4soH+U8yJSROk7OJ//hmTiWKsxapv6zRGgTt3keN8gQ=
+github.com/prometheus/common v0.68.1 h1:omjRRl4QP4komogpXuhfeOiisQg7xdy8VM1UY+pStaY=
+github.com/prometheus/common v0.68.1/go.mod h1:ZzL3f6u94qUxh9p+tJTrF+FvBS1XXbbRAZCQkytAL0Y=
 github.com/prometheus/procfs v0.20.1 h1:XwbrGOIplXW/AU3YhIhLODXMJYyC1isLFfYCsTEycfc=
 github.com/prometheus/procfs v0.20.1/go.mod h1:o9EMBZGRyvDrSPH1RqdxhojkuXstoe4UlK79eF5TGGo=
 github.com/psanford/memfs v0.0.0-20241019191636-4ef911798f9b h1:xzjEJAHum+mV5Dd5KyohRlCyP03o4yq6vNpEUtAJQzI=
@@ -175,8 +175,8 @@ github.com/scylladb/gocqlx/v3 v3.0.4 h1:37rMVFEUlsGGNYB7OLR7991KwBYR2WA5TU7wtduC
 github.com/scylladb/gocqlx/v3 v3.0.4/go.mod h1:3vBkGO+HRh/BYypLWXzurQ45u1BAO0VGBhg5VgperPY=
 github.com/sergi/go-diff v1.4.0 h1:n/SP9D5ad1fORl+llWyN+D6qoUETXNZARKjyY2/KVCw=
 github.com/sergi/go-diff v1.4.0/go.mod h1:A0bzQcvG0E7Rwjx0REVgAGH58e96+X0MeOfepqsbeW4=
-github.com/shirou/gopsutil/v4 v4.26.4 h1:B4SXVbcwTyrocPHEmWBC4uCYr4Xcu3MK1TXqbprAOWY=
-github.com/shirou/gopsutil/v4 v4.26.4/go.mod h1:LZ6ewCSkBqUpvSOf+LsTGnRinC6iaNUNMGBtDkJBaLQ=
+github.com/shirou/gopsutil/v4 v4.26.5 h1:RPcBXkpz7kOj9PqGFQOlBPZHsyaPvPVQc098y9RmCNM=
+github.com/shirou/gopsutil/v4 v4.26.5/go.mod h1:LZ6ewCSkBqUpvSOf+LsTGnRinC6iaNUNMGBtDkJBaLQ=
 github.com/shopspring/decimal v1.4.0 h1:bxl37RwXBklmTi0C79JfXCEBD1cqqHt0bbgBAGFp81k=
 github.com/shopspring/decimal v1.4.0/go.mod h1:gawqmDU56v4yIKSwfBSFip1HdCCXN8/+DMd9qYNcwME=
 github.com/sirupsen/logrus v1.9.4 h1:TsZE7l11zFCLZnZ+teH4Umoq5BhEIfIzfRDZ1Uzql2w=
