@@ -695,4 +695,3 @@ func getStringOrEmpty(m map[string]interface{}, key string) string {
 	}
 	return ""
 }
-

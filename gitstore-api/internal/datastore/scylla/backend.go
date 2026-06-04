@@ -184,6 +184,7 @@ func (s *scyllaDatastore) GetProduct(_ context.Context, uid string) (*datastore.
 		Columns(s.productTable.Metadata().Columns...).
 		Where(qb.Eq("uid")).
 		Limit(1).
+		AllowFiltering().
 		ToCql()
 	parsedUID, err := gocql.ParseUUID(uid)
 	if err != nil {
