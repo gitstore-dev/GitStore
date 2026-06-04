@@ -113,13 +113,13 @@ An author writes a product spec that violates a structural rule — duplicate op
 
 ### Functional Requirements
 
-- **FR-001**: The parser MUST extract all author-supplied fields from YAML frontmatter: `apiVersion`, `kind`, writable `metadata` fields (`name`, `generateName`, `namespace`, `labels`, `annotations`, `ownerReferences`), and `spec`. The raw Markdown body MUST be extracted separately and preserved verbatim.
+- **FR-001**: The parser MUST extract all author-supplied fields from YAML frontmatter: `apiVersion`, `kind`, writable `metadata` fields (`name`, `generateName`, `namespace`, `labels`, `annotations`), and `spec`. The raw Markdown body MUST be extracted separately and preserved verbatim.
 - **FR-002**: The parser MUST reject any file where `kind` is not exactly the string `Product` (case-sensitive). The error MUST identify the `kind` field, the value supplied, and the expected value.
 - **FR-003**: The parser MUST reject any file where `apiVersion` is absent or is not `catalog.gitstore.dev/v1beta1`. The error MUST identify the `apiVersion` field and state the expected value.
 - **FR-004**: The parser MUST reject any file where `metadata.name` is absent or is an empty string. The error MUST identify `metadata.name` as a required field.
 - **FR-005**: The parser MUST reject any file where the `spec` block is entirely absent. The error MUST identify `spec` as required.
 - **FR-006**: The admission check MUST reject any file that contains a top-level `status` key. The error MUST identify `status` as a system-managed field and explain it must not appear in author-supplied files.
-- **FR-007**: The admission check MUST reject any file whose `metadata` block contains any of the read-only system fields: `uid`, `resourceVersion`, `generation`, `creationTimestamp`, `revision`. The error MUST name the specific forbidden field.
+- **FR-007**: The admission check MUST reject any file whose `metadata` block contains any of the read-only system fields: `uid`, `resourceVersion`, `generation`, `creationTimestamp`, `revision`, `ownerReferences`. The error MUST name the specific forbidden field.
 - **FR-008**: The parser MUST validate that `spec.options` contains no duplicate `name` values. When duplicates exist, the error MUST identify the duplicated name and the positions of the conflicting entries.
 - **FR-009**: The parser MUST validate that every entry in `spec.options` has a `name` field. When absent, the error MUST identify `spec.options[N].name` as required.
 - **FR-010**: The parser MUST enforce Kubernetes label key conventions: each key name segment MUST NOT exceed 63 characters and the optional prefix MUST NOT exceed 253 characters. Errors MUST cite the offending key and the violated limit.
@@ -133,7 +133,7 @@ An author writes a product spec that violates a structural rule — duplicate op
 - **ParseError**: A structured validation error produced when a file cannot be parsed or violates a constraint. Contains: `field` (dotted path), `constraint` (rule violated), and `message` (human-readable explanation). The parser collects all errors before returning.
 - **AdmissionError**: A specialisation of `ParseError` for forbidden-field violations (`status`, read-only metadata fields). Distinct from structural parse errors so callers can route to appropriate error responses.
 - **ProductSpec**: The author-controlled declarative description of a product (title, categoryRef, tags, media, options). Defined by spec#014; this feature adds enforcement of its structural rules (option name uniqueness, required sub-fields).
-- **ObjectMeta**: Author-supplied metadata fields (`name`, `generateName`, `namespace`, `labels`, `annotations`, `ownerReferences`). Read-only fields are excluded from the parsed result. Labels are subject to key-length enforcement.
+- **ObjectMeta**: Author-supplied metadata fields (`name`, `generateName`, `namespace`, `labels`, `annotations`). Read-only system fields (`uid`, `resourceVersion`, `generation`, `creationTimestamp`, `revision`, `ownerReferences`) are rejected in the admission check and never appear in the parsed result. Labels are subject to key-length enforcement.
 
 ## Success Criteria *(mandatory)*
 

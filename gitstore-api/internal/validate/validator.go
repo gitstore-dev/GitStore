@@ -55,7 +55,7 @@ func Parse(r io.Reader) (*catalog.ProductResource, []byte, error) {
 	formats := []*frontmatter.Format{
 		frontmatter.NewFormat("---", "---", yaml.Unmarshal),
 	}
-	body, err := frontmatter.Parse(strings.NewReader(string(raw)), &res, formats...)
+	body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
 	}

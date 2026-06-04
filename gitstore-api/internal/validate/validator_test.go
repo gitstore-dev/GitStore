@@ -164,7 +164,7 @@ body
 `
 	_, _, err := validate.Parse(strings.NewReader(doc))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "apiversion")
+	assert.Contains(t, err.Error(), "catalog.gitstore.dev/v1beta1")
 }
 
 func TestParse_SpecAbsentRejected(t *testing.T) {
