@@ -696,16 +696,3 @@ func getStringOrEmpty(m map[string]interface{}, key string) string {
 	return ""
 }
 
-func getStringOr(m map[string]interface{}, key, defaultVal string) string {
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return defaultVal
-}
-
-func getFloatOrZero(m map[string]interface{}, key string) float64 {
-	if v, ok := m[key].(float64); ok {
-		return v
-	}
-	return 0.0
-}
