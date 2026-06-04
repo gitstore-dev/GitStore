@@ -8,7 +8,6 @@ package graph
 import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/scalar"
 	"github.com/shopspring/decimal"
 )
 
@@ -59,7 +58,7 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 		ID:                mustEncodeNodeID(nodeKindProduct, p.ID),
 		Title:             p.Title,
 		Sku:               p.SKU,
-		Price:             scalar.Decimal{Decimal: decimal.NewFromFloat(p.Price)},
+		Price:             decimal.NewFromFloat(p.Price),
 		Currency:          p.Currency,
 		Body:              &p.Body,
 		InventoryStatus:   model.InventoryStatus(p.InventoryStatus),

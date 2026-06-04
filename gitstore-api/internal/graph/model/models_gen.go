@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gitstore-dev/gitstore/api/internal/graph/scalar"
+	"github.com/shopspring/decimal"
 )
 
 // An object with a globally unique ID
@@ -279,7 +279,7 @@ type CreateProductInput struct {
 	// Markdown body content (product description)
 	Body *string `json:"body,omitempty"`
 	// Product price
-	Price scalar.Decimal `json:"price"`
+	Price decimal.Decimal `json:"price"`
 	// Currency code (default: USD)
 	Currency *string `json:"currency,omitempty"`
 	// Inventory status (default: IN_STOCK)
@@ -524,7 +524,7 @@ type Product struct {
 	// Markdown body content (product description with rich formatting)
 	Body *string `json:"body,omitempty"`
 	// Product price
-	Price scalar.Decimal `json:"price"`
+	Price decimal.Decimal `json:"price"`
 	// Currency code (ISO 4217)
 	Currency string `json:"currency"`
 	// Inventory status
@@ -807,7 +807,7 @@ type UpdateProductInput struct {
 	// New body content
 	Body *string `json:"body,omitempty"`
 	// New price
-	Price *scalar.Decimal `json:"price,omitempty"`
+	Price *decimal.Decimal `json:"price,omitempty"`
 	// TODO: Add a scalar for CurrencyCode
 	// New currency
 	Currency *string `json:"currency,omitempty"`

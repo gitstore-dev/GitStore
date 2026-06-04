@@ -1,4 +1,37 @@
 # Product Entity GraphQL Types
+extend type Query {
+  """
+  Get product by one unique selector.
+  """
+  product(by: ProductBy!): Product
+
+  """
+  List products with Relay cursor-based pagination
+  """
+  products(
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): ProductConnection!
+}
+
+extend type Mutation {
+  """
+  Create a new product
+  """
+  createProduct(input: CreateProductInput!): CreateProductPayload!
+
+  """
+  Update an existing product
+  """
+  updateProduct(input: UpdateProductInput!): UpdateProductPayload!
+
+  """
+  Delete a product
+  """
+  deleteProduct(input: DeleteProductInput!): DeleteProductPayload!
+}
 
 """
 Product represents a sellable item in the catalog

@@ -14,6 +14,146 @@ import (
 	"go.uber.org/zap"
 )
 
+// CreateProduct is the resolver for the createProduct field.
+func (r *mutationResolver) CreateProduct(ctx context.Context, input model.CreateProductInput) (*model.CreateProductPayload, error) {
+	categoryID, err := decodeNodeIDAs(nodeKindCategory, input.CategoryID)
+	if err != nil {
+		return nil, err
+	}
+	collectionIDs, err := decodeNodeIDsAs(nodeKindCollection, input.CollectionIds)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build input map for service
+	priceFloat, _ := input.Price.Float64()
+	serviceInput := map[string]interface{}{
+		"title":      input.Title,
+		"sku":        input.Sku,
+		"price":      priceFloat,
+		"categoryId": categoryID,
+	}
+
+	if input.Currency != nil {
+		serviceInput["currency"] = *input.Currency
+	}
+	if input.Body != nil {
+		serviceInput["body"] = *input.Body
+	}
+	if input.InventoryStatus != nil {
+		serviceInput["inventoryStatus"] = string(*input.InventoryStatus)
+	}
+	if input.InventoryQuantity != nil {
+		serviceInput["inventoryQuantity"] = int(*input.InventoryQuantity)
+	}
+	if len(input.CollectionIds) > 0 {
+		serviceInput["collectionIds"] = collectionIDs
+	}
+	if len(input.Images) > 0 {
+		serviceInput["images"] = input.Images
+	}
+	if input.Metadata != nil {
+		serviceInput["metadata"] = input.Metadata
+	}
+
+	// Create product via service
+	product, err := r.service.CreateProduct(ctx, serviceInput)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create product: %w", err)
+	}
+
+	return &model.CreateProductPayload{
+		ClientMutationID: input.ClientMutationID,
+		Product:          DatastoreProductToGraphQL(product),
+	}, nil
+}
+
+// UpdateProduct is the resolver for the updateProduct field.
+func (r *mutationResolver) UpdateProduct(ctx context.Context, input model.UpdateProductInput) (*model.UpdateProductPayload, error) {
+	productID, err := decodeNodeIDAs(nodeKindProduct, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	categoryID, err := decodeOptionalNodeIDAs(nodeKindCategory, input.CategoryID)
+	if err != nil {
+		return nil, err
+	}
+	collectionIDs, err := decodeNodeIDsAs(nodeKindCollection, input.CollectionIds)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build input map for service
+	serviceInput := map[string]interface{}{}
+
+	if input.Title != nil {
+		serviceInput["title"] = *input.Title
+	}
+	if input.Sku != nil {
+		serviceInput["sku"] = *input.Sku
+	}
+	if input.Price != nil {
+		priceFloat, _ := input.Price.Float64()
+		serviceInput["price"] = priceFloat
+	}
+	if input.Currency != nil {
+		serviceInput["currency"] = *input.Currency
+	}
+	if input.Body != nil {
+		serviceInput["body"] = *input.Body
+	}
+	if input.InventoryStatus != nil {
+		serviceInput["inventoryStatus"] = string(*input.InventoryStatus)
+	}
+	if input.InventoryQuantity != nil {
+		serviceInput["inventoryQuantity"] = int(*input.InventoryQuantity)
+	}
+	if input.CategoryID != nil {
+		serviceInput["categoryId"] = *categoryID
+	}
+	if len(input.CollectionIds) > 0 {
+		serviceInput["collectionIds"] = collectionIDs
+	}
+	if len(input.Images) > 0 {
+		serviceInput["images"] = input.Images
+	}
+	if input.Metadata != nil {
+		serviceInput["metadata"] = input.Metadata
+	}
+
+	// Update product via service
+	product, err := r.service.UpdateProduct(ctx, productID, serviceInput)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update product: %w", err)
+	}
+
+	return &model.UpdateProductPayload{
+		ClientMutationID: input.ClientMutationID,
+		Product:          DatastoreProductToGraphQL(product),
+		Conflict:         nil, // TODO: Implement optimistic locking
+	}, nil
+}
+
+// DeleteProduct is the resolver for the deleteProduct field.
+func (r *mutationResolver) DeleteProduct(ctx context.Context, input model.DeleteProductInput) (*model.DeleteProductPayload, error) {
+	productID, err := decodeNodeIDAs(nodeKindProduct, input.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Delete product via service
+	err = r.service.DeleteProduct(ctx, productID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete product: %w", err)
+	}
+
+	idCopy := mustEncodeNodeID(nodeKindProduct, productID)
+	return &model.DeleteProductPayload{
+		ClientMutationID: input.ClientMutationID,
+		DeletedProductID: &idCopy,
+	}, nil
+}
+
 // Category is the resolver for the category field.
 func (r *productResolver) Category(ctx context.Context, obj *model.Product) (*model.Category, error) {
 	productID, err := decodeNodeIDAs(nodeKindProduct, obj.ID)
@@ -70,6 +210,37 @@ func (r *productResolver) Collections(ctx context.Context, obj *model.Product) (
 	}
 
 	return collections, nil
+}
+
+// Product is the resolver for the product field.
+func (r *queryResolver) Product(ctx context.Context, by model.ProductBy) (*model.Product, error) {
+	if by.ID != nil {
+		productID, err := decodeNodeIDAs(nodeKindProduct, *by.ID)
+		if err != nil {
+			return nil, err
+		}
+		p, err := r.service.GetProductByID(ctx, productID)
+		if err != nil {
+			return nil, nil
+		}
+		return DatastoreProductToGraphQL(p), nil
+	}
+
+	p, err := r.service.GetProductBySKU(ctx, *by.Sku)
+	if err != nil {
+		return nil, nil
+	}
+	return DatastoreProductToGraphQL(p), nil
+}
+
+// Products is the resolver for the products field.
+func (r *queryResolver) Products(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
+	params := toPageParams(first, after, last, before)
+	result, err := r.service.GetProducts(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get products: %w", err)
+	}
+	return BuildProductConnection(result), nil
 }
 
 // Product returns generated.ProductResolver implementation.

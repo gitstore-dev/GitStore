@@ -14,39 +14,35 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-type Decimal struct {
-	decimal.Decimal
-}
-
 // MarshalDecimal serializes a Decimal value as a quoted string GraphQL scalar.
-func MarshalDecimal(d Decimal) graphql.Marshaler {
+func MarshalDecimal(d decimal.Decimal) graphql.Marshaler {
 	return graphql.WriterFunc(func(w io.Writer) {
 		_, _ = io.WriteString(w, `"`+d.String()+`"`)
 	})
 }
 
 // UnmarshalDecimal parses supported GraphQL Decimal input values.
-func UnmarshalDecimal(v interface{}) (Decimal, error) {
-	var d Decimal
+func UnmarshalDecimal(v interface{}) (decimal.Decimal, error) {
+	var d decimal.Decimal
 	switch value := v.(type) {
 	case string:
 		dec, err := decimal.NewFromString(value)
 		if err != nil {
 			return d, fmt.Errorf("invalid decimal value: %w", err)
 		}
-		d.Decimal = dec
+		d = dec
 	case float64:
-		d.Decimal = decimal.NewFromFloat(value)
+		d = decimal.NewFromFloat(value)
 	case int:
-		d.Decimal = decimal.NewFromInt(int64(value))
+		d = decimal.NewFromInt(int64(value))
 	case int64:
-		d.Decimal = decimal.NewFromInt(value)
+		d = decimal.NewFromInt(value)
 	case json.Number:
 		dec, err := decimal.NewFromString(value.String())
 		if err != nil {
 			return d, fmt.Errorf("invalid decimal value: %w", err)
 		}
-		d.Decimal = dec
+		d = dec
 	default:
 		return d, errors.New("invalid type for Decimal")
 	}

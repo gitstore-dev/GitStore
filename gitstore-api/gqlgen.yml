@@ -5,17 +5,17 @@ schema:
 # Where should the generated server code go?
 exec:
   package: generated
-  layout: single-file # Only other option is "follow-schema," ie multi-file.
+  layout: follow-schema # Only other option is "single-file."
 
   # Only for single-file layout:
-  filename: internal/graph/generated/generated.go
+  # filename: internal/graph/generated/generated.go
 
   # Only for follow-schema layout:
-  # dir: graph
-  # filename_template: "{name}.generated.go"
+  dir: internal/graph/generated
+  filename_template: "{name}.generated.go"
 
   # Optional: Maximum number of goroutines in concurrency to use per child resolvers(default: unlimited)
-  # worker_limit: 1000
+  worker_limit: 1000
 
 # Uncomment to enable federation
 # federation:
