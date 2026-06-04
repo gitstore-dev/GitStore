@@ -48,10 +48,10 @@ type Product struct {
 	Kind       string
 
 	// Versioning
-	Generation      int64
-	ResourceVersion string
+	Generation        int64
+	ResourceVersion   string
 	CreationTimestamp time.Time
-	Revision        string // e.g. "main@sha1:abc123"
+	Revision          string // e.g. "main@sha1:abc123"
 
 	// Author-supplied classification
 	Labels      map[string]string

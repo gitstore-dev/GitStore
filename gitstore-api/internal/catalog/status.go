@@ -50,10 +50,10 @@ type Condition struct {
 type ResolvedProductDefinition struct {
 	Category          *ResolvedCategoryDefinition `json:"category,omitempty"`
 	PriceRange        []PriceRangeDefinition      `json:"priceRange,omitempty"`
-	TotalInventory    int64                        `json:"totalInventory"`
-	VariantSummary    *VariantSummaryDefinition    `json:"variantSummary,omitempty"`
-	DefaultVariantRef *ObjectReference             `json:"defaultVariantRef,omitempty"`
-	Media             []ResolvedFileDefinition     `json:"media,omitempty"`
+	TotalInventory    int64                       `json:"totalInventory"`
+	VariantSummary    *VariantSummaryDefinition   `json:"variantSummary,omitempty"`
+	DefaultVariantRef *ObjectReference            `json:"defaultVariantRef,omitempty"`
+	Media             []ResolvedFileDefinition    `json:"media,omitempty"`
 }
 
 // ResolvedCategoryDefinition is the resolved category identity and path.
