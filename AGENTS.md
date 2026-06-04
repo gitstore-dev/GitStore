@@ -60,6 +60,7 @@ Common bootstrap variables:
 - 015-product-parser: Added Go 1.25 + `github.com/adrg/frontmatter v0.2.0`, `go-playground/validator/v10 v10.30.3`, `gopkg.in/yaml.v3`
 - 014-product-frontmatter: Added Go 1.25 (`gitstore-api`), Rust edition 2021 MSRV 1.82 (`gitstore-git-service`) + `github.com/adrg/frontmatter v0.2.0`, `go-playground/validator/v10 v10.30.3`, `gqlgen v0.17.90` (Go) · `gix 0.84.0`, `serde 1.0`, `serde_yaml 0.9` (to add) (Rust)
 - 013-receive-pack-hooks: Added Rust edition 2021, MSRV 1.82; actual gix version is `0.84.0` (Cargo.lock canonical) + `gix 0.84.0`, `gix-ref 0.64.0` (two-phase transaction API), `tokio 1.35` (full features), `tonic 0.14`, `tracing 0.1`, `anyhow 1.0`, `async-trait 0.1` (to add)
+- 012-smart-http-api: Go 1.25 (`gitstore-api`) + `net/http` second server on port 5000 · Rust edition 2021, MSRV 1.82 (`gitstore-git-service`) — adds `ReceivePack` (client-streaming), `UploadPack` (server-streaming), `InfoRefs` gRPC RPCs; removes `axum`/HTTP server, `tokio_tungstenite`/`tungstenite` WebSocket deps; removes `gorilla/websocket` and `internal/websocket` from `gitstore-api`
 
 
 <!-- MANUAL ADDITIONS START -->
