@@ -11,7 +11,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/scalar"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,7 +102,7 @@ func TestCreateProductDecodesNodeReferenceInputs(t *testing.T) {
 	payload, err := mutation.CreateProduct(ctx, model.CreateProductInput{
 		Sku:           "SKU-2",
 		Title:         "Second product",
-		Price:         scalar.Decimal{Decimal: decimal.NewFromFloat(2.50)},
+		Price:         decimal.NewFromFloat(2.50),
 		CategoryID:    mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryID),
 		CollectionIds: []string{mustEncodeNodeID(nodeKindCollection, globalIDTestCollectionID)},
 	})
