@@ -62,52 +62,8 @@ type Query {
   nodes(ids: [ID!]!): [Node]!
 
   """
-  Get product by one unique selector.
-  """
-  product(by: ProductBy!): Product
-
-  """
-  List products with Relay cursor-based pagination
-  """
-  products(
-    first: Int
-    after: String
-    last: Int
-    before: String
-  ): ProductConnection!
-
-  """
-  Get category by one unique selector.
-  """
-  category(by: CategoryBy!): Category
-
-  """
-  List categories with Relay cursor-based pagination
-  """
-  categories(
-    first: Int
-    after: String
-    last: Int
-    before: String
-  ): CategoryConnection!
-
-  """
-  Get collection by one unique selector.
-  """
-  collection(by: CollectionBy!): Collection
-
-  """
-  List collections with Relay cursor-based pagination
-  """
-  collections(
-    first: Int
-    after: String
-    last: Int
-    before: String
-  ): CollectionConnection!
-
-  """
   Get current catalog version (release tag)
+  TODO: Remove. It is unclear which repository this belongs to and it is not used in the UI.
   """
   catalogVersion: CatalogVersion!
 }
@@ -118,62 +74,8 @@ type Query {
 
 type Mutation {
   """
-  Create a new product
-  """
-  createProduct(input: CreateProductInput!): CreateProductPayload!
-
-  """
-  Update an existing product
-  """
-  updateProduct(input: UpdateProductInput!): UpdateProductPayload!
-
-  """
-  Delete a product
-  """
-  deleteProduct(input: DeleteProductInput!): DeleteProductPayload!
-
-  """
-  Create a new category
-  """
-  createCategory(input: CreateCategoryInput!): CreateCategoryPayload!
-
-  """
-  Update an existing category
-  """
-  updateCategory(input: UpdateCategoryInput!): UpdateCategoryPayload!
-
-  """
-  Delete a category
-  """
-  deleteCategory(input: DeleteCategoryInput!): DeleteCategoryPayload!
-
-  """
-  Reorder categories (drag-and-drop)
-  """
-  reorderCategories(input: ReorderCategoriesInput!): ReorderCategoriesPayload!
-
-  """
-  Create a new collection
-  """
-  createCollection(input: CreateCollectionInput!): CreateCollectionPayload!
-
-  """
-  Update an existing collection
-  """
-  updateCollection(input: UpdateCollectionInput!): UpdateCollectionPayload!
-
-  """
-  Delete a collection
-  """
-  deleteCollection(input: DeleteCollectionInput!): DeleteCollectionPayload!
-
-  """
-  Reorder collections (drag-and-drop)
-  """
-  reorderCollections(input: ReorderCollectionsInput!): ReorderCollectionsPayload!
-
-  """
   Publish changes (commit + push + create release tag)
+  TODO: Remove. It is unclear which repository we're are publishing to.
   """
   publishCatalog(input: PublishCatalogInput!): PublishCatalogPayload!
 }

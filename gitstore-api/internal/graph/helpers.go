@@ -36,7 +36,7 @@ func callerUsernameOrAnon(ctx context.Context, r *mutationResolver) string {
 
 // getCatalogStats returns product/category/collection counts from the datastore.
 func (r *Resolver) getCatalogStats(ctx context.Context) *model.CatalogStats {
-	products, _ := r.service.GetProducts(ctx, datastore.PageParams{First: 1})
+	products, _ := r.service.GetProducts(ctx, "", datastore.PageParams{First: 1})
 	categories, _ := r.service.GetCategories(ctx, datastore.PageParams{First: 1})
 	collections, _ := r.service.GetCollections(ctx, datastore.PageParams{First: 1})
 	var pc, cc, colc int32

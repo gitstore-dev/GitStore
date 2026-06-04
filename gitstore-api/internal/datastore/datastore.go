@@ -60,11 +60,11 @@ type PageResult[T any] struct {
 type Datastore interface {
 	// Product operations
 	CreateProduct(ctx context.Context, p *Product) error
-	GetProduct(ctx context.Context, id string) (*Product, error)
-	GetProductBySKU(ctx context.Context, sku string) (*Product, error)
-	ListProducts(ctx context.Context, page PageParams) (*PageResult[Product], error)
+	GetProduct(ctx context.Context, uid string) (*Product, error)
+	GetProductByName(ctx context.Context, namespace, name string) (*Product, error)
+	ListProducts(ctx context.Context, namespace string, page PageParams) (*PageResult[Product], error)
 	UpdateProduct(ctx context.Context, p *Product) error
-	DeleteProduct(ctx context.Context, id string) error
+	DeleteProduct(ctx context.Context, uid string) error
 
 	// Category operations
 	CreateCategory(ctx context.Context, c *Category) error

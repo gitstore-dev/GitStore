@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/gitstore-dev/gitstore/api/internal/graph/scalar"
+	"github.com/shopspring/decimal"
 )
 
 // An object with a globally unique ID
@@ -27,6 +27,17 @@ type AuthSession struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 	// Authenticated user information
 	User *User `json:"user"`
+}
+
+// A pointer to another catalogue resource.
+type CatalogObjectReference struct {
+	APIVersion      *string `json:"apiVersion,omitempty"`
+	Kind            *string `json:"kind,omitempty"`
+	Name            string  `json:"name"`
+	Namespace       *string `json:"namespace,omitempty"`
+	UID             *string `json:"uid,omitempty"`
+	ResourceVersion *string `json:"resourceVersion,omitempty"`
+	FieldPath       *string `json:"fieldPath,omitempty"`
 }
 
 // Catalog statistics
@@ -268,43 +279,6 @@ type CreateNamespacePayload struct {
 	Namespace *Namespace `json:"namespace"`
 }
 
-// Input for creating a product
-type CreateProductInput struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// Stock Keeping Unit (must be unique)
-	Sku string `json:"sku"`
-	// Product display name
-	Title string `json:"title"`
-	// Markdown body content (product description)
-	Body *string `json:"body,omitempty"`
-	// Product price
-	Price scalar.Decimal `json:"price"`
-	// Currency code (default: USD)
-	Currency *string `json:"currency,omitempty"`
-	// Inventory status (default: IN_STOCK)
-	InventoryStatus *InventoryStatus `json:"inventoryStatus,omitempty"`
-	// Available quantity
-	InventoryQuantity *int32 `json:"inventoryQuantity,omitempty"`
-	// Primary category ID (required)
-	CategoryID string `json:"categoryId"`
-	// Collection IDs (optional)
-	CollectionIds []string `json:"collectionIds,omitempty"`
-	// TODO: Add a scalar for URI
-	// Product image URLs
-	Images []string `json:"images,omitempty"`
-	// Custom metadata
-	Metadata map[string]any `json:"metadata,omitempty"`
-}
-
-// Payload for createProduct mutation
-type CreateProductPayload struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// The created product
-	Product *Product `json:"product,omitempty"`
-}
-
 type CreateRepositoryInput struct {
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	NamespaceID      string  `json:"namespaceId"`
@@ -369,22 +343,6 @@ type DeleteNamespacePayload struct {
 	DeletedIdentifier string `json:"deletedIdentifier"`
 }
 
-// Input for deleting a product
-type DeleteProductInput struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// Product ID to delete
-	ID string `json:"id"`
-}
-
-// Payload for deleteProduct mutation
-type DeleteProductPayload struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// Deleted product ID
-	DeletedProductID *string `json:"deletedProductId,omitempty"`
-}
-
 type DeleteRepositoryInput struct {
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	RepositoryID     string  `json:"repositoryId"`
@@ -393,6 +351,12 @@ type DeleteRepositoryInput struct {
 type DeleteRepositoryPayload struct {
 	ClientMutationID    *string `json:"clientMutationId,omitempty"`
 	DeletedRepositoryID string  `json:"deletedRepositoryId"`
+}
+
+type FileReference struct {
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Optional bool   `json:"optional"`
 }
 
 // Login mutation input (Relay pattern)
@@ -425,6 +389,10 @@ type LogoutPayload struct {
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Success indicator
 	Success bool `json:"success"`
+}
+
+type MediaDefinition struct {
+	FileRef *FileReference `json:"fileRef"`
 }
 
 type Mutation struct {
@@ -487,18 +455,11 @@ type NamespaceEdge struct {
 	Node *Namespace `json:"node"`
 }
 
-// Optimistic lock conflict information
-type OptimisticLockConflict struct {
-	// TODO: Should this be a datetime?
-	// Current version in database
-	CurrentVersion time.Time `json:"currentVersion"`
-	// TODO: Should this be a datetime?
-	// Version client attempted to update
-	AttemptedVersion time.Time `json:"attemptedVersion"`
-	// Current state of the entity
-	Current *Product `json:"current"`
-	// Diff between current and attempted (human-readable)
-	Diff string `json:"diff"`
+type OwnerReference struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	UID        string `json:"uid"`
 }
 
 // Information about pagination in a connection
@@ -513,37 +474,21 @@ type PageInfo struct {
 	EndCursor *string `json:"endCursor,omitempty"`
 }
 
-// Product represents a sellable item in the catalog
+type PriceRangeDefinition struct {
+	CurrencyCode string          `json:"currencyCode"`
+	Min          decimal.Decimal `json:"min"`
+	Max          decimal.Decimal `json:"max"`
+}
+
+// Kubernetes-style product resource. All fields are read from the datastore,
+// which holds the fully hydrated view populated by the post-push ingest pipeline.
 type Product struct {
-	// Globally unique identifier (format: prod_[base62])
-	ID string `json:"id"`
-	// Stock Keeping Unit (unique)
-	Sku string `json:"sku"`
-	// Product display name
-	Title string `json:"title"`
-	// Markdown body content (product description with rich formatting)
-	Body *string `json:"body,omitempty"`
-	// Product price
-	Price scalar.Decimal `json:"price"`
-	// Currency code (ISO 4217)
-	Currency string `json:"currency"`
-	// Inventory status
-	InventoryStatus InventoryStatus `json:"inventoryStatus"`
-	// Available quantity (null if not tracked)
-	InventoryQuantity *int32 `json:"inventoryQuantity,omitempty"`
-	// Primary category (exactly one)
-	Category *Category `json:"category"`
-	// Collections this product belongs to (multiple allowed)
-	Collections []*Collection `json:"collections"`
-	// TODO: Add a scalar for URI
-	// Product image URLs (external CDN)
-	Images []string `json:"images"`
-	// Custom metadata (free-form JSON)
-	Metadata map[string]any `json:"metadata,omitempty"`
-	// Creation timestamp
-	CreatedAt time.Time `json:"createdAt"`
-	// Last modification timestamp
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID         string             `json:"id"`
+	APIVersion string             `json:"apiVersion"`
+	Kind       string             `json:"kind"`
+	Metadata   *ProductObjectMeta `json:"metadata"`
+	Spec       *ProductSpec       `json:"spec"`
+	Status     *ProductStatus     `json:"status,omitempty"`
 }
 
 func (Product) IsNode() {}
@@ -557,22 +502,63 @@ type ProductBy struct {
 	Sku *string `json:"sku,omitempty"`
 }
 
-// Connection type for paginated products (Relay pattern)
-type ProductConnection struct {
-	// List of product edges
-	Edges []*ProductEdge `json:"edges"`
-	// Pagination information
-	PageInfo *PageInfo `json:"pageInfo"`
-	// Total count of products matching filter
-	TotalCount int32 `json:"totalCount"`
+type ProductCondition struct {
+	Type               ProductConditionType `json:"type"`
+	Status             ConditionStatus      `json:"status"`
+	ObservedGeneration *int32               `json:"observedGeneration,omitempty"`
+	LastTransitionTime time.Time            `json:"lastTransitionTime"`
+	Reason             *string              `json:"reason,omitempty"`
+	Message            *string              `json:"message,omitempty"`
 }
 
-// Edge type for Product connection (Relay pattern)
+// Connection type for paginated products (Relay pattern).
+type ProductConnection struct {
+	Edges      []*ProductEdge `json:"edges"`
+	PageInfo   *PageInfo      `json:"pageInfo"`
+	TotalCount int32          `json:"totalCount"`
+}
+
+// Edge type for Product connection (Relay pattern).
 type ProductEdge struct {
-	// Cursor for pagination
-	Cursor string `json:"cursor"`
-	// The product node
-	Node *Product `json:"node"`
+	Cursor string   `json:"cursor"`
+	Node   *Product `json:"node"`
+}
+
+// Metadata for a product resource. Author-supplied fields (name, namespace,
+// labels, annotations) originate from the git file. System-assigned fields
+// (uid, resourceVersion, etc.) are written by the ingest pipeline.
+type ProductObjectMeta struct {
+	Name              string            `json:"name"`
+	Namespace         string            `json:"namespace"`
+	Labels            map[string]any    `json:"labels,omitempty"`
+	Annotations       map[string]any    `json:"annotations,omitempty"`
+	UID               string            `json:"uid"`
+	ResourceVersion   string            `json:"resourceVersion"`
+	Generation        int32             `json:"generation"`
+	CreationTimestamp time.Time         `json:"creationTimestamp"`
+	Revision          *string           `json:"revision,omitempty"`
+	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
+}
+
+type ProductOptionDefinition struct {
+	Name   string   `json:"name"`
+	Title  *string  `json:"title,omitempty"`
+	Values []string `json:"values"`
+}
+
+type ProductSpec struct {
+	Title       *string                    `json:"title,omitempty"`
+	CategoryRef *CatalogObjectReference    `json:"categoryRef,omitempty"`
+	Tags        []string                   `json:"tags"`
+	Media       []*MediaDefinition         `json:"media"`
+	Options     []*ProductOptionDefinition `json:"options"`
+}
+
+type ProductStatus struct {
+	ObservedGeneration  int32                      `json:"observedGeneration"`
+	LastAppliedRevision *string                    `json:"lastAppliedRevision,omitempty"`
+	Conditions          []*ProductCondition        `json:"conditions"`
+	Resolved            *ResolvedProductDefinition `json:"resolved,omitempty"`
 }
 
 // Input for publishing catalog changes
@@ -717,6 +703,26 @@ type RepositoryNamespacePath struct {
 	Name string `json:"name"`
 }
 
+type ResolvedCategoryDefinition struct {
+	Name string   `json:"name"`
+	Path []string `json:"path"`
+}
+
+type ResolvedFileDefinition struct {
+	Name        string  `json:"name"`
+	URL         string  `json:"url"`
+	ContentType *string `json:"contentType,omitempty"`
+}
+
+type ResolvedProductDefinition struct {
+	Category          *ResolvedCategoryDefinition `json:"category,omitempty"`
+	PriceRange        []*PriceRangeDefinition     `json:"priceRange"`
+	TotalInventory    int32                       `json:"totalInventory"`
+	VariantSummary    *VariantSummaryDefinition   `json:"variantSummary,omitempty"`
+	DefaultVariantRef *CatalogObjectReference     `json:"defaultVariantRef,omitempty"`
+	Media             []*ResolvedFileDefinition   `json:"media"`
+}
+
 type TransferRepositoryInput struct {
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Relay ID of the repository to transfer.
@@ -792,59 +798,75 @@ type UpdateCollectionPayload struct {
 	Conflict *CollectionOptimisticLockConflict `json:"conflict,omitempty"`
 }
 
-// Input for updating a product
-type UpdateProductInput struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// Product ID to update
-	ID string `json:"id"`
-	// New SKU (optional, must be unique)
-	Sku *string `json:"sku,omitempty"`
-	// New title
-	Title *string `json:"title,omitempty"`
-	// New description
-	Description *string `json:"description,omitempty"`
-	// New body content
-	Body *string `json:"body,omitempty"`
-	// New price
-	Price *scalar.Decimal `json:"price,omitempty"`
-	// TODO: Add a scalar for CurrencyCode
-	// New currency
-	Currency *string `json:"currency,omitempty"`
-	// New inventory status
-	InventoryStatus *InventoryStatus `json:"inventoryStatus,omitempty"`
-	// New inventory quantity
-	InventoryQuantity *int32 `json:"inventoryQuantity,omitempty"`
-	// New category ID
-	CategoryID *string `json:"categoryId,omitempty"`
-	// New collection IDs (replaces all)
-	CollectionIds []string `json:"collectionIds,omitempty"`
-	// TODO: Add a scalar for URI
-	// New image URLs (replaces all)
-	Images []string `json:"images,omitempty"`
-	// New metadata (replaces all)
-	Metadata map[string]any `json:"metadata,omitempty"`
-	// TODO: Should this be a datetime?
-	// Version for optimistic locking (updated_at timestamp)
-	Version time.Time `json:"version"`
-}
-
-// Payload for updateProduct mutation
-type UpdateProductPayload struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// The updated product
-	Product *Product `json:"product,omitempty"`
-	// Conflict information (if optimistic lock failed)
-	Conflict *OptimisticLockConflict `json:"conflict,omitempty"`
-}
-
 // Authenticated user information
 type User struct {
 	// Username
 	Username string `json:"username"`
 	// Whether the user has admin privileges
 	IsAdmin bool `json:"isAdmin"`
+}
+
+type VariantSummaryDefinition struct {
+	Total       int32 `json:"total"`
+	Ready       int32 `json:"ready"`
+	Unavailable int32 `json:"unavailable"`
+}
+
+type ConditionStatus string
+
+const (
+	ConditionStatusTrue    ConditionStatus = "TRUE"
+	ConditionStatusFalse   ConditionStatus = "FALSE"
+	ConditionStatusUnknown ConditionStatus = "UNKNOWN"
+)
+
+var AllConditionStatus = []ConditionStatus{
+	ConditionStatusTrue,
+	ConditionStatusFalse,
+	ConditionStatusUnknown,
+}
+
+func (e ConditionStatus) IsValid() bool {
+	switch e {
+	case ConditionStatusTrue, ConditionStatusFalse, ConditionStatusUnknown:
+		return true
+	}
+	return false
+}
+
+func (e ConditionStatus) String() string {
+	return string(e)
+}
+
+func (e *ConditionStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ConditionStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ConditionStatus", str)
+	}
+	return nil
+}
+
+func (e ConditionStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ConditionStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ConditionStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
 }
 
 // Product inventory status
@@ -967,6 +989,69 @@ func (e *NamespaceTier) UnmarshalJSON(b []byte) error {
 }
 
 func (e NamespaceTier) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type ProductConditionType string
+
+const (
+	ProductConditionTypePublished         ProductConditionType = "PUBLISHED"
+	ProductConditionTypeAdmissionAccepted ProductConditionType = "ADMISSION_ACCEPTED"
+	ProductConditionTypeCategoryResolved  ProductConditionType = "CATEGORY_RESOLVED"
+	ProductConditionTypeOptionsAccepted   ProductConditionType = "OPTIONS_ACCEPTED"
+	ProductConditionTypeVariantsResolved  ProductConditionType = "VARIANTS_RESOLVED"
+	ProductConditionTypeReady             ProductConditionType = "READY"
+)
+
+var AllProductConditionType = []ProductConditionType{
+	ProductConditionTypePublished,
+	ProductConditionTypeAdmissionAccepted,
+	ProductConditionTypeCategoryResolved,
+	ProductConditionTypeOptionsAccepted,
+	ProductConditionTypeVariantsResolved,
+	ProductConditionTypeReady,
+}
+
+func (e ProductConditionType) IsValid() bool {
+	switch e {
+	case ProductConditionTypePublished, ProductConditionTypeAdmissionAccepted, ProductConditionTypeCategoryResolved, ProductConditionTypeOptionsAccepted, ProductConditionTypeVariantsResolved, ProductConditionTypeReady:
+		return true
+	}
+	return false
+}
+
+func (e ProductConditionType) String() string {
+	return string(e)
+}
+
+func (e *ProductConditionType) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ProductConditionType(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ProductConditionType", str)
+	}
+	return nil
+}
+
+func (e ProductConditionType) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ProductConditionType) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ProductConditionType) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

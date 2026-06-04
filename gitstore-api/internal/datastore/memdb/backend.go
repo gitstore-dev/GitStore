@@ -175,15 +175,13 @@ func notFoundOrErr(err error) error {
 
 func (m *memdbDatastore) CreateProduct(_ context.Context, p *datastore.Product) error {
 	txn := m.db.Txn(true)
-	// Check duplicate ID
-	if raw, _ := txn.First("product", "id", p.ID); raw != nil {
+	if raw, _ := txn.First("product", "id", p.UID); raw != nil {
 		txn.Abort()
-		return fmt.Errorf("%w: product id %s", datastore.ErrAlreadyExists, p.ID)
+		return fmt.Errorf("%w: product uid %s", datastore.ErrAlreadyExists, p.UID)
 	}
-	// Check duplicate SKU
-	if raw, _ := txn.First("product", "sku", p.SKU); raw != nil {
+	if raw, _ := txn.First("product", "name_namespace", p.Namespace, p.Name); raw != nil {
 		txn.Abort()
-		return fmt.Errorf("%w: product sku %s", datastore.ErrAlreadyExists, p.SKU)
+		return fmt.Errorf("%w: product %s/%s", datastore.ErrAlreadyExists, p.Namespace, p.Name)
 	}
 	if err := txn.Insert("product", p); err != nil {
 		txn.Abort()
@@ -193,31 +191,37 @@ func (m *memdbDatastore) CreateProduct(_ context.Context, p *datastore.Product) 
 	return nil
 }
 
-func (m *memdbDatastore) GetProduct(_ context.Context, id string) (*datastore.Product, error) {
+func (m *memdbDatastore) GetProduct(_ context.Context, uid string) (*datastore.Product, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
-	raw, err := txn.First("product", "id", id)
+	raw, err := txn.First("product", "id", uid)
 	if err != nil || raw == nil {
 		return nil, notFoundOrErr(err)
 	}
 	return raw.(*datastore.Product), nil
 }
 
-func (m *memdbDatastore) GetProductBySKU(_ context.Context, sku string) (*datastore.Product, error) {
+func (m *memdbDatastore) GetProductByName(_ context.Context, namespace, name string) (*datastore.Product, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
-	raw, err := txn.First("product", "sku", sku)
+	raw, err := txn.First("product", "name_namespace", namespace, name)
 	if err != nil || raw == nil {
 		return nil, notFoundOrErr(err)
 	}
 	return raw.(*datastore.Product), nil
 }
 
-func (m *memdbDatastore) ListProducts(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+func (m *memdbDatastore) ListProducts(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
-	it, err := txn.Get("product", "id")
+	var it gomemdb.ResultIterator
+	var err error
+	if namespace != "" {
+		it, err = txn.Get("product", "namespace", namespace)
+	} else {
+		it, err = txn.Get("product", "id")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("memdb: list products: %w", err)
 	}
@@ -228,15 +232,15 @@ func (m *memdbDatastore) ListProducts(_ context.Context, page datastore.PagePara
 	}
 
 	return paginateSlice(all, page, func(p *datastore.Product) (time.Time, string) {
-		return p.CreatedAt, p.ID
+		return p.CreationTimestamp, p.UID
 	}), nil
 }
 
 func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product) error {
 	txn := m.db.Txn(true)
-	if raw, _ := txn.First("product", "id", p.ID); raw == nil {
+	if raw, _ := txn.First("product", "id", p.UID); raw == nil {
 		txn.Abort()
-		return fmt.Errorf("%w: product id %s", datastore.ErrNotFound, p.ID)
+		return fmt.Errorf("%w: product uid %s", datastore.ErrNotFound, p.UID)
 	}
 	if err := txn.Insert("product", p); err != nil {
 		txn.Abort()
@@ -246,12 +250,12 @@ func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product) 
 	return nil
 }
 
-func (m *memdbDatastore) DeleteProduct(_ context.Context, id string) error {
+func (m *memdbDatastore) DeleteProduct(_ context.Context, uid string) error {
 	txn := m.db.Txn(true)
-	raw, _ := txn.First("product", "id", id)
+	raw, _ := txn.First("product", "id", uid)
 	if raw == nil {
 		txn.Abort()
-		return fmt.Errorf("%w: product id %s", datastore.ErrNotFound, id)
+		return fmt.Errorf("%w: product uid %s", datastore.ErrNotFound, uid)
 	}
 	if err := txn.Delete("product", raw); err != nil {
 		txn.Abort()

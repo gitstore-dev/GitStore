@@ -22,9 +22,9 @@ spec:
     values: [1TB, 2TB]
   media:
   - fileRef:
-    kind: File
-    name: hero-image
-    optional: true
+      kind: File
+      name: hero-image
+      optional: true
 ---
 
 # MacBook Pro 16" with M3 Max

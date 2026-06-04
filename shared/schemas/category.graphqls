@@ -1,5 +1,45 @@
 # Category Entity GraphQL Types
 
+extend type Query {
+  """
+  Get category by one unique selector.
+  """
+  category(by: CategoryBy!): Category
+
+  """
+  List categories with Relay cursor-based pagination
+  """
+  categories(
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): CategoryConnection!
+}
+
+extend type Mutation {
+  """
+  Create a new category
+  """
+  createCategory(input: CreateCategoryInput!): CreateCategoryPayload!
+
+  """
+  Update an existing category
+  """
+  updateCategory(input: UpdateCategoryInput!): UpdateCategoryPayload!
+
+  """
+  Delete a category
+  """
+  deleteCategory(input: DeleteCategoryInput!): DeleteCategoryPayload!
+  
+  """
+  Reorder categories (drag-and-drop)
+  """
+  reorderCategories(input: ReorderCategoriesInput!): ReorderCategoriesPayload!
+
+}
+
 """
 Category represents a hierarchical classification system for products
 """

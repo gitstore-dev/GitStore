@@ -65,16 +65,16 @@ func (d *InstrumentedDatastore) GetProduct(ctx context.Context, id string) (*Pro
 	return v, err
 }
 
-func (d *InstrumentedDatastore) GetProductBySKU(ctx context.Context, sku string) (*Product, error) {
+func (d *InstrumentedDatastore) GetProductByName(ctx context.Context, namespace, name string) (*Product, error) {
 	start := time.Now()
-	v, err := d.next.GetProductBySKU(ctx, sku)
-	d.observe("GetProductBySKU", start, err)
+	v, err := d.next.GetProductByName(ctx, namespace, name)
+	d.observe("GetProductByName", start, err)
 	return v, err
 }
 
-func (d *InstrumentedDatastore) ListProducts(ctx context.Context, params PageParams) (*PageResult[Product], error) {
+func (d *InstrumentedDatastore) ListProducts(ctx context.Context, namespace string, params PageParams) (*PageResult[Product], error) {
 	start := time.Now()
-	v, err := d.next.ListProducts(ctx, params)
+	v, err := d.next.ListProducts(ctx, namespace, params)
 	d.observe("ListProducts", start, err)
 	return v, err
 }
