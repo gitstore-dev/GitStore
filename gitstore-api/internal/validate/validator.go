@@ -4,10 +4,12 @@
 package validate
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 
 	"github.com/adrg/frontmatter"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
@@ -32,6 +34,11 @@ func Parse(r io.Reader) (*catalog.ProductResource, []byte, error) {
 		return nil, nil, fmt.Errorf("validate: read: %w", err)
 	}
 
+	// Opt-in: files that don't begin with --- are not product resources; skip.
+	if !bytes.HasPrefix(bytes.TrimLeftFunc(raw, unicode.IsSpace), []byte("---")) {
+		return nil, raw, nil
+	}
+
 	// Extract the raw YAML block between the first --- delimiters.
 	fmRaw, err := extractFrontmatterBlock(raw)
 	if err != nil {
@@ -45,24 +52,34 @@ func Parse(r io.Reader) (*catalog.ProductResource, []byte, error) {
 
 	// Struct binding via frontmatter.Parse.
 	var res catalog.ProductResource
-	body, err := frontmatter.Parse(strings.NewReader(string(raw)), &res)
+	formats := []*frontmatter.Format{
+		frontmatter.NewFormat("---", "---", yaml.Unmarshal),
+	}
+	body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
 	}
 
+	// Post-parse: collect all violations before returning.
+	var errs []error
+
 	// Struct-tag validation — map to user-friendly messages.
 	if err := validate.Struct(res); err != nil {
-		return nil, nil, toFriendlyError(err)
+		errs = append(errs, toFriendlyError(err))
 	}
 
 	// Spec-level validation.
 	if err := validateSpec(res.Spec); err != nil {
-		return nil, nil, err
+		errs = append(errs, err)
 	}
 
 	// Label length validation.
 	if err := validateLabels(res.Metadata.Labels); err != nil {
-		return nil, nil, err
+		errs = append(errs, err)
+	}
+
+	if len(errs) > 0 {
+		return nil, nil, errors.Join(errs...)
 	}
 
 	return &res, body, nil
@@ -71,18 +88,16 @@ func Parse(r io.Reader) (*catalog.ProductResource, []byte, error) {
 // extractFrontmatterBlock returns the raw bytes between the opening and
 // closing --- delimiters so they can be unmarshalled as a generic map.
 func extractFrontmatterBlock(src []byte) ([]byte, error) {
-	s := string(src)
 	const delim = "---"
-	start := strings.Index(s, delim)
-	if start == -1 {
+	_, rest, found := strings.Cut(string(src), delim)
+	if !found {
 		return nil, fmt.Errorf("validate: document does not use Kubernetes-style frontmatter (missing apiVersion); migration is not supported in alpha")
 	}
-	rest := s[start+len(delim):]
-	end := strings.Index(rest, delim)
-	if end == -1 {
+	inner, _, ok := strings.Cut(rest, delim)
+	if !ok {
 		return nil, fmt.Errorf("validate: unclosed frontmatter block")
 	}
-	return []byte(rest[:end]), nil
+	return []byte(inner), nil
 }
 
 // preParseChecks unmarshals the frontmatter block into a raw map and enforces
@@ -96,6 +111,11 @@ func preParseChecks(fmRaw []byte) error {
 	// Legacy format guard: apiVersion must be present.
 	if _, ok := raw["apiVersion"]; !ok {
 		return fmt.Errorf("validate: document does not use Kubernetes-style frontmatter (missing apiVersion); migration is not supported in alpha")
+	}
+
+	// spec block must be present.
+	if _, ok := raw["spec"]; !ok {
+		return fmt.Errorf("validate: spec is required")
 	}
 
 	// Forbidden top-level key: status.
