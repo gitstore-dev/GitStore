@@ -2,7 +2,7 @@
 
 **Feature Branch**: `014-product-frontmatter`  
 **Created**: 2026-06-01  
-**Status**: Draft  
+**Status**: Closed  
 **Input**: User description: "Define Product Resource Contract: Kubernetes-style Frontmatter Schema"  
 **Related**: GH#184 (task), GH#77 (initiative), GH#40 (parent initiative)
 
