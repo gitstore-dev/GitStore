@@ -16,18 +16,22 @@ var schema = &memdb.DBSchema{
 				"id": {
 					Name:    "id",
 					Unique:  true,
-					Indexer: &memdb.UUIDFieldIndex{Field: "ID"},
+					Indexer: &memdb.UUIDFieldIndex{Field: "UID"},
 				},
-				"sku": {
-					Name:    "sku",
-					Unique:  true,
-					Indexer: &memdb.StringFieldIndex{Field: "SKU"},
+				"name_namespace": {
+					Name:   "name_namespace",
+					Unique: true,
+					Indexer: &memdb.CompoundIndex{
+						Indexes: []memdb.Indexer{
+							&memdb.StringFieldIndex{Field: "Namespace"},
+							&memdb.StringFieldIndex{Field: "Name"},
+						},
+					},
 				},
-				"category_id": {
-					Name:         "category_id",
-					Unique:       false,
-					AllowMissing: true,
-					Indexer:      &memdb.StringFieldIndex{Field: "CategoryID"},
+				"namespace": {
+					Name:    "namespace",
+					Unique:  false,
+					Indexer: &memdb.StringFieldIndex{Field: "Namespace"},
 				},
 			},
 		},

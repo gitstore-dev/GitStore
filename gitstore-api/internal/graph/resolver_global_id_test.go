@@ -11,7 +11,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -20,7 +19,7 @@ import (
 const (
 	globalIDTestCategoryID   = "00000000-0000-0000-0000-000000000001"
 	globalIDTestCollectionID = "00000000-0000-0000-0000-000000000002"
-	globalIDTestProductID    = "00000000-0000-0000-0000-000000000003"
+	globalIDTestProductUID   = "00000000-0000-0000-0000-000000000003"
 	globalIDTestNamespaceID  = "00000000-0000-0000-0000-000000000004"
 )
 
@@ -30,12 +29,11 @@ func TestQueryNodeResolvesByGlobalID(t *testing.T) {
 	seedGlobalIDTestData(t, ctx, store)
 	query := &queryResolver{Resolver: resolver}
 
-	node, err := query.Node(ctx, mustEncodeNodeID(nodeKindProduct, globalIDTestProductID))
+	node, err := query.Node(ctx, mustEncodeNodeID(nodeKindProduct, globalIDTestProductUID))
 	require.NoError(t, err)
 	product, ok := node.(*model.Product)
 	require.True(t, ok)
-	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductID), product.ID)
-	assert.Equal(t, "SKU-1", product.Sku)
+	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductUID), product.ID)
 }
 
 func TestQueryNodesPreservesOrderAndSkipsInvalidIDs(t *testing.T) {
@@ -49,7 +47,7 @@ func TestQueryNodesPreservesOrderAndSkipsInvalidIDs(t *testing.T) {
 		"not-base64!",
 		mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryID),
 		mustEncodeNodeID(nodeKindCollection, globalIDTestCollectionID),
-		mustEncodeNodeID(nodeKindProduct, globalIDTestProductID),
+		mustEncodeNodeID(nodeKindProduct, globalIDTestProductUID),
 		mustEncodeNodeID(nodeKindProduct, "missing"),
 	})
 	require.NoError(t, err)
@@ -68,11 +66,10 @@ func TestLookupQueriesAcceptGlobalIDs(t *testing.T) {
 	seedGlobalIDTestData(t, ctx, store)
 	query := &queryResolver{Resolver: resolver}
 
-	productID := mustEncodeNodeID(nodeKindProduct, globalIDTestProductID)
-	product, err := query.Product(ctx, model.ProductBy{ID: &productID})
+	product, err := query.Product(ctx, "test-store", "product-1")
 	require.NoError(t, err)
 	require.NotNil(t, product)
-	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductID), product.ID)
+	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductUID), product.ID)
 
 	categoryID := mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryID)
 	category, err := query.Category(ctx, model.CategoryBy{ID: &categoryID})
@@ -93,70 +90,26 @@ func TestLookupQueriesAcceptGlobalIDs(t *testing.T) {
 	assert.Equal(t, mustEncodeNodeID(nodeKindNamespace, globalIDTestNamespaceID), namespace.ID)
 }
 
-func TestCreateProductDecodesNodeReferenceInputs(t *testing.T) {
+func TestLookupProductByName(t *testing.T) {
 	ctx := context.Background()
 	store, resolver := newGlobalIDTestResolver(t)
 	seedGlobalIDTestData(t, ctx, store)
-	mutation := &mutationResolver{Resolver: resolver}
+	query := &queryResolver{Resolver: resolver}
 
-	payload, err := mutation.CreateProduct(ctx, model.CreateProductInput{
-		Sku:           "SKU-2",
-		Title:         "Second product",
-		Price:         decimal.NewFromFloat(2.50),
-		CategoryID:    mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryID),
-		CollectionIds: []string{mustEncodeNodeID(nodeKindCollection, globalIDTestCollectionID)},
-	})
+	product, err := query.Product(ctx, "test-store", "product-1")
 	require.NoError(t, err)
-	require.NotNil(t, payload.Product)
-
-	_, rawProductID, err := DecodeNodeID(payload.Product.ID)
-	require.NoError(t, err)
-	stored, err := store.GetProduct(ctx, rawProductID)
-	require.NoError(t, err)
-	assert.Equal(t, globalIDTestCategoryID, stored.CategoryID)
-	assert.Equal(t, []string{globalIDTestCollectionID}, stored.CollectionIDs)
+	require.NotNil(t, product)
+	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductUID), product.ID)
+	assert.Equal(t, "catalog.gitstore.dev/v1beta1", product.APIVersion)
 }
 
-func TestMalformedGlobalIDReturnsError(t *testing.T) {
+func TestLookupProduct_NotFound(t *testing.T) {
 	_, resolver := newGlobalIDTestResolver(t)
 	query := &queryResolver{Resolver: resolver}
 
-	id := "not-base64!"
-	product, err := query.Product(context.Background(), model.ProductBy{ID: &id})
+	product, err := query.Product(context.Background(), "test-store", "no-such-product")
 	assert.Nil(t, product)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid global ID")
-}
-
-func TestBusinessIdentifiersAreNotDecoded(t *testing.T) {
-	ctx := context.Background()
-	store, resolver := newGlobalIDTestResolver(t)
-	seedGlobalIDTestData(t, ctx, store)
-	query := &queryResolver{Resolver: resolver}
-
-	sku := "SKU-1"
-	product, err := query.Product(ctx, model.ProductBy{Sku: &sku})
-	require.NoError(t, err)
-	require.NotNil(t, product)
-	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductID), product.ID)
-
-	categorySlug := "category-1"
-	category, err := query.Category(ctx, model.CategoryBy{Slug: &categorySlug})
-	require.NoError(t, err)
-	require.NotNil(t, category)
-	assert.Equal(t, mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryID), category.ID)
-
-	collectionSlug := "collection-1"
-	collection, err := query.Collection(ctx, model.CollectionBy{Slug: &collectionSlug})
-	require.NoError(t, err)
-	require.NotNil(t, collection)
-	assert.Equal(t, mustEncodeNodeID(nodeKindCollection, globalIDTestCollectionID), collection.ID)
-
-	namespaceIdentifier := "namespace-1"
-	namespace, err := query.Namespace(ctx, model.NamespaceBy{Identifier: &namespaceIdentifier})
-	require.NoError(t, err)
-	require.NotNil(t, namespace)
-	assert.Equal(t, mustEncodeNodeID(nodeKindNamespace, globalIDTestNamespaceID), namespace.ID)
+	assert.NoError(t, err) // not found returns nil, nil per resolver convention
 }
 
 func newGlobalIDTestResolver(t *testing.T) (datastore.Datastore, *Resolver) {
@@ -184,15 +137,12 @@ func seedGlobalIDTestData(t *testing.T, ctx context.Context, store datastore.Dat
 		UpdatedAt: now,
 	}))
 	require.NoError(t, store.CreateProduct(ctx, &datastore.Product{
-		ID:            globalIDTestProductID,
-		SKU:           "SKU-1",
-		Title:         "Product 1",
-		Price:         1.25,
-		Currency:      "USD",
-		CategoryID:    globalIDTestCategoryID,
-		CollectionIDs: []string{globalIDTestCollectionID},
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		UID:               globalIDTestProductUID,
+		Namespace:         "test-store",
+		Name:              "product-1",
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "Product",
+		CreationTimestamp: now,
 	}))
 	require.NoError(t, store.CreateNamespace(ctx, &datastore.Namespace{
 		ID:         globalIDTestNamespaceID,

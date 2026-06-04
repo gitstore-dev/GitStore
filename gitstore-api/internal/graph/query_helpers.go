@@ -12,7 +12,7 @@ import (
 func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (model.Node, error) {
 	switch kind {
 	case nodeKindProduct:
-		product, err := r.service.GetProductByID(ctx, rawID)
+		product, err := r.service.GetProductByUID(ctx, rawID)
 		if err != nil {
 			return nil, nil
 		}

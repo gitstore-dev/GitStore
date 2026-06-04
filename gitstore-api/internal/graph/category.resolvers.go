@@ -23,7 +23,7 @@ func (r *categoryResolver) Products(ctx context.Context, obj *model.Category, fi
 	// TODO: Add category-scoped product listing to the datastore interface.
 	// For now, return all products paginated (filter by category will be added later).
 	params := toPageParams(first, after, last, before)
-	result, err := r.service.GetProducts(ctx, params)
+	result, err := r.service.GetProducts(ctx, "", params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get products: %w", err)
 	}

@@ -28,10 +28,10 @@ func (s *stubDatastore) CreateProduct(_ context.Context, _ *datastore.Product) e
 func (s *stubDatastore) GetProduct(_ context.Context, _ string) (*datastore.Product, error) {
 	return s.getProductVal, s.getProductErr
 }
-func (s *stubDatastore) GetProductBySKU(_ context.Context, _ string) (*datastore.Product, error) {
+func (s *stubDatastore) GetProductByName(_ context.Context, _, _ string) (*datastore.Product, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) ListProducts(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+func (s *stubDatastore) ListProducts(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
 	return nil, s.getProductErr
 }
 func (s *stubDatastore) UpdateProduct(_ context.Context, _ *datastore.Product) error {
@@ -187,7 +187,7 @@ func histogramObservationCount(t *testing.T, reg *prometheus.Registry, op, backe
 }
 
 func TestInstrumentedDatastore_HistogramObservedOnSuccess(t *testing.T) {
-	stub := &stubDatastore{getProductVal: &datastore.Product{ID: "p1"}}
+	stub := &stubDatastore{getProductVal: &datastore.Product{UID: "p1"}}
 	inst, _, reg := newTestInstrumented(t, stub)
 
 	_, err := inst.GetProduct(context.Background(), "p1")
@@ -216,7 +216,7 @@ func TestInstrumentedDatastore_ErrorCounterIncrementedOnError(t *testing.T) {
 }
 
 func TestInstrumentedDatastore_ErrorCounterNotIncrementedOnSuccess(t *testing.T) {
-	stub := &stubDatastore{getProductVal: &datastore.Product{ID: "p1"}}
+	stub := &stubDatastore{getProductVal: &datastore.Product{UID: "p1"}}
 	inst, _, reg := newTestInstrumented(t, stub)
 
 	inst.GetProduct(context.Background(), "p1") //nolint:errcheck
@@ -243,7 +243,7 @@ func TestInstrumentedDatastore_ZapErrorLogOnFailure(t *testing.T) {
 }
 
 func TestInstrumentedDatastore_NoLogOnSuccess(t *testing.T) {
-	stub := &stubDatastore{getProductVal: &datastore.Product{ID: "p1"}}
+	stub := &stubDatastore{getProductVal: &datastore.Product{UID: "p1"}}
 	inst, logs, _ := newTestInstrumented(t, stub)
 
 	inst.GetProduct(context.Background(), "p1") //nolint:errcheck

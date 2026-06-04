@@ -39,7 +39,7 @@
 **Rationale**: Alpha software — no production data, no migration needed. The existing table schema (`bucket`, `sku`, `price`, `currency`, `inventory_status`, `category_id`, `collection_ids`, `images`) is incompatible with the new resource model at the primary key level (`bucket + created_at + id` → `namespace + name`). Re-keying requires a full table rebuild regardless, so a rewrite is strictly simpler. 
 Storing the full hydrated view in the datastore avoids a split-read path (git blob + datastore merge) on every product query — the constitution's performance target (< 500ms for 1000+ products) is met with a single datastore read per product.
 
-**New schema**: `namespace` (partition key) + `name` (clustering key) + `uid`, `api_version`, `kind`, `generation`, `resource_version`, `creation_timestamp`, `revision`, `labels`, `annotations`, `owner_refs`, `git_commit_sha`, `git_ref`, `spec` (JSON blob), `body`, `status` (JSON blob).
+**New schema**: `namespace` (partition key) + `name` (clustering key) + `uid`, `api_version`, `kind`, `generation`, `resource_version`, `creation_timestamp`, `revision`, `labels`, `annotations`, `owner_refs`, `git_commit_sha`, `git_ref`, `spec` (JSON blob), `body`, `status` (JSON blob). `PriceRangeDefinition.Min`/`Max` are `decimal.Decimal` (`shopspring/decimal`), matching the existing `Decimal` scalar binding — not `string`.
 
 **Alternatives considered**:
 - `ALTER TABLE ADD` migration: rejected — primary key change cannot be done with ALTER; rewrite is unavoidable.

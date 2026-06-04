@@ -148,11 +148,11 @@ System-assigned after push acceptance. Stored in the datastore as part of the fu
 
 ### `PriceRangeDefinition`
 
-| Field          | Type               | Constraint                                          |
-|----------------|--------------------|-----------------------------------------------------|
-| `currencyCode` | `string`           | ISO 4217                                            |
-| `min`          | `string` (decimal) | String representation to avoid float precision loss |
-| `max`          | `string` (decimal) | String representation to avoid float precision loss |
+| Field          | Type               | Constraint                                                      |
+|----------------|--------------------|-----------------------------------------------------------------|
+| `currencyCode` | `string`           | ISO 4217                                                        |
+| `min`          | `decimal.Decimal`  | `shopspring/decimal` — consistent with Decimal GraphQL scalar   |
+| `max`          | `decimal.Decimal`  | `shopspring/decimal` — consistent with Decimal GraphQL scalar   |
 
 ### `VariantSummaryDefinition`
 

@@ -3,7 +3,10 @@
 
 package datastore
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // NamespaceTier is the enumeration of allowed namespace tiers.
 type NamespaceTier string
@@ -27,22 +30,46 @@ type Namespace struct {
 	UpdatedBy          string
 }
 
-// Product represents a sellable item in the catalogue.
+// Product is the fully hydrated catalogue product record stored in the
+// datastore. It merges author-supplied frontmatter (APIVersion, Kind,
+// Namespace, Name, Labels, Annotations, Spec, Body) with system-assigned
+// metadata (UID, ResourceVersion, Generation, CreationTimestamp, Revision)
+// and system-written status (Status JSON). Git is the authoritative source
+// for what the author wrote; the datastore is the authoritative source for
+// what consumers read.
 type Product struct {
-	ID                string
-	SKU               string
-	Title             string
-	Price             float64
-	Currency          string
-	InventoryStatus   string
-	InventoryQuantity *int
-	CategoryID        string
-	CollectionIDs     []string
-	Images            []string
-	Metadata          map[string]any
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	Body              string
+	// Identity (primary key: Namespace + Name)
+	UID       string // UUID assigned on first admission
+	Namespace string
+	Name      string
+
+	// Resource envelope
+	APIVersion string
+	Kind       string
+
+	// Versioning
+	Generation      int64
+	ResourceVersion string
+	CreationTimestamp time.Time
+	Revision        string // e.g. "main@sha1:abc123"
+
+	// Author-supplied classification
+	Labels      map[string]string
+	Annotations map[string]string
+
+	// Ownership (JSON-encoded []OwnerReference)
+	OwnerRefs json.RawMessage
+
+	// Git provenance
+	GitCommitSHA string
+	GitRef       string
+
+	// Spec and body — stored as JSON blob and raw Markdown respectively
+	Spec json.RawMessage
+	Body string
+
+	// Status — system-only JSON blob
+	Status json.RawMessage
 }
 
 // Category represents a hierarchical classification.

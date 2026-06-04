@@ -126,11 +126,12 @@ type ResolvedCategoryDefinition struct {
     Path []string `json:"path"`
 }
 
-// PriceRangeDefinition uses string for decimal values to avoid float precision loss.
+// PriceRangeDefinition uses shopspring/decimal for monetary values, consistent
+// with the rest of the API (scalar/scalars.go Decimal scalar binding).
 type PriceRangeDefinition struct {
-    CurrencyCode string `json:"currencyCode"`
-    Min          string `json:"min"`
-    Max          string `json:"max"`
+    CurrencyCode string          `json:"currencyCode"`
+    Min          decimal.Decimal `json:"min"`
+    Max          decimal.Decimal `json:"max"`
 }
 
 type VariantSummaryDefinition struct {

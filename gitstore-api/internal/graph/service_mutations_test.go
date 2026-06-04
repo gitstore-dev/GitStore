@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph"
@@ -84,74 +85,29 @@ func newTestSvc(t *testing.T, writer *mockGitWriter) *graph.Service {
 	return graph.NewServiceWithWriter(store, writer, zap.NewNop())
 }
 
-func TestServiceCreateProductPersists(t *testing.T) {
-	svc := newTestSvc(t, &mockGitWriter{})
-
-	product, err := svc.CreateProduct(context.Background(), map[string]interface{}{
-		"sku":   "SKU-001",
-		"title": "Widget",
-		"price": 9.99,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, product)
-	assert.Equal(t, "SKU-001", product.SKU)
-	assert.Equal(t, "Widget", product.Title)
-	assert.NotEmpty(t, product.ID)
-
-	// Verify product is retrievable from the datastore
-	fetched, err := svc.GetProductBySKU(context.Background(), "SKU-001")
-	require.NoError(t, err)
-	assert.Equal(t, product.ID, fetched.ID)
-}
-
-func TestServiceCreateProductDuplicateSKU(t *testing.T) {
-	svc := newTestSvc(t, &mockGitWriter{})
-
-	_, err := svc.CreateProduct(context.Background(), map[string]interface{}{
-		"sku": "DUP-001", "title": "First", "price": 1.0,
-	})
-	require.NoError(t, err)
-
-	_, err = svc.CreateProduct(context.Background(), map[string]interface{}{
-		"sku": "DUP-001", "title": "Second", "price": 2.0,
-	})
-	require.Error(t, err)
-}
-
 func TestServiceDeleteProductRemovesFromDatastore(t *testing.T) {
-	svc := newTestSvc(t, &mockGitWriter{})
-
-	product, err := svc.CreateProduct(context.Background(), map[string]interface{}{
-		"sku": "SKU-DEL", "title": "ToDelete", "price": 1.0,
-	})
+	ctx := context.Background()
+	store, err := memdb.New()
 	require.NoError(t, err)
+	svc := graph.NewServiceWithWriter(store, &mockGitWriter{}, zap.NewNop())
 
-	require.NoError(t, svc.DeleteProduct(context.Background(), product.ID))
+	uid := "a0000000-0000-0000-0000-000000000001"
+	require.NoError(t, store.CreateProduct(ctx, &datastore.Product{
+		UID:       uid,
+		Namespace: "test-store",
+		Name:      "to-delete",
+	}))
 
-	_, err = svc.GetProductByID(context.Background(), product.ID)
+	require.NoError(t, svc.DeleteProduct(ctx, uid))
+
+	_, err = svc.GetProductByUID(ctx, uid)
 	require.Error(t, err)
 }
 
 func TestServiceDeleteProductNotFound(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 
-	err := svc.DeleteProduct(context.Background(), "nonexistent-id")
+	err := svc.DeleteProduct(context.Background(), "a0000000-0000-0000-0000-000000000099")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
-}
-
-func TestServiceUpdateProductAppliesChanges(t *testing.T) {
-	svc := newTestSvc(t, &mockGitWriter{})
-
-	product, err := svc.CreateProduct(context.Background(), map[string]interface{}{
-		"sku": "SKU-UPD", "title": "Original", "price": 9.99,
-	})
-	require.NoError(t, err)
-
-	updated, err := svc.UpdateProduct(context.Background(), product.ID, map[string]interface{}{
-		"title": "Super Widget",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "Super Widget", updated.Title)
-	assert.Equal(t, product.ID, updated.ID)
 }

@@ -200,13 +200,6 @@ models:
   JSON:
     model: github.com/gitstore-dev/gitstore/api/internal/graph/scalar.JSON
 
-  # Configure field resolvers for relationship fields
-  Product:
-    fields:
-      category:
-        resolver: true
-      collections:
-        resolver: true
   Category:
     fields:
       products:

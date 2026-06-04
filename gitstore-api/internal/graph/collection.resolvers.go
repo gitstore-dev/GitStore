@@ -23,7 +23,7 @@ func (r *collectionResolver) Products(ctx context.Context, obj *model.Collection
 	// TODO: Add collection-scoped product listing to the datastore interface.
 	// For now, return all products paginated (filter by collection will be added later).
 	params := toPageParams(first, after, last, before)
-	result, err := r.service.GetProducts(ctx, params)
+	result, err := r.service.GetProducts(ctx, "", params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get products: %w", err)
 	}
