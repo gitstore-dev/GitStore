@@ -100,11 +100,22 @@ JSON metadata object
 scalar JSON
 
 """
-Selector for looking up a product by exactly one unique key.
+Selector for a single product lookup. Exactly one field must be set.
 """
 input ProductBy @oneOf {
+  """Look up by globally unique Relay ID (encodes the product UID)."""
   id: ID
-  sku: String
+
+  """Look up by namespace identifier + product name (Kubernetes-style metadata.name)."""
+  namespacePath: ProductNamespacePath
+}
+
+"""
+Composite selector: namespace identifier (human-readable slug) + product name.
+"""
+input ProductNamespacePath {
+  namespace: String!
+  name: String!
 }
 
 """

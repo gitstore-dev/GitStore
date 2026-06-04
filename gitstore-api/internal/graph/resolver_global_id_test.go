@@ -66,7 +66,7 @@ func TestLookupQueriesAcceptGlobalIDs(t *testing.T) {
 	seedGlobalIDTestData(t, ctx, store)
 	query := &queryResolver{Resolver: resolver}
 
-	product, err := query.Product(ctx, "test-store", "product-1")
+	product, err := query.Product(ctx, model.ProductBy{NamespacePath: &model.ProductNamespacePath{Namespace: "test-store", Name: "product-1"}})
 	require.NoError(t, err)
 	require.NotNil(t, product)
 	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductUID), product.ID)
@@ -96,7 +96,7 @@ func TestLookupProductByName(t *testing.T) {
 	seedGlobalIDTestData(t, ctx, store)
 	query := &queryResolver{Resolver: resolver}
 
-	product, err := query.Product(ctx, "test-store", "product-1")
+	product, err := query.Product(ctx, model.ProductBy{NamespacePath: &model.ProductNamespacePath{Namespace: "test-store", Name: "product-1"}})
 	require.NoError(t, err)
 	require.NotNil(t, product)
 	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductUID), product.ID)
@@ -107,7 +107,7 @@ func TestLookupProduct_NotFound(t *testing.T) {
 	_, resolver := newGlobalIDTestResolver(t)
 	query := &queryResolver{Resolver: resolver}
 
-	product, err := query.Product(context.Background(), "test-store", "no-such-product")
+	product, err := query.Product(context.Background(), model.ProductBy{NamespacePath: &model.ProductNamespacePath{Namespace: "test-store", Name: "no-such-product"}})
 	assert.Nil(t, product)
 	assert.NoError(t, err) // not found returns nil, nil per resolver convention
 }

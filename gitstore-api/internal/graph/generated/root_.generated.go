@@ -329,7 +329,7 @@ type ComplexityRoot struct {
 		Namespaces     func(childComplexity int, first *int32, after *string, last *int32, before *string) int
 		Node           func(childComplexity int, id string) int
 		Nodes          func(childComplexity int, ids []string) int
-		Product        func(childComplexity int, namespace string, name string) int
+		Product        func(childComplexity int, by model.ProductBy) int
 		Products       func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
 		Repositories   func(childComplexity int, namespaceID string, first *int32, after *string, last *int32, before *string) int
 		Repository     func(childComplexity int, by model.RepositoryBy) int
@@ -1824,7 +1824,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.Product(childComplexity, args["namespace"].(string), args["name"].(string)), true
+		return e.ComplexityRoot.Query.Product(childComplexity, args["by"].(model.ProductBy)), true
 
 	case "Query.products":
 		if e.ComplexityRoot.Query.Products == nil {
@@ -2213,6 +2213,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputLogoutInput,
 		ec.unmarshalInputNamespaceBy,
 		ec.unmarshalInputProductBy,
+		ec.unmarshalInputProductNamespacePath,
 		ec.unmarshalInputPublishCatalogInput,
 		ec.unmarshalInputRefreshTokenInput,
 		ec.unmarshalInputRenameRepositoryInput,
@@ -3494,8 +3495,8 @@ extend type Mutation {
 # Mutations are git-driven; GraphQL mutations removed (deferred to GH#185/186).
 
 extend type Query {
-  """Fetch a product by name within a namespace."""
-  product(namespace: String!, name: String!): Product
+  """Fetch a single product by globally unique ID or namespace + name."""
+  product(by: ProductBy!): Product
 
   """List products in a namespace with Relay cursor-based pagination."""
   products(
@@ -3954,11 +3955,22 @@ JSON metadata object
 scalar JSON
 
 """
-Selector for looking up a product by exactly one unique key.
+Selector for a single product lookup. Exactly one field must be set.
 """
 input ProductBy @oneOf {
+  """Look up by globally unique Relay ID (encodes the product UID)."""
   id: ID
-  sku: String
+
+  """Look up by namespace identifier + product name (Kubernetes-style metadata.name)."""
+  namespacePath: ProductNamespacePath
+}
+
+"""
+Composite selector: namespace identifier (human-readable slug) + product name.
+"""
+input ProductNamespacePath {
+  namespace: String!
+  name: String!
 }
 
 """

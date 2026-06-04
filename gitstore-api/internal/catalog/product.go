@@ -30,7 +30,7 @@ type ProductSpec struct {
 	Title       string                    `yaml:"title"      validate:"omitempty,max=200"`
 	CategoryRef *ObjectReference          `yaml:"categoryRef"`
 	Tags        []string                  `yaml:"tags"`
-	Media       []MediaDefinition         `yaml:"media"`
+	Media       []MediaDefinition         `yaml:"media"               validate:"omitempty,dive"`
 	Options     []ProductOptionDefinition `yaml:"options"    validate:"omitempty,dive"`
 }
 

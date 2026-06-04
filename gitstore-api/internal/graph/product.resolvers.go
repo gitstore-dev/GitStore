@@ -13,12 +13,27 @@ import (
 )
 
 // Product is the resolver for the product field.
-func (r *queryResolver) Product(ctx context.Context, namespace string, name string) (*model.Product, error) {
-	p, err := r.service.GetProductByName(ctx, namespace, name)
-	if err != nil {
-		return nil, nil
+func (r *queryResolver) Product(ctx context.Context, by model.ProductBy) (*model.Product, error) {
+	switch {
+	case by.ID != nil:
+		rawID, err := decodeNodeIDAs(nodeKindProduct, *by.ID)
+		if err != nil {
+			return nil, nil
+		}
+		p, err := r.service.GetProductByUID(ctx, rawID)
+		if err != nil {
+			return nil, nil
+		}
+		return DatastoreProductToGraphQL(p), nil
+	case by.NamespacePath != nil:
+		p, err := r.service.GetProductByName(ctx, by.NamespacePath.Namespace, by.NamespacePath.Name)
+		if err != nil {
+			return nil, nil
+		}
+		return DatastoreProductToGraphQL(p), nil
+	default:
+		return nil, fmt.Errorf("ProductBy: exactly one selector required")
 	}
-	return DatastoreProductToGraphQL(p), nil
 }
 
 // Products is the resolver for the products field.

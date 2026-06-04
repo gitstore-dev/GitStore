@@ -24,27 +24,30 @@ import (
 
 // scyllaDatastore implements datastore.Datastore backed by ScyllaDB.
 type scyllaDatastore struct {
-	session               gocqlx.Session
-	log                   *zap.Logger
-	productTable          *table.Table
-	categoryTable         *table.Table
-	collectionTable       *table.Table
-	namespaceTable        *table.Table
-	repositoryTable       *table.Table
-	namespaceMappingTable *table.Table
+	session                 gocqlx.Session
+	log                     *zap.Logger
+	productByNamespaceTable *table.Table
+	productByNameTable      *table.Table
+	productByUIDTable       *table.Table
+	categoryTable           *table.Table
+	collectionTable         *table.Table
+	namespaceTable          *table.Table
+	repositoryTable         *table.Table
+	namespaceMappingTable   *table.Table
 }
 
 // row structs mirror the CQL columns.
 
+// productRow mirrors the columns of products_by_namespace.
 type productRow struct {
 	Namespace         string            `db:"namespace"`
-	Name              string            `db:"name"`
+	CreationTimestamp time.Time         `db:"creation_timestamp"`
 	UID               gocql.UUID        `db:"uid"`
+	Name              string            `db:"name"`
 	APIVersion        string            `db:"api_version"`
 	Kind              string            `db:"kind"`
 	Generation        int64             `db:"generation"`
 	ResourceVersion   string            `db:"resource_version"`
-	CreationTimestamp time.Time         `db:"creation_timestamp"`
 	Revision          string            `db:"revision"`
 	Labels            map[string]string `db:"labels"`
 	Annotations       map[string]string `db:"annotations"`
@@ -54,6 +57,21 @@ type productRow struct {
 	Spec              string            `db:"spec"`
 	Body              string            `db:"body"`
 	Status            string            `db:"status"`
+}
+
+// productNameRow mirrors products_by_name (index only).
+type productNameRow struct {
+	Namespace         string     `db:"namespace"`
+	Name              string     `db:"name"`
+	UID               gocql.UUID `db:"uid"`
+	CreationTimestamp time.Time  `db:"creation_timestamp"`
+}
+
+// productUIDRow mirrors products_by_uid (index only).
+type productUIDRow struct {
+	UID               gocql.UUID `db:"uid"`
+	Namespace         string     `db:"namespace"`
+	CreationTimestamp time.Time  `db:"creation_timestamp"`
 }
 
 type categoryRow struct {
@@ -101,6 +119,10 @@ func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) 
 	cluster.Keyspace = cfg.Keyspace
 	cluster.Consistency = gocql.Quorum
 	cluster.DisableShardAwarePort = cfg.DisableShardAwarePort
+	cluster.IgnorePeerAddr = cfg.IgnorePeerAddr
+	if at, ok := cfg.AddressTranslator.(gocql.AddressTranslator); ok {
+		cluster.AddressTranslator = at
+	}
 	if port > 0 {
 		cluster.Port = port
 	}
@@ -123,14 +145,16 @@ func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) 
 	}
 
 	return &scyllaDatastore{
-		session:               gocqlx.NewSession(rawSession),
-		log:                   log,
-		productTable:          Product,
-		categoryTable:         Category,
-		collectionTable:       Collection,
-		namespaceTable:        Namespace,
-		repositoryTable:       Repository,
-		namespaceMappingTable: NamespaceMapping,
+		session:                 gocqlx.NewSession(rawSession),
+		log:                     log,
+		productByNamespaceTable: ProductByNamespace,
+		productByNameTable:      ProductByName,
+		productByUIDTable:       ProductByUID,
+		categoryTable:           Category,
+		collectionTable:         Collection,
+		namespaceTable:          Namespace,
+		repositoryTable:         Repository,
+		namespaceMappingTable:   NamespaceMapping,
 	}, nil
 }
 
@@ -172,57 +196,85 @@ func (s *scyllaDatastore) CreateProduct(ctx context.Context, p *datastore.Produc
 		p.CreationTimestamp = time.Now().UTC().Truncate(time.Millisecond)
 	}
 	row := toProductRow(p)
-	stmt, names := s.productTable.Insert()
-	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
+	parsedUID := mustParseUUID(p.UID)
+
+	insNS, _ := s.productByNamespaceTable.Insert()
+	insName, _ := s.productByNameTable.Insert()
+	insUID, _ := s.productByUIDTable.Insert()
+
+	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
+	b.Query(insNS, row.Namespace, row.CreationTimestamp, row.UID, row.Name, row.APIVersion, row.Kind,
+		row.Generation, row.ResourceVersion, row.Revision, row.Labels, row.Annotations,
+		row.OwnerRefs, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
+	b.Query(insName, row.Namespace, row.Name, row.UID, row.CreationTimestamp)
+	b.Query(insUID, row.UID, row.Namespace, row.CreationTimestamp)
+	_ = parsedUID
+	if err := s.session.ExecuteBatch(b); err != nil {
 		return fmt.Errorf("scylla: create product: %w", err)
 	}
 	return nil
 }
 
 func (s *scyllaDatastore) GetProduct(_ context.Context, uid string) (*datastore.Product, error) {
-	stmt, names := qb.Select("products").
-		Columns(s.productTable.Metadata().Columns...).
-		Where(qb.Eq("uid")).
-		Limit(1).
-		AllowFiltering().
-		ToCql()
 	parsedUID, err := gocql.ParseUUID(uid)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid product uid %s", datastore.ErrNotFound, uid)
 	}
-	var row productRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"uid": parsedUID}).GetRelease(&row); err != nil {
+	// Step 1: uid -> (namespace, creation_timestamp)
+	getUID, names := s.productByUIDTable.Get()
+	var uidRow productUIDRow
+	if err := s.session.Query(getUID, names).BindMap(qb.M{"uid": parsedUID}).GetRelease(&uidRow); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product uid %s", datastore.ErrNotFound, uid)
 		}
-		return nil, fmt.Errorf("scylla: get product: %w", err)
+		return nil, fmt.Errorf("scylla: get product (uid lookup): %w", err)
 	}
-	return fromProductRow(&row), nil
+	// Step 2: (namespace, creation_timestamp, uid) -> full row
+	return s.getProductByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
 }
 
 func (s *scyllaDatastore) GetProductByName(_ context.Context, namespace, name string) (*datastore.Product, error) {
-	stmt, names := s.productTable.Get()
-	var row productRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"namespace": namespace, "name": name}).GetRelease(&row); err != nil {
+	// Step 1: (namespace, name) -> (uid, creation_timestamp)
+	getName, nameNames := s.productByNameTable.Get()
+	var nameRow productNameRow
+	if err := s.session.Query(getName, nameNames).BindMap(qb.M{"namespace": namespace, "name": name}).GetRelease(&nameRow); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product %s/%s", datastore.ErrNotFound, namespace, name)
 		}
-		return nil, fmt.Errorf("scylla: get product by name: %w", err)
+		return nil, fmt.Errorf("scylla: get product by name (name lookup): %w", err)
+	}
+	// Step 2: full row from products_by_namespace
+	return s.getProductByKey(nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
+}
+
+// getProductByKey fetches a full product row from products_by_namespace by its complete primary key.
+func (s *scyllaDatastore) getProductByKey(namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.Product, error) {
+	cols := strings.Join(s.productByNamespaceTable.Metadata().Columns, ", ")
+	stmt := fmt.Sprintf(
+		"SELECT %s FROM products_by_namespace WHERE namespace = ? AND creation_timestamp = ? AND uid = ?",
+		cols,
+	)
+	var row productRow
+	if err := s.session.Query(stmt, nil).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, fmt.Errorf("%w: product %s/%s", datastore.ErrNotFound, namespace, uid)
+		}
+		return nil, fmt.Errorf("scylla: get product by key: %w", err)
 	}
 	return fromProductRow(&row), nil
 }
 
 func (s *scyllaDatastore) ListProducts(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
 	limit := page.Limit()
-	stmt, names := qb.Select("products").
-		Columns(s.productTable.Metadata().Columns...).
-		Where(qb.Eq("namespace")).
-		Limit(uint(limit + 1)).
-		ToCql()
+	pq := buildPaginatedSelect(s.productByNamespaceTable, page, "namespace", namespace, productClusterKeys, nil, nil)
 
 	var rows []productRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"namespace": namespace}).SelectRelease(&rows); err != nil {
+	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list products: %w", err)
+	}
+
+	if page.Last > 0 {
+		reverseRows(rows)
 	}
 
 	products := make([]*datastore.Product, len(rows))
@@ -234,16 +286,31 @@ func (s *scyllaDatastore) ListProducts(_ context.Context, namespace string, page
 }
 
 func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Product) error {
-	if _, err := s.GetProductByName(ctx, p.Namespace, p.Name); err != nil {
+	existing, err := s.GetProductByName(ctx, p.Namespace, p.Name)
+	if err != nil {
 		return err
 	}
 	row := toProductRow(p)
-	stmt, names := s.productTable.Update(
-		"uid", "api_version", "kind", "generation", "resource_version",
-		"revision", "labels", "annotations", "owner_refs",
-		"git_commit_sha", "git_ref", "spec", "body", "status",
+	// Preserve the original creation_timestamp so the primary key is unchanged.
+	row.CreationTimestamp = existing.CreationTimestamp
+
+	updNS := fmt.Sprintf(
+		"UPDATE products_by_namespace SET api_version=?, kind=?, generation=?, resource_version=?, " +
+			"revision=?, labels=?, annotations=?, owner_refs=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
+			"WHERE namespace=? AND creation_timestamp=? AND uid=?",
 	)
-	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
+	parsedUID := mustParseUUID(p.UID)
+
+	b := s.session.NewBatch(gocql.LoggedBatch).WithContext(ctx)
+	b.Query(updNS,
+		row.APIVersion, row.Kind, row.Generation, row.ResourceVersion,
+		row.Revision, row.Labels, row.Annotations, row.OwnerRefs,
+		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
+		row.Namespace, row.CreationTimestamp, parsedUID,
+	)
+	// products_by_name and products_by_uid are index-only; their non-key columns
+	// (uid, creation_timestamp) do not change on update, so no update needed there.
+	if err := s.session.ExecuteBatch(b); err != nil {
 		return fmt.Errorf("scylla: update product: %w", err)
 	}
 	return nil
@@ -254,11 +321,17 @@ func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
 	if err != nil {
 		return err
 	}
-	stmt, names := s.productTable.Delete()
-	if err := s.session.Query(stmt, names).BindMap(qb.M{
-		"namespace": p.Namespace,
-		"name":      p.Name,
-	}).ExecRelease(); err != nil {
+	parsedUID := mustParseUUID(uid)
+
+	delNS := "DELETE FROM products_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=?"
+	delName := "DELETE FROM products_by_name WHERE namespace=? AND name=?"
+	delUID := "DELETE FROM products_by_uid WHERE uid=?"
+
+	b := s.session.NewBatch(gocql.LoggedBatch).WithContext(ctx)
+	b.Query(delNS, p.Namespace, p.CreationTimestamp, parsedUID)
+	b.Query(delName, p.Namespace, p.Name)
+	b.Query(delUID, parsedUID)
+	if err := s.session.ExecuteBatch(b); err != nil {
 		return fmt.Errorf("scylla: delete product: %w", err)
 	}
 	return nil
@@ -325,7 +398,7 @@ func (s *scyllaDatastore) GetCategoryBySlug(_ context.Context, slug string) (*da
 
 func (s *scyllaDatastore) ListCategories(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Category], error) {
 	limit := page.Limit()
-	pq := buildPaginatedSelect(s.categoryTable, page, nil, nil)
+	pq := buildPaginatedSelect(s.categoryTable, page, "bucket", BucketAll, defaultClusterKeys, nil, nil)
 
 	var rows []categoryRow
 	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
@@ -436,7 +509,7 @@ func (s *scyllaDatastore) GetCollectionBySlug(_ context.Context, slug string) (*
 
 func (s *scyllaDatastore) ListCollections(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
 	limit := page.Limit()
-	pq := buildPaginatedSelect(s.collectionTable, page, nil, nil)
+	pq := buildPaginatedSelect(s.collectionTable, page, "bucket", BucketAll, defaultClusterKeys, nil, nil)
 
 	var rows []collectionRow
 	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
@@ -546,7 +619,7 @@ func (s *scyllaDatastore) GetNamespaceByIdentifier(_ context.Context, identifier
 
 func (s *scyllaDatastore) ListNamespaces(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {
 	limit := page.Limit()
-	pq := buildPaginatedSelect(s.namespaceTable, page, nil, nil)
+	pq := buildPaginatedSelect(s.namespaceTable, page, "bucket", BucketAll, defaultClusterKeys, nil, nil)
 
 	var rows []namespaceRow
 	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
@@ -598,13 +671,13 @@ func toProductRow(p *datastore.Product) *productRow {
 	}
 	return &productRow{
 		Namespace:         p.Namespace,
-		Name:              p.Name,
+		CreationTimestamp: p.CreationTimestamp,
 		UID:               mustParseUUID(p.UID),
+		Name:              p.Name,
 		APIVersion:        p.APIVersion,
 		Kind:              p.Kind,
 		Generation:        p.Generation,
 		ResourceVersion:   p.ResourceVersion,
-		CreationTimestamp: p.CreationTimestamp,
 		Revision:          p.Revision,
 		Labels:            p.Labels,
 		Annotations:       p.Annotations,
