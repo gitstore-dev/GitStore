@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 // Product is the resolver for the product field.
@@ -32,7 +33,7 @@ func (r *queryResolver) Product(ctx context.Context, by model.ProductBy) (*model
 		}
 		return DatastoreProductToGraphQL(p), nil
 	default:
-		return nil, fmt.Errorf("ProductBy: exactly one selector required")
+		return nil, gqlerror.Errorf("ProductBy: exactly one selector required")
 	}
 }
 

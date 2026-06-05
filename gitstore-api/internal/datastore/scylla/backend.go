@@ -196,19 +196,21 @@ func (s *scyllaDatastore) CreateProduct(ctx context.Context, p *datastore.Produc
 		p.CreationTimestamp = time.Now().UTC().Truncate(time.Millisecond)
 	}
 	row := toProductRow(p)
-	parsedUID := mustParseUUID(p.UID)
 
 	insNS, _ := s.productByNamespaceTable.Insert()
 	insName, _ := s.productByNameTable.Insert()
 	insUID, _ := s.productByUIDTable.Insert()
 
+	// LOGGED BATCH spans three different partition keys (namespace, name, uid).
+	// This crosses partition boundaries which is a ScyllaDB anti-pattern at scale
+	// (incurs a coordinator-side batchlog write per operation).
+	// TODO: switch to UNLOGGED BATCH + application-layer retry before production ramp.
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(insNS, row.Namespace, row.CreationTimestamp, row.UID, row.Name, row.APIVersion, row.Kind,
 		row.Generation, row.ResourceVersion, row.Revision, row.Labels, row.Annotations,
 		row.OwnerRefs, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
 	b.Query(insName, row.Namespace, row.Name, row.UID, row.CreationTimestamp)
 	b.Query(insUID, row.UID, row.Namespace, row.CreationTimestamp)
-	_ = parsedUID
 	if err := s.session.ExecuteBatch(b); err != nil {
 		return fmt.Errorf("scylla: create product: %w", err)
 	}
@@ -257,7 +259,7 @@ func (s *scyllaDatastore) getProductByKey(namespace string, createdAt time.Time,
 	var row productRow
 	if err := s.session.Query(stmt, nil).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, fmt.Errorf("%w: product %s/%s", datastore.ErrNotFound, namespace, uid)
+			return nil, fmt.Errorf("%w: product namespace=%s uid=%s", datastore.ErrNotFound, namespace, uid)
 		}
 		return nil, fmt.Errorf("scylla: get product by key: %w", err)
 	}
@@ -293,20 +295,20 @@ func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Produc
 	row := toProductRow(p)
 	// Preserve the original creation_timestamp so the primary key is unchanged.
 	row.CreationTimestamp = existing.CreationTimestamp
+	// Use the UID from the stored row, not the caller, so the WHERE clause targets
+	// the row that was actually found rather than a potentially stale caller value.
+	existingUID := mustParseUUID(existing.UID)
 
-	updNS := fmt.Sprintf(
-		"UPDATE products_by_namespace SET api_version=?, kind=?, generation=?, resource_version=?, " +
-			"revision=?, labels=?, annotations=?, owner_refs=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
-			"WHERE namespace=? AND creation_timestamp=? AND uid=?",
-	)
-	parsedUID := mustParseUUID(p.UID)
+	const updNS = "UPDATE products_by_namespace SET api_version=?, kind=?, generation=?, resource_version=?, " +
+		"revision=?, labels=?, annotations=?, owner_refs=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
+		"WHERE namespace=? AND creation_timestamp=? AND uid=?"
 
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(updNS,
 		row.APIVersion, row.Kind, row.Generation, row.ResourceVersion,
 		row.Revision, row.Labels, row.Annotations, row.OwnerRefs,
 		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
-		row.Namespace, row.CreationTimestamp, parsedUID,
+		row.Namespace, row.CreationTimestamp, existingUID,
 	)
 	// products_by_name and products_by_uid are index-only; their non-key columns
 	// (uid, creation_timestamp) do not change on update, so no update needed there.

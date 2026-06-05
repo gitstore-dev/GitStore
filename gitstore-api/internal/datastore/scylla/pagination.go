@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gocql/gocql"
 	"github.com/scylladb/gocqlx/v3/table"
 )
 
@@ -26,6 +27,9 @@ func parsePageCursor(cursor string) (*datastore.PageCursor, error) {
 	ts, err := time.Parse(time.RFC3339Nano, parts[1])
 	if err != nil {
 		return nil, fmt.Errorf("invalid timestamp: %w", err)
+	}
+	if _, err := gocql.ParseUUID(parts[2]); err != nil {
+		return nil, fmt.Errorf("invalid cursor id: %w", err)
 	}
 	return &datastore.PageCursor{CreatedAt: ts, ID: parts[2]}, nil
 }
