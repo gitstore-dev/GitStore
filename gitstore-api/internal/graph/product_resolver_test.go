@@ -134,3 +134,20 @@ func TestProductResolver_SpecHydratedViaResolver(t *testing.T) {
 	assert.Equal(t, "My Widget", *got.Spec.Title)
 	assert.Equal(t, []string{"featured"}, got.Spec.Tags)
 }
+
+// ── T027: Product with no status blob returns nil status (FR-011) ─────────────
+
+func TestProductResolver_StatusAbsent_ReturnsNilStatus(t *testing.T) {
+	qr, store := newProductResolverEnv(t)
+	p := seedProduct(t, store, "my-store", "no-status-product")
+	// Explicitly leave p.Status nil (never written by controller).
+
+	encodedID := mustEncodeNodeID(nodeKindProduct, p.UID)
+	by := model.ProductBy{ID: &encodedID}
+
+	got, err := qr.Product(context.Background(), by)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	// status must be null, not an empty object (FR-011).
+	assert.Nil(t, got.Status)
+}

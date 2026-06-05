@@ -123,13 +123,21 @@ func preParseChecks(fmRaw []byte) error {
 		return fmt.Errorf("validate: status is system-managed and must not be set by authors")
 	}
 
-	// Forbidden read-only metadata keys.
+	// Forbidden read-only metadata keys — collect all before returning (FR-008, FR-009).
 	if meta, ok := raw["metadata"].(map[string]any); ok {
 		readOnly := []string{"uid", "resourceVersion", "generation", "creationTimestamp", "revision", "ownerReferences"}
+		var forbidden []string
 		for _, field := range readOnly {
 			if _, present := meta[field]; present {
-				return fmt.Errorf("validate: metadata.%s is read-only and must not be set by authors", field)
+				forbidden = append(forbidden, field)
 			}
+		}
+		if len(forbidden) > 0 {
+			msgs := make([]string, len(forbidden))
+			for i, f := range forbidden {
+				msgs[i] = fmt.Sprintf("validate: metadata.%s is read-only and must not be set by authors", f)
+			}
+			return fmt.Errorf("%s", strings.Join(msgs, "\n"))
 		}
 	}
 
@@ -151,6 +159,18 @@ func validateSpec(spec catalog.ProductSpec) error {
 	return nil
 }
 
+// fieldPath converts a go-playground/validator StructNamespace to a dotted
+// lowercase path relative to the root struct.
+// e.g. "ProductResource.Spec.Media[0].FileRef.Name" → "spec.media[0].fileref.name"
+func fieldPath(fe validator.FieldError) string {
+	ns := fe.StructNamespace()
+	// Strip the root struct name prefix (everything up to and including the first dot).
+	if idx := strings.IndexByte(ns, '.'); idx >= 0 {
+		ns = ns[idx+1:]
+	}
+	return strings.ToLower(ns)
+}
+
 // toFriendlyError converts go-playground/validator field errors into
 // lower-case, user-readable messages that match the spec error format.
 func toFriendlyError(err error) error {
@@ -160,14 +180,16 @@ func toFriendlyError(err error) error {
 	}
 	msgs := make([]string, 0, len(ve))
 	for _, fe := range ve {
-		field := strings.ToLower(fe.Field())
+		path := fieldPath(fe)
 		switch fe.Tag() {
 		case "required":
-			msgs = append(msgs, fmt.Sprintf("validate: %s is required", field))
+			msgs = append(msgs, fmt.Sprintf("validate: %s is required", path))
 		case "eq":
-			msgs = append(msgs, fmt.Sprintf("validate: %s must be %q, got %q", field, fe.Param(), fe.Value()))
+			msgs = append(msgs, fmt.Sprintf("validate: %s must be %q, got %q", path, fe.Param(), fe.Value()))
+		case "max":
+			msgs = append(msgs, fmt.Sprintf("validate: %s exceeds maximum length of %s characters", path, fe.Param()))
 		default:
-			msgs = append(msgs, fmt.Sprintf("validate: %s failed %s", field, fe.Tag()))
+			msgs = append(msgs, fmt.Sprintf("validate: %s failed %s", path, fe.Tag()))
 		}
 	}
 	return fmt.Errorf("%s", strings.Join(msgs, "; "))

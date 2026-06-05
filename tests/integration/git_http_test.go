@@ -16,12 +16,12 @@ import (
 func TestGitClone(t *testing.T) {
 	namespace := getEnv("NAMESPACE", "gitstore")
 	repository := getEnv("REPOSITORY", "catalog")
-	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitServerGitURL, namespace, repository)
+	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitURL, namespace, repository)
 
 	// Lightweight reachability check — skip rather than fail if stack is down.
 	check := exec.Command("git", "ls-remote", remoteURL)
 	if err := check.Run(); err != nil {
-		t.Skipf("git smart HTTP unreachable at %s: %v — is the stack up?", remoteURL, err)
+		t.Fatalf("PREREQUISITE: git smart HTTP unreachable at %s: %v — is the stack up?", remoteURL, err)
 	}
 
 	workDir := t.TempDir()
@@ -63,7 +63,7 @@ func TestGitFetch(t *testing.T) {
 	fetchDir := t.TempDir()
 	namespace := getEnv("NAMESPACE", "gitstore")
 	repository := getEnv("REPOSITORY", "catalog")
-	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitServerGitURL, namespace, repository)
+	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitURL, namespace, repository)
 
 	cloneCmd := exec.Command("git", "clone", remoteURL, fetchDir)
 	cloneCmd.Dir = os.TempDir()
@@ -121,7 +121,7 @@ func TestGitPush(t *testing.T) {
 	// Verify the remote ref tip matches local HEAD.
 	namespace := getEnv("NAMESPACE", "gitstore")
 	repository := getEnv("REPOSITORY", "catalog")
-	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitServerGitURL, namespace, repository)
+	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitURL, namespace, repository)
 	lsCmd := exec.Command("git", "ls-remote", remoteURL, "refs/heads/main")
 	lsOut, err := lsCmd.CombinedOutput()
 	if err != nil {
