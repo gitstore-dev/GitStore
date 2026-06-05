@@ -16,15 +16,24 @@ import (
 func TestLookupOneOfSelectorsValidateExactlyOneKey(t *testing.T) {
 	schema := generated.NewExecutableSchema(generated.Config{Resolvers: &Resolver{}}).Schema()
 
-	// product uses positional args (namespace, name), not a oneof selector.
+	// product uses @oneOf selector (by: ProductBy!) — same convention as category/collection/namespace.
 	t.Run("product/valid_args", func(t *testing.T) {
-		assertQueryValidation(t, schema, `query { product(namespace: "my-store", name: "my-product") { id } }`, true)
+		assertQueryValidation(t, schema, `query { product(by: {namespacePath: {namespace: "my-store", name: "my-product"}}) { id } }`, true)
+	})
+	t.Run("product/valid_id", func(t *testing.T) {
+		assertQueryValidation(t, schema, `query { product(by: {id: "gid"}) { id } }`, true)
 	})
 	t.Run("product/missing_namespace", func(t *testing.T) {
 		assertQueryValidation(t, schema, `query { product(name: "my-product") { id } }`, false)
 	})
 	t.Run("product/missing_name", func(t *testing.T) {
 		assertQueryValidation(t, schema, `query { product(namespace: "my-store") { id } }`, false)
+	})
+	t.Run("product/no_selector_key", func(t *testing.T) {
+		assertQueryValidation(t, schema, `query { product(by: {}) { id } }`, false)
+	})
+	t.Run("product/multiple_selector_keys", func(t *testing.T) {
+		assertQueryValidation(t, schema, `query { product(by: {id: "gid", namespacePath: {namespace: "ns", name: "n"}}) { id } }`, false)
 	})
 
 	// category, collection, namespace still use oneof selectors.

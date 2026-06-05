@@ -3,21 +3,11 @@
 Auto-generated from all feature plans. Last updated: 2026-03-26
 
 ## Active Technologies
-- Go 1.25 (`gitstore-api`), Rust edition 2021 (`gitstore-git-service`) (005-structured-config-mgmt)
-- N/A — configuration is in-memory after startup load (005-structured-config-mgmt)
-- `go-memdb` (in-memory backend) / ScyllaDB 5.x+ (production backend) (006-api-datastore-abstraction)
-- Rust edition 2021, MSRV 1.82 (required by gix 0.83.0) + `gix 0.83.0` (replaces `git2 0.20.4`), `tokio 1.35`, `axum 0.8`, `tonic 0.14`, `tracing 0.1`, `anyhow 1.0` (007-migrate-gitoxide)
-- Bare Git repositories on local filesystem (unchanged) (007-migrate-gitoxide)
-- Rust edition 2021, MSRV 1.82 + `gix 0.83.0`, `gix-packetline` (compatible version), `gix-pack` (compatible version), `gix-protocol` (compatible version), `axum 0.8`, `tokio 1.35`, `tracing 0.1`, `tempfile 3.8` (dev) (008-remove-git-shellouts)
-- Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90`, `go-memdb v1.3.5`, `gocqlx/v3 v3.0.4` (ScyllaDB), `go-playground/validator/v10`, `go.uber.org/zap`, `google/uuid` (009-api-namespaces)
-- `go-memdb` (development / in-memory backend) / ScyllaDB 5.x+ (production backend) — via the `datastore.Datastore` interface from feature 006 (009-api-namespaces)
-- Go 1.25 (`gitstore-api`) · Rust edition 2021, MSRV 1.82 (`gitstore-git-service`) + `gqlgen v0.17.90`, `go-memdb v1.3.5`, `gocqlx/v3 v3.0.4`, `google/uuid v1.6.0` (Go) · `gix 0.83.0`, `tonic 0.14.6`, `prost 0.14.3` (Rust) (010-repo-storage-identity)
-- `go-memdb` (development) · ScyllaDB 5.x+ (production) — via `datastore.Datastore` interface (feature #006) (010-repo-storage-identity)
-- Rust edition 2021, MSRV 1.82; actual gix version is `0.84.0` (Cargo.lock canonical) + `gix 0.84.0`, `gix-ref 0.64.0` (two-phase transaction API), `tokio 1.35` (full features), `tonic 0.14`, `tracing 0.1`, `anyhow 1.0`, `async-trait 0.1` (to add) (013-receive-pack-hooks)
-- Go 1.25 (`gitstore-api`), Rust edition 2021 MSRV 1.82 (`gitstore-git-service`) + `github.com/adrg/frontmatter v0.2.0`, `go-playground/validator/v10 v10.30.3`, `gqlgen v0.17.90` (Go) · `gix 0.84.0`, `serde 1.0`, `serde_yaml 0.9` (to add) (Rust) (014-product-frontmatter)
-- ScyllaDB 5.x+ (production) / `go-memdb v1.3.5` (development) — via `datastore.Datastore` interface (014-product-frontmatter)
-- Go 1.25 + `github.com/adrg/frontmatter v0.2.0`, `go-playground/validator/v10 v10.30.3`, `gopkg.in/yaml.v3` (015-product-parser)
-- N/A — parser operates on `io.Reader`; no persistence (015-product-parser)
+- Languages: Go 1.25 (`gitstore-api`, `gitstore-controller-manager`) and Rust edition 2021, MSRV 1.82 (`gitstore-git-service`).
+- API/Data stack (Go): `gqlgen v0.17.90`, `go-memdb v1.3.5` (dev), `gocqlx/v3 v3.0.4` + `gocql` (ScyllaDB prod), `go-playground/validator/v10`, `go.uber.org/zap`, `google/uuid`, `encoding/json`.
+- Git service stack (Rust): `gix 0.84.0` (+ `gix-ref 0.64.0`), `tokio 1.35`, `axum 0.8`, `tonic 0.14`, `tracing 0.1`, `anyhow 1.0`, `async-trait 0.1`, `serde 1.0`, `serde_yaml 0.9`.
+- Storage model: bare Git repositories on local filesystem; datastore abstraction with `go-memdb` in development and ScyllaDB 5.x+ in production.
+- Product metadata/parsing: `github.com/adrg/frontmatter v0.2.0` and `gopkg.in/yaml.v3` (parser is in-memory via `io.Reader`).
 
 - (001-git-backed-ecommerce)
 
@@ -57,10 +47,8 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 016-product-spec-hydration: Added Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90`, `go-memdb v1.3.5`, `gocqlx/v3 v3.0.4`, `gocql` (Scylla driver), `encoding/json` (stdlib), `go-playground/validator/v10 v10.30.3`, `go.uber.org/zap`
 - 015-product-parser: Added Go 1.25 + `github.com/adrg/frontmatter v0.2.0`, `go-playground/validator/v10 v10.30.3`, `gopkg.in/yaml.v3`
-- 014-product-frontmatter: Added Go 1.25 (`gitstore-api`), Rust edition 2021 MSRV 1.82 (`gitstore-git-service`) + `github.com/adrg/frontmatter v0.2.0`, `go-playground/validator/v10 v10.30.3`, `gqlgen v0.17.90` (Go) · `gix 0.84.0`, `serde 1.0`, `serde_yaml 0.9` (to add) (Rust)
-- 013-receive-pack-hooks: Added Rust edition 2021, MSRV 1.82; actual gix version is `0.84.0` (Cargo.lock canonical) + `gix 0.84.0`, `gix-ref 0.64.0` (two-phase transaction API), `tokio 1.35` (full features), `tonic 0.14`, `tracing 0.1`, `anyhow 1.0`, `async-trait 0.1` (to add)
-- 012-smart-http-api: Go 1.25 (`gitstore-api`) + `net/http` second server on port 5000 · Rust edition 2021, MSRV 1.82 (`gitstore-git-service`) — adds `ReceivePack` (client-streaming), `UploadPack` (server-streaming), `InfoRefs` gRPC RPCs; removes `axum`/HTTP server, `tokio_tungstenite`/`tungstenite` WebSocket deps; removes `gorilla/websocket` and `internal/websocket` from `gitstore-api`
 
 
 <!-- MANUAL ADDITIONS START -->

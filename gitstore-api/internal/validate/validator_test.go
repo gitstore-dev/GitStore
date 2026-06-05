@@ -346,3 +346,86 @@ func TestParse_NoFrontmatterSkipped(t *testing.T) {
 	assert.Nil(t, res)
 	assert.NotEmpty(t, body)
 }
+
+// ── US4: Spec field constraints (016-product-spec-hydration) ─────────────────
+
+func TestParse_SpecTitle_TooLong_Rejected(t *testing.T) {
+	longTitle := strings.Repeat("x", 201) // 201 chars — exceeds max=200
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\nspec:\n  title: \"" +
+		longTitle + "\"\n---\nbody\n"
+	_, _, err := validate.Parse(strings.NewReader(doc))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "title")
+}
+
+func TestParse_SpecTitle_MaxLength_Accepted(t *testing.T) {
+	exactTitle := strings.Repeat("x", 200) // 200 chars — at limit, must pass
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\nspec:\n  title: \"" +
+		exactTitle + "\"\n---\nbody\n"
+	res, _, err := validate.Parse(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, res)
+}
+
+func TestParse_SpecMedia_EmptyFileRefName_Rejected(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec:
+  media:
+    - fileRef:
+        name: ""
+        kind: "File"
+---
+body
+`
+	_, _, err := validate.Parse(strings.NewReader(doc))
+	require.Error(t, err)
+	// go-playground/validator reports the leaf field name; "name" is the field
+	// inside FileReference that failed the "required" constraint.
+	assert.Contains(t, err.Error(), "name")
+}
+
+func TestParse_SpecMedia_EmptyFileRefKind_Rejected(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec:
+  media:
+    - fileRef:
+        name: "hero-image"
+        kind: ""
+---
+body
+`
+	_, _, err := validate.Parse(strings.NewReader(doc))
+	require.Error(t, err)
+	// go-playground/validator reports the leaf field name; "kind" is the field
+	// inside FileReference that failed the "required" constraint.
+	assert.Contains(t, err.Error(), "kind")
+}
+
+func TestParse_SpecMedia_ValidFileRef_Accepted(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec:
+  media:
+    - fileRef:
+        name: "hero-image"
+        kind: "File"
+---
+body
+`
+	res, _, err := validate.Parse(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Len(t, res.Spec.Media, 1)
+	assert.Equal(t, "hero-image", res.Spec.Media[0].FileRef.Name)
+}

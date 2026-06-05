@@ -86,6 +86,10 @@ type ScyllaConfig struct {
 	Password              string   `mapstructure:"password"`
 	TLS                   bool     `mapstructure:"tls"`
 	DisableShardAwarePort bool     `mapstructure:"disable_shard_aware_port"`
+	IgnorePeerAddr        bool     `mapstructure:"ignore_peer_addr"`
+	// AddressTranslator is an optional runtime-only field (not populated from config files).
+	// Set it when Scylla runs behind a NAT (e.g. Docker) to redirect peer addresses.
+	AddressTranslator interface{} `mapstructure:"-"`
 }
 
 // Load reads configuration from all sources (defaults → config file → env vars)

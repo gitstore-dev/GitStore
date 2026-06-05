@@ -10,17 +10,18 @@ const BucketAll = "all"
 
 // Table models
 var (
-	Product = table.New(table.Metadata{
-		Name: "products",
+	// ProductByNamespace is the primary paginated read table (newest-first per namespace).
+	ProductByNamespace = table.New(table.Metadata{
+		Name: "products_by_namespace",
 		Columns: []string{
 			"namespace",
-			"name",
+			"creation_timestamp",
 			"uid",
+			"name",
 			"api_version",
 			"kind",
 			"generation",
 			"resource_version",
-			"creation_timestamp",
 			"revision",
 			"labels",
 			"annotations",
@@ -35,8 +36,40 @@ var (
 			"namespace",
 		},
 		SortKey: []string{
+			"creation_timestamp",
+			"uid",
+		},
+	})
+
+	// ProductByName is the lookup table for GetProductByName(namespace, name).
+	ProductByName = table.New(table.Metadata{
+		Name: "products_by_name",
+		Columns: []string{
+			"namespace",
+			"name",
+			"uid",
+			"creation_timestamp",
+		},
+		PartKey: []string{
+			"namespace",
+		},
+		SortKey: []string{
 			"name",
 		},
+	})
+
+	// ProductByUID is the lookup table for GetProduct(uid).
+	ProductByUID = table.New(table.Metadata{
+		Name: "products_by_uid",
+		Columns: []string{
+			"uid",
+			"namespace",
+			"creation_timestamp",
+		},
+		PartKey: []string{
+			"uid",
+		},
+		SortKey: []string{},
 	})
 
 	Category = table.New(table.Metadata{

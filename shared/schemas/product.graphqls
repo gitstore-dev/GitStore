@@ -4,8 +4,8 @@
 # Mutations are git-driven; GraphQL mutations removed (deferred to GH#185/186).
 
 extend type Query {
-  """Fetch a product by name within a namespace."""
-  product(namespace: String!, name: String!): Product
+  """Fetch a single product by globally unique ID or namespace + name."""
+  product(by: ProductBy!): Product
 
   """List products in a namespace with Relay cursor-based pagination."""
   products(

@@ -496,10 +496,12 @@ func (Product) IsNode() {}
 // Globally unique identifier (format: [type]_[base62])
 func (this Product) GetID() string { return this.ID }
 
-// Selector for looking up a product by exactly one unique key.
+// Selector for a single product lookup. Exactly one field must be set.
 type ProductBy struct {
-	ID  *string `json:"id,omitempty"`
-	Sku *string `json:"sku,omitempty"`
+	// Look up by globally unique Relay ID (encodes the product UID).
+	ID *string `json:"id,omitempty"`
+	// Look up by namespace identifier + product name (Kubernetes-style metadata.name).
+	NamespacePath *ProductNamespacePath `json:"namespacePath,omitempty"`
 }
 
 type ProductCondition struct {
@@ -522,6 +524,12 @@ type ProductConnection struct {
 type ProductEdge struct {
 	Cursor string   `json:"cursor"`
 	Node   *Product `json:"node"`
+}
+
+// Composite selector: namespace identifier (human-readable slug) + product name.
+type ProductNamespacePath struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
 }
 
 // Metadata for a product resource. Author-supplied fields (name, namespace,

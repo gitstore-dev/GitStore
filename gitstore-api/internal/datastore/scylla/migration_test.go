@@ -36,6 +36,8 @@ func newRawSession(t *testing.T) *gocql.Session {
 	cluster.Keyspace = scyllaKeyspace // keyspace provisioned by TestMain in backend_test.go
 	cluster.Consistency = gocql.Quorum
 	cluster.DisableShardAwarePort = true
+	cluster.IgnorePeerAddr = true
+	cluster.AddressTranslator = contactPointTranslator(host, port)
 	session, sessErr := cluster.CreateSession()
 	require.NoError(t, sessErr)
 	t.Cleanup(session.Close)
@@ -55,14 +57,16 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, scyllaKeyspace, ksName)
 
-	// Verify products table exists.
-	var tblName string
-	err = session.Query(
-		`SELECT table_name FROM system_schema.tables WHERE keyspace_name = ? AND table_name = 'products'`,
-		scyllaKeyspace,
-	).Scan(&tblName)
-	require.NoError(t, err)
-	assert.Equal(t, "products", tblName)
+	// Verify the three product tables exist (016-product-spec-hydration schema).
+	for _, expectedTable := range []string{"products_by_namespace", "products_by_name", "products_by_uid"} {
+		var tblName string
+		err = session.Query(
+			`SELECT table_name FROM system_schema.tables WHERE keyspace_name = ? AND table_name = ?`,
+			scyllaKeyspace, expectedTable,
+		).Scan(&tblName)
+		require.NoError(t, err, "expected table %s to exist", expectedTable)
+		assert.Equal(t, expectedTable, tblName)
+	}
 }
 
 func TestRunMigrations_Idempotent(t *testing.T) {

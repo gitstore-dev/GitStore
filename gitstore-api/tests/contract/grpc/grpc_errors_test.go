@@ -115,7 +115,7 @@ func TestGRPCGetLatestTagEmptyRepo(t *testing.T) {
 		ContainerRequest: req, Started: true,
 	})
 	if err != nil {
-		t.Skipf("git-service container unavailable: %v", err)
+		t.Fatalf("git-service container unavailable (ensure Docker is running): %v", err)
 	}
 	defer container.Terminate(ctx) //nolint:errcheck
 
