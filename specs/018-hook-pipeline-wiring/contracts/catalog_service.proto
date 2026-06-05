@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+//
+// CatalogService — hook pipeline callout contract (spec#018)
+//
+// Two RPCs:
+//   ValidateResources — blocking pre-receive validation callout.
+//     Called by gitstore-git-service before any refs are updated.
+//     Returns all field-level violations across all submitted blobs.
+//   AdmitResources — fire-and-forget post-receive admission callout.
+//     Called by gitstore-git-service after refs are committed.
+//     gitstore-api fetches, parses, and stores catalog resources independently.
+//
+// Call direction: gitstore-git-service (tonic client) → gitstore-api (tonic server)
+// This is the first reverse callout; the existing GitService direction is unchanged.
+
+syntax = "proto3";
+
+package gitstore.catalog.v1;
+
+option go_package = "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1;catalogv1";
+
+service CatalogService {
+  // ValidateResources validates resource blobs extracted from an incoming push commit.
+  // The git service calls this in the pre-receive phase (blocking).
+  // The response carries all violations across all blobs in a single call.
+  rpc ValidateResources(ValidateResourcesRequest) returns (ValidateResourcesResponse);
+
+  // AdmitResources triggers catalog storage for resources in an accepted push commit.
+  // The git service calls this in the post-receive phase (fire-and-forget).
+  // The git service does not wait for this call to complete before responding to the author.
+  rpc AdmitResources(AdmitResourcesRequest) returns (AdmitResourcesResponse);
+}
+
+// ResourceBlob is a candidate resource file extracted from an incoming commit.
+// Any file whose raw bytes begin with a YAML frontmatter delimiter (`---`) qualifies.
+// The git service performs the frontmatter detection locally before including a file here.
+message ResourceBlob {
+  // path is the repository-relative file path, e.g. "products/widget.md".
+  string path = 1;
+
+  // blob_oid is the git object ID of this blob.
+  string blob_oid = 2;
+
+  // content is the full raw bytes of the file.
+  bytes content = 3;
+}
+
+// ValidationError is a single field-level violation returned by ValidateResources.
+// Matches the ParseError shape from spec#015 (validate.Parse).
+message ValidationError {
+  // file_path is the repository-relative path of the file that contains this violation.
+  string file_path = 1;
+
+  // field is the dotted path to the offending field, e.g. "spec.title".
+  string field = 2;
+
+  // constraint is the rule that was violated, e.g. "max=200", "required".
+  string constraint = 3;
+
+  // message is a human-readable explanation of the violation.
+  string message = 4;
+}
+
+// ValidateResourcesRequest carries resource blobs to validate.
+message ValidateResourcesRequest {
+  // repository_id is the stable UUIDv7 of the repository being pushed to.
+  // Field 15 is the project-wide convention for the repository scoping key.
+  string repository_id = 15;
+
+  // blobs contains all candidate resource files from the incoming commit.
+  // Only files with a YAML frontmatter block are included (detected by the git service).
+  repeated ResourceBlob blobs = 1;
+}
+
+// ValidateResourcesResponse carries the aggregate validation outcome.
+message ValidateResourcesResponse {
+  // accepted is true if all blobs passed validation; false if any violation was found.
+  bool accepted = 1;
+
+  // errors contains all field-level violations across all blobs.
+  // Non-empty only when accepted=false.
+  // All violations across all files are collected before returning (no fail-fast).
+  repeated ValidationError errors = 2;
+}
+
+// AdmitResourcesRequest identifies the accepted push commit to admit into the catalog.
+// gitstore-api fetches, parses, and stores resources independently using its own
+// GitService client — the git service does not send blobs for admission.
+message AdmitResourcesRequest {
+  // repository_id is the stable UUIDv7 of the repository.
+  string repository_id = 15;
+
+  // commit_sha is the full SHA of the accepted push commit.
+  string commit_sha = 1;
+
+  // ref_name is the fully-qualified ref that was updated, e.g. "refs/heads/main".
+  string ref_name = 2;
+}
+
+// AdmitResourcesResponse is intentionally empty.
+// The git service does not inspect this response; it is fire-and-forget.
+message AdmitResourcesResponse {}
