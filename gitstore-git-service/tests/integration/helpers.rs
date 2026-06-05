@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use gitstore::git::hooks::{AdmissionDecision, AdmissionHandler, RefUpdate};
+use gitstore::git::hooks::{
+    AdmissionDecision, AdmissionHandler, RefUpdate, ResourceBlob, ValidationHandler,
+};
 
 /// Create a bare git repository at `dir` and return its path.
 pub fn make_bare_repo(dir: &Path) -> PathBuf {
@@ -111,6 +113,7 @@ impl AdmissionHandler for RejectingAdmissionHandler {
         &self,
         _phase: &str,
         _updates: &[RefUpdate],
+        _repository_id: &str,
     ) -> anyhow::Result<AdmissionDecision> {
         Ok(AdmissionDecision::Reject(self.0.clone()))
     }
@@ -125,6 +128,7 @@ impl AdmissionHandler for PerRefRejectingHandler {
         &self,
         _phase: &str,
         updates: &[RefUpdate],
+        _repository_id: &str,
     ) -> anyhow::Result<AdmissionDecision> {
         // When called per-ref (single update), identify position by ref_name tag
         // The handler is called once per ref, so updates.len() == 1 in update phase.
@@ -153,6 +157,7 @@ impl AdmissionHandler for SlowAdmissionHandler {
         &self,
         _phase: &str,
         _updates: &[RefUpdate],
+        _repository_id: &str,
     ) -> anyhow::Result<AdmissionDecision> {
         tokio::time::sleep(Duration::from_secs(10)).await;
         Ok(AdmissionDecision::Accept)
@@ -175,7 +180,61 @@ impl AdmissionHandler for CountingAdmissionHandler {
         &self,
         _phase: &str,
         _updates: &[RefUpdate],
+        _repository_id: &str,
     ) -> anyhow::Result<AdmissionDecision> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(AdmissionDecision::Accept)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ValidationHandler test doubles (mirror of the AdmissionHandler variants above)
+// ---------------------------------------------------------------------------
+
+/// A no-op ValidationHandler used as a placeholder when per-ref logic lives in the admission slot.
+pub struct PerRefRejectingValidationHandler(pub std::collections::HashSet<usize>);
+
+#[async_trait]
+impl ValidationHandler for PerRefRejectingValidationHandler {
+    async fn validate(&self, _blobs: &[ResourceBlob]) -> anyhow::Result<AdmissionDecision> {
+        Ok(AdmissionDecision::Accept)
+    }
+}
+
+/// Always rejects validation with the configured reason.
+pub struct RejectingValidationHandler(pub String);
+
+#[async_trait]
+impl ValidationHandler for RejectingValidationHandler {
+    async fn validate(&self, _blobs: &[ResourceBlob]) -> anyhow::Result<AdmissionDecision> {
+        Ok(AdmissionDecision::Reject(self.0.clone()))
+    }
+}
+
+/// Sleeps longer than the pipeline timeout to trigger fail-closed.
+pub struct SlowValidationHandler;
+
+#[async_trait]
+impl ValidationHandler for SlowValidationHandler {
+    async fn validate(&self, _blobs: &[ResourceBlob]) -> anyhow::Result<AdmissionDecision> {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        Ok(AdmissionDecision::Accept)
+    }
+}
+
+/// Counts how many times validate() is called.
+pub struct CountingValidationHandler(pub Arc<AtomicUsize>);
+
+impl CountingValidationHandler {
+    pub fn new() -> (Self, Arc<AtomicUsize>) {
+        let counter = Arc::new(AtomicUsize::new(0));
+        (Self(Arc::clone(&counter)), counter)
+    }
+}
+
+#[async_trait]
+impl ValidationHandler for CountingValidationHandler {
+    async fn validate(&self, _blobs: &[ResourceBlob]) -> anyhow::Result<AdmissionDecision> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(AdmissionDecision::Accept)
     }
