@@ -271,9 +271,13 @@ impl HookPipeline {
         }
         let start = Instant::now();
         let decision = self
-            .run_schema_validation("reference-transaction/prepared", git_dir, updates, None, || {
-                HookDecision::Accept
-            })
+            .run_schema_validation(
+                "reference-transaction/prepared",
+                git_dir,
+                updates,
+                None,
+                || HookDecision::Accept,
+            )
             .await;
         let duration_ms = start.elapsed().as_millis() as u64;
         match decision {
@@ -606,26 +610,34 @@ fn collect_changed_blobs_from_trees(
         };
         tree.decode()
             .ok()
-            .map(|d| d.entries.iter().map(|e| gix::objs::tree::Entry {
-                mode: e.mode,
-                filename: e.filename.to_owned(),
-                oid: e.oid.to_owned(),
-            }).collect())
+            .map(|d| {
+                d.entries
+                    .iter()
+                    .map(|e| gix::objs::tree::Entry {
+                        mode: e.mode,
+                        filename: e.filename.to_owned(),
+                        oid: e.oid.to_owned(),
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     };
 
     let old_entries = decode_tree(old_tree_id);
     let new_entries = {
         let e = decode_tree(new_tree_id);
-        if e.is_empty() { return; }
+        if e.is_empty() {
+            return;
+        }
         e
     };
 
     // Build a map from filename → (oid, mode) for old entries.
-    let old_map: std::collections::HashMap<String, (gix::ObjectId, gix::object::tree::EntryKind)> = old_entries
-        .iter()
-        .map(|e| (e.filename.to_string(), (e.oid, e.mode.kind())))
-        .collect();
+    let old_map: std::collections::HashMap<String, (gix::ObjectId, gix::object::tree::EntryKind)> =
+        old_entries
+            .iter()
+            .map(|e| (e.filename.to_string(), (e.oid, e.mode.kind())))
+            .collect();
 
     for entry in &new_entries {
         let name = entry.filename.to_string();
@@ -658,7 +670,13 @@ fn collect_changed_blobs_from_trees(
                 let new_blob_id: gix::ObjectId = entry.oid;
                 let old_blob_id = old_map
                     .get(&name)
-                    .filter(|(_, k)| matches!(k, gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable))
+                    .filter(|(_, k)| {
+                        matches!(
+                            k,
+                            gix::object::tree::EntryKind::Blob
+                                | gix::object::tree::EntryKind::BlobExecutable
+                        )
+                    })
                     .map(|(id, _)| *id);
                 if old_blob_id == Some(new_blob_id) {
                     continue; // Content identical — skip.

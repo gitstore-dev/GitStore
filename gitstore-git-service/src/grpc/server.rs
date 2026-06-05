@@ -896,7 +896,14 @@ impl GitService for GitServiceImpl {
         let pipeline = Arc::clone(&self.hook_pipeline);
         let repo_path_pipeline = repo_path.clone();
         let quarantine_path = quarantine.dir.path().to_path_buf();
-        let accepted_indices = match pipeline.run(&repo_path_pipeline, &pipeline_updates, Some(quarantine_path.as_path())).await {
+        let accepted_indices = match pipeline
+            .run(
+                &repo_path_pipeline,
+                &pipeline_updates,
+                Some(quarantine_path.as_path()),
+            )
+            .await
+        {
             Ok(indices) => indices,
             Err(rejection) => {
                 let all_refs: Vec<&str> = ref_updates.iter().map(|u| u.ref_name.as_str()).collect();
