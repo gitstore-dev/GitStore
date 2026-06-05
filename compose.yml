@@ -15,6 +15,10 @@ services:
       - GITSTORE_LOG__LEVEL=info
       - GITSTORE_LOG__FORMAT=json
       - GITSTORE_GIT__REPO__MAX_FILE_SIZE=52428800
+      - GITSTORE_CATALOG_SERVICE__URI=http://api:6000
+    depends_on:
+      api:
+        condition: service_healthy
     networks:
       - gitstore-network
 
@@ -27,12 +31,14 @@ services:
     ports:
       - "4000:4000"  # GraphQL API
       - "5000:5000"  # Git smart HTTP
+      - "6000:6000"  # CatalogService gRPC
     depends_on:
       git-service:
         condition: service_started
     environment:
       - GITSTORE_API_PORT=4000
       - GITSTORE_API__GIT_PORT=5000
+      - GITSTORE_API__GRPC_PORT=6000
       - GITSTORE_GIT__GRPC__URI=dns:///git-service:50051
       - GITSTORE_AUTH__ADMIN__USERNAME=${GITSTORE_AUTH__ADMIN__USERNAME:-admin}
       - GITSTORE_AUTH__ADMIN__PASSWORD_HASH=${GITSTORE_AUTH__ADMIN__PASSWORD_HASH}
