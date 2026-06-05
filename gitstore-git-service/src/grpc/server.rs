@@ -891,9 +891,12 @@ impl GitService for GitServiceImpl {
         .map_err(|e| Status::internal(format!("nff join: {}", e)))??;
 
         // Run hook pipeline async (pre-receive → proc-receive → update).
+        // Pass quarantine dir so blob extraction can see pushed objects before
+        // promote_quarantine runs.
         let pipeline = Arc::clone(&self.hook_pipeline);
         let repo_path_pipeline = repo_path.clone();
-        let accepted_indices = match pipeline.run(&repo_path_pipeline, &pipeline_updates, None).await {
+        let quarantine_path = quarantine.dir.path().to_path_buf();
+        let accepted_indices = match pipeline.run(&repo_path_pipeline, &pipeline_updates, Some(quarantine_path.as_path())).await {
             Ok(indices) => indices,
             Err(rejection) => {
                 let all_refs: Vec<&str> = ref_updates.iter().map(|u| u.ref_name.as_str()).collect();

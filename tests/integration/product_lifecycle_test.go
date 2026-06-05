@@ -19,13 +19,13 @@ import (
 
 // validProductFixture returns a Kubernetes-style product file accepted by the
 // pre-receive validation hook.
-func validProductFixture(name string) string {
+func validProductFixture(name, ns string) string {
 	return fmt.Sprintf(`---
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: %s
-  namespace: gitstore
+  namespace: %s
 spec:
   title: Integration Test Product
   tags: [integration, test]
@@ -35,53 +35,53 @@ spec:
 ---
 
 Integration test product.
-`, name)
+`, name, ns)
 }
 
 // invalidTitleFixture returns a product file with spec.title > 200 chars.
-func invalidTitleFixture(name string) string {
+func invalidTitleFixture(name, ns string) string {
 	title := strings.Repeat("x", 201)
 	return fmt.Sprintf(`---
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: %s
-  namespace: gitstore
+  namespace: %s
 spec:
   title: "%s"
 ---
-`, name, title)
+`, name, ns, title)
 }
 
 // invalidStatusFixture returns a product file with a top-level status key.
-func invalidStatusFixture(name string) string {
+func invalidStatusFixture(name, ns string) string {
 	return fmt.Sprintf(`---
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: %s
-  namespace: gitstore
+  namespace: %s
 spec: {}
 status:
   conditions: []
 ---
-`, name)
+`, name, ns)
 }
 
 // invalidMediaFixture returns a product file with a media entry missing fileRef.name.
-func invalidMediaFixture(name string) string {
+func invalidMediaFixture(name, ns string) string {
 	return fmt.Sprintf(`---
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: %s
-  namespace: gitstore
+  namespace: %s
 spec:
   media:
   - fileRef:
       kind: File
 ---
-`, name)
+`, name, ns)
 }
 
 // ── GraphQL helpers ───────────────────────────────────────────────────────────
@@ -122,13 +122,17 @@ func uniqueName(prefix string) string {
 // ── T032/T039: Full lifecycle — valid file accepted and queryable ─────────────
 
 func TestProductLifecycle_ValidFile_AcceptedAndQueryable(t *testing.T) {
+	ns := getEnv("NAMESPACE", "gitstore")
 	name := uniqueName("lifecycle-valid")
 	h := newPushHelper(t)
-	h.commitProduct(name+".md", validProductFixture(name))
+	h.commitProduct(name+".md", validProductFixture(name, ns))
 	out, err := h.push()
 	if err != nil {
 		t.Fatalf("expected push to succeed for valid product, got error:\n%s", out)
 	}
+
+	// Give post-receive admission a moment to complete (fire-and-forget).
+	time.Sleep(500 * time.Millisecond)
 
 	// Query the product via GraphQL.
 	resp := gqlQuery(t, `
@@ -138,7 +142,7 @@ func TestProductLifecycle_ValidFile_AcceptedAndQueryable(t *testing.T) {
 				spec { title tags }
 			}
 		}
-	`, map[string]any{"ns": "gitstore", "name": name})
+	`, map[string]any{"ns": ns, "name": name})
 	if len(resp.Errors) > 0 {
 		t.Fatalf("graphql errors: %s", resp.Errors)
 	}
@@ -166,9 +170,10 @@ func TestProductLifecycle_ValidFile_AcceptedAndQueryable(t *testing.T) {
 // ── T033/T040: Invalid title — push rejected with field-scoped error ──────────
 
 func TestProductLifecycle_InvalidTitle_PushRejected(t *testing.T) {
+	ns := getEnv("NAMESPACE", "gitstore")
 	name := uniqueName("lifecycle-bad-title")
 	h := newPushHelper(t)
-	h.commitProduct(name+".md", invalidTitleFixture(name))
+	h.commitProduct(name+".md", invalidTitleFixture(name, ns))
 	out, err := h.push()
 	if err == nil {
 		t.Fatal("expected push to be rejected for title > 200 chars, but it succeeded")
@@ -185,9 +190,10 @@ func TestProductLifecycle_InvalidTitle_PushRejected(t *testing.T) {
 // ── T034/T040: Status key present — push rejected as system-managed ───────────
 
 func TestProductLifecycle_StatusPresent_PushRejected(t *testing.T) {
+	ns := getEnv("NAMESPACE", "gitstore")
 	name := uniqueName("lifecycle-bad-status")
 	h := newPushHelper(t)
-	h.commitProduct(name+".md", invalidStatusFixture(name))
+	h.commitProduct(name+".md", invalidStatusFixture(name, ns))
 	out, err := h.push()
 	if err == nil {
 		t.Fatal("expected push to be rejected for status key present, but it succeeded")
@@ -204,9 +210,10 @@ func TestProductLifecycle_StatusPresent_PushRejected(t *testing.T) {
 // ── T035/T040: Missing fileRef.name — push rejected with indexed path ─────────
 
 func TestProductLifecycle_MissingFileRefName_PushRejected(t *testing.T) {
+	ns := getEnv("NAMESPACE", "gitstore")
 	name := uniqueName("lifecycle-bad-media")
 	h := newPushHelper(t)
-	h.commitProduct(name+".md", invalidMediaFixture(name))
+	h.commitProduct(name+".md", invalidMediaFixture(name, ns))
 	out, err := h.push()
 	if err == nil {
 		t.Fatal("expected push to be rejected for missing fileRef.name, but it succeeded")
@@ -222,12 +229,16 @@ func TestProductLifecycle_MissingFileRefName_PushRejected(t *testing.T) {
 func TestProductLifecycle_StatusHydration(t *testing.T) {
 	// This test requires a product to be ingested and a status blob written.
 	// It validates FR-010/FR-012 end-to-end via the GraphQL API.
+	ns := getEnv("NAMESPACE", "gitstore")
 	name := uniqueName("lifecycle-status")
 	h := newPushHelper(t)
-	h.commitProduct(name+".md", validProductFixture(name))
+	h.commitProduct(name+".md", validProductFixture(name, ns))
 	if out, err := h.push(); err != nil {
 		t.Fatalf("setup push failed: %v\n%s", err, out)
 	}
+
+	// Give post-receive admission a moment to complete (fire-and-forget).
+	time.Sleep(500 * time.Millisecond)
 
 	// Query the product to confirm it exists and has null status (not yet reconciled).
 	resp := gqlQuery(t, `
@@ -237,7 +248,7 @@ func TestProductLifecycle_StatusHydration(t *testing.T) {
 				status { observedGeneration conditions { type status } }
 			}
 		}
-	`, map[string]any{"ns": "gitstore", "name": name})
+	`, map[string]any{"ns": ns, "name": name})
 	if len(resp.Errors) > 0 {
 		t.Fatalf("graphql errors after push: %s", resp.Errors)
 	}

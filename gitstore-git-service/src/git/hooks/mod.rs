@@ -465,21 +465,38 @@ fn extract_resource_blobs(
 ) -> Vec<ResourceBlob> {
     let zero = "0".repeat(40);
 
-    // Register the quarantine directory as a temporary git alternate so that
-    // gix-odb can resolve pushed objects before promote_quarantine runs.
-    let alternates_path = git_dir.join("objects").join("info").join("alternates");
-    let wrote_alternates = if let Some(q) = quarantine_dir {
-        let _ = std::fs::create_dir_all(git_dir.join("objects").join("info"));
-        std::fs::write(&alternates_path, format!("{}\n", q.display())).is_ok()
-    } else {
-        false
-    };
+    // To make pushed objects visible before promote_quarantine runs, temporarily
+    // hard-link the quarantine pack/index files into the live objects/pack dir.
+    // Hard-links are instant and atomic; the files are removed after extraction.
+    // This mirrors what native git does with GIT_ALTERNATE_OBJECT_DIRECTORIES.
+    let pack_dir = git_dir.join("objects").join("pack");
+    let mut staged_files: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(q) = quarantine_dir {
+        let _ = std::fs::create_dir_all(&pack_dir);
+        if let Ok(entries) = std::fs::read_dir(q) {
+            for entry in entries.flatten() {
+                let src = entry.path();
+                let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if ext == "pack" || ext == "idx" {
+                    let dst = pack_dir.join(entry.file_name());
+                    if !dst.exists() {
+                        // Try hard link first (free); fall back to copy across filesystems.
+                        let ok = std::fs::hard_link(&src, &dst).is_ok()
+                            || std::fs::copy(&src, &dst).is_ok();
+                        if ok {
+                            staged_files.push(dst);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let repo = match gix::open(git_dir) {
         Ok(r) => r,
         Err(_) => {
-            if wrote_alternates {
-                let _ = std::fs::remove_file(&alternates_path);
+            for f in &staged_files {
+                let _ = std::fs::remove_file(f);
             }
             return vec![];
         }
@@ -487,19 +504,34 @@ fn extract_resource_blobs(
 
     let mut blobs = Vec::new();
     for update in updates {
-        let oid_hex = &update.new_oid;
-        if oid_hex == &zero {
+        let new_oid_hex = &update.new_oid;
+        let old_oid_hex = &update.old_oid;
+        if new_oid_hex == &zero {
             continue; // branch deletion — no blobs to extract
         }
-        let oid = match gix::ObjectId::from_hex(oid_hex.as_bytes()) {
+        let new_oid = match gix::ObjectId::from_hex(new_oid_hex.as_bytes()) {
             Ok(id) => id,
             Err(_) => continue,
         };
-        collect_blobs_from_commit(&repo, oid, &mut blobs);
+        if old_oid_hex == &zero {
+            // New branch creation — scan the full new tree.
+            collect_blobs_from_commit(&repo, new_oid, &mut blobs);
+        } else {
+            // Ref update — only validate files changed in the push delta.
+            // This avoids re-validating files that already passed in prior commits.
+            let old_oid = match gix::ObjectId::from_hex(old_oid_hex.as_bytes()) {
+                Ok(id) => id,
+                Err(_) => {
+                    collect_blobs_from_commit(&repo, new_oid, &mut blobs);
+                    continue;
+                }
+            };
+            collect_changed_blobs(&repo, old_oid, new_oid, &mut blobs);
+        }
     }
 
-    if wrote_alternates {
-        let _ = std::fs::remove_file(&alternates_path);
+    for f in &staged_files {
+        let _ = std::fs::remove_file(f);
     }
 
     blobs
@@ -523,6 +555,128 @@ fn collect_blobs_from_commit(
         Err(_) => return,
     };
     collect_blobs_from_tree(repo, tree_id, "", out);
+}
+
+/// For a ref update (non-zero old_oid), collect only blobs for paths that
+/// changed between old_commit and new_commit. This avoids re-validating files
+/// that were already accepted in prior commits.
+fn collect_changed_blobs(
+    repo: &gix::Repository,
+    old_commit_id: gix::ObjectId,
+    new_commit_id: gix::ObjectId,
+    out: &mut Vec<ResourceBlob>,
+) {
+    let get_tree = |commit_id: gix::ObjectId| -> Option<gix::ObjectId> {
+        repo.find_object(commit_id)
+            .ok()
+            .and_then(|o| o.try_into_commit().ok())
+            .and_then(|c| c.tree_id().map(|id| id.detach()).ok())
+    };
+
+    let old_tree = match get_tree(old_commit_id) {
+        Some(t) => t,
+        None => {
+            // Can't find old tree — fall back to full scan of new commit.
+            collect_blobs_from_commit(repo, new_commit_id, out);
+            return;
+        }
+    };
+    let new_tree = match get_tree(new_commit_id) {
+        Some(t) => t,
+        None => return,
+    };
+
+    // Collect changed paths by diffing old tree vs new tree.
+    collect_changed_blobs_from_trees(repo, old_tree, new_tree, "", out);
+}
+
+fn collect_changed_blobs_from_trees(
+    repo: &gix::Repository,
+    old_tree_id: gix::ObjectId,
+    new_tree_id: gix::ObjectId,
+    prefix: &str,
+    out: &mut Vec<ResourceBlob>,
+) {
+    let decode_tree = |tree_id: gix::ObjectId| -> Vec<gix::objs::tree::Entry> {
+        let Some(obj) = repo.find_object(tree_id).ok() else {
+            return vec![];
+        };
+        let Some(tree) = obj.try_into_tree().ok() else {
+            return vec![];
+        };
+        tree.decode()
+            .ok()
+            .map(|d| d.entries.iter().map(|e| gix::objs::tree::Entry {
+                mode: e.mode,
+                filename: e.filename.to_owned(),
+                oid: e.oid.to_owned(),
+            }).collect())
+            .unwrap_or_default()
+    };
+
+    let old_entries = decode_tree(old_tree_id);
+    let new_entries = {
+        let e = decode_tree(new_tree_id);
+        if e.is_empty() { return; }
+        e
+    };
+
+    // Build a map from filename → (oid, mode) for old entries.
+    let old_map: std::collections::HashMap<String, (gix::ObjectId, gix::object::tree::EntryKind)> = old_entries
+        .iter()
+        .map(|e| (e.filename.to_string(), (e.oid.into(), e.mode.kind())))
+        .collect();
+
+    for entry in &new_entries {
+        let name = entry.filename.to_string();
+        let path = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{}/{}", prefix, name)
+        };
+        match entry.mode.kind() {
+            gix::object::tree::EntryKind::Tree => {
+                let new_sub_id: gix::ObjectId = entry.oid.into();
+                let old_sub_id = old_map
+                    .get(&name)
+                    .filter(|(_, k)| *k == gix::object::tree::EntryKind::Tree)
+                    .map(|(id, _)| *id);
+                match old_sub_id {
+                    Some(old_sub) if old_sub == new_sub_id => {
+                        // Subtree unchanged — skip entirely.
+                    }
+                    Some(old_sub) => {
+                        collect_changed_blobs_from_trees(repo, old_sub, new_sub_id, &path, out);
+                    }
+                    None => {
+                        // New subtree — scan all blobs in it.
+                        collect_blobs_from_tree(repo, new_sub_id, &path, out);
+                    }
+                }
+            }
+            gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable => {
+                let new_blob_id: gix::ObjectId = entry.oid.into();
+                let old_blob_id = old_map
+                    .get(&name)
+                    .filter(|(_, k)| matches!(k, gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable))
+                    .map(|(id, _)| *id);
+                if old_blob_id == Some(new_blob_id) {
+                    continue; // Content identical — skip.
+                }
+                if let Ok(blob_obj) = repo.find_object(new_blob_id) {
+                    let content = blob_obj.data.to_vec();
+                    if content.starts_with(b"---") {
+                        out.push(ResourceBlob {
+                            path,
+                            blob_oid: new_blob_id.to_string(),
+                            content,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn collect_blobs_from_tree(
