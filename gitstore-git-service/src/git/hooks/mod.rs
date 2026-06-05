@@ -624,7 +624,7 @@ fn collect_changed_blobs_from_trees(
     // Build a map from filename → (oid, mode) for old entries.
     let old_map: std::collections::HashMap<String, (gix::ObjectId, gix::object::tree::EntryKind)> = old_entries
         .iter()
-        .map(|e| (e.filename.to_string(), (e.oid.into(), e.mode.kind())))
+        .map(|e| (e.filename.to_string(), (e.oid, e.mode.kind())))
         .collect();
 
     for entry in &new_entries {
@@ -636,7 +636,7 @@ fn collect_changed_blobs_from_trees(
         };
         match entry.mode.kind() {
             gix::object::tree::EntryKind::Tree => {
-                let new_sub_id: gix::ObjectId = entry.oid.into();
+                let new_sub_id: gix::ObjectId = entry.oid;
                 let old_sub_id = old_map
                     .get(&name)
                     .filter(|(_, k)| *k == gix::object::tree::EntryKind::Tree)
@@ -655,7 +655,7 @@ fn collect_changed_blobs_from_trees(
                 }
             }
             gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable => {
-                let new_blob_id: gix::ObjectId = entry.oid.into();
+                let new_blob_id: gix::ObjectId = entry.oid;
                 let old_blob_id = old_map
                     .get(&name)
                     .filter(|(_, k)| matches!(k, gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable))
