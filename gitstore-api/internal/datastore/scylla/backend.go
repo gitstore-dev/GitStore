@@ -301,7 +301,7 @@ func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Produc
 	)
 	parsedUID := mustParseUUID(p.UID)
 
-	b := s.session.NewBatch(gocql.LoggedBatch).WithContext(ctx)
+	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(updNS,
 		row.APIVersion, row.Kind, row.Generation, row.ResourceVersion,
 		row.Revision, row.Labels, row.Annotations, row.OwnerRefs,
@@ -327,7 +327,7 @@ func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
 	delName := "DELETE FROM products_by_name WHERE namespace=? AND name=?"
 	delUID := "DELETE FROM products_by_uid WHERE uid=?"
 
-	b := s.session.NewBatch(gocql.LoggedBatch).WithContext(ctx)
+	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(delNS, p.Namespace, p.CreationTimestamp, parsedUID)
 	b.Query(delName, p.Namespace, p.Name)
 	b.Query(delUID, parsedUID)
