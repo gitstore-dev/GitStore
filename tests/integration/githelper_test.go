@@ -49,18 +49,18 @@ func newPushHelper(t *testing.T) *pushHelper {
 	workDir := t.TempDir()
 	namespace := getEnv("NAMESPACE", "gitstore")
 	repository := getEnv("REPOSITORY", "catalog")
-	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitServerGitURL, namespace, repository)
+	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitURL, namespace, repository)
 
 	// Try a lightweight reachability check before cloning.
 	checkCmd := exec.Command("git", "ls-remote", remoteURL)
 	if err := checkCmd.Run(); err != nil {
-		t.Skipf("gitstore-git-service catalog repo unreachable at %s: %v — is docker compose up?", remoteURL, err)
+		t.Fatalf("PREREQUISITE: gitstore-git-service catalog repo unreachable at %s: %v — is docker compose up?", remoteURL, err)
 	}
 
 	cloneCmd := exec.Command("git", "clone", remoteURL, workDir)
 	cloneCmd.Dir = os.TempDir()
 	if out, err := cloneCmd.CombinedOutput(); err != nil {
-		t.Skipf("could not clone catalog repo: %v\n%s", err, out)
+		t.Fatalf("PREREQUISITE: could not clone catalog repo: %v\n%s", err, out)
 	}
 
 	// Configure git identity and ensure the default branch is "main"

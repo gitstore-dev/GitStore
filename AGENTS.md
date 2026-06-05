@@ -8,6 +8,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - Git service stack (Rust): `gix 0.84.0` (+ `gix-ref 0.64.0`), `tokio 1.35`, `axum 0.8`, `tonic 0.14`, `tracing 0.1`, `anyhow 1.0`, `async-trait 0.1`, `serde 1.0`, `serde_yaml 0.9`.
 - Storage model: bare Git repositories on local filesystem; datastore abstraction with `go-memdb` in development and ScyllaDB 5.x+ in production.
 - Product metadata/parsing: `github.com/adrg/frontmatter v0.2.0` and `gopkg.in/yaml.v3` (parser is in-memory via `io.Reader`).
+- Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90`, `go-playground/validator/v10 v10.30.3`, `github.com/adrg/frontmatter v0.2.0`, `gopkg.in/yaml.v3`, `go.uber.org/zap`, `shopspring/decimal` (001-product-spec-validation)
+- `go-memdb v1.3.5` (dev) / `gocqlx/v3 v3.0.4` + `gocql` (ScyllaDB prod) (001-product-spec-validation)
 
 - (001-git-backed-ecommerce)
 
@@ -47,8 +49,8 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 001-product-spec-validation: Added Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90`, `go-playground/validator/v10 v10.30.3`, `github.com/adrg/frontmatter v0.2.0`, `gopkg.in/yaml.v3`, `go.uber.org/zap`, `shopspring/decimal`
 - 016-product-spec-hydration: Added Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90`, `go-memdb v1.3.5`, `gocqlx/v3 v3.0.4`, `gocql` (Scylla driver), `encoding/json` (stdlib), `go-playground/validator/v10 v10.30.3`, `go.uber.org/zap`
-- 015-product-parser: Added Go 1.25 + `github.com/adrg/frontmatter v0.2.0`, `go-playground/validator/v10 v10.30.3`, `gopkg.in/yaml.v3`
 
 
 <!-- MANUAL ADDITIONS START -->
