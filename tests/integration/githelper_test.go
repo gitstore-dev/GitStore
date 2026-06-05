@@ -12,26 +12,22 @@ import (
 )
 
 
-// uniqueValidProduct returns a valid product fixture with a timestamp-unique ID and SKU
-// so repeated test runs never collide on filename or SKU in the catalog.
+// uniqueValidProduct returns a Kubernetes-style product fixture with a
+// timestamp-unique name so repeated test runs never collide on name in the catalog.
 func uniqueValidProduct(ts int64) string {
 	return fmt.Sprintf(`---
-id: prod_inttest_%d
-sku: INTTEST-%d
-title: Integration Test Product
-price: 99.99
-currency: USD
-category_id: cat_electronics_001
-collection_ids: []
-images: []
-inventory_status: in_stock
-inventory_quantity: 10
-created_at: 2026-01-01T00:00:00Z
-updated_at: 2026-01-01T00:00:00Z
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: inttest-%d
+  namespace: acme-store
+spec:
+  title: Integration Test Product
+  tags: [integration, test]
 ---
 
 Integration test product for core-stack contract verification.
-`, ts, ts)
+`, ts)
 }
 
 // pushHelper holds state for a single test push scenario.

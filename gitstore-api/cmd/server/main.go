@@ -14,8 +14,12 @@ import (
 	"syscall"
 	"time"
 
+	"net"
+
 	gqlhandler "github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/playground"
+	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	dsfactory "github.com/gitstore-dev/gitstore/api/internal/datastore/factory"
@@ -28,6 +32,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/logger"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -141,12 +146,27 @@ func main() {
 		}
 	}()
 
+	// CatalogService gRPC server — receives hook pipeline callouts from gitstore-git-service.
+	grpcLis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Api.GrpcPort))
+	if err != nil {
+		logger.Log.Fatal("Failed to listen on gRPC port", zap.Int("port", cfg.Api.GrpcPort), zap.Error(err))
+	}
+	grpcServer := grpc.NewServer()
+	catalogv1.RegisterCatalogServiceServer(grpcServer, cataloggrpc.NewServerWithLogger(store, gitClient, logger.Log))
+	go func() {
+		logger.Log.Info("CatalogService gRPC server starting", zap.Int("port", cfg.Api.GrpcPort))
+		if err := grpcServer.Serve(grpcLis); err != nil {
+			logger.Log.Error("CatalogService gRPC server error", zap.Error(err))
+		}
+	}()
+
 	logger.Log.Info("Server ready",
 		zap.String("graphql", fmt.Sprintf("http://localhost:%d/graphql", cfg.Api.Port)),
 		zap.String("playground", fmt.Sprintf("http://localhost:%d/playground", cfg.Api.Port)),
 		zap.String("health", fmt.Sprintf("http://localhost:%d/health", cfg.Api.Port)),
 		zap.String("ready", fmt.Sprintf("http://localhost:%d/ready", cfg.Api.Port)),
 		zap.String("git_http", fmt.Sprintf("http://localhost:%d", cfg.Api.GitPort)),
+		zap.String("catalog_grpc", fmt.Sprintf("localhost:%d", cfg.Api.GrpcPort)),
 	)
 
 	sigChan := make(chan os.Signal, 1)
@@ -165,6 +185,8 @@ func main() {
 	if err := gitSrv.Shutdown(shutdownCtx); err != nil {
 		logger.Log.Error("Git HTTP server shutdown error", zap.Error(err))
 	}
+
+	grpcServer.GracefulStop()
 
 	logger.Log.Info("Server stopped")
 }

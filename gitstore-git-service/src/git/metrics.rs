@@ -103,6 +103,43 @@ fn count_pack_files(repo_path: &Path) -> usize {
         .count()
 }
 
+// ---------------------------------------------------------------------------
+// Schema validation metrics (T015)
+// ---------------------------------------------------------------------------
+
+use prometheus::{IntCounterVec, Opts, Registry};
+use std::sync::OnceLock;
+
+static SCHEMA_VALIDATION_TOTAL: OnceLock<IntCounterVec> = OnceLock::new();
+
+fn schema_validation_counter() -> &'static IntCounterVec {
+    SCHEMA_VALIDATION_TOTAL.get_or_init(|| {
+        IntCounterVec::new(
+            Opts::new(
+                "gitstore_schema_validation_total",
+                "Pre-receive schema validation callout outcomes",
+            ),
+            &["result"],
+        )
+        .expect("failed to create schema_validation_total counter")
+    })
+}
+
+/// Increment `gitstore_schema_validation_total` with the given result label.
+/// Labels: `accepted`, `rejected`, `timeout`, `service_unavailable`.
+pub fn increment_schema_validation_total(result: &str) {
+    schema_validation_counter()
+        .with_label_values(&[result])
+        .inc();
+}
+
+/// Register the schema validation counter with a Prometheus registry.
+pub fn register_schema_validation_metrics(registry: &Registry) -> prometheus::Result<()> {
+    registry.register(Box::new(schema_validation_counter().clone()))
+}
+
+// ---------------------------------------------------------------------------
+
 /// Log repository metrics at INFO level and emit a warning if the repo exceeds `warn_threshold_mib`.
 pub fn log_repo_metrics(repo_path: &Path, warn_threshold_mib: f64) {
     let metrics = RepoMetrics::collect(repo_path);

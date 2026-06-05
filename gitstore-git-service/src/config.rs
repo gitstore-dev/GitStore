@@ -9,7 +9,9 @@ pub struct AppConfig {
     pub git: GitConfig,
     pub log: LogConfig,
     pub hooks: HooksConfig,
+    pub schema_validation: SchemaValidationConfig,
     pub admission_control: AdmissionControlConfig,
+    pub catalog_service: CatalogServiceConfig,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -56,13 +58,20 @@ pub struct HookToggle {
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub struct AdmissionControlConfig {
-    pub validating_admission_policy: ValidatingAdmissionPolicyConfig,
+pub struct SchemaValidationConfig {
+    pub phase: String,
+    pub timeout_secs: u64,
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub struct ValidatingAdmissionPolicyConfig {
+pub struct AdmissionControlConfig {
     pub phase: String,
+    pub branch_pattern: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct CatalogServiceConfig {
+    pub uri: String,
 }
 
 /// Load configuration from defaults → gitstore.toml → environment variables.
@@ -106,6 +115,15 @@ impl AppConfig {
                 "log.format must be one of: json, text (got: {})",
                 self.log.format
             )),
+        }
+
+        // FR-019: schema_validation and admission_control must run in different phases.
+        if self.schema_validation.phase == self.admission_control.phase {
+            errors.push(format!(
+                "GITSTORE_SCHEMA_VALIDATION__PHASE and GITSTORE_ADMISSION_CONTROL__PHASE \
+                 must be different (both set to {:?})",
+                self.schema_validation.phase
+            ));
         }
 
         if errors.is_empty() {
@@ -170,15 +188,23 @@ level = "info"
 format = "json"
 
 [hooks.git_receive_pack]
-pre_receive           = { enabled = false }
+pre_receive           = { enabled = true }
 update                = { enabled = false }
-post_receive          = { enabled = false }
+post_receive          = { enabled = true }
 proc_receive          = { enabled = false }
 post_update           = { enabled = false }
 reference_transaction = { enabled = false }
 
-[admission_control.validating_admission_policy]
+[schema_validation]
 phase = "pre-receive"
+timeout_secs = 10
+
+[admission_control]
+phase = "post-receive"
+branch_pattern = "refs/heads/main"
+
+[catalog_service]
+uri = "http://localhost:6000"
 "#
     .to_string()
 }
@@ -199,6 +225,11 @@ mod tests {
             "GITSTORE_LOG__LEVEL",
             "GITSTORE_LOG__FORMAT",
             "GITSTORE_GIT__REPO__MAX_FILE_SIZE",
+            "GITSTORE_SCHEMA_VALIDATION__PHASE",
+            "GITSTORE_SCHEMA_VALIDATION__TIMEOUT_SECS",
+            "GITSTORE_ADMISSION_CONTROL__PHASE",
+            "GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN",
+            "GITSTORE_CATALOG_SERVICE__URI",
         ];
         for k in &keys {
             env::remove_var(k);
@@ -423,5 +454,54 @@ mod tests {
             !cfg.hooks.git_receive_pack.reference_transaction.enabled,
             "reference_transaction should default to disabled"
         );
+    }
+
+    // T007: phase-conflict validation (FR-019)
+
+    #[test]
+    fn test_validate_phase_conflict_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        // Set both phases to the same value — must fail
+        env::set_var("GITSTORE_SCHEMA_VALIDATION__PHASE", "pre-receive");
+        env::set_var("GITSTORE_ADMISSION_CONTROL__PHASE", "pre-receive");
+        let cfg = load_config_from(None).expect("load failed");
+        let result = cfg.validate();
+        assert!(
+            result.is_err(),
+            "expected conflict error when both phases are equal"
+        );
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("GITSTORE_SCHEMA_VALIDATION__PHASE")
+                && msg.contains("GITSTORE_ADMISSION_CONTROL__PHASE"),
+            "error should name both env vars, got: {msg}"
+        );
+        clear_env();
+    }
+
+    #[test]
+    fn test_validate_split_phases_pass() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        // Default split: pre-receive vs post-receive — must pass
+        let cfg = load_config_from(None).expect("load failed");
+        assert_eq!(cfg.schema_validation.phase, "pre-receive");
+        assert_eq!(cfg.admission_control.phase, "post-receive");
+        cfg.validate()
+            .expect("default split phases should pass validation");
+    }
+
+    #[test]
+    fn test_default_config_has_new_structure() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        let cfg = load_config_from(None).expect("load failed");
+        assert_eq!(cfg.schema_validation.phase, "pre-receive");
+        assert_eq!(cfg.schema_validation.timeout_secs, 10);
+        assert_eq!(cfg.admission_control.phase, "post-receive");
+        assert_eq!(cfg.admission_control.branch_pattern, "refs/heads/main");
+        assert_eq!(cfg.catalog_service.uri, "http://localhost:6000");
     }
 }

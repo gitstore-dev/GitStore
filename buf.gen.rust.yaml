@@ -2,12 +2,12 @@ version: v2
 inputs:
   - directory: shared/proto
 plugins:
-  - remote: buf.build/community/neoeinstein-prost:v0.4.0
+  - remote: buf.build/community/neoeinstein-prost:v0.5.0
     out: gitstore-git-service/gen
     opt:
       - compile_well_known_types=true
       - extern_path=.google.protobuf=::pbjson_types
-  - remote: buf.build/community/neoeinstein-tonic:v0.4.0
+  - remote: buf.build/community/neoeinstein-tonic:v0.5.0
     out: gitstore-git-service/gen
     opt:
       - compile_well_known_types=true

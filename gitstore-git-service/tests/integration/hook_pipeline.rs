@@ -7,11 +7,11 @@ use std::sync::Arc;
 use tempfile::TempDir;
 
 use gitstore::config::{GitReceivePackHooks, HookToggle};
-use gitstore::git::hooks::{HookPipeline, NoopAdmissionHandler, RefUpdate};
+use gitstore::git::hooks::{HookPipeline, NoopAdmissionHandler, NoopValidationHandler, RefUpdate};
 
 use super::helpers::{
-    make_bare_repo, make_commit, zero_oid, CountingAdmissionHandler, PerRefRejectingHandler,
-    RejectingAdmissionHandler, SlowAdmissionHandler,
+    make_bare_repo, make_commit, zero_oid, CountingValidationHandler, PerRefRejectingHandler,
+    RejectingValidationHandler, SlowValidationHandler,
 };
 
 // ---------------------------------------------------------------------------
@@ -44,6 +44,26 @@ fn noop_pipeline(config: GitReceivePackHooks) -> HookPipeline {
     HookPipeline::new(
         config,
         "pre-receive".to_string(),
+        std::time::Duration::from_secs(10),
+        "post-receive".to_string(),
+        "refs/heads/main".to_string(),
+        Arc::new(NoopValidationHandler),
+        Arc::new(NoopAdmissionHandler),
+    )
+}
+
+fn pipeline_with_validation_handler(
+    config: GitReceivePackHooks,
+    phase: &str,
+    handler: Arc<dyn gitstore::git::hooks::ValidationHandler + Send + Sync>,
+) -> HookPipeline {
+    HookPipeline::new(
+        config,
+        phase.to_string(),
+        std::time::Duration::from_secs(5),
+        "post-receive".to_string(),
+        "refs/heads/main".to_string(),
+        handler,
         Arc::new(NoopAdmissionHandler),
     )
 }
@@ -71,7 +91,7 @@ async fn test_push_accepted_all_phases_enabled() {
     let update = make_update("refs/heads/main", &old_oid, &new_oid);
 
     let result = pipeline
-        .run(&repo_path, std::slice::from_ref(&update))
+        .run(&repo_path, std::slice::from_ref(&update), None)
         .await
         .unwrap();
     assert_eq!(result, vec![0], "index 0 should be accepted");
@@ -98,7 +118,7 @@ async fn test_pipeline_run_returns_all_accepted_with_noop() {
     let pipeline = noop_pipeline(all_enabled());
     let update = make_update("refs/heads/main", zero_oid(), &oid);
 
-    let accepted = pipeline.run(&repo_path, &[update]).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &[update], None).await.unwrap();
     assert_eq!(accepted, vec![0]);
 }
 
@@ -115,17 +135,17 @@ async fn test_push_rejected_pre_receive() {
 
     let mut cfg = all_disabled();
     cfg.pre_receive = HookToggle { enabled: true };
-    let pipeline = HookPipeline::new(
+    let pipeline = pipeline_with_validation_handler(
         cfg,
-        "pre-receive".to_string(),
-        Arc::new(RejectingAdmissionHandler("blocked by policy".to_string())),
+        "pre-receive",
+        Arc::new(RejectingValidationHandler("blocked by policy".to_string())),
     );
 
     let updates = vec![
         make_update("refs/heads/main", &oid1, &oid2),
         make_update("refs/heads/dev", zero_oid(), &oid1),
     ];
-    let err = pipeline.run(&repo_path, &updates).await.unwrap_err();
+    let err = pipeline.run(&repo_path, &updates, None).await.unwrap_err();
     assert_eq!(err.phase, "pre-receive");
     assert_eq!(err.reason, "blocked by policy");
 }
@@ -144,11 +164,18 @@ async fn test_push_rejected_update_one_ref() {
     cfg.update = HookToggle { enabled: true };
 
     // PerRefRejectingHandler rejects refs named refs/test/idx/1
+    // Per-ref rejection: use the AdmissionHandler slot at the update phase.
+    // The AdmissionHandler is called once per ref in run_schema_validation when
+    // the phase matches admission_control_phase.
     let mut reject_set = HashSet::new();
     reject_set.insert(1usize);
     let pipeline = HookPipeline::new(
         cfg,
-        "update".to_string(),
+        "pre-receive".to_string(), // validation at pre-receive (noop)
+        std::time::Duration::from_secs(5),
+        "update".to_string(), // admission at update (per-ref)
+        "refs/heads/main".to_string(),
+        Arc::new(NoopValidationHandler),
         Arc::new(PerRefRejectingHandler(reject_set)),
     );
 
@@ -157,7 +184,7 @@ async fn test_push_rejected_update_one_ref() {
         make_update("refs/test/idx/1", zero_oid(), &oid),
         make_update("refs/test/idx/2", zero_oid(), &oid),
     ];
-    let accepted = pipeline.run(&repo_path, &updates).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &updates, None).await.unwrap();
     assert_eq!(accepted, vec![0, 2], "only idx/1 should be rejected");
 }
 
@@ -173,14 +200,14 @@ async fn test_push_rejected_proc_receive() {
 
     let mut cfg = all_disabled();
     cfg.proc_receive = HookToggle { enabled: true };
-    let pipeline = HookPipeline::new(
+    let pipeline = pipeline_with_validation_handler(
         cfg,
-        "proc-receive".to_string(),
-        Arc::new(RejectingAdmissionHandler("proc blocked".to_string())),
+        "proc-receive",
+        Arc::new(RejectingValidationHandler("proc blocked".to_string())),
     );
 
     let update = make_update("refs/heads/main", zero_oid(), &oid);
-    let err = pipeline.run(&repo_path, &[update]).await.unwrap_err();
+    let err = pipeline.run(&repo_path, &[update], None).await.unwrap_err();
     assert_eq!(err.phase, "proc-receive");
     assert_eq!(err.reason, "proc blocked");
 }
@@ -197,10 +224,10 @@ async fn test_reference_transaction_veto() {
 
     let mut cfg = all_disabled();
     cfg.reference_transaction = HookToggle { enabled: true };
-    let pipeline = HookPipeline::new(
+    let pipeline = pipeline_with_validation_handler(
         cfg,
-        "reference-transaction/prepared".to_string(),
-        Arc::new(RejectingAdmissionHandler("txn blocked".to_string())),
+        "reference-transaction/prepared",
+        Arc::new(RejectingValidationHandler("txn blocked".to_string())),
     );
 
     let update = make_update("refs/heads/main", zero_oid(), &oid);
@@ -225,7 +252,7 @@ async fn test_all_phases_disabled() {
     let pipeline = noop_pipeline(all_disabled());
     let update = make_update("refs/heads/main", zero_oid(), &oid);
 
-    let accepted = pipeline.run(&repo_path, &[update]).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &[update], None).await.unwrap();
     assert_eq!(accepted, vec![0]);
 }
 
@@ -244,7 +271,7 @@ async fn test_only_pre_receive_enabled() {
     let pipeline = noop_pipeline(cfg);
 
     let update = make_update("refs/heads/main", zero_oid(), &oid);
-    let accepted = pipeline.run(&repo_path, &[update]).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &[update], None).await.unwrap();
     assert_eq!(accepted, vec![0]);
 }
 
@@ -279,14 +306,10 @@ async fn test_admission_accept() {
 
     let mut cfg = all_disabled();
     cfg.pre_receive = HookToggle { enabled: true };
-    let pipeline = HookPipeline::new(
-        cfg,
-        "pre-receive".to_string(),
-        Arc::new(NoopAdmissionHandler),
-    );
+    let pipeline = noop_pipeline(cfg);
 
     let update = make_update("refs/heads/main", zero_oid(), &oid);
-    let accepted = pipeline.run(&repo_path, &[update]).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &[update], None).await.unwrap();
     assert_eq!(accepted, vec![0]);
 }
 
@@ -302,16 +325,16 @@ async fn test_admission_reject_with_reason() {
 
     let mut cfg = all_disabled();
     cfg.update = HookToggle { enabled: true };
-    let pipeline = HookPipeline::new(
+    let pipeline = pipeline_with_validation_handler(
         cfg,
-        "update".to_string(),
-        Arc::new(RejectingAdmissionHandler("policy violation".to_string())),
+        "update",
+        Arc::new(RejectingValidationHandler("policy violation".to_string())),
     );
 
     let update = make_update("refs/heads/main", zero_oid(), &oid);
     // update is per-ref, rejection causes that ref to be marked ng (not a pipeline Err)
     // All refs are rejected so accepted set is empty.
-    let accepted = pipeline.run(&repo_path, &[update]).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &[update], None).await.unwrap();
     assert!(
         accepted.is_empty(),
         "all refs should be rejected by update admission"
@@ -330,19 +353,16 @@ async fn test_admission_timeout_fail_closed() {
 
     let mut cfg = all_disabled();
     cfg.pre_receive = HookToggle { enabled: true };
-    let pipeline = HookPipeline::new(
-        cfg,
-        "pre-receive".to_string(),
-        Arc::new(SlowAdmissionHandler),
-    );
+    let pipeline =
+        pipeline_with_validation_handler(cfg, "pre-receive", Arc::new(SlowValidationHandler));
 
     let update = make_update("refs/heads/main", zero_oid(), &oid);
     let start = std::time::Instant::now();
-    let err = pipeline.run(&repo_path, &[update]).await.unwrap_err();
+    let err = pipeline.run(&repo_path, &[update], None).await.unwrap_err();
     let elapsed = start.elapsed();
 
     assert_eq!(err.phase, "pre-receive");
-    assert_eq!(err.reason, "admission service timeout");
+    assert_eq!(err.reason, "validation service unavailable");
     // Should complete well under 10 seconds (the slow handler sleeps 10s)
     assert!(
         elapsed.as_secs() < 8,
@@ -367,18 +387,14 @@ async fn test_admission_only_called_at_configured_phase() {
     cfg.pre_receive = HookToggle { enabled: true };
     cfg.update = HookToggle { enabled: true };
 
-    let (counter_handler, counter) = CountingAdmissionHandler::new();
-    let pipeline = HookPipeline::new(
-        cfg,
-        "update".to_string(), // admission only at update
-        Arc::new(counter_handler),
-    );
+    let (counter_handler, counter) = CountingValidationHandler::new();
+    let pipeline = pipeline_with_validation_handler(cfg, "update", Arc::new(counter_handler));
 
     let updates = vec![
         make_update("refs/heads/main", &oid1, &oid2),
         make_update("refs/heads/dev", zero_oid(), &oid1),
     ];
-    let accepted = pipeline.run(&repo_path, &updates).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &updates, None).await.unwrap();
     assert_eq!(accepted, vec![0, 1]);
 
     // Admission called once per ref in update phase = 2 times; pre-receive = 0
