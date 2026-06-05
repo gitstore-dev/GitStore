@@ -164,6 +164,11 @@ impl HookPipeline {
 
     /// Run the pre-receive → proc-receive → update phases.
     ///
+    /// `quarantine_dir`: path to the staged quarantine TempDir written by
+    /// `stage_pack_from_reader`. When present, blob extraction opens the repo
+    /// with this directory listed as an alternate object store so that pushed
+    /// objects (not yet promoted to the live ODB) are visible during validation.
+    ///
     /// Returns `Ok(accepted_indices)` where each entry is an index into `updates`
     /// that was accepted by the update phase.
     /// Returns `Err(HookRejection)` if pre-receive or proc-receive rejects the push.
@@ -171,11 +176,12 @@ impl HookPipeline {
         &self,
         git_dir: &Path,
         updates: &[RefUpdate],
+        quarantine_dir: Option<&Path>,
     ) -> Result<Vec<usize>, HookRejection> {
         // --- pre-receive (once per push, all-or-nothing) ---
         if self.config.pre_receive.enabled {
             let decision = self
-                .run_schema_validation("pre-receive", git_dir, updates, || {
+                .run_schema_validation("pre-receive", git_dir, updates, quarantine_dir, || {
                     run_pre_receive(git_dir, updates)
                 })
                 .await;
@@ -198,7 +204,7 @@ impl HookPipeline {
         // --- proc-receive (once per push, all-or-nothing) ---
         if self.config.proc_receive.enabled {
             let decision = self
-                .run_schema_validation("proc-receive", git_dir, updates, || {
+                .run_schema_validation("proc-receive", git_dir, updates, quarantine_dir, || {
                     run_proc_receive(git_dir, updates)
                 })
                 .await;
@@ -227,7 +233,9 @@ impl HookPipeline {
             }
             let single = std::slice::from_ref(update);
             let decision = self
-                .run_schema_validation("update", git_dir, single, || run_update(git_dir, update))
+                .run_schema_validation("update", git_dir, single, quarantine_dir, || {
+                    run_update(git_dir, update)
+                })
                 .await;
             match decision {
                 HookDecision::Accept => {
@@ -263,7 +271,7 @@ impl HookPipeline {
         }
         let start = Instant::now();
         let decision = self
-            .run_schema_validation("reference-transaction/prepared", git_dir, updates, || {
+            .run_schema_validation("reference-transaction/prepared", git_dir, updates, None, || {
                 HookDecision::Accept
             })
             .await;
@@ -364,6 +372,7 @@ impl HookPipeline {
         phase: &str,
         git_dir: &Path,
         updates: &[RefUpdate],
+        quarantine_dir: Option<&Path>,
         phase_fn: F,
     ) -> HookDecision
     where
@@ -376,7 +385,7 @@ impl HookPipeline {
         }
         // Invoke the validation handler at its configured phase (blocking, fail-closed).
         if phase == self.schema_validation_phase {
-            let blobs = extract_resource_blobs(git_dir, updates);
+            let blobs = extract_resource_blobs(git_dir, updates, quarantine_dir);
             let result = tokio::time::timeout(
                 self.schema_validation_timeout,
                 self.validation_handler.validate(&blobs),
@@ -441,13 +450,39 @@ impl HookPipeline {
 // ---------------------------------------------------------------------------
 
 /// Walk the commit trees for all ref updates and collect resource blobs (files
-/// beginning with `---`). Objects are accessible from the git quarantine area.
+/// beginning with `---`).
+///
+/// `quarantine_dir` is the TempDir written by `stage_pack_from_reader`. When
+/// present its path is written to `{git_dir}/objects/info/alternates` so that
+/// gix-odb resolves pushed objects that are not yet promoted to the live ODB.
+/// The alternates entry is removed after extraction regardless of outcome.
+///
 /// Returns an empty vec if git_dir is not a valid repo or any update fails.
-fn extract_resource_blobs(git_dir: &Path, updates: &[RefUpdate]) -> Vec<ResourceBlob> {
+fn extract_resource_blobs(
+    git_dir: &Path,
+    updates: &[RefUpdate],
+    quarantine_dir: Option<&Path>,
+) -> Vec<ResourceBlob> {
     let zero = "0".repeat(40);
+
+    // Register the quarantine directory as a temporary git alternate so that
+    // gix-odb can resolve pushed objects before promote_quarantine runs.
+    let alternates_path = git_dir.join("objects").join("info").join("alternates");
+    let wrote_alternates = if let Some(q) = quarantine_dir {
+        let _ = std::fs::create_dir_all(git_dir.join("objects").join("info"));
+        std::fs::write(&alternates_path, format!("{}\n", q.display())).is_ok()
+    } else {
+        false
+    };
+
     let repo = match gix::open(git_dir) {
         Ok(r) => r,
-        Err(_) => return vec![],
+        Err(_) => {
+            if wrote_alternates {
+                let _ = std::fs::remove_file(&alternates_path);
+            }
+            return vec![];
+        }
     };
 
     let mut blobs = Vec::new();
@@ -462,6 +497,11 @@ fn extract_resource_blobs(git_dir: &Path, updates: &[RefUpdate]) -> Vec<Resource
         };
         collect_blobs_from_commit(&repo, oid, &mut blobs);
     }
+
+    if wrote_alternates {
+        let _ = std::fs::remove_file(&alternates_path);
+    }
+
     blobs
 }
 
@@ -699,7 +739,7 @@ mod tests {
             make_update("refs/heads/dev"),
         ];
         let result = pipeline
-            .run(std::path::Path::new("/tmp"), &updates)
+            .run(std::path::Path::new("/tmp"), &updates, None)
             .await
             .unwrap();
         assert_eq!(result, vec![0, 1]);
@@ -713,7 +753,7 @@ mod tests {
         let pipeline = make_pipeline(cfg);
         let updates = vec![make_update("refs/heads/main")];
         let result = pipeline
-            .run(std::path::Path::new("/tmp"), &updates)
+            .run(std::path::Path::new("/tmp"), &updates, None)
             .await
             .unwrap();
         assert_eq!(result, vec![0]);

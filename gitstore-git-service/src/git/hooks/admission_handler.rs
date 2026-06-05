@@ -54,9 +54,7 @@ impl AdmissionHandler for AdmissionControlHandler {
         repository_id: &str,
     ) -> anyhow::Result<AdmissionDecision> {
         for update in updates {
-            if !update.ref_name.starts_with(&self.branch_pattern)
-                && update.ref_name != self.branch_pattern
-            {
+            if update.ref_name != self.branch_pattern {
                 // Ref does not match branch pattern — skip, no gRPC call.
                 continue;
             }
@@ -248,6 +246,32 @@ mod tests {
             count.load(Ordering::SeqCst),
             1,
             "new branch creation must trigger admit"
+        );
+    }
+
+    // T019e: ref that is a prefix extension of branch_pattern must NOT trigger admission
+    // (e.g. "refs/heads/main-old" when branch_pattern is "refs/heads/main")
+    #[tokio::test]
+    async fn test_prefix_extended_ref_no_grpc_call() {
+        let count = Arc::new(AtomicU32::new(0));
+        let addr = start_mock_server(count.clone()).await;
+
+        let handler = AdmissionControlHandler::connect(&addr, "refs/heads/main".to_string())
+            .await
+            .unwrap();
+
+        let updates = vec![make_update("refs/heads/main-old", false)];
+        let result = handler
+            .admit("post-receive", &updates, "repo-1")
+            .await
+            .unwrap();
+        assert!(matches!(result, AdmissionDecision::Accept));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            0,
+            "refs/heads/main-old must not match refs/heads/main branch pattern"
         );
     }
 }

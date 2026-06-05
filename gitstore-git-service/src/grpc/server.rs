@@ -893,7 +893,7 @@ impl GitService for GitServiceImpl {
         // Run hook pipeline async (pre-receive → proc-receive → update).
         let pipeline = Arc::clone(&self.hook_pipeline);
         let repo_path_pipeline = repo_path.clone();
-        let accepted_indices = match pipeline.run(&repo_path_pipeline, &pipeline_updates).await {
+        let accepted_indices = match pipeline.run(&repo_path_pipeline, &pipeline_updates, None).await {
             Ok(indices) => indices,
             Err(rejection) => {
                 let all_refs: Vec<&str> = ref_updates.iter().map(|u| u.ref_name.as_str()).collect();

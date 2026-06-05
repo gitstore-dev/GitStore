@@ -91,7 +91,7 @@ async fn test_push_accepted_all_phases_enabled() {
     let update = make_update("refs/heads/main", &old_oid, &new_oid);
 
     let result = pipeline
-        .run(&repo_path, std::slice::from_ref(&update))
+        .run(&repo_path, std::slice::from_ref(&update), None)
         .await
         .unwrap();
     assert_eq!(result, vec![0], "index 0 should be accepted");
@@ -118,7 +118,7 @@ async fn test_pipeline_run_returns_all_accepted_with_noop() {
     let pipeline = noop_pipeline(all_enabled());
     let update = make_update("refs/heads/main", zero_oid(), &oid);
 
-    let accepted = pipeline.run(&repo_path, &[update]).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &[update], None).await.unwrap();
     assert_eq!(accepted, vec![0]);
 }
 
@@ -145,7 +145,7 @@ async fn test_push_rejected_pre_receive() {
         make_update("refs/heads/main", &oid1, &oid2),
         make_update("refs/heads/dev", zero_oid(), &oid1),
     ];
-    let err = pipeline.run(&repo_path, &updates).await.unwrap_err();
+    let err = pipeline.run(&repo_path, &updates, None).await.unwrap_err();
     assert_eq!(err.phase, "pre-receive");
     assert_eq!(err.reason, "blocked by policy");
 }
@@ -184,7 +184,7 @@ async fn test_push_rejected_update_one_ref() {
         make_update("refs/test/idx/1", zero_oid(), &oid),
         make_update("refs/test/idx/2", zero_oid(), &oid),
     ];
-    let accepted = pipeline.run(&repo_path, &updates).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &updates, None).await.unwrap();
     assert_eq!(accepted, vec![0, 2], "only idx/1 should be rejected");
 }
 
@@ -207,7 +207,7 @@ async fn test_push_rejected_proc_receive() {
     );
 
     let update = make_update("refs/heads/main", zero_oid(), &oid);
-    let err = pipeline.run(&repo_path, &[update]).await.unwrap_err();
+    let err = pipeline.run(&repo_path, &[update], None).await.unwrap_err();
     assert_eq!(err.phase, "proc-receive");
     assert_eq!(err.reason, "proc blocked");
 }
@@ -252,7 +252,7 @@ async fn test_all_phases_disabled() {
     let pipeline = noop_pipeline(all_disabled());
     let update = make_update("refs/heads/main", zero_oid(), &oid);
 
-    let accepted = pipeline.run(&repo_path, &[update]).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &[update], None).await.unwrap();
     assert_eq!(accepted, vec![0]);
 }
 
@@ -271,7 +271,7 @@ async fn test_only_pre_receive_enabled() {
     let pipeline = noop_pipeline(cfg);
 
     let update = make_update("refs/heads/main", zero_oid(), &oid);
-    let accepted = pipeline.run(&repo_path, &[update]).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &[update], None).await.unwrap();
     assert_eq!(accepted, vec![0]);
 }
 
@@ -309,7 +309,7 @@ async fn test_admission_accept() {
     let pipeline = noop_pipeline(cfg);
 
     let update = make_update("refs/heads/main", zero_oid(), &oid);
-    let accepted = pipeline.run(&repo_path, &[update]).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &[update], None).await.unwrap();
     assert_eq!(accepted, vec![0]);
 }
 
@@ -334,7 +334,7 @@ async fn test_admission_reject_with_reason() {
     let update = make_update("refs/heads/main", zero_oid(), &oid);
     // update is per-ref, rejection causes that ref to be marked ng (not a pipeline Err)
     // All refs are rejected so accepted set is empty.
-    let accepted = pipeline.run(&repo_path, &[update]).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &[update], None).await.unwrap();
     assert!(
         accepted.is_empty(),
         "all refs should be rejected by update admission"
@@ -358,7 +358,7 @@ async fn test_admission_timeout_fail_closed() {
 
     let update = make_update("refs/heads/main", zero_oid(), &oid);
     let start = std::time::Instant::now();
-    let err = pipeline.run(&repo_path, &[update]).await.unwrap_err();
+    let err = pipeline.run(&repo_path, &[update], None).await.unwrap_err();
     let elapsed = start.elapsed();
 
     assert_eq!(err.phase, "pre-receive");
@@ -394,7 +394,7 @@ async fn test_admission_only_called_at_configured_phase() {
         make_update("refs/heads/main", &oid1, &oid2),
         make_update("refs/heads/dev", zero_oid(), &oid1),
     ];
-    let accepted = pipeline.run(&repo_path, &updates).await.unwrap();
+    let accepted = pipeline.run(&repo_path, &updates, None).await.unwrap();
     assert_eq!(accepted, vec![0, 1]);
 
     // Admission called once per ref in update phase = 2 times; pre-receive = 0

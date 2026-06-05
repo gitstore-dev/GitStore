@@ -139,9 +139,14 @@ impl HttpPackServer {
             .collect();
 
         // Run pre-receive → proc-receive → update phases via the pipeline.
+        // Pass the quarantine dir so blob extraction can resolve pushed objects
+        // that are not yet visible in the live ODB.
         // block_in_place lets us .await inside spawn_blocking.
+        let quarantine_path = quarantine.as_ref().map(|q| q.dir.path().to_path_buf());
         let pipeline_result = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(pipeline.run(&self.repo_path, &hook_updates))
+            tokio::runtime::Handle::current().block_on(
+                pipeline.run(&self.repo_path, &hook_updates, quarantine_path.as_deref()),
+            )
         });
 
         let accepted_indices = match pipeline_result {
