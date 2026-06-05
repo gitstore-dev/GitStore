@@ -429,3 +429,191 @@ body
 	require.Len(t, res.Spec.Media, 1)
 	assert.Equal(t, "hero-image", res.Spec.Media[0].FileRef.Name)
 }
+
+// ── T010–T014: US1 spec field constraint tests ────────────────────────────────
+
+func TestParse_SpecTitle_TooLong_FieldNamedInError(t *testing.T) {
+	longTitle := strings.Repeat("x", 201)
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\nspec:\n  title: \"" +
+		longTitle + "\"\n---\nbody\n"
+	_, _, err := validate.Parse(strings.NewReader(doc))
+	require.Error(t, err)
+	// Must name the qualified field path and the limit (FR-001).
+	assert.Contains(t, err.Error(), "spec.title")
+	assert.Contains(t, err.Error(), "200")
+}
+
+func TestParse_SpecMedia_MissingFileRefName_IndexedError(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec:
+  media:
+    - fileRef:
+        kind: "File"
+---
+body
+`
+	_, _, err := validate.Parse(strings.NewReader(doc))
+	require.Error(t, err)
+	// Must name the indexed path (FR-002).
+	assert.Contains(t, err.Error(), "spec.media[0]")
+	assert.Contains(t, err.Error(), "fileref.name")
+}
+
+func TestParse_CategoryRef_MissingName_Rejected(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec:
+  categoryRef:
+    kind: CategoryTaxonomy
+---
+body
+`
+	_, _, err := validate.Parse(strings.NewReader(doc))
+	require.Error(t, err)
+	// Must name the qualified path (FR-005).
+	assert.Contains(t, err.Error(), "categoryref.name")
+}
+
+func TestParse_OptionsEmptyList_Accepted(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec:
+  options: []
+---
+body
+`
+	res, _, err := validate.Parse(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Empty(t, res.Spec.Options)
+}
+
+func TestParse_OptionsAbsent_Accepted(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec: {}
+---
+body
+`
+	res, _, err := validate.Parse(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Nil(t, res.Spec.Options)
+}
+
+func TestParse_MediaOptionalTrue_NoFileRefName_Rejected(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec:
+  media:
+    - fileRef:
+        kind: "File"
+        optional: true
+---
+body
+`
+	_, _, err := validate.Parse(strings.NewReader(doc))
+	require.Error(t, err)
+	// optional: true does NOT waive the name requirement.
+	assert.Contains(t, err.Error(), "fileref.name")
+}
+
+// ── T020–T021: US2 system-managed field tests ─────────────────────────────────
+
+func TestParse_StatusEmptyMap_Rejected(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec: {}
+status: {}
+---
+body
+`
+	_, _, err := validate.Parse(strings.NewReader(doc))
+	require.Error(t, err)
+	// Presence of key, not content, triggers rejection (FR-007).
+	assert.Contains(t, err.Error(), "status")
+	assert.Contains(t, err.Error(), "system-managed")
+}
+
+func TestParse_MultipleReadOnlyFields_AllNamed(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+  uid: some-uuid
+  resourceVersion: "1"
+  generation: 3
+spec: {}
+---
+body
+`
+	_, _, err := validate.Parse(strings.NewReader(doc))
+	require.Error(t, err)
+	// All three forbidden fields must appear (FR-008, FR-009).
+	assert.Contains(t, err.Error(), "uid")
+	assert.Contains(t, err.Error(), "resourceVersion")
+	assert.Contains(t, err.Error(), "generation")
+}
+
+// ── T006: Multi-error for forbidden metadata fields ───────────────────────────
+
+func TestParse_MultipleReadOnlyFieldsReportedTogether(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+  uid: some-uuid
+  resourceVersion: "1"
+spec: {}
+---
+body
+`
+	_, _, err := validate.Parse(strings.NewReader(doc))
+	require.Error(t, err)
+	// Both forbidden fields must appear in the single error response (FR-008, FR-009).
+	assert.Contains(t, err.Error(), "uid")
+	assert.Contains(t, err.Error(), "resourceVersion")
+}
+
+// ── T007: Full field path in struct-tag error messages ────────────────────────
+
+func TestParse_SpecMedia_FieldPathInError(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec:
+  media:
+    - fileRef:
+        kind: "File"
+---
+body
+`
+	_, _, err := validate.Parse(strings.NewReader(doc))
+	require.Error(t, err)
+	// The error must name the full qualified path, not just the leaf "name" (FR-002).
+	assert.Contains(t, err.Error(), "spec.media[0]")
+	assert.Contains(t, err.Error(), "fileref.name")
+}
