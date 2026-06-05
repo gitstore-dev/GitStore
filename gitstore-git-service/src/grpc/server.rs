@@ -11,12 +11,22 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
-use crate::git::hooks::{HookPipeline, NoopAdmissionHandler, RefUpdate};
+use crate::git::hooks::{HookPipeline, NoopAdmissionHandler, NoopValidationHandler, RefUpdate};
 use crate::git::repo::{create_repository, delete_repository, fanout_path, list_tags};
 use tracing::{error, info};
 
 pub mod proto {
-    tonic::include_proto!("gitstore.git.v1");
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/gen/gitstore/git/v1/gitstore.git.v1.rs"
+    ));
+}
+
+pub mod catalog_proto {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/gen/gitstore/catalog/v1/gitstore.catalog.v1.rs"
+    ));
 }
 
 use proto::git_service_server::GitService;
@@ -44,6 +54,10 @@ impl GitServiceImpl {
             Arc::new(HookPipeline::new(
                 default_hooks,
                 "pre-receive".to_string(),
+                std::time::Duration::from_secs(10),
+                "post-receive".to_string(),
+                "refs/heads/main".to_string(),
+                Arc::new(NoopValidationHandler),
                 Arc::new(NoopAdmissionHandler),
             )),
         )
@@ -1024,7 +1038,7 @@ impl GitService for GitServiceImpl {
 
         info!(repo_id = %repo_id, "receive_pack: refs committed");
 
-        pipeline.run_post_receive(&repo_path, &accepted_updates_for_callbacks);
+        pipeline.run_post_receive(&repo_path, &accepted_updates_for_callbacks, &repo_id);
 
         let report_status = build_report_status(
             &ref_updates,

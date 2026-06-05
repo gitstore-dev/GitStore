@@ -1,0 +1,1228 @@
+// @generated
+/// Generated client implementations.
+pub mod git_service_client {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    #[derive(Debug, Clone)]
+    pub struct GitServiceClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl GitServiceClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> GitServiceClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::Body>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> GitServiceClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::Body>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::Body>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+        {
+            GitServiceClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        pub async fn create_repository(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CreateRepositoryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CreateRepositoryResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/CreateRepository",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("gitstore.git.v1.GitService", "CreateRepository"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn delete_repository(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteRepositoryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteRepositoryResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/DeleteRepository",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("gitstore.git.v1.GitService", "DeleteRepository"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn info_refs(
+            &mut self,
+            request: impl tonic::IntoRequest<super::InfoRefsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::InfoRefsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/InfoRefs",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("gitstore.git.v1.GitService", "InfoRefs"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn receive_pack(
+            &mut self,
+            request: impl tonic::IntoStreamingRequest<
+                Message = super::ReceivePackRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::ReceivePackResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/ReceivePack",
+            );
+            let mut req = request.into_streaming_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("gitstore.git.v1.GitService", "ReceivePack"));
+            self.inner.client_streaming(req, path, codec).await
+        }
+        pub async fn upload_pack(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UploadPackRequest>,
+        ) -> std::result::Result<
+            tonic::Response<tonic::codec::Streaming<super::UploadPackResponse>>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/UploadPack",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("gitstore.git.v1.GitService", "UploadPack"));
+            self.inner.server_streaming(req, path, codec).await
+        }
+        pub async fn get_file(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetFileRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetFileResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/GetFile",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("gitstore.git.v1.GitService", "GetFile"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_file_stream(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetFileStreamRequest>,
+        ) -> std::result::Result<
+            tonic::Response<tonic::codec::Streaming<super::GetFileStreamResponse>>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/GetFileStream",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("gitstore.git.v1.GitService", "GetFileStream"));
+            self.inner.server_streaming(req, path, codec).await
+        }
+        pub async fn list_files(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListFilesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListFilesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/ListFiles",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("gitstore.git.v1.GitService", "ListFiles"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn commit_file(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CommitFileRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CommitFileResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/CommitFile",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("gitstore.git.v1.GitService", "CommitFile"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn delete_file(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteFileRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteFileResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/DeleteFile",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("gitstore.git.v1.GitService", "DeleteFile"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn create_tag(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CreateTagRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CreateTagResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/CreateTag",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("gitstore.git.v1.GitService", "CreateTag"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn list_tags(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListTagsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListTagsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/ListTags",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("gitstore.git.v1.GitService", "ListTags"));
+            self.inner.unary(req, path, codec).await
+        }
+        pub async fn get_latest_tag(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetLatestTagRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetLatestTagResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.git.v1.GitService/GetLatestTag",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("gitstore.git.v1.GitService", "GetLatestTag"));
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated server implementations.
+pub mod git_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with GitServiceServer.
+    #[async_trait]
+    pub trait GitService: std::marker::Send + std::marker::Sync + 'static {
+        async fn create_repository(
+            &self,
+            request: tonic::Request<super::CreateRepositoryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CreateRepositoryResponse>,
+            tonic::Status,
+        >;
+        async fn delete_repository(
+            &self,
+            request: tonic::Request<super::DeleteRepositoryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteRepositoryResponse>,
+            tonic::Status,
+        >;
+        async fn info_refs(
+            &self,
+            request: tonic::Request<super::InfoRefsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::InfoRefsResponse>,
+            tonic::Status,
+        >;
+        async fn receive_pack(
+            &self,
+            request: tonic::Request<tonic::Streaming<super::ReceivePackRequest>>,
+        ) -> std::result::Result<
+            tonic::Response<super::ReceivePackResponse>,
+            tonic::Status,
+        >;
+        /// Server streaming response type for the UploadPack method.
+        type UploadPackStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::UploadPackResponse, tonic::Status>,
+            >
+            + std::marker::Send
+            + 'static;
+        async fn upload_pack(
+            &self,
+            request: tonic::Request<super::UploadPackRequest>,
+        ) -> std::result::Result<tonic::Response<Self::UploadPackStream>, tonic::Status>;
+        async fn get_file(
+            &self,
+            request: tonic::Request<super::GetFileRequest>,
+        ) -> std::result::Result<tonic::Response<super::GetFileResponse>, tonic::Status>;
+        /// Server streaming response type for the GetFileStream method.
+        type GetFileStreamStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<super::GetFileStreamResponse, tonic::Status>,
+            >
+            + std::marker::Send
+            + 'static;
+        async fn get_file_stream(
+            &self,
+            request: tonic::Request<super::GetFileStreamRequest>,
+        ) -> std::result::Result<
+            tonic::Response<Self::GetFileStreamStream>,
+            tonic::Status,
+        >;
+        async fn list_files(
+            &self,
+            request: tonic::Request<super::ListFilesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListFilesResponse>,
+            tonic::Status,
+        >;
+        async fn commit_file(
+            &self,
+            request: tonic::Request<super::CommitFileRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CommitFileResponse>,
+            tonic::Status,
+        >;
+        async fn delete_file(
+            &self,
+            request: tonic::Request<super::DeleteFileRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteFileResponse>,
+            tonic::Status,
+        >;
+        async fn create_tag(
+            &self,
+            request: tonic::Request<super::CreateTagRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CreateTagResponse>,
+            tonic::Status,
+        >;
+        async fn list_tags(
+            &self,
+            request: tonic::Request<super::ListTagsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListTagsResponse>,
+            tonic::Status,
+        >;
+        async fn get_latest_tag(
+            &self,
+            request: tonic::Request<super::GetLatestTagRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetLatestTagResponse>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct GitServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> GitServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for GitServiceServer<T>
+    where
+        T: GitService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/gitstore.git.v1.GitService/CreateRepository" => {
+                    #[allow(non_camel_case_types)]
+                    struct CreateRepositorySvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::UnaryService<super::CreateRepositoryRequest>
+                    for CreateRepositorySvc<T> {
+                        type Response = super::CreateRepositoryResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CreateRepositoryRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::create_repository(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CreateRepositorySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.git.v1.GitService/DeleteRepository" => {
+                    #[allow(non_camel_case_types)]
+                    struct DeleteRepositorySvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::UnaryService<super::DeleteRepositoryRequest>
+                    for DeleteRepositorySvc<T> {
+                        type Response = super::DeleteRepositoryResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::DeleteRepositoryRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::delete_repository(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DeleteRepositorySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.git.v1.GitService/InfoRefs" => {
+                    #[allow(non_camel_case_types)]
+                    struct InfoRefsSvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::UnaryService<super::InfoRefsRequest>
+                    for InfoRefsSvc<T> {
+                        type Response = super::InfoRefsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::InfoRefsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::info_refs(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = InfoRefsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.git.v1.GitService/ReceivePack" => {
+                    #[allow(non_camel_case_types)]
+                    struct ReceivePackSvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::ClientStreamingService<super::ReceivePackRequest>
+                    for ReceivePackSvc<T> {
+                        type Response = super::ReceivePackResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                tonic::Streaming<super::ReceivePackRequest>,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::receive_pack(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ReceivePackSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.client_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.git.v1.GitService/UploadPack" => {
+                    #[allow(non_camel_case_types)]
+                    struct UploadPackSvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::ServerStreamingService<super::UploadPackRequest>
+                    for UploadPackSvc<T> {
+                        type Response = super::UploadPackResponse;
+                        type ResponseStream = T::UploadPackStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::UploadPackRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::upload_pack(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UploadPackSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.git.v1.GitService/GetFile" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetFileSvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::UnaryService<super::GetFileRequest>
+                    for GetFileSvc<T> {
+                        type Response = super::GetFileResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetFileRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::get_file(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetFileSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.git.v1.GitService/GetFileStream" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetFileStreamSvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::ServerStreamingService<super::GetFileStreamRequest>
+                    for GetFileStreamSvc<T> {
+                        type Response = super::GetFileStreamResponse;
+                        type ResponseStream = T::GetFileStreamStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetFileStreamRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::get_file_stream(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetFileStreamSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.git.v1.GitService/ListFiles" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListFilesSvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::UnaryService<super::ListFilesRequest>
+                    for ListFilesSvc<T> {
+                        type Response = super::ListFilesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListFilesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::list_files(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListFilesSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.git.v1.GitService/CommitFile" => {
+                    #[allow(non_camel_case_types)]
+                    struct CommitFileSvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::UnaryService<super::CommitFileRequest>
+                    for CommitFileSvc<T> {
+                        type Response = super::CommitFileResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CommitFileRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::commit_file(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CommitFileSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.git.v1.GitService/DeleteFile" => {
+                    #[allow(non_camel_case_types)]
+                    struct DeleteFileSvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::UnaryService<super::DeleteFileRequest>
+                    for DeleteFileSvc<T> {
+                        type Response = super::DeleteFileResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::DeleteFileRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::delete_file(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DeleteFileSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.git.v1.GitService/CreateTag" => {
+                    #[allow(non_camel_case_types)]
+                    struct CreateTagSvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::UnaryService<super::CreateTagRequest>
+                    for CreateTagSvc<T> {
+                        type Response = super::CreateTagResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CreateTagRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::create_tag(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CreateTagSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.git.v1.GitService/ListTags" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListTagsSvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::UnaryService<super::ListTagsRequest>
+                    for ListTagsSvc<T> {
+                        type Response = super::ListTagsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListTagsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::list_tags(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListTagsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.git.v1.GitService/GetLatestTag" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetLatestTagSvc<T: GitService>(pub Arc<T>);
+                    impl<
+                        T: GitService,
+                    > tonic::server::UnaryService<super::GetLatestTagRequest>
+                    for GetLatestTagSvc<T> {
+                        type Response = super::GetLatestTagResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetLatestTagRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as GitService>::get_latest_tag(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetLatestTagSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for GitServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "gitstore.git.v1.GitService";
+    impl<T> tonic::server::NamedService for GitServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}

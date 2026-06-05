@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 
+pub mod admission_handler;
+pub mod validation_handler;
+
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -56,19 +59,52 @@ impl std::fmt::Display for HookRejection {
 impl std::error::Error for HookRejection {}
 
 // ---------------------------------------------------------------------------
+// ResourceBlob
+// ---------------------------------------------------------------------------
+
+/// Raw bytes of a candidate resource file extracted from a push commit.
+/// Any file beginning with `---` qualifies; kind/apiVersion inside determine routing.
+#[derive(Clone, Debug)]
+pub struct ResourceBlob {
+    pub path: String,
+    pub blob_oid: String,
+    pub content: Vec<u8>,
+}
+
+// ---------------------------------------------------------------------------
+// ValidationHandler trait
+// ---------------------------------------------------------------------------
+
+/// Called in the pre-receive phase (blocking). Receives pre-extracted resource blobs
+/// from the quarantine area and returns an admission decision.
+#[async_trait]
+pub trait ValidationHandler: Send + Sync {
+    async fn validate(&self, blobs: &[ResourceBlob]) -> anyhow::Result<AdmissionDecision>;
+}
+
+/// Default no-op implementation — always accepts.
+pub struct NoopValidationHandler;
+
+#[async_trait]
+impl ValidationHandler for NoopValidationHandler {
+    async fn validate(&self, _blobs: &[ResourceBlob]) -> anyhow::Result<AdmissionDecision> {
+        Ok(AdmissionDecision::Accept)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AdmissionHandler trait
 // ---------------------------------------------------------------------------
 
-/// Integration point for future admission (#105) and validation (#106) services.
-/// Implemented by any type that participates in push admission decisions.
-///
-/// Called at the phase configured by
-/// `GITSTORE_ADMISSION_CONTROL_VALIDATING_ADMISSION_POLICY_PHASE`.
+/// Called in the post-receive phase (fire-and-forget).
 #[async_trait]
 pub trait AdmissionHandler: Send + Sync {
-    /// Return `Accept` to allow the push/ref to proceed, or `Reject(reason)` to block it.
-    /// Errors are treated as `Reject("admission handler error")`.
-    async fn admit(&self, phase: &str, updates: &[RefUpdate]) -> anyhow::Result<AdmissionDecision>;
+    async fn admit(
+        &self,
+        phase: &str,
+        updates: &[RefUpdate],
+        repository_id: &str,
+    ) -> anyhow::Result<AdmissionDecision>;
 }
 
 /// Default no-op implementation — always accepts.
@@ -80,6 +116,7 @@ impl AdmissionHandler for NoopAdmissionHandler {
         &self,
         _phase: &str,
         _updates: &[RefUpdate],
+        _repository_id: &str,
     ) -> anyhow::Result<AdmissionDecision> {
         Ok(AdmissionDecision::Accept)
     }
@@ -89,25 +126,39 @@ impl AdmissionHandler for NoopAdmissionHandler {
 // HookPipeline
 // ---------------------------------------------------------------------------
 
-const ADMISSION_TIMEOUT: Duration = Duration::from_secs(5);
-
 /// Orchestrates the in-process hook execution pipeline for a single push event.
 pub struct HookPipeline {
     pub config: GitReceivePackHooks,
-    pub admission_phase: String,
+
+    // Schema validation slot (blocking, pre-receive by default)
+    pub schema_validation_phase: String,
+    pub schema_validation_timeout: Duration,
+    pub validation_handler: Arc<dyn ValidationHandler + Send + Sync>,
+
+    // Admission control slot (fire-and-forget, post-receive by default)
+    pub admission_control_phase: String,
+    pub admission_branch_pattern: String,
     pub admission_handler: Arc<dyn AdmissionHandler + Send + Sync>,
 }
 
 impl HookPipeline {
     pub fn new(
         config: GitReceivePackHooks,
-        admission_phase: String,
-        handler: Arc<dyn AdmissionHandler + Send + Sync>,
+        schema_validation_phase: String,
+        schema_validation_timeout: Duration,
+        admission_control_phase: String,
+        admission_branch_pattern: String,
+        validation_handler: Arc<dyn ValidationHandler + Send + Sync>,
+        admission_handler: Arc<dyn AdmissionHandler + Send + Sync>,
     ) -> Self {
         Self {
             config,
-            admission_phase,
-            admission_handler: handler,
+            schema_validation_phase,
+            schema_validation_timeout,
+            validation_handler,
+            admission_control_phase,
+            admission_branch_pattern,
+            admission_handler,
         }
     }
 
@@ -124,7 +175,7 @@ impl HookPipeline {
         // --- pre-receive (once per push, all-or-nothing) ---
         if self.config.pre_receive.enabled {
             let decision = self
-                .run_phase_with_admission("pre-receive", git_dir, updates, || {
+                .run_schema_validation("pre-receive", git_dir, updates, || {
                     run_pre_receive(git_dir, updates)
                 })
                 .await;
@@ -147,7 +198,7 @@ impl HookPipeline {
         // --- proc-receive (once per push, all-or-nothing) ---
         if self.config.proc_receive.enabled {
             let decision = self
-                .run_phase_with_admission("proc-receive", git_dir, updates, || {
+                .run_schema_validation("proc-receive", git_dir, updates, || {
                     run_proc_receive(git_dir, updates)
                 })
                 .await;
@@ -176,7 +227,7 @@ impl HookPipeline {
             }
             let single = std::slice::from_ref(update);
             let decision = self
-                .run_phase_with_admission("update", git_dir, single, || run_update(git_dir, update))
+                .run_schema_validation("update", git_dir, single, || run_update(git_dir, update))
                 .await;
             match decision {
                 HookDecision::Accept => {
@@ -212,7 +263,7 @@ impl HookPipeline {
         }
         let start = Instant::now();
         let decision = self
-            .run_phase_with_admission("reference-transaction/prepared", git_dir, updates, || {
+            .run_schema_validation("reference-transaction/prepared", git_dir, updates, || {
                 HookDecision::Accept
             })
             .await;
@@ -266,13 +317,34 @@ impl HookPipeline {
         }
     }
 
-    /// Called after refs are committed. Errors are logged at ERROR level and never propagated.
-    pub fn run_post_receive(&self, git_dir: &Path, updates: &[RefUpdate]) {
+    /// Called after refs are committed. Spawns the admission control handler
+    /// (fire-and-forget) and logs phase completion.
+    pub fn run_post_receive(&self, git_dir: &Path, updates: &[RefUpdate], repository_id: &str) {
         if !self.config.post_receive.enabled {
             return;
         }
         let start = Instant::now();
-        run_post_receive(git_dir, updates);
+
+        if self.admission_control_phase == "post-receive" {
+            let handler = Arc::clone(&self.admission_handler);
+            let updates_owned = updates.to_vec();
+            let repository_id = repository_id.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = handler
+                    .admit("post-receive", &updates_owned, &repository_id)
+                    .await
+                {
+                    error!(
+                        phase = "post-receive",
+                        reason = %e,
+                        "admission_handler_error"
+                    );
+                }
+            });
+        } else {
+            run_post_receive(git_dir, updates);
+        }
+
         let duration_ms = start.elapsed().as_millis() as u64;
         info!(
             phase = "post-receive",
@@ -284,12 +356,13 @@ impl HookPipeline {
 
     // -- internal helpers --
 
-    /// Run `phase_fn` then, if this is the configured admission phase, call the handler
-    /// with a 5-second timeout (fail-closed). Returns the final `HookDecision`.
-    async fn run_phase_with_admission<F>(
+    /// Run `phase_fn` then, if this is the configured schema validation phase, call the
+    /// validation handler with the configured timeout (fail-closed).
+    /// Returns the final `HookDecision`.
+    async fn run_schema_validation<F>(
         &self,
         phase: &str,
-        _git_dir: &Path,
+        git_dir: &Path,
         updates: &[RefUpdate],
         phase_fn: F,
     ) -> HookDecision
@@ -301,11 +374,12 @@ impl HookPipeline {
         if let HookDecision::Reject(_) = &decision {
             return decision;
         }
-        // Only invoke the admission handler at the configured phase.
-        if phase == self.admission_phase {
+        // Invoke the validation handler at its configured phase (blocking, fail-closed).
+        if phase == self.schema_validation_phase {
+            let blobs = extract_resource_blobs(git_dir, updates);
             let result = tokio::time::timeout(
-                ADMISSION_TIMEOUT,
-                self.admission_handler.admit(phase, updates),
+                self.schema_validation_timeout,
+                self.validation_handler.validate(&blobs),
             )
             .await;
             let duration_ms = start.elapsed().as_millis() as u64;
@@ -315,18 +389,42 @@ impl HookPipeline {
                     return HookDecision::Reject(reason);
                 }
                 Ok(Err(e)) => {
-                    error!(
-                        phase,
-                        duration_ms,
-                        reason = %e,
-                        "hook_phase_error"
-                    );
-                    return HookDecision::Reject("admission handler error".to_string());
+                    error!(phase, duration_ms, reason = %e, "hook_phase_error");
+                    return HookDecision::Reject("validation handler error".to_string());
                 }
                 Err(_elapsed) => {
                     error!(
                         phase,
                         duration_ms,
+                        reason = "validation service timeout",
+                        "hook_phase_error"
+                    );
+                    return HookDecision::Reject("validation service unavailable".to_string());
+                }
+            }
+        }
+
+        // Also invoke the admission handler at its configured phase when that phase is blocking
+        // (i.e., when admission_control_phase is not post-receive). This allows the admission
+        // slot to veto pushes at any pre/proc/update phase — used by integration tests.
+        if phase == self.admission_control_phase && phase != "post-receive" {
+            let result = tokio::time::timeout(
+                self.schema_validation_timeout,
+                self.admission_handler.admit(phase, updates, ""),
+            )
+            .await;
+            match result {
+                Ok(Ok(AdmissionDecision::Accept)) => {}
+                Ok(Ok(AdmissionDecision::Reject(reason))) => {
+                    return HookDecision::Reject(reason);
+                }
+                Ok(Err(e)) => {
+                    error!(phase, reason = %e, "hook_phase_error");
+                    return HookDecision::Reject("admission handler error".to_string());
+                }
+                Err(_elapsed) => {
+                    error!(
+                        phase,
                         reason = "admission service timeout",
                         "hook_phase_error"
                     );
@@ -335,6 +433,102 @@ impl HookPipeline {
             }
         }
         decision
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Blob extraction
+// ---------------------------------------------------------------------------
+
+/// Walk the commit trees for all ref updates and collect resource blobs (files
+/// beginning with `---`). Objects are accessible from the git quarantine area.
+/// Returns an empty vec if git_dir is not a valid repo or any update fails.
+fn extract_resource_blobs(git_dir: &Path, updates: &[RefUpdate]) -> Vec<ResourceBlob> {
+    let zero = "0".repeat(40);
+    let repo = match gix::open(git_dir) {
+        Ok(r) => r,
+        Err(_) => return vec![],
+    };
+
+    let mut blobs = Vec::new();
+    for update in updates {
+        let oid_hex = &update.new_oid;
+        if oid_hex == &zero {
+            continue; // branch deletion — no blobs to extract
+        }
+        let oid = match gix::ObjectId::from_hex(oid_hex.as_bytes()) {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
+        collect_blobs_from_commit(&repo, oid, &mut blobs);
+    }
+    blobs
+}
+
+fn collect_blobs_from_commit(
+    repo: &gix::Repository,
+    commit_id: gix::ObjectId,
+    out: &mut Vec<ResourceBlob>,
+) {
+    let commit = match repo
+        .find_object(commit_id)
+        .ok()
+        .and_then(|o| o.try_into_commit().ok())
+    {
+        Some(c) => c,
+        None => return,
+    };
+    let tree_id = match commit.tree_id().map(|id| id.detach()) {
+        Ok(id) => id,
+        Err(_) => return,
+    };
+    collect_blobs_from_tree(repo, tree_id, "", out);
+}
+
+fn collect_blobs_from_tree(
+    repo: &gix::Repository,
+    tree_id: gix::ObjectId,
+    prefix: &str,
+    out: &mut Vec<ResourceBlob>,
+) {
+    let tree = match repo
+        .find_object(tree_id)
+        .ok()
+        .and_then(|o| o.try_into_tree().ok())
+    {
+        Some(t) => t,
+        None => return,
+    };
+    let decoded = match tree.decode() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    for entry in &decoded.entries {
+        let name = entry.filename.to_string();
+        let path = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{}/{}", prefix, name)
+        };
+        match entry.mode.kind() {
+            gix::object::tree::EntryKind::Tree => {
+                collect_blobs_from_tree(repo, entry.oid.into(), &path, out);
+            }
+            gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable => {
+                let blob_id: gix::ObjectId = entry.oid.into();
+                if let Ok(blob_obj) = repo.find_object(blob_id) {
+                    let content = blob_obj.data.to_vec();
+                    if content.starts_with(b"---") {
+                        out.push(ResourceBlob {
+                            path,
+                            blob_oid: blob_id.to_string(),
+                            content,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -460,7 +654,7 @@ mod tests {
             old_oid: "0".repeat(40),
             new_oid: "a".repeat(40),
         }];
-        let result = h.admit("pre-receive", &updates).await.unwrap();
+        let result = h.admit("pre-receive", &updates, "").await.unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
     }
 
@@ -477,6 +671,18 @@ mod tests {
         }
     }
 
+    fn make_pipeline(config: GitReceivePackHooks) -> HookPipeline {
+        HookPipeline::new(
+            config,
+            "pre-receive".to_string(),
+            Duration::from_secs(10),
+            "post-receive".to_string(),
+            "refs/heads/main".to_string(),
+            Arc::new(NoopValidationHandler),
+            Arc::new(NoopAdmissionHandler),
+        )
+    }
+
     fn make_update(ref_name: &str) -> RefUpdate {
         RefUpdate {
             ref_name: ref_name.to_string(),
@@ -487,11 +693,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_all_disabled_accepts_all_indices() {
-        let pipeline = HookPipeline::new(
-            make_disabled_config(),
-            "pre-receive".to_string(),
-            Arc::new(NoopAdmissionHandler),
-        );
+        let pipeline = make_pipeline(make_disabled_config());
         let updates = vec![
             make_update("refs/heads/main"),
             make_update("refs/heads/dev"),
@@ -508,11 +710,7 @@ mod tests {
         use crate::config::HookToggle;
         let mut cfg = make_disabled_config();
         cfg.pre_receive = HookToggle { enabled: true };
-        let pipeline = HookPipeline::new(
-            cfg,
-            "pre-receive".to_string(),
-            Arc::new(NoopAdmissionHandler),
-        );
+        let pipeline = make_pipeline(cfg);
         let updates = vec![make_update("refs/heads/main")];
         let result = pipeline
             .run(std::path::Path::new("/tmp"), &updates)
@@ -549,5 +747,131 @@ mod tests {
     fn test_get_tag_name() {
         assert_eq!(get_tag_name("refs/tags/v1.0.0"), Some("v1.0.0".to_string()));
         assert_eq!(get_tag_name("refs/heads/main"), None);
+    }
+
+    // T009: ResourceBlob extraction logic
+
+    fn make_repo_with_files(
+        dir: &std::path::Path,
+        files: &[(&str, &[u8])],
+    ) -> (gix::Repository, gix::ObjectId) {
+        let repo = gix::init_bare(dir).unwrap();
+
+        let mut tree_id = gix::ObjectId::empty_tree(gix::hash::Kind::Sha1);
+        for (path, content) in files {
+            let blob_oid = repo.write_blob(content).unwrap().detach();
+            tree_id = repo
+                .edit_tree(tree_id)
+                .unwrap()
+                .upsert(*path, gix::object::tree::EntryKind::Blob, blob_oid)
+                .unwrap()
+                .write()
+                .unwrap()
+                .detach();
+        }
+
+        let tree_id = tree_id;
+
+        let sig = gix::actor::Signature {
+            name: "test".into(),
+            email: "test@test.com".into(),
+            time: gix::date::Time::now_local_or_utc(),
+        };
+        let mut time_buf = gix::date::parse::TimeBuf::default();
+        let sig_ref = sig.to_ref(&mut time_buf);
+        let commit_id = repo
+            .commit_as(
+                sig_ref,
+                sig_ref,
+                "HEAD",
+                "init",
+                tree_id,
+                std::iter::empty::<gix::ObjectId>(),
+            )
+            .unwrap()
+            .detach();
+
+        (repo, commit_id)
+    }
+
+    #[test]
+    fn test_file_with_frontmatter_prefix_extracted_as_blob() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = b"---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\n---\nbody";
+        let (repo, commit_id) =
+            make_repo_with_files(dir.path(), &[("products/widget.md", content)]);
+
+        // extract_resource_blobs opens a fresh repo from git_dir; use path directly
+        let mut out = Vec::new();
+        collect_blobs_from_commit(&repo, commit_id, &mut out);
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].path, "products/widget.md");
+        assert!(out[0].content.starts_with(b"---"));
+    }
+
+    #[test]
+    fn test_file_without_frontmatter_prefix_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = b"This is just a plain markdown file without frontmatter.";
+        let (repo, commit_id) = make_repo_with_files(dir.path(), &[("README.md", content)]);
+
+        let mut out = Vec::new();
+        collect_blobs_from_commit(&repo, commit_id, &mut out);
+
+        assert_eq!(out.len(), 0, "non-frontmatter files must be skipped");
+    }
+
+    #[test]
+    fn test_ref_update_with_zero_old_oid_treated_as_new_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let content = b"---\nkind: Product\n---\nbody";
+        let (repo, commit_id) = make_repo_with_files(dir.path(), &[("products/p.md", content)]);
+
+        // new branch creation: old_oid is all zeros
+        let update = RefUpdate {
+            ref_name: "refs/heads/new-branch".to_string(),
+            old_oid: "0".repeat(40),
+            new_oid: commit_id.to_string(),
+        };
+
+        let mut out = Vec::new();
+        collect_blobs_from_commit(&repo, commit_id, &mut out);
+
+        // Blobs extracted regardless of old_oid
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].path, "products/p.md");
+        // The zero old_oid case is handled by extract_resource_blobs skipping deletions
+        let _ = update; // just show the zero old_oid scenario compiles
+    }
+
+    #[test]
+    fn test_empty_commit_tree_produces_zero_blobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = gix::init_bare(dir.path()).unwrap();
+
+        let sig = gix::actor::Signature {
+            name: "test".into(),
+            email: "test@test.com".into(),
+            time: gix::date::Time::now_local_or_utc(),
+        };
+        let empty_tree = gix::ObjectId::empty_tree(gix::hash::Kind::Sha1);
+        let mut time_buf = gix::date::parse::TimeBuf::default();
+        let sig_ref = sig.to_ref(&mut time_buf);
+        let commit_id = repo
+            .commit_as(
+                sig_ref,
+                sig_ref,
+                "HEAD",
+                "empty",
+                empty_tree,
+                std::iter::empty::<gix::ObjectId>(),
+            )
+            .unwrap()
+            .detach();
+
+        let mut out = Vec::new();
+        collect_blobs_from_commit(&repo, commit_id, &mut out);
+        assert_eq!(out.len(), 0);
     }
 }

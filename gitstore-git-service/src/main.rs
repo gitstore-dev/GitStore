@@ -10,7 +10,11 @@ use tracing::{error, info};
 
 use std::sync::Arc;
 
-use gitstore::git::hooks::{HookPipeline, NoopAdmissionHandler};
+use gitstore::git::hooks::validation_handler::SchemaValidationHandler;
+use gitstore::git::hooks::{
+    admission_handler::AdmissionControlHandler, HookPipeline, NoopAdmissionHandler,
+    NoopValidationHandler,
+};
 use gitstore::grpc::server::{proto::git_service_server::GitServiceServer, GitServiceImpl};
 
 #[derive(Parser, Debug)]
@@ -59,15 +63,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!(path = %data_path.display(), "Created data directory");
     }
 
+    // Build validation handler — connect lazily so startup never blocks on catalog service.
+    let catalog_url = cfg.catalog_service.uri.clone();
+    let validation_timeout = std::time::Duration::from_secs(cfg.schema_validation.timeout_secs);
+    let validation_handler: Arc<dyn gitstore::git::hooks::ValidationHandler + Send + Sync> =
+        match SchemaValidationHandler::connect(&catalog_url, validation_timeout, "".to_string())
+            .await
+        {
+            Ok(h) => {
+                info!(url = %catalog_url, "SchemaValidationHandler connected");
+                Arc::new(h)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "SchemaValidationHandler unavailable at startup; using noop");
+                Arc::new(NoopValidationHandler)
+            }
+        };
+
+    // Build admission handler.
+    let admission_handler: Arc<dyn gitstore::git::hooks::AdmissionHandler + Send + Sync> =
+        match AdmissionControlHandler::connect(
+            &catalog_url,
+            cfg.admission_control.branch_pattern.clone(),
+        )
+        .await
+        {
+            Ok(h) => {
+                info!(url = %catalog_url, "AdmissionControlHandler connected");
+                Arc::new(h)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "AdmissionControlHandler unavailable at startup; using noop");
+                Arc::new(NoopAdmissionHandler)
+            }
+        };
+
     // Start gRPC server
     let grpc_addr: SocketAddr = format!("0.0.0.0:{}", cfg.grpc.port).parse()?;
     let hook_pipeline = Arc::new(HookPipeline::new(
         cfg.hooks.git_receive_pack.clone(),
-        cfg.admission_control
-            .validating_admission_policy
-            .phase
-            .clone(),
-        Arc::new(NoopAdmissionHandler),
+        cfg.schema_validation.phase.clone(),
+        validation_timeout,
+        cfg.admission_control.phase.clone(),
+        cfg.admission_control.branch_pattern.clone(),
+        validation_handler,
+        admission_handler,
     ));
     let grpc_service = GitServiceImpl::with_pipeline(data_path.clone(), hook_pipeline);
     info!(

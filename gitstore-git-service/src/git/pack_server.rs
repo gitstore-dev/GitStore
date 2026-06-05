@@ -275,7 +275,7 @@ impl HttpPackServer {
             drop(quarantine);
         }
 
-        pipeline.run_post_receive(&self.repo_path, &accepted_updates);
+        pipeline.run_post_receive(&self.repo_path, &accepted_updates, "");
 
         // Build report-status response.
         let accepted_set: std::collections::HashSet<usize> =
