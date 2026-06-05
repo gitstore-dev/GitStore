@@ -181,6 +181,26 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.True(t, result.HasNext)
 	})
 
+	t.Run("Product/SpecRoundTrip", func(t *testing.T) {
+		p := newProduct()
+		p.Spec = []byte(`{"title":"Widget","tags":["new"]}`)
+		require.NoError(t, ds.CreateProduct(ctx, p))
+
+		got, err := ds.GetProduct(ctx, p.UID)
+		require.NoError(t, err)
+		assert.Equal(t, string(p.Spec), string(got.Spec))
+	})
+
+	t.Run("Product/StatusRoundTrip", func(t *testing.T) {
+		p := newProduct()
+		p.Status = []byte(`{"observedGeneration":2,"conditions":[{"type":"READY","status":"TRUE","lastTransitionTime":"2026-01-01T00:00:00Z"}]}`)
+		require.NoError(t, ds.CreateProduct(ctx, p))
+
+		got, err := ds.GetProduct(ctx, p.UID)
+		require.NoError(t, err)
+		assert.Equal(t, string(p.Status), string(got.Status))
+	})
+
 	t.Run("Category/CreateAndGet", func(t *testing.T) {
 		c := newCategory()
 		require.NoError(t, ds.CreateCategory(ctx, c))

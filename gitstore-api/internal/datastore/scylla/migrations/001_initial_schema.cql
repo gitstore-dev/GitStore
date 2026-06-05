@@ -1,44 +1,38 @@
-CREATE TABLE IF NOT EXISTS products (
-    -- Partition + clustering key
+CREATE TABLE IF NOT EXISTS products_by_namespace (
     namespace          text,
-    name               text,
-
-    -- Immutable identity
+    creation_timestamp timestamp,
     uid                uuid,
+    name               text,
     api_version        text,
     kind               text,
-
-    -- Versioning / optimistic concurrency
     generation         bigint,
     resource_version   text,
-    creation_timestamp timestamp,
     revision           text,
-
-    -- Author-supplied classification
     labels             map<text, text>,
     annotations        map<text, text>,
-
-    -- Ownership (serialized JSON — rarely queried directly)
     owner_refs         text,
-
-    -- Git provenance
     git_commit_sha     text,
     git_ref            text,
-
-    -- Spec (complex nested structure — serialized JSON)
     spec               text,
-
-    -- Markdown body content
     body               text,
-
-    -- Status (system-only — serialized JSON)
     status             text,
+    PRIMARY KEY ((namespace), creation_timestamp, uid)
+) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC);
 
-    PRIMARY KEY (namespace, name)
-) WITH CLUSTERING ORDER BY (name ASC);
+CREATE TABLE IF NOT EXISTS products_by_name (
+    namespace          text,
+    name               text,
+    uid                uuid,
+    creation_timestamp timestamp,
+    PRIMARY KEY ((namespace), name)
+);
 
--- Secondary index for UID lookups (global ID resolution)
-CREATE INDEX IF NOT EXISTS products_by_uid ON products (uid);
+CREATE TABLE IF NOT EXISTS products_by_uid (
+    uid                uuid,
+    namespace          text,
+    creation_timestamp timestamp,
+    PRIMARY KEY (uid)
+);
 
 CREATE TABLE IF NOT EXISTS categories (
     bucket             text,

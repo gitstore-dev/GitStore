@@ -23,6 +23,7 @@ type Resolver struct {
 // NewResolver creates a new GraphQL resolver.
 // writer is the GitWriter backed by the gRPC client; pass nil to disable writes.
 func NewResolver(store datastore.Datastore, writer GitWriter, logger *zap.Logger) *Resolver {
+	SetConverterLogger(logger)
 	svc := NewServiceWithWriter(store, writer, logger)
 	return &Resolver{
 		logger:         logger,

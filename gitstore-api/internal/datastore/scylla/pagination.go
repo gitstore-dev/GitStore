@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gocql/gocql"
 	"github.com/scylladb/gocqlx/v3/table"
 )
 
@@ -27,6 +28,9 @@ func parsePageCursor(cursor string) (*datastore.PageCursor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid timestamp: %w", err)
 	}
+	if _, err := gocql.ParseUUID(parts[2]); err != nil {
+		return nil, fmt.Errorf("invalid cursor id: %w", err)
+	}
 	return &datastore.PageCursor{CreatedAt: ts, ID: parts[2]}, nil
 }
 
@@ -37,13 +41,27 @@ type paginatedQuery struct {
 	Args []any
 }
 
+// clusterKeys names the two clustering columns used for keyset pagination.
+// The default is ("created_at", "id") which matches categories/collections/namespaces/repositories.
+// Products use ("creation_timestamp", "uid").
+type clusterKeys struct {
+	TimestampCol string
+	IDCol        string
+}
+
+var defaultClusterKeys = clusterKeys{TimestampCol: "created_at", IDCol: "id"}
+var productClusterKeys = clusterKeys{TimestampCol: "creation_timestamp", IDCol: "uid"}
+
 // buildPaginatedSelect constructs a CQL SELECT with keyset pagination.
-// It uses tuple inequality comparisons (created_at, id) < (?, ?) for forward
-// pagination and (created_at, id) > (?, ?) for backward, with reversed ORDER BY.
+// It uses tuple inequality comparisons on the two clustering columns for forward
+// pagination and the reverse predicate for backward, with reversed ORDER BY.
 //
-// extraWhere adds additional WHERE clauses (e.g., "namespace_id = ?") and
-// extraArgs provides corresponding bind values.
-func buildPaginatedSelect(tbl *table.Table, page datastore.PageParams, extraWhere []string, extraArgs []any) paginatedQuery {
+// partitionCol is the partition key column name (e.g. "bucket" or "namespace").
+// partitionVal is the bind value for that column.
+// ck specifies the clustering column names; pass defaultClusterKeys for all entities
+// except products (which use productClusterKeys).
+// extraWhere adds additional WHERE clauses and extraArgs provides their bind values.
+func buildPaginatedSelect(tbl *table.Table, page datastore.PageParams, partitionCol string, partitionVal any, ck clusterKeys, extraWhere []string, extraArgs []any) paginatedQuery {
 	limit := page.Limit()
 	fetchLimit := limit + 1
 
@@ -53,33 +71,35 @@ func buildPaginatedSelect(tbl *table.Table, page datastore.PageParams, extraWher
 	var whereParts []string
 	var args []any
 
-	// Partition key: bucket = ?
-	whereParts = append(whereParts, "bucket = ?")
-	args = append(args, BucketAll)
+	// Partition key predicate
+	whereParts = append(whereParts, partitionCol+" = ?")
+	args = append(args, partitionVal)
 
-	// Additional WHERE clauses (e.g., namespace_id = ?)
+	// Additional WHERE clauses
 	whereParts = append(whereParts, extraWhere...)
 	args = append(args, extraArgs...)
 
 	// Cursor-based tuple inequality
 	backward := page.Last > 0
+	ltPredicate := fmt.Sprintf("(%s, %s) < (?, ?)", ck.TimestampCol, ck.IDCol)
+	gtPredicate := fmt.Sprintf("(%s, %s) > (?, ?)", ck.TimestampCol, ck.IDCol)
 	if page.After != "" && !backward {
 		cursor, err := parsePageCursor(page.After)
 		if err == nil {
-			whereParts = append(whereParts, "(created_at, id) < (?, ?)")
+			whereParts = append(whereParts, ltPredicate)
 			args = append(args, cursor.CreatedAt, mustParseUUID(cursor.ID))
 		}
 	} else if backward && page.Before != "" {
 		cursor, err := parsePageCursor(page.Before)
 		if err == nil {
-			whereParts = append(whereParts, "(created_at, id) > (?, ?)")
+			whereParts = append(whereParts, gtPredicate)
 			args = append(args, cursor.CreatedAt, mustParseUUID(cursor.ID))
 		}
 	}
 
-	orderClause := "ORDER BY created_at DESC, id DESC"
+	orderClause := fmt.Sprintf("ORDER BY %s DESC, %s DESC", ck.TimestampCol, ck.IDCol)
 	if backward {
-		orderClause = "ORDER BY created_at ASC, id ASC"
+		orderClause = fmt.Sprintf("ORDER BY %s ASC, %s ASC", ck.TimestampCol, ck.IDCol)
 	}
 
 	stmt := fmt.Sprintf("SELECT %s FROM %s WHERE %s %s LIMIT %d",

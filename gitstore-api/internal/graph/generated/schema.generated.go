@@ -51,7 +51,7 @@ type QueryResolver interface {
 	Collections(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.CollectionConnection, error)
 	Namespace(ctx context.Context, by model.NamespaceBy) (*model.Namespace, error)
 	Namespaces(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.NamespaceConnection, error)
-	Product(ctx context.Context, namespace string, name string) (*model.Product, error)
+	Product(ctx context.Context, by model.ProductBy) (*model.Product, error)
 	Products(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error)
 	Repository(ctx context.Context, by model.RepositoryBy) (*model.Repository, error)
 	Repositories(ctx context.Context, namespaceID string, first *int32, after *string, last *int32, before *string) (*model.RepositoryConnection, error)
@@ -514,22 +514,14 @@ func (ec *executionContext) field_Query_nodes_args(ctx context.Context, rawArgs 
 func (ec *executionContext) field_Query_product_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "namespace",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNString2string(ctx, v)
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "by",
+		func(ctx context.Context, v any) (model.ProductBy, error) {
+			return ec.unmarshalNProductBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductBy(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["namespace"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "name",
-		func(ctx context.Context, v any) (string, error) {
-			return ec.unmarshalNString2string(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["name"] = arg1
+	args["by"] = arg0
 	return args, nil
 }
 
@@ -1925,7 +1917,7 @@ func (ec *executionContext) _Query_product(ctx context.Context, field graphql.Co
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Product(ctx, fc.Args["namespace"].(string), fc.Args["name"].(string))
+			return ec.Resolvers.Query().Product(ctx, fc.Args["by"].(model.ProductBy))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.Product) graphql.Marshaler {
@@ -2256,7 +2248,7 @@ func (ec *executionContext) unmarshalInputProductBy(ctx context.Context, obj any
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"id", "sku"}
+	fieldsInOrder := [...]string{"id", "namespacePath"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -2270,13 +2262,50 @@ func (ec *executionContext) unmarshalInputProductBy(ctx context.Context, obj any
 				return it, err
 			}
 			it.ID = data
-		case "sku":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("sku"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+		case "namespacePath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespacePath"))
+			data, err := ec.unmarshalOProductNamespacePath2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductNamespacePath(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.Sku = data
+			it.NamespacePath = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputProductNamespacePath(ctx context.Context, obj any) (model.ProductNamespacePath, error) {
+	var it model.ProductNamespacePath
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"namespace", "name"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
 		}
 	}
 	return it, nil
@@ -2938,6 +2967,11 @@ func (ec *executionContext) marshalNPageInfo2ᚖgithubᚗcomᚋgitstoreᚑdevᚋ
 	return ec._PageInfo(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNProductBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductBy(ctx context.Context, v any) (model.ProductBy, error) {
+	res, err := ec.unmarshalInputProductBy(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) unmarshalOJSON2map(ctx context.Context, v any) (map[string]any, error) {
 	if v == nil {
 		return nil, nil
@@ -2961,6 +2995,14 @@ func (ec *executionContext) marshalONode2githubᚗcomᚋgitstoreᚑdevᚋgitstor
 		return graphql.Null
 	}
 	return ec._Node(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOProductNamespacePath2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductNamespacePath(ctx context.Context, v any) (*model.ProductNamespacePath, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputProductNamespacePath(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 // endregion ***************************** type.gotpl *****************************

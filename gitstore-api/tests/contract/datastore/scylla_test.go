@@ -43,6 +43,18 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// contactPointTranslator redirects all peer addresses to the contact point,
+// needed when Scylla runs behind Docker NAT where rpc_address is an internal IP.
+func contactPointTranslator(contactHost string, contactPort int) gocql.AddressTranslator {
+	contactIP := net.ParseIP(contactHost)
+	return gocql.AddressTranslatorFunc(func(_ net.IP, port int) (net.IP, int) {
+		if contactPort > 0 {
+			port = contactPort
+		}
+		return contactIP, port
+	})
+}
+
 func provisionKeyspace(addr, keyspace string) {
 	host, portStr, splitErr := net.SplitHostPort(addr)
 	if splitErr != nil {
@@ -58,10 +70,12 @@ func provisionKeyspace(addr, keyspace string) {
 	cluster.ConnectTimeout = 5 * time.Second
 	cluster.Timeout = 5 * time.Second
 	cluster.DisableShardAwarePort = true
+	cluster.IgnorePeerAddr = true
+	cluster.AddressTranslator = contactPointTranslator(host, port)
 
 	var session *gocql.Session
 	var err error
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		session, err = cluster.CreateSession()
 		if err == nil {
@@ -112,15 +126,25 @@ func openRootSession(addr string) (*gocql.Session, error) {
 	cluster.ConnectTimeout = 5 * time.Second
 	cluster.Timeout = 5 * time.Second
 	cluster.DisableShardAwarePort = true
+	cluster.IgnorePeerAddr = true
+	cluster.AddressTranslator = contactPointTranslator(host, port)
 	return cluster.CreateSession()
 }
 
 func newScyllaDatastore(t *testing.T) datastore.Datastore {
 	t.Helper()
+	host, portStr, splitErr := net.SplitHostPort(scyllaAddr)
+	if splitErr != nil {
+		host = scyllaAddr
+		portStr = "9042"
+	}
+	port, _ := strconv.Atoi(portStr)
 	cfg := config.ScyllaConfig{
 		Hosts:                 []string{scyllaAddr},
 		Keyspace:              scyllaKeyspace,
 		DisableShardAwarePort: true,
+		IgnorePeerAddr:        true,
+		AddressTranslator:     contactPointTranslator(host, port),
 	}
 	store, err := scylla.New(cfg, zap.NewNop())
 	require.NoError(t, err)

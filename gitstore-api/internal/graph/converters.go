@@ -6,8 +6,13 @@
 package graph
 
 import (
+	"encoding/json"
+	"strings"
+	"time"
+
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"go.uber.org/zap"
 )
 
 // datastoreNamespaceToModel converts a datastore Namespace to a GraphQL model Namespace.
@@ -43,6 +48,153 @@ func DatastoreNamespaceToGraphQL(ns *datastore.Namespace) *model.Namespace {
 	return datastoreNamespaceToModel(ns)
 }
 
+// converterLogger is a package-level logger for blob-unmarshal warnings.
+// It is initialised to a no-op logger by default; callers that have a real
+// logger can replace it via SetConverterLogger.
+var converterLogger *zap.Logger = zap.NewNop()
+
+// SetConverterLogger replaces the package-level logger used by converter helpers.
+func SetConverterLogger(l *zap.Logger) { converterLogger = l }
+
+// specFromJSON deserialises a ProductSpec blob. A nil/empty blob returns a
+// non-nil empty spec (FR-001). Unmarshal errors are logged at WARN level and
+// also return the empty spec.
+func specFromJSON(raw json.RawMessage) *model.ProductSpec {
+	empty := &model.ProductSpec{
+		Tags:    []string{},
+		Media:   []*model.MediaDefinition{},
+		Options: []*model.ProductOptionDefinition{},
+	}
+	if len(raw) == 0 {
+		return empty
+	}
+	var s model.ProductSpec
+	if err := json.Unmarshal(raw, &s); err != nil {
+		converterLogger.Warn("product blob unmarshal error", zap.String("field", "spec"), zap.Error(err))
+		return empty
+	}
+	if s.Tags == nil {
+		s.Tags = []string{}
+	}
+	if s.Media == nil {
+		s.Media = []*model.MediaDefinition{}
+	}
+	if s.Options == nil {
+		s.Options = []*model.ProductOptionDefinition{}
+	}
+	return &s
+}
+
+// rawCondition mirrors catalog.Condition so we can unmarshal Kubernetes-style
+// enum strings ("Ready"/"True") before mapping them to GraphQL enum values
+// ("READY"/"TRUE"). The generated UnmarshalJSON on model enums rejects the
+// Kubernetes casing, which would cause valid system-written blobs to silently
+// return nil status for every ingested product.
+type rawCondition struct {
+	Type               string    `json:"type"`
+	Status             string    `json:"status"`
+	ObservedGeneration int32     `json:"observedGeneration"`
+	LastTransitionTime time.Time `json:"lastTransitionTime"`
+	Reason             string    `json:"reason,omitempty"`
+	Message            string    `json:"message,omitempty"`
+}
+
+type rawProductStatus struct {
+	ObservedGeneration  int32                            `json:"observedGeneration"`
+	LastAppliedRevision string                           `json:"lastAppliedRevision"`
+	Conditions          []rawCondition                   `json:"conditions"`
+	Resolved            *model.ResolvedProductDefinition `json:"resolved,omitempty"`
+}
+
+// k8sConditionTypeToGraphQL maps Kubernetes TitleCase condition type strings to
+// the SCREAMING_SNAKE_CASE GraphQL enum values.
+var k8sConditionTypeToGraphQL = map[string]model.ProductConditionType{
+	"Published":         model.ProductConditionTypePublished,
+	"AdmissionAccepted": model.ProductConditionTypeAdmissionAccepted,
+	"CategoryResolved":  model.ProductConditionTypeCategoryResolved,
+	"OptionsAccepted":   model.ProductConditionTypeOptionsAccepted,
+	"VariantsResolved":  model.ProductConditionTypeVariantsResolved,
+	"Ready":             model.ProductConditionTypeReady,
+}
+
+// k8sConditionStatusToGraphQL maps "True"/"False"/"Unknown" to their GraphQL equivalents.
+var k8sConditionStatusToGraphQL = map[string]model.ConditionStatus{
+	"True":    model.ConditionStatusTrue,
+	"False":   model.ConditionStatusFalse,
+	"Unknown": model.ConditionStatusUnknown,
+}
+
+// statusFromJSON deserialises a ProductStatus blob. A nil/empty blob returns
+// nil (FR-002). Unmarshal errors are logged at WARN and also return nil.
+// Condition enums are normalised from Kubernetes TitleCase to GraphQL UPPER_SNAKE_CASE.
+func statusFromJSON(raw json.RawMessage) *model.ProductStatus {
+	if len(raw) == 0 {
+		return nil
+	}
+	var rs rawProductStatus
+	if err := json.Unmarshal(raw, &rs); err != nil {
+		converterLogger.Warn("product blob unmarshal error", zap.String("field", "status"), zap.Error(err))
+		return nil
+	}
+	conditions := make([]*model.ProductCondition, 0, len(rs.Conditions))
+	for _, c := range rs.Conditions {
+		condType, ok := k8sConditionTypeToGraphQL[c.Type]
+		if !ok {
+			// Already a GraphQL value or unknown — pass through uppercased.
+			condType = model.ProductConditionType(strings.ToUpper(c.Type))
+		}
+		condStatus, ok := k8sConditionStatusToGraphQL[c.Status]
+		if !ok {
+			condStatus = model.ConditionStatus(strings.ToUpper(c.Status))
+		}
+		gen := c.ObservedGeneration
+		cond := &model.ProductCondition{
+			Type:               condType,
+			Status:             condStatus,
+			ObservedGeneration: &gen,
+			LastTransitionTime: c.LastTransitionTime,
+		}
+		if c.Reason != "" {
+			r := c.Reason
+			cond.Reason = &r
+		}
+		if c.Message != "" {
+			m := c.Message
+			cond.Message = &m
+		}
+		conditions = append(conditions, cond)
+	}
+	var lastApplied *string
+	if rs.LastAppliedRevision != "" {
+		s := rs.LastAppliedRevision
+		lastApplied = &s
+	}
+	return &model.ProductStatus{
+		ObservedGeneration:  rs.ObservedGeneration,
+		LastAppliedRevision: lastApplied,
+		Conditions:          conditions,
+		Resolved:            rs.Resolved,
+	}
+}
+
+// ownerRefsFromJSON deserialises an OwnerRefs blob. Nil/empty or unmarshal
+// errors return an empty (never nil) slice.
+func ownerRefsFromJSON(raw json.RawMessage) []*model.OwnerReference {
+	empty := []*model.OwnerReference{}
+	if len(raw) == 0 {
+		return empty
+	}
+	var refs []*model.OwnerReference
+	if err := json.Unmarshal(raw, &refs); err != nil {
+		converterLogger.Warn("product blob unmarshal error", zap.String("field", "ownerRefs"), zap.Error(err))
+		return empty
+	}
+	if refs == nil {
+		return empty
+	}
+	return refs
+}
+
 // DatastoreProductToGraphQL converts a datastore Product to a GraphQL model Product.
 func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 	if p == nil {
@@ -56,7 +208,7 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 		ResourceVersion:   p.ResourceVersion,
 		Generation:        gen,
 		CreationTimestamp: p.CreationTimestamp,
-		OwnerReferences:   []*model.OwnerReference{},
+		OwnerReferences:   ownerRefsFromJSON(p.OwnerRefs),
 	}
 	if p.Revision != "" {
 		meta.Revision = &p.Revision
@@ -80,7 +232,8 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 		APIVersion: p.APIVersion,
 		Kind:       p.Kind,
 		Metadata:   meta,
-		Spec:       &model.ProductSpec{Tags: []string{}, Media: []*model.MediaDefinition{}, Options: []*model.ProductOptionDefinition{}},
+		Spec:       specFromJSON(p.Spec),
+		Status:     statusFromJSON(p.Status),
 	}
 }
 
