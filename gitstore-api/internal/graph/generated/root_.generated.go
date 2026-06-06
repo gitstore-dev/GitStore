@@ -64,18 +64,27 @@ type ComplexityRoot struct {
 	}
 
 	Category struct {
-		Body         func(childComplexity int) int
-		Children     func(childComplexity int) int
-		CreatedAt    func(childComplexity int) int
-		Depth        func(childComplexity int) int
-		DisplayOrder func(childComplexity int) int
-		ID           func(childComplexity int) int
-		Name         func(childComplexity int) int
-		Parent       func(childComplexity int) int
-		Path         func(childComplexity int) int
-		Products     func(childComplexity int, first *int32, after *string, last *int32, before *string) int
-		Slug         func(childComplexity int) int
-		UpdatedAt    func(childComplexity int) int
+		APIVersion func(childComplexity int) int
+		Body       func(childComplexity int) int
+		Children   func(childComplexity int) int
+		Depth      func(childComplexity int) int
+		ID         func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Parent     func(childComplexity int) int
+		Path       func(childComplexity int) int
+		Products   func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
+	}
+
+	CategoryCondition struct {
+		LastTransitionTime func(childComplexity int) int
+		Message            func(childComplexity int) int
+		ObservedGeneration func(childComplexity int) int
+		Reason             func(childComplexity int) int
+		Status             func(childComplexity int) int
+		Type               func(childComplexity int) int
 	}
 
 	CategoryConnection struct {
@@ -89,11 +98,37 @@ type ComplexityRoot struct {
 		Node   func(childComplexity int) int
 	}
 
+	CategoryObjectMeta struct {
+		Annotations       func(childComplexity int) int
+		CreationTimestamp func(childComplexity int) int
+		Generation        func(childComplexity int) int
+		Labels            func(childComplexity int) int
+		Name              func(childComplexity int) int
+		Namespace         func(childComplexity int) int
+		OwnerReferences   func(childComplexity int) int
+		ResourceVersion   func(childComplexity int) int
+		Revision          func(childComplexity int) int
+		UID               func(childComplexity int) int
+	}
+
 	CategoryOptimisticLockConflict struct {
 		AttemptedVersion func(childComplexity int) int
 		Current          func(childComplexity int) int
 		CurrentVersion   func(childComplexity int) int
 		Diff             func(childComplexity int) int
+	}
+
+	CategorySpec struct {
+		Media     func(childComplexity int) int
+		ParentRef func(childComplexity int) int
+		Title     func(childComplexity int) int
+	}
+
+	CategoryTaxonomyStatus struct {
+		Conditions          func(childComplexity int) int
+		LastAppliedRevision func(childComplexity int) int
+		ObservedGeneration  func(childComplexity int) int
+		Resolved            func(childComplexity int) int
 	}
 
 	Collection struct {
@@ -171,6 +206,11 @@ type ComplexityRoot struct {
 		Kind     func(childComplexity int) int
 		Name     func(childComplexity int) int
 		Optional func(childComplexity int) int
+	}
+
+	KeyValuePair struct {
+		Key   func(childComplexity int) int
+		Value func(childComplexity int) int
 	}
 
 	LoginPayload struct {
@@ -384,6 +424,13 @@ type ComplexityRoot struct {
 		Path func(childComplexity int) int
 	}
 
+	ResolvedCategoryTaxonomy struct {
+		AncestorPath func(childComplexity int) int
+		ChildCount   func(childComplexity int) int
+		Depth        func(childComplexity int) int
+		ProductCount func(childComplexity int) int
+	}
+
 	ResolvedFileDefinition struct {
 		ContentType func(childComplexity int) int
 		Name        func(childComplexity int) int
@@ -575,6 +622,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CatalogVersion.Tag(childComplexity), true
 
+	case "Category.apiVersion":
+		if e.ComplexityRoot.Category.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Category.APIVersion(childComplexity), true
+
 	case "Category.body":
 		if e.ComplexityRoot.Category.Body == nil {
 			break
@@ -589,26 +643,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Category.Children(childComplexity), true
 
-	case "Category.createdAt":
-		if e.ComplexityRoot.Category.CreatedAt == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Category.CreatedAt(childComplexity), true
-
 	case "Category.depth":
 		if e.ComplexityRoot.Category.Depth == nil {
 			break
 		}
 
 		return e.ComplexityRoot.Category.Depth(childComplexity), true
-
-	case "Category.displayOrder":
-		if e.ComplexityRoot.Category.DisplayOrder == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Category.DisplayOrder(childComplexity), true
 
 	case "Category.id":
 		if e.ComplexityRoot.Category.ID == nil {
@@ -617,12 +657,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Category.ID(childComplexity), true
 
-	case "Category.name":
-		if e.ComplexityRoot.Category.Name == nil {
+	case "Category.kind":
+		if e.ComplexityRoot.Category.Kind == nil {
 			break
 		}
 
-		return e.ComplexityRoot.Category.Name(childComplexity), true
+		return e.ComplexityRoot.Category.Kind(childComplexity), true
+
+	case "Category.metadata":
+		if e.ComplexityRoot.Category.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Category.Metadata(childComplexity), true
 
 	case "Category.parent":
 		if e.ComplexityRoot.Category.Parent == nil {
@@ -650,19 +697,61 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Category.Products(childComplexity, args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
 
-	case "Category.slug":
-		if e.ComplexityRoot.Category.Slug == nil {
+	case "Category.spec":
+		if e.ComplexityRoot.Category.Spec == nil {
 			break
 		}
 
-		return e.ComplexityRoot.Category.Slug(childComplexity), true
+		return e.ComplexityRoot.Category.Spec(childComplexity), true
 
-	case "Category.updatedAt":
-		if e.ComplexityRoot.Category.UpdatedAt == nil {
+	case "Category.status":
+		if e.ComplexityRoot.Category.Status == nil {
 			break
 		}
 
-		return e.ComplexityRoot.Category.UpdatedAt(childComplexity), true
+		return e.ComplexityRoot.Category.Status(childComplexity), true
+
+	case "CategoryCondition.lastTransitionTime":
+		if e.ComplexityRoot.CategoryCondition.LastTransitionTime == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryCondition.LastTransitionTime(childComplexity), true
+
+	case "CategoryCondition.message":
+		if e.ComplexityRoot.CategoryCondition.Message == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryCondition.Message(childComplexity), true
+
+	case "CategoryCondition.observedGeneration":
+		if e.ComplexityRoot.CategoryCondition.ObservedGeneration == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryCondition.ObservedGeneration(childComplexity), true
+
+	case "CategoryCondition.reason":
+		if e.ComplexityRoot.CategoryCondition.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryCondition.Reason(childComplexity), true
+
+	case "CategoryCondition.status":
+		if e.ComplexityRoot.CategoryCondition.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryCondition.Status(childComplexity), true
+
+	case "CategoryCondition.type":
+		if e.ComplexityRoot.CategoryCondition.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryCondition.Type(childComplexity), true
 
 	case "CategoryConnection.edges":
 		if e.ComplexityRoot.CategoryConnection.Edges == nil {
@@ -699,6 +788,76 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CategoryEdge.Node(childComplexity), true
 
+	case "CategoryObjectMeta.annotations":
+		if e.ComplexityRoot.CategoryObjectMeta.Annotations == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryObjectMeta.Annotations(childComplexity), true
+
+	case "CategoryObjectMeta.creationTimestamp":
+		if e.ComplexityRoot.CategoryObjectMeta.CreationTimestamp == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryObjectMeta.CreationTimestamp(childComplexity), true
+
+	case "CategoryObjectMeta.generation":
+		if e.ComplexityRoot.CategoryObjectMeta.Generation == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryObjectMeta.Generation(childComplexity), true
+
+	case "CategoryObjectMeta.labels":
+		if e.ComplexityRoot.CategoryObjectMeta.Labels == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryObjectMeta.Labels(childComplexity), true
+
+	case "CategoryObjectMeta.name":
+		if e.ComplexityRoot.CategoryObjectMeta.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryObjectMeta.Name(childComplexity), true
+
+	case "CategoryObjectMeta.namespace":
+		if e.ComplexityRoot.CategoryObjectMeta.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryObjectMeta.Namespace(childComplexity), true
+
+	case "CategoryObjectMeta.ownerReferences":
+		if e.ComplexityRoot.CategoryObjectMeta.OwnerReferences == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryObjectMeta.OwnerReferences(childComplexity), true
+
+	case "CategoryObjectMeta.resourceVersion":
+		if e.ComplexityRoot.CategoryObjectMeta.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryObjectMeta.ResourceVersion(childComplexity), true
+
+	case "CategoryObjectMeta.revision":
+		if e.ComplexityRoot.CategoryObjectMeta.Revision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryObjectMeta.Revision(childComplexity), true
+
+	case "CategoryObjectMeta.uid":
+		if e.ComplexityRoot.CategoryObjectMeta.UID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryObjectMeta.UID(childComplexity), true
+
 	case "CategoryOptimisticLockConflict.attemptedVersion":
 		if e.ComplexityRoot.CategoryOptimisticLockConflict.AttemptedVersion == nil {
 			break
@@ -726,6 +885,55 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CategoryOptimisticLockConflict.Diff(childComplexity), true
+
+	case "CategorySpec.media":
+		if e.ComplexityRoot.CategorySpec.Media == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategorySpec.Media(childComplexity), true
+
+	case "CategorySpec.parentRef":
+		if e.ComplexityRoot.CategorySpec.ParentRef == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategorySpec.ParentRef(childComplexity), true
+
+	case "CategorySpec.title":
+		if e.ComplexityRoot.CategorySpec.Title == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategorySpec.Title(childComplexity), true
+
+	case "CategoryTaxonomyStatus.conditions":
+		if e.ComplexityRoot.CategoryTaxonomyStatus.Conditions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryTaxonomyStatus.Conditions(childComplexity), true
+
+	case "CategoryTaxonomyStatus.lastAppliedRevision":
+		if e.ComplexityRoot.CategoryTaxonomyStatus.LastAppliedRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryTaxonomyStatus.LastAppliedRevision(childComplexity), true
+
+	case "CategoryTaxonomyStatus.observedGeneration":
+		if e.ComplexityRoot.CategoryTaxonomyStatus.ObservedGeneration == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryTaxonomyStatus.ObservedGeneration(childComplexity), true
+
+	case "CategoryTaxonomyStatus.resolved":
+		if e.ComplexityRoot.CategoryTaxonomyStatus.Resolved == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryTaxonomyStatus.Resolved(childComplexity), true
 
 	case "Collection.body":
 		if e.ComplexityRoot.Collection.Body == nil {
@@ -997,6 +1205,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.FileReference.Optional(childComplexity), true
+
+	case "KeyValuePair.key":
+		if e.ComplexityRoot.KeyValuePair.Key == nil {
+			break
+		}
+
+		return e.ComplexityRoot.KeyValuePair.Key(childComplexity), true
+
+	case "KeyValuePair.value":
+		if e.ComplexityRoot.KeyValuePair.Value == nil {
+			break
+		}
+
+		return e.ComplexityRoot.KeyValuePair.Value(childComplexity), true
 
 	case "LoginPayload.clientMutationId":
 		if e.ComplexityRoot.LoginPayload.ClientMutationID == nil {
@@ -2037,6 +2259,34 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ResolvedCategoryDefinition.Path(childComplexity), true
 
+	case "ResolvedCategoryTaxonomy.ancestorPath":
+		if e.ComplexityRoot.ResolvedCategoryTaxonomy.AncestorPath == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedCategoryTaxonomy.AncestorPath(childComplexity), true
+
+	case "ResolvedCategoryTaxonomy.childCount":
+		if e.ComplexityRoot.ResolvedCategoryTaxonomy.ChildCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedCategoryTaxonomy.ChildCount(childComplexity), true
+
+	case "ResolvedCategoryTaxonomy.depth":
+		if e.ComplexityRoot.ResolvedCategoryTaxonomy.Depth == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedCategoryTaxonomy.Depth(childComplexity), true
+
+	case "ResolvedCategoryTaxonomy.productCount":
+		if e.ComplexityRoot.ResolvedCategoryTaxonomy.ProductCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedCategoryTaxonomy.ProductCount(childComplexity), true
+
 	case "ResolvedFileDefinition.contentType":
 		if e.ComplexityRoot.ResolvedFileDefinition.ContentType == nil {
 			break
@@ -2482,7 +2732,10 @@ extend type Mutation {
 }
 
 """
-Category represents a hierarchical classification system for products
+Category represents a hierarchical classification system for products.
+Follows the Kubernetes-style resource envelope: id / apiVersion / kind / metadata / spec / status.
+Tree-traversal convenience fields (parent, children, path, depth, products, body) are top-level
+because they are computed or graph-linked and do not belong in spec or status.
 """
 type Category implements Node {
   """
@@ -2491,32 +2744,47 @@ type Category implements Node {
   id: ID!
 
   """
-  Category display name
+  Kubernetes-style apiVersion (e.g. catalog.gitstore.dev/v1beta1).
   """
-  name: String!
+  apiVersion: String
 
   """
-  URL-friendly slug (unique)
+  Resource kind. Always "CategoryTaxonomy" for git-backed categories.
   """
-  slug: String!
+  kind: String
 
   """
-  Parent category (null for root categories)
+  Resource metadata (name, labels, system-assigned fields).
+  """
+  metadata: CategoryObjectMeta!
+
+  """
+  Author-supplied specification (title, parentRef, media).
+  """
+  spec: CategorySpec!
+
+  """
+  System-written status. Null until the first push is admitted.
+  """
+  status: CategoryTaxonomyStatus
+
+  """
+  Markdown body content (category description).
+  """
+  body: String
+
+  """
+  Parent category (null for root categories).
   """
   parent: Category
 
   """
-  Child categories (subcategories)
+  Direct child categories.
   """
   children: [Category!]!
 
   """
-  Display order within parent
-  """
-  displayOrder: Int!
-
-  """
-  Products in this category (includes subcategory products)
+  Products in this category (includes subcategory products).
   """
   products(
     first: Int
@@ -2526,29 +2794,88 @@ type Category implements Node {
   ): ProductConnection!
 
   """
-  Markdown body content (category description with rich formatting)
-  """
-  body: String
-
-  """
-  Creation timestamp
-  """
-  createdAt: DateTime!
-
-  """
-  Last modification timestamp
-  """
-  updatedAt: DateTime!
-
-  """
-  Full path from root (e.g., ["Electronics", "Computers", "Laptops"])
+  Full path from root (e.g., ["electronics", "computers", "laptops"]).
+  Derived from the materialized ancestor path stored at admission time.
   """
   path: [String!]!
 
   """
-  Depth in tree (root = 0)
+  Depth in tree (root = 0).
   """
   depth: Int!
+}
+
+"""
+Metadata for a CategoryTaxonomy resource.
+Author-supplied fields (name, namespace, labels, annotations) originate from the git file.
+System-assigned fields (uid through ownerReferences) are written by the ingest pipeline.
+"""
+type CategoryObjectMeta {
+  name: String!
+  namespace: String
+
+  """
+  Kubernetes-style labels. Use KeyValuePair list (JSON type alignment with Product deferred).
+  """
+  labels: [KeyValuePair!]!
+  annotations: [KeyValuePair!]!
+
+  # System-assigned (read-only)
+  uid: ID!
+  resourceVersion: String!
+  generation: Int!
+  creationTimestamp: DateTime!
+  revision: String
+  ownerReferences: [OwnerReference!]!
+}
+
+"""
+Author-supplied specification for a CategoryTaxonomy resource.
+"""
+type CategorySpec {
+  title: String!
+  parentRef: CatalogObjectReference
+  media: [MediaDefinition!]!
+}
+
+"""
+A key-value pair for label maps.
+"""
+type KeyValuePair {
+  key: String!
+  value: String!
+}
+
+"""
+System-written status for a git-backed CategoryTaxonomy resource.
+"""
+type CategoryTaxonomyStatus {
+  observedGeneration: Int!
+  lastAppliedRevision: String!
+  conditions: [CategoryCondition!]!
+  resolved: ResolvedCategoryTaxonomy
+}
+
+"""
+A named status condition following the Kubernetes condition convention.
+"""
+type CategoryCondition {
+  type: String!
+  status: String!
+  observedGeneration: Int!
+  lastTransitionTime: DateTime!
+  reason: String
+  message: String
+}
+
+"""
+Controller-computed category hierarchy metadata.
+"""
+type ResolvedCategoryTaxonomy {
+  depth: Int!
+  ancestorPath: String!
+  childCount: Int!
+  productCount: Int!
 }
 
 """
@@ -3979,6 +4306,10 @@ Selector for looking up a category by exactly one unique key.
 input CategoryBy @oneOf {
   id: ID
   slug: String
+  """
+  Look up a git-backed category by its metadata.name (unique within namespace).
+  """
+  name: String
 }
 
 """
@@ -4081,30 +4412,48 @@ func (ec *executionContext) childFields_Category(ctx context.Context, field grap
 	switch field.Name {
 	case "id":
 		return ec.fieldContext_Category_id(ctx, field)
-	case "name":
-		return ec.fieldContext_Category_name(ctx, field)
-	case "slug":
-		return ec.fieldContext_Category_slug(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_Category_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_Category_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_Category_metadata(ctx, field)
+	case "spec":
+		return ec.fieldContext_Category_spec(ctx, field)
+	case "status":
+		return ec.fieldContext_Category_status(ctx, field)
+	case "body":
+		return ec.fieldContext_Category_body(ctx, field)
 	case "parent":
 		return ec.fieldContext_Category_parent(ctx, field)
 	case "children":
 		return ec.fieldContext_Category_children(ctx, field)
-	case "displayOrder":
-		return ec.fieldContext_Category_displayOrder(ctx, field)
 	case "products":
 		return ec.fieldContext_Category_products(ctx, field)
-	case "body":
-		return ec.fieldContext_Category_body(ctx, field)
-	case "createdAt":
-		return ec.fieldContext_Category_createdAt(ctx, field)
-	case "updatedAt":
-		return ec.fieldContext_Category_updatedAt(ctx, field)
 	case "path":
 		return ec.fieldContext_Category_path(ctx, field)
 	case "depth":
 		return ec.fieldContext_Category_depth(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Category", field.Name)
+}
+
+func (ec *executionContext) childFields_CategoryCondition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_CategoryCondition_type(ctx, field)
+	case "status":
+		return ec.fieldContext_CategoryCondition_status(ctx, field)
+	case "observedGeneration":
+		return ec.fieldContext_CategoryCondition_observedGeneration(ctx, field)
+	case "lastTransitionTime":
+		return ec.fieldContext_CategoryCondition_lastTransitionTime(ctx, field)
+	case "reason":
+		return ec.fieldContext_CategoryCondition_reason(ctx, field)
+	case "message":
+		return ec.fieldContext_CategoryCondition_message(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CategoryCondition", field.Name)
 }
 
 func (ec *executionContext) childFields_CategoryConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4129,6 +4478,32 @@ func (ec *executionContext) childFields_CategoryEdge(ctx context.Context, field 
 	return nil, fmt.Errorf("no field named %q was found under type CategoryEdge", field.Name)
 }
 
+func (ec *executionContext) childFields_CategoryObjectMeta(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_CategoryObjectMeta_name(ctx, field)
+	case "namespace":
+		return ec.fieldContext_CategoryObjectMeta_namespace(ctx, field)
+	case "labels":
+		return ec.fieldContext_CategoryObjectMeta_labels(ctx, field)
+	case "annotations":
+		return ec.fieldContext_CategoryObjectMeta_annotations(ctx, field)
+	case "uid":
+		return ec.fieldContext_CategoryObjectMeta_uid(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_CategoryObjectMeta_resourceVersion(ctx, field)
+	case "generation":
+		return ec.fieldContext_CategoryObjectMeta_generation(ctx, field)
+	case "creationTimestamp":
+		return ec.fieldContext_CategoryObjectMeta_creationTimestamp(ctx, field)
+	case "revision":
+		return ec.fieldContext_CategoryObjectMeta_revision(ctx, field)
+	case "ownerReferences":
+		return ec.fieldContext_CategoryObjectMeta_ownerReferences(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CategoryObjectMeta", field.Name)
+}
+
 func (ec *executionContext) childFields_CategoryOptimisticLockConflict(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "currentVersion":
@@ -4141,6 +4516,32 @@ func (ec *executionContext) childFields_CategoryOptimisticLockConflict(ctx conte
 		return ec.fieldContext_CategoryOptimisticLockConflict_diff(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CategoryOptimisticLockConflict", field.Name)
+}
+
+func (ec *executionContext) childFields_CategorySpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "title":
+		return ec.fieldContext_CategorySpec_title(ctx, field)
+	case "parentRef":
+		return ec.fieldContext_CategorySpec_parentRef(ctx, field)
+	case "media":
+		return ec.fieldContext_CategorySpec_media(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CategorySpec", field.Name)
+}
+
+func (ec *executionContext) childFields_CategoryTaxonomyStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "observedGeneration":
+		return ec.fieldContext_CategoryTaxonomyStatus_observedGeneration(ctx, field)
+	case "lastAppliedRevision":
+		return ec.fieldContext_CategoryTaxonomyStatus_lastAppliedRevision(ctx, field)
+	case "conditions":
+		return ec.fieldContext_CategoryTaxonomyStatus_conditions(ctx, field)
+	case "resolved":
+		return ec.fieldContext_CategoryTaxonomyStatus_resolved(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CategoryTaxonomyStatus", field.Name)
 }
 
 func (ec *executionContext) childFields_Collection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4295,6 +4696,16 @@ func (ec *executionContext) childFields_FileReference(ctx context.Context, field
 		return ec.fieldContext_FileReference_optional(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type FileReference", field.Name)
+}
+
+func (ec *executionContext) childFields_KeyValuePair(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "key":
+		return ec.fieldContext_KeyValuePair_key(ctx, field)
+	case "value":
+		return ec.fieldContext_KeyValuePair_value(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type KeyValuePair", field.Name)
 }
 
 func (ec *executionContext) childFields_LoginPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4643,6 +5054,20 @@ func (ec *executionContext) childFields_ResolvedCategoryDefinition(ctx context.C
 		return ec.fieldContext_ResolvedCategoryDefinition_path(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ResolvedCategoryDefinition", field.Name)
+}
+
+func (ec *executionContext) childFields_ResolvedCategoryTaxonomy(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "depth":
+		return ec.fieldContext_ResolvedCategoryTaxonomy_depth(ctx, field)
+	case "ancestorPath":
+		return ec.fieldContext_ResolvedCategoryTaxonomy_ancestorPath(ctx, field)
+	case "childCount":
+		return ec.fieldContext_ResolvedCategoryTaxonomy_childCount(ctx, field)
+	case "productCount":
+		return ec.fieldContext_ResolvedCategoryTaxonomy_productCount(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ResolvedCategoryTaxonomy", field.Name)
 }
 
 func (ec *executionContext) childFields_ResolvedFileDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

@@ -18,11 +18,11 @@ func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (mo
 		}
 		return DatastoreProductToGraphQL(product), nil
 	case nodeKindCategory:
-		category, err := r.service.GetCategoryByID(ctx, rawID)
-		if err != nil {
-			return nil, nil
-		}
-		return DatastoreCategoryToGraphQL(category), nil
+		// UID-based global node lookup for CategoryTaxonomy is not yet indexed
+		// (no GetCategoryTaxonomyByUID method exists). Returns nil until a UID
+		// index is added to the category_taxonomy table.
+		_ = rawID
+		return nil, nil
 	case nodeKindCollection:
 		collection, err := r.service.GetCollectionByID(ctx, rawID)
 		if err != nil {

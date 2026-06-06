@@ -124,6 +124,10 @@ Selector for looking up a category by exactly one unique key.
 input CategoryBy @oneOf {
   id: ID
   slug: String
+  """
+  Look up a git-backed category by its metadata.name (unique within namespace).
+  """
+  name: String
 }
 
 """

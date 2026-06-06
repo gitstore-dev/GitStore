@@ -66,13 +66,11 @@ type Datastore interface {
 	UpdateProduct(ctx context.Context, p *Product) error
 	DeleteProduct(ctx context.Context, uid string) error
 
-	// Category operations
-	CreateCategory(ctx context.Context, c *Category) error
-	GetCategory(ctx context.Context, id string) (*Category, error)
-	GetCategoryBySlug(ctx context.Context, slug string) (*Category, error)
-	ListCategories(ctx context.Context, page PageParams) (*PageResult[Category], error)
-	UpdateCategory(ctx context.Context, c *Category) error
-	DeleteCategory(ctx context.Context, id string) error
+	// CategoryTaxonomy operations
+	CreateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error
+	GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*CategoryTaxonomy, error)
+	ListCategoryTaxonomies(ctx context.Context, namespace string, page PageParams) (*PageResult[CategoryTaxonomy], error)
+	UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error
 
 	// Collection operations
 	CreateCollection(ctx context.Context, c *Collection) error

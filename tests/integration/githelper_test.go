@@ -43,7 +43,7 @@ func newPushHelper(t *testing.T) *pushHelper {
 	t.Helper()
 
 	workDir := t.TempDir()
-	namespace := getEnv("NAMESPACE", "gitstore")
+	namespace := getEnv("NAMESPACE", "gitstore-test")
 	repository := getEnv("REPOSITORY", "catalog")
 	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitURL, namespace, repository)
 

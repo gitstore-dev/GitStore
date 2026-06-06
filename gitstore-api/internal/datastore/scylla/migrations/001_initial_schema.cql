@@ -34,19 +34,6 @@ CREATE TABLE IF NOT EXISTS products_by_uid (
     PRIMARY KEY (uid)
 );
 
-CREATE TABLE IF NOT EXISTS categories (
-    bucket             text,
-    created_at         timestamp,
-    id                 uuid,
-    name               text,
-    slug               text,
-    parent_id          text,
-    display_order      int,
-    updated_at         timestamp,
-    body               text,
-    PRIMARY KEY (bucket, created_at, id)
-) WITH CLUSTERING ORDER BY (created_at DESC, id DESC);
-
 CREATE TABLE IF NOT EXISTS collections (
     bucket             text,
     created_at         timestamp,
@@ -93,4 +80,26 @@ CREATE TABLE IF NOT EXISTS namespace_mappings (
     name         text,
     repo_id      uuid,
     PRIMARY KEY  (namespace_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS category_taxonomy (
+    namespace          text,
+    name               text,
+    uid                uuid,
+    api_version        text,
+    kind               text,
+    generation         bigint,
+    resource_version   text,
+    creation_ts        timestamp,
+    revision           text,
+    labels             map<text, text>,
+    annotations        map<text, text>,
+    parent_name        text,
+    ancestor_path      text,
+    git_commit_sha     text,
+    git_ref            text,
+    spec               text,
+    body               text,
+    status             text,
+    PRIMARY KEY ((namespace), name)
 );

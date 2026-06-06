@@ -29,7 +29,7 @@ type scyllaDatastore struct {
 	productByNamespaceTable *table.Table
 	productByNameTable      *table.Table
 	productByUIDTable       *table.Table
-	categoryTable           *table.Table
+	categoryTaxonomyTable   *table.Table
 	collectionTable         *table.Table
 	namespaceTable          *table.Table
 	repositoryTable         *table.Table
@@ -74,16 +74,25 @@ type productUIDRow struct {
 	CreationTimestamp time.Time  `db:"creation_timestamp"`
 }
 
-type categoryRow struct {
-	Bucket       string     `db:"bucket"`
-	CreatedAt    time.Time  `db:"created_at"`
-	ID           gocql.UUID `db:"id"`
-	Name         string     `db:"name"`
-	Slug         string     `db:"slug"`
-	ParentID     *string    `db:"parent_id"`
-	DisplayOrder int        `db:"display_order"`
-	UpdatedAt    time.Time  `db:"updated_at"`
-	Body         string     `db:"body"`
+type categoryTaxonomyRow struct {
+	Namespace       string            `db:"namespace"`
+	Name            string            `db:"name"`
+	UID             string            `db:"uid"`
+	APIVersion      string            `db:"api_version"`
+	Kind            string            `db:"kind"`
+	Generation      int64             `db:"generation"`
+	ResourceVersion string            `db:"resource_version"`
+	CreationTS      time.Time         `db:"creation_ts"`
+	Revision        string            `db:"revision"`
+	Labels          map[string]string `db:"labels"`
+	Annotations     map[string]string `db:"annotations"`
+	ParentName      string            `db:"parent_name"`
+	AncestorPath    string            `db:"ancestor_path"`
+	GitCommitSHA    string            `db:"git_commit_sha"`
+	GitRef          string            `db:"git_ref"`
+	Spec            string            `db:"spec"`
+	Body            string            `db:"body"`
+	Status          string            `db:"status"`
 }
 
 type collectionRow struct {
@@ -150,7 +159,7 @@ func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) 
 		productByNamespaceTable: ProductByNamespace,
 		productByNameTable:      ProductByName,
 		productByUIDTable:       ProductByUID,
-		categoryTable:           Category,
+		categoryTaxonomyTable:   CategoryTaxonomy,
 		collectionTable:         Collection,
 		namespaceTable:          Namespace,
 		repositoryTable:         Repository,
@@ -339,113 +348,65 @@ func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
 	return nil
 }
 
-// ── Category ──────────────────────────────────────────────────────────────────
+// ── CategoryTaxonomy ──────────────────────────────────────────────────────────
 
-func (s *scyllaDatastore) CreateCategory(ctx context.Context, c *datastore.Category) error {
-	if _, err := s.GetCategory(ctx, c.ID); err == nil {
-		return fmt.Errorf("%w: category id %s", datastore.ErrAlreadyExists, c.ID)
+func (s *scyllaDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy) error {
+	if c.CreationTimestamp.IsZero() {
+		c.CreationTimestamp = time.Now().UTC().Truncate(time.Millisecond)
 	}
-	if existing, err := s.GetCategoryBySlug(ctx, c.Slug); err == nil && existing.ID != c.ID {
-		return fmt.Errorf("%w: category slug %s", datastore.ErrAlreadyExists, c.Slug)
-	}
-	now := time.Now().UTC().Truncate(time.Millisecond)
-	if c.CreatedAt.IsZero() {
-		c.CreatedAt = now
-	}
-	if c.UpdatedAt.IsZero() {
-		c.UpdatedAt = now
-	}
-	row := toCategoryRow(c)
-	stmt, names := s.categoryTable.Insert()
+	row := toCategoryTaxonomyRow(c)
+	stmt, names := s.categoryTaxonomyTable.Insert()
 	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
-		return fmt.Errorf("scylla: create category: %w", err)
+		return fmt.Errorf("scylla: create category_taxonomy: %w", err)
 	}
 	return nil
 }
 
-func (s *scyllaDatastore) GetCategory(_ context.Context, id string) (*datastore.Category, error) {
-	uid, err := gocql.ParseUUID(id)
-	if err != nil {
-		return nil, fmt.Errorf("%w: invalid category id %s", datastore.ErrNotFound, id)
-	}
-	stmt, names := qb.Select("categories").
-		Columns(s.categoryTable.Metadata().Columns...).
-		Where(qb.Eq("id")).
-		Limit(1).
-		ToCql()
-	var row categoryRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"id": uid}).GetRelease(&row); err != nil {
+func (s *scyllaDatastore) GetCategoryTaxonomyByName(_ context.Context, namespace, name string) (*datastore.CategoryTaxonomy, error) {
+	stmt, names := s.categoryTaxonomyTable.Get()
+	var row categoryTaxonomyRow
+	if err := s.session.Query(stmt, names).BindMap(qb.M{
+		"namespace": namespace,
+		"name":      name,
+	}).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, fmt.Errorf("%w: category id %s", datastore.ErrNotFound, id)
+			return nil, fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrNotFound, namespace, name)
 		}
-		return nil, fmt.Errorf("scylla: get category: %w", err)
+		return nil, fmt.Errorf("scylla: get category_taxonomy: %w", err)
 	}
-	return fromCategoryRow(&row), nil
+	return fromCategoryTaxonomyRow(&row), nil
 }
 
-func (s *scyllaDatastore) GetCategoryBySlug(_ context.Context, slug string) (*datastore.Category, error) {
-	stmt, names := qb.Select("categories").
-		Columns(s.categoryTable.Metadata().Columns...).
-		Where(qb.Eq("slug")).
-		ToCql()
-	var row categoryRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"slug": slug}).GetRelease(&row); err != nil {
-		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, fmt.Errorf("%w: category slug %s", datastore.ErrNotFound, slug)
-		}
-		return nil, fmt.Errorf("scylla: get category by slug: %w", err)
-	}
-	return fromCategoryRow(&row), nil
-}
-
-func (s *scyllaDatastore) ListCategories(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Category], error) {
+func (s *scyllaDatastore) ListCategoryTaxonomies(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
 	limit := page.Limit()
-	pq := buildPaginatedSelect(s.categoryTable, page, "bucket", BucketAll, defaultClusterKeys, nil, nil)
+	pq := buildPaginatedSelect(s.categoryTaxonomyTable, page, "namespace", namespace, clusterKeys{TimestampCol: "creation_ts", IDCol: "name"}, nil, nil)
 
-	var rows []categoryRow
+	var rows []categoryTaxonomyRow
 	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
-		return nil, fmt.Errorf("scylla: list categories: %w", err)
+		return nil, fmt.Errorf("scylla: list category_taxonomies: %w", err)
 	}
 
 	if page.Last > 0 {
 		reverseRows(rows)
 	}
 
-	cats := make([]*datastore.Category, len(rows))
+	cats := make([]*datastore.CategoryTaxonomy, len(rows))
 	for i := range rows {
-		cats[i] = fromCategoryRow(&rows[i])
+		cats[i] = fromCategoryTaxonomyRow(&rows[i])
 	}
 
 	return buildPageResult(cats, limit, page), nil
 }
 
-func (s *scyllaDatastore) UpdateCategory(ctx context.Context, c *datastore.Category) error {
-	if _, err := s.GetCategory(ctx, c.ID); err != nil {
-		return err
-	}
-	row := toCategoryRow(c)
-	stmt, names := s.categoryTable.Update(
-		"name", "slug", "parent_id", "display_order",
-		"updated_at", "body",
+func (s *scyllaDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy) error {
+	row := toCategoryTaxonomyRow(c)
+	stmt, names := s.categoryTaxonomyTable.Update(
+		"uid", "api_version", "kind", "generation", "resource_version",
+		"revision", "labels", "annotations", "parent_name", "ancestor_path",
+		"git_commit_sha", "git_ref", "spec", "body", "status",
 	)
 	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
-		return fmt.Errorf("scylla: update category: %w", err)
-	}
-	return nil
-}
-
-func (s *scyllaDatastore) DeleteCategory(ctx context.Context, id string) error {
-	cat, err := s.GetCategory(ctx, id)
-	if err != nil {
-		return err
-	}
-	stmt, names := s.categoryTable.Delete()
-	if err := s.session.Query(stmt, names).BindMap(qb.M{
-		"bucket":     BucketAll,
-		"created_at": cat.CreatedAt,
-		"id":         mustParseUUID(id),
-	}).ExecRelease(); err != nil {
-		return fmt.Errorf("scylla: delete category: %w", err)
+		return fmt.Errorf("scylla: update category_taxonomy: %w", err)
 	}
 	return nil
 }
@@ -721,30 +682,57 @@ func jsonOrNil(s string) []byte {
 	return []byte(s)
 }
 
-func toCategoryRow(c *datastore.Category) *categoryRow {
-	return &categoryRow{
-		Bucket:       BucketAll,
-		CreatedAt:    c.CreatedAt,
-		ID:           mustParseUUID(c.ID),
-		Name:         c.Name,
-		Slug:         c.Slug,
-		ParentID:     c.ParentID,
-		DisplayOrder: c.DisplayOrder,
-		UpdatedAt:    c.UpdatedAt,
-		Body:         c.Body,
+func toCategoryTaxonomyRow(c *datastore.CategoryTaxonomy) *categoryTaxonomyRow {
+	spec := ""
+	if len(c.Spec) > 0 {
+		spec = string(c.Spec)
+	}
+	status := ""
+	if len(c.Status) > 0 {
+		status = string(c.Status)
+	}
+	return &categoryTaxonomyRow{
+		Namespace:       c.Namespace,
+		Name:            c.Name,
+		UID:             c.UID,
+		APIVersion:      c.APIVersion,
+		Kind:            c.Kind,
+		Generation:      c.Generation,
+		ResourceVersion: c.ResourceVersion,
+		CreationTS:      c.CreationTimestamp,
+		Revision:        c.Revision,
+		Labels:          c.Labels,
+		Annotations:     c.Annotations,
+		ParentName:      c.ParentName,
+		AncestorPath:    c.AncestorPath,
+		GitCommitSHA:    c.GitCommitSHA,
+		GitRef:          c.GitRef,
+		Spec:            spec,
+		Body:            c.Body,
+		Status:          status,
 	}
 }
 
-func fromCategoryRow(r *categoryRow) *datastore.Category {
-	return &datastore.Category{
-		ID:           r.ID.String(),
-		Name:         r.Name,
-		Slug:         r.Slug,
-		ParentID:     r.ParentID,
-		DisplayOrder: r.DisplayOrder,
-		CreatedAt:    r.CreatedAt,
-		UpdatedAt:    r.UpdatedAt,
-		Body:         r.Body,
+func fromCategoryTaxonomyRow(r *categoryTaxonomyRow) *datastore.CategoryTaxonomy {
+	return &datastore.CategoryTaxonomy{
+		Namespace:         r.Namespace,
+		Name:              r.Name,
+		UID:               r.UID,
+		APIVersion:        r.APIVersion,
+		Kind:              r.Kind,
+		Generation:        r.Generation,
+		ResourceVersion:   r.ResourceVersion,
+		CreationTimestamp: r.CreationTS,
+		Revision:          r.Revision,
+		Labels:            r.Labels,
+		Annotations:       r.Annotations,
+		ParentName:        r.ParentName,
+		AncestorPath:      r.AncestorPath,
+		GitCommitSHA:      r.GitCommitSHA,
+		GitRef:            r.GitRef,
+		Spec:              jsonOrNil(r.Spec),
+		Body:              r.Body,
+		Status:            jsonOrNil(r.Status),
 	}
 }
 

@@ -41,7 +41,10 @@ extend type Mutation {
 }
 
 """
-Category represents a hierarchical classification system for products
+Category represents a hierarchical classification system for products.
+Follows the Kubernetes-style resource envelope: id / apiVersion / kind / metadata / spec / status.
+Tree-traversal convenience fields (parent, children, path, depth, products, body) are top-level
+because they are computed or graph-linked and do not belong in spec or status.
 """
 type Category implements Node {
   """
@@ -50,32 +53,47 @@ type Category implements Node {
   id: ID!
 
   """
-  Category display name
+  Kubernetes-style apiVersion (e.g. catalog.gitstore.dev/v1beta1).
   """
-  name: String!
+  apiVersion: String
 
   """
-  URL-friendly slug (unique)
+  Resource kind. Always "CategoryTaxonomy" for git-backed categories.
   """
-  slug: String!
+  kind: String
 
   """
-  Parent category (null for root categories)
+  Resource metadata (name, labels, system-assigned fields).
+  """
+  metadata: CategoryObjectMeta!
+
+  """
+  Author-supplied specification (title, parentRef, media).
+  """
+  spec: CategorySpec!
+
+  """
+  System-written status. Null until the first push is admitted.
+  """
+  status: CategoryTaxonomyStatus
+
+  """
+  Markdown body content (category description).
+  """
+  body: String
+
+  """
+  Parent category (null for root categories).
   """
   parent: Category
 
   """
-  Child categories (subcategories)
+  Direct child categories.
   """
   children: [Category!]!
 
   """
-  Display order within parent
-  """
-  displayOrder: Int!
-
-  """
-  Products in this category (includes subcategory products)
+  Products in this category (includes subcategory products).
   """
   products(
     first: Int
@@ -85,29 +103,88 @@ type Category implements Node {
   ): ProductConnection!
 
   """
-  Markdown body content (category description with rich formatting)
-  """
-  body: String
-
-  """
-  Creation timestamp
-  """
-  createdAt: DateTime!
-
-  """
-  Last modification timestamp
-  """
-  updatedAt: DateTime!
-
-  """
-  Full path from root (e.g., ["Electronics", "Computers", "Laptops"])
+  Full path from root (e.g., ["electronics", "computers", "laptops"]).
+  Derived from the materialized ancestor path stored at admission time.
   """
   path: [String!]!
 
   """
-  Depth in tree (root = 0)
+  Depth in tree (root = 0).
   """
   depth: Int!
+}
+
+"""
+Metadata for a CategoryTaxonomy resource.
+Author-supplied fields (name, namespace, labels, annotations) originate from the git file.
+System-assigned fields (uid through ownerReferences) are written by the ingest pipeline.
+"""
+type CategoryObjectMeta {
+  name: String!
+  namespace: String
+
+  """
+  Kubernetes-style labels. Use KeyValuePair list (JSON type alignment with Product deferred).
+  """
+  labels: [KeyValuePair!]!
+  annotations: [KeyValuePair!]!
+
+  # System-assigned (read-only)
+  uid: ID!
+  resourceVersion: String!
+  generation: Int!
+  creationTimestamp: DateTime!
+  revision: String
+  ownerReferences: [OwnerReference!]!
+}
+
+"""
+Author-supplied specification for a CategoryTaxonomy resource.
+"""
+type CategorySpec {
+  title: String!
+  parentRef: CatalogObjectReference
+  media: [MediaDefinition!]!
+}
+
+"""
+A key-value pair for label maps.
+"""
+type KeyValuePair {
+  key: String!
+  value: String!
+}
+
+"""
+System-written status for a git-backed CategoryTaxonomy resource.
+"""
+type CategoryTaxonomyStatus {
+  observedGeneration: Int!
+  lastAppliedRevision: String!
+  conditions: [CategoryCondition!]!
+  resolved: ResolvedCategoryTaxonomy
+}
+
+"""
+A named status condition following the Kubernetes condition convention.
+"""
+type CategoryCondition {
+  type: String!
+  status: String!
+  observedGeneration: Int!
+  lastTransitionTime: DateTime!
+  reason: String
+  message: String
+}
+
+"""
+Controller-computed category hierarchy metadata.
+"""
+type ResolvedCategoryTaxonomy {
+  depth: Int!
+  ancestorPath: String!
+  childCount: Int!
+  productCount: Int!
 }
 
 """

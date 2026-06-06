@@ -40,22 +40,16 @@ func (s *stubDatastore) UpdateProduct(_ context.Context, _ *datastore.Product) e
 func (s *stubDatastore) DeleteProduct(_ context.Context, _ string) error {
 	return s.getProductErr
 }
-func (s *stubDatastore) CreateCategory(_ context.Context, _ *datastore.Category) error {
+func (s *stubDatastore) CreateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
 	return s.getProductErr
 }
-func (s *stubDatastore) GetCategory(_ context.Context, _ string) (*datastore.Category, error) {
+func (s *stubDatastore) GetCategoryTaxonomyByName(_ context.Context, _, _ string) (*datastore.CategoryTaxonomy, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) GetCategoryBySlug(_ context.Context, _ string) (*datastore.Category, error) {
+func (s *stubDatastore) ListCategoryTaxonomies(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) ListCategories(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.Category], error) {
-	return nil, s.getProductErr
-}
-func (s *stubDatastore) UpdateCategory(_ context.Context, _ *datastore.Category) error {
-	return s.getProductErr
-}
-func (s *stubDatastore) DeleteCategory(_ context.Context, _ string) error {
+func (s *stubDatastore) UpdateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) CreateCollection(_ context.Context, _ *datastore.Collection) error {

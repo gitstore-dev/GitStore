@@ -109,41 +109,41 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 		assert.True(t, backward.HasNext)
 	})
 
-	t.Run("Categories/ForwardPagination", func(t *testing.T) {
+	t.Run("CategoryTaxonomies/ForwardPagination", func(t *testing.T) {
 		ds := newMemdbDatastore(t)
 		ctx := context.Background()
 
 		for i := range 4 {
-			c := newCategory()
-			c.CreatedAt = time.Now().Add(time.Duration(i) * time.Second)
-			require.NoError(t, ds.CreateCategory(ctx, c))
+			c := newCategoryTaxonomy()
+			c.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
+			require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
 		}
 
-		page1, err := ds.ListCategories(ctx, datastore.PageParams{First: 2})
+		page1, err := ds.ListCategoryTaxonomies(ctx, "test-ns", datastore.PageParams{First: 2})
 		require.NoError(t, err)
 		assert.Len(t, page1.Items, 2)
 		assert.True(t, page1.HasNext)
 		assert.False(t, page1.HasPrevious)
 
-		cursor := encodeCursor(page1.Items[1].CreatedAt, page1.Items[1].ID)
-		page2, err := ds.ListCategories(ctx, datastore.PageParams{First: 2, After: cursor})
+		cursor := encodeCursor(page1.Items[1].CreationTimestamp, page1.Items[1].UID)
+		page2, err := ds.ListCategoryTaxonomies(ctx, "test-ns", datastore.PageParams{First: 2, After: cursor})
 		require.NoError(t, err)
 		assert.Len(t, page2.Items, 2)
 		assert.False(t, page2.HasNext)
 		assert.True(t, page2.HasPrevious)
 	})
 
-	t.Run("Categories/BackwardPagination", func(t *testing.T) {
+	t.Run("CategoryTaxonomies/BackwardPagination", func(t *testing.T) {
 		ds := newMemdbDatastore(t)
 		ctx := context.Background()
 
 		for i := range 4 {
-			c := newCategory()
-			c.CreatedAt = time.Now().Add(time.Duration(i) * time.Second)
-			require.NoError(t, ds.CreateCategory(ctx, c))
+			c := newCategoryTaxonomy()
+			c.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
+			require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
 		}
 
-		result, err := ds.ListCategories(ctx, datastore.PageParams{Last: 2})
+		result, err := ds.ListCategoryTaxonomies(ctx, "test-ns", datastore.PageParams{Last: 2})
 		require.NoError(t, err)
 		assert.Len(t, result.Items, 2)
 		assert.False(t, result.HasNext)

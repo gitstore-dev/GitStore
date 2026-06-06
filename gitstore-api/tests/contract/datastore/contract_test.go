@@ -32,15 +32,19 @@ func newProduct() *datastore.Product {
 	}
 }
 
-func newCategory() *datastore.Category {
+func newCategoryTaxonomy() *datastore.CategoryTaxonomy {
 	now := time.Now()
-	slug := "cat-" + newID()[:8]
-	return &datastore.Category{
-		ID:        newID(),
-		Name:      "Test Category",
-		Slug:      slug,
-		CreatedAt: now,
-		UpdatedAt: now,
+	uid := newID()
+	name := "cat-" + newID()[:8]
+	return &datastore.CategoryTaxonomy{
+		UID:               uid,
+		Namespace:         "test-ns",
+		Name:              name,
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "CategoryTaxonomy",
+		Generation:        1,
+		ResourceVersion:   "1",
+		CreationTimestamp: now,
 	}
 }
 
@@ -201,75 +205,46 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.Equal(t, string(p.Status), string(got.Status))
 	})
 
-	t.Run("Category/CreateAndGet", func(t *testing.T) {
-		c := newCategory()
-		require.NoError(t, ds.CreateCategory(ctx, c))
+	t.Run("CategoryTaxonomy/CreateAndGet", func(t *testing.T) {
+		c := newCategoryTaxonomy()
+		require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
 
-		got, err := ds.GetCategory(ctx, c.ID)
+		got, err := ds.GetCategoryTaxonomyByName(ctx, c.Namespace, c.Name)
 		require.NoError(t, err)
-		assert.Equal(t, c.ID, got.ID)
-		assert.Equal(t, c.Slug, got.Slug)
+		assert.Equal(t, c.UID, got.UID)
+		assert.Equal(t, c.Name, got.Name)
 	})
 
-	t.Run("Category/GetNotFound", func(t *testing.T) {
-		_, err := ds.GetCategory(ctx, newID())
+	t.Run("CategoryTaxonomy/GetNotFound", func(t *testing.T) {
+		_, err := ds.GetCategoryTaxonomyByName(ctx, "test-ns", "does-not-exist-"+newID()[:8])
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
-	t.Run("Category/GetBySlug", func(t *testing.T) {
-		c := newCategory()
-		require.NoError(t, ds.CreateCategory(ctx, c))
+	t.Run("CategoryTaxonomy/DuplicateNameReturnsAlreadyExists", func(t *testing.T) {
+		c := newCategoryTaxonomy()
+		require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
 
-		got, err := ds.GetCategoryBySlug(ctx, c.Slug)
-		require.NoError(t, err)
-		assert.Equal(t, c.ID, got.ID)
-	})
-
-	t.Run("Category/GetBySlugNotFound", func(t *testing.T) {
-		_, err := ds.GetCategoryBySlug(ctx, "slug-does-not-exist-"+newID()[:8])
-		assert.ErrorIs(t, err, datastore.ErrNotFound)
-	})
-
-	t.Run("Category/DuplicateSlugReturnsAlreadyExists", func(t *testing.T) {
-		c := newCategory()
-		require.NoError(t, ds.CreateCategory(ctx, c))
-
-		c2 := newCategory()
-		c2.Slug = c.Slug
-		err := ds.CreateCategory(ctx, c2)
+		c2 := newCategoryTaxonomy()
+		c2.Name = c.Name
+		err := ds.CreateCategoryTaxonomy(ctx, c2)
 		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
 	})
 
-	t.Run("Category/Update", func(t *testing.T) {
-		c := newCategory()
-		require.NoError(t, ds.CreateCategory(ctx, c))
+	t.Run("CategoryTaxonomy/Update", func(t *testing.T) {
+		c := newCategoryTaxonomy()
+		require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
 
-		c.Name = "Renamed"
-		require.NoError(t, ds.UpdateCategory(ctx, c))
+		c.AncestorPath = "electronics"
+		require.NoError(t, ds.UpdateCategoryTaxonomy(ctx, c))
 
-		got, err := ds.GetCategory(ctx, c.ID)
+		got, err := ds.GetCategoryTaxonomyByName(ctx, c.Namespace, c.Name)
 		require.NoError(t, err)
-		assert.Equal(t, "Renamed", got.Name)
+		assert.Equal(t, "electronics", got.AncestorPath)
 	})
 
-	t.Run("Category/UpdateNotFound", func(t *testing.T) {
-		c := newCategory()
-		c.ID = newID()
-		err := ds.UpdateCategory(ctx, c)
-		assert.ErrorIs(t, err, datastore.ErrNotFound)
-	})
-
-	t.Run("Category/Delete", func(t *testing.T) {
-		c := newCategory()
-		require.NoError(t, ds.CreateCategory(ctx, c))
-		require.NoError(t, ds.DeleteCategory(ctx, c.ID))
-
-		_, err := ds.GetCategory(ctx, c.ID)
-		assert.ErrorIs(t, err, datastore.ErrNotFound)
-	})
-
-	t.Run("Category/DeleteNotFound", func(t *testing.T) {
-		err := ds.DeleteCategory(ctx, newID())
+	t.Run("CategoryTaxonomy/UpdateNotFound", func(t *testing.T) {
+		c := newCategoryTaxonomy()
+		err := ds.UpdateCategoryTaxonomy(ctx, c)
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 

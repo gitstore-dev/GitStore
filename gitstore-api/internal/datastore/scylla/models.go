@@ -72,25 +72,33 @@ var (
 		SortKey: []string{},
 	})
 
-	Category = table.New(table.Metadata{
-		Name: "categories",
+	CategoryTaxonomy = table.New(table.Metadata{
+		Name: "category_taxonomy",
 		Columns: []string{
-			"bucket",
-			"created_at",
-			"id",
+			"namespace",
 			"name",
-			"slug",
-			"parent_id",
-			"display_order",
-			"updated_at",
+			"uid",
+			"api_version",
+			"kind",
+			"generation",
+			"resource_version",
+			"creation_ts",
+			"revision",
+			"labels",
+			"annotations",
+			"parent_name",
+			"ancestor_path",
+			"git_commit_sha",
+			"git_ref",
+			"spec",
 			"body",
+			"status",
 		},
 		PartKey: []string{
-			"bucket",
+			"namespace",
 		},
 		SortKey: []string{
-			"created_at",
-			"id",
+			"name",
 		},
 	})
 

@@ -2174,7 +2174,7 @@ func (ec *executionContext) unmarshalInputCategoryBy(ctx context.Context, obj an
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"id", "slug"}
+	fieldsInOrder := [...]string{"id", "slug", "name"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -2195,6 +2195,13 @@ func (ec *executionContext) unmarshalInputCategoryBy(ctx context.Context, obj an
 				return it, err
 			}
 			it.Slug = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
 		}
 	}
 	return it, nil

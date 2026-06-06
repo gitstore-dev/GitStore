@@ -14,7 +14,7 @@ import (
 
 // TestGitClone covers: git clone over port 5000 succeeds and produces a working repo.
 func TestGitClone(t *testing.T) {
-	namespace := getEnv("NAMESPACE", "gitstore")
+	namespace := getEnv("NAMESPACE", "gitstore-test")
 	repository := getEnv("REPOSITORY", "catalog")
 	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitURL, namespace, repository)
 
@@ -61,7 +61,7 @@ func TestGitFetch(t *testing.T) {
 
 	// Clone a second copy and fetch — the pushed commit must appear.
 	fetchDir := t.TempDir()
-	namespace := getEnv("NAMESPACE", "gitstore")
+	namespace := getEnv("NAMESPACE", "gitstore-test")
 	repository := getEnv("REPOSITORY", "catalog")
 	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitURL, namespace, repository)
 
@@ -119,7 +119,7 @@ func TestGitPush(t *testing.T) {
 	}
 
 	// Verify the remote ref tip matches local HEAD.
-	namespace := getEnv("NAMESPACE", "gitstore")
+	namespace := getEnv("NAMESPACE", "gitstore-test")
 	repository := getEnv("REPOSITORY", "catalog")
 	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitURL, namespace, repository)
 	lsCmd := exec.Command("git", "ls-remote", remoteURL, "refs/heads/main")

@@ -292,108 +292,85 @@ func TestScylla_DeleteProduct_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
-// ── Category ──────────────────────────────────────────────────────────────────
+// ── CategoryTaxonomy ──────────────────────────────────────────────────────────
 
-func TestScylla_CreateGetCategory(t *testing.T) {
-	store := newTestStore(t)
-	ctx := context.Background()
-
-	c := &datastore.Category{ID: newID(), Name: "Electronics", Slug: "cat-" + newID()[:8]}
-	require.NoError(t, store.CreateCategory(ctx, c))
-
-	got, err := store.GetCategory(ctx, c.ID)
-	require.NoError(t, err)
-	assert.Equal(t, c.Slug, got.Slug)
+func newCategoryTaxonomy(ns, name string) *datastore.CategoryTaxonomy {
+	return &datastore.CategoryTaxonomy{
+		UID:             newID(),
+		Namespace:       ns,
+		Name:            name,
+		APIVersion:      "catalog.gitstore.dev/v1beta1",
+		Kind:            "CategoryTaxonomy",
+		Generation:      1,
+		ResourceVersion: "1",
+	}
 }
 
-func TestScylla_CreateCategory_DuplicateSlug(t *testing.T) {
+func TestScylla_CreateGetCategoryTaxonomy(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	slug := "dup-cat-" + newID()[:8]
-	c1 := &datastore.Category{ID: newID(), Slug: slug}
-	require.NoError(t, store.CreateCategory(ctx, c1))
-	c2 := &datastore.Category{ID: newID(), Slug: slug}
-	err := store.CreateCategory(ctx, c2)
+	c := newCategoryTaxonomy("test-ns", "cat-"+newID()[:8])
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, c))
+
+	got, err := store.GetCategoryTaxonomyByName(ctx, c.Namespace, c.Name)
+	require.NoError(t, err)
+	assert.Equal(t, c.UID, got.UID)
+}
+
+func TestScylla_CreateCategoryTaxonomy_DuplicateName(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	name := "dup-cat-" + newID()[:8]
+	c1 := newCategoryTaxonomy("test-ns", name)
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, c1))
+	c2 := newCategoryTaxonomy("test-ns", name)
+	err := store.CreateCategoryTaxonomy(ctx, c2)
 	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
 }
 
-func TestScylla_GetCategory_NotFound(t *testing.T) {
+func TestScylla_GetCategoryTaxonomy_NotFound(t *testing.T) {
 	store := newTestStore(t)
-	_, err := store.GetCategory(context.Background(), newID())
+	_, err := store.GetCategoryTaxonomyByName(context.Background(), "test-ns", "no-such-cat-"+newID()[:8])
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
-func TestScylla_GetCategoryBySlug(t *testing.T) {
+func TestScylla_ListCategoryTaxonomies(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	slug := "slug-" + newID()[:8]
-	c := &datastore.Category{ID: newID(), Slug: slug}
-	require.NoError(t, store.CreateCategory(ctx, c))
-
-	got, err := store.GetCategoryBySlug(ctx, slug)
-	require.NoError(t, err)
-	assert.Equal(t, c.ID, got.ID)
-}
-
-func TestScylla_GetCategoryBySlug_NotFound(t *testing.T) {
-	store := newTestStore(t)
-	_, err := store.GetCategoryBySlug(context.Background(), "missing-slug-"+newID()[:8])
-	require.ErrorIs(t, err, datastore.ErrNotFound)
-}
-
-func TestScylla_ListCategories(t *testing.T) {
-	store := newTestStore(t)
-	ctx := context.Background()
-
-	before, err := store.ListCategories(ctx, datastore.PageParams{First: 100})
+	before, err := store.ListCategoryTaxonomies(ctx, "test-ns", datastore.PageParams{First: 100})
 	require.NoError(t, err)
 
-	c1 := &datastore.Category{ID: newID(), Slug: "catls1-" + newID()[:8]}
-	c2 := &datastore.Category{ID: newID(), Slug: "catls2-" + newID()[:8]}
-	require.NoError(t, store.CreateCategory(ctx, c1))
-	require.NoError(t, store.CreateCategory(ctx, c2))
+	c1 := newCategoryTaxonomy("test-ns", "catls1-"+newID()[:8])
+	c2 := newCategoryTaxonomy("test-ns", "catls2-"+newID()[:8])
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, c1))
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, c2))
 
-	after, err := store.ListCategories(ctx, datastore.PageParams{First: 100})
+	after, err := store.ListCategoryTaxonomies(ctx, "test-ns", datastore.PageParams{First: 100})
 	require.NoError(t, err)
 	assert.Equal(t, len(before.Items)+2, len(after.Items))
 }
 
-func TestScylla_UpdateCategory(t *testing.T) {
+func TestScylla_UpdateCategoryTaxonomy(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	c := &datastore.Category{ID: newID(), Slug: "upd-cat-" + newID()[:8], Name: "Before"}
-	require.NoError(t, store.CreateCategory(ctx, c))
-	c.Name = "After"
-	require.NoError(t, store.UpdateCategory(ctx, c))
+	c := newCategoryTaxonomy("test-ns", "upd-cat-"+newID()[:8])
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, c))
+	c.AncestorPath = "electronics"
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, c))
 
-	got, err := store.GetCategory(ctx, c.ID)
+	got, err := store.GetCategoryTaxonomyByName(ctx, c.Namespace, c.Name)
 	require.NoError(t, err)
-	assert.Equal(t, "After", got.Name)
+	assert.Equal(t, "electronics", got.AncestorPath)
 }
 
-func TestScylla_UpdateCategory_NotFound(t *testing.T) {
+func TestScylla_UpdateCategoryTaxonomy_NotFound(t *testing.T) {
 	store := newTestStore(t)
-	err := store.UpdateCategory(context.Background(), &datastore.Category{ID: newID(), Slug: "ghost-" + newID()[:8]})
-	require.ErrorIs(t, err, datastore.ErrNotFound)
-}
-
-func TestScylla_DeleteCategory(t *testing.T) {
-	store := newTestStore(t)
-	ctx := context.Background()
-
-	c := &datastore.Category{ID: newID(), Slug: "del-cat-" + newID()[:8]}
-	require.NoError(t, store.CreateCategory(ctx, c))
-	require.NoError(t, store.DeleteCategory(ctx, c.ID))
-	_, err := store.GetCategory(ctx, c.ID)
-	require.ErrorIs(t, err, datastore.ErrNotFound)
-}
-
-func TestScylla_DeleteCategory_NotFound(t *testing.T) {
-	store := newTestStore(t)
-	err := store.DeleteCategory(context.Background(), newID())
+	c := newCategoryTaxonomy("test-ns", "ghost-cat-"+newID()[:8])
+	err := store.UpdateCategoryTaxonomy(context.Background(), c)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 

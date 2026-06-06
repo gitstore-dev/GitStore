@@ -72,18 +72,42 @@ type Product struct {
 	Status json.RawMessage
 }
 
-// Category represents a hierarchical classification.
-// Computed fields (Parent, Children, Path, Depth) are not stored;
-// they are built by the catalog layer after loading.
-type Category struct {
-	ID           string
-	Name         string
-	Slug         string
-	ParentID     *string
-	DisplayOrder int
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	Body         string
+// CategoryTaxonomy is the git-backed Kubernetes-style category resource.
+// Mirrors the Product entity structure. Distinct from the legacy Category entity.
+type CategoryTaxonomy struct {
+	// Identity (primary key: Namespace + Name)
+	UID       string
+	Namespace string
+	Name      string
+
+	// Resource envelope
+	APIVersion string
+	Kind       string
+
+	// Versioning
+	Generation        int64
+	ResourceVersion   string
+	CreationTimestamp time.Time
+	Revision          string // e.g. "main@sha1:abc123"
+
+	// Author-supplied classification
+	Labels      map[string]string
+	Annotations map[string]string
+
+	// Hierarchy — adjacency pointer + materialized path
+	ParentName   string // spec.parentRef.name; empty string for root categories
+	AncestorPath string // slash-separated from root to self, e.g. "electronics/computers/laptops"
+
+	// Git provenance
+	GitCommitSHA string
+	GitRef       string
+
+	// Spec and body
+	Spec json.RawMessage // JSON-encoded CategoryTaxonomySpec
+	Body string          // Markdown description
+
+	// Status — system-only JSON blob (written at admission; controller fills Resolved fields)
+	Status json.RawMessage
 }
 
 // Collection represents a flat grouping of products.

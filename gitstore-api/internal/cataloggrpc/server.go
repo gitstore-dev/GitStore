@@ -99,13 +99,13 @@ func (s *Server) ValidateResources(
 			continue
 		}
 
-		_, _, err := validate.Parse(bytes.NewReader(blob.Content))
+		_, _, err := validate.ParseResource(bytes.NewReader(blob.Content))
 		if err == nil {
 			continue
 		}
 
 		// Convert the error string into ValidationError messages.
-		// validate.Parse returns a joined error string; split on "; " and "\n".
+		// validate.ParseResource returns a joined error string; split on "; " and "\n".
 		msgs := splitValidationErrors(err.Error())
 		for _, msg := range msgs {
 			ve := errorToValidationError(blob.Path, msg)
@@ -202,6 +202,14 @@ func (s *Server) AdmitResources(
 	branch := strings.TrimPrefix(req.RefName, "refs/heads/")
 	revision := branch + "@sha1:" + req.CommitSha
 
+	// Two-pass: collect all parsed resources first so CategoryTaxonomy
+	// can detect intra-push cycles and resolve in-push parents.
+	type parsedEntry struct {
+		parsed *validate.ParsedResource
+		body   []byte
+	}
+	var entries []parsedEntry
+
 	for _, path := range paths {
 		content, err := s.git.ReadFile(ctx, req.RepositoryId, path, req.CommitSha)
 		if err != nil {
@@ -209,76 +217,259 @@ func (s *Server) AdmitResources(
 				zap.String("path", path), zap.Error(err))
 			continue
 		}
-
-		resource, body, err := validate.Parse(bytes.NewReader(content))
-		if err != nil || resource == nil {
+		parsed, body, err := validate.ParseResource(bytes.NewReader(content))
+		if err != nil || parsed == nil {
 			if err != nil {
 				s.log.Error("admit_resources: parse failed",
 					zap.String("path", path), zap.Error(err))
 			}
 			continue
 		}
+		entries = append(entries, parsedEntry{parsed, body})
+	}
 
-		specJSON, err := json.Marshal(resource.Spec)
-		if err != nil {
-			s.log.Error("admit_resources: marshal spec failed",
-				zap.String("path", path), zap.Error(err))
-			continue
+	// Build intra-push category graph: name → parentName
+	pushCategoryParents := make(map[string]string)
+	for _, e := range entries {
+		if e.parsed.Kind == "CategoryTaxonomy" {
+			cat := e.parsed.CategoryTaxonomy
+			parent := ""
+			if cat.Spec.ParentRef != nil {
+				parent = cat.Spec.ParentRef.Name
+			}
+			pushCategoryParents[cat.Metadata.Name] = parent
 		}
+	}
+	cycleMembers := detectCycles(pushCategoryParents)
 
-		namespace := resource.Metadata.Namespace
-		if namespace == "" {
-			namespace = req.RepositoryId
-		}
+	now := time.Now().UTC()
 
-		existing, getErr := s.store.GetProductByName(ctx, namespace, resource.Metadata.Name)
-		now := time.Now().UTC()
-
-		if getErr != nil || existing == nil {
-			p := &datastore.Product{
-				UID:               uuid.Must(uuid.NewV7()).String(),
-				Namespace:         namespace,
-				Name:              resource.Metadata.Name,
-				APIVersion:        resource.APIVersion,
-				Kind:              resource.Kind,
-				Labels:            resource.Metadata.Labels,
-				Annotations:       resource.Metadata.Annotations,
-				Generation:        1,
-				ResourceVersion:   "1",
-				CreationTimestamp: now,
-				Revision:          revision,
-				GitCommitSHA:      req.CommitSha,
-				GitRef:            req.RefName,
-				Spec:              specJSON,
-				Body:              string(body),
-			}
-			p.Status = admissionAcceptedStatus(1, revision, now)
-			if cerr := s.store.CreateProduct(ctx, p); cerr != nil {
-				s.log.Error("admit_resources: create product failed",
-					zap.String("name", resource.Metadata.Name), zap.Error(cerr))
-			}
-		} else {
-			gen := existing.Generation + 1
-			existing.APIVersion = resource.APIVersion
-			existing.Kind = resource.Kind
-			existing.Labels = resource.Metadata.Labels
-			existing.Annotations = resource.Metadata.Annotations
-			existing.Generation = gen
-			existing.ResourceVersion = fmt.Sprintf("%d", gen)
-			existing.Revision = revision
-			existing.GitCommitSHA = req.CommitSha
-			existing.GitRef = req.RefName
-			existing.Spec = specJSON
-			existing.Body = string(body)
-			existing.Status = admissionAcceptedStatus(gen, revision, now)
-			if uerr := s.store.UpdateProduct(ctx, existing); uerr != nil {
-				s.log.Error("admit_resources: update product failed",
-					zap.String("name", resource.Metadata.Name), zap.Error(uerr))
-			}
+	for _, e := range entries {
+		switch e.parsed.Kind {
+		case "Product":
+			s.admitProduct(ctx, e.parsed.Product, e.body, req, revision, now)
+		case "CategoryTaxonomy":
+			inCycle := cycleMembers[e.parsed.CategoryTaxonomy.Metadata.Name]
+			s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, req, revision, now, pushCategoryParents, inCycle)
 		}
 	}
 
 	return &catalogv1.AdmitResourcesResponse{}, nil
+}
+
+// detectCycles returns the set of category names involved in intra-push cycles.
+func detectCycles(parentMap map[string]string) map[string]bool {
+	inCycle := make(map[string]bool)
+	// DFS with three-color marking: 0=white, 1=gray, 2=black
+	color := make(map[string]int, len(parentMap))
+	var visit func(name string) bool
+	visit = func(name string) bool {
+		if color[name] == 2 {
+			return false
+		}
+		if color[name] == 1 {
+			return true // back edge → cycle
+		}
+		parent, inPush := parentMap[name]
+		if !inPush || parent == "" {
+			color[name] = 2
+			return false
+		}
+		color[name] = 1
+		if visit(parent) {
+			inCycle[name] = true
+		}
+		color[name] = 2
+		return inCycle[name]
+	}
+	for name := range parentMap {
+		visit(name)
+	}
+	return inCycle
+}
+
+func (s *Server) admitProduct(
+	ctx context.Context,
+	resource *catalog.ProductResource,
+	body []byte,
+	req *catalogv1.AdmitResourcesRequest,
+	revision string,
+	now time.Time,
+) {
+	specJSON, err := json.Marshal(resource.Spec)
+	if err != nil {
+		s.log.Error("admit_resources: marshal product spec failed",
+			zap.String("name", resource.Metadata.Name), zap.Error(err))
+		return
+	}
+
+	namespace := resource.Metadata.Namespace
+	if namespace == "" {
+		namespace = req.RepositoryId
+	}
+
+	existing, getErr := s.store.GetProductByName(ctx, namespace, resource.Metadata.Name)
+
+	if getErr != nil || existing == nil {
+		p := &datastore.Product{
+			UID:               uuid.Must(uuid.NewV7()).String(),
+			Namespace:         namespace,
+			Name:              resource.Metadata.Name,
+			APIVersion:        resource.APIVersion,
+			Kind:              resource.Kind,
+			Labels:            resource.Metadata.Labels,
+			Annotations:       resource.Metadata.Annotations,
+			Generation:        1,
+			ResourceVersion:   "1",
+			CreationTimestamp: now,
+			Revision:          revision,
+			GitCommitSHA:      req.CommitSha,
+			GitRef:            req.RefName,
+			Spec:              specJSON,
+			Body:              string(body),
+		}
+		p.Status = admissionAcceptedStatus(1, revision, now)
+		if cerr := s.store.CreateProduct(ctx, p); cerr != nil {
+			s.log.Error("admit_resources: create product failed",
+				zap.String("name", resource.Metadata.Name), zap.Error(cerr))
+		}
+	} else {
+		gen := existing.Generation + 1
+		existing.APIVersion = resource.APIVersion
+		existing.Kind = resource.Kind
+		existing.Labels = resource.Metadata.Labels
+		existing.Annotations = resource.Metadata.Annotations
+		existing.Generation = gen
+		existing.ResourceVersion = fmt.Sprintf("%d", gen)
+		existing.Revision = revision
+		existing.GitCommitSHA = req.CommitSha
+		existing.GitRef = req.RefName
+		existing.Spec = specJSON
+		existing.Body = string(body)
+		existing.Status = admissionAcceptedStatus(gen, revision, now)
+		if uerr := s.store.UpdateProduct(ctx, existing); uerr != nil {
+			s.log.Error("admit_resources: update product failed",
+				zap.String("name", resource.Metadata.Name), zap.Error(uerr))
+		}
+	}
+}
+
+// admitCategoryTaxonomyWithContext stores a CategoryTaxonomy with hierarchy context.
+// pushParents maps each category name in the push to its parent name (empty = root).
+// inCycle indicates this category is part of a detected intra-push cycle.
+func (s *Server) admitCategoryTaxonomyWithContext(
+	ctx context.Context,
+	resource *catalog.CategoryTaxonomyResource,
+	body []byte,
+	req *catalogv1.AdmitResourcesRequest,
+	revision string,
+	now time.Time,
+	pushParents map[string]string,
+	inCycle bool,
+) {
+	specJSON, err := json.Marshal(resource.Spec)
+	if err != nil {
+		s.log.Error("admit_resources: marshal category spec failed",
+			zap.String("name", resource.Metadata.Name), zap.Error(err))
+		return
+	}
+
+	namespace := resource.Metadata.Namespace
+	if namespace == "" {
+		namespace = req.RepositoryId
+	}
+
+	name := resource.Metadata.Name
+
+	// Compute parent name and ancestor path.
+	parentName := ""
+	ancestorPath := name
+	parentResolved := false
+
+	if resource.Spec.ParentRef != nil && resource.Spec.ParentRef.Name != "" {
+		parentName = resource.Spec.ParentRef.Name
+
+		// T033: check if parent is in the same push (co-creation).
+		if _, inPush := pushParents[parentName]; inPush {
+			// Parent is in this push; use parent's own name as its ancestor path
+			// (it's a root-level co-creation). Will be corrected if parent itself
+			// has a stored ancestor path after admission ordering.
+			ancestorPath = parentName + "/" + name
+			parentResolved = true
+		} else {
+			// T023: look up parent in DB.
+			parent, perr := s.store.GetCategoryTaxonomyByName(ctx, namespace, parentName)
+			if perr == nil && parent != nil {
+				ancestorPath = parent.AncestorPath + "/" + name
+				parentResolved = true
+			}
+			// If parent not found: tentative root, ParentResolved=False.
+		}
+	}
+
+	existing, getErr := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)
+
+	statusJSON := categoryAdmissionStatusFull(1, revision, now, parentResolved, inCycle)
+
+	if getErr != nil || existing == nil {
+		c := &datastore.CategoryTaxonomy{
+			UID:               uuid.Must(uuid.NewV7()).String(),
+			Namespace:         namespace,
+			Name:              name,
+			APIVersion:        resource.APIVersion,
+			Kind:              resource.Kind,
+			Labels:            resource.Metadata.Labels,
+			Annotations:       resource.Metadata.Annotations,
+			Generation:        1,
+			ResourceVersion:   "1",
+			CreationTimestamp: now,
+			Revision:          revision,
+			GitCommitSHA:      req.CommitSha,
+			GitRef:            req.RefName,
+			ParentName:        parentName,
+			AncestorPath:      ancestorPath,
+			Spec:              specJSON,
+			Body:              string(body),
+			Status:            statusJSON,
+		}
+		if cerr := s.store.CreateCategoryTaxonomy(ctx, c); cerr != nil {
+			s.log.Error("admit_resources: create category failed",
+				zap.String("name", name), zap.Error(cerr))
+		} else {
+			s.log.Info("admit_resources: category created",
+				zap.String("kind", resource.Kind),
+				zap.String("namespace", namespace),
+				zap.String("name", name),
+				zap.String("ancestor_path", ancestorPath),
+				zap.Bool("parent_resolved", parentResolved))
+		}
+	} else {
+		gen := existing.Generation + 1
+		existing.APIVersion = resource.APIVersion
+		existing.Kind = resource.Kind
+		existing.Labels = resource.Metadata.Labels
+		existing.Annotations = resource.Metadata.Annotations
+		existing.Generation = gen
+		existing.ResourceVersion = fmt.Sprintf("%d", gen)
+		existing.Revision = revision
+		existing.GitCommitSHA = req.CommitSha
+		existing.GitRef = req.RefName
+		existing.ParentName = parentName
+		existing.AncestorPath = ancestorPath
+		existing.Spec = specJSON
+		existing.Body = string(body)
+		existing.Status = categoryAdmissionStatusFull(gen, revision, now, parentResolved, inCycle)
+		if uerr := s.store.UpdateCategoryTaxonomy(ctx, existing); uerr != nil {
+			s.log.Error("admit_resources: update category failed",
+				zap.String("name", name), zap.Error(uerr))
+		} else {
+			s.log.Info("admit_resources: category updated",
+				zap.String("kind", resource.Kind),
+				zap.String("namespace", namespace),
+				zap.String("name", name),
+				zap.String("ancestor_path", ancestorPath))
+		}
+	}
 }
 
 // admissionAcceptedStatus builds the initial status JSON with AdmissionAccepted: True (FR-009).
@@ -294,6 +485,47 @@ func admissionAcceptedStatus(generation int64, revision string, now time.Time) [
 				LastTransitionTime: now,
 				Reason:             "AdmittedByHookPipeline",
 				Message:            "Resource admitted via the post-receive hook pipeline.",
+			},
+		},
+	}
+	b, _ := json.Marshal(status)
+	return b
+}
+
+// categoryAdmissionStatusFull builds the initial status JSON for a CategoryTaxonomy,
+// including Acyclic condition (T032) and ParentResolved based on actual resolution (T033).
+func categoryAdmissionStatusFull(generation int64, revision string, now time.Time, parentResolved bool, inCycle bool) []byte {
+	parentStatus := catalog.ConditionFalse
+	if parentResolved {
+		parentStatus = catalog.ConditionTrue
+	}
+	acyclicStatus := catalog.ConditionTrue
+	if inCycle {
+		acyclicStatus = catalog.ConditionFalse
+	}
+	status := catalog.CategoryTaxonomyStatus{
+		ObservedGeneration:  generation,
+		LastAppliedRevision: revision,
+		Conditions: []catalog.Condition{
+			{
+				Type:               catalog.ConditionAdmissionAccepted,
+				Status:             catalog.ConditionTrue,
+				ObservedGeneration: generation,
+				LastTransitionTime: now,
+				Reason:             "AdmittedByHookPipeline",
+				Message:            "Resource admitted via the post-receive hook pipeline.",
+			},
+			{
+				Type:               catalog.ConditionParentResolved,
+				Status:             parentStatus,
+				ObservedGeneration: generation,
+				LastTransitionTime: now,
+			},
+			{
+				Type:               catalog.ConditionAcyclic,
+				Status:             acyclicStatus,
+				ObservedGeneration: generation,
+				LastTransitionTime: now,
 			},
 		},
 	}
