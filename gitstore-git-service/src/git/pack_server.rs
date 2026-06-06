@@ -52,11 +52,11 @@ impl HttpPackServer {
     pub fn handle_upload_pack(&self, body: &[u8]) -> Result<Vec<u8>> {
         let start = Instant::now();
         let repo = open_repo(&self.repo_path)?;
-        let (wants, haves) = parse_wants_and_haves(body);
+        let (wants, haves, done_seen) = parse_wants_and_haves(body);
         let mut response = Vec::new();
 
-        if wants.is_empty() {
-            // NAK — nothing requested
+        if wants.is_empty() || !done_seen {
+            // NAK — nothing requested or negotiation still in progress
             write_pkt_line(&mut response, b"NAK\n")?;
             response.extend_from_slice(b"0000");
             emit_span("upload-pack-rpc", &self.repo_path, start, "ok", 0);
@@ -459,13 +459,14 @@ fn collect_refs(repo: &gix::Repository) -> Result<Vec<(String, String)>> {
     Ok(refs)
 }
 
-/// Parse `want` and `have` lines from a pkt-line upload-pack request body.
+/// Parse `want`, `have`, and `done` lines from a pkt-line upload-pack request body.
 ///
-/// Returns `(wants, haves)`. `haves` are objects the client already has; the
-/// pack builder uses them as cut-off points so only the delta is sent.
-pub fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>) {
+/// Returns `(wants, haves, done_seen)`. `done_seen` is `true` when the client sent
+/// `done`, signalling it has finished negotiation and expects a pack in response.
+pub fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>, bool) {
     let mut wants = Vec::new();
     let mut haves = Vec::new();
+    let mut done_seen = false;
     let mut pos = 0;
 
     while pos + 4 <= body.len() {
@@ -498,11 +499,13 @@ pub fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>) {
                 if !oid.is_empty() {
                     haves.push(oid);
                 }
+            } else if s == "done" {
+                done_seen = true;
             }
         }
         pos += len;
     }
-    (wants, haves)
+    (wants, haves, done_seen)
 }
 
 /// Build a pack file containing objects reachable from `wants` but not from `haves`.
@@ -514,6 +517,7 @@ pub fn build_pack_for_wants(
     wants: &[String],
     haves: &[String],
 ) -> Result<Vec<u8>> {
+    use gix::object::Kind;
     use gix_pack::data::output;
     use gix_pack::data::output::count::objects::ObjectExpansion;
 
@@ -540,27 +544,53 @@ pub fn build_pack_for_wants(
     let mut odb = (*repo.objects).clone();
     odb.prevent_pack_unload();
 
+    // Peel annotated tags: rev_walk traverses commits only, so a want pointing at a
+    // tag object would yield no commits and produce an empty pack. We peel each tag
+    // to its target commit and include the tag object itself via AsIs expansion.
+    let mut commit_tips: Vec<gix::ObjectId> = Vec::new();
+    let mut extra_objects: Vec<gix::ObjectId> = Vec::new();
+    for oid in &want_ids {
+        let obj = repo
+            .find_object(*oid)
+            .with_context(|| format!("find want object {oid}"))?;
+        if obj.kind == Kind::Tag {
+            extra_objects.push(*oid);
+            let tag = obj
+                .try_into_tag()
+                .map_err(|_| anyhow::anyhow!("peel tag {oid}"))?;
+            let target_id = tag
+                .target_id()
+                .with_context(|| format!("tag target {oid}"))?;
+            commit_tips.push(target_id.detach());
+        } else {
+            commit_tips.push(*oid);
+        }
+    }
+
     // Walk commits from wants, stopping at have boundaries so only the
     // incremental delta is included rather than the full history.
-    // Walk all commits reachable from wants, stopping at have boundaries.
-    // Always use rev_walk so parent commits are included in full clones (empty haves).
     let walk_ids: Vec<gix::ObjectId> = repo
-        .rev_walk(want_ids.iter().copied())
+        .rev_walk(commit_tips.iter().copied())
         .with_boundary(have_ids.iter().copied())
         .all()
         .context("rev walk for pack generation")?
         .filter_map(|r| r.ok().map(|info| info.id))
         .collect();
 
-    if walk_ids.is_empty() {
-        return Ok(Vec::new());
+    if walk_ids.is_empty() && extra_objects.is_empty() {
+        anyhow::bail!(
+            "upload-pack: rev_walk produced no objects for {} want(s); \
+             repository may be corrupt or wants are not reachable",
+            want_ids.len()
+        );
     }
 
+    // Count commit-reachable objects (trees + blobs via TreeContents expansion).
     let mut ids_iter = walk_ids
         .iter()
         .map(|id| Ok::<_, Box<dyn std::error::Error + Send + Sync>>(*id));
 
-    let (counts, _) = gix_pack::data::output::count::objects_unthreaded(
+    let (mut counts, _) = gix_pack::data::output::count::objects_unthreaded(
         &odb,
         &mut ids_iter,
         &gix::progress::Discard,
@@ -568,6 +598,22 @@ pub fn build_pack_for_wants(
         ObjectExpansion::TreeContents,
     )
     .context("counting pack objects")?;
+
+    // Include tag objects themselves (AsIs — no expansion needed for tag blobs).
+    if !extra_objects.is_empty() {
+        let mut tag_iter = extra_objects
+            .iter()
+            .map(|id| Ok::<_, Box<dyn std::error::Error + Send + Sync>>(*id));
+        let (tag_counts, _) = gix_pack::data::output::count::objects_unthreaded(
+            &odb,
+            &mut tag_iter,
+            &gix::progress::Discard,
+            &interrupt,
+            ObjectExpansion::AsIs,
+        )
+        .context("counting tag objects")?;
+        counts.extend(tag_counts);
+    }
 
     if counts.is_empty() {
         return Ok(Vec::new());
@@ -780,4 +826,291 @@ fn move_file(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
     std::fs::copy(src, dst).context("copy file")?;
     std::fs::remove_file(src).context("remove source file")?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // Test helpers
+    // -----------------------------------------------------------------------
+
+    /// Create an in-memory bare gix repository in a temp directory.
+    fn make_test_repo() -> (tempfile::TempDir, gix::Repository) {
+        let dir = tempfile::TempDir::new().expect("tmp dir");
+        let repo = gix::init_bare(dir.path()).expect("init bare repo");
+        (dir, repo)
+    }
+
+    /// Write a blob + tree + commit into `repo` and return the commit OID.
+    /// Updates `refs/heads/main` so the commit is reachable.
+    fn make_commit(
+        repo: &gix::Repository,
+        message: &str,
+        parent: Option<gix::ObjectId>,
+    ) -> gix::ObjectId {
+        use gix::objs::tree::Entry;
+        use gix::objs::{Blob, Tree};
+
+        // Blob
+        let blob_oid = repo
+            .write_object(Blob {
+                data: message.as_bytes().into(),
+            })
+            .expect("write blob")
+            .detach();
+
+        // Tree
+        let tree = Tree {
+            entries: vec![Entry {
+                mode: gix::objs::tree::EntryKind::Blob.into(),
+                filename: "file.txt".into(),
+                oid: blob_oid,
+            }],
+        };
+        let tree_oid = repo.write_object(tree).expect("write tree").detach();
+
+        // Build a SignatureRef with a raw time string (git format: "seconds offset")
+        let sig = gix::actor::SignatureRef {
+            name: "Test".into(),
+            email: "test@example.com".into(),
+            time: "0 +0000",
+        };
+
+        let parents: Vec<gix::ObjectId> = parent.into_iter().collect();
+        repo.commit_as(sig, sig, "refs/heads/main", message, tree_oid, parents)
+            .expect("write commit")
+            .detach()
+    }
+
+    /// Encode a slice of lines as pkt-line bytes.
+    fn pkt_lines(lines: &[&[u8]]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for line in lines {
+            let len = line.len() + 4;
+            out.extend_from_slice(format!("{:04x}", len).as_bytes());
+            out.extend_from_slice(line);
+        }
+        out
+    }
+
+    /// Append a flush packet (`0000`) to a byte buffer.
+    fn flush(buf: &mut Vec<u8>) {
+        buf.extend_from_slice(b"0000");
+    }
+
+    // -----------------------------------------------------------------------
+    // T050 – T053: parse_wants_and_haves
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn t050_parse_wants_and_haves_want_plus_done() {
+        let oid = "a".repeat(40);
+        let want_line = format!("want {}\n", oid);
+        let mut body = pkt_lines(&[want_line.as_bytes(), b"done\n"]);
+        flush(&mut body);
+
+        let (wants, haves, done_seen) = parse_wants_and_haves(&body);
+        assert_eq!(wants, vec![oid]);
+        assert!(haves.is_empty());
+        assert!(done_seen, "done_seen must be true when 'done' line present");
+    }
+
+    #[test]
+    fn t051_parse_wants_and_haves_done_absent() {
+        let oid = "b".repeat(40);
+        let want_line = format!("want {}\n", oid);
+        let mut body = pkt_lines(&[want_line.as_bytes()]);
+        flush(&mut body);
+
+        let (wants, haves, done_seen) = parse_wants_and_haves(&body);
+        assert_eq!(wants, vec![oid]);
+        assert!(haves.is_empty());
+        assert!(!done_seen, "done_seen must be false when 'done' absent");
+    }
+
+    #[test]
+    fn t052_parse_wants_and_haves_empty_body() {
+        let (wants, haves, done_seen) = parse_wants_and_haves(b"");
+        assert!(wants.is_empty());
+        assert!(haves.is_empty());
+        assert!(!done_seen);
+    }
+
+    #[test]
+    fn t053_parse_wants_and_haves_caps_stripped() {
+        // capability string after \0 must not bleed into the OID
+        let oid = "c".repeat(40);
+        let want_line = format!("want {}\0multi_ack side-band-64k\n", oid);
+        let mut body = pkt_lines(&[want_line.as_bytes(), b"done\n"]);
+        flush(&mut body);
+
+        let (wants, _haves, done_seen) = parse_wants_and_haves(&body);
+        assert_eq!(wants, vec![oid], "capability suffix must be stripped");
+        assert!(done_seen);
+    }
+
+    // -----------------------------------------------------------------------
+    // T054 – T056: handle_upload_pack
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn t054_handle_upload_pack_empty_wants_returns_nak_flush() {
+        let (_dir, repo) = make_test_repo();
+        let server = HttpPackServer {
+            repo_path: repo.path().to_path_buf(),
+            max_pack_size: 64 * 1024 * 1024,
+        };
+
+        let body = b""; // no wants, no done
+        let resp = server.handle_upload_pack(body).expect("handle_upload_pack");
+
+        // Expected: pkt-line("NAK\n") + "0000"
+        let mut expected = Vec::new();
+        write_pkt_line(&mut expected, b"NAK\n").unwrap();
+        expected.extend_from_slice(b"0000");
+        assert_eq!(resp, expected, "empty-wants must return NAK+0000");
+    }
+
+    #[test]
+    fn t055_handle_upload_pack_wants_plus_done_returns_pack() {
+        let (_dir, repo) = make_test_repo();
+        let commit_oid = make_commit(&repo, "initial", None);
+
+        // Point HEAD at the commit so the server has a valid repo
+        let head_ref = repo
+            .refs
+            .transaction()
+            .prepare(
+                vec![gix::refs::transaction::RefEdit {
+                    change: gix::refs::transaction::Change::Update {
+                        log: gix::refs::transaction::LogChange {
+                            mode: gix::refs::transaction::RefLog::AndReference,
+                            force_create_reflog: false,
+                            message: "init".into(),
+                        },
+                        expected: gix::refs::transaction::PreviousValue::Any,
+                        new: gix::refs::Target::Object(commit_oid),
+                    },
+                    name: "refs/heads/main".try_into().unwrap(),
+                    deref: false,
+                }],
+                gix::lock::acquire::Fail::Immediately,
+                gix::lock::acquire::Fail::Immediately,
+            )
+            .unwrap();
+        let _ = head_ref.commit(None);
+
+        let server = HttpPackServer {
+            repo_path: repo.path().to_path_buf(),
+            max_pack_size: 64 * 1024 * 1024,
+        };
+
+        let want_line = format!("want {}\n", commit_oid);
+        let mut body = pkt_lines(&[want_line.as_bytes(), b"done\n"]);
+        flush(&mut body);
+
+        let resp = server
+            .handle_upload_pack(&body)
+            .expect("handle_upload_pack");
+
+        // Response must start with pkt-line("NAK\n") and contain sideband data (0x01 prefix)
+        let mut nak = Vec::new();
+        write_pkt_line(&mut nak, b"NAK\n").unwrap();
+        assert!(
+            resp.starts_with(&nak),
+            "response must begin with NAK pkt-line"
+        );
+        assert!(
+            resp.len() > nak.len() + 4,
+            "response must contain pack data after NAK"
+        );
+        // Verify sideband channel byte
+        let after_nak = &resp[nak.len()..];
+        let sideband_len =
+            usize::from_str_radix(std::str::from_utf8(&after_nak[..4]).unwrap(), 16).unwrap();
+        assert_eq!(
+            after_nak[4], 0x01,
+            "pack data must be on sideband channel 1"
+        );
+        let _ = sideband_len;
+    }
+
+    #[test]
+    fn t056_handle_upload_pack_wants_no_done_returns_nak_flush() {
+        let (_dir, repo) = make_test_repo();
+        let commit_oid = make_commit(&repo, "initial", None);
+
+        let server = HttpPackServer {
+            repo_path: repo.path().to_path_buf(),
+            max_pack_size: 64 * 1024 * 1024,
+        };
+
+        // wants present but no done line
+        let want_line = format!("want {}\n", commit_oid);
+        let mut body = pkt_lines(&[want_line.as_bytes()]);
+        flush(&mut body);
+
+        let resp = server
+            .handle_upload_pack(&body)
+            .expect("handle_upload_pack");
+
+        let mut expected = Vec::new();
+        write_pkt_line(&mut expected, b"NAK\n").unwrap();
+        expected.extend_from_slice(b"0000");
+        assert_eq!(resp, expected, "wants without done must return NAK+0000");
+    }
+
+    // -----------------------------------------------------------------------
+    // T057 – T059: build_pack_for_wants
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn t057_build_pack_for_wants_fresh_clone_non_empty() {
+        let (_dir, repo) = make_test_repo();
+        let commit_oid = make_commit(&repo, "initial", None);
+
+        let wants = vec![commit_oid.to_string()];
+        let pack = build_pack_for_wants(&repo, &wants, &[]).expect("build_pack_for_wants");
+
+        assert!(!pack.is_empty(), "fresh clone pack must be non-empty");
+        assert!(
+            pack.starts_with(b"PACK"),
+            "output must be a valid PACK file"
+        );
+    }
+
+    #[test]
+    fn t058_build_pack_for_wants_client_has_everything_returns_err() {
+        let (_dir, repo) = make_test_repo();
+        let commit_oid = make_commit(&repo, "initial", None);
+
+        // Client has the tip — rev_walk with have=tip yields no commits
+        let wants = vec![commit_oid.to_string()];
+        let haves = vec![commit_oid.to_string()];
+        let result = build_pack_for_wants(&repo, &wants, &haves);
+
+        assert!(
+            result.is_err(),
+            "should error when rev_walk yields no objects"
+        );
+    }
+
+    #[test]
+    fn t059_build_pack_for_wants_unreachable_want_returns_err() {
+        let (_dir, repo) = make_test_repo();
+        // A well-formed but non-existent OID
+        let fake_oid = "d".repeat(40);
+        let wants = vec![fake_oid];
+        let result = build_pack_for_wants(&repo, &wants, &[]);
+        assert!(
+            result.is_err(),
+            "non-existent want OID must return an error"
+        );
+    }
 }

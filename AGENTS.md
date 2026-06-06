@@ -12,6 +12,9 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `go-memdb v1.3.5` (dev) / `gocqlx/v3 v3.0.4` + `gocql` (ScyllaDB prod) (001-product-spec-validation)
 - Rust edition 2021, MSRV 1.82 (`gitstore-git-service`); Go 1.25 (`gitstore-api`) (018-hook-pipeline-wiring)
 - Existing `Datastore` interface (`CreateProduct` / `UpdateProduct`) — no schema changes (018-hook-pipeline-wiring)
+- `go-memdb` (dev) / ScyllaDB 5.x+ (prod) via `Datastore` interface (`CreateProduct` / `UpdateProduct`) (018-hook-pipeline-wiring)
+- Rust edition 2021, MSRV 1.82 (`gitstore-git-service`) + `gix 0.84.0`, `gix-pack 0.71.0`, `tokio 1.35`, `anyhow 1.0`, `tracing 0.1` (019-fix-upload-pack)
+- N/A (reads existing bare git repositories on local filesystem) (019-fix-upload-pack)
 
 - (001-git-backed-ecommerce)
 
@@ -51,9 +54,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 019-fix-upload-pack: Added Rust edition 2021, MSRV 1.82 (`gitstore-git-service`) + `gix 0.84.0`, `gix-pack 0.71.0`, `tokio 1.35`, `anyhow 1.0`, `tracing 0.1`
 - 018-hook-pipeline-wiring: Added Rust edition 2021, MSRV 1.82 (`gitstore-git-service`); Go 1.25 (`gitstore-api`)
-- 001-product-spec-validation: Added Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90`, `go-playground/validator/v10 v10.30.3`, `github.com/adrg/frontmatter v0.2.0`, `gopkg.in/yaml.v3`, `go.uber.org/zap`, `shopspring/decimal`
-- 016-product-spec-hydration: Added Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90`, `go-memdb v1.3.5`, `gocqlx/v3 v3.0.4`, `gocql` (Scylla driver), `encoding/json` (stdlib), `go-playground/validator/v10 v10.30.3`, `go.uber.org/zap`
+- 018-hook-pipeline-wiring: Added Rust edition 2021, MSRV 1.82 (`gitstore-git-service`); Go 1.25 (`gitstore-api`)
 
 
 <!-- MANUAL ADDITIONS START -->

@@ -24,9 +24,16 @@ func NewClientFromConn(conn *grpc.ClientConn) *Client {
 }
 
 // ReadFile fetches the raw bytes of a single file at the given ref.
+// Uses the shared Client.RepositoryID field — prefer ReadFileForRepo for concurrent use.
 func (c *Client) ReadFile(ctx context.Context, path, ref string) ([]byte, error) {
+	return c.ReadFileForRepo(ctx, c.RepositoryID, path, ref)
+}
+
+// ReadFileForRepo fetches the raw bytes of a single file at the given ref for
+// the specified repository. Safe for concurrent calls with different repository IDs.
+func (c *Client) ReadFileForRepo(ctx context.Context, repositoryID, path, ref string) ([]byte, error) {
 	resp, err := c.Git.GetFile(ctx, &gitv1.GetFileRequest{
-		RepositoryId: c.RepositoryID,
+		RepositoryId: repositoryID,
 		Path:         path,
 		Ref:          ref,
 	})
@@ -37,10 +44,16 @@ func (c *Client) ReadFile(ctx context.Context, path, ref string) ([]byte, error)
 }
 
 // ListFiles enumerates file paths under prefix at the given ref.
-// prefix should end with "/" (e.g. "products/"); empty string means repo root.
+// Uses the shared Client.RepositoryID field — prefer ListFilesForRepo for concurrent use.
 func (c *Client) ListFiles(ctx context.Context, prefix, ref string) ([]*gitv1.FileEntry, error) {
+	return c.ListFilesForRepo(ctx, c.RepositoryID, prefix, ref)
+}
+
+// ListFilesForRepo enumerates file paths under prefix at the given ref for
+// the specified repository. Safe for concurrent calls with different repository IDs.
+func (c *Client) ListFilesForRepo(ctx context.Context, repositoryID, prefix, ref string) ([]*gitv1.FileEntry, error) {
 	resp, err := c.Git.ListFiles(ctx, &gitv1.ListFilesRequest{
-		RepositoryId: c.RepositoryID,
+		RepositoryId: repositoryID,
 		Ref:          ref,
 		PathPrefix:   prefix,
 		Recursive:    true,
