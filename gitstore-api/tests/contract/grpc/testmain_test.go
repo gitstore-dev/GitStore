@@ -42,12 +42,12 @@ func TestMain(m *testing.M) {
 
 	req := testcontainers.ContainerRequest{
 		Image:        "gitstore-git-service:latest",
-		ExposedPorts: []string{"9418/tcp", "50051/tcp"},
+		ExposedPorts: []string{"50051/tcp"},
 		Env: map[string]string{
 			"GITSTORE_GIT__DATA_DIR": "/data/repos",
 			"GITSTORE_GRPC__PORT":    "50051",
 		},
-		WaitingFor: wait.ForHTTP("/health").WithPort("9418/tcp").
+		WaitingFor: wait.ForListeningPort("50051/tcp").
 			WithStartupTimeout(60 * time.Second),
 	}
 
@@ -56,8 +56,8 @@ func TestMain(m *testing.M) {
 		Started:          true,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "skipping grpc integration tests: git-service container unavailable: %v\n", err)
-		os.Exit(0)
+		fmt.Fprintf(os.Stderr, "FAIL: git-service container unavailable: %v\n", err)
+		os.Exit(1)
 	}
 
 	grpcPort, err := container.MappedPort(ctx, "50051")

@@ -199,14 +199,19 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 			require.NoError(t, ds.CreateCollection(ctx, items[i]))
 		}
 
-		// Cursor at items[2] (third-newest): "give me items older than this".
-		// With DESC ordering, only items[1] (base+1s) and items[0] (base+0s) are older → 2 items, no HasNext.
+		// Cursor at items[2] (third-newest): verify items[1] and items[0] appear in the page.
+		// Global-table tests share state across -count runs, so we check membership by ID
+		// rather than exact length to avoid counting pre-existing rows from earlier runs.
 		cursor := encodeCursor(items[2].CreatedAt, items[2].ID)
-		page2, err := ds.ListCollections(ctx, datastore.PageParams{First: 2, After: cursor})
+		page2, err := ds.ListCollections(ctx, datastore.PageParams{First: 10, After: cursor})
 		require.NoError(t, err)
-		assert.Len(t, page2.Items, 2)
 		assert.True(t, page2.HasPrevious)
-		assert.False(t, page2.HasNext)
+		ids := make(map[string]bool, len(page2.Items))
+		for _, it := range page2.Items {
+			ids[it.ID] = true
+		}
+		assert.True(t, ids[items[1].ID], "expected items[1] in page")
+		assert.True(t, ids[items[0].ID], "expected items[0] in page")
 	})
 
 	t.Run("Collections/BackwardPagination", func(t *testing.T) {
@@ -236,13 +241,19 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 			require.NoError(t, ds.CreateNamespace(ctx, nss[i]))
 		}
 
-		// Cursor at nss[2] (third-newest): only nss[1] and nss[0] are older → 2 items, no HasNext.
+		// Cursor at nss[2] (third-newest): verify nss[1] and nss[0] appear in the page.
+		// Global-table tests share state across -count runs, so we check membership by ID
+		// rather than exact length to avoid counting pre-existing rows from earlier runs.
 		cursor := encodeCursor(nss[2].CreatedAt, nss[2].ID)
-		page2, err := ds.ListNamespaces(ctx, datastore.PageParams{First: 2, After: cursor})
+		page2, err := ds.ListNamespaces(ctx, datastore.PageParams{First: 10, After: cursor})
 		require.NoError(t, err)
-		assert.Len(t, page2.Items, 2)
-		assert.False(t, page2.HasNext)
 		assert.True(t, page2.HasPrevious)
+		ids := make(map[string]bool, len(page2.Items))
+		for _, ns := range page2.Items {
+			ids[ns.ID] = true
+		}
+		assert.True(t, ids[nss[1].ID], "expected nss[1] in page")
+		assert.True(t, ids[nss[0].ID], "expected nss[0] in page")
 	})
 
 	t.Run("Namespaces/BackwardPagination", func(t *testing.T) {
