@@ -111,3 +111,10 @@ CREATE TABLE IF NOT EXISTS category_taxonomy_by_name (
     creation_timestamp timestamp,
     PRIMARY KEY ((namespace), name)
 );
+
+CREATE TABLE IF NOT EXISTS category_taxonomy_by_uid (
+    uid                uuid,
+    namespace          text,
+    creation_timestamp timestamp,
+    PRIMARY KEY (uid)
+);

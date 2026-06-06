@@ -43,6 +43,9 @@ func (s *stubDatastore) DeleteProduct(_ context.Context, _ string) error {
 func (s *stubDatastore) CreateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
 	return s.getProductErr
 }
+func (s *stubDatastore) GetCategoryTaxonomy(_ context.Context, _ string) (*datastore.CategoryTaxonomy, error) {
+	return nil, s.getProductErr
+}
 func (s *stubDatastore) GetCategoryTaxonomyByName(_ context.Context, _, _ string) (*datastore.CategoryTaxonomy, error) {
 	return nil, s.getProductErr
 }

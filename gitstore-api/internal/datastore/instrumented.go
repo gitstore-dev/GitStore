@@ -102,6 +102,13 @@ func (d *InstrumentedDatastore) CreateCategoryTaxonomy(ctx context.Context, c *C
 	return err
 }
 
+func (d *InstrumentedDatastore) GetCategoryTaxonomy(ctx context.Context, uid string) (*CategoryTaxonomy, error) {
+	start := time.Now()
+	v, err := d.next.GetCategoryTaxonomy(ctx, uid)
+	d.observe("GetCategoryTaxonomy", start, err)
+	return v, err
+}
+
 func (d *InstrumentedDatastore) GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*CategoryTaxonomy, error) {
 	start := time.Now()
 	v, err := d.next.GetCategoryTaxonomyByName(ctx, namespace, name)

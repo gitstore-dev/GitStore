@@ -54,8 +54,7 @@ func TestQueryNodesPreservesOrderAndSkipsInvalidIDs(t *testing.T) {
 	require.Len(t, nodes, 6)
 	assert.IsType(t, &model.Namespace{}, nodes[0])
 	assert.Nil(t, nodes[1])
-	// CategoryTaxonomy UID index not yet wired (T013); global node lookup returns nil.
-	assert.Nil(t, nodes[2])
+	assert.IsType(t, &model.Category{}, nodes[2])
 	assert.IsType(t, &model.Collection{}, nodes[3])
 	assert.IsType(t, &model.Product{}, nodes[4])
 	assert.Nil(t, nodes[5])
@@ -72,11 +71,11 @@ func TestLookupQueriesAcceptGlobalIDs(t *testing.T) {
 	require.NotNil(t, product)
 	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductUID), product.ID)
 
-	// CategoryTaxonomy UID index not yet wired (T013); Category by ID returns nil.
 	categoryID := mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryUID)
 	category, err := query.Category(ctx, model.CategoryBy{ID: &categoryID})
 	require.NoError(t, err)
-	assert.Nil(t, category)
+	require.NotNil(t, category)
+	assert.Equal(t, categoryID, category.ID)
 
 	collectionID := mustEncodeNodeID(nodeKindCollection, globalIDTestCollectionID)
 	collection, err := query.Collection(ctx, model.CollectionBy{ID: &collectionID})

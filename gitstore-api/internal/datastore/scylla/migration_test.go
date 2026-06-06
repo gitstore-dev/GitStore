@@ -57,8 +57,8 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, scyllaKeyspace, ksName)
 
-	// Verify the three product tables exist (016-product-spec-hydration schema).
-	for _, expectedTable := range []string{"products_by_namespace", "products_by_name", "products_by_uid"} {
+	// Verify representative lookup tables exist.
+	for _, expectedTable := range []string{"products_by_namespace", "products_by_name", "products_by_uid", "category_taxonomy_by_uid"} {
 		var tblName string
 		err = session.Query(
 			`SELECT table_name FROM system_schema.tables WHERE keyspace_name = ? AND table_name = ?`,

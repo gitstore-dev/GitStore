@@ -2450,6 +2450,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
 		ec.unmarshalInputCategoryBy,
+		ec.unmarshalInputCategoryNamespacePath,
 		ec.unmarshalInputCollectionBy,
 		ec.unmarshalInputCreateCategoryInput,
 		ec.unmarshalInputCreateCollectionInput,
@@ -4304,12 +4305,21 @@ input ProductNamespacePath {
 Selector for looking up a category by exactly one unique key.
 """
 input CategoryBy @oneOf {
+  """Look up by globally unique Relay ID (encodes the category UID)."""
   id: ID
-  slug: String
+
   """
-  Look up a git-backed category by its metadata.name (unique within namespace).
+  Look up by namespace identifier + category name (Kubernetes-style metadata.name).
   """
-  name: String
+  namespacePath: CategoryNamespacePath
+}
+
+"""
+Composite selector: namespace identifier (human-readable slug) + category name.
+"""
+input CategoryNamespacePath {
+  namespace: String!
+  name: String!
 }
 
 """

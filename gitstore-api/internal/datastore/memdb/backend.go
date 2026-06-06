@@ -285,6 +285,16 @@ func (m *memdbDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.
 	return nil
 }
 
+func (m *memdbDatastore) GetCategoryTaxonomy(_ context.Context, uid string) (*datastore.CategoryTaxonomy, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("category_taxonomy", "id", uid)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return raw.(*datastore.CategoryTaxonomy), nil
+}
+
 func (m *memdbDatastore) GetCategoryTaxonomyByName(_ context.Context, namespace, name string) (*datastore.CategoryTaxonomy, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()

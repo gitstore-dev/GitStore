@@ -316,6 +316,10 @@ func TestScylla_CreateGetCategoryTaxonomy(t *testing.T) {
 	got, err := store.GetCategoryTaxonomyByName(ctx, c.Namespace, c.Name)
 	require.NoError(t, err)
 	assert.Equal(t, c.UID, got.UID)
+
+	gotByUID, err := store.GetCategoryTaxonomy(ctx, c.UID)
+	require.NoError(t, err)
+	assert.Equal(t, c.Name, gotByUID.Name)
 }
 
 func TestScylla_CreateCategoryTaxonomy_DuplicateName(t *testing.T) {
@@ -333,6 +337,9 @@ func TestScylla_CreateCategoryTaxonomy_DuplicateName(t *testing.T) {
 func TestScylla_GetCategoryTaxonomy_NotFound(t *testing.T) {
 	store := newTestStore(t)
 	_, err := store.GetCategoryTaxonomyByName(context.Background(), "test-ns", "no-such-cat-"+newID()[:8])
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+
+	_, err = store.GetCategoryTaxonomy(context.Background(), newID())
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 

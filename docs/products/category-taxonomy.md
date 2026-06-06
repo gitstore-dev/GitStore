@@ -111,9 +111,9 @@ follow the Kubernetes convention (`True`/`False`/`Unknown`).
 ## GraphQL queries
 
 ```graphql
-# Look up a category by name
+# Look up a category by namespace + name
 query {
-  category(by: { name: "personal-computers" }) {
+  category(by: { namespacePath: { namespace: "gitstore-test", name: "personal-computers" } }) {
     id
     apiVersion
     kind

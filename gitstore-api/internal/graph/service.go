@@ -111,6 +111,15 @@ func (s *Service) GetCategoryTaxonomies(ctx context.Context, namespace string, p
 	return result, nil
 }
 
+// GetCategoryTaxonomyByUID returns a CategoryTaxonomy by UID.
+func (s *Service) GetCategoryTaxonomyByUID(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error) {
+	c, err := s.store.GetCategoryTaxonomy(ctx, uid)
+	if err != nil {
+		return nil, fmt.Errorf("category not found: %s", uid)
+	}
+	return c, nil
+}
+
 // GetCategoryTaxonomyByName returns a CategoryTaxonomy by namespace and name.
 func (s *Service) GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*datastore.CategoryTaxonomy, error) {
 	c, err := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)

@@ -215,6 +215,22 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.Equal(t, c.Name, got.Name)
 	})
 
+	t.Run("CategoryTaxonomy/GetByUID", func(t *testing.T) {
+		c := newCategoryTaxonomy()
+		require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
+
+		got, err := ds.GetCategoryTaxonomy(ctx, c.UID)
+		require.NoError(t, err)
+		assert.Equal(t, c.UID, got.UID)
+		assert.Equal(t, c.Name, got.Name)
+		assert.Equal(t, c.Namespace, got.Namespace)
+	})
+
+	t.Run("CategoryTaxonomy/GetByUIDNotFound", func(t *testing.T) {
+		_, err := ds.GetCategoryTaxonomy(ctx, newID())
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
 	t.Run("CategoryTaxonomy/GetNotFound", func(t *testing.T) {
 		_, err := ds.GetCategoryTaxonomyByName(ctx, "test-ns", "does-not-exist-"+newID()[:8])
 		assert.ErrorIs(t, err, datastore.ErrNotFound)

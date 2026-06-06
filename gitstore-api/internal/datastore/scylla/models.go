@@ -120,6 +120,20 @@ var (
 		},
 	})
 
+	// CategoryTaxonomyByUID is the lookup table for GetCategoryTaxonomy(uid).
+	CategoryTaxonomyByUID = table.New(table.Metadata{
+		Name: "category_taxonomy_by_uid",
+		Columns: []string{
+			"uid",
+			"namespace",
+			"creation_timestamp",
+		},
+		PartKey: []string{
+			"uid",
+		},
+		SortKey: []string{},
+	})
+
 	Collection = table.New(table.Metadata{
 		Name: "collections",
 		Columns: []string{

@@ -12,6 +12,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 // Products is the resolver for the products field.
@@ -60,25 +61,26 @@ func (r *mutationResolver) ReorderCategories(ctx context.Context, input model.Re
 
 // Category is the resolver for the category field.
 func (r *queryResolver) Category(ctx context.Context, by model.CategoryBy) (*model.Category, error) {
-	if by.Name != nil {
-		ns := namespaceFromContext(ctx)
-		c, err := r.service.GetCategoryTaxonomyByName(ctx, ns, *by.Name)
-		if err != nil {
-			return nil, nil
-		}
-		return DatastoreCategoryTaxonomyToGraphQL(c), nil
-	}
-	if by.ID != nil {
+	switch {
+	case by.ID != nil:
 		categoryUID, err := decodeNodeIDAs(nodeKindCategory, *by.ID)
 		if err != nil {
 			return nil, err
 		}
-		// UID-based lookup for CategoryTaxonomy not yet indexed (T013 limitation).
-		_ = categoryUID
-		return nil, nil
+		c, err := r.service.GetCategoryTaxonomyByUID(ctx, categoryUID)
+		if err != nil {
+			return nil, nil
+		}
+		return DatastoreCategoryTaxonomyToGraphQL(c), nil
+	case by.NamespacePath != nil:
+		c, err := r.service.GetCategoryTaxonomyByName(ctx, by.NamespacePath.Namespace, by.NamespacePath.Name)
+		if err != nil {
+			return nil, nil
+		}
+		return DatastoreCategoryTaxonomyToGraphQL(c), nil
+	default:
+		return nil, gqlerror.Errorf("CategoryBy: exactly one selector required")
 	}
-	// Slug field retained for backwards compatibility; no-op for git-backed categories.
-	return nil, nil
 }
 
 // Categories returns categories as a Relay connection.

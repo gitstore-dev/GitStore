@@ -140,9 +140,10 @@ type categoryQueryResult struct {
 
 func queryCategory(t *testing.T, name string) *categoryQueryResult {
 	t.Helper()
+	ns := getEnv("NAMESPACE", "gitstore-test")
 	resp := gqlQuery(t, `
-		query($name: String!) {
-			category(by: {name: $name}) {
+		query($namespace: String!, $name: String!) {
+			category(by: {namespacePath: {namespace: $namespace, name: $name}}) {
 				id
 				apiVersion
 				kind
@@ -152,7 +153,7 @@ func queryCategory(t *testing.T, name string) *categoryQueryResult {
 				depth
 			}
 		}
-	`, map[string]any{"name": name})
+	`, map[string]any{"namespace": ns, "name": name})
 	if len(resp.Errors) > 0 {
 		t.Fatalf("graphql errors querying category %q: %s", name, resp.Errors)
 	}

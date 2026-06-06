@@ -10,6 +10,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,6 +39,65 @@ func seedCategory(t *testing.T, store datastore.Datastore, ns, name string, crea
 	}
 	require.NoError(t, store.CreateCategoryTaxonomy(context.Background(), c))
 	return c
+}
+
+// ── Single category lookup ───────────────────────────────────────────────────
+
+func TestCategoryResolver_CategoryByNamespacePath(t *testing.T) {
+	qr, store := newCategoryResolverEnv(t)
+	ctx := context.Background()
+	c := seedCategory(t, store, "test-ns", "electronics", time.Now().UTC())
+
+	got, err := qr.Category(ctx, model.CategoryBy{
+		NamespacePath: &model.CategoryNamespacePath{Namespace: c.Namespace, Name: c.Name},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, mustEncodeNodeID(nodeKindCategory, c.UID), got.ID)
+	assert.Equal(t, c.Name, got.Metadata.Name)
+	require.NotNil(t, got.Metadata.Namespace)
+	assert.Equal(t, c.Namespace, *got.Metadata.Namespace)
+}
+
+func TestCategoryResolver_CategoryByID(t *testing.T) {
+	qr, store := newCategoryResolverEnv(t)
+	ctx := context.Background()
+	c := seedCategory(t, store, "test-ns", "electronics", time.Now().UTC())
+	categoryID := mustEncodeNodeID(nodeKindCategory, c.UID)
+
+	got, err := qr.Category(ctx, model.CategoryBy{ID: &categoryID})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, categoryID, got.ID)
+	assert.Equal(t, c.Name, got.Metadata.Name)
+}
+
+func TestCategoryResolver_CategoryByNamespacePath_NotFound(t *testing.T) {
+	qr, _ := newCategoryResolverEnv(t)
+
+	got, err := qr.Category(context.Background(), model.CategoryBy{
+		NamespacePath: &model.CategoryNamespacePath{Namespace: "test-ns", Name: "missing"},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestCategoryResolver_CategoryByID_NotFound(t *testing.T) {
+	qr, _ := newCategoryResolverEnv(t)
+	categoryID := mustEncodeNodeID(nodeKindCategory, uuid.New().String())
+
+	got, err := qr.Category(context.Background(), model.CategoryBy{ID: &categoryID})
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+func TestCategoryResolver_CategoryByID_Malformed(t *testing.T) {
+	qr, _ := newCategoryResolverEnv(t)
+	badID := "not-base64"
+
+	got, err := qr.Category(context.Background(), model.CategoryBy{ID: &badID})
+	assert.Error(t, err)
+	assert.Nil(t, got)
 }
 
 // ── Categories forward pagination ────────────────────────────────────────────

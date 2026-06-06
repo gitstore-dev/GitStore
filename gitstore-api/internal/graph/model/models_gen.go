@@ -105,10 +105,10 @@ func (this Category) GetID() string { return this.ID }
 
 // Selector for looking up a category by exactly one unique key.
 type CategoryBy struct {
-	ID   *string `json:"id,omitempty"`
-	Slug *string `json:"slug,omitempty"`
-	// Look up a git-backed category by its metadata.name (unique within namespace).
-	Name *string `json:"name,omitempty"`
+	// Look up by globally unique Relay ID (encodes the category UID).
+	ID *string `json:"id,omitempty"`
+	// Look up by namespace identifier + category name (Kubernetes-style metadata.name).
+	NamespacePath *CategoryNamespacePath `json:"namespacePath,omitempty"`
 }
 
 // A named status condition following the Kubernetes condition convention.
@@ -137,6 +137,12 @@ type CategoryEdge struct {
 	Cursor string `json:"cursor"`
 	// The category node
 	Node *Category `json:"node"`
+}
+
+// Composite selector: namespace identifier (human-readable slug) + category name.
+type CategoryNamespacePath struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
 }
 
 // Metadata for a CategoryTaxonomy resource.

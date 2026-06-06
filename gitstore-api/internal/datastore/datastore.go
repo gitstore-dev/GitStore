@@ -68,6 +68,7 @@ type Datastore interface {
 
 	// CategoryTaxonomy operations
 	CreateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error
+	GetCategoryTaxonomy(ctx context.Context, uid string) (*CategoryTaxonomy, error)
 	GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*CategoryTaxonomy, error)
 	ListCategoryTaxonomies(ctx context.Context, namespace string, page PageParams) (*PageResult[CategoryTaxonomy], error)
 	UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error

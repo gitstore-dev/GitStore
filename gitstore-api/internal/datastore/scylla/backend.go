@@ -31,6 +31,7 @@ type scyllaDatastore struct {
 	productByUIDTable           *table.Table
 	categoryTaxonomyTable       *table.Table
 	categoryTaxonomyByNameTable *table.Table
+	categoryTaxonomyByUIDTable  *table.Table
 	collectionTable             *table.Table
 	namespaceTable              *table.Table
 	repositoryTable             *table.Table
@@ -104,6 +105,13 @@ type categoryTaxonomyNameRow struct {
 	CreationTimestamp time.Time  `db:"creation_timestamp"`
 }
 
+// categoryTaxonomyUIDRow mirrors category_taxonomy_by_uid (index only).
+type categoryTaxonomyUIDRow struct {
+	UID               gocql.UUID `db:"uid"`
+	Namespace         string     `db:"namespace"`
+	CreationTimestamp time.Time  `db:"creation_timestamp"`
+}
+
 type collectionRow struct {
 	Bucket       string     `db:"bucket"`
 	CreatedAt    time.Time  `db:"created_at"`
@@ -170,6 +178,7 @@ func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) 
 		productByUIDTable:           ProductByUID,
 		categoryTaxonomyTable:       CategoryTaxonomy,
 		categoryTaxonomyByNameTable: CategoryTaxonomyByName,
+		categoryTaxonomyByUIDTable:  CategoryTaxonomyByUID,
 		collectionTable:             Collection,
 		namespaceTable:              Namespace,
 		repositoryTable:             Repository,
@@ -361,6 +370,9 @@ func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
 // ── CategoryTaxonomy ──────────────────────────────────────────────────────────
 
 func (s *scyllaDatastore) CreateCategoryTaxonomy(ctx context.Context, c *datastore.CategoryTaxonomy) error {
+	if _, err := s.GetCategoryTaxonomy(ctx, c.UID); err == nil {
+		return fmt.Errorf("%w: category_taxonomy uid %s", datastore.ErrAlreadyExists, c.UID)
+	}
 	if _, err := s.GetCategoryTaxonomyByName(ctx, c.Namespace, c.Name); err == nil {
 		return fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrAlreadyExists, c.Namespace, c.Name)
 	}
@@ -371,6 +383,7 @@ func (s *scyllaDatastore) CreateCategoryTaxonomy(ctx context.Context, c *datasto
 
 	insMain, _ := s.categoryTaxonomyTable.Insert()
 	insName, _ := s.categoryTaxonomyByNameTable.Insert()
+	insUID, _ := s.categoryTaxonomyByUIDTable.Insert()
 
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(insMain, row.Namespace, row.CreationTimestamp, mustParseUUID(row.UID), row.Name,
@@ -378,6 +391,7 @@ func (s *scyllaDatastore) CreateCategoryTaxonomy(ctx context.Context, c *datasto
 		row.Labels, row.Annotations, row.ParentName, row.AncestorPath,
 		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
 	b.Query(insName, row.Namespace, row.Name, mustParseUUID(row.UID), row.CreationTimestamp)
+	b.Query(insUID, mustParseUUID(row.UID), row.Namespace, row.CreationTimestamp)
 	if err := s.session.ExecuteBatch(b); err != nil {
 		return fmt.Errorf("scylla: create category_taxonomy: %w", err)
 	}
@@ -396,6 +410,26 @@ func (s *scyllaDatastore) getCategoryTaxonomyByKey(namespace string, creationTim
 		return nil, fmt.Errorf("scylla: get category_taxonomy by key: %w", err)
 	}
 	return fromCategoryTaxonomyRow(&row), nil
+}
+
+func (s *scyllaDatastore) GetCategoryTaxonomy(_ context.Context, uid string) (*datastore.CategoryTaxonomy, error) {
+	parsedUID, err := gocql.ParseUUID(uid)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid category_taxonomy uid %s", datastore.ErrNotFound, uid)
+	}
+	// Step 1: uid -> (namespace, creation_timestamp)
+	stmt, names := s.categoryTaxonomyByUIDTable.Get()
+	var uidRow categoryTaxonomyUIDRow
+	if err := s.session.Query(stmt, names).BindMap(qb.M{
+		"uid": parsedUID,
+	}).GetRelease(&uidRow); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, fmt.Errorf("%w: category_taxonomy uid %s", datastore.ErrNotFound, uid)
+		}
+		return nil, fmt.Errorf("scylla: get category_taxonomy by uid: %w", err)
+	}
+	// Step 2: (namespace, creation_timestamp, uid) -> full row
+	return s.getCategoryTaxonomyByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
 }
 
 func (s *scyllaDatastore) GetCategoryTaxonomyByName(_ context.Context, namespace, name string) (*datastore.CategoryTaxonomy, error) {
@@ -458,6 +492,8 @@ func (s *scyllaDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *datasto
 		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
 		row.Namespace, row.CreationTimestamp, existingUID,
 	)
+	insUID, _ := s.categoryTaxonomyByUIDTable.Insert()
+	b.Query(insUID, existingUID, row.Namespace, row.CreationTimestamp)
 	if err := s.session.ExecuteBatch(b); err != nil {
 		return fmt.Errorf("scylla: update category_taxonomy: %w", err)
 	}

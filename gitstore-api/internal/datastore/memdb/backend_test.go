@@ -198,11 +198,18 @@ func TestMemdb_CreateAndGetCategoryTaxonomy(t *testing.T) {
 	got, err := ds.GetCategoryTaxonomyByName(ctx, c.Namespace, c.Name)
 	require.NoError(t, err)
 	assert.Equal(t, c.UID, got.UID)
+
+	gotByUID, err := ds.GetCategoryTaxonomy(ctx, c.UID)
+	require.NoError(t, err)
+	assert.Equal(t, c.Name, gotByUID.Name)
 }
 
 func TestMemdb_GetCategoryTaxonomy_NotFound(t *testing.T) {
 	ds := newBackend(t)
 	_, err := ds.GetCategoryTaxonomyByName(context.Background(), "test-ns", "no-such-cat")
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+
+	_, err = ds.GetCategoryTaxonomy(context.Background(), "b0000000-0000-0000-0000-000000000099")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
