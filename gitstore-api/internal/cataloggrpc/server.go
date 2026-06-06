@@ -127,8 +127,8 @@ func (s *Server) ValidateResources(
 func splitValidationErrors(errStr string) []string {
 	// validate.Parse joins errors with "; " or "\n"
 	var parts []string
-	for _, part := range strings.Split(errStr, "\n") {
-		for _, sub := range strings.Split(part, "; ") {
+	for part := range strings.SplitSeq(errStr, "\n") {
+		for sub := range strings.SplitSeq(part, "; ") {
 			if s := strings.TrimSpace(sub); s != "" {
 				parts = append(parts, s)
 			}
@@ -179,19 +179,18 @@ func errorToValidationError(filePath, msg string) *catalogv1.ValidationError {
 }
 
 // resolveNamespaceIdentifier looks up the namespace identifier string (e.g. "gitci")
-// for a given repository UUID. Falls back to the repository UUID itself if the
-// repository or its namespace cannot be resolved — ensuring a consistent non-empty
-// namespace is always used for catalog storage.
-func (s *Server) resolveNamespaceIdentifier(ctx context.Context, repositoryID string) string {
+// for a given repository UUID. Returns an error if the repository or its namespace
+// cannot be resolved — storing catalog resources under a raw UUID is never correct.
+func (s *Server) resolveNamespaceIdentifier(ctx context.Context, repositoryID string) (string, error) {
 	repo, err := s.store.GetRepository(ctx, repositoryID)
 	if err != nil || repo == nil {
-		return repositoryID
+		return "", fmt.Errorf("admit_resources: repository %s not found: %w", repositoryID, err)
 	}
 	ns, err := s.store.GetNamespace(ctx, repo.NamespaceID)
 	if err != nil || ns == nil {
-		return repositoryID
+		return "", fmt.Errorf("admit_resources: namespace %s not found for repository %s: %w", repo.NamespaceID, repositoryID, err)
 	}
-	return ns.Identifier
+	return ns.Identifier, nil
 }
 
 // AdmitResources fetches, parses, and stores catalog resources from an accepted push commit.
@@ -206,9 +205,15 @@ func (s *Server) AdmitResources(
 	}
 
 	// Resolve the namespace identifier (e.g. "gitci") from the repository UUID.
-	// Resources that omit metadata.namespace default to this value so they are
-	// queryable by the GraphQL resolver, which also uses the namespace identifier.
-	repoNamespace := s.resolveNamespaceIdentifier(ctx, req.RepositoryId)
+	// This is the push context namespace; catalog resources that omit metadata.namespace
+	// inherit it. Storing resources under the raw repository UUID is never correct.
+	repoNamespace, err := s.resolveNamespaceIdentifier(ctx, req.RepositoryId)
+	if err != nil {
+		s.log.Error("admit_resources: cannot resolve namespace for repository",
+			zap.String("repository_id", req.RepositoryId),
+			zap.Error(err))
+		return &catalogv1.AdmitResourcesResponse{}, nil
+	}
 
 	paths, err := s.git.ListFiles(ctx, req.RepositoryId, "", req.CommitSha)
 	if err != nil {

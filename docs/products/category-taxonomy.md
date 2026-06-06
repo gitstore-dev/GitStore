@@ -12,7 +12,7 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
   name: personal-computers
-  namespace: my-store          # optional; defaults to repository ID
+  namespace: my-store          # optional; inferred from the repository's owning namespace
   labels:
     gitstore.dev/segment: electronics
 spec:
@@ -44,7 +44,7 @@ Personal Computers is the category for desktop and laptop computers.
 
 | Field | Description |
 |---|---|
-| `metadata.namespace` | Defaults to the repository ID |
+| `metadata.namespace` | Optional. Inferred from the repository's owning namespace (see [Namespace inference](#namespace-inference)) |
 | `metadata.labels` | Key-value pairs for classification |
 | `metadata.annotations` | Key-value pairs for tooling metadata |
 | `spec.parentRef` | Reference to a parent `CategoryTaxonomy` by name |
@@ -56,6 +56,28 @@ The following fields are system-managed and must **not** appear in committed fil
 `metadata.uid`, `metadata.resourceVersion`, `metadata.generation`,
 `metadata.creationTimestamp`, `metadata.revision`, `metadata.ownerReferences`,
 `metadata.finalizers`, `status`.
+
+## Namespace inference
+
+All catalog resources (`Product`, `CategoryTaxonomy`) treat `metadata.namespace` as
+optional in the committed file. When omitted, the namespace is resolved at admission
+time from the push context:
+
+1. The post-receive pipeline receives the repository UUID (`repositoryId`) from the
+   git hook.
+2. The admission server calls `GetRepository(repositoryId)` to retrieve the repository
+   record.
+3. It then calls `GetNamespace(repository.namespaceID)` to retrieve the owning namespace.
+4. The namespace `identifier` (a human-readable slug such as `my-store`) is used as the
+   stored namespace for the resource.
+
+**The raw repository UUID is never stored as the namespace.** If the repository or its
+namespace cannot be resolved, the push admission is aborted and no resources are stored.
+
+Even when `metadata.namespace` is present in the file it is still validated to match the
+inferred namespace. The field exists to allow multiple repositories within the same
+namespace to push resources that cross-reference each other by name (product and category
+names are unique per namespace, not per repository).
 
 ## Hierarchy
 

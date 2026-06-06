@@ -9,14 +9,20 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testRepoID is a fixed UUID used as the repository ID in AdmitResources tests.
+// The memdb UUIDFieldIndex requires exactly 36 characters.
+const testRepoID = "00000000-0000-0000-0000-000000000001"
 
 // validProduct is a minimal valid product YAML frontmatter blob.
 const validProduct = `---
@@ -36,7 +42,7 @@ A test product.
 func TestValidateResources_ValidBlob_Accepted(t *testing.T) {
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "products/widget.md", BlobOid: "abc", Content: []byte(validProduct)},
 		},
@@ -62,7 +68,7 @@ status:
 `
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "products/bad.md", BlobOid: "abc", Content: []byte(content)},
 		},
@@ -81,7 +87,7 @@ func TestValidateResources_TitleTooLong_Rejected(t *testing.T) {
 	content := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: long\n  namespace: gitstore\nspec:\n  title: " + longTitle + "\n---\n"
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "products/long.md", BlobOid: "abc", Content: []byte(content)},
 		},
@@ -110,7 +116,7 @@ status:
 `
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "products/widget.md", BlobOid: "aaa", Content: []byte(validProduct)},
 			{Path: "products/bad.md", BlobOid: "bbb", Content: []byte(badContent)},
@@ -129,7 +135,7 @@ func TestValidateResources_NonfrontmatterBlob_NoError(t *testing.T) {
 	content := []byte("This is a plain README without frontmatter.\n")
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "README.md", BlobOid: "abc", Content: content},
 		},
@@ -162,7 +168,7 @@ func containsSubstring(msgs []string, sub string) bool {
 func TestValidateResources_EmptyBlobs_Accepted(t *testing.T) {
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs:        nil,
 	})
 	require.NoError(t, err)
@@ -207,7 +213,7 @@ func TestAdmitResources_NewProduct_Created(t *testing.T) {
 
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -239,7 +245,7 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 
 	// First admission — creates the product
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -253,7 +259,7 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 
 	// Second admission — updates the product
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("b", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -283,7 +289,7 @@ func TestAdmitResources_TwoProducts_BothStored(t *testing.T) {
 
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -313,7 +319,7 @@ func TestAdmitResources_OneParseFailure_OtherStored(t *testing.T) {
 
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -340,7 +346,7 @@ func TestAdmitResources_AdmissionAcceptedConditionSet(t *testing.T) {
 
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -388,7 +394,7 @@ A category for electronic products.
 func TestValidateResources_CategoryTaxonomy_Accepted(t *testing.T) {
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "categories/electronics.md", BlobOid: "abc", Content: []byte(validCategoryTaxonomy)},
 		},
@@ -410,7 +416,7 @@ spec: {}
 `
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "categories/electronics.md", BlobOid: "abc", Content: []byte(content)},
 		},
@@ -433,7 +439,7 @@ spec:
 `
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "categories/electronics.md", BlobOid: "abc", Content: []byte(content)},
 		},
@@ -459,7 +465,7 @@ status:
 `
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "categories/electronics.md", BlobOid: "abc", Content: []byte(content)},
 		},
@@ -482,7 +488,7 @@ spec:
 `
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "things/foo.md", BlobOid: "abc", Content: []byte(content)},
 		},
@@ -496,7 +502,7 @@ spec:
 func TestValidateResources_ProductAndCategoryTaxonomy_BothValidated(t *testing.T) {
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "products/widget.md", BlobOid: "abc", Content: []byte(validProduct)},
 			{Path: "categories/electronics.md", BlobOid: "def", Content: []byte(validCategoryTaxonomy)},
@@ -539,7 +545,7 @@ func TestAdmitResources_CategoryTaxonomy_Created(t *testing.T) {
 
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -568,7 +574,7 @@ func TestAdmitResources_CategoryTaxonomy_Updated(t *testing.T) {
 
 	// First admission
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -581,7 +587,7 @@ func TestAdmitResources_CategoryTaxonomy_Updated(t *testing.T) {
 
 	// Second admission — update
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("b", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -606,7 +612,7 @@ func TestAdmitResources_CategoryTaxonomy_AdmissionAcceptedCondition(t *testing.T
 
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -645,7 +651,7 @@ func TestAdmitResources_CategoryTaxonomy_RootAncestorPath(t *testing.T) {
 
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -693,7 +699,7 @@ func TestAdmitResources_IntraPushCycle_BothStoredWithAcyclicFalse(t *testing.T) 
 
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -742,7 +748,7 @@ func TestAdmitResources_ValidChain_BothStoredWithAcyclicTrue(t *testing.T) {
 
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -790,7 +796,7 @@ func TestAdmitResources_RootCategory_AncestorPathEqualsName(t *testing.T) {
 	}
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -815,7 +821,7 @@ func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T
 	}
 	srv := cataloggrpc.NewServerForTest(memStore, git1)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -832,7 +838,7 @@ func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T
 	}
 	srv2 := cataloggrpc.NewServerForTest(memStore, git2)
 	_, err = srv2.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("b", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -860,7 +866,7 @@ func TestAdmitResources_CoCreation_ParentAndChildInSamePush(t *testing.T) {
 	}
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -883,7 +889,7 @@ func TestAdmitResources_ChildWithMissingParent_TentativeRoot_ParentResolvedFalse
 	}
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -933,7 +939,7 @@ func TestAdmitResources_DeepCoCreation_GrandchildAncestorPath(t *testing.T) {
 	}
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -967,7 +973,7 @@ func TestAdmitResources_TailCycle_AllMembersMarkedAcyclicFalse(t *testing.T) {
 	}
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -1020,7 +1026,7 @@ body
 `
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs:        []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}},
 	})
 	require.NoError(t, err)
@@ -1045,7 +1051,7 @@ body
 `
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs:        []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}},
 	})
 	require.NoError(t, err)
@@ -1068,7 +1074,7 @@ body
 `
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs:        []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}},
 	})
 	require.NoError(t, err)
@@ -1107,13 +1113,13 @@ body
 	}
 	srv := cataloggrpc.NewServerForTest(store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    "abc123",
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
 
-	c, err := store.GetCategoryTaxonomyByName(context.Background(), "repo-1", "electronics")
+	c, err := store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
 	require.NoError(t, err)
 	require.NotNil(t, c)
 
@@ -1161,13 +1167,13 @@ body
 	}
 	srv := cataloggrpc.NewServerForTest(store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    "abc123",
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
 
-	c, err := store.GetCategoryTaxonomyByName(context.Background(), "repo-1", "electronics")
+	c, err := store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
 	require.NoError(t, err)
 	assert.NotNil(t, c)
 }
@@ -1199,13 +1205,13 @@ body
 	}
 	srv := cataloggrpc.NewServerForTest(store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    "abc123",
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
 
-	c, err := store.GetCategoryTaxonomyByName(context.Background(), "repo-1", "electronics")
+	c, err := store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
 	require.NoError(t, err)
 	assert.NotNil(t, c)
 }
@@ -1214,11 +1220,41 @@ body
 // Test helpers
 // ---------------------------------------------------------------------------
 
+// newTestDatastore creates a fresh in-memory store pre-seeded with a namespace
+// (identifier "gitstore") and a repository (ID "repo-1") so that
+// AdmitResources can resolve the namespace identifier from the push context.
 func newTestDatastore(t *testing.T) datastore.Datastore {
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	now := time.Now()
+	ns := &datastore.Namespace{
+		ID:          uuid.New().String(),
+		Identifier:  "gitstore",
+		DisplayName: "GitStore Test",
+		Tier:        datastore.NamespaceTierUser,
+		CreatedAt:   now,
+		CreatedBy:   "test",
+		UpdatedAt:   now,
+		UpdatedBy:   "test",
+	}
+	require.NoError(t, store.CreateNamespace(ctx, ns))
+
+	repo := &datastore.Repository{
+		ID:            testRepoID,
+		NamespaceID:   ns.ID,
+		Name:          "catalog",
+		DefaultBranch: "main",
+		StorageClass:  "local",
+		CreatedAt:     now,
+		CreatedBy:     "test",
+		UpdatedAt:     now,
+		UpdatedBy:     "test",
+	}
+	require.NoError(t, store.CreateRepository(ctx, repo))
 	return store
 }
 

@@ -649,7 +649,9 @@ pub fn build_pack_for_wants(
     let mut pack_bytes: Vec<u8> = Vec::new();
     type EntryBatch = Vec<output::Entry>;
     let mut bytes_iter = gix_pack::data::output::bytes::FromEntriesIter::new(
-        all_entries.into_iter().map(Ok::<EntryBatch, std::convert::Infallible>),
+        all_entries
+            .into_iter()
+            .map(Ok::<EntryBatch, std::convert::Infallible>),
         &mut pack_bytes,
         num_entries,
         gix_pack::data::Version::V2,
