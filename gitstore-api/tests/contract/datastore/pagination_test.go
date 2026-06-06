@@ -26,21 +26,24 @@ func encodeCursor(createdAt time.Time, id string) string {
 }
 
 // RunPaginationSuite exercises keyset pagination across all list operations.
-func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
+// ds is the datastore under test. Each sub-test uses a unique namespace so
+// sub-tests are isolated against a shared backend (ScyllaDB) and do not
+// require a fresh in-memory store per run.
+func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 	t.Helper()
 
 	t.Run("Products/ForwardPagination", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
+		ns := "test-" + newID()[:8]
 
 		products := make([]*datastore.Product, 5)
 		for i := range 5 {
-			products[i] = newProduct()
+			products[i] = newProductInNS(ns)
 			products[i].CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateProduct(ctx, products[i]))
 		}
 
-		page1, err := ds.ListProducts(ctx, "test-ns", datastore.PageParams{First: 2})
+		page1, err := ds.ListProducts(ctx, ns, datastore.PageParams{First: 2})
 		require.NoError(t, err)
 		assert.Len(t, page1.Items, 2)
 		assert.True(t, page1.HasNext)
@@ -50,7 +53,7 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 			page1.Items[0].CreationTimestamp.Equal(page1.Items[1].CreationTimestamp))
 
 		cursor := encodeCursor(page1.Items[1].CreationTimestamp, page1.Items[1].UID)
-		page2, err := ds.ListProducts(ctx, "test-ns", datastore.PageParams{First: 2, After: cursor})
+		page2, err := ds.ListProducts(ctx, ns, datastore.PageParams{First: 2, After: cursor})
 		require.NoError(t, err)
 		assert.Len(t, page2.Items, 2)
 		assert.True(t, page2.HasNext)
@@ -61,7 +64,7 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 				page1.Items[1].UID > page2.Items[0].UID))
 
 		cursor2 := encodeCursor(page2.Items[1].CreationTimestamp, page2.Items[1].UID)
-		page3, err := ds.ListProducts(ctx, "test-ns", datastore.PageParams{First: 2, After: cursor2})
+		page3, err := ds.ListProducts(ctx, ns, datastore.PageParams{First: 2, After: cursor2})
 		require.NoError(t, err)
 		assert.Len(t, page3.Items, 1)
 		assert.False(t, page3.HasNext)
@@ -69,16 +72,16 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("Products/BackwardPagination", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
+		ns := "test-" + newID()[:8]
 
 		for i := range 5 {
-			p := newProduct()
+			p := newProductInNS(ns)
 			p.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateProduct(ctx, p))
 		}
 
-		result, err := ds.ListProducts(ctx, "test-ns", datastore.PageParams{Last: 2})
+		result, err := ds.ListProducts(ctx, ns, datastore.PageParams{Last: 2})
 		require.NoError(t, err)
 		assert.Len(t, result.Items, 2)
 		assert.False(t, result.HasNext)
@@ -89,44 +92,44 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("Products/BackwardWithBefore", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
+		ns := "test-" + newID()[:8]
 
 		for i := range 5 {
-			p := newProduct()
+			p := newProductInNS(ns)
 			p.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateProduct(ctx, p))
 		}
 
-		page1, err := ds.ListProducts(ctx, "test-ns", datastore.PageParams{First: 3})
+		page1, err := ds.ListProducts(ctx, ns, datastore.PageParams{First: 3})
 		require.NoError(t, err)
 		require.Len(t, page1.Items, 3)
 
 		startCursor := encodeCursor(page1.Items[2].CreationTimestamp, page1.Items[2].UID)
-		backward, err := ds.ListProducts(ctx, "test-ns", datastore.PageParams{Last: 2, Before: startCursor})
+		backward, err := ds.ListProducts(ctx, ns, datastore.PageParams{Last: 2, Before: startCursor})
 		require.NoError(t, err)
 		assert.Len(t, backward.Items, 2)
 		assert.True(t, backward.HasNext)
 	})
 
 	t.Run("CategoryTaxonomies/ForwardPagination", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
+		ns := "test-" + newID()[:8]
 
 		for i := range 4 {
-			c := newCategoryTaxonomy()
+			c := newCategoryTaxonomyInNS(ns)
 			c.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
 		}
 
-		page1, err := ds.ListCategoryTaxonomies(ctx, "test-ns", datastore.PageParams{First: 2})
+		page1, err := ds.ListCategoryTaxonomies(ctx, ns, datastore.PageParams{First: 2})
 		require.NoError(t, err)
 		assert.Len(t, page1.Items, 2)
 		assert.True(t, page1.HasNext)
 		assert.False(t, page1.HasPrevious)
 
 		cursor := encodeCursor(page1.Items[1].CreationTimestamp, page1.Items[1].UID)
-		page2, err := ds.ListCategoryTaxonomies(ctx, "test-ns", datastore.PageParams{First: 2, After: cursor})
+		page2, err := ds.ListCategoryTaxonomies(ctx, ns, datastore.PageParams{First: 2, After: cursor})
 		require.NoError(t, err)
 		assert.Len(t, page2.Items, 2)
 		assert.False(t, page2.HasNext)
@@ -134,24 +137,55 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("CategoryTaxonomies/BackwardPagination", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
+		ns := "test-" + newID()[:8]
 
 		for i := range 4 {
-			c := newCategoryTaxonomy()
+			c := newCategoryTaxonomyInNS(ns)
 			c.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
 		}
 
-		result, err := ds.ListCategoryTaxonomies(ctx, "test-ns", datastore.PageParams{Last: 2})
+		result, err := ds.ListCategoryTaxonomies(ctx, ns, datastore.PageParams{Last: 2})
 		require.NoError(t, err)
 		assert.Len(t, result.Items, 2)
 		assert.False(t, result.HasNext)
 		assert.True(t, result.HasPrevious)
 	})
 
+	t.Run("CategoryTaxonomies/BackwardWithBefore", func(t *testing.T) {
+		ctx := context.Background()
+		ns := "test-" + newID()[:8]
+
+		for i := range 5 {
+			c := newCategoryTaxonomyInNS(ns)
+			c.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
+			require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
+		}
+
+		page1, err := ds.ListCategoryTaxonomies(ctx, ns, datastore.PageParams{First: 3})
+		require.NoError(t, err)
+		require.Len(t, page1.Items, 3)
+
+		beforeCursor := encodeCursor(page1.Items[2].CreationTimestamp, page1.Items[2].UID)
+		backward, err := ds.ListCategoryTaxonomies(ctx, ns, datastore.PageParams{Last: 2, Before: beforeCursor})
+		require.NoError(t, err)
+		assert.Len(t, backward.Items, 2)
+		assert.True(t, backward.HasNext)
+	})
+
+	t.Run("CategoryTaxonomies/EmptyResult", func(t *testing.T) {
+		ctx := context.Background()
+		ns := "test-" + newID()[:8]
+
+		result, err := ds.ListCategoryTaxonomies(ctx, ns, datastore.PageParams{First: 10})
+		require.NoError(t, err)
+		assert.Empty(t, result.Items)
+		assert.False(t, result.HasNext)
+		assert.False(t, result.HasPrevious)
+	})
+
 	t.Run("Collections/ForwardPagination", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
 
 		for i := range 4 {
@@ -175,7 +209,6 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("Collections/BackwardPagination", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
 
 		for i := range 4 {
@@ -192,7 +225,6 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("Namespaces/ForwardPagination", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
 
 		for i := range 4 {
@@ -216,7 +248,6 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("Namespaces/BackwardPagination", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
 
 		for i := range 4 {
@@ -233,7 +264,6 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("Repositories/ForwardPagination", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
 
 		ns := newNamespace(datastore.NamespaceTierUser)
@@ -271,7 +301,6 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("Repositories/BackwardPagination", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
 
 		ns := newNamespace(datastore.NamespaceTierUser)
@@ -292,7 +321,6 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("Repositories/BackwardWithBefore", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
 
 		ns := newNamespace(datastore.NamespaceTierUser)
@@ -319,7 +347,6 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("Repositories/IsolatedByNamespace", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
 
 		ns1 := newNamespace(datastore.NamespaceTierUser)
@@ -345,8 +372,8 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("EmptyResult/Products", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
-		result, err := ds.ListProducts(context.Background(), "test-ns", datastore.PageParams{First: 10})
+		ns := "test-" + newID()[:8]
+		result, err := ds.ListProducts(context.Background(), ns, datastore.PageParams{First: 10})
 		require.NoError(t, err)
 		assert.Empty(t, result.Items)
 		assert.False(t, result.HasNext)
@@ -354,7 +381,6 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("EmptyResult/Repositories", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
 		ns := newNamespace(datastore.NamespaceTierUser)
 		require.NoError(t, ds.CreateNamespace(ctx, ns))
@@ -367,14 +393,14 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("TotalCount", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
+		ns := "test-" + newID()[:8]
 
 		for range 5 {
-			require.NoError(t, ds.CreateProduct(ctx, newProduct()))
+			require.NoError(t, ds.CreateProduct(ctx, newProductInNS(ns)))
 		}
 
-		result, err := ds.ListProducts(ctx, "test-ns", datastore.PageParams{First: 2})
+		result, err := ds.ListProducts(ctx, ns, datastore.PageParams{First: 2})
 		require.NoError(t, err)
 		assert.Len(t, result.Items, 2)
 		// memdb returns exact count; scylla may return -1
@@ -384,16 +410,16 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 	})
 
 	t.Run("Ordering/NewestFirst", func(t *testing.T) {
-		ds := newMemdbDatastore(t)
 		ctx := context.Background()
+		ns := "test-" + newID()[:8]
 
 		for i := range 5 {
-			p := newProduct()
+			p := newProductInNS(ns)
 			p.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateProduct(ctx, p))
 		}
 
-		result, err := ds.ListProducts(ctx, "test-ns", datastore.PageParams{})
+		result, err := ds.ListProducts(ctx, ns, datastore.PageParams{})
 		require.NoError(t, err)
 		require.Len(t, result.Items, 5)
 
@@ -406,6 +432,31 @@ func RunPaginationSuite(t *testing.T, _ datastore.Datastore) {
 			)
 		}
 	})
+}
+
+func newProductInNS(ns string) *datastore.Product {
+	return &datastore.Product{
+		UID:               newID(),
+		Namespace:         ns,
+		Name:              "product-" + newID()[:8],
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "Product",
+		CreationTimestamp: time.Now(),
+	}
+}
+
+func newCategoryTaxonomyInNS(ns string) *datastore.CategoryTaxonomy {
+	now := time.Now()
+	return &datastore.CategoryTaxonomy{
+		UID:               newID(),
+		Namespace:         ns,
+		Name:              "cat-" + newID()[:8],
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "CategoryTaxonomy",
+		Generation:        1,
+		ResourceVersion:   "1",
+		CreationTimestamp: now,
+	}
 }
 
 func newRepository(namespaceID string) *datastore.Repository {
