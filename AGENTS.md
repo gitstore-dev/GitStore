@@ -15,6 +15,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `go-memdb` (dev) / ScyllaDB 5.x+ (prod) via `Datastore` interface (`CreateProduct` / `UpdateProduct`) (018-hook-pipeline-wiring)
 - Rust edition 2021, MSRV 1.82 (`gitstore-git-service`) + `gix 0.84.0`, `gix-pack 0.71.0`, `tokio 1.35`, `anyhow 1.0`, `tracing 0.1` (019-fix-upload-pack)
 - N/A (reads existing bare git repositories on local filesystem) (019-fix-upload-pack)
+- GitHub Actions YAML + Go 1.25 (test runner) + Docker Compose, `compose.scylla.yml` (already committed), ScyllaDB 5.4 (020-pre-receive-validation-e2e)
+- memdb (default, no infra) and ScyllaDB 5.4 (via Docker overlay) (020-pre-receive-validation-e2e)
 
 - (001-git-backed-ecommerce)
 
@@ -54,8 +56,8 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 020-pre-receive-validation-e2e: Added GitHub Actions YAML + Go 1.25 (test runner) + Docker Compose, `compose.scylla.yml` (already committed), ScyllaDB 5.4
 - 019-fix-upload-pack: Added Rust edition 2021, MSRV 1.82 (`gitstore-git-service`) + `gix 0.84.0`, `gix-pack 0.71.0`, `tokio 1.35`, `anyhow 1.0`, `tracing 0.1`
-- 018-hook-pipeline-wiring: Added Rust edition 2021, MSRV 1.82 (`gitstore-git-service`); Go 1.25 (`gitstore-api`)
 - 018-hook-pipeline-wiring: Added Rust edition 2021, MSRV 1.82 (`gitstore-git-service`); Go 1.25 (`gitstore-api`)
 
 
