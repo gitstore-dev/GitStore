@@ -84,13 +84,13 @@ CREATE TABLE IF NOT EXISTS namespace_mappings (
 
 CREATE TABLE IF NOT EXISTS category_taxonomy (
     namespace          text,
-    name               text,
+    creation_timestamp timestamp,
     uid                uuid,
+    name               text,
     api_version        text,
     kind               text,
     generation         bigint,
     resource_version   text,
-    creation_ts        timestamp,
     revision           text,
     labels             map<text, text>,
     annotations        map<text, text>,
@@ -101,5 +101,13 @@ CREATE TABLE IF NOT EXISTS category_taxonomy (
     spec               text,
     body               text,
     status             text,
+    PRIMARY KEY ((namespace), creation_timestamp, uid)
+) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC);
+
+CREATE TABLE IF NOT EXISTS category_taxonomy_by_name (
+    namespace          text,
+    name               text,
+    uid                uuid,
+    creation_timestamp timestamp,
     PRIMARY KEY ((namespace), name)
 );

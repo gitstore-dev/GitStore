@@ -76,13 +76,13 @@ var (
 		Name: "category_taxonomy",
 		Columns: []string{
 			"namespace",
-			"name",
+			"creation_timestamp",
 			"uid",
+			"name",
 			"api_version",
 			"kind",
 			"generation",
 			"resource_version",
-			"creation_ts",
 			"revision",
 			"labels",
 			"annotations",
@@ -93,6 +93,24 @@ var (
 			"spec",
 			"body",
 			"status",
+		},
+		PartKey: []string{
+			"namespace",
+		},
+		SortKey: []string{
+			"creation_timestamp",
+			"uid",
+		},
+	})
+
+	// CategoryTaxonomyByName is the lookup table for GetCategoryTaxonomyByName(namespace, name).
+	CategoryTaxonomyByName = table.New(table.Metadata{
+		Name: "category_taxonomy_by_name",
+		Columns: []string{
+			"namespace",
+			"name",
+			"uid",
+			"creation_timestamp",
 		},
 		PartKey: []string{
 			"namespace",

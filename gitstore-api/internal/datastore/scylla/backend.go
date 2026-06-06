@@ -24,16 +24,17 @@ import (
 
 // scyllaDatastore implements datastore.Datastore backed by ScyllaDB.
 type scyllaDatastore struct {
-	session                 gocqlx.Session
-	log                     *zap.Logger
-	productByNamespaceTable *table.Table
-	productByNameTable      *table.Table
-	productByUIDTable       *table.Table
-	categoryTaxonomyTable   *table.Table
-	collectionTable         *table.Table
-	namespaceTable          *table.Table
-	repositoryTable         *table.Table
-	namespaceMappingTable   *table.Table
+	session                     gocqlx.Session
+	log                         *zap.Logger
+	productByNamespaceTable     *table.Table
+	productByNameTable          *table.Table
+	productByUIDTable           *table.Table
+	categoryTaxonomyTable       *table.Table
+	categoryTaxonomyByNameTable *table.Table
+	collectionTable             *table.Table
+	namespaceTable              *table.Table
+	repositoryTable             *table.Table
+	namespaceMappingTable       *table.Table
 }
 
 // row structs mirror the CQL columns.
@@ -75,24 +76,32 @@ type productUIDRow struct {
 }
 
 type categoryTaxonomyRow struct {
-	Namespace       string            `db:"namespace"`
-	Name            string            `db:"name"`
-	UID             string            `db:"uid"`
-	APIVersion      string            `db:"api_version"`
-	Kind            string            `db:"kind"`
-	Generation      int64             `db:"generation"`
-	ResourceVersion string            `db:"resource_version"`
-	CreationTS      time.Time         `db:"creation_ts"`
-	Revision        string            `db:"revision"`
-	Labels          map[string]string `db:"labels"`
-	Annotations     map[string]string `db:"annotations"`
-	ParentName      string            `db:"parent_name"`
-	AncestorPath    string            `db:"ancestor_path"`
-	GitCommitSHA    string            `db:"git_commit_sha"`
-	GitRef          string            `db:"git_ref"`
-	Spec            string            `db:"spec"`
-	Body            string            `db:"body"`
-	Status          string            `db:"status"`
+	Namespace         string            `db:"namespace"`
+	CreationTimestamp time.Time         `db:"creation_timestamp"`
+	UID               string            `db:"uid"`
+	Name              string            `db:"name"`
+	APIVersion        string            `db:"api_version"`
+	Kind              string            `db:"kind"`
+	Generation        int64             `db:"generation"`
+	ResourceVersion   string            `db:"resource_version"`
+	Revision          string            `db:"revision"`
+	Labels            map[string]string `db:"labels"`
+	Annotations       map[string]string `db:"annotations"`
+	ParentName        string            `db:"parent_name"`
+	AncestorPath      string            `db:"ancestor_path"`
+	GitCommitSHA      string            `db:"git_commit_sha"`
+	GitRef            string            `db:"git_ref"`
+	Spec              string            `db:"spec"`
+	Body              string            `db:"body"`
+	Status            string            `db:"status"`
+}
+
+// categoryTaxonomyNameRow mirrors category_taxonomy_by_name (index only).
+type categoryTaxonomyNameRow struct {
+	Namespace         string     `db:"namespace"`
+	Name              string     `db:"name"`
+	UID               gocql.UUID `db:"uid"`
+	CreationTimestamp time.Time  `db:"creation_timestamp"`
 }
 
 type collectionRow struct {
@@ -154,16 +163,17 @@ func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) 
 	}
 
 	return &scyllaDatastore{
-		session:                 gocqlx.NewSession(rawSession),
-		log:                     log,
-		productByNamespaceTable: ProductByNamespace,
-		productByNameTable:      ProductByName,
-		productByUIDTable:       ProductByUID,
-		categoryTaxonomyTable:   CategoryTaxonomy,
-		collectionTable:         Collection,
-		namespaceTable:          Namespace,
-		repositoryTable:         Repository,
-		namespaceMappingTable:   NamespaceMapping,
+		session:                     gocqlx.NewSession(rawSession),
+		log:                         log,
+		productByNamespaceTable:     ProductByNamespace,
+		productByNameTable:          ProductByName,
+		productByUIDTable:           ProductByUID,
+		categoryTaxonomyTable:       CategoryTaxonomy,
+		categoryTaxonomyByNameTable: CategoryTaxonomyByName,
+		collectionTable:             Collection,
+		namespaceTable:              Namespace,
+		repositoryTable:             Repository,
+		namespaceMappingTable:       NamespaceMapping,
 	}, nil
 }
 
@@ -350,36 +360,64 @@ func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
 
 // ── CategoryTaxonomy ──────────────────────────────────────────────────────────
 
-func (s *scyllaDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy) error {
+func (s *scyllaDatastore) CreateCategoryTaxonomy(ctx context.Context, c *datastore.CategoryTaxonomy) error {
+	if _, err := s.GetCategoryTaxonomyByName(ctx, c.Namespace, c.Name); err == nil {
+		return fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrAlreadyExists, c.Namespace, c.Name)
+	}
 	if c.CreationTimestamp.IsZero() {
 		c.CreationTimestamp = time.Now().UTC().Truncate(time.Millisecond)
 	}
 	row := toCategoryTaxonomyRow(c)
-	stmt, names := s.categoryTaxonomyTable.Insert()
-	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
+
+	insMain, _ := s.categoryTaxonomyTable.Insert()
+	insName, _ := s.categoryTaxonomyByNameTable.Insert()
+
+	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
+	b.Query(insMain, row.Namespace, row.CreationTimestamp, mustParseUUID(row.UID), row.Name,
+		row.APIVersion, row.Kind, row.Generation, row.ResourceVersion, row.Revision,
+		row.Labels, row.Annotations, row.ParentName, row.AncestorPath,
+		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
+	b.Query(insName, row.Namespace, row.Name, mustParseUUID(row.UID), row.CreationTimestamp)
+	if err := s.session.ExecuteBatch(b); err != nil {
 		return fmt.Errorf("scylla: create category_taxonomy: %w", err)
 	}
 	return nil
 }
 
-func (s *scyllaDatastore) GetCategoryTaxonomyByName(_ context.Context, namespace, name string) (*datastore.CategoryTaxonomy, error) {
-	stmt, names := s.categoryTaxonomyTable.Get()
+func (s *scyllaDatastore) getCategoryTaxonomyByKey(namespace string, creationTimestamp time.Time, uid gocql.UUID) (*datastore.CategoryTaxonomy, error) {
+	const stmt = "SELECT %s FROM category_taxonomy WHERE namespace = ? AND creation_timestamp = ? AND uid = ?"
+	cols := strings.Join(s.categoryTaxonomyTable.Metadata().Columns, ", ")
 	var row categoryTaxonomyRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{
-		"namespace": namespace,
-		"name":      name,
-	}).GetRelease(&row); err != nil {
+	if err := s.session.Query(fmt.Sprintf(stmt, cols), nil).
+		Bind(namespace, creationTimestamp, uid).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrNotFound, namespace, name)
+			return nil, fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrNotFound, namespace, uid)
 		}
-		return nil, fmt.Errorf("scylla: get category_taxonomy: %w", err)
+		return nil, fmt.Errorf("scylla: get category_taxonomy by key: %w", err)
 	}
 	return fromCategoryTaxonomyRow(&row), nil
 }
 
+func (s *scyllaDatastore) GetCategoryTaxonomyByName(_ context.Context, namespace, name string) (*datastore.CategoryTaxonomy, error) {
+	// Step 1: (namespace, name) -> (uid, creation_timestamp)
+	stmt, names := s.categoryTaxonomyByNameTable.Get()
+	var nameRow categoryTaxonomyNameRow
+	if err := s.session.Query(stmt, names).BindMap(qb.M{
+		"namespace": namespace,
+		"name":      name,
+	}).GetRelease(&nameRow); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrNotFound, namespace, name)
+		}
+		return nil, fmt.Errorf("scylla: get category_taxonomy by name: %w", err)
+	}
+	// Step 2: (namespace, creation_timestamp, uid) -> full row
+	return s.getCategoryTaxonomyByKey(namespace, nameRow.CreationTimestamp, nameRow.UID)
+}
+
 func (s *scyllaDatastore) ListCategoryTaxonomies(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
 	limit := page.Limit()
-	pq := buildPaginatedSelect(s.categoryTaxonomyTable, page, "namespace", namespace, clusterKeys{TimestampCol: "creation_ts", IDCol: "name"}, nil, nil)
+	pq := buildPaginatedSelect(s.categoryTaxonomyTable, page, "namespace", namespace, clusterKeys{TimestampCol: "creation_timestamp", IDCol: "uid"}, nil, nil)
 
 	var rows []categoryTaxonomyRow
 	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
@@ -398,14 +436,29 @@ func (s *scyllaDatastore) ListCategoryTaxonomies(_ context.Context, namespace st
 	return buildPageResult(cats, limit, page), nil
 }
 
-func (s *scyllaDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy) error {
+func (s *scyllaDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *datastore.CategoryTaxonomy) error {
+	existing, err := s.GetCategoryTaxonomyByName(ctx, c.Namespace, c.Name)
+	if err != nil {
+		return err
+	}
 	row := toCategoryTaxonomyRow(c)
-	stmt, names := s.categoryTaxonomyTable.Update(
-		"uid", "api_version", "kind", "generation", "resource_version",
-		"revision", "labels", "annotations", "parent_name", "ancestor_path",
-		"git_commit_sha", "git_ref", "spec", "body", "status",
+	// Preserve the original creation_timestamp so the primary key is unchanged.
+	row.CreationTimestamp = existing.CreationTimestamp
+	existingUID := mustParseUUID(existing.UID)
+
+	const updMain = "UPDATE category_taxonomy SET name=?, api_version=?, kind=?, generation=?, resource_version=?, " +
+		"revision=?, labels=?, annotations=?, parent_name=?, ancestor_path=?, " +
+		"git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
+		"WHERE namespace=? AND creation_timestamp=? AND uid=?"
+
+	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
+	b.Query(updMain,
+		row.Name, row.APIVersion, row.Kind, row.Generation, row.ResourceVersion,
+		row.Revision, row.Labels, row.Annotations, row.ParentName, row.AncestorPath,
+		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
+		row.Namespace, row.CreationTimestamp, existingUID,
 	)
-	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
+	if err := s.session.ExecuteBatch(b); err != nil {
 		return fmt.Errorf("scylla: update category_taxonomy: %w", err)
 	}
 	return nil
@@ -692,24 +745,24 @@ func toCategoryTaxonomyRow(c *datastore.CategoryTaxonomy) *categoryTaxonomyRow {
 		status = string(c.Status)
 	}
 	return &categoryTaxonomyRow{
-		Namespace:       c.Namespace,
-		Name:            c.Name,
-		UID:             c.UID,
-		APIVersion:      c.APIVersion,
-		Kind:            c.Kind,
-		Generation:      c.Generation,
-		ResourceVersion: c.ResourceVersion,
-		CreationTS:      c.CreationTimestamp,
-		Revision:        c.Revision,
-		Labels:          c.Labels,
-		Annotations:     c.Annotations,
-		ParentName:      c.ParentName,
-		AncestorPath:    c.AncestorPath,
-		GitCommitSHA:    c.GitCommitSHA,
-		GitRef:          c.GitRef,
-		Spec:            spec,
-		Body:            c.Body,
-		Status:          status,
+		Namespace:         c.Namespace,
+		Name:              c.Name,
+		UID:               c.UID,
+		APIVersion:        c.APIVersion,
+		Kind:              c.Kind,
+		Generation:        c.Generation,
+		ResourceVersion:   c.ResourceVersion,
+		CreationTimestamp: c.CreationTimestamp,
+		Revision:          c.Revision,
+		Labels:            c.Labels,
+		Annotations:       c.Annotations,
+		ParentName:        c.ParentName,
+		AncestorPath:      c.AncestorPath,
+		GitCommitSHA:      c.GitCommitSHA,
+		GitRef:            c.GitRef,
+		Spec:              spec,
+		Body:              c.Body,
+		Status:            status,
 	}
 }
 
@@ -722,7 +775,7 @@ func fromCategoryTaxonomyRow(r *categoryTaxonomyRow) *datastore.CategoryTaxonomy
 		Kind:              r.Kind,
 		Generation:        r.Generation,
 		ResourceVersion:   r.ResourceVersion,
-		CreationTimestamp: r.CreationTS,
+		CreationTimestamp: r.CreationTimestamp,
 		Revision:          r.Revision,
 		Labels:            r.Labels,
 		Annotations:       r.Annotations,

@@ -519,7 +519,7 @@ metadata:
   name: ` + name + `
   namespace: gitstore
 spec:
-  title: ` + strings.Title(name) + `
+  title: ` + strings.ToUpper(name[:1]) + name[1:] + `
 ---
 
 Category body.
@@ -908,6 +908,94 @@ func TestAdmitResources_ChildWithMissingParent_TentativeRoot_ParentResolvedFalse
 		}
 	}
 	t.Fatal("ParentResolved condition not found")
+}
+
+func TestAdmitResources_DeepCoCreation_GrandchildAncestorPath(t *testing.T) {
+	// Issue 3 regression: root→child→grandchild all in one push must produce
+	// a three-segment AncestorPath for the grandchild, not just "child/grandchild".
+	memStore := newTestDatastore(t)
+	files := map[string][]byte{
+		"categories/root.md":       makeCategoryTaxonomy("root"),
+		"categories/child.md":      makeCategoryTaxonomyWithParent("child", "root"),
+		"categories/grandchild.md": makeCategoryTaxonomyWithParent("grandchild", "child"),
+	}
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{
+				"categories/root.md",
+				"categories/child.md",
+				"categories/grandchild.md",
+			}, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, _ string) ([]byte, error) {
+			return files[path], nil
+		},
+	}
+	srv := cataloggrpc.NewServerForTest(memStore, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: "repo-1",
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	child, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "child")
+	require.NoError(t, err)
+	assert.Equal(t, "root/child", child.AncestorPath)
+
+	grandchild, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "grandchild")
+	require.NoError(t, err)
+	assert.Equal(t, "root/child/grandchild", grandchild.AncestorPath)
+}
+
+func TestAdmitResources_TailCycle_AllMembersMarkedAcyclicFalse(t *testing.T) {
+	// Issue 6 regression: in the graph A→B→C→B (A is not in the cycle, B and C are),
+	// both B and C must have Acyclic=False. Previously only one was flagged.
+	memStore := newTestDatastore(t)
+	files := map[string][]byte{
+		"categories/a.md": makeCategoryTaxonomyWithParent("a", "b"),
+		"categories/b.md": makeCategoryTaxonomyWithParent("b", "c"),
+		"categories/c.md": makeCategoryTaxonomyWithParent("c", "b"),
+	}
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/a.md", "categories/b.md", "categories/c.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, _ string) ([]byte, error) {
+			return files[path], nil
+		},
+	}
+	srv := cataloggrpc.NewServerForTest(memStore, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: "repo-1",
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	getAcyclic := func(name string) string {
+		t.Helper()
+		c, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", name)
+		require.NoError(t, err, "category %q must be stored", name)
+		var status struct {
+			Conditions []struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+			} `json:"conditions"`
+		}
+		require.NoError(t, json.Unmarshal(c.Status, &status))
+		for _, cond := range status.Conditions {
+			if cond.Type == "Acyclic" {
+				return cond.Status
+			}
+		}
+		t.Fatalf("category %q missing Acyclic condition", name)
+		return ""
+	}
+
+	assert.Equal(t, "True", getAcyclic("a"), "a is not in the cycle and must be Acyclic=True")
+	assert.Equal(t, "False", getAcyclic("b"), "b is in the cycle and must be Acyclic=False")
+	assert.Equal(t, "False", getAcyclic("c"), "c is in the cycle and must be Acyclic=False")
 }
 
 // ---------------------------------------------------------------------------

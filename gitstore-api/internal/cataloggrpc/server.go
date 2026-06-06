@@ -230,7 +230,9 @@ func (s *Server) AdmitResources(
 
 	// Build intra-push category graph: name → parentName
 	pushCategoryParents := make(map[string]string)
-	for _, e := range entries {
+	categoryEntries := make(map[string]*parsedEntry)
+	for i := range entries {
+		e := &entries[i]
 		if e.parsed.Kind == "CategoryTaxonomy" {
 			cat := e.parsed.CategoryTaxonomy
 			parent := ""
@@ -238,19 +240,24 @@ func (s *Server) AdmitResources(
 				parent = cat.Spec.ParentRef.Name
 			}
 			pushCategoryParents[cat.Metadata.Name] = parent
+			categoryEntries[cat.Metadata.Name] = e
 		}
 	}
 	cycleMembers := detectCycles(pushCategoryParents)
+	topoOrder := topoSortCategories(pushCategoryParents, cycleMembers)
 
 	now := time.Now().UTC()
 
+	// inPushAncestorPaths is populated as each category is admitted so that
+	// children later in the same push see their parent's full computed path.
+	inPushAncestorPaths := make(map[string]string, len(topoOrder))
+	for _, name := range topoOrder {
+		e := categoryEntries[name]
+		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, req, revision, now, inPushAncestorPaths, cycleMembers[name])
+	}
 	for _, e := range entries {
-		switch e.parsed.Kind {
-		case "Product":
+		if e.parsed.Kind == "Product" {
 			s.admitProduct(ctx, e.parsed.Product, e.body, req, revision, now)
-		case "CategoryTaxonomy":
-			inCycle := cycleMembers[e.parsed.CategoryTaxonomy.Metadata.Name]
-			s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, req, revision, now, pushCategoryParents, inCycle)
 		}
 	}
 
@@ -258,34 +265,83 @@ func (s *Server) AdmitResources(
 }
 
 // detectCycles returns the set of category names involved in intra-push cycles.
+// Uses DFS with three-color marking (0=white, 1=gray, 2=black). When a back
+// edge is found, every node on the current gray path is marked as in-cycle —
+// not just the node that triggered the back edge — so chains like A→B→C→B
+// correctly flag both B and C.
 func detectCycles(parentMap map[string]string) map[string]bool {
 	inCycle := make(map[string]bool)
-	// DFS with three-color marking: 0=white, 1=gray, 2=black
 	color := make(map[string]int, len(parentMap))
-	var visit func(name string) bool
-	visit = func(name string) bool {
+	// grayStack tracks the DFS path currently being explored.
+	var grayStack []string
+	var visit func(name string)
+	visit = func(name string) {
 		if color[name] == 2 {
-			return false
+			return
 		}
 		if color[name] == 1 {
-			return true // back edge → cycle
+			// Back edge to `name`. The cycle runs from `name`'s position in the
+			// gray stack to the top — nodes before it are mere ancestors of the
+			// cycle entry point and must not be flagged.
+			for i, n := range grayStack {
+				if n == name {
+					for _, m := range grayStack[i:] {
+						inCycle[m] = true
+					}
+					break
+				}
+			}
+			return
 		}
 		parent, inPush := parentMap[name]
 		if !inPush || parent == "" {
 			color[name] = 2
-			return false
+			return
 		}
 		color[name] = 1
-		if visit(parent) {
-			inCycle[name] = true
-		}
+		grayStack = append(grayStack, name)
+		visit(parent)
+		grayStack = grayStack[:len(grayStack)-1]
 		color[name] = 2
-		return inCycle[name]
 	}
 	for name := range parentMap {
 		visit(name)
 	}
 	return inCycle
+}
+
+// topoSortCategories returns category names from parentMap in topological order
+// (roots first, leaves last). Nodes in a cycle are appended at the end in
+// insertion order so they are still admitted (with Acyclic=False status).
+func topoSortCategories(parentMap map[string]string, cycleMembers map[string]bool) []string {
+	visited := make(map[string]bool, len(parentMap))
+	order := make([]string, 0, len(parentMap))
+	var visit func(name string)
+	visit = func(name string) {
+		if visited[name] || cycleMembers[name] {
+			return
+		}
+		visited[name] = true
+		parent := parentMap[name]
+		// Only recurse if the parent is also part of this push; external parents
+		// (already in DB) are not in parentMap and must not be added to order.
+		if parent != "" {
+			if _, inPush := parentMap[parent]; inPush {
+				visit(parent)
+			}
+		}
+		order = append(order, name)
+	}
+	for name := range parentMap {
+		visit(name)
+	}
+	// Append cycle members after the acyclic nodes, in stable order.
+	for name := range parentMap {
+		if cycleMembers[name] {
+			order = append(order, name)
+		}
+	}
+	return order
 }
 
 func (s *Server) admitProduct(
@@ -355,7 +411,9 @@ func (s *Server) admitProduct(
 }
 
 // admitCategoryTaxonomyWithContext stores a CategoryTaxonomy with hierarchy context.
-// pushParents maps each category name in the push to its parent name (empty = root).
+// inPushAncestorPaths maps category names that have already been admitted in this
+// push to their computed AncestorPath; populated as each category is stored so
+// that later categories see the full paths of co-created parents.
 // inCycle indicates this category is part of a detected intra-push cycle.
 func (s *Server) admitCategoryTaxonomyWithContext(
 	ctx context.Context,
@@ -364,7 +422,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	req *catalogv1.AdmitResourcesRequest,
 	revision string,
 	now time.Time,
-	pushParents map[string]string,
+	inPushAncestorPaths map[string]string,
 	inCycle bool,
 ) {
 	specJSON, err := json.Marshal(resource.Spec)
@@ -389,12 +447,11 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	if resource.Spec.ParentRef != nil && resource.Spec.ParentRef.Name != "" {
 		parentName = resource.Spec.ParentRef.Name
 
-		// T033: check if parent is in the same push (co-creation).
-		if _, inPush := pushParents[parentName]; inPush {
-			// Parent is in this push; use parent's own name as its ancestor path
-			// (it's a root-level co-creation). Will be corrected if parent itself
-			// has a stored ancestor path after admission ordering.
-			ancestorPath = parentName + "/" + name
+		// T033: check if parent was already admitted in this push (co-creation).
+		// inPushAncestorPaths is populated in topological order so the parent's
+		// full computed path is available here even for deep chains (root→child→grandchild).
+		if parentPath, inPush := inPushAncestorPaths[parentName]; inPush {
+			ancestorPath = parentPath + "/" + name
 			parentResolved = true
 		} else {
 			// T023: look up parent in DB.
@@ -435,14 +492,14 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		if cerr := s.store.CreateCategoryTaxonomy(ctx, c); cerr != nil {
 			s.log.Error("admit_resources: create category failed",
 				zap.String("name", name), zap.Error(cerr))
-		} else {
-			s.log.Info("admit_resources: category created",
-				zap.String("kind", resource.Kind),
-				zap.String("namespace", namespace),
-				zap.String("name", name),
-				zap.String("ancestor_path", ancestorPath),
-				zap.Bool("parent_resolved", parentResolved))
+			return
 		}
+		s.log.Info("admit_resources: category created",
+			zap.String("kind", resource.Kind),
+			zap.String("namespace", namespace),
+			zap.String("name", name),
+			zap.String("ancestor_path", ancestorPath),
+			zap.Bool("parent_resolved", parentResolved))
 	} else {
 		gen := existing.Generation + 1
 		existing.APIVersion = resource.APIVersion
@@ -462,14 +519,16 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		if uerr := s.store.UpdateCategoryTaxonomy(ctx, existing); uerr != nil {
 			s.log.Error("admit_resources: update category failed",
 				zap.String("name", name), zap.Error(uerr))
-		} else {
-			s.log.Info("admit_resources: category updated",
-				zap.String("kind", resource.Kind),
-				zap.String("namespace", namespace),
-				zap.String("name", name),
-				zap.String("ancestor_path", ancestorPath))
+			return
 		}
+		s.log.Info("admit_resources: category updated",
+			zap.String("kind", resource.Kind),
+			zap.String("namespace", namespace),
+			zap.String("name", name),
+			zap.String("ancestor_path", ancestorPath))
 	}
+	// Record the computed path so children later in this push see the correct full path.
+	inPushAncestorPaths[name] = ancestorPath
 }
 
 // admissionAcceptedStatus builds the initial status JSON with AdmissionAccepted: True (FR-009).

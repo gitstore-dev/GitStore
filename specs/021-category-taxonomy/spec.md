@@ -2,7 +2,7 @@
 
 **Feature Branch**: `021-category-taxonomy`  
 **Created**: 2026-06-06  
-**Status**: Draft  
+**Status**: Closed  
 **Input**: User description: "Support hierarchical CategoryTaxonomy and single-category product constraint (GH#82)"
 
 ## User Scenarios & Testing *(mandatory)*

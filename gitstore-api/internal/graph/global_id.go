@@ -106,17 +106,6 @@ func decodeNodeIDAs(kind, id string) (string, error) {
 	return rawID, nil
 }
 
-func decodeOptionalNodeIDAs(kind string, id *string) (*string, error) {
-	if id == nil {
-		return nil, nil
-	}
-	rawID, err := decodeNodeIDAs(kind, *id)
-	if err != nil {
-		return nil, err
-	}
-	return &rawID, nil
-}
-
 func decodeNodeIDsAs(kind string, ids []string) ([]string, error) {
 	rawIDs := make([]string, len(ids))
 	for i, id := range ids {
