@@ -37,7 +37,7 @@ concurrency:
 
 jobs:
   integration-test:
-    name: Integration Tests
+    name: Integration Tests (memdb)
     runs-on: ubuntu-latest
     permissions:
       contents: read
