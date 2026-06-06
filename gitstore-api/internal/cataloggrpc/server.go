@@ -178,6 +178,22 @@ func errorToValidationError(filePath, msg string) *catalogv1.ValidationError {
 	}
 }
 
+// resolveNamespaceIdentifier looks up the namespace identifier string (e.g. "gitci")
+// for a given repository UUID. Falls back to the repository UUID itself if the
+// repository or its namespace cannot be resolved — ensuring a consistent non-empty
+// namespace is always used for catalog storage.
+func (s *Server) resolveNamespaceIdentifier(ctx context.Context, repositoryID string) string {
+	repo, err := s.store.GetRepository(ctx, repositoryID)
+	if err != nil || repo == nil {
+		return repositoryID
+	}
+	ns, err := s.store.GetNamespace(ctx, repo.NamespaceID)
+	if err != nil || ns == nil {
+		return repositoryID
+	}
+	return ns.Identifier
+}
+
 // AdmitResources fetches, parses, and stores catalog resources from an accepted push commit.
 // Called fire-and-forget from the post-receive hook. Each product is processed independently;
 // failures are logged and do not block remaining products (FR-011).
@@ -188,6 +204,11 @@ func (s *Server) AdmitResources(
 	if s.git == nil || s.store == nil {
 		return &catalogv1.AdmitResourcesResponse{}, nil
 	}
+
+	// Resolve the namespace identifier (e.g. "gitci") from the repository UUID.
+	// Resources that omit metadata.namespace default to this value so they are
+	// queryable by the GraphQL resolver, which also uses the namespace identifier.
+	repoNamespace := s.resolveNamespaceIdentifier(ctx, req.RepositoryId)
 
 	paths, err := s.git.ListFiles(ctx, req.RepositoryId, "", req.CommitSha)
 	if err != nil {
@@ -253,11 +274,11 @@ func (s *Server) AdmitResources(
 	inPushAncestorPaths := make(map[string]string, len(topoOrder))
 	for _, name := range topoOrder {
 		e := categoryEntries[name]
-		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, req, revision, now, inPushAncestorPaths, cycleMembers[name])
+		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, req, repoNamespace, revision, now, inPushAncestorPaths, cycleMembers[name])
 	}
 	for _, e := range entries {
 		if e.parsed.Kind == "Product" {
-			s.admitProduct(ctx, e.parsed.Product, e.body, req, revision, now)
+			s.admitProduct(ctx, e.parsed.Product, e.body, req, repoNamespace, revision, now)
 		}
 	}
 
@@ -349,6 +370,7 @@ func (s *Server) admitProduct(
 	resource *catalog.ProductResource,
 	body []byte,
 	req *catalogv1.AdmitResourcesRequest,
+	repoNamespace string,
 	revision string,
 	now time.Time,
 ) {
@@ -361,7 +383,7 @@ func (s *Server) admitProduct(
 
 	namespace := resource.Metadata.Namespace
 	if namespace == "" {
-		namespace = req.RepositoryId
+		namespace = repoNamespace
 	}
 
 	existing, getErr := s.store.GetProductByName(ctx, namespace, resource.Metadata.Name)
@@ -420,6 +442,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	resource *catalog.CategoryTaxonomyResource,
 	body []byte,
 	req *catalogv1.AdmitResourcesRequest,
+	repoNamespace string,
 	revision string,
 	now time.Time,
 	inPushAncestorPaths map[string]string,
@@ -434,7 +457,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 
 	namespace := resource.Metadata.Namespace
 	if namespace == "" {
-		namespace = req.RepositoryId
+		namespace = repoNamespace
 	}
 
 	name := resource.Metadata.Name
