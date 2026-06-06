@@ -2,7 +2,7 @@
 
 **Feature Branch**: `019-fix-upload-pack`
 **Created**: 2026-06-05
-**Status**: Draft
+**Status**: Closed
 **Input**: User description: "git clone and git fetch fail because the upload-pack implementation returns NAK and closes the connection instead of sending a PACK file."
 
 ## User Scenarios & Testing *(mandatory)*
