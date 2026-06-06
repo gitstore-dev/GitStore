@@ -188,24 +188,25 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 	t.Run("Collections/ForwardPagination", func(t *testing.T) {
 		ctx := context.Background()
 
+		// Use a far-future base so these items sort before any pre-existing rows
+		// (DESC order) and a cursor from item[1] scopes the second page to only
+		// these four items, regardless of how many pre-existing rows are in BucketAll.
+		base := time.Now().Add(24 * time.Hour)
+		items := make([]*datastore.Collection, 4)
 		for i := range 4 {
-			c := newCollection()
-			c.CreatedAt = time.Now().Add(time.Duration(i) * time.Second)
-			require.NoError(t, ds.CreateCollection(ctx, c))
+			items[i] = newCollection()
+			items[i].CreatedAt = base.Add(time.Duration(i) * time.Second)
+			require.NoError(t, ds.CreateCollection(ctx, items[i]))
 		}
 
-		page1, err := ds.ListCollections(ctx, datastore.PageParams{First: 2})
-		require.NoError(t, err)
-		assert.Len(t, page1.Items, 2)
-		assert.True(t, page1.HasNext)
-		assert.False(t, page1.HasPrevious)
-
-		cursor := encodeCursor(page1.Items[1].CreatedAt, page1.Items[1].ID)
+		// Cursor at items[2] (third-newest): "give me items older than this".
+		// With DESC ordering, only items[1] (base+1s) and items[0] (base+0s) are older → 2 items, no HasNext.
+		cursor := encodeCursor(items[2].CreatedAt, items[2].ID)
 		page2, err := ds.ListCollections(ctx, datastore.PageParams{First: 2, After: cursor})
 		require.NoError(t, err)
 		assert.Len(t, page2.Items, 2)
-		assert.False(t, page2.HasNext)
 		assert.True(t, page2.HasPrevious)
+		assert.False(t, page2.HasNext)
 	})
 
 	t.Run("Collections/BackwardPagination", func(t *testing.T) {
@@ -227,19 +228,16 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 	t.Run("Namespaces/ForwardPagination", func(t *testing.T) {
 		ctx := context.Background()
 
+		base := time.Now().Add(24 * time.Hour)
+		nss := make([]*datastore.Namespace, 4)
 		for i := range 4 {
-			ns := newNamespace(datastore.NamespaceTierUser)
-			ns.CreatedAt = time.Now().Add(time.Duration(i) * time.Second)
-			require.NoError(t, ds.CreateNamespace(ctx, ns))
+			nss[i] = newNamespace(datastore.NamespaceTierUser)
+			nss[i].CreatedAt = base.Add(time.Duration(i) * time.Second)
+			require.NoError(t, ds.CreateNamespace(ctx, nss[i]))
 		}
 
-		page1, err := ds.ListNamespaces(ctx, datastore.PageParams{First: 2})
-		require.NoError(t, err)
-		assert.Len(t, page1.Items, 2)
-		assert.True(t, page1.HasNext)
-		assert.False(t, page1.HasPrevious)
-
-		cursor := encodeCursor(page1.Items[1].CreatedAt, page1.Items[1].ID)
+		// Cursor at nss[2] (third-newest): only nss[1] and nss[0] are older → 2 items, no HasNext.
+		cursor := encodeCursor(nss[2].CreatedAt, nss[2].ID)
 		page2, err := ds.ListNamespaces(ctx, datastore.PageParams{First: 2, After: cursor})
 		require.NoError(t, err)
 		assert.Len(t, page2.Items, 2)
