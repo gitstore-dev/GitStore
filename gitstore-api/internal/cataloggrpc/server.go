@@ -31,11 +31,13 @@ type GitReader interface {
 }
 
 // gitClientReader wraps *gitclient.Client to satisfy GitReader.
+// Each method passes repositoryID directly to the gRPC request instead of
+// mutating the shared Client.RepositoryID field, making it safe for concurrent
+// AdmitResources calls targeting different repositories.
 type gitClientReader struct{ c *gitclient.Client }
 
 func (r *gitClientReader) ListFiles(ctx context.Context, repositoryID, prefix, ref string) ([]string, error) {
-	r.c.RepositoryID = repositoryID
-	entries, err := r.c.ListFiles(ctx, prefix, ref)
+	entries, err := r.c.ListFilesForRepo(ctx, repositoryID, prefix, ref)
 	if err != nil {
 		return nil, err
 	}
@@ -47,8 +49,7 @@ func (r *gitClientReader) ListFiles(ctx context.Context, repositoryID, prefix, r
 }
 
 func (r *gitClientReader) ReadFile(ctx context.Context, repositoryID, path, ref string) ([]byte, error) {
-	r.c.RepositoryID = repositoryID
-	return r.c.ReadFile(ctx, path, ref)
+	return r.c.ReadFileForRepo(ctx, repositoryID, path, ref)
 }
 
 // Server implements catalogv1.CatalogServiceServer.
