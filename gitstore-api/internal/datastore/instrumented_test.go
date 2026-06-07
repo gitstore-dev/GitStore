@@ -8,6 +8,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
@@ -61,17 +62,17 @@ func (s *stubDatastore) CreateCollection(_ context.Context, _ *datastore.Collect
 func (s *stubDatastore) GetCollection(_ context.Context, _ string) (*datastore.Collection, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) GetCollectionBySlug(_ context.Context, _ string) (*datastore.Collection, error) {
+func (s *stubDatastore) GetCollectionByName(_ context.Context, _, _ string) (*datastore.Collection, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) ListCollections(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
+func (s *stubDatastore) ListCollections(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
 	return nil, s.getProductErr
 }
 func (s *stubDatastore) UpdateCollection(_ context.Context, _ *datastore.Collection) error {
 	return s.getProductErr
 }
-func (s *stubDatastore) DeleteCollection(_ context.Context, _ string) error {
-	return s.getProductErr
+func (s *stubDatastore) ListProductsByLabelSelector(_ context.Context, _ string, _ catalog.LabelSelector) ([]*datastore.Product, error) {
+	return nil, s.getProductErr
 }
 func (s *stubDatastore) CreateNamespace(_ context.Context, _ *datastore.Namespace) error {
 	return s.getProductErr

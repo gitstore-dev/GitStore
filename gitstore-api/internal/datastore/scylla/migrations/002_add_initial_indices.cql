@@ -1,6 +1,3 @@
-CREATE INDEX IF NOT EXISTS collections_by_id          ON collections        (id);
-CREATE INDEX IF NOT EXISTS collections_by_slug        ON collections        (slug);
-
 CREATE INDEX IF NOT EXISTS namespaces_by_id           ON namespaces         (id);
 CREATE INDEX IF NOT EXISTS namespaces_by_identifier   ON namespaces         (identifier);
 

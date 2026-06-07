@@ -7,147 +7,101 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"go.uber.org/zap"
 )
 
 // Products is the resolver for the products field.
 func (r *collectionResolver) Products(ctx context.Context, obj *model.Collection, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error) {
-	_, err := decodeNodeIDAs(nodeKindCollection, obj.ID)
+	uid, err := decodeNodeIDAs(nodeKindCollection, obj.ID)
 	if err != nil {
 		return nil, err
 	}
-	// TODO: Add collection-scoped product listing to the datastore interface.
-	// For now, return all products paginated (filter by collection will be added later).
-	params := toPageParams(first, after, last, before)
-	result, err := r.service.GetProducts(ctx, "", params)
+	c, err := r.service.GetCollectionByUID(ctx, uid)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get products: %w", err)
+		return nil, fmt.Errorf("collection not found: %w", err)
 	}
-	return BuildProductConnection(result), nil
+	var spec struct {
+		Selector *struct {
+			MatchLabels      map[string]string `json:"matchLabels"`
+			MatchExpressions []struct {
+				Key      string   `json:"key"`
+				Operator string   `json:"operator"`
+				Values   []string `json:"values"`
+			} `json:"matchExpressions"`
+		} `json:"selector"`
+	}
+	if c.Spec != nil {
+		if err := jsonUnmarshal(c.Spec, &spec); err != nil {
+			r.logger.Warn("collection products: failed to unmarshal spec", zap.String("uid", uid), zap.Error(err))
+		} else if spec.Selector != nil {
+			selector := specSelectorToCatalog(spec.Selector)
+			products, err := r.service.ListProductsByLabelSelector(ctx, c.Namespace, selector)
+			if err != nil {
+				return nil, fmt.Errorf("failed to list collection products: %w", err)
+			}
+			return BuildProductConnectionFromSlice(products, toPageParams(first, after, last, before)), nil
+		}
+	}
+	return &model.ProductConnection{
+		Edges:    []*model.ProductEdge{},
+		PageInfo: &model.PageInfo{},
+	}, nil
 }
 
 // CreateCollection is the resolver for the createCollection field.
-func (r *mutationResolver) CreateCollection(ctx context.Context, input model.CreateCollectionInput) (*model.CreateCollectionPayload, error) {
-	if _, err := decodeNodeIDsAs(nodeKindProduct, input.ProductIds); err != nil {
-		return nil, err
-	}
-
-	serviceInput := map[string]interface{}{
-		"name": input.Name,
-		"slug": input.Slug,
-	}
-	if input.Body != nil {
-		serviceInput["body"] = *input.Body
-	}
-	if input.DisplayOrder != nil {
-		serviceInput["displayOrder"] = *input.DisplayOrder
-	}
-
-	collection, err := r.service.CreateCollection(ctx, serviceInput)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create collection: %w", err)
-	}
-
-	return &model.CreateCollectionPayload{
-		ClientMutationID: input.ClientMutationID,
-		Collection:       DatastoreCollectionToGraphQL(collection),
-	}, nil
+func (r *mutationResolver) CreateCollection(_ context.Context, _ model.CreateCollectionInput) (*model.CreateCollectionPayload, error) {
+	return nil, fmt.Errorf("createCollection is deprecated: manage collections via git push")
 }
 
 // UpdateCollection is the resolver for the updateCollection field.
-func (r *mutationResolver) UpdateCollection(ctx context.Context, input model.UpdateCollectionInput) (*model.UpdateCollectionPayload, error) {
-	collectionID, err := decodeNodeIDAs(nodeKindCollection, input.ID)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := decodeNodeIDsAs(nodeKindProduct, input.ProductIds); err != nil {
-		return nil, err
-	}
-
-	collection := &model.Collection{
-		ID:           mustEncodeNodeID(nodeKindCollection, collectionID),
-		Name:         stringOrDefault(input.Name, "Updated Collection"),
-		Slug:         stringOrDefault(input.Slug, "updated-collection"),
-		Body:         input.Body,
-		DisplayOrder: intOrDefault(input.DisplayOrder, 0),
-		Products:     &model.ProductConnection{Edges: []*model.ProductEdge{}, PageInfo: &model.PageInfo{}},
-		CreatedAt:    time.Now().Add(-24 * time.Hour),
-		UpdatedAt:    time.Now(),
-	}
-	return &model.UpdateCollectionPayload{
-		ClientMutationID: input.ClientMutationID,
-		Collection:       collection,
-		Conflict:         nil,
-	}, nil
+func (r *mutationResolver) UpdateCollection(_ context.Context, _ model.UpdateCollectionInput) (*model.UpdateCollectionPayload, error) {
+	return nil, fmt.Errorf("updateCollection is deprecated: manage collections via git push")
 }
 
 // DeleteCollection is the resolver for the deleteCollection field.
-func (r *mutationResolver) DeleteCollection(ctx context.Context, input model.DeleteCollectionInput) (*model.DeleteCollectionPayload, error) {
-	collectionID, err := decodeNodeIDAs(nodeKindCollection, input.ID)
-	if err != nil {
-		return nil, err
-	}
-	idCopy := mustEncodeNodeID(nodeKindCollection, collectionID)
-	return &model.DeleteCollectionPayload{
-		ClientMutationID:    input.ClientMutationID,
-		DeletedCollectionID: &idCopy,
-	}, nil
-}
-
-// ReorderCollections is the resolver for the reorderCollections field.
-func (r *mutationResolver) ReorderCollections(ctx context.Context, input model.ReorderCollectionsInput) (*model.ReorderCollectionsPayload, error) {
-	orderedIDs, err := decodeNodeIDsAs(nodeKindCollection, input.OrderedIds)
-	if err != nil {
-		return nil, err
-	}
-
-	collections := make([]*model.Collection, len(orderedIDs))
-	for i, id := range orderedIDs {
-		collections[i] = &model.Collection{
-			ID:           mustEncodeNodeID(nodeKindCollection, id),
-			Name:         fmt.Sprintf("Collection %d", i+1),
-			Slug:         fmt.Sprintf("collection-%d", i+1),
-			DisplayOrder: int32(i),
-			Products:     &model.ProductConnection{Edges: []*model.ProductEdge{}, PageInfo: &model.PageInfo{}},
-			CreatedAt:    time.Now(),
-			UpdatedAt:    time.Now(),
-		}
-	}
-	return &model.ReorderCollectionsPayload{
-		ClientMutationID: input.ClientMutationID,
-		Collections:      collections,
-	}, nil
+func (r *mutationResolver) DeleteCollection(_ context.Context, _ model.DeleteCollectionInput) (*model.DeleteCollectionPayload, error) {
+	return nil, fmt.Errorf("deleteCollection is deprecated: manage collections via git push")
 }
 
 // Collection is the resolver for the collection field.
 func (r *queryResolver) Collection(ctx context.Context, by model.CollectionBy) (*model.Collection, error) {
 	if by.ID != nil {
-		collectionID, err := decodeNodeIDAs(nodeKindCollection, *by.ID)
+		uid, err := decodeNodeIDAs(nodeKindCollection, *by.ID)
 		if err != nil {
 			return nil, err
 		}
-		c, err := r.service.GetCollectionByID(ctx, collectionID)
-		if err != nil {
+		c, err := r.service.GetCollectionByUID(ctx, uid)
+		if errors.Is(err, datastore.ErrNotFound) {
 			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("collection lookup by id: %w", err)
 		}
 		return DatastoreCollectionToGraphQL(c), nil
 	}
-
-	c, err := r.service.GetCollectionBySlug(ctx, *by.Slug)
-	if err != nil {
-		return nil, nil
+	if by.NamespacePath != nil {
+		c, err := r.service.GetCollectionByName(ctx, by.NamespacePath.Namespace, by.NamespacePath.Name)
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("collection lookup by name: %w", err)
+		}
+		return DatastoreCollectionToGraphQL(c), nil
 	}
-	return DatastoreCollectionToGraphQL(c), nil
+	return nil, fmt.Errorf("collection lookup requires id or namespacePath")
 }
 
 // Collections returns collections as a Relay connection.
-func (r *queryResolver) Collections(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.CollectionConnection, error) {
+func (r *queryResolver) Collections(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.CollectionConnection, error) {
 	params := toPageParams(first, after, last, before)
-	result, err := r.service.GetCollections(ctx, params)
+	result, err := r.service.GetCollections(ctx, namespace, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get collections: %w", err)
 	}

@@ -187,43 +187,41 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 
 	t.Run("Collections/ForwardPagination", func(t *testing.T) {
 		ctx := context.Background()
+		ns := "pag-coll-" + newID()[:8]
 
-		// Use a far-future base so these items sort before any pre-existing rows
-		// (DESC order) and a cursor from item[1] scopes the second page to only
-		// these four items, regardless of how many pre-existing rows are in BucketAll.
 		base := time.Now().Add(24 * time.Hour)
 		items := make([]*datastore.Collection, 4)
 		for i := range 4 {
 			items[i] = newCollection()
-			items[i].CreatedAt = base.Add(time.Duration(i) * time.Second)
+			items[i].Namespace = ns
+			items[i].CreationTimestamp = base.Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateCollection(ctx, items[i]))
 		}
 
-		// Cursor at items[2] (third-newest): verify items[1] and items[0] appear in the page.
-		// Global-table tests share state across -count runs, so we check membership by ID
-		// rather than exact length to avoid counting pre-existing rows from earlier runs.
-		cursor := encodeCursor(items[2].CreatedAt, items[2].ID)
-		page2, err := ds.ListCollections(ctx, datastore.PageParams{First: 10, After: cursor})
+		cursor := encodeCursor(items[2].CreationTimestamp, items[2].UID)
+		page2, err := ds.ListCollections(ctx, ns, datastore.PageParams{First: 10, After: cursor})
 		require.NoError(t, err)
 		assert.True(t, page2.HasPrevious)
 		ids := make(map[string]bool, len(page2.Items))
 		for _, it := range page2.Items {
-			ids[it.ID] = true
+			ids[it.UID] = true
 		}
-		assert.True(t, ids[items[1].ID], "expected items[1] in page")
-		assert.True(t, ids[items[0].ID], "expected items[0] in page")
+		assert.True(t, ids[items[1].UID], "expected items[1] in page")
+		assert.True(t, ids[items[0].UID], "expected items[0] in page")
 	})
 
 	t.Run("Collections/BackwardPagination", func(t *testing.T) {
 		ctx := context.Background()
+		ns := "pag-coll-bwd-" + newID()[:8]
 
 		for i := range 4 {
 			c := newCollection()
-			c.CreatedAt = time.Now().Add(time.Duration(i) * time.Second)
+			c.Namespace = ns
+			c.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateCollection(ctx, c))
 		}
 
-		result, err := ds.ListCollections(ctx, datastore.PageParams{Last: 2})
+		result, err := ds.ListCollections(ctx, ns, datastore.PageParams{Last: 2})
 		require.NoError(t, err)
 		assert.Len(t, result.Items, 2)
 		assert.False(t, result.HasNext)

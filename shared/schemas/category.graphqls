@@ -182,6 +182,7 @@ Controller-computed category hierarchy metadata.
 """
 type ResolvedCategoryTaxonomy {
   depth: Int!
+  # TODO: Change to 'path: [String!]!'
   ancestorPath: String!
   childCount: Int!
   productCount: Int!

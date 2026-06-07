@@ -33,7 +33,6 @@ type MutationResolver interface {
 	CreateCollection(ctx context.Context, input model.CreateCollectionInput) (*model.CreateCollectionPayload, error)
 	UpdateCollection(ctx context.Context, input model.UpdateCollectionInput) (*model.UpdateCollectionPayload, error)
 	DeleteCollection(ctx context.Context, input model.DeleteCollectionInput) (*model.DeleteCollectionPayload, error)
-	ReorderCollections(ctx context.Context, input model.ReorderCollectionsInput) (*model.ReorderCollectionsPayload, error)
 	CreateNamespace(ctx context.Context, input model.CreateNamespaceInput) (*model.CreateNamespacePayload, error)
 	DeleteNamespace(ctx context.Context, input model.DeleteNamespaceInput) (*model.DeleteNamespacePayload, error)
 	CreateRepository(ctx context.Context, input model.CreateRepositoryInput) (*model.CreateRepositoryPayload, error)
@@ -48,7 +47,7 @@ type QueryResolver interface {
 	Category(ctx context.Context, by model.CategoryBy) (*model.Category, error)
 	Categories(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.CategoryConnection, error)
 	Collection(ctx context.Context, by model.CollectionBy) (*model.Collection, error)
-	Collections(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.CollectionConnection, error)
+	Collections(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.CollectionConnection, error)
 	Namespace(ctx context.Context, by model.NamespaceBy) (*model.Namespace, error)
 	Namespaces(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.NamespaceConnection, error)
 	Product(ctx context.Context, by model.ProductBy) (*model.Product, error)
@@ -257,20 +256,6 @@ func (ec *executionContext) field_Mutation_reorderCategories_args(ctx context.Co
 	return args, nil
 }
 
-func (ec *executionContext) field_Mutation_reorderCollections_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
-		func(ctx context.Context, v any) (model.ReorderCollectionsInput, error) {
-			return ec.unmarshalNReorderCollectionsInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCollectionsInput(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["input"] = arg0
-	return args, nil
-}
-
 func (ec *executionContext) field_Mutation_transferRepository_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -396,38 +381,46 @@ func (ec *executionContext) field_Query_collection_args(ctx context.Context, raw
 func (ec *executionContext) field_Query_collections_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "first",
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "namespace",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["namespace"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "first",
 		func(ctx context.Context, v any) (*int32, error) {
 			return ec.unmarshalOInt2ᚖint32(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["first"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "after",
+	args["first"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "after",
 		func(ctx context.Context, v any) (*string, error) {
 			return ec.unmarshalOString2ᚖstring(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["after"] = arg1
-	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "last",
+	args["after"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "last",
 		func(ctx context.Context, v any) (*int32, error) {
 			return ec.unmarshalOInt2ᚖint32(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["last"] = arg2
-	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "before",
+	args["last"] = arg3
+	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "before",
 		func(ctx context.Context, v any) (*string, error) {
 			return ec.unmarshalOString2ᚖstring(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["before"] = arg3
+	args["before"] = arg4
 	return args, nil
 }
 
@@ -1123,50 +1116,6 @@ func (ec *executionContext) fieldContext_Mutation_deleteCollection(ctx context.C
 	return fc, nil
 }
 
-func (ec *executionContext) _Mutation_reorderCollections(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Mutation_reorderCollections(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Mutation().ReorderCollections(ctx, fc.Args["input"].(model.ReorderCollectionsInput))
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.ReorderCollectionsPayload) graphql.Marshaler {
-			return ec.marshalNReorderCollectionsPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReorderCollectionsPayload(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Mutation_reorderCollections(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Mutation",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_ReorderCollectionsPayload(ctx, field)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Mutation_reorderCollections_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _Mutation_createNamespace(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1785,7 +1734,7 @@ func (ec *executionContext) _Query_collections(ctx context.Context, field graphq
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Collections(ctx, fc.Args["first"].(*int32), fc.Args["after"].(*string), fc.Args["last"].(*int32), fc.Args["before"].(*string))
+			return ec.Resolvers.Query().Collections(ctx, fc.Args["namespace"].(string), fc.Args["first"].(*int32), fc.Args["after"].(*string), fc.Args["last"].(*int32), fc.Args["before"].(*string))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.CollectionConnection) graphql.Marshaler {
@@ -2248,7 +2197,7 @@ func (ec *executionContext) unmarshalInputCollectionBy(ctx context.Context, obj 
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"id", "slug"}
+	fieldsInOrder := [...]string{"id", "namespacePath"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -2262,13 +2211,50 @@ func (ec *executionContext) unmarshalInputCollectionBy(ctx context.Context, obj 
 				return it, err
 			}
 			it.ID = data
-		case "slug":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("slug"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+		case "namespacePath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespacePath"))
+			data, err := ec.unmarshalOCollectionNamespacePath2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionNamespacePath(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.Slug = data
+			it.NamespacePath = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputCollectionNamespacePath(ctx context.Context, obj any) (model.CollectionNamespacePath, error) {
+	var it model.CollectionNamespacePath
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"namespace", "name"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
 		}
 	}
 	return it, nil
@@ -2496,13 +2482,6 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "deleteCollection":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_deleteCollection(ctx, field)
-			})
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "reorderCollections":
-			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
-				return ec._Mutation_reorderCollections(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -3014,6 +2993,14 @@ func (ec *executionContext) unmarshalOCategoryNamespacePath2ᚖgithubᚗcomᚋgi
 		return nil, nil
 	}
 	res, err := ec.unmarshalInputCategoryNamespacePath(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOCollectionNamespacePath2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionNamespacePath(ctx context.Context, v any) (*model.CollectionNamespacePath, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputCollectionNamespacePath(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 

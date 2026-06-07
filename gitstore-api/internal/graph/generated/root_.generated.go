@@ -132,15 +132,22 @@ type ComplexityRoot struct {
 	}
 
 	Collection struct {
-		Body         func(childComplexity int) int
-		CreatedAt    func(childComplexity int) int
-		DisplayOrder func(childComplexity int) int
-		ID           func(childComplexity int) int
-		Name         func(childComplexity int) int
-		ProductCount func(childComplexity int) int
-		Products     func(childComplexity int, first *int32, after *string, last *int32, before *string) int
-		Slug         func(childComplexity int) int
-		UpdatedAt    func(childComplexity int) int
+		APIVersion func(childComplexity int) int
+		Body       func(childComplexity int) int
+		ID         func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Products   func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
+	}
+
+	CollectionCondition struct {
+		Message            func(childComplexity int) int
+		ObservedGeneration func(childComplexity int) int
+		Reason             func(childComplexity int) int
+		Status             func(childComplexity int) int
+		Type               func(childComplexity int) int
 	}
 
 	CollectionConnection struct {
@@ -154,11 +161,33 @@ type ComplexityRoot struct {
 		Node   func(childComplexity int) int
 	}
 
+	CollectionObjectMeta struct {
+		Annotations       func(childComplexity int) int
+		CreationTimestamp func(childComplexity int) int
+		Generation        func(childComplexity int) int
+		Labels            func(childComplexity int) int
+		Name              func(childComplexity int) int
+		Namespace         func(childComplexity int) int
+		ResourceVersion   func(childComplexity int) int
+		Revision          func(childComplexity int) int
+		UID               func(childComplexity int) int
+	}
+
 	CollectionOptimisticLockConflict struct {
-		AttemptedVersion func(childComplexity int) int
-		Current          func(childComplexity int) int
-		CurrentVersion   func(childComplexity int) int
-		Diff             func(childComplexity int) int
+		Current func(childComplexity int) int
+	}
+
+	CollectionSpec struct {
+		Media    func(childComplexity int) int
+		Selector func(childComplexity int) int
+		Title    func(childComplexity int) int
+	}
+
+	CollectionStatus struct {
+		Conditions          func(childComplexity int) int
+		LastAppliedRevision func(childComplexity int) int
+		ObservedGeneration  func(childComplexity int) int
+		Resolved            func(childComplexity int) int
 	}
 
 	CreateCategoryPayload struct {
@@ -167,8 +196,7 @@ type ComplexityRoot struct {
 	}
 
 	CreateCollectionPayload struct {
-		ClientMutationID func(childComplexity int) int
-		Collection       func(childComplexity int) int
+		Collection func(childComplexity int) int
 	}
 
 	CreateNamespacePayload struct {
@@ -188,7 +216,6 @@ type ComplexityRoot struct {
 	}
 
 	DeleteCollectionPayload struct {
-		ClientMutationID    func(childComplexity int) int
 		DeletedCollectionID func(childComplexity int) int
 	}
 
@@ -211,6 +238,17 @@ type ComplexityRoot struct {
 	KeyValuePair struct {
 		Key   func(childComplexity int) int
 		Value func(childComplexity int) int
+	}
+
+	LabelSelector struct {
+		MatchExpressions func(childComplexity int) int
+		MatchLabels      func(childComplexity int) int
+	}
+
+	LabelSelectorRequirement struct {
+		Key      func(childComplexity int) int
+		Operator func(childComplexity int) int
+		Values   func(childComplexity int) int
 	}
 
 	LoginPayload struct {
@@ -242,7 +280,6 @@ type ComplexityRoot struct {
 		RefreshToken       func(childComplexity int, input model.RefreshTokenInput) int
 		RenameRepository   func(childComplexity int, input model.RenameRepositoryInput) int
 		ReorderCategories  func(childComplexity int, input model.ReorderCategoriesInput) int
-		ReorderCollections func(childComplexity int, input model.ReorderCollectionsInput) int
 		TransferRepository func(childComplexity int, input model.TransferRepositoryInput) int
 		UpdateCategory     func(childComplexity int, input model.UpdateCategoryInput) int
 		UpdateCollection   func(childComplexity int, input model.UpdateCollectionInput) int
@@ -364,7 +401,7 @@ type ComplexityRoot struct {
 		Categories     func(childComplexity int, first *int32, after *string, last *int32, before *string) int
 		Category       func(childComplexity int, by model.CategoryBy) int
 		Collection     func(childComplexity int, by model.CollectionBy) int
-		Collections    func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+		Collections    func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
 		Namespace      func(childComplexity int, by model.NamespaceBy) int
 		Namespaces     func(childComplexity int, first *int32, after *string, last *int32, before *string) int
 		Node           func(childComplexity int, id string) int
@@ -388,11 +425,6 @@ type ComplexityRoot struct {
 	ReorderCategoriesPayload struct {
 		Categories       func(childComplexity int) int
 		ClientMutationID func(childComplexity int) int
-	}
-
-	ReorderCollectionsPayload struct {
-		ClientMutationID func(childComplexity int) int
-		Collections      func(childComplexity int) int
 	}
 
 	Repository struct {
@@ -431,6 +463,10 @@ type ComplexityRoot struct {
 		ProductCount func(childComplexity int) int
 	}
 
+	ResolvedCollectionDefinition struct {
+		MemberCount func(childComplexity int) int
+	}
+
 	ResolvedFileDefinition struct {
 		ContentType func(childComplexity int) int
 		Name        func(childComplexity int) int
@@ -458,9 +494,8 @@ type ComplexityRoot struct {
 	}
 
 	UpdateCollectionPayload struct {
-		ClientMutationID func(childComplexity int) int
-		Collection       func(childComplexity int) int
-		Conflict         func(childComplexity int) int
+		Collection func(childComplexity int) int
+		Conflict   func(childComplexity int) int
 	}
 
 	User struct {
@@ -935,26 +970,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CategoryTaxonomyStatus.Resolved(childComplexity), true
 
+	case "Collection.apiVersion":
+		if e.ComplexityRoot.Collection.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Collection.APIVersion(childComplexity), true
+
 	case "Collection.body":
 		if e.ComplexityRoot.Collection.Body == nil {
 			break
 		}
 
 		return e.ComplexityRoot.Collection.Body(childComplexity), true
-
-	case "Collection.createdAt":
-		if e.ComplexityRoot.Collection.CreatedAt == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Collection.CreatedAt(childComplexity), true
-
-	case "Collection.displayOrder":
-		if e.ComplexityRoot.Collection.DisplayOrder == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Collection.DisplayOrder(childComplexity), true
 
 	case "Collection.id":
 		if e.ComplexityRoot.Collection.ID == nil {
@@ -963,19 +991,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Collection.ID(childComplexity), true
 
-	case "Collection.name":
-		if e.ComplexityRoot.Collection.Name == nil {
+	case "Collection.kind":
+		if e.ComplexityRoot.Collection.Kind == nil {
 			break
 		}
 
-		return e.ComplexityRoot.Collection.Name(childComplexity), true
+		return e.ComplexityRoot.Collection.Kind(childComplexity), true
 
-	case "Collection.productCount":
-		if e.ComplexityRoot.Collection.ProductCount == nil {
+	case "Collection.metadata":
+		if e.ComplexityRoot.Collection.Metadata == nil {
 			break
 		}
 
-		return e.ComplexityRoot.Collection.ProductCount(childComplexity), true
+		return e.ComplexityRoot.Collection.Metadata(childComplexity), true
 
 	case "Collection.products":
 		if e.ComplexityRoot.Collection.Products == nil {
@@ -989,19 +1017,54 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Collection.Products(childComplexity, args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
 
-	case "Collection.slug":
-		if e.ComplexityRoot.Collection.Slug == nil {
+	case "Collection.spec":
+		if e.ComplexityRoot.Collection.Spec == nil {
 			break
 		}
 
-		return e.ComplexityRoot.Collection.Slug(childComplexity), true
+		return e.ComplexityRoot.Collection.Spec(childComplexity), true
 
-	case "Collection.updatedAt":
-		if e.ComplexityRoot.Collection.UpdatedAt == nil {
+	case "Collection.status":
+		if e.ComplexityRoot.Collection.Status == nil {
 			break
 		}
 
-		return e.ComplexityRoot.Collection.UpdatedAt(childComplexity), true
+		return e.ComplexityRoot.Collection.Status(childComplexity), true
+
+	case "CollectionCondition.message":
+		if e.ComplexityRoot.CollectionCondition.Message == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionCondition.Message(childComplexity), true
+
+	case "CollectionCondition.observedGeneration":
+		if e.ComplexityRoot.CollectionCondition.ObservedGeneration == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionCondition.ObservedGeneration(childComplexity), true
+
+	case "CollectionCondition.reason":
+		if e.ComplexityRoot.CollectionCondition.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionCondition.Reason(childComplexity), true
+
+	case "CollectionCondition.status":
+		if e.ComplexityRoot.CollectionCondition.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionCondition.Status(childComplexity), true
+
+	case "CollectionCondition.type":
+		if e.ComplexityRoot.CollectionCondition.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionCondition.Type(childComplexity), true
 
 	case "CollectionConnection.edges":
 		if e.ComplexityRoot.CollectionConnection.Edges == nil {
@@ -1038,12 +1101,68 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CollectionEdge.Node(childComplexity), true
 
-	case "CollectionOptimisticLockConflict.attemptedVersion":
-		if e.ComplexityRoot.CollectionOptimisticLockConflict.AttemptedVersion == nil {
+	case "CollectionObjectMeta.annotations":
+		if e.ComplexityRoot.CollectionObjectMeta.Annotations == nil {
 			break
 		}
 
-		return e.ComplexityRoot.CollectionOptimisticLockConflict.AttemptedVersion(childComplexity), true
+		return e.ComplexityRoot.CollectionObjectMeta.Annotations(childComplexity), true
+
+	case "CollectionObjectMeta.creationTimestamp":
+		if e.ComplexityRoot.CollectionObjectMeta.CreationTimestamp == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionObjectMeta.CreationTimestamp(childComplexity), true
+
+	case "CollectionObjectMeta.generation":
+		if e.ComplexityRoot.CollectionObjectMeta.Generation == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionObjectMeta.Generation(childComplexity), true
+
+	case "CollectionObjectMeta.labels":
+		if e.ComplexityRoot.CollectionObjectMeta.Labels == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionObjectMeta.Labels(childComplexity), true
+
+	case "CollectionObjectMeta.name":
+		if e.ComplexityRoot.CollectionObjectMeta.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionObjectMeta.Name(childComplexity), true
+
+	case "CollectionObjectMeta.namespace":
+		if e.ComplexityRoot.CollectionObjectMeta.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionObjectMeta.Namespace(childComplexity), true
+
+	case "CollectionObjectMeta.resourceVersion":
+		if e.ComplexityRoot.CollectionObjectMeta.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionObjectMeta.ResourceVersion(childComplexity), true
+
+	case "CollectionObjectMeta.revision":
+		if e.ComplexityRoot.CollectionObjectMeta.Revision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionObjectMeta.Revision(childComplexity), true
+
+	case "CollectionObjectMeta.uid":
+		if e.ComplexityRoot.CollectionObjectMeta.UID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionObjectMeta.UID(childComplexity), true
 
 	case "CollectionOptimisticLockConflict.current":
 		if e.ComplexityRoot.CollectionOptimisticLockConflict.Current == nil {
@@ -1052,19 +1171,54 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CollectionOptimisticLockConflict.Current(childComplexity), true
 
-	case "CollectionOptimisticLockConflict.currentVersion":
-		if e.ComplexityRoot.CollectionOptimisticLockConflict.CurrentVersion == nil {
+	case "CollectionSpec.media":
+		if e.ComplexityRoot.CollectionSpec.Media == nil {
 			break
 		}
 
-		return e.ComplexityRoot.CollectionOptimisticLockConflict.CurrentVersion(childComplexity), true
+		return e.ComplexityRoot.CollectionSpec.Media(childComplexity), true
 
-	case "CollectionOptimisticLockConflict.diff":
-		if e.ComplexityRoot.CollectionOptimisticLockConflict.Diff == nil {
+	case "CollectionSpec.selector":
+		if e.ComplexityRoot.CollectionSpec.Selector == nil {
 			break
 		}
 
-		return e.ComplexityRoot.CollectionOptimisticLockConflict.Diff(childComplexity), true
+		return e.ComplexityRoot.CollectionSpec.Selector(childComplexity), true
+
+	case "CollectionSpec.title":
+		if e.ComplexityRoot.CollectionSpec.Title == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionSpec.Title(childComplexity), true
+
+	case "CollectionStatus.conditions":
+		if e.ComplexityRoot.CollectionStatus.Conditions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionStatus.Conditions(childComplexity), true
+
+	case "CollectionStatus.lastAppliedRevision":
+		if e.ComplexityRoot.CollectionStatus.LastAppliedRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionStatus.LastAppliedRevision(childComplexity), true
+
+	case "CollectionStatus.observedGeneration":
+		if e.ComplexityRoot.CollectionStatus.ObservedGeneration == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionStatus.ObservedGeneration(childComplexity), true
+
+	case "CollectionStatus.resolved":
+		if e.ComplexityRoot.CollectionStatus.Resolved == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionStatus.Resolved(childComplexity), true
 
 	case "CreateCategoryPayload.category":
 		if e.ComplexityRoot.CreateCategoryPayload.Category == nil {
@@ -1079,13 +1233,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CreateCategoryPayload.ClientMutationID(childComplexity), true
-
-	case "CreateCollectionPayload.clientMutationId":
-		if e.ComplexityRoot.CreateCollectionPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CreateCollectionPayload.ClientMutationID(childComplexity), true
 
 	case "CreateCollectionPayload.collection":
 		if e.ComplexityRoot.CreateCollectionPayload.Collection == nil {
@@ -1142,13 +1289,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.DeleteCategoryPayload.OrphanedProductIds(childComplexity), true
-
-	case "DeleteCollectionPayload.clientMutationId":
-		if e.ComplexityRoot.DeleteCollectionPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.DeleteCollectionPayload.ClientMutationID(childComplexity), true
 
 	case "DeleteCollectionPayload.deletedCollectionId":
 		if e.ComplexityRoot.DeleteCollectionPayload.DeletedCollectionID == nil {
@@ -1219,6 +1359,41 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.KeyValuePair.Value(childComplexity), true
+
+	case "LabelSelector.matchExpressions":
+		if e.ComplexityRoot.LabelSelector.MatchExpressions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LabelSelector.MatchExpressions(childComplexity), true
+
+	case "LabelSelector.matchLabels":
+		if e.ComplexityRoot.LabelSelector.MatchLabels == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LabelSelector.MatchLabels(childComplexity), true
+
+	case "LabelSelectorRequirement.key":
+		if e.ComplexityRoot.LabelSelectorRequirement.Key == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LabelSelectorRequirement.Key(childComplexity), true
+
+	case "LabelSelectorRequirement.operator":
+		if e.ComplexityRoot.LabelSelectorRequirement.Operator == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LabelSelectorRequirement.Operator(childComplexity), true
+
+	case "LabelSelectorRequirement.values":
+		if e.ComplexityRoot.LabelSelectorRequirement.Values == nil {
+			break
+		}
+
+		return e.ComplexityRoot.LabelSelectorRequirement.Values(childComplexity), true
 
 	case "LoginPayload.clientMutationId":
 		if e.ComplexityRoot.LoginPayload.ClientMutationID == nil {
@@ -1422,18 +1597,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.ReorderCategories(childComplexity, args["input"].(model.ReorderCategoriesInput)), true
-
-	case "Mutation.reorderCollections":
-		if e.ComplexityRoot.Mutation.ReorderCollections == nil {
-			break
-		}
-
-		args, err := ec.field_Mutation_reorderCollections_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.ReorderCollections(childComplexity, args["input"].(model.ReorderCollectionsInput)), true
 
 	case "Mutation.transferRepository":
 		if e.ComplexityRoot.Mutation.TransferRepository == nil {
@@ -1986,7 +2149,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.Collections(childComplexity, args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
+		return e.ComplexityRoot.Query.Collections(childComplexity, args["namespace"].(string), args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
 
 	case "Query.namespace":
 		if e.ComplexityRoot.Query.Namespace == nil {
@@ -2125,20 +2288,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ReorderCategoriesPayload.ClientMutationID(childComplexity), true
-
-	case "ReorderCollectionsPayload.clientMutationId":
-		if e.ComplexityRoot.ReorderCollectionsPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ReorderCollectionsPayload.ClientMutationID(childComplexity), true
-
-	case "ReorderCollectionsPayload.collections":
-		if e.ComplexityRoot.ReorderCollectionsPayload.Collections == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ReorderCollectionsPayload.Collections(childComplexity), true
 
 	case "Repository.createdAt":
 		if e.ComplexityRoot.Repository.CreatedAt == nil {
@@ -2287,6 +2436,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ResolvedCategoryTaxonomy.ProductCount(childComplexity), true
 
+	case "ResolvedCollectionDefinition.memberCount":
+		if e.ComplexityRoot.ResolvedCollectionDefinition.MemberCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedCollectionDefinition.MemberCount(childComplexity), true
+
 	case "ResolvedFileDefinition.contentType":
 		if e.ComplexityRoot.ResolvedFileDefinition.ContentType == nil {
 			break
@@ -2385,13 +2541,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateCategoryPayload.Conflict(childComplexity), true
 
-	case "UpdateCollectionPayload.clientMutationId":
-		if e.ComplexityRoot.UpdateCollectionPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.UpdateCollectionPayload.ClientMutationID(childComplexity), true
-
 	case "UpdateCollectionPayload.collection":
 		if e.ComplexityRoot.UpdateCollectionPayload.Collection == nil {
 			break
@@ -2452,6 +2601,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCategoryBy,
 		ec.unmarshalInputCategoryNamespacePath,
 		ec.unmarshalInputCollectionBy,
+		ec.unmarshalInputCollectionNamespacePath,
 		ec.unmarshalInputCreateCategoryInput,
 		ec.unmarshalInputCreateCollectionInput,
 		ec.unmarshalInputCreateNamespaceInput,
@@ -2469,7 +2619,6 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputRefreshTokenInput,
 		ec.unmarshalInputRenameRepositoryInput,
 		ec.unmarshalInputReorderCategoriesInput,
-		ec.unmarshalInputReorderCollectionsInput,
 		ec.unmarshalInputRepositoryBy,
 		ec.unmarshalInputRepositoryNamespacePath,
 		ec.unmarshalInputTransferRepositoryInput,
@@ -3141,18 +3290,20 @@ type CategoryOptimisticLockConflict {
   diff: String!
 }
 `, BuiltIn: false},
-	{Name: "../../../../shared/schemas/collection.graphqls", Input: `# Collection Entity GraphQL Types
+	{Name: "../../../../shared/schemas/collection.graphqls", Input: `# Collection Entity GraphQL Types (Kubernetes-style resource envelope)
+# Replaces the legacy flat collection schema.
 
 extend type Query {
   """
-  Get collection by one unique selector.
+  Get a collection by one unique selector.
   """
   collection(by: CollectionBy!): Collection
 
   """
-  List collections with Relay cursor-based pagination
+  List collections with Relay cursor-based pagination, scoped to a namespace.
   """
   collections(
+    namespace: String!
     first: Int
     after: String
     last: Int
@@ -3161,55 +3312,67 @@ extend type Query {
 }
 
 extend type Mutation {
-
   """
-  Create a new collection
+  Deprecated: Collection resources are managed via git push.
+  This mutation always returns an informative error.
   """
   createCollection(input: CreateCollectionInput!): CreateCollectionPayload!
 
   """
-  Update an existing collection
+  Deprecated: Collection resources are managed via git push.
+  This mutation always returns an informative error.
   """
   updateCollection(input: UpdateCollectionInput!): UpdateCollectionPayload!
 
   """
-  Delete a collection
+  Deprecated: Collection resources are managed via git push.
+  This mutation always returns an informative error.
   """
   deleteCollection(input: DeleteCollectionInput!): DeleteCollectionPayload!
-
-  """
-  Reorder collections (drag-and-drop)
-  """
-  reorderCollections(input: ReorderCollectionsInput!): ReorderCollectionsPayload!
-
 }
 
 """
-Collection represents a curated grouping of products (flat, non-hierarchical)
+A Collection is a namespace-scoped catalog resource that groups products via
+a declarative label selector. Defined by git push; mutations are not supported.
 """
 type Collection implements Node {
   """
-  Globally unique identifier (format: coll_[base62])
+  Globally unique Relay ID (encodes the collection UID).
   """
   id: ID!
 
   """
-  Collection display name
+  API version. Always catalog.gitstore.dev/v1beta1.
   """
-  name: String!
+  apiVersion: String
 
   """
-  URL-friendly slug (unique)
+  Resource kind. Always Collection.
   """
-  slug: String!
+  kind: String
 
   """
-  Display order for collection listing
+  System-managed identity and metadata.
   """
-  displayOrder: Int!
+  metadata: CollectionObjectMeta!
 
   """
-  Products in this collection
+  Author-controlled specification: title, selector, and media.
+  """
+  spec: CollectionSpec!
+
+  """
+  System-computed status: conditions and member count.
+  """
+  status: CollectionStatus
+
+  """
+  Markdown body content (collection description).
+  """
+  body: String
+
+  """
+  Paginated connection of products matched by this collection's label selector.
   """
   products(
     first: Int
@@ -3217,361 +3380,250 @@ type Collection implements Node {
     last: Int
     before: String
   ): ProductConnection!
-
-  """
-  Markdown body content (collection description with rich formatting)
-  """
-  body: String
-
-  """
-  Creation timestamp
-  """
-  createdAt: DateTime!
-
-  """
-  Last modification timestamp
-  """
-  updatedAt: DateTime!
-
-  """
-  Number of products in this collection
-  """
-  productCount: Int!
 }
 
 """
-Edge type for Collection connection (Relay pattern)
+System-managed identity fields for a Collection resource.
+All fields are read-only; they are set and updated by the system.
 """
-type CollectionEdge {
+type CollectionObjectMeta {
   """
-  Cursor for pagination
-  """
-  cursor: String!
-
-  """
-  The collection node
-  """
-  node: Collection!
-}
-
-"""
-Connection type for paginated collections (Relay pattern)
-"""
-type CollectionConnection {
-  """
-  List of collection edges
-  """
-  edges: [CollectionEdge!]!
-
-  """
-  Pagination information
-  """
-  pageInfo: PageInfo!
-
-  """
-  Total count of collections
-  """
-  totalCount: Int!
-}
-
-# ============================================================================
-# Mutations
-# ============================================================================
-
-"""
-Input for creating a collection
-"""
-input CreateCollectionInput {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
-  Collection name
+  DNS-label name, unique within the namespace.
   """
   name: String!
 
   """
-  URL-friendly slug (must be unique)
+  Namespace identifier the collection belongs to.
   """
-  slug: String!
+  namespace: String
 
   """
-  Display order
+  Globally unique system-generated identifier.
   """
-  displayOrder: Int
+  uid: ID!
 
   """
-  Product IDs to include
+  Opaque concurrency token. Changes on every spec update.
   """
-  productIds: [ID!]
+  resourceVersion: String!
 
   """
-  Markdown body content
+  Monotonically increasing counter incremented on every spec change.
   """
-  body: String
+  generation: Int!
+
+  """
+  Timestamp of first admission.
+  """
+  creationTimestamp: DateTime!
+
+  """
+  Git revision of the last successful push (e.g. main@sha1:abc123).
+  """
+  revision: String
+
+  """
+  Author-supplied key-value labels.
+  """
+  labels: [KeyValuePair!]!
+
+  """
+  Author-supplied annotations.
+  """
+  annotations: [KeyValuePair!]!
 }
 
 """
-Payload for createCollection mutation
+Author-controlled specification for a Collection resource.
 """
+type CollectionSpec {
+  """
+  Human-readable display title for the collection.
+  """
+  title: String!
+
+  """
+  Label selector that determines collection membership.
+  An absent or empty selector yields zero members.
+  """
+  selector: LabelSelector
+
+  """
+  Media slots referencing File resources.
+  """
+  media: [MediaDefinition!]!
+}
+
+"""
+A label selector that matches products by their labels.
+matchLabels and matchExpressions are combined with logical AND.
+An empty selector (all fields absent) matches nothing.
+"""
+type LabelSelector {
+  """
+  Exact key-value pairs that must all be present on a product's labels.
+  """
+  matchLabels: [KeyValuePair!]!
+
+  """
+  Set-based requirements. All entries must be satisfied.
+  """
+  matchExpressions: [LabelSelectorRequirement!]!
+}
+
+"""
+A single label selector expression with set-based semantics.
+"""
+type LabelSelectorRequirement {
+  """
+  The label key this requirement applies to.
+  """
+  key: String!
+
+  """
+  The operator: IN, NOT_IN, EXISTS, or DOES_NOT_EXIST.
+  """
+  operator: LabelSelectorOperator!
+
+  """
+  The set of values. Required for IN and NOT_IN; must be empty for EXISTS and DOES_NOT_EXIST.
+  """
+  values: [String!]!
+}
+
+"""
+Operators supported in a LabelSelectorRequirement.
+"""
+enum LabelSelectorOperator {
+  IN
+  NOT_IN
+  EXISTS
+  DOES_NOT_EXIST
+}
+
+"""
+System-computed status for a Collection resource.
+"""
+type CollectionStatus {
+  """
+  Generation of the spec that this status was computed from.
+  """
+  observedGeneration: Int!
+
+  """
+  Git revision of the last successfully admitted push.
+  """
+  lastAppliedRevision: String
+
+  """
+  Condition set written at admission time.
+  """
+  conditions: [CollectionCondition!]!
+
+  """
+  Resolved membership snapshot (cached hint; collection.products is authoritative).
+  """
+  resolved: ResolvedCollectionDefinition
+}
+
+"""
+A single status condition on a Collection resource.
+"""
+type CollectionCondition {
+  type: String!
+  status: String!
+  observedGeneration: Int
+  reason: String
+  message: String
+}
+
+"""
+Resolved membership information cached at last admission.
+"""
+type ResolvedCollectionDefinition {
+  """
+  Cached count of matching products at last admission.
+  """
+  memberCount: Int!
+}
+
+"""
+Edge type for Collection connection (Relay pattern).
+"""
+type CollectionEdge {
+  cursor: String!
+  node: Collection!
+}
+
+"""
+Paginated connection for collections (Relay pattern).
+"""
+type CollectionConnection {
+  edges: [CollectionEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# ============================================================================
+# Minimal stub inputs (legacy mutations deprecated — managed via git push)
+# ============================================================================
+
+input CreateCollectionInput {
+  name: String!
+}
+
 type CreateCollectionPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
-  The created collection
-  """
   collection: Collection
 }
 
-"""
-Input for updating a collection
-"""
 input UpdateCollectionInput {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
-  Collection ID to update
-  """
   id: ID!
-
-  """
-  New name
-  """
-  name: String
-
-  """
-  New slug
-  """
-  slug: String
-
-  """
-  New display order
-  """
-  displayOrder: Int
-
-  """
-  New product IDs (replaces all)
-  """
-  productIds: [ID!]
-
-  """
-  New body content
-  """
-  body: String
-
-  """
-  TODO: Should this be a datatime?
-  Version for optimistic locking
-  """
-  version: DateTime!
 }
 
-"""
-Payload for updateCollection mutation
-"""
 type UpdateCollectionPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
-  The updated collection
-  """
   collection: Collection
-
-  """
-  Conflict information (if optimistic lock failed)
-  """
   conflict: CollectionOptimisticLockConflict
 }
 
-"""
-Input for deleting a collection
-"""
-input DeleteCollectionInput {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
+type CollectionOptimisticLockConflict {
+  current: Collection!
+}
 
-  """
-  Collection ID to delete
-  """
+input DeleteCollectionInput {
   id: ID!
 }
 
-"""
-Payload for deleteCollection mutation
-"""
 type DeleteCollectionPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
-  Deleted collection ID
-  """
   deletedCollectionId: ID
 }
 
-"""
-Input for reordering collections (drag-and-drop)
-"""
-input ReorderCollectionsInput {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
-  Ordered list of collection IDs
-  """
-  orderedIds: [ID!]!
-}
-
-"""
-Payload for reorderCollections mutation
-"""
-type ReorderCollectionsPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
-  Updated collections
-  """
-  collections: [Collection!]
-}
-
-"""
-Optimistic lock conflict for collection
-"""
-type CollectionOptimisticLockConflict {
-  """
-  TODO: Should this be a datetime?
-  Current version in database
-  """
-  currentVersion: DateTime!
-
-  """
-  TODO: Should this be a datetime?
-  Version client attempted to update
-  """
-  attemptedVersion: DateTime!
-
-  """
-  Current state of the collection
-  """
-  current: Collection!
-
-  """
-  Diff between current and attempted
-  """
-  diff: String!
-}
-
 # ============================================================================
-# Publish Mutation (shared across entities)
+# Publish / CatalogVersion (kept here for schema continuity)
 # ============================================================================
 
-"""
-Input for publishing catalog changes
-"""
 input PublishCatalogInput {
-  """
-  Client mutation ID (Relay pattern)
-  """
   clientMutationId: String
-
-  """
-  Release version tag (e.g., v1.0.0)
-  """
   version: String!
-
-  """
-  Release notes/commit message
-  """
   message: String!
 }
 
-"""
-Payload for publishCatalog mutation
-"""
 type PublishCatalogPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
   clientMutationId: String
-
-  """
-  New catalog version
-  """
   catalogVersion: CatalogVersion
 }
 
-"""
-Catalog version information
-"""
 type CatalogVersion {
-  """
-  Version tag (e.g., v1.0.0)
-  """
   tag: String!
-
-  """
-  Commit SHA
-  """
   commit: String!
-
-  """
-  Release timestamp
-  """
   publishedAt: DateTime!
-
-  """
-  Release message
-  """
   message: String
-
-  """
-  Statistics
-  """
   stats: CatalogStats!
 }
 
-"""
-Catalog statistics
-"""
 type CatalogStats {
-  """
-  Total products
-  """
   productCount: Int!
-
-  """
-  Total categories
-  """
   categoryCount: Int!
-
-  """
-  Total collections
-  """
   collectionCount: Int!
-
-  """
-  Number of orphaned product references
-  """
   orphanedReferences: Int!
 }
 `, BuiltIn: false},
@@ -4326,8 +4378,19 @@ input CategoryNamespacePath {
 Selector for looking up a collection by exactly one unique key.
 """
 input CollectionBy @oneOf {
+  """Look up by globally unique Relay ID (encodes the collection UID)."""
   id: ID
-  slug: String
+
+  """Look up by namespace identifier + collection name."""
+  namespacePath: CollectionNamespacePath
+}
+
+"""
+Composite selector: namespace identifier + collection name.
+"""
+input CollectionNamespacePath {
+  namespace: String!
+  name: String!
 }
 
 """
@@ -4558,24 +4621,38 @@ func (ec *executionContext) childFields_Collection(ctx context.Context, field gr
 	switch field.Name {
 	case "id":
 		return ec.fieldContext_Collection_id(ctx, field)
-	case "name":
-		return ec.fieldContext_Collection_name(ctx, field)
-	case "slug":
-		return ec.fieldContext_Collection_slug(ctx, field)
-	case "displayOrder":
-		return ec.fieldContext_Collection_displayOrder(ctx, field)
-	case "products":
-		return ec.fieldContext_Collection_products(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_Collection_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_Collection_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_Collection_metadata(ctx, field)
+	case "spec":
+		return ec.fieldContext_Collection_spec(ctx, field)
+	case "status":
+		return ec.fieldContext_Collection_status(ctx, field)
 	case "body":
 		return ec.fieldContext_Collection_body(ctx, field)
-	case "createdAt":
-		return ec.fieldContext_Collection_createdAt(ctx, field)
-	case "updatedAt":
-		return ec.fieldContext_Collection_updatedAt(ctx, field)
-	case "productCount":
-		return ec.fieldContext_Collection_productCount(ctx, field)
+	case "products":
+		return ec.fieldContext_Collection_products(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Collection", field.Name)
+}
+
+func (ec *executionContext) childFields_CollectionCondition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_CollectionCondition_type(ctx, field)
+	case "status":
+		return ec.fieldContext_CollectionCondition_status(ctx, field)
+	case "observedGeneration":
+		return ec.fieldContext_CollectionCondition_observedGeneration(ctx, field)
+	case "reason":
+		return ec.fieldContext_CollectionCondition_reason(ctx, field)
+	case "message":
+		return ec.fieldContext_CollectionCondition_message(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CollectionCondition", field.Name)
 }
 
 func (ec *executionContext) childFields_CollectionConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4600,18 +4677,62 @@ func (ec *executionContext) childFields_CollectionEdge(ctx context.Context, fiel
 	return nil, fmt.Errorf("no field named %q was found under type CollectionEdge", field.Name)
 }
 
+func (ec *executionContext) childFields_CollectionObjectMeta(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_CollectionObjectMeta_name(ctx, field)
+	case "namespace":
+		return ec.fieldContext_CollectionObjectMeta_namespace(ctx, field)
+	case "uid":
+		return ec.fieldContext_CollectionObjectMeta_uid(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_CollectionObjectMeta_resourceVersion(ctx, field)
+	case "generation":
+		return ec.fieldContext_CollectionObjectMeta_generation(ctx, field)
+	case "creationTimestamp":
+		return ec.fieldContext_CollectionObjectMeta_creationTimestamp(ctx, field)
+	case "revision":
+		return ec.fieldContext_CollectionObjectMeta_revision(ctx, field)
+	case "labels":
+		return ec.fieldContext_CollectionObjectMeta_labels(ctx, field)
+	case "annotations":
+		return ec.fieldContext_CollectionObjectMeta_annotations(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CollectionObjectMeta", field.Name)
+}
+
 func (ec *executionContext) childFields_CollectionOptimisticLockConflict(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "currentVersion":
-		return ec.fieldContext_CollectionOptimisticLockConflict_currentVersion(ctx, field)
-	case "attemptedVersion":
-		return ec.fieldContext_CollectionOptimisticLockConflict_attemptedVersion(ctx, field)
 	case "current":
 		return ec.fieldContext_CollectionOptimisticLockConflict_current(ctx, field)
-	case "diff":
-		return ec.fieldContext_CollectionOptimisticLockConflict_diff(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CollectionOptimisticLockConflict", field.Name)
+}
+
+func (ec *executionContext) childFields_CollectionSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "title":
+		return ec.fieldContext_CollectionSpec_title(ctx, field)
+	case "selector":
+		return ec.fieldContext_CollectionSpec_selector(ctx, field)
+	case "media":
+		return ec.fieldContext_CollectionSpec_media(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CollectionSpec", field.Name)
+}
+
+func (ec *executionContext) childFields_CollectionStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "observedGeneration":
+		return ec.fieldContext_CollectionStatus_observedGeneration(ctx, field)
+	case "lastAppliedRevision":
+		return ec.fieldContext_CollectionStatus_lastAppliedRevision(ctx, field)
+	case "conditions":
+		return ec.fieldContext_CollectionStatus_conditions(ctx, field)
+	case "resolved":
+		return ec.fieldContext_CollectionStatus_resolved(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CollectionStatus", field.Name)
 }
 
 func (ec *executionContext) childFields_CreateCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4626,8 +4747,6 @@ func (ec *executionContext) childFields_CreateCategoryPayload(ctx context.Contex
 
 func (ec *executionContext) childFields_CreateCollectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_CreateCollectionPayload_clientMutationId(ctx, field)
 	case "collection":
 		return ec.fieldContext_CreateCollectionPayload_collection(ctx, field)
 	}
@@ -4668,8 +4787,6 @@ func (ec *executionContext) childFields_DeleteCategoryPayload(ctx context.Contex
 
 func (ec *executionContext) childFields_DeleteCollectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_DeleteCollectionPayload_clientMutationId(ctx, field)
 	case "deletedCollectionId":
 		return ec.fieldContext_DeleteCollectionPayload_deletedCollectionId(ctx, field)
 	}
@@ -4716,6 +4833,28 @@ func (ec *executionContext) childFields_KeyValuePair(ctx context.Context, field 
 		return ec.fieldContext_KeyValuePair_value(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type KeyValuePair", field.Name)
+}
+
+func (ec *executionContext) childFields_LabelSelector(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "matchLabels":
+		return ec.fieldContext_LabelSelector_matchLabels(ctx, field)
+	case "matchExpressions":
+		return ec.fieldContext_LabelSelector_matchExpressions(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type LabelSelector", field.Name)
+}
+
+func (ec *executionContext) childFields_LabelSelectorRequirement(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "key":
+		return ec.fieldContext_LabelSelectorRequirement_key(ctx, field)
+	case "operator":
+		return ec.fieldContext_LabelSelectorRequirement_operator(ctx, field)
+	case "values":
+		return ec.fieldContext_LabelSelectorRequirement_values(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type LabelSelectorRequirement", field.Name)
 }
 
 func (ec *executionContext) childFields_LoginPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4998,16 +5137,6 @@ func (ec *executionContext) childFields_ReorderCategoriesPayload(ctx context.Con
 	return nil, fmt.Errorf("no field named %q was found under type ReorderCategoriesPayload", field.Name)
 }
 
-func (ec *executionContext) childFields_ReorderCollectionsPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_ReorderCollectionsPayload_clientMutationId(ctx, field)
-	case "collections":
-		return ec.fieldContext_ReorderCollectionsPayload_collections(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type ReorderCollectionsPayload", field.Name)
-}
-
 func (ec *executionContext) childFields_Repository(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "id":
@@ -5080,6 +5209,14 @@ func (ec *executionContext) childFields_ResolvedCategoryTaxonomy(ctx context.Con
 	return nil, fmt.Errorf("no field named %q was found under type ResolvedCategoryTaxonomy", field.Name)
 }
 
+func (ec *executionContext) childFields_ResolvedCollectionDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "memberCount":
+		return ec.fieldContext_ResolvedCollectionDefinition_memberCount(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ResolvedCollectionDefinition", field.Name)
+}
+
 func (ec *executionContext) childFields_ResolvedFileDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "name":
@@ -5134,8 +5271,6 @@ func (ec *executionContext) childFields_UpdateCategoryPayload(ctx context.Contex
 
 func (ec *executionContext) childFields_UpdateCollectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_UpdateCollectionPayload_clientMutationId(ctx, field)
 	case "collection":
 		return ec.fieldContext_UpdateCollectionPayload_collection(ctx, field)
 	case "conflict":

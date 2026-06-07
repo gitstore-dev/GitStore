@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	gomemdb "github.com/hashicorp/go-memdb"
 )
@@ -346,13 +347,9 @@ func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.
 
 func (m *memdbDatastore) CreateCollection(_ context.Context, c *datastore.Collection) error {
 	txn := m.db.Txn(true)
-	if raw, _ := txn.First("collection", "id", c.ID); raw != nil {
+	if raw, _ := txn.First("collection", "name_namespace", c.Namespace, c.Name); raw != nil {
 		txn.Abort()
-		return fmt.Errorf("%w: collection id %s", datastore.ErrAlreadyExists, c.ID)
-	}
-	if raw, _ := txn.First("collection", "slug", c.Slug); raw != nil {
-		txn.Abort()
-		return fmt.Errorf("%w: collection slug %s", datastore.ErrAlreadyExists, c.Slug)
+		return fmt.Errorf("%w: collection %s/%s", datastore.ErrAlreadyExists, c.Namespace, c.Name)
 	}
 	if err := txn.Insert("collection", c); err != nil {
 		txn.Abort()
@@ -362,30 +359,30 @@ func (m *memdbDatastore) CreateCollection(_ context.Context, c *datastore.Collec
 	return nil
 }
 
-func (m *memdbDatastore) GetCollection(_ context.Context, id string) (*datastore.Collection, error) {
+func (m *memdbDatastore) GetCollection(_ context.Context, uid string) (*datastore.Collection, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
-	raw, err := txn.First("collection", "id", id)
+	raw, err := txn.First("collection", "id", uid)
 	if err != nil || raw == nil {
 		return nil, notFoundOrErr(err)
 	}
 	return raw.(*datastore.Collection), nil
 }
 
-func (m *memdbDatastore) GetCollectionBySlug(_ context.Context, slug string) (*datastore.Collection, error) {
+func (m *memdbDatastore) GetCollectionByName(_ context.Context, namespace, name string) (*datastore.Collection, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
-	raw, err := txn.First("collection", "slug", slug)
+	raw, err := txn.First("collection", "name_namespace", namespace, name)
 	if err != nil || raw == nil {
 		return nil, notFoundOrErr(err)
 	}
 	return raw.(*datastore.Collection), nil
 }
 
-func (m *memdbDatastore) ListCollections(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
+func (m *memdbDatastore) ListCollections(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
-	it, err := txn.Get("collection", "id")
+	it, err := txn.Get("collection", "namespace", namespace)
 	if err != nil {
 		return nil, fmt.Errorf("memdb: list collections: %w", err)
 	}
@@ -394,15 +391,15 @@ func (m *memdbDatastore) ListCollections(_ context.Context, page datastore.PageP
 		all = append(all, obj.(*datastore.Collection))
 	}
 	return paginateSlice(all, page, func(c *datastore.Collection) (time.Time, string) {
-		return c.CreatedAt, c.ID
+		return c.CreationTimestamp, c.UID
 	}), nil
 }
 
 func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collection) error {
 	txn := m.db.Txn(true)
-	if raw, _ := txn.First("collection", "id", c.ID); raw == nil {
+	if raw, _ := txn.First("collection", "name_namespace", c.Namespace, c.Name); raw == nil {
 		txn.Abort()
-		return fmt.Errorf("%w: collection id %s", datastore.ErrNotFound, c.ID)
+		return fmt.Errorf("%w: collection %s/%s", datastore.ErrNotFound, c.Namespace, c.Name)
 	}
 	if err := txn.Insert("collection", c); err != nil {
 		txn.Abort()
@@ -412,19 +409,21 @@ func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collec
 	return nil
 }
 
-func (m *memdbDatastore) DeleteCollection(_ context.Context, id string) error {
-	txn := m.db.Txn(true)
-	raw, _ := txn.First("collection", "id", id)
-	if raw == nil {
-		txn.Abort()
-		return fmt.Errorf("%w: collection id %s", datastore.ErrNotFound, id)
+func (m *memdbDatastore) ListProductsByLabelSelector(_ context.Context, namespace string, selector catalog.LabelSelector) ([]*datastore.Product, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	it, err := txn.Get("product", "namespace", namespace)
+	if err != nil {
+		return nil, fmt.Errorf("memdb: list products by selector: %w", err)
 	}
-	if err := txn.Delete("collection", raw); err != nil {
-		txn.Abort()
-		return fmt.Errorf("memdb: delete collection: %w", err)
+	var result []*datastore.Product
+	for obj := it.Next(); obj != nil; obj = it.Next() {
+		p := obj.(*datastore.Product)
+		if catalog.MatchesLabels(&selector, p.Labels) {
+			result = append(result, p)
+		}
 	}
-	txn.Commit()
-	return nil
+	return result, nil
 }
 
 // ── Namespace ─────────────────────────────────────────────────────────────────

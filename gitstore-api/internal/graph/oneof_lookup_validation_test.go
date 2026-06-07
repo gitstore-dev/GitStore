@@ -58,7 +58,7 @@ func TestLookupOneOfSelectorsValidateExactlyOneKey(t *testing.T) {
 		natural   string
 		selection string
 	}{
-		{field: "collection", natural: `slug: "collection-1"`, selection: "id"},
+		{field: "collection", natural: `namespacePath: {namespace: "my-store", name: "collection-1"}`, selection: "id"},
 		{field: "namespace", natural: `identifier: "namespace-1"`, selection: "id"},
 	}
 

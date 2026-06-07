@@ -43,6 +43,70 @@ func buildPageInfo[T any](result *datastore.PageResult[T], cursorFn func(*T) str
 	return pi
 }
 
+// BuildProductConnectionFromSlice builds a paginated ProductConnection from a flat slice.
+// It applies cursor-based keyset pagination (after/before) and honours first/last limits.
+// Products must be pre-sorted by (CreationTimestamp DESC, UID DESC) for cursor seeks to be stable.
+func BuildProductConnectionFromSlice(products []*datastore.Product, params datastore.PageParams) *model.ProductConnection {
+	// Apply cursor filter
+	if params.After != "" {
+		if c, err := DecodeKeysetCursor(params.After); err == nil {
+			for i, p := range products {
+				if p.CreationTimestamp.Equal(c.CreatedAt) && p.UID == c.ID {
+					products = products[i+1:]
+					break
+				}
+			}
+		}
+	} else if params.Before != "" {
+		if c, err := DecodeKeysetCursor(params.Before); err == nil {
+			for i, p := range products {
+				if p.CreationTimestamp.Equal(c.CreatedAt) && p.UID == c.ID {
+					products = products[:i]
+					break
+				}
+			}
+		}
+	}
+
+	totalFiltered := len(products)
+	limit := params.Limit()
+	hasNext, hasPrevious := false, false
+
+	if params.Last > 0 {
+		if len(products) > limit {
+			products = products[len(products)-limit:]
+			hasPrevious = true
+		}
+		hasNext = params.Before != ""
+	} else {
+		if len(products) > limit {
+			products = products[:limit]
+			hasNext = true
+		}
+		hasPrevious = params.After != ""
+	}
+
+	edges := make([]*model.ProductEdge, len(products))
+	for i, p := range products {
+		edges[i] = &model.ProductEdge{
+			Cursor: EncodeKeysetCursor(p.CreationTimestamp, p.UID),
+			Node:   DatastoreProductToGraphQL(p),
+		}
+	}
+	pi := &model.PageInfo{HasNextPage: hasNext, HasPreviousPage: hasPrevious}
+	if len(products) > 0 {
+		sc := EncodeKeysetCursor(products[0].CreationTimestamp, products[0].UID)
+		ec := EncodeKeysetCursor(products[len(products)-1].CreationTimestamp, products[len(products)-1].UID)
+		pi.StartCursor = &sc
+		pi.EndCursor = &ec
+	}
+	return &model.ProductConnection{
+		Edges:      edges,
+		PageInfo:   pi,
+		TotalCount: int32(totalFiltered),
+	}
+}
+
 // BuildProductConnection converts a PageResult[Product] into a GraphQL ProductConnection.
 func BuildProductConnection(result *datastore.PageResult[datastore.Product]) *model.ProductConnection {
 	edges := make([]*model.ProductEdge, len(result.Items))
@@ -80,14 +144,14 @@ func BuildCollectionConnection(result *datastore.PageResult[datastore.Collection
 	edges := make([]*model.CollectionEdge, len(result.Items))
 	for i, c := range result.Items {
 		edges[i] = &model.CollectionEdge{
-			Cursor: EncodeKeysetCursor(c.CreatedAt, c.ID),
+			Cursor: EncodeKeysetCursor(c.CreationTimestamp, c.UID),
 			Node:   DatastoreCollectionToGraphQL(c),
 		}
 	}
 	return &model.CollectionConnection{
 		Edges:      edges,
 		TotalCount: result.TotalCount,
-		PageInfo:   buildPageInfo(result, func(c *datastore.Collection) string { return EncodeKeysetCursor(c.CreatedAt, c.ID) }),
+		PageInfo:   buildPageInfo(result, func(c *datastore.Collection) string { return EncodeKeysetCursor(c.CreationTimestamp, c.UID) }),
 	}
 }
 
