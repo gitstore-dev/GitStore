@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
@@ -139,23 +140,23 @@ func (d *InstrumentedDatastore) CreateCollection(ctx context.Context, c *Collect
 	return err
 }
 
-func (d *InstrumentedDatastore) GetCollection(ctx context.Context, id string) (*Collection, error) {
+func (d *InstrumentedDatastore) GetCollection(ctx context.Context, uid string) (*Collection, error) {
 	start := time.Now()
-	v, err := d.next.GetCollection(ctx, id)
+	v, err := d.next.GetCollection(ctx, uid)
 	d.observe("GetCollection", start, err)
 	return v, err
 }
 
-func (d *InstrumentedDatastore) GetCollectionBySlug(ctx context.Context, slug string) (*Collection, error) {
+func (d *InstrumentedDatastore) GetCollectionByName(ctx context.Context, namespace, name string) (*Collection, error) {
 	start := time.Now()
-	v, err := d.next.GetCollectionBySlug(ctx, slug)
-	d.observe("GetCollectionBySlug", start, err)
+	v, err := d.next.GetCollectionByName(ctx, namespace, name)
+	d.observe("GetCollectionByName", start, err)
 	return v, err
 }
 
-func (d *InstrumentedDatastore) ListCollections(ctx context.Context, params PageParams) (*PageResult[Collection], error) {
+func (d *InstrumentedDatastore) ListCollections(ctx context.Context, namespace string, params PageParams) (*PageResult[Collection], error) {
 	start := time.Now()
-	v, err := d.next.ListCollections(ctx, params)
+	v, err := d.next.ListCollections(ctx, namespace, params)
 	d.observe("ListCollections", start, err)
 	return v, err
 }
@@ -167,11 +168,11 @@ func (d *InstrumentedDatastore) UpdateCollection(ctx context.Context, c *Collect
 	return err
 }
 
-func (d *InstrumentedDatastore) DeleteCollection(ctx context.Context, id string) error {
+func (d *InstrumentedDatastore) ListProductsByLabelSelector(ctx context.Context, namespace string, selector catalog.LabelSelector) ([]*Product, error) {
 	start := time.Now()
-	err := d.next.DeleteCollection(ctx, id)
-	d.observe("DeleteCollection", start, err)
-	return err
+	v, err := d.next.ListProductsByLabelSelector(ctx, namespace, selector)
+	d.observe("ListProductsByLabelSelector", start, err)
+	return v, err
 }
 
 // ── Namespace ─────────────────────────────────────────────────────────────

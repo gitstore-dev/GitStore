@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gocql/gocql"
@@ -33,6 +34,8 @@ type scyllaDatastore struct {
 	categoryTaxonomyByNameTable *table.Table
 	categoryTaxonomyByUIDTable  *table.Table
 	collectionTable             *table.Table
+	collectionByNameTable       *table.Table
+	collectionByUIDTable        *table.Table
 	namespaceTable              *table.Table
 	repositoryTable             *table.Table
 	namespaceMappingTable       *table.Table
@@ -113,15 +116,35 @@ type categoryTaxonomyUIDRow struct {
 }
 
 type collectionRow struct {
-	Bucket       string     `db:"bucket"`
-	CreatedAt    time.Time  `db:"created_at"`
-	ID           gocql.UUID `db:"id"`
-	Name         string     `db:"name"`
-	Slug         string     `db:"slug"`
-	DisplayOrder int        `db:"display_order"`
-	ProductIDs   []string   `db:"product_ids"`
-	UpdatedAt    time.Time  `db:"updated_at"`
-	Body         string     `db:"body"`
+	Namespace         string            `db:"namespace"`
+	CreationTimestamp time.Time         `db:"creation_timestamp"`
+	UID               gocql.UUID        `db:"uid"`
+	Name              string            `db:"name"`
+	APIVersion        string            `db:"api_version"`
+	Kind              string            `db:"kind"`
+	Generation        int64             `db:"generation"`
+	ResourceVersion   string            `db:"resource_version"`
+	Revision          string            `db:"revision"`
+	Labels            map[string]string `db:"labels"`
+	Annotations       map[string]string `db:"annotations"`
+	GitCommitSHA      string            `db:"git_commit_sha"`
+	GitRef            string            `db:"git_ref"`
+	Spec              string            `db:"spec"`
+	Body              string            `db:"body"`
+	Status            string            `db:"status"`
+}
+
+type collectionNameRow struct {
+	Namespace         string     `db:"namespace"`
+	Name              string     `db:"name"`
+	UID               gocql.UUID `db:"uid"`
+	CreationTimestamp time.Time  `db:"creation_timestamp"`
+}
+
+type collectionUIDRow struct {
+	UID               gocql.UUID `db:"uid"`
+	Namespace         string     `db:"namespace"`
+	CreationTimestamp time.Time  `db:"creation_timestamp"`
 }
 
 type namespaceRow struct {
@@ -180,6 +203,8 @@ func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) 
 		categoryTaxonomyByNameTable: CategoryTaxonomyByName,
 		categoryTaxonomyByUIDTable:  CategoryTaxonomyByUID,
 		collectionTable:             Collection,
+		collectionByNameTable:       CollectionByName,
+		collectionByUIDTable:        CollectionByUID,
 		namespaceTable:              Namespace,
 		repositoryTable:             Repository,
 		namespaceMappingTable:       NamespaceMapping,
@@ -503,65 +528,80 @@ func (s *scyllaDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *datasto
 // ── Collection ────────────────────────────────────────────────────────────────
 
 func (s *scyllaDatastore) CreateCollection(ctx context.Context, c *datastore.Collection) error {
-	if _, err := s.GetCollection(ctx, c.ID); err == nil {
-		return fmt.Errorf("%w: collection id %s", datastore.ErrAlreadyExists, c.ID)
+	if _, err := s.GetCollection(ctx, c.UID); err == nil {
+		return fmt.Errorf("%w: collection uid %s", datastore.ErrAlreadyExists, c.UID)
 	}
-	if existing, err := s.GetCollectionBySlug(ctx, c.Slug); err == nil && existing.ID != c.ID {
-		return fmt.Errorf("%w: collection slug %s", datastore.ErrAlreadyExists, c.Slug)
+	if _, err := s.GetCollectionByName(ctx, c.Namespace, c.Name); err == nil {
+		return fmt.Errorf("%w: collection %s/%s", datastore.ErrAlreadyExists, c.Namespace, c.Name)
 	}
-	now := time.Now().UTC().Truncate(time.Millisecond)
-	if c.CreatedAt.IsZero() {
-		c.CreatedAt = now
-	}
-	if c.UpdatedAt.IsZero() {
-		c.UpdatedAt = now
+	if c.CreationTimestamp.IsZero() {
+		c.CreationTimestamp = time.Now().UTC().Truncate(time.Millisecond)
 	}
 	row := toCollectionRow(c)
-	stmt, names := s.collectionTable.Insert()
-	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
+
+	insNS, _ := s.collectionTable.Insert()
+	insName, _ := s.collectionByNameTable.Insert()
+	insUID, _ := s.collectionByUIDTable.Insert()
+
+	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
+	b.Query(insNS, row.Namespace, row.CreationTimestamp, row.UID, row.Name, row.APIVersion, row.Kind,
+		row.Generation, row.ResourceVersion, row.Revision, row.Labels, row.Annotations,
+		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
+	b.Query(insName, row.Namespace, row.Name, row.UID, row.CreationTimestamp)
+	b.Query(insUID, row.UID, row.Namespace, row.CreationTimestamp)
+	if err := s.session.ExecuteBatch(b); err != nil {
 		return fmt.Errorf("scylla: create collection: %w", err)
 	}
 	return nil
 }
 
-func (s *scyllaDatastore) GetCollection(_ context.Context, id string) (*datastore.Collection, error) {
-	uid, err := gocql.ParseUUID(id)
+func (s *scyllaDatastore) GetCollection(_ context.Context, uid string) (*datastore.Collection, error) {
+	parsedUID, err := gocql.ParseUUID(uid)
 	if err != nil {
-		return nil, fmt.Errorf("%w: invalid collection id %s", datastore.ErrNotFound, id)
+		return nil, fmt.Errorf("%w: invalid collection uid %s", datastore.ErrNotFound, uid)
 	}
-	stmt, names := qb.Select("collections").
-		Columns(s.collectionTable.Metadata().Columns...).
-		Where(qb.Eq("id")).
-		Limit(1).
-		ToCql()
-	var row collectionRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"id": uid}).GetRelease(&row); err != nil {
+	getUID, names := s.collectionByUIDTable.Get()
+	var uidRow collectionUIDRow
+	if err := s.session.Query(getUID, names).BindMap(qb.M{"uid": parsedUID}).GetRelease(&uidRow); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, fmt.Errorf("%w: collection id %s", datastore.ErrNotFound, id)
+			return nil, fmt.Errorf("%w: collection uid %s", datastore.ErrNotFound, uid)
 		}
-		return nil, fmt.Errorf("scylla: get collection: %w", err)
+		return nil, fmt.Errorf("scylla: get collection (uid lookup): %w", err)
+	}
+	return s.getCollectionByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
+}
+
+func (s *scyllaDatastore) GetCollectionByName(_ context.Context, namespace, name string) (*datastore.Collection, error) {
+	getName, nameNames := s.collectionByNameTable.Get()
+	var nameRow collectionNameRow
+	if err := s.session.Query(getName, nameNames).BindMap(qb.M{"namespace": namespace, "name": name}).GetRelease(&nameRow); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, fmt.Errorf("%w: collection %s/%s", datastore.ErrNotFound, namespace, name)
+		}
+		return nil, fmt.Errorf("scylla: get collection by name: %w", err)
+	}
+	return s.getCollectionByKey(nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
+}
+
+func (s *scyllaDatastore) getCollectionByKey(namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.Collection, error) {
+	cols := strings.Join(s.collectionTable.Metadata().Columns, ", ")
+	stmt := fmt.Sprintf(
+		"SELECT %s FROM collection WHERE namespace = ? AND creation_timestamp = ? AND uid = ?",
+		cols,
+	)
+	var row collectionRow
+	if err := s.session.Query(stmt, nil).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, fmt.Errorf("%w: collection namespace=%s uid=%s", datastore.ErrNotFound, namespace, uid)
+		}
+		return nil, fmt.Errorf("scylla: get collection by key: %w", err)
 	}
 	return fromCollectionRow(&row), nil
 }
 
-func (s *scyllaDatastore) GetCollectionBySlug(_ context.Context, slug string) (*datastore.Collection, error) {
-	stmt, names := qb.Select("collections").
-		Columns(s.collectionTable.Metadata().Columns...).
-		Where(qb.Eq("slug")).
-		ToCql()
-	var row collectionRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"slug": slug}).GetRelease(&row); err != nil {
-		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, fmt.Errorf("%w: collection slug %s", datastore.ErrNotFound, slug)
-		}
-		return nil, fmt.Errorf("scylla: get collection by slug: %w", err)
-	}
-	return fromCollectionRow(&row), nil
-}
-
-func (s *scyllaDatastore) ListCollections(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
+func (s *scyllaDatastore) ListCollections(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
 	limit := page.Limit()
-	pq := buildPaginatedSelect(s.collectionTable, page, "bucket", BucketAll, defaultClusterKeys, nil, nil)
+	pq := buildPaginatedSelect(s.collectionTable, page, "namespace", namespace, collectionClusterKeys, nil, nil)
 
 	var rows []collectionRow
 	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
@@ -572,43 +612,53 @@ func (s *scyllaDatastore) ListCollections(_ context.Context, page datastore.Page
 		reverseRows(rows)
 	}
 
-	cols := make([]*datastore.Collection, len(rows))
+	items := make([]*datastore.Collection, len(rows))
 	for i := range rows {
-		cols[i] = fromCollectionRow(&rows[i])
+		items[i] = fromCollectionRow(&rows[i])
 	}
 
-	return buildPageResult(cols, limit, page), nil
+	return buildPageResult(items, limit, page), nil
 }
 
 func (s *scyllaDatastore) UpdateCollection(ctx context.Context, c *datastore.Collection) error {
-	if _, err := s.GetCollection(ctx, c.ID); err != nil {
+	existing, err := s.GetCollectionByName(ctx, c.Namespace, c.Name)
+	if err != nil {
 		return err
 	}
 	row := toCollectionRow(c)
-	stmt, names := s.collectionTable.Update(
-		"name", "slug", "display_order", "product_ids",
-		"updated_at", "body",
+	row.CreationTimestamp = existing.CreationTimestamp
+	existingUID := mustParseUUID(existing.UID)
+
+	const updNS = "UPDATE collection SET api_version=?, kind=?, generation=?, resource_version=?, " +
+		"revision=?, labels=?, annotations=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
+		"WHERE namespace=? AND creation_timestamp=? AND uid=?"
+
+	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
+	b.Query(updNS,
+		row.APIVersion, row.Kind, row.Generation, row.ResourceVersion,
+		row.Revision, row.Labels, row.Annotations,
+		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
+		row.Namespace, row.CreationTimestamp, existingUID,
 	)
-	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
+	if err := s.session.ExecuteBatch(b); err != nil {
 		return fmt.Errorf("scylla: update collection: %w", err)
 	}
 	return nil
 }
 
-func (s *scyllaDatastore) DeleteCollection(ctx context.Context, id string) error {
-	col, err := s.GetCollection(ctx, id)
+func (s *scyllaDatastore) ListProductsByLabelSelector(ctx context.Context, namespace string, selector catalog.LabelSelector) ([]*datastore.Product, error) {
+	page := datastore.PageParams{First: 1000}
+	result, err := s.ListProducts(ctx, namespace, page)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	stmt, names := s.collectionTable.Delete()
-	if err := s.session.Query(stmt, names).BindMap(qb.M{
-		"bucket":     BucketAll,
-		"created_at": col.CreatedAt,
-		"id":         mustParseUUID(id),
-	}).ExecRelease(); err != nil {
-		return fmt.Errorf("scylla: delete collection: %w", err)
+	var matched []*datastore.Product
+	for _, p := range result.Items {
+		if catalog.MatchesLabels(&selector, p.Labels) {
+			matched = append(matched, p)
+		}
 	}
-	return nil
+	return matched, nil
 }
 
 // ── Namespace ─────────────────────────────────────────────────────────────────
@@ -827,28 +877,43 @@ func fromCategoryTaxonomyRow(r *categoryTaxonomyRow) *datastore.CategoryTaxonomy
 
 func toCollectionRow(c *datastore.Collection) *collectionRow {
 	return &collectionRow{
-		Bucket:       BucketAll,
-		CreatedAt:    c.CreatedAt,
-		ID:           mustParseUUID(c.ID),
-		Name:         c.Name,
-		Slug:         c.Slug,
-		DisplayOrder: c.DisplayOrder,
-		ProductIDs:   c.ProductIDs,
-		UpdatedAt:    c.UpdatedAt,
-		Body:         c.Body,
+		Namespace:         c.Namespace,
+		CreationTimestamp: c.CreationTimestamp,
+		UID:               mustParseUUID(c.UID),
+		Name:              c.Name,
+		APIVersion:        c.APIVersion,
+		Kind:              c.Kind,
+		Generation:        c.Generation,
+		ResourceVersion:   c.ResourceVersion,
+		Revision:          c.Revision,
+		Labels:            c.Labels,
+		Annotations:       c.Annotations,
+		GitCommitSHA:      c.GitCommitSHA,
+		GitRef:            c.GitRef,
+		Spec:              string(c.Spec),
+		Body:              c.Body,
+		Status:            string(c.Status),
 	}
 }
 
 func fromCollectionRow(r *collectionRow) *datastore.Collection {
 	return &datastore.Collection{
-		ID:           r.ID.String(),
-		Name:         r.Name,
-		Slug:         r.Slug,
-		DisplayOrder: r.DisplayOrder,
-		ProductIDs:   r.ProductIDs,
-		CreatedAt:    r.CreatedAt,
-		UpdatedAt:    r.UpdatedAt,
-		Body:         r.Body,
+		UID:               r.UID.String(),
+		Namespace:         r.Namespace,
+		Name:              r.Name,
+		APIVersion:        r.APIVersion,
+		Kind:              r.Kind,
+		Generation:        r.Generation,
+		ResourceVersion:   r.ResourceVersion,
+		CreationTimestamp: r.CreationTimestamp,
+		Revision:          r.Revision,
+		Labels:            r.Labels,
+		Annotations:       r.Annotations,
+		GitCommitSHA:      r.GitCommitSHA,
+		GitRef:            r.GitRef,
+		Spec:              jsonOrNil(r.Spec),
+		Body:              r.Body,
+		Status:            jsonOrNil(r.Status),
 	}
 }
 

@@ -44,7 +44,7 @@ func callerUsernameOrAnon(ctx context.Context, r *mutationResolver) string {
 func (r *Resolver) getCatalogStats(ctx context.Context) *model.CatalogStats {
 	products, _ := r.service.GetProducts(ctx, "", datastore.PageParams{First: 1})
 	categories, _ := r.service.GetCategoryTaxonomies(ctx, "", datastore.PageParams{First: 1})
-	collections, _ := r.service.GetCollections(ctx, datastore.PageParams{First: 1})
+	collections, _ := r.service.GetCollections(ctx, "", datastore.PageParams{First: 1})
 	var pc, cc, colc int32
 	if products != nil {
 		pc = products.TotalCount

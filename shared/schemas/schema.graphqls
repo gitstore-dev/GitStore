@@ -143,8 +143,19 @@ input CategoryNamespacePath {
 Selector for looking up a collection by exactly one unique key.
 """
 input CollectionBy @oneOf {
+  """Look up by globally unique Relay ID (encodes the collection UID)."""
   id: ID
-  slug: String
+
+  """Look up by namespace identifier + collection name."""
+  namespacePath: CollectionNamespacePath
+}
+
+"""
+Composite selector: namespace identifier + collection name.
+"""
+input CollectionNamespacePath {
+  namespace: String!
+  name: String!
 }
 
 """

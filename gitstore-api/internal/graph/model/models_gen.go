@@ -40,30 +40,19 @@ type CatalogObjectReference struct {
 	FieldPath       *string `json:"fieldPath,omitempty"`
 }
 
-// Catalog statistics
 type CatalogStats struct {
-	// Total products
-	ProductCount int32 `json:"productCount"`
-	// Total categories
-	CategoryCount int32 `json:"categoryCount"`
-	// Total collections
-	CollectionCount int32 `json:"collectionCount"`
-	// Number of orphaned product references
+	ProductCount       int32 `json:"productCount"`
+	CategoryCount      int32 `json:"categoryCount"`
+	CollectionCount    int32 `json:"collectionCount"`
 	OrphanedReferences int32 `json:"orphanedReferences"`
 }
 
-// Catalog version information
 type CatalogVersion struct {
-	// Version tag (e.g., v1.0.0)
-	Tag string `json:"tag"`
-	// Commit SHA
-	Commit string `json:"commit"`
-	// Release timestamp
-	PublishedAt time.Time `json:"publishedAt"`
-	// Release message
-	Message *string `json:"message,omitempty"`
-	// Statistics
-	Stats *CatalogStats `json:"stats"`
+	Tag         string        `json:"tag"`
+	Commit      string        `json:"commit"`
+	PublishedAt time.Time     `json:"publishedAt"`
+	Message     *string       `json:"message,omitempty"`
+	Stats       *CatalogStats `json:"stats"`
 }
 
 // Category represents a hierarchical classification system for products.
@@ -191,26 +180,25 @@ type CategoryTaxonomyStatus struct {
 	Resolved            *ResolvedCategoryTaxonomy `json:"resolved,omitempty"`
 }
 
-// Collection represents a curated grouping of products (flat, non-hierarchical)
+// A Collection is a namespace-scoped catalog resource that groups products via
+// a declarative label selector. Defined by git push; mutations are not supported.
 type Collection struct {
-	// Globally unique identifier (format: coll_[base62])
+	// Globally unique Relay ID (encodes the collection UID).
 	ID string `json:"id"`
-	// Collection display name
-	Name string `json:"name"`
-	// URL-friendly slug (unique)
-	Slug string `json:"slug"`
-	// Display order for collection listing
-	DisplayOrder int32 `json:"displayOrder"`
-	// Products in this collection
-	Products *ProductConnection `json:"products"`
-	// Markdown body content (collection description with rich formatting)
+	// API version. Always catalog.gitstore.dev/v1beta1.
+	APIVersion *string `json:"apiVersion,omitempty"`
+	// Resource kind. Always Collection.
+	Kind *string `json:"kind,omitempty"`
+	// System-managed identity and metadata.
+	Metadata *CollectionObjectMeta `json:"metadata"`
+	// Author-controlled specification: title, selector, and media.
+	Spec *CollectionSpec `json:"spec"`
+	// System-computed status: conditions and member count.
+	Status *CollectionStatus `json:"status,omitempty"`
+	// Markdown body content (collection description).
 	Body *string `json:"body,omitempty"`
-	// Creation timestamp
-	CreatedAt time.Time `json:"createdAt"`
-	// Last modification timestamp
-	UpdatedAt time.Time `json:"updatedAt"`
-	// Number of products in this collection
-	ProductCount int32 `json:"productCount"`
+	// Paginated connection of products matched by this collection's label selector.
+	Products *ProductConnection `json:"products"`
 }
 
 func (Collection) IsNode() {}
@@ -220,40 +208,88 @@ func (this Collection) GetID() string { return this.ID }
 
 // Selector for looking up a collection by exactly one unique key.
 type CollectionBy struct {
-	ID   *string `json:"id,omitempty"`
-	Slug *string `json:"slug,omitempty"`
+	// Look up by globally unique Relay ID (encodes the collection UID).
+	ID *string `json:"id,omitempty"`
+	// Look up by namespace identifier + collection name.
+	NamespacePath *CollectionNamespacePath `json:"namespacePath,omitempty"`
 }
 
-// Connection type for paginated collections (Relay pattern)
+// A single status condition on a Collection resource.
+type CollectionCondition struct {
+	Type               string  `json:"type"`
+	Status             string  `json:"status"`
+	ObservedGeneration *int32  `json:"observedGeneration,omitempty"`
+	Reason             *string `json:"reason,omitempty"`
+	Message            *string `json:"message,omitempty"`
+}
+
+// Paginated connection for collections (Relay pattern).
 type CollectionConnection struct {
-	// List of collection edges
-	Edges []*CollectionEdge `json:"edges"`
-	// Pagination information
-	PageInfo *PageInfo `json:"pageInfo"`
-	// Total count of collections
-	TotalCount int32 `json:"totalCount"`
+	Edges      []*CollectionEdge `json:"edges"`
+	PageInfo   *PageInfo         `json:"pageInfo"`
+	TotalCount int32             `json:"totalCount"`
 }
 
-// Edge type for Collection connection (Relay pattern)
+// Edge type for Collection connection (Relay pattern).
 type CollectionEdge struct {
-	// Cursor for pagination
-	Cursor string `json:"cursor"`
-	// The collection node
-	Node *Collection `json:"node"`
+	Cursor string      `json:"cursor"`
+	Node   *Collection `json:"node"`
 }
 
-// Optimistic lock conflict for collection
+// Composite selector: namespace identifier + collection name.
+type CollectionNamespacePath struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// System-managed identity fields for a Collection resource.
+// All fields are read-only; they are set and updated by the system.
+type CollectionObjectMeta struct {
+	// DNS-label name, unique within the namespace.
+	Name string `json:"name"`
+	// Namespace identifier the collection belongs to.
+	Namespace *string `json:"namespace,omitempty"`
+	// Globally unique system-generated identifier.
+	UID string `json:"uid"`
+	// Opaque concurrency token. Changes on every spec update.
+	ResourceVersion string `json:"resourceVersion"`
+	// Monotonically increasing counter incremented on every spec change.
+	Generation int32 `json:"generation"`
+	// Timestamp of first admission.
+	CreationTimestamp time.Time `json:"creationTimestamp"`
+	// Git revision of the last successful push (e.g. main@sha1:abc123).
+	Revision *string `json:"revision,omitempty"`
+	// Author-supplied key-value labels.
+	Labels []*KeyValuePair `json:"labels"`
+	// Author-supplied annotations.
+	Annotations []*KeyValuePair `json:"annotations"`
+}
+
 type CollectionOptimisticLockConflict struct {
-	// TODO: Should this be a datetime?
-	// Current version in database
-	CurrentVersion time.Time `json:"currentVersion"`
-	// TODO: Should this be a datetime?
-	// Version client attempted to update
-	AttemptedVersion time.Time `json:"attemptedVersion"`
-	// Current state of the collection
 	Current *Collection `json:"current"`
-	// Diff between current and attempted
-	Diff string `json:"diff"`
+}
+
+// Author-controlled specification for a Collection resource.
+type CollectionSpec struct {
+	// Human-readable display title for the collection.
+	Title string `json:"title"`
+	// Label selector that determines collection membership.
+	// An absent or empty selector yields zero members.
+	Selector *LabelSelector `json:"selector,omitempty"`
+	// Media slots referencing File resources.
+	Media []*MediaDefinition `json:"media"`
+}
+
+// System-computed status for a Collection resource.
+type CollectionStatus struct {
+	// Generation of the spec that this status was computed from.
+	ObservedGeneration int32 `json:"observedGeneration"`
+	// Git revision of the last successfully admitted push.
+	LastAppliedRevision *string `json:"lastAppliedRevision,omitempty"`
+	// Condition set written at admission time.
+	Conditions []*CollectionCondition `json:"conditions"`
+	// Resolved membership snapshot (cached hint; collection.products is authoritative).
+	Resolved *ResolvedCollectionDefinition `json:"resolved,omitempty"`
 }
 
 // Input for creating a category
@@ -280,27 +316,11 @@ type CreateCategoryPayload struct {
 	Category *Category `json:"category,omitempty"`
 }
 
-// Input for creating a collection
 type CreateCollectionInput struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// Collection name
 	Name string `json:"name"`
-	// URL-friendly slug (must be unique)
-	Slug string `json:"slug"`
-	// Display order
-	DisplayOrder *int32 `json:"displayOrder,omitempty"`
-	// Product IDs to include
-	ProductIds []string `json:"productIds,omitempty"`
-	// Markdown body content
-	Body *string `json:"body,omitempty"`
 }
 
-// Payload for createCollection mutation
 type CreateCollectionPayload struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// The created collection
 	Collection *Collection `json:"collection,omitempty"`
 }
 
@@ -363,19 +383,11 @@ type DeleteCategoryPayload struct {
 	OrphanedProductIds []string `json:"orphanedProductIds,omitempty"`
 }
 
-// Input for deleting a collection
 type DeleteCollectionInput struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// Collection ID to delete
 	ID string `json:"id"`
 }
 
-// Payload for deleteCollection mutation
 type DeleteCollectionPayload struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// Deleted collection ID
 	DeletedCollectionID *string `json:"deletedCollectionId,omitempty"`
 }
 
@@ -417,6 +429,26 @@ type FileReference struct {
 type KeyValuePair struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
+}
+
+// A label selector that matches products by their labels.
+// matchLabels and matchExpressions are combined with logical AND.
+// An empty selector (all fields absent) matches nothing.
+type LabelSelector struct {
+	// Exact key-value pairs that must all be present on a product's labels.
+	MatchLabels []*KeyValuePair `json:"matchLabels"`
+	// Set-based requirements. All entries must be satisfied.
+	MatchExpressions []*LabelSelectorRequirement `json:"matchExpressions"`
+}
+
+// A single label selector expression with set-based semantics.
+type LabelSelectorRequirement struct {
+	// The label key this requirement applies to.
+	Key string `json:"key"`
+	// The operator: IN, NOT_IN, EXISTS, or DOES_NOT_EXIST.
+	Operator LabelSelectorOperator `json:"operator"`
+	// The set of values. Required for IN and NOT_IN; must be empty for EXISTS and DOES_NOT_EXIST.
+	Values []string `json:"values"`
 }
 
 // Login mutation input (Relay pattern)
@@ -629,22 +661,15 @@ type ProductStatus struct {
 	Resolved            *ResolvedProductDefinition `json:"resolved,omitempty"`
 }
 
-// Input for publishing catalog changes
 type PublishCatalogInput struct {
-	// Client mutation ID (Relay pattern)
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// Release version tag (e.g., v1.0.0)
-	Version string `json:"version"`
-	// Release notes/commit message
-	Message string `json:"message"`
+	Version          string  `json:"version"`
+	Message          string  `json:"message"`
 }
 
-// Payload for publishCatalog mutation
 type PublishCatalogPayload struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// New catalog version
-	CatalogVersion *CatalogVersion `json:"catalogVersion,omitempty"`
+	ClientMutationID *string         `json:"clientMutationId,omitempty"`
+	CatalogVersion   *CatalogVersion `json:"catalogVersion,omitempty"`
 }
 
 type Query struct {
@@ -696,22 +721,6 @@ type ReorderCategoriesPayload struct {
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Updated categories
 	Categories []*Category `json:"categories,omitempty"`
-}
-
-// Input for reordering collections (drag-and-drop)
-type ReorderCollectionsInput struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// Ordered list of collection IDs
-	OrderedIds []string `json:"orderedIds"`
-}
-
-// Payload for reorderCollections mutation
-type ReorderCollectionsPayload struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// Updated collections
-	Collections []*Collection `json:"collections,omitempty"`
 }
 
 // A git repository. Has a stable internal identity (id) that is independent of
@@ -784,6 +793,12 @@ type ResolvedCategoryTaxonomy struct {
 	ProductCount int32  `json:"productCount"`
 }
 
+// Resolved membership information cached at last admission.
+type ResolvedCollectionDefinition struct {
+	// Cached count of matching products at last admission.
+	MemberCount int32 `json:"memberCount"`
+}
+
 type ResolvedFileDefinition struct {
 	Name        string  `json:"name"`
 	URL         string  `json:"url"`
@@ -843,35 +858,13 @@ type UpdateCategoryPayload struct {
 	Conflict *CategoryOptimisticLockConflict `json:"conflict,omitempty"`
 }
 
-// Input for updating a collection
 type UpdateCollectionInput struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// Collection ID to update
 	ID string `json:"id"`
-	// New name
-	Name *string `json:"name,omitempty"`
-	// New slug
-	Slug *string `json:"slug,omitempty"`
-	// New display order
-	DisplayOrder *int32 `json:"displayOrder,omitempty"`
-	// New product IDs (replaces all)
-	ProductIds []string `json:"productIds,omitempty"`
-	// New body content
-	Body *string `json:"body,omitempty"`
-	// TODO: Should this be a datatime?
-	// Version for optimistic locking
-	Version time.Time `json:"version"`
 }
 
-// Payload for updateCollection mutation
 type UpdateCollectionPayload struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// The updated collection
-	Collection *Collection `json:"collection,omitempty"`
-	// Conflict information (if optimistic lock failed)
-	Conflict *CollectionOptimisticLockConflict `json:"conflict,omitempty"`
+	Collection *Collection                       `json:"collection,omitempty"`
+	Conflict   *CollectionOptimisticLockConflict `json:"conflict,omitempty"`
 }
 
 // Authenticated user information
@@ -1000,6 +993,66 @@ func (e *InventoryStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e InventoryStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Operators supported in a LabelSelectorRequirement.
+type LabelSelectorOperator string
+
+const (
+	LabelSelectorOperatorIn           LabelSelectorOperator = "IN"
+	LabelSelectorOperatorNotIn        LabelSelectorOperator = "NOT_IN"
+	LabelSelectorOperatorExists       LabelSelectorOperator = "EXISTS"
+	LabelSelectorOperatorDoesNotExist LabelSelectorOperator = "DOES_NOT_EXIST"
+)
+
+var AllLabelSelectorOperator = []LabelSelectorOperator{
+	LabelSelectorOperatorIn,
+	LabelSelectorOperatorNotIn,
+	LabelSelectorOperatorExists,
+	LabelSelectorOperatorDoesNotExist,
+}
+
+func (e LabelSelectorOperator) IsValid() bool {
+	switch e {
+	case LabelSelectorOperatorIn, LabelSelectorOperatorNotIn, LabelSelectorOperatorExists, LabelSelectorOperatorDoesNotExist:
+		return true
+	}
+	return false
+}
+
+func (e LabelSelectorOperator) String() string {
+	return string(e)
+}
+
+func (e *LabelSelectorOperator) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = LabelSelectorOperator(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid LabelSelectorOperator", str)
+	}
+	return nil
+}
+
+func (e LabelSelectorOperator) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *LabelSelectorOperator) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e LabelSelectorOperator) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

@@ -51,6 +51,7 @@ type clusterKeys struct {
 
 var defaultClusterKeys = clusterKeys{TimestampCol: "created_at", IDCol: "id"}
 var productClusterKeys = clusterKeys{TimestampCol: "creation_timestamp", IDCol: "uid"}
+var collectionClusterKeys = clusterKeys{TimestampCol: "creation_timestamp", IDCol: "uid"}
 
 // buildPaginatedSelect constructs a CQL SELECT with keyset pagination.
 // It uses tuple inequality comparisons on the two clustering columns for forward

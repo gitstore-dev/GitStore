@@ -10,9 +10,11 @@ package datastore_contract_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -49,14 +51,12 @@ func newCategoryTaxonomy() *datastore.CategoryTaxonomy {
 }
 
 func newCollection() *datastore.Collection {
-	now := time.Now()
-	slug := "coll-" + newID()[:8]
 	return &datastore.Collection{
-		ID:        newID(),
-		Name:      "Test Collection",
-		Slug:      slug,
-		CreatedAt: now,
-		UpdatedAt: now,
+		UID:        newID(),
+		Namespace:  "test-store",
+		Name:       "coll-" + newID()[:8],
+		APIVersion: "catalog.gitstore.dev/v1beta1",
+		Kind:       "Collection",
 	}
 }
 
@@ -268,10 +268,10 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		c := newCollection()
 		require.NoError(t, ds.CreateCollection(ctx, c))
 
-		got, err := ds.GetCollection(ctx, c.ID)
+		got, err := ds.GetCollection(ctx, c.UID)
 		require.NoError(t, err)
-		assert.Equal(t, c.ID, got.ID)
-		assert.Equal(t, c.Slug, got.Slug)
+		assert.Equal(t, c.UID, got.UID)
+		assert.Equal(t, c.Name, got.Name)
 	})
 
 	t.Run("Collection/GetNotFound", func(t *testing.T) {
@@ -279,26 +279,26 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
-	t.Run("Collection/GetBySlug", func(t *testing.T) {
+	t.Run("Collection/GetByName", func(t *testing.T) {
 		c := newCollection()
 		require.NoError(t, ds.CreateCollection(ctx, c))
 
-		got, err := ds.GetCollectionBySlug(ctx, c.Slug)
+		got, err := ds.GetCollectionByName(ctx, c.Namespace, c.Name)
 		require.NoError(t, err)
-		assert.Equal(t, c.ID, got.ID)
+		assert.Equal(t, c.UID, got.UID)
 	})
 
-	t.Run("Collection/GetBySlugNotFound", func(t *testing.T) {
-		_, err := ds.GetCollectionBySlug(ctx, "slug-does-not-exist-"+newID()[:8])
+	t.Run("Collection/GetByNameNotFound", func(t *testing.T) {
+		_, err := ds.GetCollectionByName(ctx, "test-store", "name-does-not-exist-"+newID()[:8])
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
-	t.Run("Collection/DuplicateSlugReturnsAlreadyExists", func(t *testing.T) {
+	t.Run("Collection/DuplicateNameReturnsAlreadyExists", func(t *testing.T) {
 		c := newCollection()
 		require.NoError(t, ds.CreateCollection(ctx, c))
 
 		c2 := newCollection()
-		c2.Slug = c.Slug
+		c2.Name = c.Name
 		err := ds.CreateCollection(ctx, c2)
 		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
 	})
@@ -307,33 +307,83 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		c := newCollection()
 		require.NoError(t, ds.CreateCollection(ctx, c))
 
-		c.Name = "Renamed"
+		c.Body = "Updated description"
 		require.NoError(t, ds.UpdateCollection(ctx, c))
 
-		got, err := ds.GetCollection(ctx, c.ID)
+		got, err := ds.GetCollection(ctx, c.UID)
 		require.NoError(t, err)
-		assert.Equal(t, "Renamed", got.Name)
+		assert.Equal(t, "Updated description", got.Body)
 	})
 
 	t.Run("Collection/UpdateNotFound", func(t *testing.T) {
 		c := newCollection()
-		c.ID = newID()
+		c.UID = newID()
 		err := ds.UpdateCollection(ctx, c)
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
-	t.Run("Collection/Delete", func(t *testing.T) {
-		c := newCollection()
-		require.NoError(t, ds.CreateCollection(ctx, c))
-		require.NoError(t, ds.DeleteCollection(ctx, c.ID))
-
-		_, err := ds.GetCollection(ctx, c.ID)
-		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	t.Run("Collection/ListByNamespace", func(t *testing.T) {
+		ns := "list-ns-" + newID()[:8]
+		for i := 0; i < 3; i++ {
+			c := newCollection()
+			c.Namespace = ns
+			c.Name = fmt.Sprintf("coll-%d-%s", i, newID()[:6])
+			require.NoError(t, ds.CreateCollection(ctx, c))
+		}
+		result, err := ds.ListCollections(ctx, ns, datastore.PageParams{First: 10})
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, len(result.Items), 3)
 	})
 
-	t.Run("Collection/DeleteNotFound", func(t *testing.T) {
-		err := ds.DeleteCollection(ctx, newID())
-		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	// ── ListProductsByLabelSelector ───────────────────────────────────────────
+
+	t.Run("ListProductsByLabelSelector/MatchLabels", func(t *testing.T) {
+		ns := "sel-ns-" + newID()[:8]
+		p1 := newProduct()
+		p1.Namespace = ns
+		p1.Name = "sel-p1-" + newID()[:6]
+		p1.Labels = map[string]string{"env": "prod", "tier": "web"}
+		require.NoError(t, ds.CreateProduct(ctx, p1))
+
+		p2 := newProduct()
+		p2.Namespace = ns
+		p2.Name = "sel-p2-" + newID()[:6]
+		p2.Labels = map[string]string{"env": "staging"}
+		require.NoError(t, ds.CreateProduct(ctx, p2))
+
+		sel := catalog.LabelSelector{MatchLabels: map[string]string{"env": "prod"}}
+		result, err := ds.ListProductsByLabelSelector(ctx, ns, sel)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Equal(t, p1.UID, result[0].UID)
+	})
+
+	t.Run("ListProductsByLabelSelector/NoMatch", func(t *testing.T) {
+		ns := "sel-nomatch-" + newID()[:8]
+		p := newProduct()
+		p.Namespace = ns
+		p.Name = "product-" + newID()[:6]
+		p.Labels = map[string]string{"env": "dev"}
+		require.NoError(t, ds.CreateProduct(ctx, p))
+
+		sel := catalog.LabelSelector{MatchLabels: map[string]string{"env": "prod"}}
+		result, err := ds.ListProductsByLabelSelector(ctx, ns, sel)
+		require.NoError(t, err)
+		assert.Empty(t, result)
+	})
+
+	t.Run("ListProductsByLabelSelector/EmptySelector", func(t *testing.T) {
+		ns := "sel-empty-" + newID()[:8]
+		p := newProduct()
+		p.Namespace = ns
+		p.Name = "product-" + newID()[:6]
+		p.Labels = map[string]string{"env": "prod"}
+		require.NoError(t, ds.CreateProduct(ctx, p))
+
+		sel := catalog.LabelSelector{}
+		result, err := ds.ListProductsByLabelSelector(ctx, ns, sel)
+		require.NoError(t, err)
+		assert.Empty(t, result)
 	})
 
 	// ── Namespace ─────────────────────────────────────────────────────────────

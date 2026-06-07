@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -129,31 +130,36 @@ func (s *Service) GetCategoryTaxonomyByName(ctx context.Context, namespace, name
 	return c, nil
 }
 
-// GetCollections returns paginated collections.
-func (s *Service) GetCollections(ctx context.Context, params datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
-	result, err := s.store.ListCollections(ctx, params)
+// GetCollections returns paginated collections for a namespace.
+func (s *Service) GetCollections(ctx context.Context, namespace string, params datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
+	result, err := s.store.ListCollections(ctx, namespace, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list collections: %w", err)
 	}
 	return result, nil
 }
 
-// GetCollectionByID returns a collection by ID.
-func (s *Service) GetCollectionByID(ctx context.Context, id string) (*datastore.Collection, error) {
-	c, err := s.store.GetCollection(ctx, id)
+// GetCollectionByUID returns a collection by UID.
+func (s *Service) GetCollectionByUID(ctx context.Context, uid string) (*datastore.Collection, error) {
+	c, err := s.store.GetCollection(ctx, uid)
 	if err != nil {
-		return nil, fmt.Errorf("collection not found: %s", id)
+		return nil, fmt.Errorf("collection not found: %s", uid)
 	}
 	return c, nil
 }
 
-// GetCollectionBySlug returns a collection by slug.
-func (s *Service) GetCollectionBySlug(ctx context.Context, slug string) (*datastore.Collection, error) {
-	c, err := s.store.GetCollectionBySlug(ctx, slug)
+// GetCollectionByName returns a collection by namespace/name.
+func (s *Service) GetCollectionByName(ctx context.Context, namespace, name string) (*datastore.Collection, error) {
+	c, err := s.store.GetCollectionByName(ctx, namespace, name)
 	if err != nil {
-		return nil, fmt.Errorf("collection not found with slug: %s", slug)
+		return nil, fmt.Errorf("collection not found: %s/%s", namespace, name)
 	}
 	return c, nil
+}
+
+// ListProductsByLabelSelector returns products in a namespace matching the label selector.
+func (s *Service) ListProductsByLabelSelector(ctx context.Context, namespace string, selector catalog.LabelSelector) ([]*datastore.Product, error) {
+	return s.store.ListProductsByLabelSelector(ctx, namespace, selector)
 }
 
 // DeleteProduct deletes a product from the datastore by UID.
@@ -166,18 +172,12 @@ func (s *Service) DeleteProduct(ctx context.Context, uid string) error {
 }
 
 // CreateCollection creates a new collection in the datastore.
+// This is a transitional method; collection admission via git push is the primary path.
 func (s *Service) CreateCollection(ctx context.Context, input map[string]interface{}) (*datastore.Collection, error) {
-	now := time.Now()
 	c := &datastore.Collection{
-		ID:        uuid.New().String(),
+		UID:       uuid.New().String(),
 		Name:      getStringOrEmpty(input, "name"),
-		Slug:      getStringOrEmpty(input, "slug"),
 		Body:      getStringOrEmpty(input, "body"),
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	if order, ok := input["displayOrder"].(int); ok {
-		c.DisplayOrder = order
 	}
 	if err := s.store.CreateCollection(ctx, c); err != nil {
 		return nil, fmt.Errorf("failed to create collection: %w", err)
@@ -186,34 +186,22 @@ func (s *Service) CreateCollection(ctx context.Context, input map[string]interfa
 }
 
 // UpdateCollection updates an existing collection.
-func (s *Service) UpdateCollection(ctx context.Context, id string, input map[string]interface{}) (*datastore.Collection, error) {
-	existing, err := s.store.GetCollection(ctx, id)
+func (s *Service) UpdateCollection(ctx context.Context, uid string, input map[string]interface{}) (*datastore.Collection, error) {
+	existing, err := s.store.GetCollection(ctx, uid)
 	if err != nil {
-		return nil, fmt.Errorf("collection not found: %s", id)
+		return nil, fmt.Errorf("collection not found: %s", uid)
 	}
 	c := *existing
-	c.UpdatedAt = time.Now()
 	if name, ok := input["name"].(string); ok {
 		c.Name = name
 	}
-	if slug, ok := input["slug"].(string); ok {
-		c.Slug = slug
-	}
 	if body, ok := input["body"].(string); ok {
 		c.Body = body
-	}
-	if order, ok := input["displayOrder"].(int); ok {
-		c.DisplayOrder = order
 	}
 	if err := s.store.UpdateCollection(ctx, &c); err != nil {
 		return nil, fmt.Errorf("failed to update collection: %w", err)
 	}
 	return &c, nil
-}
-
-// DeleteCollection deletes a collection from the datastore.
-func (s *Service) DeleteCollection(ctx context.Context, id string) error {
-	return s.store.DeleteCollection(ctx, id)
 }
 
 // ── Namespace ─────────────────────────────────────────────────────────────────

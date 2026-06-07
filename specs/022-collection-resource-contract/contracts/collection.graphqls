@@ -1,5 +1,15 @@
-# Collection Entity GraphQL Types (Kubernetes-style resource envelope)
-# Replaces the legacy flat collection schema.
+# Contract: Collection GraphQL Schema
+#
+# Replaces shared/schemas/collection.graphqls entirely.
+# Legacy mutations (createCollection, updateCollection, deleteCollection,
+# reorderCollections) become stubs returning an informative error.
+#
+# New shared types (LabelSelector, LabelSelectorRequirement, LabelSelectorOperator)
+# are added to shared/schemas/schema.graphqls alongside existing shared input types.
+
+# ============================================================================
+# Queries
+# ============================================================================
 
 extend type Query {
   """
@@ -8,10 +18,9 @@ extend type Query {
   collection(by: CollectionBy!): Collection
 
   """
-  List collections with Relay cursor-based pagination, scoped to a namespace.
+  List collections with Relay cursor-based pagination, scoped to the current namespace.
   """
   collections(
-    namespace: String!
     first: Int
     after: String
     last: Int
@@ -19,25 +28,9 @@ extend type Query {
   ): CollectionConnection!
 }
 
-extend type Mutation {
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  createCollection(input: CreateCollectionInput!): CreateCollectionPayload!
-
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  updateCollection(input: UpdateCollectionInput!): UpdateCollectionPayload!
-
-  """
-  Deprecated: Collection resources are managed via git push.
-  This mutation always returns an informative error.
-  """
-  deleteCollection(input: DeleteCollectionInput!): DeleteCollectionPayload!
-}
+# ============================================================================
+# Collection Resource Envelope
+# ============================================================================
 
 """
 A Collection is a namespace-scoped catalog resource that groups products via
@@ -70,7 +63,7 @@ type Collection implements Node {
   spec: CollectionSpec!
 
   """
-  System-computed status: conditions and member count.
+  System-computed status: conditions, member count, and resolved media.
   """
   status: CollectionStatus
 
@@ -81,6 +74,9 @@ type Collection implements Node {
 
   """
   Paginated connection of products matched by this collection's label selector.
+  Uses snapshot-at-query-time cursor semantics: all pages in a single traversal
+  reflect membership as evaluated when the first page was requested.
+  Access control: same as reading the Collection itself.
   """
   products(
     first: Int
@@ -89,6 +85,10 @@ type Collection implements Node {
     before: String
   ): ProductConnection!
 }
+
+# ============================================================================
+# CollectionObjectMeta
+# ============================================================================
 
 """
 System-managed identity fields for a Collection resource.
@@ -106,7 +106,7 @@ type CollectionObjectMeta {
   namespace: String
 
   """
-  Globally unique system-generated identifier.
+  Globally unique system-generated identifier (UUID, encoded as Relay ID).
   """
   uid: ID!
 
@@ -139,7 +139,16 @@ type CollectionObjectMeta {
   Author-supplied annotations.
   """
   annotations: [KeyValuePair!]!
+
+  """
+  Owner references (reserved for future controller use).
+  """
+  ownerReferences: [OwnerReference!]!
 }
+
+# ============================================================================
+# CollectionSpec
+# ============================================================================
 
 """
 Author-controlled specification for a Collection resource.
@@ -161,6 +170,10 @@ type CollectionSpec {
   """
   media: [MediaDefinition!]!
 }
+
+# ============================================================================
+# LabelSelector (shared — also added to schema.graphqls)
+# ============================================================================
 
 """
 A label selector that matches products by their labels.
@@ -203,11 +216,30 @@ type LabelSelectorRequirement {
 Operators supported in a LabelSelectorRequirement.
 """
 enum LabelSelectorOperator {
+  """
+  Label value must be in the values list.
+  """
   IN
+
+  """
+  Label value must not be in the values list.
+  """
   NOT_IN
+
+  """
+  Label key must be present (any value).
+  """
   EXISTS
+
+  """
+  Label key must be absent.
+  """
   DOES_NOT_EXIST
 }
+
+# ============================================================================
+# CollectionStatus
+# ============================================================================
 
 """
 System-computed status for a Collection resource.
@@ -224,12 +256,13 @@ type CollectionStatus {
   lastAppliedRevision: String
 
   """
-  Condition set written at admission time.
+  Condition set: SelectorAccepted, MembersResolved, Ready.
   """
   conditions: [CollectionCondition!]!
 
   """
-  Resolved membership snapshot (cached hint; collection.products is authoritative).
+  Resolved membership snapshot computed at last admission.
+  memberCount is a cached hint; collection.products is the authoritative live source.
   """
   resolved: ResolvedCollectionDefinition
 }
@@ -238,22 +271,80 @@ type CollectionStatus {
 A single status condition on a Collection resource.
 """
 type CollectionCondition {
+  """
+  Condition type: SelectorAccepted | MembersResolved | Ready.
+  """
   type: String!
+
+  """
+  True or False.
+  """
   status: String!
+
+  """
+  Generation at which this condition was last evaluated.
+  """
   observedGeneration: Int
+
+  """
+  Machine-readable reason token.
+  """
   reason: String
+
+  """
+  Human-readable detail message.
+  """
   message: String
 }
 
 """
-Resolved membership information cached at last admission.
+Resolved membership information computed at last admission.
+memberCount may lag behind the live collection.products count
+if products were relabelled after the last push.
 """
 type ResolvedCollectionDefinition {
   """
-  Cached count of matching products at last admission.
+  Number of products that satisfied the selector at last admission.
+  Cached hint — collection.products is authoritative.
   """
   memberCount: Int!
+
+  """
+  Resolved media entries (URLs populated by the file resolver).
+  """
+  media: [ResolvedFileDefinition!]!
 }
+
+# ============================================================================
+# CollectionBy / CollectionNamespacePath
+# ============================================================================
+
+"""
+Selector for looking up a collection by exactly one unique key.
+"""
+input CollectionBy @oneOf {
+  """
+  Look up by globally unique Relay ID (encodes the collection UID).
+  """
+  id: ID
+
+  """
+  Look up by namespace identifier + collection name.
+  """
+  namespacePath: CollectionNamespacePath
+}
+
+"""
+Composite selector: namespace identifier + collection name.
+"""
+input CollectionNamespacePath {
+  namespace: String!
+  name: String!
+}
+
+# ============================================================================
+# Connection / Edge
+# ============================================================================
 
 """
 Edge type for Collection connection (Relay pattern).
@@ -273,8 +364,30 @@ type CollectionConnection {
 }
 
 # ============================================================================
-# Minimal stub inputs (legacy mutations deprecated — managed via git push)
+# Legacy mutation stubs (collection mutations managed via git push)
 # ============================================================================
+
+extend type Mutation {
+  """
+  Deprecated: Collection resources are managed via git push.
+  This mutation always returns an error.
+  """
+  createCollection(input: CreateCollectionInput!): CreateCollectionPayload!
+
+  """
+  Deprecated: Collection resources are managed via git push.
+  This mutation always returns an error.
+  """
+  updateCollection(input: UpdateCollectionInput!): UpdateCollectionPayload!
+
+  """
+  Deprecated: Collection resources are managed via git push.
+  This mutation always returns an error.
+  """
+  deleteCollection(input: DeleteCollectionInput!): DeleteCollectionPayload!
+}
+
+# Minimal stub inputs to preserve schema compatibility.
 
 input CreateCollectionInput {
   name: String!
@@ -290,11 +403,6 @@ input UpdateCollectionInput {
 
 type UpdateCollectionPayload {
   collection: Collection
-  conflict: CollectionOptimisticLockConflict
-}
-
-type CollectionOptimisticLockConflict {
-  current: Collection!
 }
 
 input DeleteCollectionInput {
@@ -303,34 +411,4 @@ input DeleteCollectionInput {
 
 type DeleteCollectionPayload {
   deletedCollectionId: ID
-}
-
-# ============================================================================
-# Publish / CatalogVersion (kept here for schema continuity)
-# ============================================================================
-
-input PublishCatalogInput {
-  clientMutationId: String
-  version: String!
-  message: String!
-}
-
-type PublishCatalogPayload {
-  clientMutationId: String
-  catalogVersion: CatalogVersion
-}
-
-type CatalogVersion {
-  tag: String!
-  commit: String!
-  publishedAt: DateTime!
-  message: String
-  stats: CatalogStats!
-}
-
-type CatalogStats {
-  productCount: Int!
-  categoryCount: Int!
-  collectionCount: Int!
-  orphanedReferences: Int!
 }

@@ -110,16 +110,39 @@ type CategoryTaxonomy struct {
 	Status json.RawMessage
 }
 
-// Collection represents a flat grouping of products.
+// Collection is the git-backed Kubernetes-style collection resource.
+// Membership is determined at query time via label selector evaluation,
+// not by a stored product list.
 type Collection struct {
-	ID           string
-	Name         string
-	Slug         string
-	DisplayOrder int
-	ProductIDs   []string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	Body         string
+	// Identity (primary key: Namespace + Name)
+	UID       string
+	Namespace string
+	Name      string
+
+	// Resource envelope
+	APIVersion string
+	Kind       string
+
+	// Versioning
+	Generation        int64
+	ResourceVersion   string
+	CreationTimestamp time.Time
+	Revision          string // e.g. "main@sha1:abc123"
+
+	// Author-supplied classification
+	Labels      map[string]string
+	Annotations map[string]string
+
+	// Git provenance
+	GitCommitSHA string
+	GitRef       string
+
+	// Spec and body
+	Spec json.RawMessage // JSON-encoded CollectionSpec
+	Body string          // Markdown description
+
+	// Status — system-only JSON blob
+	Status json.RawMessage
 }
 
 // Repository represents a git repository with a stable internal identity.

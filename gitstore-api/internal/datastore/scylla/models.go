@@ -134,26 +134,65 @@ var (
 		SortKey: []string{},
 	})
 
+	// Collection is the primary paginated read table (newest-first per namespace).
 	Collection = table.New(table.Metadata{
-		Name: "collections",
+		Name: "collection",
 		Columns: []string{
-			"bucket",
-			"created_at",
-			"id",
+			"namespace",
+			"creation_timestamp",
+			"uid",
 			"name",
-			"slug",
-			"display_order",
-			"product_ids",
-			"updated_at",
+			"api_version",
+			"kind",
+			"generation",
+			"resource_version",
+			"revision",
+			"labels",
+			"annotations",
+			"git_commit_sha",
+			"git_ref",
+			"spec",
 			"body",
+			"status",
 		},
 		PartKey: []string{
-			"bucket",
+			"namespace",
 		},
 		SortKey: []string{
-			"created_at",
-			"id",
+			"creation_timestamp",
+			"uid",
 		},
+	})
+
+	// CollectionByName is the lookup table for GetCollectionByName(namespace, name).
+	CollectionByName = table.New(table.Metadata{
+		Name: "collection_by_name",
+		Columns: []string{
+			"namespace",
+			"name",
+			"uid",
+			"creation_timestamp",
+		},
+		PartKey: []string{
+			"namespace",
+		},
+		SortKey: []string{
+			"name",
+		},
+	})
+
+	// CollectionByUID is the lookup table for GetCollection(uid).
+	CollectionByUID = table.New(table.Metadata{
+		Name: "collection_by_uid",
+		Columns: []string{
+			"uid",
+			"namespace",
+			"creation_timestamp",
+		},
+		PartKey: []string{
+			"uid",
+		},
+		SortKey: []string{},
 	})
 
 	Namespace = table.New(table.Metadata{

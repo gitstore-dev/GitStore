@@ -80,14 +80,14 @@ func BuildCollectionConnection(result *datastore.PageResult[datastore.Collection
 	edges := make([]*model.CollectionEdge, len(result.Items))
 	for i, c := range result.Items {
 		edges[i] = &model.CollectionEdge{
-			Cursor: EncodeKeysetCursor(c.CreatedAt, c.ID),
+			Cursor: EncodeKeysetCursor(c.CreationTimestamp, c.UID),
 			Node:   DatastoreCollectionToGraphQL(c),
 		}
 	}
 	return &model.CollectionConnection{
 		Edges:      edges,
 		TotalCount: result.TotalCount,
-		PageInfo:   buildPageInfo(result, func(c *datastore.Collection) string { return EncodeKeysetCursor(c.CreatedAt, c.ID) }),
+		PageInfo:   buildPageInfo(result, func(c *datastore.Collection) string { return EncodeKeysetCursor(c.CreationTimestamp, c.UID) }),
 	}
 }
 
