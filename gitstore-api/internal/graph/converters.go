@@ -274,6 +274,13 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 				Name       string `json:"name"`
 				Namespace  string `json:"namespace"`
 			} `json:"parentRef"`
+			Media []struct {
+				FileRef *struct {
+					Name     string `json:"name"`
+					Kind     string `json:"kind"`
+					Optional bool   `json:"optional"`
+				} `json:"fileRef"`
+			} `json:"media"`
 		}
 		if err := json.Unmarshal(c.Spec, &raw); err == nil {
 			title = raw.Title
@@ -290,6 +297,18 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 				if raw.ParentRef.Namespace != "" {
 					parentRef.Namespace = &raw.ParentRef.Namespace
 				}
+			}
+			for _, m := range raw.Media {
+				if m.FileRef == nil {
+					continue
+				}
+				specMedia = append(specMedia, &model.MediaDefinition{
+					FileRef: &model.FileReference{
+						Name:     m.FileRef.Name,
+						Kind:     m.FileRef.Kind,
+						Optional: m.FileRef.Optional,
+					},
+				})
 			}
 		}
 	}
