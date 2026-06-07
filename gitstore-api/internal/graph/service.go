@@ -175,9 +175,9 @@ func (s *Service) DeleteProduct(ctx context.Context, uid string) error {
 // This is a transitional method; collection admission via git push is the primary path.
 func (s *Service) CreateCollection(ctx context.Context, input map[string]interface{}) (*datastore.Collection, error) {
 	c := &datastore.Collection{
-		UID:       uuid.New().String(),
-		Name:      getStringOrEmpty(input, "name"),
-		Body:      getStringOrEmpty(input, "body"),
+		UID:  uuid.New().String(),
+		Name: getStringOrEmpty(input, "name"),
+		Body: getStringOrEmpty(input, "body"),
 	}
 	if err := s.store.CreateCollection(ctx, c); err != nil {
 		return nil, fmt.Errorf("failed to create collection: %w", err)

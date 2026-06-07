@@ -48,11 +48,11 @@ func categoryTaxonomyFixture(uid, name string) *datastore.CategoryTaxonomy {
 
 func collectionFixture(uid, namespace, name string) *datastore.Collection {
 	return &datastore.Collection{
-		UID:       uid,
-		Namespace: namespace,
-		Name:      name,
+		UID:        uid,
+		Namespace:  namespace,
+		Name:       name,
 		APIVersion: "catalog.gitstore.dev/v1beta1",
-		Kind:      "Collection",
+		Kind:       "Collection",
 	}
 }
 
