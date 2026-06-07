@@ -386,6 +386,106 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.Empty(t, result)
 	})
 
+	t.Run("ListProductsByLabelSelector/MatchExpressions_NotIn", func(t *testing.T) {
+		ns := "sel-notin-" + newID()[:8]
+		pApple := newProduct()
+		pApple.Namespace = ns
+		pApple.Name = "apple-" + newID()[:6]
+		pApple.Labels = map[string]string{"brand": "apple"}
+		require.NoError(t, ds.CreateProduct(ctx, pApple))
+
+		pSamsung := newProduct()
+		pSamsung.Namespace = ns
+		pSamsung.Name = "samsung-" + newID()[:6]
+		pSamsung.Labels = map[string]string{"brand": "samsung"}
+		require.NoError(t, ds.CreateProduct(ctx, pSamsung))
+
+		sel := catalog.LabelSelector{
+			MatchExpressions: []catalog.LabelSelectorRequirement{
+				{Key: "brand", Operator: "NotIn", Values: []string{"apple"}},
+			},
+		}
+		result, err := ds.ListProductsByLabelSelector(ctx, ns, sel)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Equal(t, pSamsung.UID, result[0].UID)
+	})
+
+	t.Run("ListProductsByLabelSelector/MatchExpressions_Exists", func(t *testing.T) {
+		ns := "sel-exists-" + newID()[:8]
+		pFeatured := newProduct()
+		pFeatured.Namespace = ns
+		pFeatured.Name = "featured-" + newID()[:6]
+		pFeatured.Labels = map[string]string{"featured": "true"}
+		require.NoError(t, ds.CreateProduct(ctx, pFeatured))
+
+		pPlain := newProduct()
+		pPlain.Namespace = ns
+		pPlain.Name = "plain-" + newID()[:6]
+		pPlain.Labels = map[string]string{"other": "val"}
+		require.NoError(t, ds.CreateProduct(ctx, pPlain))
+
+		sel := catalog.LabelSelector{
+			MatchExpressions: []catalog.LabelSelectorRequirement{
+				{Key: "featured", Operator: "Exists"},
+			},
+		}
+		result, err := ds.ListProductsByLabelSelector(ctx, ns, sel)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Equal(t, pFeatured.UID, result[0].UID)
+	})
+
+	t.Run("ListProductsByLabelSelector/MatchExpressions_DoesNotExist", func(t *testing.T) {
+		ns := "sel-dne-" + newID()[:8]
+		pSale := newProduct()
+		pSale.Namespace = ns
+		pSale.Name = "sale-" + newID()[:6]
+		pSale.Labels = map[string]string{"sale": "true"}
+		require.NoError(t, ds.CreateProduct(ctx, pSale))
+
+		pNoSale := newProduct()
+		pNoSale.Namespace = ns
+		pNoSale.Name = "no-sale-" + newID()[:6]
+		pNoSale.Labels = map[string]string{"other": "val"}
+		require.NoError(t, ds.CreateProduct(ctx, pNoSale))
+
+		sel := catalog.LabelSelector{
+			MatchExpressions: []catalog.LabelSelectorRequirement{
+				{Key: "sale", Operator: "DoesNotExist"},
+			},
+		}
+		result, err := ds.ListProductsByLabelSelector(ctx, ns, sel)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Equal(t, pNoSale.UID, result[0].UID)
+	})
+
+	t.Run("ListProductsByLabelSelector/MatchExpressions_In", func(t *testing.T) {
+		ns := "sel-in-" + newID()[:8]
+		pProd := newProduct()
+		pProd.Namespace = ns
+		pProd.Name = "env-prod-" + newID()[:6]
+		pProd.Labels = map[string]string{"env": "prod"}
+		require.NoError(t, ds.CreateProduct(ctx, pProd))
+
+		pStaging := newProduct()
+		pStaging.Namespace = ns
+		pStaging.Name = "env-staging-" + newID()[:6]
+		pStaging.Labels = map[string]string{"env": "staging"}
+		require.NoError(t, ds.CreateProduct(ctx, pStaging))
+
+		sel := catalog.LabelSelector{
+			MatchExpressions: []catalog.LabelSelectorRequirement{
+				{Key: "env", Operator: "In", Values: []string{"prod"}},
+			},
+		}
+		result, err := ds.ListProductsByLabelSelector(ctx, ns, sel)
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Equal(t, pProd.UID, result[0].UID)
+	})
+
 	// ── Namespace ─────────────────────────────────────────────────────────────
 
 	t.Run("Namespace/TestCreateNamespace_success", func(t *testing.T) {

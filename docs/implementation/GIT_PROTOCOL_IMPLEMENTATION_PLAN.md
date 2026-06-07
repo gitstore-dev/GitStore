@@ -1,6 +1,7 @@
 # Git Protocol Implementation Plan (Native git://)
 
-**Goal**: Implement a full git:// protocol server in Rust for GitStore's built-in git engine.
+**Goal**: Implement a full git:// protocol server in Rust for GitStore's built-in git engine.  
+**Status** 🚫 Obsolete
 
 **Reference**: [Git Protocol Documentation](https://git-scm.com/book/en/v2/Git-Internals-Transfer-Protocols)
 

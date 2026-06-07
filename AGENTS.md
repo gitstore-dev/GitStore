@@ -20,6 +20,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - Go 1.25 (`gitstore-api`); Rust edition 2021 MSRV 1.82 (`gitstore-git-service`) + `gqlgen v0.17.90`, `go-playground/validator/v10 v10.30.3`, `github.com/adrg/frontmatter v0.2.0`, `gopkg.in/yaml.v3`, `go.uber.org/zap`, `google/uuid`, `gocqlx/v3 v3.0.4` (ScyllaDB prod), `go-memdb v1.3.5` (dev) (021-category-taxonomy)
 - Go 1.25 (`gitstore-api`); Rust edition 2021 MSRV 1.82 (`gitstore-git-service` — no changes needed) + `gqlgen v0.17.90`, `go-memdb v1.3.5` (dev), `gocqlx/v3 v3.0.4` + `gocql` (ScyllaDB prod), `go-playground/validator/v10`, `go.uber.org/zap`, `github.com/adrg/frontmatter v0.2.0`, `gopkg.in/yaml.v3` (022-collection-resource-contract)
 - ScyllaDB 5.x+ (prod) via three-table pattern; `go-memdb` (dev/test) (022-collection-resource-contract)
+- Go 1.25 (`gitstore-api`, `tests/integration`) + `go-playground/validator/v10 v10.30.3` (validation), `gqlgen v0.17.90` (GraphQL), `go-memdb v1.3.5` (dev backend), `gocqlx/v3 v3.0.4` + `gocql` (ScyllaDB backend) (023-collection-integration-tests)
+- `go-memdb` (dev/test default) and ScyllaDB 5.4 (prod/CI); backend selected at runtime via `GITSTORE_DATASTORE__BACKEND` env var (023-collection-integration-tests)
 
 - (001-git-backed-ecommerce)
 
@@ -59,9 +61,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 023-collection-integration-tests: Added Go 1.25 (`gitstore-api`, `tests/integration`) + `go-playground/validator/v10 v10.30.3` (validation), `gqlgen v0.17.90` (GraphQL), `go-memdb v1.3.5` (dev backend), `gocqlx/v3 v3.0.4` + `gocql` (ScyllaDB backend)
 - 022-collection-resource-contract: Added Go 1.25 (`gitstore-api`); Rust edition 2021 MSRV 1.82 (`gitstore-git-service` — no changes needed) + `gqlgen v0.17.90`, `go-memdb v1.3.5` (dev), `gocqlx/v3 v3.0.4` + `gocql` (ScyllaDB prod), `go-playground/validator/v10`, `go.uber.org/zap`, `github.com/adrg/frontmatter v0.2.0`, `gopkg.in/yaml.v3`
 - 021-category-taxonomy: Replaced legacy `Category` entity with Kubernetes-style `CategoryTaxonomy` backed by git push pipeline. Added `ParseResource` multi-kind validator dispatcher, intra-push DFS cycle detection, materialized `AncestorPath` hierarchy, `CategoryObjectMeta`/`CategorySpec`/`status` GraphQL envelope, E2E integration tests. Removed legacy `slug`/`displayOrder` fields from `Category` type. Completed `ObjectMeta` with full system-managed fields. Closes GH#40, GH#82.
-- 020-pre-receive-validation-e2e: Added GitHub Actions YAML + Go 1.25 (test runner) + Docker Compose, `compose.scylla.yml` (already committed), ScyllaDB 5.4
 
 
 <!-- MANUAL ADDITIONS START -->
