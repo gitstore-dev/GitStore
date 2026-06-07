@@ -83,6 +83,21 @@ func (h *pushHelper) commitProduct(filename, content string) {
 	run(h.t, h.workDir, "git", "commit", "-m", fmt.Sprintf("add %s", filename))
 }
 
+// commitCollection writes a Collection markdown file and commits it.
+func (h *pushHelper) commitCollection(filename, content string) {
+	h.t.Helper()
+	dir := filepath.Join(h.workDir, "collections")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		h.t.Fatalf("mkdir collections: %v", err)
+	}
+	path := filepath.Join(dir, filename)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		h.t.Fatalf("write collection file: %v", err)
+	}
+	run(h.t, h.workDir, "git", "add", path)
+	run(h.t, h.workDir, "git", "commit", "-m", fmt.Sprintf("add %s", filename))
+}
+
 // push executes git push and returns (stdout+stderr, error).
 func (h *pushHelper) push() (string, error) {
 	h.t.Helper()
