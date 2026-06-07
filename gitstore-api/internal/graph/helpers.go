@@ -12,20 +12,6 @@ import (
 
 // Helper functions for GraphQL resolvers
 
-func stringOrDefault(s *string, def string) string {
-	if s != nil {
-		return *s
-	}
-	return def
-}
-
-func intOrDefault(i *int32, def int32) int32 {
-	if i != nil {
-		return *i
-	}
-	return def
-}
-
 // namespaceFromContext extracts the namespace from the request context.
 // Falls back to an empty string (which lists across all namespaces in memdb).
 func namespaceFromContext(_ context.Context) string {
