@@ -24,7 +24,7 @@ func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (mo
 		}
 		return DatastoreCategoryTaxonomyToGraphQL(category), nil
 	case nodeKindCollection:
-		collection, err := r.service.GetCollectionByID(ctx, rawID)
+		collection, err := r.service.GetCollectionByUID(ctx, rawID)
 		if err != nil {
 			return nil, nil
 		}

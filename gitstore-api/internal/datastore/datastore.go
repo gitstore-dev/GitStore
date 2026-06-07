@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 )
 
 // Sentinel errors returned by all backends.
@@ -75,11 +77,11 @@ type Datastore interface {
 
 	// Collection operations
 	CreateCollection(ctx context.Context, c *Collection) error
-	GetCollection(ctx context.Context, id string) (*Collection, error)
-	GetCollectionBySlug(ctx context.Context, slug string) (*Collection, error)
-	ListCollections(ctx context.Context, page PageParams) (*PageResult[Collection], error)
+	GetCollection(ctx context.Context, uid string) (*Collection, error)
+	GetCollectionByName(ctx context.Context, namespace, name string) (*Collection, error)
+	ListCollections(ctx context.Context, namespace string, page PageParams) (*PageResult[Collection], error)
 	UpdateCollection(ctx context.Context, c *Collection) error
-	DeleteCollection(ctx context.Context, id string) error
+	ListProductsByLabelSelector(ctx context.Context, namespace string, selector catalog.LabelSelector) ([]*Product, error)
 
 	// Namespace operations
 	CreateNamespace(ctx context.Context, ns *Namespace) error

@@ -282,8 +282,11 @@ func (s *Server) AdmitResources(
 		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, req, repoNamespace, revision, now, inPushAncestorPaths, cycleMembers[name])
 	}
 	for _, e := range entries {
-		if e.parsed.Kind == "Product" {
+		switch e.parsed.Kind {
+		case "Product":
 			s.admitProduct(ctx, e.parsed.Product, e.body, req, repoNamespace, revision, now)
+		case "Collection":
+			s.admitCollection(ctx, e.parsed.Collection, e.body, req, repoNamespace, revision, now)
 		}
 	}
 
@@ -432,6 +435,73 @@ func (s *Server) admitProduct(
 		existing.Status = admissionAcceptedStatus(gen, revision, now)
 		if uerr := s.store.UpdateProduct(ctx, existing); uerr != nil {
 			s.log.Error("admit_resources: update product failed",
+				zap.String("name", resource.Metadata.Name), zap.Error(uerr))
+		}
+	}
+}
+
+func (s *Server) admitCollection(
+	ctx context.Context,
+	resource *catalog.CollectionResource,
+	body []byte,
+	req *catalogv1.AdmitResourcesRequest,
+	repoNamespace string,
+	revision string,
+	now time.Time,
+) {
+	specJSON, err := json.Marshal(resource.Spec)
+	if err != nil {
+		s.log.Error("admit_resources: marshal collection spec failed",
+			zap.String("name", resource.Metadata.Name), zap.Error(err))
+		return
+	}
+
+	namespace := resource.Metadata.Namespace
+	if namespace == "" {
+		namespace = repoNamespace
+	}
+
+	existing, getErr := s.store.GetCollectionByName(ctx, namespace, resource.Metadata.Name)
+
+	if getErr != nil || existing == nil {
+		c := &datastore.Collection{
+			UID:               uuid.Must(uuid.NewV7()).String(),
+			Namespace:         namespace,
+			Name:              resource.Metadata.Name,
+			APIVersion:        resource.APIVersion,
+			Kind:              resource.Kind,
+			Labels:            resource.Metadata.Labels,
+			Annotations:       resource.Metadata.Annotations,
+			Generation:        1,
+			ResourceVersion:   "1",
+			CreationTimestamp: now,
+			Revision:          revision,
+			GitCommitSHA:      req.CommitSha,
+			GitRef:            req.RefName,
+			Spec:              specJSON,
+			Body:              string(body),
+		}
+		c.Status = admissionAcceptedStatus(1, revision, now)
+		if cerr := s.store.CreateCollection(ctx, c); cerr != nil {
+			s.log.Error("admit_resources: create collection failed",
+				zap.String("name", resource.Metadata.Name), zap.Error(cerr))
+		}
+	} else {
+		gen := existing.Generation + 1
+		existing.APIVersion = resource.APIVersion
+		existing.Kind = resource.Kind
+		existing.Labels = resource.Metadata.Labels
+		existing.Annotations = resource.Metadata.Annotations
+		existing.Generation = gen
+		existing.ResourceVersion = fmt.Sprintf("%d", gen)
+		existing.Revision = revision
+		existing.GitCommitSHA = req.CommitSha
+		existing.GitRef = req.RefName
+		existing.Spec = specJSON
+		existing.Body = string(body)
+		existing.Status = admissionAcceptedStatus(gen, revision, now)
+		if uerr := s.store.UpdateCollection(ctx, existing); uerr != nil {
+			s.log.Error("admit_resources: update collection failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(uerr))
 		}
 	}

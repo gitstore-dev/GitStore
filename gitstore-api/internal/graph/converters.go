@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"go.uber.org/zap"
@@ -418,15 +419,175 @@ func DatastoreCollectionToGraphQL(c *datastore.Collection) *model.Collection {
 	if c == nil {
 		return nil
 	}
-	return &model.Collection{
-		ID:        mustEncodeNodeID(nodeKindCollection, c.ID),
-		Name:      c.Name,
-		Slug:      c.Slug,
-		Body:      &c.Body,
-		Products:  nil,
-		CreatedAt: c.CreatedAt,
-		UpdatedAt: c.UpdatedAt,
+	gen := int32(c.Generation)
+	meta := &model.CollectionObjectMeta{
+		Name:              c.Name,
+		UID:               mustEncodeNodeID(nodeKindCollection, c.UID),
+		ResourceVersion:   c.ResourceVersion,
+		Generation:        gen,
+		CreationTimestamp: c.CreationTimestamp,
+		Labels:            kvPairs(c.Labels),
+		Annotations:       kvPairs(c.Annotations),
 	}
+	if c.Namespace != "" {
+		ns := c.Namespace
+		meta.Namespace = &ns
+	}
+	if c.Revision != "" {
+		r := c.Revision
+		meta.Revision = &r
+	}
+	out := &model.Collection{
+		ID:       mustEncodeNodeID(nodeKindCollection, c.UID),
+		Metadata: meta,
+		Spec:     collectionSpecFromJSON(c.Spec),
+		Status:   collectionStatusFromJSON(c.Status),
+		Products: &model.ProductConnection{Edges: []*model.ProductEdge{}, PageInfo: &model.PageInfo{}},
+	}
+	if c.APIVersion != "" {
+		v := c.APIVersion
+		out.APIVersion = &v
+	}
+	if c.Kind != "" {
+		k := c.Kind
+		out.Kind = &k
+	}
+	if c.Body != "" {
+		out.Body = &c.Body
+	}
+	return out
+}
+
+// collectionSpecFromJSON deserialises a CollectionSpec blob.
+func collectionSpecFromJSON(raw json.RawMessage) *model.CollectionSpec {
+	empty := &model.CollectionSpec{Media: []*model.MediaDefinition{}}
+	if len(raw) == 0 {
+		return empty
+	}
+	var rs struct {
+		Title    string `json:"title"`
+		Selector *struct {
+			MatchLabels      map[string]string `json:"matchLabels"`
+			MatchExpressions []*struct {
+				Key      string   `json:"key"`
+				Operator string   `json:"operator"`
+				Values   []string `json:"values"`
+			} `json:"matchExpressions"`
+		} `json:"selector"`
+		Media []struct {
+			FileRef *struct {
+				Name     string `json:"name"`
+				Kind     string `json:"kind"`
+				Optional bool   `json:"optional"`
+			} `json:"fileRef"`
+		} `json:"media"`
+	}
+	if err := json.Unmarshal(raw, &rs); err != nil {
+		converterLogger.Warn("collection blob unmarshal error", zap.String("field", "spec"), zap.Error(err))
+		return empty
+	}
+	spec := &model.CollectionSpec{Title: rs.Title, Media: []*model.MediaDefinition{}}
+	if rs.Selector != nil {
+		sel := &model.LabelSelector{}
+		for k, v := range rs.Selector.MatchLabels {
+			sel.MatchLabels = append(sel.MatchLabels, &model.KeyValuePair{Key: k, Value: v})
+		}
+		for _, e := range rs.Selector.MatchExpressions {
+			sel.MatchExpressions = append(sel.MatchExpressions, &model.LabelSelectorRequirement{
+				Key:      e.Key,
+				Operator: model.LabelSelectorOperator(e.Operator),
+				Values:   e.Values,
+			})
+		}
+		spec.Selector = sel
+	}
+	for _, m := range rs.Media {
+		if m.FileRef == nil {
+			continue
+		}
+		spec.Media = append(spec.Media, &model.MediaDefinition{
+			FileRef: &model.FileReference{
+				Name:     m.FileRef.Name,
+				Kind:     m.FileRef.Kind,
+				Optional: m.FileRef.Optional,
+			},
+		})
+	}
+	return spec
+}
+
+// collectionStatusFromJSON deserialises a CollectionStatus blob.
+func collectionStatusFromJSON(raw json.RawMessage) *model.CollectionStatus {
+	if len(raw) == 0 {
+		return nil
+	}
+	var rs struct {
+		ObservedGeneration  int32          `json:"observedGeneration"`
+		LastAppliedRevision string         `json:"lastAppliedRevision"`
+		Conditions          []rawCondition `json:"conditions"`
+		Resolved            *struct {
+			MemberCount int32 `json:"memberCount"`
+		} `json:"resolved"`
+	}
+	if err := json.Unmarshal(raw, &rs); err != nil {
+		converterLogger.Warn("collection blob unmarshal error", zap.String("field", "status"), zap.Error(err))
+		return nil
+	}
+	conditions := make([]*model.CollectionCondition, 0, len(rs.Conditions))
+	for _, c := range rs.Conditions {
+		cond := &model.CollectionCondition{
+			Type:   c.Type,
+			Status: c.Status,
+		}
+		gen := c.ObservedGeneration
+		cond.ObservedGeneration = &gen
+		if c.Reason != "" {
+			r := c.Reason
+			cond.Reason = &r
+		}
+		if c.Message != "" {
+			m := c.Message
+			cond.Message = &m
+		}
+		conditions = append(conditions, cond)
+	}
+	status := &model.CollectionStatus{
+		ObservedGeneration: rs.ObservedGeneration,
+		Conditions:         conditions,
+	}
+	if rs.LastAppliedRevision != "" {
+		s := rs.LastAppliedRevision
+		status.LastAppliedRevision = &s
+	}
+	if rs.Resolved != nil {
+		status.Resolved = &model.ResolvedCollectionDefinition{MemberCount: rs.Resolved.MemberCount}
+	}
+	return status
+}
+
+// jsonUnmarshal is a thin wrapper so resolver files can call it without importing encoding/json.
+func jsonUnmarshal(data json.RawMessage, v any) error {
+	return json.Unmarshal(data, v)
+}
+
+// specSelectorToCatalog converts an inline spec selector struct to catalog.LabelSelector.
+func specSelectorToCatalog(sel *struct {
+	MatchLabels      map[string]string `json:"matchLabels"`
+	MatchExpressions []struct {
+		Key      string   `json:"key"`
+		Operator string   `json:"operator"`
+		Values   []string `json:"values"`
+	} `json:"matchExpressions"`
+}) catalog.LabelSelector {
+	s := catalog.LabelSelector{MatchLabels: sel.MatchLabels}
+	for _, e := range sel.MatchExpressions {
+		s.MatchExpressions = append(s.MatchExpressions, catalog.LabelSelectorRequirement{
+			Key:      e.Key,
+			Operator: e.Operator,
+			Values:   e.Values,
+		})
+	}
+	return s
 }
 
 // DatastoreRepositoryToGraphQL converts a datastore Repository to the GraphQL model

@@ -46,13 +46,13 @@ func categoryTaxonomyFixture(uid, name string) *datastore.CategoryTaxonomy {
 	}
 }
 
-func collectionFixture(id, slug string) *datastore.Collection {
+func collectionFixture(uid, namespace, name string) *datastore.Collection {
 	return &datastore.Collection{
-		ID:        id,
-		Name:      "Test Collection",
-		Slug:      slug,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		UID:        uid,
+		Namespace:  namespace,
+		Name:       name,
+		APIVersion: "catalog.gitstore.dev/v1beta1",
+		Kind:       "Collection",
 	}
 }
 
@@ -235,12 +235,13 @@ func TestMemdb_UpdateCategoryTaxonomy_NotFound(t *testing.T) {
 func TestMemdb_CreateAndGetCollection(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
-	c := collectionFixture("c0000000-0000-0000-0000-000000000001", "col-slug")
+	c := collectionFixture("c0000000-0000-0000-0000-000000000001", "my-store", "summer-sale")
 	require.NoError(t, ds.CreateCollection(ctx, c))
 
-	got, err := ds.GetCollection(ctx, c.ID)
+	got, err := ds.GetCollection(ctx, c.UID)
 	require.NoError(t, err)
-	assert.Equal(t, c.Slug, got.Slug)
+	assert.Equal(t, c.UID, got.UID)
+	assert.Equal(t, c.Name, got.Name)
 }
 
 func TestMemdb_GetCollection_NotFound(t *testing.T) {
@@ -249,20 +250,20 @@ func TestMemdb_GetCollection_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
-func TestMemdb_GetCollectionBySlug(t *testing.T) {
+func TestMemdb_GetCollectionByName(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
-	c := collectionFixture("c0000000-0000-0000-0000-000000000002", "col-slug-lkp")
+	c := collectionFixture("c0000000-0000-0000-0000-000000000002", "my-store", "winter-sale")
 	require.NoError(t, ds.CreateCollection(ctx, c))
 
-	got, err := ds.GetCollectionBySlug(ctx, "col-slug-lkp")
+	got, err := ds.GetCollectionByName(ctx, "my-store", "winter-sale")
 	require.NoError(t, err)
-	assert.Equal(t, c.ID, got.ID)
+	assert.Equal(t, c.UID, got.UID)
 }
 
-func TestMemdb_GetCollectionBySlug_NotFound(t *testing.T) {
+func TestMemdb_GetCollectionByName_NotFound(t *testing.T) {
 	ds := newBackend(t)
-	_, err := ds.GetCollectionBySlug(context.Background(), "not-there")
+	_, err := ds.GetCollectionByName(context.Background(), "my-store", "not-there")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 

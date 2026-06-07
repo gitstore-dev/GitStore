@@ -133,11 +133,12 @@ func seedGlobalIDTestData(t *testing.T, ctx context.Context, store datastore.Dat
 		CreationTimestamp: now,
 	}))
 	require.NoError(t, store.CreateCollection(ctx, &datastore.Collection{
-		ID:        globalIDTestCollectionID,
-		Name:      "Collection 1",
-		Slug:      "collection-1",
-		CreatedAt: now,
-		UpdatedAt: now,
+		UID:               globalIDTestCollectionID,
+		Namespace:         "test-store",
+		Name:              "collection-1",
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "Collection",
+		CreationTimestamp: now,
 	}))
 	require.NoError(t, store.CreateProduct(ctx, &datastore.Product{
 		UID:               globalIDTestProductUID,

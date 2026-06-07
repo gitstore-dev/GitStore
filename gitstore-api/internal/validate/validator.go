@@ -19,12 +19,13 @@ import (
 
 var validate = validator.New()
 
-// ParsedResource is the result of ParseResource; exactly one of Product or
-// CategoryTaxonomy is set, matching the Kind field.
+// ParsedResource is the result of ParseResource; exactly one of Product,
+// CategoryTaxonomy, or Collection is set, matching the Kind field.
 type ParsedResource struct {
 	Kind             string
 	Product          *catalog.ProductResource
 	CategoryTaxonomy *catalog.CategoryTaxonomyResource
+	Collection       *catalog.CollectionResource
 }
 
 // Parse reads a Markdown document, extracts the YAML frontmatter into a
@@ -170,6 +171,27 @@ func ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		}
 		return &ParsedResource{Kind: "CategoryTaxonomy", CategoryTaxonomy: &res}, body, nil
 
+	case "Collection":
+		var res catalog.CollectionResource
+		body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
+		}
+		var errs []error
+		if err := validate.Struct(res); err != nil {
+			errs = append(errs, toFriendlyError(err))
+		}
+		if err := validateLabels(res.Metadata.Labels); err != nil {
+			errs = append(errs, err)
+		}
+		if err := validateCollectionSpec(res.Spec); err != nil {
+			errs = append(errs, err)
+		}
+		if len(errs) > 0 {
+			return nil, nil, errors.Join(errs...)
+		}
+		return &ParsedResource{Kind: "Collection", Collection: &res}, body, nil
+
 	default:
 		return nil, nil, fmt.Errorf("validate: kind %q is not a recognized catalog resource type", kindProbe.Kind)
 	}
@@ -179,6 +201,21 @@ func ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 func validateCategorySpec(name string, spec catalog.CategoryTaxonomySpec) error {
 	if spec.ParentRef != nil && spec.ParentRef.Name == name {
 		return fmt.Errorf("validate: spec.parentRef.name must not reference the category itself")
+	}
+	return nil
+}
+
+// validateCollectionSpec enforces spec-level rules for Collection.
+func validateCollectionSpec(spec catalog.CollectionSpec) error {
+	if spec.TargetRef != nil && spec.TargetRef.Kind != "Product" {
+		return fmt.Errorf("validate: spec.targetRef.kind must be %q, got %q", "Product", spec.TargetRef.Kind)
+	}
+	if spec.Selector != nil {
+		for i, expr := range spec.Selector.MatchExpressions {
+			if (expr.Operator == "In" || expr.Operator == "NotIn") && len(expr.Values) == 0 {
+				return fmt.Errorf("validate: spec.selector.matchExpressions[%d]: operator %q requires at least one value", i, expr.Operator)
+			}
+		}
 	}
 	return nil
 }
