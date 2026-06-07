@@ -467,7 +467,7 @@ func collectionSpecFromJSON(raw json.RawMessage) *model.CollectionSpec {
 	var rs struct {
 		Title    string `json:"title"`
 		Selector *struct {
-			MatchLabels      []*struct{ Key, Value string } `json:"matchLabels"`
+			MatchLabels      map[string]string `json:"matchLabels"`
 			MatchExpressions []*struct {
 				Key      string   `json:"key"`
 				Operator string   `json:"operator"`
@@ -489,9 +489,8 @@ func collectionSpecFromJSON(raw json.RawMessage) *model.CollectionSpec {
 	spec := &model.CollectionSpec{Title: rs.Title, Media: []*model.MediaDefinition{}}
 	if rs.Selector != nil {
 		sel := &model.LabelSelector{}
-		for _, kv := range rs.Selector.MatchLabels {
-			kk, vv := kv.Key, kv.Value
-			sel.MatchLabels = append(sel.MatchLabels, &model.KeyValuePair{Key: kk, Value: vv})
+		for k, v := range rs.Selector.MatchLabels {
+			sel.MatchLabels = append(sel.MatchLabels, &model.KeyValuePair{Key: k, Value: v})
 		}
 		for _, e := range rs.Selector.MatchExpressions {
 			sel.MatchExpressions = append(sel.MatchExpressions, &model.LabelSelectorRequirement{
@@ -591,21 +590,6 @@ func specSelectorToCatalog(sel *struct {
 	return s
 }
 
-// BuildProductConnectionFromSlice builds a ProductConnection from a flat slice (no pagination).
-func BuildProductConnectionFromSlice(products []*datastore.Product) *model.ProductConnection {
-	edges := make([]*model.ProductEdge, len(products))
-	for i, p := range products {
-		edges[i] = &model.ProductEdge{
-			Cursor: mustEncodeNodeID(nodeKindProduct, p.UID),
-			Node:   DatastoreProductToGraphQL(p),
-		}
-	}
-	return &model.ProductConnection{
-		Edges:      edges,
-		PageInfo:   &model.PageInfo{},
-		TotalCount: int32(len(products)),
-	}
-}
 
 // DatastoreRepositoryToGraphQL converts a datastore Repository to the GraphQL model
 // without namespace (namespace is resolved separately via field resolver).

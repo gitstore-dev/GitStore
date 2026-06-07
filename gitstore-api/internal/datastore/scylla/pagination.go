@@ -14,6 +14,13 @@ import (
 	"github.com/scylladb/gocqlx/v3/table"
 )
 
+// encodeKeysetCursor encodes a keyset position as an opaque base64 cursor.
+// The format mirrors the graph-layer EncodeKeysetCursor so cursors are interchangeable.
+func encodeKeysetCursor(ts time.Time, id string) string {
+	payload := fmt.Sprintf("keyset|%s|%s", ts.Format(time.RFC3339Nano), id)
+	return base64.StdEncoding.EncodeToString([]byte(payload))
+}
+
 // parsePageCursor decodes an opaque base64 keyset cursor into a PageCursor.
 func parsePageCursor(cursor string) (*datastore.PageCursor, error) {
 	decoded, err := base64.StdEncoding.DecodeString(cursor)

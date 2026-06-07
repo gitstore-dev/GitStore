@@ -647,16 +647,26 @@ func (s *scyllaDatastore) UpdateCollection(ctx context.Context, c *datastore.Col
 }
 
 func (s *scyllaDatastore) ListProductsByLabelSelector(ctx context.Context, namespace string, selector catalog.LabelSelector) ([]*datastore.Product, error) {
-	page := datastore.PageParams{First: 1000}
-	result, err := s.ListProducts(ctx, namespace, page)
-	if err != nil {
-		return nil, err
-	}
-	var matched []*datastore.Product
-	for _, p := range result.Items {
-		if catalog.MatchesLabels(&selector, p.Labels) {
-			matched = append(matched, p)
+	const batchSize = 500
+	var (
+		matched []*datastore.Product
+		page    = datastore.PageParams{First: batchSize}
+	)
+	for {
+		result, err := s.ListProducts(ctx, namespace, page)
+		if err != nil {
+			return nil, err
 		}
+		for _, p := range result.Items {
+			if catalog.MatchesLabels(&selector, p.Labels) {
+				matched = append(matched, p)
+			}
+		}
+		if !result.HasNext || len(result.Items) == 0 {
+			break
+		}
+		last := result.Items[len(result.Items)-1]
+		page.After = encodeKeysetCursor(last.CreationTimestamp, last.UID)
 	}
 	return matched, nil
 }

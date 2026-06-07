@@ -171,6 +171,17 @@ func newProduct(namespace, name string) *datastore.Product {
 	}
 }
 
+func newCollection(namespace, name string) *datastore.Collection {
+	return &datastore.Collection{
+		UID:               newID(),
+		Namespace:         namespace,
+		Name:              name,
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "Collection",
+		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+	}
+}
+
 // ── Product ───────────────────────────────────────────────────────────────────
 
 func TestScylla_CreateGetProduct(t *testing.T) {
@@ -387,22 +398,34 @@ func TestScylla_CreateGetCollection(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	c := &datastore.Collection{ID: newID(), Name: "Summer Sale", Slug: "col-" + newID()[:8]}
+	c := newCollection("test-ns", "col-"+newID()[:8])
 	require.NoError(t, store.CreateCollection(ctx, c))
 
-	got, err := store.GetCollection(ctx, c.ID)
+	got, err := store.GetCollection(ctx, c.UID)
 	require.NoError(t, err)
-	assert.Equal(t, c.Slug, got.Slug)
+	assert.Equal(t, c.UID, got.UID)
+	assert.Equal(t, c.Name, got.Name)
+	assert.Equal(t, c.Namespace, got.Namespace)
 }
 
-func TestScylla_CreateCollection_DuplicateSlug(t *testing.T) {
+func TestScylla_CreateCollection_DuplicateUID(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	slug := "dup-col-" + newID()[:8]
-	c1 := &datastore.Collection{ID: newID(), Slug: slug}
+	c := newCollection("test-ns", "dup-uid-"+newID()[:8])
+	require.NoError(t, store.CreateCollection(ctx, c))
+	err := store.CreateCollection(ctx, c)
+	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
+}
+
+func TestScylla_CreateCollection_DuplicateName(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	name := "dup-col-" + newID()[:8]
+	c1 := newCollection("test-ns", name)
 	require.NoError(t, store.CreateCollection(ctx, c1))
-	c2 := &datastore.Collection{ID: newID(), Slug: slug}
+	c2 := newCollection("test-ns", name)
 	err := store.CreateCollection(ctx, c2)
 	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
 }
@@ -413,22 +436,22 @@ func TestScylla_GetCollection_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
-func TestScylla_GetCollectionBySlug(t *testing.T) {
+func TestScylla_GetCollectionByName(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	slug := "find-col-" + newID()[:8]
-	c := &datastore.Collection{ID: newID(), Slug: slug}
+	name := "find-col-" + newID()[:8]
+	c := newCollection("test-ns", name)
 	require.NoError(t, store.CreateCollection(ctx, c))
 
-	got, err := store.GetCollectionBySlug(ctx, slug)
+	got, err := store.GetCollectionByName(ctx, "test-ns", name)
 	require.NoError(t, err)
-	assert.Equal(t, c.ID, got.ID)
+	assert.Equal(t, c.UID, got.UID)
 }
 
-func TestScylla_GetCollectionBySlug_NotFound(t *testing.T) {
+func TestScylla_GetCollectionByName_NotFound(t *testing.T) {
 	store := newTestStore(t)
-	_, err := store.GetCollectionBySlug(context.Background(), "no-col-"+newID()[:8])
+	_, err := store.GetCollectionByName(context.Background(), "test-ns", "no-col-"+newID()[:8])
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
@@ -436,15 +459,15 @@ func TestScylla_ListCollections(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	before, err := store.ListCollections(ctx, datastore.PageParams{First: 100})
+	before, err := store.ListCollections(ctx, "test-ns", datastore.PageParams{First: 100})
 	require.NoError(t, err)
 
-	c1 := &datastore.Collection{ID: newID(), Slug: "colls1-" + newID()[:8]}
-	c2 := &datastore.Collection{ID: newID(), Slug: "colls2-" + newID()[:8]}
+	c1 := newCollection("test-ns", "colls1-"+newID()[:8])
+	c2 := newCollection("test-ns", "colls2-"+newID()[:8])
 	require.NoError(t, store.CreateCollection(ctx, c1))
 	require.NoError(t, store.CreateCollection(ctx, c2))
 
-	after, err := store.ListCollections(ctx, datastore.PageParams{First: 100})
+	after, err := store.ListCollections(ctx, "test-ns", datastore.PageParams{First: 100})
 	require.NoError(t, err)
 	assert.Equal(t, len(before.Items)+2, len(after.Items))
 }
@@ -453,36 +476,20 @@ func TestScylla_UpdateCollection(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	c := &datastore.Collection{ID: newID(), Slug: "upd-col-" + newID()[:8], Name: "Before"}
+	c := newCollection("test-ns", "upd-col-"+newID()[:8])
+	c.Body = "Before"
 	require.NoError(t, store.CreateCollection(ctx, c))
-	c.Name = "After"
+	c.Body = "After"
 	require.NoError(t, store.UpdateCollection(ctx, c))
 
-	got, err := store.GetCollection(ctx, c.ID)
+	got, err := store.GetCollection(ctx, c.UID)
 	require.NoError(t, err)
-	assert.Equal(t, "After", got.Name)
+	assert.Equal(t, "After", got.Body)
 }
 
 func TestScylla_UpdateCollection_NotFound(t *testing.T) {
 	store := newTestStore(t)
-	err := store.UpdateCollection(context.Background(), &datastore.Collection{ID: newID(), Slug: "ghost-col-" + newID()[:8]})
-	require.ErrorIs(t, err, datastore.ErrNotFound)
-}
-
-func TestScylla_DeleteCollection(t *testing.T) {
-	store := newTestStore(t)
-	ctx := context.Background()
-
-	c := &datastore.Collection{ID: newID(), Slug: "del-col-" + newID()[:8]}
-	require.NoError(t, store.CreateCollection(ctx, c))
-	require.NoError(t, store.DeleteCollection(ctx, c.ID))
-	_, err := store.GetCollection(ctx, c.ID)
-	require.ErrorIs(t, err, datastore.ErrNotFound)
-}
-
-func TestScylla_DeleteCollection_NotFound(t *testing.T) {
-	store := newTestStore(t)
-	err := store.DeleteCollection(context.Background(), newID())
+	err := store.UpdateCollection(context.Background(), newCollection("test-ns", "ghost-col-"+newID()[:8]))
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 

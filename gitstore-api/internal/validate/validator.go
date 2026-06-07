@@ -184,6 +184,9 @@ func ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		if err := validateLabels(res.Metadata.Labels); err != nil {
 			errs = append(errs, err)
 		}
+		if err := validateCollectionSpec(res.Spec); err != nil {
+			errs = append(errs, err)
+		}
 		if len(errs) > 0 {
 			return nil, nil, errors.Join(errs...)
 		}
@@ -198,6 +201,21 @@ func ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 func validateCategorySpec(name string, spec catalog.CategoryTaxonomySpec) error {
 	if spec.ParentRef != nil && spec.ParentRef.Name == name {
 		return fmt.Errorf("validate: spec.parentRef.name must not reference the category itself")
+	}
+	return nil
+}
+
+// validateCollectionSpec enforces spec-level rules for Collection.
+func validateCollectionSpec(spec catalog.CollectionSpec) error {
+	if spec.TargetRef != nil && spec.TargetRef.Kind != "Product" {
+		return fmt.Errorf("validate: spec.targetRef.kind must be %q, got %q", "Product", spec.TargetRef.Kind)
+	}
+	if spec.Selector != nil {
+		for i, expr := range spec.Selector.MatchExpressions {
+			if (expr.Operator == "In" || expr.Operator == "NotIn") && len(expr.Values) == 0 {
+				return fmt.Errorf("validate: spec.selector.matchExpressions[%d]: operator %q requires at least one value", i, expr.Operator)
+			}
+		}
 	}
 	return nil
 }

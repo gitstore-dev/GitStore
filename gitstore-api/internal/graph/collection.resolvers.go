@@ -7,10 +7,13 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"go.uber.org/zap"
 )
 
 // Products is the resolver for the products field.
@@ -34,14 +37,15 @@ func (r *collectionResolver) Products(ctx context.Context, obj *model.Collection
 		} `json:"selector"`
 	}
 	if c.Spec != nil {
-		if err := jsonUnmarshal(c.Spec, &spec); err == nil && spec.Selector != nil {
+		if err := jsonUnmarshal(c.Spec, &spec); err != nil {
+			r.logger.Warn("collection products: failed to unmarshal spec", zap.String("uid", uid), zap.Error(err))
+		} else if spec.Selector != nil {
 			selector := specSelectorToCatalog(spec.Selector)
-			ns := c.Namespace
-			products, err := r.service.ListProductsByLabelSelector(ctx, ns, selector)
+			products, err := r.service.ListProductsByLabelSelector(ctx, c.Namespace, selector)
 			if err != nil {
 				return nil, fmt.Errorf("failed to list collection products: %w", err)
 			}
-			return BuildProductConnectionFromSlice(products), nil
+			return BuildProductConnectionFromSlice(products, toPageParams(first, after, last, before)), nil
 		}
 	}
 	return &model.ProductConnection{
@@ -73,15 +77,21 @@ func (r *queryResolver) Collection(ctx context.Context, by model.CollectionBy) (
 			return nil, err
 		}
 		c, err := r.service.GetCollectionByUID(ctx, uid)
-		if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
 			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("collection lookup by id: %w", err)
 		}
 		return DatastoreCollectionToGraphQL(c), nil
 	}
 	if by.NamespacePath != nil {
 		c, err := r.service.GetCollectionByName(ctx, by.NamespacePath.Namespace, by.NamespacePath.Name)
-		if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
 			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("collection lookup by name: %w", err)
 		}
 		return DatastoreCollectionToGraphQL(c), nil
 	}
