@@ -30,7 +30,7 @@ The `password` field is always redacted in structured startup logs.
 
 ## Schema migrations (ScyllaDB only)
 
-Migrations are embedded via `//go:embed migrations/*.cql` and applied
+Migrations are embedded via `//go:embed *.cql` and applied
 automatically at startup via `gocqlx/v3/migrate.FromFS`. The keyspace is
 operator-provisioned; migrations own tables and indexes inside that keyspace.
 
