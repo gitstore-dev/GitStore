@@ -79,7 +79,7 @@ query {
 Provision a namespace and repository through the running API:
 
 ```bash
-make bootstrap NAMESPACE=gitstore REPOSITORY=catalog ADMIN_PASSWORD=<admin-password>
+make bootstrap NAMESPACE=gitstore-test REPOSITORY=catalog ADMIN_PASSWORD=<admin-password>
 ```
 
 Then clone over Smart HTTP using the clone URL printed by `make bootstrap`:

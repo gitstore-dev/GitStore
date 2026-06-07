@@ -122,7 +122,7 @@ func uniqueName(prefix string) string {
 // ── T032/T039: Full lifecycle — valid file accepted and queryable ─────────────
 
 func TestProductLifecycle_ValidFile_AcceptedAndQueryable(t *testing.T) {
-	ns := getEnv("NAMESPACE", "gitstore")
+	ns := getEnv("NAMESPACE", "gitstore-test")
 	name := uniqueName("lifecycle-valid")
 	h := newPushHelper(t)
 	h.commitProduct(name+".md", validProductFixture(name, ns))
@@ -170,7 +170,7 @@ func TestProductLifecycle_ValidFile_AcceptedAndQueryable(t *testing.T) {
 // ── T033/T040: Invalid title — push rejected with field-scoped error ──────────
 
 func TestProductLifecycle_InvalidTitle_PushRejected(t *testing.T) {
-	ns := getEnv("NAMESPACE", "gitstore")
+	ns := getEnv("NAMESPACE", "gitstore-test")
 	name := uniqueName("lifecycle-bad-title")
 	h := newPushHelper(t)
 	h.commitProduct(name+".md", invalidTitleFixture(name, ns))
@@ -190,7 +190,7 @@ func TestProductLifecycle_InvalidTitle_PushRejected(t *testing.T) {
 // ── T034/T040: Status key present — push rejected as system-managed ───────────
 
 func TestProductLifecycle_StatusPresent_PushRejected(t *testing.T) {
-	ns := getEnv("NAMESPACE", "gitstore")
+	ns := getEnv("NAMESPACE", "gitstore-test")
 	name := uniqueName("lifecycle-bad-status")
 	h := newPushHelper(t)
 	h.commitProduct(name+".md", invalidStatusFixture(name, ns))
@@ -210,7 +210,7 @@ func TestProductLifecycle_StatusPresent_PushRejected(t *testing.T) {
 // ── T035/T040: Missing fileRef.name — push rejected with indexed path ─────────
 
 func TestProductLifecycle_MissingFileRefName_PushRejected(t *testing.T) {
-	ns := getEnv("NAMESPACE", "gitstore")
+	ns := getEnv("NAMESPACE", "gitstore-test")
 	name := uniqueName("lifecycle-bad-media")
 	h := newPushHelper(t)
 	h.commitProduct(name+".md", invalidMediaFixture(name, ns))
@@ -229,7 +229,7 @@ func TestProductLifecycle_MissingFileRefName_PushRejected(t *testing.T) {
 func TestProductLifecycle_StatusHydration(t *testing.T) {
 	// This test requires a product to be ingested and a status blob written.
 	// It validates FR-010/FR-012 end-to-end via the GraphQL API.
-	ns := getEnv("NAMESPACE", "gitstore")
+	ns := getEnv("NAMESPACE", "gitstore-test")
 	name := uniqueName("lifecycle-status")
 	h := newPushHelper(t)
 	h.commitProduct(name+".md", validProductFixture(name, ns))

@@ -2,7 +2,7 @@
 
 **Feature Branch**: `020-pre-receive-validation-e2e`
 **Created**: 2026-06-06
-**Status**: Draft
+**Status**: Closed
 **Depends on**: 018-hook-pipeline-wiring, 019-fix-upload-pack
 
 ## Overview

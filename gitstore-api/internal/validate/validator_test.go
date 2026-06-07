@@ -617,3 +617,271 @@ body
 	assert.Contains(t, err.Error(), "spec.media[0]")
 	assert.Contains(t, err.Error(), "fileref.name")
 }
+
+// ── T018: ParseResource tests (must fail before T017 implementation) ──────────
+
+func TestParseResource_CategoryTaxonomy_ValidAllFields(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: electronics
+spec:
+  title: Electronics
+---
+body
+`
+	res, body, err := validate.ParseResource(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.NotNil(t, res.CategoryTaxonomy)
+	assert.Equal(t, "CategoryTaxonomy", res.Kind)
+	assert.Equal(t, "electronics", res.CategoryTaxonomy.Metadata.Name)
+	assert.Equal(t, "Electronics", res.CategoryTaxonomy.Spec.Title)
+	assert.NotEmpty(t, body)
+}
+
+func TestParseResource_CategoryTaxonomy_MissingTitle(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: electronics
+spec: {}
+---
+body
+`
+	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "spec.title")
+}
+
+func TestParseResource_CategoryTaxonomy_MissingName(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata: {}
+spec:
+  title: Electronics
+---
+body
+`
+	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata.name")
+}
+
+func TestParseResource_UnknownKind(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: UnknownKind
+metadata:
+  name: something
+spec:
+  title: Foo
+---
+body
+`
+	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "UnknownKind")
+	assert.Contains(t, err.Error(), "not a recognized")
+}
+
+func TestParseResource_CategoryTaxonomy_SelfReference(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: electronics
+spec:
+  title: Electronics
+  parentRef:
+    name: electronics
+---
+body
+`
+	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not reference the category itself")
+}
+
+func TestParseResource_Product_Regression(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec: {}
+---
+body
+`
+	res, body, err := validate.ParseResource(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.NotNil(t, res.Product)
+	assert.Equal(t, "Product", res.Kind)
+	assert.Equal(t, "my-product", res.Product.Metadata.Name)
+	assert.NotEmpty(t, body)
+}
+
+// ── T037: CategoryTaxonomy media validation ────────────────────────────────────
+
+func TestParseResource_CategoryTaxonomy_ValidMedia_Accepted(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: electronics
+spec:
+  title: Electronics
+  media:
+    - fileRef:
+        name: electronics-hero
+        kind: ImageFile
+---
+body
+`
+	res, _, err := validate.ParseResource(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, res.CategoryTaxonomy)
+	require.Len(t, res.CategoryTaxonomy.Spec.Media, 1)
+	assert.Equal(t, "electronics-hero", res.CategoryTaxonomy.Spec.Media[0].FileRef.Name)
+}
+
+func TestParseResource_CategoryTaxonomy_MediaMissingFileRefName_Rejected(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: electronics
+spec:
+  title: Electronics
+  media:
+    - fileRef:
+        kind: ImageFile
+---
+body
+`
+	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "media[0]")
+	assert.Contains(t, err.Error(), "name")
+}
+
+func TestParseResource_CategoryTaxonomy_MediaMissingFileRefKind_Rejected(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: electronics
+spec:
+  title: Electronics
+  media:
+    - fileRef:
+        name: electronics-hero
+---
+body
+`
+	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "media[0]")
+	assert.Contains(t, err.Error(), "kind")
+}
+
+func TestParseResource_CategoryTaxonomy_OptionalMediaMissingFile_Accepted(t *testing.T) {
+	// optional:true means the File resource need not exist at push time.
+	// Push-time validation only checks struct fields, not File existence.
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: electronics
+spec:
+  title: Electronics
+  media:
+    - fileRef:
+        name: optional-hero
+        kind: ImageFile
+        optional: true
+---
+body
+`
+	res, _, err := validate.ParseResource(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, res.CategoryTaxonomy)
+	assert.True(t, res.CategoryTaxonomy.Spec.Media[0].FileRef.Optional)
+}
+
+// ── T034: Product single-category constraint ───────────────────────────────────
+
+func TestParseResource_Product_SingleCategoryRef_Accepted(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec:
+  categoryRef:
+    name: electronics
+    kind: CategoryTaxonomy
+---
+body
+`
+	res, _, err := validate.ParseResource(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, res.Product)
+	require.NotNil(t, res.Product.Spec.CategoryRef)
+	assert.Equal(t, "electronics", res.Product.Spec.CategoryRef.Name)
+}
+
+func TestParseResource_Product_NoCategoryRef_Accepted(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec: {}
+---
+body
+`
+	res, _, err := validate.ParseResource(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, res.Product)
+	assert.Nil(t, res.Product.Spec.CategoryRef)
+}
+
+func TestParseResource_Product_CategoryRefArray_Rejected(t *testing.T) {
+	// YAML sequence under categoryRef cannot unmarshal into *ObjectReference.
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec:
+  categoryRef:
+    - name: electronics
+    - name: computers
+---
+body
+`
+	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	require.Error(t, err)
+}
+
+func TestParseResource_Product_CategoryRefPresentButEmptyName_Rejected(t *testing.T) {
+	doc := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: my-product
+spec:
+  categoryRef:
+    kind: CategoryTaxonomy
+---
+body
+`
+	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "categoryref.name")
+}

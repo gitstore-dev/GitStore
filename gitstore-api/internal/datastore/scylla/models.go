@@ -72,26 +72,66 @@ var (
 		SortKey: []string{},
 	})
 
-	Category = table.New(table.Metadata{
-		Name: "categories",
+	CategoryTaxonomy = table.New(table.Metadata{
+		Name: "category_taxonomy",
 		Columns: []string{
-			"bucket",
-			"created_at",
-			"id",
+			"namespace",
+			"creation_timestamp",
+			"uid",
 			"name",
-			"slug",
-			"parent_id",
-			"display_order",
-			"updated_at",
+			"api_version",
+			"kind",
+			"generation",
+			"resource_version",
+			"revision",
+			"labels",
+			"annotations",
+			"parent_name",
+			"ancestor_path",
+			"git_commit_sha",
+			"git_ref",
+			"spec",
 			"body",
+			"status",
 		},
 		PartKey: []string{
-			"bucket",
+			"namespace",
 		},
 		SortKey: []string{
-			"created_at",
-			"id",
+			"creation_timestamp",
+			"uid",
 		},
+	})
+
+	// CategoryTaxonomyByName is the lookup table for GetCategoryTaxonomyByName(namespace, name).
+	CategoryTaxonomyByName = table.New(table.Metadata{
+		Name: "category_taxonomy_by_name",
+		Columns: []string{
+			"namespace",
+			"name",
+			"uid",
+			"creation_timestamp",
+		},
+		PartKey: []string{
+			"namespace",
+		},
+		SortKey: []string{
+			"name",
+		},
+	})
+
+	// CategoryTaxonomyByUID is the lookup table for GetCategoryTaxonomy(uid).
+	CategoryTaxonomyByUID = table.New(table.Metadata{
+		Name: "category_taxonomy_by_uid",
+		Columns: []string{
+			"uid",
+			"namespace",
+			"creation_timestamp",
+		},
+		PartKey: []string{
+			"uid",
+		},
+		SortKey: []string{},
 	})
 
 	Collection = table.New(table.Metadata{

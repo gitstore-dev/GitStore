@@ -93,47 +93,40 @@ func (d *InstrumentedDatastore) DeleteProduct(ctx context.Context, id string) er
 	return err
 }
 
-// ── Category ───────────────────────────────────────────────────────────────
+// ── CategoryTaxonomy ───────────────────────────────────────────────────────
 
-func (d *InstrumentedDatastore) CreateCategory(ctx context.Context, c *Category) error {
+func (d *InstrumentedDatastore) CreateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error {
 	start := time.Now()
-	err := d.next.CreateCategory(ctx, c)
-	d.observe("CreateCategory", start, err)
+	err := d.next.CreateCategoryTaxonomy(ctx, c)
+	d.observe("CreateCategoryTaxonomy", start, err)
 	return err
 }
 
-func (d *InstrumentedDatastore) GetCategory(ctx context.Context, id string) (*Category, error) {
+func (d *InstrumentedDatastore) GetCategoryTaxonomy(ctx context.Context, uid string) (*CategoryTaxonomy, error) {
 	start := time.Now()
-	v, err := d.next.GetCategory(ctx, id)
-	d.observe("GetCategory", start, err)
+	v, err := d.next.GetCategoryTaxonomy(ctx, uid)
+	d.observe("GetCategoryTaxonomy", start, err)
 	return v, err
 }
 
-func (d *InstrumentedDatastore) GetCategoryBySlug(ctx context.Context, slug string) (*Category, error) {
+func (d *InstrumentedDatastore) GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*CategoryTaxonomy, error) {
 	start := time.Now()
-	v, err := d.next.GetCategoryBySlug(ctx, slug)
-	d.observe("GetCategoryBySlug", start, err)
+	v, err := d.next.GetCategoryTaxonomyByName(ctx, namespace, name)
+	d.observe("GetCategoryTaxonomyByName", start, err)
 	return v, err
 }
 
-func (d *InstrumentedDatastore) ListCategories(ctx context.Context, params PageParams) (*PageResult[Category], error) {
+func (d *InstrumentedDatastore) ListCategoryTaxonomies(ctx context.Context, namespace string, params PageParams) (*PageResult[CategoryTaxonomy], error) {
 	start := time.Now()
-	v, err := d.next.ListCategories(ctx, params)
-	d.observe("ListCategories", start, err)
+	v, err := d.next.ListCategoryTaxonomies(ctx, namespace, params)
+	d.observe("ListCategoryTaxonomies", start, err)
 	return v, err
 }
 
-func (d *InstrumentedDatastore) UpdateCategory(ctx context.Context, c *Category) error {
+func (d *InstrumentedDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error {
 	start := time.Now()
-	err := d.next.UpdateCategory(ctx, c)
-	d.observe("UpdateCategory", start, err)
-	return err
-}
-
-func (d *InstrumentedDatastore) DeleteCategory(ctx context.Context, id string) error {
-	start := time.Now()
-	err := d.next.DeleteCategory(ctx, id)
-	d.observe("DeleteCategory", start, err)
+	err := d.next.UpdateCategoryTaxonomy(ctx, c)
+	d.observe("UpdateCategoryTaxonomy", start, err)
 	return err
 }
 

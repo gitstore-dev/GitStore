@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	globalIDTestCategoryID   = "00000000-0000-0000-0000-000000000001"
+	globalIDTestCategoryUID  = "00000000-0000-0000-0000-000000000001"
 	globalIDTestCollectionID = "00000000-0000-0000-0000-000000000002"
 	globalIDTestProductUID   = "00000000-0000-0000-0000-000000000003"
 	globalIDTestNamespaceID  = "00000000-0000-0000-0000-000000000004"
@@ -45,7 +45,7 @@ func TestQueryNodesPreservesOrderAndSkipsInvalidIDs(t *testing.T) {
 	nodes, err := query.Nodes(ctx, []string{
 		mustEncodeNodeID(nodeKindNamespace, globalIDTestNamespaceID),
 		"not-base64!",
-		mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryID),
+		mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryUID),
 		mustEncodeNodeID(nodeKindCollection, globalIDTestCollectionID),
 		mustEncodeNodeID(nodeKindProduct, globalIDTestProductUID),
 		mustEncodeNodeID(nodeKindProduct, "missing"),
@@ -71,11 +71,11 @@ func TestLookupQueriesAcceptGlobalIDs(t *testing.T) {
 	require.NotNil(t, product)
 	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductUID), product.ID)
 
-	categoryID := mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryID)
+	categoryID := mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryUID)
 	category, err := query.Category(ctx, model.CategoryBy{ID: &categoryID})
 	require.NoError(t, err)
 	require.NotNil(t, category)
-	assert.Equal(t, mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryID), category.ID)
+	assert.Equal(t, categoryID, category.ID)
 
 	collectionID := mustEncodeNodeID(nodeKindCollection, globalIDTestCollectionID)
 	collection, err := query.Collection(ctx, model.CollectionBy{ID: &collectionID})
@@ -122,12 +122,15 @@ func newGlobalIDTestResolver(t *testing.T) (datastore.Datastore, *Resolver) {
 func seedGlobalIDTestData(t *testing.T, ctx context.Context, store datastore.Datastore) {
 	t.Helper()
 	now := time.Now()
-	require.NoError(t, store.CreateCategory(ctx, &datastore.Category{
-		ID:        globalIDTestCategoryID,
-		Name:      "Category 1",
-		Slug:      "category-1",
-		CreatedAt: now,
-		UpdatedAt: now,
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{
+		UID:               globalIDTestCategoryUID,
+		Namespace:         "test-store",
+		Name:              "category-1",
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "CategoryTaxonomy",
+		Generation:        1,
+		ResourceVersion:   "1",
+		CreationTimestamp: now,
 	}))
 	require.NoError(t, store.CreateCollection(ctx, &datastore.Collection{
 		ID:        globalIDTestCollectionID,

@@ -619,22 +619,39 @@ pub fn build_pack_for_wants(
         return Ok(Vec::new());
     }
 
-    let num_entries = counts.len() as u32;
-
     let entries_iter = output::entry::iter_from_counts(
         counts,
         odb.clone(),
         Box::new(gix::progress::Discard),
-        gix_pack::data::output::entry::iter_from_counts::Options::default(),
+        gix_pack::data::output::entry::iter_from_counts::Options {
+            thread_limit: Some(1),
+            ..Default::default()
+        },
     );
 
+    // Collect all entries first so we know the exact count before creating
+    // FromEntriesIter. Passing an incorrect count causes an index-out-of-bounds
+    // panic in gix-pack 0.71.0 when delta expansion inflates the entry count
+    // beyond counts.len().
     type BatchResult =
         Result<Vec<output::Entry>, gix_pack::data::output::entry::iter_from_counts::Error>;
+    let all_entries: Vec<Vec<output::Entry>> = entries_iter
+        .into_iter()
+        .map(|r| -> BatchResult { r.map(|(_seq, entries)| entries) })
+        .collect::<Result<_, _>>()
+        .map_err(|e| anyhow::anyhow!("pack entry collection error: {e}"))?;
+    let num_entries: u32 = all_entries.iter().map(|b| b.len() as u32).sum();
+
+    if num_entries == 0 {
+        return Ok(Vec::new());
+    }
+
     let mut pack_bytes: Vec<u8> = Vec::new();
+    type EntryBatch = Vec<output::Entry>;
     let mut bytes_iter = gix_pack::data::output::bytes::FromEntriesIter::new(
-        entries_iter
+        all_entries
             .into_iter()
-            .map(|r| -> BatchResult { r.map(|(_seq, entries)| entries) }),
+            .map(Ok::<EntryBatch, std::convert::Infallible>),
         &mut pack_bytes,
         num_entries,
         gix_pack::data::Version::V2,

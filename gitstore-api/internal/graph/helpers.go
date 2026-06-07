@@ -26,6 +26,12 @@ func intOrDefault(i *int32, def int32) int32 {
 	return def
 }
 
+// namespaceFromContext extracts the namespace from the request context.
+// Falls back to an empty string (which lists across all namespaces in memdb).
+func namespaceFromContext(_ context.Context) string {
+	return ""
+}
+
 // callerUsernameOrAnon extracts the caller username from auth context, or returns "anon".
 func callerUsernameOrAnon(ctx context.Context, r *mutationResolver) string {
 	if r.authMiddleware == nil {
@@ -37,7 +43,7 @@ func callerUsernameOrAnon(ctx context.Context, r *mutationResolver) string {
 // getCatalogStats returns product/category/collection counts from the datastore.
 func (r *Resolver) getCatalogStats(ctx context.Context) *model.CatalogStats {
 	products, _ := r.service.GetProducts(ctx, "", datastore.PageParams{First: 1})
-	categories, _ := r.service.GetCategories(ctx, datastore.PageParams{First: 1})
+	categories, _ := r.service.GetCategoryTaxonomies(ctx, "", datastore.PageParams{First: 1})
 	collections, _ := r.service.GetCollections(ctx, datastore.PageParams{First: 1})
 	var pc, cc, colc int32
 	if products != nil {

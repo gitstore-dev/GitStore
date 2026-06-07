@@ -292,3 +292,59 @@ func TestStatusFromJSON_JPY_PriceRange_NoLoss(t *testing.T) {
 	assert.Equal(t, "299.75", kwd.Min.String())
 	assert.Equal(t, "599.5", kwd.Max.String())
 }
+
+// ── DatastoreCategoryTaxonomyToGraphQL ───────────────────────────────────────
+
+func newTestCategoryTaxonomy() *datastore.CategoryTaxonomy {
+	return &datastore.CategoryTaxonomy{
+		UID:               "00000000-0000-0000-0000-000000000099",
+		Namespace:         "test-ns",
+		Name:              "electronics",
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "CategoryTaxonomy",
+		Generation:        1,
+		ResourceVersion:   "rv1",
+		CreationTimestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+}
+
+func TestDatastoreCategoryTaxonomyToGraphQL_MediaHydration(t *testing.T) {
+	c := newTestCategoryTaxonomy()
+	c.Spec = json.RawMessage(`{"title":"Electronics","media":[{"fileRef":{"name":"banner","kind":"File","optional":false}},{"fileRef":{"name":"icon","kind":"File","optional":true}}]}`)
+
+	got := DatastoreCategoryTaxonomyToGraphQL(c)
+	require.NotNil(t, got)
+	require.NotNil(t, got.Spec)
+	require.Len(t, got.Spec.Media, 2)
+	assert.Equal(t, "banner", got.Spec.Media[0].FileRef.Name)
+	assert.Equal(t, "File", got.Spec.Media[0].FileRef.Kind)
+	assert.False(t, got.Spec.Media[0].FileRef.Optional)
+	assert.Equal(t, "icon", got.Spec.Media[1].FileRef.Name)
+	assert.True(t, got.Spec.Media[1].FileRef.Optional)
+}
+
+func TestDatastoreCategoryTaxonomyToGraphQL_NilSpec_ReturnsEmptyMedia(t *testing.T) {
+	c := newTestCategoryTaxonomy()
+	c.Spec = nil
+
+	got := DatastoreCategoryTaxonomyToGraphQL(c)
+	require.NotNil(t, got)
+	require.NotNil(t, got.Spec)
+	assert.NotNil(t, got.Spec.Media)
+	assert.Empty(t, got.Spec.Media)
+}
+
+func TestDatastoreCategoryTaxonomyToGraphQL_NoMedia_ReturnsEmptyMedia(t *testing.T) {
+	c := newTestCategoryTaxonomy()
+	c.Spec = json.RawMessage(`{"title":"Electronics"}`)
+
+	got := DatastoreCategoryTaxonomyToGraphQL(c)
+	require.NotNil(t, got)
+	require.NotNil(t, got.Spec)
+	assert.NotNil(t, got.Spec.Media)
+	assert.Empty(t, got.Spec.Media)
+}
+
+func TestDatastoreCategoryTaxonomyToGraphQL_NilCategoryTaxonomy_ReturnsNil(t *testing.T) {
+	assert.Nil(t, DatastoreCategoryTaxonomyToGraphQL(nil))
+}

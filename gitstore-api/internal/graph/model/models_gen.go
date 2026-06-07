@@ -66,31 +66,35 @@ type CatalogVersion struct {
 	Stats *CatalogStats `json:"stats"`
 }
 
-// Category represents a hierarchical classification system for products
+// Category represents a hierarchical classification system for products.
+// Follows the Kubernetes-style resource envelope: id / apiVersion / kind / metadata / spec / status.
+// Tree-traversal convenience fields (parent, children, path, depth, products, body) are top-level
+// because they are computed or graph-linked and do not belong in spec or status.
 type Category struct {
 	// Globally unique identifier (format: cat_[base62])
 	ID string `json:"id"`
-	// Category display name
-	Name string `json:"name"`
-	// URL-friendly slug (unique)
-	Slug string `json:"slug"`
-	// Parent category (null for root categories)
-	Parent *Category `json:"parent,omitempty"`
-	// Child categories (subcategories)
-	Children []*Category `json:"children"`
-	// Display order within parent
-	DisplayOrder int32 `json:"displayOrder"`
-	// Products in this category (includes subcategory products)
-	Products *ProductConnection `json:"products"`
-	// Markdown body content (category description with rich formatting)
+	// Kubernetes-style apiVersion (e.g. catalog.gitstore.dev/v1beta1).
+	APIVersion *string `json:"apiVersion,omitempty"`
+	// Resource kind. Always "CategoryTaxonomy" for git-backed categories.
+	Kind *string `json:"kind,omitempty"`
+	// Resource metadata (name, labels, system-assigned fields).
+	Metadata *CategoryObjectMeta `json:"metadata"`
+	// Author-supplied specification (title, parentRef, media).
+	Spec *CategorySpec `json:"spec"`
+	// System-written status. Null until the first push is admitted.
+	Status *CategoryTaxonomyStatus `json:"status,omitempty"`
+	// Markdown body content (category description).
 	Body *string `json:"body,omitempty"`
-	// Creation timestamp
-	CreatedAt time.Time `json:"createdAt"`
-	// Last modification timestamp
-	UpdatedAt time.Time `json:"updatedAt"`
-	// Full path from root (e.g., ["Electronics", "Computers", "Laptops"])
+	// Parent category (null for root categories).
+	Parent *Category `json:"parent,omitempty"`
+	// Direct child categories.
+	Children []*Category `json:"children"`
+	// Products in this category (includes subcategory products).
+	Products *ProductConnection `json:"products"`
+	// Full path from root (e.g., ["electronics", "computers", "laptops"]).
+	// Derived from the materialized ancestor path stored at admission time.
 	Path []string `json:"path"`
-	// Depth in tree (root = 0)
+	// Depth in tree (root = 0).
 	Depth int32 `json:"depth"`
 }
 
@@ -101,8 +105,20 @@ func (this Category) GetID() string { return this.ID }
 
 // Selector for looking up a category by exactly one unique key.
 type CategoryBy struct {
-	ID   *string `json:"id,omitempty"`
-	Slug *string `json:"slug,omitempty"`
+	// Look up by globally unique Relay ID (encodes the category UID).
+	ID *string `json:"id,omitempty"`
+	// Look up by namespace identifier + category name (Kubernetes-style metadata.name).
+	NamespacePath *CategoryNamespacePath `json:"namespacePath,omitempty"`
+}
+
+// A named status condition following the Kubernetes condition convention.
+type CategoryCondition struct {
+	Type               string    `json:"type"`
+	Status             string    `json:"status"`
+	ObservedGeneration int32     `json:"observedGeneration"`
+	LastTransitionTime time.Time `json:"lastTransitionTime"`
+	Reason             *string   `json:"reason,omitempty"`
+	Message            *string   `json:"message,omitempty"`
 }
 
 // Connection type for paginated categories (Relay pattern)
@@ -123,6 +139,29 @@ type CategoryEdge struct {
 	Node *Category `json:"node"`
 }
 
+// Composite selector: namespace identifier (human-readable slug) + category name.
+type CategoryNamespacePath struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// Metadata for a CategoryTaxonomy resource.
+// Author-supplied fields (name, namespace, labels, annotations) originate from the git file.
+// System-assigned fields (uid through ownerReferences) are written by the ingest pipeline.
+type CategoryObjectMeta struct {
+	Name      string  `json:"name"`
+	Namespace *string `json:"namespace,omitempty"`
+	// Kubernetes-style labels. Use KeyValuePair list (JSON type alignment with Product deferred).
+	Labels            []*KeyValuePair   `json:"labels"`
+	Annotations       []*KeyValuePair   `json:"annotations"`
+	UID               string            `json:"uid"`
+	ResourceVersion   string            `json:"resourceVersion"`
+	Generation        int32             `json:"generation"`
+	CreationTimestamp time.Time         `json:"creationTimestamp"`
+	Revision          *string           `json:"revision,omitempty"`
+	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
+}
+
 // Optimistic lock conflict for category
 type CategoryOptimisticLockConflict struct {
 	// TODO: Should this be a datetime?
@@ -135,6 +174,21 @@ type CategoryOptimisticLockConflict struct {
 	Current *Category `json:"current"`
 	// Diff between current and attempted
 	Diff string `json:"diff"`
+}
+
+// Author-supplied specification for a CategoryTaxonomy resource.
+type CategorySpec struct {
+	Title     string                  `json:"title"`
+	ParentRef *CatalogObjectReference `json:"parentRef,omitempty"`
+	Media     []*MediaDefinition      `json:"media"`
+}
+
+// System-written status for a git-backed CategoryTaxonomy resource.
+type CategoryTaxonomyStatus struct {
+	ObservedGeneration  int32                     `json:"observedGeneration"`
+	LastAppliedRevision string                    `json:"lastAppliedRevision"`
+	Conditions          []*CategoryCondition      `json:"conditions"`
+	Resolved            *ResolvedCategoryTaxonomy `json:"resolved,omitempty"`
 }
 
 // Collection represents a curated grouping of products (flat, non-hierarchical)
@@ -357,6 +411,12 @@ type FileReference struct {
 	Name     string `json:"name"`
 	Kind     string `json:"kind"`
 	Optional bool   `json:"optional"`
+}
+
+// A key-value pair for label maps.
+type KeyValuePair struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 // Login mutation input (Relay pattern)
@@ -714,6 +774,14 @@ type RepositoryNamespacePath struct {
 type ResolvedCategoryDefinition struct {
 	Name string   `json:"name"`
 	Path []string `json:"path"`
+}
+
+// Controller-computed category hierarchy metadata.
+type ResolvedCategoryTaxonomy struct {
+	Depth        int32  `json:"depth"`
+	AncestorPath string `json:"ancestorPath"`
+	ChildCount   int32  `json:"childCount"`
+	ProductCount int32  `json:"productCount"`
 }
 
 type ResolvedFileDefinition struct {

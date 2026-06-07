@@ -265,86 +265,78 @@ func (m *memdbDatastore) DeleteProduct(_ context.Context, uid string) error {
 	return nil
 }
 
-// ── Category ──────────────────────────────────────────────────────────────────
+// ── CategoryTaxonomy ──────────────────────────────────────────────────────────
 
-func (m *memdbDatastore) CreateCategory(_ context.Context, c *datastore.Category) error {
+func (m *memdbDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy) error {
 	txn := m.db.Txn(true)
-	if raw, _ := txn.First("category", "id", c.ID); raw != nil {
+	if raw, _ := txn.First("category_taxonomy", "id", c.UID); raw != nil {
 		txn.Abort()
-		return fmt.Errorf("%w: category id %s", datastore.ErrAlreadyExists, c.ID)
+		return fmt.Errorf("%w: category_taxonomy uid %s", datastore.ErrAlreadyExists, c.UID)
 	}
-	if raw, _ := txn.First("category", "slug", c.Slug); raw != nil {
+	if raw, _ := txn.First("category_taxonomy", "name_namespace", c.Namespace, c.Name); raw != nil {
 		txn.Abort()
-		return fmt.Errorf("%w: category slug %s", datastore.ErrAlreadyExists, c.Slug)
+		return fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrAlreadyExists, c.Namespace, c.Name)
 	}
-	if err := txn.Insert("category", c); err != nil {
+	if err := txn.Insert("category_taxonomy", c); err != nil {
 		txn.Abort()
-		return fmt.Errorf("memdb: insert category: %w", err)
+		return fmt.Errorf("memdb: insert category_taxonomy: %w", err)
 	}
 	txn.Commit()
 	return nil
 }
 
-func (m *memdbDatastore) GetCategory(_ context.Context, id string) (*datastore.Category, error) {
+func (m *memdbDatastore) GetCategoryTaxonomy(_ context.Context, uid string) (*datastore.CategoryTaxonomy, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
-	raw, err := txn.First("category", "id", id)
+	raw, err := txn.First("category_taxonomy", "id", uid)
 	if err != nil || raw == nil {
 		return nil, notFoundOrErr(err)
 	}
-	return raw.(*datastore.Category), nil
+	return raw.(*datastore.CategoryTaxonomy), nil
 }
 
-func (m *memdbDatastore) GetCategoryBySlug(_ context.Context, slug string) (*datastore.Category, error) {
+func (m *memdbDatastore) GetCategoryTaxonomyByName(_ context.Context, namespace, name string) (*datastore.CategoryTaxonomy, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
-	raw, err := txn.First("category", "slug", slug)
+	raw, err := txn.First("category_taxonomy", "name_namespace", namespace, name)
 	if err != nil || raw == nil {
 		return nil, notFoundOrErr(err)
 	}
-	return raw.(*datastore.Category), nil
+	return raw.(*datastore.CategoryTaxonomy), nil
 }
 
-func (m *memdbDatastore) ListCategories(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Category], error) {
+func (m *memdbDatastore) ListCategoryTaxonomies(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
-	it, err := txn.Get("category", "id")
+
+	var it gomemdb.ResultIterator
+	var err error
+	if namespace != "" {
+		it, err = txn.Get("category_taxonomy", "namespace", namespace)
+	} else {
+		it, err = txn.Get("category_taxonomy", "id")
+	}
 	if err != nil {
-		return nil, fmt.Errorf("memdb: list categories: %w", err)
+		return nil, fmt.Errorf("memdb: list category_taxonomies: %w", err)
 	}
-	var all []*datastore.Category
+	var all []*datastore.CategoryTaxonomy
 	for obj := it.Next(); obj != nil; obj = it.Next() {
-		all = append(all, obj.(*datastore.Category))
+		all = append(all, obj.(*datastore.CategoryTaxonomy))
 	}
-	return paginateSlice(all, page, func(c *datastore.Category) (time.Time, string) {
-		return c.CreatedAt, c.ID
+	return paginateSlice(all, page, func(c *datastore.CategoryTaxonomy) (time.Time, string) {
+		return c.CreationTimestamp, c.UID
 	}), nil
 }
 
-func (m *memdbDatastore) UpdateCategory(_ context.Context, c *datastore.Category) error {
+func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy) error {
 	txn := m.db.Txn(true)
-	if raw, _ := txn.First("category", "id", c.ID); raw == nil {
+	if raw, _ := txn.First("category_taxonomy", "name_namespace", c.Namespace, c.Name); raw == nil {
 		txn.Abort()
-		return fmt.Errorf("%w: category id %s", datastore.ErrNotFound, c.ID)
+		return fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrNotFound, c.Namespace, c.Name)
 	}
-	if err := txn.Insert("category", c); err != nil {
+	if err := txn.Insert("category_taxonomy", c); err != nil {
 		txn.Abort()
-		return fmt.Errorf("memdb: update category: %w", err)
-	}
-	txn.Commit()
-	return nil
-}
-
-func (m *memdbDatastore) DeleteCategory(_ context.Context, id string) error {
-	txn := m.db.Txn(true)
-	raw, _ := txn.First("category", "id", id)
-	if raw == nil {
-		txn.Abort()
-		return fmt.Errorf("%w: category id %s", datastore.ErrNotFound, id)
-	}
-	if err := txn.Delete("category", raw); err != nil {
-		txn.Abort()
-		return fmt.Errorf("memdb: delete category: %w", err)
+		return fmt.Errorf("memdb: update category_taxonomy: %w", err)
 	}
 	txn.Commit()
 	return nil
