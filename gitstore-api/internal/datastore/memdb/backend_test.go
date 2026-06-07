@@ -33,13 +33,16 @@ func productFixture(uid, namespace, name string) *datastore.Product {
 	}
 }
 
-func categoryFixture(id, slug string) *datastore.Category {
-	return &datastore.Category{
-		ID:        id,
-		Name:      "Test Category",
-		Slug:      slug,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+func categoryTaxonomyFixture(uid, name string) *datastore.CategoryTaxonomy {
+	return &datastore.CategoryTaxonomy{
+		UID:               uid,
+		Namespace:         "test-ns",
+		Name:              name,
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "CategoryTaxonomy",
+		Generation:        1,
+		ResourceVersion:   "1",
+		CreationTimestamp: time.Now(),
 	}
 }
 
@@ -184,55 +187,46 @@ func TestMemdb_DeleteProduct_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
-// ── Category tests ────────────────────────────────────────────────────────────
+// ── CategoryTaxonomy tests ────────────────────────────────────────────────────
 
-func TestMemdb_CreateAndGetCategory(t *testing.T) {
+func TestMemdb_CreateAndGetCategoryTaxonomy(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
-	c := categoryFixture("b0000000-0000-0000-0000-000000000001", "test-cat")
-	require.NoError(t, ds.CreateCategory(ctx, c))
+	c := categoryTaxonomyFixture("b0000000-0000-0000-0000-000000000001", "electronics")
+	require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
 
-	got, err := ds.GetCategory(ctx, c.ID)
+	got, err := ds.GetCategoryTaxonomyByName(ctx, c.Namespace, c.Name)
 	require.NoError(t, err)
-	assert.Equal(t, c.Slug, got.Slug)
+	assert.Equal(t, c.UID, got.UID)
+
+	gotByUID, err := ds.GetCategoryTaxonomy(ctx, c.UID)
+	require.NoError(t, err)
+	assert.Equal(t, c.Name, gotByUID.Name)
 }
 
-func TestMemdb_GetCategory_NotFound(t *testing.T) {
+func TestMemdb_GetCategoryTaxonomy_NotFound(t *testing.T) {
 	ds := newBackend(t)
-	_, err := ds.GetCategory(context.Background(), "b0000000-0000-0000-0000-000000000099")
+	_, err := ds.GetCategoryTaxonomyByName(context.Background(), "test-ns", "no-such-cat")
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+
+	_, err = ds.GetCategoryTaxonomy(context.Background(), "b0000000-0000-0000-0000-000000000099")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
-func TestMemdb_GetCategoryBySlug(t *testing.T) {
+func TestMemdb_CreateCategoryTaxonomy_DuplicateNameReturnsAlreadyExists(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
-	c := categoryFixture("b0000000-0000-0000-0000-000000000002", "slug-lookup")
-	require.NoError(t, ds.CreateCategory(ctx, c))
-
-	got, err := ds.GetCategoryBySlug(ctx, "slug-lookup")
-	require.NoError(t, err)
-	assert.Equal(t, c.ID, got.ID)
-}
-
-func TestMemdb_GetCategoryBySlug_NotFound(t *testing.T) {
-	ds := newBackend(t)
-	_, err := ds.GetCategoryBySlug(context.Background(), "no-such-slug")
-	require.ErrorIs(t, err, datastore.ErrNotFound)
-}
-
-func TestMemdb_CreateCategory_DuplicateSlugReturnsAlreadyExists(t *testing.T) {
-	ds := newBackend(t)
-	ctx := context.Background()
-	c1 := categoryFixture("b0000000-0000-0000-0000-000000000003", "dupe-slug")
-	c2 := categoryFixture("b0000000-0000-0000-0000-000000000004", "dupe-slug")
-	require.NoError(t, ds.CreateCategory(ctx, c1))
-	err := ds.CreateCategory(ctx, c2)
+	c1 := categoryTaxonomyFixture("b0000000-0000-0000-0000-000000000003", "dupe-cat")
+	c2 := categoryTaxonomyFixture("b0000000-0000-0000-0000-000000000004", "dupe-cat")
+	require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c1))
+	err := ds.CreateCategoryTaxonomy(ctx, c2)
 	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
 }
 
-func TestMemdb_DeleteCategory_NotFound(t *testing.T) {
+func TestMemdb_UpdateCategoryTaxonomy_NotFound(t *testing.T) {
 	ds := newBackend(t)
-	err := ds.DeleteCategory(context.Background(), "b0000000-0000-0000-0000-000000000099")
+	c := categoryTaxonomyFixture("b0000000-0000-0000-0000-000000000099", "ghost-cat")
+	err := ds.UpdateCategoryTaxonomy(context.Background(), c)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 

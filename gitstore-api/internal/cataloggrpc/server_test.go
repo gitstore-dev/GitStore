@@ -9,14 +9,20 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testRepoID is a fixed UUID used as the repository ID in AdmitResources tests.
+// The memdb UUIDFieldIndex requires exactly 36 characters.
+const testRepoID = "00000000-0000-0000-0000-000000000001"
 
 // validProduct is a minimal valid product YAML frontmatter blob.
 const validProduct = `---
@@ -36,7 +42,7 @@ A test product.
 func TestValidateResources_ValidBlob_Accepted(t *testing.T) {
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "products/widget.md", BlobOid: "abc", Content: []byte(validProduct)},
 		},
@@ -62,7 +68,7 @@ status:
 `
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "products/bad.md", BlobOid: "abc", Content: []byte(content)},
 		},
@@ -81,7 +87,7 @@ func TestValidateResources_TitleTooLong_Rejected(t *testing.T) {
 	content := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: long\n  namespace: gitstore\nspec:\n  title: " + longTitle + "\n---\n"
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "products/long.md", BlobOid: "abc", Content: []byte(content)},
 		},
@@ -110,7 +116,7 @@ status:
 `
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "products/widget.md", BlobOid: "aaa", Content: []byte(validProduct)},
 			{Path: "products/bad.md", BlobOid: "bbb", Content: []byte(badContent)},
@@ -129,7 +135,7 @@ func TestValidateResources_NonfrontmatterBlob_NoError(t *testing.T) {
 	content := []byte("This is a plain README without frontmatter.\n")
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
 			{Path: "README.md", BlobOid: "abc", Content: content},
 		},
@@ -162,7 +168,7 @@ func containsSubstring(msgs []string, sub string) bool {
 func TestValidateResources_EmptyBlobs_Accepted(t *testing.T) {
 	srv := cataloggrpc.NewServer(nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		Blobs:        nil,
 	})
 	require.NoError(t, err)
@@ -207,7 +213,7 @@ func TestAdmitResources_NewProduct_Created(t *testing.T) {
 
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -239,7 +245,7 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 
 	// First admission — creates the product
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -253,7 +259,7 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 
 	// Second admission — updates the product
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("b", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -283,7 +289,7 @@ func TestAdmitResources_TwoProducts_BothStored(t *testing.T) {
 
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -313,7 +319,7 @@ func TestAdmitResources_OneParseFailure_OtherStored(t *testing.T) {
 
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -340,7 +346,7 @@ func TestAdmitResources_AdmissionAcceptedConditionSet(t *testing.T) {
 
 	srv := cataloggrpc.NewServerForTest(memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: "repo-1",
+		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
@@ -369,14 +375,886 @@ func TestAdmitResources_AdmissionAcceptedConditionSet(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// T019: ValidateResources — CategoryTaxonomy schema validation
+// ---------------------------------------------------------------------------
+
+const validCategoryTaxonomy = `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: electronics
+  namespace: gitstore
+spec:
+  title: Electronics
+---
+
+A category for electronic products.
+`
+
+func TestValidateResources_CategoryTaxonomy_Accepted(t *testing.T) {
+	srv := cataloggrpc.NewServer(nil, nil)
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs: []*catalogv1.ResourceBlob{
+			{Path: "categories/electronics.md", BlobOid: "abc", Content: []byte(validCategoryTaxonomy)},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Accepted)
+	assert.Empty(t, resp.Errors)
+}
+
+func TestValidateResources_CategoryTaxonomy_MissingTitle_Rejected(t *testing.T) {
+	content := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: electronics
+  namespace: gitstore
+spec: {}
+---
+`
+	srv := cataloggrpc.NewServer(nil, nil)
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs: []*catalogv1.ResourceBlob{
+			{Path: "categories/electronics.md", BlobOid: "abc", Content: []byte(content)},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Accepted)
+	require.NotEmpty(t, resp.Errors)
+	msgs := collectMessages(resp.Errors)
+	assert.True(t, containsSubstring(msgs, "spec.title"), "expected spec.title in error")
+}
+
+func TestValidateResources_CategoryTaxonomy_MissingName_Rejected(t *testing.T) {
+	content := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata: {}
+spec:
+  title: Electronics
+---
+`
+	srv := cataloggrpc.NewServer(nil, nil)
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs: []*catalogv1.ResourceBlob{
+			{Path: "categories/electronics.md", BlobOid: "abc", Content: []byte(content)},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Accepted)
+	require.NotEmpty(t, resp.Errors)
+	msgs := collectMessages(resp.Errors)
+	assert.True(t, containsSubstring(msgs, "metadata.name"), "expected metadata.name in error")
+}
+
+func TestValidateResources_CategoryTaxonomy_StatusKey_Rejected(t *testing.T) {
+	content := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: electronics
+spec:
+  title: Electronics
+status:
+  phase: ready
+---
+`
+	srv := cataloggrpc.NewServer(nil, nil)
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs: []*catalogv1.ResourceBlob{
+			{Path: "categories/electronics.md", BlobOid: "abc", Content: []byte(content)},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Accepted)
+	msgs := collectMessages(resp.Errors)
+	assert.True(t, containsSubstring(msgs, "status"), "expected 'status' in error message")
+}
+
+func TestValidateResources_UnknownKind_Rejected(t *testing.T) {
+	content := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: UnknownKind
+metadata:
+  name: foo
+spec:
+  title: Foo
+---
+`
+	srv := cataloggrpc.NewServer(nil, nil)
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs: []*catalogv1.ResourceBlob{
+			{Path: "things/foo.md", BlobOid: "abc", Content: []byte(content)},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Accepted)
+	msgs := collectMessages(resp.Errors)
+	assert.True(t, containsSubstring(msgs, "not a recognized"), "expected 'not a recognized' in error")
+}
+
+func TestValidateResources_ProductAndCategoryTaxonomy_BothValidated(t *testing.T) {
+	srv := cataloggrpc.NewServer(nil, nil)
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs: []*catalogv1.ResourceBlob{
+			{Path: "products/widget.md", BlobOid: "abc", Content: []byte(validProduct)},
+			{Path: "categories/electronics.md", BlobOid: "def", Content: []byte(validCategoryTaxonomy)},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Accepted)
+	assert.Empty(t, resp.Errors)
+}
+
+// ---------------------------------------------------------------------------
+// T020: AdmitResources — CategoryTaxonomy admission
+// ---------------------------------------------------------------------------
+
+func makeCategoryTaxonomy(name string) []byte {
+	return []byte(`---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: ` + name + `
+  namespace: gitstore
+spec:
+  title: ` + strings.ToUpper(name[:1]) + name[1:] + `
+---
+
+Category body.
+`)
+}
+
+func TestAdmitResources_CategoryTaxonomy_Created(t *testing.T) {
+	memStore := newTestDatastore(t)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/electronics.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeCategoryTaxonomy("electronics"), nil
+		},
+	}
+
+	srv := cataloggrpc.NewServerForTest(memStore, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	got, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, err)
+	assert.Equal(t, "electronics", got.Name)
+	assert.Equal(t, int64(1), got.Generation)
+	assert.NotEmpty(t, got.UID)
+	assert.False(t, got.CreationTimestamp.IsZero())
+}
+
+func TestAdmitResources_CategoryTaxonomy_Updated(t *testing.T) {
+	memStore := newTestDatastore(t)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/electronics.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeCategoryTaxonomy("electronics"), nil
+		},
+	}
+
+	srv := cataloggrpc.NewServerForTest(memStore, git)
+
+	// First admission
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	c1, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, err)
+	uid1 := c1.UID
+	gen1 := c1.Generation
+
+	// Second admission — update
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("b", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	c2, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, err)
+	assert.Equal(t, uid1, c2.UID, "UID must be preserved on update")
+	assert.Greater(t, c2.Generation, gen1, "generation must be incremented")
+}
+
+func TestAdmitResources_CategoryTaxonomy_AdmissionAcceptedCondition(t *testing.T) {
+	memStore := newTestDatastore(t)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/electronics.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeCategoryTaxonomy("electronics"), nil
+		},
+	}
+
+	srv := cataloggrpc.NewServerForTest(memStore, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	c, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, err)
+
+	var status struct {
+		Conditions []struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		} `json:"conditions"`
+	}
+	require.NoError(t, json.Unmarshal(c.Status, &status))
+	var found bool
+	for _, cond := range status.Conditions {
+		if cond.Type == "AdmissionAccepted" && cond.Status == "True" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "AdmissionAccepted: True condition must be set")
+}
+
+func TestAdmitResources_CategoryTaxonomy_RootAncestorPath(t *testing.T) {
+	memStore := newTestDatastore(t)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/electronics.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeCategoryTaxonomy("electronics"), nil
+		},
+	}
+
+	srv := cataloggrpc.NewServerForTest(memStore, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	c, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, err)
+	assert.Equal(t, "electronics", c.AncestorPath, "root category AncestorPath must equal its own name")
+	assert.Equal(t, "", c.ParentName, "root category ParentName must be empty")
+}
+
+// ---------------------------------------------------------------------------
+// T029: Cycle detection
+// ---------------------------------------------------------------------------
+
+func makeCategoryTaxonomyWithParent(name, parentName string) []byte {
+	return []byte(`---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: ` + name + `
+  namespace: gitstore
+spec:
+  title: ` + name + `
+  parentRef:
+    name: ` + parentName + `
+---
+`)
+}
+
+func TestAdmitResources_IntraPushCycle_BothStoredWithAcyclicFalse(t *testing.T) {
+	memStore := newTestDatastore(t)
+	files := map[string][]byte{
+		"categories/a.md": makeCategoryTaxonomyWithParent("a", "b"),
+		"categories/b.md": makeCategoryTaxonomyWithParent("b", "a"),
+	}
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/a.md", "categories/b.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, _ string) ([]byte, error) {
+			return files[path], nil
+		},
+	}
+
+	srv := cataloggrpc.NewServerForTest(memStore, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	for _, name := range []string{"a", "b"} {
+		c, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", name)
+		require.NoError(t, err, "category %q must be stored", name)
+
+		var status struct {
+			Conditions []struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+			} `json:"conditions"`
+		}
+		require.NoError(t, json.Unmarshal(c.Status, &status))
+		var acyclicCond *struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		}
+		for i := range status.Conditions {
+			if status.Conditions[i].Type == "Acyclic" {
+				acyclicCond = &status.Conditions[i]
+				break
+			}
+		}
+		require.NotNil(t, acyclicCond, "category %q must have Acyclic condition", name)
+		assert.Equal(t, "False", acyclicCond.Status, "category %q in a cycle must have Acyclic=False", name)
+	}
+}
+
+func TestAdmitResources_ValidChain_BothStoredWithAcyclicTrue(t *testing.T) {
+	memStore := newTestDatastore(t)
+	files := map[string][]byte{
+		"categories/a.md": makeCategoryTaxonomy("a"),
+		"categories/b.md": makeCategoryTaxonomyWithParent("b", "a"),
+	}
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/a.md", "categories/b.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, _ string) ([]byte, error) {
+			return files[path], nil
+		},
+	}
+
+	srv := cataloggrpc.NewServerForTest(memStore, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	for _, name := range []string{"a", "b"} {
+		c, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", name)
+		require.NoError(t, err)
+
+		var status struct {
+			Conditions []struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+			} `json:"conditions"`
+		}
+		require.NoError(t, json.Unmarshal(c.Status, &status))
+		var acyclicCond *struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		}
+		for i := range status.Conditions {
+			if status.Conditions[i].Type == "Acyclic" {
+				acyclicCond = &status.Conditions[i]
+				break
+			}
+		}
+		require.NotNil(t, acyclicCond, "category %q must have Acyclic condition", name)
+		assert.Equal(t, "True", acyclicCond.Status, "category %q in valid chain must have Acyclic=True", name)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// T030: Ancestor path computation
+// ---------------------------------------------------------------------------
+
+func TestAdmitResources_RootCategory_AncestorPathEqualsName(t *testing.T) {
+	memStore := newTestDatastore(t)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/electronics.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeCategoryTaxonomy("electronics"), nil
+		},
+	}
+	srv := cataloggrpc.NewServerForTest(memStore, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	c, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, err)
+	assert.Equal(t, "electronics", c.AncestorPath)
+}
+
+func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T) {
+	memStore := newTestDatastore(t)
+
+	// First push: store parent
+	git1 := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/electronics.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeCategoryTaxonomy("electronics"), nil
+		},
+	}
+	srv := cataloggrpc.NewServerForTest(memStore, git1)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	// Second push: child references stored parent
+	git2 := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/computers.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeCategoryTaxonomyWithParent("computers", "electronics"), nil
+		},
+	}
+	srv2 := cataloggrpc.NewServerForTest(memStore, git2)
+	_, err = srv2.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("b", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	child, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "computers")
+	require.NoError(t, err)
+	assert.Equal(t, "electronics/computers", child.AncestorPath)
+	assert.Equal(t, "electronics", child.ParentName)
+}
+
+func TestAdmitResources_CoCreation_ParentAndChildInSamePush(t *testing.T) {
+	memStore := newTestDatastore(t)
+	files := map[string][]byte{
+		"categories/electronics.md": makeCategoryTaxonomy("electronics"),
+		"categories/computers.md":   makeCategoryTaxonomyWithParent("computers", "electronics"),
+	}
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/electronics.md", "categories/computers.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, _ string) ([]byte, error) {
+			return files[path], nil
+		},
+	}
+	srv := cataloggrpc.NewServerForTest(memStore, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	child, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "computers")
+	require.NoError(t, err)
+	assert.Equal(t, "electronics/computers", child.AncestorPath)
+}
+
+func TestAdmitResources_ChildWithMissingParent_TentativeRoot_ParentResolvedFalse(t *testing.T) {
+	memStore := newTestDatastore(t)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/computers.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeCategoryTaxonomyWithParent("computers", "electronics"), nil
+		},
+	}
+	srv := cataloggrpc.NewServerForTest(memStore, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	c, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "computers")
+	require.NoError(t, err)
+	// Parent not found → tentative root, AncestorPath == name
+	assert.Equal(t, "computers", c.AncestorPath)
+
+	var status struct {
+		Conditions []struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		} `json:"conditions"`
+	}
+	require.NoError(t, json.Unmarshal(c.Status, &status))
+	for _, cond := range status.Conditions {
+		if cond.Type == "ParentResolved" {
+			assert.Equal(t, "False", cond.Status)
+			return
+		}
+	}
+	t.Fatal("ParentResolved condition not found")
+}
+
+func TestAdmitResources_DeepCoCreation_GrandchildAncestorPath(t *testing.T) {
+	// Issue 3 regression: root→child→grandchild all in one push must produce
+	// a three-segment AncestorPath for the grandchild, not just "child/grandchild".
+	memStore := newTestDatastore(t)
+	files := map[string][]byte{
+		"categories/root.md":       makeCategoryTaxonomy("root"),
+		"categories/child.md":      makeCategoryTaxonomyWithParent("child", "root"),
+		"categories/grandchild.md": makeCategoryTaxonomyWithParent("grandchild", "child"),
+	}
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{
+				"categories/root.md",
+				"categories/child.md",
+				"categories/grandchild.md",
+			}, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, _ string) ([]byte, error) {
+			return files[path], nil
+		},
+	}
+	srv := cataloggrpc.NewServerForTest(memStore, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	child, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "child")
+	require.NoError(t, err)
+	assert.Equal(t, "root/child", child.AncestorPath)
+
+	grandchild, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "grandchild")
+	require.NoError(t, err)
+	assert.Equal(t, "root/child/grandchild", grandchild.AncestorPath)
+}
+
+func TestAdmitResources_TailCycle_AllMembersMarkedAcyclicFalse(t *testing.T) {
+	// Issue 6 regression: in the graph A→B→C→B (A is not in the cycle, B and C are),
+	// both B and C must have Acyclic=False. Previously only one was flagged.
+	memStore := newTestDatastore(t)
+	files := map[string][]byte{
+		"categories/a.md": makeCategoryTaxonomyWithParent("a", "b"),
+		"categories/b.md": makeCategoryTaxonomyWithParent("b", "c"),
+		"categories/c.md": makeCategoryTaxonomyWithParent("c", "b"),
+	}
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/a.md", "categories/b.md", "categories/c.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, _ string) ([]byte, error) {
+			return files[path], nil
+		},
+	}
+	srv := cataloggrpc.NewServerForTest(memStore, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	getAcyclic := func(name string) string {
+		t.Helper()
+		c, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", name)
+		require.NoError(t, err, "category %q must be stored", name)
+		var status struct {
+			Conditions []struct {
+				Type   string `json:"type"`
+				Status string `json:"status"`
+			} `json:"conditions"`
+		}
+		require.NoError(t, json.Unmarshal(c.Status, &status))
+		for _, cond := range status.Conditions {
+			if cond.Type == "Acyclic" {
+				return cond.Status
+			}
+		}
+		t.Fatalf("category %q missing Acyclic condition", name)
+		return ""
+	}
+
+	assert.Equal(t, "True", getAcyclic("a"), "a is not in the cycle and must be Acyclic=True")
+	assert.Equal(t, "False", getAcyclic("b"), "b is in the cycle and must be Acyclic=False")
+	assert.Equal(t, "False", getAcyclic("c"), "c is in the cycle and must be Acyclic=False")
+}
+
+// ---------------------------------------------------------------------------
+// T035: ValidateResources — Product single-category constraint
+// ---------------------------------------------------------------------------
+
+func TestValidateResources_Product_SingleCategoryRef_Accepted(t *testing.T) {
+	blob := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: widget
+  namespace: gitstore
+spec:
+  title: Widget
+  categoryRef:
+    name: electronics
+    kind: CategoryTaxonomy
+---
+
+body
+`
+	srv := cataloggrpc.NewServer(nil, nil)
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs:        []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Accepted)
+	assert.Empty(t, resp.Errors)
+}
+
+func TestValidateResources_Product_CategoryRefArray_Rejected(t *testing.T) {
+	// YAML sequence cannot unmarshal into *ObjectReference — type mismatch.
+	blob := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: widget
+  namespace: gitstore
+spec:
+  categoryRef:
+    - name: electronics
+    - name: computers
+---
+body
+`
+	srv := cataloggrpc.NewServer(nil, nil)
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs:        []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Accepted)
+	assert.NotEmpty(t, resp.Errors)
+}
+
+func TestValidateResources_Product_CategoryRefEmptyName_Rejected(t *testing.T) {
+	blob := `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: widget
+  namespace: gitstore
+spec:
+  categoryRef:
+    kind: CategoryTaxonomy
+---
+body
+`
+	srv := cataloggrpc.NewServer(nil, nil)
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs:        []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}},
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Accepted)
+	require.NotEmpty(t, resp.Errors)
+	assert.Contains(t, strings.ToLower(resp.Errors[0].Message), "categoryref.name")
+}
+
+// ---------------------------------------------------------------------------
+// T038: AdmitResources — CategoryTaxonomy media admission
+// ---------------------------------------------------------------------------
+
+func TestAdmitResources_CategoryTaxonomy_MediaPreservedInSpec(t *testing.T) {
+	const blob = `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: electronics
+spec:
+  title: Electronics
+  media:
+    - fileRef:
+        name: electronics-hero
+        kind: ImageFile
+---
+body
+`
+	store := newTestDatastore(t)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/electronics.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _ string, _ string) ([]byte, error) {
+			return []byte(blob), nil
+		},
+	}
+	srv := cataloggrpc.NewServerForTest(store, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    "abc123",
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	c, err := store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, err)
+	require.NotNil(t, c)
+
+	// Media must be present in the stored Spec JSON blob.
+	var spec struct {
+		Media []struct {
+			FileRef struct {
+				Name string `json:"name"`
+				Kind string `json:"kind"`
+			} `json:"fileRef"`
+		} `json:"media"`
+	}
+	require.NoError(t, json.Unmarshal(c.Spec, &spec))
+	require.Len(t, spec.Media, 1)
+	assert.Equal(t, "electronics-hero", spec.Media[0].FileRef.Name)
+	assert.Equal(t, "ImageFile", spec.Media[0].FileRef.Kind)
+}
+
+func TestAdmitResources_CategoryTaxonomy_RequiredMediaAdmitted(t *testing.T) {
+	// optional:false media is admitted without push rejection — File existence
+	// check is deferred to controller (GH#244).
+	const blob = `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: electronics
+spec:
+  title: Electronics
+  media:
+    - fileRef:
+        name: required-hero
+        kind: ImageFile
+        optional: false
+---
+body
+`
+	store := newTestDatastore(t)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/electronics.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _ string, _ string) ([]byte, error) {
+			return []byte(blob), nil
+		},
+	}
+	srv := cataloggrpc.NewServerForTest(store, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    "abc123",
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	c, err := store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, err)
+	assert.NotNil(t, c)
+}
+
+func TestAdmitResources_CategoryTaxonomy_OptionalMediaAdmitted(t *testing.T) {
+	const blob = `---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: electronics
+spec:
+  title: Electronics
+  media:
+    - fileRef:
+        name: optional-hero
+        kind: ImageFile
+        optional: true
+---
+body
+`
+	store := newTestDatastore(t)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"categories/electronics.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _ string, _ string) ([]byte, error) {
+			return []byte(blob), nil
+		},
+	}
+	srv := cataloggrpc.NewServerForTest(store, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    "abc123",
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	c, err := store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, err)
+	assert.NotNil(t, c)
+}
+
+// ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
+// newTestDatastore creates a fresh in-memory store pre-seeded with a namespace
+// (identifier "gitstore") and a repository (ID "repo-1") so that
+// AdmitResources can resolve the namespace identifier from the push context.
 func newTestDatastore(t *testing.T) datastore.Datastore {
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	now := time.Now()
+	ns := &datastore.Namespace{
+		ID:          uuid.New().String(),
+		Identifier:  "gitstore",
+		DisplayName: "GitStore Test",
+		Tier:        datastore.NamespaceTierUser,
+		CreatedAt:   now,
+		CreatedBy:   "test",
+		UpdatedAt:   now,
+		UpdatedBy:   "test",
+	}
+	require.NoError(t, store.CreateNamespace(ctx, ns))
+
+	repo := &datastore.Repository{
+		ID:            testRepoID,
+		NamespaceID:   ns.ID,
+		Name:          "catalog",
+		DefaultBranch: "main",
+		StorageClass:  "local",
+		CreatedAt:     now,
+		CreatedBy:     "test",
+		UpdatedAt:     now,
+		UpdatedBy:     "test",
+	}
+	require.NoError(t, store.CreateRepository(ctx, repo))
 	return store
 }
 

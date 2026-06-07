@@ -155,3 +155,7 @@ func newScyllaDatastore(t *testing.T) datastore.Datastore {
 func TestContractScylla(t *testing.T) {
 	RunContractSuite(t, newScyllaDatastore(t))
 }
+
+func TestPaginationScylla(t *testing.T) {
+	RunPaginationSuite(t, newScyllaDatastore(t))
+}

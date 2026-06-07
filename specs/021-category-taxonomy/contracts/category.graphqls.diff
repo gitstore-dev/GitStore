@@ -1,0 +1,143 @@
+# GraphQL Schema Changes: CategoryTaxonomy (spec#021)
+#
+# All changes are ADDITIVE to shared/schemas/category.graphqls.
+# No existing fields are removed or modified.
+# No breaking changes to existing queries or mutations.
+#
+# This file documents the additions as a diff-style reference.
+# Apply by editing shared/schemas/category.graphqls directly.
+
+# ---------------------------------------------------------------------------
+# ADDITIONS to existing type Category
+# ---------------------------------------------------------------------------
+
+# ADD to type Category (after existing `updatedAt` field):
+
+  """
+  Kubernetes-style apiVersion of this category resource (e.g. catalog.gitstore.dev/v1beta1).
+  Null for legacy categories created via createCategory mutation.
+  """
+  apiVersion: String
+
+  """
+  Resource kind. Always "CategoryTaxonomy" for git-backed categories.
+  Null for legacy categories.
+  """
+  kind: String
+
+  """
+  Display title from spec.title (git-backed categories).
+  Falls back to name for legacy categories.
+  """
+  title: String
+
+  """
+  Kubernetes-style labels from metadata.labels.
+  Empty for legacy categories.
+  """
+  labels: [KeyValuePair!]!
+
+  """
+  Git-backed category status. Null for legacy categories.
+  """
+  categoryStatus: CategoryTaxonomyStatus
+
+# ---------------------------------------------------------------------------
+# NEW: CategoryTaxonomyStatus type
+# ---------------------------------------------------------------------------
+
+"""
+System-written status for a git-backed CategoryTaxonomy resource.
+"""
+type CategoryTaxonomyStatus {
+  """
+  Generation of the spec this status reflects.
+  """
+  observedGeneration: Int!
+
+  """
+  Git revision of the last admitted push (e.g. main@sha1:abc123).
+  """
+  lastAppliedRevision: String!
+
+  """
+  Status conditions (AdmissionAccepted, ParentResolved, Acyclic, Ready).
+  """
+  conditions: [CategoryCondition!]!
+
+  """
+  Controller-computed resolved metadata. Null until controller reconciles (GH#244).
+  """
+  resolved: ResolvedCategoryTaxonomy
+}
+
+"""
+A named status condition following the Kubernetes condition convention.
+"""
+type CategoryCondition {
+  type: String!
+  status: String!          # "True" | "False" | "Unknown"
+  observedGeneration: Int!
+  lastTransitionTime: DateTime!
+  reason: String
+  message: String
+}
+
+"""
+Controller-computed category hierarchy metadata.
+Null until the controller reconciler (GH#244) runs.
+"""
+type ResolvedCategoryTaxonomy {
+  """
+  Depth in hierarchy (root = 0).
+  """
+  depth: Int!
+
+  """
+  Materialized ancestor path (slash-separated names from root to self).
+  e.g. "electronics/computers/laptops"
+  """
+  ancestorPath: String!
+
+  """
+  Count of direct and indirect child categories.
+  """
+  childCount: Int!
+
+  """
+  Count of products in this category and all descendants.
+  """
+  productCount: Int!
+}
+
+# ---------------------------------------------------------------------------
+# ADDITIONS to Query — git-backed category lookup by name
+# ---------------------------------------------------------------------------
+
+# EXTEND CategoryBy input (add name field):
+
+# ADD to input CategoryBy:
+  """
+  Look up a git-backed category by its metadata.name (unique within namespace).
+  """
+  name: String
+
+# ---------------------------------------------------------------------------
+# NEW: KeyValuePair scalar type (if not already in schema.graphqls)
+# ---------------------------------------------------------------------------
+
+"""
+A key-value pair for label maps.
+"""
+type KeyValuePair {
+  key: String!
+  value: String!
+}
+
+# ---------------------------------------------------------------------------
+# NO CHANGES to:
+# - Mutation createCategory / updateCategory / deleteCategory / reorderCategories
+# - CategoryConnection, CategoryEdge, PageInfo
+# - Category fields: id, name, slug, parent, children, displayOrder,
+#   products, body, createdAt, updatedAt, path, depth
+# ---------------------------------------------------------------------------

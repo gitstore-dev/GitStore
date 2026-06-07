@@ -1,6 +1,3 @@
-CREATE INDEX IF NOT EXISTS categories_by_id           ON categories         (id);
-CREATE INDEX IF NOT EXISTS categories_by_slug         ON categories         (slug);
-
 CREATE INDEX IF NOT EXISTS collections_by_id          ON collections        (id);
 CREATE INDEX IF NOT EXISTS collections_by_slug        ON collections        (slug);
 

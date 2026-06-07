@@ -59,19 +59,19 @@ func BuildProductConnection(result *datastore.PageResult[datastore.Product]) *mo
 	}
 }
 
-// BuildCategoryConnection converts a PageResult[Category] into a GraphQL CategoryConnection.
-func BuildCategoryConnection(result *datastore.PageResult[datastore.Category]) *model.CategoryConnection {
+// BuildCategoryConnection converts a PageResult[CategoryTaxonomy] into a GraphQL CategoryConnection.
+func BuildCategoryConnection(result *datastore.PageResult[datastore.CategoryTaxonomy]) *model.CategoryConnection {
 	edges := make([]*model.CategoryEdge, len(result.Items))
 	for i, c := range result.Items {
 		edges[i] = &model.CategoryEdge{
-			Cursor: EncodeKeysetCursor(c.CreatedAt, c.ID),
-			Node:   DatastoreCategoryToGraphQL(c),
+			Cursor: EncodeKeysetCursor(c.CreationTimestamp, c.UID),
+			Node:   DatastoreCategoryTaxonomyToGraphQL(c),
 		}
 	}
 	return &model.CategoryConnection{
 		Edges:      edges,
 		TotalCount: result.TotalCount,
-		PageInfo:   buildPageInfo(result, func(c *datastore.Category) string { return EncodeKeysetCursor(c.CreatedAt, c.ID) }),
+		PageInfo:   buildPageInfo(result, func(c *datastore.CategoryTaxonomy) string { return EncodeKeysetCursor(c.CreationTimestamp, c.UID) }),
 	}
 }
 

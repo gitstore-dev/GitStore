@@ -24,7 +24,7 @@ A Product resource is a Markdown file with YAML frontmatter pushed to a GitStore
 | Field | Type | Required | Constraint |
 |-------|------|----------|-----------|
 | `metadata.name` | string | yes | DNS subdomain format |
-| `metadata.namespace` | string | no | |
+| `metadata.namespace` | string | no | Optional. Inferred from the repository's owning namespace at push time; raw repository UUID is never stored |
 | `metadata.labels` | map[string]string | no | Key prefix ≤ 253 chars; key name ≤ 63 chars; value ≤ 63 chars |
 | `metadata.annotations` | map[string]string | no | |
 

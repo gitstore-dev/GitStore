@@ -122,8 +122,21 @@ input ProductNamespacePath {
 Selector for looking up a category by exactly one unique key.
 """
 input CategoryBy @oneOf {
+  """Look up by globally unique Relay ID (encodes the category UID)."""
   id: ID
-  slug: String
+
+  """
+  Look up by namespace identifier + category name (Kubernetes-style metadata.name).
+  """
+  namespacePath: CategoryNamespacePath
+}
+
+"""
+Composite selector: namespace identifier (human-readable slug) + category name.
+"""
+input CategoryNamespacePath {
+  namespace: String!
+  name: String!
 }
 
 """

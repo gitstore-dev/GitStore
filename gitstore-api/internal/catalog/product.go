@@ -3,6 +3,8 @@
 
 package catalog
 
+import "time"
+
 // ProductResource is the top-level envelope parsed from a product Markdown
 // file's YAML frontmatter. Only author-writable fields are present here;
 // status and read-only metadata fields are stored in the datastore and merged
@@ -14,15 +16,26 @@ type ProductResource struct {
 	Spec       ProductSpec `yaml:"spec"`
 }
 
-// ObjectMeta holds author-supplied metadata. Read-only system fields (UID,
-// ResourceVersion, Generation, CreationTimestamp, Revision, OwnerReferences)
-// are managed by the system and stored in the datastore only.
+// ObjectMeta is the full Kubernetes-style resource metadata for a catalog resource.
+//
+// Author-writable fields (Name, Namespace, Labels, Annotations) may appear in
+// committed frontmatter YAML. System-managed fields (UID through Finalizers) are
+// written by the ingest pipeline and stored in the datastore only; preParseChecks
+// rejects them when present in author-committed files.
 type ObjectMeta struct {
-	Name         string            `yaml:"name"         validate:"required"`
-	Namespace    string            `yaml:"namespace"`
-	GenerateName string            `yaml:"generateName"`
-	Labels       map[string]string `yaml:"labels"`
-	Annotations  map[string]string `yaml:"annotations"`
+	// Author-writable
+	Name        string            `yaml:"name"        validate:"required"`
+	Namespace   string            `yaml:"namespace"`
+	Labels      map[string]string `yaml:"labels"`
+	Annotations map[string]string `yaml:"annotations"`
+	// System-managed (read-only; populated from datastore at read time)
+	UID               string           `yaml:"uid"`
+	ResourceVersion   string           `yaml:"resourceVersion"`
+	Generation        int64            `yaml:"generation"`
+	CreationTimestamp time.Time        `yaml:"creationTimestamp"`
+	Revision          string           `yaml:"revision"`
+	OwnerReferences   []OwnerReference `yaml:"ownerReferences"`
+	Finalizers        []string         `yaml:"finalizers"`
 }
 
 // ProductSpec is the author-controlled declarative specification for a product.

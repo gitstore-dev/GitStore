@@ -1,0 +1,15 @@
+# CatalogService Proto Contract: CategoryTaxonomy (spec#021)
+#
+# NO CHANGES to shared/proto/gitstore/catalog/v1/catalog_service.proto
+#
+# The existing ValidateResources and AdmitResources RPCs are kind-agnostic:
+# they send raw ResourceBlob bytes and the Go handler performs kind-routing
+# internally. Adding CategoryTaxonomy support requires no proto changes.
+#
+# This file serves as the explicit record that the proto contract was reviewed
+# and deliberately left unchanged.
+#
+# Reviewed: 2026-06-06
+# Decision: No proto changes needed.
+# Rationale: ResourceBlob.content carries raw YAML bytes; kind routing is a
+#             Go-side concern inside cataloggrpc.Server.

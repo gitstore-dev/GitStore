@@ -2174,7 +2174,7 @@ func (ec *executionContext) unmarshalInputCategoryBy(ctx context.Context, obj an
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"id", "slug"}
+	fieldsInOrder := [...]string{"id", "namespacePath"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -2188,13 +2188,50 @@ func (ec *executionContext) unmarshalInputCategoryBy(ctx context.Context, obj an
 				return it, err
 			}
 			it.ID = data
-		case "slug":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("slug"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+		case "namespacePath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespacePath"))
+			data, err := ec.unmarshalOCategoryNamespacePath2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryNamespacePath(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.Slug = data
+			it.NamespacePath = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputCategoryNamespacePath(ctx context.Context, obj any) (model.CategoryNamespacePath, error) {
+	var it model.CategoryNamespacePath
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"namespace", "name"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
 		}
 	}
 	return it, nil
@@ -2970,6 +3007,14 @@ func (ec *executionContext) marshalNPageInfo2ᚖgithubᚗcomᚋgitstoreᚑdevᚋ
 func (ec *executionContext) unmarshalNProductBy2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductBy(ctx context.Context, v any) (model.ProductBy, error) {
 	res, err := ec.unmarshalInputProductBy(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOCategoryNamespacePath2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCategoryNamespacePath(ctx context.Context, v any) (*model.CategoryNamespacePath, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputCategoryNamespacePath(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) unmarshalOJSON2map(ctx context.Context, v any) (map[string]any, error) {

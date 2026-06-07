@@ -35,18 +35,40 @@ var schema = &memdb.DBSchema{
 				},
 			},
 		},
-		"category": {
-			Name: "category",
+		"category_taxonomy": {
+			Name: "category_taxonomy",
 			Indexes: map[string]*memdb.IndexSchema{
 				"id": {
 					Name:    "id",
 					Unique:  true,
-					Indexer: &memdb.UUIDFieldIndex{Field: "ID"},
+					Indexer: &memdb.UUIDFieldIndex{Field: "UID"},
 				},
-				"slug": {
-					Name:    "slug",
-					Unique:  true,
-					Indexer: &memdb.StringFieldIndex{Field: "Slug", Lowercase: true},
+				"name_namespace": {
+					Name:   "name_namespace",
+					Unique: true,
+					Indexer: &memdb.CompoundIndex{
+						Indexes: []memdb.Indexer{
+							&memdb.StringFieldIndex{Field: "Namespace"},
+							&memdb.StringFieldIndex{Field: "Name"},
+						},
+					},
+				},
+				"namespace": {
+					Name:    "namespace",
+					Unique:  false,
+					Indexer: &memdb.StringFieldIndex{Field: "Namespace"},
+				},
+				"parent_name": {
+					Name:         "parent_name",
+					Unique:       false,
+					AllowMissing: true,
+					Indexer:      &memdb.StringFieldIndex{Field: "ParentName"},
+				},
+				"ancestor_path": {
+					Name:         "ancestor_path",
+					Unique:       false,
+					AllowMissing: true,
+					Indexer:      &memdb.StringFieldIndex{Field: "AncestorPath"},
 				},
 			},
 		},

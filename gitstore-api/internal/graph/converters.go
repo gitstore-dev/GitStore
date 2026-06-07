@@ -237,20 +237,179 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 	}
 }
 
-// DatastoreCategoryToGraphQL converts a datastore Category to a GraphQL model Category.
-func DatastoreCategoryToGraphQL(c *datastore.Category) *model.Category {
+// DatastoreCategoryTaxonomyToGraphQL converts a CategoryTaxonomy datastore entity
+// to the GraphQL model.Category.
+func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Category {
 	if c == nil {
 		return nil
 	}
-	return &model.Category{
-		ID:        mustEncodeNodeID(nodeKindCategory, c.ID),
-		Name:      c.Name,
-		Slug:      c.Slug,
-		Body:      &c.Body,
-		Parent:    nil,
-		Children:  []*model.Category{},
-		CreatedAt: c.CreatedAt,
-		UpdatedAt: c.UpdatedAt,
+
+	// Compute path and depth from materialized AncestorPath.
+	var path []string
+	var depth int32
+	if c.AncestorPath != "" {
+		path = strings.Split(c.AncestorPath, "/")
+		depth = int32(len(path) - 1)
+	}
+
+	emptyProducts := &model.ProductConnection{
+		Edges:    []*model.ProductEdge{},
+		PageInfo: &model.PageInfo{},
+	}
+
+	// Build labels and annotations as []*model.KeyValuePair.
+	labels := kvPairs(c.Labels)
+	annotations := kvPairs(c.Annotations)
+
+	// Extract title from spec JSON.
+	title := ""
+	var parentRef *model.CatalogObjectReference
+	var specMedia []*model.MediaDefinition
+	if len(c.Spec) > 0 {
+		var raw struct {
+			Title     string `json:"title"`
+			ParentRef *struct {
+				APIVersion string `json:"apiVersion"`
+				Kind       string `json:"kind"`
+				Name       string `json:"name"`
+				Namespace  string `json:"namespace"`
+			} `json:"parentRef"`
+			Media []struct {
+				FileRef *struct {
+					Name     string `json:"name"`
+					Kind     string `json:"kind"`
+					Optional bool   `json:"optional"`
+				} `json:"fileRef"`
+			} `json:"media"`
+		}
+		if err := json.Unmarshal(c.Spec, &raw); err == nil {
+			title = raw.Title
+			if raw.ParentRef != nil && raw.ParentRef.Name != "" {
+				parentRef = &model.CatalogObjectReference{
+					Name: raw.ParentRef.Name,
+				}
+				if raw.ParentRef.APIVersion != "" {
+					parentRef.APIVersion = &raw.ParentRef.APIVersion
+				}
+				if raw.ParentRef.Kind != "" {
+					parentRef.Kind = &raw.ParentRef.Kind
+				}
+				if raw.ParentRef.Namespace != "" {
+					parentRef.Namespace = &raw.ParentRef.Namespace
+				}
+			}
+			for _, m := range raw.Media {
+				if m.FileRef == nil {
+					continue
+				}
+				specMedia = append(specMedia, &model.MediaDefinition{
+					FileRef: &model.FileReference{
+						Name:     m.FileRef.Name,
+						Kind:     m.FileRef.Kind,
+						Optional: m.FileRef.Optional,
+					},
+				})
+			}
+		}
+	}
+
+	gen := int32(c.Generation)
+	rv := c.ResourceVersion
+	meta := &model.CategoryObjectMeta{
+		Name:              c.Name,
+		Labels:            labels,
+		Annotations:       annotations,
+		UID:               mustEncodeNodeID(nodeKindCategory, c.UID),
+		ResourceVersion:   rv,
+		Generation:        gen,
+		CreationTimestamp: c.CreationTimestamp,
+		OwnerReferences:   []*model.OwnerReference{},
+	}
+	if c.Namespace != "" {
+		ns := c.Namespace
+		meta.Namespace = &ns
+	}
+	if c.Revision != "" {
+		meta.Revision = &c.Revision
+	}
+
+	spec := &model.CategorySpec{
+		Title:     title,
+		ParentRef: parentRef,
+		Media:     specMedia,
+	}
+	if spec.Media == nil {
+		spec.Media = []*model.MediaDefinition{}
+	}
+
+	apiVersion := c.APIVersion
+	kind := c.Kind
+	cat := &model.Category{
+		ID:         mustEncodeNodeID(nodeKindCategory, c.UID),
+		APIVersion: &apiVersion,
+		Kind:       &kind,
+		Metadata:   meta,
+		Spec:       spec,
+		Status:     categoryStatusFromJSON(c.Status),
+		Body:       nil,
+		Parent:     nil,
+		Children:   []*model.Category{},
+		Path:       path,
+		Depth:      depth,
+		Products:   emptyProducts,
+	}
+	if c.Body != "" {
+		cat.Body = &c.Body
+	}
+	return cat
+}
+
+// kvPairs converts a string map to a []*model.KeyValuePair slice.
+func kvPairs(m map[string]string) []*model.KeyValuePair {
+	pairs := make([]*model.KeyValuePair, 0, len(m))
+	for k, v := range m {
+		kk, vv := k, v
+		pairs = append(pairs, &model.KeyValuePair{Key: kk, Value: vv})
+	}
+	return pairs
+}
+
+// categoryStatusFromJSON deserialises a CategoryTaxonomyStatus blob.
+func categoryStatusFromJSON(raw json.RawMessage) *model.CategoryTaxonomyStatus {
+	if len(raw) == 0 {
+		return nil
+	}
+	var rs struct {
+		ObservedGeneration  int32          `json:"observedGeneration"`
+		LastAppliedRevision string         `json:"lastAppliedRevision"`
+		Conditions          []rawCondition `json:"conditions"`
+	}
+	if err := json.Unmarshal(raw, &rs); err != nil {
+		converterLogger.Warn("category blob unmarshal error", zap.String("field", "status"), zap.Error(err))
+		return nil
+	}
+	conditions := make([]*model.CategoryCondition, 0, len(rs.Conditions))
+	for _, c := range rs.Conditions {
+		cond := &model.CategoryCondition{
+			Type:               c.Type,
+			Status:             c.Status,
+			ObservedGeneration: c.ObservedGeneration,
+			LastTransitionTime: c.LastTransitionTime,
+		}
+		if c.Reason != "" {
+			r := c.Reason
+			cond.Reason = &r
+		}
+		if c.Message != "" {
+			m := c.Message
+			cond.Message = &m
+		}
+		conditions = append(conditions, cond)
+	}
+	return &model.CategoryTaxonomyStatus{
+		ObservedGeneration:  rs.ObservedGeneration,
+		LastAppliedRevision: rs.LastAppliedRevision,
+		Conditions:          conditions,
 	}
 }
 

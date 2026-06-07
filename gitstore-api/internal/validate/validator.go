@@ -19,6 +19,14 @@ import (
 
 var validate = validator.New()
 
+// ParsedResource is the result of ParseResource; exactly one of Product or
+// CategoryTaxonomy is set, matching the Kind field.
+type ParsedResource struct {
+	Kind             string
+	Product          *catalog.ProductResource
+	CategoryTaxonomy *catalog.CategoryTaxonomyResource
+}
+
 // Parse reads a Markdown document, extracts the YAML frontmatter into a
 // ProductResource, validates it, and returns the parsed resource, the
 // remaining Markdown body, and any error.
@@ -85,6 +93,96 @@ func Parse(r io.Reader) (*catalog.ProductResource, []byte, error) {
 	return &res, body, nil
 }
 
+// ParseResource reads a Markdown document, extracts YAML frontmatter, dispatches
+// on the kind field, validates the resource, and returns a ParsedResource.
+// Recognized kinds: Product, CategoryTaxonomy.
+func ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
+	raw, err := io.ReadAll(r)
+	if err != nil {
+		return nil, nil, fmt.Errorf("validate: read: %w", err)
+	}
+
+	if !bytes.HasPrefix(bytes.TrimLeftFunc(raw, unicode.IsSpace), []byte("---")) {
+		return nil, raw, nil
+	}
+
+	fmRaw, err := extractFrontmatterBlock(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if err := preParseChecks(fmRaw); err != nil {
+		return nil, nil, err
+	}
+
+	// Extract the kind before struct binding.
+	var kindProbe struct {
+		Kind string `yaml:"kind"`
+	}
+	if err := yaml.Unmarshal(fmRaw, &kindProbe); err != nil {
+		return nil, nil, fmt.Errorf("validate: malformed YAML: %w", err)
+	}
+
+	formats := []*frontmatter.Format{
+		frontmatter.NewFormat("---", "---", yaml.Unmarshal),
+	}
+
+	switch kindProbe.Kind {
+	case "Product":
+		var res catalog.ProductResource
+		body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
+		}
+		var errs []error
+		if err := validate.Struct(res); err != nil {
+			errs = append(errs, toFriendlyError(err))
+		}
+		if err := validateSpec(res.Spec); err != nil {
+			errs = append(errs, err)
+		}
+		if err := validateLabels(res.Metadata.Labels); err != nil {
+			errs = append(errs, err)
+		}
+		if len(errs) > 0 {
+			return nil, nil, errors.Join(errs...)
+		}
+		return &ParsedResource{Kind: "Product", Product: &res}, body, nil
+
+	case "CategoryTaxonomy":
+		var res catalog.CategoryTaxonomyResource
+		body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
+		}
+		var errs []error
+		if err := validate.Struct(res); err != nil {
+			errs = append(errs, toFriendlyError(err))
+		}
+		if err := validateCategorySpec(res.Metadata.Name, res.Spec); err != nil {
+			errs = append(errs, err)
+		}
+		if err := validateLabels(res.Metadata.Labels); err != nil {
+			errs = append(errs, err)
+		}
+		if len(errs) > 0 {
+			return nil, nil, errors.Join(errs...)
+		}
+		return &ParsedResource{Kind: "CategoryTaxonomy", CategoryTaxonomy: &res}, body, nil
+
+	default:
+		return nil, nil, fmt.Errorf("validate: kind %q is not a recognized catalog resource type", kindProbe.Kind)
+	}
+}
+
+// validateCategorySpec enforces spec-level rules for CategoryTaxonomy.
+func validateCategorySpec(name string, spec catalog.CategoryTaxonomySpec) error {
+	if spec.ParentRef != nil && spec.ParentRef.Name == name {
+		return fmt.Errorf("validate: spec.parentRef.name must not reference the category itself")
+	}
+	return nil
+}
+
 // extractFrontmatterBlock returns the raw bytes between the opening and
 // closing --- delimiters so they can be unmarshalled as a generic map.
 func extractFrontmatterBlock(src []byte) ([]byte, error) {
@@ -125,7 +223,7 @@ func preParseChecks(fmRaw []byte) error {
 
 	// Forbidden read-only metadata keys — collect all before returning (FR-008, FR-009).
 	if meta, ok := raw["metadata"].(map[string]any); ok {
-		readOnly := []string{"uid", "resourceVersion", "generation", "creationTimestamp", "revision", "ownerReferences"}
+		readOnly := []string{"uid", "resourceVersion", "generation", "creationTimestamp", "revision", "ownerReferences", "finalizers"}
 		var forbidden []string
 		for _, field := range readOnly {
 			if _, present := meta[field]; present {

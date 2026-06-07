@@ -36,13 +36,28 @@ func TestLookupOneOfSelectorsValidateExactlyOneKey(t *testing.T) {
 		assertQueryValidation(t, schema, `query { product(by: {id: "gid", namespacePath: {namespace: "ns", name: "n"}}) { id } }`, false)
 	})
 
-	// category, collection, namespace still use oneof selectors.
+	t.Run("category/valid_namespace_path", func(t *testing.T) {
+		assertQueryValidation(t, schema, `query { category(by: {namespacePath: {namespace: "my-store", name: "electronics"}}) { id } }`, true)
+	})
+	t.Run("category/valid_id", func(t *testing.T) {
+		assertQueryValidation(t, schema, `query { category(by: {id: "gid"}) { id } }`, true)
+	})
+	t.Run("category/multiple_selector_keys", func(t *testing.T) {
+		assertQueryValidation(t, schema, `query { category(by: {id: "gid", namespacePath: {namespace: "ns", name: "electronics"}}) { id } }`, false)
+	})
+	t.Run("category/legacy_name_invalid", func(t *testing.T) {
+		assertQueryValidation(t, schema, `query { category(by: {name: "electronics"}) { id } }`, false)
+	})
+	t.Run("category/legacy_slug_invalid", func(t *testing.T) {
+		assertQueryValidation(t, schema, `query { category(by: {slug: "electronics"}) { id } }`, false)
+	})
+
+	// collection and namespace still use oneof selectors.
 	tests := []struct {
 		field     string
 		natural   string
 		selection string
 	}{
-		{field: "category", natural: `slug: "category-1"`, selection: "id"},
 		{field: "collection", natural: `slug: "collection-1"`, selection: "id"},
 		{field: "namespace", natural: `identifier: "namespace-1"`, selection: "id"},
 	}

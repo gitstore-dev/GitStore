@@ -67,7 +67,7 @@ Namespace create and delete mutations require authentication. Creating `ENTERPRI
 
 All GraphQL types that implement `Node` expose opaque global IDs. The ID format is base64-encoded `gid://GitStore/{NodeType}/{rawID}`. For example, product raw ID `123` is returned as `Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC8xMjM=`.
 
-Clients should treat these values as opaque and pass them back unchanged to `node`, `nodes`, lookup selectors such as `product(by: {id: ...})`, filters, and mutation fields typed as `ID`. Business identifiers such as `product(by: {sku: ...})`, `category(by: {slug: ...})`, `collection(by: {slug: ...})`, `namespace(by: {identifier: ...})`, and namespace `parentEnterpriseIdentifier` are not global IDs.
+Clients should treat these values as opaque and pass them back unchanged to `node`, `nodes`, lookup selectors such as `product(by: {id: ...})`, filters, and mutation fields typed as `ID`. Business identifiers such as `product(by: {sku: ...})`, `category(by: {namespacePath: ...})`, `collection(by: {slug: ...})`, `namespace(by: {identifier: ...})`, and namespace `parentEnterpriseIdentifier` are not global IDs.
 
 ### node
 
@@ -212,22 +212,26 @@ query {
 
 ### category
 
-Get a category by exactly one unique selector: `id` or `slug`.
+Get a category by exactly one unique selector: `id` or `namespacePath`.
 
 ```graphql
 query {
-  category(by: {slug: "electronics"}) {
+  category(by: {namespacePath: {namespace: "gitstore-test", name: "electronics"}}) {
     id
-    name
-    children {
+    metadata {
       name
+    }
+    children {
+      metadata {
+        name
+      }
     }
   }
 }
 ```
 
 **Arguments**:
-- `by: CategoryBy!` - One of `id` (global ID) or `slug`
+- `by: CategoryBy!` - One of `id` (global ID) or `namespacePath` (`namespace` + `name`)
 
 **Returns**: `Category` (nullable)
 

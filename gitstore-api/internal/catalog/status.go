@@ -22,6 +22,8 @@ const (
 	ConditionOptionsAccepted   ConditionType = "OptionsAccepted"
 	ConditionVariantsResolved  ConditionType = "VariantsResolved"
 	ConditionReady             ConditionType = "Ready"
+	ConditionParentResolved    ConditionType = "ParentResolved"
+	ConditionAcyclic           ConditionType = "Acyclic"
 
 	ConditionTrue    ConditionStatus = "True"
 	ConditionFalse   ConditionStatus = "False"
@@ -38,7 +40,7 @@ type ProductStatus struct {
 
 // Condition is a named status signal following the Kubernetes condition convention.
 type Condition struct {
-	Type               ConditionType   `json:"type"               validate:"required,oneof=Published AdmissionAccepted CategoryResolved OptionsAccepted VariantsResolved Ready"`
+	Type               ConditionType   `json:"type"               validate:"required,oneof=Published AdmissionAccepted CategoryResolved OptionsAccepted VariantsResolved Ready ParentResolved Acyclic"`
 	Status             ConditionStatus `json:"status"             validate:"required,oneof=True False Unknown"`
 	ObservedGeneration int64           `json:"observedGeneration"`
 	LastTransitionTime time.Time       `json:"lastTransitionTime"`
@@ -95,10 +97,27 @@ type SystemObjectMeta struct {
 	OwnerReferences   []OwnerReference `json:"ownerReferences,omitempty"`
 }
 
-// OwnerReference is a link to a resource that owns this product.
+// OwnerReference is a typed pointer to the resource that owns this object.
 type OwnerReference struct {
-	APIVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
-	Name       string `json:"name"`
-	UID        string `json:"uid"`
+	APIVersion string `yaml:"apiVersion" json:"apiVersion"`
+	Kind       string `yaml:"kind"       json:"kind"`
+	Name       string `yaml:"name"       json:"name"`
+	UID        string `yaml:"uid"        json:"uid"`
+}
+
+// CategoryTaxonomyStatus is the system-written state for a category taxonomy. Never stored in git.
+type CategoryTaxonomyStatus struct {
+	ObservedGeneration  int64                     `json:"observedGeneration"`
+	LastAppliedRevision string                    `json:"lastAppliedRevision"`
+	Conditions          []Condition               `json:"conditions"`
+	Resolved            *ResolvedCategoryTaxonomy `json:"resolved,omitempty"`
+}
+
+// ResolvedCategoryTaxonomy holds system-computed hierarchy aggregates for a category.
+type ResolvedCategoryTaxonomy struct {
+	Depth        int8              `json:"depth"`
+	AncestorPath string            `json:"ancestorPath"`
+	Ancestors    []ObjectReference `json:"ancestors,omitempty"`
+	ChildCount   int64             `json:"childCount"`
+	ProductCount int64             `json:"productCount"`
 }

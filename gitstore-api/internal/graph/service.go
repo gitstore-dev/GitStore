@@ -102,29 +102,29 @@ func (s *Service) GetProductByName(ctx context.Context, namespace, name string) 
 	return p, nil
 }
 
-// GetCategories returns paginated categories.
-func (s *Service) GetCategories(ctx context.Context, params datastore.PageParams) (*datastore.PageResult[datastore.Category], error) {
-	result, err := s.store.ListCategories(ctx, params)
+// GetCategoryTaxonomies returns paginated CategoryTaxonomy resources.
+func (s *Service) GetCategoryTaxonomies(ctx context.Context, namespace string, params datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
+	result, err := s.store.ListCategoryTaxonomies(ctx, namespace, params)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list categories: %w", err)
+		return nil, fmt.Errorf("failed to list category taxonomies: %w", err)
 	}
 	return result, nil
 }
 
-// GetCategoryByID returns a category by ID.
-func (s *Service) GetCategoryByID(ctx context.Context, id string) (*datastore.Category, error) {
-	c, err := s.store.GetCategory(ctx, id)
+// GetCategoryTaxonomyByUID returns a CategoryTaxonomy by UID.
+func (s *Service) GetCategoryTaxonomyByUID(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error) {
+	c, err := s.store.GetCategoryTaxonomy(ctx, uid)
 	if err != nil {
-		return nil, fmt.Errorf("category not found: %s", id)
+		return nil, fmt.Errorf("category not found: %s", uid)
 	}
 	return c, nil
 }
 
-// GetCategoryBySlug returns a category by slug.
-func (s *Service) GetCategoryBySlug(ctx context.Context, slug string) (*datastore.Category, error) {
-	c, err := s.store.GetCategoryBySlug(ctx, slug)
+// GetCategoryTaxonomyByName returns a CategoryTaxonomy by namespace and name.
+func (s *Service) GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*datastore.CategoryTaxonomy, error) {
+	c, err := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)
 	if err != nil {
-		return nil, fmt.Errorf("category not found with slug: %s", slug)
+		return nil, fmt.Errorf("category not found: %s/%s", namespace, name)
 	}
 	return c, nil
 }
@@ -163,61 +163,6 @@ func (s *Service) DeleteProduct(ctx context.Context, uid string) error {
 		return fmt.Errorf("product not found: %s", uid)
 	}
 	return nil
-}
-
-// CreateCategory creates a new category in the datastore.
-func (s *Service) CreateCategory(ctx context.Context, input map[string]interface{}) (*datastore.Category, error) {
-	now := time.Now()
-	c := &datastore.Category{
-		ID:        uuid.New().String(),
-		Name:      getStringOrEmpty(input, "name"),
-		Slug:      getStringOrEmpty(input, "slug"),
-		Body:      getStringOrEmpty(input, "body"),
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	if parentID, ok := input["parentId"].(string); ok && parentID != "" {
-		c.ParentID = &parentID
-	}
-	if order, ok := input["displayOrder"].(int); ok {
-		c.DisplayOrder = order
-	}
-
-	if err := s.store.CreateCategory(ctx, c); err != nil {
-		return nil, fmt.Errorf("failed to create category: %w", err)
-	}
-	return c, nil
-}
-
-// UpdateCategory updates an existing category.
-func (s *Service) UpdateCategory(ctx context.Context, id string, input map[string]interface{}) (*datastore.Category, error) {
-	existing, err := s.store.GetCategory(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("category not found: %s", id)
-	}
-	c := *existing
-	c.UpdatedAt = time.Now()
-	if name, ok := input["name"].(string); ok {
-		c.Name = name
-	}
-	if slug, ok := input["slug"].(string); ok {
-		c.Slug = slug
-	}
-	if body, ok := input["body"].(string); ok {
-		c.Body = body
-	}
-	if order, ok := input["displayOrder"].(int); ok {
-		c.DisplayOrder = order
-	}
-	if err := s.store.UpdateCategory(ctx, &c); err != nil {
-		return nil, fmt.Errorf("failed to update category: %w", err)
-	}
-	return &c, nil
-}
-
-// DeleteCategory deletes a category from the datastore.
-func (s *Service) DeleteCategory(ctx context.Context, id string) error {
-	return s.store.DeleteCategory(ctx, id)
 }
 
 // CreateCollection creates a new collection in the datastore.
