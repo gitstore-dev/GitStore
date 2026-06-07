@@ -590,7 +590,6 @@ func specSelectorToCatalog(sel *struct {
 	return s
 }
 
-
 // DatastoreRepositoryToGraphQL converts a datastore Repository to the GraphQL model
 // without namespace (namespace is resolved separately via field resolver).
 func DatastoreRepositoryToGraphQL(r *datastore.Repository) *model.Repository {
