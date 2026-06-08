@@ -266,6 +266,114 @@ func (m *memdbDatastore) DeleteProduct(_ context.Context, uid string) error {
 	return nil
 }
 
+// ── ProductVariant ────────────────────────────────────────────────────────────
+
+func (m *memdbDatastore) CreateProductVariant(_ context.Context, v *datastore.ProductVariant) error {
+	txn := m.db.Txn(true)
+	if raw, _ := txn.First("product_variant", "id", v.UID); raw != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: product_variant uid %s", datastore.ErrAlreadyExists, v.UID)
+	}
+	if raw, _ := txn.First("product_variant", "name_namespace", v.Namespace, v.Name); raw != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: product_variant %s/%s", datastore.ErrAlreadyExists, v.Namespace, v.Name)
+	}
+	if v.SKU != "" {
+		if raw, _ := txn.First("product_variant", "sku_namespace", v.Namespace, v.SKU); raw != nil {
+			txn.Abort()
+			return fmt.Errorf("%w: product_variant sku %s in namespace %s", datastore.ErrAlreadyExists, v.SKU, v.Namespace)
+		}
+	}
+	if err := txn.Insert("product_variant", v); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: insert product_variant: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) GetProductVariant(_ context.Context, uid string) (*datastore.ProductVariant, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("product_variant", "id", uid)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return raw.(*datastore.ProductVariant), nil
+}
+
+func (m *memdbDatastore) GetProductVariantByName(_ context.Context, namespace, name string) (*datastore.ProductVariant, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("product_variant", "name_namespace", namespace, name)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return raw.(*datastore.ProductVariant), nil
+}
+
+func (m *memdbDatastore) GetProductVariantBySKU(_ context.Context, namespace, sku string) (*datastore.ProductVariant, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("product_variant", "sku_namespace", namespace, sku)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return raw.(*datastore.ProductVariant), nil
+}
+
+func (m *memdbDatastore) ListProductVariants(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.ProductVariant], error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+
+	var it gomemdb.ResultIterator
+	var err error
+	if namespace != "" {
+		it, err = txn.Get("product_variant", "namespace", namespace)
+	} else {
+		it, err = txn.Get("product_variant", "id")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("memdb: list product_variants: %w", err)
+	}
+
+	var all []*datastore.ProductVariant
+	for obj := it.Next(); obj != nil; obj = it.Next() {
+		all = append(all, obj.(*datastore.ProductVariant))
+	}
+	return paginateSlice(all, page, func(v *datastore.ProductVariant) (time.Time, string) {
+		return v.CreationTimestamp, v.UID
+	}), nil
+}
+
+func (m *memdbDatastore) ListProductVariantsByProductRef(_ context.Context, namespace, productRefName string) ([]*datastore.ProductVariant, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	it, err := txn.Get("product_variant", "product_ref", namespace, productRefName)
+	if err != nil {
+		return nil, fmt.Errorf("memdb: list product_variants by product_ref: %w", err)
+	}
+	var result []*datastore.ProductVariant
+	for obj := it.Next(); obj != nil; obj = it.Next() {
+		result = append(result, obj.(*datastore.ProductVariant))
+	}
+	return result, nil
+}
+
+func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.ProductVariant) error {
+	txn := m.db.Txn(true)
+	if raw, _ := txn.First("product_variant", "id", v.UID); raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: product_variant uid %s", datastore.ErrNotFound, v.UID)
+	}
+	if err := txn.Insert("product_variant", v); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: update product_variant: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
 // ── CategoryTaxonomy ──────────────────────────────────────────────────────────
 
 func (m *memdbDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy) error {

@@ -117,8 +117,17 @@ impl ValidationHandler for SchemaValidationHandler {
                     self.record_metric("accepted");
                     Ok(AdmissionDecision::Accept)
                 } else {
-                    let error_summary: Vec<String> =
-                        resp.errors.iter().map(|e| e.message.clone()).collect();
+                    let error_summary: Vec<String> = resp
+                        .errors
+                        .iter()
+                        .map(|e| {
+                            if e.file_path.is_empty() {
+                                e.message.clone()
+                            } else {
+                                format!("{}: {}", e.file_path, e.message)
+                            }
+                        })
+                        .collect();
                     let aggregated = error_summary.join("; ");
                     error!(
                         file_count,
@@ -268,6 +277,10 @@ mod tests {
         let result = handler.validate(&blobs).await.unwrap();
         match result {
             AdmissionDecision::Reject(msg) => {
+                assert!(
+                    msg.contains("products/p.md"),
+                    "expected file path in: {msg}"
+                );
                 assert!(msg.contains("spec.title"), "expected spec.title in: {msg}");
                 assert!(
                     msg.contains("system-managed"),

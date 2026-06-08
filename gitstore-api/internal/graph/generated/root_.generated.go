@@ -25,6 +25,7 @@ type ResolverRoot interface {
 	Category() CategoryResolver
 	Collection() CollectionResolver
 	Mutation() MutationResolver
+	Product() ProductResolver
 	Query() QueryResolver
 }
 
@@ -229,10 +230,21 @@ type ComplexityRoot struct {
 		DeletedRepositoryID func(childComplexity int) int
 	}
 
+	EligibilityDefinition struct {
+		Constraints func(childComplexity int) int
+		Operator    func(childComplexity int) int
+	}
+
 	FileReference struct {
 		Kind     func(childComplexity int) int
 		Name     func(childComplexity int) int
 		Optional func(childComplexity int) int
+	}
+
+	InventoryDefinition struct {
+		Managed           func(childComplexity int) int
+		Policy            func(childComplexity int) int
+		StockLocationRefs func(childComplexity int) int
 	}
 
 	KeyValuePair struct {
@@ -328,13 +340,40 @@ type ComplexityRoot struct {
 		Min          func(childComplexity int) int
 	}
 
+	PriceRuleConstraint struct {
+		Expression func(childComplexity int) int
+		Name       func(childComplexity int) int
+	}
+
+	PriceSet struct {
+		Name   func(childComplexity int) int
+		Prices func(childComplexity int) int
+	}
+
+	PriceTemplate struct {
+		Amount         func(childComplexity int) int
+		CurrencyCode   func(childComplexity int) int
+		Eligibility    func(childComplexity int) int
+		Name           func(childComplexity int) int
+		Priority       func(childComplexity int) int
+		Quantity       func(childComplexity int) int
+		Strategy       func(childComplexity int) int
+		ValidFromTime  func(childComplexity int) int
+		ValidUntilTime func(childComplexity int) int
+	}
+
+	PricingDefinition struct {
+		PriceSet func(childComplexity int) int
+	}
+
 	Product struct {
-		APIVersion func(childComplexity int) int
-		ID         func(childComplexity int) int
-		Kind       func(childComplexity int) int
-		Metadata   func(childComplexity int) int
-		Spec       func(childComplexity int) int
-		Status     func(childComplexity int) int
+		APIVersion      func(childComplexity int) int
+		ID              func(childComplexity int) int
+		Kind            func(childComplexity int) int
+		Metadata        func(childComplexity int) int
+		ProductVariants func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+		Spec            func(childComplexity int) int
+		Status          func(childComplexity int) int
 	}
 
 	ProductCondition struct {
@@ -391,25 +430,92 @@ type ComplexityRoot struct {
 		Resolved            func(childComplexity int) int
 	}
 
+	ProductVariant struct {
+		APIVersion func(childComplexity int) int
+		Body       func(childComplexity int) int
+		ID         func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
+	}
+
+	ProductVariantCondition struct {
+		LastTransitionTime func(childComplexity int) int
+		Message            func(childComplexity int) int
+		ObservedGeneration func(childComplexity int) int
+		Reason             func(childComplexity int) int
+		Status             func(childComplexity int) int
+		Type               func(childComplexity int) int
+	}
+
+	ProductVariantConnection struct {
+		Edges      func(childComplexity int) int
+		PageInfo   func(childComplexity int) int
+		TotalCount func(childComplexity int) int
+	}
+
+	ProductVariantEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
+	}
+
+	ProductVariantObjectMeta struct {
+		Annotations       func(childComplexity int) int
+		CreationTimestamp func(childComplexity int) int
+		Generation        func(childComplexity int) int
+		Labels            func(childComplexity int) int
+		Name              func(childComplexity int) int
+		Namespace         func(childComplexity int) int
+		OwnerReferences   func(childComplexity int) int
+		ResourceVersion   func(childComplexity int) int
+		Revision          func(childComplexity int) int
+		UID               func(childComplexity int) int
+	}
+
+	ProductVariantSpec struct {
+		Inventory       func(childComplexity int) int
+		Media           func(childComplexity int) int
+		Pricing         func(childComplexity int) int
+		ProductRef      func(childComplexity int) int
+		SelectedOptions func(childComplexity int) int
+		Sku             func(childComplexity int) int
+		Title           func(childComplexity int) int
+	}
+
+	ProductVariantStatus struct {
+		Conditions          func(childComplexity int) int
+		LastAppliedRevision func(childComplexity int) int
+		ObservedGeneration  func(childComplexity int) int
+		Resolved            func(childComplexity int) int
+	}
+
 	PublishCatalogPayload struct {
 		CatalogVersion   func(childComplexity int) int
 		ClientMutationID func(childComplexity int) int
 	}
 
+	QuantityDefinition struct {
+		Max func(childComplexity int) int
+		Min func(childComplexity int) int
+	}
+
 	Query struct {
-		CatalogVersion func(childComplexity int) int
-		Categories     func(childComplexity int, first *int32, after *string, last *int32, before *string) int
-		Category       func(childComplexity int, by model.CategoryBy) int
-		Collection     func(childComplexity int, by model.CollectionBy) int
-		Collections    func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
-		Namespace      func(childComplexity int, by model.NamespaceBy) int
-		Namespaces     func(childComplexity int, first *int32, after *string, last *int32, before *string) int
-		Node           func(childComplexity int, id string) int
-		Nodes          func(childComplexity int, ids []string) int
-		Product        func(childComplexity int, by model.ProductBy) int
-		Products       func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
-		Repositories   func(childComplexity int, namespaceID string, first *int32, after *string, last *int32, before *string) int
-		Repository     func(childComplexity int, by model.RepositoryBy) int
+		CatalogVersion  func(childComplexity int) int
+		Categories      func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+		Category        func(childComplexity int, by model.CategoryBy) int
+		Collection      func(childComplexity int, by model.CollectionBy) int
+		Collections     func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		Namespace       func(childComplexity int, by model.NamespaceBy) int
+		Namespaces      func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+		Node            func(childComplexity int, id string) int
+		Nodes           func(childComplexity int, ids []string) int
+		Product         func(childComplexity int, by model.ProductBy) int
+		ProductVariant  func(childComplexity int, by model.ProductVariantBy) int
+		ProductVariants func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		Products        func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		Repositories    func(childComplexity int, namespaceID string, first *int32, after *string, last *int32, before *string) int
+		Repository      func(childComplexity int, by model.RepositoryBy) int
 	}
 
 	RefreshTokenPayload struct {
@@ -473,6 +579,21 @@ type ComplexityRoot struct {
 		URL         func(childComplexity int) int
 	}
 
+	ResolvedInventoryDefinition struct {
+		AvailableQuantity func(childComplexity int) int
+		Managed           func(childComplexity int) int
+		Policy            func(childComplexity int) int
+	}
+
+	ResolvedPriceSetDefinition struct {
+		CompiledExpressions func(childComplexity int) int
+		Currencies          func(childComplexity int) int
+		Hash                func(childComplexity int) int
+		Name                func(childComplexity int) int
+		PriceCount          func(childComplexity int) int
+		Strategies          func(childComplexity int) int
+	}
+
 	ResolvedProductDefinition struct {
 		Category          func(childComplexity int) int
 		DefaultVariantRef func(childComplexity int) int
@@ -480,6 +601,28 @@ type ComplexityRoot struct {
 		PriceRange        func(childComplexity int) int
 		TotalInventory    func(childComplexity int) int
 		VariantSummary    func(childComplexity int) int
+	}
+
+	ResolvedProductRef struct {
+		Name func(childComplexity int) int
+		UID  func(childComplexity int) int
+	}
+
+	ResolvedProductVariantDefinition struct {
+		Inventory           func(childComplexity int) int
+		Media               func(childComplexity int) int
+		PriceSet            func(childComplexity int) int
+		Product             func(childComplexity int) int
+		SelectedOptionsHash func(childComplexity int) int
+	}
+
+	SelectedOptionDefinition struct {
+		Name  func(childComplexity int) int
+		Value func(childComplexity int) int
+	}
+
+	StrategyDefinition struct {
+		Type func(childComplexity int) int
 	}
 
 	TransferRepositoryPayload struct {
@@ -1325,6 +1468,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.DeleteRepositoryPayload.DeletedRepositoryID(childComplexity), true
 
+	case "EligibilityDefinition.constraints":
+		if e.ComplexityRoot.EligibilityDefinition.Constraints == nil {
+			break
+		}
+
+		return e.ComplexityRoot.EligibilityDefinition.Constraints(childComplexity), true
+
+	case "EligibilityDefinition.operator":
+		if e.ComplexityRoot.EligibilityDefinition.Operator == nil {
+			break
+		}
+
+		return e.ComplexityRoot.EligibilityDefinition.Operator(childComplexity), true
+
 	case "FileReference.kind":
 		if e.ComplexityRoot.FileReference.Kind == nil {
 			break
@@ -1345,6 +1502,27 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.FileReference.Optional(childComplexity), true
+
+	case "InventoryDefinition.managed":
+		if e.ComplexityRoot.InventoryDefinition.Managed == nil {
+			break
+		}
+
+		return e.ComplexityRoot.InventoryDefinition.Managed(childComplexity), true
+
+	case "InventoryDefinition.policy":
+		if e.ComplexityRoot.InventoryDefinition.Policy == nil {
+			break
+		}
+
+		return e.ComplexityRoot.InventoryDefinition.Policy(childComplexity), true
+
+	case "InventoryDefinition.stockLocationRefs":
+		if e.ComplexityRoot.InventoryDefinition.StockLocationRefs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.InventoryDefinition.StockLocationRefs(childComplexity), true
 
 	case "KeyValuePair.key":
 		if e.ComplexityRoot.KeyValuePair.Key == nil {
@@ -1809,6 +1987,104 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.PriceRangeDefinition.Min(childComplexity), true
 
+	case "PriceRuleConstraint.expression":
+		if e.ComplexityRoot.PriceRuleConstraint.Expression == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PriceRuleConstraint.Expression(childComplexity), true
+
+	case "PriceRuleConstraint.name":
+		if e.ComplexityRoot.PriceRuleConstraint.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PriceRuleConstraint.Name(childComplexity), true
+
+	case "PriceSet.name":
+		if e.ComplexityRoot.PriceSet.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PriceSet.Name(childComplexity), true
+
+	case "PriceSet.prices":
+		if e.ComplexityRoot.PriceSet.Prices == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PriceSet.Prices(childComplexity), true
+
+	case "PriceTemplate.amount":
+		if e.ComplexityRoot.PriceTemplate.Amount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PriceTemplate.Amount(childComplexity), true
+
+	case "PriceTemplate.currencyCode":
+		if e.ComplexityRoot.PriceTemplate.CurrencyCode == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PriceTemplate.CurrencyCode(childComplexity), true
+
+	case "PriceTemplate.eligibility":
+		if e.ComplexityRoot.PriceTemplate.Eligibility == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PriceTemplate.Eligibility(childComplexity), true
+
+	case "PriceTemplate.name":
+		if e.ComplexityRoot.PriceTemplate.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PriceTemplate.Name(childComplexity), true
+
+	case "PriceTemplate.priority":
+		if e.ComplexityRoot.PriceTemplate.Priority == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PriceTemplate.Priority(childComplexity), true
+
+	case "PriceTemplate.quantity":
+		if e.ComplexityRoot.PriceTemplate.Quantity == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PriceTemplate.Quantity(childComplexity), true
+
+	case "PriceTemplate.strategy":
+		if e.ComplexityRoot.PriceTemplate.Strategy == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PriceTemplate.Strategy(childComplexity), true
+
+	case "PriceTemplate.validFromTime":
+		if e.ComplexityRoot.PriceTemplate.ValidFromTime == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PriceTemplate.ValidFromTime(childComplexity), true
+
+	case "PriceTemplate.validUntilTime":
+		if e.ComplexityRoot.PriceTemplate.ValidUntilTime == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PriceTemplate.ValidUntilTime(childComplexity), true
+
+	case "PricingDefinition.priceSet":
+		if e.ComplexityRoot.PricingDefinition.PriceSet == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PricingDefinition.PriceSet(childComplexity), true
+
 	case "Product.apiVersion":
 		if e.ComplexityRoot.Product.APIVersion == nil {
 			break
@@ -1836,6 +2112,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Product.Metadata(childComplexity), true
+
+	case "Product.productVariants":
+		if e.ComplexityRoot.Product.ProductVariants == nil {
+			break
+		}
+
+		args, err := ec.field_Product_productVariants_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Product.ProductVariants(childComplexity, args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
 
 	case "Product.spec":
 		if e.ComplexityRoot.Product.Spec == nil {
@@ -2082,6 +2370,279 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ProductStatus.Resolved(childComplexity), true
 
+	case "ProductVariant.apiVersion":
+		if e.ComplexityRoot.ProductVariant.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariant.APIVersion(childComplexity), true
+
+	case "ProductVariant.body":
+		if e.ComplexityRoot.ProductVariant.Body == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariant.Body(childComplexity), true
+
+	case "ProductVariant.id":
+		if e.ComplexityRoot.ProductVariant.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariant.ID(childComplexity), true
+
+	case "ProductVariant.kind":
+		if e.ComplexityRoot.ProductVariant.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariant.Kind(childComplexity), true
+
+	case "ProductVariant.metadata":
+		if e.ComplexityRoot.ProductVariant.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariant.Metadata(childComplexity), true
+
+	case "ProductVariant.spec":
+		if e.ComplexityRoot.ProductVariant.Spec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariant.Spec(childComplexity), true
+
+	case "ProductVariant.status":
+		if e.ComplexityRoot.ProductVariant.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariant.Status(childComplexity), true
+
+	case "ProductVariantCondition.lastTransitionTime":
+		if e.ComplexityRoot.ProductVariantCondition.LastTransitionTime == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantCondition.LastTransitionTime(childComplexity), true
+
+	case "ProductVariantCondition.message":
+		if e.ComplexityRoot.ProductVariantCondition.Message == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantCondition.Message(childComplexity), true
+
+	case "ProductVariantCondition.observedGeneration":
+		if e.ComplexityRoot.ProductVariantCondition.ObservedGeneration == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantCondition.ObservedGeneration(childComplexity), true
+
+	case "ProductVariantCondition.reason":
+		if e.ComplexityRoot.ProductVariantCondition.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantCondition.Reason(childComplexity), true
+
+	case "ProductVariantCondition.status":
+		if e.ComplexityRoot.ProductVariantCondition.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantCondition.Status(childComplexity), true
+
+	case "ProductVariantCondition.type":
+		if e.ComplexityRoot.ProductVariantCondition.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantCondition.Type(childComplexity), true
+
+	case "ProductVariantConnection.edges":
+		if e.ComplexityRoot.ProductVariantConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantConnection.Edges(childComplexity), true
+
+	case "ProductVariantConnection.pageInfo":
+		if e.ComplexityRoot.ProductVariantConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantConnection.PageInfo(childComplexity), true
+
+	case "ProductVariantConnection.totalCount":
+		if e.ComplexityRoot.ProductVariantConnection.TotalCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantConnection.TotalCount(childComplexity), true
+
+	case "ProductVariantEdge.cursor":
+		if e.ComplexityRoot.ProductVariantEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantEdge.Cursor(childComplexity), true
+
+	case "ProductVariantEdge.node":
+		if e.ComplexityRoot.ProductVariantEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantEdge.Node(childComplexity), true
+
+	case "ProductVariantObjectMeta.annotations":
+		if e.ComplexityRoot.ProductVariantObjectMeta.Annotations == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantObjectMeta.Annotations(childComplexity), true
+
+	case "ProductVariantObjectMeta.creationTimestamp":
+		if e.ComplexityRoot.ProductVariantObjectMeta.CreationTimestamp == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantObjectMeta.CreationTimestamp(childComplexity), true
+
+	case "ProductVariantObjectMeta.generation":
+		if e.ComplexityRoot.ProductVariantObjectMeta.Generation == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantObjectMeta.Generation(childComplexity), true
+
+	case "ProductVariantObjectMeta.labels":
+		if e.ComplexityRoot.ProductVariantObjectMeta.Labels == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantObjectMeta.Labels(childComplexity), true
+
+	case "ProductVariantObjectMeta.name":
+		if e.ComplexityRoot.ProductVariantObjectMeta.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantObjectMeta.Name(childComplexity), true
+
+	case "ProductVariantObjectMeta.namespace":
+		if e.ComplexityRoot.ProductVariantObjectMeta.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantObjectMeta.Namespace(childComplexity), true
+
+	case "ProductVariantObjectMeta.ownerReferences":
+		if e.ComplexityRoot.ProductVariantObjectMeta.OwnerReferences == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantObjectMeta.OwnerReferences(childComplexity), true
+
+	case "ProductVariantObjectMeta.resourceVersion":
+		if e.ComplexityRoot.ProductVariantObjectMeta.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantObjectMeta.ResourceVersion(childComplexity), true
+
+	case "ProductVariantObjectMeta.revision":
+		if e.ComplexityRoot.ProductVariantObjectMeta.Revision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantObjectMeta.Revision(childComplexity), true
+
+	case "ProductVariantObjectMeta.uid":
+		if e.ComplexityRoot.ProductVariantObjectMeta.UID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantObjectMeta.UID(childComplexity), true
+
+	case "ProductVariantSpec.inventory":
+		if e.ComplexityRoot.ProductVariantSpec.Inventory == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantSpec.Inventory(childComplexity), true
+
+	case "ProductVariantSpec.media":
+		if e.ComplexityRoot.ProductVariantSpec.Media == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantSpec.Media(childComplexity), true
+
+	case "ProductVariantSpec.pricing":
+		if e.ComplexityRoot.ProductVariantSpec.Pricing == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantSpec.Pricing(childComplexity), true
+
+	case "ProductVariantSpec.productRef":
+		if e.ComplexityRoot.ProductVariantSpec.ProductRef == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantSpec.ProductRef(childComplexity), true
+
+	case "ProductVariantSpec.selectedOptions":
+		if e.ComplexityRoot.ProductVariantSpec.SelectedOptions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantSpec.SelectedOptions(childComplexity), true
+
+	case "ProductVariantSpec.sku":
+		if e.ComplexityRoot.ProductVariantSpec.Sku == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantSpec.Sku(childComplexity), true
+
+	case "ProductVariantSpec.title":
+		if e.ComplexityRoot.ProductVariantSpec.Title == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantSpec.Title(childComplexity), true
+
+	case "ProductVariantStatus.conditions":
+		if e.ComplexityRoot.ProductVariantStatus.Conditions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantStatus.Conditions(childComplexity), true
+
+	case "ProductVariantStatus.lastAppliedRevision":
+		if e.ComplexityRoot.ProductVariantStatus.LastAppliedRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantStatus.LastAppliedRevision(childComplexity), true
+
+	case "ProductVariantStatus.observedGeneration":
+		if e.ComplexityRoot.ProductVariantStatus.ObservedGeneration == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantStatus.ObservedGeneration(childComplexity), true
+
+	case "ProductVariantStatus.resolved":
+		if e.ComplexityRoot.ProductVariantStatus.Resolved == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantStatus.Resolved(childComplexity), true
+
 	case "PublishCatalogPayload.catalogVersion":
 		if e.ComplexityRoot.PublishCatalogPayload.CatalogVersion == nil {
 			break
@@ -2095,6 +2656,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.PublishCatalogPayload.ClientMutationID(childComplexity), true
+
+	case "QuantityDefinition.max":
+		if e.ComplexityRoot.QuantityDefinition.Max == nil {
+			break
+		}
+
+		return e.ComplexityRoot.QuantityDefinition.Max(childComplexity), true
+
+	case "QuantityDefinition.min":
+		if e.ComplexityRoot.QuantityDefinition.Min == nil {
+			break
+		}
+
+		return e.ComplexityRoot.QuantityDefinition.Min(childComplexity), true
 
 	case "Query.catalogVersion":
 		if e.ComplexityRoot.Query.CatalogVersion == nil {
@@ -2210,6 +2785,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Product(childComplexity, args["by"].(model.ProductBy)), true
+
+	case "Query.productVariant":
+		if e.ComplexityRoot.Query.ProductVariant == nil {
+			break
+		}
+
+		args, err := ec.field_Query_productVariant_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ProductVariant(childComplexity, args["by"].(model.ProductVariantBy)), true
+
+	case "Query.productVariants":
+		if e.ComplexityRoot.Query.ProductVariants == nil {
+			break
+		}
+
+		args, err := ec.field_Query_productVariants_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ProductVariants(childComplexity, args["namespace"].(string), args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
 
 	case "Query.products":
 		if e.ComplexityRoot.Query.Products == nil {
@@ -2464,6 +3063,69 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ResolvedFileDefinition.URL(childComplexity), true
 
+	case "ResolvedInventoryDefinition.availableQuantity":
+		if e.ComplexityRoot.ResolvedInventoryDefinition.AvailableQuantity == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedInventoryDefinition.AvailableQuantity(childComplexity), true
+
+	case "ResolvedInventoryDefinition.managed":
+		if e.ComplexityRoot.ResolvedInventoryDefinition.Managed == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedInventoryDefinition.Managed(childComplexity), true
+
+	case "ResolvedInventoryDefinition.policy":
+		if e.ComplexityRoot.ResolvedInventoryDefinition.Policy == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedInventoryDefinition.Policy(childComplexity), true
+
+	case "ResolvedPriceSetDefinition.compiledExpressions":
+		if e.ComplexityRoot.ResolvedPriceSetDefinition.CompiledExpressions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedPriceSetDefinition.CompiledExpressions(childComplexity), true
+
+	case "ResolvedPriceSetDefinition.currencies":
+		if e.ComplexityRoot.ResolvedPriceSetDefinition.Currencies == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedPriceSetDefinition.Currencies(childComplexity), true
+
+	case "ResolvedPriceSetDefinition.hash":
+		if e.ComplexityRoot.ResolvedPriceSetDefinition.Hash == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedPriceSetDefinition.Hash(childComplexity), true
+
+	case "ResolvedPriceSetDefinition.name":
+		if e.ComplexityRoot.ResolvedPriceSetDefinition.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedPriceSetDefinition.Name(childComplexity), true
+
+	case "ResolvedPriceSetDefinition.priceCount":
+		if e.ComplexityRoot.ResolvedPriceSetDefinition.PriceCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedPriceSetDefinition.PriceCount(childComplexity), true
+
+	case "ResolvedPriceSetDefinition.strategies":
+		if e.ComplexityRoot.ResolvedPriceSetDefinition.Strategies == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedPriceSetDefinition.Strategies(childComplexity), true
+
 	case "ResolvedProductDefinition.category":
 		if e.ComplexityRoot.ResolvedProductDefinition.Category == nil {
 			break
@@ -2505,6 +3167,76 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ResolvedProductDefinition.VariantSummary(childComplexity), true
+
+	case "ResolvedProductRef.name":
+		if e.ComplexityRoot.ResolvedProductRef.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedProductRef.Name(childComplexity), true
+
+	case "ResolvedProductRef.uid":
+		if e.ComplexityRoot.ResolvedProductRef.UID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedProductRef.UID(childComplexity), true
+
+	case "ResolvedProductVariantDefinition.inventory":
+		if e.ComplexityRoot.ResolvedProductVariantDefinition.Inventory == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedProductVariantDefinition.Inventory(childComplexity), true
+
+	case "ResolvedProductVariantDefinition.media":
+		if e.ComplexityRoot.ResolvedProductVariantDefinition.Media == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedProductVariantDefinition.Media(childComplexity), true
+
+	case "ResolvedProductVariantDefinition.priceSet":
+		if e.ComplexityRoot.ResolvedProductVariantDefinition.PriceSet == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedProductVariantDefinition.PriceSet(childComplexity), true
+
+	case "ResolvedProductVariantDefinition.product":
+		if e.ComplexityRoot.ResolvedProductVariantDefinition.Product == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedProductVariantDefinition.Product(childComplexity), true
+
+	case "ResolvedProductVariantDefinition.selectedOptionsHash":
+		if e.ComplexityRoot.ResolvedProductVariantDefinition.SelectedOptionsHash == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedProductVariantDefinition.SelectedOptionsHash(childComplexity), true
+
+	case "SelectedOptionDefinition.name":
+		if e.ComplexityRoot.SelectedOptionDefinition.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SelectedOptionDefinition.Name(childComplexity), true
+
+	case "SelectedOptionDefinition.value":
+		if e.ComplexityRoot.SelectedOptionDefinition.Value == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SelectedOptionDefinition.Value(childComplexity), true
+
+	case "StrategyDefinition.type":
+		if e.ComplexityRoot.StrategyDefinition.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StrategyDefinition.Type(childComplexity), true
 
 	case "TransferRepositoryPayload.clientMutationId":
 		if e.ComplexityRoot.TransferRepositoryPayload.ClientMutationID == nil {
@@ -2615,6 +3347,8 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputNamespaceBy,
 		ec.unmarshalInputProductBy,
 		ec.unmarshalInputProductNamespacePath,
+		ec.unmarshalInputProductVariantBy,
+		ec.unmarshalInputProductVariantNamespacePath,
 		ec.unmarshalInputPublishCatalogInput,
 		ec.unmarshalInputRefreshTokenInput,
 		ec.unmarshalInputRenameRepositoryInput,
@@ -3023,6 +3757,7 @@ Controller-computed category hierarchy metadata.
 """
 type ResolvedCategoryTaxonomy {
   depth: Int!
+  # TODO: Change to 'path: [String!]!'
   ancestorPath: String!
   childCount: Int!
   productCount: Int!
@@ -4039,6 +4774,516 @@ type ProductConnection {
   totalCount: Int!
 }
 `, BuiltIn: false},
+	{Name: "../../../../shared/schemas/product_variant.graphqls", Input: `# ProductVariant Entity GraphQL Types (Kubernetes-style resource envelope)
+# ProductVariant is the purchasable SKU unit; Product is the non-sellable parent.
+# All writes are via git push; query resolvers serve the fully-hydrated datastore view.
+
+extend type Query {
+  """
+  Get a single ProductVariant by globally unique ID or namespace + name.
+  """
+  productVariant(by: ProductVariantBy!): ProductVariant
+
+  """
+  List ProductVariants in a namespace with Relay cursor-based pagination.
+  """
+  productVariants(
+    namespace: String!
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): ProductVariantConnection!
+}
+
+"""
+Kubernetes-style ProductVariant resource. The atomic sellable SKU unit.
+Product is the non-sellable parent descriptor; ProductVariant carries pricing,
+inventory policy, and the selected option combination that makes a SKU unique.
+"""
+type ProductVariant implements Node {
+  """
+  Globally unique Relay ID (encodes the variant UID).
+  """
+  id: ID!
+
+  """
+  API version. Always catalog.gitstore.dev/v1beta1.
+  """
+  apiVersion: String!
+
+  """
+  Resource kind. Always ProductVariant.
+  """
+  kind: String!
+
+  """
+  System-managed identity and metadata.
+  """
+  metadata: ProductVariantObjectMeta!
+
+  """
+  Author-controlled specification: SKU, pricing, inventory, and options.
+  """
+  spec: ProductVariantSpec!
+
+  """
+  System-computed status written at admission and updated by the controller.
+  """
+  status: ProductVariantStatus
+
+  """
+  Variant-specific descriptive copy authored in the Markdown body.
+  """
+  body: String
+}
+
+"""
+System-managed identity fields for a ProductVariant resource.
+All fields are read-only; set and updated by the system.
+"""
+type ProductVariantObjectMeta {
+  """
+  DNS-label name, unique within the namespace.
+  """
+  name: String!
+
+  """
+  Namespace identifier the variant belongs to.
+  """
+  namespace: String!
+
+  """
+  Globally unique system-generated identifier.
+  """
+  uid: ID!
+
+  """
+  Opaque concurrency token. Changes on every spec update.
+  """
+  resourceVersion: String!
+
+  """
+  Monotonically increasing counter incremented on every spec change.
+  """
+  generation: Int!
+
+  """
+  Timestamp of first admission.
+  """
+  creationTimestamp: DateTime!
+
+  """
+  Git revision of the last successfully admitted push (e.g. main@sha1:abc123).
+  """
+  revision: String
+
+  """
+  Author-supplied key-value labels.
+  """
+  labels: [KeyValuePair!]!
+
+  """
+  Author-supplied annotations.
+  """
+  annotations: [KeyValuePair!]!
+
+  """
+  Owner references linking this variant to its parent Product resource.
+  """
+  ownerReferences: [OwnerReference!]!
+}
+
+"""
+Author-controlled specification for a ProductVariant resource.
+"""
+type ProductVariantSpec {
+  """
+  Human-readable display title for this variant.
+  """
+  title: String!
+
+  """
+  Stock-keeping unit: globally unique identifier for the variant within the namespace.
+  """
+  sku: String!
+
+  """
+  Reference to the parent Product this variant belongs to.
+  """
+  productRef: CatalogObjectReference!
+
+  """
+  Inventory management settings.
+  """
+  inventory: InventoryDefinition
+
+  """
+  Pricing rules and price templates.
+  """
+  pricing: PricingDefinition
+
+  """
+  The combination of option name/value pairs that uniquely identify this variant.
+  Must match a valid combination defined on the parent Product.
+  """
+  selectedOptions: [SelectedOptionDefinition!]!
+
+  """
+  Media slots referencing File resources.
+  """
+  media: [MediaDefinition!]!
+}
+
+"""
+Inventory management configuration for a ProductVariant.
+"""
+type InventoryDefinition {
+  """
+  Whether inventory levels are tracked. When false, the variant is always
+  considered available regardless of stockLocationRefs.
+  """
+  managed: Boolean!
+
+  """
+  Behaviour when stock is exhausted. Only meaningful when managed is true.
+  DENY prevents purchase; BACKORDER allows orders against future stock.
+  """
+  policy: InventoryPolicy
+
+  """
+  References to stock location resources. Stored as-is when managed is false;
+  actively evaluated when managed is true.
+  """
+  stockLocationRefs: [CatalogObjectReference!]!
+}
+
+"""
+Inventory oversell policy applied when managed stock reaches zero.
+"""
+enum InventoryPolicy {
+  """Reject new orders when stock reaches zero."""
+  DENY
+
+  """Allow orders against negative stock (backorder)."""
+  BACKORDER
+}
+
+"""
+Top-level pricing configuration for a ProductVariant.
+"""
+type PricingDefinition {
+  """
+  Named price set containing one or more price templates.
+  """
+  priceSet: PriceSet
+}
+
+"""
+A named collection of price templates for a variant.
+"""
+type PriceSet {
+  """
+  Identifier for this price set, unique within the variant spec.
+  """
+  name: String!
+
+  """
+  Ordered list of price templates. Evaluation order is determined by priority.
+  """
+  prices: [PriceTemplate!]!
+}
+
+"""
+A single price rule within a PriceSet. Carries amount, currency, validity
+window, quantity thresholds, strategy, and optional eligibility constraints.
+"""
+type PriceTemplate {
+  """
+  Identifier for this price template within the price set.
+  """
+  name: String!
+
+  """
+  ISO 8601 timestamp from which this price is valid (inclusive). Null means no lower bound.
+  """
+  validFromTime: DateTime
+
+  """
+  ISO 8601 timestamp until which this price is valid (exclusive). Null means no upper bound.
+  Must be strictly after validFromTime when both are present.
+  """
+  validUntilTime: DateTime
+
+  """
+  Optional quantity range that must be satisfied for this price to apply.
+  """
+  quantity: QuantityDefinition
+
+  """
+  ISO 4217 currency code (e.g. USD, EUR).
+  """
+  currencyCode: String!
+
+  """
+  Monetary amount for this price template, stored with full decimal precision.
+  """
+  amount: Decimal!
+
+  """
+  Pricing strategy (e.g. fixed, percentage_discount).
+  """
+  strategy: StrategyDefinition!
+
+  """
+  Evaluation priority. Lower values are evaluated first.
+  """
+  priority: Int!
+
+  """
+  Optional eligibility gate. If absent, the price applies unconditionally.
+  """
+  eligibility: EligibilityDefinition
+}
+
+"""
+Inclusive quantity range that must be satisfied for a price template to apply.
+"""
+type QuantityDefinition {
+  """
+  Minimum order quantity (inclusive).
+  """
+  min: Int!
+
+  """
+  Maximum order quantity (inclusive). Null means unbounded.
+  """
+  max: Int
+}
+
+"""
+Pricing strategy applied when this price template is selected.
+"""
+type StrategyDefinition {
+  """
+  Strategy identifier (e.g. fixed, percentage_discount, cost_plus).
+  """
+  type: String!
+}
+
+"""
+Gate that controls when a price template is eligible.
+Multiple constraints are combined with the specified operator.
+"""
+type EligibilityDefinition {
+  """
+  Logical combination of constraints: ALL (AND) or ANY (OR).
+  """
+  operator: EligibilityOperator!
+
+  """
+  Individual constraint rules.
+  """
+  constraints: [PriceRuleConstraint!]!
+}
+
+"""
+Logical combination operator for eligibility constraints.
+"""
+enum EligibilityOperator {
+  """All constraints must be satisfied."""
+  ALL
+
+  """At least one constraint must be satisfied."""
+  ANY
+}
+
+"""
+A single eligibility constraint expressed as a CEL expression.
+Syntax is validated at admission; runtime evaluation is performed by the pricing engine.
+"""
+type PriceRuleConstraint {
+  """
+  Optional human-readable name for documentation purposes.
+  """
+  name: String
+
+  """
+  CEL expression evaluated against runtime cart context.
+  Must be syntactically valid CEL; validated at admission.
+  """
+  expression: String!
+}
+
+"""
+A resolved name/value pair representing one product option selection.
+"""
+type SelectedOptionDefinition {
+  """
+  Option name, must match a name declared on the parent Product's options list.
+  """
+  name: String!
+
+  """
+  Selected value for the named option.
+  """
+  value: String!
+}
+
+"""
+System-computed status for a ProductVariant resource.
+"""
+type ProductVariantStatus {
+  """
+  Generation of the spec that this status was computed from.
+  """
+  observedGeneration: Int!
+
+  """
+  Git revision of the last successfully admitted push.
+  """
+  lastAppliedRevision: String
+
+  """
+  Condition set written at admission and updated by the controller.
+  """
+  conditions: [ProductVariantCondition!]!
+
+  """
+  Resolved aggregates computed at admission and kept current by the controller.
+  """
+  resolved: ResolvedProductVariantDefinition
+}
+
+"""
+A single status condition on a ProductVariant resource.
+"""
+type ProductVariantCondition {
+  type: ProductVariantConditionType!
+  status: ConditionStatus!
+  observedGeneration: Int
+  lastTransitionTime: DateTime!
+  reason: String
+  message: String
+}
+
+"""
+Named condition types for a ProductVariant resource.
+"""
+enum ProductVariantConditionType {
+  """Structural and semantic checks passed at admission."""
+  ADMISSION_ACCEPTED
+
+  """Parent Product resource has been located and linked."""
+  PRODUCT_RESOLVED
+
+  """selectedOptions combination is valid against the parent Product's option definitions."""
+  OPTIONS_ACCEPTED
+
+  """CEL expressions in pricing rules are syntactically valid."""
+  PRICING_ACCEPTED
+
+  """All blocking conditions are True; variant is fully operational."""
+  READY
+}
+
+"""
+Resolved aggregates for a ProductVariant, computed at admission and kept current.
+"""
+type ResolvedProductVariantDefinition {
+  """
+  Resolved parent product identity.
+  """
+  product: ResolvedProductRef
+
+  """
+  Stable fingerprint of the selectedOptions combination (sorted name:value pairs).
+  """
+  selectedOptionsHash: String
+
+  """
+  Resolved pricing summary.
+  """
+  priceSet: ResolvedPriceSetDefinition
+
+  """
+  Resolved inventory summary.
+  """
+  inventory: ResolvedInventoryDefinition
+
+  """
+  Resolved media files.
+  """
+  media: [ResolvedFileDefinition!]!
+}
+
+"""
+Resolved identity of the parent Product resource.
+"""
+type ResolvedProductRef {
+  name: String!
+  uid: ID!
+}
+
+"""
+Resolved summary of the variant's price set.
+"""
+type ResolvedPriceSetDefinition {
+  name: String!
+  """Stable hash of all price templates in the set."""
+  hash: String
+  """Number of CEL expressions compiled successfully."""
+  compiledExpressions: Int!
+  """Total number of price templates."""
+  priceCount: Int!
+  """Distinct currency codes present in the price set."""
+  currencies: [String!]!
+  """Distinct strategy types present in the price set."""
+  strategies: [String!]!
+}
+
+"""
+Resolved inventory summary for a ProductVariant.
+"""
+type ResolvedInventoryDefinition {
+  managed: Boolean!
+  availableQuantity: Int!
+  policy: InventoryPolicy
+}
+
+"""
+Edge type for ProductVariant connection (Relay pattern).
+"""
+type ProductVariantEdge {
+  cursor: String!
+  node: ProductVariant!
+}
+
+"""
+Paginated connection for ProductVariants (Relay pattern).
+"""
+type ProductVariantConnection {
+  edges: [ProductVariantEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# ---------------------------------------------------------------------------
+# Extend Product to expose its variants connection
+# ---------------------------------------------------------------------------
+
+extend type Product {
+  """
+  Paginated list of ProductVariants belonging to this product.
+  """
+  productVariants(
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): ProductVariantConnection!
+}
+`, BuiltIn: false},
 	{Name: "../../../../shared/schemas/repository.graphqls", Input: `# SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (c) 2026 GitStore contributors
 
@@ -4389,6 +5634,25 @@ input CollectionBy @oneOf {
 Composite selector: namespace identifier + collection name.
 """
 input CollectionNamespacePath {
+  namespace: String!
+  name: String!
+}
+
+"""
+Selector for a single ProductVariant lookup. Exactly one field must be set.
+"""
+input ProductVariantBy @oneOf {
+  """Look up by globally unique Relay ID (encodes the variant UID)."""
+  id: ID
+
+  """Look up by namespace identifier + variant name (Kubernetes-style metadata.name)."""
+  namespacePath: ProductVariantNamespacePath
+}
+
+"""
+Composite selector: namespace identifier (human-readable slug) + variant name.
+"""
+input ProductVariantNamespacePath {
   namespace: String!
   name: String!
 }
@@ -4813,6 +6077,16 @@ func (ec *executionContext) childFields_DeleteRepositoryPayload(ctx context.Cont
 	return nil, fmt.Errorf("no field named %q was found under type DeleteRepositoryPayload", field.Name)
 }
 
+func (ec *executionContext) childFields_EligibilityDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "operator":
+		return ec.fieldContext_EligibilityDefinition_operator(ctx, field)
+	case "constraints":
+		return ec.fieldContext_EligibilityDefinition_constraints(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type EligibilityDefinition", field.Name)
+}
+
 func (ec *executionContext) childFields_FileReference(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "name":
@@ -4823,6 +6097,18 @@ func (ec *executionContext) childFields_FileReference(ctx context.Context, field
 		return ec.fieldContext_FileReference_optional(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type FileReference", field.Name)
+}
+
+func (ec *executionContext) childFields_InventoryDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "managed":
+		return ec.fieldContext_InventoryDefinition_managed(ctx, field)
+	case "policy":
+		return ec.fieldContext_InventoryDefinition_policy(ctx, field)
+	case "stockLocationRefs":
+		return ec.fieldContext_InventoryDefinition_stockLocationRefs(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type InventoryDefinition", field.Name)
 }
 
 func (ec *executionContext) childFields_KeyValuePair(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -4971,6 +6257,58 @@ func (ec *executionContext) childFields_PriceRangeDefinition(ctx context.Context
 	return nil, fmt.Errorf("no field named %q was found under type PriceRangeDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_PriceRuleConstraint(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_PriceRuleConstraint_name(ctx, field)
+	case "expression":
+		return ec.fieldContext_PriceRuleConstraint_expression(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type PriceRuleConstraint", field.Name)
+}
+
+func (ec *executionContext) childFields_PriceSet(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_PriceSet_name(ctx, field)
+	case "prices":
+		return ec.fieldContext_PriceSet_prices(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type PriceSet", field.Name)
+}
+
+func (ec *executionContext) childFields_PriceTemplate(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_PriceTemplate_name(ctx, field)
+	case "validFromTime":
+		return ec.fieldContext_PriceTemplate_validFromTime(ctx, field)
+	case "validUntilTime":
+		return ec.fieldContext_PriceTemplate_validUntilTime(ctx, field)
+	case "quantity":
+		return ec.fieldContext_PriceTemplate_quantity(ctx, field)
+	case "currencyCode":
+		return ec.fieldContext_PriceTemplate_currencyCode(ctx, field)
+	case "amount":
+		return ec.fieldContext_PriceTemplate_amount(ctx, field)
+	case "strategy":
+		return ec.fieldContext_PriceTemplate_strategy(ctx, field)
+	case "priority":
+		return ec.fieldContext_PriceTemplate_priority(ctx, field)
+	case "eligibility":
+		return ec.fieldContext_PriceTemplate_eligibility(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type PriceTemplate", field.Name)
+}
+
+func (ec *executionContext) childFields_PricingDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "priceSet":
+		return ec.fieldContext_PricingDefinition_priceSet(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type PricingDefinition", field.Name)
+}
+
 func (ec *executionContext) childFields_Product(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "id":
@@ -4985,6 +6323,8 @@ func (ec *executionContext) childFields_Product(ctx context.Context, field graph
 		return ec.fieldContext_Product_spec(ctx, field)
 	case "status":
 		return ec.fieldContext_Product_status(ctx, field)
+	case "productVariants":
+		return ec.fieldContext_Product_productVariants(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Product", field.Name)
 }
@@ -5097,6 +6437,126 @@ func (ec *executionContext) childFields_ProductStatus(ctx context.Context, field
 	return nil, fmt.Errorf("no field named %q was found under type ProductStatus", field.Name)
 }
 
+func (ec *executionContext) childFields_ProductVariant(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_ProductVariant_id(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_ProductVariant_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_ProductVariant_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_ProductVariant_metadata(ctx, field)
+	case "spec":
+		return ec.fieldContext_ProductVariant_spec(ctx, field)
+	case "status":
+		return ec.fieldContext_ProductVariant_status(ctx, field)
+	case "body":
+		return ec.fieldContext_ProductVariant_body(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProductVariant", field.Name)
+}
+
+func (ec *executionContext) childFields_ProductVariantCondition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_ProductVariantCondition_type(ctx, field)
+	case "status":
+		return ec.fieldContext_ProductVariantCondition_status(ctx, field)
+	case "observedGeneration":
+		return ec.fieldContext_ProductVariantCondition_observedGeneration(ctx, field)
+	case "lastTransitionTime":
+		return ec.fieldContext_ProductVariantCondition_lastTransitionTime(ctx, field)
+	case "reason":
+		return ec.fieldContext_ProductVariantCondition_reason(ctx, field)
+	case "message":
+		return ec.fieldContext_ProductVariantCondition_message(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProductVariantCondition", field.Name)
+}
+
+func (ec *executionContext) childFields_ProductVariantConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "edges":
+		return ec.fieldContext_ProductVariantConnection_edges(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_ProductVariantConnection_pageInfo(ctx, field)
+	case "totalCount":
+		return ec.fieldContext_ProductVariantConnection_totalCount(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProductVariantConnection", field.Name)
+}
+
+func (ec *executionContext) childFields_ProductVariantEdge(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "cursor":
+		return ec.fieldContext_ProductVariantEdge_cursor(ctx, field)
+	case "node":
+		return ec.fieldContext_ProductVariantEdge_node(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProductVariantEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_ProductVariantObjectMeta(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_ProductVariantObjectMeta_name(ctx, field)
+	case "namespace":
+		return ec.fieldContext_ProductVariantObjectMeta_namespace(ctx, field)
+	case "uid":
+		return ec.fieldContext_ProductVariantObjectMeta_uid(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_ProductVariantObjectMeta_resourceVersion(ctx, field)
+	case "generation":
+		return ec.fieldContext_ProductVariantObjectMeta_generation(ctx, field)
+	case "creationTimestamp":
+		return ec.fieldContext_ProductVariantObjectMeta_creationTimestamp(ctx, field)
+	case "revision":
+		return ec.fieldContext_ProductVariantObjectMeta_revision(ctx, field)
+	case "labels":
+		return ec.fieldContext_ProductVariantObjectMeta_labels(ctx, field)
+	case "annotations":
+		return ec.fieldContext_ProductVariantObjectMeta_annotations(ctx, field)
+	case "ownerReferences":
+		return ec.fieldContext_ProductVariantObjectMeta_ownerReferences(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProductVariantObjectMeta", field.Name)
+}
+
+func (ec *executionContext) childFields_ProductVariantSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "title":
+		return ec.fieldContext_ProductVariantSpec_title(ctx, field)
+	case "sku":
+		return ec.fieldContext_ProductVariantSpec_sku(ctx, field)
+	case "productRef":
+		return ec.fieldContext_ProductVariantSpec_productRef(ctx, field)
+	case "inventory":
+		return ec.fieldContext_ProductVariantSpec_inventory(ctx, field)
+	case "pricing":
+		return ec.fieldContext_ProductVariantSpec_pricing(ctx, field)
+	case "selectedOptions":
+		return ec.fieldContext_ProductVariantSpec_selectedOptions(ctx, field)
+	case "media":
+		return ec.fieldContext_ProductVariantSpec_media(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProductVariantSpec", field.Name)
+}
+
+func (ec *executionContext) childFields_ProductVariantStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "observedGeneration":
+		return ec.fieldContext_ProductVariantStatus_observedGeneration(ctx, field)
+	case "lastAppliedRevision":
+		return ec.fieldContext_ProductVariantStatus_lastAppliedRevision(ctx, field)
+	case "conditions":
+		return ec.fieldContext_ProductVariantStatus_conditions(ctx, field)
+	case "resolved":
+		return ec.fieldContext_ProductVariantStatus_resolved(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProductVariantStatus", field.Name)
+}
+
 func (ec *executionContext) childFields_PublishCatalogPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "clientMutationId":
@@ -5105,6 +6565,16 @@ func (ec *executionContext) childFields_PublishCatalogPayload(ctx context.Contex
 		return ec.fieldContext_PublishCatalogPayload_catalogVersion(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type PublishCatalogPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_QuantityDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "min":
+		return ec.fieldContext_QuantityDefinition_min(ctx, field)
+	case "max":
+		return ec.fieldContext_QuantityDefinition_max(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type QuantityDefinition", field.Name)
 }
 
 func (ec *executionContext) childFields_RefreshTokenPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -5229,6 +6699,36 @@ func (ec *executionContext) childFields_ResolvedFileDefinition(ctx context.Conte
 	return nil, fmt.Errorf("no field named %q was found under type ResolvedFileDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_ResolvedInventoryDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "managed":
+		return ec.fieldContext_ResolvedInventoryDefinition_managed(ctx, field)
+	case "availableQuantity":
+		return ec.fieldContext_ResolvedInventoryDefinition_availableQuantity(ctx, field)
+	case "policy":
+		return ec.fieldContext_ResolvedInventoryDefinition_policy(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ResolvedInventoryDefinition", field.Name)
+}
+
+func (ec *executionContext) childFields_ResolvedPriceSetDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_ResolvedPriceSetDefinition_name(ctx, field)
+	case "hash":
+		return ec.fieldContext_ResolvedPriceSetDefinition_hash(ctx, field)
+	case "compiledExpressions":
+		return ec.fieldContext_ResolvedPriceSetDefinition_compiledExpressions(ctx, field)
+	case "priceCount":
+		return ec.fieldContext_ResolvedPriceSetDefinition_priceCount(ctx, field)
+	case "currencies":
+		return ec.fieldContext_ResolvedPriceSetDefinition_currencies(ctx, field)
+	case "strategies":
+		return ec.fieldContext_ResolvedPriceSetDefinition_strategies(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ResolvedPriceSetDefinition", field.Name)
+}
+
 func (ec *executionContext) childFields_ResolvedProductDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "category":
@@ -5245,6 +6745,50 @@ func (ec *executionContext) childFields_ResolvedProductDefinition(ctx context.Co
 		return ec.fieldContext_ResolvedProductDefinition_media(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ResolvedProductDefinition", field.Name)
+}
+
+func (ec *executionContext) childFields_ResolvedProductRef(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_ResolvedProductRef_name(ctx, field)
+	case "uid":
+		return ec.fieldContext_ResolvedProductRef_uid(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ResolvedProductRef", field.Name)
+}
+
+func (ec *executionContext) childFields_ResolvedProductVariantDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "product":
+		return ec.fieldContext_ResolvedProductVariantDefinition_product(ctx, field)
+	case "selectedOptionsHash":
+		return ec.fieldContext_ResolvedProductVariantDefinition_selectedOptionsHash(ctx, field)
+	case "priceSet":
+		return ec.fieldContext_ResolvedProductVariantDefinition_priceSet(ctx, field)
+	case "inventory":
+		return ec.fieldContext_ResolvedProductVariantDefinition_inventory(ctx, field)
+	case "media":
+		return ec.fieldContext_ResolvedProductVariantDefinition_media(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ResolvedProductVariantDefinition", field.Name)
+}
+
+func (ec *executionContext) childFields_SelectedOptionDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_SelectedOptionDefinition_name(ctx, field)
+	case "value":
+		return ec.fieldContext_SelectedOptionDefinition_value(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SelectedOptionDefinition", field.Name)
+}
+
+func (ec *executionContext) childFields_StrategyDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_StrategyDefinition_type(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type StrategyDefinition", field.Name)
 }
 
 func (ec *executionContext) childFields_TransferRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

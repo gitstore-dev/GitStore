@@ -13,6 +13,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
 )
 
@@ -235,6 +236,10 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 		Metadata:   meta,
 		Spec:       specFromJSON(p.Spec),
 		Status:     statusFromJSON(p.Status),
+		ProductVariants: &model.ProductVariantConnection{
+			Edges:    []*model.ProductVariantEdge{},
+			PageInfo: &model.PageInfo{},
+		},
 	}
 }
 
@@ -622,6 +627,324 @@ func datastoreNamespaceTierToModel(t datastore.NamespaceTier) model.NamespaceTie
 // datastoreRepositoryToModel converts a datastore Repository to the GraphQL model.
 // ns may be nil if the namespace resolver has not been called yet; in that case
 // the Namespace field is left nil and must be resolved via a field resolver.
+// DatastoreVariantToGraphQL converts a datastore ProductVariant to the GraphQL model.
+func DatastoreVariantToGraphQL(v *datastore.ProductVariant) *model.ProductVariant {
+	if v == nil {
+		return nil
+	}
+	gen := int32(v.Generation)
+	meta := &model.ProductVariantObjectMeta{
+		Name:              v.Name,
+		Namespace:         v.Namespace,
+		UID:               mustEncodeNodeID(nodeKindProductVariant, v.UID),
+		ResourceVersion:   v.ResourceVersion,
+		Generation:        gen,
+		CreationTimestamp: v.CreationTimestamp,
+		Labels:            kvPairs(v.Labels),
+		Annotations:       kvPairs(v.Annotations),
+		OwnerReferences:   []*model.OwnerReference{},
+	}
+	if v.Revision != "" {
+		r := v.Revision
+		meta.Revision = &r
+	}
+	out := &model.ProductVariant{
+		ID:       mustEncodeNodeID(nodeKindProductVariant, v.UID),
+		Metadata: meta,
+		Spec:     variantSpecFromJSON(v.Spec),
+		Status:   variantStatusFromJSON(v.Status),
+	}
+	out.APIVersion = v.APIVersion
+	out.Kind = v.Kind
+	if v.Body != "" {
+		b := v.Body
+		out.Body = &b
+	}
+	return out
+}
+
+// variantSpecFromJSON deserialises a ProductVariantSpec JSON blob.
+func variantSpecFromJSON(raw json.RawMessage) *model.ProductVariantSpec {
+	empty := &model.ProductVariantSpec{
+		SelectedOptions: []*model.SelectedOptionDefinition{},
+		Media:           []*model.MediaDefinition{},
+	}
+	if len(raw) == 0 {
+		return empty
+	}
+	var rs struct {
+		Title      string `json:"title"`
+		SKU        string `json:"sku"`
+		ProductRef *struct {
+			Name string `json:"name"`
+			Kind string `json:"kind"`
+		} `json:"productRef"`
+		Inventory *struct {
+			Managed           bool   `json:"managed"`
+			Policy            string `json:"policy"`
+			StockLocationRefs []struct {
+				Name string `json:"name"`
+				Kind string `json:"kind"`
+			} `json:"stockLocationRefs"`
+		} `json:"inventory"`
+		Pricing *struct {
+			PriceSet *struct {
+				Name   string `json:"name"`
+				Prices []struct {
+					Name           string     `json:"name"`
+					ValidFromTime  *time.Time `json:"validFromTime"`
+					ValidUntilTime *time.Time `json:"validUntilTime"`
+					CurrencyCode   string     `json:"currencyCode"`
+					Amount         string     `json:"amount"`
+					Priority       int32      `json:"priority"`
+					Strategy       *struct {
+						Type string `json:"type"`
+					} `json:"strategy"`
+					Quantity *struct {
+						Min int32  `json:"min"`
+						Max *int32 `json:"max"`
+					} `json:"quantity"`
+					Eligibility *struct {
+						Operator    string `json:"operator"`
+						Constraints []struct {
+							Name       *string `json:"name"`
+							Expression string  `json:"expression"`
+						} `json:"constraints"`
+					} `json:"eligibility"`
+				} `json:"prices"`
+			} `json:"priceSet"`
+		} `json:"pricing"`
+		SelectedOptions []struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		} `json:"selectedOptions"`
+		Media []struct {
+			FileRef *struct {
+				Name     string `json:"name"`
+				Kind     string `json:"kind"`
+				Optional bool   `json:"optional"`
+			} `json:"fileRef"`
+		} `json:"media"`
+	}
+	if err := json.Unmarshal(raw, &rs); err != nil {
+		converterLogger.Warn("variant blob unmarshal error", zap.String("field", "spec"), zap.Error(err))
+		return empty
+	}
+	spec := &model.ProductVariantSpec{
+		Title:           rs.Title,
+		Sku:             rs.SKU,
+		SelectedOptions: []*model.SelectedOptionDefinition{},
+		Media:           []*model.MediaDefinition{},
+	}
+	if rs.ProductRef != nil {
+		ref := &model.CatalogObjectReference{Name: rs.ProductRef.Name}
+		if rs.ProductRef.Kind != "" {
+			k := rs.ProductRef.Kind
+			ref.Kind = &k
+		}
+		spec.ProductRef = ref
+	} else {
+		spec.ProductRef = &model.CatalogObjectReference{}
+	}
+	if rs.Inventory != nil {
+		inv := &model.InventoryDefinition{
+			Managed:           rs.Inventory.Managed,
+			StockLocationRefs: []*model.CatalogObjectReference{},
+		}
+		if rs.Inventory.Policy != "" {
+			p := model.InventoryPolicy(strings.ToUpper(rs.Inventory.Policy))
+			inv.Policy = &p
+		}
+		for _, sl := range rs.Inventory.StockLocationRefs {
+			slRef := &model.CatalogObjectReference{Name: sl.Name}
+			if sl.Kind != "" {
+				k := sl.Kind
+				slRef.Kind = &k
+			}
+			inv.StockLocationRefs = append(inv.StockLocationRefs, slRef)
+		}
+		spec.Inventory = inv
+	}
+	if rs.Pricing != nil && rs.Pricing.PriceSet != nil {
+		ps := &model.PriceSet{Name: rs.Pricing.PriceSet.Name}
+		for _, p := range rs.Pricing.PriceSet.Prices {
+			pt := &model.PriceTemplate{
+				Name:         p.Name,
+				CurrencyCode: p.CurrencyCode,
+				Priority:     p.Priority,
+			}
+			if p.Strategy != nil {
+				pt.Strategy = &model.StrategyDefinition{Type: p.Strategy.Type}
+			} else {
+				pt.Strategy = &model.StrategyDefinition{}
+			}
+			if p.Amount != "" {
+				if d, err := decimal.NewFromString(p.Amount); err == nil {
+					pt.Amount = d
+				}
+			}
+			pt.ValidFromTime = p.ValidFromTime
+			pt.ValidUntilTime = p.ValidUntilTime
+			if p.Quantity != nil {
+				pt.Quantity = &model.QuantityDefinition{Min: p.Quantity.Min, Max: p.Quantity.Max}
+			}
+			if p.Eligibility != nil {
+				el := &model.EligibilityDefinition{
+					Operator:    model.EligibilityOperator(strings.ToUpper(p.Eligibility.Operator)),
+					Constraints: []*model.PriceRuleConstraint{},
+				}
+				for _, c := range p.Eligibility.Constraints {
+					prc := &model.PriceRuleConstraint{Expression: c.Expression}
+					prc.Name = c.Name
+					el.Constraints = append(el.Constraints, prc)
+				}
+				pt.Eligibility = el
+			}
+			ps.Prices = append(ps.Prices, pt)
+		}
+		spec.Pricing = &model.PricingDefinition{PriceSet: ps}
+	}
+	for _, o := range rs.SelectedOptions {
+		spec.SelectedOptions = append(spec.SelectedOptions, &model.SelectedOptionDefinition{Name: o.Name, Value: o.Value})
+	}
+	for _, m := range rs.Media {
+		if m.FileRef == nil {
+			continue
+		}
+		spec.Media = append(spec.Media, &model.MediaDefinition{
+			FileRef: &model.FileReference{Name: m.FileRef.Name, Kind: m.FileRef.Kind, Optional: m.FileRef.Optional},
+		})
+	}
+	return spec
+}
+
+// variantStatusFromJSON deserialises a ProductVariant status JSON blob.
+func variantStatusFromJSON(raw json.RawMessage) *model.ProductVariantStatus {
+	if len(raw) == 0 {
+		return nil
+	}
+	var rs struct {
+		ObservedGeneration  int32          `json:"observedGeneration"`
+		LastAppliedRevision string         `json:"lastAppliedRevision"`
+		Conditions          []rawCondition `json:"conditions"`
+		Resolved            *struct {
+			Product *struct {
+				Name string `json:"name"`
+				UID  string `json:"uid"`
+			} `json:"product,omitempty"`
+			SelectedOptionsHash string `json:"selectedOptionsHash,omitempty"`
+			PriceSet            *struct {
+				Name                string   `json:"name"`
+				Hash                string   `json:"hash,omitempty"`
+				CompiledExpressions int32    `json:"compiledExpressions"`
+				PriceCount          int64    `json:"priceCount"`
+				Currencies          []string `json:"currencies"`
+				Strategies          []string `json:"strategies"`
+			} `json:"priceSet,omitempty"`
+			Inventory *struct {
+				Managed           bool   `json:"managed"`
+				AvailableQuantity int64  `json:"availableQuantity"`
+				Policy            string `json:"policy,omitempty"`
+			} `json:"inventory,omitempty"`
+		} `json:"resolved,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &rs); err != nil {
+		converterLogger.Warn("variant blob unmarshal error", zap.String("field", "status"), zap.Error(err))
+		return nil
+	}
+	conditions := make([]*model.ProductVariantCondition, 0, len(rs.Conditions))
+	for _, c := range rs.Conditions {
+		condType := model.ProductVariantConditionType(strings.ToUpper(
+			strings.ReplaceAll(c.Type, "Accepted", "_ACCEPTED"),
+		))
+		// Map from Kubernetes-style to SCREAMING_SNAKE_CASE enum values.
+		switch c.Type {
+		case "AdmissionAccepted":
+			condType = model.ProductVariantConditionTypeAdmissionAccepted
+		case "ProductResolved":
+			condType = model.ProductVariantConditionTypeProductResolved
+		case "OptionsAccepted":
+			condType = model.ProductVariantConditionTypeOptionsAccepted
+		case "PricingAccepted":
+			condType = model.ProductVariantConditionTypePricingAccepted
+		case "Ready":
+			condType = model.ProductVariantConditionTypeReady
+		}
+		condStatus, ok := k8sConditionStatusToGraphQL[c.Status]
+		if !ok {
+			condStatus = model.ConditionStatus(strings.ToUpper(c.Status))
+		}
+		cond := &model.ProductVariantCondition{
+			Type:               condType,
+			Status:             condStatus,
+			LastTransitionTime: c.LastTransitionTime,
+		}
+		gen := c.ObservedGeneration
+		cond.ObservedGeneration = &gen
+		if c.Reason != "" {
+			r := c.Reason
+			cond.Reason = &r
+		}
+		if c.Message != "" {
+			m := c.Message
+			cond.Message = &m
+		}
+		conditions = append(conditions, cond)
+	}
+	status := &model.ProductVariantStatus{
+		ObservedGeneration: rs.ObservedGeneration,
+		Conditions:         conditions,
+	}
+	if rs.LastAppliedRevision != "" {
+		s := rs.LastAppliedRevision
+		status.LastAppliedRevision = &s
+	}
+	if rs.Resolved != nil {
+		resolved := &model.ResolvedProductVariantDefinition{}
+		if rs.Resolved.Product != nil {
+			resolved.Product = &model.ResolvedProductRef{
+				Name: rs.Resolved.Product.Name,
+				UID:  rs.Resolved.Product.UID,
+			}
+		}
+		if rs.Resolved.SelectedOptionsHash != "" {
+			h := rs.Resolved.SelectedOptionsHash
+			resolved.SelectedOptionsHash = &h
+		}
+		if ps := rs.Resolved.PriceSet; ps != nil {
+			gps := &model.ResolvedPriceSetDefinition{
+				Name:                ps.Name,
+				PriceCount:          int32(ps.PriceCount),
+				CompiledExpressions: ps.CompiledExpressions,
+				Currencies:          ps.Currencies,
+				Strategies:          ps.Strategies,
+			}
+			if ps.Hash != "" {
+				h := ps.Hash
+				gps.Hash = &h
+			}
+			resolved.PriceSet = gps
+		}
+		if inv := rs.Resolved.Inventory; inv != nil {
+			ginv := &model.ResolvedInventoryDefinition{
+				Managed:           inv.Managed,
+				AvailableQuantity: int32(inv.AvailableQuantity),
+			}
+			switch inv.Policy {
+			case "deny":
+				p := model.InventoryPolicyDeny
+				ginv.Policy = &p
+			case "backorder":
+				p := model.InventoryPolicyBackorder
+				ginv.Policy = &p
+			}
+			resolved.Inventory = ginv
+		}
+		status.Resolved = resolved
+	}
+	return status
+}
+
 func datastoreRepositoryToModel(r *datastore.Repository, ns *datastore.Namespace, dataDir string) *model.Repository {
 	if r == nil {
 		return nil

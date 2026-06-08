@@ -155,6 +155,85 @@ func BuildCollectionConnection(result *datastore.PageResult[datastore.Collection
 	}
 }
 
+// BuildVariantConnectionFromSlice builds a ProductVariantConnection from a flat slice with
+// cursor-based keyset pagination (after/before) and first/last limits.
+// Variants must be pre-sorted by (CreationTimestamp DESC, UID DESC).
+func BuildVariantConnectionFromSlice(variants []*datastore.ProductVariant, params datastore.PageParams) *model.ProductVariantConnection {
+	if params.After != "" {
+		if c, err := DecodeKeysetCursor(params.After); err == nil {
+			for i, v := range variants {
+				if v.CreationTimestamp.Equal(c.CreatedAt) && v.UID == c.ID {
+					variants = variants[i+1:]
+					break
+				}
+			}
+		}
+	} else if params.Before != "" {
+		if c, err := DecodeKeysetCursor(params.Before); err == nil {
+			for i, v := range variants {
+				if v.CreationTimestamp.Equal(c.CreatedAt) && v.UID == c.ID {
+					variants = variants[:i]
+					break
+				}
+			}
+		}
+	}
+
+	totalFiltered := len(variants)
+	limit := params.Limit()
+	hasNext, hasPrevious := false, false
+
+	if params.Last > 0 {
+		if len(variants) > limit {
+			variants = variants[len(variants)-limit:]
+			hasPrevious = true
+		}
+		hasNext = params.Before != ""
+	} else {
+		if len(variants) > limit {
+			variants = variants[:limit]
+			hasNext = true
+		}
+		hasPrevious = params.After != ""
+	}
+
+	edges := make([]*model.ProductVariantEdge, len(variants))
+	for i, v := range variants {
+		edges[i] = &model.ProductVariantEdge{
+			Cursor: EncodeKeysetCursor(v.CreationTimestamp, v.UID),
+			Node:   DatastoreVariantToGraphQL(v),
+		}
+	}
+	pi := &model.PageInfo{HasNextPage: hasNext, HasPreviousPage: hasPrevious}
+	if len(variants) > 0 {
+		sc := EncodeKeysetCursor(variants[0].CreationTimestamp, variants[0].UID)
+		ec := EncodeKeysetCursor(variants[len(variants)-1].CreationTimestamp, variants[len(variants)-1].UID)
+		pi.StartCursor = &sc
+		pi.EndCursor = &ec
+	}
+	return &model.ProductVariantConnection{
+		Edges:      edges,
+		PageInfo:   pi,
+		TotalCount: int32(totalFiltered),
+	}
+}
+
+// BuildVariantConnection converts a PageResult[ProductVariant] into a GraphQL ProductVariantConnection.
+func BuildVariantConnection(result *datastore.PageResult[datastore.ProductVariant]) *model.ProductVariantConnection {
+	edges := make([]*model.ProductVariantEdge, len(result.Items))
+	for i, v := range result.Items {
+		edges[i] = &model.ProductVariantEdge{
+			Cursor: EncodeKeysetCursor(v.CreationTimestamp, v.UID),
+			Node:   DatastoreVariantToGraphQL(v),
+		}
+	}
+	return &model.ProductVariantConnection{
+		Edges:      edges,
+		TotalCount: result.TotalCount,
+		PageInfo:   buildPageInfo(result, func(v *datastore.ProductVariant) string { return EncodeKeysetCursor(v.CreationTimestamp, v.UID) }),
+	}
+}
+
 // BuildNamespaceConnection converts a PageResult[Namespace] into a GraphQL NamespaceConnection.
 func BuildNamespaceConnection(result *datastore.PageResult[datastore.Namespace]) *model.NamespaceConnection {
 	edges := make([]*model.NamespaceEdge, len(result.Items))

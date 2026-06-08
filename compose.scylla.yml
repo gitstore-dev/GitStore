@@ -1,6 +1,6 @@
 services:
   scylla:
-    image: scylladb/scylla:5.4
+    image: scylladb/scylla:2026.1
     container_name: gitstore-scylla
     ports:
       - "9042:9042"   # CQL native transport
@@ -17,7 +17,7 @@ services:
       start_period: 30s
 
   scylla-init:
-    image: scylladb/scylla:5.4
+    image: scylladb/scylla:2026.1
     depends_on:
       scylla:
         condition: service_healthy

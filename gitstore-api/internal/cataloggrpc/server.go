@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
+	"github.com/google/cel-go/cel"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -55,9 +57,20 @@ func (r *gitClientReader) ReadFile(ctx context.Context, repositoryID, path, ref 
 // Server implements catalogv1.CatalogServiceServer.
 type Server struct {
 	catalogv1.UnimplementedCatalogServiceServer
-	store datastore.Datastore
-	git   GitReader
-	log   *zap.Logger
+	store  datastore.Datastore
+	git    GitReader
+	log    *zap.Logger
+	celEnv *cel.Env // shared, constructed once; nil means CEL unavailable (skip rather than reject)
+}
+
+// newCELEnv constructs a CEL environment for syntax-checking price eligibility expressions.
+// Returns nil if the environment cannot be created (CEL unavailable); callers must tolerate nil.
+func newCELEnv() *cel.Env {
+	env, err := cel.NewEnv()
+	if err != nil {
+		return nil
+	}
+	return env
 }
 
 // NewServer creates a new CatalogService gRPC server.
@@ -67,7 +80,7 @@ func NewServer(store datastore.Datastore, gitClient *gitclient.Client) *Server {
 	if gitClient != nil {
 		git = &gitClientReader{c: gitClient}
 	}
-	return &Server{store: store, git: git, log: zap.NewNop()}
+	return &Server{store: store, git: git, log: zap.NewNop(), celEnv: newCELEnv()}
 }
 
 // NewServerWithLogger creates a new server with a custom logger.
@@ -76,12 +89,12 @@ func NewServerWithLogger(store datastore.Datastore, gitClient *gitclient.Client,
 	if gitClient != nil {
 		git = &gitClientReader{c: gitClient}
 	}
-	return &Server{store: store, git: git, log: log}
+	return &Server{store: store, git: git, log: log, celEnv: newCELEnv()}
 }
 
 // NewServerForTest creates a server with a mock GitReader for unit tests.
 func NewServerForTest(store datastore.Datastore, git GitReader) *Server {
-	return &Server{store: store, git: git, log: zap.NewNop()}
+	return &Server{store: store, git: git, log: zap.NewNop(), celEnv: newCELEnv()}
 }
 
 // ValidateResources validates resource blobs extracted from an incoming push commit.
@@ -103,6 +116,10 @@ func (s *Server) ValidateResources(
 		if err == nil {
 			continue
 		}
+
+		s.log.Warn("validate_resources: pre-receive rejection",
+			zap.String("path", blob.Path),
+			zap.Error(err))
 
 		// Convert the error string into ValidationError messages.
 		// validate.ParseResource returns a joined error string; split on "; " and "\n".
@@ -227,6 +244,18 @@ func (s *Server) AdmitResources(
 	// Extract branch name from ref: "refs/heads/main" → "main"
 	branch := strings.TrimPrefix(req.RefName, "refs/heads/")
 	revision := branch + "@sha1:" + req.CommitSha
+	now := time.Now().UTC()
+
+	// Build the admission context once so every per-file admit helper can read
+	// namespace, commit SHA, ref, and wall-clock time without re-querying the DB.
+	admCtx := AdmissionContext{
+		RepositoryID: req.RepositoryId,
+		Namespace:    repoNamespace,
+		CommitSHA:    req.CommitSha,
+		RefName:      req.RefName,
+		Revision:     revision,
+		Now:          now,
+	}
 
 	// Two-pass: collect all parsed resources first so CategoryTaxonomy
 	// can detect intra-push cycles and resolve in-push parents.
@@ -272,21 +301,21 @@ func (s *Server) AdmitResources(
 	cycleMembers := detectCycles(pushCategoryParents)
 	topoOrder := topoSortCategories(pushCategoryParents, cycleMembers)
 
-	now := time.Now().UTC()
-
 	// inPushAncestorPaths is populated as each category is admitted so that
 	// children later in the same push see their parent's full computed path.
 	inPushAncestorPaths := make(map[string]string, len(topoOrder))
 	for _, name := range topoOrder {
 		e := categoryEntries[name]
-		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, req, repoNamespace, revision, now, inPushAncestorPaths, cycleMembers[name])
+		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx, inPushAncestorPaths, cycleMembers[name])
 	}
 	for _, e := range entries {
 		switch e.parsed.Kind {
 		case "Product":
-			s.admitProduct(ctx, e.parsed.Product, e.body, req, repoNamespace, revision, now)
+			s.admitProduct(ctx, e.parsed.Product, e.body, admCtx)
 		case "Collection":
-			s.admitCollection(ctx, e.parsed.Collection, e.body, req, repoNamespace, revision, now)
+			s.admitCollection(ctx, e.parsed.Collection, e.body, admCtx)
+		case "ProductVariant":
+			s.admitProductVariant(ctx, e.parsed.ProductVariant, e.body, admCtx)
 		}
 	}
 
@@ -377,10 +406,7 @@ func (s *Server) admitProduct(
 	ctx context.Context,
 	resource *catalog.ProductResource,
 	body []byte,
-	req *catalogv1.AdmitResourcesRequest,
-	repoNamespace string,
-	revision string,
-	now time.Time,
+	admCtx AdmissionContext,
 ) {
 	specJSON, err := json.Marshal(resource.Spec)
 	if err != nil {
@@ -391,7 +417,7 @@ func (s *Server) admitProduct(
 
 	namespace := resource.Metadata.Namespace
 	if namespace == "" {
-		namespace = repoNamespace
+		namespace = admCtx.Namespace
 	}
 
 	existing, getErr := s.store.GetProductByName(ctx, namespace, resource.Metadata.Name)
@@ -407,14 +433,14 @@ func (s *Server) admitProduct(
 			Annotations:       resource.Metadata.Annotations,
 			Generation:        1,
 			ResourceVersion:   "1",
-			CreationTimestamp: now,
-			Revision:          revision,
-			GitCommitSHA:      req.CommitSha,
-			GitRef:            req.RefName,
+			CreationTimestamp: admCtx.Now,
+			Revision:          admCtx.Revision,
+			GitCommitSHA:      admCtx.CommitSHA,
+			GitRef:            admCtx.RefName,
 			Spec:              specJSON,
 			Body:              string(body),
 		}
-		p.Status = admissionAcceptedStatus(1, revision, now)
+		p.Status = admissionAcceptedStatus(1, admCtx.Revision, admCtx.Now)
 		if cerr := s.store.CreateProduct(ctx, p); cerr != nil {
 			s.log.Error("admit_resources: create product failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(cerr))
@@ -427,12 +453,12 @@ func (s *Server) admitProduct(
 		existing.Annotations = resource.Metadata.Annotations
 		existing.Generation = gen
 		existing.ResourceVersion = fmt.Sprintf("%d", gen)
-		existing.Revision = revision
-		existing.GitCommitSHA = req.CommitSha
-		existing.GitRef = req.RefName
+		existing.Revision = admCtx.Revision
+		existing.GitCommitSHA = admCtx.CommitSHA
+		existing.GitRef = admCtx.RefName
 		existing.Spec = specJSON
 		existing.Body = string(body)
-		existing.Status = admissionAcceptedStatus(gen, revision, now)
+		existing.Status = admissionAcceptedStatus(gen, admCtx.Revision, admCtx.Now)
 		if uerr := s.store.UpdateProduct(ctx, existing); uerr != nil {
 			s.log.Error("admit_resources: update product failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(uerr))
@@ -444,10 +470,7 @@ func (s *Server) admitCollection(
 	ctx context.Context,
 	resource *catalog.CollectionResource,
 	body []byte,
-	req *catalogv1.AdmitResourcesRequest,
-	repoNamespace string,
-	revision string,
-	now time.Time,
+	admCtx AdmissionContext,
 ) {
 	specJSON, err := json.Marshal(resource.Spec)
 	if err != nil {
@@ -458,7 +481,7 @@ func (s *Server) admitCollection(
 
 	namespace := resource.Metadata.Namespace
 	if namespace == "" {
-		namespace = repoNamespace
+		namespace = admCtx.Namespace
 	}
 
 	existing, getErr := s.store.GetCollectionByName(ctx, namespace, resource.Metadata.Name)
@@ -474,14 +497,14 @@ func (s *Server) admitCollection(
 			Annotations:       resource.Metadata.Annotations,
 			Generation:        1,
 			ResourceVersion:   "1",
-			CreationTimestamp: now,
-			Revision:          revision,
-			GitCommitSHA:      req.CommitSha,
-			GitRef:            req.RefName,
+			CreationTimestamp: admCtx.Now,
+			Revision:          admCtx.Revision,
+			GitCommitSHA:      admCtx.CommitSHA,
+			GitRef:            admCtx.RefName,
 			Spec:              specJSON,
 			Body:              string(body),
 		}
-		c.Status = admissionAcceptedStatus(1, revision, now)
+		c.Status = admissionAcceptedStatus(1, admCtx.Revision, admCtx.Now)
 		if cerr := s.store.CreateCollection(ctx, c); cerr != nil {
 			s.log.Error("admit_resources: create collection failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(cerr))
@@ -494,15 +517,164 @@ func (s *Server) admitCollection(
 		existing.Annotations = resource.Metadata.Annotations
 		existing.Generation = gen
 		existing.ResourceVersion = fmt.Sprintf("%d", gen)
-		existing.Revision = revision
-		existing.GitCommitSHA = req.CommitSha
-		existing.GitRef = req.RefName
+		existing.Revision = admCtx.Revision
+		existing.GitCommitSHA = admCtx.CommitSHA
+		existing.GitRef = admCtx.RefName
 		existing.Spec = specJSON
 		existing.Body = string(body)
-		existing.Status = admissionAcceptedStatus(gen, revision, now)
+		existing.Status = admissionAcceptedStatus(gen, admCtx.Revision, admCtx.Now)
 		if uerr := s.store.UpdateCollection(ctx, existing); uerr != nil {
 			s.log.Error("admit_resources: update collection failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(uerr))
+		}
+	}
+}
+
+// admitProductVariant stores a ProductVariant after admission checks.
+// Product existence is not required at admit time; the controller resolves
+// the productRef asynchronously (single-pass catalog authoring support).
+func (s *Server) admitProductVariant(
+	ctx context.Context,
+	resource *catalog.ProductVariantResource,
+	body []byte,
+	admCtx AdmissionContext,
+) {
+	if resource == nil {
+		return
+	}
+	specJSON, err := json.Marshal(resource.Spec)
+	if err != nil {
+		s.log.Error("admit_resources: marshal product_variant spec failed",
+			zap.String("name", resource.Metadata.Name), zap.Error(err))
+		return
+	}
+
+	namespace := resource.Metadata.Namespace
+	if namespace == "" {
+		namespace = admCtx.Namespace
+	}
+
+	// Run all admission checks, collecting results into admitResult.
+	admitResult := variantAdmitResult{
+		OptionsAccepted: true,
+		PricingAccepted: true,
+	}
+
+	productRefName := ""
+	if resource.Spec.ProductRef != nil {
+		productRefName = resource.Spec.ProductRef.Name
+		if productRefName != "" {
+			if parent, perr := s.store.GetProductByName(ctx, namespace, productRefName); perr == nil {
+				admitResult.ProductResolved = true
+				if len(resource.Spec.SelectedOptions) > 0 {
+					admitResult.OptionsAccepted, admitResult.OptionsMsg = validateSelectedOptions(resource.Spec.SelectedOptions, parent.Spec)
+					if !admitResult.OptionsAccepted {
+						s.log.Warn("admit_resources: product_variant option incompatibility",
+							zap.String("name", resource.Metadata.Name),
+							zap.String("namespace", namespace),
+							zap.String("product_ref", productRefName),
+							zap.String("reason", admitResult.OptionsMsg))
+					}
+				}
+			} else {
+				s.log.Info("admit_resources: product_variant productRef deferred — product not yet in datastore",
+					zap.String("name", resource.Metadata.Name),
+					zap.String("namespace", namespace),
+					zap.String("product_ref", productRefName))
+			}
+		}
+	}
+
+	// CEL syntax validation (admission-phase; no runtime evaluation).
+	admitResult.PricingAccepted, admitResult.PricingMsg = celValidateExpressions(s.celEnv, resource.Spec)
+	if !admitResult.PricingAccepted {
+		s.log.Warn("admit_resources: product_variant CEL syntax error",
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace),
+			zap.String("reason", admitResult.PricingMsg))
+	}
+
+	// Compute resolved summaries.
+	admitResult.Resolved = &catalog.ResolvedProductVariantDefinition{
+		PriceSet:  computeResolvedPriceSet(s.celEnv, resource.Spec),
+		Inventory: computeResolvedInventory(resource.Spec),
+	}
+
+	existing, getErr := s.store.GetProductVariantByName(ctx, namespace, resource.Metadata.Name)
+
+	if getErr != nil || existing == nil {
+		// SKU uniqueness check: another variant in this namespace may already hold the SKU.
+		if skuOwner, skuErr := s.store.GetProductVariantBySKU(ctx, namespace, resource.Spec.SKU); skuErr == nil && skuOwner != nil && skuOwner.Name != resource.Metadata.Name {
+			s.log.Warn("admit_resources: product_variant SKU conflict — SKU already claimed by another variant",
+				zap.String("name", resource.Metadata.Name),
+				zap.String("namespace", namespace),
+				zap.String("sku", resource.Spec.SKU),
+				zap.String("conflict_name", skuOwner.Name))
+		}
+
+		statusJSON := variantAdmissionStatus(1, admCtx.Revision, admCtx.Now, admitResult)
+		v := &datastore.ProductVariant{
+			UID:               uuid.Must(uuid.NewV7()).String(),
+			Namespace:         namespace,
+			Name:              resource.Metadata.Name,
+			APIVersion:        resource.APIVersion,
+			Kind:              resource.Kind,
+			Labels:            resource.Metadata.Labels,
+			Annotations:       resource.Metadata.Annotations,
+			Generation:        1,
+			ResourceVersion:   "1",
+			CreationTimestamp: admCtx.Now,
+			Revision:          admCtx.Revision,
+			GitCommitSHA:      admCtx.CommitSHA,
+			GitRef:            admCtx.RefName,
+			SKU:               resource.Spec.SKU,
+			ProductRefName:    productRefName,
+			Spec:              specJSON,
+			Body:              string(body),
+			Status:            statusJSON,
+		}
+		if cerr := s.store.CreateProductVariant(ctx, v); cerr != nil {
+			s.log.Error("admit_resources: create product_variant failed",
+				zap.String("name", resource.Metadata.Name), zap.Error(cerr))
+		} else {
+			s.log.Info("admit_resources: product_variant created",
+				zap.String("name", resource.Metadata.Name),
+				zap.String("namespace", namespace),
+				zap.String("sku", resource.Spec.SKU),
+				zap.String("uid", v.UID),
+				zap.Bool("product_resolved", admitResult.ProductResolved),
+				zap.Bool("options_accepted", admitResult.OptionsAccepted),
+				zap.Bool("pricing_accepted", admitResult.PricingAccepted))
+		}
+	} else {
+		gen := existing.Generation + 1
+		existing.APIVersion = resource.APIVersion
+		existing.Kind = resource.Kind
+		existing.Labels = resource.Metadata.Labels
+		existing.Annotations = resource.Metadata.Annotations
+		existing.Generation = gen
+		existing.ResourceVersion = fmt.Sprintf("%d", gen)
+		existing.Revision = admCtx.Revision
+		existing.GitCommitSHA = admCtx.CommitSHA
+		existing.GitRef = admCtx.RefName
+		existing.SKU = resource.Spec.SKU
+		existing.ProductRefName = productRefName
+		existing.Spec = specJSON
+		existing.Body = string(body)
+		existing.Status = variantAdmissionStatus(gen, admCtx.Revision, admCtx.Now, admitResult)
+		if uerr := s.store.UpdateProductVariant(ctx, existing); uerr != nil {
+			s.log.Error("admit_resources: update product_variant failed",
+				zap.String("name", resource.Metadata.Name), zap.Error(uerr))
+		} else {
+			s.log.Info("admit_resources: product_variant updated",
+				zap.String("name", resource.Metadata.Name),
+				zap.String("namespace", namespace),
+				zap.String("sku", resource.Spec.SKU),
+				zap.String("uid", existing.UID),
+				zap.Int64("generation", gen),
+				zap.Bool("product_resolved", admitResult.ProductResolved),
+				zap.Bool("options_accepted", admitResult.OptionsAccepted),
+				zap.Bool("pricing_accepted", admitResult.PricingAccepted))
 		}
 	}
 }
@@ -516,10 +688,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	ctx context.Context,
 	resource *catalog.CategoryTaxonomyResource,
 	body []byte,
-	req *catalogv1.AdmitResourcesRequest,
-	repoNamespace string,
-	revision string,
-	now time.Time,
+	admCtx AdmissionContext,
 	inPushAncestorPaths map[string]string,
 	inCycle bool,
 ) {
@@ -532,7 +701,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 
 	namespace := resource.Metadata.Namespace
 	if namespace == "" {
-		namespace = repoNamespace
+		namespace = admCtx.Namespace
 	}
 
 	name := resource.Metadata.Name
@@ -545,14 +714,14 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	if resource.Spec.ParentRef != nil && resource.Spec.ParentRef.Name != "" {
 		parentName = resource.Spec.ParentRef.Name
 
-		// T033: check if parent was already admitted in this push (co-creation).
+		// Check if parent was already admitted in this push (co-creation).
 		// inPushAncestorPaths is populated in topological order so the parent's
 		// full computed path is available here even for deep chains (root→child→grandchild).
 		if parentPath, inPush := inPushAncestorPaths[parentName]; inPush {
 			ancestorPath = parentPath + "/" + name
 			parentResolved = true
 		} else {
-			// T023: look up parent in DB.
+			// Look up parent in DB.
 			parent, perr := s.store.GetCategoryTaxonomyByName(ctx, namespace, parentName)
 			if perr == nil && parent != nil {
 				ancestorPath = parent.AncestorPath + "/" + name
@@ -564,7 +733,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 
 	existing, getErr := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)
 
-	statusJSON := categoryAdmissionStatusFull(1, revision, now, parentResolved, inCycle)
+	statusJSON := categoryAdmissionStatusFull(1, admCtx.Revision, admCtx.Now, parentResolved, inCycle)
 
 	if getErr != nil || existing == nil {
 		c := &datastore.CategoryTaxonomy{
@@ -577,10 +746,10 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 			Annotations:       resource.Metadata.Annotations,
 			Generation:        1,
 			ResourceVersion:   "1",
-			CreationTimestamp: now,
-			Revision:          revision,
-			GitCommitSHA:      req.CommitSha,
-			GitRef:            req.RefName,
+			CreationTimestamp: admCtx.Now,
+			Revision:          admCtx.Revision,
+			GitCommitSHA:      admCtx.CommitSHA,
+			GitRef:            admCtx.RefName,
 			ParentName:        parentName,
 			AncestorPath:      ancestorPath,
 			Spec:              specJSON,
@@ -606,14 +775,14 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		existing.Annotations = resource.Metadata.Annotations
 		existing.Generation = gen
 		existing.ResourceVersion = fmt.Sprintf("%d", gen)
-		existing.Revision = revision
-		existing.GitCommitSHA = req.CommitSha
-		existing.GitRef = req.RefName
+		existing.Revision = admCtx.Revision
+		existing.GitCommitSHA = admCtx.CommitSHA
+		existing.GitRef = admCtx.RefName
 		existing.ParentName = parentName
 		existing.AncestorPath = ancestorPath
 		existing.Spec = specJSON
 		existing.Body = string(body)
-		existing.Status = categoryAdmissionStatusFull(gen, revision, now, parentResolved, inCycle)
+		existing.Status = categoryAdmissionStatusFull(gen, admCtx.Revision, admCtx.Now, parentResolved, inCycle)
 		if uerr := s.store.UpdateCategoryTaxonomy(ctx, existing); uerr != nil {
 			s.log.Error("admit_resources: update category failed",
 				zap.String("name", name), zap.Error(uerr))
@@ -647,6 +816,174 @@ func admissionAcceptedStatus(generation int64, revision string, now time.Time) [
 	}
 	b, _ := json.Marshal(status)
 	return b
+}
+
+// variantAdmitResult carries the results of all admission checks for a ProductVariant.
+type variantAdmitResult struct {
+	ProductResolved bool
+	OptionsAccepted bool
+	OptionsMsg      string
+	PricingAccepted bool
+	PricingMsg      string
+	Resolved        *catalog.ResolvedProductVariantDefinition
+}
+
+// variantAdmissionStatus builds the status JSON for a ProductVariant from admission results.
+func variantAdmissionStatus(generation int64, revision string, now time.Time, r variantAdmitResult) []byte {
+	condBool := func(b bool) catalog.ConditionStatus {
+		if b {
+			return catalog.ConditionTrue
+		}
+		return catalog.ConditionFalse
+	}
+	optionsCond := catalog.Condition{
+		Type:               catalog.ConditionOptionsAccepted,
+		Status:             condBool(r.OptionsAccepted),
+		ObservedGeneration: generation,
+		LastTransitionTime: now,
+	}
+	if !r.OptionsAccepted && r.OptionsMsg != "" {
+		optionsCond.Reason = "IncompatibleOptions"
+		optionsCond.Message = r.OptionsMsg
+	}
+	pricingCond := catalog.Condition{
+		Type:               catalog.ConditionPricingAccepted,
+		Status:             condBool(r.PricingAccepted),
+		ObservedGeneration: generation,
+		LastTransitionTime: now,
+	}
+	if !r.PricingAccepted && r.PricingMsg != "" {
+		pricingCond.Reason = "InvalidCELExpression"
+		pricingCond.Message = r.PricingMsg
+	}
+	status := catalog.ProductVariantStatus{
+		ObservedGeneration:  generation,
+		LastAppliedRevision: revision,
+		Conditions: []catalog.Condition{
+			{
+				Type:               catalog.ConditionAdmissionAccepted,
+				Status:             catalog.ConditionTrue,
+				ObservedGeneration: generation,
+				LastTransitionTime: now,
+				Reason:             "AdmittedByHookPipeline",
+				Message:            "Resource admitted via the post-receive hook pipeline.",
+			},
+			{
+				Type:               catalog.ConditionProductResolved,
+				Status:             condBool(r.ProductResolved),
+				ObservedGeneration: generation,
+				LastTransitionTime: now,
+			},
+			optionsCond,
+			pricingCond,
+		},
+		Resolved: r.Resolved,
+	}
+	b, _ := json.Marshal(status)
+	return b
+}
+
+// celValidateExpressions parses each CEL expression for syntax only (no evaluation).
+// env may be nil (CEL unavailable); in that case all expressions are considered valid.
+// Returns (true, "") if all are valid, or (false, message) on the first syntax error.
+func celValidateExpressions(env *cel.Env, spec catalog.ProductVariantSpec) (bool, string) {
+	if env == nil || spec.Pricing == nil || spec.Pricing.PriceSet == nil {
+		return true, ""
+	}
+	for i, pt := range spec.Pricing.PriceSet.Prices {
+		if pt.Eligibility == nil {
+			continue
+		}
+		for j, c := range pt.Eligibility.Constraints {
+			if _, iss := env.Parse(c.Expression); iss != nil && iss.Err() != nil {
+				return false, fmt.Sprintf("pricing.priceSet.prices[%d].eligibility.constraints[%d]: invalid CEL expression %q: %s",
+					i, j, c.Expression, iss.Err())
+			}
+		}
+	}
+	return true, ""
+}
+
+// computeResolvedPriceSet builds a ResolvedPriceSetDefinition summary from the spec.
+// compiledExpressions counts CEL expressions that parse without error.
+// env may be nil; in that case compiledExpressions is always 0.
+func computeResolvedPriceSet(env *cel.Env, spec catalog.ProductVariantSpec) *catalog.ResolvedPriceSetDefinition {
+	if spec.Pricing == nil || spec.Pricing.PriceSet == nil {
+		return nil
+	}
+	ps := spec.Pricing.PriceSet
+	currencySet := make(map[string]struct{})
+	strategySet := make(map[string]struct{})
+	var compiled int32
+	for _, pt := range ps.Prices {
+		if pt.CurrencyCode != "" {
+			currencySet[pt.CurrencyCode] = struct{}{}
+		}
+		if pt.Strategy != nil && pt.Strategy.Type != "" {
+			strategySet[pt.Strategy.Type] = struct{}{}
+		}
+		if env != nil && pt.Eligibility != nil {
+			for _, c := range pt.Eligibility.Constraints {
+				if _, iss := env.Parse(c.Expression); iss == nil || iss.Err() == nil {
+					compiled++
+				}
+			}
+		}
+	}
+	currencies := make([]string, 0, len(currencySet))
+	for c := range currencySet {
+		currencies = append(currencies, c)
+	}
+	sort.Strings(currencies)
+	strategies := make([]string, 0, len(strategySet))
+	for s := range strategySet {
+		strategies = append(strategies, s)
+	}
+	sort.Strings(strategies)
+	return &catalog.ResolvedPriceSetDefinition{
+		Name:                ps.Name,
+		PriceCount:          int64(len(ps.Prices)),
+		Currencies:          currencies,
+		Strategies:          strategies,
+		CompiledExpressions: compiled,
+	}
+}
+
+// computeResolvedInventory builds a ResolvedInventoryDefinition from the spec.
+func computeResolvedInventory(spec catalog.ProductVariantSpec) *catalog.ResolvedInventoryDefinition {
+	if spec.Inventory == nil {
+		return nil
+	}
+	return &catalog.ResolvedInventoryDefinition{
+		Managed: spec.Inventory.Managed,
+		Policy:  spec.Inventory.Policy,
+	}
+}
+
+// validateSelectedOptions checks that every selectedOption.name exists in the
+// parent product's declared options. Returns (true, "") on success, or
+// (false, descriptive message) on the first unknown option name found.
+func validateSelectedOptions(selected []catalog.SelectedOptionDefinition, parentSpec []byte) (bool, string) {
+	// Parse the parent product spec to extract declared option names.
+	var spec struct {
+		Options []struct {
+			Name string `json:"name"`
+		} `json:"options"`
+	}
+	if err := json.Unmarshal(parentSpec, &spec); err != nil {
+		// Cannot parse parent spec; skip option validation rather than false-reject.
+		return true, ""
+	}
+	declared := make(map[string]struct{}, len(spec.Options))
+	for _, o := range spec.Options {
+		declared[o.Name] = struct{}{}
+	}
+	for _, so := range selected {
+		if _, ok := declared[so.Name]; !ok {
+			return false, fmt.Sprintf("selectedOptions: name %q not found in parent product options", so.Name)
+		}
+	}
+	return true, ""
 }
 
 // categoryAdmissionStatusFull builds the initial status JSON for a CategoryTaxonomy,

@@ -1,0 +1,509 @@
+# ProductVariant Entity GraphQL Types (Kubernetes-style resource envelope)
+# ProductVariant is the purchasable SKU unit; Product is the non-sellable parent.
+# All writes are via git push; query resolvers serve the fully-hydrated datastore view.
+
+extend type Query {
+  """
+  Get a single ProductVariant by globally unique ID or namespace + name.
+  """
+  productVariant(by: ProductVariantBy!): ProductVariant
+
+  """
+  List ProductVariants in a namespace with Relay cursor-based pagination.
+  """
+  productVariants(
+    namespace: String!
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): ProductVariantConnection!
+}
+
+"""
+Kubernetes-style ProductVariant resource. The atomic sellable SKU unit.
+Product is the non-sellable parent descriptor; ProductVariant carries pricing,
+inventory policy, and the selected option combination that makes a SKU unique.
+"""
+type ProductVariant implements Node {
+  """
+  Globally unique Relay ID (encodes the variant UID).
+  """
+  id: ID!
+
+  """
+  API version. Always catalog.gitstore.dev/v1beta1.
+  """
+  apiVersion: String!
+
+  """
+  Resource kind. Always ProductVariant.
+  """
+  kind: String!
+
+  """
+  System-managed identity and metadata.
+  """
+  metadata: ProductVariantObjectMeta!
+
+  """
+  Author-controlled specification: SKU, pricing, inventory, and options.
+  """
+  spec: ProductVariantSpec!
+
+  """
+  System-computed status written at admission and updated by the controller.
+  """
+  status: ProductVariantStatus
+
+  """
+  Variant-specific descriptive copy authored in the Markdown body.
+  """
+  body: String
+}
+
+"""
+System-managed identity fields for a ProductVariant resource.
+All fields are read-only; set and updated by the system.
+"""
+type ProductVariantObjectMeta {
+  """
+  DNS-label name, unique within the namespace.
+  """
+  name: String!
+
+  """
+  Namespace identifier the variant belongs to.
+  """
+  namespace: String!
+
+  """
+  Globally unique system-generated identifier.
+  """
+  uid: ID!
+
+  """
+  Opaque concurrency token. Changes on every spec update.
+  """
+  resourceVersion: String!
+
+  """
+  Monotonically increasing counter incremented on every spec change.
+  """
+  generation: Int!
+
+  """
+  Timestamp of first admission.
+  """
+  creationTimestamp: DateTime!
+
+  """
+  Git revision of the last successfully admitted push (e.g. main@sha1:abc123).
+  """
+  revision: String
+
+  """
+  Author-supplied key-value labels.
+  """
+  labels: [KeyValuePair!]!
+
+  """
+  Author-supplied annotations.
+  """
+  annotations: [KeyValuePair!]!
+
+  """
+  Owner references linking this variant to its parent Product resource.
+  """
+  ownerReferences: [OwnerReference!]!
+}
+
+"""
+Author-controlled specification for a ProductVariant resource.
+"""
+type ProductVariantSpec {
+  """
+  Human-readable display title for this variant.
+  """
+  title: String!
+
+  """
+  Stock-keeping unit: globally unique identifier for the variant within the namespace.
+  """
+  sku: String!
+
+  """
+  Reference to the parent Product this variant belongs to.
+  """
+  productRef: CatalogObjectReference!
+
+  """
+  Inventory management settings.
+  """
+  inventory: InventoryDefinition
+
+  """
+  Pricing rules and price templates.
+  """
+  pricing: PricingDefinition
+
+  """
+  The combination of option name/value pairs that uniquely identify this variant.
+  Must match a valid combination defined on the parent Product.
+  """
+  selectedOptions: [SelectedOptionDefinition!]!
+
+  """
+  Media slots referencing File resources.
+  """
+  media: [MediaDefinition!]!
+}
+
+"""
+Inventory management configuration for a ProductVariant.
+"""
+type InventoryDefinition {
+  """
+  Whether inventory levels are tracked. When false, the variant is always
+  considered available regardless of stockLocationRefs.
+  """
+  managed: Boolean!
+
+  """
+  Behaviour when stock is exhausted. Only meaningful when managed is true.
+  DENY prevents purchase; BACKORDER allows orders against future stock.
+  """
+  policy: InventoryPolicy
+
+  """
+  References to stock location resources. Stored as-is when managed is false;
+  actively evaluated when managed is true.
+  """
+  stockLocationRefs: [CatalogObjectReference!]!
+}
+
+"""
+Inventory oversell policy applied when managed stock reaches zero.
+"""
+enum InventoryPolicy {
+  """Reject new orders when stock reaches zero."""
+  DENY
+
+  """Allow orders against negative stock (backorder)."""
+  BACKORDER
+}
+
+"""
+Top-level pricing configuration for a ProductVariant.
+"""
+type PricingDefinition {
+  """
+  Named price set containing one or more price templates.
+  """
+  priceSet: PriceSet
+}
+
+"""
+A named collection of price templates for a variant.
+"""
+type PriceSet {
+  """
+  Identifier for this price set, unique within the variant spec.
+  """
+  name: String!
+
+  """
+  Ordered list of price templates. Evaluation order is determined by priority.
+  """
+  prices: [PriceTemplate!]!
+}
+
+"""
+A single price rule within a PriceSet. Carries amount, currency, validity
+window, quantity thresholds, strategy, and optional eligibility constraints.
+"""
+type PriceTemplate {
+  """
+  Identifier for this price template within the price set.
+  """
+  name: String!
+
+  """
+  ISO 8601 timestamp from which this price is valid (inclusive). Null means no lower bound.
+  """
+  validFromTime: DateTime
+
+  """
+  ISO 8601 timestamp until which this price is valid (exclusive). Null means no upper bound.
+  Must be strictly after validFromTime when both are present.
+  """
+  validUntilTime: DateTime
+
+  """
+  Optional quantity range that must be satisfied for this price to apply.
+  """
+  quantity: QuantityDefinition
+
+  """
+  ISO 4217 currency code (e.g. USD, EUR).
+  """
+  currencyCode: String!
+
+  """
+  Monetary amount for this price template, stored with full decimal precision.
+  """
+  amount: Decimal!
+
+  """
+  Pricing strategy (e.g. fixed, percentage_discount).
+  """
+  strategy: StrategyDefinition!
+
+  """
+  Evaluation priority. Lower values are evaluated first.
+  """
+  priority: Int!
+
+  """
+  Optional eligibility gate. If absent, the price applies unconditionally.
+  """
+  eligibility: EligibilityDefinition
+}
+
+"""
+Inclusive quantity range that must be satisfied for a price template to apply.
+"""
+type QuantityDefinition {
+  """
+  Minimum order quantity (inclusive).
+  """
+  min: Int!
+
+  """
+  Maximum order quantity (inclusive). Null means unbounded.
+  """
+  max: Int
+}
+
+"""
+Pricing strategy applied when this price template is selected.
+"""
+type StrategyDefinition {
+  """
+  Strategy identifier (e.g. fixed, percentage_discount, cost_plus).
+  """
+  type: String!
+}
+
+"""
+Gate that controls when a price template is eligible.
+Multiple constraints are combined with the specified operator.
+"""
+type EligibilityDefinition {
+  """
+  Logical combination of constraints: ALL (AND) or ANY (OR).
+  """
+  operator: EligibilityOperator!
+
+  """
+  Individual constraint rules.
+  """
+  constraints: [PriceRuleConstraint!]!
+}
+
+"""
+Logical combination operator for eligibility constraints.
+"""
+enum EligibilityOperator {
+  """All constraints must be satisfied."""
+  ALL
+
+  """At least one constraint must be satisfied."""
+  ANY
+}
+
+"""
+A single eligibility constraint expressed as a CEL expression.
+Syntax is validated at admission; runtime evaluation is performed by the pricing engine.
+"""
+type PriceRuleConstraint {
+  """
+  Optional human-readable name for documentation purposes.
+  """
+  name: String
+
+  """
+  CEL expression evaluated against runtime cart context.
+  Must be syntactically valid CEL; validated at admission.
+  """
+  expression: String!
+}
+
+"""
+A resolved name/value pair representing one product option selection.
+"""
+type SelectedOptionDefinition {
+  """
+  Option name, must match a name declared on the parent Product's options list.
+  """
+  name: String!
+
+  """
+  Selected value for the named option.
+  """
+  value: String!
+}
+
+"""
+System-computed status for a ProductVariant resource.
+"""
+type ProductVariantStatus {
+  """
+  Generation of the spec that this status was computed from.
+  """
+  observedGeneration: Int!
+
+  """
+  Git revision of the last successfully admitted push.
+  """
+  lastAppliedRevision: String
+
+  """
+  Condition set written at admission and updated by the controller.
+  """
+  conditions: [ProductVariantCondition!]!
+
+  """
+  Resolved aggregates computed at admission and kept current by the controller.
+  """
+  resolved: ResolvedProductVariantDefinition
+}
+
+"""
+A single status condition on a ProductVariant resource.
+"""
+type ProductVariantCondition {
+  type: ProductVariantConditionType!
+  status: ConditionStatus!
+  observedGeneration: Int
+  lastTransitionTime: DateTime!
+  reason: String
+  message: String
+}
+
+"""
+Named condition types for a ProductVariant resource.
+"""
+enum ProductVariantConditionType {
+  """Structural and semantic checks passed at admission."""
+  ADMISSION_ACCEPTED
+
+  """Parent Product resource has been located and linked."""
+  PRODUCT_RESOLVED
+
+  """selectedOptions combination is valid against the parent Product's option definitions."""
+  OPTIONS_ACCEPTED
+
+  """CEL expressions in pricing rules are syntactically valid."""
+  PRICING_ACCEPTED
+
+  """All blocking conditions are True; variant is fully operational."""
+  READY
+}
+
+"""
+Resolved aggregates for a ProductVariant, computed at admission and kept current.
+"""
+type ResolvedProductVariantDefinition {
+  """
+  Resolved parent product identity.
+  """
+  product: ResolvedProductRef
+
+  """
+  Stable fingerprint of the selectedOptions combination (sorted name:value pairs).
+  """
+  selectedOptionsHash: String
+
+  """
+  Resolved pricing summary.
+  """
+  priceSet: ResolvedPriceSetDefinition
+
+  """
+  Resolved inventory summary.
+  """
+  inventory: ResolvedInventoryDefinition
+
+  """
+  Resolved media files.
+  """
+  media: [ResolvedFileDefinition!]!
+}
+
+"""
+Resolved identity of the parent Product resource.
+"""
+type ResolvedProductRef {
+  name: String!
+  uid: ID!
+}
+
+"""
+Resolved summary of the variant's price set.
+"""
+type ResolvedPriceSetDefinition {
+  name: String!
+  """Stable hash of all price templates in the set."""
+  hash: String
+  """Number of CEL expressions compiled successfully."""
+  compiledExpressions: Int!
+  """Total number of price templates."""
+  priceCount: Int!
+  """Distinct currency codes present in the price set."""
+  currencies: [String!]!
+  """Distinct strategy types present in the price set."""
+  strategies: [String!]!
+}
+
+"""
+Resolved inventory summary for a ProductVariant.
+"""
+type ResolvedInventoryDefinition {
+  managed: Boolean!
+  availableQuantity: Int!
+  policy: InventoryPolicy
+}
+
+"""
+Edge type for ProductVariant connection (Relay pattern).
+"""
+type ProductVariantEdge {
+  cursor: String!
+  node: ProductVariant!
+}
+
+"""
+Paginated connection for ProductVariants (Relay pattern).
+"""
+type ProductVariantConnection {
+  edges: [ProductVariantEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# ---------------------------------------------------------------------------
+# Extend Product to expose its variants connection
+# ---------------------------------------------------------------------------
+
+extend type Product {
+  """
+  Paginated list of ProductVariants belonging to this product.
+  """
+  productVariants(
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): ProductVariantConnection!
+}

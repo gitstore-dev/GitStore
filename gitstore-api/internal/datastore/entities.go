@@ -145,6 +145,51 @@ type Collection struct {
 	Status json.RawMessage
 }
 
+// ProductVariant is the purchasable SKU unit. A Product is the non-sellable
+// parent descriptor; each ProductVariant carries its own pricing, inventory,
+// and selected option combination.
+//
+// SKU and ProductRefName are denormalised from Spec to support memdb
+// field-based indexing without JSON parsing on every lookup.
+type ProductVariant struct {
+	// Identity (primary key: Namespace + Name)
+	UID       string
+	Namespace string
+	Name      string
+
+	// Resource envelope
+	APIVersion string
+	Kind       string
+
+	// Versioning
+	Generation        int64
+	ResourceVersion   string
+	CreationTimestamp time.Time
+	Revision          string // e.g. "main@sha1:abc123"
+
+	// Author-supplied classification
+	Labels      map[string]string
+	Annotations map[string]string
+
+	// Ownership (JSON-encoded []OwnerReference)
+	OwnerRefs json.RawMessage
+
+	// Denormalised index fields (always kept in sync with Spec)
+	SKU            string // spec.sku
+	ProductRefName string // spec.productRef.name
+
+	// Git provenance
+	GitCommitSHA string
+	GitRef       string
+
+	// Spec and body
+	Spec json.RawMessage // JSON-encoded ProductVariantSpec
+	Body string          // Markdown description
+
+	// Status — system-only JSON blob
+	Status json.RawMessage
+}
+
 // Repository represents a git repository with a stable internal identity.
 // The physical storage path is derived from ID using the fanout formula and is never stored.
 type Repository struct {
