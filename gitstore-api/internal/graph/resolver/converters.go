@@ -3,7 +3,7 @@
 
 // Type converters between datastore and GraphQL models
 
-package graph
+package resolver
 
 import (
 	"encoding/json"

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 
-package graph_test
+package resolver_test
 
 import (
 	"context"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/graph"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +18,7 @@ const (
 	testNsID2 = "01960000-0000-7000-8000-000000000011"
 )
 
-func svcStore(t *testing.T, svc *graph.Service) datastore.Datastore {
+func svcStore(t *testing.T, svc *resolver.Service) datastore.Datastore {
 	t.Helper()
 	return svc.Store()
 }

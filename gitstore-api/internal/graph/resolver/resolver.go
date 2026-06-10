@@ -3,7 +3,7 @@
 
 // Base GraphQL resolver
 
-package graph
+package resolver
 
 import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"

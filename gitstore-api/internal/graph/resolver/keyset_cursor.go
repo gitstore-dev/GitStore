@@ -3,7 +3,7 @@
 
 // Keyset cursor encoding and decoding for stable, opaque Relay pagination
 
-package graph
+package resolver
 
 import (
 	"encoding/base64"
