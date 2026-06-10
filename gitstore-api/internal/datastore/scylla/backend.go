@@ -888,8 +888,8 @@ func (s *scyllaDatastore) UpdateProductVariant(ctx context.Context, v *datastore
 	newSKU := v.SKU
 	if oldSKU != newSKU {
 		if oldSKU != "" {
-			b.Query("DELETE FROM product_variant_by_sku WHERE namespace=? AND sku=? AND creation_timestamp=? AND uid=?",
-				row.Namespace, oldSKU, row.CreationTimestamp, existingUID)
+			b.Query("DELETE FROM product_variant_by_sku WHERE namespace=? AND sku=?",
+				row.Namespace, oldSKU)
 		}
 		if newSKU != "" {
 			insSKU, _ := s.productVariantBySKUTable.Insert()
