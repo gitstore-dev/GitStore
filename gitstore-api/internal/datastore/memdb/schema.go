@@ -72,6 +72,51 @@ var schema = &memdb.DBSchema{
 				},
 			},
 		},
+		"product_variant": {
+			Name: "product_variant",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {
+					Name:    "id",
+					Unique:  true,
+					Indexer: &memdb.UUIDFieldIndex{Field: "UID"},
+				},
+				"name_namespace": {
+					Name:   "name_namespace",
+					Unique: true,
+					Indexer: &memdb.CompoundIndex{
+						Indexes: []memdb.Indexer{
+							&memdb.StringFieldIndex{Field: "Namespace"},
+							&memdb.StringFieldIndex{Field: "Name"},
+						},
+					},
+				},
+				"namespace": {
+					Name:    "namespace",
+					Unique:  false,
+					Indexer: &memdb.StringFieldIndex{Field: "Namespace"},
+				},
+				"sku_namespace": {
+					Name:   "sku_namespace",
+					Unique: true,
+					Indexer: &memdb.CompoundIndex{
+						Indexes: []memdb.Indexer{
+							&memdb.StringFieldIndex{Field: "Namespace"},
+							&memdb.StringFieldIndex{Field: "SKU"},
+						},
+					},
+				},
+				"product_ref": {
+					Name:   "product_ref",
+					Unique: false,
+					Indexer: &memdb.CompoundIndex{
+						Indexes: []memdb.Indexer{
+							&memdb.StringFieldIndex{Field: "Namespace"},
+							&memdb.StringFieldIndex{Field: "ProductRefName"},
+						},
+					},
+				},
+			},
+		},
 		"collection": {
 			Name: "collection",
 			Indexes: map[string]*memdb.IndexSchema{

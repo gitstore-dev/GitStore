@@ -13,22 +13,24 @@ import (
 )
 
 const (
-	nodeKindProduct    = "Product"
-	nodeKindCategory   = "Category"
-	nodeKindCollection = "Collection"
-	nodeKindNamespace  = "Namespace"
-	nodeKindRepository = "Repository"
+	nodeKindProduct        = "Product"
+	nodeKindCategory       = "Category"
+	nodeKindCollection     = "Collection"
+	nodeKindNamespace      = "Namespace"
+	nodeKindRepository     = "Repository"
+	nodeKindProductVariant = "ProductVariant"
 
 	globalIDScheme = "gid"
 	globalIDHost   = "GitStore"
 )
 
 var supportedNodeKinds = map[string]struct{}{
-	nodeKindProduct:    {},
-	nodeKindCategory:   {},
-	nodeKindCollection: {},
-	nodeKindNamespace:  {},
-	nodeKindRepository: {},
+	nodeKindProduct:        {},
+	nodeKindCategory:       {},
+	nodeKindCollection:     {},
+	nodeKindNamespace:      {},
+	nodeKindRepository:     {},
+	nodeKindProductVariant: {},
 }
 
 // EncodeNodeID returns an opaque Relay-style global ID for a GraphQL Node.

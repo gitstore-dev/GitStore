@@ -182,6 +182,19 @@ func newCollection(namespace, name string) *datastore.Collection {
 	}
 }
 
+func newProductVariant(namespace, name, sku, productRefName string) *datastore.ProductVariant {
+	return &datastore.ProductVariant{
+		UID:               newID(),
+		Namespace:         namespace,
+		Name:              name,
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "ProductVariant",
+		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+		SKU:               sku,
+		ProductRefName:    productRefName,
+	}
+}
+
 // ── Product ───────────────────────────────────────────────────────────────────
 
 func TestScylla_CreateGetProduct(t *testing.T) {
@@ -261,6 +274,32 @@ func TestScylla_ListProducts(t *testing.T) {
 	result, err := store.ListProducts(ctx, ns, datastore.PageParams{First: 100})
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(result.Items), 3)
+}
+
+func TestScylla_UpdateProductVariant_UpdatesSKUIndex(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	ns := "variant-ns-" + newID()[:8]
+	name := "variant-" + newID()[:8]
+	oldSKU := "sku-old-" + newID()[:8]
+	newSKU := "sku-new-" + newID()[:8]
+
+	v := newProductVariant(ns, name, oldSKU, "product-a")
+	require.NoError(t, store.CreateProductVariant(ctx, v))
+
+	v.SKU = newSKU
+	v.Generation = 2
+	v.ResourceVersion = "2"
+	require.NoError(t, store.UpdateProductVariant(ctx, v))
+
+	_, err := store.GetProductVariantBySKU(ctx, ns, oldSKU)
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+
+	got, err := store.GetProductVariantBySKU(ctx, ns, newSKU)
+	require.NoError(t, err)
+	assert.Equal(t, name, got.Name)
+	assert.Equal(t, newSKU, got.SKU)
 }
 
 func TestScylla_UpdateProduct(t *testing.T) {

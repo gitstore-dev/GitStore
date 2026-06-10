@@ -21,6 +21,7 @@ const (
 	globalIDTestCollectionID = "00000000-0000-0000-0000-000000000002"
 	globalIDTestProductUID   = "00000000-0000-0000-0000-000000000003"
 	globalIDTestNamespaceID  = "00000000-0000-0000-0000-000000000004"
+	globalIDTestVariantUID   = "00000000-0000-0000-0000-000000000005"
 )
 
 func TestQueryNodeResolvesByGlobalID(t *testing.T) {
@@ -34,6 +35,12 @@ func TestQueryNodeResolvesByGlobalID(t *testing.T) {
 	product, ok := node.(*model.Product)
 	require.True(t, ok)
 	assert.Equal(t, mustEncodeNodeID(nodeKindProduct, globalIDTestProductUID), product.ID)
+
+	variantNode, err := query.Node(ctx, mustEncodeNodeID(nodeKindProductVariant, globalIDTestVariantUID))
+	require.NoError(t, err)
+	variant, ok := variantNode.(*model.ProductVariant)
+	require.True(t, ok)
+	assert.Equal(t, mustEncodeNodeID(nodeKindProductVariant, globalIDTestVariantUID), variant.ID)
 }
 
 func TestQueryNodesPreservesOrderAndSkipsInvalidIDs(t *testing.T) {
@@ -48,16 +55,18 @@ func TestQueryNodesPreservesOrderAndSkipsInvalidIDs(t *testing.T) {
 		mustEncodeNodeID(nodeKindCategory, globalIDTestCategoryUID),
 		mustEncodeNodeID(nodeKindCollection, globalIDTestCollectionID),
 		mustEncodeNodeID(nodeKindProduct, globalIDTestProductUID),
+		mustEncodeNodeID(nodeKindProductVariant, globalIDTestVariantUID),
 		mustEncodeNodeID(nodeKindProduct, "missing"),
 	})
 	require.NoError(t, err)
-	require.Len(t, nodes, 6)
+	require.Len(t, nodes, 7)
 	assert.IsType(t, &model.Namespace{}, nodes[0])
 	assert.Nil(t, nodes[1])
 	assert.IsType(t, &model.Category{}, nodes[2])
 	assert.IsType(t, &model.Collection{}, nodes[3])
 	assert.IsType(t, &model.Product{}, nodes[4])
-	assert.Nil(t, nodes[5])
+	assert.IsType(t, &model.ProductVariant{}, nodes[5])
+	assert.Nil(t, nodes[6])
 }
 
 func TestLookupQueriesAcceptGlobalIDs(t *testing.T) {
@@ -156,5 +165,15 @@ func seedGlobalIDTestData(t *testing.T, ctx context.Context, store datastore.Dat
 		CreatedBy:  "tester",
 		UpdatedAt:  now,
 		UpdatedBy:  "tester",
+	}))
+	require.NoError(t, store.CreateProductVariant(ctx, &datastore.ProductVariant{
+		UID:               globalIDTestVariantUID,
+		Namespace:         "test-store",
+		Name:              "variant-1",
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "ProductVariant",
+		CreationTimestamp: now,
+		SKU:               "sku-1",
+		ProductRefName:    "product-1",
 	}))
 }

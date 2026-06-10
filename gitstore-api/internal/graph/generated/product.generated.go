@@ -18,9 +18,51 @@ import (
 
 // region    ************************** generated!.gotpl **************************
 
+type ProductResolver interface {
+	ProductVariants(ctx context.Context, obj *model.Product, first *int32, after *string, last *int32, before *string) (*model.ProductVariantConnection, error)
+}
+
 // endregion ************************** generated!.gotpl **************************
 
 // region    ***************************** args.gotpl *****************************
+
+func (ec *executionContext) field_Product_productVariants_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "first",
+		func(ctx context.Context, v any) (*int32, error) {
+			return ec.unmarshalOInt2ᚖint32(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["first"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "after",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["after"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "last",
+		func(ctx context.Context, v any) (*int32, error) {
+			return ec.unmarshalOInt2ᚖint32(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["last"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "before",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["before"] = arg3
+	return args, nil
+}
 
 // endregion ***************************** args.gotpl *****************************
 
@@ -614,6 +656,50 @@ func (ec *executionContext) fieldContext_Product_status(_ context.Context, field
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_ProductStatus(ctx, field)
 		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Product_productVariants(ctx context.Context, field graphql.CollectedField, obj *model.Product) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Product_productVariants(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Product().ProductVariants(ctx, obj, fc.Args["first"].(*int32), fc.Args["after"].(*string), fc.Args["last"].(*int32), fc.Args["before"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ProductVariantConnection) graphql.Marshaler {
+			return ec.marshalNProductVariantConnection2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductVariantConnection(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Product_productVariants(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Product",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ProductVariantConnection(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Product_productVariants_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -2093,30 +2179,66 @@ func (ec *executionContext) _Product(ctx context.Context, sel ast.SelectionSet, 
 		case "id":
 			out.Values[i] = ec._Product_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "apiVersion":
 			out.Values[i] = ec._Product_apiVersion(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "kind":
 			out.Values[i] = ec._Product_kind(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "metadata":
 			out.Values[i] = ec._Product_metadata(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "spec":
 			out.Values[i] = ec._Product_spec(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "status":
 			out.Values[i] = ec._Product_status(ctx, field, obj)
+		case "productVariants":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Product_productVariants(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -2707,6 +2829,32 @@ func (ec *executionContext) _VariantSummaryDefinition(ctx context.Context, sel a
 // endregion **************************** object.gotpl ****************************
 
 // region    ***************************** type.gotpl *****************************
+
+func (ec *executionContext) marshalNCatalogObjectReference2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogObjectReferenceᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.CatalogObjectReference) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 1000, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNCatalogObjectReference2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogObjectReference(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNCatalogObjectReference2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogObjectReference(ctx context.Context, sel ast.SelectionSet, v *model.CatalogObjectReference) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CatalogObjectReference(ctx, sel, v)
+}
 
 func (ec *executionContext) unmarshalNConditionStatus2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐConditionStatus(ctx context.Context, v any) (model.ConditionStatus, error) {
 	var res model.ConditionStatus

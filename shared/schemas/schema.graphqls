@@ -159,6 +159,25 @@ input CollectionNamespacePath {
 }
 
 """
+Selector for a single ProductVariant lookup. Exactly one field must be set.
+"""
+input ProductVariantBy @oneOf {
+  """Look up by globally unique Relay ID (encodes the variant UID)."""
+  id: ID
+
+  """Look up by namespace identifier + variant name (Kubernetes-style metadata.name)."""
+  namespacePath: ProductVariantNamespacePath
+}
+
+"""
+Composite selector: namespace identifier (human-readable slug) + variant name.
+"""
+input ProductVariantNamespacePath {
+  namespace: String!
+  name: String!
+}
+
+"""
 Product inventory status
 """
 enum InventoryStatus {

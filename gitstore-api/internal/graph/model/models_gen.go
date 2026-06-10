@@ -419,10 +419,32 @@ type DeleteRepositoryPayload struct {
 	DeletedRepositoryID string  `json:"deletedRepositoryId"`
 }
 
+// Gate that controls when a price template is eligible.
+// Multiple constraints are combined with the specified operator.
+type EligibilityDefinition struct {
+	// Logical combination of constraints: ALL (AND) or ANY (OR).
+	Operator EligibilityOperator `json:"operator"`
+	// Individual constraint rules.
+	Constraints []*PriceRuleConstraint `json:"constraints"`
+}
+
 type FileReference struct {
 	Name     string `json:"name"`
 	Kind     string `json:"kind"`
 	Optional bool   `json:"optional"`
+}
+
+// Inventory management configuration for a ProductVariant.
+type InventoryDefinition struct {
+	// Whether inventory levels are tracked. When false, the variant is always
+	// considered available regardless of stockLocationRefs.
+	Managed bool `json:"managed"`
+	// Behaviour when stock is exhausted. Only meaningful when managed is true.
+	// DENY prevents purchase; BACKORDER allows orders against future stock.
+	Policy *InventoryPolicy `json:"policy,omitempty"`
+	// References to stock location resources. Stored as-is when managed is false;
+	// actively evaluated when managed is true.
+	StockLocationRefs []*CatalogObjectReference `json:"stockLocationRefs"`
 }
 
 // A key-value pair for label maps.
@@ -572,6 +594,54 @@ type PriceRangeDefinition struct {
 	Max          decimal.Decimal `json:"max"`
 }
 
+// A single eligibility constraint expressed as a CEL expression.
+// Syntax is validated at admission; runtime evaluation is performed by the pricing engine.
+type PriceRuleConstraint struct {
+	// Optional human-readable name for documentation purposes.
+	Name *string `json:"name,omitempty"`
+	// CEL expression evaluated against runtime cart context.
+	// Must be syntactically valid CEL; validated at admission.
+	Expression string `json:"expression"`
+}
+
+// A named collection of price templates for a variant.
+type PriceSet struct {
+	// Identifier for this price set, unique within the variant spec.
+	Name string `json:"name"`
+	// Ordered list of price templates. Evaluation order is determined by priority.
+	Prices []*PriceTemplate `json:"prices"`
+}
+
+// A single price rule within a PriceSet. Carries amount, currency, validity
+// window, quantity thresholds, strategy, and optional eligibility constraints.
+type PriceTemplate struct {
+	// Identifier for this price template within the price set.
+	Name string `json:"name"`
+	// ISO 8601 timestamp from which this price is valid (inclusive). Null means no lower bound.
+	ValidFromTime *time.Time `json:"validFromTime,omitempty"`
+	// ISO 8601 timestamp until which this price is valid (exclusive). Null means no upper bound.
+	// Must be strictly after validFromTime when both are present.
+	ValidUntilTime *time.Time `json:"validUntilTime,omitempty"`
+	// Optional quantity range that must be satisfied for this price to apply.
+	Quantity *QuantityDefinition `json:"quantity,omitempty"`
+	// ISO 4217 currency code (e.g. USD, EUR).
+	CurrencyCode string `json:"currencyCode"`
+	// Monetary amount for this price template, stored with full decimal precision.
+	Amount decimal.Decimal `json:"amount"`
+	// Pricing strategy (e.g. fixed, percentage_discount).
+	Strategy *StrategyDefinition `json:"strategy"`
+	// Evaluation priority. Lower values are evaluated first.
+	Priority int32 `json:"priority"`
+	// Optional eligibility gate. If absent, the price applies unconditionally.
+	Eligibility *EligibilityDefinition `json:"eligibility,omitempty"`
+}
+
+// Top-level pricing configuration for a ProductVariant.
+type PricingDefinition struct {
+	// Named price set containing one or more price templates.
+	PriceSet *PriceSet `json:"priceSet,omitempty"`
+}
+
 // Kubernetes-style product resource. All fields are read from the datastore,
 // which holds the fully hydrated view populated by the post-push ingest pipeline.
 type Product struct {
@@ -581,6 +651,8 @@ type Product struct {
 	Metadata   *ProductObjectMeta `json:"metadata"`
 	Spec       *ProductSpec       `json:"spec"`
 	Status     *ProductStatus     `json:"status,omitempty"`
+	// Paginated list of ProductVariants belonging to this product.
+	ProductVariants *ProductVariantConnection `json:"productVariants"`
 }
 
 func (Product) IsNode() {}
@@ -661,6 +733,124 @@ type ProductStatus struct {
 	Resolved            *ResolvedProductDefinition `json:"resolved,omitempty"`
 }
 
+// Kubernetes-style ProductVariant resource. The atomic sellable SKU unit.
+// Product is the non-sellable parent descriptor; ProductVariant carries pricing,
+// inventory policy, and the selected option combination that makes a SKU unique.
+type ProductVariant struct {
+	// Globally unique Relay ID (encodes the variant UID).
+	ID string `json:"id"`
+	// API version. Always catalog.gitstore.dev/v1beta1.
+	APIVersion string `json:"apiVersion"`
+	// Resource kind. Always ProductVariant.
+	Kind string `json:"kind"`
+	// System-managed identity and metadata.
+	Metadata *ProductVariantObjectMeta `json:"metadata"`
+	// Author-controlled specification: SKU, pricing, inventory, and options.
+	Spec *ProductVariantSpec `json:"spec"`
+	// System-computed status written at admission and updated by the controller.
+	Status *ProductVariantStatus `json:"status,omitempty"`
+	// Variant-specific descriptive copy authored in the Markdown body.
+	Body *string `json:"body,omitempty"`
+}
+
+func (ProductVariant) IsNode() {}
+
+// Globally unique identifier (format: [type]_[base62])
+func (this ProductVariant) GetID() string { return this.ID }
+
+// Selector for a single ProductVariant lookup. Exactly one field must be set.
+type ProductVariantBy struct {
+	// Look up by globally unique Relay ID (encodes the variant UID).
+	ID *string `json:"id,omitempty"`
+	// Look up by namespace identifier + variant name (Kubernetes-style metadata.name).
+	NamespacePath *ProductVariantNamespacePath `json:"namespacePath,omitempty"`
+}
+
+// A single status condition on a ProductVariant resource.
+type ProductVariantCondition struct {
+	Type               ProductVariantConditionType `json:"type"`
+	Status             ConditionStatus             `json:"status"`
+	ObservedGeneration *int32                      `json:"observedGeneration,omitempty"`
+	LastTransitionTime time.Time                   `json:"lastTransitionTime"`
+	Reason             *string                     `json:"reason,omitempty"`
+	Message            *string                     `json:"message,omitempty"`
+}
+
+// Paginated connection for ProductVariants (Relay pattern).
+type ProductVariantConnection struct {
+	Edges      []*ProductVariantEdge `json:"edges"`
+	PageInfo   *PageInfo             `json:"pageInfo"`
+	TotalCount int32                 `json:"totalCount"`
+}
+
+// Edge type for ProductVariant connection (Relay pattern).
+type ProductVariantEdge struct {
+	Cursor string          `json:"cursor"`
+	Node   *ProductVariant `json:"node"`
+}
+
+// Composite selector: namespace identifier (human-readable slug) + variant name.
+type ProductVariantNamespacePath struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// System-managed identity fields for a ProductVariant resource.
+// All fields are read-only; set and updated by the system.
+type ProductVariantObjectMeta struct {
+	// DNS-label name, unique within the namespace.
+	Name string `json:"name"`
+	// Namespace identifier the variant belongs to.
+	Namespace string `json:"namespace"`
+	// Globally unique system-generated identifier.
+	UID string `json:"uid"`
+	// Opaque concurrency token. Changes on every spec update.
+	ResourceVersion string `json:"resourceVersion"`
+	// Monotonically increasing counter incremented on every spec change.
+	Generation int32 `json:"generation"`
+	// Timestamp of first admission.
+	CreationTimestamp time.Time `json:"creationTimestamp"`
+	// Git revision of the last successfully admitted push (e.g. main@sha1:abc123).
+	Revision *string `json:"revision,omitempty"`
+	// Author-supplied key-value labels.
+	Labels []*KeyValuePair `json:"labels"`
+	// Author-supplied annotations.
+	Annotations []*KeyValuePair `json:"annotations"`
+	// Owner references linking this variant to its parent Product resource.
+	OwnerReferences []*OwnerReference `json:"ownerReferences"`
+}
+
+// Author-controlled specification for a ProductVariant resource.
+type ProductVariantSpec struct {
+	// Human-readable display title for this variant.
+	Title string `json:"title"`
+	// Stock-keeping unit: globally unique identifier for the variant within the namespace.
+	Sku string `json:"sku"`
+	// Reference to the parent Product this variant belongs to.
+	ProductRef *CatalogObjectReference `json:"productRef"`
+	// Inventory management settings.
+	Inventory *InventoryDefinition `json:"inventory,omitempty"`
+	// Pricing rules and price templates.
+	Pricing *PricingDefinition `json:"pricing,omitempty"`
+	// The combination of option name/value pairs that uniquely identify this variant.
+	// Must match a valid combination defined on the parent Product.
+	SelectedOptions []*SelectedOptionDefinition `json:"selectedOptions"`
+	// Media slots referencing File resources.
+	Media []*MediaDefinition `json:"media"`
+}
+
+// System-computed status for a ProductVariant resource.
+type ProductVariantStatus struct {
+	// Generation of the spec that this status was computed from.
+	ObservedGeneration int32 `json:"observedGeneration"`
+	// Git revision of the last successfully admitted push.
+	LastAppliedRevision *string `json:"lastAppliedRevision,omitempty"`
+	// Condition set written at admission and updated by the controller.
+	Conditions []*ProductVariantCondition `json:"conditions"`
+	// Resolved aggregates computed at admission and kept current by the controller.
+	Resolved *ResolvedProductVariantDefinition `json:"resolved,omitempty"`
+}
+
 type PublishCatalogInput struct {
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	Version          string  `json:"version"`
@@ -670,6 +860,14 @@ type PublishCatalogInput struct {
 type PublishCatalogPayload struct {
 	ClientMutationID *string         `json:"clientMutationId,omitempty"`
 	CatalogVersion   *CatalogVersion `json:"catalogVersion,omitempty"`
+}
+
+// Inclusive quantity range that must be satisfied for a price template to apply.
+type QuantityDefinition struct {
+	// Minimum order quantity (inclusive).
+	Min int32 `json:"min"`
+	// Maximum order quantity (inclusive). Null means unbounded.
+	Max *int32 `json:"max,omitempty"`
 }
 
 type Query struct {
@@ -805,6 +1003,28 @@ type ResolvedFileDefinition struct {
 	ContentType *string `json:"contentType,omitempty"`
 }
 
+// Resolved inventory summary for a ProductVariant.
+type ResolvedInventoryDefinition struct {
+	Managed           bool             `json:"managed"`
+	AvailableQuantity int32            `json:"availableQuantity"`
+	Policy            *InventoryPolicy `json:"policy,omitempty"`
+}
+
+// Resolved summary of the variant's price set.
+type ResolvedPriceSetDefinition struct {
+	Name string `json:"name"`
+	// Stable hash of all price templates in the set.
+	Hash *string `json:"hash,omitempty"`
+	// Number of CEL expressions compiled successfully.
+	CompiledExpressions int32 `json:"compiledExpressions"`
+	// Total number of price templates.
+	PriceCount int32 `json:"priceCount"`
+	// Distinct currency codes present in the price set.
+	Currencies []string `json:"currencies"`
+	// Distinct strategy types present in the price set.
+	Strategies []string `json:"strategies"`
+}
+
 type ResolvedProductDefinition struct {
 	Category          *ResolvedCategoryDefinition `json:"category,omitempty"`
 	PriceRange        []*PriceRangeDefinition     `json:"priceRange"`
@@ -812,6 +1032,40 @@ type ResolvedProductDefinition struct {
 	VariantSummary    *VariantSummaryDefinition   `json:"variantSummary,omitempty"`
 	DefaultVariantRef *CatalogObjectReference     `json:"defaultVariantRef,omitempty"`
 	Media             []*ResolvedFileDefinition   `json:"media"`
+}
+
+// Resolved identity of the parent Product resource.
+type ResolvedProductRef struct {
+	Name string `json:"name"`
+	UID  string `json:"uid"`
+}
+
+// Resolved aggregates for a ProductVariant, computed at admission and kept current.
+type ResolvedProductVariantDefinition struct {
+	// Resolved parent product identity.
+	Product *ResolvedProductRef `json:"product,omitempty"`
+	// Stable fingerprint of the selectedOptions combination (sorted name:value pairs).
+	SelectedOptionsHash *string `json:"selectedOptionsHash,omitempty"`
+	// Resolved pricing summary.
+	PriceSet *ResolvedPriceSetDefinition `json:"priceSet,omitempty"`
+	// Resolved inventory summary.
+	Inventory *ResolvedInventoryDefinition `json:"inventory,omitempty"`
+	// Resolved media files.
+	Media []*ResolvedFileDefinition `json:"media"`
+}
+
+// A resolved name/value pair representing one product option selection.
+type SelectedOptionDefinition struct {
+	// Option name, must match a name declared on the parent Product's options list.
+	Name string `json:"name"`
+	// Selected value for the named option.
+	Value string `json:"value"`
+}
+
+// Pricing strategy applied when this price template is selected.
+type StrategyDefinition struct {
+	// Strategy identifier (e.g. fixed, percentage_discount, cost_plus).
+	Type string `json:"type"`
 }
 
 type TransferRepositoryInput struct {
@@ -933,6 +1187,122 @@ func (e *ConditionStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e ConditionStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Logical combination operator for eligibility constraints.
+type EligibilityOperator string
+
+const (
+	// All constraints must be satisfied.
+	EligibilityOperatorAll EligibilityOperator = "ALL"
+	// At least one constraint must be satisfied.
+	EligibilityOperatorAny EligibilityOperator = "ANY"
+)
+
+var AllEligibilityOperator = []EligibilityOperator{
+	EligibilityOperatorAll,
+	EligibilityOperatorAny,
+}
+
+func (e EligibilityOperator) IsValid() bool {
+	switch e {
+	case EligibilityOperatorAll, EligibilityOperatorAny:
+		return true
+	}
+	return false
+}
+
+func (e EligibilityOperator) String() string {
+	return string(e)
+}
+
+func (e *EligibilityOperator) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = EligibilityOperator(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid EligibilityOperator", str)
+	}
+	return nil
+}
+
+func (e EligibilityOperator) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *EligibilityOperator) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e EligibilityOperator) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Inventory oversell policy applied when managed stock reaches zero.
+type InventoryPolicy string
+
+const (
+	// Reject new orders when stock reaches zero.
+	InventoryPolicyDeny InventoryPolicy = "DENY"
+	// Allow orders against negative stock (backorder).
+	InventoryPolicyBackorder InventoryPolicy = "BACKORDER"
+)
+
+var AllInventoryPolicy = []InventoryPolicy{
+	InventoryPolicyDeny,
+	InventoryPolicyBackorder,
+}
+
+func (e InventoryPolicy) IsValid() bool {
+	switch e {
+	case InventoryPolicyDeny, InventoryPolicyBackorder:
+		return true
+	}
+	return false
+}
+
+func (e InventoryPolicy) String() string {
+	return string(e)
+}
+
+func (e *InventoryPolicy) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = InventoryPolicy(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid InventoryPolicy", str)
+	}
+	return nil
+}
+
+func (e InventoryPolicy) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *InventoryPolicy) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e InventoryPolicy) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil
@@ -1181,6 +1551,73 @@ func (e *ProductConditionType) UnmarshalJSON(b []byte) error {
 }
 
 func (e ProductConditionType) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Named condition types for a ProductVariant resource.
+type ProductVariantConditionType string
+
+const (
+	// Structural and semantic checks passed at admission.
+	ProductVariantConditionTypeAdmissionAccepted ProductVariantConditionType = "ADMISSION_ACCEPTED"
+	// Parent Product resource has been located and linked.
+	ProductVariantConditionTypeProductResolved ProductVariantConditionType = "PRODUCT_RESOLVED"
+	// selectedOptions combination is valid against the parent Product's option definitions.
+	ProductVariantConditionTypeOptionsAccepted ProductVariantConditionType = "OPTIONS_ACCEPTED"
+	// CEL expressions in pricing rules are syntactically valid.
+	ProductVariantConditionTypePricingAccepted ProductVariantConditionType = "PRICING_ACCEPTED"
+	// All blocking conditions are True; variant is fully operational.
+	ProductVariantConditionTypeReady ProductVariantConditionType = "READY"
+)
+
+var AllProductVariantConditionType = []ProductVariantConditionType{
+	ProductVariantConditionTypeAdmissionAccepted,
+	ProductVariantConditionTypeProductResolved,
+	ProductVariantConditionTypeOptionsAccepted,
+	ProductVariantConditionTypePricingAccepted,
+	ProductVariantConditionTypeReady,
+}
+
+func (e ProductVariantConditionType) IsValid() bool {
+	switch e {
+	case ProductVariantConditionTypeAdmissionAccepted, ProductVariantConditionTypeProductResolved, ProductVariantConditionTypeOptionsAccepted, ProductVariantConditionTypePricingAccepted, ProductVariantConditionTypeReady:
+		return true
+	}
+	return false
+}
+
+func (e ProductVariantConditionType) String() string {
+	return string(e)
+}
+
+func (e *ProductVariantConditionType) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ProductVariantConditionType(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ProductVariantConditionType", str)
+	}
+	return nil
+}
+
+func (e ProductVariantConditionType) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ProductVariantConditionType) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ProductVariantConditionType) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

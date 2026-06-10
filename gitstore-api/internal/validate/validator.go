@@ -20,12 +20,13 @@ import (
 var validate = validator.New()
 
 // ParsedResource is the result of ParseResource; exactly one of Product,
-// CategoryTaxonomy, or Collection is set, matching the Kind field.
+// CategoryTaxonomy, Collection, or ProductVariant is set, matching the Kind field.
 type ParsedResource struct {
 	Kind             string
 	Product          *catalog.ProductResource
 	CategoryTaxonomy *catalog.CategoryTaxonomyResource
 	Collection       *catalog.CollectionResource
+	ProductVariant   *catalog.ProductVariantResource
 }
 
 // Parse reads a Markdown document, extracts the YAML frontmatter into a
@@ -192,9 +193,69 @@ func ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		}
 		return &ParsedResource{Kind: "Collection", Collection: &res}, body, nil
 
+	case "ProductVariant":
+		var res catalog.ProductVariantResource
+		body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
+		}
+		var errs []error
+		if err := validate.Struct(res); err != nil {
+			errs = append(errs, toFriendlyError(err))
+		}
+		if err := validateProductVariantSpec(res.Spec); err != nil {
+			errs = append(errs, err)
+		}
+		if err := validateLabels(res.Metadata.Labels); err != nil {
+			errs = append(errs, err)
+		}
+		if len(errs) > 0 {
+			return nil, nil, errors.Join(errs...)
+		}
+		return &ParsedResource{Kind: "ProductVariant", ProductVariant: &res}, body, nil
+
 	default:
 		return nil, nil, fmt.Errorf("validate: kind %q is not a recognized catalog resource type", kindProbe.Kind)
 	}
+}
+
+// validStrategyTypes is the set of recognised pricing strategy type values.
+var validStrategyTypes = map[string]struct{}{
+	"fixed":          {},
+	"fixedUnitPrice": {},
+	"percentage":     {},
+	"tiered":         {},
+}
+
+// validateProductVariantSpec enforces spec-level pre-receive rules for ProductVariant.
+// These are stateless structural checks that do not require DB access.
+func validateProductVariantSpec(spec catalog.ProductVariantSpec) error {
+	if spec.Inventory != nil {
+		switch spec.Inventory.Policy {
+		case "", "deny", "backorder":
+			// valid
+		default:
+			return fmt.Errorf("validate: spec.inventory.policy must be one of deny, backorder, got %q", spec.Inventory.Policy)
+		}
+	}
+
+	if spec.Pricing == nil || spec.Pricing.PriceSet == nil {
+		return nil
+	}
+	for i, pt := range spec.Pricing.PriceSet.Prices {
+		if pt.Strategy != nil {
+			if _, ok := validStrategyTypes[pt.Strategy.Type]; !ok {
+				return fmt.Errorf("validate: spec.pricing.priceSet.prices[%d]: strategy.type %q is not a recognised value", i, pt.Strategy.Type)
+			}
+		}
+		if pt.ValidFromTime != nil && pt.ValidUntilTime != nil && !pt.ValidUntilTime.After(*pt.ValidFromTime) {
+			return fmt.Errorf("validate: spec.pricing.priceSet.prices[%d]: validUntilTime must be after validFromTime", i)
+		}
+		if pt.Quantity != nil && pt.Quantity.Max != nil && *pt.Quantity.Max < pt.Quantity.Min {
+			return fmt.Errorf("validate: spec.pricing.priceSet.prices[%d]: quantity.max must be >= quantity.min", i)
+		}
+	}
+	return nil
 }
 
 // validateCategorySpec enforces spec-level rules for CategoryTaxonomy.

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
@@ -46,3 +47,8 @@ func (r *queryResolver) Products(ctx context.Context, namespace string, first *i
 	}
 	return BuildProductConnection(result), nil
 }
+
+// Product returns generated.ProductResolver implementation.
+func (r *Resolver) Product() generated.ProductResolver { return &productResolver{r} }
+
+type productResolver struct{ *Resolver }
