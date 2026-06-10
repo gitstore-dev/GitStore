@@ -960,27 +960,40 @@ func computeResolvedInventory(spec catalog.ProductVariantSpec) *catalog.Resolved
 	}
 }
 
-// validateSelectedOptions checks that every selectedOption.name exists in the
-// parent product's declared options. Returns (true, "") on success, or
-// (false, descriptive message) on the first unknown option name found.
+// validateSelectedOptions checks that every selected option name exists in the
+// parent product and, when the parent option declares allowed values, that the
+// selected value is one of them.
+// Returns (true, "") on success, or (false, descriptive message) on first
+// mismatch.
 func validateSelectedOptions(selected []catalog.SelectedOptionDefinition, parentSpec []byte) (bool, string) {
-	// Parse the parent product spec to extract declared option names.
+	// Parse the parent product spec to extract declared option names and values.
 	var spec struct {
 		Options []struct {
-			Name string `json:"name"`
+			Name   string   `json:"name"`
+			Values []string `json:"values"`
 		} `json:"options"`
 	}
 	if err := json.Unmarshal(parentSpec, &spec); err != nil {
 		// Cannot parse parent spec; skip option validation rather than false-reject.
 		return true, ""
 	}
-	declared := make(map[string]struct{}, len(spec.Options))
+	declared := make(map[string]map[string]struct{}, len(spec.Options))
 	for _, o := range spec.Options {
-		declared[o.Name] = struct{}{}
+		allowedValues := make(map[string]struct{}, len(o.Values))
+		for _, v := range o.Values {
+			allowedValues[v] = struct{}{}
+		}
+		declared[o.Name] = allowedValues
 	}
 	for _, so := range selected {
-		if _, ok := declared[so.Name]; !ok {
+		allowedValues, ok := declared[so.Name]
+		if !ok {
 			return false, fmt.Sprintf("selectedOptions: name %q not found in parent product options", so.Name)
+		}
+		if len(allowedValues) > 0 {
+			if _, ok := allowedValues[so.Value]; !ok {
+				return false, fmt.Sprintf("selectedOptions: value %q for option %q not found in parent product option values", so.Value, so.Name)
+			}
 		}
 	}
 	return true, ""

@@ -883,6 +883,19 @@ func (s *scyllaDatastore) UpdateProductVariant(ctx context.Context, v *datastore
 		row.SKU, row.ProductRefName, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
 		row.Namespace, row.CreationTimestamp, existingUID,
 	)
+	// Maintain sku index: if SKU changed, delete old entry and insert new one.
+	oldSKU := existing.SKU
+	newSKU := v.SKU
+	if oldSKU != newSKU {
+		if oldSKU != "" {
+			b.Query("DELETE FROM product_variant_by_sku WHERE namespace=? AND sku=? AND creation_timestamp=? AND uid=?",
+				row.Namespace, oldSKU, row.CreationTimestamp, existingUID)
+		}
+		if newSKU != "" {
+			insSKU, _ := s.productVariantBySKUTable.Insert()
+			b.Query(insSKU, row.Namespace, newSKU, existingUID, row.CreationTimestamp)
+		}
+	}
 	// Maintain product_ref index: if productRefName changed, delete old entry and insert new one.
 	oldRef := existing.ProductRefName
 	newRef := v.ProductRefName
