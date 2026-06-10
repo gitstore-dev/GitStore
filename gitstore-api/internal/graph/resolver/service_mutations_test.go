@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 
-package graph_test
+package resolver_test
 
 import (
 	"context"
@@ -11,13 +11,13 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
-	"github.com/gitstore-dev/gitstore/api/internal/graph"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
-// mockGitWriter implements graph.GitWriter for testing.
+// mockGitWriter implements resolver.GitWriter for testing.
 type mockGitWriter struct {
 	mu             sync.Mutex
 	commitCalls    []gitclient.CommitFileParams
@@ -78,18 +78,18 @@ func (m *mockGitWriter) CreateTag(_ context.Context, p gitclient.CreateTagParams
 }
 
 // newTestSvc builds a Service backed by an in-memory datastore.
-func newTestSvc(t *testing.T, writer *mockGitWriter) *graph.Service {
+func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
-	return graph.NewServiceWithWriter(store, writer, zap.NewNop())
+	return resolver.NewServiceWithWriter(store, writer, zap.NewNop())
 }
 
 func TestServiceDeleteProductRemovesFromDatastore(t *testing.T) {
 	ctx := context.Background()
 	store, err := memdb.New()
 	require.NoError(t, err)
-	svc := graph.NewServiceWithWriter(store, &mockGitWriter{}, zap.NewNop())
+	svc := resolver.NewServiceWithWriter(store, &mockGitWriter{}, zap.NewNop())
 
 	uid := "a0000000-0000-0000-0000-000000000001"
 	require.NoError(t, store.CreateProduct(ctx, &datastore.Product{

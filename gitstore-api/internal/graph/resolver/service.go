@@ -4,7 +4,7 @@
 // Service layer for GraphQL resolvers
 // Handles CRUD operations via the datastore abstraction layer.
 
-package graph
+package resolver
 
 import (
 	"context"

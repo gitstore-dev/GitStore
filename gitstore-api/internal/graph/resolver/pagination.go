@@ -3,7 +3,7 @@
 
 // Relay-style connection builders powered by generic datastore.PageResult.
 
-package graph
+package resolver
 
 import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"

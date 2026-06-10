@@ -25,8 +25,8 @@ import (
 	dsfactory "github.com/gitstore-dev/gitstore/api/internal/datastore/factory"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/githttp"
-	"github.com/gitstore-dev/gitstore/api/internal/graph"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	"github.com/gitstore-dev/gitstore/api/internal/handler"
 	"github.com/gitstore-dev/gitstore/api/internal/health"
 	"github.com/gitstore-dev/gitstore/api/internal/logger"
@@ -191,10 +191,10 @@ func main() {
 	logger.Log.Info("Server stopped")
 }
 
-func newGraphQLHandler(store datastore.Datastore, writer graph.GitWriter, log *zap.Logger, authMiddleware *middleware.AuthMiddleware) http.Handler {
-	resolver := graph.NewResolver(store, writer, log)
-	resolver.WithAuthMiddleware(authMiddleware)
-	schema := generated.NewExecutableSchema(generated.Config{Resolvers: resolver})
+func newGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log *zap.Logger, authMiddleware *middleware.AuthMiddleware) http.Handler {
+	rootResolver := resolver.NewResolver(store, writer, log)
+	rootResolver.WithAuthMiddleware(authMiddleware)
+	schema := generated.NewExecutableSchema(generated.Config{Resolvers: rootResolver})
 	gqlServer := gqlhandler.NewDefaultServer(schema)
 
 	gqlHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -40,14 +40,14 @@ model:
 
 # Where should the resolver implementations go?
 resolver:
-  package: graph
+  package: resolver
   layout: follow-schema # Only other option is "single-file."
 
   # Only for single-file layout:
   # filename: graph/resolver.go
 
   # Only for follow-schema layout:
-  dir: internal/graph
+  dir: internal/graph/resolver
   filename_template: "{name}.resolvers.go"
 
   # Optional: turn on to not generate template comments above resolvers
