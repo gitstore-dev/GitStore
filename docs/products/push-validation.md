@@ -36,10 +36,12 @@ After refs are committed, the git service calls `CatalogService.AdmitResources` 
 
 The API then:
 1. Calls `ListFiles` on the git service to enumerate all files at the commit SHA.
-2. For each file with a `---` prefix: calls `GetFile`, parses it with `validate.Parse`, and stores or updates the catalog record.
-3. Sets the `AdmissionAccepted: True` status condition on the stored product.
+2. For each file with a `---` prefix: calls `GetFile`, parses the frontmatter, dispatches on `kind`, and stores or updates the catalog record.
+3. Sets the `AdmissionAccepted: True` status condition on the stored resource.
 
-Failures for individual products are logged at ERROR but do not block remaining products.
+Supported `kind` values: `Product`, `ProductVariant`, `CategoryTaxonomy`, `Collection`.
+
+Failures for individual resources are logged at ERROR but do not block remaining resources.
 
 ### Branch filtering
 

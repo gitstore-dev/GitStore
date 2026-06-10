@@ -17,6 +17,12 @@ func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (mo
 			return nil, nil
 		}
 		return DatastoreProductToGraphQL(product), nil
+	case nodeKindProductVariant:
+		variant, err := r.service.GetProductVariantByUID(ctx, rawID)
+		if err != nil {
+			return nil, nil
+		}
+		return DatastoreVariantToGraphQL(variant), nil
 	case nodeKindCategory:
 		category, err := r.service.GetCategoryTaxonomyByUID(ctx, rawID)
 		if err != nil {

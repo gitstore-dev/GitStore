@@ -241,6 +241,62 @@ var (
 		},
 	})
 
+	ProductVariantByNamespace = table.New(table.Metadata{
+		Name: "product_variant_by_namespace",
+		Columns: []string{
+			"namespace",
+			"creation_timestamp",
+			"uid",
+			"name",
+			"api_version",
+			"kind",
+			"generation",
+			"resource_version",
+			"revision",
+			"labels",
+			"annotations",
+			"owner_refs",
+			"sku",
+			"product_ref_name",
+			"git_commit_sha",
+			"git_ref",
+			"spec",
+			"body",
+			"status",
+		},
+		PartKey: []string{"namespace"},
+		SortKey: []string{"creation_timestamp", "uid"},
+	})
+
+	ProductVariantByName = table.New(table.Metadata{
+		Name:    "product_variant_by_name",
+		Columns: []string{"namespace", "name", "uid", "creation_timestamp"},
+		PartKey: []string{"namespace"},
+		SortKey: []string{"name"},
+	})
+
+	ProductVariantByUID = table.New(table.Metadata{
+		Name:    "product_variant_by_uid",
+		Columns: []string{"uid", "namespace", "creation_timestamp"},
+		PartKey: []string{"uid"},
+		SortKey: []string{},
+	})
+
+	ProductVariantBySKU = table.New(table.Metadata{
+		Name:    "product_variant_by_sku",
+		Columns: []string{"namespace", "sku", "uid", "creation_timestamp"},
+		PartKey: []string{"namespace"},
+		SortKey: []string{"sku"},
+	})
+
+	// ProductVariantByProductRef is the lookup table for ListProductVariantsByProductRef(namespace, productRefName).
+	ProductVariantByProductRef = table.New(table.Metadata{
+		Name:    "product_variant_by_product_ref",
+		Columns: []string{"namespace", "product_ref_name", "uid", "creation_timestamp"},
+		PartKey: []string{"namespace", "product_ref_name"},
+		SortKey: []string{"creation_timestamp", "uid"},
+	})
+
 	NamespaceMapping = table.New(table.Metadata{
 		Name: "namespace_mappings",
 		Columns: []string{

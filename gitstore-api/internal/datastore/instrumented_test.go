@@ -56,6 +56,27 @@ func (s *stubDatastore) ListCategoryTaxonomies(_ context.Context, _ string, _ da
 func (s *stubDatastore) UpdateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
 	return s.getProductErr
 }
+func (s *stubDatastore) CreateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) GetProductVariant(_ context.Context, _ string) (*datastore.ProductVariant, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) GetProductVariantByName(_ context.Context, _, _ string) (*datastore.ProductVariant, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) GetProductVariantBySKU(_ context.Context, _, _ string) (*datastore.ProductVariant, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) ListProductVariants(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.ProductVariant], error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) ListProductVariantsByProductRef(_ context.Context, _, _ string) ([]*datastore.ProductVariant, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) UpdateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
+	return s.getProductErr
+}
 func (s *stubDatastore) CreateCollection(_ context.Context, _ *datastore.Collection) error {
 	return s.getProductErr
 }

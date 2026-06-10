@@ -621,6 +621,40 @@ func datastoreNamespaceTierFromModel(t model.NamespaceTier) datastore.NamespaceT
 	}
 }
 
+// ── ProductVariant ─────────────────────────────────────────────────────────
+
+// GetProductVariants returns paginated ProductVariants for a namespace.
+func (s *Service) GetProductVariants(ctx context.Context, namespace string, params datastore.PageParams) (*datastore.PageResult[datastore.ProductVariant], error) {
+	result, err := s.store.ListProductVariants(ctx, namespace, params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list product variants: %w", err)
+	}
+	return result, nil
+}
+
+// GetProductVariantByUID returns a ProductVariant by UID.
+func (s *Service) GetProductVariantByUID(ctx context.Context, uid string) (*datastore.ProductVariant, error) {
+	v, err := s.store.GetProductVariant(ctx, uid)
+	if err != nil {
+		return nil, fmt.Errorf("product variant not found: %s: %w", uid, err)
+	}
+	return v, nil
+}
+
+// GetProductVariantByName returns a ProductVariant by namespace/name.
+func (s *Service) GetProductVariantByName(ctx context.Context, namespace, name string) (*datastore.ProductVariant, error) {
+	v, err := s.store.GetProductVariantByName(ctx, namespace, name)
+	if err != nil {
+		return nil, fmt.Errorf("product variant not found: %s/%s: %w", namespace, name, err)
+	}
+	return v, nil
+}
+
+// GetProductVariantsByProductRef returns all ProductVariants for a given product name in a namespace.
+func (s *Service) GetProductVariantsByProductRef(ctx context.Context, namespace, productRefName string) ([]*datastore.ProductVariant, error) {
+	return s.store.ListProductVariantsByProductRef(ctx, namespace, productRefName)
+}
+
 // Helper functions
 func getStringOrEmpty(m map[string]interface{}, key string) string {
 	if v, ok := m[key].(string); ok {

@@ -25,6 +25,10 @@ const (
 	ConditionParentResolved    ConditionType = "ParentResolved"
 	ConditionAcyclic           ConditionType = "Acyclic"
 
+	// ProductVariant-specific condition types.
+	ConditionProductResolved ConditionType = "ProductResolved"
+	ConditionPricingAccepted ConditionType = "PricingAccepted"
+
 	ConditionTrue    ConditionStatus = "True"
 	ConditionFalse   ConditionStatus = "False"
 	ConditionUnknown ConditionStatus = "Unknown"
@@ -40,7 +44,7 @@ type ProductStatus struct {
 
 // Condition is a named status signal following the Kubernetes condition convention.
 type Condition struct {
-	Type               ConditionType   `json:"type"               validate:"required,oneof=Published AdmissionAccepted CategoryResolved OptionsAccepted VariantsResolved Ready ParentResolved Acyclic"`
+	Type               ConditionType   `json:"type"               validate:"required,oneof=Published AdmissionAccepted CategoryResolved OptionsAccepted VariantsResolved Ready ParentResolved Acyclic ProductResolved PricingAccepted"`
 	Status             ConditionStatus `json:"status"             validate:"required,oneof=True False Unknown"`
 	ObservedGeneration int64           `json:"observedGeneration"`
 	LastTransitionTime time.Time       `json:"lastTransitionTime"`

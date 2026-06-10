@@ -208,3 +208,7 @@ models:
     fields:
       products:
         resolver: true
+  Product:
+    fields:
+      productVariants:
+        resolver: true

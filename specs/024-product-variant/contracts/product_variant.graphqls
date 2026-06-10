@@ -1,0 +1,220 @@
+# ProductVariant Resource — Kubernetes-style GraphQL Schema
+# Mirrors the existing Product schema pattern in product.graphqls.
+# All reads served from the datastore (fully hydrated view).
+# Mutations are git-driven; no GraphQL mutation type.
+
+extend type Query {
+  """Fetch a single ProductVariant by globally unique ID or namespace + name."""
+  productVariant(by: ProductVariantBy!): ProductVariant
+
+  """List ProductVariants in a namespace with Relay cursor-based pagination."""
+  productVariants(
+    namespace: String!
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): ProductVariantConnection!
+}
+
+"""
+Kubernetes-style ProductVariant resource. The atomic sellable SKU unit.
+Product is the non-sellable parent descriptor; ProductVariant carries price,
+inventory, and SKU.
+"""
+type ProductVariant implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ProductVariantObjectMeta!
+  spec: ProductVariantSpec!
+  status: ProductVariantStatus
+  """Variant-specific descriptive copy authored in the Markdown body."""
+  body: String
+}
+
+type ProductVariantObjectMeta {
+  name: String!
+  namespace: String!
+  labels: JSON
+  annotations: JSON
+
+  # System-assigned (read-only)
+  uid: ID!
+  resourceVersion: String!
+  generation: Int!
+  creationTimestamp: DateTime!
+  revision: String
+  ownerReferences: [OwnerReference!]!
+}
+
+type ProductVariantSpec {
+  title: String!
+  sku: String!
+  productRef: CatalogObjectReference!
+  inventory: InventoryDefinition
+  pricing: PricingDefinition
+  selectedOptions: [SelectedOptionDefinition!]!
+  media: [MediaDefinition!]!
+}
+
+type InventoryDefinition {
+  managed: Boolean!
+  policy: InventoryPolicy
+  stockLocationRefs: [CatalogObjectReference!]!
+}
+
+enum InventoryPolicy {
+  DENY
+  BACKORDER
+}
+
+type PricingDefinition {
+  priceSet: PriceSet
+}
+
+type PriceSet {
+  name: String!
+  prices: [PriceTemplate!]!
+}
+
+type PriceTemplate {
+  name: String!
+  validFromTime: DateTime
+  validUntilTime: DateTime
+  quantity: QuantityDefinition
+  currencyCode: String!
+  amount: Decimal!
+  strategy: StrategyDefinition!
+  priority: Int!
+  eligibility: EligibilityDefinition
+}
+
+type QuantityDefinition {
+  min: Int!
+  """Null means unbounded."""
+  max: Int
+}
+
+type StrategyDefinition {
+  type: String!
+}
+
+type EligibilityDefinition {
+  operator: EligibilityOperator!
+  constraints: [PriceRuleConstraint!]!
+}
+
+enum EligibilityOperator {
+  ALL
+  ANY
+}
+
+type PriceRuleConstraint {
+  name: String
+  """CEL expression evaluated at runtime against cart context."""
+  expression: String!
+}
+
+type SelectedOptionDefinition {
+  name: String!
+  value: String!
+}
+
+type ProductVariantStatus {
+  observedGeneration: Int!
+  lastAppliedRevision: String
+  conditions: [ProductVariantCondition!]!
+  resolved: ResolvedProductVariantDefinition
+}
+
+type ProductVariantCondition {
+  type: ProductVariantConditionType!
+  status: ConditionStatus!
+  observedGeneration: Int
+  lastTransitionTime: DateTime!
+  reason: String
+  message: String
+}
+
+enum ProductVariantConditionType {
+  ADMISSION_ACCEPTED
+  PRODUCT_RESOLVED
+  OPTIONS_ACCEPTED
+  PRICING_ACCEPTED
+  READY
+}
+
+type ResolvedProductVariantDefinition {
+  product: ResolvedProductRef
+  selectedOptionsHash: String
+  priceSet: ResolvedPriceSetDefinition
+  inventory: ResolvedInventoryDefinition
+  media: [ResolvedFileDefinition!]!
+}
+
+type ResolvedProductRef {
+  name: String!
+  uid: ID!
+}
+
+type ResolvedPriceSetDefinition {
+  name: String!
+  hash: String
+  compiledExpressions: Int!
+  priceCount: Int!
+  currencies: [String!]!
+  strategies: [String!]!
+}
+
+type ResolvedInventoryDefinition {
+  managed: Boolean!
+  availableQuantity: Int!
+  policy: InventoryPolicy
+}
+
+"""Edge type for ProductVariant connection (Relay pattern)."""
+type ProductVariantEdge {
+  cursor: String!
+  node: ProductVariant!
+}
+
+"""Connection type for paginated ProductVariants (Relay pattern)."""
+type ProductVariantConnection {
+  edges: [ProductVariantEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+# ---------------------------------------------------------------------------
+# Extend Product to expose its variants connection
+# ---------------------------------------------------------------------------
+
+extend type Product {
+  """Paginated list of ProductVariants belonging to this product."""
+  productVariants(
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): ProductVariantConnection!
+}
+
+# ---------------------------------------------------------------------------
+# Lookup input types  (added to schema.graphqls in practice)
+# ---------------------------------------------------------------------------
+
+"""Selector for a single ProductVariant lookup. Exactly one field must be set."""
+input ProductVariantBy @oneOf {
+  """Look up by globally unique Relay ID."""
+  id: ID
+
+  """Look up by namespace + name (Kubernetes-style metadata.name)."""
+  namespacePath: ProductVariantNamespacePath
+}
+
+"""Composite selector: namespace identifier + variant name."""
+input ProductVariantNamespacePath {
+  namespace: String!
+  name: String!
+}

@@ -131,6 +131,57 @@ func (d *InstrumentedDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *C
 	return err
 }
 
+// ── ProductVariant ────────────────────────────────────────────────────────
+
+func (d *InstrumentedDatastore) CreateProductVariant(ctx context.Context, v *ProductVariant) error {
+	start := time.Now()
+	err := d.next.CreateProductVariant(ctx, v)
+	d.observe("CreateProductVariant", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) GetProductVariant(ctx context.Context, uid string) (*ProductVariant, error) {
+	start := time.Now()
+	result, err := d.next.GetProductVariant(ctx, uid)
+	d.observe("GetProductVariant", start, err)
+	return result, err
+}
+
+func (d *InstrumentedDatastore) GetProductVariantByName(ctx context.Context, namespace, name string) (*ProductVariant, error) {
+	start := time.Now()
+	result, err := d.next.GetProductVariantByName(ctx, namespace, name)
+	d.observe("GetProductVariantByName", start, err)
+	return result, err
+}
+
+func (d *InstrumentedDatastore) GetProductVariantBySKU(ctx context.Context, namespace, sku string) (*ProductVariant, error) {
+	start := time.Now()
+	result, err := d.next.GetProductVariantBySKU(ctx, namespace, sku)
+	d.observe("GetProductVariantBySKU", start, err)
+	return result, err
+}
+
+func (d *InstrumentedDatastore) ListProductVariants(ctx context.Context, namespace string, params PageParams) (*PageResult[ProductVariant], error) {
+	start := time.Now()
+	result, err := d.next.ListProductVariants(ctx, namespace, params)
+	d.observe("ListProductVariants", start, err)
+	return result, err
+}
+
+func (d *InstrumentedDatastore) ListProductVariantsByProductRef(ctx context.Context, namespace, productRefName string) ([]*ProductVariant, error) {
+	start := time.Now()
+	result, err := d.next.ListProductVariantsByProductRef(ctx, namespace, productRefName)
+	d.observe("ListProductVariantsByProductRef", start, err)
+	return result, err
+}
+
+func (d *InstrumentedDatastore) UpdateProductVariant(ctx context.Context, v *ProductVariant) error {
+	start := time.Now()
+	err := d.next.UpdateProductVariant(ctx, v)
+	d.observe("UpdateProductVariant", start, err)
+	return err
+}
+
 // ── Collection ─────────────────────────────────────────────────────────────
 
 func (d *InstrumentedDatastore) CreateCollection(ctx context.Context, c *Collection) error {
