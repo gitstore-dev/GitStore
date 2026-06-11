@@ -9,21 +9,38 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gitstore-dev/gitstore/api/internal/middleware"
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"go.uber.org/zap"
 )
 
 // LoginHandler handles authentication requests
 type LoginHandler struct {
-	authMiddleware *middleware.AuthMiddleware
-	logger         *zap.Logger
+	auth   AuthService
+	logger *zap.Logger
+	clock  apiruntime.Clock
+}
+
+// LoginHandlerDeps contains dependencies for LoginHandler.
+type LoginHandlerDeps struct {
+	Auth   AuthService
+	Logger *zap.Logger
+	Clock  apiruntime.Clock
 }
 
 // NewLoginHandler creates a new login handler
-func NewLoginHandler(authMiddleware *middleware.AuthMiddleware, logger *zap.Logger) *LoginHandler {
+func NewLoginHandler(deps LoginHandlerDeps) *LoginHandler {
+	logger := deps.Logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	clock := deps.Clock
+	if clock == nil {
+		clock = apiruntime.SystemClock{}
+	}
 	return &LoginHandler{
-		authMiddleware: authMiddleware,
-		logger:         logger,
+		auth:   deps.Auth,
+		logger: logger,
+		clock:  clock,
 	}
 }
 
@@ -60,7 +77,7 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate credentials
-	if !h.authMiddleware.ValidateCredentials(username, password) {
+	if h.auth == nil || !h.auth.ValidateCredentials(username, password) {
 		h.logger.Debug("Invalid credentials",
 			zap.String("username", username),
 		)
@@ -69,7 +86,7 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate JWT token
-	token, err := h.authMiddleware.GenerateSessionToken(username, true)
+	token, err := h.auth.GenerateSessionToken(username, true)
 	if err != nil {
 		h.logger.Error("Failed to generate session token",
 			zap.Error(err),
@@ -78,8 +95,7 @@ func (h *LoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Calculate expiry time (24 hours from now)
-	expiresAt := time.Now().Add(24 * time.Hour)
+	expiresAt := h.clock.Now().Add(h.auth.GetTokenDuration())
 
 	// Return response
 	response := LoginResponse{

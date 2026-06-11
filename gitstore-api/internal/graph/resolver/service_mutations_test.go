@@ -82,14 +82,25 @@ func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
-	return resolver.NewServiceWithWriter(store, writer, zap.NewNop())
+	svc, err := resolver.NewService(resolver.ServiceDeps{
+		Store:     store,
+		GitWriter: writer,
+		Logger:    zap.NewNop(),
+	})
+	require.NoError(t, err)
+	return svc
 }
 
 func TestServiceDeleteProductRemovesFromDatastore(t *testing.T) {
 	ctx := context.Background()
 	store, err := memdb.New()
 	require.NoError(t, err)
-	svc := resolver.NewServiceWithWriter(store, &mockGitWriter{}, zap.NewNop())
+	svc, err := resolver.NewService(resolver.ServiceDeps{
+		Store:     store,
+		GitWriter: &mockGitWriter{},
+		Logger:    zap.NewNop(),
+	})
+	require.NoError(t, err)
 
 	uid := "a0000000-0000-0000-0000-000000000001"
 	require.NoError(t, store.CreateProduct(ctx, &datastore.Product{

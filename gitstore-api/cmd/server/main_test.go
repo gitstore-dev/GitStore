@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/app"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
@@ -62,10 +63,17 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 
 	hash, err := middleware.HashPassword("admin123")
 	require.NoError(t, err)
-	authMiddleware, err := middleware.NewAuthMiddleware("admin", hash, "dev-secret", "2h", "gitstore")
+	authMiddleware, err := middleware.NewAuthMiddleware(middleware.AuthDeps{
+		AdminUsername:     "admin",
+		AdminPasswordHash: hash,
+		JWTSecret:         "dev-secret",
+		JWTDuration:       "2h",
+		JWTIssuer:         "gitstore",
+	})
 	require.NoError(t, err)
 
-	handler := newGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), authMiddleware)
+	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), authMiddleware, nil, nil)
+	require.NoError(t, err)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
 		"query": "mutation { login(input: { username: \"admin\", password: \"admin123\" }) { session { token user { username isAdmin } } } }"
@@ -167,10 +175,17 @@ func TestGraphQLHandlerRejectsNamespaceMutationWithoutBearerToken(t *testing.T) 
 
 	hash, err := middleware.HashPassword("admin123")
 	require.NoError(t, err)
-	authMiddleware, err := middleware.NewAuthMiddleware("admin", hash, "dev-secret", "2h", "gitstore")
+	authMiddleware, err := middleware.NewAuthMiddleware(middleware.AuthDeps{
+		AdminUsername:     "admin",
+		AdminPasswordHash: hash,
+		JWTSecret:         "dev-secret",
+		JWTDuration:       "2h",
+		JWTIssuer:         "gitstore",
+	})
 	require.NoError(t, err)
 
-	handler := newGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), authMiddleware)
+	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), authMiddleware, nil, nil)
+	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
 		"query": "mutation { createNamespace(input: { identifier: \"alice\", tier: USER }) { namespace { identifier } } }"
 	}`))

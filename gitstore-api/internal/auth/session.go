@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -32,27 +33,56 @@ type SessionManager struct {
 	secretKey     []byte
 	tokenDuration time.Duration
 	issuer        string
+	clock         apiruntime.Clock
+}
+
+// SessionManagerDeps contains the dependencies and configuration for a session manager.
+type SessionManagerDeps struct {
+	Secret   string
+	Duration string
+	Issuer   string
+	Clock    apiruntime.Clock
 }
 
 // NewSessionManager creates a new session manager from explicit config values.
-func NewSessionManager(secret, durationStr, issuer string) (*SessionManager, error) {
+func NewSessionManager(deps SessionManagerDeps) (*SessionManager, error) {
+	if deps.Secret == "" {
+		return nil, fmt.Errorf("auth: session manager secret is required")
+	}
+	if deps.Issuer == "" {
+		return nil, fmt.Errorf("auth: session manager issuer is required")
+	}
 	duration := 24 * time.Hour
-	if durationStr != "" {
-		if d, err := time.ParseDuration(durationStr); err == nil {
-			duration = d
+	if deps.Duration != "" {
+		d, err := time.ParseDuration(deps.Duration)
+		if err != nil {
+			return nil, fmt.Errorf("auth: invalid token duration %q: %w", deps.Duration, err)
 		}
+		duration = d
+	}
+	clock := deps.Clock
+	if clock == nil {
+		clock = apiruntime.SystemClock{}
 	}
 
 	return &SessionManager{
-		secretKey:     []byte(secret),
+		secretKey:     []byte(deps.Secret),
 		tokenDuration: duration,
-		issuer:        issuer,
+		issuer:        deps.Issuer,
+		clock:         clock,
 	}, nil
+}
+
+func (sm *SessionManager) now() time.Time {
+	if sm.clock == nil {
+		return time.Now()
+	}
+	return sm.clock.Now()
 }
 
 // GenerateToken creates a new JWT token for a user
 func (sm *SessionManager) GenerateToken(username string, isAdmin bool) (string, error) {
-	now := time.Now()
+	now := sm.now()
 	expiresAt := now.Add(sm.tokenDuration)
 
 	claims := Claims{
@@ -88,7 +118,7 @@ func (sm *SessionManager) ValidateToken(tokenString string) (*Claims, error) {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return sm.secretKey, nil
-	})
+	}, jwt.WithTimeFunc(sm.now))
 
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
@@ -114,13 +144,13 @@ func (sm *SessionManager) RefreshToken(tokenString string) (string, error) {
 			// Parse without validation to check expiry time
 			token, _ := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 				return sm.secretKey, nil
-			})
+			}, jwt.WithoutClaimsValidation())
 
 			if token != nil {
 				if claims, ok := token.Claims.(*Claims); ok {
 					// Check if token expired within grace period
 					gracePeriod := 7 * 24 * time.Hour
-					if time.Since(claims.ExpiresAt.Time) > gracePeriod {
+					if sm.now().Sub(claims.ExpiresAt.Time) > gracePeriod {
 						return "", fmt.Errorf("token expired beyond grace period")
 					}
 					// Generate new token

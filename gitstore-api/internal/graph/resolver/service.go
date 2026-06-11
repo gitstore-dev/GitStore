@@ -12,13 +12,12 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"github.com/google/uuid"
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
@@ -42,6 +41,8 @@ type Service struct {
 	store     datastore.Datastore
 	gitWriter GitWriter
 	logger    *zap.Logger
+	clock     apiruntime.Clock
+	ids       apiruntime.IDGenerator
 }
 
 // GitWriter is the write subset of gitclient.Client used by the Service.
@@ -54,21 +55,38 @@ type GitWriter interface {
 	CreateTag(ctx context.Context, p gitclient.CreateTagParams) (string, error)
 }
 
-// NewService creates a new service instance backed by the datastore.
-func NewService(store datastore.Datastore, logger *zap.Logger) *Service {
-	return &Service{
-		store:  store,
-		logger: logger,
-	}
+// ServiceDeps contains dependencies for GraphQL business logic.
+type ServiceDeps struct {
+	Store       datastore.Datastore
+	GitWriter   GitWriter
+	Logger      *zap.Logger
+	Clock       apiruntime.Clock
+	IDGenerator apiruntime.IDGenerator
 }
 
-// NewServiceWithWriter creates a service with an explicit GitWriter (for tests).
-func NewServiceWithWriter(store datastore.Datastore, writer GitWriter, logger *zap.Logger) *Service {
-	return &Service{
-		store:     store,
-		gitWriter: writer,
-		logger:    logger,
+// NewService creates a new service instance backed by the datastore.
+func NewService(deps ServiceDeps) (*Service, error) {
+	if deps.Store == nil {
+		return nil, fmt.Errorf("resolver: datastore is required")
 	}
+	if deps.Logger == nil {
+		return nil, fmt.Errorf("resolver: logger is required")
+	}
+	clock := deps.Clock
+	if clock == nil {
+		clock = apiruntime.SystemClock{}
+	}
+	ids := deps.IDGenerator
+	if ids == nil {
+		ids = apiruntime.UUIDGenerator{}
+	}
+	return &Service{
+		store:     deps.Store,
+		gitWriter: deps.GitWriter,
+		logger:    deps.Logger,
+		clock:     clock,
+		ids:       ids,
+	}, nil
 }
 
 // SetGitWriter wires the gRPC client after construction (called from main.go).
@@ -175,7 +193,7 @@ func (s *Service) DeleteProduct(ctx context.Context, uid string) error {
 // This is a transitional method; collection admission via git push is the primary path.
 func (s *Service) CreateCollection(ctx context.Context, input map[string]interface{}) (*datastore.Collection, error) {
 	c := &datastore.Collection{
-		UID:  uuid.New().String(),
+		UID:  s.ids.NewID(),
 		Name: getStringOrEmpty(input, "name"),
 		Body: getStringOrEmpty(input, "body"),
 	}
@@ -240,13 +258,13 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 		parentEnterpriseID = &parent.ID
 	}
 
-	now := time.Now()
+	now := s.clock.Now()
 	var displayName string
 	if input.DisplayName != nil {
 		displayName = *input.DisplayName
 	}
 	ns := &datastore.Namespace{
-		ID:                 uuid.New().String(),
+		ID:                 s.ids.NewID(),
 		Identifier:         identifier,
 		DisplayName:        displayName,
 		Tier:               tier,
@@ -373,13 +391,13 @@ func (s *Service) CreateRepository(ctx context.Context, namespaceID, name, defau
 	if storageClass == "" {
 		storageClass = "default"
 	}
-	repoID, err := uuid.NewV7()
+	repoID, err := s.ids.NewV7ID()
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to generate repository ID")
 	}
-	now := time.Now().UTC()
+	now := s.clock.Now().UTC()
 	repo := &datastore.Repository{
-		ID:            repoID.String(),
+		ID:            repoID,
 		NamespaceID:   namespaceID,
 		Name:          name,
 		DefaultBranch: defaultBranch,
@@ -518,7 +536,7 @@ func (s *Service) RenameRepository(ctx context.Context, repoID, newName, callerU
 		return nil, gqlerror.Errorf("failed to rename repository")
 	}
 	repo.Name = newName
-	repo.UpdatedAt = time.Now().UTC()
+	repo.UpdatedAt = s.clock.Now().UTC()
 	repo.UpdatedBy = callerUsername
 	if err := s.store.UpdateRepository(ctx, repo); err != nil {
 		s.logger.Error("failed to update repository record after rename",
@@ -555,7 +573,7 @@ func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespaceID,
 		return nil, gqlerror.Errorf("failed to transfer repository")
 	}
 	repo.NamespaceID = toNamespaceID
-	repo.UpdatedAt = time.Now().UTC()
+	repo.UpdatedAt = s.clock.Now().UTC()
 	repo.UpdatedBy = callerUsername
 	if err := s.store.UpdateRepository(ctx, repo); err != nil {
 		s.logger.Error("failed to update repository record after transfer",

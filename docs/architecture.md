@@ -53,6 +53,12 @@ The API gateway (`gitstore-api`) and the Git server (`gitstore-git-service`) com
 `gitstore-git-service` serves one port:
 - Port `50051` — gRPC only
 
+### Go API Composition
+
+`gitstore-api` uses explicit manual dependency injection. Runtime wiring is centralized in `gitstore-api/internal/app`, and `cmd/server/main.go` is limited to configuration loading, logger construction, server startup, and signal-driven shutdown.
+
+Business packages receive dependencies through plain `Deps` structs rather than package globals or a DI framework. Shared infrastructure seams such as clocks, ID generators, catalog parsers, Git clients, auth services, and loggers are passed into constructors so tests can use deterministic time, IDs, and token expiry behavior.
+
 Key environment variables:
 
 | Service                | Variable                   | Purpose                                                          |

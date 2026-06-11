@@ -7,7 +7,6 @@ package resolver
 
 import (
 	"context"
-	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -25,7 +24,7 @@ func (r *mutationResolver) PublishCatalog(ctx context.Context, input model.Publi
 	version := &model.CatalogVersion{
 		Tag:         input.Version,
 		Commit:      "abc123def456", // TODO: resolve actual commit from git push result
-		PublishedAt: time.Now(),
+		PublishedAt: r.clock.Now(),
 		Message:     &message,
 		Stats:       stats,
 	}
@@ -67,7 +66,7 @@ func (r *queryResolver) CatalogVersion(ctx context.Context) (*model.CatalogVersi
 	return &model.CatalogVersion{
 		Tag:         "",
 		Commit:      "",
-		PublishedAt: time.Now(),
+		PublishedAt: r.clock.Now(),
 		Message:     nil,
 		Stats:       stats,
 	}, nil

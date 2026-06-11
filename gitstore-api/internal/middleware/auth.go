@@ -31,18 +31,48 @@ type AuthMiddleware struct {
 	sessionManager    *auth.SessionManager
 }
 
+// AuthDeps contains authentication middleware dependencies and configuration.
+type AuthDeps struct {
+	AdminUsername     string
+	AdminPasswordHash string
+	SessionManager    *auth.SessionManager
+	JWTSecret         string
+	JWTDuration       string
+	JWTIssuer         string
+}
+
 // NewAuthMiddleware creates a new authentication middleware from explicit config values.
-func NewAuthMiddleware(username, passwordHash, jwtSecret, jwtDuration, jwtIssuer string) (*AuthMiddleware, error) {
-	sessionManager, err := auth.NewSessionManager(jwtSecret, jwtDuration, jwtIssuer)
-	if err != nil {
-		return nil, err
+func NewAuthMiddleware(deps AuthDeps) (*AuthMiddleware, error) {
+	if deps.AdminUsername == "" {
+		return nil, authConfigError("admin username is required")
+	}
+	if deps.AdminPasswordHash == "" {
+		return nil, authConfigError("admin password hash is required")
+	}
+	sessionManager := deps.SessionManager
+	if sessionManager == nil {
+		var err error
+		sessionManager, err = auth.NewSessionManager(auth.SessionManagerDeps{
+			Secret:   deps.JWTSecret,
+			Duration: deps.JWTDuration,
+			Issuer:   deps.JWTIssuer,
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &AuthMiddleware{
-		adminUsername:     username,
-		adminPasswordHash: passwordHash,
+		adminUsername:     deps.AdminUsername,
+		adminPasswordHash: deps.AdminPasswordHash,
 		sessionManager:    sessionManager,
 	}, nil
+}
+
+type authConfigError string
+
+func (e authConfigError) Error() string {
+	return "auth: " + string(e)
 }
 
 // ValidateCredentials checks if the provided username and password are valid

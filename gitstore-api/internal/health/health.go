@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"go.uber.org/zap"
 )
 
@@ -44,15 +45,33 @@ type Handler struct {
 	logger    *zap.Logger
 	version   string
 	startTime time.Time
+	clock     apiruntime.Clock
+}
+
+// HandlerDeps contains dependencies for Handler.
+type HandlerDeps struct {
+	Store   datastore.Datastore
+	Logger  *zap.Logger
+	Version string
+	Clock   apiruntime.Clock
 }
 
 // NewHandler creates a new health check handler
-func NewHandler(store datastore.Datastore, logger *zap.Logger, version string) *Handler {
+func NewHandler(deps HandlerDeps) *Handler {
+	logger := deps.Logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	clock := deps.Clock
+	if clock == nil {
+		clock = apiruntime.SystemClock{}
+	}
 	return &Handler{
-		store:     store,
+		store:     deps.Store,
 		logger:    logger,
-		version:   version,
-		startTime: time.Now(),
+		version:   deps.Version,
+		startTime: clock.Now(),
+		clock:     clock,
 	}
 }
 
@@ -62,7 +81,7 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	response := HealthResponse{
 		Status:    StatusHealthy,
 		Version:   h.version,
-		Timestamp: time.Now(),
+		Timestamp: h.clock.Now(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -94,7 +113,7 @@ func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
 	response := HealthResponse{
 		Status:    overallStatus,
 		Version:   h.version,
-		Timestamp: time.Now(),
+		Timestamp: h.clock.Now(),
 		Checks:    checks,
 	}
 
@@ -131,6 +150,13 @@ func (h *Handler) performChecks(ctx context.Context) map[string]Check {
 }
 
 func (h *Handler) checkDatastore(ctx context.Context) Check {
+	if h.store == nil {
+		h.logger.Warn("Datastore check failed", zap.String("reason", "datastore not configured"))
+		return Check{
+			Status:  StatusUnhealthy,
+			Message: "datastore unavailable",
+		}
+	}
 	_, err := h.store.ListProducts(ctx, "", datastore.PageParams{First: 1})
 	if err != nil {
 		h.logger.Warn("Datastore check failed", zap.Error(err))
@@ -147,7 +173,7 @@ func (h *Handler) checkDatastore(ctx context.Context) Check {
 }
 
 func (h *Handler) checkUptime() Check {
-	if time.Since(h.startTime) < 5*time.Second {
+	if h.clock.Now().Sub(h.startTime) < 5*time.Second {
 		return Check{
 			Status:  StatusDegraded,
 			Message: "service warming up",

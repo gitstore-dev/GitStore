@@ -17,7 +17,22 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var validate = validator.New()
+// Parser owns catalog frontmatter parsing and struct validation state.
+type Parser struct {
+	structValidator *validator.Validate
+}
+
+// NewParser creates a parser with a fresh struct validator.
+func NewParser() *Parser {
+	return &Parser{structValidator: validator.New()}
+}
+
+func (p *Parser) validator() *validator.Validate {
+	if p == nil || p.structValidator == nil {
+		return validator.New()
+	}
+	return p.structValidator
+}
 
 // ParsedResource is the result of ParseResource; exactly one of Product,
 // CategoryTaxonomy, Collection, or ProductVariant is set, matching the Kind field.
@@ -29,76 +44,10 @@ type ParsedResource struct {
 	ProductVariant   *catalog.ProductVariantResource
 }
 
-// Parse reads a Markdown document, extracts the YAML frontmatter into a
-// ProductResource, validates it, and returns the parsed resource, the
-// remaining Markdown body, and any error.
-//
-// Validation is two-pass:
-//  1. Pre-parse: detect legacy format, forbidden top-level keys (status,
-//     read-only metadata fields) from the raw YAML map before struct binding.
-//  2. Post-parse: struct-tag validation via go-playground/validator, plus
-//     spec-level rules (options.name required/unique, label length).
-func Parse(r io.Reader) (*catalog.ProductResource, []byte, error) {
-	raw, err := io.ReadAll(r)
-	if err != nil {
-		return nil, nil, fmt.Errorf("validate: read: %w", err)
-	}
-
-	// Opt-in: files that don't begin with --- are not product resources; skip.
-	if !bytes.HasPrefix(bytes.TrimLeftFunc(raw, unicode.IsSpace), []byte("---")) {
-		return nil, raw, nil
-	}
-
-	// Extract the raw YAML block between the first --- delimiters.
-	fmRaw, err := extractFrontmatterBlock(raw)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Pre-parse checks on the raw map.
-	if err := preParseChecks(fmRaw); err != nil {
-		return nil, nil, err
-	}
-
-	// Struct binding via frontmatter.Parse.
-	var res catalog.ProductResource
-	formats := []*frontmatter.Format{
-		frontmatter.NewFormat("---", "---", yaml.Unmarshal),
-	}
-	body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
-	}
-
-	// Post-parse: collect all violations before returning.
-	var errs []error
-
-	// Struct-tag validation — map to user-friendly messages.
-	if err := validate.Struct(res); err != nil {
-		errs = append(errs, toFriendlyError(err))
-	}
-
-	// Spec-level validation.
-	if err := validateSpec(res.Spec); err != nil {
-		errs = append(errs, err)
-	}
-
-	// Label length validation.
-	if err := validateLabels(res.Metadata.Labels); err != nil {
-		errs = append(errs, err)
-	}
-
-	if len(errs) > 0 {
-		return nil, nil, errors.Join(errs...)
-	}
-
-	return &res, body, nil
-}
-
-// ParseResource reads a Markdown document, extracts YAML frontmatter, dispatches
-// on the kind field, validates the resource, and returns a ParsedResource.
-// Recognized kinds: Product, CategoryTaxonomy.
-func ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
+// ParseResource reads a Markdown document, extracts YAML frontmatter,
+// dispatches on the kind field, validates the resource, and returns a
+// ParsedResource.
+func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 	raw, err := io.ReadAll(r)
 	if err != nil {
 		return nil, nil, fmt.Errorf("validate: read: %w", err)
@@ -137,7 +86,7 @@ func ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
 		}
 		var errs []error
-		if err := validate.Struct(res); err != nil {
+		if err := p.validator().Struct(res); err != nil {
 			errs = append(errs, toFriendlyError(err))
 		}
 		if err := validateSpec(res.Spec); err != nil {
@@ -158,7 +107,7 @@ func ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
 		}
 		var errs []error
-		if err := validate.Struct(res); err != nil {
+		if err := p.validator().Struct(res); err != nil {
 			errs = append(errs, toFriendlyError(err))
 		}
 		if err := validateCategorySpec(res.Metadata.Name, res.Spec); err != nil {
@@ -179,7 +128,7 @@ func ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
 		}
 		var errs []error
-		if err := validate.Struct(res); err != nil {
+		if err := p.validator().Struct(res); err != nil {
 			errs = append(errs, toFriendlyError(err))
 		}
 		if err := validateLabels(res.Metadata.Labels); err != nil {
@@ -200,7 +149,7 @@ func ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
 		}
 		var errs []error
-		if err := validate.Struct(res); err != nil {
+		if err := p.validator().Struct(res); err != nil {
 			errs = append(errs, toFriendlyError(err))
 		}
 		if err := validateProductVariantSpec(res.Spec); err != nil {

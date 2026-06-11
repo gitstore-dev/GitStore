@@ -7,7 +7,6 @@ package resolver
 
 import (
 	"context"
-	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -37,7 +36,7 @@ func (r *mutationResolver) Login(ctx context.Context, input model.LoginInput) (*
 		return nil, gqlerror.Errorf("internal server error")
 	}
 
-	expiresAt := time.Now().Add(r.authMiddleware.GetTokenDuration())
+	expiresAt := r.clock.Now().Add(r.authMiddleware.GetTokenDuration())
 	return &model.LoginPayload{
 		ClientMutationID: input.ClientMutationID,
 		Session: &model.AuthSession{

@@ -5,9 +5,12 @@ package validate_test
 
 import (
 	"embed"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,12 +19,23 @@ import (
 //go:embed testdata/*
 var testFS embed.FS
 
+func parseProduct(r io.Reader) (*catalog.ProductResource, []byte, error) {
+	parsed, body, err := validate.NewParser().ParseResource(r)
+	if err != nil || parsed == nil {
+		return nil, body, err
+	}
+	if parsed.Product == nil {
+		return nil, body, fmt.Errorf("expected Product resource, got %q", parsed.Kind)
+	}
+	return parsed.Product, body, nil
+}
+
 // ── US1: Valid product parsing ────────────────────────────────────────────────
 
 func TestParse_ValidProductAccepted(t *testing.T) {
 	f, err := testFS.Open("testdata/macbook-pro-64gb-1tb-ssd-m4.md")
 	require.NoError(t, err)
-	res, body, err := validate.Parse(f)
+	res, body, err := parseProduct(f)
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.Equal(t, "catalog.gitstore.dev/v1beta1", res.APIVersion)
@@ -40,7 +54,7 @@ spec: {}
 ---
 body
 `
-	res, body, err := validate.Parse(strings.NewReader(doc))
+	res, body, err := parseProduct(strings.NewReader(doc))
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.Equal(t, "minimal-product", res.Metadata.Name)
@@ -65,7 +79,7 @@ spec: {}
 ---
 body
 `
-	res, _, err := validate.Parse(strings.NewReader(doc))
+	res, _, err := parseProduct(strings.NewReader(doc))
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.Equal(t, "production", res.Metadata.Labels["env"])
@@ -85,7 +99,7 @@ spec: {}
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "kind")
 }
@@ -100,7 +114,7 @@ spec: {}
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "name")
 }
@@ -115,7 +129,7 @@ spec: {}
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "kind")
 }
@@ -130,7 +144,7 @@ metadata:
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "migration is not supported in alpha")
 }
@@ -147,7 +161,7 @@ status:
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "status")
 }
@@ -162,7 +176,7 @@ spec: {}
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "catalog.gitstore.dev/v1beta1")
 }
@@ -176,7 +190,7 @@ metadata:
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "spec")
 }
@@ -191,7 +205,7 @@ spec: {}
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "name")
 }
@@ -209,7 +223,7 @@ spec: {}
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "uid")
 }
@@ -228,7 +242,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "options[0].name")
 }
@@ -246,7 +260,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate")
 	assert.Contains(t, err.Error(), "color")
@@ -263,7 +277,7 @@ spec: {}
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ownerReferences")
 }
@@ -282,7 +296,7 @@ func TestParse_ReadOnlyMetadataAllFieldsRejected(t *testing.T) {
 		t.Run(tc.field, func(t *testing.T) {
 			doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\n" +
 				tc.yaml + "\nspec: {}\n---\nbody\n"
-			_, _, err := validate.Parse(strings.NewReader(doc))
+			_, _, err := parseProduct(strings.NewReader(doc))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.field)
 		})
@@ -295,7 +309,7 @@ func TestParse_LabelKeyTooLongRejected(t *testing.T) {
 	longKey := strings.Repeat("a", 64) // exceeds 63-char segment limit
 	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\n  labels:\n    " +
 		longKey + ": value\nspec: {}\n---\nbody\n"
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "label")
 }
@@ -305,7 +319,7 @@ func TestParse_LabelKeyPrefixTooLongRejected(t *testing.T) {
 	key := longPrefix + "/name"
 	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\n  labels:\n    \"" +
 		key + "\": value\nspec: {}\n---\nbody\n"
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "prefix")
 }
@@ -314,18 +328,21 @@ func TestParse_LabelValueTooLongRejected(t *testing.T) {
 	longVal := strings.Repeat("v", 64) // exceeds 63-char value limit
 	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\n  labels:\n    env: " +
 		longVal + "\nspec: {}\n---\nbody\n"
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "label value")
 }
 
 func TestParse_MultipleViolationsReportedTogether(t *testing.T) {
-	// Both kind wrong AND duplicate options — both violations must appear.
+	// Duplicate options and invalid label value must both appear for a Product.
+	longVal := strings.Repeat("v", 64)
 	doc := `---
 apiVersion: catalog.gitstore.dev/v1beta1
-kind: Widget
+kind: Product
 metadata:
   name: my-product
+  labels:
+    env: ` + longVal + `
 spec:
   options:
   - name: color
@@ -333,15 +350,15 @@ spec:
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "kind")
 	assert.Contains(t, err.Error(), "duplicate")
+	assert.Contains(t, err.Error(), "label value")
 }
 
 func TestParse_NoFrontmatterSkipped(t *testing.T) {
 	doc := "# README\n\nThis is a plain Markdown file with no frontmatter.\n"
-	res, body, err := validate.Parse(strings.NewReader(doc))
+	res, body, err := parseProduct(strings.NewReader(doc))
 	require.NoError(t, err)
 	assert.Nil(t, res)
 	assert.NotEmpty(t, body)
@@ -353,7 +370,7 @@ func TestParse_SpecTitle_TooLong_Rejected(t *testing.T) {
 	longTitle := strings.Repeat("x", 201) // 201 chars — exceeds max=200
 	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\nspec:\n  title: \"" +
 		longTitle + "\"\n---\nbody\n"
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "title")
 }
@@ -362,7 +379,7 @@ func TestParse_SpecTitle_MaxLength_Accepted(t *testing.T) {
 	exactTitle := strings.Repeat("x", 200) // 200 chars — at limit, must pass
 	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\nspec:\n  title: \"" +
 		exactTitle + "\"\n---\nbody\n"
-	res, _, err := validate.Parse(strings.NewReader(doc))
+	res, _, err := parseProduct(strings.NewReader(doc))
 	require.NoError(t, err)
 	require.NotNil(t, res)
 }
@@ -381,7 +398,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	// go-playground/validator reports the leaf field name; "name" is the field
 	// inside FileReference that failed the "required" constraint.
@@ -402,7 +419,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	// go-playground/validator reports the leaf field name; "kind" is the field
 	// inside FileReference that failed the "required" constraint.
@@ -423,7 +440,7 @@ spec:
 ---
 body
 `
-	res, _, err := validate.Parse(strings.NewReader(doc))
+	res, _, err := parseProduct(strings.NewReader(doc))
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	require.Len(t, res.Spec.Media, 1)
@@ -436,7 +453,7 @@ func TestParse_SpecTitle_TooLong_FieldNamedInError(t *testing.T) {
 	longTitle := strings.Repeat("x", 201)
 	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\nspec:\n  title: \"" +
 		longTitle + "\"\n---\nbody\n"
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	// Must name the qualified field path and the limit (FR-001).
 	assert.Contains(t, err.Error(), "spec.title")
@@ -456,7 +473,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	// Must name the indexed path (FR-002).
 	assert.Contains(t, err.Error(), "spec.media[0]")
@@ -475,7 +492,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	// Must name the qualified path (FR-005).
 	assert.Contains(t, err.Error(), "categoryref.name")
@@ -492,7 +509,7 @@ spec:
 ---
 body
 `
-	res, _, err := validate.Parse(strings.NewReader(doc))
+	res, _, err := parseProduct(strings.NewReader(doc))
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.Empty(t, res.Spec.Options)
@@ -508,7 +525,7 @@ spec: {}
 ---
 body
 `
-	res, _, err := validate.Parse(strings.NewReader(doc))
+	res, _, err := parseProduct(strings.NewReader(doc))
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.Nil(t, res.Spec.Options)
@@ -528,7 +545,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	// optional: true does NOT waive the name requirement.
 	assert.Contains(t, err.Error(), "fileref.name")
@@ -547,7 +564,7 @@ status: {}
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	// Presence of key, not content, triggers rejection (FR-007).
 	assert.Contains(t, err.Error(), "status")
@@ -567,7 +584,7 @@ spec: {}
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	// All three forbidden fields must appear (FR-008, FR-009).
 	assert.Contains(t, err.Error(), "uid")
@@ -589,7 +606,7 @@ spec: {}
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	// Both forbidden fields must appear in the single error response (FR-008, FR-009).
 	assert.Contains(t, err.Error(), "uid")
@@ -611,7 +628,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.Parse(strings.NewReader(doc))
+	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
 	// The error must name the full qualified path, not just the leaf "name" (FR-002).
 	assert.Contains(t, err.Error(), "spec.media[0]")
@@ -631,7 +648,7 @@ spec:
 ---
 body
 `
-	res, body, err := validate.ParseResource(strings.NewReader(doc))
+	res, body, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	require.NotNil(t, res.CategoryTaxonomy)
@@ -651,7 +668,7 @@ spec: {}
 ---
 body
 `
-	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	_, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "spec.title")
 }
@@ -666,7 +683,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	_, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "metadata.name")
 }
@@ -682,7 +699,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	_, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "UnknownKind")
 	assert.Contains(t, err.Error(), "not a recognized")
@@ -701,7 +718,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	_, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must not reference the category itself")
 }
@@ -716,7 +733,7 @@ spec: {}
 ---
 body
 `
-	res, body, err := validate.ParseResource(strings.NewReader(doc))
+	res, body, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	require.NotNil(t, res.Product)
@@ -742,7 +759,7 @@ spec:
 ---
 body
 `
-	res, _, err := validate.ParseResource(strings.NewReader(doc))
+	res, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.NoError(t, err)
 	require.NotNil(t, res.CategoryTaxonomy)
 	require.Len(t, res.CategoryTaxonomy.Spec.Media, 1)
@@ -763,7 +780,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	_, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "media[0]")
 	assert.Contains(t, err.Error(), "name")
@@ -783,7 +800,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	_, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "media[0]")
 	assert.Contains(t, err.Error(), "kind")
@@ -807,7 +824,7 @@ spec:
 ---
 body
 `
-	res, _, err := validate.ParseResource(strings.NewReader(doc))
+	res, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.NoError(t, err)
 	require.NotNil(t, res.CategoryTaxonomy)
 	assert.True(t, res.CategoryTaxonomy.Spec.Media[0].FileRef.Optional)
@@ -828,7 +845,7 @@ spec:
 ---
 body
 `
-	res, _, err := validate.ParseResource(strings.NewReader(doc))
+	res, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.NoError(t, err)
 	require.NotNil(t, res.Product)
 	require.NotNil(t, res.Product.Spec.CategoryRef)
@@ -845,7 +862,7 @@ spec: {}
 ---
 body
 `
-	res, _, err := validate.ParseResource(strings.NewReader(doc))
+	res, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.NoError(t, err)
 	require.NotNil(t, res.Product)
 	assert.Nil(t, res.Product.Spec.CategoryRef)
@@ -865,7 +882,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	_, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.Error(t, err)
 }
 
@@ -881,7 +898,7 @@ spec:
 ---
 body
 `
-	_, _, err := validate.ParseResource(strings.NewReader(doc))
+	_, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "categoryref.name")
 }

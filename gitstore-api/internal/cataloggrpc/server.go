@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -19,9 +20,9 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/google/cel-go/cel"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -30,6 +31,11 @@ import (
 type GitReader interface {
 	ListFiles(ctx context.Context, repositoryID, prefix, ref string) ([]string, error)
 	ReadFile(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
+}
+
+// ResourceParser is the parser behavior required by the CatalogService server.
+type ResourceParser interface {
+	ParseResource(r io.Reader) (*validate.ParsedResource, []byte, error)
 }
 
 // gitClientReader wraps *gitclient.Client to satisfy GitReader.
@@ -57,10 +63,26 @@ func (r *gitClientReader) ReadFile(ctx context.Context, repositoryID, path, ref 
 // Server implements catalogv1.CatalogServiceServer.
 type Server struct {
 	catalogv1.UnimplementedCatalogServiceServer
-	store  datastore.Datastore
-	git    GitReader
-	log    *zap.Logger
+	store datastore.Datastore
+	git   GitReader
+	log   *zap.Logger
+
+	parser ResourceParser
+	clock  apiruntime.Clock
+	ids    apiruntime.IDGenerator
 	celEnv *cel.Env // shared, constructed once; nil means CEL unavailable (skip rather than reject)
+}
+
+// ServerDeps contains dependencies for the CatalogService gRPC server.
+type ServerDeps struct {
+	Store       datastore.Datastore
+	GitReader   GitReader
+	GitClient   *gitclient.Client
+	Logger      *zap.Logger
+	Parser      ResourceParser
+	Clock       apiruntime.Clock
+	IDGenerator apiruntime.IDGenerator
+	CELEnv      *cel.Env
 }
 
 // newCELEnv constructs a CEL environment for syntax-checking price eligibility expressions.
@@ -74,27 +96,54 @@ func newCELEnv() *cel.Env {
 }
 
 // NewServer creates a new CatalogService gRPC server.
-// store and gitClient may be nil for unit tests that only call ValidateResources.
-func NewServer(store datastore.Datastore, gitClient *gitclient.Client) *Server {
-	var git GitReader
-	if gitClient != nil {
-		git = &gitClientReader{c: gitClient}
+func NewServer(deps ServerDeps) (*Server, error) {
+	if deps.Store == nil {
+		return nil, fmt.Errorf("cataloggrpc: datastore is required")
 	}
-	return &Server{store: store, git: git, log: zap.NewNop(), celEnv: newCELEnv()}
+	if deps.Logger == nil {
+		return nil, fmt.Errorf("cataloggrpc: logger is required")
+	}
+	git := deps.GitReader
+	if git == nil && deps.GitClient != nil {
+		git = &gitClientReader{c: deps.GitClient}
+	}
+	parser := deps.Parser
+	if parser == nil {
+		parser = validate.NewParser()
+	}
+	clock := deps.Clock
+	if clock == nil {
+		clock = apiruntime.SystemClock{}
+	}
+	ids := deps.IDGenerator
+	if ids == nil {
+		ids = apiruntime.UUIDGenerator{}
+	}
+	celEnv := deps.CELEnv
+	if celEnv == nil {
+		celEnv = newCELEnv()
+	}
+	return &Server{
+		store:  deps.Store,
+		git:    git,
+		log:    deps.Logger,
+		parser: parser,
+		clock:  clock,
+		ids:    ids,
+		celEnv: celEnv,
+	}, nil
 }
 
-// NewServerWithLogger creates a new server with a custom logger.
-func NewServerWithLogger(store datastore.Datastore, gitClient *gitclient.Client, log *zap.Logger) *Server {
-	var git GitReader
-	if gitClient != nil {
-		git = &gitClientReader{c: gitClient}
+func (s *Server) newUID(kind, name string) (string, bool) {
+	uid, err := s.ids.NewV7ID()
+	if err != nil {
+		s.log.Error("admit_resources: generate UID failed",
+			zap.String("kind", kind),
+			zap.String("name", name),
+			zap.Error(err))
+		return "", false
 	}
-	return &Server{store: store, git: git, log: log, celEnv: newCELEnv()}
-}
-
-// NewServerForTest creates a server with a mock GitReader for unit tests.
-func NewServerForTest(store datastore.Datastore, git GitReader) *Server {
-	return &Server{store: store, git: git, log: zap.NewNop(), celEnv: newCELEnv()}
+	return uid, true
 }
 
 // ValidateResources validates resource blobs extracted from an incoming push commit.
@@ -112,7 +161,7 @@ func (s *Server) ValidateResources(
 			continue
 		}
 
-		_, _, err := validate.ParseResource(bytes.NewReader(blob.Content))
+		_, _, err := s.parser.ParseResource(bytes.NewReader(blob.Content))
 		if err == nil {
 			continue
 		}
@@ -244,7 +293,7 @@ func (s *Server) AdmitResources(
 	// Extract branch name from ref: "refs/heads/main" → "main"
 	branch := strings.TrimPrefix(req.RefName, "refs/heads/")
 	revision := branch + "@sha1:" + req.CommitSha
-	now := time.Now().UTC()
+	now := s.clock.Now().UTC()
 
 	// Build the admission context once so every per-file admit helper can read
 	// namespace, commit SHA, ref, and wall-clock time without re-querying the DB.
@@ -272,7 +321,7 @@ func (s *Server) AdmitResources(
 				zap.String("path", path), zap.Error(err))
 			continue
 		}
-		parsed, body, err := validate.ParseResource(bytes.NewReader(content))
+		parsed, body, err := s.parser.ParseResource(bytes.NewReader(content))
 		if err != nil || parsed == nil {
 			if err != nil {
 				s.log.Error("admit_resources: parse failed",
@@ -423,8 +472,12 @@ func (s *Server) admitProduct(
 	existing, getErr := s.store.GetProductByName(ctx, namespace, resource.Metadata.Name)
 
 	if getErr != nil || existing == nil {
+		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
+		if !ok {
+			return
+		}
 		p := &datastore.Product{
-			UID:               uuid.Must(uuid.NewV7()).String(),
+			UID:               uid,
 			Namespace:         namespace,
 			Name:              resource.Metadata.Name,
 			APIVersion:        resource.APIVersion,
@@ -487,8 +540,12 @@ func (s *Server) admitCollection(
 	existing, getErr := s.store.GetCollectionByName(ctx, namespace, resource.Metadata.Name)
 
 	if getErr != nil || existing == nil {
+		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
+		if !ok {
+			return
+		}
 		c := &datastore.Collection{
-			UID:               uuid.Must(uuid.NewV7()).String(),
+			UID:               uid,
 			Namespace:         namespace,
 			Name:              resource.Metadata.Name,
 			APIVersion:        resource.APIVersion,
@@ -613,8 +670,12 @@ func (s *Server) admitProductVariant(
 		}
 
 		statusJSON := variantAdmissionStatus(1, admCtx.Revision, admCtx.Now, admitResult)
+		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
+		if !ok {
+			return
+		}
 		v := &datastore.ProductVariant{
-			UID:               uuid.Must(uuid.NewV7()).String(),
+			UID:               uid,
 			Namespace:         namespace,
 			Name:              resource.Metadata.Name,
 			APIVersion:        resource.APIVersion,
@@ -736,8 +797,12 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	statusJSON := categoryAdmissionStatusFull(1, admCtx.Revision, admCtx.Now, parentResolved, inCycle)
 
 	if getErr != nil || existing == nil {
+		uid, ok := s.newUID(resource.Kind, name)
+		if !ok {
+			return
+		}
 		c := &datastore.CategoryTaxonomy{
-			UID:               uuid.Must(uuid.NewV7()).String(),
+			UID:               uid,
 			Namespace:         namespace,
 			Name:              name,
 			APIVersion:        resource.APIVersion,
