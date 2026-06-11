@@ -12,17 +12,75 @@ import (
 	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // testRepoID is a fixed UUID used as the repository ID in AdmitResources tests.
 // The memdb UUIDFieldIndex requires exactly 36 characters.
 const testRepoID = "00000000-0000-0000-0000-000000000001"
+
+func newCatalogServer(t *testing.T, store datastore.Datastore, git cataloggrpc.GitReader, opts ...func(*cataloggrpc.ServerDeps)) *cataloggrpc.Server {
+	t.Helper()
+	if store == nil {
+		var err error
+		store, err = memdb.New()
+		require.NoError(t, err)
+	}
+	deps := cataloggrpc.ServerDeps{
+		Store:     store,
+		GitReader: git,
+		Logger:    zap.NewNop(),
+	}
+	for _, opt := range opts {
+		opt(&deps)
+	}
+	srv, err := cataloggrpc.NewServer(deps)
+	require.NoError(t, err)
+	return srv
+}
+
+func TestNewServerRequiresDatastore(t *testing.T) {
+	_, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{Logger: zap.NewNop()})
+	require.ErrorContains(t, err, "datastore is required")
+}
+
+func TestNewServerRequiresLogger(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	defer store.Close()
+
+	_, err = cataloggrpc.NewServer(cataloggrpc.ServerDeps{Store: store})
+	require.ErrorContains(t, err, "logger is required")
+}
+
+func TestNewServerDefaultsOptionalDependencies(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	defer store.Close()
+
+	srv, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
+		Store:  store,
+		Logger: zap.NewNop(),
+	})
+	require.NoError(t, err)
+
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs: []*catalogv1.ResourceBlob{
+			{Path: "products/widget.md", BlobOid: "abc", Content: []byte(validProduct)},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, resp.Accepted)
+}
 
 // validProduct is a minimal valid product YAML frontmatter blob.
 const validProduct = `---
@@ -40,7 +98,7 @@ A test product.
 
 // T011a: blob with valid frontmatter → accepted=true, empty errors
 func TestValidateResources_ValidBlob_Accepted(t *testing.T) {
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
@@ -66,7 +124,7 @@ status:
   phase: ready
 ---
 `
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
@@ -85,7 +143,7 @@ status:
 func TestValidateResources_TitleTooLong_Rejected(t *testing.T) {
 	longTitle := strings.Repeat("x", 201)
 	content := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: long\n  namespace: gitstore\nspec:\n  title: " + longTitle + "\n---\n"
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
@@ -114,7 +172,7 @@ status:
   phase: ready
 ---
 `
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
@@ -133,7 +191,7 @@ status:
 // T011e: blob without `---` prefix → treated as no-op, no error
 func TestValidateResources_NonfrontmatterBlob_NoError(t *testing.T) {
 	content := []byte("This is a plain README without frontmatter.\n")
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
@@ -166,7 +224,7 @@ func containsSubstring(msgs []string, sub string) bool {
 
 // TestValidateResources_EmptyBlobs ensures empty input is accepted with no errors.
 func TestValidateResources_EmptyBlobs_Accepted(t *testing.T) {
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs:        nil,
@@ -202,6 +260,8 @@ func makeProduct(name string) []byte {
 // T020a: valid commit_sha with one product file → CreateProduct called with correct spec fields
 func TestAdmitResources_NewProduct_Created(t *testing.T) {
 	memStore := newTestDatastore(t)
+	now := time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)
+	const uid = "11111111-1111-7111-8111-111111111111"
 	git := &mockGitReader{
 		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
 			return []string{"products/widget.md"}, nil
@@ -211,7 +271,10 @@ func TestAdmitResources_NewProduct_Created(t *testing.T) {
 		},
 	}
 
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git, func(deps *cataloggrpc.ServerDeps) {
+		deps.Clock = apiruntime.NewFixedClock(now)
+		deps.IDGenerator = apiruntime.NewSequenceIDGenerator(uid)
+	})
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -223,9 +286,18 @@ func TestAdmitResources_NewProduct_Created(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "widget", p.Name)
 	assert.Equal(t, int64(1), p.Generation)
-	assert.NotEmpty(t, p.UID)
-	assert.False(t, p.CreationTimestamp.IsZero())
-	assert.Contains(t, p.Revision, "main@sha1:")
+	assert.Equal(t, uid, p.UID)
+	assert.Equal(t, now, p.CreationTimestamp)
+	assert.Equal(t, "main@sha1:"+strings.Repeat("a", 40), p.Revision)
+
+	var status catalog.ProductStatus
+	require.NoError(t, json.Unmarshal(p.Status, &status))
+	assert.Equal(t, int64(1), status.ObservedGeneration)
+	assert.Equal(t, p.Revision, status.LastAppliedRevision)
+	require.Len(t, status.Conditions, 1)
+	assert.Equal(t, catalog.ConditionAdmissionAccepted, status.Conditions[0].Type)
+	assert.Equal(t, catalog.ConditionTrue, status.Conditions[0].Status)
+	assert.Equal(t, now, status.Conditions[0].LastTransitionTime)
 }
 
 // T020b: product already exists → UpdateProduct called; uid and creationTimestamp preserved,
@@ -241,7 +313,7 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 		},
 	}
 
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 
 	// First admission — creates the product
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
@@ -287,7 +359,7 @@ func TestAdmitResources_TwoProducts_BothStored(t *testing.T) {
 		},
 	}
 
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -317,7 +389,7 @@ func TestAdmitResources_OneParseFailure_OtherStored(t *testing.T) {
 		},
 	}
 
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -344,7 +416,7 @@ func TestAdmitResources_AdmissionAcceptedConditionSet(t *testing.T) {
 		},
 	}
 
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -392,7 +464,7 @@ A category for electronic products.
 `
 
 func TestValidateResources_CategoryTaxonomy_Accepted(t *testing.T) {
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
@@ -414,7 +486,7 @@ metadata:
 spec: {}
 ---
 `
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
@@ -437,7 +509,7 @@ spec:
   title: Electronics
 ---
 `
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
@@ -463,7 +535,7 @@ status:
   phase: ready
 ---
 `
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
@@ -486,7 +558,7 @@ spec:
   title: Foo
 ---
 `
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
@@ -500,7 +572,7 @@ spec:
 }
 
 func TestValidateResources_ProductAndCategoryTaxonomy_BothValidated(t *testing.T) {
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs: []*catalogv1.ResourceBlob{
@@ -543,7 +615,7 @@ func TestAdmitResources_CategoryTaxonomy_Created(t *testing.T) {
 		},
 	}
 
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -570,7 +642,7 @@ func TestAdmitResources_CategoryTaxonomy_Updated(t *testing.T) {
 		},
 	}
 
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 
 	// First admission
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
@@ -610,7 +682,7 @@ func TestAdmitResources_CategoryTaxonomy_AdmissionAcceptedCondition(t *testing.T
 		},
 	}
 
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -649,7 +721,7 @@ func TestAdmitResources_CategoryTaxonomy_RootAncestorPath(t *testing.T) {
 		},
 	}
 
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -697,7 +769,7 @@ func TestAdmitResources_IntraPushCycle_BothStoredWithAcyclicFalse(t *testing.T) 
 		},
 	}
 
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -746,7 +818,7 @@ func TestAdmitResources_ValidChain_BothStoredWithAcyclicTrue(t *testing.T) {
 		},
 	}
 
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -794,7 +866,7 @@ func TestAdmitResources_RootCategory_AncestorPathEqualsName(t *testing.T) {
 			return makeCategoryTaxonomy("electronics"), nil
 		},
 	}
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -819,7 +891,7 @@ func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T
 			return makeCategoryTaxonomy("electronics"), nil
 		},
 	}
-	srv := cataloggrpc.NewServerForTest(memStore, git1)
+	srv := newCatalogServer(t, memStore, git1)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -836,7 +908,7 @@ func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T
 			return makeCategoryTaxonomyWithParent("computers", "electronics"), nil
 		},
 	}
-	srv2 := cataloggrpc.NewServerForTest(memStore, git2)
+	srv2 := newCatalogServer(t, memStore, git2)
 	_, err = srv2.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("b", 40),
@@ -864,7 +936,7 @@ func TestAdmitResources_CoCreation_ParentAndChildInSamePush(t *testing.T) {
 			return files[path], nil
 		},
 	}
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -887,7 +959,7 @@ func TestAdmitResources_ChildWithMissingParent_TentativeRoot_ParentResolvedFalse
 			return makeCategoryTaxonomyWithParent("computers", "electronics"), nil
 		},
 	}
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -937,7 +1009,7 @@ func TestAdmitResources_DeepCoCreation_GrandchildAncestorPath(t *testing.T) {
 			return files[path], nil
 		},
 	}
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -971,7 +1043,7 @@ func TestAdmitResources_TailCycle_AllMembersMarkedAcyclicFalse(t *testing.T) {
 			return files[path], nil
 		},
 	}
-	srv := cataloggrpc.NewServerForTest(memStore, git)
+	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    strings.Repeat("a", 40),
@@ -1024,7 +1096,7 @@ spec:
 
 body
 `
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs:        []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}},
@@ -1049,7 +1121,7 @@ spec:
 ---
 body
 `
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs:        []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}},
@@ -1072,7 +1144,7 @@ spec:
 ---
 body
 `
-	srv := cataloggrpc.NewServer(nil, nil)
+	srv := newCatalogServer(t, nil, nil)
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Blobs:        []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(blob)}},
@@ -1111,7 +1183,7 @@ body
 			return []byte(blob), nil
 		},
 	}
-	srv := cataloggrpc.NewServerForTest(store, git)
+	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    "abc123",
@@ -1165,7 +1237,7 @@ body
 			return []byte(blob), nil
 		},
 	}
-	srv := cataloggrpc.NewServerForTest(store, git)
+	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    "abc123",
@@ -1203,7 +1275,7 @@ body
 			return []byte(blob), nil
 		},
 	}
-	srv := cataloggrpc.NewServerForTest(store, git)
+	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
 		CommitSha:    "abc123",

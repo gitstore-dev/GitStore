@@ -15,9 +15,9 @@ import (
 
 var Log *zap.Logger
 
-// InitLogger initializes the global structured logger with the given log level and format.
+// InitLogger initializes and returns a structured logger with the given log level and format.
 // If logLevel is empty or invalid, INFO level is used.
-func InitLogger(logLevel, logFormat string) error {
+func InitLogger(logLevel, logFormat string) (*zap.Logger, error) {
 	config := zap.NewProductionConfig()
 
 	level, err := zapcore.ParseLevel(logLevel)
@@ -32,7 +32,7 @@ func InitLogger(logLevel, logFormat string) error {
 	case "text":
 		config.Encoding = "console"
 	default:
-		return fmt.Errorf("invalid log format %q; valid values: json, text", logFormat)
+		return nil, fmt.Errorf("invalid log format %q; valid values: json, text", logFormat)
 	}
 
 	config.EncoderConfig.TimeKey = "timestamp"
@@ -40,11 +40,11 @@ func InitLogger(logLevel, logFormat string) error {
 
 	logger, err := config.Build()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	Log = logger
-	return nil
+	return logger, nil
 }
 
 // Sync flushes any buffered log entries

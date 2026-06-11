@@ -125,7 +125,9 @@ func newGlobalIDTestResolver(t *testing.T) (datastore.Datastore, *Resolver) {
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
-	return store, NewResolver(store, nil, zap.NewNop())
+	r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop()})
+	require.NoError(t, err)
+	return store, r
 }
 
 func seedGlobalIDTestData(t *testing.T, ctx context.Context, store datastore.Datastore) {

@@ -10,15 +10,20 @@ import (
 )
 
 func TestInitLoggerSupportsJSONFormat(t *testing.T) {
-	require.NoError(t, InitLogger("info", "json"))
+	log, err := InitLogger("info", "json")
+	require.NoError(t, err)
+	require.NotNil(t, log)
 	Sync()
 }
 
 func TestInitLoggerSupportsTextFormat(t *testing.T) {
-	require.NoError(t, InitLogger("debug", "text"))
+	log, err := InitLogger("debug", "text")
+	require.NoError(t, err)
+	require.NotNil(t, log)
 	Sync()
 }
 
 func TestInitLoggerRejectsInvalidFormat(t *testing.T) {
-	require.ErrorContains(t, InitLogger("info", "xml"), "invalid log format")
+	_, err := InitLogger("info", "xml")
+	require.ErrorContains(t, err, "invalid log format")
 }
