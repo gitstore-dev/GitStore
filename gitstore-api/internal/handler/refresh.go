@@ -9,21 +9,38 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gitstore-dev/gitstore/api/internal/middleware"
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"go.uber.org/zap"
 )
 
 // RefreshTokenHandler handles token refresh requests
 type RefreshTokenHandler struct {
-	authMiddleware *middleware.AuthMiddleware
-	logger         *zap.Logger
+	auth   AuthService
+	logger *zap.Logger
+	clock  apiruntime.Clock
+}
+
+// RefreshTokenHandlerDeps contains dependencies for RefreshTokenHandler.
+type RefreshTokenHandlerDeps struct {
+	Auth   AuthService
+	Logger *zap.Logger
+	Clock  apiruntime.Clock
 }
 
 // NewRefreshTokenHandler creates a new refresh token handler
-func NewRefreshTokenHandler(authMiddleware *middleware.AuthMiddleware, logger *zap.Logger) *RefreshTokenHandler {
+func NewRefreshTokenHandler(deps RefreshTokenHandlerDeps) *RefreshTokenHandler {
+	logger := deps.Logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	clock := deps.Clock
+	if clock == nil {
+		clock = apiruntime.SystemClock{}
+	}
 	return &RefreshTokenHandler{
-		authMiddleware: authMiddleware,
-		logger:         logger,
+		auth:   deps.Auth,
+		logger: logger,
+		clock:  clock,
 	}
 }
 
@@ -56,7 +73,12 @@ func (h *RefreshTokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Refresh the token
-	newToken, err := h.authMiddleware.RefreshSessionToken(token)
+	if h.auth == nil {
+		h.logger.Debug("auth service not configured")
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	newToken, err := h.auth.RefreshSessionToken(token)
 	if err != nil {
 		h.logger.Debug("Failed to refresh token",
 			zap.Error(err),
@@ -65,8 +87,7 @@ func (h *RefreshTokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Calculate expiry time (24 hours from now)
-	expiresAt := time.Now().Add(24 * time.Hour)
+	expiresAt := h.clock.Now().Add(h.auth.GetTokenDuration())
 
 	// Return response
 	response := RefreshTokenResponse{

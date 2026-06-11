@@ -21,7 +21,8 @@ func newCategoryResolverEnv(t *testing.T) (*queryResolver, datastore.Datastore) 
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
-	r := NewResolver(store, nil, zap.NewNop())
+	r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop()})
+	require.NoError(t, err)
 	return &queryResolver{Resolver: r}, store
 }
 

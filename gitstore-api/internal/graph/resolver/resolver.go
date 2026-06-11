@@ -6,10 +6,15 @@
 package resolver
 
 import (
+	"errors"
+
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"go.uber.org/zap"
 )
+
+var errMissingLogger = errors.New("resolver: logger is required")
 
 // Resolver is the root GraphQL resolver
 type Resolver struct {
@@ -18,19 +23,39 @@ type Resolver struct {
 	service        *Service
 	authMiddleware *middleware.AuthMiddleware
 	storageDataDir string // data_dir used to build storagePath in responses; defaults to "/data"
+	clock          apiruntime.Clock
+}
+
+// ResolverDeps contains dependencies for the root GraphQL resolver.
+type ResolverDeps struct {
+	Store       datastore.Datastore
+	GitWriter   GitWriter
+	Logger      *zap.Logger
+	Clock       apiruntime.Clock
+	IDGenerator apiruntime.IDGenerator
 }
 
 // NewResolver creates a new GraphQL resolver.
-// writer is the GitWriter backed by the gRPC client; pass nil to disable writes.
-func NewResolver(store datastore.Datastore, writer GitWriter, logger *zap.Logger) *Resolver {
-	SetConverterLogger(logger)
-	svc := NewServiceWithWriter(store, writer, logger)
+func NewResolver(deps ResolverDeps) (*Resolver, error) {
+	if deps.Logger == nil {
+		return nil, errMissingLogger
+	}
+	SetConverterLogger(deps.Logger)
+	svc, err := NewService(ServiceDeps(deps))
+	if err != nil {
+		return nil, err
+	}
+	clock := deps.Clock
+	if clock == nil {
+		clock = apiruntime.SystemClock{}
+	}
 	return &Resolver{
-		logger:         logger,
-		store:          store,
+		logger:         deps.Logger,
+		store:          deps.Store,
 		service:        svc,
 		storageDataDir: "/data",
-	}
+		clock:          clock,
+	}, nil
 }
 
 // WithStorageDataDir sets the data directory for deriving storage paths.

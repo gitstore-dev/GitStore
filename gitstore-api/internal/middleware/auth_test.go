@@ -17,7 +17,13 @@ func newTestAuthMiddleware(t *testing.T) *AuthMiddleware {
 	t.Helper()
 	hash, err := HashPassword("admin123")
 	require.NoError(t, err)
-	am, err := NewAuthMiddleware("admin", hash, "dev-secret-change-in-production", "24h", "gitstore")
+	am, err := NewAuthMiddleware(AuthDeps{
+		AdminUsername:     "admin",
+		AdminPasswordHash: hash,
+		JWTSecret:         "dev-secret-change-in-production",
+		JWTDuration:       "24h",
+		JWTIssuer:         "gitstore",
+	})
 	require.NoError(t, err)
 	return am
 }
@@ -26,7 +32,13 @@ func TestNewAuthMiddleware(t *testing.T) {
 	t.Run("should create with provided credentials", func(t *testing.T) {
 		hash, err := HashPassword("testpass123")
 		require.NoError(t, err)
-		am, err := NewAuthMiddleware("admin", hash, "dev-secret-change-in-production", "24h", "gitstore")
+		am, err := NewAuthMiddleware(AuthDeps{
+			AdminUsername:     "admin",
+			AdminPasswordHash: hash,
+			JWTSecret:         "dev-secret-change-in-production",
+			JWTDuration:       "24h",
+			JWTIssuer:         "gitstore",
+		})
 		require.NoError(t, err)
 		require.NotNil(t, am)
 		assert.Equal(t, "admin", am.adminUsername)
@@ -36,10 +48,38 @@ func TestNewAuthMiddleware(t *testing.T) {
 	t.Run("should use injected credentials", func(t *testing.T) {
 		hash, err := HashPassword("testpass123")
 		require.NoError(t, err)
-		am, err := NewAuthMiddleware("testadmin", hash, "dev-secret-change-in-production", "24h", "gitstore")
+		am, err := NewAuthMiddleware(AuthDeps{
+			AdminUsername:     "testadmin",
+			AdminPasswordHash: hash,
+			JWTSecret:         "dev-secret-change-in-production",
+			JWTDuration:       "24h",
+			JWTIssuer:         "gitstore",
+		})
 		require.NoError(t, err)
 		assert.Equal(t, "testadmin", am.adminUsername)
 		assert.Equal(t, hash, am.adminPasswordHash)
+	})
+
+	t.Run("should reject missing admin username", func(t *testing.T) {
+		hash, err := HashPassword("testpass123")
+		require.NoError(t, err)
+		_, err = NewAuthMiddleware(AuthDeps{
+			AdminPasswordHash: hash,
+			JWTSecret:         "dev-secret-change-in-production",
+			JWTDuration:       "24h",
+			JWTIssuer:         "gitstore",
+		})
+		require.ErrorContains(t, err, "admin username is required")
+	})
+
+	t.Run("should reject missing admin password hash", func(t *testing.T) {
+		_, err := NewAuthMiddleware(AuthDeps{
+			AdminUsername: "admin",
+			JWTSecret:     "dev-secret-change-in-production",
+			JWTDuration:   "24h",
+			JWTIssuer:     "gitstore",
+		})
+		require.ErrorContains(t, err, "admin password hash is required")
 	})
 }
 
