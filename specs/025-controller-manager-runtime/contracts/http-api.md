@@ -2,6 +2,7 @@
 
 **Module**: `gitstore-controller-manager`  
 **Base path**: `/controller/v1`  
+**Default port**: `5001` (`GITSTORE_CONTROLLER__PORT`)  
 **Date**: 2026-06-11
 
 ---

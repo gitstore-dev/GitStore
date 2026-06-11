@@ -73,16 +73,16 @@ if err := mgr.Start(ctx); err != nil {
 
 ```bash
 # Human-readable health summary
-curl http://localhost:5000/health | jq .
+curl http://localhost:5001/health | jq .
 
 # Prometheus metrics
-curl http://localhost:5000/metrics
+curl http://localhost:5001/metrics
 
 # List poison items for Product kind
-curl http://localhost:5000/controller/v1/poison/Product | jq .
+curl http://localhost:5001/controller/v1/poison/Product | jq .
 
 # Re-queue a specific poison item
-curl -X POST http://localhost:5000/controller/v1/poison/Product/gitstore-test/widget-pro/requeue
+curl -X POST http://localhost:5001/controller/v1/poison/Product/gitstore-test/widget-pro/requeue
 ```
 
 ---
@@ -93,8 +93,8 @@ The controller manager reads configuration from environment variables (consisten
 
 | Variable | Default | Description |
 |---|---|---|
-| `GITSTORE_CONTROLLER__HTTP_ADDR` | `:5000` | Health/metrics HTTP listen address |
-| `GITSTORE_CONTROLLER__API_ADDR` | `localhost:4000` | `gitstore-api` GraphQL address (for informer source) |
+| `GITSTORE_CONTROLLER__PORT` | `5001` | Health/metrics HTTP listen port |
+| `GITSTORE_CONTROLLER__API__URI` | `http://localhost:4000/graphql` | `gitstore-api` GraphQL URI (for informer source) |
 | `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS` | `5` | Global default retry limit |
 | `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | `5m` | Global default stall threshold |
 

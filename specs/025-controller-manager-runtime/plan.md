@@ -16,7 +16,7 @@ Define and implement the controller manager runtime in the `gitstore-controller-
 **Target Platform**: Linux server (same as `gitstore-api`)  
 **Project Type**: Internal service binary (separate module from `gitstore-api`)  
 **Performance Goals**: Work item dispatched within 100ms under non-saturated queue (SC-001); health surface reflects queue state within 5s (SC-004)  
-**Constraints**: No `k8s.io/*` dependencies; no persistence layer in this spec; multi-node distribution out of scope  
+**Constraints**: No `k8s.io/*` dependencies; no persistence layer in this spec; multi-node distribution out of scope; port 5001 (`GITSTORE_CONTROLLER__PORT`); upstream API URI via `GITSTORE_CONTROLLER__API__URI`  
 **Scale/Scope**: Single-process; handles all registered resource kinds for the controller manager
 
 ## Constitution Check
