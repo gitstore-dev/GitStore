@@ -15,6 +15,7 @@ import (
 // Requeuer is the subset of Manager that the poison handlers need.
 type Requeuer interface {
 	QuarantineStore(kind string) *retry.QuarantineStore
+	AllPoisonItems() []*retry.PoisonItem
 	Requeue(key types.WorkItemKey) error
 }
 
@@ -34,20 +35,23 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func ListPoisonHandler(mgr Requeuer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		kind := r.PathValue("kind")
+
 		if kind == "_all" {
-			kind = ""
+			items := mgr.AllPoisonItems()
+			if items == nil {
+				items = []*retry.PoisonItem{}
+			}
+			writeJSON(w, http.StatusOK, items)
+			return
 		}
 
 		qs := mgr.QuarantineStore(kind)
-		if qs == nil && kind != "" {
+		if qs == nil {
 			writeJSON(w, http.StatusNotFound, errorBody{Error: "kind not registered"})
 			return
 		}
 
-		var items []*retry.PoisonItem
-		if qs != nil {
-			items = qs.List(kind)
-		}
+		items := qs.List(kind)
 		if items == nil {
 			items = []*retry.PoisonItem{}
 		}

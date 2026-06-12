@@ -7,6 +7,7 @@ package manager
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
@@ -32,6 +33,9 @@ type kindState struct {
 	q          *queue.Queue
 	pool       *worker.Pool
 	quarantine *retry.QuarantineStore
+
+	mu          sync.Mutex
+	lastSuccess time.Time
 }
 
 // Manager supervises one controller (queue + pool + reconciler) per registered kind.
@@ -117,11 +121,16 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 		health.QueueDepth.WithLabelValues(kind).Set(float64(depth))
 		health.PoisonItemsTotal.WithLabelValues(kind).Set(float64(poison))
 
+		ks.mu.Lock()
+		lastSuccess := ks.lastSuccess
+		ks.mu.Unlock()
+		stalled := !lastSuccess.IsZero() && time.Since(lastSuccess) > ks.reg.StallThreshold
+
 		out[kind] = health.KindStat{
 			ActiveWorkers: active,
 			QueueDepth:    depth,
 			PoisonItems:   poison,
-			Stalled:       false,
+			Stalled:       stalled,
 		}
 	}
 	return out
@@ -135,6 +144,15 @@ func (m *Manager) QuarantineStore(kind string) *retry.QuarantineStore {
 		return nil
 	}
 	return ks.quarantine
+}
+
+// AllPoisonItems returns all quarantined items across every registered kind.
+func (m *Manager) AllPoisonItems() []*retry.PoisonItem {
+	var out []*retry.PoisonItem
+	for _, ks := range m.kinds {
+		out = append(out, ks.quarantine.List("")...)
+	}
+	return out
 }
 
 // Start begins the dispatch loop for all registered kinds.
@@ -200,11 +218,17 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 
 	switch res {
 	case retry.ResultOK:
+		ks.mu.Lock()
+		ks.lastSuccess = time.Now()
+		ks.mu.Unlock()
 		log.Debug("reconciled successfully", zap.Int("attempts", attempts))
 	case retry.ResultQuarantine:
 		log.Error("reconciler quarantined after exhausting retries",
 			zap.Int("attempts", attempts),
 		)
+		// Forget the key before quarantine so that the deferred Done does not
+		// re-enqueue it if another event arrived during the retry loop.
+		ks.q.Forget(key)
 		ks.quarantine.Put(&retry.PoisonItem{
 			Key:      key,
 			Attempts: attempts,

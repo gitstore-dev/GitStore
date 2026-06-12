@@ -132,6 +132,15 @@ func (q *Queue) ShuttingDown() bool {
 	return q.shutdown
 }
 
+// Forget removes key from the dirty set so that a subsequent Done call will
+// not re-enqueue it. Call this before quarantining an item to prevent the
+// deferred Done from bypassing the quarantine guarantee.
+func (q *Queue) Forget(key types.WorkItemKey) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	delete(q.dirty, key)
+}
+
 // RateLimitedEnqueue is a helper that respects a real rate limiter with context.
 func RateLimitedEnqueue(q *Queue, key types.WorkItemKey, timeout time.Duration) error {
 	ctx, cancel := contextWithTimeout(timeout)
