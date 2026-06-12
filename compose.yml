@@ -52,6 +52,25 @@ services:
       retries: 10
       start_period: 2s
 
+  controller-manager:
+    image: ghcr.io/gitstore-dev/controller-manager
+    build:
+      context: .
+      dockerfile: docker/controller-manager.Dockerfile
+    container_name: gitstore-controller-manager
+    ports:
+      - "5001:5001"
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      - GITSTORE_CONTROLLER__PORT=5001
+      - GITSTORE_CONTROLLER__API__URI=http://api:4000/graphql
+      - GITSTORE_LOG__LEVEL=info
+      - GITSTORE_LOG__FORMAT=json
+    networks:
+      - gitstore-network
+
 volumes:
   git-repo-data-root:
     driver: local

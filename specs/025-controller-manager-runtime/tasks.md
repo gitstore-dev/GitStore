@@ -19,11 +19,11 @@
 
 **Purpose**: Initialize `gitstore-controller-manager` module structure, dependencies, and CI/CD.
 
-- [ ] T001 Add 4 new dependencies to `gitstore-controller-manager/go.mod`: `golang.org/x/time v0.15.0`, `github.com/alitto/pond/v2 v2.7.1`, `github.com/cenkalti/backoff/v5 v5.0.3`, `github.com/prometheus/client_golang v1.23.2`
-- [ ] T002 [P] Create directory structure per plan.md: `gitstore-controller-manager/internal/{manager,queue,worker,retry,cache,health,api}/` and `gitstore-controller-manager/tests/{contract,integration}/`
-- [ ] T003 [P] Create `docker/controller-manager.Dockerfile` — multi-stage Go build matching `docker/api.Dockerfile` pattern; `EXPOSE 5001`; `ENV GITSTORE_CONTROLLER__PORT=5001`
-- [ ] T004 [P] Add `CONTROLLER_IMAGE` env var and `build-controller-manager-image` job to `.github/workflows/cd.yml` following the existing `build-api-image` job pattern; add job to `needs` list of `deploy-staging` and `deploy-production`
-- [ ] T005 [P] Add `make controller` target to root `Makefile` to run `gitstore-controller-manager` locally (matching `make api` pattern)
+- [x] T001 Add 4 new dependencies to `gitstore-controller-manager/go.mod`: `golang.org/x/time v0.15.0`, `github.com/alitto/pond/v2 v2.7.1`, `github.com/cenkalti/backoff/v5 v5.0.3`, `github.com/prometheus/client_golang v1.23.2`
+- [x] T002 [P] Create directory structure per plan.md: `gitstore-controller-manager/internal/{manager,queue,worker,retry,cache,health,api}/` and `gitstore-controller-manager/tests/{contract,integration}/`
+- [x] T003 [P] Create `docker/controller-manager.Dockerfile` — multi-stage Go build matching `docker/api.Dockerfile` pattern; `EXPOSE 5001`; `ENV GITSTORE_CONTROLLER__PORT=5001`
+- [x] T004 [P] Add `CONTROLLER_IMAGE` env var and `build-controller-manager-image` job to `.github/workflows/cd.yml` following the existing `build-api-image` job pattern; add job to `needs` list of `deploy-staging` and `deploy-production`
+- [x] T005 [P] Add `make controller` target to root `Makefile` to run `gitstore-controller-manager` locally (matching `make api` pattern)
 
 **Checkpoint**: Module structure exists, Dockerfile compiles, CD job wired.
 
@@ -35,10 +35,10 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T006 Define shared types in `gitstore-controller-manager/internal/manager/types.go`: `WorkItemKey`, `Result`, `Reconciler` interface, `ReconcilerRegistration` struct — exact shapes from `data-model.md`
-- [ ] T007 [P] Set up structured logging (`go.uber.org/zap`) in `gitstore-controller-manager/internal/manager/logger.go` — consistent with `gitstore-api` logger setup
-- [ ] T008 [P] Create `gitstore-controller-manager/internal/manager/errors.go`: define sentinel errors `ErrNotFound`, `ErrQueueShutdown`, `ErrKindNotRegistered`
-- [ ] T009 Implement config struct in `gitstore-controller-manager/internal/config/config.go`: `GITSTORE_CONTROLLER__PORT`, `GITSTORE_CONTROLLER__API__URI`, `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`, `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` — use `viper` consistent with `gitstore-api/internal/config`
+- [x] T006 Define shared types in `gitstore-controller-manager/internal/manager/types.go`: `WorkItemKey`, `Result`, `Reconciler` interface, `ReconcilerRegistration` struct — exact shapes from `data-model.md`
+- [x] T007 [P] Set up structured logging (`go.uber.org/zap`) in `gitstore-controller-manager/internal/manager/logger.go` — consistent with `gitstore-api` logger setup
+- [x] T008 [P] Create `gitstore-controller-manager/internal/manager/errors.go`: define sentinel errors `ErrNotFound`, `ErrQueueShutdown`, `ErrKindNotRegistered`
+- [x] T009 Implement config struct in `gitstore-controller-manager/internal/config/config.go`: `GITSTORE_CONTROLLER__PORT`, `GITSTORE_CONTROLLER__API__URI`, `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`, `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` — use `viper` consistent with `gitstore-api/internal/config`
 
 **Checkpoint**: Foundational types, interfaces, logging, and config compile; user story phases can now proceed.
 
@@ -52,18 +52,18 @@
 
 ### Tests for User Story 1 ⚠️ Write first — must FAIL before implementation
 
-- [ ] T010 [P] [US1] Write contract test in `gitstore-controller-manager/tests/contract/reconciler_contract_test.go`: verify `Reconciler` interface is callable with `WorkItemKey`; verify `Queue` interface dedup invariant (5 `Enqueue` calls → 1 `Dequeue`); verify `Done` re-enqueues dirty keys exactly once
-- [ ] T011 [P] [US1] Write integration test in `gitstore-controller-manager/tests/integration/manager_dispatch_test.go`: start manager, register no-op reconciler for `"Widget"`, enqueue key 5 times, assert handler called once; assert unregistered kind returns `ErrKindNotRegistered`
+- [x] T010 [P] [US1] Write contract test in `gitstore-controller-manager/tests/contract/reconciler_contract_test.go`: verify `Reconciler` interface is callable with `WorkItemKey`; verify `Queue` interface dedup invariant (5 `Enqueue` calls → 1 `Dequeue`); verify `Done` re-enqueues dirty keys exactly once
+- [x] T011 [P] [US1] Write integration test in `gitstore-controller-manager/tests/integration/manager_dispatch_test.go`: start manager, register no-op reconciler for `"Widget"`, enqueue key 5 times, assert handler called once; assert unregistered kind returns `ErrKindNotRegistered`
 
 ### Implementation for User Story 1
 
-- [ ] T012 [P] [US1] Implement `gitstore-controller-manager/internal/queue/queue.go`: typed generic dedup queue with `dirty`/`processing`/`queue` three-set pattern + `golang.org/x/time/rate` token-bucket admission; implements `Queue` interface from `data-model.md`
-- [ ] T013 [P] [US1] Implement `gitstore-controller-manager/internal/queue/queue_test.go`: unit tests for dedup semantics, rate limiting, `ShutDown` behaviour
-- [ ] T014 [P] [US1] Implement `gitstore-controller-manager/internal/worker/pool.go`: per-kind `pond/v2` pool wrapper; `Submit(fn)`, `Resize(n)`, `ActiveWorkers() int64`, `WaitingTasks() uint64`, `Stop()`
-- [ ] T015 [P] [US1] Implement `gitstore-controller-manager/internal/worker/pool_test.go`: unit tests for bounded concurrency, `Resize`, graceful stop
-- [ ] T016 [US1] Implement `gitstore-controller-manager/internal/manager/manager.go`: `Manager` struct with `Register(ReconcilerRegistration)`, `Start(ctx)`, `Stop()`, dispatch loop wiring queue → worker pool → reconciler; emit structured log on each dispatch
-- [ ] T017 [US1] Implement `gitstore-controller-manager/cmd/controller/main.go`: wire `Config`, `Manager`, HTTP server skeleton; graceful shutdown on `SIGTERM`/`SIGINT`
-- [ ] T018 [US1] Verify T010 and T011 tests pass
+- [x] T012 [P] [US1] Implement `gitstore-controller-manager/internal/queue/queue.go`: typed generic dedup queue with `dirty`/`processing`/`queue` three-set pattern + `golang.org/x/time/rate` token-bucket admission; implements `Queue` interface from `data-model.md`
+- [x] T013 [P] [US1] Implement `gitstore-controller-manager/internal/queue/queue_test.go`: unit tests for dedup semantics, rate limiting, `ShutDown` behaviour
+- [x] T014 [P] [US1] Implement `gitstore-controller-manager/internal/worker/pool.go`: per-kind `pond/v2` pool wrapper; `Submit(fn)`, `Resize(n)`, `ActiveWorkers() int64`, `WaitingTasks() uint64`, `Stop()`
+- [x] T015 [P] [US1] Implement `gitstore-controller-manager/internal/worker/pool_test.go`: unit tests for bounded concurrency, `Resize`, graceful stop
+- [x] T016 [US1] Implement `gitstore-controller-manager/internal/manager/manager.go`: `Manager` struct with `Register(ReconcilerRegistration)`, `Start(ctx)`, `Stop()`, dispatch loop wiring queue → worker pool → reconciler; emit structured log on each dispatch
+- [x] T017 [US1] Implement `gitstore-controller-manager/cmd/controller/main.go`: wire `Config`, `Manager`, HTTP server skeleton; graceful shutdown on `SIGTERM`/`SIGINT`
+- [x] T018 [US1] Verify T010 and T011 tests pass
 
 **Checkpoint**: `make controller` starts; register a reconciler, enqueue a key, observe dispatch in logs. US1 independently functional.
 
@@ -77,18 +77,18 @@
 
 ### Tests for User Story 2 ⚠️ Write first — must FAIL before implementation
 
-- [ ] T019 [P] [US2] Write contract test in `gitstore-controller-manager/tests/contract/quarantine_contract_test.go`: verify `QuarantineStore` interface — `Put`, `Get`, `Delete`, `List`, `Len`; verify `RetryRecord` and `PoisonItem` structs match `data-model.md`
-- [ ] T020 [P] [US2] Write integration test in `gitstore-controller-manager/tests/integration/retry_quarantine_test.go`: register always-failing reconciler; assert item quarantined after `MaxAttempts`; assert retry signals emitted (FR-004); assert other items unaffected (SC-002); assert requeue resets attempt count
+- [x] T019 [P] [US2] Write contract test in `gitstore-controller-manager/tests/contract/quarantine_contract_test.go`: verify `QuarantineStore` interface — `Put`, `Get`, `Delete`, `List`, `Len`; verify `RetryRecord` and `PoisonItem` structs match `data-model.md`
+- [x] T020 [P] [US2] Write integration test in `gitstore-controller-manager/tests/integration/retry_quarantine_test.go`: register always-failing reconciler; assert item quarantined after `MaxAttempts`; assert retry signals emitted (FR-004); assert other items unaffected (SC-002); assert requeue resets attempt count
 
 ### Implementation for User Story 2
 
-- [ ] T021 [P] [US2] Implement `gitstore-controller-manager/internal/retry/retry.go`: `cenkalti/backoff/v5` retry loop; `RetryNotify` emits structured log + observable signal per attempt; `backoff.Permanent(err)` short-circuits to quarantine; populates `RetryRecord`
-- [ ] T022 [P] [US2] Implement `gitstore-controller-manager/internal/retry/quarantine.go`: `QuarantineStore` — `sync.RWMutex`-protected `map[WorkItemKey]*PoisonItem`; thread-safe `Put/Get/Delete/List/Len`
-- [ ] T023 [P] [US2] Implement `gitstore-controller-manager/internal/retry/retry_test.go`: unit tests for backoff delays, `Permanent` short-circuit, quarantine after max attempts
-- [ ] T024 [US2] Wire retry engine into `gitstore-controller-manager/internal/manager/manager.go` dispatch loop: wrap reconciler call with retry; on quarantine move item to `QuarantineStore`; emit `gitstore_controller_reconcile_total{result="poison"}` counter
-- [ ] T025 [P] [US2] Implement `gitstore-controller-manager/internal/api/poison.go`: `GET /controller/v1/poison/{kind}` (list quarantined items) and `POST /controller/v1/poison/{kind}/{namespace}/{name}/requeue` (re-queue with reset budget); JSON error format from `contracts/http-api.md`
-- [ ] T026 [US2] Register poison HTTP handlers in `gitstore-controller-manager/cmd/controller/main.go`
-- [ ] T027 [US2] Verify T019 and T020 tests pass
+- [x] T021 [P] [US2] Implement `gitstore-controller-manager/internal/retry/retry.go`: `cenkalti/backoff/v5` retry loop; `RetryNotify` emits structured log + observable signal per attempt; `backoff.Permanent(err)` short-circuits to quarantine; populates `RetryRecord`
+- [x] T022 [P] [US2] Implement `gitstore-controller-manager/internal/retry/quarantine.go`: `QuarantineStore` — `sync.RWMutex`-protected `map[WorkItemKey]*PoisonItem`; thread-safe `Put/Get/Delete/List/Len`
+- [x] T023 [P] [US2] Implement `gitstore-controller-manager/internal/retry/retry_test.go`: unit tests for backoff delays, `Permanent` short-circuit, quarantine after max attempts
+- [x] T024 [US2] Wire retry engine into `gitstore-controller-manager/internal/manager/manager.go` dispatch loop: wrap reconciler call with retry; on quarantine move item to `QuarantineStore`; emit `gitstore_controller_reconcile_total{result="poison"}` counter
+- [x] T025 [P] [US2] Implement `gitstore-controller-manager/internal/api/poison.go`: `GET /controller/v1/poison/{kind}` (list quarantined items) and `POST /controller/v1/poison/{kind}/{namespace}/{name}/requeue` (re-queue with reset budget); JSON error format from `contracts/http-api.md`
+- [x] T026 [US2] Register poison HTTP handlers in `gitstore-controller-manager/cmd/controller/main.go`
+- [x] T027 [US2] Verify T019 and T020 tests pass
 
 **Checkpoint**: Inject a broken reconciler; confirm quarantine after retries; confirm `curl .../requeue` re-processes item. US2 independently functional.
 
@@ -102,15 +102,15 @@
 
 ### Tests for User Story 3 ⚠️ Write first — must FAIL before implementation
 
-- [ ] T028 [P] [US3] Write contract test in `gitstore-controller-manager/tests/contract/cache_contract_test.go`: verify `InformerCache[T]` interface — `Set/Get/Delete/List/HasSynced`; verify event handler callbacks fire after `Set`/`Delete`; verify `HasSynced()` returns false until explicitly set
-- [ ] T029 [P] [US3] Write integration test in `gitstore-controller-manager/tests/integration/level_triggered_test.go`: populate cache; enqueue key; assert reconciler reads from cache; update cache; enqueue same key; assert reconciler reads updated state; assert no API call made when cache hits
+- [x] T028 [P] [US3] Write contract test in `gitstore-controller-manager/tests/contract/cache_contract_test.go`: verify `InformerCache[T]` interface — `Set/Get/Delete/List/HasSynced`; verify event handler callbacks fire after `Set`/`Delete`; verify `HasSynced()` returns false until explicitly set
+- [x] T029 [P] [US3] Write integration test in `gitstore-controller-manager/tests/integration/level_triggered_test.go`: populate cache; enqueue key; assert reconciler reads from cache; update cache; enqueue same key; assert reconciler reads updated state; assert no API call made when cache hits
 
 ### Implementation for User Story 3
 
-- [ ] T030 [P] [US3] Implement `gitstore-controller-manager/internal/cache/cache.go`: generic `InformerCache[T]` with `sync.RWMutex` map; `AddEventHandler(EventHandler[T])`; `HasSynced()` flag; callbacks fire after cache mutation
-- [ ] T031 [P] [US3] Implement `gitstore-controller-manager/internal/cache/cache_test.go`: unit tests for concurrent `Set/Get`, event handler invocation order, `HasSynced` lifecycle
-- [ ] T032 [US3] Expose `Cache(kind string) InformerCache[T]` on `Manager` in `gitstore-controller-manager/internal/manager/manager.go`; wire `HasSynced` check before dispatch loop starts (reconcile loop blocked until cache synced)
-- [ ] T033 [US3] Verify T028 and T029 tests pass
+- [x] T030 [P] [US3] Implement `gitstore-controller-manager/internal/cache/cache.go`: generic `InformerCache[T]` with `sync.RWMutex` map; `AddEventHandler(EventHandler[T])`; `HasSynced()` flag; callbacks fire after cache mutation
+- [x] T031 [P] [US3] Implement `gitstore-controller-manager/internal/cache/cache_test.go`: unit tests for concurrent `Set/Get`, event handler invocation order, `HasSynced` lifecycle
+- [x] T032 [US3] Expose `Cache(kind string) InformerCache[T]` on `Manager` in `gitstore-controller-manager/internal/manager/manager.go`; wire `HasSynced` check before dispatch loop starts (reconcile loop blocked until cache synced)
+- [x] T033 [US3] Verify T028 and T029 tests pass
 
 **Checkpoint**: Reconciler reads from cache; replay produces correct state. US3 independently functional.
 
@@ -124,15 +124,15 @@
 
 ### Tests for User Story 4 ⚠️ Write first — must FAIL before implementation
 
-- [ ] T034 [P] [US4] Write integration test in `gitstore-controller-manager/tests/integration/health_test.go`: start manager; query `/health`; assert JSON fields match `contracts/http-api.md`; query `/metrics`; assert all `gitstore_controller_*` gauge names present; simulate stall; assert `stalled: true`
+- [x] T034 [P] [US4] Write integration test in `gitstore-controller-manager/tests/integration/health_test.go`: start manager; query `/health`; assert JSON fields match `contracts/http-api.md`; query `/metrics`; assert all `gitstore_controller_*` gauge names present; simulate stall; assert `stalled: true`
 
 ### Implementation for User Story 4
 
-- [ ] T035 [P] [US4] Implement `gitstore-controller-manager/internal/health/metrics.go`: register all 6 Prometheus `GaugeVec`/`CounterVec` metrics from `data-model.md` (`active_workers`, `queue_depth`, `poison_items_total`, `last_reconcile_timestamp`, `stalled_workers`, `reconcile_total{result}`)
-- [ ] T036 [P] [US4] Implement `gitstore-controller-manager/internal/health/stall.go`: background goroutine per kind; compares `time.Since(lastReconcile)` against `StallThreshold`; sets `stalled_workers{kind}` gauge; ticks at `StallThreshold/2`
-- [ ] T037 [P] [US4] Implement `gitstore-controller-manager/internal/health/handler.go`: `GET /health` — JSON response per `contracts/http-api.md`; aggregates per-kind metrics from Prometheus collectors; top-level `status` is `"degraded"` if any kind stalled or has poison items
-- [ ] T038 [US4] Register `/health` and `/metrics` endpoints in `gitstore-controller-manager/cmd/controller/main.go`; wire stall detector goroutines on `Start()`; update per-kind gauges from pool metrics on each reconcile completion
-- [ ] T039 [US4] Verify T034 test passes
+- [x] T035 [P] [US4] Implement `gitstore-controller-manager/internal/health/metrics.go`: register all 6 Prometheus `GaugeVec`/`CounterVec` metrics from `data-model.md` (`active_workers`, `queue_depth`, `poison_items_total`, `last_reconcile_timestamp`, `stalled_workers`, `reconcile_total{result}`)
+- [x] T036 [P] [US4] Implement `gitstore-controller-manager/internal/health/stall.go`: background goroutine per kind; compares `time.Since(lastReconcile)` against `StallThreshold`; sets `stalled_workers{kind}` gauge; ticks at `StallThreshold/2`
+- [x] T037 [P] [US4] Implement `gitstore-controller-manager/internal/health/handler.go`: `GET /health` — JSON response per `contracts/http-api.md`; aggregates per-kind metrics from Prometheus collectors; top-level `status` is `"degraded"` if any kind stalled or has poison items
+- [x] T038 [US4] Register `/health` and `/metrics` endpoints in `gitstore-controller-manager/cmd/controller/main.go`; wire stall detector goroutines on `Start()`; update per-kind gauges from pool metrics on each reconcile completion
+- [x] T039 [US4] Verify T034 test passes
 
 **Checkpoint**: `curl localhost:5001/health` returns per-kind JSON. `curl localhost:5001/metrics` returns Prometheus scrape. US4 independently functional.
 
@@ -142,11 +142,11 @@
 
 **Purpose**: Integration wiring, documentation, and operational readiness.
 
-- [ ] T040 [P] Update `AGENTS.md` (`Active Technologies` and `Commands` sections): add `gitstore-controller-manager` module, 4 new dependencies, `make controller` command, port 5001, config var naming conventions
-- [ ] T041 [P] Update `compose.yml`: add `controller-manager` service entry with `GITSTORE_CONTROLLER__PORT=5001`, `GITSTORE_CONTROLLER__API__URI=http://api:4000/graphql`; expose port 5001; add to `deploy-staging`/`deploy-production` needs in `cd.yml`
-- [ ] T042 [P] Add `gitstore-controller-manager` to root `Makefile` `build`, `test`, `lint`, and `pr-ready` aggregate targets
-- [ ] T043 [P] Write `gitstore-controller-manager/.env.example` with all config variables and comments (matching `gitstore-api/.env.example` style)
-- [ ] T044 Run `make pr-ready` and fix any lint/license/test failures
+- [x] T040 [P] Update `AGENTS.md` (`Active Technologies` and `Commands` sections): add `gitstore-controller-manager` module, 4 new dependencies, `make controller` command, port 5001, config var naming conventions
+- [x] T041 [P] Update `compose.yml`: add `controller-manager` service entry with `GITSTORE_CONTROLLER__PORT=5001`, `GITSTORE_CONTROLLER__API__URI=http://api:4000/graphql`; expose port 5001; add to `deploy-staging`/`deploy-production` needs in `cd.yml`
+- [x] T042 [P] Add `gitstore-controller-manager` to root `Makefile` `build`, `test`, `lint`, and `pr-ready` aggregate targets
+- [x] T043 [P] Write `gitstore-controller-manager/.env.example` with all config variables and comments (matching `gitstore-api/.env.example` style)
+- [x] T044 Run `make pr-ready` and fix any lint/license/test failures
 
 **Checkpoint**: `make pr-ready` passes. All 4 user stories functional end-to-end.
 

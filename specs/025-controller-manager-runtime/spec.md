@@ -2,7 +2,7 @@
 
 **Feature Branch**: `025-controller-manager-runtime`  
 **Created**: 2026-06-11  
-**Status**: Draft  
+**Status**: Closed  
 **Input**: User description: "Starting from issue #165 we build the infrastructure for controllers. Traverse the dependency graph and build a memory of related specs. This is the first one"
 
 ## Clarifications
