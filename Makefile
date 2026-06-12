@@ -31,7 +31,7 @@ DEFAULT_BRANCH ?= main
 export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CACHE
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
-.PHONY: help git api dev compose scylla compose-scylla ps logs stop down
+.PHONY: help git api controller dev compose scylla compose-scylla ps logs stop down
 .PHONY: build test lint license-check pr-ready
 .PHONY: bootstrap bootstrap-token bootstrap-namespace bootstrap-repository git-clean-data
 .PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools
@@ -52,6 +52,9 @@ help: ## Show available targets and common variables.
 git: ## Run gitstore-git-service locally in the foreground.
 	@mkdir -p "$(GIT_DATA_DIR)"
 	@cd "$(GIT_SERVICE_DIR)" && GITSTORE_GIT__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service
+
+controller: ## Run gitstore-controller-manager locally in the foreground.
+	@cd "$(CONTROLLER_MANAGER_DIR)" && go run ./cmd/controller
 
 api: ## Run gitstore-api locally in the foreground.
 	@if [ ! -f "$(API_ENV_FILE)" ] && { [ -z "$${GITSTORE_AUTH__ADMIN__USERNAME:-}" ] || [ -z "$${GITSTORE_AUTH__ADMIN__PASSWORD_HASH:-}" ] || [ -z "$${GITSTORE_AUTH__JWT__SECRET:-}" ]; }; then \
@@ -131,7 +134,7 @@ build: ## Build Rust and Go services.
 test: ## Run Rust and Go test suites.
 	@cd "$(GIT_SERVICE_DIR)" && cargo test --verbose
 	@cd "$(API_DIR)" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-	@cd "$(CONTROLLER_MANAGER_DIR)" && go test -count=1 -v ./...
+	@cd "$(CONTROLLER_MANAGER_DIR)" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
 lint: ## Run Rust formatting/clippy and Go formatting/vet/staticcheck.
 	@cd "$(GIT_SERVICE_DIR)" && cargo fmt --all -- --check

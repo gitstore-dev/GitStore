@@ -6,13 +6,15 @@ name: CI Integration
 
 on:
   push:
-    branches: [ main, 'feature/**', '[0-9]+-*' ]
+    branches: [ main ]
     paths:
       - 'gitstore-api/**'
       - 'gitstore-git-service/**'
+      - 'gitstore-controller-manager/**'
       - 'shared/proto/**'
       - 'docker/git-service.Dockerfile'
       - 'docker/api.Dockerfile'
+      - 'docker/controller-manager.Dockerfile'
       - 'compose.yml'
       - 'compose.scylla.yml'
       - '.github/workflows/ci-integration.yml'
@@ -21,9 +23,11 @@ on:
     paths:
       - 'gitstore-api/**'
       - 'gitstore-git-service/**'
+      - 'gitstore-controller-manager/**'
       - 'shared/proto/**'
       - 'docker/git-service.Dockerfile'
       - 'docker/api.Dockerfile'
+      - 'docker/controller-manager.Dockerfile'
       - 'compose.yml'
       - 'compose.scylla.yml'
       - '.github/workflows/ci-integration.yml'
@@ -252,3 +256,22 @@ jobs:
     - name: Run gRPC contract tests
       working-directory: ./gitstore-api
       run: go test -tags grpc -v -timeout 5m ./tests/contract/grpc/...
+
+  controller-manager-contract-test:
+    name: Controller Manager Contract Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.x'
+        cache-dependency-path: gitstore-controller-manager/go.sum
+
+    - name: Run controller-manager contract tests
+      working-directory: ./gitstore-controller-manager
+      run: go test -v -race -timeout 60s ./tests/contract/...

@@ -16,7 +16,7 @@ auto_commit:
     enabled: false
     message: "[Spec Kit] Save progress before clarification"
   before_plan:
-    enabled: false
+    enabled: true
     message: "[Spec Kit] Save progress before planning"
   before_tasks:
     enabled: false
