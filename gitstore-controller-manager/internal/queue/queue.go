@@ -9,6 +9,7 @@ package queue
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"golang.org/x/time/rate"
@@ -147,4 +148,14 @@ func (q *Queue) Forget(key types.WorkItemKey) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	delete(q.dirty, key)
+}
+
+// RateLimitedEnqueue waits up to timeout for the rate limiter then enqueues key.
+func RateLimitedEnqueue(q *Queue, key types.WorkItemKey, timeout time.Duration) error {
+	ctx, cancel := contextWithTimeout(timeout)
+	defer cancel()
+	if err := q.limiter.Wait(ctx); err != nil {
+		return err
+	}
+	return q.Enqueue(key)
 }
