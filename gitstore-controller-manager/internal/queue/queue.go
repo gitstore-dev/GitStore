@@ -9,7 +9,6 @@ package queue
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"golang.org/x/time/rate"
@@ -27,6 +26,9 @@ type Queue struct {
 	processing map[types.WorkItemKey]struct{}
 	shutdown   bool
 	limiter    *rate.Limiter
+	// stopCtx is cancelled by ShutDown so rate-limiter waits can unblock.
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
 }
 
 // New creates a Queue with the given capacity and optional rate limit.
@@ -38,10 +40,13 @@ func New(burst int, ratePerSec float64) *Queue {
 	} else {
 		lim = rate.NewLimiter(rate.Inf, burst)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	q := &Queue{
 		dirty:      make(map[types.WorkItemKey]struct{}),
 		processing: make(map[types.WorkItemKey]struct{}),
 		limiter:    lim,
+		stopCtx:    ctx,
+		stopCancel: cancel,
 	}
 	q.cond = sync.NewCond(&q.mu)
 	return q
@@ -51,7 +56,9 @@ func New(burst int, ratePerSec float64) *Queue {
 // it is recorded as dirty and will be re-queued after Done is called.
 // Returns types.ErrQueueShutdown if the queue is shutting down.
 func (q *Queue) Enqueue(key types.WorkItemKey) error {
-	_ = q.limiter.Wait(context.Background())
+	if err := q.limiter.Wait(q.stopCtx); err != nil {
+		return types.ErrQueueShutdown
+	}
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -117,8 +124,9 @@ func (q *Queue) Len() int {
 	return len(q.queue)
 }
 
-// ShutDown closes the queue and unblocks all Dequeue callers.
+// ShutDown closes the queue and unblocks all Dequeue and Enqueue callers.
 func (q *Queue) ShutDown() {
+	q.stopCancel()
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.shutdown = true
@@ -139,27 +147,4 @@ func (q *Queue) Forget(key types.WorkItemKey) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	delete(q.dirty, key)
-}
-
-// RateLimitedEnqueue is a helper that respects a real rate limiter with context.
-func RateLimitedEnqueue(q *Queue, key types.WorkItemKey, timeout time.Duration) error {
-	ctx, cancel := contextWithTimeout(timeout)
-	defer cancel()
-	if err := q.limiter.Wait(ctx); err != nil {
-		return err
-	}
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.shutdown {
-		return types.ErrQueueShutdown
-	}
-	if _, exists := q.dirty[key]; exists {
-		return nil
-	}
-	q.dirty[key] = struct{}{}
-	if _, processing := q.processing[key]; !processing {
-		q.queue = append(q.queue, key)
-		q.cond.Signal()
-	}
-	return nil
 }

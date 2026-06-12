@@ -43,6 +43,16 @@ func (p *Pool) WaitingTasks() uint64 {
 }
 
 // Stop waits for all in-flight tasks to complete, then shuts down the pool.
+// If ctx is cancelled before all tasks finish the call returns early; the
+// underlying pool goroutines continue to drain in the background.
 func (p *Pool) Stop(ctx context.Context) {
-	p.pool.StopAndWait()
+	done := make(chan struct{})
+	go func() {
+		p.pool.StopAndWait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }

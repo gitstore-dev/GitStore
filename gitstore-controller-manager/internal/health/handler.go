@@ -34,15 +34,17 @@ func NewHandler(mgr ManagerStats) http.Handler {
 		kinds := mgr.KindStats()
 
 		status := "ok"
+		httpStatus := http.StatusOK
 		for _, s := range kinds {
 			if s.Stalled || s.PoisonItems > 0 {
 				status = "degraded"
+				httpStatus = http.StatusServiceUnavailable
 				break
 			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
+		w.WriteHeader(httpStatus)
 		_ = json.NewEncoder(w).Encode(healthResponse{Status: status, Kinds: kinds})
 	})
 }

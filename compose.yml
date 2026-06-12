@@ -70,6 +70,12 @@ services:
       - GITSTORE_LOG__FORMAT=json
     networks:
       - gitstore-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5001/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+      start_period: 2s
 
 volumes:
   git-repo-data-root:

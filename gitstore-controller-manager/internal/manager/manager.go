@@ -156,14 +156,22 @@ func (m *Manager) AllPoisonItems() []*retry.PoisonItem {
 }
 
 // Start begins the dispatch loop for all registered kinds.
-// It blocks until ctx is cancelled.
+// It blocks until ctx is cancelled, then drains all queues and worker pools.
 func (m *Manager) Start(ctx context.Context) error {
+	var wg sync.WaitGroup
 	for _, ks := range m.kinds {
-		go m.runDispatchLoop(ctx, ks)
+		wg.Add(1)
+		go func(ks *kindState) {
+			defer wg.Done()
+			m.runDispatchLoop(ctx, ks)
+		}(ks)
 	}
 	<-ctx.Done()
 	for _, ks := range m.kinds {
 		ks.q.ShutDown()
+	}
+	wg.Wait()
+	for _, ks := range m.kinds {
 		ks.pool.Stop(ctx)
 	}
 	return nil
@@ -200,7 +208,7 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 		Multiplier:      ks.reg.Multiplier,
 	}
 
-	res, attempts := retry.RunWithRetry(ctx, key, retryCfg, log, func(rctx context.Context) error {
+	res, attempts, lastErr := retry.RunWithRetry(ctx, key, retryCfg, log, func(rctx context.Context) error {
 		result, err := ks.reg.Reconciler.Reconcile(rctx, key)
 		if err != nil {
 			return err
@@ -229,9 +237,14 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 		// Forget the key before quarantine so that the deferred Done does not
 		// re-enqueue it if another event arrived during the retry loop.
 		ks.q.Forget(key)
+		lastErrStr := ""
+		if lastErr != nil {
+			lastErrStr = lastErr.Error()
+		}
 		ks.quarantine.Put(&retry.PoisonItem{
-			Key:      key,
-			Attempts: attempts,
+			Key:       key,
+			Attempts:  attempts,
+			LastError: lastErrStr,
 		})
 	}
 }

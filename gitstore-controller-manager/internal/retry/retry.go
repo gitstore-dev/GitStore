@@ -38,13 +38,14 @@ const (
 
 // RunWithRetry calls fn up to cfg.MaxAttempts times with exponential backoff.
 // Returns ResultQuarantine if fn keeps failing; ResultOK on first success.
+// The third return value is the last error seen (nil on success).
 func RunWithRetry(
 	ctx context.Context,
 	key types.WorkItemKey,
 	cfg Config,
 	log *zap.Logger,
 	fn func(context.Context) error,
-) (Result, int) {
+) (Result, int, error) {
 	attempts := 0
 
 	b := backoff.NewExponentialBackOff()
@@ -72,7 +73,7 @@ func RunWithRetry(
 		backoff.WithNotify(notify),
 	)
 	if err != nil {
-		return ResultQuarantine, attempts + 1
+		return ResultQuarantine, attempts + 1, err
 	}
-	return ResultOK, attempts + 1
+	return ResultOK, attempts + 1, nil
 }

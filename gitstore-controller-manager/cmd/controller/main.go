@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/api"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
@@ -40,7 +41,7 @@ func main() {
 	addr := fmt.Sprintf(":%d", cfg.Controller.Port)
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: buildMux(mgr, log),
+		Handler: buildMux(mgr),
 	}
 
 	go func() {
@@ -55,15 +56,16 @@ func main() {
 		log.Error("manager exited with error", zap.Error(err))
 	}
 
-	if err := srv.Shutdown(context.Background()); err != nil {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Warn("HTTP server shutdown error", zap.Error(err))
 	}
 	log.Info("controller-manager stopped")
 }
 
 // buildMux returns the HTTP handler for the health/metrics and management surface.
-func buildMux(mgr *manager.Manager, log *zap.Logger) http.Handler {
-	_ = log
+func buildMux(mgr *manager.Manager) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", health.NewHandler(mgr))
 	mux.Handle("GET /metrics", health.NewMetricsHandler(mgr))
