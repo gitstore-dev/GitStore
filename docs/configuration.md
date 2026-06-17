@@ -33,11 +33,11 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 
 ### API Server
 
-| Key            | Env Var                  | Type    | Default | Required | Sensitive | Description                                        |
-|----------------|--------------------------|---------|---------|----------|-----------|----------------------------------------------------|
-| `api.port`      | `GITSTORE_API__PORT`      | integer | `4000` | No | No | HTTP port the GraphQL API server listens on (1–65535) |
-| `api.git_port`  | `GITSTORE_API__GIT_PORT`  | integer | `5000` | No | No | Git Smart HTTP port the API server listens on (1–65535) |
-| `api.grpc_port` | `GITSTORE_API__GRPC_PORT` | integer | `6000` | No | No | CatalogService gRPC port called by gitstore-git-service |
+| Key             | Env Var                   | Type    | Default | Required | Sensitive | Description                                             |
+|-----------------|---------------------------|---------|---------|----------|-----------|---------------------------------------------------------|
+| `api.port`      | `GITSTORE_API__PORT`      | integer | `4000`  | No       | No        | HTTP port the GraphQL API server listens on (1–65535)   |
+| `api.git_port`  | `GITSTORE_API__GIT_PORT`  | integer | `5000`  | No       | No        | Git Smart HTTP port the API server listens on (1–65535) |
+| `api.grpc_port` | `GITSTORE_API__GRPC_PORT` | integer | `6000`  | No       | No        | CatalogService gRPC port called by gitstore-git-service |
 
 ### Git Service Connection
 
@@ -135,36 +135,36 @@ Secrets (`auth.admin.password_hash`, `auth.jwt.secret`) must remain in environme
 
 ### Core
 
-| Key                      | Env Var                              | Type   | Default       | Required | Sensitive | Description                                       |
-|--------------------------|--------------------------------------|--------|---------------|----------|-----------|---------------------------------------------------|
-| `grpc.port`              | `GITSTORE_GRPC__PORT`                  | u16    | `50051`       | No | No | GitService gRPC server port |
-| `git.data_dir`           | `GITSTORE_GIT__DATA_DIR`               | string | `/data/repos` | No | No | Bare repository storage directory |
-| `git.max_pack_size_bytes` | `GITSTORE_GIT__MAX_PACK_SIZE_BYTES`   | u64    | `52428800`    | No | No | Max pack size in bytes |
-| `git.repo.max_file_size` | `GITSTORE_GIT__REPO__MAX_FILE_SIZE`    | u64    | `52428800`    | No | No | Max file size in bytes |
-| `catalog_service.uri`    | `GITSTORE_CATALOG_SERVICE__URI`        | string | `http://localhost:6000` | No | No | gitstore-api CatalogService gRPC endpoint |
-| `log.level`              | `GITSTORE_LOG__LEVEL`                  | string | `info`        | No | No | `trace` \| `debug` \| `info` \| `warn` \| `error` |
-| `log.format`             | `GITSTORE_LOG__FORMAT`                 | string | `json`        | No | No | `json` \| `text` |
+| Key                       | Env Var                             | Type   | Default                 | Required | Sensitive | Description                                       |
+|---------------------------|-------------------------------------|--------|-------------------------|----------|-----------|---------------------------------------------------|
+| `grpc.port`               | `GITSTORE_GRPC__PORT`               | u16    | `50051`                 | No       | No        | GitService gRPC server port                       |
+| `git.data_dir`            | `GITSTORE_GIT__DATA_DIR`            | string | `/data/repos`           | No       | No        | Bare repository storage directory                 |
+| `git.max_pack_size_bytes` | `GITSTORE_GIT__MAX_PACK_SIZE_BYTES` | u64    | `52428800`              | No       | No        | Max pack size in bytes                            |
+| `git.repo.max_file_size`  | `GITSTORE_GIT__REPO__MAX_FILE_SIZE` | u64    | `52428800`              | No       | No        | Max file size in bytes                            |
+| `catalog_service.uri`     | `GITSTORE_CATALOG_SERVICE__URI`     | string | `http://localhost:6000` | No       | No        | gitstore-api CatalogService gRPC endpoint         |
+| `log.level`               | `GITSTORE_LOG__LEVEL`               | string | `info`                  | No       | No        | `trace` \| `debug` \| `info` \| `warn` \| `error` |
+| `log.format`              | `GITSTORE_LOG__FORMAT`              | string | `json`                  | No       | No        | `json` \| `text`                                  |
 
 ### Hook Phase Toggles
 
 Nested hook keys may be set in `gitstore.toml`. Environment variable overrides use `__` (double-underscore) as the separator.
 
-| Config Key                                    | Default | Description                          |
-|-----------------------------------------------|---------|--------------------------------------|
-| `hooks.git_receive_pack.pre_receive.enabled`  | `true`  | Enable the `pre-receive` hook phase  |
-| `hooks.git_receive_pack.update.enabled`       | `false` | Enable the `update` hook phase       |
-| `hooks.git_receive_pack.post_receive.enabled` | `true`  | Enable the `post-receive` hook phase |
-| `hooks.git_receive_pack.proc_receive.enabled` | `false` | Enable the `proc-receive` hook phase |
-| `hooks.git_receive_pack.post_update.enabled`  | `false` | Enable the `post-update` hook phase  |
+| Config Key                                             | Default | Description                                   |
+|--------------------------------------------------------|---------|-----------------------------------------------|
+| `hooks.git_receive_pack.pre_receive.enabled`           | `true`  | Enable the `pre-receive` hook phase           |
+| `hooks.git_receive_pack.update.enabled`                | `false` | Enable the `update` hook phase                |
+| `hooks.git_receive_pack.post_receive.enabled`          | `true`  | Enable the `post-receive` hook phase          |
+| `hooks.git_receive_pack.proc_receive.enabled`          | `false` | Enable the `proc-receive` hook phase          |
+| `hooks.git_receive_pack.post_update.enabled`           | `false` | Enable the `post-update` hook phase           |
 | `hooks.git_receive_pack.reference_transaction.enabled` | `false` | Enable the `reference-transaction` hook phase |
 
 ### Validation and Admission
 
-| Config Key | Env Var | Default | Description |
-|---|---|---|---|
-| `schema_validation.phase` | `GITSTORE_SCHEMA_VALIDATION__PHASE` | `pre-receive` | Hook phase for blocking schema validation |
-| `schema_validation.timeout_secs` | `GITSTORE_SCHEMA_VALIDATION__TIMEOUT_SECS` | `10` | CatalogService validation timeout |
-| `admission_control.phase` | `GITSTORE_ADMISSION_CONTROL__PHASE` | `post-receive` | Hook phase for admission notification |
+| Config Key                         | Env Var                                      | Default           | Description                                 |
+|------------------------------------|----------------------------------------------|-------------------|---------------------------------------------|
+| `schema_validation.phase`          | `GITSTORE_SCHEMA_VALIDATION__PHASE`          | `pre-receive`     | Hook phase for blocking schema validation   |
+| `schema_validation.timeout_secs`   | `GITSTORE_SCHEMA_VALIDATION__TIMEOUT_SECS`   | `10`              | CatalogService validation timeout           |
+| `admission_control.phase`          | `GITSTORE_ADMISSION_CONTROL__PHASE`          | `post-receive`    | Hook phase for admission notification       |
 | `admission_control.branch_pattern` | `GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN` | `refs/heads/main` | Ref pattern admitted into catalogue storage |
 
 ### CLI Flags
@@ -220,21 +220,21 @@ uri = "http://localhost:6000"
 **`.env` file**: `.env` (optional, current working directory)
 **Env var prefix**: `GITSTORE_`
 
-| Key | Env Var | Type | Default | Required | Sensitive | Description |
-|---|---|---|---|---|---|---|
-| `controller.port` | `GITSTORE_CONTROLLER__PORT` | integer | `5001` | No | No | HTTP port for `/health`, `/metrics`, and `/controller/v1/*` |
-| `controller.api__uri` | `GITSTORE_CONTROLLER__API__URI` | string | `http://localhost:4000/graphql` | No | No | GraphQL API URI used by reconcilers |
-| `controller.default_max_attempts` | `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS` | integer | `5` | No | No | Retry limit before quarantine |
-| `controller.default_stall_threshold` | `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | duration | `5m` | No | No | Worker stall threshold |
-| `log.level` | `GITSTORE_LOG__LEVEL` | string | `info` | No | No | `debug` \| `info` \| `warn` \| `error` |
-| `log.format` | `GITSTORE_LOG__FORMAT` | string | `json` | No | No | `json` \| `text` |
+| Key                                  | Env Var                                        | Type     | Default                         | Required | Sensitive | Description                                                 |
+|--------------------------------------|------------------------------------------------|----------|---------------------------------|----------|-----------|-------------------------------------------------------------|
+| `controller.port`                    | `GITSTORE_CONTROLLER__PORT`                    | integer  | `5001`                          | No       | No        | HTTP port for `/health`, `/metrics`, and `/controller/v1/*` |
+| `controller.api_uri`                 | `GITSTORE_CONTROLLER__API_URI`                 | string   | `http://localhost:4000/graphql` | No       | No        | GraphQL API URI used by reconcilers                         |
+| `controller.default_max_attempts`    | `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`    | integer  | `5`                             | No       | No        | Retry limit before quarantine                               |
+| `controller.default_stall_threshold` | `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | duration | `5m`                            | No       | No        | Worker stall threshold                                      |
+| `log.level`                          | `GITSTORE_LOG__LEVEL`                          | string   | `info`                          | No       | No        | `debug` \| `info` \| `warn` \| `error`                      |
+| `log.format`                         | `GITSTORE_LOG__FORMAT`                         | string   | `json`                          | No       | No        | `json` \| `text`                                            |
 
 Example:
 
 ```toml
 [controller]
 port = 5001
-api__uri = "http://localhost:4000/graphql"
+api_uri = "http://localhost:4000/graphql"
 default_max_attempts = 5
 default_stall_threshold = "5m"
 

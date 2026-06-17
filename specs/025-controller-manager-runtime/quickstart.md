@@ -94,7 +94,7 @@ The controller manager reads configuration from environment variables (consisten
 | Variable | Default | Description |
 |---|---|---|
 | `GITSTORE_CONTROLLER__PORT` | `5001` | Health/metrics HTTP listen port |
-| `GITSTORE_CONTROLLER__API__URI` | `http://localhost:4000/graphql` | `gitstore-api` GraphQL URI (for informer source) |
+| `GITSTORE_CONTROLLER__API_URI` | `http://localhost:4000/graphql` | `gitstore-api` GraphQL URI (for informer source) |
 | `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS` | `5` | Global default retry limit |
 | `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | `5m` | Global default stall threshold |
 

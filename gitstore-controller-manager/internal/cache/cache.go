@@ -25,11 +25,15 @@ type Cache[T any] struct {
 	store    map[types.WorkItemKey]T
 	handlers []EventHandler[T]
 	synced   bool
+	syncedCh chan struct{}
 }
 
 // New creates an empty Cache.
 func New[T any]() *Cache[T] {
-	return &Cache[T]{store: make(map[types.WorkItemKey]T)}
+	return &Cache[T]{
+		store:    make(map[types.WorkItemKey]T),
+		syncedCh: make(chan struct{}),
+	}
 }
 
 // AddEventHandler registers a callback set. Callbacks fire synchronously after mutations.
@@ -106,8 +110,18 @@ func (c *Cache[T]) HasSynced() bool {
 }
 
 // MarkSynced signals that the cache has completed its initial population.
+// Calling it more than once is a no-op.
 func (c *Cache[T]) MarkSynced() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.synced = true
+	if !c.synced {
+		c.synced = true
+		close(c.syncedCh)
+	}
+}
+
+// SyncedCh returns a channel that is closed once MarkSynced has been called.
+// Callers can select on it instead of polling HasSynced.
+func (c *Cache[T]) SyncedCh() <-chan struct{} {
+	return c.syncedCh
 }

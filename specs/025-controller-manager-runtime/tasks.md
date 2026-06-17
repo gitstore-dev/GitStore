@@ -38,7 +38,7 @@
 - [x] T006 Define shared types in `gitstore-controller-manager/internal/manager/types.go`: `WorkItemKey`, `Result`, `Reconciler` interface, `ReconcilerRegistration` struct — exact shapes from `data-model.md`
 - [x] T007 [P] Set up structured logging (`go.uber.org/zap`) in `gitstore-controller-manager/internal/manager/logger.go` — consistent with `gitstore-api` logger setup
 - [x] T008 [P] Create `gitstore-controller-manager/internal/manager/errors.go`: define sentinel errors `ErrNotFound`, `ErrQueueShutdown`, `ErrKindNotRegistered`
-- [x] T009 Implement config struct in `gitstore-controller-manager/internal/config/config.go`: `GITSTORE_CONTROLLER__PORT`, `GITSTORE_CONTROLLER__API__URI`, `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`, `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` — use `viper` consistent with `gitstore-api/internal/config`
+- [x] T009 Implement config struct in `gitstore-controller-manager/internal/config/config.go`: `GITSTORE_CONTROLLER__PORT`, `GITSTORE_CONTROLLER__API_URI`, `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`, `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` — use `viper` consistent with `gitstore-api/internal/config`
 
 **Checkpoint**: Foundational types, interfaces, logging, and config compile; user story phases can now proceed.
 
@@ -143,7 +143,7 @@
 **Purpose**: Integration wiring, documentation, and operational readiness.
 
 - [x] T040 [P] Update `AGENTS.md` (`Active Technologies` and `Commands` sections): add `gitstore-controller-manager` module, 4 new dependencies, `make controller` command, port 5001, config var naming conventions
-- [x] T041 [P] Update `compose.yml`: add `controller-manager` service entry with `GITSTORE_CONTROLLER__PORT=5001`, `GITSTORE_CONTROLLER__API__URI=http://api:4000/graphql`; expose port 5001; add to `deploy-staging`/`deploy-production` needs in `cd.yml`
+- [x] T041 [P] Update `compose.yml`: add `controller-manager` service entry with `GITSTORE_CONTROLLER__PORT=5001`, `GITSTORE_CONTROLLER__API_URI=http://api:4000/graphql`; expose port 5001; add to `deploy-staging`/`deploy-production` needs in `cd.yml`
 - [x] T042 [P] Add `gitstore-controller-manager` to root `Makefile` `build`, `test`, `lint`, and `pr-ready` aggregate targets
 - [x] T043 [P] Write `gitstore-controller-manager/.env.example` with all config variables and comments (matching `gitstore-api/.env.example` style)
 - [x] T044 Run `make pr-ready` and fix any lint/license/test failures

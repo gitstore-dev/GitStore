@@ -65,7 +65,7 @@ services:
         condition: service_healthy
     environment:
       - GITSTORE_CONTROLLER__PORT=5001
-      - GITSTORE_CONTROLLER__API__URI=http://api:4000/graphql
+      - GITSTORE_CONTROLLER__API_URI=http://api:4000/graphql
       - GITSTORE_LOG__LEVEL=info
       - GITSTORE_LOG__FORMAT=json
     networks:

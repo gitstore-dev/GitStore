@@ -34,7 +34,7 @@ export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 .PHONY: help git api controller dev compose scylla compose-scylla ps logs stop down
 .PHONY: build test lint license-check pr-ready
 .PHONY: bootstrap bootstrap-token bootstrap-namespace bootstrap-repository git-clean-data
-.PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools
+.PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools gen-admin-password
 
 help: ## Show available targets and common variables.
 	@awk 'BEGIN {FS = ":.*##"; printf "GitStore make targets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -170,6 +170,34 @@ bootstrap-tools:
 	@command -v curl >/dev/null 2>&1 || { echo "curl is required for bootstrap targets"; exit 127; }
 	@command -v jq >/dev/null 2>&1 || { echo "jq is required for bootstrap targets"; exit 127; }
 
+gen-admin-password: ## Generate a bcrypt hash for ADMIN_PASSWORD and write it to gitstore-api/.env.
+	@if [ -z "$${ADMIN_PASSWORD:-}" ]; then \
+		echo "Usage: make gen-admin-password ADMIN_PASSWORD=<password>"; \
+		exit 2; \
+	fi
+	@hash=$$(cd "$(API_DIR)" && go run ./cmd/hashpw "$$ADMIN_PASSWORD") || { \
+		echo "Failed to generate bcrypt hash. Make sure the gitstore-api module builds correctly."; \
+		exit 1; \
+	}; \
+	env_file="$(API_DIR)/.env"; \
+	if [ -f "$$env_file" ]; then \
+		if grep -q 'GITSTORE_AUTH__ADMIN__PASSWORD_HASH' "$$env_file"; then \
+			if [ "$$(uname)" = "Darwin" ]; then \
+				sed -i '' "s|^GITSTORE_AUTH__ADMIN__PASSWORD_HASH=.*|GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$$hash|" "$$env_file"; \
+			else \
+				sed -i "s|^GITSTORE_AUTH__ADMIN__PASSWORD_HASH=.*|GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$$hash|" "$$env_file"; \
+			fi; \
+			echo "Updated GITSTORE_AUTH__ADMIN__PASSWORD_HASH in $$env_file"; \
+		else \
+			printf 'GITSTORE_AUTH__ADMIN__PASSWORD_HASH=%s\n' "$$hash" >> "$$env_file"; \
+			echo "Appended GITSTORE_AUTH__ADMIN__PASSWORD_HASH to $$env_file"; \
+		fi; \
+	else \
+		printf 'GITSTORE_AUTH__ADMIN__PASSWORD_HASH=%s\n' "$$hash" > "$$env_file"; \
+		echo "Created $$env_file with GITSTORE_AUTH__ADMIN__PASSWORD_HASH"; \
+	fi; \
+	echo "Hash: $$hash"
+
 bootstrap-token: bootstrap-tools ## Login and print/cache a bootstrap bearer token.
 	@if [ -z "$${ADMIN_PASSWORD:-}" ]; then \
 		echo "ADMIN_PASSWORD is required for bootstrap-token"; \
@@ -184,10 +212,12 @@ bootstrap-token: bootstrap-tools ## Login and print/cache a bootstrap bearer tok
 	}; \
 	if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
 		echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
+		echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match the hash in gitstore-api/.env (run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate)."; \
 		exit 1; \
 	fi; \
 	token=$$(echo "$$response" | jq -er '.data.login.session.token // empty') || { \
 		echo "Login response did not contain a token. Check ADMIN_USERNAME, ADMIN_PASSWORD, and API_URL."; \
+		echo "Hint: run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate the password hash in gitstore-api/.env."; \
 		exit 1; \
 	}; \
 	printf '%s\n' "$$token"; \
@@ -211,9 +241,14 @@ bootstrap-namespace: bootstrap-tools ## Create only the bootstrap namespace.
 		}; \
 		if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
 			echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
+			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match the hash in gitstore-api/.env (run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate)."; \
 			exit 1; \
 		fi; \
-		token=$$(echo "$$response" | jq -er '.data.login.session.token // empty') || { echo "Login response did not contain a token."; exit 1; }; \
+		token=$$(echo "$$response" | jq -er '.data.login.session.token // empty') || { \
+			echo "Login response did not contain a token."; \
+			echo "Hint: run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate the password hash in gitstore-api/.env."; \
+			exit 1; \
+		}; \
 	fi; \
 	query='mutation CreateNamespace($$identifier: String!, $$displayName: String, $$tier: NamespaceTier!) { createNamespace(input: { identifier: $$identifier, displayName: $$displayName, tier: $$tier }) { namespace { id identifier tier } } }'; \
 	payload=$$(jq -n --arg query "$$query" --arg identifier "$${NAMESPACE}" --arg displayName "$${NAMESPACE_DISPLAY_NAME}" --arg tier "$${NAMESPACE_TIER}" '{query: $$query, variables: {identifier: $$identifier, displayName: $$displayName, tier: $$tier}}'); \
@@ -244,9 +279,14 @@ bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; n
 		}; \
 		if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
 			echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
+			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match the hash in gitstore-api/.env (run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate)."; \
 			exit 1; \
 		fi; \
-		token=$$(echo "$$response" | jq -er '.data.login.session.token // empty') || { echo "Login response did not contain a token."; exit 1; }; \
+		token=$$(echo "$$response" | jq -er '.data.login.session.token // empty') || { \
+			echo "Login response did not contain a token."; \
+			echo "Hint: run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate the password hash in gitstore-api/.env."; \
+			exit 1; \
+		}; \
 	fi; \
 	query='query Namespace($$identifier: String!) { namespace(by: { identifier: $$identifier }) { id identifier } }'; \
 	payload=$$(jq -n --arg query "$$query" --arg identifier "$${NAMESPACE}" '{query: $$query, variables: {identifier: $$identifier}}'); \
