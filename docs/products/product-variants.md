@@ -69,8 +69,8 @@ Each `PriceTemplate` supports:
 | Field | Type | Constraint |
 |-------|------|-----------|
 | `managed` | boolean | Whether stock is tracked |
-| `availableQuantity` | integer | Current stock level |
 | `policy` | string | One of: `""` (default), `deny`, `backorder` |
+| `stockLocationRefs` | list | References to stock location resources |
 
 ---
 
@@ -151,7 +151,6 @@ spec:
           type: fixed
   inventory:
     managed: true
-    availableQuantity: 50
     policy: deny
 ---
 
