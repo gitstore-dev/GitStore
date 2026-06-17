@@ -6,6 +6,7 @@ package contract_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -399,7 +400,7 @@ func TestManager_DuplicateRegistration_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error on duplicate registration, got nil")
 	}
-	if !errors.Is(err, err) || !containsStr(err.Error(), "BackfillJob") {
+	if !strings.Contains(err.Error(), "BackfillJob") {
 		t.Errorf("error should mention kind name, got: %v", err)
 	}
 }
@@ -492,19 +493,6 @@ func TestManager_UnregisteredKind_EmitsSignalNoPanic(t *testing.T) {
 	if !errors.Is(err, manager.ErrKindNotRegistered) {
 		t.Errorf("expected ErrKindNotRegistered, got %v", err)
 	}
-}
-
-func containsStr(s, sub string) bool {
-	return len(s) > 0 && len(sub) > 0 && (s == sub || len(s) >= len(sub) && containsRunes(s, sub))
-}
-
-func containsRunes(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
 
 // funcReconciler lets tests inject arbitrary Reconcile behaviour.

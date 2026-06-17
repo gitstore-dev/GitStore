@@ -152,11 +152,14 @@ func (q *Queue) Forget(key types.WorkItemKey) {
 
 // RateLimitedEnqueue waits up to timeout for the rate limiter then enqueues key.
 func RateLimitedEnqueue(q *Queue, key types.WorkItemKey, timeout time.Duration) error {
-	ctx, cancel := context.Background(), context.CancelFunc(nil)
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
 	if timeout > 0 {
 		ctx, cancel = context.WithTimeout(context.Background(), timeout)
 	} else {
-		ctx, cancel = context.Background(), func() { /* no deadline */ }
+		ctx, cancel = context.Background(), func() { /* no deadline, nothing to cancel */ }
 	}
 	defer cancel()
 	if err := q.limiter.Wait(ctx); err != nil {

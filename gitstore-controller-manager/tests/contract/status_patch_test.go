@@ -13,6 +13,17 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
 
+// mockStatusClient is a test double for status.StatusClient.
+type mockStatusClient struct {
+	returnErr error
+	callCount int
+}
+
+func (m *mockStatusClient) Apply(_ context.Context, _ types.WorkItemKey, _ *status.StatusPatch) error {
+	m.callCount++
+	return m.returnErr
+}
+
 // T026: IsNoOp returns true when every non-nil patch field matches ResourceStatus.
 func TestStatusPatch_IsNoOp_AllFieldsMatch(t *testing.T) {
 	gen := int64(5)
@@ -84,9 +95,9 @@ func TestStatusPatch_ObservedGenerationRequired(t *testing.T) {
 	}
 }
 
-// T029: MockStatusClient returns ErrConflict and errors.Is resolves correctly.
+// T029: mockStatusClient returns ErrConflict and errors.Is resolves correctly.
 func TestStatusClient_Conflict_ReturnsErrConflict(t *testing.T) {
-	mock := &status.MockStatusClient{ReturnErr: types.ErrConflict}
+	mock := &mockStatusClient{returnErr: types.ErrConflict}
 
 	gen := int64(1)
 	patch := &status.StatusPatch{
@@ -100,9 +111,9 @@ func TestStatusClient_Conflict_ReturnsErrConflict(t *testing.T) {
 	}
 }
 
-// T030: when IsNoOp is true, MockStatusClient.Apply is never called.
+// T030: when IsNoOp is true, mockStatusClient.Apply is never called.
 func TestStatusClient_NoOpPatch_SkipsApply(t *testing.T) {
-	mock := &status.MockStatusClient{}
+	mock := &mockStatusClient{}
 
 	gen := int64(2)
 	rev := "main@sha1:abc"
@@ -123,7 +134,7 @@ func TestStatusClient_NoOpPatch_SkipsApply(t *testing.T) {
 
 	// Caller is responsible for checking IsNoOp before calling Apply.
 	// Here we verify the mock records zero calls when the caller respects the contract.
-	if mock.CallCount != 0 {
-		t.Errorf("Apply should not have been called, got %d calls", mock.CallCount)
+	if mock.callCount != 0 {
+		t.Errorf("Apply should not have been called, got %d calls", mock.callCount)
 	}
 }

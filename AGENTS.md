@@ -16,7 +16,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `make help` — list root commands and common variables.
 - `make git` — run `gitstore-git-service` locally in the foreground using `GIT_DATA_DIR` (default: `.gitstore/repos`).
 - `make api` — run `gitstore-api` locally in the foreground. Requires `gitstore-api/.env` or shell env for required auth secrets.
-- `make controller` — run `gitstore-controller-manager` locally in the foreground on port 5001. Requires `GITSTORE_CONTROLLER__API__URI` pointing at a running API (default: `http://localhost:4000/graphql`).
+- `make controller` — run `gitstore-controller-manager` locally in the foreground on port 5001. Requires `GITSTORE_CONTROLLER__API_URI` pointing at a running API (default: `http://localhost:4000/graphql`).
 - `make dev` — run the native git service and API together in the foreground with shutdown trapping.
 - `make compose` — run the core Docker Compose stack (API + git service) in the foreground.
 - `DETACH=1 make compose` — run the core Docker Compose stack in the background.

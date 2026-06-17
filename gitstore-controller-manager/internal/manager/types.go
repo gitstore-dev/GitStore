@@ -25,6 +25,7 @@ type Reconciler = types.Reconciler
 // has completed. Used to gate dispatch until the cache is warm.
 type syncChecker interface {
 	HasSynced() bool
+	SyncedCh() <-chan struct{}
 }
 
 // ReconcilerRegistration configures a controller for one resource kind.

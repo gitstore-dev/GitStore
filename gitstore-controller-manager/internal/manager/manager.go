@@ -43,6 +43,7 @@ type kindState struct {
 
 // Manager supervises one controller (queue + pool + reconciler) per registered kind.
 type Manager struct {
+	mu    sync.RWMutex
 	kinds map[string]*kindState
 	log   *zap.Logger
 }
@@ -63,7 +64,7 @@ func (m *Manager) WithLogger(log *zap.Logger) *Manager {
 
 // Register wires a reconciler for the given resource kind.
 // Returns an error if Kind is empty, Reconciler or Cache is nil, or the kind
-// has already been registered. Must be called before Start.
+// has already been registered. Safe to call concurrently.
 func (m *Manager) Register(reg ReconcilerRegistration) error {
 	if reg.Kind == "" {
 		return fmt.Errorf("reconciler registration: Kind must not be empty")
@@ -74,6 +75,8 @@ func (m *Manager) Register(reg ReconcilerRegistration) error {
 	if reg.Cache == nil {
 		return fmt.Errorf("reconciler registration: Cache must not be nil for kind %q", reg.Kind)
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, exists := m.kinds[reg.Kind]; exists {
 		return fmt.Errorf("reconciler registration: kind %q already registered", reg.Kind)
 	}
@@ -95,7 +98,9 @@ func (m *Manager) Register(reg ReconcilerRegistration) error {
 // Enqueue adds key to the queue of its kind.
 // Returns ErrKindNotRegistered if no reconciler is registered for key.Kind.
 func (m *Manager) Enqueue(key WorkItemKey) error {
+	m.mu.RLock()
 	ks, ok := m.kinds[key.Kind]
+	m.mu.RUnlock()
 	if !ok {
 		return types.ErrKindNotRegistered
 	}
@@ -104,7 +109,9 @@ func (m *Manager) Enqueue(key WorkItemKey) error {
 
 // IsQuarantined reports whether the key is currently in the quarantine store.
 func (m *Manager) IsQuarantined(key WorkItemKey) bool {
+	m.mu.RLock()
 	ks, ok := m.kinds[key.Kind]
+	m.mu.RUnlock()
 	if !ok {
 		return false
 	}
@@ -115,7 +122,9 @@ func (m *Manager) IsQuarantined(key WorkItemKey) bool {
 // Requeue removes the key from quarantine and re-enqueues it with a fresh budget.
 // Returns ErrKindNotRegistered or ErrNotFound if the key isn't quarantined.
 func (m *Manager) Requeue(key WorkItemKey) error {
+	m.mu.RLock()
 	ks, ok := m.kinds[key.Kind]
+	m.mu.RUnlock()
 	if !ok {
 		return types.ErrKindNotRegistered
 	}
@@ -129,6 +138,8 @@ func (m *Manager) Requeue(key WorkItemKey) error {
 
 // KindStats returns a per-kind operational snapshot and updates Prometheus gauges.
 func (m *Manager) KindStats() map[string]health.KindStat {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	out := make(map[string]health.KindStat, len(m.kinds))
 	for kind, ks := range m.kinds {
 		active := ks.pool.RunningWorkers()
@@ -158,7 +169,9 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 // QuarantineStore returns the poison-item store for the given kind.
 // Returns nil if the kind is not registered.
 func (m *Manager) QuarantineStore(kind string) *retry.QuarantineStore {
+	m.mu.RLock()
 	ks, ok := m.kinds[kind]
+	m.mu.RUnlock()
 	if !ok {
 		return nil
 	}
@@ -167,6 +180,8 @@ func (m *Manager) QuarantineStore(kind string) *retry.QuarantineStore {
 
 // AllPoisonItems returns all quarantined items across every registered kind.
 func (m *Manager) AllPoisonItems() []*retry.PoisonItem {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var out []*retry.PoisonItem
 	for _, ks := range m.kinds {
 		out = append(out, ks.quarantine.List("")...)
@@ -177,6 +192,8 @@ func (m *Manager) AllPoisonItems() []*retry.PoisonItem {
 // Start begins the dispatch loop for all registered kinds.
 // It blocks until ctx is cancelled, then drains all queues and worker pools.
 func (m *Manager) Start(ctx context.Context) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var wg sync.WaitGroup
 	for _, ks := range m.kinds {
 		wg.Add(1)
@@ -204,13 +221,14 @@ func (m *Manager) runDispatchLoop(ctx context.Context, ks *kindState) {
 		if shutdown {
 			return
 		}
-		// Gate: spin until cache is warm or context is cancelled.
-		for !ks.cache.HasSynced() {
+		// Gate: block until the cache has completed its initial list or the
+		// context is cancelled. SyncedCh is closed once and reused for all
+		// items — no polling, no goroutine-per-item overhead.
+		if !ks.cache.HasSynced() {
 			select {
 			case <-ctx.Done():
 				return
-			default:
-				time.Sleep(50 * time.Millisecond)
+			case <-ks.cache.SyncedCh():
 			}
 		}
 		ks.pool.Submit(func() {
@@ -240,8 +258,8 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 	// Call reconciler via safeReconcile so panics are converted to TransientFailure.
 	result := safeReconcile(ks.reg.Reconciler, key)(ctx)
 
-	// Check for panic on the first call and emit structured log + counter.
-	m.emitPanicLog(log, key, result)
+	// Check for panic on the first call and emit structured log.
+	m.logPanic(log, key, result)
 
 	switch r := result.(type) {
 	case types.Success:
@@ -262,7 +280,8 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 		})
 
 	case types.TransientFailure:
-		// Honour BackoffHint: wait before the first retry attempt.
+		// BackoffHint: delay before the first retry. Pass 0 to the retry engine
+		// so the hint is applied exactly once — not doubled as an initial interval.
 		if r.BackoffHint > 0 {
 			select {
 			case <-ctx.Done():
@@ -270,19 +289,33 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 			case <-time.After(r.BackoffHint):
 			}
 		}
-		res, attempts, lastErr := retry.RunWithRetry(ctx, key, retryCfg, r.BackoffHint, log, func(rctx context.Context) error {
+		res, attempts, lastErr := retry.RunWithRetry(ctx, key, retryCfg, 0, log, func(rctx context.Context) error {
 			inner := safeReconcile(ks.reg.Reconciler, key)(rctx)
-			m.emitPanicLog(log, key, inner)
+			m.logPanic(log, key, inner)
 			switch iv := inner.(type) {
 			case types.TransientFailure:
 				return iv.Err
 			case types.TerminalFailure:
-				// Treat terminal during retry as permanent — exit loop with error so quarantine fires.
-				return iv.Err
+				// Wrap with a sentinel so dispatch can quarantine immediately
+				// once RunWithRetry returns, without consuming more retry budget.
+				return &terminalDuringRetryError{cause: iv.Err}
 			default:
 				return nil
 			}
 		})
+		// TerminalFailure occurred inside the retry loop — quarantine immediately.
+		var tdr *terminalDuringRetryError
+		if errors.As(lastErr, &tdr) {
+			log.Error("terminal failure during retry — quarantining immediately", zap.Error(tdr.cause))
+			ks.q.Forget(key)
+			health.ReconcileTotal.WithLabelValues(key.Kind, "terminal_failure").Inc()
+			ks.quarantine.Put(&retry.PoisonItem{
+				Key:       key,
+				Attempts:  attempts,
+				LastError: tdr.cause.Error(),
+			})
+			return
+		}
 		switch res {
 		case retry.ResultOK:
 			ks.mu.Lock()
@@ -313,9 +346,10 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 	}
 }
 
-// emitPanicLog checks if result is a TransientFailure wrapping a PanicError and
-// emits a structured ERROR log with the stack trace.
-func (m *Manager) emitPanicLog(log *zap.Logger, key WorkItemKey, result types.ReconcileResult) {
+// logPanic checks if result is a TransientFailure wrapping a PanicError and
+// emits a structured ERROR log with the stack trace. It does NOT increment any
+// metric — the caller owns the counter so it is never double-counted.
+func (m *Manager) logPanic(log *zap.Logger, key WorkItemKey, result types.ReconcileResult) {
 	tf, ok := result.(types.TransientFailure)
 	if !ok {
 		return
@@ -327,9 +361,16 @@ func (m *Manager) emitPanicLog(log *zap.Logger, key WorkItemKey, result types.Re
 			zap.Any("panicValue", pe.Value),
 			zap.ByteString("stacktrace", pe.Stack),
 		)
-		health.ReconcileTotal.WithLabelValues(key.Kind, "transient_failure").Inc()
 	}
 }
+
+// terminalDuringRetryError is a sentinel returned from inside the RunWithRetry
+// callback when the reconciler emits TerminalFailure mid-retry. It signals
+// dispatch to quarantine immediately rather than waiting for budget exhaustion.
+type terminalDuringRetryError struct{ cause error }
+
+func (e *terminalDuringRetryError) Error() string { return e.cause.Error() }
+func (e *terminalDuringRetryError) Unwrap() error { return e.cause }
 
 func applyDefaults(reg *ReconcilerRegistration) {
 	if reg.MaxAttempts <= 0 {

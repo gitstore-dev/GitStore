@@ -83,14 +83,3 @@ func conditionsEqual(a, b []*Condition) bool {
 type StatusClient interface {
 	Apply(ctx context.Context, key types.WorkItemKey, patch *StatusPatch) error
 }
-
-// MockStatusClient is a test double for StatusClient.
-type MockStatusClient struct {
-	ReturnErr error
-	CallCount int
-}
-
-func (m *MockStatusClient) Apply(_ context.Context, _ types.WorkItemKey, _ *StatusPatch) error {
-	m.CallCount++
-	return m.ReturnErr
-}
