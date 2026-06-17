@@ -151,15 +151,16 @@ func (q *Queue) Forget(key types.WorkItemKey) {
 }
 
 // RateLimitedEnqueue waits up to timeout for the rate limiter then enqueues key.
+// The wait is rooted in q.stopCtx so a ShutDown() unblocks waiting callers.
 func RateLimitedEnqueue(q *Queue, key types.WorkItemKey, timeout time.Duration) error {
 	var (
 		ctx    context.Context
 		cancel context.CancelFunc
 	)
 	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+		ctx, cancel = context.WithTimeout(q.stopCtx, timeout)
 	} else {
-		ctx, cancel = context.Background(), func() { /* no deadline, nothing to cancel */ }
+		ctx, cancel = q.stopCtx, func() { /* stopCtx has no per-call deadline to cancel */ }
 	}
 	defer cancel()
 	if err := q.limiter.Wait(ctx); err != nil {

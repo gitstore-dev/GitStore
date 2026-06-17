@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cenkalti/backoff/v5"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/queue"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/retry"
@@ -191,11 +192,18 @@ func (m *Manager) AllPoisonItems() []*retry.PoisonItem {
 
 // Start begins the dispatch loop for all registered kinds.
 // It blocks until ctx is cancelled, then drains all queues and worker pools.
+// The kinds snapshot is taken under a short-lived read lock so that Register
+// calls made after Start() do not deadlock (FR-012).
 func (m *Manager) Start(ctx context.Context) error {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	var wg sync.WaitGroup
+	kinds := make([]*kindState, 0, len(m.kinds))
 	for _, ks := range m.kinds {
+		kinds = append(kinds, ks)
+	}
+	m.mu.RUnlock()
+
+	var wg sync.WaitGroup
+	for _, ks := range kinds {
 		wg.Add(1)
 		go func(ks *kindState) {
 			defer wg.Done()
@@ -203,11 +211,11 @@ func (m *Manager) Start(ctx context.Context) error {
 		}(ks)
 	}
 	<-ctx.Done()
-	for _, ks := range m.kinds {
+	for _, ks := range kinds {
 		ks.q.ShutDown()
 	}
 	wg.Wait()
-	for _, ks := range m.kinds {
+	for _, ks := range kinds {
 		ks.pool.Stop(ctx)
 	}
 	return nil
@@ -258,8 +266,12 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 	// Call reconciler via safeReconcile so panics are converted to TransientFailure.
 	result := safeReconcile(ks.reg.Reconciler, key)(ctx)
 
-	// Check for panic on the first call and emit structured log.
-	m.logPanic(log, key, result)
+	// Check for panic on the first call: emit structured log and increment the
+	// transient_failure metric immediately (FR-004). The metric is owned here so
+	// it is never double-counted regardless of whether the retry loop succeeds.
+	if m.logPanic(log, key, result) {
+		health.ReconcileTotal.WithLabelValues(key.Kind, "transient_failure").Inc()
+	}
 
 	switch r := result.(type) {
 	case types.Success:
@@ -280,79 +292,117 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 		})
 
 	case types.TransientFailure:
-		// BackoffHint: delay before the first retry. Pass 0 to the retry engine
-		// so the hint is applied exactly once — not doubled as an initial interval.
-		if r.BackoffHint > 0 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(r.BackoffHint):
-			}
-		}
-		res, attempts, lastErr := retry.RunWithRetry(ctx, key, retryCfg, 0, log, func(rctx context.Context) error {
-			inner := safeReconcile(ks.reg.Reconciler, key)(rctx)
-			m.logPanic(log, key, inner)
-			switch iv := inner.(type) {
-			case types.TransientFailure:
-				return iv.Err
-			case types.TerminalFailure:
-				// Wrap with a sentinel so dispatch can quarantine immediately
-				// once RunWithRetry returns, without consuming more retry budget.
-				return &terminalDuringRetryError{cause: iv.Err}
-			default:
-				return nil
-			}
-		})
-		// TerminalFailure occurred inside the retry loop — quarantine immediately.
-		var tdr *terminalDuringRetryError
-		if errors.As(lastErr, &tdr) {
-			log.Error("terminal failure during retry — quarantining immediately", zap.Error(tdr.cause))
-			ks.q.Forget(key)
-			health.ReconcileTotal.WithLabelValues(key.Kind, "terminal_failure").Inc()
-			ks.quarantine.Put(&retry.PoisonItem{
-				Key:       key,
-				Attempts:  attempts,
-				LastError: tdr.cause.Error(),
-			})
-			return
-		}
-		switch res {
-		case retry.ResultOK:
-			ks.mu.Lock()
-			ks.lastSuccess = time.Now()
-			ks.mu.Unlock()
-			health.ReconcileTotal.WithLabelValues(key.Kind, "success").Inc()
-			log.Debug("reconciled successfully after retries", zap.Int("attempts", attempts))
-		case retry.ResultQuarantine:
-			log.Error("reconciler quarantined after exhausting retries", zap.Int("attempts", attempts))
-			ks.q.Forget(key)
-			health.ReconcileTotal.WithLabelValues(key.Kind, "transient_failure").Inc()
-			lastErrStr := ""
-			if lastErr != nil {
-				lastErrStr = lastErr.Error()
-			}
-			ks.quarantine.Put(&retry.PoisonItem{
-				Key:       key,
-				Attempts:  attempts,
-				LastError: lastErrStr,
-			})
-		}
+		m.handleTransient(ctx, ks, key, r, retryCfg, log)
 
 	case types.RequeueAfter:
 		health.ReconcileTotal.WithLabelValues(key.Kind, "requeue_after").Inc()
 		time.AfterFunc(r.After, func() {
-			_ = ks.q.Enqueue(key)
+			if err := ks.q.Enqueue(key); err != nil {
+				m.log.Warn("RequeueAfter lost — queue shut down before timer fired",
+					zap.String("kind", key.Kind),
+					zap.String("namespace", key.Namespace),
+					zap.String("name", key.Name),
+					zap.Duration("after", r.After),
+					zap.Error(err),
+				)
+			}
+		})
+	}
+}
+
+// handleTransient applies the BackoffHint pre-delay, then drives the retry loop
+// for a TransientFailure result from the initial reconcile call.
+// The initial call is counted as attempt 1; RunWithRetry receives MaxAttempts-1
+// so total invocations equal MaxAttempts exactly.
+func (m *Manager) handleTransient(
+	ctx context.Context,
+	ks *kindState,
+	key WorkItemKey,
+	r types.TransientFailure,
+	retryCfg retry.Config,
+	log *zap.Logger,
+) {
+	if r.BackoffHint > 0 {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(r.BackoffHint):
+		}
+	}
+
+	retryAttempts := retryCfg.MaxAttempts - 1
+	if retryAttempts <= 0 {
+		log.Error("reconciler quarantined after exhausting retries", zap.Int("attempts", 1))
+		ks.q.Forget(key)
+		health.ReconcileTotal.WithLabelValues(key.Kind, "transient_failure").Inc()
+		lastErrStr := ""
+		if r.Err != nil {
+			lastErrStr = r.Err.Error()
+		}
+		ks.quarantine.Put(&retry.PoisonItem{Key: key, Attempts: 1, LastError: lastErrStr})
+		return
+	}
+
+	retryCfg.MaxAttempts = retryAttempts
+	res, attempts, lastErr := retry.RunWithRetry(ctx, key, retryCfg, 0, log, func(rctx context.Context) error {
+		inner := safeReconcile(ks.reg.Reconciler, key)(rctx)
+		_ = m.logPanic(log, key, inner)
+		switch iv := inner.(type) {
+		case types.TransientFailure:
+			return iv.Err
+		case types.TerminalFailure:
+			// backoff.Permanent short-circuits the retry loop immediately so the
+			// remaining budget is not consumed. errors.As unwraps through
+			// PermanentError.Unwrap to find terminalDuringRetryError.
+			return backoff.Permanent(&terminalDuringRetryError{cause: iv.Err})
+		default:
+			return nil
+		}
+	})
+
+	var tdr *terminalDuringRetryError
+	if errors.As(lastErr, &tdr) {
+		log.Error("terminal failure during retry — quarantining immediately", zap.Error(tdr.cause))
+		ks.q.Forget(key)
+		health.ReconcileTotal.WithLabelValues(key.Kind, "terminal_failure").Inc()
+		ks.quarantine.Put(&retry.PoisonItem{
+			Key:       key,
+			Attempts:  attempts + 1, // +1 for the initial call before RunWithRetry
+			LastError: tdr.cause.Error(),
+		})
+		return
+	}
+
+	switch res {
+	case retry.ResultOK:
+		ks.mu.Lock()
+		ks.lastSuccess = time.Now()
+		ks.mu.Unlock()
+		health.ReconcileTotal.WithLabelValues(key.Kind, "success").Inc()
+		log.Debug("reconciled successfully after retries", zap.Int("attempts", attempts+1))
+	case retry.ResultQuarantine:
+		log.Error("reconciler quarantined after exhausting retries", zap.Int("attempts", attempts+1))
+		ks.q.Forget(key)
+		health.ReconcileTotal.WithLabelValues(key.Kind, "transient_failure").Inc()
+		lastErrStr := ""
+		if lastErr != nil {
+			lastErrStr = lastErr.Error()
+		}
+		ks.quarantine.Put(&retry.PoisonItem{
+			Key:       key,
+			Attempts:  attempts + 1, // +1 for the initial call before RunWithRetry
+			LastError: lastErrStr,
 		})
 	}
 }
 
 // logPanic checks if result is a TransientFailure wrapping a PanicError and
-// emits a structured ERROR log with the stack trace. It does NOT increment any
-// metric — the caller owns the counter so it is never double-counted.
-func (m *Manager) logPanic(log *zap.Logger, key WorkItemKey, result types.ReconcileResult) {
+// emits a structured ERROR log with the stack trace. Returns true if a panic
+// was detected so the caller can increment the metric exactly once (FR-004).
+func (m *Manager) logPanic(log *zap.Logger, key WorkItemKey, result types.ReconcileResult) bool {
 	tf, ok := result.(types.TransientFailure)
 	if !ok {
-		return
+		return false
 	}
 	var pe *PanicError
 	if errors.As(tf.Err, &pe) {
@@ -361,7 +411,9 @@ func (m *Manager) logPanic(log *zap.Logger, key WorkItemKey, result types.Reconc
 			zap.Any("panicValue", pe.Value),
 			zap.ByteString("stacktrace", pe.Stack),
 		)
+		return true
 	}
+	return false
 }
 
 // terminalDuringRetryError is a sentinel returned from inside the RunWithRetry
