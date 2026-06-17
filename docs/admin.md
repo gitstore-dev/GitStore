@@ -1,1 +1,3 @@
-See [docs/admin/overview.md](admin/overview.md) for the Admin documentation.
+# GitStore Admin
+
+See [docs/admin/README.md](admin/README.md) for the Admin documentation.

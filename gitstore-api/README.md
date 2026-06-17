@@ -1,95 +1,128 @@
-# API
+# gitstore-api
 
-GraphQL API service for the GitStore platform. Provides a headless, Relay-compatible GraphQL interface for querying and managing commerce catalogues stored in Git, plus a Git Smart HTTP server for standard push/pull operations.
+Go API service for GitStore. It is the public front door for GraphQL and Git Smart HTTP, and it is also the CatalogService gRPC server called by `gitstore-git-service` during push validation and admission.
 
-## Tech Stack
+## Purpose
 
-- **Language**: Go 1.25
-- **GraphQL**: [gqlgen](https://github.com/99designs/gqlgen) v0.17.90
-- **Datastore**: `go-memdb` (development) / ScyllaDB 5.x+ (production)
-- **Auth**: JWT (via `golang-jwt/jwt/v5`)
-- **Logging**: `go.uber.org/zap`
-- **gRPC client**: connects to `gitstore-git-service` for Git operations
+`gitstore-api` owns:
+
+- GraphQL queries for namespaces, repositories, products, product variants, categories, and collections.
+- Control-plane mutations for authentication, namespaces, and repositories.
+- Git Smart HTTP routing for `git clone`, `git fetch`, and `git push`.
+- CatalogService gRPC handlers for `ValidateResources` and `AdmitResources`.
+- Datastore access through the `memdb` and ScyllaDB backends.
+- Authentication, request middleware, health checks, and generated gqlgen wiring.
+
+Catalogue writes are Git-driven today. GraphQL catalogue CRUD is not the documented write path while Git-backed catalogue writes over GraphQL are being finalized.
+
+## Boundaries
+
+- Clients send GraphQL traffic to this service on port `4000`.
+- Git clients send Smart HTTP traffic to this service on port `5000`.
+- `gitstore-git-service` calls this service's CatalogService gRPC endpoint on port `6000`.
+- This service calls `gitstore-git-service` through GitService gRPC on port `50051`.
+- This service owns datastore persistence for control-plane records and admitted catalogue projections.
+
+## Ports And Paths
+
+| Port | Path | Purpose |
+|---:|---|---|
+| `4000` | `/graphql` | GraphQL API |
+| `4000` | `/playground` | GraphQL Playground |
+| `4000` | `/health` | Liveness health check |
+| `4000` | `/ready` | Readiness check |
+| `5000` | `/{namespace}/{repo}.git/info/refs` | Git Smart HTTP ref advertisement |
+| `5000` | `/{namespace}/{repo}.git/git-upload-pack` | Git fetch/clone |
+| `5000` | `/{namespace}/{repo}.git/git-receive-pack` | Git push |
+| `6000` | gRPC | CatalogService validation/admission |
 
 ## Project Structure
 
-```
+```text
 gitstore-api/
 ├── cmd/
-│   ├── server/       # Main API server entrypoint
-│   └── hashpw/       # Utility to generate bcrypt password hashes
-├── internal/
-│   ├── auth/         # Authentication & JWT handling
-│   ├── config/       # Configuration loading
-│   ├── datastore/    # Datastore abstraction (memdb / ScyllaDB)
-│   ├── gitclient/    # gRPC client to the git service
-│   ├── githttp/      # Git Smart HTTP protocol handler
-│   ├── graph/        # GraphQL resolvers and generated code
-│   ├── handler/      # HTTP route handlers
-│   ├── health/       # Health check endpoint
-│   ├── logger/       # Structured logging setup
-│   ├── middleware/   # HTTP middleware (auth, CORS, etc.)
-│   ├── models/       # Domain models
-│   └── validate/     # Input validation
+│   ├── server/       # API server entrypoint
+│   └── hashpw/       # bcrypt password hash helper
 ├── gen/              # Generated protobuf Go code
-├── tests/            # Integration tests
-├── gqlgen.yml        # gqlgen code generation config
+├── internal/
+│   ├── app/          # Runtime composition
+│   ├── auth/         # Session and JWT logic
+│   ├── catalog/      # Catalogue resource structs
+│   ├── cataloggrpc/  # CatalogService gRPC server
+│   ├── config/       # Configuration loading
+│   ├── datastore/    # Datastore abstraction and backends
+│   ├── gitclient/    # GitService gRPC client
+│   ├── githttp/      # Git Smart HTTP handler
+│   ├── graph/        # gqlgen resolvers and generated code
+│   ├── health/       # Health and readiness handlers
+│   ├── middleware/   # HTTP middleware
+│   └── validate/     # Frontmatter validation
+├── tests/            # Contract tests
+├── generate.go       # gqlgen directive
+├── gqlgen.yml        # gqlgen configuration
 └── go.mod
 ```
 
-## Configuration
+## Configuration Highlights
 
-Copy `.env.example` to `.env` and fill in the required values:
+Required for local API startup unless provided by `.env`:
 
-| Variable                              | Required          | Description                                       |
-|---------------------------------------|-------------------|---------------------------------------------------|
-| `GITSTORE_AUTH__ADMIN__USERNAME`      | Yes               | Admin username                                    |
-| `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | Yes               | Bcrypt hash (generate with `go run ./cmd/hashpw`) |
-| `GITSTORE_AUTH__JWT__SECRET`          | Yes               | Min 32-char random string for JWT signing         |
-| `GITSTORE_GIT__GRPC__URI`             | Yes (has default) | gRPC address of the git service                   |
-| `GITSTORE_API__GIT_PORT`              | No                | Git Smart HTTP listen port (default: 5000)        |
-| `GITSTORE_API_PORT`                   | No                | GraphQL API listen port (default: 4000)           |
-| `GITSTORE_DATASTORE__BACKEND`         | No                | `memdb` (default) or `scylla`                     |
-| `GITSTORE_LOG__LEVEL`                 | No                | `debug`, `info`, `warn`, `error`                  |
+| Variable | Default | Purpose |
+|---|---|---|
+| `GITSTORE_AUTH__ADMIN__USERNAME` | unset | Admin username |
+| `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | unset | bcrypt password hash |
+| `GITSTORE_AUTH__JWT__SECRET` | unset | JWT signing secret |
+| `GITSTORE_API__PORT` | `4000` | GraphQL HTTP port |
+| `GITSTORE_API__GIT_PORT` | `5000` | Git Smart HTTP port |
+| `GITSTORE_API__GRPC_PORT` | `6000` | CatalogService gRPC port |
+| `GITSTORE_GIT__GRPC__URI` | `dns:///localhost:50051` | GitService gRPC target |
+| `GITSTORE_DATASTORE__BACKEND` | `memdb` | `memdb` or `scylla` |
+| `GITSTORE_LOG__LEVEL` | `info` | Log level |
+| `GITSTORE_LOG__FORMAT` | `json` | `json` or `text` |
 
-See `.env.example` for the full list including ScyllaDB options.
+Copy the example file for local development:
 
-## Running
+```bash
+cp gitstore-api/.env.example gitstore-api/.env
+```
+
+## Commands
 
 From the repository root:
 
 ```bash
-# Run the API service (requires .env or shell env vars)
 make api
-
-# Or run both services together
 make dev
+make compose DETACH=1
+make bootstrap ADMIN_PASSWORD=<admin-password>
 ```
 
-## Development
+From this module:
 
 ```bash
-# Run tests
-cd gitstore-api && go test ./...
-
-# Regenerate GraphQL code after schema changes
+go test ./...
 go generate ./...
-
-# Generate a password hash for local development
 go run ./cmd/hashpw <password>
 ```
 
-## API Endpoints
+Scylla-backed tests:
 
-| Port | Path                                       | Description                      |
-|------|--------------------------------------------|----------------------------------|
-| 4000 | `/graphql`                                 | GraphQL API                      |
-| 4000 | `/playground`                              | GraphQL Playground (development) |
-| 4000 | `/health`                                  | Health check                     |
-| 5000 | `/{namespace}/{repo}.git/info/refs`        | Git Smart HTTP info/refs         |
-| 5000 | `/{namespace}/{repo}.git/git-upload-pack`  | Git fetch/clone                  |
-| 5000 | `/{namespace}/{repo}.git/git-receive-pack` | Git push                         |
+```bash
+GITSTORE_TEST_SCYLLA_ADDR=127.0.0.1:9042 \
+  go test -tags scylla -v -timeout 10m ./tests/contract/datastore/... ./internal/datastore/scylla/...
+```
+
+## Deeper Docs
+
+- [User Guide](../docs/user-guide.md)
+- [Developer Guide](../docs/developer-guide.md)
+- [API Reference](../docs/api-reference.md)
+- [Configuration](../docs/configuration.md)
+- [Push Validation](../docs/products/push-validation.md)
+- [GraphQL schemas](../shared/schemas/)
+- [CatalogService proto](../shared/proto/gitstore/catalog/v1/catalog_service.proto)
+- [GitService proto](../shared/proto/gitstore/git/v1/git_service.proto)
 
 ## License
 
-AGPL-3.0-or-later — see [LICENCE](../LICENSE).
+AGPL-3.0-or-later. See [LICENSE](../LICENSE).

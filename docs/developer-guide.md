@@ -1,441 +1,109 @@
 # GitStore Developer Guide
 
-**Date**: 2026-03-09
-**Target Audience**: Developers, DevOps, Technical Users
-**Prerequisites**: Docker, Git, Basic GraphQL knowledge
+**Date**: 2026-06-17
 
-## Overview
+**Audience**: Contributors, operators, and integration engineers
+**Prerequisites**: Docker, Git, Go, Rust, Make, curl, jq
 
-GitStore is a git-backed ecommerce headless engine with two core services:
-1. **Git Service** (`gitstore-git-service`, Rust) - Git protocol transport via gRPC (port 50051)
-2. **GraphQL API** (`gitstore-api`, Go) - Headless API with Relay support, catalogue validation/policy hooks, and Git smart HTTP (port 5000)
+This guide keeps implementation detail out of the user guide. It covers service topology, local development, datastore backends, hook/admission flow, controller-manager runtime, generated schema/proto workflow, and module responsibilities.
 
-> **Catalogue schema note**: `gitstore-git-service` does not parse or validate markdown/frontmatter content. Schema-aware validation and policy enforcement are owned by the API layer and future `git-receive-pack` hooks.
+## Current Topology
 
-> **Admin**: For the optional web interface, see [docs/admin/](admin/).
+```mermaid
+graph TD
+    GitClient["Git client\nCLI / agent"]
+    GraphQLClient["GraphQL clients\nstorefront / admin / scripts"]
+    Controller["gitstore-controller-manager\nport 5001"]
 
-## Quick Start (5 minutes)
+    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 5000\nCatalogService gRPC: 6000"]
+    GitService["gitstore-git-service\nGitService gRPC: 50051"]
+    Datastore["Datastore\nmemdb or ScyllaDB"]
+    Repos["Bare repositories\nlocal filesystem"]
 
-### 1. Clone and Start Services
+    GitClient -->|"Git Smart HTTP"| API
+    GraphQLClient -->|"GraphQL"| API
+    Controller -->|"GraphQL reconcile/status traffic"| API
+
+    API -->|"GitService gRPC"| GitService
+    GitService -->|"CatalogService gRPC\nValidateResources / AdmitResources"| API
+    API --> Datastore
+    GitService --> Repos
+```
+
+## Ports
+
+| Service | Port | Purpose |
+|---|---:|---|
+| `gitstore-api` | `4000` | GraphQL, Playground, `/health`, `/ready`, login helper |
+| `gitstore-api` | `5000` | Git Smart HTTP front door |
+| `gitstore-api` | `6000` | CatalogService gRPC called by the Git service |
+| `gitstore-git-service` | `50051` | GitService gRPC storage and transport |
+| `gitstore-controller-manager` | `5001` | `/health`, `/metrics`, poison-item API |
+| `gitstore-admin` | `3000` | Optional browser UI |
+
+## Local Development
+
+Start the Docker stack:
 
 ```bash
-# Clone repository
-git clone https://github.com/gitstore-dev/gitstore
-cd gitstore
-
-# Start all core services
 make compose DETACH=1
-
-# Check service health
 make ps
-
-# Create a starter namespace and repository
-make bootstrap ADMIN_PASSWORD=<admin-password>
 ```
 
-**Expected Output**:
-```
-NAME                 STATUS              PORTS
-gitstore-git-service running             0.0.0.0:50051->50051/tcp
-gitstore-api         running             0.0.0.0:4000->4000/tcp, 0.0.0.0:5000->5000/tcp
-```
-
-### 2. Access Services
-
-- **GraphQL Playground**: http://localhost:4000/playground
-- **Git smart HTTP**: http://localhost:5000/{namespace}/{repo} — use with `git clone`, `git fetch`, `git push`
-
-### 3. Test GraphQL Query
-
-Open http://localhost:4000/playground and run:
-
-```graphql
-query {
-  products(first: 5) {
-    edges {
-      node {
-        sku
-        title
-        price
-        category {
-          name
-        }
-      }
-    }
-  }
-}
-```
-
----
-
-## User Journeys
-
-### Journey 1: Technical User - Git Workflow (P1 MVP)
-
-**Goal**: Create and publish a product catalogue using git
-
-#### Step 1: Create and Clone a Catalogue Repository
-
-Provision a namespace and repository through the running API:
+Run native services:
 
 ```bash
-make bootstrap NAMESPACE=gitstore-test REPOSITORY=catalog ADMIN_PASSWORD=<admin-password>
-```
-
-Then clone over Smart HTTP using the clone URL printed by `make bootstrap`:
-
-```bash
-git clone http://localhost:5000/gitstore/catalog catalogue-work
-cd catalogue-work
-```
-
-#### Step 2: Create a Product
-
-```bash
-mkdir -p products/electronics
-cat > products/electronics/LAPTOP-001.md << 'EOF'
----
-id: prod_laptop001
-sku: LAPTOP-001
-title: Premium Laptop
-description: High-performance laptop for professionals
-price: 1299.99
-currency: USD
-inventory_status: in_stock
-inventory_quantity: 50
-category_id: cat_electronics
-collection_ids:
-  - coll_featured
-images:
-  - https://cdn.example.com/laptop-001.jpg
-metadata:
-  brand: TechCorp
-  weight_kg: 1.8
-created_at: 2026-03-09T10:00:00Z
-updated_at: 2026-03-09T10:00:00Z
----
-
-# Premium Laptop
-
-Professional-grade laptop with cutting-edge specs.
-
-## Features
-- Intel i7 processor
-- 16GB RAM
-- 512GB SSD
-- 15.6" 4K display
-EOF
-```
-
-#### Step 3: Commit and Push
-
-```bash
-git add products/electronics/LAPTOP-001.md
-git commit -m "Add Premium Laptop (LAPTOP-001)"
-git push origin main
-```
-
-**Expected Output**:
-```
-Counting objects: 4, done.
-Delta compression using up to 8 threads.
-Compressing objects: 100% (3/3), done.
-Writing objects: 100% (4/4), 512 bytes | 512.00 KiB/s, done.
-Total 4 (delta 1), reused 0 (delta 0)
-To http://localhost:5000/gitstore/catalog
-   abc1234..def5678  main -> main
-```
-
-> [!NOTE]
-> If policy hooks are enabled in your deployment, push output may also include hook diagnostics emitted by the API/policy layer.
-
-#### Step 4: Create Release Tag
-
-```bash
-git tag -a v0.2.0 -m "Release v0.2.0: Added Premium Laptop"
-git push origin v0.2.0
-```
-
-**Result**: Storefront typically updates within ~30 seconds via gRPC event stream, but timing may vary.
-
-#### Step 5: Verify Product on Storefront
-
-```bash
-curl http://localhost:4000/graphql \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "{ product(by: {sku: \"LAPTOP-001\"}) { title price } }"
-  }'
-```
-
-**Expected Output**:
-```json
-{
-  "data": {
-    "product": {
-      "title": "Premium Laptop",
-      "price": "1299.99"
-    }
-  },
-  "errors": []
-}
-```
-
----
-
-### Journey 2: Organise with Categories & Collections (P2)
-
-**Goal**: Create hierarchical categories and curated collections
-
-#### Step 1: Create Root Category
-
-```bash
-cat > categories/electronics.md << 'EOF'
----
-id: cat_electronics
-name: Electronics
-description: Electronic devices and accessories
-parent_id: null
-display_order: 1
-slug: electronics
-created_at: 2026-03-09T09:00:00Z
-updated_at: 2026-03-09T09:00:00Z
----
-
-# Electronics
-
-Browse our selection of electronic devices.
-EOF
-```
-
-#### Step 2: Create Subcategory
-
-```bash
-cat > categories/computers.md << 'EOF'
----
-id: cat_computers
-name: Computers
-description: Desktops, laptops, and accessories
-parent_id: cat_electronics
-display_order: 1
-slug: computers
-created_at: 2026-03-09T09:00:00Z
-updated_at: 2026-03-09T09:00:00Z
----
-
-# Computers
-
-High-performance computing solutions.
-EOF
-```
-
-#### Step 3: Create Collection
-
-```bash
-cat > collections/featured.md << 'EOF'
----
-id: coll_featured
-name: Featured Products
-description: Our hand-picked selection
-product_ids: []
-display_order: 1
-slug: featured
-created_at: 2026-03-09T09:00:00Z
-updated_at: 2026-03-09T09:00:00Z
----
-
-# Featured Products
-
-This week's featured selection.
-EOF
-```
-
-> [!NOTE]
-> Products reference collections via `collection_ids` in product files.
-
-#### Step 4: Commit, Tag, and Push
-
-```bash
-git add categories/ collections/
-git commit -m "Add Electronics category hierarchy and Featured collection"
-git tag -a v0.3.0 -m "Release v0.3.0: Categories and collections"
-git push origin main v0.3.0
-```
-
-#### Step 5: Query Category Tree
-
-```graphql
-query CategoryTree {
-  categories {
-    edges {
-      node {
-        name
-        slug
-        children {
-          name
-          slug
-        }
-      }
-    }
-  }
-}
-```
-
-**Expected Output**:
-```json
-{
-  "data": {
-    "categories": {
-      "edges": [
-        {
-          "node": {
-            "name": "Electronics",
-            "slug": "electronics",
-            "children": [
-              {
-                "name": "Computers",
-                "slug": "computers"
-              }
-            ]
-          }
-        }
-      ]
-    }
-  },
-  "errors": []
-}
-```
-
----
-
-## Architecture Deep Dive
-
-### Component Interaction Flow
-
-```
-┌─────────────┐   Git smart HTTP  ┌─────────────┐   gRPC         ┌─────────────┐
-│ Git Client  │   (push/pull)     │   GraphQL   │   (port 50051) │   Git       │
-│   (CLI)     │──────────────────→│   API       │───────────────→│   Service   │
-│             │←──────────────────│  (Go)       │←───────────────│  (Rust)     │
-└─────────────┘ Hook / Policy Err.│  port 5000  │                └─────────────┘
-                  or Success      └──────┬──────┘
-                                         │
-                       ┌─────────────────┼─────────────────┐
-                       │ GraphQL         │                 │ GraphQL
-                       │                 │                 │
-                       ↓                 ↓                 ↓
-                ┌─────────────┐   ┌─────────────┐  ┌─────────────┐
-                │  Admin      │   │ Storefront  │  │   Other     │
-                │  (Astro)    │   │  (Consumer) │  │   Clients   │
-                └─────────────┘   └─────────────┘  └─────────────┘
-                       │
-                       │ GraphQL Mutations
-                       │ (create/update/delete)
-                       │ + publishCatalog
-                       ↓
-                ┌─────────────┐   gRPC            ┌─────────────┐
-                │  GraphQL    │   (commit/tag)    │   Git       │
-                │   API       │──────────────────→│   Service   │
-                │   (Go)      │←──────────────────│  (Rust)     │
-                └─────────────┘ Hook / Policy     └─────────────┘
-```
-
-### Data Flow: Create Product
-
-**Path 1: Technical User (Git CLI)**
-1. **Git Client**: User creates Markdown file locally
-2. **Git Client**: `git commit` + `git push` to `http://localhost:5000/{namespace}/{repo}`
-3. **GraphQL API (port 5000)**: Proxies Git smart HTTP to `gitstore-git-service` via gRPC
-4. **Git Service**: Git transport accepts/rejects based on git protocol state (no frontmatter schema rewrite)
-5. **Git Client**: Receives success/failure
-6. **Git Client**: `git tag v1.0.0` + `git push --tags`
-7. **Git Service**: Tag created → gRPC event stream notification (pending GH#139)
-8. **Storefront**: Queries API → Gets updated catalogue
-
-**Path 2: Admin (optional web UI)**
-
-> See [docs/admin/](admin/) for the Admin setup and usage.
-
----
-
-## Development Setup
-
-### Prerequisites
-
-- **Rust**: 1.75+ (`rustup install stable`)
-- **Go**: 1.21+ (`go version`)
-- **Node.js**: 18+ (`node --version`)
-- **Docker**: 24+ (for local development)
-- **Git**: 2.40+
-- **Make, curl, jq**: required for root command wrappers and bootstrap targets
-
-### Build from Source
-
-Run aggregate build and test checks from the repository root:
-
-```bash
-make build
-make test
-```
-
-These targets build and test the Rust git service plus Go modules in `gitstore-api` and `gitstore-controller-manager`.
-
-#### Git Service (Rust)
-
-```bash
-# Run standalone in the foreground
 make git
-```
-
-#### GraphQL API (Go)
-
-```bash
-# Run standalone in the foreground.
-# Requires gitstore-api/.env or shell env for required auth secrets.
 make api
+make controller
 ```
 
-Run both native services together:
+Run the Git service and API together in the foreground:
 
 ```bash
 make dev
 ```
 
-### Environment Variables
-
-#### Git Service
+Bootstrap local control-plane resources through GraphQL:
 
 ```bash
-GITSTORE_GRPC__PORT=50051
-GITSTORE_GIT__DATA_DIR=/data/repos
-GITSTORE_LOG__LEVEL=info
-GITSTORE_LOG__FORMAT=json
-GITSTORE_GIT__REPO__MAX_FILE_SIZE=52428800  # 50MB
+make bootstrap ADMIN_PASSWORD=<admin-password>
 ```
 
-#### GraphQL API
+Useful variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `API_URL` | `http://localhost:4000/graphql` | Bootstrap GraphQL endpoint |
+| `ADMIN_USERNAME` | `admin` | Login username |
+| `ADMIN_PASSWORD` | unset | Login password for bootstrap token creation |
+| `BOOTSTRAP_TOKEN` | unset | Reuse an existing bearer token |
+| `NAMESPACE` | `gitstore-test` | Namespace to create |
+| `REPOSITORY` | `catalog` | Repository to create |
+| `DEFAULT_BRANCH` | `main` | Repository default branch |
+
+## Datastore Backends
+
+`gitstore-api` owns the application datastore abstraction.
+
+| Backend | Use | Notes |
+|---|---|---|
+| `memdb` | Development and fast tests | In-memory only; no persistence |
+| `scylla` | Production-oriented backend | Uses ScyllaDB 5.x+ and embedded migrations |
+
+Start Scylla services only:
 
 ```bash
-GITSTORE_API__PORT=4000
-GITSTORE_API__GIT_PORT=5000
-GITSTORE_GIT__GRPC__URI=dns:///git-service:50051
-GITSTORE_CACHE__TTL=300  # 5 minutes
-GITSTORE_LOG__LEVEL=info
-GITSTORE_LOG__FORMAT=json
-```
-
-#### Start ScyllaDB (optional, for database-backed development)
-
-```bash
-# Scylla services only
 make scylla DETACH=1
+```
 
-# Full core stack with Scylla
+Start the full stack with Scylla:
+
+```bash
 make compose-scylla DETACH=1
 ```
 
-Scylla-backed Go tests use an externally managed ScyllaDB instance. Start
-ScyllaDB first, then point the tests at its CQL address:
+Run Scylla-backed API datastore tests after Scylla is reachable:
 
 ```bash
 cd gitstore-api
@@ -443,209 +111,277 @@ GITSTORE_TEST_SCYLLA_ADDR=127.0.0.1:9042 \
   go test -tags scylla -v -timeout 10m ./tests/contract/datastore/... ./internal/datastore/scylla/...
 ```
 
-### Bootstrap and Clean-up
+## Git And Admission Flow
 
-Bootstrap creates resources through the running GraphQL API. It is create-oriented: existing namespaces or repositories fail clearly instead of being updated.
+The API is the Git Smart HTTP front door. The Rust Git service is gRPC-only storage and transport.
+
+1. A Git client clones, fetches, or pushes to `http://localhost:5000/{namespace}/{repo}.git`.
+2. `gitstore-api` resolves `{namespace}/{repo}` to the stable repository ID stored in the datastore.
+3. `gitstore-api` forwards Git transport work to `gitstore-git-service` through `GitService` gRPC.
+4. During receive-pack, `gitstore-git-service` stages objects in quarantine and runs enabled hook phases.
+5. In the blocking pre-receive phase, `gitstore-git-service` sends frontmatter resource blobs to `gitstore-api` via `CatalogService.ValidateResources`.
+6. If validation passes, refs are updated and the push succeeds.
+7. In the post-receive phase, `gitstore-git-service` calls `CatalogService.AdmitResources` with repository ID, commit SHA, and ref name.
+8. `gitstore-api` fetches accepted files through `GitService`, parses catalogue resources, applies admission checks, and stores hydrated records and status in the datastore.
+9. `gitstore-controller-manager` reconciles controller-owned status and operational follow-up through the API.
+
+The pre-receive phase is intentionally stateless and blocking. Admission can use datastore state and is allowed to complete asynchronously relative to the Git client acknowledgement.
+
+## Controller Manager Runtime
+
+`gitstore-controller-manager` provides the shared runtime for level-triggered controllers.
+
+Runtime pieces:
+
+- Work queues keyed by kind, namespace, and name.
+- Worker pools via `pond`.
+- Retry and backoff via `cenkalti/backoff`.
+- Quarantine for poison items after repeated failures.
+- Panic capture with stack traces.
+- Per-kind health statistics.
+- Prometheus metrics.
+
+HTTP surface on port `5001`:
+
+| Route | Purpose |
+|---|---|
+| `GET /health` | Returns `ok` or `degraded` based on stalled workers and poison items |
+| `GET /metrics` | Prometheus metrics |
+| `GET /controller/v1/poison/{kind}` | List quarantined items for one kind |
+| `GET /controller/v1/poison/_all` | List all quarantined items |
+| `POST /controller/v1/poison/{kind}/{namespace}/{name}/requeue` | Requeue one poison item |
+
+## Module Notes
+
+### `gitstore-api`
+
+Purpose:
+
+- GraphQL API and Relay-style schema.
+- Authentication and JWT sessions.
+- Namespace and repository control plane.
+- Git Smart HTTP handler.
+- CatalogService gRPC server for push validation and admission.
+- Datastore abstraction and backend implementations.
+
+Important directories:
+
+| Path | Purpose |
+|---|---|
+| `cmd/server` | API entrypoint |
+| `internal/app` | Runtime composition |
+| `internal/graph` | gqlgen resolvers and generated code |
+| `internal/githttp` | Smart HTTP front door |
+| `internal/gitclient` | GitService gRPC client |
+| `internal/cataloggrpc` | CatalogService gRPC implementation |
+| `internal/datastore` | Datastore abstraction and backends |
+| `internal/validate` | Frontmatter resource validation |
+
+Commands:
 
 ```bash
-# Login and cache a bearer token for later bootstrap commands
-make bootstrap-token ADMIN_PASSWORD=<admin-password>
-
-# Create namespace + repository
-make bootstrap ADMIN_PASSWORD=<admin-password>
-
-# Or create them separately
-make bootstrap-namespace ADMIN_PASSWORD=<admin-password>
-make bootstrap-repository ADMIN_PASSWORD=<admin-password>
+make api
+cd gitstore-api
+go test ./...
+go generate ./...
+go run ./cmd/hashpw <password>
 ```
 
-Useful bootstrap variables include `API_URL`, `ADMIN_USERNAME`, `BOOTSTRAP_TOKEN`, `NAMESPACE`, `NAMESPACE_DISPLAY_NAME`, `NAMESPACE_TIER`, `REPOSITORY`, and `DEFAULT_BRANCH`.
+### `gitstore-git-service`
 
-For native local service data only:
+Purpose:
+
+- Own bare repository storage.
+- Serve GitService gRPC operations for repository lifecycle, ref advertisement, receive-pack, upload-pack, file reads, commits, deletes, and tags.
+- Run receive hook phases and call the API CatalogService.
+
+Important directories:
+
+| Path | Purpose |
+|---|---|
+| `src/grpc` | Tonic GitService server |
+| `src/git` | Repository and pack protocol logic |
+| `src/git/hooks` | Receive hook pipeline, validation, admission callouts |
+| `gen` | Generated Rust proto bindings |
+| `tests/integration` | Rust integration tests |
+
+Commands:
 
 ```bash
-make git-clean-data CONFIRM=1
+make git
+cd gitstore-git-service
+cargo test
+cargo test --test integration
+cargo build --release
 ```
 
-For Docker Compose services:
+### `gitstore-controller-manager`
+
+Purpose:
+
+- Shared controller runtime.
+- Level-triggered reconciliation primitives.
+- Health, metrics, and poison-item management API.
+
+Important directories:
+
+| Path | Purpose |
+|---|---|
+| `cmd/controller` | Controller manager entrypoint |
+| `internal/manager` | Runtime registration and dispatch |
+| `internal/queue` | Work queue |
+| `internal/worker` | Worker pool |
+| `internal/retry` | Backoff and quarantine |
+| `internal/health` | Health and metrics handlers |
+| `internal/api` | Poison-item API |
+| `tests/contract` | Runtime contract tests |
+
+Commands:
 
 ```bash
-make down
+make controller
+cd gitstore-controller-manager
+go test ./...
 ```
 
-### Go Licence Headers
+### `gitstore-admin`
 
-All Go source files in this repository should include this header near the top of the file:
+Purpose:
 
-```go
-// SPDX-License-Identifier: AGPL-3.0-or-later
-// Copyright (c) 2026 GitStore contributors
-```
+- Optional Astro/React UI.
+- GraphQL client of `gitstore-api`.
+- Browser-facing attachment point for future Git-backed editing workflows.
 
-Run the repository license checks through Make:
+Commands:
 
 ```bash
+make admin-compose DETACH=1
+cd gitstore-admin
+npm install
+npm run dev
+npm run build
+npm run test
+npm run test:e2e
+```
+
+## Generated Schema And Proto Workflow
+
+### GraphQL
+
+Schema files live in [shared/schemas](../shared/schemas/). gqlgen configuration lives in [gitstore-api/gqlgen.yml](../gitstore-api/gqlgen.yml).
+
+When schema changes:
+
+```bash
+cd gitstore-api
+go generate ./...
+go test ./...
+```
+
+Generated files are under `gitstore-api/internal/graph/generated` and `gitstore-api/internal/graph/model`.
+
+### Protobuf
+
+Canonical proto contracts live in [shared/proto](../shared/proto/):
+
+- `gitstore/git/v1/git_service.proto`
+- `gitstore/catalog/v1/catalog_service.proto`
+
+Generated Go stubs live in `gitstore-api/gen`. Generated Rust stubs live in `gitstore-git-service/gen`. The Rust build does not generate proto code at compile time; `build.rs` documents that stubs are generated by the repository's buf workflow.
+
+After proto changes, regenerate stubs with the repository's proto generation workflow and run:
+
+```bash
+make build
+make test
+```
+
+## Tests And PR Readiness
+
+Focused checks:
+
+```bash
+cd gitstore-api
+go test ./...
+
+cd ../gitstore-controller-manager
+go test ./...
+
+cd ../gitstore-git-service
+cargo test
+```
+
+Aggregate checks:
+
+```bash
+make build
+make test
+make lint
 make license-check
+make pr-ready
 ```
 
-Install repository hooks once per clone:
+Install local hooks once per clone:
 
 ```bash
 ./scripts/install-git-hooks.sh
 ```
 
-This installs `.git/hooks/pre-commit`, which blocks commits when staged Go files are missing headers or use an outdated year, and `.git/hooks/commit-msg`, which rejects non-Conventional Commit messages.
+Use Conventional Commits.
 
-CI also enforces this via:
-- `.github/workflows/go-license-headers.yml`
-- `.github/workflows/rust-license-headers.yml`
-- `.github/workflows/js-license-headers.yml`
+## Configuration Highlights
 
-### IDE Setup (GoLand and VS Code)
+### API
 
-- **VS Code**
-  - Use the `gostorehdr` snippet from `.vscode/go.code-snippets` to insert the standard header quickly.
-  - Use the `gitrusthdr` snippet from `.vscode/rust.code-snippets` for Rust headers.
-  - Use the `gitjshdr` snippet from `.vscode/javascript-typescript.code-snippets` for JS/TS headers.
-  - Run the task `go:check-license-headers-staged` before commit (or `go:check-license-headers-all` for a full scan) from `.vscode/tasks.json`.
-  - Run `rust:check-license-headers-staged` (or `rust:check-license-headers-all`) for Rust files.
-  - Run `js:check-license-headers-staged` (or `js:check-license-headers-all`) for JS/TS files.
+| Env var | Default | Purpose |
+|---|---|---|
+| `GITSTORE_API__PORT` | `4000` | GraphQL HTTP port |
+| `GITSTORE_API__GIT_PORT` | `5000` | Git Smart HTTP port |
+| `GITSTORE_API__GRPC_PORT` | `6000` | CatalogService gRPC port |
+| `GITSTORE_GIT__GRPC__URI` | `dns:///localhost:50051` | GitService gRPC target |
+| `GITSTORE_DATASTORE__BACKEND` | `memdb` | `memdb` or `scylla` |
+| `GITSTORE_AUTH__ADMIN__USERNAME` | unset | Admin login username |
+| `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | unset | bcrypt password hash |
+| `GITSTORE_AUTH__JWT__SECRET` | unset | JWT signing secret |
 
-- **GoLand / JetBrains IDEs**
-  - Configure a Copyright profile with the same SPDX + copyright text.
-  - Enable "Before Commit" execution of:
-    - `./scripts/check-go-license-headers.sh --staged`
-    - `./scripts/check-rust-license-headers.sh --staged`
-    - `./scripts/check-js-license-headers.sh --staged`
-  - Optionally add an External Tool that runs the same command for one-click validation.
-  - Use Conventional Commits for the commit summary, for example `feat: add product search`.
+### Git Service
 
----
+| Env var | Default | Purpose |
+|---|---|---|
+| `GITSTORE_GRPC__PORT` | `50051` | GitService gRPC port |
+| `GITSTORE_GIT__DATA_DIR` | `/data/repos` | Bare repository root |
+| `GITSTORE_GIT__REPO__MAX_FILE_SIZE` | `52428800` | Per-file limit |
+| `GITSTORE_CATALOG_SERVICE__URI` | `http://localhost:6000` | API CatalogService target |
 
-## Testing
+### Controller Manager
 
-Run the standard Rust and Go test suites from the repository root:
+| Env var | Default | Purpose |
+|---|---|---|
+| `GITSTORE_CONTROLLER__PORT` | `5001` | HTTP management port |
+| `GITSTORE_CONTROLLER__API__URI` | `http://localhost:4000/graphql` | API endpoint for reconciliation |
+| `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS` | `5` | Retry limit before quarantine |
+| `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | `5m` | Worker stall threshold |
 
-```bash
-make test
-```
+See [configuration.md](configuration.md) for the operator reference.
 
-Before opening a PR, run the full readiness workflow:
+## Historical Implementation References
 
-```bash
-make pr-ready
-```
+Spec quickstarts are useful implementation references, but they are not user-facing current workflow docs.
 
----
+| Spec | Reference |
+|---|---|
+| `012-smart-http-api` | [quickstart](../specs/012-smart-http-api/quickstart.md), [plan](../specs/012-smart-http-api/plan.md) |
+| `018-hook-pipeline-wiring` | [quickstart](../specs/018-hook-pipeline-wiring/quickstart.md), [plan](../specs/018-hook-pipeline-wiring/plan.md) |
+| `021-category-taxonomy` | [quickstart](../specs/021-category-taxonomy/quickstart.md), [plan](../specs/021-category-taxonomy/plan.md) |
+| `022-collection-resource-contract` | [quickstart](../specs/022-collection-resource-contract/quickstart.md), [plan](../specs/022-collection-resource-contract/plan.md) |
+| `024-product-variant` | [quickstart](../specs/024-product-variant/quickstart.md), [plan](../specs/024-product-variant/plan.md) |
+| `025-controller-manager-runtime` | [quickstart](../specs/025-controller-manager-runtime/quickstart.md), [plan](../specs/025-controller-manager-runtime/plan.md) |
+| `026-reconcile-handler` | [quickstart](../specs/026-reconcile-handler/quickstart.md), [plan](../specs/026-reconcile-handler/plan.md) |
 
-## Troubleshooting
+## Related Docs
 
-### Issue: Git Push Rejected
-
-**Error**:
-```
-! [remote rejected] main -> main (pre-receive hook declined)
-```
-
-**Cause**:
-- A server-side hook rejected the ref update (for example branch/tag policy, signing policy, or API-managed catalogue rules)
-
-**Solution**:
-- Read hook output from the push response and from service logs
-- Correct the issue in your local branch, then push again
-
-### Issue: Storefront Not Updating After Release Tag
-
-**Symptoms**: Storefront not updating after release tag
-
-**Debug**:
-```bash
-# Check API logs
-make logs SERVICE=api
-
-# Manual cache invalidation
-# TODO returns 404
-curl -X POST http://localhost:4000/admin/cache/invalidate
-```
-
-### Issue: Orphaned Product References
-
-**Error in GraphQL response**:
-```json
-{
-  "data": {
-    "product": {
-      "category": null
-    }
-  },
-  "errors": [
-    {
-      "message": "Category cat_invalid not found",
-      "locations": [{ "line": 7, "column": 7 }],
-      "path": ["product", "category"]
-    }
-  ]
-}
-```
-
-**Solution**:
-- Update product to reference valid category
-- Or delete product if category deletion was intentional
-
----
-
-## Performance Tuning
-
-### Git Repository Size Management
-
-```bash
-# Check repository size
-du -sh /data/repos/<repository_id>.git
-
-# Git garbage collection
-git gc --aggressive --prune=now
-
-# Compress markdown files
-find products -name "*.md" -exec gzip {} \;
-```
-
-### API Cache Configuration
-
-Adjust cache TTL based on update frequency:
-
-```go
-// High update frequency (every 5 minutes)
-cache.TTL = 2 * time.Minute
-
-// Low update frequency (once per day)
-cache.TTL = 30 * time.Minute
-```
-
-### Database Queries
-
-Use DataLoader to batch product category lookups:
-
-```go
-loader := dataloader.NewBatchedLoader(func(keys []string) []*Category {
-    return repo.GetCategoriesByIDs(keys)
-})
-```
-
----
-
-## Next Steps
-
-1. **User Guide**: [user-guide.md](user-guide.md) - End-user and operator workflows
-2. **API Reference**: [api-reference.md](api-reference.md) - GraphQL and service API details
-3. **Architecture**: [architecture.md](architecture.md) - System components and data flow
-4. **Storefront**: [storefront.md](storefront.md) - Consumer experience notes
-5. **GraphQL Contracts**: [../shared/schemas/](../shared/schemas/) - Schema source of truth
-
----
-
-## Support & Resources
-
-- **GitHub Issues**: https://github.com/gitstore-dev/gitstore/issues
-- **Documentation**: https://docs.gitstore.dev
-- **GraphQL Playground**: http://localhost:4000/playground
-- **Project Overview**: [README.md](../README.md)
+- [User Guide](user-guide.md)
+- [API Reference](api-reference.md)
+- [Architecture](architecture.md)
+- [Admin](admin/README.md)
+- [Push Validation](products/push-validation.md)
