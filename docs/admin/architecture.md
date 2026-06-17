@@ -1,56 +1,59 @@
-# GitStore Admin — Architecture
+# GitStore Admin Architecture
 
-`gitstore-admin` is the backoffice layer of the core GitStore stack.
+`gitstore-admin` is an optional UI layer in front of `gitstore-api`.
 
-## Architecture Diagram
+## Topology
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#E5E7EB', 'edgeLabelBackground':'#ffffff', 'tertiaryColor': '#fff'}}}%%
 graph TD
-    Merchandiser[("🧑‍💼 Merchandiser\n(Browser)")]:::external
-    GitClient[("👩‍💻 Git Client\n(CLI / AI Agent)")]:::external
-    Storefront[("🌐 Storefront")]:::external
+    Browser["Browser"]
+    GitClient["Git client\n(CLI / agent)"]
+    Storefront["Storefront"]
 
-    Admin[("🖥️ gitstore-admin\n(Astro/React)")]:::addon
-    API[("🐹 gitstore-api\n(Go GraphQL)")]:::go
-    Git[("🦀 gitstore-git-service\n(Rust Git Engine)")]:::rust
-    Disk[("💾 Storage\n(Bare .git Repos)")]:::infra
+    Admin["gitstore-admin\nAstro / React\nport 3000"]
+    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 5000\nCatalogService gRPC: 6000"]
+    GitService["gitstore-git-service\ngRPC: 50051"]
+    Controller["gitstore-controller-manager\nhealth/metrics/API: 5001"]
+    Datastore["memdb / ScyllaDB"]
+    Repos["Bare Git repositories"]
 
-    Merchandiser -->|"Browser UI"| Admin
-    Admin -->|"GraphQL mutations\n(products, categories, tags)"| API
-    GitClient -->|"git push / pull"| Git
-    API -->|"gRPC / git protocol"| Git
-    Git <-->|"Fast I/O"| Disk
-    Storefront -->|"GraphQL queries"| API
+    Browser -->|"HTTP"| Admin
+    Admin -->|"GraphQL"| API
+    Storefront -->|"GraphQL"| API
+    GitClient -->|"Git Smart HTTP"| API
+    Controller -->|"GraphQL reconcile traffic"| API
 
-    classDef rust fill:#FCA5A5,stroke:#DC2626,stroke-width:2px,color:#000;
-    classDef go fill:#BAE6FD,stroke:#0284C7,stroke-width:2px,color:#000;
-    classDef addon fill:#D1FAE5,stroke:#059669,stroke-width:2px,color:#000;
-    classDef infra fill:#E5E7EB,stroke:#4B5563,stroke-width:2px,color:#000;
-    classDef external fill:#fff,stroke:#111,stroke-width:1px,stroke-dasharray: 5 5,color:#000;
+    API -->|"GitService gRPC"| GitService
+    GitService -->|"CatalogService gRPC\nvalidate/admit"| API
+    API --> Datastore
+    GitService --> Repos
 ```
 
-## How the Admin Fits In
+## Boundaries
 
-The core stack (`gitstore-api` + `gitstore-git-service`) operates independently. `gitstore-admin`:
+- Admin is a client of `gitstore-api`.
+- Admin uses `GITSTORE_GRAPHQL_URL` to reach the GraphQL endpoint.
+- Admin never talks directly to `gitstore-git-service`.
+- Git clone, fetch, and push traffic enters through `gitstore-api` on Git Smart HTTP port `5000`.
+- `gitstore-git-service` remains gRPC-only from the perspective of the compose network.
+- Catalogue admission is owned by the API and Git service hook callout flow, not by the admin process.
 
-1. Connects only to `gitstore-api` via GraphQL — it never talks directly to `gitstore-git-service`.
-2. Uses the same GraphQL mutations available to any other client (AI agents, storefronts, CI scripts).
-3. Calls the `publishCatalog` mutation which triggers `gitstore-api` to push a tagged commit to `gitstore-git-service`.
+## Compose Network
 
-## Relationship to Core Proposals
+When started with `compose.admin.yml`, the services share `gitstore-network`:
 
-Both architecture proposals in [`docs/architecture.md`](../architecture.md) support the admin add-on at the same attachment point: the GraphQL API layer. The admin add-on is proposal-agnostic.
-
-## Network Topology (Compose)
-
-When started with the `compose.admin.yml` override, the three containers share `gitstore-network`:
-
-```
+```text
 gitstore-network
-├── gitstore-git-service  (ports 9418, 8080)
-├── gitstore-api          (port 4000)
-└── gitstore-admin        (port 3000)  ← added by compose.admin.yml
+├── gitstore-api                 ports 4000, 5000, 6000
+├── gitstore-git-service         port 50051
+├── gitstore-controller-manager  port 5001
+└── gitstore-admin               port 3000
 ```
 
-The admin container communicates with the API container using the internal DNS name `api` (resolved by Docker within `gitstore-network`).
+Inside the Docker network, admin reaches the API at `http://api:4000/graphql`.
+
+## Current Write Model
+
+Catalogue writes are Git-driven today. Users author catalogue resource files, commit them, and push to the API-fronted Git Smart HTTP endpoint. Push validation and admission are performed by the core services.
+
+The admin UI remains the browser-facing attachment point for future Git-backed editing workflows. Direct catalogue GraphQL CRUD and publish mutations are not the documented integration path while that design is still being finalized.

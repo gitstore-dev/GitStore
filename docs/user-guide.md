@@ -1,473 +1,493 @@
 # GitStore User Guide
 
-Welcome to GitStore, a git-backed ecommerce headless engine that lets you manage product catalogs using markdown files with YAML front-matter.
+GitStore lets you manage a commerce catalogue as Markdown files in Git and read the admitted catalogue through GraphQL.
 
-> **Format note**: Markdown/front-matter is the catalogue content format. `gitstore-git-service` transports Git data and exposes hook points; catalogue parsing and schema-aware validation live in higher layers such as the API and policy workers.
+This guide treats GitStore as a running product. It focuses on what you do as a user: start the stack, create a namespace and repository, push catalogue manifests, query GraphQL, and troubleshoot common issues.
 
-## Table of Contents
+## Prerequisites
 
-- [Overview](#overview)
-- [Getting Started](#getting-started)
-- [Catalog Structure](#catalog-structure)
-- [Managing Products](#managing-products)
-- [Managing Categories](#managing-categories)
-- [Managing Collections](#managing-collections)
-- [Publishing Changes](#publishing-changes)
-- [Using the Admin](#using-the-admin)
-- [Querying the GraphQL API](#querying-the-graphql-api)
-- [Troubleshooting](#troubleshooting)
-
-## Overview
-
-GitStore provides two ways to manage your product catalog:
-
-1. **Git-based workflow**: Edit markdown files directly, commit changes, and push to publish
-2. **Admin**: Use an optional web interface — see [docs/admin/](admin/)
-
-Both workflows use git as the source of truth, ensuring version control, auditability, and collaboration.
-
-## Getting Started
-
-### Prerequisites
-
-- Git installed on your system
+- Docker and Docker Compose
+- Git
 - Make, curl, and jq
-- Docker and Docker Compose (for running GitStore services)
 
-### Quick Start
+## Start GitStore
 
-Demo data seeding will be provided in a future feature.
-
-1. **Start GitStore services**:
-   ```bash
-   make compose DETACH=1
-   ```
-
-2. **Wait for services to be healthy** (10-15 seconds):
-   ```bash
-   make ps
-   ```
-
-3. **Create a namespace and catalog repository**:
-   ```bash
-   make bootstrap ADMIN_PASSWORD=<admin-password>
-   ```
-
-4. **Clone the catalog repository** using the clone URL printed by `make bootstrap`:
-   ```bash
-   git clone http://localhost:9418/<repository-id> catalog-work
-   cd catalog-work
-   ```
-
-5. **Create a release tag**:
-   ```bash
-   git tag -a v1.0.0 -m "Initial catalog release"
-   git push origin v1.0.0
-   ```
-
-6. **Access the GraphQL playground**:
-   Open http://localhost:4000/playground in your browser
-
-## Catalog Structure
-
-Your catalog repository follows this structure:
-
-```
-catalog.git/
-├── products/
-│   ├── prod_example_001.md
-│   └── prod_example_002.md
-├── categories/
-│   ├── electronics.md
-│   └── books.md
-└── collections/
-    ├── featured.md
-    └── new-arrivals.md
-```
-
-## Managing Products
-
-### Product File Format
-
-Products are defined in markdown files with YAML front-matter:
-
-```markdown
----
-id: prod_macbook_001
-sku: MBP-16-M3-2024
-title: MacBook Pro 16" M3 Max
-price: 3499.00
-currency: USD
-category_id: cat_computers_001
-collection_ids:
-  - coll_featured_001
-  - coll_new_001
-inventory_status: in_stock
-inventory_quantity: 15
-images:
-  - https://cdn.example.com/images/macbook-pro-16-m3.jpg
-metadata:
-  brand: Apple
-  processor: M3 Max
-  ram: 36GB
-  storage: 1TB SSD
-created_at: 2026-01-15T10:00:00Z
-updated_at: 2026-01-15T10:00:00Z
----
-
-# MacBook Pro 16" with M3 Max
-
-The most powerful MacBook Pro ever. Supercharged by the M3 Max chip.
-
-## Features
-
-- M3 Max chip with up to 40-core GPU
-- 36GB unified memory
-- 1TB SSD storage
-- 16-inch Liquid Retina XDR display
-```
-
-### Required Fields
-
-- `id`: Unique product identifier
-- `sku`: Stock Keeping Unit (must be unique)
-- `title`: Product name
-- `price`: Product price (numeric)
-- `currency`: ISO currency code (e.g., USD, EUR)
-- `category_id`: Reference to a category
-
-### Optional Fields
-
-- `collection_ids`: Array of collection IDs the product belongs to
-- `inventory_status`: One of `in_stock`, `low_stock`, `out_of_stock`
-- `inventory_quantity`: Number of items available
-- `images`: Array of image URLs (stored externally)
-- `metadata`: Flexible key-value pairs for custom attributes
-
-### Creating a Product
-
-1. Create a new markdown file in `products/`:
-   ```bash
-   touch products/my-product.md
-   ```
-
-2. Add front-matter and description (see format above)
-
-3. Commit and push:
-   ```bash
-   git add products/my-product.md
-   git commit -m "Add new product: My Product"
-   git push origin main
-   ```
-
-4. Create a release tag to publish:
-   ```bash
-   git tag -a v1.0.1 -m "Add My Product"
-   git push origin v1.0.1
-   ```
-
-### Updating a Product
-
-1. Edit the product markdown file
-2. Update the `updated_at` timestamp
-3. Commit and push changes
-4. Create a new release tag
-
-### Deleting a Product
-
-1. Delete the product markdown file:
-   ```bash
-   git rm products/my-product.md
-   ```
-
-2. Commit and push:
-   ```bash
-   git commit -m "Remove product: My Product"
-   git push origin main
-   ```
-
-3. Create a release tag to publish the deletion
-
-## Managing Categories
-
-### Category File Format
-
-```markdown
----
-id: cat_electronics_001
-name: Electronics
-slug: electronics
-parent_id: null
-display_order: 0
-created_at: 2026-01-01T00:00:00Z
-updated_at: 2026-01-01T00:00:00Z
----
-
-All your electronic needs - from computers to accessories.
-```
-
-### Hierarchical Categories
-
-Categories support parent-child relationships:
-
-```markdown
----
-id: cat_computers_001
-name: Computers
-slug: computers
-parent_id: cat_electronics_001  # Child of Electronics
-display_order: 0
----
-
-Desktop computers, laptops, and workstations.
-```
-
-### Category Rules
-
-- A product can belong to exactly one category
-- Categories can be nested (parent-child relationships)
-- Use `display_order` to control sort order
-- `slug` is used in URLs and must be unique
-
-## Managing Collections
-
-### Collection File Format
-
-```markdown
----
-id: coll_featured_001
-name: Featured Products
-slug: featured
-display_order: 0
-created_at: 2026-01-01T00:00:00Z
-updated_at: 2026-01-01T00:00:00Z
----
-
-Our hand-picked selection of the best products.
-```
-
-### Adding Products to Collections
-
-Products reference collections in their `collection_ids` array:
-
-```yaml
-collection_ids:
-  - coll_featured_001
-  - coll_new_001
-```
-
-### Collection Rules
-
-- A product can belong to multiple collections
-- Collections are flat (no hierarchy)
-- Use collections for merchandising (e.g., "Winter Collection", "Best Sellers")
-
-## Publishing Changes
-
-GitStore reads data from **release tags**, not from the main branch directly.
-
-### Creating a Release
+Start the core stack:
 
 ```bash
-# Make changes to your catalog files
-git add .
-git commit -m "Update product prices"
-
-# Create and push an annotated tag
-git tag -a v1.0.2 -m "Price updates for Q2"
-git push origin v1.0.2
+make compose DETACH=1
+make ps
 ```
 
-### Versioning Strategy
+The core stack exposes:
 
-- Use semantic versioning: `v1.0.0`, `v1.0.1`, `v1.1.0`
-- Major version: Breaking changes to catalog structure
-- Minor version: New products or features
-- Patch version: Updates to existing products
+| Service | Local endpoint |
+|---|---|
+| GraphQL API | http://localhost:4000/graphql |
+| GraphQL Playground | http://localhost:4000/playground |
+| Git Smart HTTP | http://localhost:5000 |
+| Controller manager health | http://localhost:5001/health |
 
-### Tag Notifications
+## Bootstrap A Repository
 
-When you push a tag, the git-service broadcasts a websocket notification to trigger catalog reload in the API.
+Create the default namespace and repository:
 
-## Using the Admin
+```bash
+make bootstrap ADMIN_PASSWORD=<admin-password>
+```
 
-> For Admin UI setup and usage, see [docs/admin/quickstart.md](admin/quickstart.md).
+By default this creates:
 
-## Querying the GraphQL API
+| Resource | Default |
+|---|---|
+| Namespace | `gitstore-test` |
+| Repository | `catalog` |
+| Default branch | `main` |
 
-### GraphQL Playground
+Common overrides:
 
-Open http://localhost:4000/playground to explore the API interactively.
+```bash
+make bootstrap \
+  ADMIN_PASSWORD=<admin-password> \
+  NAMESPACE=my-store \
+  NAMESPACE_DISPLAY_NAME="My Store" \
+  REPOSITORY=catalog \
+  DEFAULT_BRANCH=main
+```
 
-### Example Queries
+The command prints a clone URL like:
 
-**Get all products**:
+```text
+http://localhost:5000/gitstore-test/catalog.git
+```
+
+Clone it:
+
+```bash
+git clone http://localhost:5000/gitstore-test/catalog.git catalog-work
+cd catalog-work
+```
+
+## Author Catalogue Files
+
+Catalogue resources are Markdown files with YAML frontmatter. You can organize files in directories that make sense for your team; GitStore detects resources by their frontmatter envelope.
+
+A typical repository might look like:
+
+```text
+catalog-work/
+├── products/
+│   └── macbook-pro.md
+├── variants/
+│   └── macbook-pro-16-m4-64gb.md
+├── categories/
+│   └── laptops.md
+└── collections/
+    └── featured.md
+```
+
+### Product
+
+`Product` is the non-sellable parent descriptor.
+
+```markdown
+---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: macbook-pro
+  labels:
+    gitstore.dev/brand: apple
+    gitstore.dev/type: laptop
+spec:
+  title: MacBook Pro
+  tags:
+    - laptop
+    - workstation
+  options:
+    - name: memory
+      values: ["36gb", "64gb"]
+    - name: storage
+      values: ["1tb", "2tb"]
+---
+
+Portable workstation for demanding creative and engineering work.
+```
+
+### ProductVariant
+
+`ProductVariant` is the purchasable SKU unit. Pricing and inventory live on variants, not on the parent product.
+
+```markdown
+---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: ProductVariant
+metadata:
+  name: macbook-pro-16-m4-64gb-1tb
+spec:
+  title: MacBook Pro 16 M4 Max 64GB 1TB
+  sku: MBP-16-M4-64GB-1TB
+  productRef:
+    name: macbook-pro
+  selectedOptions:
+    - name: memory
+      value: 64gb
+    - name: storage
+      value: 1tb
+  pricing:
+    priceSet:
+      name: default
+      prices:
+        - name: usd
+          currencyCode: USD
+          amount: "3499.00"
+          priority: 0
+          strategy:
+            type: fixed
+  inventory:
+    managed: true
+    policy: deny
+---
+
+High-memory configuration for large builds, media pipelines, and local AI work.
+```
+
+### Category
+
+```markdown
+---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: laptops
+spec:
+  title: Laptops
+---
+
+Portable computers and workstations.
+```
+
+### Collection
+
+```markdown
+---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Collection
+metadata:
+  name: featured-laptops
+  namespace: gitstore-test
+spec:
+  title: Featured Laptops
+  selector:
+    matchLabels:
+      gitstore.dev/type: laptop
+---
+
+Featured laptop products.
+```
+
+For the full resource formats, use the dedicated references:
+
+- [Product spec](products/product-spec.md)
+- [ProductVariant spec](products/product-variants.md)
+- [CategoryTaxonomy spec](categories/category-taxonomy.md)
+- [Collection spec](collections/collection-spec.md)
+- [Push validation](products/push-validation.md)
+
+## Push Changes
+
+Commit and push your catalogue files:
+
+```bash
+git add products variants categories collections
+git commit -m "Add initial laptop catalogue"
+git push origin main
+```
+
+If validation fails, Git prints the rejection reason in the push output. Fix the files and push again.
+
+After an accepted push, query GraphQL to inspect the admitted state. Some status fields may update after reconciliation, so repeat the query after a few seconds if you are checking computed status.
+
+## Query GraphQL
+
+Open http://localhost:4000/playground or use curl.
+
+### List Products
+
 ```graphql
-query {
-  products {
+query ListProducts {
+  products(namespace: "gitstore-test", first: 10) {
     edges {
       node {
         id
-        sku
-        title
-        price
-        category {
+        metadata {
           name
+          namespace
+          generation
         }
-        collections {
-          name
+        spec {
+          title
+          tags
+          options {
+            name
+            values
+          }
+        }
+        status {
+          conditions {
+            type
+            status
+          }
         }
       }
     }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    totalCount
   }
 }
 ```
 
-**Get a specific product by SKU**:
+### Query A Variant By SKU Data
+
+ProductVariant lookup is by global ID or namespace plus resource name. SKU is a field on the variant spec.
+
 ```graphql
-query {
-  product(by: {sku: "MBP-16-M3-2024"}) {
+query GetVariant {
+  productVariant(
+    by: {
+      namespacePath: {
+        namespace: "gitstore-test"
+        name: "macbook-pro-16-m4-64gb-1tb"
+      }
+    }
+  ) {
     id
-    title
-    price
-    inventoryStatus
-  }
-}
-```
-
-**Filter products by category**:
-```graphql
-query {
-  products(filter: { categoryId: "cat_computers_001" }) {
-    edges {
-      node {
-        id
-        title
-        price
-      }
+    metadata {
+      name
+      namespace
     }
-  }
-}
-```
-
-**Filter products by price range**:
-```graphql
-query {
-  products(filter: { priceMin: "100", priceMax: "500" }) {
-    edges {
-      node {
-        id
-        title
-        price
-      }
-    }
-  }
-}
-```
-
-**Get category hierarchy**:
-```graphql
-query {
-  categories {
-    edges {
-      node {
-        id
+    spec {
+      sku
+      title
+      selectedOptions {
         name
-        parent {
+        value
+      }
+      pricing {
+        priceSet {
+          name
+          prices {
+            name
+            currencyCode
+            amount
+          }
+        }
+      }
+      inventory {
+        managed
+        policy
+      }
+    }
+    status {
+      conditions {
+        type
+        status
+        reason
+      }
+    }
+  }
+}
+```
+
+### List Categories
+
+```graphql
+query ListCategories {
+  categories(first: 20) {
+    edges {
+      node {
+        metadata {
           name
         }
+        spec {
+          title
+        }
+        path
+        depth
         children {
-          name
+          metadata {
+            name
+          }
         }
       }
     }
   }
 }
 ```
+
+### List Collections
+
+```graphql
+query ListCollections {
+  collections(namespace: "gitstore-test", first: 20) {
+    edges {
+      node {
+        metadata {
+          name
+        }
+        spec {
+          title
+          selector {
+            matchLabels {
+              key
+              value
+            }
+          }
+        }
+        products(first: 5) {
+          totalCount
+        }
+      }
+    }
+  }
+}
+```
+
+### Query With Curl
+
+```bash
+curl -s http://localhost:4000/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query { products(namespace: \"gitstore-test\", first: 5) { totalCount } }"}' | jq .
+```
+
+## Control-plane Operations
+
+Use GraphQL mutations for authentication, namespaces, and repositories. The Make bootstrap targets wrap these calls for the common local workflow.
+
+Login:
+
+```graphql
+mutation Login {
+  login(input: { username: "admin", password: "<password>" }) {
+    session {
+      token
+      expiresAt
+      user {
+        username
+        isAdmin
+      }
+    }
+  }
+}
+```
+
+Create a namespace and repository manually when you need custom provisioning. See [API Reference](api-reference.md#mutation-operations) for the exact inputs.
+
+Catalogue writes are Git-driven today. Product, category, collection, and variant CRUD over GraphQL will be documented after the Git-backed design is finalized.
+
+## Admin UI
+
+The optional admin UI runs on http://localhost:3000:
+
+```bash
+make admin-compose DETACH=1
+```
+
+See [Admin docs](admin/README.md) for setup and current limitations.
 
 ## Troubleshooting
 
-### Products not appearing after push
+### Stack Is Not Healthy
 
-**Problem**: Pushed changes but products don't appear in GraphQL queries.
+Check service state and logs:
 
-**Solution**: Ensure you created a release tag:
-```bash
-git tag -a v1.0.x -m "Release message"
-git push origin v1.0.x
-```
-
-GitStore only reads from release tags, not from main/HEAD.
-
-### "Repository does not exist" error
-
-**Problem**: GraphQL API returns "repository does not exist" error.
-
-**Solution**: Verify the repository was bootstrapped and the git service is healthy:
 ```bash
 make ps
+make logs SERVICE=api
 make logs SERVICE=git-service
+make logs SERVICE=controller-manager
 ```
 
-If you are using native services, check `GIT_DATA_DIR` and recreate the starter repository with `make bootstrap`.
+If required auth environment variables are missing, the API will not become healthy. Set `GITSTORE_AUTH__ADMIN__USERNAME`, `GITSTORE_AUTH__ADMIN__PASSWORD_HASH`, and `GITSTORE_AUTH__JWT__SECRET`, or use the provided compose defaults for local development.
 
-### Admin shows stale data or merge conflicts
+### Bootstrap Fails
 
-> For Admin-specific troubleshooting, see [docs/admin/quickstart.md](admin/quickstart.md).
+`make bootstrap` needs a valid admin password unless you provide `BOOTSTRAP_TOKEN` or have a cached token.
 
-### Validation errors
+```bash
+make bootstrap-token ADMIN_PASSWORD=<admin-password>
+make bootstrap BOOTSTRAP_TOKEN=<token>
+```
 
-**Problem**: Push rejected by a server-side hook or policy check.
+Bootstrap is create-oriented. If a namespace or repository already exists, either use different `NAMESPACE` / `REPOSITORY` values or keep the existing resources.
 
-**Solution**: Check the rejection message for the specific issue. Depending on your deployment, this may come from API-managed catalogue rules or other policy hooks, for example:
-- Missing required fields (id, sku, title, price, category_id)
-- Invalid data types (price must be numeric)
-- Invalid YAML syntax in front-matter
-- Protected branch or tag policy violations
+### Clone Or Push Says Repository Not Found
 
-Fix the files or workflow issue locally and try again.
+Use the clone URL printed by `make bootstrap`. It should include the namespace, repository name, and `.git` suffix:
 
-### Images not loading
+```text
+http://localhost:5000/gitstore-test/catalog.git
+```
 
-**Problem**: Product images return 404 errors.
+Verify the repository exists:
 
-**Solution**: GitStore doesn't store images in git. Host images externally:
-- CDN (Cloudflare, Fastly)
-- Cloud storage (S3, Google Cloud Storage, Cloudflare R2)
-- Image hosting service
+```graphql
+query Repository {
+  repository(
+    by: {
+      namespacePath: {
+        namespace: "gitstore-test"
+        name: "catalog"
+      }
+    }
+  ) {
+    id
+    name
+    defaultBranch
+  }
+}
+```
 
-Update the `images` array in product front-matter with the correct URLs.
+### Push Is Rejected
+
+Read the `remote:` lines in the Git output. Common causes:
+
+- Wrong `apiVersion` or `kind`.
+- Missing `metadata.name`.
+- Authoring system-managed `status` or read-only metadata fields.
+- Invalid YAML frontmatter.
+- Invalid product variant options, pricing, or inventory fields.
+
+Fix the file and push again.
+
+### GraphQL Query Returns Empty Results
+
+Check that:
+
+- You are querying the right namespace.
+- Your push completed successfully.
+- You are querying variant fields on `ProductVariant`, not old flat fields on `Product`.
+- The resource name in `namespacePath` matches `metadata.name`.
+
+### Images Or Media Do Not Load
+
+Catalogue manifests reference media; they do not make GitStore an image CDN. Host images or binary assets externally or through a future file-resource workflow, then reference them from catalogue resources.
 
 ## Best Practices
 
-### Version Control
+- Keep one logical catalogue change per commit.
+- Use descriptive filenames and resource names.
+- Review diffs before pushing bulk updates.
+- Keep product sellability on `ProductVariant`; use `Product` for shared product description and option definitions.
+- Prefer labels for collection membership so collections remain declarative.
 
-- Write clear commit messages describing what changed
-- Use meaningful release tag messages
-- Don't force-push to main branch
+## Resources
 
-### File Organization
-
-- Use descriptive filenames: `macbook-pro-16-m3.md`, not `product1.md`
-- Group related products in subdirectories if needed
-- Keep markdown files readable for humans
-
-### Performance
-
-- For large catalogs (>10,000 products), consider pagination in queries
-- Use GraphQL filters to reduce response size
-- Host images on CDN, not in git
-
-### Collaboration
-
-- Coordinate with team members before making bulk changes
-- Use branches for experimental catalog changes
-- Review diffs before creating release tags
-
-## Support and Resources
-
-- [Developer Guide](developer-guide.md) - Integration scenarios and build instructions
-- [Scripts README](../scripts/README.md) - Demo catalog initialization
-- [Troubleshooting](#troubleshooting) - Common issues and solutions
-- [GraphQL API Reference](api-reference.md) - Complete API documentation
-- [GitHub Repository](https://github.com/gitstore-dev/gitstore) - Source code and issues
+- [API Reference](api-reference.md)
+- [Developer Guide](developer-guide.md)
+- [Configuration](configuration.md)
+- [Docker Troubleshooting](docker-troubleshooting.md)
