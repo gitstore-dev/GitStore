@@ -99,3 +99,45 @@ func TestInformerCache_HasSynced(t *testing.T) {
 		t.Fatal("expected HasSynced=true after MarkSynced")
 	}
 }
+
+// T037: AsReadOnly returns a CacheAccessor that satisfies Get but does not
+// expose Set, Delete, or MarkSynced (compile-time check via interface assertion).
+func TestCacheAccessor_ReadOnly(t *testing.T) {
+	c := cache.New[string]()
+	c.MarkSynced()
+
+	key := types.WorkItemKey{Kind: "Product", Namespace: "ns", Name: "ro1"}
+	c.Set(key, "hello")
+
+	ro := cache.AsReadOnly(c)
+
+	// Verify it satisfies the CacheAccessor interface.
+	var _ cache.CacheAccessor[string] = ro
+
+	// Verify Get works through the read-only view.
+	val, ok := ro.Get(key)
+	if !ok {
+		t.Fatal("expected item present via CacheAccessor")
+	}
+	if val != "hello" {
+		t.Errorf("got %q, want %q", val, "hello")
+	}
+
+	// Verify write methods are NOT accessible on the CacheAccessor interface.
+	// This is enforced at compile time — CacheAccessor only has Get.
+	type mustNotHaveSet interface {
+		Set(types.WorkItemKey, string)
+	}
+	type mustNotHaveDelete interface{ Delete(types.WorkItemKey) }
+	type mustNotHaveMarkSynced interface{ MarkSynced() }
+
+	if _, has := any(ro).(mustNotHaveSet); has {
+		t.Error("CacheAccessor must not expose Set")
+	}
+	if _, has := any(ro).(mustNotHaveDelete); has {
+		t.Error("CacheAccessor must not expose Delete")
+	}
+	if _, has := any(ro).(mustNotHaveMarkSynced); has {
+		t.Error("CacheAccessor must not expose MarkSynced")
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 )
@@ -21,17 +22,22 @@ func TestHealth_JSONFieldsPresent(t *testing.T) {
 	defer cancel()
 
 	r := &countingReconciler{}
+	c := cache.New[string]()
+	c.MarkSynced()
 	mgr := manager.New()
-	mgr.Register(manager.ReconcilerRegistration{
+	if err := mgr.Register(manager.ReconcilerRegistration{
 		Kind:            "Widget",
 		Reconciler:      r,
+		Cache:           c,
 		MaxAttempts:     3,
 		InitialInterval: 5 * time.Millisecond,
 		MaxInterval:     20 * time.Millisecond,
 		Multiplier:      2.0,
 		StallThreshold:  1 * time.Minute,
 		WorkerCount:     2,
-	})
+	}); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
 
 	go func() { _ = mgr.Start(ctx) }()
 
@@ -68,6 +74,84 @@ func TestHealth_JSONFieldsPresent(t *testing.T) {
 		if _, ok := widget[field]; !ok {
 			t.Errorf("missing field %q in Widget health", field)
 		}
+	}
+}
+
+// T034: KindStats() lists all registered kinds with Registered=true.
+func TestHealth_RegisteredKindsListed(t *testing.T) {
+	mgr := manager.New()
+
+	c1 := cache.New[string]()
+	c1.MarkSynced()
+	if err := mgr.Register(manager.ReconcilerRegistration{
+		Kind:            "CategoryTaxonomy",
+		Reconciler:      &countingReconciler{},
+		Cache:           c1,
+		MaxAttempts:     1,
+		InitialInterval: 1 * time.Millisecond,
+		MaxInterval:     5 * time.Millisecond,
+		Multiplier:      2.0,
+		StallThreshold:  time.Minute,
+		WorkerCount:     1,
+	}); err != nil {
+		t.Fatalf("Register CategoryTaxonomy failed: %v", err)
+	}
+
+	c2 := cache.New[string]()
+	c2.MarkSynced()
+	if err := mgr.Register(manager.ReconcilerRegistration{
+		Kind:            "Collection",
+		Reconciler:      &countingReconciler{},
+		Cache:           c2,
+		MaxAttempts:     1,
+		InitialInterval: 1 * time.Millisecond,
+		MaxInterval:     5 * time.Millisecond,
+		Multiplier:      2.0,
+		StallThreshold:  time.Minute,
+		WorkerCount:     1,
+	}); err != nil {
+		t.Fatalf("Register Collection failed: %v", err)
+	}
+
+	stats := mgr.KindStats()
+	for _, kind := range []string{"CategoryTaxonomy", "Collection"} {
+		s, ok := stats[kind]
+		if !ok {
+			t.Errorf("kind %q missing from KindStats()", kind)
+			continue
+		}
+		if !s.Registered {
+			t.Errorf("kind %q: Registered=false, want true", kind)
+		}
+	}
+}
+
+// T035: duplicate registration returns an error; no dispatch goroutines started.
+func TestHealth_DuplicateKind_FatalBeforeStart(t *testing.T) {
+	mgr := manager.New()
+	c := cache.New[string]()
+	c.MarkSynced()
+	r := &countingReconciler{}
+	reg := manager.ReconcilerRegistration{
+		Kind:            "Widget",
+		Reconciler:      r,
+		Cache:           c,
+		MaxAttempts:     1,
+		InitialInterval: 1 * time.Millisecond,
+		MaxInterval:     5 * time.Millisecond,
+		Multiplier:      2.0,
+		StallThreshold:  time.Minute,
+		WorkerCount:     1,
+	}
+	if err := mgr.Register(reg); err != nil {
+		t.Fatalf("first Register failed: %v", err)
+	}
+	if err := mgr.Register(reg); err == nil {
+		t.Fatal("expected error on duplicate Register, got nil")
+	}
+	// No Start() called after error — reconciler call count must remain zero.
+	if r.calls.Load() != 0 {
+		t.Errorf("reconciler should not have been called, got %d calls", r.calls.Load())
 	}
 }
 

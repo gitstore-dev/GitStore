@@ -26,7 +26,7 @@ type ControllerConfig struct {
 	Port int `mapstructure:"port" validate:"min=1,max=65535"`
 
 	// ApiURI is the gitstore-api GraphQL URI used as the Watch event source.
-	ApiURI string `mapstructure:"api__uri"`
+	ApiURI string `mapstructure:"api_uri"`
 
 	// DefaultMaxAttempts is the global retry limit before quarantine.
 	DefaultMaxAttempts int `mapstructure:"default_max_attempts"`
@@ -49,7 +49,7 @@ func Load() (*Config, error) {
 	v := viper.New()
 
 	v.SetDefault("controller.port", 5001)
-	v.SetDefault("controller.api__uri", "http://localhost:4000/graphql")
+	v.SetDefault("controller.api_uri", "http://localhost:4000/graphql")
 	v.SetDefault("controller.default_max_attempts", 5)
 	v.SetDefault("controller.default_stall_threshold", "5m")
 	v.SetDefault("log.level", "info")
@@ -86,7 +86,7 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("controller.port must be between 1 and 65535, got %d", cfg.Controller.Port)
 	}
 	if cfg.Controller.ApiURI == "" {
-		return fmt.Errorf("controller.api__uri must not be empty")
+		return fmt.Errorf("controller.api_uri must not be empty")
 	}
 	if cfg.Controller.DefaultMaxAttempts < 1 {
 		return fmt.Errorf("controller.default_max_attempts must be >= 1")

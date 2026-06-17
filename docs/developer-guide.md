@@ -32,14 +32,14 @@ graph TD
 
 ## Ports
 
-| Service | Port | Purpose |
-|---|---:|---|
-| `gitstore-api` | `4000` | GraphQL, Playground, `/health`, `/ready`, login helper |
-| `gitstore-api` | `5000` | Git Smart HTTP front door |
-| `gitstore-api` | `6000` | CatalogService gRPC called by the Git service |
-| `gitstore-git-service` | `50051` | GitService gRPC storage and transport |
-| `gitstore-controller-manager` | `5001` | `/health`, `/metrics`, poison-item API |
-| `gitstore-admin` | `3000` | Optional browser UI |
+| Service                       |    Port | Purpose                                                |
+|-------------------------------|--------:|--------------------------------------------------------|
+| `gitstore-api`                |  `4000` | GraphQL, Playground, `/health`, `/ready`, login helper |
+| `gitstore-api`                |  `5000` | Git Smart HTTP front door                              |
+| `gitstore-api`                |  `6000` | CatalogService gRPC called by the Git service          |
+| `gitstore-git-service`        | `50051` | GitService gRPC storage and transport                  |
+| `gitstore-controller-manager` |  `5001` | `/health`, `/metrics`, poison-item API                 |
+| `gitstore-admin`              |  `3000` | Optional browser UI                                    |
 
 ## Local Development
 
@@ -72,23 +72,23 @@ make bootstrap ADMIN_PASSWORD=<admin-password>
 
 Useful variables:
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `API_URL` | `http://localhost:4000/graphql` | Bootstrap GraphQL endpoint |
-| `ADMIN_USERNAME` | `admin` | Login username |
-| `ADMIN_PASSWORD` | unset | Login password for bootstrap token creation |
-| `BOOTSTRAP_TOKEN` | unset | Reuse an existing bearer token |
-| `NAMESPACE` | `gitstore-test` | Namespace to create |
-| `REPOSITORY` | `catalog` | Repository to create |
-| `DEFAULT_BRANCH` | `main` | Repository default branch |
+| Variable          | Default                         | Purpose                                     |
+|-------------------|---------------------------------|---------------------------------------------|
+| `API_URL`         | `http://localhost:4000/graphql` | Bootstrap GraphQL endpoint                  |
+| `ADMIN_USERNAME`  | `admin`                         | Login username                              |
+| `ADMIN_PASSWORD`  | unset                           | Login password for bootstrap token creation |
+| `BOOTSTRAP_TOKEN` | unset                           | Reuse an existing bearer token              |
+| `NAMESPACE`       | `gitstore-test`                 | Namespace to create                         |
+| `REPOSITORY`      | `catalog`                       | Repository to create                        |
+| `DEFAULT_BRANCH`  | `main`                          | Repository default branch                   |
 
 ## Datastore Backends
 
 `gitstore-api` owns the application datastore abstraction.
 
-| Backend | Use | Notes |
-|---|---|---|
-| `memdb` | Development and fast tests | In-memory only; no persistence |
+| Backend  | Use                         | Notes                                      |
+|----------|-----------------------------|--------------------------------------------|
+| `memdb`  | Development and fast tests  | In-memory only; no persistence             |
 | `scylla` | Production-oriented backend | Uses ScyllaDB 5.x+ and embedded migrations |
 
 Start Scylla services only:
@@ -143,13 +143,13 @@ Runtime pieces:
 
 HTTP surface on port `5001`:
 
-| Route | Purpose |
-|---|---|
-| `GET /health` | Returns `ok` or `degraded` based on stalled workers and poison items |
-| `GET /metrics` | Prometheus metrics |
-| `GET /controller/v1/poison/{kind}` | List quarantined items for one kind |
-| `GET /controller/v1/poison/_all` | List all quarantined items |
-| `POST /controller/v1/poison/{kind}/{namespace}/{name}/requeue` | Requeue one poison item |
+| Route                                                          | Purpose                                                              |
+|----------------------------------------------------------------|----------------------------------------------------------------------|
+| `GET /health`                                                  | Returns `ok` or `degraded` based on stalled workers and poison items |
+| `GET /metrics`                                                 | Prometheus metrics                                                   |
+| `GET /controller/v1/poison/{kind}`                             | List quarantined items for one kind                                  |
+| `GET /controller/v1/poison/_all`                               | List all quarantined items                                           |
+| `POST /controller/v1/poison/{kind}/{namespace}/{name}/requeue` | Requeue one poison item                                              |
 
 ## Module Notes
 
@@ -166,16 +166,16 @@ Purpose:
 
 Important directories:
 
-| Path | Purpose |
-|---|---|
-| `cmd/server` | API entrypoint |
-| `internal/app` | Runtime composition |
-| `internal/graph` | gqlgen resolvers and generated code |
-| `internal/githttp` | Smart HTTP front door |
-| `internal/gitclient` | GitService gRPC client |
-| `internal/cataloggrpc` | CatalogService gRPC implementation |
-| `internal/datastore` | Datastore abstraction and backends |
-| `internal/validate` | Frontmatter resource validation |
+| Path                   | Purpose                             |
+|------------------------|-------------------------------------|
+| `cmd/server`           | API entrypoint                      |
+| `internal/app`         | Runtime composition                 |
+| `internal/graph`       | gqlgen resolvers and generated code |
+| `internal/githttp`     | Smart HTTP front door               |
+| `internal/gitclient`   | GitService gRPC client              |
+| `internal/cataloggrpc` | CatalogService gRPC implementation  |
+| `internal/datastore`   | Datastore abstraction and backends  |
+| `internal/validate`    | Frontmatter resource validation     |
 
 Commands:
 
@@ -197,13 +197,13 @@ Purpose:
 
 Important directories:
 
-| Path | Purpose |
-|---|---|
-| `src/grpc` | Tonic GitService server |
-| `src/git` | Repository and pack protocol logic |
-| `src/git/hooks` | Receive hook pipeline, validation, admission callouts |
-| `gen` | Generated Rust proto bindings |
-| `tests/integration` | Rust integration tests |
+| Path                | Purpose                                               |
+|---------------------|-------------------------------------------------------|
+| `src/grpc`          | Tonic GitService server                               |
+| `src/git`           | Repository and pack protocol logic                    |
+| `src/git/hooks`     | Receive hook pipeline, validation, admission callouts |
+| `gen`               | Generated Rust proto bindings                         |
+| `tests/integration` | Rust integration tests                                |
 
 Commands:
 
@@ -225,16 +225,16 @@ Purpose:
 
 Important directories:
 
-| Path | Purpose |
-|---|---|
-| `cmd/controller` | Controller manager entrypoint |
+| Path               | Purpose                           |
+|--------------------|-----------------------------------|
+| `cmd/controller`   | Controller manager entrypoint     |
 | `internal/manager` | Runtime registration and dispatch |
-| `internal/queue` | Work queue |
-| `internal/worker` | Worker pool |
-| `internal/retry` | Backoff and quarantine |
-| `internal/health` | Health and metrics handlers |
-| `internal/api` | Poison-item API |
-| `tests/contract` | Runtime contract tests |
+| `internal/queue`   | Work queue                        |
+| `internal/worker`  | Worker pool                       |
+| `internal/retry`   | Backoff and quarantine            |
+| `internal/health`  | Health and metrics handlers       |
+| `internal/api`     | Poison-item API                   |
+| `tests/contract`   | Runtime contract tests            |
 
 Commands:
 
@@ -333,34 +333,34 @@ Use Conventional Commits.
 
 ### API
 
-| Env var | Default | Purpose |
-|---|---|---|
-| `GITSTORE_API__PORT` | `4000` | GraphQL HTTP port |
-| `GITSTORE_API__GIT_PORT` | `5000` | Git Smart HTTP port |
-| `GITSTORE_API__GRPC_PORT` | `6000` | CatalogService gRPC port |
-| `GITSTORE_GIT__GRPC__URI` | `dns:///localhost:50051` | GitService gRPC target |
-| `GITSTORE_DATASTORE__BACKEND` | `memdb` | `memdb` or `scylla` |
-| `GITSTORE_AUTH__ADMIN__USERNAME` | unset | Admin login username |
-| `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | unset | bcrypt password hash |
-| `GITSTORE_AUTH__JWT__SECRET` | unset | JWT signing secret |
+| Env var                               | Default                  | Purpose                  |
+|---------------------------------------|--------------------------|--------------------------|
+| `GITSTORE_API__PORT`                  | `4000`                   | GraphQL HTTP port        |
+| `GITSTORE_API__GIT_PORT`              | `5000`                   | Git Smart HTTP port      |
+| `GITSTORE_API__GRPC_PORT`             | `6000`                   | CatalogService gRPC port |
+| `GITSTORE_GIT__GRPC__URI`             | `dns:///localhost:50051` | GitService gRPC target   |
+| `GITSTORE_DATASTORE__BACKEND`         | `memdb`                  | `memdb` or `scylla`      |
+| `GITSTORE_AUTH__ADMIN__USERNAME`      | unset                    | Admin login username     |
+| `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | unset                    | bcrypt password hash     |
+| `GITSTORE_AUTH__JWT__SECRET`          | unset                    | JWT signing secret       |
 
 ### Git Service
 
-| Env var | Default | Purpose |
-|---|---|---|
-| `GITSTORE_GRPC__PORT` | `50051` | GitService gRPC port |
-| `GITSTORE_GIT__DATA_DIR` | `/data/repos` | Bare repository root |
-| `GITSTORE_GIT__REPO__MAX_FILE_SIZE` | `52428800` | Per-file limit |
-| `GITSTORE_CATALOG_SERVICE__URI` | `http://localhost:6000` | API CatalogService target |
+| Env var                             | Default                 | Purpose                   |
+|-------------------------------------|-------------------------|---------------------------|
+| `GITSTORE_GRPC__PORT`               | `50051`                 | GitService gRPC port      |
+| `GITSTORE_GIT__DATA_DIR`            | `/data/repos`           | Bare repository root      |
+| `GITSTORE_GIT__REPO__MAX_FILE_SIZE` | `52428800`              | Per-file limit            |
+| `GITSTORE_CATALOG_SERVICE__URI`     | `http://localhost:6000` | API CatalogService target |
 
 ### Controller Manager
 
-| Env var | Default | Purpose |
-|---|---|---|
-| `GITSTORE_CONTROLLER__PORT` | `5001` | HTTP management port |
-| `GITSTORE_CONTROLLER__API__URI` | `http://localhost:4000/graphql` | API endpoint for reconciliation |
-| `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS` | `5` | Retry limit before quarantine |
-| `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | `5m` | Worker stall threshold |
+| Env var                                        | Default                         | Purpose                         |
+|------------------------------------------------|---------------------------------|---------------------------------|
+| `GITSTORE_CONTROLLER__PORT`                    | `5001`                          | HTTP management port            |
+| `GITSTORE_CONTROLLER__API_URI`                 | `http://localhost:4000/graphql` | API endpoint for reconciliation |
+| `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`    | `5`                             | Retry limit before quarantine   |
+| `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | `5m`                            | Worker stall threshold          |
 
 See [configuration.md](configuration.md) for the operator reference.
 
@@ -368,15 +368,15 @@ See [configuration.md](configuration.md) for the operator reference.
 
 Spec quickstarts are useful implementation references, but they are not user-facing current workflow docs.
 
-| Spec | Reference |
-|---|---|
-| `012-smart-http-api` | [quickstart](../specs/012-smart-http-api/quickstart.md), [plan](../specs/012-smart-http-api/plan.md) |
-| `018-hook-pipeline-wiring` | [quickstart](../specs/018-hook-pipeline-wiring/quickstart.md), [plan](../specs/018-hook-pipeline-wiring/plan.md) |
-| `021-category-taxonomy` | [quickstart](../specs/021-category-taxonomy/quickstart.md), [plan](../specs/021-category-taxonomy/plan.md) |
+| Spec                               | Reference                                                                                                                        |
+|------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|
+| `012-smart-http-api`               | [quickstart](../specs/012-smart-http-api/quickstart.md), [plan](../specs/012-smart-http-api/plan.md)                             |
+| `018-hook-pipeline-wiring`         | [quickstart](../specs/018-hook-pipeline-wiring/quickstart.md), [plan](../specs/018-hook-pipeline-wiring/plan.md)                 |
+| `021-category-taxonomy`            | [quickstart](../specs/021-category-taxonomy/quickstart.md), [plan](../specs/021-category-taxonomy/plan.md)                       |
 | `022-collection-resource-contract` | [quickstart](../specs/022-collection-resource-contract/quickstart.md), [plan](../specs/022-collection-resource-contract/plan.md) |
-| `024-product-variant` | [quickstart](../specs/024-product-variant/quickstart.md), [plan](../specs/024-product-variant/plan.md) |
-| `025-controller-manager-runtime` | [quickstart](../specs/025-controller-manager-runtime/quickstart.md), [plan](../specs/025-controller-manager-runtime/plan.md) |
-| `026-reconcile-handler` | [quickstart](../specs/026-reconcile-handler/quickstart.md), [plan](../specs/026-reconcile-handler/plan.md) |
+| `024-product-variant`              | [quickstart](../specs/024-product-variant/quickstart.md), [plan](../specs/024-product-variant/plan.md)                           |
+| `025-controller-manager-runtime`   | [quickstart](../specs/025-controller-manager-runtime/quickstart.md), [plan](../specs/025-controller-manager-runtime/plan.md)     |
+| `026-reconcile-handler`            | [quickstart](../specs/026-reconcile-handler/quickstart.md), [plan](../specs/026-reconcile-handler/plan.md)                       |
 
 ## Related Docs
 

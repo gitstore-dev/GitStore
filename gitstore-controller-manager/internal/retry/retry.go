@@ -39,17 +39,24 @@ const (
 // RunWithRetry calls fn up to cfg.MaxAttempts times with exponential backoff.
 // Returns ResultQuarantine if fn keeps failing; ResultOK on first success.
 // The third return value is the last error seen (nil on success).
+// initialIntervalOverride, when non-zero, replaces cfg.InitialInterval for this invocation
+// (used to honour TransientFailure.BackoffHint).
 func RunWithRetry(
 	ctx context.Context,
 	key types.WorkItemKey,
 	cfg Config,
+	initialIntervalOverride time.Duration,
 	log *zap.Logger,
 	fn func(context.Context) error,
 ) (Result, int, error) {
 	attempts := 0
 
 	b := backoff.NewExponentialBackOff()
-	b.InitialInterval = cfg.InitialInterval
+	if initialIntervalOverride > 0 {
+		b.InitialInterval = initialIntervalOverride
+	} else {
+		b.InitialInterval = cfg.InitialInterval
+	}
 	b.MaxInterval = cfg.MaxInterval
 	b.Multiplier = cfg.Multiplier
 
