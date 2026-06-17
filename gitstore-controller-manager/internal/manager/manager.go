@@ -7,6 +7,8 @@ package manager
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -33,6 +35,7 @@ type kindState struct {
 	q          *queue.Queue
 	pool       *worker.Pool
 	quarantine *retry.QuarantineStore
+	cache      syncChecker
 
 	mu          sync.Mutex
 	lastSuccess time.Time
@@ -59,19 +62,34 @@ func (m *Manager) WithLogger(log *zap.Logger) *Manager {
 }
 
 // Register wires a reconciler for the given resource kind.
-// Must be called before Start.
-func (m *Manager) Register(reg ReconcilerRegistration) {
+// Returns an error if Kind is empty, Reconciler or Cache is nil, or the kind
+// has already been registered. Must be called before Start.
+func (m *Manager) Register(reg ReconcilerRegistration) error {
+	if reg.Kind == "" {
+		return fmt.Errorf("reconciler registration: Kind must not be empty")
+	}
+	if reg.Reconciler == nil {
+		return fmt.Errorf("reconciler registration: Reconciler must not be nil for kind %q", reg.Kind)
+	}
+	if reg.Cache == nil {
+		return fmt.Errorf("reconciler registration: Cache must not be nil for kind %q", reg.Kind)
+	}
+	if _, exists := m.kinds[reg.Kind]; exists {
+		return fmt.Errorf("reconciler registration: kind %q already registered", reg.Kind)
+	}
 	applyDefaults(&reg)
 	m.kinds[reg.Kind] = &kindState{
 		reg:        reg,
 		q:          queue.New(1000, 0),
 		pool:       worker.New(reg.WorkerCount),
 		quarantine: retry.NewQuarantineStore(),
+		cache:      reg.Cache,
 	}
 	// Pre-initialise gauges so they appear in /metrics before the first poll.
 	health.ActiveWorkers.WithLabelValues(reg.Kind).Set(0)
 	health.QueueDepth.WithLabelValues(reg.Kind).Set(0)
 	health.PoisonItemsTotal.WithLabelValues(reg.Kind).Set(0)
+	return nil
 }
 
 // Enqueue adds key to the queue of its kind.
@@ -131,6 +149,7 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 			QueueDepth:    depth,
 			PoisonItems:   poison,
 			Stalled:       stalled,
+			Registered:    true,
 		}
 	}
 	return out
@@ -178,11 +197,21 @@ func (m *Manager) Start(ctx context.Context) error {
 }
 
 // runDispatchLoop dequeues items and submits them to the worker pool.
+// Dispatch is held for each item until the cache reports HasSynced (T018).
 func (m *Manager) runDispatchLoop(ctx context.Context, ks *kindState) {
 	for {
 		key, shutdown := ks.q.Dequeue()
 		if shutdown {
 			return
+		}
+		// Gate: spin until cache is warm or context is cancelled.
+		for !ks.cache.HasSynced() {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				time.Sleep(50 * time.Millisecond)
+			}
 		}
 		ks.pool.Submit(func() {
 			m.dispatch(ctx, ks, key)
@@ -208,44 +237,97 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 		Multiplier:      ks.reg.Multiplier,
 	}
 
-	res, attempts, lastErr := retry.RunWithRetry(ctx, key, retryCfg, log, func(rctx context.Context) error {
-		result, err := ks.reg.Reconciler.Reconcile(rctx, key)
-		if err != nil {
-			return err
-		}
-		if result.RequeueAfter > 0 {
-			go func() {
-				time.Sleep(result.RequeueAfter)
-				_ = ks.q.Enqueue(key)
-			}()
-		} else if result.Requeue {
-			_ = ks.q.Enqueue(key)
-		}
-		return nil
-	})
+	// Call reconciler via safeReconcile so panics are converted to TransientFailure.
+	result := safeReconcile(ks.reg.Reconciler, key)(ctx)
 
-	switch res {
-	case retry.ResultOK:
+	// Check for panic on the first call and emit structured log + counter.
+	m.emitPanicLog(log, key, result)
+
+	switch r := result.(type) {
+	case types.Success:
 		ks.mu.Lock()
 		ks.lastSuccess = time.Now()
 		ks.mu.Unlock()
-		log.Debug("reconciled successfully", zap.Int("attempts", attempts))
-	case retry.ResultQuarantine:
-		log.Error("reconciler quarantined after exhausting retries",
-			zap.Int("attempts", attempts),
-		)
-		// Forget the key before quarantine so that the deferred Done does not
-		// re-enqueue it if another event arrived during the retry loop.
+		health.ReconcileTotal.WithLabelValues(key.Kind, "success").Inc()
+		log.Debug("reconciled successfully")
+
+	case types.TerminalFailure:
+		log.Error("terminal reconcile failure — quarantining immediately", zap.Error(r.Err))
 		ks.q.Forget(key)
-		lastErrStr := ""
-		if lastErr != nil {
-			lastErrStr = lastErr.Error()
-		}
+		health.ReconcileTotal.WithLabelValues(key.Kind, "terminal_failure").Inc()
 		ks.quarantine.Put(&retry.PoisonItem{
 			Key:       key,
-			Attempts:  attempts,
-			LastError: lastErrStr,
+			Attempts:  1,
+			LastError: r.Err.Error(),
 		})
+
+	case types.TransientFailure:
+		// Honour BackoffHint: wait before the first retry attempt.
+		if r.BackoffHint > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(r.BackoffHint):
+			}
+		}
+		res, attempts, lastErr := retry.RunWithRetry(ctx, key, retryCfg, r.BackoffHint, log, func(rctx context.Context) error {
+			inner := safeReconcile(ks.reg.Reconciler, key)(rctx)
+			m.emitPanicLog(log, key, inner)
+			switch iv := inner.(type) {
+			case types.TransientFailure:
+				return iv.Err
+			case types.TerminalFailure:
+				// Treat terminal during retry as permanent — exit loop with error so quarantine fires.
+				return iv.Err
+			default:
+				return nil
+			}
+		})
+		switch res {
+		case retry.ResultOK:
+			ks.mu.Lock()
+			ks.lastSuccess = time.Now()
+			ks.mu.Unlock()
+			health.ReconcileTotal.WithLabelValues(key.Kind, "success").Inc()
+			log.Debug("reconciled successfully after retries", zap.Int("attempts", attempts))
+		case retry.ResultQuarantine:
+			log.Error("reconciler quarantined after exhausting retries", zap.Int("attempts", attempts))
+			ks.q.Forget(key)
+			health.ReconcileTotal.WithLabelValues(key.Kind, "transient_failure").Inc()
+			lastErrStr := ""
+			if lastErr != nil {
+				lastErrStr = lastErr.Error()
+			}
+			ks.quarantine.Put(&retry.PoisonItem{
+				Key:       key,
+				Attempts:  attempts,
+				LastError: lastErrStr,
+			})
+		}
+
+	case types.RequeueAfter:
+		health.ReconcileTotal.WithLabelValues(key.Kind, "requeue_after").Inc()
+		time.AfterFunc(r.After, func() {
+			_ = ks.q.Enqueue(key)
+		})
+	}
+}
+
+// emitPanicLog checks if result is a TransientFailure wrapping a PanicError and
+// emits a structured ERROR log with the stack trace.
+func (m *Manager) emitPanicLog(log *zap.Logger, key WorkItemKey, result types.ReconcileResult) {
+	tf, ok := result.(types.TransientFailure)
+	if !ok {
+		return
+	}
+	var pe *PanicError
+	if errors.As(tf.Err, &pe) {
+		log.Error("reconciler panic recovered",
+			zap.String("kind", key.Kind),
+			zap.Any("panicValue", pe.Value),
+			zap.ByteString("stacktrace", pe.Stack),
+		)
+		health.ReconcileTotal.WithLabelValues(key.Kind, "transient_failure").Inc()
 	}
 }
 

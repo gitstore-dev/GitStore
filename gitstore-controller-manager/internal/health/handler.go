@@ -21,6 +21,7 @@ type KindStat struct {
 	QueueDepth    int   `json:"queueDepth"`
 	PoisonItems   int   `json:"poisonItems"`
 	Stalled       bool  `json:"stalled"`
+	Registered    bool  `json:"registered"`
 }
 
 type healthResponse struct {

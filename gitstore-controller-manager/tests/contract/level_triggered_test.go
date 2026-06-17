@@ -20,10 +20,10 @@ type stateReadingReconciler struct {
 	lastSeen atomic.Value // stores string
 }
 
-func (s *stateReadingReconciler) Reconcile(_ context.Context, key types.WorkItemKey) (types.Result, error) {
+func (s *stateReadingReconciler) Reconcile(_ context.Context, key types.WorkItemKey) types.ReconcileResult {
 	val, _ := s.cache.Get(key)
 	s.lastSeen.Store(val)
-	return types.Result{}, nil
+	return types.ResultOK()
 }
 
 func TestManager_LevelTriggered_ReadsCurrentCacheState(t *testing.T) {
@@ -38,16 +38,19 @@ func TestManager_LevelTriggered_ReadsCurrentCacheState(t *testing.T) {
 
 	r := &stateReadingReconciler{cache: c}
 	mgr := manager.New()
-	mgr.Register(manager.ReconcilerRegistration{
+	if err := mgr.Register(manager.ReconcilerRegistration{
 		Kind:            "Product",
 		Reconciler:      r,
+		Cache:           c,
 		MaxAttempts:     1,
 		InitialInterval: 1 * time.Millisecond,
 		MaxInterval:     5 * time.Millisecond,
 		Multiplier:      2.0,
 		StallThreshold:  1 * time.Minute,
 		WorkerCount:     1,
-	})
+	}); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
 
 	go func() { _ = mgr.Start(ctx) }()
 

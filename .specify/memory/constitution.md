@@ -60,9 +60,10 @@ Sync Impact Report:
 
 GitStore comprises three independent services:
 
-1. **Git Server (Rust)**: Built-in git engine with pre-push validation and gRPC notification stream (pending GH#139)
+1. **Git Service (Rust)**: Built-in git engine with pre-push validation and gRPC notification stream (pending GH#139)
 2. **GraphQL API (Go)**: Relay-compliant API layer exposing catalogue data with in-memory caching
-3. **Admin UI (Astro/React)**: Optional web interface for non-technical users
+3. **Controller Manager (Go)**
+4. **Admin (Astro/React)**: Optional web interface for non-technical users
 
 **Justification for Polyglot Architecture:**
 - Rust provides superior performance and memory safety for git operations and validation (critical path)
@@ -81,8 +82,8 @@ GitStore comprises three independent services:
 
 ### Scale Constraints
 
-- Product catalogue size: up to 10,000 products initially
-- Git repository size: < 500MB for Markdown + metadata
+- Product catalogue size: up to 1,000,000 products initially
+- Git repository size: < 10GB for Markdown + metadata and media
 - Concurrent admin UI users: 1-5 initially (single admin user authentication)
 
 ## Development Workflow

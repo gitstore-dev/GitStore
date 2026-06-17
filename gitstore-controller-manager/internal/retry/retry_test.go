@@ -27,7 +27,7 @@ var fastCfg = retry.Config{
 }
 
 func TestRunWithRetry_SuccessOnFirstTry(t *testing.T) {
-	res, attempts, err := retry.RunWithRetry(context.Background(), testKey, fastCfg, nopLog, func(_ context.Context) error {
+	res, attempts, err := retry.RunWithRetry(context.Background(), testKey, fastCfg, 0, nopLog, func(_ context.Context) error {
 		return nil
 	})
 	if res != retry.ResultOK {
@@ -43,7 +43,7 @@ func TestRunWithRetry_SuccessOnFirstTry(t *testing.T) {
 
 func TestRunWithRetry_RetriesAndSucceeds(t *testing.T) {
 	var calls atomic.Int32
-	res, attempts, err := retry.RunWithRetry(context.Background(), testKey, fastCfg, nopLog, func(_ context.Context) error {
+	res, attempts, err := retry.RunWithRetry(context.Background(), testKey, fastCfg, 0, nopLog, func(_ context.Context) error {
 		if calls.Add(1) < 3 {
 			return errors.New("transient")
 		}
@@ -61,7 +61,7 @@ func TestRunWithRetry_RetriesAndSucceeds(t *testing.T) {
 }
 
 func TestRunWithRetry_QuarantinesAfterMaxAttempts(t *testing.T) {
-	res, attempts, err := retry.RunWithRetry(context.Background(), testKey, fastCfg, nopLog, func(_ context.Context) error {
+	res, attempts, err := retry.RunWithRetry(context.Background(), testKey, fastCfg, 0, nopLog, func(_ context.Context) error {
 		return errors.New("always fail")
 	})
 	if res != retry.ResultQuarantine {
@@ -79,7 +79,7 @@ func TestRunWithRetry_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already cancelled
 
-	res, _, _ := retry.RunWithRetry(ctx, testKey, fastCfg, nopLog, func(_ context.Context) error {
+	res, _, _ := retry.RunWithRetry(ctx, testKey, fastCfg, 0, nopLog, func(_ context.Context) error {
 		return errors.New("fail")
 	})
 	// Should quarantine (context cancelled = exhausted)
