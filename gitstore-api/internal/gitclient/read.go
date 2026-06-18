@@ -52,16 +52,29 @@ func (c *Client) ListFiles(ctx context.Context, prefix, ref string) ([]*gitv1.Fi
 // ListFilesForRepo enumerates file paths under prefix at the given ref for
 // the specified repository. Safe for concurrent calls with different repository IDs.
 func (c *Client) ListFilesForRepo(ctx context.Context, repositoryID, prefix, ref string) ([]*gitv1.FileEntry, error) {
-	resp, err := c.Git.ListFiles(ctx, &gitv1.ListFilesRequest{
+	resp, err := c.listFilesForRepo(ctx, repositoryID, prefix, ref)
+	if err != nil {
+		return nil, err
+	}
+	return resp.Files, nil
+}
+
+// ResolveRefForRepo resolves a ref to the commit SHA currently seen by the git service.
+func (c *Client) ResolveRefForRepo(ctx context.Context, repositoryID, ref string) (string, error) {
+	resp, err := c.listFilesForRepo(ctx, repositoryID, "", ref)
+	if err != nil {
+		return "", err
+	}
+	return resp.RefCommitSha, nil
+}
+
+func (c *Client) listFilesForRepo(ctx context.Context, repositoryID, prefix, ref string) (*gitv1.ListFilesResponse, error) {
+	return c.Git.ListFiles(ctx, &gitv1.ListFilesRequest{
 		RepositoryId: repositoryID,
 		Ref:          ref,
 		PathPrefix:   prefix,
 		Recursive:    true,
 	})
-	if err != nil {
-		return nil, err
-	}
-	return resp.Files, nil
 }
 
 // GetLatestTag returns the latest semver release tag.

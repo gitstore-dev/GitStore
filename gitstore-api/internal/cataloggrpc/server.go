@@ -10,9 +10,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +36,7 @@ import (
 type GitReader interface {
 	ListFiles(ctx context.Context, repositoryID, prefix, ref string) ([]string, error)
 	ReadFile(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
+	ResolveRef(ctx context.Context, repositoryID, ref string) (string, error)
 }
 
 // ResourceParser is the parser behavior required by the CatalogService server.
@@ -60,6 +64,10 @@ func (r *gitClientReader) ListFiles(ctx context.Context, repositoryID, prefix, r
 
 func (r *gitClientReader) ReadFile(ctx context.Context, repositoryID, path, ref string) ([]byte, error) {
 	return r.c.ReadFileForRepo(ctx, repositoryID, path, ref)
+}
+
+func (r *gitClientReader) ResolveRef(ctx context.Context, repositoryID, ref string) (string, error) {
+	return r.c.ResolveRefForRepo(ctx, repositoryID, ref)
 }
 
 // Server implements catalogv1.CatalogServiceServer.
@@ -283,6 +291,37 @@ func (s *Server) AdmitResources(
 		return &catalogv1.AdmitResourcesResponse{}, nil
 	}
 
+	newCommit := req.GetNewCommitSha()
+	if newCommit == "" {
+		newCommit = req.GetCommitSha()
+	}
+	if newCommit == "" {
+		s.log.Warn("admit_resources: missing new commit sha",
+			zap.String("repository_id", req.RepositoryId),
+			zap.String("ref_name", req.RefName))
+		return &catalogv1.AdmitResourcesResponse{}, nil
+	}
+
+	if req.RefName != "" && !isZeroOID(newCommit) {
+		current, err := s.git.ResolveRef(ctx, req.RepositoryId, req.RefName)
+		if err != nil {
+			s.log.Error("admit_resources: resolve ref failed",
+				zap.String("repository_id", req.RepositoryId),
+				zap.String("ref_name", req.RefName),
+				zap.String("new_commit_sha", newCommit),
+				zap.Error(err))
+			return &catalogv1.AdmitResourcesResponse{}, nil
+		}
+		if current != "" && current != newCommit {
+			s.log.Info("admit_resources: stale admission skipped",
+				zap.String("repository_id", req.RepositoryId),
+				zap.String("ref_name", req.RefName),
+				zap.String("admitted_commit_sha", newCommit),
+				zap.String("current_commit_sha", current))
+			return &catalogv1.AdmitResourcesResponse{}, nil
+		}
+	}
+
 	// Resolve the namespace identifier (e.g. "gitci") from the repository UUID.
 	// This is the push context namespace; catalog resources that omit metadata.namespace
 	// inherit it. Storing resources under the raw repository UUID is never correct.
@@ -294,18 +333,9 @@ func (s *Server) AdmitResources(
 		return &catalogv1.AdmitResourcesResponse{}, nil
 	}
 
-	paths, err := s.git.ListFiles(ctx, req.RepositoryId, "", req.CommitSha)
-	if err != nil {
-		s.log.Error("admit_resources: list files failed",
-			zap.String("repository_id", req.RepositoryId),
-			zap.String("commit_sha", req.CommitSha),
-			zap.Error(err))
-		return &catalogv1.AdmitResourcesResponse{}, nil
-	}
-
 	// Extract branch name from ref: "refs/heads/main" → "main"
 	branch := strings.TrimPrefix(req.RefName, "refs/heads/")
-	revision := branch + "@sha1:" + req.CommitSha
+	revision := branch + "@sha1:" + newCommit
 	now := s.clock.Now().UTC()
 
 	// Build the admission context once so every per-file admit helper can read
@@ -313,43 +343,119 @@ func (s *Server) AdmitResources(
 	admCtx := AdmissionContext{
 		RepositoryID: req.RepositoryId,
 		Namespace:    repoNamespace,
-		CommitSHA:    req.CommitSha,
+		CommitSHA:    newCommit,
 		RefName:      req.RefName,
 		Revision:     revision,
 		Now:          now,
 	}
 
-	// Two-pass: collect all parsed resources first so CategoryTaxonomy
-	// can detect intra-push cycles and resolve in-push parents.
-	type parsedEntry struct {
-		parsed *validate.ParsedResource
-		body   []byte
+	if req.GetOldCommitSha() == "" {
+		s.log.Warn("admit_resources: old commit absent; falling back to full-tree snapshot admission",
+			zap.String("repository_id", req.RepositoryId),
+			zap.String("ref_name", req.RefName),
+			zap.String("commit_sha", newCommit))
+		entries := s.loadParsedEntries(ctx, req.RepositoryId, newCommit, admCtx.Namespace, nil)
+		s.admitParsedEntries(ctx, entries, admCtx, nil)
+		return &catalogv1.AdmitResourcesResponse{}, nil
 	}
-	var entries []parsedEntry
 
+	oldEntries := s.loadParsedEntries(ctx, req.RepositoryId, req.GetOldCommitSha(), admCtx.Namespace, req.GetChangedPaths())
+	newEntries := s.loadParsedEntries(ctx, req.RepositoryId, newCommit, admCtx.Namespace, req.GetChangedPaths())
+	ops := deriveResourceAdmissionOperations(oldEntries, newEntries, req.GetChangedPaths())
+	s.applyResourceOperations(ctx, ops, admCtx)
+
+	return &catalogv1.AdmitResourcesResponse{}, nil
+}
+
+func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, namespace string, changedPaths []string) []*parsedEntry {
+	if ref == "" || isZeroOID(ref) {
+		return nil
+	}
+	paths, err := s.git.ListFiles(ctx, repositoryID, "", ref)
+	if err != nil {
+		s.log.Error("admit_resources: list files failed",
+			zap.String("repository_id", repositoryID),
+			zap.String("commit_sha", ref),
+			zap.Error(err))
+		return nil
+	}
+	if len(changedPaths) > 0 {
+		pathSet := make(map[string]struct{}, len(changedPaths))
+		for _, path := range changedPaths {
+			pathSet[path] = struct{}{}
+		}
+		filtered := paths[:0]
+		for _, path := range paths {
+			if _, ok := pathSet[path]; ok {
+				filtered = append(filtered, path)
+			}
+		}
+		paths = filtered
+	}
+	entries := make([]*parsedEntry, 0, len(paths))
 	for _, path := range paths {
-		content, err := s.git.ReadFile(ctx, req.RepositoryId, path, req.CommitSha)
+		content, err := s.git.ReadFile(ctx, repositoryID, path, ref)
 		if err != nil {
 			s.log.Error("admit_resources: read file failed",
-				zap.String("path", path), zap.Error(err))
+				zap.String("path", path),
+				zap.String("commit_sha", ref),
+				zap.Error(err))
 			continue
 		}
 		parsed, body, err := s.parser.ParseResource(bytes.NewReader(content))
 		if err != nil || parsed == nil {
 			if err != nil {
 				s.log.Error("admit_resources: parse failed",
-					zap.String("path", path), zap.Error(err))
+					zap.String("path", path),
+					zap.String("commit_sha", ref),
+					zap.Error(err))
 			}
 			continue
 		}
-		entries = append(entries, parsedEntry{parsed, body})
+		entry, ok, err := newParsedEntry(path, parsed, body, namespace)
+		if err != nil {
+			s.log.Error("admit_resources: hash resource failed",
+				zap.String("path", path),
+				zap.String("commit_sha", ref),
+				zap.Error(err))
+			continue
+		}
+		if ok {
+			entries = append(entries, entry)
+		}
 	}
+	return entries
+}
 
+func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmissionOperation, admCtx AdmissionContext) {
+	upsertOps := make(map[string]resourceAdmissionOperation)
+	var upsertEntries []*parsedEntry
+	for _, op := range ops {
+		switch op.operation {
+		case admission.OperationDelete:
+			s.deleteResource(ctx, op.identity)
+		case admission.OperationCreate, admission.OperationUpdate:
+			if op.newEntry == nil {
+				continue
+			}
+			upsertOps[op.identity.key()] = op
+			upsertEntries = append(upsertEntries, op.newEntry)
+		}
+	}
+	s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps)
+}
+
+func (s *Server) admitParsedEntries(
+	ctx context.Context,
+	entries []*parsedEntry,
+	admCtx AdmissionContext,
+	explicitOps map[string]resourceAdmissionOperation,
+) {
 	// Build intra-push category graph: name → parentName
 	pushCategoryParents := make(map[string]string)
 	categoryEntries := make(map[string]*parsedEntry)
 	for i := range entries {
-		e := &entries[i]
+		e := entries[i]
 		if e.parsed.Kind == "CategoryTaxonomy" {
 			cat := e.parsed.CategoryTaxonomy
 			parent := ""
@@ -378,9 +484,9 @@ func (s *Server) AdmitResources(
 		if ns == "" {
 			ns = admCtx.Namespace
 		}
-		siblingOp := admission.OperationCreate
-		if existing, err := s.store.GetCategoryTaxonomyByName(ctx, ns, cat.Metadata.Name); err == nil && existing != nil {
-			siblingOp = admission.OperationUpdate
+		siblingOp, ok := s.operationForEntry(ctx, e, explicitOps)
+		if !ok {
+			continue
 		}
 		catPushSet = append(catPushSet, admission.AdmissionRequest{
 			Object:     cat,
@@ -399,20 +505,122 @@ func (s *Server) AdmitResources(
 	inPushAncestorPaths := make(map[string]string, len(topoOrder))
 	for _, name := range topoOrder {
 		e := categoryEntries[name]
-		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx, inPushAncestorPaths, catPushSet)
+		op, ok := s.operationForEntry(ctx, e, explicitOps)
+		if !ok {
+			continue
+		}
+		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx, e.path, op, inPushAncestorPaths, catPushSet)
 	}
 	for _, e := range entries {
+		op, ok := s.operationForEntry(ctx, e, explicitOps)
+		if !ok {
+			continue
+		}
 		switch e.parsed.Kind {
 		case "Product":
-			s.admitProduct(ctx, e.parsed.Product, e.body, admCtx)
+			s.admitProduct(ctx, e.parsed.Product, e.body, admCtx, e.path, op)
 		case "Collection":
-			s.admitCollection(ctx, e.parsed.Collection, e.body, admCtx)
+			s.admitCollection(ctx, e.parsed.Collection, e.body, admCtx, e.path, op)
 		case "ProductVariant":
-			s.admitProductVariant(ctx, e.parsed.ProductVariant, e.body, admCtx)
+			s.admitProductVariant(ctx, e.parsed.ProductVariant, e.body, admCtx, e.path, op)
 		}
 	}
+}
 
-	return &catalogv1.AdmitResourcesResponse{}, nil
+func (s *Server) operationForEntry(
+	ctx context.Context,
+	e *parsedEntry,
+	explicitOps map[string]resourceAdmissionOperation,
+) (admission.Operation, bool) {
+	if e == nil {
+		return "", false
+	}
+	if op, ok := explicitOps[e.identity.key()]; ok {
+		return op.operation, true
+	}
+	existing, err := s.lookupResourceByIdentity(ctx, e.identity)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return admission.OperationCreate, true
+		}
+		s.log.Error("admit_resources: lookup resource failed",
+			zap.String("kind", e.identity.Kind),
+			zap.String("namespace", e.identity.Namespace),
+			zap.String("name", e.identity.Name),
+			zap.Error(err))
+		return "", false
+	}
+	if existing != nil {
+		return admission.OperationUpdate, true
+	}
+	return admission.OperationCreate, true
+}
+
+func (s *Server) lookupResourceByIdentity(ctx context.Context, id resourceIdentity) (any, error) {
+	switch id.Kind {
+	case "Product":
+		return s.store.GetProductByName(ctx, id.Namespace, id.Name)
+	case "CategoryTaxonomy":
+		return s.store.GetCategoryTaxonomyByName(ctx, id.Namespace, id.Name)
+	case "Collection":
+		return s.store.GetCollectionByName(ctx, id.Namespace, id.Name)
+	case "ProductVariant":
+		return s.store.GetProductVariantByName(ctx, id.Namespace, id.Name)
+	default:
+		return nil, datastore.ErrNotFound
+	}
+}
+
+func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) {
+	existing, err := s.lookupResourceByIdentity(ctx, id)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			s.log.Info("admit_resources: delete skipped for missing resource",
+				zap.String("kind", id.Kind),
+				zap.String("namespace", id.Namespace),
+				zap.String("name", id.Name))
+			return
+		}
+		s.log.Error("admit_resources: delete lookup failed",
+			zap.String("kind", id.Kind),
+			zap.String("namespace", id.Namespace),
+			zap.String("name", id.Name),
+			zap.Error(err))
+		return
+	}
+
+	var uid string
+	var deleteErr error
+	switch r := existing.(type) {
+	case *datastore.Product:
+		uid = r.UID
+		deleteErr = s.store.DeleteProduct(ctx, r.UID)
+	case *datastore.CategoryTaxonomy:
+		uid = r.UID
+		deleteErr = s.store.DeleteCategoryTaxonomy(ctx, r.UID)
+	case *datastore.Collection:
+		uid = r.UID
+		deleteErr = s.store.DeleteCollection(ctx, r.UID)
+	case *datastore.ProductVariant:
+		uid = r.UID
+		deleteErr = s.store.DeleteProductVariant(ctx, r.UID)
+	default:
+		deleteErr = datastore.ErrNotFound
+	}
+	if deleteErr != nil {
+		s.log.Error("admit_resources: delete resource failed",
+			zap.String("kind", id.Kind),
+			zap.String("namespace", id.Namespace),
+			zap.String("name", id.Name),
+			zap.String("uid", uid),
+			zap.Error(deleteErr))
+		return
+	}
+	s.log.Info("admit_resources: resource deleted",
+		zap.String("kind", id.Kind),
+		zap.String("namespace", id.Namespace),
+		zap.String("name", id.Name),
+		zap.String("uid", uid))
 }
 
 // detectCycles delegates to the admission/catalog package implementation.
@@ -427,11 +635,37 @@ func topoSortCategories(parentMap map[string]string, cycleMembers map[string]boo
 	return admcatalog.TopoSortCategories(parentMap, cycleMembers)
 }
 
+func isZeroOID(sha string) bool {
+	if sha == "" {
+		return false
+	}
+	for _, r := range sha {
+		if r != '0' {
+			return false
+		}
+	}
+	return true
+}
+
+func nextResourceVersion(current string) string {
+	n, err := strconv.ParseInt(current, 10, 64)
+	if err != nil || n < 1 {
+		return "1"
+	}
+	return fmt.Sprintf("%d", n+1)
+}
+
+func specBodyChanged(existingSpec []byte, existingBody string, specJSON []byte, body []byte) bool {
+	return !bytes.Equal(existingSpec, specJSON) || existingBody != string(body)
+}
+
 func (s *Server) admitProduct(
 	ctx context.Context,
 	resource *catalog.ProductResource,
 	body []byte,
 	admCtx AdmissionContext,
+	sourcePath string,
+	op admission.Operation,
 ) {
 	specJSON, err := json.Marshal(resource.Spec)
 	if err != nil {
@@ -446,12 +680,24 @@ func (s *Server) admitProduct(
 	}
 
 	existing, getErr := s.store.GetProductByName(ctx, namespace, resource.Metadata.Name)
-
-	op := admission.OperationCreate
 	var oldObject any
 	if getErr == nil && existing != nil {
-		op = admission.OperationUpdate
 		oldObject = existing
+	} else if getErr != nil && !errors.Is(getErr, datastore.ErrNotFound) {
+		s.log.Error("admit_resources: product lookup failed",
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace),
+			zap.Error(getErr))
+		return
+	}
+	if getErr != nil && errors.Is(getErr, datastore.ErrNotFound) {
+		op = admission.OperationCreate
+	}
+	if existing == nil && op == admission.OperationUpdate {
+		s.log.Warn("admit_resources: product update missing stored identity; creating resource",
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace))
+		op = admission.OperationCreate
 	}
 
 	if d, denied := s.chain.Admit(ctx, admission.AdmissionRequest{
@@ -477,7 +723,7 @@ func (s *Server) admitProduct(
 		return
 	}
 
-	if getErr != nil || existing == nil {
+	if op == admission.OperationCreate || existing == nil {
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
 		if !ok {
 			return
@@ -494,6 +740,8 @@ func (s *Server) admitProduct(
 			ResourceVersion:   "1",
 			CreationTimestamp: admCtx.Now,
 			Revision:          admCtx.Revision,
+			RepositoryID:      admCtx.RepositoryID,
+			SourcePath:        sourcePath,
 			GitCommitSHA:      admCtx.CommitSHA,
 			GitRef:            admCtx.RefName,
 			Spec:              specJSON,
@@ -505,14 +753,29 @@ func (s *Server) admitProduct(
 				zap.String("name", resource.Metadata.Name), zap.Error(cerr))
 		}
 	} else {
-		gen := existing.Generation + 1
+		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
+		changedMetadata := existing.APIVersion != resource.APIVersion ||
+			existing.Kind != resource.Kind ||
+			!reflect.DeepEqual(existing.Labels, resource.Metadata.Labels) ||
+			!reflect.DeepEqual(existing.Annotations, resource.Metadata.Annotations)
+		changedProvenance := existing.RepositoryID != admCtx.RepositoryID ||
+			existing.SourcePath != sourcePath
+		if !changedSpecBody && !changedMetadata && !changedProvenance {
+			return
+		}
+		gen := existing.Generation
+		if changedSpecBody {
+			gen++
+		}
 		existing.APIVersion = resource.APIVersion
 		existing.Kind = resource.Kind
 		existing.Labels = resource.Metadata.Labels
 		existing.Annotations = resource.Metadata.Annotations
 		existing.Generation = gen
-		existing.ResourceVersion = fmt.Sprintf("%d", gen)
+		existing.ResourceVersion = nextResourceVersion(existing.ResourceVersion)
 		existing.Revision = admCtx.Revision
+		existing.RepositoryID = admCtx.RepositoryID
+		existing.SourcePath = sourcePath
 		existing.GitCommitSHA = admCtx.CommitSHA
 		existing.GitRef = admCtx.RefName
 		existing.Spec = specJSON
@@ -530,6 +793,8 @@ func (s *Server) admitCollection(
 	resource *catalog.CollectionResource,
 	body []byte,
 	admCtx AdmissionContext,
+	sourcePath string,
+	op admission.Operation,
 ) {
 	specJSON, err := json.Marshal(resource.Spec)
 	if err != nil {
@@ -544,12 +809,24 @@ func (s *Server) admitCollection(
 	}
 
 	existing, getErr := s.store.GetCollectionByName(ctx, namespace, resource.Metadata.Name)
-
-	op := admission.OperationCreate
 	var oldObject any
 	if getErr == nil && existing != nil {
-		op = admission.OperationUpdate
 		oldObject = existing
+	} else if getErr != nil && !errors.Is(getErr, datastore.ErrNotFound) {
+		s.log.Error("admit_resources: collection lookup failed",
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace),
+			zap.Error(getErr))
+		return
+	}
+	if getErr != nil && errors.Is(getErr, datastore.ErrNotFound) {
+		op = admission.OperationCreate
+	}
+	if existing == nil && op == admission.OperationUpdate {
+		s.log.Warn("admit_resources: collection update missing stored identity; creating resource",
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace))
+		op = admission.OperationCreate
 	}
 
 	if d, denied := s.chain.Admit(ctx, admission.AdmissionRequest{
@@ -575,7 +852,7 @@ func (s *Server) admitCollection(
 		return
 	}
 
-	if getErr != nil || existing == nil {
+	if op == admission.OperationCreate || existing == nil {
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
 		if !ok {
 			return
@@ -592,6 +869,8 @@ func (s *Server) admitCollection(
 			ResourceVersion:   "1",
 			CreationTimestamp: admCtx.Now,
 			Revision:          admCtx.Revision,
+			RepositoryID:      admCtx.RepositoryID,
+			SourcePath:        sourcePath,
 			GitCommitSHA:      admCtx.CommitSHA,
 			GitRef:            admCtx.RefName,
 			Spec:              specJSON,
@@ -603,14 +882,29 @@ func (s *Server) admitCollection(
 				zap.String("name", resource.Metadata.Name), zap.Error(cerr))
 		}
 	} else {
-		gen := existing.Generation + 1
+		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
+		changedMetadata := existing.APIVersion != resource.APIVersion ||
+			existing.Kind != resource.Kind ||
+			!reflect.DeepEqual(existing.Labels, resource.Metadata.Labels) ||
+			!reflect.DeepEqual(existing.Annotations, resource.Metadata.Annotations)
+		changedProvenance := existing.RepositoryID != admCtx.RepositoryID ||
+			existing.SourcePath != sourcePath
+		if !changedSpecBody && !changedMetadata && !changedProvenance {
+			return
+		}
+		gen := existing.Generation
+		if changedSpecBody {
+			gen++
+		}
 		existing.APIVersion = resource.APIVersion
 		existing.Kind = resource.Kind
 		existing.Labels = resource.Metadata.Labels
 		existing.Annotations = resource.Metadata.Annotations
 		existing.Generation = gen
-		existing.ResourceVersion = fmt.Sprintf("%d", gen)
+		existing.ResourceVersion = nextResourceVersion(existing.ResourceVersion)
 		existing.Revision = admCtx.Revision
+		existing.RepositoryID = admCtx.RepositoryID
+		existing.SourcePath = sourcePath
 		existing.GitCommitSHA = admCtx.CommitSHA
 		existing.GitRef = admCtx.RefName
 		existing.Spec = specJSON
@@ -631,6 +925,8 @@ func (s *Server) admitProductVariant(
 	resource *catalog.ProductVariantResource,
 	body []byte,
 	admCtx AdmissionContext,
+	sourcePath string,
+	op admission.Operation,
 ) {
 	if resource == nil {
 		return
@@ -648,12 +944,24 @@ func (s *Server) admitProductVariant(
 	}
 
 	existing, getErr := s.store.GetProductVariantByName(ctx, namespace, resource.Metadata.Name)
-
-	op := admission.OperationCreate
 	var oldObject any
 	if getErr == nil && existing != nil {
-		op = admission.OperationUpdate
 		oldObject = existing
+	} else if getErr != nil && !errors.Is(getErr, datastore.ErrNotFound) {
+		s.log.Error("admit_resources: product_variant lookup failed",
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace),
+			zap.Error(getErr))
+		return
+	}
+	if getErr != nil && errors.Is(getErr, datastore.ErrNotFound) {
+		op = admission.OperationCreate
+	}
+	if existing == nil && op == admission.OperationUpdate {
+		s.log.Warn("admit_resources: product_variant update missing stored identity; creating resource",
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace))
+		op = admission.OperationCreate
 	}
 
 	// Run admission chain; map resulting conditions back to variantAdmitResult.
@@ -710,16 +1018,27 @@ func (s *Server) admitProductVariant(
 		Inventory: computeResolvedInventory(resource.Spec),
 	}
 
-	if getErr != nil || existing == nil {
-		// SKU uniqueness check: another variant in this namespace may already hold the SKU.
-		if skuOwner, skuErr := s.store.GetProductVariantBySKU(ctx, namespace, resource.Spec.SKU); skuErr == nil && skuOwner != nil && skuOwner.Name != resource.Metadata.Name {
-			s.log.Warn("admit_resources: product_variant SKU conflict — SKU already claimed by another variant",
-				zap.String("name", resource.Metadata.Name),
-				zap.String("namespace", namespace),
-				zap.String("sku", resource.Spec.SKU),
-				zap.String("conflict_name", skuOwner.Name))
-		}
+	if skuOwner, skuErr := s.store.GetProductVariantBySKU(ctx, namespace, resource.Spec.SKU); skuErr == nil && skuOwner != nil && skuOwner.Name != resource.Metadata.Name {
+		s.log.Warn("admit_resources: product_variant SKU conflict; incoming resource skipped",
+			zap.String("operation", string(op)),
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace),
+			zap.String("sku", resource.Spec.SKU),
+			zap.String("conflict_name", skuOwner.Name),
+			zap.String("conflict_uid", skuOwner.UID))
+		return
+	} else if skuErr != nil && !errors.Is(skuErr, datastore.ErrNotFound) {
+		s.log.Error("admit_resources: product_variant SKU lookup failed",
+			zap.String("operation", string(op)),
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace),
+			zap.String("sku", resource.Spec.SKU),
+			zap.Error(skuErr))
+		return
+	}
 
+	if op == admission.OperationCreate || existing == nil {
+		// SKU uniqueness check: another variant in this namespace may already hold the SKU.
 		statusJSON := variantAdmissionStatus(1, admCtx.Revision, admCtx.Now, admitResult)
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
 		if !ok {
@@ -737,6 +1056,8 @@ func (s *Server) admitProductVariant(
 			ResourceVersion:   "1",
 			CreationTimestamp: admCtx.Now,
 			Revision:          admCtx.Revision,
+			RepositoryID:      admCtx.RepositoryID,
+			SourcePath:        sourcePath,
 			GitCommitSHA:      admCtx.CommitSHA,
 			GitRef:            admCtx.RefName,
 			SKU:               resource.Spec.SKU,
@@ -759,14 +1080,30 @@ func (s *Server) admitProductVariant(
 				zap.Bool("pricing_accepted", admitResult.PricingAccepted))
 		}
 	} else {
-		gen := existing.Generation + 1
+		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
+		changedMetadata := existing.APIVersion != resource.APIVersion ||
+			existing.Kind != resource.Kind ||
+			!reflect.DeepEqual(existing.Labels, resource.Metadata.Labels) ||
+			!reflect.DeepEqual(existing.Annotations, resource.Metadata.Annotations)
+		changedProvenance := existing.RepositoryID != admCtx.RepositoryID ||
+			existing.SourcePath != sourcePath
+		changedDenorm := existing.SKU != resource.Spec.SKU || existing.ProductRefName != productRefName
+		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedDenorm {
+			return
+		}
+		gen := existing.Generation
+		if changedSpecBody {
+			gen++
+		}
 		existing.APIVersion = resource.APIVersion
 		existing.Kind = resource.Kind
 		existing.Labels = resource.Metadata.Labels
 		existing.Annotations = resource.Metadata.Annotations
 		existing.Generation = gen
-		existing.ResourceVersion = fmt.Sprintf("%d", gen)
+		existing.ResourceVersion = nextResourceVersion(existing.ResourceVersion)
 		existing.Revision = admCtx.Revision
+		existing.RepositoryID = admCtx.RepositoryID
+		existing.SourcePath = sourcePath
 		existing.GitCommitSHA = admCtx.CommitSHA
 		existing.GitRef = admCtx.RefName
 		existing.SKU = resource.Spec.SKU
@@ -802,6 +1139,8 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	resource *catalog.CategoryTaxonomyResource,
 	body []byte,
 	admCtx AdmissionContext,
+	sourcePath string,
+	op admission.Operation,
 	inPushAncestorPaths map[string]string,
 	catPushSet []admission.AdmissionRequest,
 ) {
@@ -820,12 +1159,24 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	name := resource.Metadata.Name
 
 	existing, getErr := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)
-
-	op := admission.OperationCreate
 	var oldObject any
 	if getErr == nil && existing != nil {
-		op = admission.OperationUpdate
 		oldObject = existing
+	} else if getErr != nil && !errors.Is(getErr, datastore.ErrNotFound) {
+		s.log.Error("admit_resources: category lookup failed",
+			zap.String("name", name),
+			zap.String("namespace", namespace),
+			zap.Error(getErr))
+		return
+	}
+	if getErr != nil && errors.Is(getErr, datastore.ErrNotFound) {
+		op = admission.OperationCreate
+	}
+	if existing == nil && op == admission.OperationUpdate {
+		s.log.Warn("admit_resources: category update missing stored identity; creating resource",
+			zap.String("name", name),
+			zap.String("namespace", namespace))
+		op = admission.OperationCreate
 	}
 
 	// Run admission chain to determine ParentResolved and Acyclic conditions.
@@ -888,9 +1239,8 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		// If parent not found: tentative root path stays as `name`.
 	}
 
-	statusJSON := categoryAdmissionStatusFull(1, admCtx.Revision, admCtx.Now, parentResolved, inCycle)
-
-	if getErr != nil || existing == nil {
+	if op == admission.OperationCreate || existing == nil {
+		statusJSON := categoryAdmissionStatusFull(1, admCtx.Revision, admCtx.Now, parentResolved, inCycle)
 		uid, ok := s.newUID(resource.Kind, name)
 		if !ok {
 			return
@@ -907,6 +1257,8 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 			ResourceVersion:   "1",
 			CreationTimestamp: admCtx.Now,
 			Revision:          admCtx.Revision,
+			RepositoryID:      admCtx.RepositoryID,
+			SourcePath:        sourcePath,
 			GitCommitSHA:      admCtx.CommitSHA,
 			GitRef:            admCtx.RefName,
 			ParentName:        parentName,
@@ -927,14 +1279,31 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 			zap.String("ancestor_path", ancestorPath),
 			zap.Bool("parent_resolved", parentResolved))
 	} else {
-		gen := existing.Generation + 1
+		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
+		changedMetadata := existing.APIVersion != resource.APIVersion ||
+			existing.Kind != resource.Kind ||
+			!reflect.DeepEqual(existing.Labels, resource.Metadata.Labels) ||
+			!reflect.DeepEqual(existing.Annotations, resource.Metadata.Annotations)
+		changedProvenance := existing.RepositoryID != admCtx.RepositoryID ||
+			existing.SourcePath != sourcePath
+		changedHierarchy := existing.ParentName != parentName || existing.AncestorPath != ancestorPath
+		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedHierarchy {
+			inPushAncestorPaths[name] = ancestorPath
+			return
+		}
+		gen := existing.Generation
+		if changedSpecBody {
+			gen++
+		}
 		existing.APIVersion = resource.APIVersion
 		existing.Kind = resource.Kind
 		existing.Labels = resource.Metadata.Labels
 		existing.Annotations = resource.Metadata.Annotations
 		existing.Generation = gen
-		existing.ResourceVersion = fmt.Sprintf("%d", gen)
+		existing.ResourceVersion = nextResourceVersion(existing.ResourceVersion)
 		existing.Revision = admCtx.Revision
+		existing.RepositoryID = admCtx.RepositoryID
+		existing.SourcePath = sourcePath
 		existing.GitCommitSHA = admCtx.CommitSHA
 		existing.GitRef = admCtx.RefName
 		existing.ParentName = parentName

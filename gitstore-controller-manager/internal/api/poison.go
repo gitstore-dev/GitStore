@@ -60,7 +60,7 @@ func ListPoisonHandler(mgr Requeuer) http.HandlerFunc {
 }
 
 // RequeuePoisonHandler removes a key from quarantine and re-enqueues it.
-// Route: POST /controller/v1/poison/{kind}/{namespace}/{name}/requeue
+// Route: POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue
 func RequeuePoisonHandler(mgr Requeuer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		kind := r.PathValue("kind")

@@ -1,13 +1,13 @@
 # Push Validation and Admission Pipeline
 
-This document describes how GitStore validates and stores product resources when a catalog author pushes to a repository.
+This document describes how GitStore validates and stores Git-backed catalog resources when a catalog author pushes to a repository.
 
 ## Overview
 
 When a `git push` arrives at the GitStore git service, two hook phases handle the incoming data:
 
 1. **Pre-receive (blocking)**: `gitstore-git-service` extracts resource blobs from the incoming commit and calls `CatalogService.ValidateResources` on `gitstore-api`. Invalid pushes are rejected before any refs are updated.
-2. **Post-receive (fire-and-forget)**: `gitstore-git-service` notifies `gitstore-api` via `CatalogService.AdmitResources`. The API fetches the accepted files, parses them, and stores catalog records asynchronously. The git author is not blocked.
+2. **Post-receive (fire-and-forget)**: `gitstore-git-service` notifies `gitstore-api` via `CatalogService.AdmitResources`. The API compares the old and new ref tips, parses changed resources, and stores catalog records asynchronously. The git author is not blocked.
 
 ## Frontmatter Opt-in Model
 
@@ -32,16 +32,47 @@ remote: error: push rejected by pre-receive: validate: spec.title exceeds maximu
 
 ## Post-receive Admission
 
-After refs are committed, the git service calls `CatalogService.AdmitResources` with `repository_id`, `commit_sha`, and `ref_name`. The call is fire-and-forget — the git client receives the push acknowledgment immediately without waiting for storage to complete.
+After refs are committed, the git service calls `CatalogService.AdmitResources` with `repository_id`, `ref_name`, the old commit SHA, and the new commit SHA. `commit_sha` is still sent as a compatibility alias for the new commit. The call is fire-and-forget — the git client receives the push acknowledgment immediately without waiting for storage to complete.
 
 The API then:
-1. Calls `ListFiles` on the git service to enumerate all files at the commit SHA.
-2. For each file with a `---` prefix: calls `GetFile`, parses the frontmatter, dispatches on `kind`, and stores or updates the catalog record.
-3. Sets the `AdmissionAccepted: True` status condition on the stored resource.
+1. Confirms the ref still points at the admitted new commit. If a newer push has already advanced the ref, the stale admission is skipped.
+2. Compares resource files at the old and new commits.
+3. Derives operations by resource identity: create, update, delete, or path move.
+4. Calls `GetFile` for changed resource files, parses frontmatter, dispatches on `kind`, and stores, updates, or deletes the catalog record.
+5. Sets `AdmissionAccepted: True` status on stored or updated resources.
 
 Supported `kind` values: `Product`, `ProductVariant`, `CategoryTaxonomy`, `Collection`.
 
-Failures for individual resources are logged at ERROR but do not block remaining resources.
+Failures for individual resources are logged with operation, namespace, name, and conflict details where available. They do not block remaining resources and cannot reject a Git push that has already been accepted.
+
+If `old_commit_sha` is absent because an older git service called the API, admission falls back to the legacy full-tree snapshot path and logs a warning.
+
+## Resource Identity and Lifecycle
+
+Catalog resource identity is independent of file path. GitStore identifies a stored resource by:
+
+| Field | Source |
+|---|---|
+| `apiVersion` | Frontmatter |
+| `kind` | Frontmatter |
+| `namespace` | `metadata.namespace` or the repository's owning namespace |
+| `metadata.name` | Frontmatter |
+
+The file path is stored as source provenance, not identity. Moving `products/widget.md` to `catalog/products/widget.md` with the same identity keeps the same `metadata.uid`.
+
+Lifecycle rules:
+
+| Git change | Stored result |
+|---|---|
+| New identity appears | Create resource with a new `metadata.uid`, `generation=1`, `resourceVersion=1` |
+| Existing identity changes `spec` or Markdown body | Preserve `metadata.uid`, increment `generation`, increment `resourceVersion` |
+| Existing identity moves to a new path with the same spec/body | Preserve `metadata.uid` and `generation`, increment `resourceVersion` |
+| Existing identity changes only labels/annotations | Preserve `metadata.uid` and `generation`, increment `resourceVersion` |
+| Identity disappears from the admitted ref | Delete the stored resource and remove lookup indexes |
+| Identity is deleted in one commit and added again later | Allocate a new `metadata.uid`, reset `generation=1` and `resourceVersion=1` |
+| `metadata.name` or `kind` changes in a file | Delete the old identity and create the new identity |
+
+Duplicate SKU conflicts for `ProductVariant` are not inserted after detection. The existing variant remains unchanged, the conflicting incoming variant is skipped, and the conflict is visible in structured API logs. Structural validation errors still reject the push during pre-receive.
 
 ### Branch filtering
 
@@ -49,7 +80,7 @@ Only pushes to refs matching `GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN` (defau
 
 ## Revision format
 
-The `revision` field on a stored product encodes both the branch context and the exact commit:
+The `revision` field on a stored catalog resource encodes both the branch context and the exact commit:
 
 ```
 main@sha1:a1b2c3d4e5f6...

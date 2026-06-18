@@ -1,4 +1,7 @@
-# CategoryTaxonomy Document Format
+# CategoryTaxonomy Spec Reference
+
+**API Version**: `catalog.gitstore.dev/v1beta1`  
+**Kind**: `CategoryTaxonomy`
 
 Categories in GitStore are managed through git push — not GraphQL mutations. A
 `CategoryTaxonomy` file committed to the catalog repository is validated at push
@@ -59,7 +62,7 @@ The following fields are system-managed and must **not** appear in committed fil
 
 ## Namespace inference
 
-All catalog resources (`Product`, `CategoryTaxonomy`) treat `metadata.namespace` as
+All current Git-backed catalog resources (`Product`, `ProductVariant`, `CategoryTaxonomy`, `Collection`) treat `metadata.namespace` as
 optional in the committed file. When omitted, the namespace is resolved at admission
 time from the push context:
 
@@ -78,6 +81,10 @@ Even when `metadata.namespace` is present in the file it is still validated to m
 inferred namespace. The field exists to allow multiple repositories within the same
 namespace to push resources that cross-reference each other by name (product and category
 names are unique per namespace, not per repository).
+
+## Lifecycle
+
+GitStore identifies a category by `apiVersion`, `kind`, resolved namespace, and `metadata.name`; the file path is provenance only. Moving a category file preserves `metadata.uid`. Changing `spec` or the Markdown body increments `metadata.generation` and `metadata.resourceVersion`. Path-only moves and label/annotation-only edits preserve `generation` and increment `resourceVersion`. Deleting the file removes the category from GraphQL reads after post-receive admission; adding the same identity again later creates a new UID.
 
 ## Hierarchy
 

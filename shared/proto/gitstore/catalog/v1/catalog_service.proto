@@ -92,10 +92,25 @@ message AdmitResourcesRequest {
   string repository_id = 15;
 
   // commit_sha is the full SHA of the accepted push commit.
+  // Deprecated for new callers in favor of new_commit_sha, but retained as
+  // the canonical new commit for older git-service versions.
   string commit_sha = 1;
 
   // ref_name is the fully-qualified ref that was updated, e.g. "refs/heads/main".
   string ref_name = 2;
+
+  // old_commit_sha is the ref tip before the accepted update.
+  // It is all zeroes for branch creation and empty for legacy callers.
+  string old_commit_sha = 3;
+
+  // new_commit_sha is the ref tip after the accepted update.
+  // If empty, consumers must use commit_sha for backwards compatibility.
+  string new_commit_sha = 4;
+
+  // changed_paths optionally carries repository-relative paths known to have
+  // changed in the accepted update. When absent, gitstore-api derives the
+  // changed resource set by comparing old_commit_sha and new_commit_sha.
+  repeated string changed_paths = 5;
 }
 
 // AdmitResourcesResponse is intentionally empty.

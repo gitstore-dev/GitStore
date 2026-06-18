@@ -35,7 +35,7 @@ A ProductVariant resource is a Markdown file with YAML frontmatter pushed to a G
 | Field | Type | Required | Constraint |
 |-------|------|----------|-----------|
 | `spec.title` | string | yes | Max 200 characters |
-| `spec.sku` | string | yes | Unique per namespace |
+| `spec.sku` | string | yes | Unique per namespace; duplicate SKU admissions are skipped and leave the existing variant unchanged |
 | `spec.productRef.name` | string | yes | Name of the parent `Product` resource |
 | `spec.selectedOptions` | list | no | Each entry: `name` + `value`; names must match parent product options |
 | `spec.pricing` | object | no | See Pricing Fields |
@@ -80,7 +80,7 @@ The `status` block is written by the admission controller and must not be author
 
 | Field | Meaning |
 |-------|---------|
-| `status.observedGeneration` | Increments on every admitted update |
+| `status.observedGeneration` | Tracks the latest admitted `metadata.generation`; generation increments when `spec` or Markdown body changes |
 | `status.conditions` | List of named conditions (see below) |
 | `status.resolved` | Computed summaries populated at admission |
 
@@ -172,7 +172,7 @@ catalog/
     my-t-shirt-blue-l.md
 ```
 
-The admission controller processes all files from the commit. When it encounters a variant whose `productRef` points to a product that is not yet in the datastore (because it is also being admitted from the same push), it stores the variant with `ProductResolved=False` and resolves the reference asynchronously. No multi-step workflow is required.
+The admission controller derives create, update, delete, and move operations by comparing the old and new commit. When it encounters a variant whose `productRef` points to a product that is not yet in the datastore (because it is also being admitted from the same push), it stores the variant with `ProductResolved=False` and resolves the reference asynchronously. No multi-step workflow is required.
 
 This is a key differentiator from traditional e-commerce platforms where catalog setup requires:
 
@@ -185,3 +185,5 @@ With GitStore:
 2. `git push` — everything is admitted in one operation
 
 The same single-pass model applies to co-pushed `CategoryTaxonomy` and `Collection` resources.
+
+File paths are not resource identity. Moving a variant file while keeping the same `apiVersion`, `kind`, namespace, and `metadata.name` preserves `metadata.uid`. Deleting a variant removes it from GraphQL reads after admission; adding the same identity again in a later commit creates a new UID.

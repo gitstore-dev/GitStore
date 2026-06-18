@@ -74,6 +74,7 @@ type Datastore interface {
 	GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*CategoryTaxonomy, error)
 	ListCategoryTaxonomies(ctx context.Context, namespace string, page PageParams) (*PageResult[CategoryTaxonomy], error)
 	UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error
+	DeleteCategoryTaxonomy(ctx context.Context, uid string) error
 
 	// ProductVariant operations
 	CreateProductVariant(ctx context.Context, v *ProductVariant) error
@@ -83,6 +84,7 @@ type Datastore interface {
 	ListProductVariants(ctx context.Context, namespace string, page PageParams) (*PageResult[ProductVariant], error)
 	ListProductVariantsByProductRef(ctx context.Context, namespace, productRefName string) ([]*ProductVariant, error)
 	UpdateProductVariant(ctx context.Context, v *ProductVariant) error
+	DeleteProductVariant(ctx context.Context, uid string) error
 
 	// Collection operations
 	CreateCollection(ctx context.Context, c *Collection) error
@@ -90,6 +92,7 @@ type Datastore interface {
 	GetCollectionByName(ctx context.Context, namespace, name string) (*Collection, error)
 	ListCollections(ctx context.Context, namespace string, page PageParams) (*PageResult[Collection], error)
 	UpdateCollection(ctx context.Context, c *Collection) error
+	DeleteCollection(ctx context.Context, uid string) error
 	ListProductsByLabelSelector(ctx context.Context, namespace string, selector catalog.LabelSelector) ([]*Product, error)
 
 	// Namespace operations

@@ -82,7 +82,7 @@ curl http://localhost:5001/metrics
 curl http://localhost:5001/controller/v1/poison/Product | jq .
 
 # Re-queue a specific poison item
-curl -X POST http://localhost:5001/controller/v1/poison/Product/gitstore-test/widget-pro/requeue
+curl -X POST http://localhost:5001/controller/v1/poison/gitstore-test/Product/widget-pro/requeue
 ```
 
 ---

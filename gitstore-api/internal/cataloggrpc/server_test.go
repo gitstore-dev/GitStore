@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -241,8 +242,9 @@ func TestValidateResources_EmptyBlobs_Accepted(t *testing.T) {
 
 // mockGitReader is a test double for the GitReader interface used by AdmitResources.
 type mockGitReader struct {
-	listFilesFunc func(ctx context.Context, repositoryID, prefix, ref string) ([]string, error)
-	readFileFunc  func(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
+	listFilesFunc  func(ctx context.Context, repositoryID, prefix, ref string) ([]string, error)
+	readFileFunc   func(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
+	resolveRefFunc func(ctx context.Context, repositoryID, ref string) (string, error)
 }
 
 func (m *mockGitReader) ListFiles(ctx context.Context, repositoryID, prefix, ref string) ([]string, error) {
@@ -251,6 +253,13 @@ func (m *mockGitReader) ListFiles(ctx context.Context, repositoryID, prefix, ref
 
 func (m *mockGitReader) ReadFile(ctx context.Context, repositoryID, path, ref string) ([]byte, error) {
 	return m.readFileFunc(ctx, repositoryID, path, ref)
+}
+
+func (m *mockGitReader) ResolveRef(ctx context.Context, repositoryID, ref string) (string, error) {
+	if m.resolveRefFunc != nil {
+		return m.resolveRefFunc(ctx, repositoryID, ref)
+	}
+	return "", nil
 }
 
 // makeProduct builds a valid product blob for a given name.
@@ -309,7 +318,10 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
 			return []string{"products/widget.md"}, nil
 		},
-		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+		readFileFunc: func(_ context.Context, _, _, ref string) ([]byte, error) {
+			if strings.HasPrefix(ref, "b") {
+				return append(makeProduct("widget"), []byte("updated body")...), nil
+			}
 			return makeProduct("widget"), nil
 		},
 	}
@@ -611,7 +623,10 @@ func TestAdmitResources_CategoryTaxonomy_Created(t *testing.T) {
 		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
 			return []string{"categories/electronics.md"}, nil
 		},
-		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+		readFileFunc: func(_ context.Context, _, _, ref string) ([]byte, error) {
+			if strings.HasPrefix(ref, "b") {
+				return append(makeCategoryTaxonomy("electronics"), []byte("updated body")...), nil
+			}
 			return makeCategoryTaxonomy("electronics"), nil
 		},
 	}
@@ -638,7 +653,10 @@ func TestAdmitResources_CategoryTaxonomy_Updated(t *testing.T) {
 		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
 			return []string{"categories/electronics.md"}, nil
 		},
-		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+		readFileFunc: func(_ context.Context, _, _, ref string) ([]byte, error) {
+			if strings.HasPrefix(ref, "b") {
+				return append(makeCategoryTaxonomy("electronics"), []byte("updated body")...), nil
+			}
 			return makeCategoryTaxonomy("electronics"), nil
 		},
 	}
@@ -1349,6 +1367,192 @@ func (p *recordingPolicy) Name() string { return "RecordingPolicy" }
 func (p *recordingPolicy) Validate(_ context.Context, req admission.AdmissionRequest) admission.AdmissionDecision {
 	p.calls = append(p.calls, req)
 	return admission.DecisionAllow()
+}
+
+func makeProductVariant(name, sku string) []byte {
+	return []byte(`---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: ProductVariant
+metadata:
+  name: ` + name + `
+  namespace: gitstore
+spec:
+  title: ` + name + `
+  sku: ` + sku + `
+  productRef:
+    name: widget
+---
+`)
+}
+
+func newTreeGitReader(current *string, files map[string]map[string][]byte) *mockGitReader {
+	return &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, ref string) ([]string, error) {
+			tree := files[ref]
+			paths := make([]string, 0, len(tree))
+			for path := range tree {
+				paths = append(paths, path)
+			}
+			sort.Strings(paths)
+			return paths, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, ref string) ([]byte, error) {
+			return files[ref][path], nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			return *current, nil
+		},
+	}
+}
+
+func admitDelta(t *testing.T, srv *cataloggrpc.Server, oldCommit, newCommit string) {
+	t.Helper()
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    newCommit,
+		OldCommitSha: oldCommit,
+		NewCommitSha: newCommit,
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+}
+
+func TestAdmitResources_OperationAwareDeleteRemovesProductVariant(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	current := a
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {"variants/red.md": makeProductVariant("red", "SKU-1")},
+		b: {},
+	})
+	srv := newCatalogServer(t, store, git)
+
+	admitDelta(t, srv, zero, a)
+	_, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+
+	current = b
+	admitDelta(t, srv, a, b)
+
+	_, err = store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	assert.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestAdmitResources_MovePreservesUIDAndGeneration(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	current := a
+	blob := makeProductVariant("red", "SKU-1")
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {"variants/red.md": blob},
+		b: {"catalog/variants/red.md": blob},
+	})
+	srv := newCatalogServer(t, store, git)
+
+	admitDelta(t, srv, zero, a)
+	v1, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+
+	current = b
+	admitDelta(t, srv, a, b)
+	v2, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+
+	assert.Equal(t, v1.UID, v2.UID)
+	assert.Equal(t, int64(1), v2.Generation)
+	assert.Equal(t, "2", v2.ResourceVersion)
+	assert.Equal(t, "catalog/variants/red.md", v2.SourcePath)
+	assert.Equal(t, b, v2.GitCommitSHA)
+}
+
+func TestAdmitResources_DeleteReaddAllocatesNewUID(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	c := strings.Repeat("c", 40)
+	current := a
+	blob := makeProductVariant("red", "SKU-1")
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {"variants/red.md": blob},
+		b: {},
+		c: {"variants/red.md": blob},
+	})
+	srv := newCatalogServer(t, store, git)
+
+	admitDelta(t, srv, zero, a)
+	v1, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+
+	current = b
+	admitDelta(t, srv, a, b)
+	current = c
+	admitDelta(t, srv, b, c)
+
+	v2, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+	assert.NotEqual(t, v1.UID, v2.UID)
+	assert.Equal(t, int64(1), v2.Generation)
+	assert.Equal(t, "1", v2.ResourceVersion)
+}
+
+func TestAdmitResources_DuplicateSKUCreateSkipped(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	current := a
+	red := makeProductVariant("red", "SKU-1")
+	blue := makeProductVariant("blue", "SKU-1")
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {"variants/red.md": red},
+		b: {
+			"variants/red.md":  red,
+			"variants/blue.md": blue,
+		},
+	})
+	srv := newCatalogServer(t, store, git)
+
+	admitDelta(t, srv, zero, a)
+	current = b
+	admitDelta(t, srv, a, b)
+
+	_, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+	_, err = store.GetProductVariantByName(context.Background(), "gitstore", "blue")
+	assert.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestAdmitResources_StaleAdmissionSkipped(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	newer := strings.Repeat("c", 40)
+	current := newer
+	listCalled := false
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			listCalled = true
+			return []string{"variants/red.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeProductVariant("red", "SKU-1"), nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			return current, nil
+		},
+	}
+	srv := newCatalogServer(t, store, git)
+
+	admitDelta(t, srv, zero, a)
+
+	assert.False(t, listCalled)
+	_, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	assert.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
 // TestExtraValidatingPolicies_CalledForAdmittedResources verifies that an extra
