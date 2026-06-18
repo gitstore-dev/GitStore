@@ -52,7 +52,7 @@ In CI, `.github/workflows/go-license-headers.yml` runs:
 
 ## check-rust-license-headers.sh
 
-Validates that Rust files include the required AGPL header and that changed files include the current year in their copyright line.
+Validates that Rust files include the required AGPL header and that changed files include the current year in their copyright line. Generated Rust files with `Code generated`, `@generated`, or `DO NOT EDIT` markers near the top are skipped.
 
 ### Usage
 

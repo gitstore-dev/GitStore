@@ -61,7 +61,7 @@ See the module READMEs for boundaries and commands:
 - **Markdown-native catalogue authoring**: Catalogue resources are easy to create and edit as text files.
 - **Git-native collaboration**: Branches, commits, diffs, code review, and history become catalogue lifecycle tools.
 - **Automation-friendly**: AI agents can generate and update catalogue content through file operations and standard Git pushes.
-- **Operational safety**: Push-time validation and admission checks return clear errors before invalid catalogue data becomes queryable.
+- **Operational safety**: Blocking pre-receive validation returns clear structural errors, while post-receive admission projects only valid catalog resources into GraphQL and skips stale or conflicting writes.
 
 ## Quick Start
 

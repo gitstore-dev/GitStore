@@ -64,13 +64,13 @@ List all quarantined poison items for the given resource kind. Use `kind=_all` t
 }
 ```
 
-### `POST /controller/v1/poison/{kind}/{namespace}/{name}/requeue`
+### `POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue`
 
 Re-queue a specific quarantined item. Resets retry budget to zero. The item re-enters the active work queue and goes through the normal reconcile → retry → quarantine lifecycle.
 
 **Path params**:
-- `kind` — resource kind
 - `namespace` — resource namespace
+- `kind` — resource kind
 - `name` — resource name
 
 **Response `204 No Content`** — item re-queued successfully.

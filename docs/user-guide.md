@@ -206,7 +206,11 @@ git push origin main
 
 If validation fails, Git prints the rejection reason in the push output. Fix the files and push again.
 
-After an accepted push, query GraphQL to inspect the admitted state. Some status fields may update after reconciliation, so repeat the query after a few seconds if you are checking computed status.
+After an accepted push, query GraphQL to inspect the admitted state. Post-receive admission runs asynchronously, so a push can succeed before every resource has been projected into the datastore. Some status fields may update after reconciliation, so repeat the query after a few seconds if you are checking computed status.
+
+GitStore tracks catalog resources by `apiVersion`, `kind`, namespace, and `metadata.name`, not by file path. You can move a resource file to another directory without changing its `metadata.uid`. Editing the spec or Markdown body increments `generation` and `resourceVersion`; moving the file with the same content only increments `resourceVersion`. Deleting a resource file removes it from GraphQL reads after admission processes the commit. If you delete a resource and add the same identity again later, it receives a new UID.
+
+Admission conflicts that require datastore state, such as a duplicate `ProductVariant.spec.sku`, cannot reject a Git push after refs have already been accepted. In that case the existing variant remains unchanged and the conflicting incoming variant is skipped. Check API logs when a pushed resource does not appear after structural validation passed.
 
 ## Query GraphQL
 

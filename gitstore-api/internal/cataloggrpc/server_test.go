@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 // testRepoID is a fixed UUID used as the repository ID in AdmitResources tests.
@@ -241,8 +244,9 @@ func TestValidateResources_EmptyBlobs_Accepted(t *testing.T) {
 
 // mockGitReader is a test double for the GitReader interface used by AdmitResources.
 type mockGitReader struct {
-	listFilesFunc func(ctx context.Context, repositoryID, prefix, ref string) ([]string, error)
-	readFileFunc  func(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
+	listFilesFunc  func(ctx context.Context, repositoryID, prefix, ref string) ([]string, error)
+	readFileFunc   func(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
+	resolveRefFunc func(ctx context.Context, repositoryID, ref string) (string, error)
 }
 
 func (m *mockGitReader) ListFiles(ctx context.Context, repositoryID, prefix, ref string) ([]string, error) {
@@ -251,6 +255,13 @@ func (m *mockGitReader) ListFiles(ctx context.Context, repositoryID, prefix, ref
 
 func (m *mockGitReader) ReadFile(ctx context.Context, repositoryID, path, ref string) ([]byte, error) {
 	return m.readFileFunc(ctx, repositoryID, path, ref)
+}
+
+func (m *mockGitReader) ResolveRef(ctx context.Context, repositoryID, ref string) (string, error) {
+	if m.resolveRefFunc != nil {
+		return m.resolveRefFunc(ctx, repositoryID, ref)
+	}
+	return "", nil
 }
 
 // makeProduct builds a valid product blob for a given name.
@@ -309,7 +320,10 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
 			return []string{"products/widget.md"}, nil
 		},
-		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+		readFileFunc: func(_ context.Context, _, _, ref string) ([]byte, error) {
+			if strings.HasPrefix(ref, "b") {
+				return append(makeProduct("widget"), []byte("updated body")...), nil
+			}
 			return makeProduct("widget"), nil
 		},
 	}
@@ -611,7 +625,10 @@ func TestAdmitResources_CategoryTaxonomy_Created(t *testing.T) {
 		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
 			return []string{"categories/electronics.md"}, nil
 		},
-		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+		readFileFunc: func(_ context.Context, _, _, ref string) ([]byte, error) {
+			if strings.HasPrefix(ref, "b") {
+				return append(makeCategoryTaxonomy("electronics"), []byte("updated body")...), nil
+			}
 			return makeCategoryTaxonomy("electronics"), nil
 		},
 	}
@@ -638,7 +655,10 @@ func TestAdmitResources_CategoryTaxonomy_Updated(t *testing.T) {
 		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
 			return []string{"categories/electronics.md"}, nil
 		},
-		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+		readFileFunc: func(_ context.Context, _, _, ref string) ([]byte, error) {
+			if strings.HasPrefix(ref, "b") {
+				return append(makeCategoryTaxonomy("electronics"), []byte("updated body")...), nil
+			}
 			return makeCategoryTaxonomy("electronics"), nil
 		},
 	}
@@ -1351,6 +1371,229 @@ func (p *recordingPolicy) Validate(_ context.Context, req admission.AdmissionReq
 	return admission.DecisionAllow()
 }
 
+func makeProductVariant(name, sku string) []byte {
+	return []byte(`---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: ProductVariant
+metadata:
+  name: ` + name + `
+  namespace: gitstore
+spec:
+  title: ` + name + `
+  sku: ` + sku + `
+  productRef:
+    name: widget
+---
+`)
+}
+
+func newTreeGitReader(current *string, files map[string]map[string][]byte) *mockGitReader {
+	return &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, ref string) ([]string, error) {
+			tree := files[ref]
+			paths := make([]string, 0, len(tree))
+			for path := range tree {
+				paths = append(paths, path)
+			}
+			sort.Strings(paths)
+			return paths, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, ref string) ([]byte, error) {
+			return files[ref][path], nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			return *current, nil
+		},
+	}
+}
+
+func admitDelta(t *testing.T, srv *cataloggrpc.Server, oldCommit, newCommit string) {
+	t.Helper()
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    newCommit,
+		OldCommitSha: oldCommit,
+		NewCommitSha: newCommit,
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+}
+
+func TestAdmitResources_OperationAwareDeleteRemovesProductVariant(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	current := a
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {"variants/red.md": makeProductVariant("red", "SKU-1")},
+		b: {},
+	})
+	srv := newCatalogServer(t, store, git)
+
+	admitDelta(t, srv, zero, a)
+	_, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+
+	current = b
+	admitDelta(t, srv, a, b)
+
+	_, err = store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	assert.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestAdmitResources_MovePreservesUIDAndGeneration(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	current := a
+	blob := makeProductVariant("red", "SKU-1")
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {"variants/red.md": blob},
+		b: {"catalog/variants/red.md": blob},
+	})
+	srv := newCatalogServer(t, store, git)
+
+	admitDelta(t, srv, zero, a)
+	v1, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+
+	current = b
+	admitDelta(t, srv, a, b)
+	v2, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+
+	assert.Equal(t, v1.UID, v2.UID)
+	assert.Equal(t, int64(1), v2.Generation)
+	assert.Equal(t, "2", v2.ResourceVersion)
+	assert.Equal(t, "catalog/variants/red.md", v2.SourcePath)
+	assert.Equal(t, b, v2.GitCommitSHA)
+}
+
+func TestAdmitResources_DeleteReaddAllocatesNewUID(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	c := strings.Repeat("c", 40)
+	current := a
+	blob := makeProductVariant("red", "SKU-1")
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {"variants/red.md": blob},
+		b: {},
+		c: {"variants/red.md": blob},
+	})
+	srv := newCatalogServer(t, store, git)
+
+	admitDelta(t, srv, zero, a)
+	v1, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+
+	current = b
+	admitDelta(t, srv, a, b)
+	current = c
+	admitDelta(t, srv, b, c)
+
+	v2, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+	assert.NotEqual(t, v1.UID, v2.UID)
+	assert.Equal(t, int64(1), v2.Generation)
+	assert.Equal(t, "1", v2.ResourceVersion)
+}
+
+func TestAdmitResources_DuplicateSKUCreateSkipped(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	current := a
+	red := makeProductVariant("red", "SKU-1")
+	blue := makeProductVariant("blue", "SKU-1")
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {"variants/red.md": red},
+		b: {
+			"variants/red.md":  red,
+			"variants/blue.md": blue,
+		},
+	})
+	srv := newCatalogServer(t, store, git)
+
+	admitDelta(t, srv, zero, a)
+	current = b
+	admitDelta(t, srv, a, b)
+
+	_, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+	_, err = store.GetProductVariantByName(context.Background(), "gitstore", "blue")
+	assert.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestAdmitResources_StaleAdmissionSkipped(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	newer := strings.Repeat("c", 40)
+	current := newer
+	listCalled := false
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			listCalled = true
+			return []string{"variants/red.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeProductVariant("red", "SKU-1"), nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			return current, nil
+		},
+	}
+	srv := newCatalogServer(t, store, git)
+
+	admitDelta(t, srv, zero, a)
+
+	assert.False(t, listCalled)
+	_, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	assert.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+// TestAdmitResources_EmptySHAFromResolveRef_AdmissionProceeds verifies that when
+// ResolveRef returns an empty SHA (e.g. an unimplemented backend), the staleness
+// guard is skipped and the push is admitted rather than silently dropped.
+func TestAdmitResources_EmptySHAFromResolveRef_AdmissionProceeds(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, ref string) ([]string, error) {
+			if isZeroRef(ref) {
+				return nil, nil
+			}
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeProduct("widget"), nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			// Backend does not implement ResolveRef — returns empty string without error.
+			return "", nil
+		},
+	}
+	srv := newCatalogServer(t, store, git)
+
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: zero,
+		NewCommitSha: a,
+		CommitSha:    a,
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	_, err = store.GetProductByName(context.Background(), "gitstore", "widget")
+	assert.NoError(t, err, "admission must proceed when ResolveRef returns empty SHA")
+}
+
 // TestExtraValidatingPolicies_CalledForAdmittedResources verifies that an extra
 // policy registered via ServerDeps.ExtraValidatingPolicies is invoked for every
 // resource admitted through AdmitResources.
@@ -1422,6 +1665,114 @@ func TestDeniedAdmission_BlocksStorage(t *testing.T) {
 	p, getErr := memStore.GetProductByName(ctx, "gitstore", "widget")
 	assert.Error(t, getErr, "denied product must not be stored")
 	assert.Nil(t, p)
+}
+
+// TestAdmitResources_BranchDeleteRecreated_SkipsDeleteAdmission verifies that a
+// zero-OID delete push is treated as stale when the branch has already been
+// recreated before the admission runs (fix for Issue #2 stale-branch-delete).
+func TestAdmitResources_BranchDeleteRecreated_SkipsDeleteAdmission(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40) // branch was recreated at this commit
+	listCalled := false
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			listCalled = true
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeProduct("widget"), nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			// Branch exists at 'b' — it was recreated after the delete.
+			return b, nil
+		},
+	}
+	srv := newCatalogServer(t, store, git)
+
+	// Simulate a branch-delete admission: newCommit is all zeros.
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: a,
+		NewCommitSha: zero,
+		CommitSha:    zero,
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	// Because the ref now points to 'b' (recreated), the delete must be skipped.
+	assert.False(t, listCalled, "ListFiles must not be called for a stale branch-delete admission")
+}
+
+// TestAdmitResources_BranchDeleteRefGone_ProceedsWithDeletion verifies that a
+// zero-OID delete push proceeds normally when the branch no longer exists
+// (the ref was truly deleted and not recreated).
+func TestAdmitResources_BranchDeleteRefGone_ProceedsWithDeletion(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	blob := makeProduct("widget")
+
+	// Seed step: use a simple git reader that resolves the ref correctly.
+	seedGit := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return blob, nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			return a, nil // ref exists at 'a'
+		},
+	}
+	seedSrv := newCatalogServer(t, store, seedGit)
+	_, err := seedSrv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    a,
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+	_, err = store.GetProductByName(context.Background(), "gitstore", "widget")
+	require.NoError(t, err, "widget must exist after first admission")
+
+	// Delete step: ref is gone — zero-OID push with NotFound from ResolveRef must proceed.
+	deleteGit := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, ref string) ([]string, error) {
+			if isZeroRef(ref) {
+				return nil, nil
+			}
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return blob, nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			return "", grpcstatus.Error(codes.NotFound, "ref not found")
+		},
+	}
+	deleteSrv := newCatalogServer(t, store, deleteGit)
+	_, err = deleteSrv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: a,
+		NewCommitSha: zero,
+		CommitSha:    zero,
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+	// The delete admission proceeds; since newCommit is zero-OID and there are no
+	// new files, all resources from the old commit should have been deleted.
+	_, err = store.GetProductByName(context.Background(), "gitstore", "widget")
+	assert.ErrorIs(t, err, datastore.ErrNotFound, "widget must be deleted after branch delete admission")
+}
+
+func isZeroRef(ref string) bool {
+	for _, r := range ref {
+		if r != '0' {
+			return false
+		}
+	}
+	return ref != ""
 }
 
 // TestAdmitResources_OperationSetCorrectly verifies that the second push of the

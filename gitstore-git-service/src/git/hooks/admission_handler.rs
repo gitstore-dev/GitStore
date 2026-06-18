@@ -59,7 +59,8 @@ impl AdmissionHandler for AdmissionControlHandler {
                 continue;
             }
 
-            let commit_sha = update.new_oid.clone();
+            let old_commit_sha = update.old_oid.clone();
+            let new_commit_sha = update.new_oid.clone();
             let ref_name = update.ref_name.clone();
             let mut client = self.client.clone();
             let repository_id = repository_id.to_string();
@@ -67,8 +68,11 @@ impl AdmissionHandler for AdmissionControlHandler {
             tokio::spawn(async move {
                 let req = AdmitResourcesRequest {
                     repository_id,
-                    commit_sha,
+                    commit_sha: new_commit_sha.clone(),
                     ref_name: ref_name.clone(),
+                    old_commit_sha,
+                    new_commit_sha,
+                    changed_paths: vec![],
                 };
                 if let Err(e) = client.admit_resources(req).await {
                     error!(

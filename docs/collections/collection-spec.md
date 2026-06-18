@@ -24,11 +24,15 @@ A Collection resource is a Markdown file with YAML frontmatter pushed to a GitSt
 | Field | Type | Required | Constraint |
 |-------|------|----------|------------|
 | `metadata.name` | string | yes | DNS subdomain format; unique within namespace |
-| `metadata.namespace` | string | yes | Must match the repository's owning namespace |
+| `metadata.namespace` | string | no | Optional. Inferred from the repository's owning namespace when omitted |
 | `metadata.labels` | map[string]string | no | Key prefix ≤ 253 chars; key name ≤ 63 chars; value ≤ 63 chars |
 | `metadata.annotations` | map[string]string | no | No length restriction |
 
 System-managed metadata fields (`uid`, `resourceVersion`, `generation`, `creationTimestamp`, `revision`, `ownerReferences`) are populated by the system after admission. They must **not** appear in author-written documents.
+
+## Lifecycle
+
+GitStore identifies a collection by `apiVersion`, `kind`, resolved namespace, and `metadata.name`; the file path is provenance only. Moving a collection file preserves `metadata.uid`. Changing `spec` or the Markdown body increments `metadata.generation` and `metadata.resourceVersion`. Path-only moves and label/annotation-only edits preserve `generation` and increment `resourceVersion`. Deleting the file removes the collection from GraphQL reads after post-receive admission; adding the same identity again later creates a new UID.
 
 ---
 
@@ -180,7 +184,6 @@ All validation errors are returned as plain text on the `git push` stderr stream
 | Wrong `kind` | `validate: kind must be "Collection"` |
 | Unrecognized `kind` | `validate: kind %q is not a recognized catalog resource type` |
 | Missing `metadata.name` | `validate: metadata.name is required` |
-| Missing `metadata.namespace` | `validate: metadata.namespace is required` |
 | Missing `spec.title` | `validate: spec.title is required` |
 | Invalid `targetRef.kind` | `validate: spec.targetRef.kind must be "Product", got "<value>"` |
 | `In`/`NotIn` with no values | `validate: spec.selector.matchExpressions[N]: operator "In" requires at least one value` |

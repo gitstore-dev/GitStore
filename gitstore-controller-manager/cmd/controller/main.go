@@ -70,6 +70,6 @@ func buildMux(mgr *manager.Manager) http.Handler {
 	mux.Handle("GET /health", health.NewHandler(mgr))
 	mux.Handle("GET /metrics", health.NewMetricsHandler(mgr))
 	mux.HandleFunc("GET /controller/v1/poison/{kind}", api.ListPoisonHandler(mgr))
-	mux.HandleFunc("POST /controller/v1/poison/{kind}/{namespace}/{name}/requeue", api.RequeuePoisonHandler(mgr))
+	mux.HandleFunc("POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue", api.RequeuePoisonHandler(mgr))
 	return mux
 }

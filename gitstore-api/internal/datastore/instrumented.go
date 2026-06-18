@@ -5,6 +5,7 @@ package datastore
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
@@ -40,6 +41,9 @@ func (d *InstrumentedDatastore) observe(op string, start time.Time, err error) {
 	elapsed := time.Since(start)
 	d.dur.WithLabelValues(op, d.backend).Observe(elapsed.Seconds())
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return
+		}
 		d.errs.WithLabelValues(op, d.backend).Inc()
 		d.log.Error("datastore operation failed",
 			zap.String("operation", op),
@@ -131,6 +135,13 @@ func (d *InstrumentedDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *C
 	return err
 }
 
+func (d *InstrumentedDatastore) DeleteCategoryTaxonomy(ctx context.Context, uid string) error {
+	start := time.Now()
+	err := d.next.DeleteCategoryTaxonomy(ctx, uid)
+	d.observe("DeleteCategoryTaxonomy", start, err)
+	return err
+}
+
 // ── ProductVariant ────────────────────────────────────────────────────────
 
 func (d *InstrumentedDatastore) CreateProductVariant(ctx context.Context, v *ProductVariant) error {
@@ -182,6 +193,13 @@ func (d *InstrumentedDatastore) UpdateProductVariant(ctx context.Context, v *Pro
 	return err
 }
 
+func (d *InstrumentedDatastore) DeleteProductVariant(ctx context.Context, uid string) error {
+	start := time.Now()
+	err := d.next.DeleteProductVariant(ctx, uid)
+	d.observe("DeleteProductVariant", start, err)
+	return err
+}
+
 // ── Collection ─────────────────────────────────────────────────────────────
 
 func (d *InstrumentedDatastore) CreateCollection(ctx context.Context, c *Collection) error {
@@ -216,6 +234,13 @@ func (d *InstrumentedDatastore) UpdateCollection(ctx context.Context, c *Collect
 	start := time.Now()
 	err := d.next.UpdateCollection(ctx, c)
 	d.observe("UpdateCollection", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) DeleteCollection(ctx context.Context, uid string) error {
+	start := time.Now()
+	err := d.next.DeleteCollection(ctx, uid)
+	d.observe("DeleteCollection", start, err)
 	return err
 }
 

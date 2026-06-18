@@ -29,8 +29,8 @@ Rules:
   2. For changed files (--staged / --diff-base), the copyright year must include
      the current year.
 
-Generated files (containing "Code generated" or "DO NOT EDIT" in the first
-8 lines) are skipped.
+Generated files (containing "Code generated", "@generated", or "DO NOT EDIT"
+in the first 8 lines) are skipped.
 EOF
 }
 
@@ -140,7 +140,7 @@ check_file() {
   head8="$(head -n 8  <<<"$content")"
   head12="$(head -n 12 <<<"$content")"
 
-  if grep -Eq 'Code generated|DO NOT EDIT' <<<"$head8"; then
+  if grep -Eq 'Code generated|@generated|DO NOT EDIT' <<<"$head8"; then
     return
   fi
 
@@ -194,4 +194,3 @@ if (( failures > 0 )); then
 fi
 
 echo "Rust license header check passed ($checked file(s) checked)."
-

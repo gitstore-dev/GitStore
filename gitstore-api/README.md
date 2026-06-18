@@ -15,6 +15,8 @@ Go API service for GitStore. It is the public front door for GraphQL and Git Sma
 
 Catalogue writes are Git-driven today. GraphQL catalogue CRUD is not the documented write path while Git-backed catalogue writes over GraphQL are being finalized.
 
+Post-receive admission is operation-aware for current Git-backed catalog resources: `Product`, `ProductVariant`, `CategoryTaxonomy`, and `Collection`. The API compares old/new commit state, treats `apiVersion` + `kind` + namespace + `metadata.name` as identity, stores file path as provenance, deletes removed identities, preserves UID on path moves, and skips stale admissions when the ref has already advanced.
+
 ## Boundaries
 
 - Clients send GraphQL traffic to this service on port `4000`.

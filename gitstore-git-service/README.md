@@ -21,6 +21,7 @@ It does not expose public Git HTTP endpoints. Git clients enter through `gitstor
 - This service stores repositories below `GITSTORE_GIT__DATA_DIR`.
 - During push hooks, this service calls `gitstore-api` CatalogService gRPC on port `6000`.
 - Catalogue parsing and datastore persistence are API responsibilities.
+- Post-receive admission callouts include the ref name, old commit SHA, and new commit SHA so the API can derive creates, updates, deletes, moves, and stale-admission skips.
 
 ## Configuration Highlights
 
