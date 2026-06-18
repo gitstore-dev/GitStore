@@ -86,7 +86,7 @@
 - [x] T022 [P] [US2] Implement `gitstore-controller-manager/internal/retry/quarantine.go`: `QuarantineStore` — `sync.RWMutex`-protected `map[WorkItemKey]*PoisonItem`; thread-safe `Put/Get/Delete/List/Len`
 - [x] T023 [P] [US2] Implement `gitstore-controller-manager/internal/retry/retry_test.go`: unit tests for backoff delays, `Permanent` short-circuit, quarantine after max attempts
 - [x] T024 [US2] Wire retry engine into `gitstore-controller-manager/internal/manager/manager.go` dispatch loop: wrap reconciler call with retry; on quarantine move item to `QuarantineStore`; emit `gitstore_controller_reconcile_total{result="poison"}` counter
-- [x] T025 [P] [US2] Implement `gitstore-controller-manager/internal/api/poison.go`: `GET /controller/v1/poison/{kind}` (list quarantined items) and `POST /controller/v1/poison/{kind}/{namespace}/{name}/requeue` (re-queue with reset budget); JSON error format from `contracts/http-api.md`
+- [x] T025 [P] [US2] Implement `gitstore-controller-manager/internal/api/poison.go`: `GET /controller/v1/poison/{kind}` (list quarantined items) and `POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue` (re-queue with reset budget); JSON error format from `contracts/http-api.md`
 - [x] T026 [US2] Register poison HTTP handlers in `gitstore-controller-manager/cmd/controller/main.go`
 - [x] T027 [US2] Verify T019 and T020 tests pass
 

@@ -374,6 +374,21 @@ func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.Pr
 	return nil
 }
 
+func (m *memdbDatastore) DeleteProductVariant(_ context.Context, uid string) error {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("product_variant", "id", uid)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: product_variant uid %s", datastore.ErrNotFound, uid)
+	}
+	if err := txn.Delete("product_variant", raw); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: delete product_variant: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
 // ── CategoryTaxonomy ──────────────────────────────────────────────────────────
 
 func (m *memdbDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy) error {
@@ -451,10 +466,29 @@ func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.
 	return nil
 }
 
+func (m *memdbDatastore) DeleteCategoryTaxonomy(_ context.Context, uid string) error {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("category_taxonomy", "id", uid)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: category_taxonomy uid %s", datastore.ErrNotFound, uid)
+	}
+	if err := txn.Delete("category_taxonomy", raw); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: delete category_taxonomy: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
 // ── Collection ────────────────────────────────────────────────────────────────
 
 func (m *memdbDatastore) CreateCollection(_ context.Context, c *datastore.Collection) error {
 	txn := m.db.Txn(true)
+	if raw, _ := txn.First("collection", "id", c.UID); raw != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: collection uid %s", datastore.ErrAlreadyExists, c.UID)
+	}
 	if raw, _ := txn.First("collection", "name_namespace", c.Namespace, c.Name); raw != nil {
 		txn.Abort()
 		return fmt.Errorf("%w: collection %s/%s", datastore.ErrAlreadyExists, c.Namespace, c.Name)
@@ -512,6 +546,21 @@ func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collec
 	if err := txn.Insert("collection", c); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: update collection: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) DeleteCollection(_ context.Context, uid string) error {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("collection", "id", uid)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: collection uid %s", datastore.ErrNotFound, uid)
+	}
+	if err := txn.Delete("collection", raw); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: delete collection: %w", err)
 	}
 	txn.Commit()
 	return nil

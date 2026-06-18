@@ -28,6 +28,14 @@ Optional Markdown body content.
 `status` is not author-writable. Controllers and admission write status to the
 datastore.
 
+For current built-in catalog resources (`Product`, `ProductVariant`,
+`CategoryTaxonomy`, `Collection`), resource identity is `apiVersion`, `kind`,
+resolved namespace, and `metadata.name`. The Markdown file path is stored as
+source provenance only. Moving a file preserves UID, spec/body edits increment
+`generation` and `resourceVersion`, path-only moves preserve `generation` and
+increment `resourceVersion`, deletes remove the stored identity, and a later
+delete/re-add receives a new UID.
+
 ## Control Plane
 
 | Resource | Scope | Summary | Initial spec shape |

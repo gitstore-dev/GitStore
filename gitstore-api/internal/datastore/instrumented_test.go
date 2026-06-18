@@ -56,6 +56,9 @@ func (s *stubDatastore) ListCategoryTaxonomies(_ context.Context, _ string, _ da
 func (s *stubDatastore) UpdateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
 	return s.getProductErr
 }
+func (s *stubDatastore) DeleteCategoryTaxonomy(_ context.Context, _ string) error {
+	return s.getProductErr
+}
 func (s *stubDatastore) CreateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
 	return s.getProductErr
 }
@@ -77,6 +80,9 @@ func (s *stubDatastore) ListProductVariantsByProductRef(_ context.Context, _, _ 
 func (s *stubDatastore) UpdateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
 	return s.getProductErr
 }
+func (s *stubDatastore) DeleteProductVariant(_ context.Context, _ string) error {
+	return s.getProductErr
+}
 func (s *stubDatastore) CreateCollection(_ context.Context, _ *datastore.Collection) error {
 	return s.getProductErr
 }
@@ -90,6 +96,9 @@ func (s *stubDatastore) ListCollections(_ context.Context, _ string, _ datastore
 	return nil, s.getProductErr
 }
 func (s *stubDatastore) UpdateCollection(_ context.Context, _ *datastore.Collection) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) DeleteCollection(_ context.Context, _ string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) ListProductsByLabelSelector(_ context.Context, _ string, _ catalog.LabelSelector) ([]*datastore.Product, error) {
@@ -226,12 +235,21 @@ func TestInstrumentedDatastore_HistogramObservedOnError(t *testing.T) {
 }
 
 func TestInstrumentedDatastore_ErrorCounterIncrementedOnError(t *testing.T) {
-	stub := &stubDatastore{getProductErr: datastore.ErrNotFound}
+	stub := &stubDatastore{getProductErr: errors.New("boom")}
 	inst, _, reg := newTestInstrumented(t, stub)
 
 	inst.GetProduct(context.Background(), "missing") //nolint:errcheck
 
 	assert.Equal(t, float64(1), counterValue(t, reg, "GetProduct", "test-backend"))
+}
+
+func TestInstrumentedDatastore_ErrNotFoundDoesNotIncrementErrorCounter(t *testing.T) {
+	stub := &stubDatastore{getProductErr: datastore.ErrNotFound}
+	inst, _, reg := newTestInstrumented(t, stub)
+
+	inst.GetProduct(context.Background(), "missing") //nolint:errcheck
+
+	assert.Equal(t, float64(0), counterValue(t, reg, "GetProduct", "test-backend"))
 }
 
 func TestInstrumentedDatastore_ErrorCounterNotIncrementedOnSuccess(t *testing.T) {
@@ -259,6 +277,15 @@ func TestInstrumentedDatastore_ZapErrorLogOnFailure(t *testing.T) {
 	}
 	assert.Equal(t, "GetProduct", fields["operation"])
 	assert.Equal(t, "test-backend", fields["backend"])
+}
+
+func TestInstrumentedDatastore_NoLogOnErrNotFound(t *testing.T) {
+	stub := &stubDatastore{getProductErr: datastore.ErrNotFound}
+	inst, logs, _ := newTestInstrumented(t, stub)
+
+	inst.GetProduct(context.Background(), "missing") //nolint:errcheck
+
+	assert.Equal(t, 0, logs.Len())
 }
 
 func TestInstrumentedDatastore_NoLogOnSuccess(t *testing.T) {

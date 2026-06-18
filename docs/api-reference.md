@@ -729,6 +729,10 @@ git push origin main
 
 The API reference intentionally omits catalogue CRUD mutation docs. Some schema fields may remain for compatibility or transitional UI work, but they are not the supported write path for catalogue resources.
 
+Git-backed catalogue resources are projected into GraphQL after post-receive admission. Resource identity is `apiVersion`, `kind`, namespace, and `metadata.name`; the source file path is provenance only. File moves preserve `metadata.uid`. Spec or Markdown body edits increment `metadata.generation` and `metadata.resourceVersion`; path-only moves and metadata-only edits preserve `generation` and increment `resourceVersion`. Deleted files disappear from GraphQL reads after admission deletes the stored identity. A later delete/re-add receives a new UID and starts again at `generation=1`.
+
+Post-receive admission is asynchronous and cannot reject an already accepted Git push. DB-backed conflicts such as duplicate variant SKUs leave the existing stored resource unchanged and skip the conflicting incoming resource.
+
 ## Types
 
 ### Namespace

@@ -178,9 +178,9 @@ Proposal 1 starts at the API boundary, commits to Git immediately, and then inde
 
 - **Request contract**: GraphQL mutations should include idempotency keys so retries do not create duplicate commits.
 - **Commit metadata**: Persist actor identity, request ID, and schema version in commit message/footer for traceability.
-- **Queue payload**: Emit repository path, commit SHA, changed blob paths, and correlation ID on each post-receive event.
-- **Validation contract**: Parser worker validates changed blobs against the catalogue content schema (product/category/collection frontmatter) and returns structured errors.
-- **KV write model**: Use deterministic keys (`catalog:{env}:{entity}:{id}`) and version stamps (`etag` or commit SHA).
+- **Admission payload**: Emit repository/ref, old commit SHA, new commit SHA, optional changed blob paths, and correlation ID on each post-receive event.
+- **Validation contract**: The API/parser validates changed catalog blobs against the resource schemas (`Product`, `ProductVariant`, `CategoryTaxonomy`, `Collection`) and returns structured errors.
+- **Write model**: Current catalog resources write resource-specific datastore rows with source path and commit provenance; future cache/KV projections can use deterministic keys (`catalog:{env}:{entity}:{id}`) and version stamps.
 
 ### Architecture Diagram
 
@@ -262,10 +262,10 @@ graph LR
 ### Implementation Sequence
 
 1. Wire GraphQL mutation handlers in `gitstore-api/` to a single gRPC `CommitChange` boundary.
-2. Implement post-receive event publication in `gitstore-git-service/` with correlation IDs.
-3. Add parser worker consumers that validate and upsert KV documents.
-4. Add observability: mutation latency, queue lag, validation failure rate, and KV upsert latency.
-5. Gate rollout with shadow indexing before switching storefront reads fully to KV.
+2. Implement post-receive admission callouts in `gitstore-git-service/` with ref name, old/new commit SHAs, and correlation IDs.
+3. Add API/parser consumers that derive create/update/delete/move operations and apply resource-specific datastore writes.
+4. Add observability: mutation latency, admission lag, validation failure rate, and datastore write latency.
+5. Gate cache rollout with shadow indexing before switching storefront reads fully to KV.
 
 ---
 
@@ -400,7 +400,7 @@ Proposal 3 reflects the current roadmap initiatives and supersedes Proposals 1 a
 1. **Ingress**: Git and GraphQL writes enter through `gitstore-api` (protocol and API front door).
 2. **Git event emission**: `gitstore-git-service` publishes normalised Git ref events (`branch-*`, `tag-*`, `push-rejected`) through the GitEvent contract.
 3. **Validation pipeline**: parsing, hub-version conversion, schema/CEL checks, and admission policies run in `gitstore-api`.
-4. **Persistence**: validated resources are projected into the universal ScyllaDB resource model with monotonic `resourceVersion`.
+4. **Persistence**: current Git-backed catalog resources are projected into resource-specific datastore tables with monotonic `resourceVersion`; the universal ScyllaDB resource model remains a target architecture item.
 5. **Reconciliation**: controller manager consumes watch streams, executes side effects, and writes status conditions via status subresource mutations.
 6. **Graph serving**: dynamic GraphQL schema synthesis serves core and CRD kinds from unified storage; federation is optional for external app subgraphs.
 
@@ -608,7 +608,7 @@ Validation is layered, not monolithic. The layers map to the Kubernetes model:
 | Built-in API | Post-receive, async      | Cross-object logic: sku uniqueness, parent reference resolution | Compiled API handler logic               |
 | Admission    | Post-receive, async      | Policy: org rules, quota, external system checks                | Dynamic, may call external policy engine |
 
-Pre-receive must return quickly (< ~200ms). Full schema and admission validation run asynchronously in the post-receive pipeline so that large pushes are not blocked by per-file parsing cost.
+Pre-receive stays stateless and rejects structurally invalid resource blobs before refs are updated. DB-backed semantic checks and lifecycle projection run asynchronously in the post-receive admission pipeline so large pushes are not blocked by datastore lookups.
 
 Git-originated and API-originated mutations converge at the schema and admission layers — they are evaluated identically.
 
@@ -642,10 +642,11 @@ status:
 
 ### Git Ingest Contract
 
-- **Pre-receive hook** (gRPC): auth, branch/tag protection, quota, and lightweight structural decoding. No durable state write.
-- **Post-receive hook** (gRPC): full schema validation, admission policy evaluation, hub-version conversion, `.spec` and `.status.conditions` persistence.
-- Each accepted write increments `resourceVersion` and publishes a watch event.
-- If post-receive admission fails, the commit is persisted in Git (audit trail) but the resource carries `AdmissionAccepted=False` in `.status.conditions`. It is invisible to controllers and storefront until corrected.
+- **Pre-receive hook** (gRPC): auth, branch/tag protection, quota, and stateless structural/schema validation. No durable state write.
+- **Post-receive hook** (gRPC): operation-aware admission receives the old and new ref tips, confirms the ref has not advanced, derives create/update/delete/move operations, and persists `.spec` plus admission-owned `.status.conditions` for current catalog resources.
+- Resource identity is `apiVersion`, `kind`, namespace, and `metadata.name`; source file path is provenance. Path-only moves preserve `metadata.uid` and `generation` while incrementing `resourceVersion`.
+- Spec/body edits increment both `generation` and `resourceVersion`; deletes remove the stored identity; delete/re-add allocates a new UID.
+- If post-receive admission finds a DB-backed conflict, the commit remains in Git but the conflicting incoming resource is skipped or marked failed where a stored object exists. The already accepted push is not rejected retroactively.
 
 ### Watch Protocol over GraphQL
 
@@ -680,9 +681,9 @@ sequenceDiagram
     G->>API: gRPC pre-receive (validate only)
     API-->>G: allow/reject
     G->>G: persist accepted commit
-    G->>API: gRPC post-receive (accepted refs + blobs)
-    API->>API: parse + convert to hub version
-    API->>DB: UPSERT .spec (resourceVersion++)
+    G->>API: gRPC post-receive (ref + old/new commits)
+    API->>API: stale-ref check + derive resource operations
+    API->>DB: apply create/update/delete (generation/resourceVersion lifecycle)
     API->>WC: apply reconciled object
     WC--)RC: ADDED/MODIFIED event
     end
@@ -691,7 +692,7 @@ sequenceDiagram
     note right of RC: 2. Reconcile and report status
     RC->>RC: compare .spec with external state
     RC->>API: GraphQL mutation (update status)
-    API->>DB: UPSERT .status (resourceVersion++)
+    API->>DB: UPSERT .status (resourceVersion++; generation stable)
     API->>WC: apply reconciled object
     WC--)RC: MODIFIED event (resume-safe)
     end

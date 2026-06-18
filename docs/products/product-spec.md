@@ -31,6 +31,10 @@ A Product resource is a Markdown file with YAML frontmatter pushed to a GitStore
 **Forbidden metadata fields** (read-only, system-assigned):  
 `uid`, `resourceVersion`, `generation`, `creationTimestamp`, `revision`, `ownerReferences`
 
+## Lifecycle
+
+GitStore identifies a product by `apiVersion`, `kind`, resolved namespace, and `metadata.name`; the file path is provenance only. Moving a product file preserves `metadata.uid`. Changing `spec` or the Markdown body increments `metadata.generation` and `metadata.resourceVersion`. Path-only moves and label/annotation-only edits preserve `generation` and increment `resourceVersion`. Deleting the file removes the product from GraphQL reads after post-receive admission; adding the same identity again later creates a new UID.
+
 ---
 
 ## Spec Fields

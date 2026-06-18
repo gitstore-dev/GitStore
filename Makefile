@@ -77,8 +77,10 @@ dev: ## Run local git service and API together in the foreground.
 		trap - INT TERM EXIT; \
 		[ -n "$${git_pid:-}" ] && kill "$$git_pid" 2>/dev/null || true; \
 		[ -n "$${api_pid:-}" ] && kill "$$api_pid" 2>/dev/null || true; \
+		[ -n "$${controller_pid:-}" ] && kill "$$controller_pid" 2>/dev/null || true; \
 		[ -n "$${git_pid:-}" ] && wait "$$git_pid" 2>/dev/null || true; \
 		[ -n "$${api_pid:-}" ] && wait "$$api_pid" 2>/dev/null || true; \
+		[ -n "$${controller_pid:-}" ] && wait "$$controller_pid" 2>/dev/null || true; \
 		rm -rf "$$tmp"; \
 	}; \
 	trap 'cleanup; exit 130' INT; \
@@ -98,6 +100,13 @@ dev: ## Run local git service and API together in the foreground.
 		wait "$$child"; status=$$?; \
 		printf 'api %s\n' "$$status" > "$$fifo"; \
 	) & api_pid=$$!; \
+	( set +e; \
+		cd "$(CONTROLLER_MANAGER_DIR)" || { printf 'controller 1\n' > "$$fifo"; exit 0; }; \
+		go run ./cmd/controller & child=$$!; \
+		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
+		wait "$$child"; status=$$?; \
+		printf 'controller %s\n' "$$status" > "$$fifo"; \
+	) & controller_pid=$$!; \
 	read service status < "$$fifo"; \
 	echo "$$service exited with status $$status"; \
 	cleanup; \
@@ -172,7 +181,7 @@ bootstrap-tools:
 
 gen-admin-password: ## Generate a bcrypt hash for ADMIN_PASSWORD and write it to gitstore-api/.env.
 	@if [ -z "$${ADMIN_PASSWORD:-}" ]; then \
-		echo "Usage: make gen-admin-password ADMIN_PASSWORD=<password>"; \
+		echo "Usage: make gen-admin-password ADMIN_PASSWORD='<password>'"; \
 		exit 2; \
 	fi
 	@hash=$$(cd "$(API_DIR)" && go run ./cmd/hashpw "$$ADMIN_PASSWORD") || { \
@@ -183,17 +192,17 @@ gen-admin-password: ## Generate a bcrypt hash for ADMIN_PASSWORD and write it to
 	if [ -f "$$env_file" ]; then \
 		if grep -q 'GITSTORE_AUTH__ADMIN__PASSWORD_HASH' "$$env_file"; then \
 			if [ "$$(uname)" = "Darwin" ]; then \
-				sed -i '' "s|^GITSTORE_AUTH__ADMIN__PASSWORD_HASH=.*|GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$$hash|" "$$env_file"; \
+				sed -i '' "s|^GITSTORE_AUTH__ADMIN__PASSWORD_HASH=.*|GITSTORE_AUTH__ADMIN__PASSWORD_HASH='$$hash'|" "$$env_file"; \
 			else \
-				sed -i "s|^GITSTORE_AUTH__ADMIN__PASSWORD_HASH=.*|GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$$hash|" "$$env_file"; \
+				sed -i "s|^GITSTORE_AUTH__ADMIN__PASSWORD_HASH=.*|GITSTORE_AUTH__ADMIN__PASSWORD_HASH='$$hash'|" "$$env_file"; \
 			fi; \
 			echo "Updated GITSTORE_AUTH__ADMIN__PASSWORD_HASH in $$env_file"; \
 		else \
-			printf 'GITSTORE_AUTH__ADMIN__PASSWORD_HASH=%s\n' "$$hash" >> "$$env_file"; \
+			printf "GITSTORE_AUTH__ADMIN__PASSWORD_HASH='%s'\n" "$$hash" >> "$$env_file"; \
 			echo "Appended GITSTORE_AUTH__ADMIN__PASSWORD_HASH to $$env_file"; \
 		fi; \
 	else \
-		printf 'GITSTORE_AUTH__ADMIN__PASSWORD_HASH=%s\n' "$$hash" > "$$env_file"; \
+		printf "GITSTORE_AUTH__ADMIN__PASSWORD_HASH='%s'\n" "$$hash" > "$$env_file"; \
 		echo "Created $$env_file with GITSTORE_AUTH__ADMIN__PASSWORD_HASH"; \
 	fi; \
 	echo "Hash: $$hash"

@@ -121,11 +121,15 @@ The API is the Git Smart HTTP front door. The Rust Git service is gRPC-only stor
 4. During receive-pack, `gitstore-git-service` stages objects in quarantine and runs enabled hook phases.
 5. In the blocking pre-receive phase, `gitstore-git-service` sends frontmatter resource blobs to `gitstore-api` via `CatalogService.ValidateResources`.
 6. If validation passes, refs are updated and the push succeeds.
-7. In the post-receive phase, `gitstore-git-service` calls `CatalogService.AdmitResources` with repository ID, commit SHA, and ref name.
-8. `gitstore-api` fetches accepted files through `GitService`, parses catalogue resources, applies admission checks, and stores hydrated records and status in the datastore.
+7. In the post-receive phase, `gitstore-git-service` calls `CatalogService.AdmitResources` with repository ID, ref name, old commit SHA, and new commit SHA. The legacy `commit_sha` field remains a compatibility alias for the new commit.
+8. `gitstore-api` verifies that the ref still points at the admitted new commit, skips stale admissions if a newer push already won, compares old/new resource identities, applies admission checks, and creates, updates, or deletes hydrated records in the datastore.
 9. `gitstore-controller-manager` reconciles controller-owned status and operational follow-up through the API.
 
 The pre-receive phase is intentionally stateless and blocking. Admission can use datastore state and is allowed to complete asynchronously relative to the Git client acknowledgement.
+
+Admission identity is `apiVersion`, `kind`, resolved namespace, and `metadata.name`; the Git file path is stored as provenance only. A path move with the same identity preserves `metadata.uid` and only increments `resourceVersion`. Spec/body edits increment both `generation` and `resourceVersion`. Deleting a resource file removes the stored identity; adding the same identity again later allocates a new UID.
+
+Post-receive admission cannot reject an already accepted Git push. DB-backed conflicts such as duplicate `ProductVariant.spec.sku` leave the existing resource unchanged, skip the conflicting incoming resource, and emit structured API logs with the operation, namespace, name, SKU, and conflicting identity.
 
 ## Controller Manager Runtime
 
@@ -149,7 +153,7 @@ HTTP surface on port `5001`:
 | `GET /metrics`                                                 | Prometheus metrics                                                   |
 | `GET /controller/v1/poison/{kind}`                             | List quarantined items for one kind                                  |
 | `GET /controller/v1/poison/_all`                               | List all quarantined items                                           |
-| `POST /controller/v1/poison/{kind}/{namespace}/{name}/requeue` | Requeue one poison item                                              |
+| `POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue` | Requeue one poison item                                              |
 
 ## Module Notes
 

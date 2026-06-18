@@ -62,6 +62,8 @@ type productRow struct {
 	Labels            map[string]string `db:"labels"`
 	Annotations       map[string]string `db:"annotations"`
 	OwnerRefs         string            `db:"owner_refs"`
+	RepositoryID      string            `db:"repository_id"`
+	SourcePath        string            `db:"source_path"`
 	GitCommitSHA      string            `db:"git_commit_sha"`
 	GitRef            string            `db:"git_ref"`
 	Spec              string            `db:"spec"`
@@ -98,6 +100,8 @@ type categoryTaxonomyRow struct {
 	Annotations       map[string]string `db:"annotations"`
 	ParentName        string            `db:"parent_name"`
 	AncestorPath      string            `db:"ancestor_path"`
+	RepositoryID      string            `db:"repository_id"`
+	SourcePath        string            `db:"source_path"`
 	GitCommitSHA      string            `db:"git_commit_sha"`
 	GitRef            string            `db:"git_ref"`
 	Spec              string            `db:"spec"`
@@ -132,6 +136,8 @@ type collectionRow struct {
 	Revision          string            `db:"revision"`
 	Labels            map[string]string `db:"labels"`
 	Annotations       map[string]string `db:"annotations"`
+	RepositoryID      string            `db:"repository_id"`
+	SourcePath        string            `db:"source_path"`
 	GitCommitSHA      string            `db:"git_commit_sha"`
 	GitRef            string            `db:"git_ref"`
 	Spec              string            `db:"spec"`
@@ -167,6 +173,8 @@ type productVariantRow struct {
 	OwnerRefs         string            `db:"owner_refs"`
 	SKU               string            `db:"sku"`
 	ProductRefName    string            `db:"product_ref_name"`
+	RepositoryID      string            `db:"repository_id"`
+	SourcePath        string            `db:"source_path"`
 	GitCommitSHA      string            `db:"git_commit_sha"`
 	GitRef            string            `db:"git_ref"`
 	Spec              string            `db:"spec"`
@@ -320,7 +328,7 @@ func (s *scyllaDatastore) CreateProduct(ctx context.Context, p *datastore.Produc
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(insNS, row.Namespace, row.CreationTimestamp, row.UID, row.Name, row.APIVersion, row.Kind,
 		row.Generation, row.ResourceVersion, row.Revision, row.Labels, row.Annotations,
-		row.OwnerRefs, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
+		row.OwnerRefs, row.RepositoryID, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
 	b.Query(insName, row.Namespace, row.Name, row.UID, row.CreationTimestamp)
 	b.Query(insUID, row.UID, row.Namespace, row.CreationTimestamp)
 	if err := s.session.ExecuteBatch(b); err != nil {
@@ -412,13 +420,14 @@ func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Produc
 	existingUID := mustParseUUID(existing.UID)
 
 	const updNS = "UPDATE products_by_namespace SET api_version=?, kind=?, generation=?, resource_version=?, " +
-		"revision=?, labels=?, annotations=?, owner_refs=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
+		"revision=?, labels=?, annotations=?, owner_refs=?, repository_id=?, source_path=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
 		"WHERE namespace=? AND creation_timestamp=? AND uid=?"
 
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(updNS,
 		row.APIVersion, row.Kind, row.Generation, row.ResourceVersion,
 		row.Revision, row.Labels, row.Annotations, row.OwnerRefs,
+		row.RepositoryID, row.SourcePath,
 		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
 		row.Namespace, row.CreationTimestamp, existingUID,
 	)
@@ -473,7 +482,7 @@ func (s *scyllaDatastore) CreateCategoryTaxonomy(ctx context.Context, c *datasto
 	b.Query(insMain, row.Namespace, row.CreationTimestamp, mustParseUUID(row.UID), row.Name,
 		row.APIVersion, row.Kind, row.Generation, row.ResourceVersion, row.Revision,
 		row.Labels, row.Annotations, row.ParentName, row.AncestorPath,
-		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
+		row.RepositoryID, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
 	b.Query(insName, row.Namespace, row.Name, mustParseUUID(row.UID), row.CreationTimestamp)
 	b.Query(insUID, mustParseUUID(row.UID), row.Namespace, row.CreationTimestamp)
 	if err := s.session.ExecuteBatch(b); err != nil {
@@ -566,13 +575,14 @@ func (s *scyllaDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *datasto
 
 	const updMain = "UPDATE category_taxonomy SET name=?, api_version=?, kind=?, generation=?, resource_version=?, " +
 		"revision=?, labels=?, annotations=?, parent_name=?, ancestor_path=?, " +
-		"git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
+		"repository_id=?, source_path=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
 		"WHERE namespace=? AND creation_timestamp=? AND uid=?"
 
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(updMain,
 		row.Name, row.APIVersion, row.Kind, row.Generation, row.ResourceVersion,
 		row.Revision, row.Labels, row.Annotations, row.ParentName, row.AncestorPath,
+		row.RepositoryID, row.SourcePath,
 		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
 		row.Namespace, row.CreationTimestamp, existingUID,
 	)
@@ -580,6 +590,26 @@ func (s *scyllaDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *datasto
 	b.Query(insUID, existingUID, row.Namespace, row.CreationTimestamp)
 	if err := s.session.ExecuteBatch(b); err != nil {
 		return fmt.Errorf("scylla: update category_taxonomy: %w", err)
+	}
+	return nil
+}
+
+func (s *scyllaDatastore) DeleteCategoryTaxonomy(ctx context.Context, uid string) error {
+	c, err := s.GetCategoryTaxonomy(ctx, uid)
+	if err != nil {
+		return err
+	}
+	parsedUID := mustParseUUID(uid)
+
+	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
+	b.Query("DELETE FROM category_taxonomy WHERE namespace=? AND creation_timestamp=? AND uid=?",
+		c.Namespace, c.CreationTimestamp, parsedUID)
+	b.Query("DELETE FROM category_taxonomy_by_name WHERE namespace=? AND name=?",
+		c.Namespace, c.Name)
+	b.Query("DELETE FROM category_taxonomy_by_uid WHERE uid=?",
+		parsedUID)
+	if err := s.session.ExecuteBatch(b); err != nil {
+		return fmt.Errorf("scylla: delete category_taxonomy: %w", err)
 	}
 	return nil
 }
@@ -605,7 +635,7 @@ func (s *scyllaDatastore) CreateCollection(ctx context.Context, c *datastore.Col
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(insNS, row.Namespace, row.CreationTimestamp, row.UID, row.Name, row.APIVersion, row.Kind,
 		row.Generation, row.ResourceVersion, row.Revision, row.Labels, row.Annotations,
-		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
+		row.RepositoryID, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
 	b.Query(insName, row.Namespace, row.Name, row.UID, row.CreationTimestamp)
 	b.Query(insUID, row.UID, row.Namespace, row.CreationTimestamp)
 	if err := s.session.ExecuteBatch(b); err != nil {
@@ -689,18 +719,39 @@ func (s *scyllaDatastore) UpdateCollection(ctx context.Context, c *datastore.Col
 	existingUID := mustParseUUID(existing.UID)
 
 	const updNS = "UPDATE collection SET api_version=?, kind=?, generation=?, resource_version=?, " +
-		"revision=?, labels=?, annotations=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
+		"revision=?, labels=?, annotations=?, repository_id=?, source_path=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
 		"WHERE namespace=? AND creation_timestamp=? AND uid=?"
 
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(updNS,
 		row.APIVersion, row.Kind, row.Generation, row.ResourceVersion,
 		row.Revision, row.Labels, row.Annotations,
+		row.RepositoryID, row.SourcePath,
 		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
 		row.Namespace, row.CreationTimestamp, existingUID,
 	)
 	if err := s.session.ExecuteBatch(b); err != nil {
 		return fmt.Errorf("scylla: update collection: %w", err)
+	}
+	return nil
+}
+
+func (s *scyllaDatastore) DeleteCollection(ctx context.Context, uid string) error {
+	c, err := s.GetCollection(ctx, uid)
+	if err != nil {
+		return err
+	}
+	parsedUID := mustParseUUID(uid)
+
+	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
+	b.Query("DELETE FROM collection WHERE namespace=? AND creation_timestamp=? AND uid=?",
+		c.Namespace, c.CreationTimestamp, parsedUID)
+	b.Query("DELETE FROM collection_by_name WHERE namespace=? AND name=?",
+		c.Namespace, c.Name)
+	b.Query("DELETE FROM collection_by_uid WHERE uid=?",
+		parsedUID)
+	if err := s.session.ExecuteBatch(b); err != nil {
+		return fmt.Errorf("scylla: delete collection: %w", err)
 	}
 	return nil
 }
@@ -733,6 +784,9 @@ func (s *scyllaDatastore) ListProductsByLabelSelector(ctx context.Context, names
 // ── ProductVariant ────────────────────────────────────────────────────────────
 
 func (s *scyllaDatastore) CreateProductVariant(ctx context.Context, v *datastore.ProductVariant) error {
+	if _, err := s.GetProductVariant(ctx, v.UID); err == nil {
+		return fmt.Errorf("%w: product_variant uid %s", datastore.ErrAlreadyExists, v.UID)
+	}
 	if _, err := s.GetProductVariantByName(ctx, v.Namespace, v.Name); err == nil {
 		return fmt.Errorf("%w: product_variant %s/%s", datastore.ErrAlreadyExists, v.Namespace, v.Name)
 	}
@@ -753,7 +807,7 @@ func (s *scyllaDatastore) CreateProductVariant(ctx context.Context, v *datastore
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(insNS, row.Namespace, row.CreationTimestamp, row.UID, row.Name, row.APIVersion, row.Kind,
 		row.Generation, row.ResourceVersion, row.Revision, row.Labels, row.Annotations,
-		row.OwnerRefs, row.SKU, row.ProductRefName, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
+		row.OwnerRefs, row.SKU, row.ProductRefName, row.RepositoryID, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
 	b.Query(insName, row.Namespace, row.Name, row.UID, row.CreationTimestamp)
 	b.Query(insUID, row.UID, row.Namespace, row.CreationTimestamp)
 	b.Query(insSKU, row.Namespace, row.SKU, row.UID, row.CreationTimestamp)
@@ -873,14 +927,14 @@ func (s *scyllaDatastore) UpdateProductVariant(ctx context.Context, v *datastore
 	existingUID := mustParseUUID(existing.UID)
 
 	const updNS = "UPDATE product_variant_by_namespace SET api_version=?, kind=?, generation=?, resource_version=?, " +
-		"revision=?, labels=?, annotations=?, owner_refs=?, sku=?, product_ref_name=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
+		"revision=?, labels=?, annotations=?, owner_refs=?, sku=?, product_ref_name=?, repository_id=?, source_path=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
 		"WHERE namespace=? AND creation_timestamp=? AND uid=?"
 
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(updNS,
 		row.APIVersion, row.Kind, row.Generation, row.ResourceVersion,
 		row.Revision, row.Labels, row.Annotations, row.OwnerRefs,
-		row.SKU, row.ProductRefName, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
+		row.SKU, row.ProductRefName, row.RepositoryID, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
 		row.Namespace, row.CreationTimestamp, existingUID,
 	)
 	// Maintain sku index: if SKU changed, delete old entry and insert new one.
@@ -911,6 +965,34 @@ func (s *scyllaDatastore) UpdateProductVariant(ctx context.Context, v *datastore
 	}
 	if err := s.session.ExecuteBatch(b); err != nil {
 		return fmt.Errorf("scylla: update product_variant: %w", err)
+	}
+	return nil
+}
+
+func (s *scyllaDatastore) DeleteProductVariant(ctx context.Context, uid string) error {
+	v, err := s.GetProductVariant(ctx, uid)
+	if err != nil {
+		return err
+	}
+	parsedUID := mustParseUUID(uid)
+
+	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
+	b.Query("DELETE FROM product_variant_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=?",
+		v.Namespace, v.CreationTimestamp, parsedUID)
+	b.Query("DELETE FROM product_variant_by_name WHERE namespace=? AND name=?",
+		v.Namespace, v.Name)
+	b.Query("DELETE FROM product_variant_by_uid WHERE uid=?",
+		parsedUID)
+	if v.SKU != "" {
+		b.Query("DELETE FROM product_variant_by_sku WHERE namespace=? AND sku=?",
+			v.Namespace, v.SKU)
+	}
+	if v.ProductRefName != "" {
+		b.Query("DELETE FROM product_variant_by_product_ref WHERE namespace=? AND product_ref_name=? AND creation_timestamp=? AND uid=?",
+			v.Namespace, v.ProductRefName, v.CreationTimestamp, parsedUID)
+	}
+	if err := s.session.ExecuteBatch(b); err != nil {
+		return fmt.Errorf("scylla: delete product_variant: %w", err)
 	}
 	return nil
 }
@@ -1038,6 +1120,8 @@ func toProductRow(p *datastore.Product) *productRow {
 		Labels:            p.Labels,
 		Annotations:       p.Annotations,
 		OwnerRefs:         ownerRefs,
+		RepositoryID:      p.RepositoryID,
+		SourcePath:        p.SourcePath,
 		GitCommitSHA:      p.GitCommitSHA,
 		GitRef:            p.GitRef,
 		Spec:              spec,
@@ -1060,6 +1144,8 @@ func fromProductRow(r *productRow) *datastore.Product {
 		Labels:            r.Labels,
 		Annotations:       r.Annotations,
 		OwnerRefs:         jsonOrNil(r.OwnerRefs),
+		RepositoryID:      r.RepositoryID,
+		SourcePath:        r.SourcePath,
 		GitCommitSHA:      r.GitCommitSHA,
 		GitRef:            r.GitRef,
 		Spec:              jsonOrNil(r.Spec),
@@ -1098,6 +1184,8 @@ func toCategoryTaxonomyRow(c *datastore.CategoryTaxonomy) *categoryTaxonomyRow {
 		Annotations:       c.Annotations,
 		ParentName:        c.ParentName,
 		AncestorPath:      c.AncestorPath,
+		RepositoryID:      c.RepositoryID,
+		SourcePath:        c.SourcePath,
 		GitCommitSHA:      c.GitCommitSHA,
 		GitRef:            c.GitRef,
 		Spec:              spec,
@@ -1121,6 +1209,8 @@ func fromCategoryTaxonomyRow(r *categoryTaxonomyRow) *datastore.CategoryTaxonomy
 		Annotations:       r.Annotations,
 		ParentName:        r.ParentName,
 		AncestorPath:      r.AncestorPath,
+		RepositoryID:      r.RepositoryID,
+		SourcePath:        r.SourcePath,
 		GitCommitSHA:      r.GitCommitSHA,
 		GitRef:            r.GitRef,
 		Spec:              jsonOrNil(r.Spec),
@@ -1142,6 +1232,8 @@ func toCollectionRow(c *datastore.Collection) *collectionRow {
 		Revision:          c.Revision,
 		Labels:            c.Labels,
 		Annotations:       c.Annotations,
+		RepositoryID:      c.RepositoryID,
+		SourcePath:        c.SourcePath,
 		GitCommitSHA:      c.GitCommitSHA,
 		GitRef:            c.GitRef,
 		Spec:              string(c.Spec),
@@ -1163,6 +1255,8 @@ func fromCollectionRow(r *collectionRow) *datastore.Collection {
 		Revision:          r.Revision,
 		Labels:            r.Labels,
 		Annotations:       r.Annotations,
+		RepositoryID:      r.RepositoryID,
+		SourcePath:        r.SourcePath,
 		GitCommitSHA:      r.GitCommitSHA,
 		GitRef:            r.GitRef,
 		Spec:              jsonOrNil(r.Spec),
@@ -1187,6 +1281,8 @@ func toProductVariantRow(v *datastore.ProductVariant) *productVariantRow {
 		OwnerRefs:         string(v.OwnerRefs),
 		SKU:               v.SKU,
 		ProductRefName:    v.ProductRefName,
+		RepositoryID:      v.RepositoryID,
+		SourcePath:        v.SourcePath,
 		GitCommitSHA:      v.GitCommitSHA,
 		GitRef:            v.GitRef,
 		Spec:              string(v.Spec),
@@ -1211,6 +1307,8 @@ func fromProductVariantRow(r *productVariantRow) *datastore.ProductVariant {
 		OwnerRefs:         jsonOrNil(r.OwnerRefs),
 		SKU:               r.SKU,
 		ProductRefName:    r.ProductRefName,
+		RepositoryID:      r.RepositoryID,
+		SourcePath:        r.SourcePath,
 		GitCommitSHA:      r.GitCommitSHA,
 		GitRef:            r.GitRef,
 		Spec:              jsonOrNil(r.Spec),

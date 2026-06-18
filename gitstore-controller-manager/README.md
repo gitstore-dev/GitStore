@@ -32,7 +32,7 @@ Controllers reconcile through `gitstore-api`; the manager does not talk directly
 | `GET /metrics` | Prometheus metrics |
 | `GET /controller/v1/poison/{kind}` | List quarantined items for a kind |
 | `GET /controller/v1/poison/_all` | List all quarantined items |
-| `POST /controller/v1/poison/{kind}/{namespace}/{name}/requeue` | Requeue a quarantined item |
+| `POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue` | Requeue a quarantined item |
 
 ## Configuration Highlights
 

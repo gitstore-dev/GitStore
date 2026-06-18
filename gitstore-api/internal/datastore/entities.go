@@ -61,6 +61,8 @@ type Product struct {
 	OwnerRefs json.RawMessage
 
 	// Git provenance
+	RepositoryID string
+	SourcePath   string
 	GitCommitSHA string
 	GitRef       string
 
@@ -99,6 +101,8 @@ type CategoryTaxonomy struct {
 	AncestorPath string // slash-separated from root to self, e.g. "electronics/computers/laptops"
 
 	// Git provenance
+	RepositoryID string
+	SourcePath   string
 	GitCommitSHA string
 	GitRef       string
 
@@ -134,6 +138,8 @@ type Collection struct {
 	Annotations map[string]string
 
 	// Git provenance
+	RepositoryID string
+	SourcePath   string
 	GitCommitSHA string
 	GitRef       string
 
@@ -179,6 +185,8 @@ type ProductVariant struct {
 	ProductRefName string // spec.productRef.name
 
 	// Git provenance
+	RepositoryID string
+	SourcePath   string
 	GitCommitSHA string
 	GitRef       string
 

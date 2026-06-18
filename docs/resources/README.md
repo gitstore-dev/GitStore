@@ -56,7 +56,7 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: example-product
-  namespace: example-store
+  namespace: example-store  # optional for current catalog resources; inferred from the repository when omitted
   labels:
     gitstore.dev/brand: example
   annotations:
@@ -77,6 +77,8 @@ System-managed fields that author files must not set:
 - `metadata.revision`
 - `metadata.ownerReferences`
 - `status`
+
+For current Git-backed catalog resources, identity is `apiVersion`, `kind`, resolved namespace, and `metadata.name`. File path is source provenance, not identity. A path-only move preserves `metadata.uid` and `generation` while incrementing `resourceVersion`; a spec or Markdown body edit increments both `generation` and `resourceVersion`; deleting and later re-adding the same identity creates a new UID.
 
 ## Common Datastore-Only Shape
 

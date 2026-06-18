@@ -120,7 +120,7 @@ gitstore_controller_reconcile_total{kind,result}  — counter (result: success|e
 
 ## Decision 6: Operator Re-Queue of Poison Items
 
-**Decision**: HTTP `POST /controller/v1/poison/{kind}/{namespace}/{name}/requeue` — `net/http` handler, no new libraries, served on `GITSTORE_CONTROLLER__PORT` (default `5001`). Atomically removes from quarantine store, resets retry budget, re-enqueues through the rate limiter.
+**Decision**: HTTP `POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue` — `net/http` handler, no new libraries, served on `GITSTORE_CONTROLLER__PORT` (default `5001`). Atomically removes from quarantine store, resets retry budget, re-enqueues through the rate limiter.
 
 **Rationale**: The spec requires explicit operator-initiated re-queue without restart (FR-003a). The implementation acquires the quarantine store mutex, removes the item, resets `RetryRecord.Attempts` and `History` to zero, then calls `queue.Enqueue(key)`. Returns `404` if not in quarantine, `409` if queue is shutting down. `GET /controller/v1/poison/{kind}` lists quarantined items.
 
