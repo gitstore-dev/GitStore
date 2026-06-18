@@ -5,14 +5,6 @@ package cataloggrpc
 
 import "time"
 
-// ValidationContext carries per-request state for the pre-receive validation
-// phase. It is populated once per ValidateResources call and threaded through
-// all per-file validators, avoiding repeated DB lookups per blob.
-type ValidationContext struct {
-	RepositoryID string
-	Namespace    string // resolved namespace identifier (e.g. "my-store")
-}
-
 // AdmissionContext carries per-request state for the post-receive admission
 // phase. It is populated once per AdmitResources call from a single DB lookup
 // (repository → namespace) and threaded through all per-resource admit helpers.

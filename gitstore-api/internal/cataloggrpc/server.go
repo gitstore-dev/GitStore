@@ -17,6 +17,8 @@ import (
 	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	admcatalog "github.com/gitstore-dev/gitstore/api/internal/admission/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
@@ -71,18 +73,20 @@ type Server struct {
 	clock  apiruntime.Clock
 	ids    apiruntime.IDGenerator
 	celEnv *cel.Env // shared, constructed once; nil means CEL unavailable (skip rather than reject)
+	chain  *admission.Chain
 }
 
 // ServerDeps contains dependencies for the CatalogService gRPC server.
 type ServerDeps struct {
-	Store       datastore.Datastore
-	GitReader   GitReader
-	GitClient   *gitclient.Client
-	Logger      *zap.Logger
-	Parser      ResourceParser
-	Clock       apiruntime.Clock
-	IDGenerator apiruntime.IDGenerator
-	CELEnv      *cel.Env
+	Store                   datastore.Datastore
+	GitReader               GitReader
+	GitClient               *gitclient.Client
+	Logger                  *zap.Logger
+	Parser                  ResourceParser
+	Clock                   apiruntime.Clock
+	IDGenerator             apiruntime.IDGenerator
+	CELEnv                  *cel.Env
+	ExtraValidatingPolicies []admission.ValidatingAdmissionPolicy
 }
 
 // newCELEnv constructs a CEL environment for syntax-checking price eligibility expressions.
@@ -123,6 +127,14 @@ func NewServer(deps ServerDeps) (*Server, error) {
 	if celEnv == nil {
 		celEnv = newCELEnv()
 	}
+	chain := admission.NewChain(deps.Logger)
+	chain.RegisterValidatingPolicy(admcatalog.NewProductValidatingPolicy(deps.Logger))
+	chain.RegisterValidatingPolicy(admcatalog.NewCollectionValidatingPolicy(deps.Logger))
+	chain.RegisterValidatingPolicy(admcatalog.NewProductVariantValidatingPolicy(deps.Store, celEnv, deps.Logger))
+	chain.RegisterValidatingPolicy(admcatalog.NewCategoryTaxonomyValidatingPolicy(deps.Store, deps.Logger))
+	for _, p := range deps.ExtraValidatingPolicies {
+		chain.RegisterValidatingPolicy(p)
+	}
 	return &Server{
 		store:  deps.Store,
 		git:    git,
@@ -131,6 +143,7 @@ func NewServer(deps ServerDeps) (*Server, error) {
 		clock:  clock,
 		ids:    ids,
 		celEnv: celEnv,
+		chain:  chain,
 	}, nil
 }
 
@@ -350,12 +363,38 @@ func (s *Server) AdmitResources(
 	cycleMembers := detectCycles(pushCategoryParents)
 	topoOrder := topoSortCategories(pushCategoryParents, cycleMembers)
 
+	// Build a PushSet of AdmissionRequests for CategoryTaxonomy resources so the
+	// chain's policy can resolve in-push parents and detect cycles.
+	gitCtx := &admission.GitAdmissionContext{
+		RepositoryID: admCtx.RepositoryID,
+		CommitSHA:    admCtx.CommitSHA,
+		RefName:      admCtx.RefName,
+		Revision:     admCtx.Revision,
+	}
+	catPushSet := make([]admission.AdmissionRequest, 0, len(categoryEntries))
+	for _, e := range categoryEntries {
+		cat := e.parsed.CategoryTaxonomy
+		ns := cat.Metadata.Namespace
+		if ns == "" {
+			ns = admCtx.Namespace
+		}
+		catPushSet = append(catPushSet, admission.AdmissionRequest{
+			Object:     cat,
+			Kind:       cat.Kind,
+			Name:       cat.Metadata.Name,
+			Namespace:  ns,
+			Operation:  admission.OperationCreate,
+			Trigger:    admission.TriggerGitPush,
+			GitContext: gitCtx,
+		})
+	}
+
 	// inPushAncestorPaths is populated as each category is admitted so that
 	// children later in the same push see their parent's full computed path.
 	inPushAncestorPaths := make(map[string]string, len(topoOrder))
 	for _, name := range topoOrder {
 		e := categoryEntries[name]
-		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx, inPushAncestorPaths, cycleMembers[name])
+		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx, inPushAncestorPaths, catPushSet)
 	}
 	for _, e := range entries {
 		switch e.parsed.Kind {
@@ -371,84 +410,16 @@ func (s *Server) AdmitResources(
 	return &catalogv1.AdmitResourcesResponse{}, nil
 }
 
-// detectCycles returns the set of category names involved in intra-push cycles.
-// Uses DFS with three-color marking (0=white, 1=gray, 2=black). When a back
-// edge is found, every node on the current gray path is marked as in-cycle —
-// not just the node that triggered the back edge — so chains like A→B→C→B
-// correctly flag both B and C.
+// detectCycles delegates to the admission/catalog package implementation.
+// Kept as a thin wrapper so the batch pre-processing in AdmitResources (which
+// still needs topo-sort ordering) does not need to import admcatalog directly.
 func detectCycles(parentMap map[string]string) map[string]bool {
-	inCycle := make(map[string]bool)
-	color := make(map[string]int, len(parentMap))
-	// grayStack tracks the DFS path currently being explored.
-	var grayStack []string
-	var visit func(name string)
-	visit = func(name string) {
-		if color[name] == 2 {
-			return
-		}
-		if color[name] == 1 {
-			// Back edge to `name`. The cycle runs from `name`'s position in the
-			// gray stack to the top — nodes before it are mere ancestors of the
-			// cycle entry point and must not be flagged.
-			for i, n := range grayStack {
-				if n == name {
-					for _, m := range grayStack[i:] {
-						inCycle[m] = true
-					}
-					break
-				}
-			}
-			return
-		}
-		parent, inPush := parentMap[name]
-		if !inPush || parent == "" {
-			color[name] = 2
-			return
-		}
-		color[name] = 1
-		grayStack = append(grayStack, name)
-		visit(parent)
-		grayStack = grayStack[:len(grayStack)-1]
-		color[name] = 2
-	}
-	for name := range parentMap {
-		visit(name)
-	}
-	return inCycle
+	return admcatalog.DetectCycles(parentMap)
 }
 
-// topoSortCategories returns category names from parentMap in topological order
-// (roots first, leaves last). Nodes in a cycle are appended at the end in
-// insertion order so they are still admitted (with Acyclic=False status).
+// topoSortCategories delegates to the admission/catalog package implementation.
 func topoSortCategories(parentMap map[string]string, cycleMembers map[string]bool) []string {
-	visited := make(map[string]bool, len(parentMap))
-	order := make([]string, 0, len(parentMap))
-	var visit func(name string)
-	visit = func(name string) {
-		if visited[name] || cycleMembers[name] {
-			return
-		}
-		visited[name] = true
-		parent := parentMap[name]
-		// Only recurse if the parent is also part of this push; external parents
-		// (already in DB) are not in parentMap and must not be added to order.
-		if parent != "" {
-			if _, inPush := parentMap[parent]; inPush {
-				visit(parent)
-			}
-		}
-		order = append(order, name)
-	}
-	for name := range parentMap {
-		visit(name)
-	}
-	// Append cycle members after the acyclic nodes, in stable order.
-	for name := range parentMap {
-		if cycleMembers[name] {
-			order = append(order, name)
-		}
-	}
-	return order
+	return admcatalog.TopoSortCategories(parentMap, cycleMembers)
 }
 
 func (s *Server) admitProduct(
@@ -468,6 +439,21 @@ func (s *Server) admitProduct(
 	if namespace == "" {
 		namespace = admCtx.Namespace
 	}
+
+	s.chain.Admit(ctx, admission.AdmissionRequest{
+		Object:    resource,
+		Kind:      resource.Kind,
+		Name:      resource.Metadata.Name,
+		Namespace: namespace,
+		Operation: admission.OperationCreate,
+		Trigger:   admission.TriggerGitPush,
+		GitContext: &admission.GitAdmissionContext{
+			RepositoryID: admCtx.RepositoryID,
+			CommitSHA:    admCtx.CommitSHA,
+			RefName:      admCtx.RefName,
+			Revision:     admCtx.Revision,
+		},
+	})
 
 	existing, getErr := s.store.GetProductByName(ctx, namespace, resource.Metadata.Name)
 
@@ -536,6 +522,21 @@ func (s *Server) admitCollection(
 	if namespace == "" {
 		namespace = admCtx.Namespace
 	}
+
+	s.chain.Admit(ctx, admission.AdmissionRequest{
+		Object:    resource,
+		Kind:      resource.Kind,
+		Name:      resource.Metadata.Name,
+		Namespace: namespace,
+		Operation: admission.OperationCreate,
+		Trigger:   admission.TriggerGitPush,
+		GitContext: &admission.GitAdmissionContext{
+			RepositoryID: admCtx.RepositoryID,
+			CommitSHA:    admCtx.CommitSHA,
+			RefName:      admCtx.RefName,
+			Revision:     admCtx.Revision,
+		},
+	})
 
 	existing, getErr := s.store.GetCollectionByName(ctx, namespace, resource.Metadata.Name)
 
@@ -611,44 +612,43 @@ func (s *Server) admitProductVariant(
 		namespace = admCtx.Namespace
 	}
 
-	// Run all admission checks, collecting results into admitResult.
+	// Run admission chain; map resulting conditions back to variantAdmitResult.
 	admitResult := variantAdmitResult{
 		OptionsAccepted: true,
 		PricingAccepted: true,
+	}
+	admReq := admission.AdmissionRequest{
+		Object:    resource,
+		Kind:      resource.Kind,
+		Name:      resource.Metadata.Name,
+		Namespace: namespace,
+		Operation: admission.OperationCreate,
+		Trigger:   admission.TriggerGitPush,
+		GitContext: &admission.GitAdmissionContext{
+			RepositoryID: admCtx.RepositoryID,
+			CommitSHA:    admCtx.CommitSHA,
+			RefName:      admCtx.RefName,
+			Revision:     admCtx.Revision,
+		},
+	}
+	if allowed, ok := s.chain.Admit(ctx, admReq).(admission.Allowed); ok {
+		for _, c := range allowed.Conditions {
+			switch catalog.ConditionType(c.Type) {
+			case catalog.ConditionProductResolved:
+				admitResult.ProductResolved = c.Status
+			case catalog.ConditionOptionsAccepted:
+				admitResult.OptionsAccepted = c.Status
+				admitResult.OptionsMsg = c.Message
+			case catalog.ConditionPricingAccepted:
+				admitResult.PricingAccepted = c.Status
+				admitResult.PricingMsg = c.Message
+			}
+		}
 	}
 
 	productRefName := ""
 	if resource.Spec.ProductRef != nil {
 		productRefName = resource.Spec.ProductRef.Name
-		if productRefName != "" {
-			if parent, perr := s.store.GetProductByName(ctx, namespace, productRefName); perr == nil {
-				admitResult.ProductResolved = true
-				if len(resource.Spec.SelectedOptions) > 0 {
-					admitResult.OptionsAccepted, admitResult.OptionsMsg = validateSelectedOptions(resource.Spec.SelectedOptions, parent.Spec)
-					if !admitResult.OptionsAccepted {
-						s.log.Warn("admit_resources: product_variant option incompatibility",
-							zap.String("name", resource.Metadata.Name),
-							zap.String("namespace", namespace),
-							zap.String("product_ref", productRefName),
-							zap.String("reason", admitResult.OptionsMsg))
-					}
-				}
-			} else {
-				s.log.Info("admit_resources: product_variant productRef deferred — product not yet in datastore",
-					zap.String("name", resource.Metadata.Name),
-					zap.String("namespace", namespace),
-					zap.String("product_ref", productRefName))
-			}
-		}
-	}
-
-	// CEL syntax validation (admission-phase; no runtime evaluation).
-	admitResult.PricingAccepted, admitResult.PricingMsg = celValidateExpressions(s.celEnv, resource.Spec)
-	if !admitResult.PricingAccepted {
-		s.log.Warn("admit_resources: product_variant CEL syntax error",
-			zap.String("name", resource.Metadata.Name),
-			zap.String("namespace", namespace),
-			zap.String("reason", admitResult.PricingMsg))
 	}
 
 	// Compute resolved summaries.
@@ -744,14 +744,15 @@ func (s *Server) admitProductVariant(
 // inPushAncestorPaths maps category names that have already been admitted in this
 // push to their computed AncestorPath; populated as each category is stored so
 // that later categories see the full paths of co-created parents.
-// inCycle indicates this category is part of a detected intra-push cycle.
+// catPushSet is the full set of CategoryTaxonomy AdmissionRequests in this push,
+// passed to the chain policy for cross-resource cycle and parent resolution.
 func (s *Server) admitCategoryTaxonomyWithContext(
 	ctx context.Context,
 	resource *catalog.CategoryTaxonomyResource,
 	body []byte,
 	admCtx AdmissionContext,
 	inPushAncestorPaths map[string]string,
-	inCycle bool,
+	catPushSet []admission.AdmissionRequest,
 ) {
 	specJSON, err := json.Marshal(resource.Spec)
 	if err != nil {
@@ -767,10 +768,38 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 
 	name := resource.Metadata.Name
 
+	// Run admission chain to determine ParentResolved and Acyclic conditions.
+	parentResolved := false
+	inCycle := false
+	admReq := admission.AdmissionRequest{
+		Object:    resource,
+		Kind:      resource.Kind,
+		Name:      name,
+		Namespace: namespace,
+		Operation: admission.OperationCreate,
+		Trigger:   admission.TriggerGitPush,
+		GitContext: &admission.GitAdmissionContext{
+			RepositoryID: admCtx.RepositoryID,
+			CommitSHA:    admCtx.CommitSHA,
+			RefName:      admCtx.RefName,
+			Revision:     admCtx.Revision,
+		},
+		PushSet: catPushSet,
+	}
+	if allowed, ok := s.chain.Admit(ctx, admReq).(admission.Allowed); ok {
+		for _, c := range allowed.Conditions {
+			switch catalog.ConditionType(c.Type) {
+			case catalog.ConditionParentResolved:
+				parentResolved = c.Status
+			case catalog.ConditionAcyclic:
+				inCycle = !c.Status
+			}
+		}
+	}
+
 	// Compute parent name and ancestor path.
 	parentName := ""
 	ancestorPath := name
-	parentResolved := false
 
 	if resource.Spec.ParentRef != nil && resource.Spec.ParentRef.Name != "" {
 		parentName = resource.Spec.ParentRef.Name
@@ -780,16 +809,14 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		// full computed path is available here even for deep chains (root→child→grandchild).
 		if parentPath, inPush := inPushAncestorPaths[parentName]; inPush {
 			ancestorPath = parentPath + "/" + name
-			parentResolved = true
-		} else {
-			// Look up parent in DB.
+		} else if parentResolved {
+			// Look up parent in DB for its ancestor path.
 			parent, perr := s.store.GetCategoryTaxonomyByName(ctx, namespace, parentName)
 			if perr == nil && parent != nil {
 				ancestorPath = parent.AncestorPath + "/" + name
-				parentResolved = true
 			}
-			// If parent not found: tentative root, ParentResolved=False.
 		}
+		// If parent not found: tentative root path stays as `name`.
 	}
 
 	existing, getErr := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)
@@ -948,27 +975,6 @@ func variantAdmissionStatus(generation int64, revision string, now time.Time, r 
 	return b
 }
 
-// celValidateExpressions parses each CEL expression for syntax only (no evaluation).
-// env may be nil (CEL unavailable); in that case all expressions are considered valid.
-// Returns (true, "") if all are valid, or (false, message) on the first syntax error.
-func celValidateExpressions(env *cel.Env, spec catalog.ProductVariantSpec) (bool, string) {
-	if env == nil || spec.Pricing == nil || spec.Pricing.PriceSet == nil {
-		return true, ""
-	}
-	for i, pt := range spec.Pricing.PriceSet.Prices {
-		if pt.Eligibility == nil {
-			continue
-		}
-		for j, c := range pt.Eligibility.Constraints {
-			if _, iss := env.Parse(c.Expression); iss != nil && iss.Err() != nil {
-				return false, fmt.Sprintf("pricing.priceSet.prices[%d].eligibility.constraints[%d]: invalid CEL expression %q: %s",
-					i, j, c.Expression, iss.Err())
-			}
-		}
-	}
-	return true, ""
-}
-
 // computeResolvedPriceSet builds a ResolvedPriceSetDefinition summary from the spec.
 // compiledExpressions counts CEL expressions that parse without error.
 // env may be nil; in that case compiledExpressions is always 0.
@@ -1023,45 +1029,6 @@ func computeResolvedInventory(spec catalog.ProductVariantSpec) *catalog.Resolved
 		Managed: spec.Inventory.Managed,
 		Policy:  spec.Inventory.Policy,
 	}
-}
-
-// validateSelectedOptions checks that every selected option name exists in the
-// parent product and, when the parent option declares allowed values, that the
-// selected value is one of them.
-// Returns (true, "") on success, or (false, descriptive message) on first
-// mismatch.
-func validateSelectedOptions(selected []catalog.SelectedOptionDefinition, parentSpec []byte) (bool, string) {
-	// Parse the parent product spec to extract declared option names and values.
-	var spec struct {
-		Options []struct {
-			Name   string   `json:"name"`
-			Values []string `json:"values"`
-		} `json:"options"`
-	}
-	if err := json.Unmarshal(parentSpec, &spec); err != nil {
-		// Cannot parse parent spec; skip option validation rather than false-reject.
-		return true, ""
-	}
-	declared := make(map[string]map[string]struct{}, len(spec.Options))
-	for _, o := range spec.Options {
-		allowedValues := make(map[string]struct{}, len(o.Values))
-		for _, v := range o.Values {
-			allowedValues[v] = struct{}{}
-		}
-		declared[o.Name] = allowedValues
-	}
-	for _, so := range selected {
-		allowedValues, ok := declared[so.Name]
-		if !ok {
-			return false, fmt.Sprintf("selectedOptions: name %q not found in parent product options", so.Name)
-		}
-		if len(allowedValues) > 0 {
-			if _, ok := allowedValues[so.Value]; !ok {
-				return false, fmt.Sprintf("selectedOptions: value %q for option %q not found in parent product option values", so.Value, so.Name)
-			}
-		}
-	}
-	return true, ""
 }
 
 // categoryAdmissionStatusFull builds the initial status JSON for a CategoryTaxonomy,

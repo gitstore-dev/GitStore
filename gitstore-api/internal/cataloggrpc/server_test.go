@@ -12,6 +12,7 @@ import (
 	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -1332,3 +1333,50 @@ func newTestDatastore(t *testing.T) datastore.Datastore {
 
 // ensure bytes import is used
 var _ = bytes.NewReader
+
+// ---------------------------------------------------------------------------
+// T021: ExtraValidatingPolicies — injected policies run during AdmitResources
+// ---------------------------------------------------------------------------
+
+// recordingPolicy is a stub ValidatingAdmissionPolicy that records every
+// AdmissionRequest it receives so tests can assert it was called.
+type recordingPolicy struct {
+	calls []admission.AdmissionRequest
+}
+
+func (p *recordingPolicy) Name() string { return "RecordingPolicy" }
+
+func (p *recordingPolicy) Validate(_ context.Context, req admission.AdmissionRequest) admission.AdmissionDecision {
+	p.calls = append(p.calls, req)
+	return admission.DecisionAllow()
+}
+
+// TestExtraValidatingPolicies_CalledForAdmittedResources verifies that an extra
+// policy registered via ServerDeps.ExtraValidatingPolicies is invoked for every
+// resource admitted through AdmitResources.
+func TestExtraValidatingPolicies_CalledForAdmittedResources(t *testing.T) {
+	memStore := newTestDatastore(t)
+	policy := &recordingPolicy{}
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeProduct("widget"), nil
+		},
+	}
+	srv := newCatalogServer(t, memStore, git, func(deps *cataloggrpc.ServerDeps) {
+		deps.ExtraValidatingPolicies = []admission.ValidatingAdmissionPolicy{policy}
+	})
+
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	require.NotEmpty(t, policy.calls, "extra policy must be called at least once")
+	assert.Equal(t, "Product", policy.calls[0].Kind)
+	assert.Equal(t, "widget", policy.calls[0].Name)
+}
