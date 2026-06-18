@@ -852,8 +852,8 @@ impl GitService for GitServiceImpl {
             drop(tx);
 
             // Open repo now to obtain ODB handle for thin pack resolution.
-            let repo_for_odb = gix::open(&repo_path)
-                .map_err(|e| Status::internal(format!("open repo: {}", e)))?;
+            let repo_for_odb =
+                gix::open(&repo_path).map_err(|e| Status::internal(format!("open repo: {}", e)))?;
             let odb = (*repo_for_odb.objects).clone();
 
             // Stage pack from channel reader in a blocking thread

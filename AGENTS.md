@@ -11,6 +11,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - In-memory only (`sync.RWMutex` maps) — no persistence added in this spec (026-reconcile-handler)
 - Go 1.25 (gitstore-api) + `go.uber.org/zap`, `github.com/google/cel-go/cel`, `github.com/go-playground/validator/v10`, `encoding/json` (027-admission-contracts)
 - None (in-process Go types only; no new datastore tables) (027-admission-contracts)
+- Rust 1.x (`gitstore-git-service`); Go 1.25 (`gitstore-api`) + `gix 0.84.0`, `tonic 0.14`, `tokio 1.35` (Rust); no new Go deps (028-branch-deletion-admission)
+- No datastore changes (028-branch-deletion-admission)
 
 ## Commands
 
@@ -50,9 +52,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 028-branch-deletion-admission: Added Rust 1.x (`gitstore-git-service`); Go 1.25 (`gitstore-api`) + `gix 0.84.0`, `tonic 0.14`, `tokio 1.35` (Rust); no new Go deps
 - 027-admission-contracts: Added Go 1.25 (gitstore-api) + `go.uber.org/zap`, `github.com/google/cel-go/cel`, `github.com/go-playground/validator/v10`, `encoding/json`
 - 026-reconcile-handler: Added Go 1.25 + `go.uber.org/zap`, `github.com/cenkalti/backoff/v5 v5.0.3`, `github.com/prometheus/client_golang v1.23.2`, `github.com/alitto/pond/v2 v2.7.1`, `runtime/debug` (stdlib — for stack traces)
-- 025-controller-manager-runtime: Added Go 1.25 (`gitstore-controller-manager`) + `golang.org/x/time` (queue rate limiting), `github.com/alitto/pond/v2` (worker pools), `github.com/cenkalti/backoff/v5` (retry/backoff), `github.com/prometheus/client_golang v1.23.2` (health metrics), `net/http` stdlib (health/poison API)
 
 
 <!-- MANUAL ADDITIONS START -->

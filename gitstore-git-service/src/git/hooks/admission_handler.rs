@@ -346,10 +346,9 @@ mod tests {
         let count = Arc::new(AtomicU32::new(0));
         let addr = start_mock_server(count.clone()).await;
 
-        let handler =
-            AdmissionControlHandler::connect(&addr, "refs/heads/.*".to_string())
-                .await
-                .unwrap();
+        let handler = AdmissionControlHandler::connect(&addr, "refs/heads/.*".to_string())
+            .await
+            .unwrap();
 
         let updates = vec![make_update("refs/heads/feature/my-feature", false)];
         let result = handler
@@ -371,6 +370,9 @@ mod tests {
     async fn test_invalid_pattern_rejected() {
         let result =
             AdmissionControlHandler::connect("http://127.0.0.1:1", "[invalid".to_string()).await;
-        assert!(result.is_err(), "invalid regex must be rejected at connect()");
+        assert!(
+            result.is_err(),
+            "invalid regex must be rejected at connect()"
+        );
     }
 }
