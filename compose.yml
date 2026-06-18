@@ -16,6 +16,7 @@ services:
       - GITSTORE_LOG__FORMAT=json
       - GITSTORE_GIT__REPO__MAX_FILE_SIZE=52428800
       - GITSTORE_CATALOG_SERVICE__URI=http://api:6000
+      - GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN=refs/heads/.*
     networks:
       - gitstore-network
 

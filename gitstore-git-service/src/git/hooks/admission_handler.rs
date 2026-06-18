@@ -2,6 +2,7 @@
 // Copyright (c) 2026 GitStore contributors
 
 use async_trait::async_trait;
+use regex::Regex;
 use tracing::error;
 
 use super::{AdmissionDecision, AdmissionHandler, RefUpdate};
@@ -19,17 +20,17 @@ use catalog_proto::catalog_service_client::CatalogServiceClient;
 use catalog_proto::AdmitResourcesRequest;
 
 /// Implements `AdmissionHandler` for the post-receive slot.
-/// Checks the ref against `branch_pattern`; if matching, fire-and-forgets
-/// `AdmitResources`. Always returns `Accept` (never blocks the push author).
+/// Checks the ref against `branch_pattern` (a full-match regex); if matching,
+/// fire-and-forgets `AdmitResources`. Always returns `Accept`.
 pub struct AdmissionControlHandler {
     client: CatalogServiceClient<tonic::transport::Channel>,
-    branch_pattern: String,
+    branch_pattern: Regex,
 }
 
 impl AdmissionControlHandler {
     pub fn new(
         client: CatalogServiceClient<tonic::transport::Channel>,
-        branch_pattern: String,
+        branch_pattern: Regex,
     ) -> Self {
         Self {
             client,
@@ -38,10 +39,12 @@ impl AdmissionControlHandler {
     }
 
     pub async fn connect(url: &str, branch_pattern: String) -> anyhow::Result<Self> {
+        let re = Regex::new(&branch_pattern)
+            .map_err(|e| anyhow::anyhow!("invalid branch_pattern {:?}: {}", branch_pattern, e))?;
         let endpoint = tonic::transport::Endpoint::from_shared(url.to_string())?;
         let channel = endpoint.connect_lazy();
         let client = CatalogServiceClient::new(channel);
-        Ok(Self::new(client, branch_pattern))
+        Ok(Self::new(client, re))
     }
 }
 
@@ -54,7 +57,7 @@ impl AdmissionHandler for AdmissionControlHandler {
         repository_id: &str,
     ) -> anyhow::Result<AdmissionDecision> {
         for update in updates {
-            if update.ref_name != self.branch_pattern {
+            if !self.branch_pattern.is_match(&update.ref_name) {
                 // Ref does not match branch pattern — skip, no gRPC call.
                 continue;
             }
@@ -253,14 +256,14 @@ mod tests {
         );
     }
 
-    // T019e: ref that is a prefix extension of branch_pattern must NOT trigger admission
-    // (e.g. "refs/heads/main-old" when branch_pattern is "refs/heads/main")
+    // T019e: anchored pattern must not match a ref that merely contains the pattern as a prefix
+    // (e.g. "refs/heads/main-old" must not match "^refs/heads/main$")
     #[tokio::test]
     async fn test_prefix_extended_ref_no_grpc_call() {
         let count = Arc::new(AtomicU32::new(0));
         let addr = start_mock_server(count.clone()).await;
 
-        let handler = AdmissionControlHandler::connect(&addr, "refs/heads/main".to_string())
+        let handler = AdmissionControlHandler::connect(&addr, "^refs/heads/main$".to_string())
             .await
             .unwrap();
 
@@ -275,7 +278,99 @@ mod tests {
         assert_eq!(
             count.load(Ordering::SeqCst),
             0,
-            "refs/heads/main-old must not match refs/heads/main branch pattern"
+            "refs/heads/main-old must not match ^refs/heads/main$ branch pattern"
         );
+    }
+
+    // T019f: zero new_oid (branch deletion) on matching ref triggers exactly one AdmitResources call
+    #[tokio::test]
+    async fn test_branch_deletion_triggers_admit() {
+        let count = Arc::new(AtomicU32::new(0));
+        let addr = start_mock_server(count.clone()).await;
+
+        let handler = AdmissionControlHandler::connect(&addr, "refs/heads/main".to_string())
+            .await
+            .unwrap();
+
+        let update = RefUpdate {
+            ref_name: "refs/heads/main".to_string(),
+            old_oid: "a".repeat(40),
+            new_oid: "0".repeat(40), // zero new-OID = branch deletion
+        };
+        let result = handler
+            .admit("post-receive", &[update], "repo-1")
+            .await
+            .unwrap();
+        assert!(matches!(result, AdmissionDecision::Accept));
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            1,
+            "branch deletion must trigger exactly one AdmitResources call"
+        );
+    }
+
+    // T019g: zero new_oid (branch deletion) on a non-matching ref must NOT trigger admission
+    #[tokio::test]
+    async fn test_branch_deletion_non_matching_ref_no_call() {
+        let count = Arc::new(AtomicU32::new(0));
+        let addr = start_mock_server(count.clone()).await;
+
+        let handler = AdmissionControlHandler::connect(&addr, "^refs/heads/main$".to_string())
+            .await
+            .unwrap();
+
+        let update = RefUpdate {
+            ref_name: "refs/heads/experiment/foo".to_string(),
+            old_oid: "a".repeat(40),
+            new_oid: "0".repeat(40), // zero new-OID = branch deletion
+        };
+        let result = handler
+            .admit("post-receive", &[update], "repo-1")
+            .await
+            .unwrap();
+        assert!(matches!(result, AdmissionDecision::Accept));
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            0,
+            "branch deletion on non-matching ref must not call AdmitResources"
+        );
+    }
+
+    // T019h: wildcard pattern admits any feature branch (regex "refs/heads/.*")
+    #[tokio::test]
+    async fn test_wildcard_pattern_matches_feature_branch() {
+        let count = Arc::new(AtomicU32::new(0));
+        let addr = start_mock_server(count.clone()).await;
+
+        let handler =
+            AdmissionControlHandler::connect(&addr, "refs/heads/.*".to_string())
+                .await
+                .unwrap();
+
+        let updates = vec![make_update("refs/heads/feature/my-feature", false)];
+        let result = handler
+            .admit("post-receive", &updates, "repo-1")
+            .await
+            .unwrap();
+        assert!(matches!(result, AdmissionDecision::Accept));
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            1,
+            "refs/heads/.* must admit any refs/heads/ branch"
+        );
+    }
+
+    // T019i: invalid regex in branch_pattern is rejected at construction time
+    #[tokio::test]
+    async fn test_invalid_pattern_rejected() {
+        let result =
+            AdmissionControlHandler::connect("http://127.0.0.1:1", "[invalid".to_string()).await;
+        assert!(result.is_err(), "invalid regex must be rejected at connect()");
     }
 }

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 GitStore contributors
 
 use config::{Config, Environment, File, FileFormat};
+use regex::Regex;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct AppConfig {
@@ -123,6 +124,13 @@ impl AppConfig {
                 "GITSTORE_SCHEMA_VALIDATION__PHASE and GITSTORE_ADMISSION_CONTROL__PHASE \
                  must be different (both set to {:?})",
                 self.schema_validation.phase
+            ));
+        }
+
+        if Regex::new(&self.admission_control.branch_pattern).is_err() {
+            errors.push(format!(
+                "admission_control.branch_pattern is not a valid regex: {:?}",
+                self.admission_control.branch_pattern
             ));
         }
 
