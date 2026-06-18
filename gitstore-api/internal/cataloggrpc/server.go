@@ -440,12 +440,22 @@ func (s *Server) admitProduct(
 		namespace = admCtx.Namespace
 	}
 
-	s.chain.Admit(ctx, admission.AdmissionRequest{
+	existing, getErr := s.store.GetProductByName(ctx, namespace, resource.Metadata.Name)
+
+	op := admission.OperationCreate
+	var oldObject any
+	if getErr == nil && existing != nil {
+		op = admission.OperationUpdate
+		oldObject = existing
+	}
+
+	if d, denied := s.chain.Admit(ctx, admission.AdmissionRequest{
 		Object:    resource,
+		OldObject: oldObject,
 		Kind:      resource.Kind,
 		Name:      resource.Metadata.Name,
 		Namespace: namespace,
-		Operation: admission.OperationCreate,
+		Operation: op,
 		Trigger:   admission.TriggerGitPush,
 		GitContext: &admission.GitAdmissionContext{
 			RepositoryID: admCtx.RepositoryID,
@@ -453,9 +463,13 @@ func (s *Server) admitProduct(
 			RefName:      admCtx.RefName,
 			Revision:     admCtx.Revision,
 		},
-	})
-
-	existing, getErr := s.store.GetProductByName(ctx, namespace, resource.Metadata.Name)
+	}).(admission.Denied); denied {
+		s.log.Warn("admit_resources: product denied by admission chain",
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace),
+			zap.String("reason", d.Reason))
+		return
+	}
 
 	if getErr != nil || existing == nil {
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
@@ -523,12 +537,22 @@ func (s *Server) admitCollection(
 		namespace = admCtx.Namespace
 	}
 
-	s.chain.Admit(ctx, admission.AdmissionRequest{
+	existing, getErr := s.store.GetCollectionByName(ctx, namespace, resource.Metadata.Name)
+
+	op := admission.OperationCreate
+	var oldObject any
+	if getErr == nil && existing != nil {
+		op = admission.OperationUpdate
+		oldObject = existing
+	}
+
+	if d, denied := s.chain.Admit(ctx, admission.AdmissionRequest{
 		Object:    resource,
+		OldObject: oldObject,
 		Kind:      resource.Kind,
 		Name:      resource.Metadata.Name,
 		Namespace: namespace,
-		Operation: admission.OperationCreate,
+		Operation: op,
 		Trigger:   admission.TriggerGitPush,
 		GitContext: &admission.GitAdmissionContext{
 			RepositoryID: admCtx.RepositoryID,
@@ -536,9 +560,13 @@ func (s *Server) admitCollection(
 			RefName:      admCtx.RefName,
 			Revision:     admCtx.Revision,
 		},
-	})
-
-	existing, getErr := s.store.GetCollectionByName(ctx, namespace, resource.Metadata.Name)
+	}).(admission.Denied); denied {
+		s.log.Warn("admit_resources: collection denied by admission chain",
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace),
+			zap.String("reason", d.Reason))
+		return
+	}
 
 	if getErr != nil || existing == nil {
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
@@ -612,6 +640,15 @@ func (s *Server) admitProductVariant(
 		namespace = admCtx.Namespace
 	}
 
+	existing, getErr := s.store.GetProductVariantByName(ctx, namespace, resource.Metadata.Name)
+
+	op := admission.OperationCreate
+	var oldObject any
+	if getErr == nil && existing != nil {
+		op = admission.OperationUpdate
+		oldObject = existing
+	}
+
 	// Run admission chain; map resulting conditions back to variantAdmitResult.
 	admitResult := variantAdmitResult{
 		OptionsAccepted: true,
@@ -619,10 +656,11 @@ func (s *Server) admitProductVariant(
 	}
 	admReq := admission.AdmissionRequest{
 		Object:    resource,
+		OldObject: oldObject,
 		Kind:      resource.Kind,
 		Name:      resource.Metadata.Name,
 		Namespace: namespace,
-		Operation: admission.OperationCreate,
+		Operation: op,
 		Trigger:   admission.TriggerGitPush,
 		GitContext: &admission.GitAdmissionContext{
 			RepositoryID: admCtx.RepositoryID,
@@ -631,8 +669,15 @@ func (s *Server) admitProductVariant(
 			Revision:     admCtx.Revision,
 		},
 	}
-	if allowed, ok := s.chain.Admit(ctx, admReq).(admission.Allowed); ok {
-		for _, c := range allowed.Conditions {
+	switch dec := s.chain.Admit(ctx, admReq).(type) {
+	case admission.Denied:
+		s.log.Warn("admit_resources: product_variant denied by admission chain",
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace),
+			zap.String("reason", dec.Reason))
+		return
+	case admission.Allowed:
+		for _, c := range dec.Conditions {
 			switch catalog.ConditionType(c.Type) {
 			case catalog.ConditionProductResolved:
 				admitResult.ProductResolved = c.Status
@@ -656,8 +701,6 @@ func (s *Server) admitProductVariant(
 		PriceSet:  computeResolvedPriceSet(s.celEnv, resource.Spec),
 		Inventory: computeResolvedInventory(resource.Spec),
 	}
-
-	existing, getErr := s.store.GetProductVariantByName(ctx, namespace, resource.Metadata.Name)
 
 	if getErr != nil || existing == nil {
 		// SKU uniqueness check: another variant in this namespace may already hold the SKU.
@@ -768,15 +811,25 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 
 	name := resource.Metadata.Name
 
+	existing, getErr := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)
+
+	op := admission.OperationCreate
+	var oldObject any
+	if getErr == nil && existing != nil {
+		op = admission.OperationUpdate
+		oldObject = existing
+	}
+
 	// Run admission chain to determine ParentResolved and Acyclic conditions.
 	parentResolved := false
 	inCycle := false
 	admReq := admission.AdmissionRequest{
 		Object:    resource,
+		OldObject: oldObject,
 		Kind:      resource.Kind,
 		Name:      name,
 		Namespace: namespace,
-		Operation: admission.OperationCreate,
+		Operation: op,
 		Trigger:   admission.TriggerGitPush,
 		GitContext: &admission.GitAdmissionContext{
 			RepositoryID: admCtx.RepositoryID,
@@ -786,8 +839,15 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		},
 		PushSet: catPushSet,
 	}
-	if allowed, ok := s.chain.Admit(ctx, admReq).(admission.Allowed); ok {
-		for _, c := range allowed.Conditions {
+	switch dec := s.chain.Admit(ctx, admReq).(type) {
+	case admission.Denied:
+		s.log.Warn("admit_resources: category denied by admission chain",
+			zap.String("name", name),
+			zap.String("namespace", namespace),
+			zap.String("reason", dec.Reason))
+		return
+	case admission.Allowed:
+		for _, c := range dec.Conditions {
 			switch catalog.ConditionType(c.Type) {
 			case catalog.ConditionParentResolved:
 				parentResolved = c.Status
@@ -818,8 +878,6 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		}
 		// If parent not found: tentative root path stays as `name`.
 	}
-
-	existing, getErr := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)
 
 	statusJSON := categoryAdmissionStatusFull(1, admCtx.Revision, admCtx.Now, parentResolved, inCycle)
 
