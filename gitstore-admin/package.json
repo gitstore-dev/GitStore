@@ -19,7 +19,7 @@
     "react-dom": "^18.2.0",
     "urql": "^5.0.1",
     "uuid": "^14.0.0",
-    "dompurify": "^3.4.9"
+    "dompurify": "^3.4.11"
   },
   "devDependencies": {
     "@graphql-codegen/cli": "^7.0.0",
