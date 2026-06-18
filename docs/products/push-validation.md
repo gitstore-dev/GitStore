@@ -78,6 +78,14 @@ Duplicate SKU conflicts for `ProductVariant` are not inserted after detection. T
 
 Only pushes to refs matching `GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN` (default: `refs/heads/main`) trigger catalog storage. Pushes to feature branches pass validation but are not stored.
 
+### Branch deletion
+
+When a branch matching `GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN` is deleted via `git push origin --delete <branch>`, the git service forwards the deletion as an `AdmitResources` call with `new_commit_sha` set to the zero OID (`0000000000000000000000000000000000000000`). The API interprets this as a branch-delete and removes all catalog resources that were admitted on the deleted ref.
+
+Branch-delete admission uses the same pattern filter as push admission — deleting a branch that does not match the pattern produces no admission activity. The call is fire-and-forget (non-blocking), consistent with all other post-receive admission calls.
+
+The API's staleness guard also applies to branch deletions: if the branch was recreated before the admission call is processed, the delete is skipped and the re-created resources are preserved.
+
 ## Revision format
 
 The `revision` field on a stored catalog resource encodes both the branch context and the exact commit:

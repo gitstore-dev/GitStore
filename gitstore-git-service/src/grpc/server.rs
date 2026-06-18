@@ -814,49 +814,60 @@ impl GitService for GitServiceImpl {
         let initial_pack = first.pack_data.clone();
         let is_last = first.is_last;
 
-        // Channel bridge: tokio async stream → sync Read
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(16);
+        // Branch-delete pushes carry no objects; skip pack staging entirely.
+        let is_delete_only = ref_commands
+            .iter()
+            .all(|c| c.new_oid == "0000000000000000000000000000000000000000");
 
-        if !initial_pack.is_empty() {
-            tx.send(initial_pack)
-                .map_err(|_| Status::internal("channel send failed"))?;
-        }
+        let quarantine: Option<crate::git::pack_server::Quarantine> = if is_delete_only {
+            info!(repo_id = %repo_id, "receive_pack: branch deletion — skipping pack staging");
+            None
+        } else {
+            // Channel bridge: tokio async stream → sync Read
+            let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(16);
 
-        if !is_last {
-            let tx2 = tx.clone();
-            tokio::spawn(async move {
-                let mut idx = 1u32;
-                while let Ok(Some(chunk)) = stream.message().await {
-                    let bytes = chunk.pack_data.len();
-                    if !chunk.pack_data.is_empty() && tx2.send(chunk.pack_data).is_err() {
-                        break;
+            if !initial_pack.is_empty() {
+                tx.send(initial_pack)
+                    .map_err(|_| Status::internal("channel send failed"))?;
+            }
+
+            if !is_last {
+                let tx2 = tx.clone();
+                tokio::spawn(async move {
+                    let mut idx = 1u32;
+                    while let Ok(Some(chunk)) = stream.message().await {
+                        let bytes = chunk.pack_data.len();
+                        if !chunk.pack_data.is_empty() && tx2.send(chunk.pack_data).is_err() {
+                            break;
+                        }
+                        info!(chunk_index = idx, bytes, "receive_pack: chunk received");
+                        idx += 1;
+                        if chunk.is_last {
+                            break;
+                        }
                     }
-                    info!(chunk_index = idx, bytes, "receive_pack: chunk received");
-                    idx += 1;
-                    if chunk.is_last {
-                        break;
-                    }
-                }
-                drop(tx2);
-            });
-        }
-        drop(tx);
+                    drop(tx2);
+                });
+            }
+            drop(tx);
 
-        // Open repo now to obtain ODB handle for thin pack resolution.
-        let repo_for_odb =
-            gix::open(&repo_path).map_err(|e| Status::internal(format!("open repo: {}", e)))?;
-        let odb = (*repo_for_odb.objects).clone();
+            // Open repo now to obtain ODB handle for thin pack resolution.
+            let repo_for_odb =
+                gix::open(&repo_path).map_err(|e| Status::internal(format!("open repo: {}", e)))?;
+            let odb = (*repo_for_odb.objects).clone();
 
-        // Stage pack from channel reader in a blocking thread
-        let quarantine = tokio::task::spawn_blocking(move || {
-            let reader = crate::git::pack_server::ChannelReader::new(rx);
-            crate::git::pack_server::stage_pack_from_reader(reader, Some(odb))
-        })
-        .await
-        .map_err(|e| Status::internal(format!("spawn_blocking join: {}", e)))?
-        .map_err(|e| Status::internal(format!("stage pack: {}", e)))?;
+            // Stage pack from channel reader in a blocking thread
+            let q = tokio::task::spawn_blocking(move || {
+                let reader = crate::git::pack_server::ChannelReader::new(rx);
+                crate::git::pack_server::stage_pack_from_reader(reader, Some(odb))
+            })
+            .await
+            .map_err(|e| Status::internal(format!("spawn_blocking join: {}", e)))?
+            .map_err(|e| Status::internal(format!("stage pack: {}", e)))?;
 
-        info!(repo_id = %repo_id, "receive_pack: pack staged in quarantine");
+            info!(repo_id = %repo_id, "receive_pack: pack staged in quarantine");
+            Some(q)
+        };
 
         // Build ref_updates from ref_commands
         let ref_updates: Vec<RefUpdate> = ref_commands
@@ -895,12 +906,12 @@ impl GitService for GitServiceImpl {
         // promote_quarantine runs.
         let pipeline = Arc::clone(&self.hook_pipeline);
         let repo_path_pipeline = repo_path.clone();
-        let quarantine_path = quarantine.dir.path().to_path_buf();
+        let quarantine_path = quarantine.as_ref().map(|q| q.dir.path().to_path_buf());
         let accepted_indices = match pipeline
             .run(
                 &repo_path_pipeline,
                 &pipeline_updates,
-                Some(quarantine_path.as_path()),
+                quarantine_path.as_deref(),
             )
             .await
         {
@@ -1019,8 +1030,10 @@ impl GitService for GitServiceImpl {
                     Ok(TxnOutcome::RejectedByHook(rejection.reason))
                 }
                 Ok(()) => {
-                    crate::git::pack_server::promote_quarantine(&repo, quarantine)
-                        .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
+                    if let Some(q) = quarantine {
+                        crate::git::pack_server::promote_quarantine(&repo, q)
+                            .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
+                    }
                     txn.commit(None)
                         .map_err(|e| Status::internal(format!("commit ref transaction: {}", e)))?;
                     Ok(TxnOutcome::Committed)

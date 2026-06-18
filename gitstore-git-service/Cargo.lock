@@ -584,6 +584,7 @@ dependencies = [
  "gix-pack",
  "prometheus",
  "prost",
+ "regex",
  "serde",
  "tempfile",
  "tokio",

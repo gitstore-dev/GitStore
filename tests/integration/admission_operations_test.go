@@ -430,8 +430,8 @@ func TestAdmission_BranchDeletion(t *testing.T) {
 			mainName)
 	}
 
-	// The feature product should have been removed (if the branch was admitted).
+	// The feature product must have been removed by the branch deletion admission.
 	if !queryProductAbsent(t, ns, featureName) {
-		t.Logf("feature product %q still present after branch deletion — expected removal if branch was admitted", featureName)
+		t.Errorf("feature product %q still present after branch deletion — branch delete must remove admitted resources", featureName)
 	}
 }
