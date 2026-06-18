@@ -23,6 +23,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 // testRepoID is a fixed UUID used as the repository ID in AdmitResources tests.
@@ -1626,6 +1628,114 @@ func TestDeniedAdmission_BlocksStorage(t *testing.T) {
 	p, getErr := memStore.GetProductByName(ctx, "gitstore", "widget")
 	assert.Error(t, getErr, "denied product must not be stored")
 	assert.Nil(t, p)
+}
+
+// TestAdmitResources_BranchDeleteRecreated_SkipsDeleteAdmission verifies that a
+// zero-OID delete push is treated as stale when the branch has already been
+// recreated before the admission runs (fix for Issue #2 stale-branch-delete).
+func TestAdmitResources_BranchDeleteRecreated_SkipsDeleteAdmission(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40) // branch was recreated at this commit
+	listCalled := false
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			listCalled = true
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeProduct("widget"), nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			// Branch exists at 'b' — it was recreated after the delete.
+			return b, nil
+		},
+	}
+	srv := newCatalogServer(t, store, git)
+
+	// Simulate a branch-delete admission: newCommit is all zeros.
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: a,
+		NewCommitSha: zero,
+		CommitSha:    zero,
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	// Because the ref now points to 'b' (recreated), the delete must be skipped.
+	assert.False(t, listCalled, "ListFiles must not be called for a stale branch-delete admission")
+}
+
+// TestAdmitResources_BranchDeleteRefGone_ProceedsWithDeletion verifies that a
+// zero-OID delete push proceeds normally when the branch no longer exists
+// (the ref was truly deleted and not recreated).
+func TestAdmitResources_BranchDeleteRefGone_ProceedsWithDeletion(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	blob := makeProduct("widget")
+
+	// Seed step: use a simple git reader that resolves the ref correctly.
+	seedGit := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return blob, nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			return a, nil // ref exists at 'a'
+		},
+	}
+	seedSrv := newCatalogServer(t, store, seedGit)
+	_, err := seedSrv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    a,
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+	_, err = store.GetProductByName(context.Background(), "gitstore", "widget")
+	require.NoError(t, err, "widget must exist after first admission")
+
+	// Delete step: ref is gone — zero-OID push with NotFound from ResolveRef must proceed.
+	deleteGit := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, ref string) ([]string, error) {
+			if isZeroRef(ref) {
+				return nil, nil
+			}
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return blob, nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			return "", grpcstatus.Error(codes.NotFound, "ref not found")
+		},
+	}
+	deleteSrv := newCatalogServer(t, store, deleteGit)
+	_, err = deleteSrv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: a,
+		NewCommitSha: zero,
+		CommitSha:    zero,
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+	// The delete admission proceeds; since newCommit is zero-OID and there are no
+	// new files, all resources from the old commit should have been deleted.
+	_, err = store.GetProductByName(context.Background(), "gitstore", "widget")
+	assert.ErrorIs(t, err, datastore.ErrNotFound, "widget must be deleted after branch delete admission")
+}
+
+func isZeroRef(ref string) bool {
+	for _, r := range ref {
+		if r != '0' {
+			return false
+		}
+	}
+	return ref != ""
 }
 
 // TestAdmitResources_OperationSetCorrectly verifies that the second push of the

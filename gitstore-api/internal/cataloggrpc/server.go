@@ -29,6 +29,8 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/google/cel-go/cel"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 // GitReader is the read subset of gitclient.Client used by AdmitResources.
@@ -302,17 +304,37 @@ func (s *Server) AdmitResources(
 		return &catalogv1.AdmitResourcesResponse{}, nil
 	}
 
-	if req.RefName != "" && !isZeroOID(newCommit) {
+	if req.RefName != "" {
 		current, err := s.git.ResolveRef(ctx, req.RepositoryId, req.RefName)
 		if err != nil {
-			s.log.Error("admit_resources: resolve ref failed",
-				zap.String("repository_id", req.RepositoryId),
-				zap.String("ref_name", req.RefName),
-				zap.String("new_commit_sha", newCommit),
-				zap.Error(err))
-			return &catalogv1.AdmitResourcesResponse{}, nil
-		}
-		if current != "" && current != newCommit {
+			if isRefNotFound(err) {
+				if !isZeroOID(newCommit) {
+					// Ref gone but we were not a delete push — skip.
+					s.log.Info("admit_resources: ref no longer exists; stale admission skipped",
+						zap.String("repository_id", req.RepositoryId),
+						zap.String("ref_name", req.RefName),
+						zap.String("new_commit_sha", newCommit))
+					return &catalogv1.AdmitResourcesResponse{}, nil
+				}
+				// Zero-OID delete and ref is truly gone — proceed.
+			} else {
+				s.log.Error("admit_resources: resolve ref failed",
+					zap.String("repository_id", req.RepositoryId),
+					zap.String("ref_name", req.RefName),
+					zap.String("new_commit_sha", newCommit),
+					zap.Error(err))
+				return &catalogv1.AdmitResourcesResponse{}, nil
+			}
+		} else if isZeroOID(newCommit) {
+			// Delete push but the ref still exists (branch was recreated) — skip.
+			if current != "" {
+				s.log.Info("admit_resources: branch delete is stale; ref was recreated — skipping",
+					zap.String("repository_id", req.RepositoryId),
+					zap.String("ref_name", req.RefName),
+					zap.String("current_commit_sha", current))
+				return &catalogv1.AdmitResourcesResponse{}, nil
+			}
+		} else if current != "" && current != newCommit {
 			s.log.Info("admit_resources: stale admission skipped",
 				zap.String("repository_id", req.RepositoryId),
 				zap.String("ref_name", req.RefName),
@@ -443,6 +465,15 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 		}
 	}
 	s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps)
+	// TODO(CategoryTaxonomy controller): when a CategoryTaxonomy is deleted or
+	// its parentRef changes, descendants already stored in the datastore are left
+	// with a stale AncestorPath. Admission only processes the files that changed
+	// in this push; unchanged children are never re-admitted here.
+	// The CategoryTaxonomy controller must reconcile this: on any category
+	// create/update/delete event it should walk all direct and transitive children
+	// (by ParentName pointer) and recompute AncestorPath in topological order.
+	// The ParentResolved=False condition on a child is the observable signal that
+	// its path may be stale and reconciliation is needed.
 }
 
 func (s *Server) admitParsedEntries(
@@ -633,6 +664,12 @@ func detectCycles(parentMap map[string]string) map[string]bool {
 // topoSortCategories delegates to the admission/catalog package implementation.
 func topoSortCategories(parentMap map[string]string, cycleMembers map[string]bool) []string {
 	return admcatalog.TopoSortCategories(parentMap, cycleMembers)
+}
+
+// isRefNotFound returns true when a gRPC error carries a NotFound status code,
+// which is what the git service returns when a ref does not exist.
+func isRefNotFound(err error) bool {
+	return grpcstatus.Code(err) == codes.NotFound
 }
 
 func isZeroOID(sha string) bool {
