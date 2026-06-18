@@ -12,6 +12,7 @@ import (
 	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -1332,3 +1333,130 @@ func newTestDatastore(t *testing.T) datastore.Datastore {
 
 // ensure bytes import is used
 var _ = bytes.NewReader
+
+// ---------------------------------------------------------------------------
+// T021: ExtraValidatingPolicies — injected policies run during AdmitResources
+// ---------------------------------------------------------------------------
+
+// recordingPolicy is a stub ValidatingAdmissionPolicy that records every
+// AdmissionRequest it receives so tests can assert it was called.
+type recordingPolicy struct {
+	calls []admission.AdmissionRequest
+}
+
+func (p *recordingPolicy) Name() string { return "RecordingPolicy" }
+
+func (p *recordingPolicy) Validate(_ context.Context, req admission.AdmissionRequest) admission.AdmissionDecision {
+	p.calls = append(p.calls, req)
+	return admission.DecisionAllow()
+}
+
+// TestExtraValidatingPolicies_CalledForAdmittedResources verifies that an extra
+// policy registered via ServerDeps.ExtraValidatingPolicies is invoked for every
+// resource admitted through AdmitResources.
+func TestExtraValidatingPolicies_CalledForAdmittedResources(t *testing.T) {
+	memStore := newTestDatastore(t)
+	policy := &recordingPolicy{}
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeProduct("widget"), nil
+		},
+	}
+	srv := newCatalogServer(t, memStore, git, func(deps *cataloggrpc.ServerDeps) {
+		deps.ExtraValidatingPolicies = []admission.ValidatingAdmissionPolicy{policy}
+	})
+
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	require.NotEmpty(t, policy.calls, "extra policy must be called at least once")
+	assert.Equal(t, "Product", policy.calls[0].Kind)
+	assert.Equal(t, "widget", policy.calls[0].Name)
+}
+
+// denyingPolicy is a ValidatingAdmissionPolicy that always returns Denied.
+type denyingPolicy struct {
+	calls []admission.AdmissionRequest
+}
+
+func (p *denyingPolicy) Name() string { return "DenyingPolicy" }
+
+func (p *denyingPolicy) Validate(_ context.Context, req admission.AdmissionRequest) admission.AdmissionDecision {
+	p.calls = append(p.calls, req)
+	return admission.DecisionDeny("TestDenied", "")
+}
+
+// TestDeniedAdmission_BlocksStorage verifies that a Denied decision from the
+// admission chain prevents the resource from being written to the datastore.
+func TestDeniedAdmission_BlocksStorage(t *testing.T) {
+	memStore := newTestDatastore(t)
+	policy := &denyingPolicy{}
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeProduct("widget"), nil
+		},
+	}
+	srv := newCatalogServer(t, memStore, git, func(deps *cataloggrpc.ServerDeps) {
+		deps.ExtraValidatingPolicies = []admission.ValidatingAdmissionPolicy{policy}
+	})
+
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	require.NotEmpty(t, policy.calls, "denying policy must be called")
+	ctx := context.Background()
+	p, getErr := memStore.GetProductByName(ctx, "gitstore", "widget")
+	assert.Error(t, getErr, "denied product must not be stored")
+	assert.Nil(t, p)
+}
+
+// TestAdmitResources_OperationSetCorrectly verifies that the second push of the
+// same resource sends OperationUpdate (not OperationCreate) and populates OldObject.
+func TestAdmitResources_OperationSetCorrectly(t *testing.T) {
+	memStore := newTestDatastore(t)
+	policy := &recordingPolicy{}
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeProduct("widget"), nil
+		},
+	}
+	srv := newCatalogServer(t, memStore, git, func(deps *cataloggrpc.ServerDeps) {
+		deps.ExtraValidatingPolicies = []admission.ValidatingAdmissionPolicy{policy}
+	})
+
+	req := &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	}
+
+	_, err := srv.AdmitResources(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, policy.calls, 1)
+	assert.Equal(t, admission.OperationCreate, policy.calls[0].Operation, "first push must be OperationCreate")
+	assert.Nil(t, policy.calls[0].OldObject, "first push must have nil OldObject")
+
+	policy.calls = nil
+	_, err = srv.AdmitResources(context.Background(), req)
+	require.NoError(t, err)
+	require.Len(t, policy.calls, 1)
+	assert.Equal(t, admission.OperationUpdate, policy.calls[0].Operation, "second push must be OperationUpdate")
+	assert.NotNil(t, policy.calls[0].OldObject, "second push must have non-nil OldObject")
+}

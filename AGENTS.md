@@ -9,6 +9,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - Controller manager stack (Go): `golang.org/x/time` (queue rate limiting), `github.com/alitto/pond/v2 v2.7.1` (worker pools), `github.com/cenkalti/backoff/v5 v5.0.3` (retry/backoff), `github.com/prometheus/client_golang v1.23.2` (health metrics), `net/http` stdlib (health/poison API), `go.uber.org/zap`, `github.com/spf13/viper` (025-controller-manager-runtime)
 - Go 1.25 + `go.uber.org/zap`, `github.com/cenkalti/backoff/v5 v5.0.3`, `github.com/prometheus/client_golang v1.23.2`, `github.com/alitto/pond/v2 v2.7.1`, `runtime/debug` (stdlib — for stack traces) (026-reconcile-handler)
 - In-memory only (`sync.RWMutex` maps) — no persistence added in this spec (026-reconcile-handler)
+- Go 1.25 (gitstore-api) + `go.uber.org/zap`, `github.com/google/cel-go/cel`, `github.com/go-playground/validator/v10`, `encoding/json` (027-admission-contracts)
+- None (in-process Go types only; no new datastore tables) (027-admission-contracts)
 
 ## Commands
 
@@ -48,9 +50,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 027-admission-contracts: Added Go 1.25 (gitstore-api) + `go.uber.org/zap`, `github.com/google/cel-go/cel`, `github.com/go-playground/validator/v10`, `encoding/json`
 - 026-reconcile-handler: Added Go 1.25 + `go.uber.org/zap`, `github.com/cenkalti/backoff/v5 v5.0.3`, `github.com/prometheus/client_golang v1.23.2`, `github.com/alitto/pond/v2 v2.7.1`, `runtime/debug` (stdlib — for stack traces)
 - 025-controller-manager-runtime: Added Go 1.25 (`gitstore-controller-manager`) + `golang.org/x/time` (queue rate limiting), `github.com/alitto/pond/v2` (worker pools), `github.com/cenkalti/backoff/v5` (retry/backoff), `github.com/prometheus/client_golang v1.23.2` (health metrics), `net/http` stdlib (health/poison API)
-- 023-collection-integration-tests: Added Go 1.25 (`gitstore-api`, `tests/integration`) + `go-playground/validator/v10 v10.30.3` (validation), `gqlgen v0.17.90` (GraphQL), `go-memdb v1.3.5` (dev backend), `gocqlx/v3 v3.0.4` + `gocql` (ScyllaDB backend)
 
 
 <!-- MANUAL ADDITIONS START -->
