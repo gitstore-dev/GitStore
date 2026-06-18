@@ -238,6 +238,12 @@ mod tests {
             "GITSTORE_ADMISSION_CONTROL__PHASE",
             "GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN",
             "GITSTORE_CATALOG_SERVICE__URI",
+            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED",
+            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__UPDATE__ENABLED",
+            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_RECEIVE__ENABLED",
+            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__PROC_RECEIVE__ENABLED",
+            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_UPDATE__ENABLED",
+            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__REFERENCE_TRANSACTION__ENABLED",
         ];
         for k in &keys {
             env::remove_var(k);
@@ -511,5 +517,78 @@ mod tests {
         assert_eq!(cfg.admission_control.phase, "post-receive");
         assert_eq!(cfg.admission_control.branch_pattern, "refs/heads/main");
         assert_eq!(cfg.catalog_service.uri, "http://localhost:6000");
+    }
+
+    // T002: struct-accessibility check — verifies the HooksConfig API surface used by
+    // the startup log in main.rs compiles and the fields have the expected default values.
+    #[test]
+    fn test_hooks_config_fields_accessible_for_startup_log() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        let cfg = load_config_from(None).expect("load failed");
+        // All six phase toggles must be readable (this is what the startup log iterates).
+        let _ = cfg.hooks.git_receive_pack.pre_receive.enabled;
+        let _ = cfg.hooks.git_receive_pack.update.enabled;
+        let _ = cfg.hooks.git_receive_pack.post_receive.enabled;
+        let _ = cfg.hooks.git_receive_pack.proc_receive.enabled;
+        let _ = cfg.hooks.git_receive_pack.post_update.enabled;
+        let _ = cfg.hooks.git_receive_pack.reference_transaction.enabled;
+        let _ = cfg.admission_control.phase.as_str();
+        // Verify the defaults match the TOML baked-in values.
+        assert!(cfg.hooks.git_receive_pack.pre_receive.enabled);
+        assert!(!cfg.hooks.git_receive_pack.update.enabled);
+        assert!(cfg.hooks.git_receive_pack.post_receive.enabled);
+        assert!(!cfg.hooks.git_receive_pack.proc_receive.enabled);
+        assert!(!cfg.hooks.git_receive_pack.post_update.enabled);
+        assert!(!cfg.hooks.git_receive_pack.reference_transaction.enabled);
+    }
+
+    // T005: env-var round-trip — pre_receive and post_receive toggles.
+    #[test]
+    fn test_hook_toggle_env_vars_pre_receive_and_post_receive_round_trip() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var(
+            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED",
+            "false",
+        );
+        env::set_var(
+            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_RECEIVE__ENABLED",
+            "false",
+        );
+        let cfg = load_config_from(None).expect("load failed");
+        assert!(
+            !cfg.hooks.git_receive_pack.pre_receive.enabled,
+            "pre_receive should be false via env var"
+        );
+        assert!(
+            !cfg.hooks.git_receive_pack.post_receive.enabled,
+            "post_receive should be false via env var"
+        );
+        // Other phases should remain at their defaults.
+        assert!(
+            !cfg.hooks.git_receive_pack.update.enabled,
+            "update default should be false"
+        );
+        clear_env();
+    }
+
+    // T006: env-var round-trip — update toggle (default false → true).
+    #[test]
+    fn test_hook_toggle_env_var_update_enabled_round_trip() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var("GITSTORE_HOOKS__GIT_RECEIVE_PACK__UPDATE__ENABLED", "true");
+        let cfg = load_config_from(None).expect("load failed");
+        assert!(
+            cfg.hooks.git_receive_pack.update.enabled,
+            "update should be true via env var"
+        );
+        // pre_receive default must be unaffected.
+        assert!(
+            cfg.hooks.git_receive_pack.pre_receive.enabled,
+            "pre_receive default should remain true"
+        );
+        clear_env();
     }
 }

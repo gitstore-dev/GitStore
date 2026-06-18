@@ -103,9 +103,54 @@ This provides a human-readable audit trail: branch name + commit SHA without req
 | `GITSTORE_SCHEMA_VALIDATION__PHASE` | `pre-receive` | Hook phase for validation callout |
 | `GITSTORE_SCHEMA_VALIDATION__TIMEOUT_SECS` | `10` | Validation gRPC timeout in seconds |
 | `GITSTORE_ADMISSION_CONTROL__PHASE` | `post-receive` | Hook phase for admission callout |
-| `GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN` | `refs/heads/main` | Refs that trigger catalog storage |
+| `GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN` | `refs/heads/main` | Refs that trigger catalog storage (regex) |
 | `GITSTORE_CATALOG_SERVICE__URI` | `http://localhost:6000` | gitstore-api gRPC endpoint |
 | `GITSTORE_API__GRPC_PORT` | `6000` | Port where gitstore-api listens for gRPC (CatalogService) |
+
+### Hook phase toggles
+
+Each `git-receive-pack` hook phase can be independently enabled or disabled. The env-var naming
+convention uses **double underscores** (`__`) as the level separator:
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED` | `true` | Enable pre-receive schema validation |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__UPDATE__ENABLED` | `false` | Enable update hook |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_RECEIVE__ENABLED` | `true` | Enable post-receive admission |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PROC_RECEIVE__ENABLED` | `false` | Enable proc-receive hook |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_UPDATE__ENABLED` | `false` | Enable post-update hook |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__REFERENCE_TRANSACTION__ENABLED` | `false` | Enable reference-transaction hook |
+
+> **Separator note**: The field name `pre_receive` contains a single underscore. The env-var uses a
+> double underscore only between config-key levels, not within field names. So the correct var is
+> `...__PRE_RECEIVE__ENABLED`, not `...__PRE__RECEIVE__ENABLED`.
+
+### Startup observability
+
+At startup the git service emits a structured `info` log line (`"hook phases"`) that lists the
+enabled/disabled state of every `git_receive_pack` hook phase and the configured
+`admission_phase`. This is the canonical way to confirm that an environment variable override took
+effect without making a push.
+
+Example JSON log (default configuration):
+
+```json
+{
+  "timestamp": "2026-01-01T00:00:00Z",
+  "level": "INFO",
+  "fields": {
+    "pre_receive": true,
+    "update": false,
+    "post_receive": true,
+    "proc_receive": false,
+    "post_update": false,
+    "reference_transaction": false,
+    "schema_validation_phase": "pre-receive",
+    "admission_phase": "post-receive",
+    "message": "hook phases"
+  }
+}
+```
 
 > **Phase conflict**: `GITSTORE_SCHEMA_VALIDATION__PHASE` and `GITSTORE_ADMISSION_CONTROL__PHASE` must not be equal. The service refuses to start if they are the same (FR-019).
 

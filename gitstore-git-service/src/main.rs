@@ -55,6 +55,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         data_dir = %cfg.git.data_dir,
         "Starting GitStore Server"
     );
+    info!(
+        pre_receive              = cfg.hooks.git_receive_pack.pre_receive.enabled,
+        update                   = cfg.hooks.git_receive_pack.update.enabled,
+        post_receive             = cfg.hooks.git_receive_pack.post_receive.enabled,
+        proc_receive             = cfg.hooks.git_receive_pack.proc_receive.enabled,
+        post_update              = cfg.hooks.git_receive_pack.post_update.enabled,
+        reference_transaction    = cfg.hooks.git_receive_pack.reference_transaction.enabled,
+        schema_validation_phase  = %cfg.schema_validation.phase,
+        admission_phase          = %cfg.admission_control.phase,
+        "hook phases"
+    );
 
     // Create data directory if it doesn't exist (no default repo provisioned)
     let data_path = PathBuf::from(&cfg.git.data_dir);
