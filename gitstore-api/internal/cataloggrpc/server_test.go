@@ -1557,6 +1557,43 @@ func TestAdmitResources_StaleAdmissionSkipped(t *testing.T) {
 	assert.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
+// TestAdmitResources_EmptySHAFromResolveRef_AdmissionProceeds verifies that when
+// ResolveRef returns an empty SHA (e.g. an unimplemented backend), the staleness
+// guard is skipped and the push is admitted rather than silently dropped.
+func TestAdmitResources_EmptySHAFromResolveRef_AdmissionProceeds(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, ref string) ([]string, error) {
+			if isZeroRef(ref) {
+				return nil, nil
+			}
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeProduct("widget"), nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			// Backend does not implement ResolveRef — returns empty string without error.
+			return "", nil
+		},
+	}
+	srv := newCatalogServer(t, store, git)
+
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: zero,
+		NewCommitSha: a,
+		CommitSha:    a,
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	_, err = store.GetProductByName(context.Background(), "gitstore", "widget")
+	assert.NoError(t, err, "admission must proceed when ResolveRef returns empty SHA")
+}
+
 // TestExtraValidatingPolicies_CalledForAdmittedResources verifies that an extra
 // policy registered via ServerDeps.ExtraValidatingPolicies is invoked for every
 // resource admitted through AdmitResources.

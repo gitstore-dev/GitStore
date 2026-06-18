@@ -60,10 +60,20 @@ func (c *Client) ListFilesForRepo(ctx context.Context, repositoryID, prefix, ref
 }
 
 // ResolveRefForRepo resolves a ref to the commit SHA currently seen by the git service.
+// Uses Recursive:false so the server returns only the root tree entries — the
+// ref_commit_sha field is populated before the file walk, so this is safe and
+// avoids transferring the full tree over gRPC on every staleness check.
 func (c *Client) ResolveRefForRepo(ctx context.Context, repositoryID, ref string) (string, error) {
-	resp, err := c.listFilesForRepo(ctx, repositoryID, "", ref)
+	resp, err := c.Git.ListFiles(ctx, &gitv1.ListFilesRequest{
+		RepositoryId: repositoryID,
+		Ref:          ref,
+		Recursive:    false,
+	})
 	if err != nil {
 		return "", err
+	}
+	if resp.RefCommitSha == "" {
+		return "", fmt.Errorf("git service returned empty ref_commit_sha for ref %q in repository %q", ref, repositoryID)
 	}
 	return resp.RefCommitSha, nil
 }

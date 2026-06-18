@@ -33,7 +33,6 @@ type parsedEntry struct {
 	body        []byte
 	identity    resourceIdentity
 	contentHash string
-	specHash    string
 }
 
 type resourceAdmissionOperation struct {
@@ -71,23 +70,12 @@ func newParsedEntry(path string, parsed *validate.ParsedResource, body []byte, d
 	if err != nil {
 		return nil, false, err
 	}
-	specHash, err := hashJSON(struct {
-		Spec any    `json:"spec,omitempty"`
-		Body string `json:"body,omitempty"`
-	}{
-		Spec: cmp.Spec,
-		Body: cmp.Body,
-	})
-	if err != nil {
-		return nil, false, err
-	}
 	return &parsedEntry{
 		path:        path,
 		parsed:      parsed,
 		body:        body,
 		identity:    identity,
 		contentHash: contentHash,
-		specHash:    specHash,
 	}, true, nil
 }
 

@@ -327,6 +327,8 @@ func (s *Server) AdmitResources(
 			}
 		} else if isZeroOID(newCommit) {
 			// Delete push but the ref still exists (branch was recreated) — skip.
+			// Only act when current is non-empty: an empty SHA means the git service
+			// does not support ResolveRef and we cannot determine staleness.
 			if current != "" {
 				s.log.Info("admit_resources: branch delete is stale; ref was recreated — skipping",
 					zap.String("repository_id", req.RepositoryId),
@@ -335,6 +337,10 @@ func (s *Server) AdmitResources(
 				return &catalogv1.AdmitResourcesResponse{}, nil
 			}
 		} else if current != "" && current != newCommit {
+			// current == "" means the git service returned no SHA — skip the staleness
+			// check rather than silently admitting. A properly implemented service always
+			// returns a non-empty SHA (see ResolveRefForRepo), so an empty value here
+			// indicates an unimplemented or degraded backend.
 			s.log.Info("admit_resources: stale admission skipped",
 				zap.String("repository_id", req.RepositoryId),
 				zap.String("ref_name", req.RefName),
@@ -1055,27 +1061,29 @@ func (s *Server) admitProductVariant(
 		Inventory: computeResolvedInventory(resource.Spec),
 	}
 
-	if skuOwner, skuErr := s.store.GetProductVariantBySKU(ctx, namespace, resource.Spec.SKU); skuErr == nil && skuOwner != nil && skuOwner.Name != resource.Metadata.Name {
-		s.log.Warn("admit_resources: product_variant SKU conflict; incoming resource skipped",
-			zap.String("operation", string(op)),
-			zap.String("name", resource.Metadata.Name),
-			zap.String("namespace", namespace),
-			zap.String("sku", resource.Spec.SKU),
-			zap.String("conflict_name", skuOwner.Name),
-			zap.String("conflict_uid", skuOwner.UID))
-		return
-	} else if skuErr != nil && !errors.Is(skuErr, datastore.ErrNotFound) {
-		s.log.Error("admit_resources: product_variant SKU lookup failed",
-			zap.String("operation", string(op)),
-			zap.String("name", resource.Metadata.Name),
-			zap.String("namespace", namespace),
-			zap.String("sku", resource.Spec.SKU),
-			zap.Error(skuErr))
-		return
-	}
-
 	if op == admission.OperationCreate || existing == nil {
-		// SKU uniqueness check: another variant in this namespace may already hold the SKU.
+		// SKU uniqueness check: only enforced on create so that an update can correct a
+		// conflicted variant (e.g. change its SKU away from the conflicting value).
+		// On update the resource already owns its identity; a different variant holding
+		// the same SKU is a pre-existing data issue that must remain fixable via push.
+		if skuOwner, skuErr := s.store.GetProductVariantBySKU(ctx, namespace, resource.Spec.SKU); skuErr == nil && skuOwner != nil && skuOwner.Name != resource.Metadata.Name {
+			s.log.Warn("admit_resources: product_variant SKU conflict; incoming resource skipped",
+				zap.String("operation", string(op)),
+				zap.String("name", resource.Metadata.Name),
+				zap.String("namespace", namespace),
+				zap.String("sku", resource.Spec.SKU),
+				zap.String("conflict_name", skuOwner.Name),
+				zap.String("conflict_uid", skuOwner.UID))
+			return
+		} else if skuErr != nil && !errors.Is(skuErr, datastore.ErrNotFound) {
+			s.log.Error("admit_resources: product_variant SKU lookup failed",
+				zap.String("operation", string(op)),
+				zap.String("name", resource.Metadata.Name),
+				zap.String("namespace", namespace),
+				zap.String("sku", resource.Spec.SKU),
+				zap.Error(skuErr))
+			return
+		}
 		statusJSON := variantAdmissionStatus(1, admCtx.Revision, admCtx.Now, admitResult)
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
 		if !ok {
@@ -1276,6 +1284,11 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		// If parent not found: tentative root path stays as `name`.
 	}
 
+	// Record the computed path immediately so that any sibling category later in
+	// this push's topological order sees the correct full path for this node,
+	// regardless of whether the DB write below succeeds.
+	inPushAncestorPaths[name] = ancestorPath
+
 	if op == admission.OperationCreate || existing == nil {
 		statusJSON := categoryAdmissionStatusFull(1, admCtx.Revision, admCtx.Now, parentResolved, inCycle)
 		uid, ok := s.newUID(resource.Kind, name)
@@ -1325,7 +1338,6 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 			existing.SourcePath != sourcePath
 		changedHierarchy := existing.ParentName != parentName || existing.AncestorPath != ancestorPath
 		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedHierarchy {
-			inPushAncestorPaths[name] = ancestorPath
 			return
 		}
 		gen := existing.Generation
@@ -1359,8 +1371,6 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 			zap.String("name", name),
 			zap.String("ancestor_path", ancestorPath))
 	}
-	// Record the computed path so children later in this push see the correct full path.
-	inPushAncestorPaths[name] = ancestorPath
 }
 
 // admissionAcceptedStatus builds the initial status JSON with AdmissionAccepted: True (FR-009).
