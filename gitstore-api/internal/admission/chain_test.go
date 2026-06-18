@@ -230,3 +230,57 @@ func TestChain_ValidatingWebhookDenial_ShortCircuits(t *testing.T) {
 	assert.Equal(t, "webhook rejected", denied.Reason)
 	assert.NotContains(t, order, "validatewebhook:wh-after")
 }
+
+// TestChain_MutatingPolicyConditionsPropagated verifies that conditions returned
+// by mutating policies are preserved in the final Allowed result alongside patches.
+func TestChain_MutatingPolicyConditionsPropagated(t *testing.T) {
+	c := newChain(t)
+	cond := admission.AdmissionCondition{Type: "MutationApplied", Status: true}
+	patch := json.RawMessage(`{"spec":{"title":"default"}}`)
+	c.RegisterMutatingPolicy(&stubMutatingPolicy{
+		name:     "defaulter",
+		decision: admission.Allowed{Conditions: []admission.AdmissionCondition{cond}, Patches: []json.RawMessage{patch}},
+	})
+	d := c.Admit(context.Background(), baseReq())
+	allowed, ok := d.(admission.Allowed)
+	require.True(t, ok)
+	require.Len(t, allowed.Patches, 1, "patch must be preserved")
+	require.Len(t, allowed.Conditions, 1, "condition from mutating phase must be propagated")
+	assert.Equal(t, "MutationApplied", allowed.Conditions[0].Type)
+	assert.True(t, allowed.Conditions[0].Status)
+}
+
+// TestChain_MutatingWebhookConditionsPropagated verifies that conditions returned
+// by mutating webhooks are preserved in the final Allowed result.
+func TestChain_MutatingWebhookConditionsPropagated(t *testing.T) {
+	c := newChain(t)
+	cond := admission.AdmissionCondition{Type: "WebhookMutated", Status: true}
+	c.RegisterMutatingWebhook(&stubMutatingWebhook{
+		name:     "wh",
+		decision: admission.Allowed{Conditions: []admission.AdmissionCondition{cond}},
+	})
+	d := c.Admit(context.Background(), baseReq())
+	allowed, ok := d.(admission.Allowed)
+	require.True(t, ok)
+	require.Len(t, allowed.Conditions, 1)
+	assert.Equal(t, "WebhookMutated", allowed.Conditions[0].Type)
+}
+
+// TestChain_MutatingConditionsMergedWithValidatingConditions verifies last-writer-wins
+// when a mutating and a validating phase both set a condition of the same Type.
+func TestChain_MutatingConditionsMergedWithValidatingConditions(t *testing.T) {
+	c := newChain(t)
+	c.RegisterMutatingPolicy(&stubMutatingPolicy{
+		name:     "mutator",
+		decision: admission.Allowed{Conditions: []admission.AdmissionCondition{{Type: "SharedCheck", Status: false}}},
+	})
+	c.RegisterValidatingPolicy(&stubValidatingPolicy{
+		name:     "validator",
+		decision: admission.DecisionAllow(admission.AdmissionCondition{Type: "SharedCheck", Status: true}),
+	})
+	d := c.Admit(context.Background(), baseReq())
+	allowed, ok := d.(admission.Allowed)
+	require.True(t, ok)
+	require.Len(t, allowed.Conditions, 1, "duplicate Type must be merged (last-writer-wins)")
+	assert.True(t, allowed.Conditions[0].Status, "validating phase must override mutating phase value")
+}

@@ -378,13 +378,18 @@ func (s *Server) AdmitResources(
 		if ns == "" {
 			ns = admCtx.Namespace
 		}
+		siblingOp := admission.OperationCreate
+		if existing, err := s.store.GetCategoryTaxonomyByName(ctx, ns, cat.Metadata.Name); err == nil && existing != nil {
+			siblingOp = admission.OperationUpdate
+		}
 		catPushSet = append(catPushSet, admission.AdmissionRequest{
 			Object:     cat,
 			Kind:       cat.Kind,
 			Name:       cat.Metadata.Name,
 			Namespace:  ns,
-			Operation:  admission.OperationCreate,
+			Operation:  siblingOp,
 			Trigger:    admission.TriggerGitPush,
+			Now:        admCtx.Now,
 			GitContext: gitCtx,
 		})
 	}
@@ -457,6 +462,7 @@ func (s *Server) admitProduct(
 		Namespace: namespace,
 		Operation: op,
 		Trigger:   admission.TriggerGitPush,
+		Now:       admCtx.Now,
 		GitContext: &admission.GitAdmissionContext{
 			RepositoryID: admCtx.RepositoryID,
 			CommitSHA:    admCtx.CommitSHA,
@@ -554,6 +560,7 @@ func (s *Server) admitCollection(
 		Namespace: namespace,
 		Operation: op,
 		Trigger:   admission.TriggerGitPush,
+		Now:       admCtx.Now,
 		GitContext: &admission.GitAdmissionContext{
 			RepositoryID: admCtx.RepositoryID,
 			CommitSHA:    admCtx.CommitSHA,
@@ -662,6 +669,7 @@ func (s *Server) admitProductVariant(
 		Namespace: namespace,
 		Operation: op,
 		Trigger:   admission.TriggerGitPush,
+		Now:       admCtx.Now,
 		GitContext: &admission.GitAdmissionContext{
 			RepositoryID: admCtx.RepositoryID,
 			CommitSHA:    admCtx.CommitSHA,
@@ -831,6 +839,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		Namespace: namespace,
 		Operation: op,
 		Trigger:   admission.TriggerGitPush,
+		Now:       admCtx.Now,
 		GitContext: &admission.GitAdmissionContext{
 			RepositoryID: admCtx.RepositoryID,
 			CommitSHA:    admCtx.CommitSHA,

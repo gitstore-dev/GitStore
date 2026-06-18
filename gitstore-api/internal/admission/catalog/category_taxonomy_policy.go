@@ -63,8 +63,11 @@ func (p *CategoryTaxonomyValidatingPolicy) Validate(ctx context.Context, req adm
 	if resource.Spec.ParentRef != nil && resource.Spec.ParentRef.Name != "" {
 		parentName := resource.Spec.ParentRef.Name
 		parentResolved = false
-		// Check in-push set first.
-		if _, inPush := pushParentMap[parentName]; inPush {
+		// A self-loop (parentRef == own name) is always unresolvable.
+		if parentName == name {
+			// parentResolved stays false; inCycle already captures the self-loop
+		} else if _, inPush := pushParentMap[parentName]; inPush {
+			// Check in-push set first.
 			parentResolved = true
 		} else if p.store != nil {
 			// Fall back to datastore lookup.
@@ -150,7 +153,9 @@ func DetectCycles(parentMap map[string]string) map[string]bool {
 }
 
 // TopoSortCategories returns category names from parentMap in topological order
-// (roots first, leaves last). Nodes in a cycle are appended at the end.
+// (parents before children). Cycle members are placed immediately before any
+// non-cycle node that references them; cycle members with no non-cycle dependents
+// are appended at the end.
 func TopoSortCategories(parentMap map[string]string, cycleMembers map[string]bool) []string {
 	visited := make(map[string]bool, len(parentMap))
 	order := make([]string, 0, len(parentMap))
@@ -163,6 +168,12 @@ func TopoSortCategories(parentMap map[string]string, cycleMembers map[string]boo
 		parent := parentMap[name]
 		if parent != "" {
 			if _, inPush := parentMap[parent]; inPush {
+				if cycleMembers[parent] && !visited[parent] {
+					// Cycle-member parent: record it before this child so
+					// inPushAncestorPaths is populated when this node is processed.
+					visited[parent] = true
+					order = append(order, parent)
+				}
 				visit(parent)
 			}
 		}
@@ -171,8 +182,9 @@ func TopoSortCategories(parentMap map[string]string, cycleMembers map[string]boo
 	for name := range parentMap {
 		visit(name)
 	}
+	// Append any cycle members not yet added as a parent of a non-cycle node.
 	for name := range parentMap {
-		if cycleMembers[name] {
+		if cycleMembers[name] && !visited[name] {
 			order = append(order, name)
 		}
 	}

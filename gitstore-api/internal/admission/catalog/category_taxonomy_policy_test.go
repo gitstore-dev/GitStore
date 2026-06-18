@@ -62,6 +62,36 @@ func TestTopoSortCategories_CycleMembersAtEnd(t *testing.T) {
 	assert.ElementsMatch(t, []string{"a", "b"}, order[1:])
 }
 
+// TestTopoSortCategories_CycleAdjacentNodeAfterCycleMemberParent ensures a non-cycle
+// node whose only in-push parent is a cycle member is ordered AFTER that cycle member.
+// Regression for the bug where visit() skipped cycle members and appended dangling first.
+func TestTopoSortCategories_CycleAdjacentNodeAfterCycleMemberParent(t *testing.T) {
+	// cycleA→cycleB→cycleA form a cycle; dangling→cycleA is a non-cycle node
+	pm := map[string]string{
+		"cycleA":   "cycleB",
+		"cycleB":   "cycleA",
+		"dangling": "cycleA",
+	}
+	cycles := admcatalog.DetectCycles(pm)
+	assert.True(t, cycles["cycleA"], "cycleA must be in cycle")
+	assert.True(t, cycles["cycleB"], "cycleB must be in cycle")
+	assert.False(t, cycles["dangling"], "dangling must not be in cycle")
+
+	order := admcatalog.TopoSortCategories(pm, cycles)
+	require.Len(t, order, 3)
+
+	indexOf := func(name string) int {
+		for i, n := range order {
+			if n == name {
+				return i
+			}
+		}
+		return -1
+	}
+	assert.Less(t, indexOf("cycleA"), indexOf("dangling"),
+		"cycle-member parent cycleA must appear before its child dangling; got order %v", order)
+}
+
 // --- CategoryTaxonomyValidatingPolicy.Validate ---
 
 func TestCategoryTaxonomyValidatingPolicy_Name(t *testing.T) {
@@ -182,6 +212,31 @@ func TestCategoryTaxonomyValidatingPolicy_CycleMember_AcyclicFalse(t *testing.T)
 	require.True(t, ok, "cycle members are admitted with Acyclic=false, not hard-denied")
 	conds := condMap(allowed.Conditions)
 	assert.False(t, conds["Acyclic"], "cycle member must have Acyclic=false")
+}
+
+// TestCategoryTaxonomyValidatingPolicy_SelfLoop_ParentResolvedFalse is a regression
+// test for the bug where a category whose parentRef.name == its own name produced the
+// incoherent state Acyclic=False AND ParentResolved=True.
+func TestCategoryTaxonomyValidatingPolicy_SelfLoop_ParentResolvedFalse(t *testing.T) {
+	p := admcatalog.NewCategoryTaxonomyValidatingPolicy(nil, zap.NewNop())
+	cat := &catalog.CategoryTaxonomyResource{
+		Kind:     "CategoryTaxonomy",
+		Metadata: catalog.ObjectMeta{Name: "self", Namespace: "ns"},
+		Spec:     catalog.CategoryTaxonomySpec{ParentRef: &catalog.ObjectReference{Name: "self"}},
+	}
+	req := admission.AdmissionRequest{
+		Kind:      "CategoryTaxonomy",
+		Name:      "self",
+		Namespace: "ns",
+		Object:    cat,
+		Operation: admission.OperationCreate,
+	}
+	d := p.Validate(context.Background(), req)
+	allowed, ok := d.(admission.Allowed)
+	require.True(t, ok)
+	conds := condMap(allowed.Conditions)
+	assert.False(t, conds["Acyclic"], "self-loop must be flagged as cyclic")
+	assert.False(t, conds["ParentResolved"], "self-loop parent must not be considered resolved")
 }
 
 // condMap extracts a type→status map from conditions for easy assertions.

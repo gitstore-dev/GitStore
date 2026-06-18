@@ -57,7 +57,7 @@ func (c *Chain) RegisterValidatingWebhook(w ValidatingAdmissionWebhook) {
 // Admit runs the full chain against req.
 // Returns Allowed (with accumulated conditions from all validating phases) or
 // the first Denied encountered.
-func (c *Chain) Admit(ctx context.Context, req AdmissionRequest) (result AdmissionDecision) {
+func (c *Chain) Admit(ctx context.Context, req AdmissionRequest) AdmissionDecision {
 	var accPatches []json.RawMessage
 	var accConditions []AdmissionCondition
 
@@ -78,6 +78,7 @@ func (c *Chain) Admit(ctx context.Context, req AdmissionRequest) (result Admissi
 			return v
 		case Allowed:
 			accPatches = append(accPatches, v.Patches...)
+			accConditions = mergeConditions(accConditions, v.Conditions)
 		}
 	}
 
@@ -98,6 +99,7 @@ func (c *Chain) Admit(ctx context.Context, req AdmissionRequest) (result Admissi
 			return v
 		case Allowed:
 			accPatches = append(accPatches, v.Patches...)
+			accConditions = mergeConditions(accConditions, v.Conditions)
 		}
 	}
 

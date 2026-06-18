@@ -53,12 +53,23 @@ func TestValidateSelectedOptions_EmptyValuesListAcceptsAny(t *testing.T) {
 	assert.Empty(t, msg)
 }
 
-func TestValidateSelectedOptions_UnparseableParentSpec_Skips(t *testing.T) {
+// TestValidateSelectedOptions_UnparseableParentSpec_Rejects is a regression test
+// for the bug where a corrupt/unparseable parent spec silently returned (true, ""),
+// allowing variants with incompatible options to be admitted.
+func TestValidateSelectedOptions_UnparseableParentSpec_Rejects(t *testing.T) {
 	parentSpec := []byte(`not valid json`)
 	selected := []catalog.SelectedOptionDefinition{{Name: "size", Value: "M"}}
 	ok, msg := admcatalog.ValidateSelectedOptions(selected, parentSpec)
-	assert.True(t, ok, "unparseable parent spec must not false-reject")
-	assert.Empty(t, msg)
+	assert.False(t, ok, "corrupt parent spec must not silently accept the variant")
+	assert.Contains(t, msg, "unreadable")
+}
+
+// TestValidateSelectedOptions_NilParentSpec_Rejects verifies nil spec is also rejected.
+func TestValidateSelectedOptions_NilParentSpec_Rejects(t *testing.T) {
+	selected := []catalog.SelectedOptionDefinition{{Name: "size", Value: "M"}}
+	ok, msg := admcatalog.ValidateSelectedOptions(selected, nil)
+	assert.False(t, ok)
+	assert.Contains(t, msg, "unreadable")
 }
 
 // --- ValidateCELExpressions ---

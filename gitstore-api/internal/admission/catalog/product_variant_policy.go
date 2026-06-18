@@ -123,7 +123,8 @@ func (p *ProductVariantValidatingPolicy) Validate(ctx context.Context, req admis
 // selected value is one of them.
 // parentSpec is the raw JSON of the parent product's spec field from the datastore.
 // Returns (true, "") on success, or (false, descriptive message) on first mismatch.
-// If parentSpec cannot be unmarshalled, returns (true, "") — skip rather than false-reject.
+// If parentSpec is nil or cannot be unmarshalled, returns (false, reason) to avoid
+// silently accepting variants against a corrupt or missing product spec.
 func ValidateSelectedOptions(selected []catalog.SelectedOptionDefinition, parentSpec []byte) (ok bool, reason string) {
 	var spec struct {
 		Options []struct {
@@ -132,7 +133,7 @@ func ValidateSelectedOptions(selected []catalog.SelectedOptionDefinition, parent
 		} `json:"options"`
 	}
 	if err := json.Unmarshal(parentSpec, &spec); err != nil {
-		return true, ""
+		return false, "unable to validate options: parent product spec is unreadable"
 	}
 	declared := make(map[string]map[string]struct{}, len(spec.Options))
 	for _, o := range spec.Options {
