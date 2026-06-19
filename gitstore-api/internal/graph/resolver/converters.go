@@ -27,21 +27,15 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 		dn := ns.DisplayName
 		displayName = &dn
 	}
-	var parentEnterpriseID *string
-	if ns.ParentEnterpriseID != nil {
-		encoded := mustEncodeNodeID(nodeKindNamespace, *ns.ParentEnterpriseID)
-		parentEnterpriseID = &encoded
-	}
 	return &model.Namespace{
-		ID:                 mustEncodeNodeID(nodeKindNamespace, ns.ID),
-		Identifier:         ns.Identifier,
-		DisplayName:        displayName,
-		Tier:               datastoreNamespaceTierToModel(ns.Tier),
-		ParentEnterpriseID: parentEnterpriseID,
-		CreatedAt:          ns.CreatedAt,
-		CreatedBy:          ns.CreatedBy,
-		UpdatedAt:          ns.UpdatedAt,
-		UpdatedBy:          ns.UpdatedBy,
+		ID:          mustEncodeNodeID(nodeKindNamespace, ns.ID),
+		Identifier:  ns.Identifier,
+		DisplayName: displayName,
+		Tier:        datastoreNamespaceTierToModel(ns.Tier),
+		CreatedAt:   ns.CreatedAt,
+		CreatedBy:   ns.CreatedBy,
+		UpdatedAt:   ns.UpdatedAt,
+		UpdatedBy:   ns.UpdatedBy,
 	}
 }
 
@@ -615,10 +609,8 @@ func DatastoreRepositoryToGraphQL(r *datastore.Repository) *model.Repository {
 
 func datastoreNamespaceTierToModel(t datastore.NamespaceTier) model.NamespaceTier {
 	switch t {
-	case datastore.NamespaceTierOrganisation:
-		return model.NamespaceTierOrganisation
-	case datastore.NamespaceTierEnterprise:
-		return model.NamespaceTierEnterprise
+	case datastore.NamespaceTierOrganization:
+		return model.NamespaceTierOrganization
 	default:
 		return model.NamespaceTierUser
 	}

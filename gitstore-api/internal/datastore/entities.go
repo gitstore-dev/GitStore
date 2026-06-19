@@ -13,21 +13,19 @@ type NamespaceTier string
 
 const (
 	NamespaceTierUser         NamespaceTier = "user"
-	NamespaceTierOrganisation NamespaceTier = "organisation"
-	NamespaceTierEnterprise   NamespaceTier = "enterprise"
+	NamespaceTierOrganization NamespaceTier = "organisation"
 )
 
 // Namespace is the primary isolation boundary for repositories.
 type Namespace struct {
-	ID                 string
-	Identifier         string
-	DisplayName        string
-	Tier               NamespaceTier
-	ParentEnterpriseID *string
-	CreatedAt          time.Time
-	CreatedBy          string
-	UpdatedAt          time.Time
-	UpdatedBy          string
+	ID          string
+	Identifier  string
+	DisplayName string
+	Tier        NamespaceTier
+	CreatedAt   time.Time
+	CreatedBy   string
+	UpdatedAt   time.Time
+	UpdatedBy   string
 }
 
 // Product is the fully hydrated catalogue product record stored in the
