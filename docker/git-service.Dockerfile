@@ -59,7 +59,7 @@ RUN --mount=type=cache,id=cargo-registry-$TARGETARCH,target=/usr/local/cargo/reg
     find src -type f -name '*.rs' -exec touch {} + && \
     touch build.rs && \
     find /build/target -name 'build' -type d \
-      -path '*/gitstore-server-*/build' -exec rm -rf {} + 2>/dev/null || true && \
+      -path '*/git-service-*/build' -exec rm -rf {} + 2>/dev/null || true && \
     cargo build --release && \
     cp /build/target/release/git-service /build/git-service && \
     strip /build/git-service
