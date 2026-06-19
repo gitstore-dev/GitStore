@@ -164,7 +164,6 @@ query GetNamespace {
     identifier
     displayName
     tier
-    parentEnterpriseId
     createdAt
     createdBy
     updatedAt
@@ -577,7 +576,7 @@ See [Authentication](#authentication).
 
 ### createNamespace
 
-Creates a namespace. `ENTERPRISE` requires an admin token.
+Creates a namespace.
 
 ```graphql
 mutation CreateNamespace {
@@ -606,8 +605,7 @@ Input fields:
 |---|---|---|
 | `identifier` | yes | Globally unique DNS-label namespace identifier |
 | `displayName` | no | Human-friendly name |
-| `tier` | yes | `USER`, `ORGANISATION`, or `ENTERPRISE` |
-| `parentEnterpriseIdentifier` | no | Required only when linking an organisation to an enterprise |
+| `tier` | yes | `USER` or `ORGANIZATION` |
 | `clientMutationId` | no | Relay request tracking |
 
 ### deleteNamespace
@@ -743,7 +741,6 @@ type Namespace implements Node {
   identifier: String!
   displayName: String
   tier: NamespaceTier!
-  parentEnterpriseId: ID
   createdAt: DateTime!
   createdBy: String!
   updatedAt: DateTime!

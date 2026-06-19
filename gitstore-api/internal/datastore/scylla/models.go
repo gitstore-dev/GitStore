@@ -210,7 +210,6 @@ var (
 			"identifier",
 			"display_name",
 			"tier",
-			"parent_enterprise_id",
 			"created_by",
 			"updated_at",
 			"updated_by",

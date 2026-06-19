@@ -298,15 +298,14 @@ type ComplexityRoot struct {
 	}
 
 	Namespace struct {
-		CreatedAt          func(childComplexity int) int
-		CreatedBy          func(childComplexity int) int
-		DisplayName        func(childComplexity int) int
-		ID                 func(childComplexity int) int
-		Identifier         func(childComplexity int) int
-		ParentEnterpriseID func(childComplexity int) int
-		Tier               func(childComplexity int) int
-		UpdatedAt          func(childComplexity int) int
-		UpdatedBy          func(childComplexity int) int
+		CreatedAt   func(childComplexity int) int
+		CreatedBy   func(childComplexity int) int
+		DisplayName func(childComplexity int) int
+		ID          func(childComplexity int) int
+		Identifier  func(childComplexity int) int
+		Tier        func(childComplexity int) int
+		UpdatedAt   func(childComplexity int) int
+		UpdatedBy   func(childComplexity int) int
 	}
 
 	NamespaceConnection struct {
@@ -1846,13 +1845,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Namespace.Identifier(childComplexity), true
-
-	case "Namespace.parentEnterpriseId":
-		if e.ComplexityRoot.Namespace.ParentEnterpriseID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Namespace.ParentEnterpriseID(childComplexity), true
 
 	case "Namespace.tier":
 		if e.ComplexityRoot.Namespace.Tier == nil {
@@ -4376,23 +4368,16 @@ enum NamespaceTier {
   USER
 
   """
-  Organisation namespace: owned by a team or company, directly owns repositories.
-  May declare a parent enterprise at creation time.
+  Organization namespace: owned by a team or company, directly owns repositories.
   Any authenticated user may create one.
   """
-  ORGANISATION
-
-  """
-  Enterprise namespace: organises organisations, does NOT own repositories directly.
-  Only callers with an elevated platform role (isAdmin) may create one.
-  """
-  ENTERPRISE
+  ORGANIZATION
 }
 
 """
 A namespace is the primary isolation boundary for repositories in GitStore.
 Namespaces are globally unique across all tiers — the same identifier cannot
-exist as both a user-space and an organisation namespace.
+exist as both a user-space and an organization namespace.
 """
 type Namespace implements Node {
   """
@@ -4416,13 +4401,6 @@ type Namespace implements Node {
   The tier of this namespace.
   """
   tier: NamespaceTier!
-
-  """
-  For ORGANISATION tier namespaces: the ID of the parent enterprise namespace,
-  if one was declared at creation time.
-  Null for USER and ENTERPRISE tier namespaces.
-  """
-  parentEnterpriseId: ID
 
   """
   Timestamp when this namespace was created.
@@ -4512,17 +4490,11 @@ input CreateNamespaceInput {
 
   """
   The tier of the namespace being created.
-  USER and ORGANISATION tiers may be created by any authenticated user.
-  ENTERPRISE tier requires isAdmin == true in the caller's JWT.
+  USER and ORGANIZATION tiers may be created by any authenticated user.
+  Enterprise-level grouping, if needed in future, will be modeled outside
+  the namespace type.
   """
   tier: NamespaceTier!
-
-  """
-  For ORGANISATION tier only: the identifier of the parent enterprise namespace.
-  The referenced namespace must exist and have tier ENTERPRISE.
-  Omit for USER and ENTERPRISE tier namespaces.
-  """
-  parentEnterpriseIdentifier: String
 }
 
 """
@@ -4592,7 +4564,7 @@ extend type Query {
 extend type Mutation {
   """
   Create a new namespace.
-  Requires authentication. ENTERPRISE tier requires isAdmin.
+  Requires authentication.
   """
   createNamespace(input: CreateNamespaceInput!): CreateNamespacePayload!
 
@@ -6181,8 +6153,6 @@ func (ec *executionContext) childFields_Namespace(ctx context.Context, field gra
 		return ec.fieldContext_Namespace_displayName(ctx, field)
 	case "tier":
 		return ec.fieldContext_Namespace_tier(ctx, field)
-	case "parentEnterpriseId":
-		return ec.fieldContext_Namespace_parentEnterpriseId(ctx, field)
 	case "createdAt":
 		return ec.fieldContext_Namespace_createdAt(ctx, field)
 	case "createdBy":

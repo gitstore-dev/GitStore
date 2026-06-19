@@ -504,22 +504,23 @@ graph TD
 
 Namespaces are the primary isolation boundary for repositories in GitStore. They are managed exclusively through the GraphQL API in `gitstore-api`; `gitstore-git-service` is unchanged (FR-011).
 
-### Three Tiers
+### Two Tiers
 
-| Tier           | Who can create              | Owns repositories | Can have parent enterprise |
-|----------------|-----------------------------|-------------------|----------------------------|
-| `USER`         | Any authenticated caller    | Yes               | No                         |
-| `ORGANISATION` | Any authenticated caller    | Yes               | Optional                   |
-| `ENTERPRISE`   | Callers with `isAdmin` only | No                | No                         |
+| Tier           | Who can create           | Owns repositories |
+|----------------|--------------------------|-------------------|
+| `USER`         | Any authenticated caller | Yes               |
+| `ORGANIZATION` | Any authenticated caller | Yes               |
+
+Enterprise-level grouping, if needed in future, will be modeled as a separate top-level resource outside the namespace type (consistent with the GitHub model at `/enterprises/{name}`).
 
 ### Global Identifier Uniqueness
 
-Namespace identifiers are globally unique across all tiers. The same identifier cannot exist as both a user-space and an organisation namespace. Identifiers follow DNS label rules: lowercase alphanumeric + hyphens, 1–63 characters, no leading or trailing hyphen.
+Namespace identifiers are globally unique across all tiers. The same identifier cannot exist as both a user-space and an organization namespace. Identifiers follow DNS label rules: lowercase alphanumeric + hyphens, 1–63 characters, no leading or trailing hyphen.
 
 ### Authorization Model
 
 - Callers obtain JWTs with the GraphQL `login` mutation and pass them as `Authorization: Bearer <token>` on protected mutations.
-- **`isAdmin`** (JWT claim) is the elevated platform role. Callers with `isAdmin == true` may create enterprise namespaces and delete any namespace.
+- **`isAdmin`** (JWT claim) is the elevated platform role. Callers with `isAdmin == true` may delete any namespace.
 - **Ownership** for deletion is checked at query time via `CreatedBy == callerUsername || isAdmin`. No mutable ownership state is embedded in the JWT.
 
 ### API Surface
@@ -549,7 +550,7 @@ query {
 # Get namespace by identifier
 query {
   namespace(by: {identifier: "acme-corp"}) {
-    id identifier displayName tier parentEnterpriseId
+    id identifier displayName tier
     createdAt createdBy updatedAt updatedBy
   }
 }
@@ -557,7 +558,7 @@ query {
 # Get namespace by opaque global Node ID
 query {
   namespace(by: {id: "Z2lkOi8vR2l0U3RvcmUvTmFtZXNwYWNlL25hbWVzcGFjZS11dWlk"}) {
-    id identifier displayName tier parentEnterpriseId
+    id identifier displayName tier
     createdAt createdBy updatedAt updatedBy
   }
 }

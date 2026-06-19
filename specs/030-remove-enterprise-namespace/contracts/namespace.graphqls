@@ -1,5 +1,12 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
-# Copyright (c) 2026 GitStore contributors
+# Contract: namespace.graphqls — after removal of ENTERPRISE tier
+#
+# This file shows the target state of shared/schemas/namespace.graphqls.
+# Diff from current:
+#   - ENTERPRISE removed from NamespaceTier enum
+#   - ORGANISATION renamed to ORGANIZATION (American spelling)
+#   - parentEnterpriseId field removed from Namespace type
+#   - parentEnterpriseIdentifier field removed from CreateNamespaceInput
+#   - Mutation doc string updated (no longer mentions ENTERPRISE tier)
 
 """
 The tier of a namespace, which determines ownership and repository capabilities.
@@ -21,7 +28,7 @@ enum NamespaceTier {
 """
 A namespace is the primary isolation boundary for repositories in GitStore.
 Namespaces are globally unique across all tiers — the same identifier cannot
-exist as both a user-space and an organization namespace.
+exist as both a user-space and an organisation namespace.
 """
 type Namespace implements Node {
   """
@@ -135,8 +142,6 @@ input CreateNamespaceInput {
   """
   The tier of the namespace being created.
   USER and ORGANIZATION tiers may be created by any authenticated user.
-  Enterprise-level grouping, if needed in future, will be modeled outside
-  the namespace type.
   """
   tier: NamespaceTier!
 }
@@ -209,6 +214,8 @@ extend type Mutation {
   """
   Create a new namespace.
   Requires authentication.
+  Enterprise-level grouping, if needed in future, belongs outside the namespace
+  type model and will not be represented as a NamespaceTier value.
   """
   createNamespace(input: CreateNamespaceInput!): CreateNamespacePayload!
 

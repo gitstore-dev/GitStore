@@ -336,13 +336,10 @@ type CreateNamespaceInput struct {
 	// Optional human-friendly display name.
 	DisplayName *string `json:"displayName,omitempty"`
 	// The tier of the namespace being created.
-	// USER and ORGANISATION tiers may be created by any authenticated user.
-	// ENTERPRISE tier requires isAdmin == true in the caller's JWT.
+	// USER and ORGANIZATION tiers may be created by any authenticated user.
+	// Enterprise-level grouping, if needed in future, will be modeled outside
+	// the namespace type.
 	Tier NamespaceTier `json:"tier"`
-	// For ORGANISATION tier only: the identifier of the parent enterprise namespace.
-	// The referenced namespace must exist and have tier ENTERPRISE.
-	// Omit for USER and ENTERPRISE tier namespaces.
-	ParentEnterpriseIdentifier *string `json:"parentEnterpriseIdentifier,omitempty"`
 }
 
 // Payload returned after successfully creating a namespace.
@@ -514,7 +511,7 @@ type Mutation struct {
 
 // A namespace is the primary isolation boundary for repositories in GitStore.
 // Namespaces are globally unique across all tiers — the same identifier cannot
-// exist as both a user-space and an organisation namespace.
+// exist as both a user-space and an organization namespace.
 type Namespace struct {
 	// Globally unique system-generated ID (UUID).
 	ID string `json:"id"`
@@ -526,10 +523,6 @@ type Namespace struct {
 	DisplayName *string `json:"displayName,omitempty"`
 	// The tier of this namespace.
 	Tier NamespaceTier `json:"tier"`
-	// For ORGANISATION tier namespaces: the ID of the parent enterprise namespace,
-	// if one was declared at creation time.
-	// Null for USER and ENTERPRISE tier namespaces.
-	ParentEnterpriseID *string `json:"parentEnterpriseId,omitempty"`
 	// Timestamp when this namespace was created.
 	CreatedAt time.Time `json:"createdAt"`
 	// Username of the caller who created this namespace.
@@ -1435,24 +1428,19 @@ const (
 	// User-space namespace: owned by an individual, directly owns repositories.
 	// Any authenticated user may create one.
 	NamespaceTierUser NamespaceTier = "USER"
-	// Organisation namespace: owned by a team or company, directly owns repositories.
-	// May declare a parent enterprise at creation time.
+	// Organization namespace: owned by a team or company, directly owns repositories.
 	// Any authenticated user may create one.
-	NamespaceTierOrganisation NamespaceTier = "ORGANISATION"
-	// Enterprise namespace: organises organisations, does NOT own repositories directly.
-	// Only callers with an elevated platform role (isAdmin) may create one.
-	NamespaceTierEnterprise NamespaceTier = "ENTERPRISE"
+	NamespaceTierOrganization NamespaceTier = "ORGANIZATION"
 )
 
 var AllNamespaceTier = []NamespaceTier{
 	NamespaceTierUser,
-	NamespaceTierOrganisation,
-	NamespaceTierEnterprise,
+	NamespaceTierOrganization,
 }
 
 func (e NamespaceTier) IsValid() bool {
 	switch e {
-	case NamespaceTierUser, NamespaceTierOrganisation, NamespaceTierEnterprise:
+	case NamespaceTierUser, NamespaceTierOrganization:
 		return true
 	}
 	return false
