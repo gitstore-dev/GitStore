@@ -210,16 +210,15 @@ type productVariantProductRefRow struct {
 }
 
 type namespaceRow struct {
-	Bucket             string     `db:"bucket"`
-	CreatedAt          time.Time  `db:"created_at"`
-	ID                 gocql.UUID `db:"id"`
-	Identifier         string     `db:"identifier"`
-	DisplayName        string     `db:"display_name"`
-	Tier               string     `db:"tier"`
-	ParentEnterpriseID *string    `db:"parent_enterprise_id"`
-	CreatedBy          string     `db:"created_by"`
-	UpdatedAt          time.Time  `db:"updated_at"`
-	UpdatedBy          string     `db:"updated_by"`
+	Bucket      string     `db:"bucket"`
+	CreatedAt   time.Time  `db:"created_at"`
+	ID          gocql.UUID `db:"id"`
+	Identifier  string     `db:"identifier"`
+	DisplayName string     `db:"display_name"`
+	Tier        string     `db:"tier"`
+	CreatedBy   string     `db:"created_by"`
+	UpdatedAt   time.Time  `db:"updated_at"`
+	UpdatedBy   string     `db:"updated_by"`
 }
 
 // New opens a ScyllaDB connection, runs pending migrations, and returns a Datastore.
@@ -1327,29 +1326,27 @@ func mustParseUUID(s string) gocql.UUID {
 
 func toNamespaceRow(ns *datastore.Namespace) *namespaceRow {
 	return &namespaceRow{
-		Bucket:             BucketAll,
-		CreatedAt:          ns.CreatedAt,
-		ID:                 mustParseUUID(ns.ID),
-		Identifier:         ns.Identifier,
-		DisplayName:        ns.DisplayName,
-		Tier:               string(ns.Tier),
-		ParentEnterpriseID: ns.ParentEnterpriseID,
-		CreatedBy:          ns.CreatedBy,
-		UpdatedAt:          ns.UpdatedAt,
-		UpdatedBy:          ns.UpdatedBy,
+		Bucket:      BucketAll,
+		CreatedAt:   ns.CreatedAt,
+		ID:          mustParseUUID(ns.ID),
+		Identifier:  ns.Identifier,
+		DisplayName: ns.DisplayName,
+		Tier:        string(ns.Tier),
+		CreatedBy:   ns.CreatedBy,
+		UpdatedAt:   ns.UpdatedAt,
+		UpdatedBy:   ns.UpdatedBy,
 	}
 }
 
 func fromNamespaceRow(r *namespaceRow) *datastore.Namespace {
 	return &datastore.Namespace{
-		ID:                 r.ID.String(),
-		Identifier:         r.Identifier,
-		DisplayName:        r.DisplayName,
-		Tier:               datastore.NamespaceTier(r.Tier),
-		ParentEnterpriseID: r.ParentEnterpriseID,
-		CreatedAt:          r.CreatedAt,
-		CreatedBy:          r.CreatedBy,
-		UpdatedAt:          r.UpdatedAt,
-		UpdatedBy:          r.UpdatedBy,
+		ID:          r.ID.String(),
+		Identifier:  r.Identifier,
+		DisplayName: r.DisplayName,
+		Tier:        datastore.NamespaceTier(r.Tier),
+		CreatedAt:   r.CreatedAt,
+		CreatedBy:   r.CreatedBy,
+		UpdatedAt:   r.UpdatedAt,
+		UpdatedBy:   r.UpdatedBy,
 	}
 }

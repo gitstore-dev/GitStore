@@ -235,28 +235,10 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 		return nil, gqlerror.Errorf("identifier %q is reserved", identifier)
 	}
 
+	if !input.Tier.IsValid() {
+		return nil, gqlerror.Errorf("invalid namespace tier %q: must be USER or ORGANIZATION; enterprise and other tier values are not supported", input.Tier)
+	}
 	tier := datastoreNamespaceTierFromModel(input.Tier)
-	if tier == datastore.NamespaceTierEnterprise && !isAdmin {
-		return nil, gqlerror.Errorf("creating enterprise namespaces requires elevated permissions")
-	}
-
-	var parentEnterpriseID *string
-	if input.ParentEnterpriseIdentifier != nil && *input.ParentEnterpriseIdentifier != "" {
-		if tier != datastore.NamespaceTierOrganisation {
-			return nil, gqlerror.Errorf("parentEnterpriseIdentifier may only be set for ORGANISATION tier namespaces")
-		}
-		parent, err := s.store.GetNamespaceByIdentifier(ctx, *input.ParentEnterpriseIdentifier)
-		if err != nil {
-			if errors.Is(err, datastore.ErrNotFound) {
-				return nil, gqlerror.Errorf("parent enterprise namespace %q not found", *input.ParentEnterpriseIdentifier)
-			}
-			return nil, gqlerror.Errorf("failed to resolve parent enterprise namespace")
-		}
-		if parent.Tier != datastore.NamespaceTierEnterprise {
-			return nil, gqlerror.Errorf("parent namespace %q is not an enterprise namespace", *input.ParentEnterpriseIdentifier)
-		}
-		parentEnterpriseID = &parent.ID
-	}
 
 	now := s.clock.Now()
 	var displayName string
@@ -264,15 +246,14 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 		displayName = *input.DisplayName
 	}
 	ns := &datastore.Namespace{
-		ID:                 s.ids.NewID(),
-		Identifier:         identifier,
-		DisplayName:        displayName,
-		Tier:               tier,
-		ParentEnterpriseID: parentEnterpriseID,
-		CreatedAt:          now,
-		CreatedBy:          callerUsername,
-		UpdatedAt:          now,
-		UpdatedBy:          callerUsername,
+		ID:          s.ids.NewID(),
+		Identifier:  identifier,
+		DisplayName: displayName,
+		Tier:        tier,
+		CreatedAt:   now,
+		CreatedBy:   callerUsername,
+		UpdatedAt:   now,
+		UpdatedBy:   callerUsername,
 	}
 
 	if err := s.store.CreateNamespace(ctx, ns); err != nil {
@@ -630,10 +611,8 @@ func (s *Service) DeleteRepository(ctx context.Context, repoID, callerUsername s
 
 func datastoreNamespaceTierFromModel(t model.NamespaceTier) datastore.NamespaceTier {
 	switch t {
-	case model.NamespaceTierOrganisation:
-		return datastore.NamespaceTierOrganisation
-	case model.NamespaceTierEnterprise:
-		return datastore.NamespaceTierEnterprise
+	case model.NamespaceTierOrganization:
+		return datastore.NamespaceTierOrganization
 	default:
 		return datastore.NamespaceTierUser
 	}

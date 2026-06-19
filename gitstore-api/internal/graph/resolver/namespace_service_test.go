@@ -33,7 +33,7 @@ func TestCreateNamespace_orgTier_success(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	input := model.CreateNamespaceInput{
 		Identifier: "acme-engineering",
-		Tier:       model.NamespaceTierOrganisation,
+		Tier:       model.NamespaceTierOrganization,
 	}
 	ns, err := svc.CreateNamespace(context.Background(), input, "bob", false)
 	require.NoError(t, err)
@@ -99,26 +99,18 @@ func TestCreateNamespace_reservedIdentifier_admin(t *testing.T) {
 	assert.Contains(t, err.Error(), "reserved")
 }
 
-func TestCreateNamespace_enterpriseTier_withoutAdmin_denied(t *testing.T) {
+func TestCreateNamespace_enterpriseTier_rejected(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
+	// ENTERPRISE is no longer a valid NamespaceTier value; the service must reject it
+	// regardless of caller permissions. The raw string bypasses schema validation so the
+	// service-layer guard is exercised directly.
 	input := model.CreateNamespaceInput{
 		Identifier: "acme-enterprise",
-		Tier:       model.NamespaceTierEnterprise,
+		Tier:       model.NamespaceTier("ENTERPRISE"),
 	}
-	_, err := svc.CreateNamespace(context.Background(), input, "alice", false)
+	_, err := svc.CreateNamespace(context.Background(), input, "admin-user", true)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "elevated permissions")
-}
-
-func TestCreateNamespace_enterpriseTier_withAdmin_succeeds(t *testing.T) {
-	svc := newTestSvc(t, &mockGitWriter{})
-	input := model.CreateNamespaceInput{
-		Identifier: "acme-enterprise",
-		Tier:       model.NamespaceTierEnterprise,
-	}
-	ns, err := svc.CreateNamespace(context.Background(), input, "admin-user", true)
-	require.NoError(t, err)
-	require.NotNil(t, ns)
+	assert.Contains(t, err.Error(), "enterprise")
 }
 
 // ── namespaces query ───────────────────────────────────────────────────────────

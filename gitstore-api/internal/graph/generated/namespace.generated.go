@@ -222,29 +222,6 @@ func (ec *executionContext) fieldContext_Namespace_tier(_ context.Context, field
 	return graphql.NewScalarFieldContext("Namespace", field, false, false, errors.New("field of type NamespaceTier does not have child fields"))
 }
 
-func (ec *executionContext) _Namespace_parentEnterpriseId(ctx context.Context, field graphql.CollectedField, obj *model.Namespace) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Namespace_parentEnterpriseId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ParentEnterpriseID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOID2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_Namespace_parentEnterpriseId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Namespace", field, false, false, errors.New("field of type ID does not have child fields"))
-}
-
 func (ec *executionContext) _Namespace_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.Namespace) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -494,7 +471,7 @@ func (ec *executionContext) unmarshalInputCreateNamespaceInput(ctx context.Conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"clientMutationId", "identifier", "displayName", "tier", "parentEnterpriseIdentifier"}
+	fieldsInOrder := [...]string{"clientMutationId", "identifier", "displayName", "tier"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -529,13 +506,6 @@ func (ec *executionContext) unmarshalInputCreateNamespaceInput(ctx context.Conte
 				return it, err
 			}
 			it.Tier = data
-		case "parentEnterpriseIdentifier":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("parentEnterpriseIdentifier"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ParentEnterpriseIdentifier = data
 		}
 	}
 	return it, nil
@@ -733,8 +703,6 @@ func (ec *executionContext) _Namespace(ctx context.Context, sel ast.SelectionSet
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "parentEnterpriseId":
-			out.Values[i] = ec._Namespace_parentEnterpriseId(ctx, field, obj)
 		case "createdAt":
 			out.Values[i] = ec._Namespace_createdAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

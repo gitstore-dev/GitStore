@@ -1,6 +1,6 @@
 # Contract: Rust Admission Delegation — Git Service Boundary
 
-**Crate**: `gitstore-server` (`gitstore-git-service`)  
+**Crate**: `git-service` (`gitstore-git-service`)  
 **Feature**: 014-product-frontmatter  
 **Date**: 2026-06-01
 

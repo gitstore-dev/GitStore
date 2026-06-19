@@ -14,6 +14,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - Rust 1.x (`gitstore-git-service`); Go 1.25 (`gitstore-api`) + `gix 0.84.0`, `tonic 0.14`, `tokio 1.35` (Rust); no new Go deps (028-branch-deletion-admission)
 - No datastore changes (028-branch-deletion-admission)
 - Rust 1.x + `tracing 0.1`, `config 0.15.22`, `regex 1` (all already present in `Cargo.toml`) (029-hook-startup-observability)
+- Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90` (code generation), `gocqlx/v3` + `gocql` (Scylla datastore), `go-playground/validator/v10`, `go.uber.org/zap` (030-remove-enterprise-namespace)
+- ScyllaDB 5.x+ in production; `go-memdb` in development — no new migrations required (030-remove-enterprise-namespace)
 
 ## Commands
 
@@ -53,9 +55,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 030-remove-enterprise-namespace: Added Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90` (code generation), `gocqlx/v3` + `gocql` (Scylla datastore), `go-playground/validator/v10`, `go.uber.org/zap`
 - 029-hook-startup-observability: Added Rust 1.x + `tracing 0.1`, `config 0.15.22`, `regex 1` (all already present in `Cargo.toml`)
 - 028-branch-deletion-admission: Added Rust 1.x (`gitstore-git-service`); Go 1.25 (`gitstore-api`) + `gix 0.84.0`, `tonic 0.14`, `tokio 1.35` (Rust); no new Go deps
-- 027-admission-contracts: Added Go 1.25 (gitstore-api) + `go.uber.org/zap`, `github.com/google/cel-go/cel`, `github.com/go-playground/validator/v10`, `encoding/json`
 
 
 <!-- MANUAL ADDITIONS START -->

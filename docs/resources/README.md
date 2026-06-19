@@ -25,20 +25,20 @@ tracked by `gitstore-dev/GitStore#40`. That initiative currently covers
 
 ## Storage Groups
 
-| Group | Source of truth | Use for | Details |
-|---|---|---|---|
-| Git + datastore | Git for author input; datastore for hydrated read model and status | Reviewable business configuration and catalog desired state | [Git-backed resources](git-backed.md) |
-| Datastore only | ScyllaDB or memDB | Durable operational records, PII, payments, inventory movement, sessions, audit, and runtime state | [Datastore-only resources](datastore-only.md) |
+| Group                 | Source of truth                                                     | Use for                                                                                                      | Details                                                   |
+|-----------------------|---------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------|
+| Git + datastore       | Git for author input; datastore for hydrated read model and status  | Reviewable business configuration and catalog desired state                                                  | [Git-backed resources](git-backed.md)                     |
+| Datastore only        | ScyllaDB or memDB                                                   | Durable operational records, PII, payments, inventory movement, sessions, audit, and runtime state           | [Datastore-only resources](datastore-only.md)             |
 | LFS or object storage | Git LFS or object storage for payloads; Git/datastore for manifests | Binary files, media originals, generated variants, imports, exports, labels, invoices, and archived payloads | [LFS and object storage resources](lfs-object-storage.md) |
-| Transient | Not persisted as resources | Calculations, checks, previews, quotes, admission/review calls, auth reviews, and signed upload requests | [Transient resources](transient.md) |
+| Transient             | Not persisted as resources                                          | Calculations, checks, previews, quotes, admission/review calls, auth reviews, and signed upload requests     | [Transient resources](transient.md)                       |
 
 ## Core vs Extension/CRD
 
 Each resource is marked with an initial scope:
 
-| Scope | Meaning |
-|---|---|
-| Core | Should be built into GitStore because it is part of the base control plane, catalog, checkout, inventory, fulfillment, auth, or platform runtime. |
+| Scope         | Meaning                                                                                                                                                                                            |
+|---------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Core          | Should be built into GitStore because it is part of the base control plane, catalog, checkout, inventory, fulfillment, auth, or platform runtime.                                                  |
 | Extension/CRD | Should be implemented through future custom resource definitions, plugins, or optional modules. These are important for enterprise commerce but should not expand the core API surface by default. |
 
 The scope is not a persistence decision. A resource can be `Core` and
@@ -136,19 +136,19 @@ Use transient resources when:
 
 Subresources should use the same storage decision as the data they represent:
 
-| Subresource style | Storage group | Examples | Notes |
-|---|---|---|---|
-| System status | Datastore field on Git-backed resource | `Product/status`, `ProductVariant/status`, `Collection/status` | Author files must not include `status`; controllers and admission own it. |
-| Finalization and deletion gates | Datastore field on durable resource | `Namespace/finalize`, `Repository/finalize`, `Order/cancel` | Keep finalizers and deletion blockers out of Git-authored desired state unless they are policy declarations. |
-| Review/check endpoints | Transient | `TokenReview`, `SubjectAccessReview`, `AdmissionReview`, `ValidationReview` | Persist only audit or decision logs if required. |
-| Runtime child records | Datastore only | `Order/events`, `PaymentIntent/authorizations`, `PaymentIntent/captures`, `Payment/refunds`, `Shipment/trackingEvents` | These are independent operational records even when exposed under a parent API path. |
-| Generated projections | Datastore only or transient | `Product/searchDocument`, `Collection/members`, `Inventory/availability` | Store only when needed for query performance or watch semantics. |
-| Binary variants | Object storage | `File/variants`, `MediaAsset/renditions`, `Invoice/pdf` | Store manifest and resolved URLs separately from payload bytes. |
+| Subresource style               | Storage group                          | Examples                                                                                                               | Notes                                                                                                        |
+|---------------------------------|----------------------------------------|------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
+| System status                   | Datastore field on Git-backed resource | `Product/status`, `ProductVariant/status`, `Collection/status`                                                         | Author files must not include `status`; controllers and admission own it.                                    |
+| Finalization and deletion gates | Datastore field on durable resource    | `Namespace/finalize`, `Repository/finalize`, `Order/cancel`                                                            | Keep finalizers and deletion blockers out of Git-authored desired state unless they are policy declarations. |
+| Review/check endpoints          | Transient                              | `TokenReview`, `SubjectAccessReview`, `AdmissionReview`, `ValidationReview`                                            | Persist only audit or decision logs if required.                                                             |
+| Runtime child records           | Datastore only                         | `Order/events`, `PaymentIntent/authorizations`, `PaymentIntent/captures`, `Payment/refunds`, `Shipment/trackingEvents` | These are independent operational records even when exposed under a parent API path.                         |
+| Generated projections           | Datastore only or transient            | `Product/searchDocument`, `Collection/members`, `Inventory/availability`                                               | Store only when needed for query performance or watch semantics.                                             |
+| Binary variants                 | Object storage                         | `File/variants`, `MediaAsset/renditions`, `Invoice/pdf`                                                                | Store manifest and resolved URLs separately from payload bytes.                                              |
 
 ## Related Existing Resource Docs
 
 - [Product Spec Reference](../products/product-spec.md)
-- [ProductVariant Spec Reference](../products/product-variants.md)
-- [CategoryTaxonomy Document Format](../categories/category-taxonomy.md)
+- [ProductVariant Spec Reference](../products/product-variant-spec.md)
+- [CategoryTaxonomy Spec Reference](../categories/category-taxonomy-spec.md)
 - [Collection Spec Reference](../collections/collection-spec.md)
 - [Pluggable Identity and Access Design](../implementation/pluggable_auth_design.md)

@@ -501,7 +501,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	})
 
 	t.Run("Namespace/TestCreateNamespace_duplicateIdentifier", func(t *testing.T) {
-		ns := newNamespace(datastore.NamespaceTierOrganisation)
+		ns := newNamespace(datastore.NamespaceTierOrganization)
 		require.NoError(t, ds.CreateNamespace(ctx, ns))
 
 		ns2 := newNamespace(datastore.NamespaceTierUser)
@@ -510,12 +510,12 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
 	})
 
-	t.Run("Namespace/TestCreateNamespace_acrossAllTiers", func(t *testing.T) {
-		ns := newNamespace(datastore.NamespaceTierEnterprise)
+	t.Run("Namespace/TestCreateNamespace_acrossTiers", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierUser)
 		require.NoError(t, ds.CreateNamespace(ctx, ns))
 
 		// same identifier, different tier — must still conflict
-		nsOrg := newNamespace(datastore.NamespaceTierOrganisation)
+		nsOrg := newNamespace(datastore.NamespaceTierOrganization)
 		nsOrg.Identifier = ns.Identifier
 		err := ds.CreateNamespace(ctx, nsOrg)
 		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
@@ -538,7 +538,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, err)
 
 		ns1 := newNamespace(datastore.NamespaceTierUser)
-		ns2 := newNamespace(datastore.NamespaceTierOrganisation)
+		ns2 := newNamespace(datastore.NamespaceTierOrganization)
 		require.NoError(t, ds.CreateNamespace(ctx, ns1))
 		require.NoError(t, ds.CreateNamespace(ctx, ns2))
 
@@ -581,7 +581,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	})
 
 	t.Run("Namespace/TestDeleteNamespace_thenGetReturnsNotFound", func(t *testing.T) {
-		ns := newNamespace(datastore.NamespaceTierOrganisation)
+		ns := newNamespace(datastore.NamespaceTierOrganization)
 		require.NoError(t, ds.CreateNamespace(ctx, ns))
 		require.NoError(t, ds.DeleteNamespace(ctx, ns.ID))
 
