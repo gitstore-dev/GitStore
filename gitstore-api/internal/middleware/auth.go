@@ -140,13 +140,14 @@ func (am *AuthMiddleware) OptionalAuth(next http.Handler) http.Handler {
 					ctx := context.WithValue(r.Context(), UserContextKey, user)
 					// Also populate the new Principal context so resolvers migrated
 					// to auth.PrincipalFromContext work without ChainAuthMiddleware.
+					// Roles are intentionally not derived from claims here: this path
+					// has no access to the provider blacklist, so a revoked token would
+					// otherwise pass with inflated privileges. Use ChainAuthMiddleware
+					// (ProviderRegistry) in any deployment that requires role-based authz.
 					principal := &auth.Principal{
 						Subject:    claims.Username,
 						Issuer:     "gitstore",
 						AuthMethod: "static-admin",
-					}
-					if claims.IsAdmin {
-						principal.Roles = []string{"admin"}
 					}
 					ctx = auth.ContextWithPrincipal(ctx, principal)
 					next.ServeHTTP(w, r.WithContext(ctx))

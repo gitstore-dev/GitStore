@@ -52,17 +52,23 @@ type policyReloader interface {
 	Reload() error
 }
 
+// providerShutdowner is implemented by auth providers that own background goroutines.
+type providerShutdowner interface {
+	Shutdown()
+}
+
 // Server is the composed API runtime.
 type Server struct {
-	cfg          *config.Config
-	log          *zap.Logger
-	store        datastore.Datastore
-	gitClient    *gitclient.Client
-	httpServer   *http.Server
-	gitServer    *http.Server
-	grpcServer   *grpc.Server
-	grpcListener net.Listener
-	rbacReloader policyReloader
+	cfg              *config.Config
+	log              *zap.Logger
+	store            datastore.Datastore
+	gitClient        *gitclient.Client
+	httpServer       *http.Server
+	gitServer        *http.Server
+	grpcServer       *grpc.Server
+	grpcListener     net.Listener
+	rbacReloader     policyReloader
+	providerShutdown []providerShutdowner
 }
 
 // NewServer builds the API, Git HTTP, and catalog gRPC servers from config.
@@ -100,7 +106,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, fmt.Errorf("create auth middleware: %w", err)
 	}
 
-	registry, rbacReloader, err := buildProviderRegistry(cfg, log)
+	registry, rbacReloader, providerShutdowns, err := buildProviderRegistry(cfg, log)
 	if err != nil {
 		gitClient.Close()
 		store.Close()
@@ -192,15 +198,16 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	catalogv1.RegisterCatalogServiceServer(grpcServer, catalogServer)
 
 	return &Server{
-		cfg:          cfg,
-		log:          log,
-		store:        store,
-		gitClient:    gitClient,
-		httpServer:   httpServer,
-		gitServer:    gitServer,
-		grpcServer:   grpcServer,
-		grpcListener: grpcListener,
-		rbacReloader: rbacReloader,
+		cfg:              cfg,
+		log:              log,
+		store:            store,
+		gitClient:        gitClient,
+		httpServer:       httpServer,
+		gitServer:        gitServer,
+		grpcServer:       grpcServer,
+		grpcListener:     grpcListener,
+		rbacReloader:     rbacReloader,
+		providerShutdown: providerShutdowns,
 	}, nil
 }
 
@@ -254,8 +261,9 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 // buildProviderRegistry constructs a ProviderRegistry from the application config.
 // It reads authn chain, authz provider, and userdir provider from cfg and environment.
 // The second return value is non-nil when rbac-local is active — callers may use it
-// for SIGHUP-triggered policy reloads.
-func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderRegistry, policyReloader, error) {
+// for SIGHUP-triggered policy reloads. The third return value lists providers that
+// own background goroutines and must be shut down when the server stops.
+func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderRegistry, policyReloader, []providerShutdowner, error) {
 	// Build a viper instance with the same env-var scheme so provider constructors
 	// can read their config using viper.GetString("auth.xxx") with the GITSTORE__ prefix.
 	v := viper.New()
@@ -282,18 +290,20 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 	}
 
 	var authnProviders []auth.AuthNProvider
+	var shutdowns []providerShutdowner
 	for _, name := range chain {
 		switch name {
 		case "static-admin":
 			p, err := staticadmin.New(v, log)
 			if err != nil {
-				return nil, nil, fmt.Errorf("init static-admin provider: %w", err)
+				return nil, nil, nil, fmt.Errorf("init static-admin provider: %w", err)
 			}
 			authnProviders = append(authnProviders, p)
+			shutdowns = append(shutdowns, p)
 		case "anonymous":
 			authnProviders = append(authnProviders, anonymous.New())
 		default:
-			return nil, nil, fmt.Errorf("unknown authn provider %q", name)
+			return nil, nil, nil, fmt.Errorf("unknown authn provider %q", name)
 		}
 	}
 
@@ -304,7 +314,7 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 	case "rbac-local":
 		p, err := rbaclocal.New(v, log)
 		if err != nil {
-			return nil, nil, fmt.Errorf("init rbac-local authz provider: %w", err)
+			return nil, nil, nil, fmt.Errorf("init rbac-local authz provider: %w", err)
 		}
 		authzProvider = p
 		reloader = p
@@ -312,13 +322,13 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 		// Default to allow-all so existing deployments without explicit config are unaffected.
 		authzProvider = allowall.New(log)
 	default:
-		return nil, nil, fmt.Errorf("unknown authz provider %q", v.GetString("auth.authz.provider"))
+		return nil, nil, nil, fmt.Errorf("unknown authz provider %q", v.GetString("auth.authz.provider"))
 	}
 
 	// Build UserDir provider.
 	userdirProvider := userdirnone.New()
 
-	return auth.NewProviderRegistry(auth.NewChainedAuthN(authnProviders...), authzProvider, userdirProvider), reloader, nil
+	return auth.NewProviderRegistry(auth.NewChainedAuthN(authnProviders...), authzProvider, userdirProvider), reloader, shutdowns, nil
 }
 
 // Start starts all servers in background goroutines.
@@ -382,6 +392,9 @@ func (s *Server) Shutdown(ctx context.Context) {
 
 // Close releases non-server resources.
 func (s *Server) Close() {
+	for _, p := range s.providerShutdown {
+		p.Shutdown()
+	}
 	if s.grpcListener != nil {
 		_ = s.grpcListener.Close()
 	}

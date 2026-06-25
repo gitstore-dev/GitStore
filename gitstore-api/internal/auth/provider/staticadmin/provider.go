@@ -73,6 +73,11 @@ func New(cfg *viper.Viper, logger *zap.Logger) (*StaticAdminProvider, error) {
 
 func (p *StaticAdminProvider) Name() string { return "static-admin" }
 
+// Shutdown stops the background blacklist pruning goroutine.
+// It must be called when the provider is no longer needed (e.g. on server shutdown
+// or after a SIGHUP-triggered provider replacement).
+func (p *StaticAdminProvider) Shutdown() { p.blacklist.shutdown() }
+
 func (p *StaticAdminProvider) Capabilities() auth.Capability {
 	return auth.CapAuthenticate | auth.CapIssueSession | auth.CapIntrospect
 }
@@ -224,10 +229,14 @@ func (p *StaticAdminProvider) issueToken(subject string) (string, time.Time, err
 type sessionBlacklist struct {
 	mu      sync.RWMutex
 	entries map[string]time.Time
+	stop    chan struct{}
 }
 
 func newSessionBlacklist() *sessionBlacklist {
-	return &sessionBlacklist{entries: make(map[string]time.Time)}
+	return &sessionBlacklist{
+		entries: make(map[string]time.Time),
+		stop:    make(chan struct{}),
+	}
 }
 
 func (b *sessionBlacklist) add(jti string, expiresAt time.Time) {
@@ -249,9 +258,18 @@ func (b *sessionBlacklist) isRevoked(jti string) bool {
 func (b *sessionBlacklist) pruneLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		b.prune()
+	for {
+		select {
+		case <-ticker.C:
+			b.prune()
+		case <-b.stop:
+			return
+		}
 	}
+}
+
+func (b *sessionBlacklist) shutdown() {
+	close(b.stop)
 }
 
 func (b *sessionBlacklist) prune() {

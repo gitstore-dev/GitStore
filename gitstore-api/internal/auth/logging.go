@@ -45,7 +45,7 @@ func (d *DecisionLogger) Authorize(ctx context.Context, p *Principal, action str
 		outcomeStr = "challenge"
 	}
 
-	d.logger.Info("authz decision",
+	fields := []zap.Field{
 		zap.String("provider", decision.Provider),
 		zap.String("subject", subject),
 		zap.String("action", action),
@@ -54,7 +54,12 @@ func (d *DecisionLogger) Authorize(ctx context.Context, p *Principal, action str
 		zap.String("outcome", outcomeStr),
 		zap.String("reason", decision.Reason),
 		zap.Int64("latency_ms", latencyMs),
-	)
+	}
+	if err != nil {
+		d.logger.Warn("authz decision error", append(fields, zap.Error(err))...)
+	} else {
+		d.logger.Info("authz decision", fields...)
+	}
 
 	return decision, err
 }

@@ -252,7 +252,10 @@ func TestOptionalAuth_setsPrincipalInContext(t *testing.T) {
 
 	require.NotNil(t, captured)
 	assert.Equal(t, "admin", captured.Subject)
-	assert.True(t, captured.IsAdmin())
+	// The legacy OptionalAuth path does not grant admin roles from JWT claims
+	// because it cannot check the provider blacklist. IsAdmin() must be false
+	// here; use ChainAuthMiddleware (ProviderRegistry) when role-based authz is needed.
+	assert.False(t, captured.IsAdmin())
 }
 
 func TestHashPassword(t *testing.T) {

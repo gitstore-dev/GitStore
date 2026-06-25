@@ -6,7 +6,7 @@ name: CI Admin
 
 on:
   push:
-    branches: [ main, 'feature/**', '[0-9]+-*' ]
+    branches: [ main ]
     paths:
       - 'gitstore-admin/**'
   pull_request:

@@ -5,6 +5,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -81,18 +82,24 @@ func (c *ChainedAuthN) Authenticate(ctx context.Context, req AuthRequest) (*Prin
 	return nil, Deny("chain", "credentials present but no provider accepted them"), nil
 }
 
-// RevokeSession delegates to the first provider that supports it.
+// RevokeSession delegates to every provider that supports it so all session
+// stores that may hold the JTI are invalidated.
 func (c *ChainedAuthN) RevokeSession(ctx context.Context, jti string, expiresAt time.Time) error {
+	supported := false
 	for _, p := range c.providers {
 		err := p.RevokeSession(ctx, jti, expiresAt)
 		if err == nil {
-			return nil
+			supported = true
+			continue
 		}
-		if err != ErrNotSupported {
+		if !errors.Is(err, ErrNotSupported) {
 			return err
 		}
 	}
-	return ErrNotSupported
+	if !supported {
+		return ErrNotSupported
+	}
+	return nil
 }
 
 // RefreshSession delegates to the first provider that supports it.
@@ -102,7 +109,7 @@ func (c *ChainedAuthN) RefreshSession(ctx context.Context, oldToken string) (str
 		if err == nil {
 			return token, exp, nil
 		}
-		if err != ErrNotSupported {
+		if !errors.Is(err, ErrNotSupported) {
 			return "", time.Time{}, err
 		}
 	}
