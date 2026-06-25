@@ -1,4 +1,4 @@
-# gitstore-api
+# API
 
 Go API service for GitStore. It is the public front door for GraphQL and Git Smart HTTP, and it is also the CatalogService gRPC server called by `gitstore-git-service` during push validation and admission.
 
@@ -27,16 +27,16 @@ Post-receive admission is operation-aware for current Git-backed catalog resourc
 
 ## Ports And Paths
 
-| Port | Path | Purpose |
-|---:|---|---|
-| `4000` | `/graphql` | GraphQL API |
-| `4000` | `/playground` | GraphQL Playground |
-| `4000` | `/health` | Liveness health check |
-| `4000` | `/ready` | Readiness check |
-| `5000` | `/{namespace}/{repo}.git/info/refs` | Git Smart HTTP ref advertisement |
-| `5000` | `/{namespace}/{repo}.git/git-upload-pack` | Git fetch/clone |
-| `5000` | `/{namespace}/{repo}.git/git-receive-pack` | Git push |
-| `6000` | gRPC | CatalogService validation/admission |
+|   Port | Path                                       | Purpose                             |
+|-------:|--------------------------------------------|-------------------------------------|
+| `4000` | `/graphql`                                 | GraphQL API                         |
+| `4000` | `/playground`                              | GraphQL Playground                  |
+| `4000` | `/health`                                  | Liveness health check               |
+| `4000` | `/ready`                                   | Readiness check                     |
+| `5000` | `/{namespace}/{repo}.git/info/refs`        | Git Smart HTTP ref advertisement    |
+| `5000` | `/{namespace}/{repo}.git/git-upload-pack`  | Git fetch/clone                     |
+| `5000` | `/{namespace}/{repo}.git/git-receive-pack` | Git push                            |
+| `6000` | gRPC                                       | CatalogService validation/admission |
 
 ## Project Structure
 
@@ -69,18 +69,18 @@ gitstore-api/
 
 Required for local API startup unless provided by `.env`:
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `GITSTORE_AUTH__ADMIN__USERNAME` | unset | Admin username |
-| `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | unset | bcrypt password hash |
-| `GITSTORE_AUTH__JWT__SECRET` | unset | JWT signing secret |
-| `GITSTORE_API__PORT` | `4000` | GraphQL HTTP port |
-| `GITSTORE_API__GIT_PORT` | `5000` | Git Smart HTTP port |
-| `GITSTORE_API__GRPC_PORT` | `6000` | CatalogService gRPC port |
-| `GITSTORE_GIT__GRPC__URI` | `dns:///localhost:50051` | GitService gRPC target |
-| `GITSTORE_DATASTORE__BACKEND` | `memdb` | `memdb` or `scylla` |
-| `GITSTORE_LOG__LEVEL` | `info` | Log level |
-| `GITSTORE_LOG__FORMAT` | `json` | `json` or `text` |
+| Variable                              | Default                  | Purpose                  |
+|---------------------------------------|--------------------------|--------------------------|
+| `GITSTORE_AUTH__ADMIN__USERNAME`      | unset                    | Admin username           |
+| `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | unset                    | bcrypt password hash     |
+| `GITSTORE_AUTH__JWT__SECRET`          | unset                    | JWT signing secret       |
+| `GITSTORE_API__PORT`                  | `4000`                   | GraphQL HTTP port        |
+| `GITSTORE_API__GIT_PORT`              | `5000`                   | Git Smart HTTP port      |
+| `GITSTORE_API__GRPC_PORT`             | `6000`                   | CatalogService gRPC port |
+| `GITSTORE_GIT__GRPC__URI`             | `dns:///localhost:50051` | GitService gRPC target   |
+| `GITSTORE_DATASTORE__BACKEND`         | `memdb`                  | `memdb` or `scylla`      |
+| `GITSTORE_LOG__LEVEL`                 | `info`                   | Log level                |
+| `GITSTORE_LOG__FORMAT`                | `json`                   | `json` or `text`         |
 
 Copy the example file for local development:
 

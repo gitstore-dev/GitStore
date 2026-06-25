@@ -8,6 +8,7 @@ package resolver
 import (
 	"errors"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
@@ -30,6 +31,7 @@ type Resolver struct {
 type ResolverDeps struct {
 	Store       datastore.Datastore
 	GitWriter   GitWriter
+	AuthZ       auth.AuthZProvider
 	Logger      *zap.Logger
 	Clock       apiruntime.Clock
 	IDGenerator apiruntime.IDGenerator

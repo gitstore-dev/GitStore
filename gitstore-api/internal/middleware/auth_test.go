@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -119,7 +120,7 @@ func TestRequireAuth(t *testing.T) {
 
 	// Handler that checks for user in context
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, ok := GetUserFromContext(r.Context())
+		user, ok := r.Context().Value(UserContextKey).(*User)
 		if !ok {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte("No user in context"))
@@ -184,7 +185,7 @@ func TestOptionalAuth(t *testing.T) {
 
 	// Handler that checks for user in context
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, ok := GetUserFromContext(r.Context())
+		user, ok := r.Context().Value(UserContextKey).(*User)
 		if !ok {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("Anonymous"))
@@ -233,31 +234,25 @@ func TestOptionalAuth(t *testing.T) {
 	})
 }
 
-func TestGetUserFromContext(t *testing.T) {
-	t.Run("should return user from context", func(t *testing.T) {
-		am := newTestAuthMiddleware(t)
+func TestOptionalAuth_setsPrincipalInContext(t *testing.T) {
+	am := newTestAuthMiddleware(t)
+	token, err := am.GenerateSessionToken("admin", true)
+	require.NoError(t, err)
 
-		req := httptest.NewRequest("GET", "/test", nil)
-		req.Header.Set("Authorization", "Bearer token123")
+	var captured *auth.Principal
+	handler := am.OptionalAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = auth.PrincipalFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
 
-		handler := am.RequireAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user, ok := GetUserFromContext(r.Context())
-			assert.True(t, ok)
-			assert.NotNil(t, user)
-			assert.Equal(t, "admin", user.Username)
-			assert.True(t, user.IsAdmin)
-		}))
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
 
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-	})
-
-	t.Run("should return false for missing user", func(t *testing.T) {
-		req := httptest.NewRequest("GET", "/test", nil)
-		user, ok := GetUserFromContext(req.Context())
-		assert.False(t, ok)
-		assert.Nil(t, user)
-	})
+	require.NotNil(t, captured)
+	assert.Equal(t, "admin", captured.Subject)
+	assert.True(t, captured.IsAdmin())
 }
 
 func TestHashPassword(t *testing.T) {

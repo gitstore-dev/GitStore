@@ -6,6 +6,7 @@ package resolver
 import (
 	"context"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 )
@@ -19,9 +20,9 @@ func namespaceFromContext(_ context.Context) string {
 }
 
 // callerUsernameOrAnon extracts the caller username from auth context, or returns "anon".
-func callerUsernameOrAnon(ctx context.Context, r *mutationResolver) string {
-	if r.authMiddleware == nil {
-		return "anon"
+func callerUsernameOrAnon(ctx context.Context, _ *mutationResolver) string {
+	if p := auth.PrincipalFromContext(ctx); p != nil {
+		return p.Subject
 	}
 	return "anon"
 }

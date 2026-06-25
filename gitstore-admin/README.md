@@ -1,4 +1,4 @@
-# gitstore-admin
+# Admin
 
 Optional Astro/React admin UI for GitStore.
 
@@ -25,10 +25,10 @@ Catalogue writes are Git-driven today. The admin UI is the attachment point for 
 
 ## Configuration Highlights
 
-| Variable | Default in compose | Purpose |
-|---|---|---|
-| `GITSTORE_GRAPHQL_URL` | `http://api:4000/graphql` | API endpoint used by admin |
-| `GITSTORE_SESSION_TIMEOUT` | `3600` | Session timeout in seconds |
+| Variable                   | Default in compose        | Purpose                    |
+|----------------------------|---------------------------|----------------------------|
+| `GITSTORE_GRAPHQL_URL`     | `http://api:4000/graphql` | API endpoint used by admin |
+| `GITSTORE_SESSION_TIMEOUT` | `3600`                    | Session timeout in seconds |
 
 ## Project Structure
 
@@ -71,8 +71,8 @@ npm run codegen
 
 ## Ports
 
-| Port | Purpose |
-|---:|---|
+|   Port | Purpose  |
+|-------:|----------|
 | `3000` | Admin UI |
 
 ## Deeper Docs

@@ -51,26 +51,26 @@ If `old_commit_sha` is absent because an older git service called the API, admis
 
 Catalog resource identity is independent of file path. GitStore identifies a stored resource by:
 
-| Field | Source |
-|---|---|
-| `apiVersion` | Frontmatter |
-| `kind` | Frontmatter |
-| `namespace` | `metadata.namespace` or the repository's owning namespace |
-| `metadata.name` | Frontmatter |
+| Field           | Source                                                    |
+|-----------------|-----------------------------------------------------------|
+| `apiVersion`    | Frontmatter                                               |
+| `kind`          | Frontmatter                                               |
+| `namespace`     | `metadata.namespace` or the repository's owning namespace |
+| `metadata.name` | Frontmatter                                               |
 
 The file path is stored as source provenance, not identity. Moving `products/widget.md` to `catalog/products/widget.md` with the same identity keeps the same `metadata.uid`.
 
 Lifecycle rules:
 
-| Git change | Stored result |
-|---|---|
-| New identity appears | Create resource with a new `metadata.uid`, `generation=1`, `resourceVersion=1` |
-| Existing identity changes `spec` or Markdown body | Preserve `metadata.uid`, increment `generation`, increment `resourceVersion` |
-| Existing identity moves to a new path with the same spec/body | Preserve `metadata.uid` and `generation`, increment `resourceVersion` |
-| Existing identity changes only labels/annotations | Preserve `metadata.uid` and `generation`, increment `resourceVersion` |
-| Identity disappears from the admitted ref | Delete the stored resource and remove lookup indexes |
-| Identity is deleted in one commit and added again later | Allocate a new `metadata.uid`, reset `generation=1` and `resourceVersion=1` |
-| `metadata.name` or `kind` changes in a file | Delete the old identity and create the new identity |
+| Git change                                                    | Stored result                                                                  |
+|---------------------------------------------------------------|--------------------------------------------------------------------------------|
+| New identity appears                                          | Create resource with a new `metadata.uid`, `generation=1`, `resourceVersion=1` |
+| Existing identity changes `spec` or Markdown body             | Preserve `metadata.uid`, increment `generation`, increment `resourceVersion`   |
+| Existing identity moves to a new path with the same spec/body | Preserve `metadata.uid` and `generation`, increment `resourceVersion`          |
+| Existing identity changes only labels/annotations             | Preserve `metadata.uid` and `generation`, increment `resourceVersion`          |
+| Identity disappears from the admitted ref                     | Delete the stored resource and remove lookup indexes                           |
+| Identity is deleted in one commit and added again later       | Allocate a new `metadata.uid`, reset `generation=1` and `resourceVersion=1`    |
+| `metadata.name` or `kind` changes in a file                   | Delete the old identity and create the new identity                            |
 
 Duplicate SKU conflicts for `ProductVariant` are not inserted after detection. The existing variant remains unchanged, the conflicting incoming variant is skipped, and the conflict is visible in structured API logs. Structural validation errors still reject the push during pre-receive.
 
@@ -98,28 +98,28 @@ This provides a human-readable audit trail: branch name + commit SHA without req
 
 ## Configuration reference
 
-| Environment variable | Default | Description |
-|---|---|---|
-| `GITSTORE_SCHEMA_VALIDATION__PHASE` | `pre-receive` | Hook phase for validation callout |
-| `GITSTORE_SCHEMA_VALIDATION__TIMEOUT_SECS` | `10` | Validation gRPC timeout in seconds |
-| `GITSTORE_ADMISSION_CONTROL__PHASE` | `post-receive` | Hook phase for admission callout |
-| `GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN` | `refs/heads/main` | Refs that trigger catalog storage (regex) |
-| `GITSTORE_CATALOG_SERVICE__URI` | `http://localhost:6000` | gitstore-api gRPC endpoint |
-| `GITSTORE_API__GRPC_PORT` | `6000` | Port where gitstore-api listens for gRPC (CatalogService) |
+| Environment variable                         | Default                 | Description                                               |
+|----------------------------------------------|-------------------------|-----------------------------------------------------------|
+| `GITSTORE_SCHEMA_VALIDATION__PHASE`          | `pre-receive`           | Hook phase for validation callout                         |
+| `GITSTORE_SCHEMA_VALIDATION__TIMEOUT_SECS`   | `10`                    | Validation gRPC timeout in seconds                        |
+| `GITSTORE_ADMISSION_CONTROL__PHASE`          | `post-receive`          | Hook phase for admission callout                          |
+| `GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN` | `refs/heads/main`       | Refs that trigger catalog storage (regex)                 |
+| `GITSTORE_CATALOG_SERVICE__URI`              | `http://localhost:6000` | gitstore-api gRPC endpoint                                |
+| `GITSTORE_API__GRPC_PORT`                    | `6000`                  | Port where gitstore-api listens for gRPC (CatalogService) |
 
 ### Hook phase toggles
 
 Each `git-receive-pack` hook phase can be independently enabled or disabled. The env-var naming
 convention uses **double underscores** (`__`) as the level separator:
 
-| Environment variable | Default | Description |
-|---|---|---|
-| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED` | `true` | Enable pre-receive schema validation |
-| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__UPDATE__ENABLED` | `false` | Enable update hook |
-| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_RECEIVE__ENABLED` | `true` | Enable post-receive admission |
-| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PROC_RECEIVE__ENABLED` | `false` | Enable proc-receive hook |
-| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_UPDATE__ENABLED` | `false` | Enable post-update hook |
-| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__REFERENCE_TRANSACTION__ENABLED` | `false` | Enable reference-transaction hook |
+| Environment variable                                               | Default | Description                          |
+|--------------------------------------------------------------------|---------|--------------------------------------|
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED`           | `true`  | Enable pre-receive schema validation |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__UPDATE__ENABLED`                | `false` | Enable update hook                   |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_RECEIVE__ENABLED`          | `true`  | Enable post-receive admission        |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PROC_RECEIVE__ENABLED`          | `false` | Enable proc-receive hook             |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_UPDATE__ENABLED`           | `false` | Enable post-update hook              |
+| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__REFERENCE_TRANSACTION__ENABLED` | `false` | Enable reference-transaction hook    |
 
 > **Separator note**: The field name `pre_receive` contains a single underscore. The env-var uses a
 > double underscore only between config-key levels, not within field names. So the correct var is
@@ -156,6 +156,6 @@ Example JSON log (default configuration):
 
 ## Metrics
 
-| Metric | Type | Labels | Description |
-|---|---|---|---|
+| Metric                             | Type    | Labels                                                   | Description                             |
+|------------------------------------|---------|----------------------------------------------------------|-----------------------------------------|
 | `gitstore_schema_validation_total` | Counter | `result={accepted,rejected,timeout,service_unavailable}` | Pre-receive validation callout outcomes |
