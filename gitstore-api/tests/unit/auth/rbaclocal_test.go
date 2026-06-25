@@ -141,3 +141,48 @@ roles:
 		assert.Equal(t, authpkg.OutcomeAllow, d.Outcome, "action %q should be allowed", action)
 	}
 }
+
+func TestRBACLocal_DefaultDenyAbsent_DefaultsToTrue(t *testing.T) {
+	// Policy with no default_deny key — should secure-default to deny for unmatched actions.
+	policy := `version: v1
+roles:
+  reader:
+    allow:
+      - "repo.read"
+`
+	p := newRBACProvider(t, policy)
+	principal := &authpkg.Principal{Subject: "u", Roles: []string{"reader"}, AuthMethod: "test"}
+	// Matched action → allow.
+	d, err := p.Authorize(context.Background(), principal, "repo.read", authpkg.ResourceContext{})
+	require.NoError(t, err)
+	assert.Equal(t, authpkg.OutcomeAllow, d.Outcome)
+	// Unmatched action → deny (default_deny defaults to true).
+	d, err = p.Authorize(context.Background(), principal, "namespace.create.organization", authpkg.ResourceContext{})
+	require.NoError(t, err)
+	assert.Equal(t, authpkg.OutcomeDeny, d.Outcome)
+}
+
+func TestRBACLocal_RoleBindings_SubjectWithNoRoles_GetsBindingRoles(t *testing.T) {
+	// Principal arrives with no Roles but has a matching role_bindings entry.
+	policy := `version: v1
+default_deny: true
+roles:
+  developer:
+    allow:
+      - "namespace.create.user"
+role_bindings:
+  alice: [developer]
+`
+	p := newRBACProvider(t, policy)
+	// Alice has no pre-populated Roles; the binding should grant her developer access.
+	alice := &authpkg.Principal{Subject: "alice", Roles: nil, AuthMethod: "test"}
+	d, err := p.Authorize(context.Background(), alice, "namespace.create.user", authpkg.ResourceContext{})
+	require.NoError(t, err)
+	assert.Equal(t, authpkg.OutcomeAllow, d.Outcome)
+
+	// Unknown subject has no binding → default deny.
+	bob := &authpkg.Principal{Subject: "bob", Roles: nil, AuthMethod: "test"}
+	d, err = p.Authorize(context.Background(), bob, "namespace.create.user", authpkg.ResourceContext{})
+	require.NoError(t, err)
+	assert.Equal(t, authpkg.OutcomeDeny, d.Outcome)
+}

@@ -308,9 +308,11 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 		}
 		authzProvider = p
 		reloader = p
-	default:
+	case "allow-all", "":
 		// Default to allow-all so existing deployments without explicit config are unaffected.
 		authzProvider = allowall.New(log)
+	default:
+		return nil, nil, fmt.Errorf("unknown authz provider %q", v.GetString("auth.authz.provider"))
 	}
 
 	// Build UserDir provider.

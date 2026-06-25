@@ -15,7 +15,7 @@ import (
 type Policy struct {
 	Version      string                `yaml:"version"`
 	Roles        map[string]RolePolicy `yaml:"roles"`
-	DefaultDeny  bool                  `yaml:"default_deny"`
+	DefaultDeny  *bool                 `yaml:"default_deny"`
 	RoleBindings map[string][]string   `yaml:"role_bindings"`
 }
 
@@ -40,10 +40,12 @@ func loadPolicy(path string) (*Policy, error) {
 		return nil, fmt.Errorf("rbaclocal: invalid policy file %q: %w", path, err)
 	}
 
-	// Default default_deny to true if not explicitly set.
-	// yaml.Unmarshal leaves bool at its zero value (false) when absent, so we
-	// rely on explicit "default_deny: false" to opt out; absent means true.
-	// This is documented in the schema.
+	// default_deny is absent → default to true (secure-by-default).
+	// Using *bool lets us distinguish absent (nil) from explicit false.
+	if p.DefaultDeny == nil {
+		t := true
+		p.DefaultDeny = &t
+	}
 
 	return &p, nil
 }

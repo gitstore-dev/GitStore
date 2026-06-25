@@ -54,8 +54,15 @@ func (p *RBACLocalProvider) Authorize(_ context.Context, principal *auth.Princip
 	policy := p.policy
 	p.mu.RUnlock()
 
+	// Merge roles from role_bindings into the effective role set.
+	effectiveRoles := make([]string, len(principal.Roles))
+	copy(effectiveRoles, principal.Roles)
+	if bound, ok := policy.RoleBindings[principal.Subject]; ok {
+		effectiveRoles = append(effectiveRoles, bound...)
+	}
+
 	var anyAllow bool
-	for _, roleName := range principal.Roles {
+	for _, roleName := range effectiveRoles {
 		role, ok := policy.Roles[roleName]
 		if !ok {
 			continue
@@ -78,7 +85,7 @@ func (p *RBACLocalProvider) Authorize(_ context.Context, principal *auth.Princip
 		return auth.Allow("rbac-local", fmt.Sprintf("action %q allowed by role policy", action)), nil
 	}
 
-	if policy.DefaultDeny {
+	if policy.DefaultDeny != nil && *policy.DefaultDeny {
 		return auth.Deny("rbac-local", fmt.Sprintf("action %q not permitted (default deny)", action)), nil
 	}
 	return auth.Allow("rbac-local", fmt.Sprintf("action %q allowed (default allow)", action)), nil
