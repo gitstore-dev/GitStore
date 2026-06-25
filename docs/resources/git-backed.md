@@ -40,7 +40,7 @@ delete/re-add receives a new UID.
 
 | Resource         | Scope         | Summary                                                             | Initial spec shape                                                   |
 |------------------|---------------|---------------------------------------------------------------------|----------------------------------------------------------------------|
-| `Namespace`      | Core          | Tenant or account boundary for repositories and commerce resources. | `spec: {displayName, tier, defaults, limits}`                         |
+| `Namespace`      | Core          | Tenant or account boundary for repositories and commerce resources. | `spec: {displayName, tier, defaults, limits}`                        |
 | `Repository`     | Core          | Git repository declaration for catalog or configuration storage.    | `spec: {name, defaultBranch, visibility, storageClass, description}` |
 | `Environment`    | Core          | Deployment or runtime environment such as dev, staging, prod.       | `spec: {type, branchRef, promotionPolicy, variablesRef}`             |
 | `CatalogRelease` | Core          | Immutable publication marker for a catalog Git revision.            | `spec: {repositoryRef, gitRef, gitCommitSHA, notes}`                 |
@@ -144,11 +144,17 @@ Translated Markdown body.
 These resources describe files. They do not require binary payloads to be stored
 directly in Git. See [LFS and object storage resources](lfs-object-storage.md).
 
-| Resource       | Scope         | Summary                                                                               | Initial spec shape                                               |
-|----------------|---------------|---------------------------------------------------------------------------------------|------------------------------------------------------------------|
-| `File`         | Core          | Generic file manifest with content type, source URI, checksum, and processing hints.  | `spec: {contentType, type, source, processing}`                  |
-| `MediaAsset`   | Core          | Image, video, or audio asset with semantic usage and derived variants.                | `spec: {fileRef, role, altTextRef, focalPoint, variants}`        |
-| `DigitalAsset` | Extension/CRD | Downloadable commercial asset such as software, ebook, warranty PDF, or license file. | `spec: {fileRef, entitlementPolicyRef, deliveryPolicy, version}` |
+`File` is the technical media primitive. It owns source metadata, processing
+hints, and resolved binary variants. `MediaAsset` is a sibling catalog resource
+that references a `File` and adds presentation metadata such as `role`,
+`altTextRef`, and `focalPoint`. Do not model `MediaAsset` as a wrapper around
+`File`; the two resources have different lifecycles and ownership.
+
+| Resource       | Scope         | Summary                                                                                 | Initial spec shape                                               |
+|----------------|---------------|-----------------------------------------------------------------------------------------|------------------------------------------------------------------|
+| `File`         | Core          | Generic file manifest with content type, source URI, checksum, and processing hints.    | `spec: {contentType, type, source, processing}`                  |
+| `MediaAsset`   | Core          | Catalog-facing semantic asset that points at a `File` and adds role/alt/focal metadata. | `spec: {fileRef, role, altTextRef, focalPoint}`                  |
+| `DigitalAsset` | Extension/CRD | Downloadable commercial asset such as software, ebook, warranty PDF, or license file.   | `spec: {fileRef, entitlementPolicyRef, deliveryPolicy, version}` |
 
 Example:
 
@@ -367,7 +373,7 @@ spec:
 Default taxable goods category.
 ```
 
-## AuthZ Configuration
+## Authorization Configuration
 
 Authentication runtime records are datastore-only. These resources are
 reviewable desired-state authorization and policy configuration.

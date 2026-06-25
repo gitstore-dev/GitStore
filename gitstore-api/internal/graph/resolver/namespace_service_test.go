@@ -7,10 +7,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // ── createNamespace ────────────────────────────────────────────────────────────
@@ -30,7 +32,9 @@ func TestCreateNamespace_userTier_success(t *testing.T) {
 }
 
 func TestCreateNamespace_orgTier_success(t *testing.T) {
-	svc := newTestSvc(t, &mockGitWriter{})
+	// Wire an allow-all authz so a non-admin can create ORGANIZATION namespaces
+	// (the authz provider controls this; nil-authz fallback requires isAdmin=true).
+	svc := newTestSvcWithAuthZ(t, &mockGitWriter{}, allowall.New(zap.NewNop()))
 	input := model.CreateNamespaceInput{
 		Identifier: "acme-engineering",
 		Tier:       model.NamespaceTierOrganization,

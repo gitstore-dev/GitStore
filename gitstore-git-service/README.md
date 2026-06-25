@@ -1,4 +1,4 @@
-# gitstore-git-service
+# Git Service
 
 Rust Git storage and transport service for GitStore. It is gRPC-only and owns bare repository data on disk.
 
@@ -25,15 +25,15 @@ It does not expose public Git HTTP endpoints. Git clients enter through `gitstor
 
 ## Configuration Highlights
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `GITSTORE_GRPC__PORT` | `50051` | GitService gRPC listen port |
-| `GITSTORE_GIT__DATA_DIR` | `/data/repos` | Bare repository root |
-| `GITSTORE_GIT__REPO__MAX_FILE_SIZE` | `52428800` | Per-file size limit |
-| `GITSTORE_GIT__MAX_PACK_SIZE_BYTES` | `52428800` | Pack size limit |
-| `GITSTORE_CATALOG_SERVICE__URI` | `http://localhost:6000` | API CatalogService target |
-| `GITSTORE_LOG__LEVEL` | `info` | Log level |
-| `GITSTORE_LOG__FORMAT` | `json` | `json` or `text` |
+| Variable                            | Default                 | Purpose                     |
+|-------------------------------------|-------------------------|-----------------------------|
+| `GITSTORE_GRPC__PORT`               | `50051`                 | GitService gRPC listen port |
+| `GITSTORE_GIT__DATA_DIR`            | `/data/repos`           | Bare repository root        |
+| `GITSTORE_GIT__REPO__MAX_FILE_SIZE` | `52428800`              | Per-file size limit         |
+| `GITSTORE_GIT__MAX_PACK_SIZE_BYTES` | `52428800`              | Pack size limit             |
+| `GITSTORE_CATALOG_SERVICE__URI`     | `http://localhost:6000` | API CatalogService target   |
+| `GITSTORE_LOG__LEVEL`               | `info`                  | Log level                   |
+| `GITSTORE_LOG__FORMAT`              | `json`                  | `json` or `text`            |
 
 Hook and admission settings are loaded from defaults, optional `gitstore.toml`, and environment variables. See [docs/configuration.md](../docs/configuration.md).
 
@@ -82,13 +82,13 @@ Canonical contract: [shared/proto/gitstore/git/v1/git_service.proto](../shared/p
 
 Primary RPC groups:
 
-| Group | RPCs |
-|---|---|
-| Repository lifecycle | `CreateRepository`, `DeleteRepository` |
+| Group                     | RPCs                                    |
+|---------------------------|-----------------------------------------|
+| Repository lifecycle      | `CreateRepository`, `DeleteRepository`  |
 | Git Smart HTTP primitives | `InfoRefs`, `ReceivePack`, `UploadPack` |
-| Reads | `GetFile`, `GetFileStream`, `ListFiles` |
-| Writes | `CommitFile`, `DeleteFile` |
-| Tags | `CreateTag`, `ListTags`, `GetLatestTag` |
+| Reads                     | `GetFile`, `GetFileStream`, `ListFiles` |
+| Writes                    | `CommitFile`, `DeleteFile`              |
+| Tags                      | `CreateTag`, `ListTags`, `GetLatestTag` |
 
 ## Storage
 

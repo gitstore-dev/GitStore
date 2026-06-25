@@ -32,13 +32,13 @@ status:
 
 ## AuthN And AuthZ Checks
 
-| Resource | Scope | Summary | Initial spec shape |
-|---|---|---|---|
-| `Login` | Core | Authenticates a principal and returns a session. | `spec: {credentials, provider}` |
-| `Logout` | Core | Invalidates the current session or token. | `spec: {sessionRef, token}` |
-| `RefreshToken` | Core | Exchanges a refresh token for a new session. | `spec: {refreshToken}` |
-| `TokenReview` | Core | Authenticates or introspects a token. | `spec: {token, audiences}` |
-| `SubjectAccessReview` | Core | Checks whether a principal can perform an action on a resource. | `spec: {principal, action, resourceRef, context}` |
+| Resource              | Scope | Summary                                                         | Initial spec shape                                |
+|-----------------------|-------|-----------------------------------------------------------------|---------------------------------------------------|
+| `Login`               | Core  | Authenticates a principal and returns a session.                | `spec: {credentials, provider}`                   |
+| `Logout`              | Core  | Invalidates the current session or token.                       | `spec: {sessionRef, token}`                       |
+| `RefreshToken`        | Core  | Exchanges a refresh token for a new session.                    | `spec: {refreshToken}`                            |
+| `TokenReview`         | Core  | Authenticates or introspects a token.                           | `spec: {token, audiences}`                        |
+| `SubjectAccessReview` | Core  | Checks whether a principal can perform an action on a resource. | `spec: {principal, action, resourceRef, context}` |
 
 Example:
 
@@ -60,12 +60,12 @@ status:
 
 ## Admission And Validation
 
-| Resource | Scope | Summary | Initial spec shape |
-|---|---|---|---|
-| `AdmissionReview` | Core | Reviews a proposed resource write before persistence. | `spec: {operation, resource, oldResource, dryRun}` |
-| `ValidationReview` | Core | Performs structural validation without writing anything. | `spec: {resource, schemaRef, strict}` |
-| `CatalogDiff` | Core | Computes differences between two Git refs or releases. | `spec: {baseRef, targetRef, resourceSelector}` |
-| `ImportDryRun` | Core | Validates an import file and reports proposed changes. | `spec: {fileRef, format, mapping, options}` |
+| Resource           | Scope | Summary                                                  | Initial spec shape                                 |
+|--------------------|-------|----------------------------------------------------------|----------------------------------------------------|
+| `AdmissionReview`  | Core  | Reviews a proposed resource write before persistence.    | `spec: {operation, resource, oldResource, dryRun}` |
+| `ValidationReview` | Core  | Performs structural validation without writing anything. | `spec: {resource, schemaRef, strict}`              |
+| `CatalogDiff`      | Core  | Computes differences between two Git refs or releases.   | `spec: {baseRef, targetRef, resourceSelector}`     |
+| `ImportDryRun`     | Core  | Validates an import file and reports proposed changes.   | `spec: {fileRef, format, mapping, options}`        |
 
 Example:
 
@@ -88,15 +88,15 @@ status:
 
 ## Pricing, Tax, Shipping, And Inventory Calculations
 
-| Resource | Scope | Summary | Initial spec shape |
-|---|---|---|---|
-| `PriceQuote` | Core | Computes applicable prices for lines and context. | `spec: {lines, marketRef, channelRef, customerRef, currencyCode}` |
-| `TaxQuote` | Core | Computes taxes for checkout/order context. | `spec: {lines, addresses, taxCategoryRefs, providerRef}` |
-| `ShippingRateQuote` | Core | Returns eligible shipping methods and rates. | `spec: {destination, lines, packageHints, marketRef}` |
-| `InventoryAvailabilityReview` | Core | Checks availability for variants and quantities. | `spec: {lines, marketRef, channelRef, locationRefs}` |
-| `PromotionEvaluation` | Core | Evaluates promotion eligibility and benefits. | `spec: {cartRef, lines, customerRef, couponCodes}` |
-| `CheckoutValidation` | Core | Validates checkout readiness before order creation. | `spec: {checkoutRef, checks}` |
-| `RefundCalculation` | Core | Computes refundable amounts and adjustments. | `spec: {orderRef, lineRefs, reason, includeShipping}` |
+| Resource                      | Scope | Summary                                             | Initial spec shape                                                |
+|-------------------------------|-------|-----------------------------------------------------|-------------------------------------------------------------------|
+| `PriceQuote`                  | Core  | Computes applicable prices for lines and context.   | `spec: {lines, marketRef, channelRef, customerRef, currencyCode}` |
+| `TaxQuote`                    | Core  | Computes taxes for checkout/order context.          | `spec: {lines, addresses, taxCategoryRefs, providerRef}`          |
+| `ShippingRateQuote`           | Core  | Returns eligible shipping methods and rates.        | `spec: {destination, lines, packageHints, marketRef}`             |
+| `InventoryAvailabilityReview` | Core  | Checks availability for variants and quantities.    | `spec: {lines, marketRef, channelRef, locationRefs}`              |
+| `PromotionEvaluation`         | Core  | Evaluates promotion eligibility and benefits.       | `spec: {cartRef, lines, customerRef, couponCodes}`                |
+| `CheckoutValidation`          | Core  | Validates checkout readiness before order creation. | `spec: {checkoutRef, checks}`                                     |
+| `RefundCalculation`           | Core  | Computes refundable amounts and adjustments.        | `spec: {orderRef, lineRefs, reason, includeShipping}`             |
 
 Example:
 
@@ -123,11 +123,11 @@ status:
 Payment provider calls are transient at the API boundary. Durable outcomes are
 stored as datastore-only payment resources.
 
-| Resource | Scope | Summary | Initial spec shape |
-|---|---|---|---|
-| `FraudScoreRequest` | Core | Requests risk scoring from internal or external systems. | `spec: {checkoutRef, orderRef, paymentIntentRef, signals}` |
-| `PaymentAuthorizeRequest` | Core | Requests gateway authorization. | `spec: {paymentIntentRef, paymentMethodRef, amount, idempotencyKey}` |
-| `PaymentCaptureRequest` | Core | Requests capture of an authorization. | `spec: {authorizationRef, amount, idempotencyKey}` |
+| Resource                  | Scope | Summary                                                  | Initial spec shape                                                   |
+|---------------------------|-------|----------------------------------------------------------|----------------------------------------------------------------------|
+| `FraudScoreRequest`       | Core  | Requests risk scoring from internal or external systems. | `spec: {checkoutRef, orderRef, paymentIntentRef, signals}`           |
+| `PaymentAuthorizeRequest` | Core  | Requests gateway authorization.                          | `spec: {paymentIntentRef, paymentMethodRef, amount, idempotencyKey}` |
+| `PaymentCaptureRequest`   | Core  | Requests capture of an authorization.                    | `spec: {authorizationRef, amount, idempotencyKey}`                   |
 
 Example:
 
@@ -150,13 +150,13 @@ status:
 
 ## Search, Preview, And Upload
 
-| Resource | Scope | Summary | Initial spec shape |
-|---|---|---|---|
-| `SearchQuery` | Core | Executes a search request. | `spec: {query, filters, sort, pagination, context}` |
-| `ProductPreview` | Core | Renders or resolves a product preview from a Git ref. | `spec: {productRef, gitRef, locale, marketRef}` |
-| `UploadSession` | Core | Starts a resumable or multipart upload session. | `spec: {purpose, contentType, sizeBytes, checksum}` |
-| `PresignedUploadURL` | Core | Returns a signed URL for direct upload. | `spec: {uploadSessionRef, partNumber, expiresInSeconds}` |
-| `WebhookTest` | Core | Sends a synthetic event to a webhook endpoint. | `spec: {endpointRef, eventType, payload}` |
+| Resource             | Scope | Summary                                               | Initial spec shape                                       |
+|----------------------|-------|-------------------------------------------------------|----------------------------------------------------------|
+| `SearchQuery`        | Core  | Executes a search request.                            | `spec: {query, filters, sort, pagination, context}`      |
+| `ProductPreview`     | Core  | Renders or resolves a product preview from a Git ref. | `spec: {productRef, gitRef, locale, marketRef}`          |
+| `UploadSession`      | Core  | Starts a resumable or multipart upload session.       | `spec: {purpose, contentType, sizeBytes, checksum}`      |
+| `PresignedUploadURL` | Core  | Returns a signed URL for direct upload.               | `spec: {uploadSessionRef, partNumber, expiresInSeconds}` |
+| `WebhookTest`        | Core  | Sends a synthetic event to a webhook endpoint.        | `spec: {endpointRef, eventType, payload}`                |
 
 Example:
 

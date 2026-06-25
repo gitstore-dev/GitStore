@@ -16,6 +16,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - Rust 1.x + `tracing 0.1`, `config 0.15.22`, `regex 1` (all already present in `Cargo.toml`) (029-hook-startup-observability)
 - Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90` (code generation), `gocqlx/v3` + `gocql` (Scylla datastore), `go-playground/validator/v10`, `go.uber.org/zap` (030-remove-enterprise-namespace)
 - ScyllaDB 5.x+ in production; `go-memdb` in development — no new migrations required (030-remove-enterprise-namespace)
+- Go 1.25 (gitstore-api) + `golang-jwt/v5 v5.3.1` (already in go.mod), `github.com/spf13/viper v1.21.0`, `go.uber.org/zap v1.28.0`, `golang.org/x/crypto` (bcrypt, already in go.mod) (031-pluggable-authn-authz)
+- In-memory only (`sync.Map` for session blacklist) — no datastore changes (031-pluggable-authn-authz)
 
 ## Commands
 
@@ -55,9 +57,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 031-pluggable-authn-authz: Added Go 1.25 (gitstore-api) + `golang-jwt/v5 v5.3.1` (already in go.mod), `github.com/spf13/viper v1.21.0`, `go.uber.org/zap v1.28.0`, `golang.org/x/crypto` (bcrypt, already in go.mod)
 - 030-remove-enterprise-namespace: Added Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90` (code generation), `gocqlx/v3` + `gocql` (Scylla datastore), `go-playground/validator/v10`, `go.uber.org/zap`
 - 029-hook-startup-observability: Added Rust 1.x + `tracing 0.1`, `config 0.15.22`, `regex 1` (all already present in `Cargo.toml`)
-- 028-branch-deletion-admission: Added Rust 1.x (`gitstore-git-service`); Go 1.25 (`gitstore-api`) + `gix 0.84.0`, `tonic 0.14`, `tokio 1.35` (Rust); no new Go deps
 
 
 <!-- MANUAL ADDITIONS START -->
@@ -88,5 +90,5 @@ Common bootstrap variables:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/024-product-variant/plan.md
+at specs/031-pluggable-authn-authz/plan.md
 <!-- SPECKIT END -->

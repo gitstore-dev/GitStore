@@ -479,7 +479,7 @@ Check that:
 
 ### Images Or Media Do Not Load
 
-Catalogue manifests reference media; they do not make GitStore an image CDN. Host images or binary assets externally or through a future file-resource workflow, then reference them from catalogue resources.
+Catalogue manifests reference media; they do not make GitStore an image CDN. Host images or binary assets externally or through the File workflow, then reference them from catalogue resources. Use `File` for the technical asset and `MediaAsset` for catalog-facing presentation metadata.
 
 ## Best Practices
 

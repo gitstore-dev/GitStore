@@ -8,6 +8,7 @@ package resolver
 import (
 	"context"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
@@ -15,6 +16,10 @@ import (
 
 // CreateRepository is the resolver for the createRepository field.
 func (r *mutationResolver) CreateRepository(ctx context.Context, input model.CreateRepositoryInput) (*model.CreateRepositoryPayload, error) {
+	p := auth.PrincipalFromContext(ctx)
+	if p == nil || p.AuthMethod == "none" {
+		return nil, gqlerror.Errorf("authentication required")
+	}
 	namespaceID, err := decodeNodeIDAs(nodeKindNamespace, input.NamespaceID)
 	if err != nil {
 		return nil, err
@@ -44,6 +49,10 @@ func (r *mutationResolver) CreateRepository(ctx context.Context, input model.Cre
 
 // RenameRepository is the resolver for the renameRepository field.
 func (r *mutationResolver) RenameRepository(ctx context.Context, input model.RenameRepositoryInput) (*model.RenameRepositoryPayload, error) {
+	p := auth.PrincipalFromContext(ctx)
+	if p == nil || p.AuthMethod == "none" {
+		return nil, gqlerror.Errorf("authentication required")
+	}
 	repoID, err := decodeNodeIDAs(nodeKindRepository, input.RepositoryID)
 	if err != nil {
 		return nil, err
@@ -68,6 +77,10 @@ func (r *mutationResolver) RenameRepository(ctx context.Context, input model.Ren
 
 // TransferRepository is the resolver for the transferRepository field.
 func (r *mutationResolver) TransferRepository(ctx context.Context, input model.TransferRepositoryInput) (*model.TransferRepositoryPayload, error) {
+	p := auth.PrincipalFromContext(ctx)
+	if p == nil || p.AuthMethod == "none" {
+		return nil, gqlerror.Errorf("authentication required")
+	}
 	repoID, err := decodeNodeIDAs(nodeKindRepository, input.RepositoryID)
 	if err != nil {
 		return nil, err
@@ -96,6 +109,10 @@ func (r *mutationResolver) TransferRepository(ctx context.Context, input model.T
 
 // DeleteRepository is the resolver for the deleteRepository field.
 func (r *mutationResolver) DeleteRepository(ctx context.Context, input model.DeleteRepositoryInput) (*model.DeleteRepositoryPayload, error) {
+	p := auth.PrincipalFromContext(ctx)
+	if p == nil || p.AuthMethod == "none" {
+		return nil, gqlerror.Errorf("authentication required")
+	}
 	repoID, err := decodeNodeIDAs(nodeKindRepository, input.RepositoryID)
 	if err != nil {
 		return nil, err

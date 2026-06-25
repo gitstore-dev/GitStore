@@ -72,7 +72,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), authMiddleware, nil, nil)
+	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), authMiddleware, nil, nil, nil)
 	require.NoError(t, err)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
@@ -184,7 +184,7 @@ func TestGraphQLHandlerRejectsNamespaceMutationWithoutBearerToken(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), authMiddleware, nil, nil)
+	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), authMiddleware, nil, nil, nil)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
 		"query": "mutation { createNamespace(input: { identifier: \"alice\", tier: USER }) { namespace { identifier } } }"

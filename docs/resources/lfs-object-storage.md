@@ -53,30 +53,30 @@ Alt text or file description.
 
 ## Git-Backed Manifests
 
-| Resource | Scope | Summary | Initial spec shape |
-|---|---|---|---|
-| `File` | Core | Generic file manifest with source URI, checksum, content type, and processing hints. | `spec: {contentType, type, source, processing}` |
-| `MediaAsset` | Core | Catalog media manifest for images, videos, audio, and derived variants. | `spec: {fileRef, role, focalPoint, altTextRef, variants}` |
-| `DigitalAsset` | Extension/CRD | Downloadable commerce asset controlled by entitlement or delivery rules. | `spec: {fileRef, entitlementPolicyRef, deliveryPolicy, version}` |
+| Resource       | Scope         | Summary                                                                              | Initial spec shape                                               |
+|----------------|---------------|--------------------------------------------------------------------------------------|------------------------------------------------------------------|
+| `File`         | Core          | Generic file manifest with source URI, checksum, content type, and processing hints. | `spec: {contentType, type, source, processing}`                  |
+| `MediaAsset`   | Core          | Catalog-facing semantic asset that points at a `File` and adds role/alt/focal metadata. | `spec: {fileRef, role, focalPoint, altTextRef}`                  |
+| `DigitalAsset` | Extension/CRD | Downloadable commerce asset controlled by entitlement or delivery rules.             | `spec: {fileRef, entitlementPolicyRef, deliveryPolicy, version}` |
 
 ## Payload Classes
 
 These are not usually standalone API resources. They are payload classes
 referenced by `File`, `MediaAsset`, `DigitalAsset`, or datastore-only records.
 
-| Payload class | Scope | Preferred storage | Summary | Initial metadata shape |
-|---|---|---|---|---|
-| `ProductImageOriginal` | Core | Git LFS or object storage | Original catalog image. | `{contentType, sizeBytes, checksum, sourceRef}` |
-| `ProductImageVariant` | Core | Object storage | Generated resized or reformatted image. | `{originalRef, width, height, format, url}` |
-| `VideoOriginal` | Extension/CRD | Object storage | Original product or content video. | `{contentType, sizeBytes, checksum, duration}` |
-| `VideoTranscode` | Extension/CRD | Object storage | Generated video rendition. | `{originalRef, codec, bitrate, resolution, url}` |
-| `DocumentAsset` | Core | Git LFS or object storage | Manual, warranty, spec sheet, certificate, or PDF. | `{contentType, checksum, locale, title}` |
-| `ImportExportFile` | Core | Object storage | Bulk import, export, report, or reconciliation file. | `{jobRef, contentType, checksum, expiresAt}` |
-| `CustomerUpload` | Core | Object storage | File uploaded by a customer, such as return evidence. | `{customerRef, purpose, contentType, retention}` |
-| `InvoicePDF` | Core | Object storage | Generated invoice or credit note PDF. | `{orderRef, invoiceNumber, contentType, checksum}` |
-| `ReturnLabel` | Core | Object storage | Carrier-generated return label. | `{returnRef, carrier, trackingNumber, contentType}` |
-| `WebhookPayloadArchive` | Core | Object storage | Archived inbound or outbound webhook body. | `{deliveryRef, eventType, checksum, retainedUntil}` |
-| `BackupArtifact` | Extension/CRD | Object storage | Backup, restore, or migration artifact. | `{source, createdAt, checksum, encryptionRef}` |
+| Payload class           | Scope         | Preferred storage         | Summary                                               | Initial metadata shape                              |
+|-------------------------|---------------|---------------------------|-------------------------------------------------------|-----------------------------------------------------|
+| `ProductImageOriginal`  | Core          | Git LFS or object storage | Original catalog image.                               | `{contentType, sizeBytes, checksum, sourceRef}`     |
+| `ProductImageVariant`   | Core          | Object storage            | Generated resized or reformatted image.               | `{originalRef, width, height, format, url}`         |
+| `VideoOriginal`         | Extension/CRD | Object storage            | Original product or content video.                    | `{contentType, sizeBytes, checksum, duration}`      |
+| `VideoTranscode`        | Extension/CRD | Object storage            | Generated video rendition.                            | `{originalRef, codec, bitrate, resolution, url}`    |
+| `DocumentAsset`         | Core          | Git LFS or object storage | Manual, warranty, spec sheet, certificate, or PDF.    | `{contentType, checksum, locale, title}`            |
+| `ImportExportFile`      | Core          | Object storage            | Bulk import, export, report, or reconciliation file.  | `{jobRef, contentType, checksum, expiresAt}`        |
+| `CustomerUpload`        | Core          | Object storage            | File uploaded by a customer, such as return evidence. | `{customerRef, purpose, contentType, retention}`    |
+| `InvoicePDF`            | Core          | Object storage            | Generated invoice or credit note PDF.                 | `{orderRef, invoiceNumber, contentType, checksum}`  |
+| `ReturnLabel`           | Core          | Object storage            | Carrier-generated return label.                       | `{returnRef, carrier, trackingNumber, contentType}` |
+| `WebhookPayloadArchive` | Core          | Object storage            | Archived inbound or outbound webhook body.            | `{deliveryRef, eventType, checksum, retainedUntil}` |
+| `BackupArtifact`        | Extension/CRD | Object storage            | Backup, restore, or migration artifact.               | `{source, createdAt, checksum, encryptionRef}`      |
 
 ## Object URI References
 
@@ -122,3 +122,8 @@ source:
 
 The `SecretRef` target is not a Git-backed secret. It should resolve through the
 deployment secret manager or Kubernetes secret integration.
+
+`File` is the technical binary/media primitive. It owns the manifest, source
+metadata, processing hints, and resolved variants. `MediaAsset` is a sibling
+catalog resource that points at a `File` and adds presentation metadata such as
+`role`, `altTextRef`, and `focalPoint`.
