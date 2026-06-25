@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
@@ -40,6 +41,7 @@ var reservedIdentifiers = map[string]struct{}{
 type Service struct {
 	store     datastore.Datastore
 	gitWriter GitWriter
+	authz     auth.AuthZProvider
 	logger    *zap.Logger
 	clock     apiruntime.Clock
 	ids       apiruntime.IDGenerator
@@ -59,6 +61,7 @@ type GitWriter interface {
 type ServiceDeps struct {
 	Store       datastore.Datastore
 	GitWriter   GitWriter
+	AuthZ       auth.AuthZProvider
 	Logger      *zap.Logger
 	Clock       apiruntime.Clock
 	IDGenerator apiruntime.IDGenerator
@@ -83,6 +86,7 @@ func NewService(deps ServiceDeps) (*Service, error) {
 	return &Service{
 		store:     deps.Store,
 		gitWriter: deps.GitWriter,
+		authz:     deps.AuthZ,
 		logger:    deps.Logger,
 		clock:     clock,
 		ids:       ids,
@@ -240,6 +244,27 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 	}
 	tier := datastoreNamespaceTierFromModel(input.Tier)
 
+	// ORGANIZATION namespaces require explicit authorization.
+	if tier == datastore.NamespaceTierOrganization {
+		principal := auth.PrincipalFromContext(ctx)
+		if principal == nil {
+			principal = auth.Anonymous()
+		}
+		if s.authz != nil {
+			decision, err := s.authz.Authorize(ctx, principal, "namespace.create.organization",
+				auth.ResourceContext{Kind: "namespace", Attrs: map[string]any{"tier": string(tier)}})
+			if err != nil {
+				return nil, gqlerror.Errorf("authorization error")
+			}
+			if decision.Outcome == auth.OutcomeDeny {
+				return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
+			}
+		} else if !isAdmin {
+			// Fallback when no authz provider is wired (tests using nil Service.authz).
+			return nil, gqlerror.Errorf("permission denied: only admins can create ORGANIZATION namespaces")
+		}
+	}
+
 	now := s.clock.Now()
 	var displayName string
 	if input.DisplayName != nil {
@@ -315,7 +340,27 @@ func (s *Service) DeleteNamespace(ctx context.Context, identifier string, caller
 		return gqlerror.Errorf("failed to retrieve namespace")
 	}
 
-	if ns.CreatedBy != callerUsername && !isAdmin {
+	// Determine whether this is own-namespace or any-namespace deletion.
+	isOwner := ns.CreatedBy == callerUsername
+	action := "namespace.delete.any"
+	if isOwner {
+		action = "namespace.delete.own"
+	}
+	principal := auth.PrincipalFromContext(ctx)
+	if principal == nil {
+		principal = auth.Anonymous()
+	}
+	if s.authz != nil {
+		decision, err := s.authz.Authorize(ctx, principal, action,
+			auth.ResourceContext{Kind: "namespace", Name: identifier, OwnerSub: ns.CreatedBy})
+		if err != nil {
+			return gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return gqlerror.Errorf("permission denied: %s", decision.Reason)
+		}
+	} else if !isOwner && !isAdmin {
+		// Fallback for tests using nil authz.
 		return gqlerror.Errorf("permission denied: only the namespace owner or an admin may delete this namespace")
 	}
 

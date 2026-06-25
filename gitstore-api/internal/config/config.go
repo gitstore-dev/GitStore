@@ -44,8 +44,36 @@ type GitEndpointConfig struct {
 
 // AuthConfig holds authentication and JWT settings.
 type AuthConfig struct {
-	Admin UserConfig `mapstructure:"admin"`
-	JWT   JWTConfig  `mapstructure:"jwt"`
+	Admin   UserConfig    `mapstructure:"admin"`
+	JWT     JWTConfig     `mapstructure:"jwt"`
+	AuthN   AuthNConfig   `mapstructure:"authn"`
+	AuthZ   AuthZConfig   `mapstructure:"authz"`
+	UserDir UserDirConfig `mapstructure:"userdir"`
+	RBAC    RBACConfig    `mapstructure:"rbac"`
+}
+
+// AuthNConfig controls the authentication provider chain.
+type AuthNConfig struct {
+	// Chain is the ordered list of AuthN provider names. Defaults to ["static-admin","anonymous"].
+	Chain []string `mapstructure:"chain"`
+}
+
+// AuthZConfig selects the active authorization provider.
+type AuthZConfig struct {
+	// Provider is the AuthZ provider name. Defaults to "allow-all".
+	Provider string `mapstructure:"provider"`
+}
+
+// UserDirConfig selects the active user-directory provider.
+type UserDirConfig struct {
+	// Provider is the UserDir provider name. Defaults to "none".
+	Provider string `mapstructure:"provider"`
+}
+
+// RBACConfig holds rbac-local provider settings.
+type RBACConfig struct {
+	// PolicyFile is the path to the YAML policy file. Defaults to "policy.yaml".
+	PolicyFile string `mapstructure:"policy_file"`
 }
 
 // JWTConfig holds JWT token settings.
@@ -115,6 +143,10 @@ func Load() (*Config, error) {
 	v.SetDefault("auth.jwt.secret", "")
 	v.SetDefault("auth.jwt.duration", "24h")
 	v.SetDefault("auth.jwt.issuer", "gitstore")
+	v.SetDefault("auth.authn.chain", []string{"static-admin", "anonymous"})
+	v.SetDefault("auth.authz.provider", "allow-all")
+	v.SetDefault("auth.userdir.provider", "none")
+	v.SetDefault("auth.rbac.policy_file", "policy.yaml")
 	v.SetDefault("datastore.backend", "memdb")
 	v.SetDefault("datastore.scylla.hosts", []string{"localhost:9042"})
 	v.SetDefault("datastore.scylla.keyspace", "gitstore")
@@ -156,6 +188,8 @@ func Load() (*Config, error) {
 		"cache.ttl": true, "log.level": true, "log.format": true,
 		"auth.admin.username": true, "auth.admin.password_hash": true,
 		"auth.jwt.secret": true, "auth.jwt.duration": true, "auth.jwt.issuer": true,
+		"auth.authn.chain": true, "auth.authz.provider": true,
+		"auth.userdir.provider": true, "auth.rbac.policy_file": true,
 		"datastore.backend": true, "datastore.scylla.hosts": true,
 		"datastore.scylla.keyspace": true, "datastore.scylla.username": true,
 		"datastore.scylla.password": true, "datastore.scylla.tls": true,

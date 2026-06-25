@@ -40,11 +40,6 @@ Login mutation input (Relay pattern)
 """
 input LoginInput {
   """
-  Client mutation ID for request tracking (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
   Username
   """
   username: String!
@@ -60,11 +55,6 @@ Login mutation payload (Relay pattern)
 """
 type LoginPayload {
   """
-  Client mutation ID for request tracking (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
   Authentication session (token + user info)
   """
   session: AuthSession
@@ -75,6 +65,7 @@ Logout mutation input (Relay pattern)
 """
 input LogoutInput {
   """
+  TODO: Is it safe to remove and empty Input?
   Client mutation ID for request tracking (Relay pattern)
   """
   clientMutationId: String
@@ -84,11 +75,6 @@ input LogoutInput {
 Logout mutation payload (Relay pattern)
 """
 type LogoutPayload {
-  """
-  Client mutation ID for request tracking (Relay pattern)
-  """
-  clientMutationId: String
-
   """
   Success indicator
   """
@@ -100,6 +86,7 @@ Refresh token mutation input (Relay pattern)
 """
 input RefreshTokenInput {
   """
+  TODO: Is it safe to remove and empty Input?
   Client mutation ID for request tracking (Relay pattern)
   """
   clientMutationId: String
@@ -109,11 +96,6 @@ input RefreshTokenInput {
 Refresh token mutation payload (Relay pattern)
 """
 type RefreshTokenPayload {
-  """
-  Client mutation ID for request tracking (Relay pattern)
-  """
-  clientMutationId: String
-
   """
   New authentication session
   """

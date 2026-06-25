@@ -6,7 +6,7 @@ name: CI Proto
 
 on:
   push:
-    branches: [ main, 'feature/**', '[0-9]+-*' ]
+    branches: [ main ]
     paths:
       - 'shared/proto/**'
   pull_request:

@@ -88,7 +88,7 @@ The recommended ordered backlog, optimized for small independently mergeable inc
 4. **#67 API driven repository creation close-out** — the docs show this mostly exists, so close the gap and resolve ambiguity. [18]  
 5. **#77 Product frontmatter** — finish the still-open core resource. [19]  
 6. **#82 CategoryTaxonomy completion** — especially the remaining deletion and controller semantics. [20]  
-7. **#79 File frontmatter baseline** — storefront and media work depend on this. [21]  
+7. **#79 File frontmatter baseline** — storefront media primitives depend on this; `MediaAsset` remains a separate follow-on layer. [21]  
 8. **#134 Separate Markdown Parsing Layer from Catalog Validation** — prevents validator complexity from swallowing resource evolution. [22]  
 9. **#137 Object Lifecycle Versioning Contract** — make rename/edit/delete/recreate semantics explicit. [23]  
 10. **#143 ProductVariant as sellable unit** — force downstream flows to target the right primitive. [24]  
@@ -179,7 +179,7 @@ The missing issues below would make the roadmap materially more executable:
 | Implement datastore-only `PaymentIntent` API and provider abstraction     | Phase 3 MVP    | `area/checkout`                        | p1       | Runtime Order API                    | Provider-agnostic contract, sandbox provider, idempotency, tests        |
 | Implement inventory runtime baseline                                      | Phase 3 MVP    | `area/catalog` or new `area/inventory` | p1       | #143, pricing runtime                | `StockLevel`, ledger, reservation, allocation, availability snapshot    |
 | Implement fulfillment runtime baseline                                    | Phase 3 MVP    | `area/checkout`                        | p2       | Runtime Order API, inventory runtime | FulfillmentOrder, Fulfillment, Shipment, tracking query path            |
-| Add object-storage upload and signed URL workflow for `File`/`MediaAsset` | Phase 2 beta   | `area/catalog`                         | p2       | #79                                  | Signed upload/download flow, checksum enforcement, processing kickoff   |
+| Add object-storage upload and signed URL workflow for `File` | Phase 2 beta   | `area/catalog`                         | p2       | #79                                  | Signed upload/download flow, checksum enforcement, processing kickoff   |
 | Add CRD registration and schema discovery API                             | Phase 4 stable | `area/crd`                             | p2       | #140                                 | Register schema, validate instance, list CRDs, docs, tests              |
 | Add backup/restore and disaster-recovery runbook                          | Phase 4 stable | `area/infra`                           | p1       | Scylla production profile            | Backup procedure, restore drill, RPO/RTO documented, test evidence      |
 | Add load and scale test suite for admission/watch/cart flows              | Phase 4 stable | `area/infra`                           | p1       | Beta+MVP core complete               | Reproducible load tests, latency/error budgets, report docs             |
