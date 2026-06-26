@@ -87,7 +87,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	}
 	store = datastore.NewInstrumentedDatastore(store, cfg.Datastore.Backend, log)
 
-	gitClient, err := gitclient.NewClientWithAddr(cfg.Git.Grpc.Uri)
+	gitClient, err := gitclient.NewClientWithAddr(cfg.Git.Grpc.Uri, cfg.Auth.Grpc.HmacSecret)
 	if err != nil {
 		store.Close()
 		return nil, fmt.Errorf("connect git-service: %w", err)

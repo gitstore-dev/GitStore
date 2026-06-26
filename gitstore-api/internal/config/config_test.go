@@ -34,6 +34,7 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_DATASTORE__SCYLLA__USERNAME",
 		"GITSTORE_DATASTORE__SCYLLA__PASSWORD",
 		"GITSTORE_DATASTORE__SCYLLA__TLS",
+		"GITSTORE_AUTH__GRPC__HMAC_SECRET",
 	}
 	saved := make(map[string]string, len(keys))
 	for _, k := range keys {
@@ -51,12 +52,13 @@ func clearEnv(t *testing.T) func() {
 	}
 }
 
-// setRequiredAuth sets the three required auth env vars.
+// setRequiredAuth sets the required auth env vars including the gRPC HMAC secret.
 func setRequiredAuth(t *testing.T) {
 	t.Helper()
 	os.Setenv("GITSTORE_AUTH__ADMIN__USERNAME", "admin")
 	os.Setenv("GITSTORE_AUTH__ADMIN__PASSWORD_HASH", "$2a$12$hash")
 	os.Setenv("GITSTORE_AUTH__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
+	os.Setenv("GITSTORE_AUTH__GRPC__HMAC_SECRET", "ci-test-grpc-hmac-secret")
 }
 
 // T005: layered loading tests
@@ -183,6 +185,7 @@ func TestLoad_EnvFileLoadsWithoutShellVars(t *testing.T) {
 	envContent := `GITSTORE_AUTH__ADMIN__USERNAME=envfileuser
 GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$2a$12$hash
 GITSTORE_AUTH__JWT__SECRET=supersecretkey-minimum-32-chars!!
+GITSTORE_AUTH__GRPC__HMAC_SECRET=ci-test-grpc-hmac-secret
 GITSTORE_LOG__LEVEL=warn
 `
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(envContent), 0600))
@@ -293,6 +296,20 @@ func TestLoad_MultipleValidationErrorsReportedTogether(t *testing.T) {
 	assert.Contains(t, err.Error(), "Admin.Username")
 	assert.Contains(t, err.Error(), "Admin.Password")
 	assert.Contains(t, err.Error(), "JWT.Secret")
+}
+
+// T028: missing HMAC secret causes startup failure
+func TestLoad_MissingGrpcHmacSecretReturnsError(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	os.Setenv("GITSTORE_AUTH__ADMIN__USERNAME", "admin")
+	os.Setenv("GITSTORE_AUTH__ADMIN__PASSWORD_HASH", "$2a$12$hash")
+	os.Setenv("GITSTORE_AUTH__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
+	// GITSTORE_AUTH__GRPC__HMAC_SECRET intentionally absent
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Grpc")
 }
 
 // T021: unknown keys in config file produce a log warning and do not abort startup

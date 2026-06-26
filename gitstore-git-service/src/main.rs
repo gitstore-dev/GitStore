@@ -10,6 +10,7 @@ use tracing::{error, info};
 
 use std::sync::Arc;
 
+use gitstore::auth::interceptor::HmacInterceptor;
 use gitstore::git::hooks::validation_handler::SchemaValidationHandler;
 use gitstore::git::hooks::{
     admission_handler::AdmissionControlHandler, HookPipeline, NoopAdmissionHandler,
@@ -121,13 +122,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         admission_handler,
     ));
     let grpc_service = GitServiceImpl::with_pipeline(data_path.clone(), hook_pipeline);
+    let interceptor = HmacInterceptor::new(
+        &cfg.auth.grpc.hmac_secret,
+        cfg.auth.grpc.hmac_secret_previous.as_deref(),
+    );
+    info!(
+        rotation_window_open = cfg.auth.grpc.hmac_secret_previous.is_some(),
+        "gRPC HMAC auth active"
+    );
     info!(
         grpc_port = cfg.grpc.port,
         "gRPC server starting on {}", grpc_addr
     );
     let grpc_handle = tokio::spawn(async move {
         if let Err(e) = tonic::transport::Server::builder()
-            .add_service(GitServiceServer::new(grpc_service))
+            .add_service(GitServiceServer::with_interceptor(
+                grpc_service,
+                interceptor,
+            ))
             .serve(grpc_addr)
             .await
         {
