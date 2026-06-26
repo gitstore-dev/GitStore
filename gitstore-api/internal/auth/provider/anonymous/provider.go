@@ -39,3 +39,7 @@ func (p *AnonymousProvider) RevokeSession(_ context.Context, _ string, _ time.Ti
 func (p *AnonymousProvider) RefreshSession(_ context.Context, _ string) (string, time.Time, error) {
 	return "", time.Time{}, auth.ErrNotSupported
 }
+
+func (p *AnonymousProvider) IssueSession(_ context.Context, _ string) (string, time.Time, error) {
+	return "", time.Time{}, auth.ErrNotSupported
+}

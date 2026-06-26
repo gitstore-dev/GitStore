@@ -44,6 +44,10 @@ func (s *stubProvider) RefreshSession(_ context.Context, _ string) (string, time
 	return "", time.Time{}, authpkg.ErrNotSupported
 }
 
+func (s *stubProvider) IssueSession(_ context.Context, _ string) (string, time.Time, error) {
+	return "", time.Time{}, authpkg.ErrNotSupported
+}
+
 func TestChain_FirstAllowWins(t *testing.T) {
 	p1 := &stubProvider{name: "p1", outcome: authpkg.OutcomeAllow, reason: "ok"}
 	p2 := &stubProvider{name: "p2", outcome: authpkg.OutcomeAllow, reason: "ok too"}

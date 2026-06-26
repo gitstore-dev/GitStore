@@ -7,7 +7,12 @@ package resolver
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"net/http"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
@@ -15,30 +20,73 @@ import (
 
 // Login is the resolver for the login field.
 func (r *mutationResolver) Login(ctx context.Context, input model.LoginInput) (*model.LoginPayload, error) {
+	return r.Resolver.Login(ctx, input)
+}
+
+// Login implements the login mutation on the base Resolver so it can be unit-tested directly.
+func (r *Resolver) Login(ctx context.Context, input model.LoginInput) (*model.LoginPayload, error) {
+	// Legacy fallback: when the registry is absent (e.g. test helpers that only wire
+	// authMiddleware), delegate to the old credential-check path so existing integration
+	// tests continue to pass without configuration changes.
+	if r.registry == nil {
+		return r.loginLegacy(ctx, input)
+	}
+
+	creds := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", input.Username, input.Password)))
+	req := auth.AuthRequest{
+		Header: http.Header{"Authorization": []string{"Basic " + creds}},
+	}
+
+	principal, decision, err := r.registry.AuthN().Authenticate(ctx, req)
+	if err != nil {
+		r.logger.Debug("login auth error", zap.Error(err))
+		return nil, gqlerror.Errorf("invalid username or password")
+	}
+	if decision.Outcome != auth.OutcomeAllow {
+		r.logger.Debug("login denied", zap.String("reason", decision.Reason))
+		return nil, gqlerror.Errorf("invalid username or password")
+	}
+
+	token, exp, err := r.registry.AuthN().IssueSession(ctx, principal.Subject)
+	if err != nil {
+		if errors.Is(err, auth.ErrNotSupported) {
+			r.logger.Error("no auth provider supports IssueSession")
+			return nil, gqlerror.Errorf("authentication service unavailable")
+		}
+		r.logger.Error("failed to issue session token", zap.String("subject", principal.Subject), zap.Error(err))
+		return nil, gqlerror.Errorf("internal server error")
+	}
+
+	r.logger.Debug("login succeeded", zap.String("subject", principal.Subject), zap.String("provider", decision.Provider))
+	return &model.LoginPayload{
+		Session: &model.AuthSession{
+			Token:     token,
+			ExpiresAt: exp,
+			User: &model.User{
+				Username: principal.Subject,
+				IsAdmin:  principal.IsAdmin(),
+			},
+		},
+	}, nil
+}
+
+// loginLegacy is the pre-Phase-3 login path used when no ProviderRegistry is configured.
+func (r *Resolver) loginLegacy(ctx context.Context, input model.LoginInput) (*model.LoginPayload, error) {
 	if r.authMiddleware == nil {
 		r.logger.Error("auth middleware not configured")
 		return nil, gqlerror.Errorf("authentication service unavailable")
 	}
-
 	if !r.authMiddleware.ValidateCredentials(input.Username, input.Password) {
-		r.logger.Debug("invalid credentials attempt",
-			zap.String("username", input.Username),
-		)
+		r.logger.Debug("invalid credentials attempt", zap.String("username", input.Username))
 		return nil, gqlerror.Errorf("invalid username or password")
 	}
-
 	token, err := r.authMiddleware.GenerateSessionToken(input.Username, true)
 	if err != nil {
-		r.logger.Error("failed to generate session token",
-			zap.String("username", input.Username),
-			zap.Error(err),
-		)
+		r.logger.Error("failed to generate session token", zap.String("username", input.Username), zap.Error(err))
 		return nil, gqlerror.Errorf("internal server error")
 	}
-
 	expiresAt := r.clock.Now().Add(r.authMiddleware.GetTokenDuration())
 	return &model.LoginPayload{
-		ClientMutationID: input.ClientMutationID,
 		Session: &model.AuthSession{
 			Token:     token,
 			ExpiresAt: expiresAt,
@@ -52,10 +100,83 @@ func (r *mutationResolver) Login(ctx context.Context, input model.LoginInput) (*
 
 // Logout is the resolver for the logout field.
 func (r *mutationResolver) Logout(ctx context.Context, input model.LogoutInput) (*model.LogoutPayload, error) {
-	return nil, gqlerror.Errorf("not implemented: Logout")
+	return r.Resolver.Logout(ctx, input)
+}
+
+// Logout implements the logout mutation on the base Resolver so it can be unit-tested directly.
+func (r *Resolver) Logout(ctx context.Context, input model.LogoutInput) (*model.LogoutPayload, error) {
+	if r.registry == nil {
+		return nil, gqlerror.Errorf("authentication service unavailable")
+	}
+
+	principal := auth.PrincipalFromContext(ctx)
+	if principal == nil || principal.AuthMethod == "none" {
+		return nil, gqlerror.Errorf("authentication required")
+	}
+
+	// Empty TokenID means a Basic Auth session with no jti — nothing to revoke.
+	if principal.TokenID != "" {
+		err := r.registry.AuthN().RevokeSession(ctx, principal.TokenID, principal.ExpiresAt)
+		if err != nil {
+			if errors.Is(err, auth.ErrNotSupported) {
+				r.logger.Warn("logout not supported by active auth configuration")
+				return nil, gqlerror.Errorf("logout not supported by active auth configuration")
+			}
+			r.logger.Error("failed to revoke session", zap.String("subject", principal.Subject), zap.Error(err))
+			return nil, gqlerror.Errorf("internal server error")
+		}
+	}
+
+	r.logger.Debug("logout succeeded", zap.String("subject", principal.Subject))
+	return &model.LogoutPayload{Success: true}, nil
 }
 
 // RefreshToken is the resolver for the refreshToken field.
 func (r *mutationResolver) RefreshToken(ctx context.Context, input model.RefreshTokenInput) (*model.RefreshTokenPayload, error) {
-	return nil, gqlerror.Errorf("not implemented: RefreshToken")
+	return r.Resolver.RefreshToken(ctx, input)
+}
+
+// RefreshToken implements the refreshToken mutation on the base Resolver so it can be unit-tested directly.
+func (r *Resolver) RefreshToken(ctx context.Context, input model.RefreshTokenInput) (*model.RefreshTokenPayload, error) {
+	if r.registry == nil {
+		return nil, gqlerror.Errorf("authentication service unavailable")
+	}
+
+	rawToken := auth.RawTokenFromContext(ctx)
+	if rawToken == "" {
+		return nil, gqlerror.Errorf("authentication required")
+	}
+
+	newToken, exp, err := r.registry.AuthN().RefreshSession(ctx, rawToken)
+	if err != nil {
+		switch {
+		case errors.Is(err, auth.ErrNotSupported):
+			return nil, gqlerror.Errorf("token refresh not supported by active auth configuration")
+		case errors.Is(err, auth.ErrTokenTooOld):
+			return nil, gqlerror.Errorf("token too old to refresh, please log in again")
+		case errors.Is(err, auth.ErrTokenRevoked):
+			return nil, gqlerror.Errorf("token has been revoked")
+		default:
+			r.logger.Error("token refresh failed", zap.Error(err))
+			return nil, gqlerror.Errorf("internal server error")
+		}
+	}
+
+	principal := auth.PrincipalFromContext(ctx)
+	if principal == nil {
+		r.logger.Error("token refreshed but principal missing from context")
+		return nil, gqlerror.Errorf("internal server error")
+	}
+
+	r.logger.Debug("token refreshed", zap.String("subject", principal.Subject))
+	return &model.RefreshTokenPayload{
+		Session: &model.AuthSession{
+			Token:     newToken,
+			ExpiresAt: exp,
+			User: &model.User{
+				Username: principal.Subject,
+				IsAdmin:  principal.IsAdmin(),
+			},
+		},
+	}, nil
 }

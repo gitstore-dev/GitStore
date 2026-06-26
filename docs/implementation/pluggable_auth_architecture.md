@@ -1099,12 +1099,13 @@ fn default_http_auth_mode() -> String { "header".into() }
 **Test strategy:** Service-layer unit tests for createNamespace (ENTERPRISE tier rejection) and deleteNamespace (non-owner rejection) with both `allow-all` and `rbac-local` providers. Golden-path test: admin can create ENTERPRISE namespace; non-admin cannot.
 **Rollback trigger:** Either of the two existing auth checks behaves differently from before.
 
-### Phase 3 — Logout and RefreshToken mutations implemented
+### Phase 3 — Logout and RefreshToken mutations implemented ✅ (branch: 032-auth-phase-3)
 **Milestone:** `auth-framework-v1`
-**Deliverable:** `Logout` mutation calls `ChainedAuthN.RevokeSession`; `RefreshToken` mutation calls `ChainedAuthN.RefreshSession`; `StaticAdminProvider` blacklist is functional.
-**Affected packages:** `gitstore-api/internal/graph/resolver/`, `gitstore-api/internal/auth/provider/staticadmin/`
-**Test strategy:** Integration test: issue token, call Logout, verify subsequent API calls return 401; call RefreshToken, verify new token works and old token is rejected.
-**Rollback trigger:** Logout or RefreshToken returns 500 or leaves token valid after revocation.
+**Deliverable:** `Logout` mutation calls `ChainedAuthN.RevokeSession`; `RefreshToken` mutation calls `ChainedAuthN.RefreshSession`; `StaticAdminProvider` blacklist is functional. `Login` resolver migrated away from legacy `authMiddleware` stubs — `user.isAdmin` and `user.username` now derived from `Principal`. `IssueSession` added to `AuthNProvider` interface. `Principal.TokenID` carries JWT `jti`. `ContextWithRawToken`/`RawTokenFromContext` store the raw Bearer string for refresh. `GITSTORE_AUTH__JWT__REFRESH_GRACE` (default `60s`) bounds the refresh window.
+**Affected packages:** `gitstore-api/internal/auth/types.go`, `gitstore-api/internal/auth/context.go`, `gitstore-api/internal/auth/registry.go`, `gitstore-api/internal/auth/provider/staticadmin/`, `gitstore-api/internal/auth/provider/anonymous/`, `gitstore-api/internal/middleware/auth.go`, `gitstore-api/internal/graph/resolver/`
+**Known limitation:** The in-process session blacklist (`sync.Map[jti → expiresAt]` inside `StaticAdminProvider`) is **lost on server restart**. Any token revoked via `logout` or `refreshToken` becomes valid again after a restart if it has not yet expired. This is acceptable for single-instance deployments. Persistent blacklist storage (Redis or ScyllaDB behind a `SessionStore` interface) is deferred to a future phase.
+**Test strategy:** Unit tests for all three mutations (logout, refreshToken, login) in `tests/unit/resolver/auth_resolvers_test.go`; grace-window and TokenID population tests in `tests/unit/auth/staticadmin_test.go`.
+**Rollback trigger:** Logout or RefreshToken returns 500 or leaves token valid after revocation; login returns wrong `isAdmin` or `username`.
 
 ### Phase 4 — gRPC HMAC inter-service authentication
 **Milestone:** `auth-framework-git-v1`
