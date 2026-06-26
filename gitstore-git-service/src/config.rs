@@ -149,6 +149,13 @@ impl AppConfig {
         if self.auth.grpc.hmac_secret.is_empty() {
             errors.push("auth.grpc.hmac_secret must not be empty".to_string());
         }
+        if matches!(&self.auth.grpc.hmac_secret_previous, Some(s) if s.is_empty()) {
+            errors.push(
+                "auth.grpc.hmac_secret_previous must not be empty when set; \
+                 unset or remove it to disable the rotation window"
+                    .to_string(),
+            );
+        }
 
         if errors.is_empty() {
             Ok(())
@@ -663,6 +670,27 @@ mod tests {
         assert_eq!(
             cfg.auth.grpc.hmac_secret_previous,
             Some("old-secret".to_string())
+        );
+        clear_env();
+    }
+
+    // T036: validate fails when hmac_secret_previous is explicitly set to empty string
+    #[test]
+    fn test_validate_hmac_secret_previous_empty_fails() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET", "primary-secret");
+        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET_PREVIOUS", "");
+        let cfg = load_config_from(None).expect("load failed");
+        let result = cfg.validate();
+        assert!(
+            result.is_err(),
+            "expected validation error for empty hmac_secret_previous"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("hmac_secret_previous"),
+            "error should mention hmac_secret_previous, got: {err}"
         );
         clear_env();
     }

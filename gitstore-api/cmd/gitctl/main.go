@@ -4,10 +4,12 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"os"
+	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -24,11 +26,19 @@ func main() {
 
 	switch os.Args[1] {
 	case "hash-password":
-		if len(os.Args) < 3 {
-			fmt.Fprintf(os.Stderr, "Usage: gitctl hash-password <password>\n")
-			os.Exit(2)
+		var password string
+		if len(os.Args) >= 3 {
+			password = os.Args[2]
+		} else {
+			// Read from stdin to avoid exposing the password in the process list.
+			scanner := bufio.NewScanner(os.Stdin)
+			if !scanner.Scan() {
+				fmt.Fprintf(os.Stderr, "Error reading password from stdin\n")
+				os.Exit(1)
+			}
+			password = strings.TrimRight(scanner.Text(), "\r\n")
 		}
-		hash, err := bcrypt.GenerateFromPassword([]byte(os.Args[2]), bcrypt.DefaultCost)
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error generating hash: %v\n", err)
 			os.Exit(1)

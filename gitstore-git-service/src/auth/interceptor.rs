@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use subtle::ConstantTimeEq;
 use tonic::{service::Interceptor, Request, Status};
 
 /// Validates `Authorization: Bearer <token>` on every inbound gRPC call.
@@ -17,7 +18,7 @@ impl HmacInterceptor {
     pub fn new(secret: &str, previous: Option<&str>) -> Self {
         Self {
             secret: Arc::from(secret),
-            secret_previous: previous.map(Arc::from),
+            secret_previous: previous.filter(|s| !s.is_empty()).map(Arc::from),
         }
     }
 }
@@ -30,12 +31,14 @@ impl Interceptor for HmacInterceptor {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "));
 
+        let ct_eq = |a: &str, b: &str| -> bool { a.as_bytes().ct_eq(b.as_bytes()).into() };
+
         match token {
             None => Err(Status::unauthenticated("missing inter-service token")),
-            Some(t) if t == self.secret.as_ref() => Ok(req),
+            Some(t) if ct_eq(t, self.secret.as_ref()) => Ok(req),
             Some(t) => {
                 if let Some(prev) = &self.secret_previous {
-                    if t == prev.as_ref() {
+                    if ct_eq(t, prev.as_ref()) {
                         return Ok(req);
                     }
                 }
@@ -105,6 +108,18 @@ mod tests {
         let req = req_with_bearer("old-secret");
         let result = interceptor.call(req);
         assert!(result.is_err());
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::Unauthenticated);
+    }
+
+    // Empty previous secret must be treated as absent — not as a valid rotation token.
+    #[test]
+    fn test_hmac_interceptor_empty_previous_does_not_authenticate_empty_bearer() {
+        let mut interceptor = HmacInterceptor::new("secret", Some(""));
+        // Authorization: Bearer  (empty token after the space)
+        let req = req_with_bearer("");
+        let result = interceptor.call(req);
+        assert!(result.is_err(), "empty bearer must not authenticate");
         let status = result.unwrap_err();
         assert_eq!(status.code(), tonic::Code::Unauthenticated);
     }
