@@ -221,6 +221,7 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 		Store:       store,
 		GitWriter:   writer,
 		AuthZ:       authzProvider,
+		Registry:    registry,
 		Logger:      log,
 		Clock:       clock,
 		IDGenerator: ids,

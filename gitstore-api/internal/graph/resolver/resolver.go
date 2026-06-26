@@ -23,6 +23,7 @@ type Resolver struct {
 	store          datastore.Datastore
 	service        *Service
 	authMiddleware *middleware.AuthMiddleware
+	registry       *auth.ProviderRegistry
 	storageDataDir string // data_dir used to build storagePath in responses; defaults to "/data"
 	clock          apiruntime.Clock
 }
@@ -32,6 +33,7 @@ type ResolverDeps struct {
 	Store       datastore.Datastore
 	GitWriter   GitWriter
 	AuthZ       auth.AuthZProvider
+	Registry    *auth.ProviderRegistry
 	Logger      *zap.Logger
 	Clock       apiruntime.Clock
 	IDGenerator apiruntime.IDGenerator
@@ -43,7 +45,14 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 		return nil, errMissingLogger
 	}
 	SetConverterLogger(deps.Logger)
-	svc, err := NewService(ServiceDeps(deps))
+	svc, err := NewService(ServiceDeps{
+		Store:       deps.Store,
+		GitWriter:   deps.GitWriter,
+		AuthZ:       deps.AuthZ,
+		Logger:      deps.Logger,
+		Clock:       deps.Clock,
+		IDGenerator: deps.IDGenerator,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +64,7 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 		logger:         deps.Logger,
 		store:          deps.Store,
 		service:        svc,
+		registry:       deps.Registry,
 		storageDataDir: "/data",
 		clock:          clock,
 	}, nil

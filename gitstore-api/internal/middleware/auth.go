@@ -171,7 +171,13 @@ func ChainAuthMiddleware(registry *auth.ProviderRegistry, logger *zap.Logger) fu
 				Header:     r.Header,
 				RemoteAddr: r.RemoteAddr,
 			}
-			principal, decision, err := registry.AuthN().Authenticate(r.Context(), req)
+			// Store the raw Bearer token in context so the refreshToken resolver can
+			// pass it to RefreshSession without re-reading the HTTP request.
+			ctx := r.Context()
+			if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+				ctx = auth.ContextWithRawToken(ctx, strings.TrimPrefix(authHeader, "Bearer "))
+			}
+			principal, decision, err := registry.AuthN().Authenticate(ctx, req)
 			if err != nil {
 				logger.Warn("auth chain error", zap.Error(err))
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -181,7 +187,7 @@ func ChainAuthMiddleware(registry *auth.ProviderRegistry, logger *zap.Logger) fu
 				http.Error(w, "Unauthorized: "+decision.Reason, http.StatusUnauthorized)
 				return
 			}
-			ctx := auth.ContextWithPrincipal(r.Context(), principal)
+			ctx = auth.ContextWithPrincipal(ctx, principal)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
