@@ -73,3 +73,5 @@ catalogue-work/
 /gitstore-controller-manager/controller
 gitstore-controller-manager/coverage.txt
 /out/
+docs/resources/file.md
+.claude/

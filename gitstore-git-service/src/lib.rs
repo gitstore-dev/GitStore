@@ -4,6 +4,7 @@
 // GitStore Server Library
 // Structured logging setup using tracing
 
+pub mod auth;
 pub mod config;
 pub mod git;
 pub mod grpc;

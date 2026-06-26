@@ -18,6 +18,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - ScyllaDB 5.x+ in production; `go-memdb` in development — no new migrations required (030-remove-enterprise-namespace)
 - Go 1.25 (gitstore-api) + `golang-jwt/v5 v5.3.1` (already in go.mod), `github.com/spf13/viper v1.21.0`, `go.uber.org/zap v1.28.0`, `golang.org/x/crypto` (bcrypt, already in go.mod) (031-pluggable-authn-authz)
 - In-memory only (`sync.Map` for session blacklist) — no datastore changes (031-pluggable-authn-authz)
+- No new dependencies (033-auth-phase-4); `cmd/gitctl` replaces `cmd/hashpw`; `GITSTORE_AUTH__GRPC__HMAC_SECRET` required on both services (033-auth-phase-4)
+- No datastore changes (033-auth-phase-4)
 
 ## Commands
 
@@ -57,6 +59,7 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 033-auth-phase-4: No new deps; `cmd/gitctl` binary (`hash-password`, `gen-jwt-secret`, `gen-hmac-secret`); `GITSTORE_AUTH__GRPC__HMAC_SECRET` config key; `HmacInterceptor` in Rust git-service; `hmacCreds` PerRPCCredentials in Go API
 - 031-pluggable-authn-authz: Added Go 1.25 (gitstore-api) + `golang-jwt/v5 v5.3.1` (already in go.mod), `github.com/spf13/viper v1.21.0`, `go.uber.org/zap v1.28.0`, `golang.org/x/crypto` (bcrypt, already in go.mod)
 - 030-remove-enterprise-namespace: Added Go 1.25 (`gitstore-api`) + `gqlgen v0.17.90` (code generation), `gocqlx/v3` + `gocql` (Scylla datastore), `go-playground/validator/v10`, `go.uber.org/zap`
 - 029-hook-startup-observability: Added Rust 1.x + `tracing 0.1`, `config 0.15.22`, `regex 1` (all already present in `Cargo.toml`)

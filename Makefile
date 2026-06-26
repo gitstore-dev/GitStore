@@ -34,7 +34,7 @@ export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 .PHONY: help git api controller dev compose scylla compose-scylla ps logs stop down
 .PHONY: build test lint license-check pr-ready
 .PHONY: bootstrap bootstrap-token bootstrap-namespace bootstrap-repository git-clean-data
-.PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools gen-admin-password
+.PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools gen-admin-password gen-jwt-secret gen-hmac-secret
 
 help: ## Show available targets and common variables.
 	@awk 'BEGIN {FS = ":.*##"; printf "GitStore make targets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -184,7 +184,7 @@ gen-admin-password: ## Generate a bcrypt hash for ADMIN_PASSWORD and write it to
 		echo "Usage: make gen-admin-password ADMIN_PASSWORD='<password>'"; \
 		exit 2; \
 	fi
-	@hash=$$(cd "$(API_DIR)" && go run ./cmd/hashpw "$$ADMIN_PASSWORD") || { \
+	@hash=$$(cd "$(API_DIR)" && go run ./cmd/gitctl hash-password "$$ADMIN_PASSWORD") || { \
 		echo "Failed to generate bcrypt hash. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
@@ -206,6 +206,28 @@ gen-admin-password: ## Generate a bcrypt hash for ADMIN_PASSWORD and write it to
 		echo "Created $$env_file with GITSTORE_AUTH__ADMIN__PASSWORD_HASH"; \
 	fi; \
 	echo "Hash: $$hash"
+
+gen-jwt-secret: ## Generate a JWT secret and append GITSTORE_AUTH__JWT__SECRET to gitstore-api/.env.
+	@env_file="$(API_DIR)/.env"; \
+	if [ ! -f "$$env_file" ]; then \
+		echo "Note: $$env_file does not exist; it will be created."; \
+	fi; \
+	cd "$(API_DIR)" && go run ./cmd/gitctl gen-jwt-secret >> .env || { \
+		echo "Failed to generate JWT secret. Make sure the gitstore-api module builds correctly."; \
+		exit 1; \
+	}; \
+	echo "Appended GITSTORE_AUTH__JWT__SECRET to $(API_DIR)/.env"
+
+gen-hmac-secret: ## Generate an HMAC secret and append GITSTORE_AUTH__GRPC__HMAC_SECRET to gitstore-api/.env.
+	@env_file="$(API_DIR)/.env"; \
+	if [ ! -f "$$env_file" ]; then \
+		echo "Note: $$env_file does not exist; it will be created."; \
+	fi; \
+	cd "$(API_DIR)" && go run ./cmd/gitctl gen-hmac-secret >> .env || { \
+		echo "Failed to generate HMAC secret. Make sure the gitstore-api module builds correctly."; \
+		exit 1; \
+	}; \
+	echo "Appended GITSTORE_AUTH__GRPC__HMAC_SECRET to $(API_DIR)/.env"
 
 bootstrap-token: bootstrap-tools ## Login and print/cache a bootstrap bearer token.
 	@if [ -z "$${ADMIN_PASSWORD:-}" ]; then \

@@ -13,6 +13,18 @@ pub struct AppConfig {
     pub schema_validation: SchemaValidationConfig,
     pub admission_control: AdmissionControlConfig,
     pub catalog_service: CatalogServiceConfig,
+    pub auth: AuthConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct AuthConfig {
+    pub grpc: GrpcAuthConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct GrpcAuthConfig {
+    pub hmac_secret: String,
+    pub hmac_secret_previous: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -134,6 +146,17 @@ impl AppConfig {
             ));
         }
 
+        if self.auth.grpc.hmac_secret.is_empty() {
+            errors.push("auth.grpc.hmac_secret must not be empty".to_string());
+        }
+        if matches!(&self.auth.grpc.hmac_secret_previous, Some(s) if s.is_empty()) {
+            errors.push(
+                "auth.grpc.hmac_secret_previous must not be empty when set; \
+                 unset or remove it to disable the rotation window"
+                    .to_string(),
+            );
+        }
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -213,6 +236,9 @@ branch_pattern = "refs/heads/main"
 
 [catalog_service]
 uri = "http://localhost:6000"
+
+[auth.grpc]
+hmac_secret = ""
 "#
     .to_string()
 }
@@ -244,6 +270,8 @@ mod tests {
             "GITSTORE_HOOKS__GIT_RECEIVE_PACK__PROC_RECEIVE__ENABLED",
             "GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_UPDATE__ENABLED",
             "GITSTORE_HOOKS__GIT_RECEIVE_PACK__REFERENCE_TRANSACTION__ENABLED",
+            "GITSTORE_AUTH__GRPC__HMAC_SECRET",
+            "GITSTORE_AUTH__GRPC__HMAC_SECRET_PREVIOUS",
         ];
         for k in &keys {
             env::remove_var(k);
@@ -499,12 +527,14 @@ mod tests {
     fn test_validate_split_phases_pass() {
         let _lock = ENV_LOCK.lock().unwrap();
         clear_env();
+        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET", "some-secret");
         // Default split: pre-receive vs post-receive — must pass
         let cfg = load_config_from(None).expect("load failed");
         assert_eq!(cfg.schema_validation.phase, "pre-receive");
         assert_eq!(cfg.admission_control.phase, "post-receive");
         cfg.validate()
             .expect("default split phases should pass validation");
+        clear_env();
     }
 
     #[test]
@@ -588,6 +618,79 @@ mod tests {
         assert!(
             cfg.hooks.git_receive_pack.pre_receive.enabled,
             "pre_receive default should remain true"
+        );
+        clear_env();
+    }
+
+    // T017: validate fails when hmac_secret is empty (written before interceptor impl)
+    #[test]
+    fn test_validate_hmac_secret_empty_fails() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        // Leave GITSTORE_AUTH__GRPC__HMAC_SECRET unset → defaults to ""
+        let cfg = load_config_from(None).expect("load failed");
+        let result = cfg.validate();
+        assert!(
+            result.is_err(),
+            "expected validation error for empty hmac_secret"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("auth.grpc.hmac_secret"),
+            "error should mention auth.grpc.hmac_secret, got: {err}"
+        );
+    }
+
+    // T018: validate passes when hmac_secret is non-empty
+    #[test]
+    fn test_validate_hmac_secret_nonempty_passes() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET", "some-secret");
+        let cfg = load_config_from(None).expect("load failed");
+        // validate() should not error on this field
+        let result = cfg.validate();
+        assert!(
+            result.is_ok(),
+            "expected no validation error for non-empty hmac_secret, got: {:?}",
+            result.err()
+        );
+        clear_env();
+    }
+
+    // T035: env-var round-trip for hmac_secret_previous
+    #[test]
+    fn test_hmac_secret_previous_env_var() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET", "new-secret");
+        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET_PREVIOUS", "old-secret");
+        let cfg = load_config_from(None).expect("load failed");
+        assert_eq!(cfg.auth.grpc.hmac_secret, "new-secret");
+        assert_eq!(
+            cfg.auth.grpc.hmac_secret_previous,
+            Some("old-secret".to_string())
+        );
+        clear_env();
+    }
+
+    // T036: validate fails when hmac_secret_previous is explicitly set to empty string
+    #[test]
+    fn test_validate_hmac_secret_previous_empty_fails() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET", "primary-secret");
+        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET_PREVIOUS", "");
+        let cfg = load_config_from(None).expect("load failed");
+        let result = cfg.validate();
+        assert!(
+            result.is_err(),
+            "expected validation error for empty hmac_secret_previous"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("hmac_secret_previous"),
+            "error should mention hmac_secret_previous, got: {err}"
         );
         clear_env();
     }

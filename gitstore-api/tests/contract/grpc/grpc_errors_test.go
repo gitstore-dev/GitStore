@@ -106,7 +106,8 @@ func TestGRPCGetLatestTagEmptyRepo(t *testing.T) {
 		Image:        "gitstore-git-service:latest",
 		ExposedPorts: []string{"50051/tcp"},
 		Env: map[string]string{
-			"GITSTORE_GRPC__PORT": "50051",
+			"GITSTORE_GRPC__PORT":              "50051",
+			"GITSTORE_AUTH__GRPC__HMAC_SECRET": testHmacSecret,
 		},
 		WaitingFor: wait.ForListeningPort("50051/tcp").
 			WithStartupTimeout(60 * time.Second),
@@ -122,7 +123,7 @@ func TestGRPCGetLatestTagEmptyRepo(t *testing.T) {
 	grpcPort, err := container.MappedPort(ctx, "50051")
 	require.NoError(t, err)
 
-	c, err := gitclient.NewClientWithAddr(fmt.Sprintf("localhost:%s", grpcPort.Port()))
+	c, err := gitclient.NewClientWithAddr(fmt.Sprintf("localhost:%s", grpcPort.Port()), testHmacSecret)
 	require.NoError(t, err)
 	defer c.Close()
 

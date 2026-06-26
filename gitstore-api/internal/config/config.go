@@ -44,12 +44,18 @@ type GitEndpointConfig struct {
 
 // AuthConfig holds authentication and JWT settings.
 type AuthConfig struct {
-	Admin   UserConfig    `mapstructure:"admin"`
-	JWT     JWTConfig     `mapstructure:"jwt"`
-	AuthN   AuthNConfig   `mapstructure:"authn"`
-	AuthZ   AuthZConfig   `mapstructure:"authz"`
-	UserDir UserDirConfig `mapstructure:"userdir"`
-	RBAC    RBACConfig    `mapstructure:"rbac"`
+	Admin   UserConfig     `mapstructure:"admin"`
+	JWT     JWTConfig      `mapstructure:"jwt"`
+	Grpc    GrpcAuthConfig `mapstructure:"grpc"`
+	AuthN   AuthNConfig    `mapstructure:"authn"`
+	AuthZ   AuthZConfig    `mapstructure:"authz"`
+	UserDir UserDirConfig  `mapstructure:"userdir"`
+	RBAC    RBACConfig     `mapstructure:"rbac"`
+}
+
+// GrpcAuthConfig holds inter-service gRPC authentication settings.
+type GrpcAuthConfig struct {
+	HmacSecret string `mapstructure:"hmac_secret" validate:"required"`
 }
 
 // AuthNConfig controls the authentication provider chain.
@@ -143,6 +149,7 @@ func Load() (*Config, error) {
 	v.SetDefault("auth.jwt.secret", "")
 	v.SetDefault("auth.jwt.duration", "24h")
 	v.SetDefault("auth.jwt.issuer", "gitstore")
+	v.SetDefault("auth.grpc.hmac_secret", "")
 	v.SetDefault("auth.authn.chain", []string{"static-admin", "anonymous"})
 	v.SetDefault("auth.authz.provider", "allow-all")
 	v.SetDefault("auth.userdir.provider", "none")
@@ -188,7 +195,8 @@ func Load() (*Config, error) {
 		"cache.ttl": true, "log.level": true, "log.format": true,
 		"auth.admin.username": true, "auth.admin.password_hash": true,
 		"auth.jwt.secret": true, "auth.jwt.duration": true, "auth.jwt.issuer": true,
-		"auth.authn.chain": true, "auth.authz.provider": true,
+		"auth.grpc.hmac_secret": true,
+		"auth.authn.chain":      true, "auth.authz.provider": true,
 		"auth.userdir.provider": true, "auth.rbac.policy_file": true,
 		"datastore.backend": true, "datastore.scylla.hosts": true,
 		"datastore.scylla.keyspace": true, "datastore.scylla.username": true,
@@ -268,6 +276,7 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddString("auth.jwt.secret", redact(c.Auth.JWT.Secret))
 	enc.AddString("auth.jwt.duration", c.Auth.JWT.Duration)
 	enc.AddString("auth.jwt.issuer", c.Auth.JWT.Issuer)
+	enc.AddString("auth.grpc.hmac_secret", redact(c.Auth.Grpc.HmacSecret))
 	enc.AddInt("cache.ttl", c.Cache.TTL)
 	enc.AddString("log.level", c.Log.Level)
 	enc.AddString("log.format", c.Log.Format)

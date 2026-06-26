@@ -23,6 +23,7 @@ config = "0.15.22"
 dotenvy = "0.15"
 async-trait = "0.1"
 regex = "1"
+subtle = "2"
 
 [dev-dependencies]
 
