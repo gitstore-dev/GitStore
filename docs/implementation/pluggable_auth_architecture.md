@@ -1107,11 +1107,11 @@ fn default_http_auth_mode() -> String { "header".into() }
 **Test strategy:** Unit tests for all three mutations (logout, refreshToken, login) in `tests/unit/resolver/auth_resolvers_test.go`; grace-window and TokenID population tests in `tests/unit/auth/staticadmin_test.go`.
 **Rollback trigger:** Logout or RefreshToken returns 500 or leaves token valid after revocation; login returns wrong `isAdmin` or `username`.
 
-### Phase 4 — gRPC HMAC inter-service authentication
+### Phase 4 — gRPC HMAC inter-service authentication ✅ COMPLETE (033)
 **Milestone:** `auth-framework-git-v1`
-**Deliverable:** `HmacInterceptor` in Rust git-service; `hmacCreds` on Go gRPC client; `GITSTORE_AUTH__GRPC__HMAC_SECRET` wired on both sides.
-**Affected packages:** `gitstore-git-service/src/auth/`, `gitstore-api/internal/gitclient/`
-**Test strategy:** Integration test: git-service rejects gRPC calls without the HMAC token (returns `Status::unauthenticated`); accepts calls with correct token; wrong token returns 401.
+**Deliverable:** `HmacInterceptor` in Rust git-service; `hmacCreds` on Go gRPC client; `GITSTORE_AUTH__GRPC__HMAC_SECRET` wired on both sides; `cmd/gitctl` binary with `gen-hmac-secret` subcommand.
+**Affected packages:** `gitstore-git-service/src/auth/`, `gitstore-api/internal/gitclient/`, `gitstore-api/cmd/gitctl/`, `gitstore-api/internal/config/`
+**Test strategy:** Unit tests: `HmacInterceptor` rejects missing/wrong token, accepts correct token and previous token during rotation window; `hmacCreds.GetRequestMetadata` injects `Authorization: Bearer` header; config validation fails on empty secret.
 **Rollback trigger:** Any gRPC call from API to git-service fails in CI.
 
 ### Phase 5 — Git smart-HTTP authentication

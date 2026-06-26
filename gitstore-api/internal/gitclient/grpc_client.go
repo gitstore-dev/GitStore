@@ -29,10 +29,11 @@ type Client struct {
 	RepositoryID string
 }
 
-// NewClientWithAddr dials the given address directly.
-func NewClientWithAddr(addr string) (*Client, error) {
+// NewClientWithAddr dials the given address with an HMAC bearer token for inter-service auth.
+func NewClientWithAddr(addr, hmacSecret string) (*Client, error) {
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithPerRPCCredentials(hmacCreds{token: hmacSecret}),
 		grpc.WithUnaryInterceptor(grpcprom.UnaryClientInterceptor),
 		grpc.WithStreamInterceptor(grpcprom.StreamClientInterceptor),
 	}

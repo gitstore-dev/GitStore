@@ -66,6 +66,7 @@ jobs:
         GITSTORE_AUTH__ADMIN__USERNAME: admin
         GITSTORE_AUTH__ADMIN__PASSWORD_HASH: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
         GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
+        GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
 
     - name: Wait for services to be healthy
       run: |
@@ -188,6 +189,7 @@ jobs:
         GITSTORE_AUTH__ADMIN__USERNAME: admin
         GITSTORE_AUTH__ADMIN__PASSWORD_HASH: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
         GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
+        GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
 
     - name: Wait for ScyllaDB to be healthy
       run: timeout 120 sh -c 'until nc -z localhost 9042; do sleep 2; done'

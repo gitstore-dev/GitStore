@@ -18,6 +18,8 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+const testHmacSecret = "ci-test-grpc-hmac-secret"
+
 var (
 	sharedGRPCAddr string
 	sharedRepoID   string
@@ -29,7 +31,7 @@ func startSharedClient(t *testing.T) (*gitclient.Client, error) {
 	if sharedGRPCAddr == "" {
 		return nil, fmt.Errorf("shared gRPC test container is not initialized")
 	}
-	c, err := gitclient.NewClientWithAddr(sharedGRPCAddr)
+	c, err := gitclient.NewClientWithAddr(sharedGRPCAddr, testHmacSecret)
 	if err != nil {
 		return nil, err
 	}
@@ -44,8 +46,9 @@ func TestMain(m *testing.M) {
 		Image:        "gitstore-git-service:latest",
 		ExposedPorts: []string{"50051/tcp"},
 		Env: map[string]string{
-			"GITSTORE_GIT__DATA_DIR": "/data/repos",
-			"GITSTORE_GRPC__PORT":    "50051",
+			"GITSTORE_GIT__DATA_DIR":           "/data/repos",
+			"GITSTORE_GRPC__PORT":              "50051",
+			"GITSTORE_AUTH__GRPC__HMAC_SECRET": testHmacSecret,
 		},
 		WaitingFor: wait.ForListeningPort("50051/tcp").
 			WithStartupTimeout(60 * time.Second),
@@ -71,7 +74,7 @@ func TestMain(m *testing.M) {
 	sharedRepoID = uuid.New().String()
 
 	// Provision the shared repository used by catalogue load and reload tests.
-	setupClient, err := gitclient.NewClientWithAddr(sharedGRPCAddr)
+	setupClient, err := gitclient.NewClientWithAddr(sharedGRPCAddr, testHmacSecret)
 	if err == nil {
 		_, _ = setupClient.CreateRepository(ctx, sharedRepoID, "default")
 		_ = setupClient.Close()
