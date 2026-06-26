@@ -115,3 +115,17 @@ func (c *ChainedAuthN) RefreshSession(ctx context.Context, oldToken string) (str
 	}
 	return "", time.Time{}, ErrNotSupported
 }
+
+// IssueSession delegates to the first provider that supports it.
+func (c *ChainedAuthN) IssueSession(ctx context.Context, subject string) (string, time.Time, error) {
+	for _, p := range c.providers {
+		token, exp, err := p.IssueSession(ctx, subject)
+		if err == nil {
+			return token, exp, nil
+		}
+		if !errors.Is(err, ErrNotSupported) {
+			return "", time.Time{}, err
+		}
+	}
+	return "", time.Time{}, ErrNotSupported
+}

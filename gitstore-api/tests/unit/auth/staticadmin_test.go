@@ -155,3 +155,79 @@ func TestStaticAdmin_NoAuthHeader_Challenge(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, authpkg.OutcomeChallenge, decision.Outcome)
 }
+
+func TestStaticAdmin_IssueSession_ReturnsToken(t *testing.T) {
+	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
+	p, err := staticadmin.New(v, zap.NewNop())
+	require.NoError(t, err)
+
+	token, exp, err := p.IssueSession(context.Background(), "admin")
+	require.NoError(t, err)
+	assert.NotEmpty(t, token)
+	assert.False(t, exp.IsZero())
+}
+
+func TestStaticAdmin_BearerJWT_SetsTokenID(t *testing.T) {
+	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
+	p, err := staticadmin.New(v, zap.NewNop())
+	require.NoError(t, err)
+
+	token, _, err := p.IssueToken("admin")
+	require.NoError(t, err)
+
+	req := authpkg.AuthRequest{Header: http.Header{"Authorization": []string{"Bearer " + token}}}
+	principal, decision, err := p.Authenticate(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, authpkg.OutcomeAllow, decision.Outcome)
+	require.NotNil(t, principal)
+	assert.NotEmpty(t, principal.TokenID, "TokenID must be populated from the JWT jti claim")
+}
+
+func TestStaticAdmin_BasicAuth_TokenIDEmpty(t *testing.T) {
+	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
+	p, err := staticadmin.New(v, zap.NewNop())
+	require.NoError(t, err)
+
+	creds := base64.StdEncoding.EncodeToString([]byte("admin:testpass"))
+	req := authpkg.AuthRequest{Header: http.Header{"Authorization": []string{"Basic " + creds}}}
+	principal, decision, err := p.Authenticate(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, authpkg.OutcomeAllow, decision.Outcome)
+	require.NotNil(t, principal)
+	assert.Empty(t, principal.TokenID, "Basic Auth principal must not carry a TokenID")
+}
+
+func TestStaticAdmin_RefreshSession_WithinGrace_Succeeds(t *testing.T) {
+	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
+	// Issue a token that expired 30s ago (within default 60s grace).
+	v.SetDefault("auth.jwt.duration", "-30s")
+	v.SetDefault("auth.jwt.refresh_grace", "60s")
+	p, err := staticadmin.New(v, zap.NewNop())
+	require.NoError(t, err)
+
+	token, _, err := p.IssueToken("admin")
+	require.NoError(t, err)
+
+	newToken, exp, err := p.RefreshSession(context.Background(), token)
+	require.NoError(t, err)
+	assert.NotEmpty(t, newToken)
+	assert.False(t, exp.IsZero())
+}
+
+func TestStaticAdmin_RefreshSession_BeyondGrace_Fails(t *testing.T) {
+	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
+	// Issue a token that expired 5 minutes ago (beyond default 60s grace).
+	v.SetDefault("auth.jwt.duration", "-5m")
+	v.SetDefault("auth.jwt.refresh_grace", "60s")
+	p, err := staticadmin.New(v, zap.NewNop())
+	require.NoError(t, err)
+
+	token, _, err := p.IssueToken("admin")
+	require.NoError(t, err)
+
+	_, _, err = p.RefreshSession(context.Background(), token)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "too old")
+}

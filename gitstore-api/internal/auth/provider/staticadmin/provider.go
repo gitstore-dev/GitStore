@@ -27,6 +27,7 @@ type StaticAdminProvider struct {
 	jwtSecret    []byte
 	jwtIssuer    string
 	jwtDuration  time.Duration
+	refreshGrace time.Duration
 	blacklist    *sessionBlacklist
 	logger       *zap.Logger
 }
@@ -56,6 +57,14 @@ func New(cfg *viper.Viper, logger *zap.Logger) (*StaticAdminProvider, error) {
 		}
 		duration = parsed
 	}
+	refreshGrace := 60 * time.Second
+	if g := cfg.GetString("auth.jwt.refresh_grace"); g != "" {
+		parsed, err := time.ParseDuration(g)
+		if err != nil {
+			return nil, fmt.Errorf("staticadmin: invalid refresh_grace %q: %w", g, err)
+		}
+		refreshGrace = parsed
+	}
 
 	bl := newSessionBlacklist()
 	go bl.pruneLoop()
@@ -66,6 +75,7 @@ func New(cfg *viper.Viper, logger *zap.Logger) (*StaticAdminProvider, error) {
 		jwtSecret:    []byte(secret),
 		jwtIssuer:    issuer,
 		jwtDuration:  duration,
+		refreshGrace: refreshGrace,
 		blacklist:    bl,
 		logger:       logger,
 	}, nil
@@ -130,6 +140,7 @@ func (p *StaticAdminProvider) authenticateBearer(token string) (*auth.Principal,
 		Issuer:     claims.Issuer,
 		Roles:      []string{"admin"},
 		AuthMethod: "static-admin",
+		TokenID:    claims.ID,
 	}
 	if claims.ExpiresAt != nil {
 		principal.ExpiresAt = claims.ExpiresAt.Time
@@ -181,6 +192,11 @@ func (p *StaticAdminProvider) RefreshSession(_ context.Context, oldToken string)
 		return "", time.Time{}, fmt.Errorf("staticadmin: refresh: %w", err)
 	}
 
+	// Enforce grace window: reject tokens that expired longer ago than refreshGrace.
+	if claims.ExpiresAt != nil && time.Now().After(claims.ExpiresAt.Time.Add(p.refreshGrace)) {
+		return "", time.Time{}, errors.New("staticadmin: token too old to refresh")
+	}
+
 	if claims.ID != "" && p.blacklist.isRevoked(claims.ID) {
 		return "", time.Time{}, errors.New("staticadmin: token is revoked")
 	}
@@ -195,6 +211,11 @@ func (p *StaticAdminProvider) RefreshSession(_ context.Context, oldToken string)
 		return "", time.Time{}, err
 	}
 	return newToken, exp, nil
+}
+
+// IssueSession mints a new HS256 JWT for the given subject.
+func (p *StaticAdminProvider) IssueSession(_ context.Context, subject string) (string, time.Time, error) {
+	return p.issueToken(subject)
 }
 
 // IssueToken generates a new HS256 JWT for the given subject.

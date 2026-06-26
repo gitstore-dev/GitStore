@@ -55,6 +55,9 @@ type Principal struct {
 	Claims     map[string]any `json:"claims,omitempty"`
 	AuthMethod string         `json:"auth_method"`
 	ExpiresAt  time.Time      `json:"exp,omitempty"`
+	// TokenID is the JWT jti claim — unique per-token identifier used for revocation.
+	// Empty for Basic Auth sessions and anonymous principals.
+	TokenID string `json:"jti,omitempty"`
 }
 
 // IsAdmin returns true when the principal carries the built-in "admin" role.
@@ -100,6 +103,9 @@ type AuthNProvider interface {
 	Authenticate(ctx context.Context, req AuthRequest) (*Principal, Decision, error)
 	RevokeSession(ctx context.Context, jti string, expiresAt time.Time) error
 	RefreshSession(ctx context.Context, oldToken string) (newToken string, exp time.Time, err error)
+	// IssueSession mints a new session token for the given subject.
+	// Returns ErrNotSupported for providers that cannot issue tokens.
+	IssueSession(ctx context.Context, subject string) (token string, exp time.Time, err error)
 }
 
 // ResourceContext carries the resource identifier for AuthZProvider.Authorize.
