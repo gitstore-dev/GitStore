@@ -13,6 +13,12 @@ import (
 // ErrNotSupported is returned by providers for operations they do not implement.
 var ErrNotSupported = errors.New("auth: operation not supported by this provider")
 
+// ErrTokenTooOld is returned when a token has exceeded the refresh grace window.
+var ErrTokenTooOld = errors.New("auth: token too old to refresh")
+
+// ErrTokenRevoked is returned when a token has been explicitly revoked.
+var ErrTokenRevoked = errors.New("auth: token has been revoked")
+
 // Outcome is the result of an auth decision.
 type Outcome uint8
 

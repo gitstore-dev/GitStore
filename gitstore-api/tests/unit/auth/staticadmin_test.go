@@ -229,5 +229,5 @@ func TestStaticAdmin_RefreshSession_BeyondGrace_Fails(t *testing.T) {
 
 	_, _, err = p.RefreshSession(context.Background(), token)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "too old")
+	assert.ErrorIs(t, err, authpkg.ErrTokenTooOld)
 }

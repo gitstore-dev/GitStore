@@ -105,6 +105,10 @@ func (r *mutationResolver) Logout(ctx context.Context, input model.LogoutInput) 
 
 // Logout implements the logout mutation on the base Resolver so it can be unit-tested directly.
 func (r *Resolver) Logout(ctx context.Context, input model.LogoutInput) (*model.LogoutPayload, error) {
+	if r.registry == nil {
+		return nil, gqlerror.Errorf("authentication service unavailable")
+	}
+
 	principal := auth.PrincipalFromContext(ctx)
 	if principal == nil || principal.AuthMethod == "none" {
 		return nil, gqlerror.Errorf("authentication required")
@@ -123,7 +127,7 @@ func (r *Resolver) Logout(ctx context.Context, input model.LogoutInput) (*model.
 		}
 	}
 
-	r.logger.Debug("logout succeeded", zap.String("subject", principal.Subject), zap.String("jti", principal.TokenID))
+	r.logger.Debug("logout succeeded", zap.String("subject", principal.Subject))
 	return &model.LogoutPayload{Success: true}, nil
 }
 
@@ -134,6 +138,10 @@ func (r *mutationResolver) RefreshToken(ctx context.Context, input model.Refresh
 
 // RefreshToken implements the refreshToken mutation on the base Resolver so it can be unit-tested directly.
 func (r *Resolver) RefreshToken(ctx context.Context, input model.RefreshTokenInput) (*model.RefreshTokenPayload, error) {
+	if r.registry == nil {
+		return nil, gqlerror.Errorf("authentication service unavailable")
+	}
+
 	rawToken := auth.RawTokenFromContext(ctx)
 	if rawToken == "" {
 		return nil, gqlerror.Errorf("authentication required")
@@ -141,14 +149,12 @@ func (r *Resolver) RefreshToken(ctx context.Context, input model.RefreshTokenInp
 
 	newToken, exp, err := r.registry.AuthN().RefreshSession(ctx, rawToken)
 	if err != nil {
-		if errors.Is(err, auth.ErrNotSupported) {
-			return nil, gqlerror.Errorf("token refresh not supported by active auth configuration")
-		}
-		msg := err.Error()
 		switch {
-		case containsAny(msg, "too old"):
+		case errors.Is(err, auth.ErrNotSupported):
+			return nil, gqlerror.Errorf("token refresh not supported by active auth configuration")
+		case errors.Is(err, auth.ErrTokenTooOld):
 			return nil, gqlerror.Errorf("token too old to refresh, please log in again")
-		case containsAny(msg, "revoked"):
+		case errors.Is(err, auth.ErrTokenRevoked):
 			return nil, gqlerror.Errorf("token has been revoked")
 		default:
 			r.logger.Error("token refresh failed", zap.Error(err))
@@ -157,35 +163,20 @@ func (r *Resolver) RefreshToken(ctx context.Context, input model.RefreshTokenInp
 	}
 
 	principal := auth.PrincipalFromContext(ctx)
-	username := ""
-	isAdmin := false
-	if principal != nil {
-		username = principal.Subject
-		isAdmin = principal.IsAdmin()
+	if principal == nil {
+		r.logger.Error("token refreshed but principal missing from context")
+		return nil, gqlerror.Errorf("internal server error")
 	}
 
-	r.logger.Debug("token refreshed", zap.String("subject", username))
+	r.logger.Debug("token refreshed", zap.String("subject", principal.Subject))
 	return &model.RefreshTokenPayload{
 		Session: &model.AuthSession{
 			Token:     newToken,
 			ExpiresAt: exp,
 			User: &model.User{
-				Username: username,
-				IsAdmin:  isAdmin,
+				Username: principal.Subject,
+				IsAdmin:  principal.IsAdmin(),
 			},
 		},
 	}, nil
-}
-
-func containsAny(s string, substrings ...string) bool {
-	for _, sub := range substrings {
-		if len(s) >= len(sub) {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }

@@ -175,7 +175,13 @@ func (p *StaticAdminProvider) authenticateBasic(encoded string) (*auth.Principal
 }
 
 func (p *StaticAdminProvider) RevokeSession(_ context.Context, jti string, expiresAt time.Time) error {
-	p.blacklist.add(jti, expiresAt)
+	// Store the revocation until the token's natural expiry plus the authentication leeway
+	// so that an expired-within-leeway token cannot bypass the blacklist check.
+	revokeUntil := expiresAt.Add(2 * time.Minute)
+	if revokeUntil.Before(time.Now()) {
+		revokeUntil = time.Now().Add(2 * time.Minute)
+	}
+	p.blacklist.add(jti, revokeUntil)
 	return nil
 }
 
@@ -194,16 +200,22 @@ func (p *StaticAdminProvider) RefreshSession(_ context.Context, oldToken string)
 
 	// Enforce grace window: reject tokens that expired longer ago than refreshGrace.
 	if claims.ExpiresAt != nil && time.Now().After(claims.ExpiresAt.Time.Add(p.refreshGrace)) {
-		return "", time.Time{}, errors.New("staticadmin: token too old to refresh")
+		return "", time.Time{}, fmt.Errorf("staticadmin: refresh: %w", auth.ErrTokenTooOld)
 	}
 
 	if claims.ID != "" && p.blacklist.isRevoked(claims.ID) {
-		return "", time.Time{}, errors.New("staticadmin: token is revoked")
+		return "", time.Time{}, fmt.Errorf("staticadmin: refresh: %w", auth.ErrTokenRevoked)
 	}
 
-	// Revoke old jti before issuing replacement.
-	if claims.ID != "" && claims.ExpiresAt != nil {
-		p.blacklist.add(claims.ID, claims.ExpiresAt.Time)
+	// Revoke old jti before issuing replacement. Use a revocation expiry that covers the
+	// authentication leeway window (2 min) beyond the token's natural expiry so that an
+	// expired-but-within-leeway token cannot be re-used for authentication after rotation.
+	if claims.ID != "" {
+		revokeUntil := time.Now().Add(2 * time.Minute)
+		if claims.ExpiresAt != nil && claims.ExpiresAt.Time.Add(2*time.Minute).After(revokeUntil) {
+			revokeUntil = claims.ExpiresAt.Time.Add(2 * time.Minute)
+		}
+		p.blacklist.add(claims.ID, revokeUntil)
 	}
 
 	newToken, exp, err := p.issueToken(claims.Subject)
@@ -269,11 +281,8 @@ func (b *sessionBlacklist) add(jti string, expiresAt time.Time) {
 func (b *sessionBlacklist) isRevoked(jti string) bool {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	exp, ok := b.entries[jti]
-	if !ok {
-		return false
-	}
-	return time.Now().Before(exp)
+	_, ok := b.entries[jti]
+	return ok
 }
 
 func (b *sessionBlacklist) pruneLoop() {

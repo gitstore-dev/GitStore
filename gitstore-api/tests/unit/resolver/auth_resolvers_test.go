@@ -274,6 +274,38 @@ func TestLogin_NilRegistry_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestLogout_NilRegistry_ReturnsError(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	r, err := resolver.NewResolver(resolver.ResolverDeps{
+		Store:  store,
+		Logger: zap.NewNop(),
+		Clock:  apiruntime.SystemClock{},
+	})
+	require.NoError(t, err)
+
+	principal := &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin", TokenID: "some-jti"}
+	ctx := ctxWithPrincipal(principal)
+	_, err = r.Logout(ctx, model.LogoutInput{})
+	require.Error(t, err)
+}
+
+func TestRefreshToken_NilRegistry_ReturnsError(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	r, err := resolver.NewResolver(resolver.ResolverDeps{
+		Store:  store,
+		Logger: zap.NewNop(),
+		Clock:  apiruntime.SystemClock{},
+	})
+	require.NoError(t, err)
+
+	principal := &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin"}
+	ctx := ctxWithPrincipalAndRawToken(principal, "some.bearer.token")
+	_, err = r.RefreshToken(ctx, model.RefreshTokenInput{})
+	require.Error(t, err)
+}
+
 // --- helpers ---
 
 // extractJTI issues a new token and parses its jti by authenticating.
