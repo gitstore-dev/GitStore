@@ -2,7 +2,7 @@
 
 **Feature Branch**: `034-admission-path-cleanup`
 **Created**: 2026-06-27
-**Status**: Draft
+**Status**: Closed
 
 ## Overview
 
