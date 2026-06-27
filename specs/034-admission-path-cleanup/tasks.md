@@ -109,7 +109,7 @@
 ## Phase 5: Polish
 
 - [x] T026 [P] Update `gitstore-git-service/src/git/hooks/admission_handler.rs` tests T019a–T019i to pass a real `git_dir` where the mock server is exercised (or `Path::new("")` where it isn't), confirming all existing admission handler tests remain green with the new trait signature
-- [ ] T027 [P] Verify `quickstart.md` end-to-end steps in a running local stack (`make dev`): push a single-file change to a repo with multiple tracked resources; confirm API logs show only that file being read and the fallback warning is absent
+- [x] T027 [P] Verify `quickstart.md` end-to-end steps in a running local stack (`make dev`): push a single-file change to a repo with multiple tracked resources; confirm API logs show only that file being read and the fallback warning is absent
 - [x] T028 Update `CLAUDE.md` / `AGENTS.md` Recent Changes section to record `034-admission-path-cleanup`: `changed_paths` populated in Rust admission handler; legacy `OldCommitSha==""` path removed from Go API
 
 ---
