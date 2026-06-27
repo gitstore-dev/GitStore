@@ -1775,6 +1775,167 @@ func isZeroRef(ref string) bool {
 	return ref != ""
 }
 
+// spyDatastore wraps a real Datastore and counts GetProductByName calls.
+type spyDatastore struct {
+	datastore.Datastore
+	getProductByNameCalled int
+}
+
+func (s *spyDatastore) GetProductByName(ctx context.Context, namespace, name string) (*datastore.Product, error) {
+	s.getProductByNameCalled++
+	return s.Datastore.GetProductByName(ctx, namespace, name)
+}
+
+// T015: after legacy-path removal, old_commit_sha="" with changed_paths must filter reads.
+// Before T019: legacy path ignores changed_paths → both resources created → test FAILS.
+// After T019: diff path respects changed_paths → only widget created → test PASSES.
+func TestAdmitResourcesLegacyPathAbsent(t *testing.T) {
+	store := newTestDatastore(t)
+	a := strings.Repeat("a", 40)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"products/widget.md", "products/other.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, _ string) ([]byte, error) {
+			if strings.Contains(path, "widget") {
+				return makeProduct("widget"), nil
+			}
+			return makeProduct("other"), nil
+		},
+	}
+	srv := newCatalogServer(t, store, git)
+
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    a,
+		NewCommitSha: a,
+		// OldCommitSha is intentionally empty — was the legacy trigger.
+		OldCommitSha: "",
+		RefName:      "refs/heads/main",
+		ChangedPaths: []string{"products/widget.md"},
+	})
+	require.NoError(t, err)
+
+	// widget must be stored (it is in changed_paths).
+	_, err = store.GetProductByName(context.Background(), "gitstore", "widget")
+	assert.NoError(t, err, "widget must be stored")
+
+	// other must NOT be stored (not in changed_paths).
+	// Before T019, the legacy path ignores changed_paths and stores both.
+	_, err = store.GetProductByName(context.Background(), "gitstore", "other")
+	assert.ErrorIs(t, err, datastore.ErrNotFound, "other must NOT be stored (not in changed_paths)")
+}
+
+// T016: when changed_paths is set, ReadFile is called only for files in changed_paths.
+func TestAdmitResourcesChangedPathsFastPath(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+
+	readCalls := make(map[string]int)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"products/widget.md", "products/other.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, _ string) ([]byte, error) {
+			readCalls[path]++
+			if strings.Contains(path, "widget") {
+				return makeProduct("widget"), nil
+			}
+			return makeProduct("other"), nil
+		},
+	}
+	srv := newCatalogServer(t, store, git)
+
+	// Seed first commit.
+	admitDelta(t, srv, zero, a)
+	// Clear recorded calls; now do a delta push with changed_paths.
+	readCalls = make(map[string]int)
+
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    b,
+		OldCommitSha: a,
+		NewCommitSha: b,
+		RefName:      "refs/heads/main",
+		ChangedPaths: []string{"products/widget.md"},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, readCalls["products/widget.md"], "widget.md must be read for old and new commit")
+	assert.Zero(t, readCalls["products/other.md"], "other.md must NOT be read when not in changed_paths")
+}
+
+// T017: on Update, the OldObject passed to the admission chain is the stored resource.
+// This verifies operationForEntry returns the existing object so admit functions
+// can supply it as OldObject without a second DB lookup.
+func TestOperationForEntryReturnsCachedObject(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, ref string) ([]byte, error) {
+			if strings.HasPrefix(ref, "b") {
+				return append(makeProduct("widget"), []byte(" updated")...), nil
+			}
+			return makeProduct("widget"), nil
+		},
+	}
+	policy := &recordingPolicy{}
+	srv := newCatalogServer(t, store, git, func(deps *cataloggrpc.ServerDeps) {
+		deps.ExtraValidatingPolicies = []admission.ValidatingAdmissionPolicy{policy}
+	})
+
+	admitDelta(t, srv, zero, a)
+	require.Len(t, policy.calls, 1)
+	assert.Equal(t, admission.OperationCreate, policy.calls[0].Operation)
+	assert.Nil(t, policy.calls[0].OldObject, "first push: OldObject must be nil")
+
+	policy.calls = nil
+	admitDelta(t, srv, a, b)
+	require.Len(t, policy.calls, 1)
+	assert.Equal(t, admission.OperationUpdate, policy.calls[0].Operation)
+	assert.NotNil(t, policy.calls[0].OldObject, "second push: OldObject must be the stored product")
+}
+
+// T018: for a delta push of an existing product, GetProductByName is called exactly once.
+// Before T020-T021: admitProduct calls GetProductByName internally (after operationForEntry
+// may also call it) → potentially 2 calls. After refactor: exactly 1 call total.
+func TestAdmitProductSingleDBRead(t *testing.T) {
+	real := newTestDatastore(t)
+	spy := &spyDatastore{Datastore: real}
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, ref string) ([]byte, error) {
+			if strings.HasPrefix(ref, "b") {
+				return append(makeProduct("widget"), []byte(" updated")...), nil
+			}
+			return makeProduct("widget"), nil
+		},
+	}
+	srv := newCatalogServer(t, spy, git)
+
+	// Seed: create the product.
+	admitDelta(t, srv, zero, a)
+	spy.getProductByNameCalled = 0 // reset counter after seed
+
+	// Update: delta push for existing product.
+	admitDelta(t, srv, a, b)
+
+	assert.Equal(t, 1, spy.getProductByNameCalled,
+		"GetProductByName must be called exactly once per resource per admission cycle")
+}
+
 // TestAdmitResources_OperationSetCorrectly verifies that the second push of the
 // same resource sends OperationUpdate (not OperationCreate) and populates OldObject.
 func TestAdmitResources_OperationSetCorrectly(t *testing.T) {

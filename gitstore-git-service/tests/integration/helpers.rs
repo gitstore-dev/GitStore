@@ -114,6 +114,7 @@ impl AdmissionHandler for RejectingAdmissionHandler {
         _phase: &str,
         _updates: &[RefUpdate],
         _repository_id: &str,
+        _git_dir: &std::path::Path,
     ) -> anyhow::Result<AdmissionDecision> {
         Ok(AdmissionDecision::Reject(self.0.clone()))
     }
@@ -129,6 +130,7 @@ impl AdmissionHandler for PerRefRejectingHandler {
         _phase: &str,
         updates: &[RefUpdate],
         _repository_id: &str,
+        _git_dir: &std::path::Path,
     ) -> anyhow::Result<AdmissionDecision> {
         // When called per-ref (single update), identify position by ref_name tag
         // The handler is called once per ref, so updates.len() == 1 in update phase.
@@ -158,6 +160,7 @@ impl AdmissionHandler for SlowAdmissionHandler {
         _phase: &str,
         _updates: &[RefUpdate],
         _repository_id: &str,
+        _git_dir: &std::path::Path,
     ) -> anyhow::Result<AdmissionDecision> {
         tokio::time::sleep(Duration::from_secs(10)).await;
         Ok(AdmissionDecision::Accept)
@@ -181,6 +184,7 @@ impl AdmissionHandler for CountingAdmissionHandler {
         _phase: &str,
         _updates: &[RefUpdate],
         _repository_id: &str,
+        _git_dir: &std::path::Path,
     ) -> anyhow::Result<AdmissionDecision> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(AdmissionDecision::Accept)
