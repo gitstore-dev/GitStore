@@ -7,3 +7,4 @@ pub mod hooks;
 pub mod metrics;
 pub mod pack_server;
 pub mod repo;
+pub mod tree_diff;

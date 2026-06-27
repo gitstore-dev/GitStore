@@ -380,7 +380,13 @@ func (s *Server) AdmitResources(
 	oldEntries := s.loadParsedEntries(ctx, req.RepositoryId, req.GetOldCommitSha(), admCtx.Namespace, req.GetChangedPaths())
 	newEntries := s.loadParsedEntries(ctx, req.RepositoryId, newCommit, admCtx.Namespace, req.GetChangedPaths())
 	ops := deriveResourceAdmissionOperations(oldEntries, newEntries, req.GetChangedPaths())
-	s.applyResourceOperations(ctx, ops, admCtx)
+	if err := s.applyResourceOperations(ctx, ops, admCtx); err != nil {
+		s.log.Error("admit_resources: apply operations failed",
+			zap.String("repository_id", req.RepositoryId),
+			zap.String("commit_sha", newCommit),
+			zap.Error(err))
+		return nil, grpcstatus.Errorf(codes.Internal, "admit_resources: %v", err)
+	}
 
 	return &catalogv1.AdmitResourcesResponse{}, nil
 }
@@ -445,7 +451,7 @@ func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, names
 	return entries
 }
 
-func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmissionOperation, admCtx AdmissionContext) {
+func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmissionOperation, admCtx AdmissionContext) error {
 	upsertOps := make(map[string]resourceAdmissionOperation)
 	var upsertEntries []*parsedEntry
 	for _, op := range ops {
@@ -460,7 +466,6 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 			upsertEntries = append(upsertEntries, op.newEntry)
 		}
 	}
-	s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps)
 	// TODO(CategoryTaxonomy controller): when a CategoryTaxonomy is deleted or
 	// its parentRef changes, descendants already stored in the datastore are left
 	// with a stale AncestorPath. Admission only processes the files that changed
@@ -470,6 +475,7 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 	// (by ParentName pointer) and recompute AncestorPath in topological order.
 	// The ParentResolved=False condition on a child is the observable signal that
 	// its path may be stale and reconciliation is needed.
+	return s.admitParsedEntries(ctx, upsertEntries, admCtx, upsertOps)
 }
 
 func (s *Server) admitParsedEntries(
@@ -477,7 +483,7 @@ func (s *Server) admitParsedEntries(
 	entries []*parsedEntry,
 	admCtx AdmissionContext,
 	explicitOps map[string]resourceAdmissionOperation,
-) {
+) error {
 	// Build intra-push category graph: name → parentName
 	pushCategoryParents := make(map[string]string)
 	categoryEntries := make(map[string]*parsedEntry)
@@ -515,7 +521,15 @@ func (s *Server) admitParsedEntries(
 		if explOp, inExplicit := explicitOps[e.identity.key()]; inExplicit {
 			siblingOp = explOp.operation
 		} else {
-			siblingOp = admission.OperationCreate
+			// This entry is a sibling referenced by the push but not itself changed.
+			// Probe the DB so the push-set carries the correct operation; a future
+			// policy that branches on sibling operation would otherwise see a wrong value.
+			existing, err := s.lookupResourceByIdentity(ctx, e.identity)
+			if err == nil && existing != nil {
+				siblingOp = admission.OperationUpdate
+			} else {
+				siblingOp = admission.OperationCreate
+			}
 		}
 		catPushSet = append(catPushSet, admission.AdmissionRequest{
 			Object:     cat,
@@ -534,16 +548,19 @@ func (s *Server) admitParsedEntries(
 	inPushAncestorPaths := make(map[string]string, len(topoOrder))
 	for _, name := range topoOrder {
 		e := categoryEntries[name]
-		op, existing, ok := s.operationForEntry(ctx, e, explicitOps)
-		if !ok {
-			continue
+		op, existing, err := s.operationForEntry(ctx, e, explicitOps)
+		if err != nil {
+			return err
 		}
 		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx, e.path, op, existing, inPushAncestorPaths, catPushSet)
 	}
 	for _, e := range entries {
-		op, existing, ok := s.operationForEntry(ctx, e, explicitOps)
-		if !ok {
-			continue
+		if e.parsed.Kind == "CategoryTaxonomy" {
+			continue // handled in the topo loop above
+		}
+		op, existing, err := s.operationForEntry(ctx, e, explicitOps)
+		if err != nil {
+			return err
 		}
 		switch e.parsed.Kind {
 		case "Product":
@@ -554,44 +571,35 @@ func (s *Server) admitParsedEntries(
 			s.admitProductVariant(ctx, e.parsed.ProductVariant, e.body, admCtx, e.path, op, existing)
 		}
 	}
+	return nil
 }
 
 func (s *Server) operationForEntry(
 	ctx context.Context,
 	e *parsedEntry,
 	explicitOps map[string]resourceAdmissionOperation,
-) (admission.Operation, any, bool) {
+) (admission.Operation, any, error) {
 	if e == nil {
-		return "", nil, false
+		return "", nil, nil
 	}
 	if op, ok := explicitOps[e.identity.key()]; ok {
 		existing, err := s.lookupResourceByIdentity(ctx, e.identity)
 		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
-			s.log.Error("admit_resources: lookup resource failed",
-				zap.String("kind", e.identity.Kind),
-				zap.String("namespace", e.identity.Namespace),
-				zap.String("name", e.identity.Name),
-				zap.Error(err))
-			return "", nil, false
+			return "", nil, fmt.Errorf("lookup %s %s/%s: %w", e.identity.Kind, e.identity.Namespace, e.identity.Name, err)
 		}
-		return op.operation, existing, true
+		return op.operation, existing, nil
 	}
 	existing, err := s.lookupResourceByIdentity(ctx, e.identity)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
-			return admission.OperationCreate, nil, true
+			return admission.OperationCreate, nil, nil
 		}
-		s.log.Error("admit_resources: lookup resource failed",
-			zap.String("kind", e.identity.Kind),
-			zap.String("namespace", e.identity.Namespace),
-			zap.String("name", e.identity.Name),
-			zap.Error(err))
-		return "", nil, false
+		return "", nil, fmt.Errorf("lookup %s %s/%s: %w", e.identity.Kind, e.identity.Namespace, e.identity.Name, err)
 	}
 	if existing != nil {
-		return admission.OperationUpdate, existing, true
+		return admission.OperationUpdate, existing, nil
 	}
-	return admission.OperationCreate, nil, true
+	return admission.OperationCreate, nil, nil
 }
 
 func (s *Server) lookupResourceByIdentity(ctx context.Context, id resourceIdentity) (any, error) {
