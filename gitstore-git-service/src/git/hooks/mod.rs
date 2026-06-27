@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use tracing::{error, info, warn};
 
 use crate::config::GitReceivePackHooks;
+use crate::git::tree_diff::{decode_tree, get_tree_id, make_path};
 
 // ---------------------------------------------------------------------------
 // Shared data type
@@ -104,6 +105,7 @@ pub trait AdmissionHandler: Send + Sync {
         phase: &str,
         updates: &[RefUpdate],
         repository_id: &str,
+        git_dir: &std::path::Path,
     ) -> anyhow::Result<AdmissionDecision>;
 }
 
@@ -117,6 +119,7 @@ impl AdmissionHandler for NoopAdmissionHandler {
         _phase: &str,
         _updates: &[RefUpdate],
         _repository_id: &str,
+        _git_dir: &std::path::Path,
     ) -> anyhow::Result<AdmissionDecision> {
         Ok(AdmissionDecision::Accept)
     }
@@ -341,9 +344,15 @@ impl HookPipeline {
             let handler = Arc::clone(&self.admission_handler);
             let updates_owned = updates.to_vec();
             let repository_id = repository_id.to_string();
+            let git_dir_owned = git_dir.to_path_buf();
             tokio::spawn(async move {
                 if let Err(e) = handler
-                    .admit("post-receive", &updates_owned, &repository_id)
+                    .admit(
+                        "post-receive",
+                        &updates_owned,
+                        &repository_id,
+                        &git_dir_owned,
+                    )
                     .await
                 {
                     error!(
@@ -423,7 +432,7 @@ impl HookPipeline {
         if phase == self.admission_control_phase && phase != "post-receive" {
             let result = tokio::time::timeout(
                 self.schema_validation_timeout,
-                self.admission_handler.admit(phase, updates, ""),
+                self.admission_handler.admit(phase, updates, "", git_dir),
             )
             .await;
             match result {
@@ -546,17 +555,8 @@ fn collect_blobs_from_commit(
     commit_id: gix::ObjectId,
     out: &mut Vec<ResourceBlob>,
 ) {
-    let commit = match repo
-        .find_object(commit_id)
-        .ok()
-        .and_then(|o| o.try_into_commit().ok())
-    {
-        Some(c) => c,
-        None => return,
-    };
-    let tree_id = match commit.tree_id().map(|id| id.detach()) {
-        Ok(id) => id,
-        Err(_) => return,
+    let Some(tree_id) = get_tree_id(repo, commit_id) else {
+        return;
     };
     collect_blobs_from_tree(repo, tree_id, "", out);
 }
@@ -570,14 +570,7 @@ fn collect_changed_blobs(
     new_commit_id: gix::ObjectId,
     out: &mut Vec<ResourceBlob>,
 ) {
-    let get_tree = |commit_id: gix::ObjectId| -> Option<gix::ObjectId> {
-        repo.find_object(commit_id)
-            .ok()
-            .and_then(|o| o.try_into_commit().ok())
-            .and_then(|c| c.tree_id().map(|id| id.detach()).ok())
-    };
-
-    let old_tree = match get_tree(old_commit_id) {
+    let old_tree = match get_tree_id(repo, old_commit_id) {
         Some(t) => t,
         None => {
             // Can't find old tree — fall back to full scan of new commit.
@@ -585,12 +578,9 @@ fn collect_changed_blobs(
             return;
         }
     };
-    let new_tree = match get_tree(new_commit_id) {
-        Some(t) => t,
-        None => return,
+    let Some(new_tree) = get_tree_id(repo, new_commit_id) else {
+        return;
     };
-
-    // Collect changed paths by diffing old tree vs new tree.
     collect_changed_blobs_from_trees(repo, old_tree, new_tree, "", out);
 }
 
@@ -601,36 +591,11 @@ fn collect_changed_blobs_from_trees(
     prefix: &str,
     out: &mut Vec<ResourceBlob>,
 ) {
-    let decode_tree = |tree_id: gix::ObjectId| -> Vec<gix::objs::tree::Entry> {
-        let Some(obj) = repo.find_object(tree_id).ok() else {
-            return vec![];
-        };
-        let Some(tree) = obj.try_into_tree().ok() else {
-            return vec![];
-        };
-        tree.decode()
-            .ok()
-            .map(|d| {
-                d.entries
-                    .iter()
-                    .map(|e| gix::objs::tree::Entry {
-                        mode: e.mode,
-                        filename: e.filename.to_owned(),
-                        oid: e.oid.to_owned(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-
-    let old_entries = decode_tree(old_tree_id);
-    let new_entries = {
-        let e = decode_tree(new_tree_id);
-        if e.is_empty() {
-            return;
-        }
-        e
-    };
+    let old_entries = decode_tree(repo, old_tree_id);
+    let new_entries = decode_tree(repo, new_tree_id);
+    if new_entries.is_empty() {
+        return;
+    }
 
     // Build a map from filename → (oid, mode) for old entries.
     let old_map: std::collections::HashMap<String, (gix::ObjectId, gix::object::tree::EntryKind)> =
@@ -641,11 +606,7 @@ fn collect_changed_blobs_from_trees(
 
     for entry in &new_entries {
         let name = entry.filename.to_string();
-        let path = if prefix.is_empty() {
-            name.clone()
-        } else {
-            format!("{}/{}", prefix, name)
-        };
+        let path = make_path(prefix, &name);
         match entry.mode.kind() {
             gix::object::tree::EntryKind::Tree => {
                 let new_sub_id: gix::ObjectId = entry.oid;
@@ -703,31 +664,15 @@ fn collect_blobs_from_tree(
     prefix: &str,
     out: &mut Vec<ResourceBlob>,
 ) {
-    let tree = match repo
-        .find_object(tree_id)
-        .ok()
-        .and_then(|o| o.try_into_tree().ok())
-    {
-        Some(t) => t,
-        None => return,
-    };
-    let decoded = match tree.decode() {
-        Ok(d) => d,
-        Err(_) => return,
-    };
-    for entry in &decoded.entries {
+    for entry in decode_tree(repo, tree_id) {
         let name = entry.filename.to_string();
-        let path = if prefix.is_empty() {
-            name.clone()
-        } else {
-            format!("{}/{}", prefix, name)
-        };
+        let path = make_path(prefix, &name);
         match entry.mode.kind() {
             gix::object::tree::EntryKind::Tree => {
-                collect_blobs_from_tree(repo, entry.oid.into(), &path, out);
+                collect_blobs_from_tree(repo, entry.oid, &path, out);
             }
             gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable => {
-                let blob_id: gix::ObjectId = entry.oid.into();
+                let blob_id: gix::ObjectId = entry.oid;
                 if let Ok(blob_obj) = repo.find_object(blob_id) {
                     let content = blob_obj.data.to_vec();
                     if content.starts_with(b"---") {
@@ -866,7 +811,10 @@ mod tests {
             old_oid: "0".repeat(40),
             new_oid: "a".repeat(40),
         }];
-        let result = h.admit("pre-receive", &updates, "").await.unwrap();
+        let result = h
+            .admit("pre-receive", &updates, "", std::path::Path::new(""))
+            .await
+            .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
     }
 
