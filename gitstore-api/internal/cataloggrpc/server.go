@@ -377,16 +377,6 @@ func (s *Server) AdmitResources(
 		Now:          now,
 	}
 
-	if req.GetOldCommitSha() == "" {
-		s.log.Warn("admit_resources: old commit absent; falling back to full-tree snapshot admission",
-			zap.String("repository_id", req.RepositoryId),
-			zap.String("ref_name", req.RefName),
-			zap.String("commit_sha", newCommit))
-		entries := s.loadParsedEntries(ctx, req.RepositoryId, newCommit, admCtx.Namespace, nil)
-		s.admitParsedEntries(ctx, entries, admCtx, nil)
-		return &catalogv1.AdmitResourcesResponse{}, nil
-	}
-
 	oldEntries := s.loadParsedEntries(ctx, req.RepositoryId, req.GetOldCommitSha(), admCtx.Namespace, req.GetChangedPaths())
 	newEntries := s.loadParsedEntries(ctx, req.RepositoryId, newCommit, admCtx.Namespace, req.GetChangedPaths())
 	ops := deriveResourceAdmissionOperations(oldEntries, newEntries, req.GetChangedPaths())
@@ -521,9 +511,11 @@ func (s *Server) admitParsedEntries(
 		if ns == "" {
 			ns = admCtx.Namespace
 		}
-		siblingOp, ok := s.operationForEntry(ctx, e, explicitOps)
-		if !ok {
-			continue
+		var siblingOp admission.Operation
+		if explOp, inExplicit := explicitOps[e.identity.key()]; inExplicit {
+			siblingOp = explOp.operation
+		} else {
+			siblingOp = admission.OperationCreate
 		}
 		catPushSet = append(catPushSet, admission.AdmissionRequest{
 			Object:     cat,
@@ -542,24 +534,24 @@ func (s *Server) admitParsedEntries(
 	inPushAncestorPaths := make(map[string]string, len(topoOrder))
 	for _, name := range topoOrder {
 		e := categoryEntries[name]
-		op, ok := s.operationForEntry(ctx, e, explicitOps)
+		op, existing, ok := s.operationForEntry(ctx, e, explicitOps)
 		if !ok {
 			continue
 		}
-		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx, e.path, op, inPushAncestorPaths, catPushSet)
+		s.admitCategoryTaxonomyWithContext(ctx, e.parsed.CategoryTaxonomy, e.body, admCtx, e.path, op, existing, inPushAncestorPaths, catPushSet)
 	}
 	for _, e := range entries {
-		op, ok := s.operationForEntry(ctx, e, explicitOps)
+		op, existing, ok := s.operationForEntry(ctx, e, explicitOps)
 		if !ok {
 			continue
 		}
 		switch e.parsed.Kind {
 		case "Product":
-			s.admitProduct(ctx, e.parsed.Product, e.body, admCtx, e.path, op)
+			s.admitProduct(ctx, e.parsed.Product, e.body, admCtx, e.path, op, existing)
 		case "Collection":
-			s.admitCollection(ctx, e.parsed.Collection, e.body, admCtx, e.path, op)
+			s.admitCollection(ctx, e.parsed.Collection, e.body, admCtx, e.path, op, existing)
 		case "ProductVariant":
-			s.admitProductVariant(ctx, e.parsed.ProductVariant, e.body, admCtx, e.path, op)
+			s.admitProductVariant(ctx, e.parsed.ProductVariant, e.body, admCtx, e.path, op, existing)
 		}
 	}
 }
@@ -568,29 +560,38 @@ func (s *Server) operationForEntry(
 	ctx context.Context,
 	e *parsedEntry,
 	explicitOps map[string]resourceAdmissionOperation,
-) (admission.Operation, bool) {
+) (admission.Operation, any, bool) {
 	if e == nil {
-		return "", false
+		return "", nil, false
 	}
 	if op, ok := explicitOps[e.identity.key()]; ok {
-		return op.operation, true
+		existing, err := s.lookupResourceByIdentity(ctx, e.identity)
+		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+			s.log.Error("admit_resources: lookup resource failed",
+				zap.String("kind", e.identity.Kind),
+				zap.String("namespace", e.identity.Namespace),
+				zap.String("name", e.identity.Name),
+				zap.Error(err))
+			return "", nil, false
+		}
+		return op.operation, existing, true
 	}
 	existing, err := s.lookupResourceByIdentity(ctx, e.identity)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
-			return admission.OperationCreate, true
+			return admission.OperationCreate, nil, true
 		}
 		s.log.Error("admit_resources: lookup resource failed",
 			zap.String("kind", e.identity.Kind),
 			zap.String("namespace", e.identity.Namespace),
 			zap.String("name", e.identity.Name),
 			zap.Error(err))
-		return "", false
+		return "", nil, false
 	}
 	if existing != nil {
-		return admission.OperationUpdate, true
+		return admission.OperationUpdate, existing, true
 	}
-	return admission.OperationCreate, true
+	return admission.OperationCreate, nil, true
 }
 
 func (s *Server) lookupResourceByIdentity(ctx context.Context, id resourceIdentity) (any, error) {
@@ -709,6 +710,7 @@ func (s *Server) admitProduct(
 	admCtx AdmissionContext,
 	sourcePath string,
 	op admission.Operation,
+	rawExisting any,
 ) {
 	specJSON, err := json.Marshal(resource.Spec)
 	if err != nil {
@@ -722,24 +724,19 @@ func (s *Server) admitProduct(
 		namespace = admCtx.Namespace
 	}
 
-	existing, getErr := s.store.GetProductByName(ctx, namespace, resource.Metadata.Name)
+	existing, _ := rawExisting.(*datastore.Product)
 	var oldObject any
-	if getErr == nil && existing != nil {
+	if existing != nil {
 		oldObject = existing
-	} else if getErr != nil && !errors.Is(getErr, datastore.ErrNotFound) {
-		s.log.Error("admit_resources: product lookup failed",
-			zap.String("name", resource.Metadata.Name),
-			zap.String("namespace", namespace),
-			zap.Error(getErr))
-		return
-	}
-	if getErr != nil && errors.Is(getErr, datastore.ErrNotFound) {
-		op = admission.OperationCreate
-	}
-	if existing == nil && op == admission.OperationUpdate {
-		s.log.Warn("admit_resources: product update missing stored identity; creating resource",
-			zap.String("name", resource.Metadata.Name),
-			zap.String("namespace", namespace))
+		if op == admission.OperationCreate {
+			op = admission.OperationUpdate
+		}
+	} else {
+		if op == admission.OperationUpdate {
+			s.log.Warn("admit_resources: product update missing stored identity; creating resource",
+				zap.String("name", resource.Metadata.Name),
+				zap.String("namespace", namespace))
+		}
 		op = admission.OperationCreate
 	}
 
@@ -838,6 +835,7 @@ func (s *Server) admitCollection(
 	admCtx AdmissionContext,
 	sourcePath string,
 	op admission.Operation,
+	rawExisting any,
 ) {
 	specJSON, err := json.Marshal(resource.Spec)
 	if err != nil {
@@ -851,24 +849,19 @@ func (s *Server) admitCollection(
 		namespace = admCtx.Namespace
 	}
 
-	existing, getErr := s.store.GetCollectionByName(ctx, namespace, resource.Metadata.Name)
+	existing, _ := rawExisting.(*datastore.Collection)
 	var oldObject any
-	if getErr == nil && existing != nil {
+	if existing != nil {
 		oldObject = existing
-	} else if getErr != nil && !errors.Is(getErr, datastore.ErrNotFound) {
-		s.log.Error("admit_resources: collection lookup failed",
-			zap.String("name", resource.Metadata.Name),
-			zap.String("namespace", namespace),
-			zap.Error(getErr))
-		return
-	}
-	if getErr != nil && errors.Is(getErr, datastore.ErrNotFound) {
-		op = admission.OperationCreate
-	}
-	if existing == nil && op == admission.OperationUpdate {
-		s.log.Warn("admit_resources: collection update missing stored identity; creating resource",
-			zap.String("name", resource.Metadata.Name),
-			zap.String("namespace", namespace))
+		if op == admission.OperationCreate {
+			op = admission.OperationUpdate
+		}
+	} else {
+		if op == admission.OperationUpdate {
+			s.log.Warn("admit_resources: collection update missing stored identity; creating resource",
+				zap.String("name", resource.Metadata.Name),
+				zap.String("namespace", namespace))
+		}
 		op = admission.OperationCreate
 	}
 
@@ -970,6 +963,7 @@ func (s *Server) admitProductVariant(
 	admCtx AdmissionContext,
 	sourcePath string,
 	op admission.Operation,
+	rawExisting any,
 ) {
 	if resource == nil {
 		return
@@ -986,24 +980,19 @@ func (s *Server) admitProductVariant(
 		namespace = admCtx.Namespace
 	}
 
-	existing, getErr := s.store.GetProductVariantByName(ctx, namespace, resource.Metadata.Name)
+	existing, _ := rawExisting.(*datastore.ProductVariant)
 	var oldObject any
-	if getErr == nil && existing != nil {
+	if existing != nil {
 		oldObject = existing
-	} else if getErr != nil && !errors.Is(getErr, datastore.ErrNotFound) {
-		s.log.Error("admit_resources: product_variant lookup failed",
-			zap.String("name", resource.Metadata.Name),
-			zap.String("namespace", namespace),
-			zap.Error(getErr))
-		return
-	}
-	if getErr != nil && errors.Is(getErr, datastore.ErrNotFound) {
-		op = admission.OperationCreate
-	}
-	if existing == nil && op == admission.OperationUpdate {
-		s.log.Warn("admit_resources: product_variant update missing stored identity; creating resource",
-			zap.String("name", resource.Metadata.Name),
-			zap.String("namespace", namespace))
+		if op == admission.OperationCreate {
+			op = admission.OperationUpdate
+		}
+	} else {
+		if op == admission.OperationUpdate {
+			s.log.Warn("admit_resources: product_variant update missing stored identity; creating resource",
+				zap.String("name", resource.Metadata.Name),
+				zap.String("namespace", namespace))
+		}
 		op = admission.OperationCreate
 	}
 
@@ -1186,6 +1175,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 	admCtx AdmissionContext,
 	sourcePath string,
 	op admission.Operation,
+	rawExisting any,
 	inPushAncestorPaths map[string]string,
 	catPushSet []admission.AdmissionRequest,
 ) {
@@ -1203,24 +1193,19 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 
 	name := resource.Metadata.Name
 
-	existing, getErr := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)
+	existing, _ := rawExisting.(*datastore.CategoryTaxonomy)
 	var oldObject any
-	if getErr == nil && existing != nil {
+	if existing != nil {
 		oldObject = existing
-	} else if getErr != nil && !errors.Is(getErr, datastore.ErrNotFound) {
-		s.log.Error("admit_resources: category lookup failed",
-			zap.String("name", name),
-			zap.String("namespace", namespace),
-			zap.Error(getErr))
-		return
-	}
-	if getErr != nil && errors.Is(getErr, datastore.ErrNotFound) {
-		op = admission.OperationCreate
-	}
-	if existing == nil && op == admission.OperationUpdate {
-		s.log.Warn("admit_resources: category update missing stored identity; creating resource",
-			zap.String("name", name),
-			zap.String("namespace", namespace))
+		if op == admission.OperationCreate {
+			op = admission.OperationUpdate
+		}
+	} else {
+		if op == admission.OperationUpdate {
+			s.log.Warn("admit_resources: category update missing stored identity; creating resource",
+				zap.String("name", name),
+				zap.String("namespace", namespace))
+		}
 		op = admission.OperationCreate
 	}
 

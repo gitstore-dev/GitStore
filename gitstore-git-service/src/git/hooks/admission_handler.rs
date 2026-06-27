@@ -55,6 +55,7 @@ impl AdmissionHandler for AdmissionControlHandler {
         _phase: &str,
         updates: &[RefUpdate],
         repository_id: &str,
+        git_dir: &std::path::Path,
     ) -> anyhow::Result<AdmissionDecision> {
         for update in updates {
             if !self.branch_pattern.is_match(&update.ref_name) {
@@ -67,6 +68,7 @@ impl AdmissionHandler for AdmissionControlHandler {
             let ref_name = update.ref_name.clone();
             let mut client = self.client.clone();
             let repository_id = repository_id.to_string();
+            let changed_paths = compute_changed_paths(git_dir, &update.old_oid, &update.new_oid);
 
             tokio::spawn(async move {
                 let req = AdmitResourcesRequest {
@@ -75,7 +77,7 @@ impl AdmissionHandler for AdmissionControlHandler {
                     ref_name: ref_name.clone(),
                     old_commit_sha,
                     new_commit_sha,
-                    changed_paths: vec![],
+                    changed_paths,
                 };
                 if let Err(e) = client.admit_resources(req).await {
                     error!(
@@ -88,6 +90,235 @@ impl AdmissionHandler for AdmissionControlHandler {
         }
 
         Ok(AdmissionDecision::Accept)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Path computation helpers
+// ---------------------------------------------------------------------------
+
+/// Compute the set of repository-relative file paths that changed between
+/// `old_oid` and `new_oid` in the bare repository at `git_dir`.
+///
+/// - `old_oid` all-zeros → full tree of `new_oid` (new branch, no prior tree).
+/// - `new_oid` all-zeros → full tree of `old_oid` (branch deletion).
+/// - Both non-zero → paths that differ between the two trees.
+/// - Any error or empty `git_dir` → returns `vec![]` (fall back to full scan in Go).
+fn compute_changed_paths(git_dir: &std::path::Path, old_oid: &str, new_oid: &str) -> Vec<String> {
+    if git_dir.as_os_str().is_empty() {
+        return vec![];
+    }
+    let repo = match gix::open(git_dir) {
+        Ok(r) => r,
+        Err(e) => {
+            error!(git_dir = %git_dir.display(), error = %e, "compute_changed_paths: failed to open repo");
+            return vec![];
+        }
+    };
+
+    let zero = "0".repeat(40);
+
+    if new_oid == zero {
+        // Branch deletion — emit all paths from old tree.
+        let Ok(old_id) = gix::ObjectId::from_hex(old_oid.as_bytes()) else {
+            return vec![];
+        };
+        return collect_all_paths_from_commit(&repo, old_id);
+    }
+
+    let Ok(new_id) = gix::ObjectId::from_hex(new_oid.as_bytes()) else {
+        return vec![];
+    };
+
+    if old_oid == zero {
+        // New branch — emit all paths from new tree.
+        return collect_all_paths_from_commit(&repo, new_id);
+    }
+
+    let Ok(old_id) = gix::ObjectId::from_hex(old_oid.as_bytes()) else {
+        return vec![];
+    };
+
+    collect_diff_paths(&repo, old_id, new_id)
+}
+
+/// Collect all file paths in the tree of `commit_id`.
+fn collect_all_paths_from_commit(repo: &gix::Repository, commit_id: gix::ObjectId) -> Vec<String> {
+    let tree_id = match get_tree_id(repo, commit_id) {
+        Some(id) => id,
+        None => return vec![],
+    };
+    let mut paths = Vec::new();
+    collect_paths_from_tree(repo, tree_id, "", &mut paths);
+    paths
+}
+
+/// Collect paths that differ between `old_commit_id` and `new_commit_id`.
+fn collect_diff_paths(
+    repo: &gix::Repository,
+    old_commit_id: gix::ObjectId,
+    new_commit_id: gix::ObjectId,
+) -> Vec<String> {
+    let old_tree = match get_tree_id(repo, old_commit_id) {
+        Some(id) => id,
+        None => return collect_all_paths_from_commit(repo, new_commit_id),
+    };
+    let new_tree = match get_tree_id(repo, new_commit_id) {
+        Some(id) => id,
+        None => return vec![],
+    };
+    let mut paths = Vec::new();
+    collect_diff_paths_from_trees(repo, old_tree, new_tree, "", &mut paths);
+    paths
+}
+
+fn get_tree_id(repo: &gix::Repository, commit_id: gix::ObjectId) -> Option<gix::ObjectId> {
+    repo.find_object(commit_id)
+        .ok()
+        .and_then(|o| o.try_into_commit().ok())
+        .and_then(|c| c.tree_id().map(|id| id.detach()).ok())
+}
+
+/// Walk `tree_id` recursively and collect all file paths under `prefix`.
+fn collect_paths_from_tree(
+    repo: &gix::Repository,
+    tree_id: gix::ObjectId,
+    prefix: &str,
+    out: &mut Vec<String>,
+) {
+    let tree = match repo
+        .find_object(tree_id)
+        .ok()
+        .and_then(|o| o.try_into_tree().ok())
+    {
+        Some(t) => t,
+        None => return,
+    };
+    let decoded = match tree.decode() {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    for entry in &decoded.entries {
+        let name = entry.filename.to_string();
+        let path = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{}/{}", prefix, name)
+        };
+        match entry.mode.kind() {
+            gix::object::tree::EntryKind::Tree => {
+                collect_paths_from_tree(repo, entry.oid.into(), &path, out);
+            }
+            gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable => {
+                out.push(path);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Walk two trees and collect paths that differ (added, modified, deleted in new tree).
+fn collect_diff_paths_from_trees(
+    repo: &gix::Repository,
+    old_tree_id: gix::ObjectId,
+    new_tree_id: gix::ObjectId,
+    prefix: &str,
+    out: &mut Vec<String>,
+) {
+    let decode_tree = |tree_id: gix::ObjectId| -> Vec<gix::objs::tree::Entry> {
+        let Some(obj) = repo.find_object(tree_id).ok() else {
+            return vec![];
+        };
+        let Some(tree) = obj.try_into_tree().ok() else {
+            return vec![];
+        };
+        tree.decode()
+            .ok()
+            .map(|d| {
+                d.entries
+                    .iter()
+                    .map(|e| gix::objs::tree::Entry {
+                        mode: e.mode,
+                        filename: e.filename.to_owned(),
+                        oid: e.oid.to_owned(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let old_entries = decode_tree(old_tree_id);
+    let new_entries = decode_tree(new_tree_id);
+
+    let old_map: std::collections::HashMap<String, (gix::ObjectId, gix::object::tree::EntryKind)> =
+        old_entries
+            .iter()
+            .map(|e| (e.filename.to_string(), (e.oid, e.mode.kind())))
+            .collect();
+
+    // Collect paths added or modified in new tree.
+    for entry in &new_entries {
+        let name = entry.filename.to_string();
+        let path = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{}/{}", prefix, name)
+        };
+        match entry.mode.kind() {
+            gix::object::tree::EntryKind::Tree => {
+                let new_sub: gix::ObjectId = entry.oid;
+                let old_sub = old_map
+                    .get(&name)
+                    .filter(|(_, k)| *k == gix::object::tree::EntryKind::Tree)
+                    .map(|(id, _)| *id);
+                match old_sub {
+                    Some(o) if o == new_sub => {} // unchanged subtree
+                    Some(o) => collect_diff_paths_from_trees(repo, o, new_sub, &path, out),
+                    None => collect_paths_from_tree(repo, new_sub, &path, out),
+                }
+            }
+            gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable => {
+                let new_blob: gix::ObjectId = entry.oid;
+                let old_blob = old_map
+                    .get(&name)
+                    .filter(|(_, k)| {
+                        matches!(
+                            k,
+                            gix::object::tree::EntryKind::Blob
+                                | gix::object::tree::EntryKind::BlobExecutable
+                        )
+                    })
+                    .map(|(id, _)| *id);
+                if old_blob != Some(new_blob) {
+                    out.push(path);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Collect paths deleted from old tree (present in old, absent in new).
+    let new_names: std::collections::HashSet<String> =
+        new_entries.iter().map(|e| e.filename.to_string()).collect();
+    for entry in &old_entries {
+        if !new_names.contains(&entry.filename.to_string()) {
+            let name = entry.filename.to_string();
+            let path = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{}/{}", prefix, name)
+            };
+            match entry.mode.kind() {
+                gix::object::tree::EntryKind::Tree => {
+                    collect_paths_from_tree(repo, entry.oid, &path, out);
+                }
+                gix::object::tree::EntryKind::Blob
+                | gix::object::tree::EntryKind::BlobExecutable => {
+                    out.push(path);
+                }
+                _ => {}
+            }
+        }
     }
 }
 
@@ -175,7 +406,7 @@ mod tests {
 
         let updates = vec![make_update("refs/heads/main", false)];
         let result = handler
-            .admit("post-receive", &updates, "repo-1")
+            .admit("post-receive", &updates, "repo-1", std::path::Path::new(""))
             .await
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
@@ -201,7 +432,7 @@ mod tests {
 
         let updates = vec![make_update("refs/heads/feature/my-feature", false)];
         let result = handler
-            .admit("post-receive", &updates, "repo-1")
+            .admit("post-receive", &updates, "repo-1", std::path::Path::new(""))
             .await
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
@@ -224,7 +455,7 @@ mod tests {
 
         let updates = vec![make_update("refs/heads/main", false)];
         let result = handler
-            .admit("post-receive", &updates, "repo-1")
+            .admit("post-receive", &updates, "repo-1", std::path::Path::new(""))
             .await
             .unwrap();
         // Must always return Accept — errors are fire-and-forget
@@ -243,7 +474,7 @@ mod tests {
 
         let updates = vec![make_update("refs/heads/main", true)]; // zero old_oid
         let result = handler
-            .admit("post-receive", &updates, "repo-1")
+            .admit("post-receive", &updates, "repo-1", std::path::Path::new(""))
             .await
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
@@ -269,7 +500,7 @@ mod tests {
 
         let updates = vec![make_update("refs/heads/main-old", false)];
         let result = handler
-            .admit("post-receive", &updates, "repo-1")
+            .admit("post-receive", &updates, "repo-1", std::path::Path::new(""))
             .await
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
@@ -298,7 +529,12 @@ mod tests {
             new_oid: "0".repeat(40), // zero new-OID = branch deletion
         };
         let result = handler
-            .admit("post-receive", &[update], "repo-1")
+            .admit(
+                "post-receive",
+                &[update],
+                "repo-1",
+                std::path::Path::new(""),
+            )
             .await
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
@@ -327,7 +563,12 @@ mod tests {
             new_oid: "0".repeat(40), // zero new-OID = branch deletion
         };
         let result = handler
-            .admit("post-receive", &[update], "repo-1")
+            .admit(
+                "post-receive",
+                &[update],
+                "repo-1",
+                std::path::Path::new(""),
+            )
             .await
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
@@ -352,7 +593,7 @@ mod tests {
 
         let updates = vec![make_update("refs/heads/feature/my-feature", false)];
         let result = handler
-            .admit("post-receive", &updates, "repo-1")
+            .admit("post-receive", &updates, "repo-1", std::path::Path::new(""))
             .await
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
@@ -374,5 +615,164 @@ mod tests {
             result.is_err(),
             "invalid regex must be rejected at connect()"
         );
+    }
+
+    // ---------------------------------------------------------------------------
+    // T020: compute_changed_paths tests (T008–T012)
+    // ---------------------------------------------------------------------------
+
+    fn make_repo_with_files(
+        dir: &std::path::Path,
+        files: &[(&str, &[u8])],
+    ) -> (gix::Repository, gix::ObjectId) {
+        let repo = gix::init_bare(dir).unwrap();
+        let mut tree_id = gix::ObjectId::empty_tree(gix::hash::Kind::Sha1);
+        for (path, content) in files {
+            let blob_oid = repo.write_blob(content).unwrap().detach();
+            tree_id = repo
+                .edit_tree(tree_id)
+                .unwrap()
+                .upsert(*path, gix::object::tree::EntryKind::Blob, blob_oid)
+                .unwrap()
+                .write()
+                .unwrap()
+                .detach();
+        }
+        let sig = gix::actor::Signature {
+            name: "test".into(),
+            email: "test@test.com".into(),
+            time: gix::date::Time::now_local_or_utc(),
+        };
+        let mut time_buf = gix::date::parse::TimeBuf::default();
+        let sig_ref = sig.to_ref(&mut time_buf);
+        let commit_id = repo
+            .commit_as(
+                sig_ref,
+                sig_ref,
+                "HEAD",
+                "init",
+                tree_id,
+                std::iter::empty::<gix::ObjectId>(),
+            )
+            .unwrap()
+            .detach();
+        (repo, commit_id)
+    }
+
+    fn add_file_to_repo(
+        repo: &gix::Repository,
+        base_commit: gix::ObjectId,
+        path: &str,
+        content: &[u8],
+    ) -> gix::ObjectId {
+        let base_commit_obj = repo
+            .find_object(base_commit)
+            .unwrap()
+            .try_into_commit()
+            .unwrap();
+        let base_tree_id = base_commit_obj.tree_id().unwrap().detach();
+        let blob_oid = repo.write_blob(content).unwrap().detach();
+        let new_tree_id = repo
+            .edit_tree(base_tree_id)
+            .unwrap()
+            .upsert(path, gix::object::tree::EntryKind::Blob, blob_oid)
+            .unwrap()
+            .write()
+            .unwrap()
+            .detach();
+        let sig = gix::actor::Signature {
+            name: "test".into(),
+            email: "test@test.com".into(),
+            time: gix::date::Time::now_local_or_utc(),
+        };
+        let mut time_buf = gix::date::parse::TimeBuf::default();
+        let sig_ref = sig.to_ref(&mut time_buf);
+        repo.commit_as(
+            sig_ref,
+            sig_ref,
+            "HEAD",
+            "update",
+            new_tree_id,
+            [base_commit],
+        )
+        .unwrap()
+        .detach()
+    }
+
+    // T008: changed_paths contains only the modified file for a single-file update
+    #[test]
+    fn test_changed_paths_single_file_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, commit1) = make_repo_with_files(
+            dir.path(),
+            &[
+                ("products/widget.md", b"---\nkind: Product\n---"),
+                ("products/gadget.md", b"---\nkind: Product\n---"),
+            ],
+        );
+        let commit2 = add_file_to_repo(
+            &repo,
+            commit1,
+            "products/widget.md",
+            b"---\nkind: Product\nupdated: true\n---",
+        );
+
+        let mut paths =
+            compute_changed_paths(dir.path(), &commit1.to_string(), &commit2.to_string());
+        paths.sort();
+        assert_eq!(paths, vec!["products/widget.md"]);
+    }
+
+    // T009: changed_paths contains all files when old_oid is all-zeros (new branch)
+    #[test]
+    fn test_changed_paths_new_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_repo, commit_id) = make_repo_with_files(
+            dir.path(),
+            &[
+                ("products/widget.md", b"---\nkind: Product\n---"),
+                ("categories/root.md", b"---\nkind: CategoryTaxonomy\n---"),
+            ],
+        );
+        let zero = "0".repeat(40);
+        let mut paths = compute_changed_paths(dir.path(), &zero, &commit_id.to_string());
+        paths.sort();
+        assert_eq!(paths, vec!["categories/root.md", "products/widget.md"]);
+    }
+
+    // T010: changed_paths contains all files from old tree on branch deletion
+    #[test]
+    fn test_changed_paths_branch_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_repo, commit_id) = make_repo_with_files(
+            dir.path(),
+            &[
+                ("products/widget.md", b"---\nkind: Product\n---"),
+                ("products/gadget.md", b"---\nkind: Product\n---"),
+            ],
+        );
+        let zero = "0".repeat(40);
+        let mut paths = compute_changed_paths(dir.path(), &commit_id.to_string(), &zero);
+        paths.sort();
+        assert_eq!(paths, vec!["products/gadget.md", "products/widget.md"]);
+    }
+
+    // T011: gix open failure returns empty vec and does not panic
+    #[test]
+    fn test_changed_paths_gix_open_failure() {
+        let paths = compute_changed_paths(
+            std::path::Path::new("/nonexistent/path/to/repo"),
+            &"a".repeat(40),
+            &"b".repeat(40),
+        );
+        assert!(paths.is_empty(), "expected empty vec on gix open failure");
+    }
+
+    // T012: empty git_dir returns empty vec and does not panic
+    #[test]
+    fn test_changed_paths_empty_git_dir() {
+        let paths =
+            compute_changed_paths(std::path::Path::new(""), &"a".repeat(40), &"b".repeat(40));
+        assert!(paths.is_empty(), "expected empty vec for empty git_dir");
     }
 }

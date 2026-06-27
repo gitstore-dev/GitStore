@@ -104,6 +104,7 @@ pub trait AdmissionHandler: Send + Sync {
         phase: &str,
         updates: &[RefUpdate],
         repository_id: &str,
+        git_dir: &std::path::Path,
     ) -> anyhow::Result<AdmissionDecision>;
 }
 
@@ -117,6 +118,7 @@ impl AdmissionHandler for NoopAdmissionHandler {
         _phase: &str,
         _updates: &[RefUpdate],
         _repository_id: &str,
+        _git_dir: &std::path::Path,
     ) -> anyhow::Result<AdmissionDecision> {
         Ok(AdmissionDecision::Accept)
     }
@@ -341,9 +343,15 @@ impl HookPipeline {
             let handler = Arc::clone(&self.admission_handler);
             let updates_owned = updates.to_vec();
             let repository_id = repository_id.to_string();
+            let git_dir_owned = git_dir.to_path_buf();
             tokio::spawn(async move {
                 if let Err(e) = handler
-                    .admit("post-receive", &updates_owned, &repository_id)
+                    .admit(
+                        "post-receive",
+                        &updates_owned,
+                        &repository_id,
+                        &git_dir_owned,
+                    )
                     .await
                 {
                     error!(
@@ -423,7 +431,7 @@ impl HookPipeline {
         if phase == self.admission_control_phase && phase != "post-receive" {
             let result = tokio::time::timeout(
                 self.schema_validation_timeout,
-                self.admission_handler.admit(phase, updates, ""),
+                self.admission_handler.admit(phase, updates, "", git_dir),
             )
             .await;
             match result {
@@ -866,7 +874,10 @@ mod tests {
             old_oid: "0".repeat(40),
             new_oid: "a".repeat(40),
         }];
-        let result = h.admit("pre-receive", &updates, "").await.unwrap();
+        let result = h
+            .admit("pre-receive", &updates, "", std::path::Path::new(""))
+            .await
+            .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
     }
 
