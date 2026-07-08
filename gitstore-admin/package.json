@@ -11,8 +11,8 @@
     "codegen": "graphql-codegen --config codegen.yml"
   },
   "dependencies": {
-    "@astrojs/react": "^5.0.0",
-    "astro": "^6.4.6",
+    "@astrojs/react": "^6.0.1",
+    "astro": "^7.0.7",
     "graphql": "^16.13.1",
     "react": "^18.2.0",
     "react-beautiful-dnd": "^13.1.1",
