@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS products_by_namespace (
     spec               text,
     body               text,
     status             text,
+    repository_id      text,
+    source_path        text,
     PRIMARY KEY ((namespace), creation_timestamp, uid)
 ) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC);
 
@@ -51,6 +53,8 @@ CREATE TABLE IF NOT EXISTS collection (
     spec               text,
     body               text,
     status             text,
+    repository_id      text,
+    source_path        text,
     PRIMARY KEY ((namespace), creation_timestamp, uid)
 ) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC);
 
@@ -76,7 +80,6 @@ CREATE TABLE IF NOT EXISTS namespaces (
     identifier           text,
     display_name         text,
     tier                 text,
-    parent_enterprise_id text,
     created_by           text,
     updated_at           timestamp,
     updated_by           text,
@@ -123,6 +126,8 @@ CREATE TABLE IF NOT EXISTS category_taxonomy (
     spec               text,
     body               text,
     status             text,
+    repository_id      text,
+    source_path        text,
     PRIMARY KEY ((namespace), creation_timestamp, uid)
 ) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC);
 
@@ -161,6 +166,8 @@ CREATE TABLE IF NOT EXISTS product_variant_by_namespace (
     spec               text,
     body               text,
     status             text,
+    repository_id      text,
+    source_path        text,
     PRIMARY KEY ((namespace), creation_timestamp, uid)
 ) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC);
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 
-package auth_test
+package staticadmin
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
-	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,7 +36,7 @@ func mustBcrypt(t *testing.T, password string) string {
 
 func TestStaticAdmin_BearerJWT_Allow(t *testing.T) {
 	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
-	p, err := staticadmin.New(v, zap.NewNop())
+	p, err := New(v, zap.NewNop())
 	require.NoError(t, err)
 
 	token, _, err := p.IssueToken("admin")
@@ -58,7 +57,7 @@ func TestStaticAdmin_ExpiredJWT_Deny(t *testing.T) {
 	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
 	// Use a very short duration so the token expires before the leeway window.
 	v.SetDefault("auth.jwt.duration", "-10m") // already in the past by 10 minutes
-	p, err := staticadmin.New(v, zap.NewNop())
+	p, err := New(v, zap.NewNop())
 	require.NoError(t, err)
 
 	token, _, err := p.IssueToken("admin")
@@ -75,7 +74,7 @@ func TestStaticAdmin_ExpiredJWT_Deny(t *testing.T) {
 
 func TestStaticAdmin_BlacklistedJTI_Deny(t *testing.T) {
 	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
-	p, err := staticadmin.New(v, zap.NewNop())
+	p, err := New(v, zap.NewNop())
 	require.NoError(t, err)
 
 	token, exp, err := p.IssueToken("admin")
@@ -99,14 +98,14 @@ func TestStaticAdmin_WrongIssuer_Challenge(t *testing.T) {
 	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
 	// Issue a token with a different issuer by temporarily using a different viper.
 	vOther := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "other-issuer")
-	pOther, err := staticadmin.New(vOther, zap.NewNop())
+	pOther, err := New(vOther, zap.NewNop())
 	require.NoError(t, err)
 
 	token, _, err := pOther.IssueToken("admin")
 	require.NoError(t, err)
 
 	// Now try to verify it with the "gitstore" issuer provider.
-	p, err := staticadmin.New(v, zap.NewNop())
+	p, err := New(v, zap.NewNop())
 	require.NoError(t, err)
 
 	req := authpkg.AuthRequest{Header: http.Header{"Authorization": []string{"Bearer " + token}}}
@@ -118,7 +117,7 @@ func TestStaticAdmin_WrongIssuer_Challenge(t *testing.T) {
 
 func TestStaticAdmin_BasicAuth_Allow(t *testing.T) {
 	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
-	p, err := staticadmin.New(v, zap.NewNop())
+	p, err := New(v, zap.NewNop())
 	require.NoError(t, err)
 
 	creds := base64.StdEncoding.EncodeToString([]byte("admin:testpass"))
@@ -133,7 +132,7 @@ func TestStaticAdmin_BasicAuth_Allow(t *testing.T) {
 
 func TestStaticAdmin_BasicAuth_WrongPassword_Challenge(t *testing.T) {
 	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
-	p, err := staticadmin.New(v, zap.NewNop())
+	p, err := New(v, zap.NewNop())
 	require.NoError(t, err)
 
 	creds := base64.StdEncoding.EncodeToString([]byte("admin:wrongpass"))
@@ -146,7 +145,7 @@ func TestStaticAdmin_BasicAuth_WrongPassword_Challenge(t *testing.T) {
 
 func TestStaticAdmin_NoAuthHeader_Challenge(t *testing.T) {
 	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
-	p, err := staticadmin.New(v, zap.NewNop())
+	p, err := New(v, zap.NewNop())
 	require.NoError(t, err)
 
 	req := authpkg.AuthRequest{Header: http.Header{}}
@@ -158,7 +157,7 @@ func TestStaticAdmin_NoAuthHeader_Challenge(t *testing.T) {
 
 func TestStaticAdmin_IssueSession_ReturnsToken(t *testing.T) {
 	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
-	p, err := staticadmin.New(v, zap.NewNop())
+	p, err := New(v, zap.NewNop())
 	require.NoError(t, err)
 
 	token, exp, err := p.IssueSession(context.Background(), "admin")
@@ -169,7 +168,7 @@ func TestStaticAdmin_IssueSession_ReturnsToken(t *testing.T) {
 
 func TestStaticAdmin_BearerJWT_SetsTokenID(t *testing.T) {
 	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
-	p, err := staticadmin.New(v, zap.NewNop())
+	p, err := New(v, zap.NewNop())
 	require.NoError(t, err)
 
 	token, _, err := p.IssueToken("admin")
@@ -186,7 +185,7 @@ func TestStaticAdmin_BearerJWT_SetsTokenID(t *testing.T) {
 
 func TestStaticAdmin_BasicAuth_TokenIDEmpty(t *testing.T) {
 	v := newTestViper("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
-	p, err := staticadmin.New(v, zap.NewNop())
+	p, err := New(v, zap.NewNop())
 	require.NoError(t, err)
 
 	creds := base64.StdEncoding.EncodeToString([]byte("admin:testpass"))
@@ -204,7 +203,7 @@ func TestStaticAdmin_RefreshSession_WithinGrace_Succeeds(t *testing.T) {
 	// Issue a token that expired 30s ago (within default 60s grace).
 	v.SetDefault("auth.jwt.duration", "-30s")
 	v.SetDefault("auth.jwt.refresh_grace", "60s")
-	p, err := staticadmin.New(v, zap.NewNop())
+	p, err := New(v, zap.NewNop())
 	require.NoError(t, err)
 
 	token, _, err := p.IssueToken("admin")
@@ -221,7 +220,7 @@ func TestStaticAdmin_RefreshSession_BeyondGrace_Fails(t *testing.T) {
 	// Issue a token that expired 5 minutes ago (beyond default 60s grace).
 	v.SetDefault("auth.jwt.duration", "-5m")
 	v.SetDefault("auth.jwt.refresh_grace", "60s")
-	p, err := staticadmin.New(v, zap.NewNop())
+	p, err := New(v, zap.NewNop())
 	require.NoError(t, err)
 
 	token, _, err := p.IssueToken("admin")

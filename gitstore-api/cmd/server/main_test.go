@@ -13,12 +13,17 @@ import (
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/app"
+	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
-	"github.com/gitstore-dev/gitstore/api/internal/middleware"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type mockGitWriter struct {
@@ -57,22 +62,34 @@ func (m *mockGitWriter) DeleteRepository(_ context.Context, _ string) error {
 	return nil
 }
 
+func newTestGraphQLRegistry(t *testing.T) *authpkg.ProviderRegistry {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.MinCost)
+	require.NoError(t, err)
+
+	v := viper.New()
+	v.SetDefault("auth.admin.username", "admin")
+	v.SetDefault("auth.admin.password_hash", string(hash))
+	v.SetDefault("auth.jwt.secret", "dev-secret")
+	v.SetDefault("auth.jwt.issuer", "gitstore")
+	v.SetDefault("auth.jwt.duration", "2h")
+
+	staticAdmin, err := staticadmin.New(v, zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(staticAdmin.Shutdown)
+
+	return authpkg.NewProviderRegistry(
+		authpkg.NewChainedAuthN(staticAdmin, anonymous.New()),
+		allowall.New(zap.NewNop()),
+		nil,
+	)
+}
+
 func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 
-	hash, err := middleware.HashPassword("admin123")
-	require.NoError(t, err)
-	authMiddleware, err := middleware.NewAuthMiddleware(middleware.AuthDeps{
-		AdminUsername:     "admin",
-		AdminPasswordHash: hash,
-		JWTSecret:         "dev-secret",
-		JWTDuration:       "2h",
-		JWTIssuer:         "gitstore",
-	})
-	require.NoError(t, err)
-
-	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), authMiddleware, nil, nil, nil)
+	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, nil)
 	require.NoError(t, err)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
@@ -169,22 +186,37 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	assert.Equal(t, 1, listResponse.Data.Namespaces.TotalCount)
 }
 
+func TestGraphQLHandlerRejectsLoginWithInvalidCredentials(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+
+	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, nil)
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
+		"query": "mutation { login(input: { username: \"admin\", password: \"wrong\" }) { session { token } } }"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.NotEmpty(t, response.Errors)
+	assert.Contains(t, response.Errors[0].Message, "invalid username or password")
+}
+
 func TestGraphQLHandlerRejectsNamespaceMutationWithoutBearerToken(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 
-	hash, err := middleware.HashPassword("admin123")
-	require.NoError(t, err)
-	authMiddleware, err := middleware.NewAuthMiddleware(middleware.AuthDeps{
-		AdminUsername:     "admin",
-		AdminPasswordHash: hash,
-		JWTSecret:         "dev-secret",
-		JWTDuration:       "2h",
-		JWTIssuer:         "gitstore",
-	})
-	require.NoError(t, err)
-
-	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), authMiddleware, nil, nil, nil)
+	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, nil)
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
 		"query": "mutation { createNamespace(input: { identifier: \"alice\", tier: USER }) { namespace { identifier } } }"

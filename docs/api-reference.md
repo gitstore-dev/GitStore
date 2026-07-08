@@ -21,6 +21,8 @@ Public read access depends on resolver and deployment policy. Protected mutation
 Authorization: Bearer <token>
 ```
 
+First-party login is GraphQL-only via the `login(input:)` mutation.
+
 Login:
 
 ```graphql

@@ -112,7 +112,7 @@ upload is an out-of-band operation.
    - If referencing records exist, the delete is **rejected** with
      `FailedPrecondition: file references present`.
 3. If no referencing records exist, the API adds the `gitstore.dev/foreground-deletion`
-   finalizer.
+   finalizer and sets `metadata.deletionTimestamp`.
 4. Controller removes any controller-managed derived artefacts (processing output
    pointers) from the datastore and then removes the finalizer.
 5. Datastore record is hard-deleted.
@@ -126,10 +126,10 @@ upload is an out-of-band operation.
 `File` references from catalog resources (`spec.media[*].fileRef`, `spec.source.fileRef`)
 are validated in two phases:
 
-| Phase        | Check                                                                                       |
-|--------------|---------------------------------------------------------------------------------------------|
-| Push-time    | Structural: `fileRef.name` and `fileRef.kind` fields are present and non-empty.             |
-| Controller   | Semantic: the referenced `File` record exists in the same namespace (async, Phase 2, GH#244). |
+| Phase      | Check                                                                                         |
+|------------|-----------------------------------------------------------------------------------------------|
+| Push-time  | Structural: `fileRef.name` and `fileRef.kind` fields are present and non-empty.               |
+| Controller | Semantic: the referenced `File` record exists in the same namespace (async, Phase 2, GH#244). |
 
 Cross-namespace `fileRef` is **rejected at admission time** in Phase 1. All referenced
 `File` records must be in the same namespace as the referencing resource.
@@ -164,9 +164,10 @@ spec:
       kind: SecretRef
       name: s3-catalog-assets
   processing:
-    generateVariants:
-    - width: 800
-      format: webp
+    image:
+      variants:
+      - width: 800
+        format: webp
 ---
 
 Hero image for MacBook Pro.
@@ -174,34 +175,34 @@ Hero image for MacBook Pro.
 
 ### GraphQL mutation delegation
 
-| Mutation                 | Phase 1 behaviour                                                                                               |
-|--------------------------|-----------------------------------------------------------------------------------------------------------------|
-| `createFile`             | Commits `files/<name>.md` to the named repository (or `gitstore-system`); waits for admission. Binary upload is a separate out-of-band step. |
-| `updateFile`             | Commits updated manifest; waits for admission.                                                                  |
-| `deleteFile`             | Validates no `fileRef` references exist; adds `foregroundDeletion` finalizer.                                  |
-| `getFile`                | Read-only datastore query; includes controller-computed `resolvedVariants` (Phase 2).                          |
-| `listFiles`              | Read-only datastore query, namespace-scoped.                                                                    |
-| `requestFileUpload`      | **Phase 2 only.** Returns a signed upload URL; auto-commits manifest on upload completion.                     |
+| Mutation            | Phase 1 behaviour                                                                                                                            |
+|---------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| `createFile`        | Commits `files/<name>.md` to the named repository (or `gitstore-system`); waits for admission. Binary upload is a separate out-of-band step. |
+| `updateFile`        | Commits updated manifest; waits for admission.                                                                                               |
+| `deleteFile`        | Validates no `fileRef` references exist; adds `foregroundDeletion` finalizer.                                                                |
+| `getFile`           | Read-only datastore query; includes controller-computed `resolvedVariants` (Phase 2).                                                        |
+| `listFiles`         | Read-only datastore query, namespace-scoped.                                                                                                 |
+| `requestFileUpload` | **Phase 2 only.** Returns a signed upload URL; auto-commits manifest on upload completion.                                                   |
 
 There is no direct datastore write path for `File` in Phase 1.
 
 ### Validation and admission rules
 
-| Phase        | Rule                                                                                                           |
-|--------------|----------------------------------------------------------------------------------------------------------------|
-| Pre-receive  | Envelope valid; `kind: File`; `spec.contentType` non-empty; `spec.source.type` is a known value; `spec.source.uri` non-empty. |
-| Admission    | Namespace and repository `Active`; `spec.contentType` immutability check if updating; `credentialsRef` same-namespace rule (ADR-0001). |
-| Controller   | Checksum verification against source URI (Phase 2); processing pipeline trigger (Phase 2); `fileRef` back-reference validation from referencing resources (Phase 2, GH#244). |
+| Phase       | Rule                                                                                                                                                                         |
+|-------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Pre-receive | Envelope valid; `kind: File`; `spec.contentType` non-empty; `spec.source.type` is a known value; `spec.source.uri` non-empty.                                                |
+| Admission   | Namespace and repository `Active`; `spec.contentType` immutability check if updating; `credentialsRef` same-namespace rule (ADR-0001).                                       |
+| Controller  | Checksum verification against source URI (Phase 2); processing pipeline trigger (Phase 2); `fileRef` back-reference validation from referencing resources (Phase 2, GH#244). |
 
 ### Status and reconciliation behaviour
 
-| Condition           | Meaning                                                                            |
-|---------------------|------------------------------------------------------------------------------------|
-| `AdmissionAccepted` | File manifest stored in datastore.                                                 |
-| `SourceResolved`    | Source URI is accessible and checksum verified (Phase 2).                          |
-| `ProcessingComplete`| All requested variants/renditions have been generated (Phase 2).                  |
-| `Ready`             | Manifest admitted; source accessible (Phase 2).                                    |
-| `Terminating`       | `foregroundDeletion` finalizer present; `fileRef` references must be removed first. |
+| Condition            | Meaning                                                                             |
+|----------------------|-------------------------------------------------------------------------------------|
+| `AdmissionAccepted`  | File manifest stored in datastore.                                                  |
+| `SourceResolved`     | Source URI is accessible and checksum verified (Phase 2).                           |
+| `ProcessingComplete` | All requested variants/renditions have been generated (Phase 2).                    |
+| `Ready`              | Manifest admitted; source accessible (Phase 2).                                     |
+| `Terminating`        | `foregroundDeletion` finalizer present; `fileRef` references must be removed first. |
 
 In Phase 1, `SourceResolved` and `ProcessingComplete` are not set (controller work is
 deferred). `Ready` is set after `AdmissionAccepted=True` until Phase 2 controller work

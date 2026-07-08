@@ -101,7 +101,7 @@ Controller-managed fields (not author-writable): `metadata.uid`,
    b. Any `Product` records have `spec.categoryRef.name` pointing at this category
       (products assigned). If so, **rejected** with
       `FailedPrecondition: products assigned`.
-3. If both checks pass, the API adds the `gitstore.dev/foreground-deletion` finalizer.
+3. If both checks pass, the API adds the `gitstore.dev/foreground-deletion` finalizer and sets `metadata.deletionTimestamp`.
 4. Controller drains media backlinks (if tracked) and removes the finalizer.
 5. Datastore record is hard-deleted.
 
@@ -112,11 +112,11 @@ re-parenting.
 
 ### Cycle prevention
 
-| Phase        | Check                                                                           | Behaviour on violation       |
-|--------------|---------------------------------------------------------------------------------|------------------------------|
-| Pre-receive  | Self-parent: `parentRef.name == metadata.name`                                  | Reject; no record stored     |
-| Admission    | Direct mutual cycle: A→B where B already has `parentRef.name == A`              | Both stored with `Acyclic=False`; controller sets error condition |
-| Controller   | Deep cycle detection on re-parent (walk ancestor chain up to root)              | Sets `Acyclic=False` with reason `CycleDetected`; `ancestorPath` frozen at last known acyclic value |
+| Phase       | Check                                                              | Behaviour on violation                                                                              |
+|-------------|--------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
+| Pre-receive | Self-parent: `parentRef.name == metadata.name`                     | Reject; no record stored                                                                            |
+| Admission   | Direct mutual cycle: A→B where B already has `parentRef.name == A` | Both stored with `Acyclic=False`; controller sets error condition                                   |
+| Controller  | Deep cycle detection on re-parent (walk ancestor chain up to root) | Sets `Acyclic=False` with reason `CycleDetected`; `ancestorPath` frozen at last known acyclic value |
 
 The controller must not update `ancestorPath` while `Acyclic=False`. Authors must fix
 the cycle in git and push a corrected manifest.
@@ -168,36 +168,36 @@ Laptop category description.
 
 ### GraphQL mutation delegation
 
-| Mutation                      | Phase 1 behaviour                                                                                                  |
-|-------------------------------|--------------------------------------------------------------------------------------------------------------------|
-| `createCategoryTaxonomy`      | Commits `categories/<name>.md` to the named repository (or `gitstore-system`); waits for admission.               |
-| `updateCategoryTaxonomy`      | Commits updated manifest; waits for admission.                                                                     |
-| `deleteCategoryTaxonomy`      | Validates no children or assigned products; adds `foregroundDeletion` finalizer; sets `Terminating`.              |
-| `getCategoryTaxonomy`         | Read-only datastore query; includes controller-computed `ancestorPath`.                                            |
-| `listCategoryTaxonomies`      | Read-only datastore query, namespace-scoped; filterable by `ancestorPath` prefix.                                 |
+| Mutation                 | Phase 1 behaviour                                                                                    |
+|--------------------------|------------------------------------------------------------------------------------------------------|
+| `createCategoryTaxonomy` | Commits `categories/<name>.md` to the named repository (or `gitstore-system`); waits for admission.  |
+| `updateCategoryTaxonomy` | Commits updated manifest; waits for admission.                                                       |
+| `deleteCategoryTaxonomy` | Validates no children or assigned products; adds `foregroundDeletion` finalizer; sets `Terminating`. |
+| `getCategoryTaxonomy`    | Read-only datastore query; includes controller-computed `ancestorPath`.                              |
+| `listCategoryTaxonomies` | Read-only datastore query, namespace-scoped; filterable by `ancestorPath` prefix.                    |
 
 No direct datastore write path exists for `CategoryTaxonomy` in Phase 1.
 
 ### Validation and admission rules
 
-| Phase        | Rule                                                                                                           |
-|--------------|----------------------------------------------------------------------------------------------------------------|
-| Pre-receive  | Envelope valid; `kind: CategoryTaxonomy`; `spec.title` required; self-parent rejected; `media[*].fileRef.name` present when `media` non-empty. |
-| Admission    | Namespace and repository `Active`; no cross-namespace `parentRef` in Phase 1; direct mutual cycle check.       |
-| Controller   | `spec.parentRef` full resolution; deep cycle detection; `ancestorPath` computation and propagation to descendants; `spec.media[*].fileRef` resolution (deferred to Phase 2, GH#244). |
+| Phase       | Rule                                                                                                                                                                                 |
+|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Pre-receive | Envelope valid; `kind: CategoryTaxonomy`; `spec.title` required; self-parent rejected; `media[*].fileRef.name` present when `media` non-empty.                                       |
+| Admission   | Namespace and repository `Active`; no cross-namespace `parentRef` in Phase 1; direct mutual cycle check.                                                                             |
+| Controller  | `spec.parentRef` full resolution; deep cycle detection; `ancestorPath` computation and propagation to descendants; `spec.media[*].fileRef` resolution (deferred to Phase 2, GH#244). |
 
 Cross-namespace `spec.parentRef` is **rejected at admission time** in Phase 1.
 
 ### Status and reconciliation behaviour
 
-| Condition           | Meaning                                                                          |
-|---------------------|----------------------------------------------------------------------------------|
-| `AdmissionAccepted` | Category stored in datastore.                                                    |
-| `ParentResolved`    | `spec.parentRef` was found and is in the same namespace.                        |
-| `Acyclic`           | Category's ancestor chain contains no cycle.                                     |
-| `AncestorPathReady` | `ancestorPath` is up-to-date and reflects the current parent chain.             |
-| `MediaResolved`     | All `spec.media[*].fileRef` entries found (deferred to Phase 2, GH#244).        |
-| `Ready`             | Parent resolved, acyclic, ancestor path current.                                 |
+| Condition           | Meaning                                                                                 |
+|---------------------|-----------------------------------------------------------------------------------------|
+| `AdmissionAccepted` | Category stored in datastore.                                                           |
+| `ParentResolved`    | `spec.parentRef` was found and is in the same namespace.                                |
+| `Acyclic`           | Category's ancestor chain contains no cycle.                                            |
+| `AncestorPathReady` | `ancestorPath` is up-to-date and reflects the current parent chain.                     |
+| `MediaResolved`     | All `spec.media[*].fileRef` entries found (deferred to Phase 2, GH#244).                |
+| `Ready`             | Parent resolved, acyclic, ancestor path current.                                        |
 | `Terminating`       | `foregroundDeletion` finalizer present; children and assigned products must be drained. |
 
 When `AncestorPathReady=False`, queries that filter by ancestor path may return stale

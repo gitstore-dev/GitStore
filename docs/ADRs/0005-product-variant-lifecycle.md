@@ -90,7 +90,7 @@ directly to the datastore.
    best-effort warning, not a blocking rejection, because inventory runtime is not
    yet implemented. The rejection will be enforced when inventory is implemented in
    Phase 2.)
-3. The API adds the `gitstore.dev/foreground-deletion` finalizer.
+3. The API adds the `gitstore.dev/foreground-deletion` finalizer and sets `metadata.deletionTimestamp`.
 4. Controller removes the variant from any Collection membership projections (selector
    re-evaluation) and then removes the finalizer.
 5. Once finalizers are cleared, the datastore record is hard-deleted.
@@ -148,13 +148,9 @@ spec:
   selectedOptions:
   - name: color
     value: silver
-  pricing:
-    priceListRef:
-      kind: PriceList
-      name: eu-retail
   inventory:
-    tracked: true
-    policy: deny_out_of_stock
+    managed: true
+    policy: deny
   media:
   - fileRef:
       kind: File
@@ -166,35 +162,35 @@ Silver MacBook Pro 15 variant.
 
 ### GraphQL mutation delegation
 
-| Mutation                  | Phase 1 behaviour                                                                                                      |
-|---------------------------|------------------------------------------------------------------------------------------------------------------------|
-| `createProductVariant`    | Commits `products/variants/<name>.md` to the named repository (or `gitstore-system`); waits for admission.            |
-| `updateProductVariant`    | Commits updated manifest to the same path; waits for admission.                                                       |
-| `deleteProductVariant`    | Checks for active reservations (Phase 1: warning); adds `foregroundDeletion` finalizer; sets `Terminating`.           |
-| `getProductVariant`       | Read-only datastore query.                                                                                             |
-| `listProductVariants`     | Read-only datastore query, namespace-scoped; filterable by `spec.productRef.name`.                                    |
+| Mutation               | Phase 1 behaviour                                                                                           |
+|------------------------|-------------------------------------------------------------------------------------------------------------|
+| `createProductVariant` | Commits `products/variants/<name>.md` to the named repository (or `gitstore-system`); waits for admission.  |
+| `updateProductVariant` | Commits updated manifest to the same path; waits for admission.                                             |
+| `deleteProductVariant` | Checks for active reservations (Phase 1: warning); adds `foregroundDeletion` finalizer; sets `Terminating`. |
+| `getProductVariant`    | Read-only datastore query.                                                                                  |
+| `listProductVariants`  | Read-only datastore query, namespace-scoped; filterable by `spec.productRef.name`.                          |
 
 There is no direct-datastore write path for `ProductVariant` in Phase 1.
 
 ### Validation and admission rules
 
-| Phase        | Rule                                                                                                                               |
-|--------------|------------------------------------------------------------------------------------------------------------------------------------|
-| Pre-receive  | Envelope valid; `kind: ProductVariant`; `spec.productRef.name` required; `spec.sku` non-empty if present; `spec.selectedOptions[*].name` must match an option defined in the referenced product (deferred to controller in Phase 1 if co-created). |
-| Admission    | Namespace and repository `Active`; no cross-namespace `productRef`; co-creation allowed (product may not exist yet in datastore at admission time). |
-| Controller   | `spec.productRef` resolution (async); `spec.media[*].fileRef` resolution (async, deferred to Phase 2); `selectedOptions` compatibility check against parent product options (async). |
+| Phase       | Rule                                                                                                                                                                                                                                               |
+|-------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Pre-receive | Envelope valid; `kind: ProductVariant`; `spec.productRef.name` required; `spec.sku` non-empty if present; `spec.selectedOptions[*].name` must match an option defined in the referenced product (deferred to controller in Phase 1 if co-created). |
+| Admission   | Namespace and repository `Active`; no cross-namespace `productRef`; co-creation allowed (product may not exist yet in datastore at admission time).                                                                                                |
+| Controller  | `spec.productRef` resolution (async); `spec.media[*].fileRef` resolution (async, deferred to Phase 2); `selectedOptions` compatibility check against parent product options (async).                                                               |
 
 Cross-namespace `spec.productRef` is **rejected at admission time** in Phase 1.
 
 ### Status and reconciliation behaviour
 
-| Condition           | Meaning                                                                                 |
-|---------------------|-----------------------------------------------------------------------------------------|
-| `AdmissionAccepted` | Variant stored in datastore.                                                            |
+| Condition           | Meaning                                                                                |
+|---------------------|----------------------------------------------------------------------------------------|
+| `AdmissionAccepted` | Variant stored in datastore.                                                           |
 | `ProductResolved`   | `spec.productRef` was found; secondary `ownerReference` written.                       |
 | `OptionsCompatible` | Selected options are compatible with the parent product's declared option set.         |
 | `MediaResolved`     | All `spec.media[*].fileRef` entries found (deferred to Phase 2).                       |
-| `Ready`             | Variant is queryable, product is resolved, options are compatible.                      |
+| `Ready`             | Variant is queryable, product is resolved, options are compatible.                     |
 | `Terminating`       | `foregroundDeletion` finalizer present; reservations must drain (Phase 2 enforcement). |
 
 When `ProductResolved=False` and the parent product does not exist after a configurable

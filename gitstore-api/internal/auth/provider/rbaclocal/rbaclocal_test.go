@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 
-package auth_test
+package rbaclocal
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
-	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,7 +38,7 @@ role_bindings:
   anon: [anonymous]
 `
 
-func newRBACProvider(t *testing.T, policyContent string) *rbaclocal.RBACLocalProvider {
+func newRBACProvider(t *testing.T, policyContent string) *RBACLocalProvider {
 	t.Helper()
 	dir := t.TempDir()
 	policyPath := filepath.Join(dir, "policy.yaml")
@@ -47,7 +46,7 @@ func newRBACProvider(t *testing.T, policyContent string) *rbaclocal.RBACLocalPro
 
 	v := viper.New()
 	v.SetDefault("auth.rbac.policy_file", policyPath)
-	p, err := rbaclocal.New(v, zap.NewNop())
+	p, err := New(v, zap.NewNop())
 	require.NoError(t, err)
 	return p
 }
