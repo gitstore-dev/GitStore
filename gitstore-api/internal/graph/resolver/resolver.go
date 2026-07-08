@@ -10,7 +10,6 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"go.uber.org/zap"
 )
@@ -22,7 +21,6 @@ type Resolver struct {
 	logger         *zap.Logger
 	store          datastore.Datastore
 	service        *Service
-	authMiddleware *middleware.AuthMiddleware
 	registry       *auth.ProviderRegistry
 	storageDataDir string // data_dir used to build storagePath in responses; defaults to "/data"
 	clock          apiruntime.Clock
@@ -74,9 +72,4 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 func (r *Resolver) WithStorageDataDir(dir string) *Resolver {
 	r.storageDataDir = dir
 	return r
-}
-
-// WithAuthMiddleware wires the auth middleware into the resolver (called from main.go).
-func (r *Resolver) WithAuthMiddleware(am *middleware.AuthMiddleware) {
-	r.authMiddleware = am
 }

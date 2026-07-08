@@ -47,7 +47,7 @@ All proposals share the same core building blocks, arranged with different contr
 The API gateway (`gitstore-api`) and the Git server (`gitstore-git-service`) communicate exclusively through gRPC on port `50051`. **No shared volume mount is required.** The API holds no local git state; every read (catalogue load) and every write (commit, delete, tag) is an RPC call to the Git service.
 
 `gitstore-api` serves two ports:
-- Port `4000` — GraphQL/REST API
+- Port `4000` — GraphQL API
 - Port `5000` — Git smart HTTP (`git clone`, `git fetch`, `git push`)
 
 `gitstore-git-service` serves one port:

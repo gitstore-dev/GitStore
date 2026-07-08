@@ -84,9 +84,10 @@ type RBACConfig struct {
 
 // JWTConfig holds JWT token settings.
 type JWTConfig struct {
-	Secret   string `mapstructure:"secret"   validate:"required"`
-	Duration string `mapstructure:"duration"`
-	Issuer   string `mapstructure:"issuer"`
+	Secret       string `mapstructure:"secret"   validate:"required"`
+	Duration     string `mapstructure:"duration"`
+	Issuer       string `mapstructure:"issuer"`
+	RefreshGrace string `mapstructure:"refresh_grace"`
 }
 
 // UserConfig in-memory users
@@ -149,6 +150,7 @@ func Load() (*Config, error) {
 	v.SetDefault("auth.jwt.secret", "")
 	v.SetDefault("auth.jwt.duration", "24h")
 	v.SetDefault("auth.jwt.issuer", "gitstore")
+	v.SetDefault("auth.jwt.refresh_grace", "60s")
 	v.SetDefault("auth.grpc.hmac_secret", "")
 	v.SetDefault("auth.authn.chain", []string{"static-admin", "anonymous"})
 	v.SetDefault("auth.authz.provider", "allow-all")
@@ -194,7 +196,7 @@ func Load() (*Config, error) {
 		"api.port": true, "api.git_port": true, "api.grpc_port": true, "git.grpc.uri": true,
 		"cache.ttl": true, "log.level": true, "log.format": true,
 		"auth.admin.username": true, "auth.admin.password_hash": true,
-		"auth.jwt.secret": true, "auth.jwt.duration": true, "auth.jwt.issuer": true,
+		"auth.jwt.secret": true, "auth.jwt.duration": true, "auth.jwt.issuer": true, "auth.jwt.refresh_grace": true,
 		"auth.grpc.hmac_secret": true,
 		"auth.authn.chain":      true, "auth.authz.provider": true,
 		"auth.userdir.provider": true, "auth.rbac.policy_file": true,
@@ -276,6 +278,7 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddString("auth.jwt.secret", redact(c.Auth.JWT.Secret))
 	enc.AddString("auth.jwt.duration", c.Auth.JWT.Duration)
 	enc.AddString("auth.jwt.issuer", c.Auth.JWT.Issuer)
+	enc.AddString("auth.jwt.refresh_grace", c.Auth.JWT.RefreshGrace)
 	enc.AddString("auth.grpc.hmac_secret", redact(c.Auth.Grpc.HmacSecret))
 	enc.AddInt("cache.ttl", c.Cache.TTL)
 	enc.AddString("log.level", c.Log.Level)

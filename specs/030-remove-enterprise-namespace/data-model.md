@@ -19,9 +19,9 @@ The `Namespace` entity retains all existing fields except `ParentEnterpriseID`, 
 
 ### Removed fields
 
-| Field                        | Reason                                                                                                                                                                         |
-|------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `ParentEnterpriseID *string` | Only relevant for the `enterprise` tier. Removed from the Go struct, all generated/hand-written code, and the Scylla schema via migration `004_drop_parent_enterprise_id.cql`. |
+| Field                        | Reason                                                                                                |
+|------------------------------|-------------------------------------------------------------------------------------------------------|
+| `ParentEnterpriseID *string` | Only relevant for the `enterprise` tier. Removed from the Go struct, all generated/hand-written code. |
 
 ## NamespaceTier Enum (after change)
 
@@ -48,5 +48,5 @@ The `Namespace` entity retains all existing fields except `ParentEnterpriseID`, 
 
 ## Datastore Notes
 
-- Migration `004_drop_parent_enterprise_id.cql` drops the `parent_enterprise_id` column from the `namespaces` table via `ALTER TABLE namespaces DROP parent_enterprise_id;`.
+- Drop the `parent_enterprise_id` column from the `namespaces`.
 - The `memdb` in-memory datastore does not persist the `ParentEnterpriseID` field after the struct change; no separate migration needed there.

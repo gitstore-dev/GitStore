@@ -59,13 +59,14 @@ The following endpoints are served on port `api.git_port` (default `5000`):
 
 ### Authentication
 
-| Key                          | Env Var                               | Type     | Default    | Required | Sensitive | Description                             |
-|------------------------------|---------------------------------------|----------|------------|----------|-----------|-----------------------------------------|
-| `auth.admin.username`        | `GITSTORE_AUTH__ADMIN__USERNAME`      | string   | —          | **Yes**  | No        | Admin portal username                   |
-| `auth.admin.password_hash`   | `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | string   | —          | **Yes**  | **Yes**   | bcrypt hash of the admin password       |
-| `auth.jwt.secret`            | `GITSTORE_AUTH__JWT__SECRET`          | string   | —          | **Yes**  | **Yes**   | JWT signing key (minimum 32 characters) |
-| `auth.jwt.duration`          | `GITSTORE_AUTH__JWT__DURATION`        | duration | `24h`      | No       | No        | JWT token validity (e.g. `12h`, `30m`)  |
-| `auth.jwt.issuer`            | `GITSTORE_AUTH__JWT__ISSUER`          | string   | `gitstore` | No       | No        | JWT `iss` claim value                   |
+| Key                        | Env Var                               | Type     | Default    | Required | Sensitive | Description                                                 |
+|----------------------------|---------------------------------------|----------|------------|----------|-----------|-------------------------------------------------------------|
+| `auth.admin.username`      | `GITSTORE_AUTH__ADMIN__USERNAME`      | string   | —          | **Yes**  | No        | Admin portal username                                       |
+| `auth.admin.password_hash` | `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | string   | —          | **Yes**  | **Yes**   | bcrypt hash of the admin password                           |
+| `auth.jwt.secret`          | `GITSTORE_AUTH__JWT__SECRET`          | string   | —          | **Yes**  | **Yes**   | JWT signing key (minimum 32 characters)                     |
+| `auth.jwt.duration`        | `GITSTORE_AUTH__JWT__DURATION`        | duration | `24h`      | No       | No        | JWT token validity (e.g. `12h`, `30m`)                      |
+| `auth.jwt.issuer`          | `GITSTORE_AUTH__JWT__ISSUER`          | string   | `gitstore` | No       | No        | JWT `iss` claim value                                       |
+| `auth.jwt.refresh_grace`   | `GITSTORE_AUTH__JWT__REFRESH_GRACE`   | duration | `60s`      | No       | No        | Window after expiry during which `refreshToken` is accepted |
 
 For config files, admin auth keys are nested under `[auth.admin]` (for example, `username = "admin"`) and JWT keys are nested under `[auth.jwt]`.
 
@@ -108,6 +109,7 @@ uri = "dns:///localhost:50051"
 [auth.jwt]
 duration = "24h"
 issuer = "gitstore"
+refresh_grace = "60s"
 
 [log]
 level = "debug"
@@ -248,6 +250,8 @@ format = "json"
 ## Local Development with `.env`
 
 All Go services automatically load a `.env` file from the current working directory at startup. The Git service loads `.env` in its binary entrypoint before resolving layered configuration. Shell environment variables always override `.env` values.
+
+For the shared gRPC HMAC secret, `make gen-hmac-secret` writes the same `GITSTORE_AUTH__GRPC__HMAC_SECRET` value to both `gitstore-api/.env` and `gitstore-git-service/.env` so local API and git-service runs stay in sync.
 
 Copy the example file and fill in the required values:
 

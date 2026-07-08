@@ -129,7 +129,80 @@ jobs:
 
     - name: Run datastore contract tests
       working-directory: ./gitstore-api
-      run: go test -v -race -timeout 120s ./tests/contract/datastore/...
+      run: go test -tags memdb -v -race -timeout 120s ./tests/contract/datastore/...
+
+  integration-test-scylla:
+    name: Integration Tests (ScyllaDB)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+          cache-dependency-path: tests/integration/go.sum
+
+      - name: Set up Docker Compose
+        uses: docker/setup-compose-action@v2
+
+      - name: Build and start core stack with ScyllaDB
+        run: docker compose -f compose.yml -f compose.scylla.yml up -d --build
+        env:
+          GITSTORE_GIT__DATA_DIR: ./data/repos
+          GITSTORE_AUTH__ADMIN__USERNAME: admin
+          GITSTORE_AUTH__ADMIN__PASSWORD_HASH: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
+          GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
+          GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
+
+      - name: Wait for ScyllaDB to be healthy
+        run: timeout 120 sh -c 'until nc -z localhost 9042; do sleep 2; done'
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "Waiting for gitstore-api (GraphQL + git HTTP)..."
+          timeout 90 sh -c 'until curl -sf http://localhost:4000/health; do sleep 2; done'
+          timeout 60 sh -c 'until curl -sf http://localhost:5000/health; do sleep 2; done'
+          docker compose -f compose.yml -f compose.scylla.yml ps
+
+      - name: Wait for git-service gRPC to be ready
+        run: timeout 30 sh -c 'until nc -z localhost 50051; do sleep 1; done'
+
+      - name: Wait for CatalogService gRPC to be ready
+        run: timeout 30 sh -c 'until nc -z localhost 6000; do sleep 1; done'
+
+      - name: Bootstrap namespace and repository
+        run: make bootstrap ADMIN_PASSWORD=admin123 NAMESPACE=gitci NAMESPACE_DISPLAY_NAME=CI NAMESPACE_TIER=USER REPOSITORY=catalog
+
+      - name: Seed repository with initial commit
+        run: |
+          git config --global user.email "ci@gitstore.dev"
+          git config --global user.name "CI"
+          git config --global init.defaultBranch main
+          tmpdir=$(mktemp -d)
+          git clone http://localhost:5000/gitci/catalog.git "$tmpdir"
+          echo "# CI seed" > "$tmpdir/README.md"
+          git -C "$tmpdir" add README.md
+          git -C "$tmpdir" commit -m "ci: seed initial commit"
+          git -C "$tmpdir" push origin main
+
+      - name: Run integration tests (ScyllaDB backend)
+        working-directory: ./tests/integration
+        env:
+          NAMESPACE: gitci
+          REPOSITORY: catalog
+        run: go test -v -timeout 120s ./...
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f compose.yml -f compose.scylla.yml logs
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f compose.yml -f compose.scylla.yml down -v
 
   datastore-contract-test-scylla:
     name: Datastore Contract Tests (ScyllaDB)
@@ -163,79 +236,6 @@ jobs:
     - name: Stop ScyllaDB
       if: always()
       run: docker rm -f gitstore-scylla-test || true
-
-  integration-test-scylla:
-    name: Integration Tests (ScyllaDB)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    steps:
-    - uses: actions/checkout@v6
-
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.25.x'
-        cache-dependency-path: tests/integration/go.sum
-
-    - name: Set up Docker Compose
-      uses: docker/setup-compose-action@v2
-
-    - name: Build and start core stack with ScyllaDB
-      run: docker compose -f compose.yml -f compose.scylla.yml up -d --build
-      env:
-        GITSTORE_GIT__DATA_DIR: ./data/repos
-        GITSTORE_AUTH__ADMIN__USERNAME: admin
-        GITSTORE_AUTH__ADMIN__PASSWORD_HASH: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
-        GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
-        GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
-
-    - name: Wait for ScyllaDB to be healthy
-      run: timeout 120 sh -c 'until nc -z localhost 9042; do sleep 2; done'
-
-    - name: Wait for services to be healthy
-      run: |
-        echo "Waiting for gitstore-api (GraphQL + git HTTP)..."
-        timeout 90 sh -c 'until curl -sf http://localhost:4000/health; do sleep 2; done'
-        timeout 60 sh -c 'until curl -sf http://localhost:5000/health; do sleep 2; done'
-        docker compose -f compose.yml -f compose.scylla.yml ps
-
-    - name: Wait for git-service gRPC to be ready
-      run: timeout 30 sh -c 'until nc -z localhost 50051; do sleep 1; done'
-
-    - name: Wait for CatalogService gRPC to be ready
-      run: timeout 30 sh -c 'until nc -z localhost 6000; do sleep 1; done'
-
-    - name: Bootstrap namespace and repository
-      run: make bootstrap ADMIN_PASSWORD=admin123 NAMESPACE=gitci NAMESPACE_DISPLAY_NAME=CI NAMESPACE_TIER=USER REPOSITORY=catalog
-
-    - name: Seed repository with initial commit
-      run: |
-        git config --global user.email "ci@gitstore.dev"
-        git config --global user.name "CI"
-        git config --global init.defaultBranch main
-        tmpdir=$(mktemp -d)
-        git clone http://localhost:5000/gitci/catalog.git "$tmpdir"
-        echo "# CI seed" > "$tmpdir/README.md"
-        git -C "$tmpdir" add README.md
-        git -C "$tmpdir" commit -m "ci: seed initial commit"
-        git -C "$tmpdir" push origin main
-
-    - name: Run integration tests (ScyllaDB backend)
-      working-directory: ./tests/integration
-      env:
-        NAMESPACE: gitci
-        REPOSITORY: catalog
-      run: go test -v -timeout 120s ./...
-
-    - name: Collect logs on failure
-      if: failure()
-      run: docker compose -f compose.yml -f compose.scylla.yml logs
-
-    - name: Cleanup
-      if: always()
-      run: docker compose -f compose.yml -f compose.scylla.yml down -v
 
   grpc-contract-test:
     name: gRPC Contract Tests (testcontainers)

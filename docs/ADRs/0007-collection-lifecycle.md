@@ -14,36 +14,35 @@ explicit membership lists. The controller continuously recomputes membership as 
 labels change.
 
 `Collection` frontmatter (GH#84) is already closed. This ADR governs the lifecycle
-gaps: mutation delegation, finalizer protocol, and controller reconciliation semantics.
+gaps: mutation delegation, snapshot semantics, and controller reconciliation semantics.
 
 ## Decision
 
 `Collection` is **Git-backed**. Desired state is a Markdown file with YAML
-frontmatter pushed to a repository. Membership projection and status conditions are
-controller-managed fields in the datastore.
+frontmatter pushed to a repository. Status conditions and the cached membership
+count are controller-managed fields in the datastore.
 
 ### Storage classification
 
-| Layer               | Owner                                   |
-|---------------------|-----------------------------------------|
-| Desired state       | Git frontmatter (Markdown file in repo) |
-| Hydrated record     | Datastore (ScyllaDB/memDB)              |
-| Membership projection | Datastore; controller-managed         |
-| Status              | Datastore; controller-managed           |
-| Finalizers          | Datastore; controller-managed           |
+| Layer                 | Owner                                   |
+|-----------------------|-----------------------------------------|
+| Desired state         | Git frontmatter (Markdown file in repo) |
+| Hydrated record       | Datastore (ScyllaDB/memDB)              |
+| Status                | Datastore; controller-managed           |
 
 Git-authored fields: `apiVersion`, `kind`, `metadata.*` (non-system), `spec.title`,
 `spec.selector`, `spec.targetRef`, `spec.media`, Markdown body.
 
 Controller-managed fields (not author-writable): `metadata.uid`,
 `metadata.resourceVersion`, `metadata.generation`, `metadata.ownerReferences`,
-`status.*`, `status.memberCount`, `status.memberRefs`.
+`status.*`, `status.resolved.memberCount`.
 
 ### Selector-based membership model
 
 Collection membership is defined by `spec.selector` (a `LabelSelector`) applied to
 `Product` records in the same namespace. Membership is never stored as a static list
-in git — it is a live projection recomputed by the controller.
+in git or status — the live set is evaluated when `collection.products` is queried,
+while the controller maintains only the cached `memberCount` summary.
 
 `spec.targetRef` optionally constrains the selector to products that reference a
 specific resource (e.g., a specific `CategoryTaxonomy`).
@@ -57,18 +56,21 @@ bottleneck.
 
 ### Snapshot semantics
 
-The controller maintains a `memberRefs` snapshot in the datastore that reflects the
-current evaluated membership. This snapshot:
+`collection.products` snapshots membership at the first page request. The resolver
+evaluates the collection selector against the current products in the namespace, then
+materialises an ordered membership set for that traversal. Subsequent pages reuse the
+same snapshot rather than re-running selector evaluation.
 
-- is updated whenever a product is admitted, updated (label change), or deleted;
-- is updated whenever the collection's `spec.selector` changes;
-- is not committed to git;
-- may be transiently stale between the time a product label changes and the next
-  controller reconcile pass.
+The snapshot is query-owned, not controller-owned:
 
-For storefront reads, the snapshot is the primary query target. For authoritative
-membership at reconcile time, the controller re-evaluates the selector from the current
-product records.
+- it is not committed to git;
+- it is not persisted as a `memberRefs` field in status;
+- it may be represented by opaque cursor state or a transient in-process cache;
+- a fresh query, or a fresh cursor, re-evaluates against current product state.
+
+The controller still re-evaluates the selector on collection and product changes so it
+can refresh `memberCount` and status conditions, but it does not materialise a stored
+membership list.
 
 ### Lifecycle rules
 
@@ -85,7 +87,7 @@ product records.
    - `ownerReferences` written pointing at repository.
    - `AdmissionAccepted=True`.
    - Controller is enqueued to evaluate `spec.selector` against current products.
-4. Controller evaluates selector, writes `memberRefs` and `memberCount`, and sets
+4. Controller evaluates selector, writes `memberCount`, and sets
    `MembersResolved=True` (or `False` with reason `SelectorEvaluationFailed`).
 
 **GraphQL mutation path:**
@@ -106,10 +108,9 @@ product records.
 1. Author deletes the collection file and pushes, or issues `deleteCollection`.
 2. Collection deletion has no blocking dependents: no other resource owns or references
    a collection by identity in Phase 1.
-3. The API adds the `gitstore.dev/foreground-deletion` finalizer.
-4. Controller removes the `memberRefs` projection from the datastore and then removes
-   the finalizer.
-5. Datastore record is hard-deleted.
+3. The delete is admitted and the datastore record is removed as part of normal
+   cleanup; there is no stored membership projection to drain.
+4. Any cached status for the deleted collection is discarded.
 
 Collections are deliberately lightweight dependents: they depend on Products but
 Products do not depend on Collections. Deleting a collection does not affect any
@@ -126,6 +127,8 @@ The controller re-evaluates a collection's selector when:
 
 Recomputation is level-triggered: the controller computes the current membership from
 the current state of all matching products, not by replaying a sequence of events.
+Query-time snapshotting is separate: each `collection.products` traversal snapshots once
+and then paginates over that frozen set.
 
 ### File location convention
 
@@ -161,34 +164,34 @@ Summer laptop collection description.
 
 ### GraphQL mutation delegation
 
-| Mutation           | Phase 1 behaviour                                                                                                     |
-|--------------------|-----------------------------------------------------------------------------------------------------------------------|
-| `createCollection` | Commits `collections/<name>.md` to the named repository (or `gitstore-system`); waits for admission.                 |
-| `updateCollection` | Commits updated manifest; waits for admission.                                                                        |
-| `deleteCollection` | Adds `foregroundDeletion` finalizer; waits for controller to drain `memberRefs`; hard-deletes record.                |
-| `getCollection`    | Read-only datastore query; includes controller-computed `memberCount` and `memberRefs` snapshot.                     |
-| `listCollections`  | Read-only datastore query, namespace-scoped.                                                                          |
+| Mutation           | Phase 1 behaviour                                                                                    |
+|--------------------|------------------------------------------------------------------------------------------------------|
+| `createCollection` | Commits `collections/<name>.md` to the named repository (or `gitstore-system`); waits for admission. |
+| `updateCollection` | Commits updated manifest; waits for admission.                                                       |
+| `deleteCollection` | Commits the deletion; waits for admission cleanup; hard-deletes the record.                          |
+| `getCollection`    | Read-only datastore query; includes controller-computed `memberCount`.                               |
+| `listCollections`  | Read-only datastore query, namespace-scoped.                                                         |
 
 There are no mutations to explicitly add or remove products from a collection. Product
 membership is managed by editing product labels.
 
 ### Validation and admission rules
 
-| Phase        | Rule                                                                                                               |
-|--------------|--------------------------------------------------------------------------------------------------------------------|
-| Pre-receive  | Envelope valid; `kind: Collection`; `spec.title` required; `spec.targetRef.kind` must be `"Product"` if present; `media[*].fileRef.name` present when non-empty. |
-| Admission    | Namespace and repository `Active`; no cross-namespace selector targets in Phase 1 (the selector applies within the namespace only). |
-| Controller   | Selector evaluation; `memberRefs` and `memberCount` update; `spec.media[*].fileRef` resolution (deferred to Phase 2). |
+| Phase       | Rule                                                                                                                                                             |
+|-------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Pre-receive | Envelope valid; `kind: Collection`; `spec.title` required; `spec.targetRef.kind` must be `"Product"` if present; `media[*].fileRef.name` present when non-empty. |
+| Admission   | Namespace and repository `Active`; no cross-namespace selector targets in Phase 1 (the selector applies within the namespace only).                              |
+| Controller  | Selector evaluation; `memberCount` and status conditions update; `spec.media[*].fileRef` resolution (deferred to Phase 2).                                       |
+| Query       | `collection.products` snapshots current selector matches on first page request and reuses that snapshot for subsequent pages in the traversal.                   |
 
 ### Status and reconciliation behaviour
 
-| Condition           | Meaning                                                                          |
-|---------------------|----------------------------------------------------------------------------------|
-| `AdmissionAccepted` | Collection stored in datastore.                                                  |
-| `MembersResolved`   | Selector has been evaluated; `memberCount` and `memberRefs` are current.         |
-| `MediaResolved`     | All `spec.media[*].fileRef` entries found (deferred to Phase 2).                |
-| `Ready`             | Selector evaluated and `memberRefs` current.                                     |
-| `Terminating`       | `foregroundDeletion` finalizer present; `memberRefs` projection being drained.  |
+| Condition           | Meaning                                                                        |
+|---------------------|--------------------------------------------------------------------------------|
+| `AdmissionAccepted` | Collection stored in datastore.                                                |
+| `MembersResolved`   | Selector has been evaluated; `memberCount` is current.                         |
+| `MediaResolved`     | All `spec.media[*].fileRef` entries found (deferred to Phase 2).               |
+| `Ready`             | Selector evaluated and `memberCount` current.                                  |
 
 `MembersResolved=False` with reason `SelectorEvaluationFailed` indicates a malformed
 selector expression that could not be compiled. This is a terminal error that requires
@@ -200,35 +203,40 @@ that matches zero products is `MembersResolved=True` with `memberCount=0`).
 #### Product is deleted while in a collection
 
 The controller detects the deletion (product `resourceVersion` change / deletion event)
-and re-evaluates the collection's selector. The product is removed from `memberRefs`
-and `memberCount` is decremented. No error condition is set on the collection — a
-collection with zero members is valid.
+and re-evaluates the collection's selector. The next reconciliation updates
+`memberCount`; any new `collection.products` traversal excludes the deleted product.
+An in-flight traversal that already snapshotted the product set continues to use its
+frozen snapshot. No error condition is set on the collection — a collection with zero
+members is valid.
 
 #### Collection selector is updated to match different products
 
 Controller re-evaluates the selector from scratch against all current products in the
-namespace. The old `memberRefs` snapshot is replaced atomically. There is no partial
-update window — the snapshot is either the old membership or the new membership.
+namespace. New `collection.products` traversals observe the updated selector; any
+already-started traversal continues to page through its original snapshot. There is no
+partial update window within a single traversal.
 
 #### Product label is changed so it no longer matches a collection
 
 Same as above: the controller detects the product update and re-evaluates all
 collections whose selectors might be affected. This is potentially a wide fan-out if
 many collections reference the same label key. The controller must scope the re-evaluation
-to collections in the same namespace.
+to collections in the same namespace. In-flight `collection.products` traversals are
+stable until they complete.
 
 ## Consequences
 
 Positive:
 - Collection membership is always derived from current product state; no stale explicit
   lists to manage.
-- Collection deletion is non-blocking; no dependents need to drain.
+- Collection reads are stable within a single `collection.products` traversal.
 - Authors manage membership by editing product labels — one consistent place for
   product metadata.
 
 Negative:
-- Collection membership projection may be transiently stale during high-volume product
-  label changes (level-triggered, not instant).
+- The first page of `collection.products` must materialise a snapshot, which can be
+  more expensive than a plain live page read.
+- Query-time snapshot state adds transient memory pressure when traversals are large.
 - Wide label changes can trigger expensive multi-collection re-evaluation if many
   collections share label keys.
 
@@ -249,13 +257,14 @@ Negative:
 Namespace (ADR-0002)
   └─► Repository (ADR-0003)
         └─► Collection (this ADR)
-              ├── spec.selector → Product labels (ADR-0004)   [live projection, no ref]
+              ├── spec.selector → Product labels (ADR-0004)   [evaluated at query/reconcile time]
               └── spec.media[*].fileRef → File (ADR-0008)     [async, Phase 2]
 ```
 
 **No circular dependency risk:** Collection references products via selector, not via
 a hard ref stored on the product. Products carry no back-reference to collections.
-The dependency is one-way: Collection → Product (read-only selector evaluation).
+The dependency is one-way: Collection → Product (selector evaluation plus query-time
+snapshotting).
 
 ## Alternatives considered
 
@@ -266,8 +275,9 @@ product is added or removed, creating serialization contention in a team workflo
 multiple authors push new products concurrently. The selector model is decentralised
 and scales naturally.
 
-### Store `memberRefs` in git as a generated file
+### Store `memberRefs` in git or status as a generated file
 
-Rejected. `memberRefs` is a live projection derived from current product state. Storing
-it in git would make it author-writable, conflict with controller updates, and create
-noisy commit history every time product labels change.
+Rejected. `memberRefs` makes the membership set author-writable, conflicts with
+controller updates, and creates noisy commit history or status churn every time product
+labels change. It also duplicates the query-time snapshot that `collection.products`
+already needs for stable pagination.

@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 
-package auth_test
+package allowall
 
 import (
 	"context"
 	"testing"
 
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
-	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -16,8 +15,20 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
+func adminPrincipal() *authpkg.Principal {
+	return &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin"}
+}
+
+func developerPrincipal() *authpkg.Principal {
+	return &authpkg.Principal{Subject: "dev", Roles: []string{"developer"}, AuthMethod: "static-admin"}
+}
+
+func anonPrincipal() *authpkg.Principal {
+	return authpkg.Anonymous()
+}
+
 func TestAllowAll_AllowsAnyActionAndPrincipal(t *testing.T) {
-	p := allowall.New(zap.NewNop())
+	p := New(zap.NewNop())
 
 	cases := []struct {
 		principal *authpkg.Principal
@@ -40,7 +51,7 @@ func TestAllowAll_StartupWarning_EmitsWarnLog(t *testing.T) {
 	core, logs := observer.New(zapcore.WarnLevel)
 	logger := zap.New(core)
 
-	_ = allowall.New(logger)
+	_ = New(logger)
 
 	entries := logs.All()
 	require.Len(t, entries, 1, "expected exactly one log entry")

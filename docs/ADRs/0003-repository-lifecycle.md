@@ -35,12 +35,12 @@ All other repositories are git-backed: their manifests live under
 
 ### Storage classification
 
-| Layer         | Owner                                                             |
-|---------------|-------------------------------------------------------------------|
-| Desired state | Git frontmatter in `gitstore-system` (non-bootstrap repositories) |
-| Hydrated record | Datastore (ScyllaDB/memDB)                                      |
-| Status        | Datastore; controller-managed                                     |
-| Finalizers    | Datastore; controller-managed                                     |
+| Layer           | Owner                                                             |
+|-----------------|-------------------------------------------------------------------|
+| Desired state   | Git frontmatter in `gitstore-system` (non-bootstrap repositories) |
+| Hydrated record | Datastore (ScyllaDB/memDB)                                        |
+| Status          | Datastore; controller-managed                                     |
+| Finalizers      | Datastore; controller-managed                                     |
 
 ### Lifecycle rules
 
@@ -58,9 +58,9 @@ All other repositories are git-backed: their manifests live under
 1. Author pushes a `Repository` manifest to `gitstore-system` in the owning namespace.
 2. Pre-receive validates envelope, name format, `spec.defaultBranch`, and
    `spec.visibility`.
-3. Post-receive admission writes the repository record and sets
-   `AdmissionAccepted=True`.
-4. Controller reconciles: provisions the bare git repository on the git-service
+3. Pre-receive validates manifest are pushed to `gitstore-system` repository only within the current namespace.
+4. Post-receive admission writes the repository record and sets `AdmissionAccepted=True`.
+5. Controller reconciles: provisions the bare git repository on the git-service
    filesystem, sets `StorageProvisioned=True`, and then `Ready=True`.
 
 **GraphQL mutation path:**
@@ -72,7 +72,7 @@ to the datastore. See the GraphQL mutation delegation table below.
 
 #### Update
 
-Mutable fields: `spec.description`, `spec.visibility`, `spec.defaultBranch`,
+Mutable fields: `spec.visibility`, `spec.defaultBranch`,
 `spec.storageClass` (upgrade only, not downgrade).
 
 Immutable fields: `metadata.name`, `metadata.namespace`.
@@ -99,7 +99,7 @@ For `updateRepository` mutations: the API commits an updated manifest to
    - If catalog resources exist, the delete is **rejected** with
      `FailedPrecondition: catalog resources present`.
 3. If the repository is clear, the API adds the `gitstore.dev/foreground-deletion`
-   finalizer and sets `spec.deletionTimestamp`.
+   finalizer and sets `metadata.deletionTimestamp`.
 4. Repository enters `Terminating` status.
 5. The controller drains platform records referencing this repository
    (`HydrationRecord`, `AdmissionResult`, `ReconcileJob`, `WatchEvent`) and then
@@ -130,7 +130,11 @@ spec:
   defaultBranch: main
   visibility: private
   storageClass: standard
-  description: Primary catalog repository.
+  settings:
+    pushPolicy:
+      admissionControl:
+        phase: post-receive
+        branchPattern: ^refs/heads/main$
 ---
 
 Long-form repository description.
@@ -138,26 +142,26 @@ Long-form repository description.
 
 ### GraphQL mutation delegation
 
-| Mutation                     | Phase 1 behaviour                                                                                                                  |
-|------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
-| `createRepository`           | Commits `repositories/<name>.md` to `gitstore-system`; waits for admission; returns the hydrated record.                          |
-| `updateRepository`           | Commits updated manifest to `gitstore-system`; waits for admission.                                                               |
-| `renameRepository`           | **Not supported in Phase 1.** Returns `Unimplemented`. Callers must delete and recreate.                                           |
-| `transferRepository`         | **Not supported in Phase 1.** Returns `Unimplemented`.                                                                            |
-| `deleteRepository`           | Validates no catalog resources exist; adds `foregroundDeletion` finalizer; sets `Terminating`.                                     |
-| `getRepository`              | Read-only datastore query.                                                                                                         |
-| `listRepositories`           | Read-only datastore query, namespace-scoped.                                                                                       |
+| Mutation             | Phase 1 behaviour                                                                                        |
+|----------------------|----------------------------------------------------------------------------------------------------------|
+| `createRepository`   | Commits `repositories/<name>.md` to `gitstore-system`; waits for admission; returns the hydrated record. |
+| `updateRepository`   | Commits updated manifest to `gitstore-system`; waits for admission.                                      |
+| `renameRepository`   | **Not supported in Phase 1.** Returns `Unimplemented`. Callers must delete and recreate.                 |
+| `transferRepository` | **Not supported in Phase 1.** Returns `Unimplemented`.                                                   |
+| `deleteRepository`   | Validates no catalog resources exist; adds `foregroundDeletion` finalizer; sets `Terminating`.           |
+| `getRepository`      | Read-only datastore query.                                                                               |
+| `listRepositories`   | Read-only datastore query, namespace-scoped.                                                             |
 
 Direct datastore writes are only permitted for the bootstrap `gitstore-system`
 repository. All other repositories must flow through git admission.
 
 ### Validation and admission rules
 
-| Phase        | Rule                                                                                                       |
-|--------------|------------------------------------------------------------------------------------------------------------|
-| Pre-receive  | Envelope valid; `kind: Repository`; `metadata.name` format; `spec.defaultBranch` is a valid ref name.     |
-| Admission    | Name uniqueness within namespace; `spec.storageClass` is a known value; namespace is `Active` (not `Terminating`). |
-| Controller   | Bare git repository provisioned on git-service; `StorageProvisioned=True`; then `Ready=True`.              |
+| Phase       | Rule                                                                                                               |
+|-------------|--------------------------------------------------------------------------------------------------------------------|
+| Pre-receive | Envelope valid; `kind: Repository`; `metadata.name` format; `spec.defaultBranch` is a valid ref name.              |
+| Admission   | Name uniqueness within namespace; `spec.storageClass` is a known value; namespace is `Active` (not `Terminating`). |
+| Controller  | Bare git repository provisioned on git-service; `StorageProvisioned=True`; then `Ready=True`.                      |
 
 ### Status and reconciliation behaviour
 
@@ -183,15 +187,12 @@ re-queues with exponential backoff if `StorageProvisioned=False`.
 
 ### Edge cases
 
-#### Rename (delete/recreate)
+#### Rename
 
-Renaming a repository is semantically a delete followed by a recreate with a new
-`metadata.name`. All git-backed resources inside the old repository lose their
-`ownerReferences` when the old record is deleted, and the new repository's controller
-must reconcile all resources again. Callers should:
-1. Create the new repository.
-2. Push all catalog resources into the new repository.
-3. Delete the old repository after confirming all resources are re-admitted.
+Renaming a repository means updating `metadata.name` of `Repository` manifest and `ownerReferences[*].name` of dependent respurces 
+which is currently not supported in this phase.
+When we decide to support this in the future, [the repository storage identity](../implementation/010-repo-storage-identity.md)
+should be considered when designing this feature.
 
 #### Namespace entering Terminating while repository exists
 
@@ -230,8 +231,7 @@ Negative:
   deletion is blocked until all repositories are drained.
 - [ADR-0004 through ADR-0008](0004-product-lifecycle.md) — All catalog resources carry
   `ownerReferences` pointing at the repository record.
-- [ADR-0001](0001-secretref-reference-contract.md) — Repository may reference
-  `SecretRef` for object-storage credentials via `gitstore-system` configuration.
+- [ADR-0001](0001-secretref-reference-contract.md) — Repository may reference `SecretRef` for object-storage credentials via `gitstore-system` configuration.
 
 ## Dependency graph position
 

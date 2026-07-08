@@ -480,7 +480,3 @@ func newRepository(namespaceID string) *datastore.Repository {
 		UpdatedBy:     "test-user",
 	}
 }
-
-func TestPaginationMemdb(t *testing.T) {
-	RunPaginationSuite(t, newMemdbDatastore(t))
-}

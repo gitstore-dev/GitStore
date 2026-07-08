@@ -11,7 +11,7 @@ Remove `ENTERPRISE` as a valid `NamespaceTier` value across the entire `gitstore
 
 **Language/Version**: Go 1.25 (`gitstore-api`)  
 **Primary Dependencies**: `gqlgen v0.17.90` (code generation), `gocqlx/v3` + `gocql` (Scylla datastore), `go-playground/validator/v10`, `go.uber.org/zap`  
-**Storage**: ScyllaDB 5.x+ in production; `go-memdb` in development — one new migration (`004_drop_parent_enterprise_id.cql`)  
+**Storage**: ScyllaDB 5.x+ in production; `go-memdb` in development  
 **Testing**: `go test ./...` (unit + integration); `tests/contract/datastore/` (contract tests)  
 **Target Platform**: Linux server (API service)  
 **Project Type**: GraphQL web service  
@@ -61,9 +61,7 @@ gitstore-api/
 │   │   ├── entities.go                        # Remove NamespaceTierEnterprise + ParentEnterpriseID; rename NamespaceTierOrganisation→NamespaceTierOrganization
 │   │   └── scylla/
 │   │       ├── models.go                      # Remove ParentEnterpriseID from namespaceRow + column list
-│   │       ├── backend.go                     # Remove "parent_enterprise_id" from column list
-│   │       └── migrations/
-│   │           └── 004_drop_parent_enterprise_id.cql  # ALTER TABLE namespaces DROP parent_enterprise_id;
+│   │       └── backend.go                     # Remove "parent_enterprise_id" from column list
 │   └── graph/
 │       ├── model/
 │       │   └── models_gen.go                  # Regenerated (make generate)

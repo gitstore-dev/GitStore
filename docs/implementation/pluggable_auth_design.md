@@ -60,19 +60,14 @@ Authenticate(request) -> (Principal, Decision)
 Capabilities() -> { authenticate, issue_session, introspect, group_resolution, user_lookup }
 ```
 
-Candidate providers:
+Provider roadmap:
 
-- `none`
-- `static-admin`
-- `oidc-jwt`
-- `oauth2-introspection`
-- `mtls`
-- `api-key`
-- `webhook`
+- Implemented today: `static-admin`
+- Future: `oidc-jwt`, `oauth2-introspection`, `mtls`, `api-key`, `webhook`
 
 ### AuthN Chain
 
-AuthN providers run as an ordered chain (first successful decision wins):
+AuthN providers run as an ordered chain (first successful decision wins). The target production chain is:
 
 1. mTLS
 2. OIDC JWT
@@ -159,17 +154,17 @@ Ownership rules are expressed as policy input context, not hardcoded claim logic
 
 ## Local Fast Path
 
-- `authn=none`
+- `authn=static-admin,anonymous`
 - `authz=allow-all`
 - `userdir=none`
 
-## Local Secure
+## Future Local Secure
 
 - `authn=oidc-jwt`
 - `authz=rbac-local`
 - `userdir=oidc-readonly`
 
-## Production
+## Future Production
 
 - `authn=oidc-jwt|oauth2-introspection|mtls`
 - `authz=openfga|opa`
@@ -181,8 +176,8 @@ Ownership rules are expressed as policy input context, not hardcoded claim logic
 2. Add provider registry and config-driven provider selection.
 3. Introduce AuthZ abstraction and migrate resolver checks to policy calls.
 4. Add chain execution and startup capability validation.
-5. Add initial providers (`none`, `static-admin`, `oidc-jwt`, `rbac-local`).
-6. Add advanced providers (`openfga`, `opa`, `oauth2-introspection`, `mtls`).
+5. Add initial providers (`static-admin`, `anonymous`, `rbac-local`).
+6. Add advanced providers (`oidc-jwt`, `openfga`, `opa`, `oauth2-introspection`, `mtls`).
 7. Add optional UserDir adapters (`kratos`, `custom-http`, `scim`).
 
 ## Open Decisions
