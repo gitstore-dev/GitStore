@@ -28,6 +28,7 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_AUTH__JWT__SECRET",
 		"GITSTORE_AUTH__JWT__DURATION",
 		"GITSTORE_AUTH__JWT__ISSUER",
+		"GITSTORE_AUTH__JWT__REFRESH_GRACE",
 		"GITSTORE_DATASTORE__BACKEND",
 		"GITSTORE_DATASTORE__SCYLLA__HOSTS",
 		"GITSTORE_DATASTORE__SCYLLA__KEYSPACE",
@@ -80,6 +81,7 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	assert.Equal(t, "json", cfg.Log.Format)
 	assert.Equal(t, "24h", cfg.Auth.JWT.Duration)
 	assert.Equal(t, "gitstore", cfg.Auth.JWT.Issuer)
+	assert.Equal(t, "60s", cfg.Auth.JWT.RefreshGrace)
 }
 
 func TestLoad_EnvVarOverridesDefault(t *testing.T) {
@@ -89,6 +91,7 @@ func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	os.Setenv("GITSTORE_API__PORT", "8888")
 	os.Setenv("GITSTORE_LOG__LEVEL", "debug")
 	os.Setenv("GITSTORE_LOG__FORMAT", "text")
+	os.Setenv("GITSTORE_AUTH__JWT__REFRESH_GRACE", "30s")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -97,6 +100,7 @@ func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	assert.Equal(t, 8888, cfg.Api.Port)
 	assert.Equal(t, "debug", cfg.Log.Level)
 	assert.Equal(t, "text", cfg.Log.Format)
+	assert.Equal(t, "30s", cfg.Auth.JWT.RefreshGrace)
 }
 
 func TestLoad_ConfigFileValueAppliedWhenNoEnvVar(t *testing.T) {
@@ -114,6 +118,9 @@ port = 7777
 
 [cache]
 ttl = 600
+
+[auth.jwt]
+refresh_grace = "45s"
 `
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0600))
 
@@ -130,6 +137,7 @@ ttl = 600
 	assert.Equal(t, 600, cfg.Cache.TTL)
 	assert.Equal(t, "warn", cfg.Log.Level)
 	assert.Equal(t, "text", cfg.Log.Format)
+	assert.Equal(t, "45s", cfg.Auth.JWT.RefreshGrace)
 }
 
 func TestLoad_EnvVarOverridesConfigFile(t *testing.T) {

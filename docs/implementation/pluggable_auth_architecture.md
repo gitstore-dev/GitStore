@@ -838,7 +838,7 @@ func (h hmacCreds) RequireTransportSecurity() bool { return false }
 
 ### 4b. Git Smart-HTTP Authentication
 
-**Design overview:** The existing `githttp.Handler` in Go is wrapped by an `AuthMiddleware` that calls the `ChainedAuthN` before handing off to the Git backend. The API remains the AuthN/AuthZ decision point for Git Smart HTTP: it authenticates the caller, authorizes the requested repository action, resolves `(namespace, repository)` to the stable `repository_id`, and resolves any effective push-time policy before opening the gRPC call to gitstore-git-service.
+**Design overview:** The existing `githttp.Handler` in Go is wrapped by provider-chain authentication before handing off to the Git backend. The API remains the AuthN/AuthZ decision point for Git Smart HTTP: it authenticates the caller, authorizes the requested repository action, resolves `(namespace, repository)` to the stable `repository_id`, and resolves any effective push-time policy before opening the gRPC call to gitstore-git-service.
 
 The git-service validates the API as the inter-service caller via the HMAC metadata described in §4a. It does not run the pluggable AuthZ provider itself, but it is not a purely dumb storage layer: receive-pack must enforce the effective git-layer policy supplied by the API for that operation.
 
@@ -946,9 +946,9 @@ auth.admin.password_hash                 GITSTORE_AUTH__ADMIN__PASSWORD_HASH    
 auth.jwt.secret                          GITSTORE_AUTH__JWT__SECRET                 string   (required)
 auth.jwt.duration                        GITSTORE_AUTH__JWT__DURATION               duration "24h"
 auth.jwt.issuer                          GITSTORE_AUTH__JWT__ISSUER                 string   "gitstore"
-auth.jwt.refresh_grace                   GITSTORE_AUTH__JWT__REFRESH_GRACE          duration "168h"
+auth.jwt.refresh_grace                   GITSTORE_AUTH__JWT__REFRESH_GRACE          duration "60s"
 
-# OIDC JWT provider
+# Future OIDC JWT provider (Phase 6)
 auth.oidc.issuer_url                     GITSTORE_AUTH__OIDC__ISSUER_URL            string   ""
 auth.oidc.client_id                      GITSTORE_AUTH__OIDC__CLIENT_ID             string   ""
 auth.oidc.audience                       GITSTORE_AUTH__OIDC__AUDIENCE              string   "" (defaults to client_id)
@@ -974,7 +974,7 @@ GITSTORE_AUTH__USERDIR__PROVIDER=none
 GITSTORE_AUTH__GRPC__HMAC_SECRET=dev-grpc-secret
 ```
 
-**gitstore-api/.env — local-secure profile:**
+**gitstore-api/.env — future local-secure profile with OIDC (Phase 6):**
 ```text
 GITSTORE_AUTH__ADMIN__USERNAME=admin
 GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
@@ -990,14 +990,14 @@ GITSTORE_AUTH__OIDC__CLOCK_SKEW=2m
 GITSTORE_AUTH__GRPC__HMAC_SECRET=local-grpc-hmac-secret
 ```
 
-**gitstore-api/.env — production profile:**
+**gitstore-api/.env — future production profile with OIDC/OPA (Phase 6+):**
 ```text
 GITSTORE_AUTH__ADMIN__USERNAME=admin
 GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
 GITSTORE_AUTH__JWT__SECRET=${JWT_SECRET}
 GITSTORE_AUTH__JWT__ISSUER=gitstore
 GITSTORE_AUTH__JWT__DURATION=1h
-GITSTORE_AUTH__JWT__REFRESH_GRACE=168h
+GITSTORE_AUTH__JWT__REFRESH_GRACE=60s
 GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-admin,anonymous
 GITSTORE_AUTH__AUTHZ__PROVIDER=opa
 GITSTORE_AUTH__USERDIR__PROVIDER=none
@@ -1085,21 +1085,21 @@ fn default_http_auth_mode() -> String { "header".into() }
 
 ## 7. Rollout Phases
 
-### Phase 1 — Interface foundation and static-admin migration
+### Phase 1 — Interface foundation and static-admin migration ✅ COMPLETE (031)
 **Milestone:** `auth-framework-v1`
 **Deliverable:** `internal/auth/types.go`, `ProviderRegistry`, `ChainedAuthN`, `StaticAdminProvider`, `AllowAllProvider`, `RBACLocalProvider`, `AnonymousProvider`, `NoneUserDirProvider`, `DecisionLogger`. Replace `middleware.User` context with `Principal`. Wire `allow-all` as default authz; default authn chain is `["static-admin","anonymous"]`. SIGHUP triggers `rbac-local` policy reload. `GetUserFromContext` shim deleted; all callers use `auth.PrincipalFromContext` directly.
 **Affected packages:** `gitstore-api/internal/auth/`, `gitstore-api/internal/middleware/`, `gitstore-api/internal/graph/resolver/`
 **Test strategy:** Unit tests for each provider; integration test that the static-admin path works end-to-end with existing `GITSTORE_AUTH__ADMIN__*` env vars unchanged; test that `allow-all` emits a zap warning on startup.
 **Rollback trigger:** Any existing integration test (login, createNamespace, deleteNamespace) fails.
 
-### Phase 2 — Live isAdmin checks migrated to AuthZ + callerUsernameOrAnon fix
+### Phase 2 — Live isAdmin checks migrated to AuthZ + callerUsernameOrAnon fix ✅ COMPLETE (031)
 **Milestone:** `auth-framework-v1`
 **Deliverable:** `service.go` isAdmin checks replaced with `authz.Authorize` calls (§3b); `callerUsernameOrAnon` uses `Principal.Subject` (§3c); compatibility shim removed.
 **Affected packages:** `gitstore-api/internal/graph/resolver/service.go`, `gitstore-api/internal/graph/resolver/helpers.go`
 **Test strategy:** Service-layer unit tests for createNamespace (ENTERPRISE tier rejection) and deleteNamespace (non-owner rejection) with both `allow-all` and `rbac-local` providers. Golden-path test: admin can create ENTERPRISE namespace; non-admin cannot.
 **Rollback trigger:** Either of the two existing auth checks behaves differently from before.
 
-### Phase 3 — Logout and RefreshToken mutations implemented ✅ (branch: 032-auth-phase-3)
+### Phase 3 — Logout and RefreshToken mutations implemented ✅ COMPLETE (032)
 **Milestone:** `auth-framework-v1`
 **Deliverable:** `Logout` mutation calls `ChainedAuthN.RevokeSession`; `RefreshToken` mutation calls `ChainedAuthN.RefreshSession`; `StaticAdminProvider` blacklist is functional. `Login` resolver migrated away from legacy `authMiddleware` stubs — `user.isAdmin` and `user.username` now derived from `Principal`. `IssueSession` added to `AuthNProvider` interface. `Principal.TokenID` carries JWT `jti`. `ContextWithRawToken`/`RawTokenFromContext` store the raw Bearer string for refresh. `GITSTORE_AUTH__JWT__REFRESH_GRACE` (default `60s`) bounds the refresh window.
 **Affected packages:** `gitstore-api/internal/auth/types.go`, `gitstore-api/internal/auth/context.go`, `gitstore-api/internal/auth/registry.go`, `gitstore-api/internal/auth/provider/staticadmin/`, `gitstore-api/internal/auth/provider/anonymous/`, `gitstore-api/internal/middleware/auth.go`, `gitstore-api/internal/graph/resolver/`

@@ -25,11 +25,9 @@ func (r *mutationResolver) Login(ctx context.Context, input model.LoginInput) (*
 
 // Login implements the login mutation on the base Resolver so it can be unit-tested directly.
 func (r *Resolver) Login(ctx context.Context, input model.LoginInput) (*model.LoginPayload, error) {
-	// Legacy fallback: when the registry is absent (e.g. test helpers that only wire
-	// authMiddleware), delegate to the old credential-check path so existing integration
-	// tests continue to pass without configuration changes.
-	if r.registry == nil {
-		return r.loginLegacy(ctx, input)
+	if r.registry == nil || r.registry.AuthN() == nil {
+		r.logger.Error("auth provider registry not configured")
+		return nil, gqlerror.Errorf("authentication service unavailable")
 	}
 
 	creds := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", input.Username, input.Password)))
@@ -65,34 +63,6 @@ func (r *Resolver) Login(ctx context.Context, input model.LoginInput) (*model.Lo
 			User: &model.User{
 				Username: principal.Subject,
 				IsAdmin:  principal.IsAdmin(),
-			},
-		},
-	}, nil
-}
-
-// loginLegacy is the pre-Phase-3 login path used when no ProviderRegistry is configured.
-func (r *Resolver) loginLegacy(ctx context.Context, input model.LoginInput) (*model.LoginPayload, error) {
-	if r.authMiddleware == nil {
-		r.logger.Error("auth middleware not configured")
-		return nil, gqlerror.Errorf("authentication service unavailable")
-	}
-	if !r.authMiddleware.ValidateCredentials(input.Username, input.Password) {
-		r.logger.Debug("invalid credentials attempt", zap.String("username", input.Username))
-		return nil, gqlerror.Errorf("invalid username or password")
-	}
-	token, err := r.authMiddleware.GenerateSessionToken(input.Username, true)
-	if err != nil {
-		r.logger.Error("failed to generate session token", zap.String("username", input.Username), zap.Error(err))
-		return nil, gqlerror.Errorf("internal server error")
-	}
-	expiresAt := r.clock.Now().Add(r.authMiddleware.GetTokenDuration())
-	return &model.LoginPayload{
-		Session: &model.AuthSession{
-			Token:     token,
-			ExpiresAt: expiresAt,
-			User: &model.User{
-				Username: input.Username,
-				IsAdmin:  true,
 			},
 		},
 	}, nil

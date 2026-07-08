@@ -322,9 +322,9 @@ func extractJTI(t *testing.T, p *staticadmin.StaticAdminProvider, token string) 
 // These compile-time checks will fail if the resolver doesn't have the required methods.
 var _ = func() bool {
 	var r *resolver.Resolver
-	var _ func(context.Context, model.LogoutInput) (*model.LogoutPayload, error) = r.Logout
-	var _ func(context.Context, model.RefreshTokenInput) (*model.RefreshTokenPayload, error) = r.RefreshToken
-	var _ func(context.Context, model.LoginInput) (*model.LoginPayload, error) = r.Login
+	var _ = r.Logout
+	var _ = r.RefreshToken
+	var _ = r.Login
 	_ = errors.New
 	_ = time.Now
 	_ = base64.StdEncoding

@@ -17,12 +17,12 @@ Client: GET /alice/configs/info/refs
           │
           ▼
   gitstore-api (GraphQL / HTTP)
-  ┌─────────────────────────────────────┐
-  │ 1. GetNamespaceByIdentifier("alice")│
-  │    → namespace_id (UUID)            │
+  ┌──────────────────────────────────────┐
+  │ 1. GetNamespaceByIdentifier("alice") │
+  │    → namespace_id (UUID)             │
   │ 2. LookupRepository(ns_id, "configs")│
-  │    → repo_id (UUIDv7)               │
-  └────────────────┬────────────────────┘
+  │    → repo_id (UUIDv7)                │
+  └────────────────┬─────────────────────┘
                    │ gRPC (repo_id only)
                    ▼
   gitstore-git-service (Rust)

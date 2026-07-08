@@ -91,8 +91,8 @@ UID. The old variants and collection memberships are not automatically migrated.
    exist whose `spec.productRef.name` points at this product.
    - If variants exist, the delete is **rejected** with
      `FailedPrecondition: product variants present`.
-3. If no variants exist, the API adds the `gitstore.dev/foreground-deletion` finalizer
-   and marks the record `Terminating`.
+3. If no variants exist, the API adds the `gitstore.dev/foreground-deletion` finalizer and sets `metadata.deletionTimestamp`
+   then marks the record `Terminating`.
 4. Controller drains any remaining references (Collection selector results, media
    fileRef backlinks if tracked) and then removes the finalizer.
 5. Once all finalizers are cleared, the datastore record is hard-deleted.
@@ -157,11 +157,11 @@ delegate to git.
 
 ### Validation and admission rules
 
-| Phase        | Rule                                                                                                                   |
-|--------------|------------------------------------------------------------------------------------------------------------------------|
-| Pre-receive  | Envelope valid; `kind: Product`; `metadata.name` DNS format; `spec.title` ≤ 200 chars; `spec.media[*].fileRef.name` present when `media` is non-empty; `spec.options[*].name` unique within list. |
-| Admission    | Namespace and repository `Active`; `metadata.namespace` matches inferred namespace; no cross-namespace refs in Phase 1. |
-| Controller   | `spec.categoryRef` resolution (async); `spec.media[*].fileRef` resolution (async, deferred to Phase 2 per GH#244).    |
+| Phase       | Rule                                                                                                                                                                                              |
+|-------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Pre-receive | Envelope valid; `kind: Product`; `metadata.name` DNS format; `spec.title` ≤ 200 chars; `spec.media[*].fileRef.name` present when `media` is non-empty; `spec.options[*].name` unique within list. |
+| Admission   | Namespace and repository `Active`; `metadata.namespace` matches inferred namespace; no cross-namespace refs in Phase 1.                                                                           |
+| Controller  | `spec.categoryRef` resolution (async); `spec.media[*].fileRef` resolution (async, deferred to Phase 2 per GH#244).                                                                                |
 
 Cross-namespace references in `spec.categoryRef` or `spec.media[*].fileRef` are
 **rejected at admission time** in Phase 1. All referenced resources must be in the

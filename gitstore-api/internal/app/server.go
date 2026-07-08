@@ -35,7 +35,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/githttp"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
-	"github.com/gitstore-dev/gitstore/api/internal/handler"
 	"github.com/gitstore-dev/gitstore/api/internal/health"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
@@ -93,19 +92,6 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, fmt.Errorf("connect git-service: %w", err)
 	}
 
-	authMiddleware, err := middleware.NewAuthMiddleware(middleware.AuthDeps{
-		AdminUsername:     cfg.Auth.Admin.Username,
-		AdminPasswordHash: cfg.Auth.Admin.Password,
-		JWTSecret:         cfg.Auth.JWT.Secret,
-		JWTDuration:       cfg.Auth.JWT.Duration,
-		JWTIssuer:         cfg.Auth.JWT.Issuer,
-	})
-	if err != nil {
-		gitClient.Close()
-		store.Close()
-		return nil, fmt.Errorf("create auth middleware: %w", err)
-	}
-
 	registry, rbacReloader, providerShutdowns, err := buildProviderRegistry(cfg, log)
 	if err != nil {
 		gitClient.Close()
@@ -118,7 +104,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		zap.String("userdir_provider", cfg.Auth.UserDir.Provider),
 	)
 
-	gqlHandler, err := NewGraphQLHandler(store, gitClient, log, authMiddleware, registry, clock, nil)
+	gqlHandler, err := NewGraphQLHandler(store, gitClient, log, registry, clock, nil)
 	if err != nil {
 		gitClient.Close()
 		store.Close()
@@ -133,11 +119,6 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	})
 
 	mux := http.NewServeMux()
-	mux.Handle("/api/login", handler.NewLoginHandler(handler.LoginHandlerDeps{
-		Auth:   authMiddleware,
-		Logger: log,
-		Clock:  clock,
-	}))
 	mux.Handle("/graphql", gqlHandler)
 	mux.Handle("/playground", playground.Handler("GraphQL Playground", "/graphql"))
 	mux.HandleFunc("/health", healthHandler.Health)
@@ -212,15 +193,14 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 }
 
 // NewGraphQLHandler builds a GraphQL HTTP handler.
-func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log *zap.Logger, authMiddleware *middleware.AuthMiddleware, registry *auth.ProviderRegistry, clock apiruntime.Clock, ids apiruntime.IDGenerator) (http.Handler, error) {
-	var authzProvider auth.AuthZProvider
-	if registry != nil {
-		authzProvider = registry.AuthZ()
+func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log *zap.Logger, registry *auth.ProviderRegistry, clock apiruntime.Clock, ids apiruntime.IDGenerator) (http.Handler, error) {
+	if registry == nil || registry.AuthN() == nil {
+		return nil, fmt.Errorf("app: auth provider registry is required")
 	}
 	rootResolver, err := resolver.NewResolver(resolver.ResolverDeps{
 		Store:       store,
 		GitWriter:   writer,
-		AuthZ:       authzProvider,
+		AuthZ:       registry.AuthZ(),
 		Registry:    registry,
 		Logger:      log,
 		Clock:       clock,
@@ -229,7 +209,6 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 	if err != nil {
 		return nil, err
 	}
-	rootResolver.WithAuthMiddleware(authMiddleware)
 	schema := generated.NewExecutableSchema(generated.Config{Resolvers: rootResolver})
 	gqlServer := gqlhandler.New(schema)
 
@@ -252,11 +231,7 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 		gqlServer.ServeHTTP(w, r)
 	})
 
-	// Use registry-based chain if available; fall back to legacy OptionalAuth.
-	if registry != nil {
-		return middleware.ChainAuthMiddleware(registry, log)(gqlHandler), nil
-	}
-	return authMiddleware.OptionalAuth(gqlHandler), nil
+	return middleware.ChainAuthMiddleware(registry, log)(gqlHandler), nil
 }
 
 // buildProviderRegistry constructs a ProviderRegistry from the application config.
@@ -279,6 +254,7 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 	v.SetDefault("auth.jwt.secret", cfg.Auth.JWT.Secret)
 	v.SetDefault("auth.jwt.duration", cfg.Auth.JWT.Duration)
 	v.SetDefault("auth.jwt.issuer", cfg.Auth.JWT.Issuer)
+	v.SetDefault("auth.jwt.refresh_grace", cfg.Auth.JWT.RefreshGrace)
 	v.SetDefault("auth.authn.chain", cfg.Auth.AuthN.Chain)
 	v.SetDefault("auth.authz.provider", cfg.Auth.AuthZ.Provider)
 	v.SetDefault("auth.userdir.provider", cfg.Auth.UserDir.Provider)

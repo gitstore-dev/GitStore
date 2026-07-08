@@ -24,27 +24,26 @@ holds the git repositories a client pushes to, creating a bootstrap problem: the
 namespace and its repositories must exist before any git push is possible.
 
 Existing API mutations (`createNamespace`, `deleteNamespace`) treat namespace as
-datastore-only today. This ADR formalises a hybrid model that preserves that bootstrap
-path while introducing git-backed namespace management for all non-bootstrap cases.
+datastore-only today. This ADR formalises a model where API mutations delegate to git
+while introducing a bootstrap mechanism on API startup.
 
 ## Decision
 
-`Namespace` is **hybrid**: the bootstrap path writes directly to the datastore; all
-subsequent management is git-backed via the `gitstore-system` repository that the
-bootstrap operation auto-provisions.
+`Namespace` is **hybrid**: at bootstrap time the API ensures the system namespaces (`gitstore-system` and `default`) exist;
+all subsequent management is git-backed via the `gitstore-system/gitstore-system` repository that the bootstrap operation auto-provisions.
 
 ### Storage classification
 
-| Layer         | Owner                                                        |
-|---------------|--------------------------------------------------------------|
-| Desired state | Git frontmatter in `gitstore-system` repository (non-bootstrap) |
-| Hydrated record | Datastore (ScyllaDB/memDB)                                 |
-| Status        | Datastore; controller-managed                                |
-| Finalizers    | Datastore; controller-managed                                |
+| Layer           | Owner                                                                           |
+|-----------------|---------------------------------------------------------------------------------|
+| Desired state   | Git frontmatter in `gitstore-system/gitstore-system` repository (non-bootstrap) |
+| Hydrated record | Datastore (ScyllaDB/memDB)                                                      |
+| Status          | Datastore; controller-managed                                                   |
+| Finalizers      | Datastore; controller-managed                                                   |
 
-The bootstrap namespace and the `gitstore-system` repository it creates are datastore-only
-records. All other namespaces are git-backed unless the operator explicitly designates
-additional bootstrap namespaces.
+The `gitstore-system` & `default` namespaces and the `gitstore-system` repository it creates are datastore-only
+records. All other namespaces are git-backed and should only be created in `gitstore-system/gitstore-system`
+repository unless the operator explicitly designates additional bootstrap namespaces.
 
 ### Well-known system repository
 
@@ -53,10 +52,8 @@ When a namespace is bootstrapped the API automatically creates a repository name
 
 - is created with `spec.storageClass: system` to distinguish it from user repositories;
 - is the default target for all GraphQL catalog mutations that do not specify a
-  repository name (see [ADR-0004](0004-product-lifecycle.md) through
-  [ADR-0008](0008-file-lifecycle.md));
-- holds `Namespace` and `Repository` manifests for any non-bootstrap resources managed
-  declaratively.
+  repository name (see [ADR-0004](0004-product-lifecycle.md) through [ADR-0008](0008-file-lifecycle.md));
+- holds `Repository` manifests for any non-bootstrap resources managed declaratively.
 
 ### Lifecycle rules
 
@@ -64,30 +61,31 @@ When a namespace is bootstrapped the API automatically creates a repository name
 
 **Bootstrap path (required for the first namespace):**
 
-1. Caller issues `createNamespace` mutation.
-2. API validates name uniqueness, display-name length, tier, limits, and defaults.
-3. API writes the namespace record to the datastore.
-4. API provisions `gitstore-system` repository inside the namespace.
-5. No git commit is created for the namespace record itself.
+1. API checks for the existence of bootstrap namespaces.
+2. API creates bootstrap namespaces if it does not exist.
+3. API validates name uniqueness, display-name length, tier, limits, and defaults.
+4. API writes the namespace record to the datastore.
+5. API provisions `gitstore-system` repository inside each bootstrap namespace.
+6. No git commit is created for the namespace record itself.
 
 **Git-backed path (all other namespaces):**
 
-1. Author pushes a `Namespace` manifest to `gitstore-system` in an existing namespace.
+1. Author pushes a `Namespace` manifest to `gitstore-system/gitstore-system` repository.
 2. Pre-receive validates envelope, name format, and required fields.
-3. Post-receive admission writes the namespace record and sets
+3. Pre-receive rejects `Namespace` manifest to any other repository other than `gitstore-system/gitstore-system`.
+4. Post-receive admission writes the namespace record and sets
    `AdmissionAccepted=True`.
-4. Controller reconciles: checks for conflicts, provisions `gitstore-system` in the
+5. Controller reconciles: checks for conflicts, provisions `gitstore-system` repository in the
    new namespace, and sets `Ready=True`.
 
 #### Update
 
-1. Author edits the `Namespace` manifest in `gitstore-system` and pushes.
+1. Author edits the `Namespace` manifest in `gitstore-system/gitstore-system` and pushes.
 2. Admission re-validates the spec delta and updates the datastore record.
 3. Enforced immutable fields: `metadata.name`, `spec.tier` (demotion not allowed in
    Phase 1).
 
-For bootstrap namespaces, `updateNamespace` mutation delegates to the git edit API on
-the platform operator's system repository.
+For bootstrap namespaces, `updateNamespace` mutation delegates to the git edit API on the platform operator's system repository.
 
 #### Delete
 
@@ -96,7 +94,7 @@ the platform operator's system repository.
    namespace.
    - If repositories exist, the delete is **rejected** with
      `FailedPrecondition: repositories present`.
-3. If the namespace is clear, the API sets `spec.deletionPolicy: Foreground` and adds
+3. If the namespace is clear, the API sets `metadata.deletionTimestamp` and adds
    the `gitstore.dev/foreground-deletion` finalizer to the datastore record.
 4. The namespace enters `Terminating` status.
 5. The controller drains any remaining platform records (e.g. `HydrationRecord`,
@@ -107,11 +105,13 @@ the platform operator's system repository.
 namespace deletion can proceed. `deleteNamespace` must never trigger silent cascade
 deletion of repositories — the caller must delete repositories explicitly.
 
+> Bootstrap namespaces cannot be deleted.
+
 See [ADR-0003](0003-repository-lifecycle.md) for the Repository finalizer protocol.
 
 ### Git write path
 
-For git-backed namespaces, the canonical file location inside `gitstore-system` is:
+For git-backed namespaces, the canonical file location inside `gitstore-system/gitstore-system` is:
 
 ```
 namespaces/<name>.md
@@ -126,7 +126,7 @@ metadata:
 spec:
   displayName: Acme Store
   tier: ORGANIZATION
-  defaults:
+  repositoryDefaults:
     defaultBranch: main
   limits:
     maxRepositories: 100
@@ -135,30 +135,29 @@ spec:
 Optional description.
 ```
 
-The `gitstore-system` repository for the *parent* namespace is the authoring target,
+The `gitstore-system` repository for the `gitstore-system` namespace is the authoring target,
 not a repository inside the new namespace.
 
 ### GraphQL mutation delegation
 
-| Mutation              | Phase 1 behaviour                                                                                       |
-|-----------------------|---------------------------------------------------------------------------------------------------------|
-| `createNamespace`     | Bootstrap: direct datastore write + auto-provision `gitstore-system`. Non-bootstrap: commits manifest to parent namespace's `gitstore-system` and waits for admission. |
-| `updateNamespace`     | Commits an updated manifest to `gitstore-system`; returns the resource version after admission.         |
-| `deleteNamespace`     | Validates no repositories exist, then adds `foregroundDeletion` finalizer and sets `Terminating`.       |
-| `listNamespaces`      | Read-only datastore query. No git delegation.                                                           |
-| `getNamespace`        | Read-only datastore query. No git delegation.                                                           |
+| Mutation          | Phase 1 behaviour                                                                                                        |
+|-------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `createNamespace` | Bootstrap: Not applicable. Non-bootstrap: commits manifests to `gitsore-system/gitstore-system` and waits for admission. |
+| `updateNamespace` | Commits an updated manifest to `gitstore-system/gitstore-system`; returns the resource version after admission.          |
+| `deleteNamespace` | Validates no repositories exist, then adds `foregroundDeletion` finalizer and sets `Terminating`.                        |
+| `listNamespaces`  | Read-only datastore query. No git delegation.                                                                            |
+| `getNamespace`    | Read-only datastore query. No git delegation.                                                                            |
 
-Direct datastore writes that bypass git are only permitted for the bootstrap namespace
-and for operator-level administrative operations explicitly marked with
-`source: bootstrap` in the audit log.
+Direct datastore writes that bypass git are only permitted for the bootstrap namespaces
+and for operator-level administrative operations explicitly marked with `source: bootstrap` in the audit log.
 
 ### Validation and admission rules
 
-| Phase        | Rule                                                                               |
-|--------------|------------------------------------------------------------------------------------|
-| Pre-receive  | Envelope valid; `kind: Namespace`; `metadata.name` format; `spec.tier` is a known value. |
-| Admission    | Name uniqueness within the platform; `spec.limits` values within operator-configured maximums; `spec.tier` downgrade rejected. |
-| Controller   | `Ready=True` after `gitstore-system` is provisioned and reachable.                 |
+| Phase       | Rule                                                                                                                                      |
+|-------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| Pre-receive | Envelope valid; `kind: Namespace`; `metadata.name` format; `spec.tier` is a known value; Accept only in `gitstore-system/gitstore-system` |
+| Admission   | Name uniqueness within the platform; `spec.limits` values within operator-configured maximums; `spec.tier` downgrade rejected.            |
+| Controller  | `Ready=True` after `gitstore-system` is provisioned and reachable.                                                                        |
 
 ### Status and reconciliation behaviour
 
@@ -169,8 +168,7 @@ and for operator-level administrative operations explicitly marked with
 | `Ready`             | Namespace is fully operational.                                      |
 | `Terminating`       | `foregroundDeletion` finalizer present; repositories must drain.     |
 
-`observedGeneration` is set after each successful reconcile pass. The controller
-re-queues if `SystemRepoReady=False`.
+`observedGeneration` is set after each successful reconcile pass. The controller re-queues if `SystemRepoReady=False`.
 
 ## Consequences
 

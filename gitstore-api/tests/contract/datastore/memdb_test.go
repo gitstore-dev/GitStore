@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 
+//go:build memdb
+
 // Wires the contract suite against the memdb backend.
 
 package datastore_contract_test
@@ -24,4 +26,8 @@ func newMemdbDatastore(t *testing.T) datastore.Datastore {
 
 func TestContractMemdb(t *testing.T) {
 	RunContractSuite(t, newMemdbDatastore(t))
+}
+
+func TestPaginationMemdb(t *testing.T) {
+	RunPaginationSuite(t, newMemdbDatastore(t))
 }

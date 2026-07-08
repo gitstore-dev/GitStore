@@ -50,6 +50,17 @@ In CI, `.github/workflows/go-license-headers.yml` runs:
 - `--all` checks on pushes to `main`
 - `--diff-base` checks on pull requests
 
+## update-env-secret.sh
+
+Updates a `KEY='value'` entry in one or more `.env` files. If the key exists, the script replaces it in place. If the key is missing, it appends it. If the file is missing, the script creates it.
+
+### Usage
+
+```bash
+./scripts/update-env-secret.sh GITSTORE_AUTH__JWT__SECRET "new-secret" gitstore-api/.env
+./scripts/update-env-secret.sh GITSTORE_AUTH__GRPC__HMAC_SECRET "shared-secret" gitstore-api/.env gitstore-git-service/.env
+```
+
 ## check-rust-license-headers.sh
 
 Validates that Rust files include the required AGPL header and that changed files include the current year in their copyright line. Generated Rust files with `Code generated`, `@generated`, or `DO NOT EDIT` markers near the top are skipped.

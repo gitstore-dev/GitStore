@@ -115,7 +115,7 @@ Input for creating a new namespace.
 """
 input CreateNamespaceInput {
   """
-  Client mutation ID for request tracking (Relay pattern).
+  TODO: Remove, deprecated in relay
   """
   clientMutationId: String
 
@@ -146,7 +146,7 @@ Input for deleting a namespace.
 """
 input DeleteNamespaceInput {
   """
-  Client mutation ID for request tracking (Relay pattern).
+  TODO: Remove, deprecated in relay
   """
   clientMutationId: String
 
@@ -163,7 +163,7 @@ Payload returned after successfully creating a namespace.
 """
 type CreateNamespacePayload {
   """
-  Client mutation ID for request tracking (Relay pattern).
+  TODO: Remove, deprecated in relay
   """
   clientMutationId: String
 
@@ -178,7 +178,7 @@ Payload returned after successfully deleting a namespace.
 """
 type DeleteNamespacePayload {
   """
-  Client mutation ID for request tracking (Relay pattern).
+  TODO: Remove, deprecated in relay
   """
   clientMutationId: String
 

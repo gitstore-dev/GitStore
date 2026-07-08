@@ -207,27 +207,20 @@ gen-admin-password: ## Generate a bcrypt hash for ADMIN_PASSWORD and write it to
 	fi; \
 	echo "Hash: $$hash"
 
-gen-jwt-secret: ## Generate a JWT secret and append GITSTORE_AUTH__JWT__SECRET to gitstore-api/.env.
-	@env_file="$(API_DIR)/.env"; \
-	if [ ! -f "$$env_file" ]; then \
-		echo "Note: $$env_file does not exist; it will be created."; \
-	fi; \
-	cd "$(API_DIR)" && go run ./cmd/gitctl gen-jwt-secret >> .env || { \
+gen-jwt-secret: ## Generate a JWT secret and write GITSTORE_AUTH__JWT__SECRET to gitstore-api/.env.
+	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-jwt-secret | sed -n 's/^GITSTORE_AUTH__JWT__SECRET=//p') || { \
 		echo "Failed to generate JWT secret. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
-	echo "Appended GITSTORE_AUTH__JWT__SECRET to $(API_DIR)/.env"
+	./scripts/update-env-secret.sh GITSTORE_AUTH__JWT__SECRET "$$secret" "$(API_DIR)/.env"
 
-gen-hmac-secret: ## Generate an HMAC secret and append GITSTORE_AUTH__GRPC__HMAC_SECRET to gitstore-api/.env.
-	@env_file="$(API_DIR)/.env"; \
-	if [ ! -f "$$env_file" ]; then \
-		echo "Note: $$env_file does not exist; it will be created."; \
-	fi; \
-	cd "$(API_DIR)" && go run ./cmd/gitctl gen-hmac-secret >> .env || { \
+gen-hmac-secret: ## Generate an HMAC secret and write GITSTORE_AUTH__GRPC__HMAC_SECRET to both service .env files.
+	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-hmac-secret | sed -n 's/^GITSTORE_AUTH__GRPC__HMAC_SECRET=//p') || { \
 		echo "Failed to generate HMAC secret. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
-	echo "Appended GITSTORE_AUTH__GRPC__HMAC_SECRET to $(API_DIR)/.env"
+	./scripts/update-env-secret.sh GITSTORE_AUTH__GRPC__HMAC_SECRET "$$secret" "$(API_DIR)/.env" "$(GIT_SERVICE_DIR)/.env"; \
+	echo "HMAC secret updated in $(API_DIR)/.env and $(GIT_SERVICE_DIR)/.env"
 
 bootstrap-token: bootstrap-tools ## Login and print/cache a bootstrap bearer token.
 	@if [ -z "$${ADMIN_PASSWORD:-}" ]; then \
