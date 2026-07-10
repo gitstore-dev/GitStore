@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/gitstore-dev/gitstore/api/internal/app"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/logger"
@@ -21,6 +22,7 @@ import (
 
 func main() {
 	cfg, err := config.Load()
+	gin.SetMode(gin.ReleaseMode)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
 		os.Exit(1)

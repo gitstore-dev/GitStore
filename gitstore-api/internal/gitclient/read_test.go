@@ -7,7 +7,9 @@
 package gitclient_test
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"testing"
 
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
@@ -25,6 +27,7 @@ type readStub struct {
 	listFilesFunc    func(*gitv1.ListFilesRequest) (*gitv1.ListFilesResponse, error)
 	getLatestTagFunc func(*gitv1.GetLatestTagRequest) (*gitv1.GetLatestTagResponse, error)
 	listTagsFunc     func(*gitv1.ListTagsRequest) (*gitv1.ListTagsResponse, error)
+	uploadPackFunc   func(*gitv1.UploadPackRequest, gitv1.GitService_UploadPackServer) error
 }
 
 func (s *readStub) GetFile(_ context.Context, req *gitv1.GetFileRequest) (*gitv1.GetFileResponse, error) {
@@ -53,6 +56,13 @@ func (s *readStub) ListTags(_ context.Context, req *gitv1.ListTagsRequest) (*git
 		return s.listTagsFunc(req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not set up")
+}
+
+func (s *readStub) UploadPack(req *gitv1.UploadPackRequest, stream gitv1.GitService_UploadPackServer) error {
+	if s.uploadPackFunc != nil {
+		return s.uploadPackFunc(req, stream)
+	}
+	return status.Error(codes.Unimplemented, "not set up")
 }
 
 func TestReadFile_OK(t *testing.T) {
@@ -146,4 +156,25 @@ func TestListTags_OK(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tags, 2)
 	assert.Equal(t, "v1.0.0", tags[0].Name)
+}
+
+func TestUploadPackReadAllDrainsFinalChunkLargerThanReadBuffer(t *testing.T) {
+	want := bytes.Repeat([]byte("0123456789abcdef"), 512)
+	c := startBufconn(t, &readStub{
+		uploadPackFunc: func(req *gitv1.UploadPackRequest, stream gitv1.GitService_UploadPackServer) error {
+			assert.Equal(t, "repo-123", req.RepositoryId)
+			assert.Equal(t, []byte("want abc123\n0000"), req.Body)
+			return stream.Send(&gitv1.UploadPackResponse{
+				Data:   want,
+				IsLast: true,
+			})
+		},
+	})
+
+	reader, err := c.UploadPack(context.Background(), "repo-123", []byte("want abc123\n0000"))
+	require.NoError(t, err)
+
+	got, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
 }

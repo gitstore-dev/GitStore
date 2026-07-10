@@ -13,25 +13,40 @@ import (
 type UploadPackReceiver struct {
 	stream gitv1.GitService_UploadPackClient
 	buf    []byte
+	done   bool
 }
 
 // Read implements io.Reader for UploadPackReceiver, yielding chunks from the gRPC stream.
 func (r *UploadPackReceiver) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	if len(r.buf) > 0 {
 		n := copy(p, r.buf)
 		r.buf = r.buf[n:]
 		return n, nil
 	}
-	chunk, err := r.stream.Recv()
-	if err != nil {
-		return 0, err
+	if r.done {
+		return 0, io.EOF
 	}
-	n := copy(p, chunk.Data)
-	if n < len(chunk.Data) {
-		r.buf = chunk.Data[n:]
+	for {
+		chunk, err := r.stream.Recv()
+		if err != nil {
+			return 0, err
+		}
+		if chunk.IsLast {
+			r.done = true
+		}
+		if len(chunk.Data) == 0 {
+			if r.done {
+				return 0, io.EOF
+			}
+			continue
+		}
+		n := copy(p, chunk.Data)
+		if n < len(chunk.Data) {
+			r.buf = chunk.Data[n:]
+		}
+		return n, nil
 	}
-	if chunk.IsLast {
-		return n, io.EOF
-	}
-	return n, nil
 }
