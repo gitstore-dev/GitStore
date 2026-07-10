@@ -148,7 +148,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		}
 		return mapping.RepoID, true
 	}
-	gitMux := githttp.NewMux(gitClient, gitResolver, log, http.HandlerFunc(healthHandler.Health))
+	gitMux := githttp.NewMux(gitClient, gitResolver, log)
 	gitServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Api.GitPort),
 		Handler:      middleware.RequestIDMiddleware(gitMux),

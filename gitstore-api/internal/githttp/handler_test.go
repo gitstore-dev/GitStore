@@ -10,10 +10,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
+	"go.uber.org/zap"
 )
 
 // mockGitClient is a test double for GitClient.
@@ -21,6 +24,11 @@ type mockGitClient struct {
 	infoRefsFunc    func(ctx context.Context, repoID string, service gitv1.Service) ([]byte, gitv1.Service, error)
 	uploadPackFunc  func(ctx context.Context, repoID string, body []byte) (io.Reader, error)
 	receivePackFunc func(ctx context.Context, repoID string, body io.Reader) ([]byte, error)
+}
+
+func TestMain(m *testing.M) {
+	gin.SetMode(gin.TestMode)
+	os.Exit(m.Run())
 }
 
 func (m *mockGitClient) InfoRefs(ctx context.Context, repoID string, service gitv1.Service) ([]byte, gitv1.Service, error) {
@@ -47,6 +55,20 @@ func (m *mockGitClient) ReceivePack(ctx context.Context, repoID string, body io.
 // mockResolver is an alias for RepoResolver, used in tests to simulate (namespace, repo) → repo_id lookup.
 type mockResolver = RepoResolver
 
+type requestContextKey struct{}
+
+func requestWithContextMarker(req *http.Request) (*http.Request, string) {
+	const marker = "request-context-marker"
+	return req.WithContext(context.WithValue(req.Context(), requestContextKey{}, marker)), marker
+}
+
+func assertRequestContext(t *testing.T, ctx context.Context, want string) {
+	t.Helper()
+	if got, _ := ctx.Value(requestContextKey{}).(string); got != want {
+		t.Fatalf("expected request context marker %q, got %q", want, got)
+	}
+}
+
 // T006: infoRefsHandler — upload-pack advertisement
 func TestInfoRefsHandler_UploadPack(t *testing.T) {
 	advertisement := []byte("001e# service=git-upload-pack\n0000")
@@ -61,14 +83,11 @@ func TestInfoRefsHandler_UploadPack(t *testing.T) {
 	resolver := mockResolver(func(ns, repo string) (string, bool) {
 		return "test-repo-id", true
 	})
+	router := NewMux(client, resolver, zap.NewNop())
 
-	h := newHandler(client, resolver)
 	req := httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-upload-pack", nil)
-	req.SetPathValue("namespace", "gitstore")
-	req.SetPathValue("repo", "catalog")
 	w := httptest.NewRecorder()
-
-	h.infoRefsHandler(w, req)
+	router.ServeHTTP(w, req)
 
 	resp := w.Result()
 	if resp.StatusCode != http.StatusOK {
@@ -96,13 +115,13 @@ func TestInfoRefsHandler_ReceivePack(t *testing.T) {
 		return "test-repo-id", true
 	})
 
-	h := newHandler(client, resolver)
+	router := NewMux(client, resolver, zap.NewNop())
 	req := httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", nil)
 	req.SetPathValue("namespace", "gitstore")
 	req.SetPathValue("repo", "catalog")
 	w := httptest.NewRecorder()
 
-	h.infoRefsHandler(w, req)
+	router.ServeHTTP(w, req)
 
 	resp := w.Result()
 	if resp.StatusCode != http.StatusOK {
@@ -131,14 +150,12 @@ func TestUploadPackHandler_StreamsResponse(t *testing.T) {
 		return "test-repo-id", true
 	})
 
-	h := newHandler(client, resolver)
+	router := NewMux(client, resolver, zap.NewNop())
 	body := strings.NewReader("0011want abc123\n0000")
 	req := httptest.NewRequest(http.MethodPost, "/gitstore/catalog/git-upload-pack", body)
-	req.SetPathValue("namespace", "gitstore")
-	req.SetPathValue("repo", "catalog")
 	w := httptest.NewRecorder()
 
-	h.uploadPackHandler(w, req)
+	router.ServeHTTP(w, req)
 
 	resp := w.Result()
 	if resp.StatusCode != http.StatusOK {
@@ -148,10 +165,76 @@ func TestUploadPackHandler_StreamsResponse(t *testing.T) {
 	if ct != "application/x-git-upload-pack-result" {
 		t.Errorf("expected upload-pack-result Content-Type, got %q", ct)
 	}
+	if te := resp.Header.Get("Transfer-Encoding"); te != "" {
+		t.Errorf("expected net/http to manage transfer encoding, got header %q", te)
+	}
 	respBody, _ := io.ReadAll(resp.Body)
 	if !bytes.Contains(respBody, chunk1) || !bytes.Contains(respBody, chunk2) {
 		t.Errorf("expected both chunks in response, got: %q", respBody)
 	}
+}
+
+func TestHandler_PropagatesRequestContextToGitClient(t *testing.T) {
+	resolver := mockResolver(func(ns, repo string) (string, bool) {
+		return "test-repo-id", true
+	})
+
+	t.Run("info refs", func(t *testing.T) {
+		client := &mockGitClient{
+			infoRefsFunc: func(ctx context.Context, _ string, svc gitv1.Service) ([]byte, gitv1.Service, error) {
+				assertRequestContext(t, ctx, "request-context-marker")
+				return []byte("001e# service=git-upload-pack\n0000"), svc, nil
+			},
+		}
+		router := NewMux(client, resolver, zap.NewNop())
+		req := httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-upload-pack", nil)
+		req, _ = requestWithContextMarker(req)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		if resp := w.Result(); resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("upload pack", func(t *testing.T) {
+		client := &mockGitClient{
+			uploadPackFunc: func(ctx context.Context, _ string, _ []byte) (io.Reader, error) {
+				assertRequestContext(t, ctx, "request-context-marker")
+				return bytes.NewReader([]byte("pack-result")), nil
+			},
+		}
+		router := NewMux(client, resolver, zap.NewNop())
+		req := httptest.NewRequest(http.MethodPost, "/gitstore/catalog/git-upload-pack", strings.NewReader("0011want abc123\n0000"))
+		req, _ = requestWithContextMarker(req)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		if resp := w.Result(); resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("receive pack", func(t *testing.T) {
+		client := &mockGitClient{
+			receivePackFunc: func(ctx context.Context, _ string, _ io.Reader) ([]byte, error) {
+				assertRequestContext(t, ctx, "request-context-marker")
+				return []byte("report-status"), nil
+			},
+		}
+		router := NewMux(client, resolver, zap.NewNop())
+		req := httptest.NewRequest(http.MethodPost, "/gitstore/catalog/git-receive-pack", strings.NewReader("pack-body"))
+		req, _ = requestWithContextMarker(req)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		if resp := w.Result(); resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+	})
 }
 
 // T008: receivePackHandler — pipes request body to gRPC without full buffering
@@ -169,13 +252,13 @@ func TestReceivePackHandler_PipesBodyToGRPC(t *testing.T) {
 	})
 
 	packData := []byte("0053\x00\x00\x00\x00\x00\x00\x00\x00refs/heads/main\x00\x00PACK...")
-	h := newHandler(client, resolver)
+	router := NewMux(client, resolver, zap.NewNop())
 	req := httptest.NewRequest(http.MethodPost, "/gitstore/catalog/git-receive-pack", bytes.NewReader(packData))
 	req.SetPathValue("namespace", "gitstore")
 	req.SetPathValue("repo", "catalog")
 	w := httptest.NewRecorder()
 
-	h.receivePackHandler(w, req)
+	router.ServeHTTP(w, req)
 
 	resp := w.Result()
 	if resp.StatusCode != http.StatusOK {
@@ -201,13 +284,11 @@ func TestHandler_UnknownRepo_Returns404(t *testing.T) {
 		return "", false
 	})
 
-	h := newHandler(client, resolver)
+	router := NewMux(client, resolver, zap.NewNop())
 	req := httptest.NewRequest(http.MethodGet, "/unknown/repo/info/refs?service=git-upload-pack", nil)
-	req.SetPathValue("namespace", "unknown")
-	req.SetPathValue("repo", "repo")
 	w := httptest.NewRecorder()
 
-	h.infoRefsHandler(w, req)
+	router.ServeHTTP(w, req)
 
 	resp := w.Result()
 	if resp.StatusCode != http.StatusNotFound {
@@ -232,19 +313,23 @@ func TestHandler_GRPCUnavailable_Returns503(t *testing.T) {
 		return "test-repo-id", true
 	})
 
-	h := newHandler(client, resolver)
+	router := NewMux(client, resolver, zap.NewNop())
 	req := httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-upload-pack", nil)
-	req.SetPathValue("namespace", "gitstore")
-	req.SetPathValue("repo", "catalog")
 	w := httptest.NewRecorder()
 
-	h.infoRefsHandler(w, req)
+	router.ServeHTTP(w, req)
 
 	resp := w.Result()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("expected 503, got %d", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			t.Error(err)
+		}
+	}(resp.Body)
 	if !bytes.Contains(body, []byte("ERR service unavailable")) {
 		t.Errorf("expected 'ERR service unavailable' in body, got: %q", body)
 	}

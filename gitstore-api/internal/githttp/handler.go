@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
 	"go.uber.org/zap"
 )
@@ -31,17 +32,8 @@ type handler struct {
 	log      *zap.Logger
 }
 
-// newHandler creates a new handler with the given git client and resolver.
-func newHandler(git GitClient, resolver RepoResolver) *handler {
-	return &handler{
-		git:      git,
-		resolver: resolver,
-		log:      zap.NewNop(),
-	}
-}
-
 // newHandlerWithLogger creates a handler with a real logger.
-func newHandlerWithLogger(git GitClient, resolver RepoResolver, log *zap.Logger) *handler {
+func newHandler(git GitClient, resolver RepoResolver, log *zap.Logger) *handler {
 	return &handler{git: git, resolver: resolver, log: log}
 }
 
@@ -52,23 +44,27 @@ func (h *handler) resolveRepo(namespace, repo string) (string, bool) {
 }
 
 // gitPktLineError writes a Git pkt-line ERR response.
-func gitPktLineError(w http.ResponseWriter, status int, msg string) {
+func (h *handler) gitPktLineError(w http.ResponseWriter, status int, msg string) {
 	body := fmt.Sprintf("ERR %s", msg)
 	pktLen := len(body) + 4
 	line := fmt.Sprintf("%04x%s", pktLen, body)
 	w.WriteHeader(status)
-	w.Write([]byte(line)) //nolint:errcheck
+	_, err := w.Write([]byte(line))
+	if err != nil {
+		h.log.Error("failed to write response", zap.Error(err))
+		return
+	}
 }
 
 // infoRefsHandler handles GET /{namespace}/{repo}/info/refs?service=git-*
-func (h *handler) infoRefsHandler(w http.ResponseWriter, r *http.Request) {
-	namespace := r.PathValue("namespace")
-	repo := r.PathValue("repo")
-	svcParam := r.URL.Query().Get("service")
+func (h *handler) infoRefsHandler(c *gin.Context) {
+	namespace := c.Param("namespace")
+	repo := c.Param("repo")
+	svcParam := c.Query("service")
 
 	repoID, ok := h.resolveRepo(namespace, repo)
 	if !ok {
-		gitPktLineError(w, http.StatusNotFound, "repository not found")
+		h.gitPktLineError(c.Writer, http.StatusNotFound, "repository not found")
 		return
 	}
 
@@ -82,60 +78,57 @@ func (h *handler) infoRefsHandler(w http.ResponseWriter, r *http.Request) {
 		service = gitv1.Service_SERVICE_GIT_RECEIVE_PACK
 		contentType = "application/x-git-receive-pack-advertisement"
 	default:
-		gitPktLineError(w, http.StatusBadRequest, "unknown service")
+		h.gitPktLineError(c.Writer, http.StatusBadRequest, "unknown service")
 		return
 	}
 
 	h.log.Info("info_refs start", zap.String("repo_id", repoID), zap.String("service", svcParam))
 
-	advertisement, _, err := h.git.InfoRefs(r.Context(), repoID, service)
+	advertisement, _, err := h.git.InfoRefs(c.Request.Context(), repoID, service)
 	if err != nil {
 		h.log.Error("info_refs: git service error", zap.Error(err))
-		gitPktLineError(w, http.StatusServiceUnavailable, "service unavailable")
+		h.gitPktLineError(c.Writer, http.StatusServiceUnavailable, "service unavailable")
 		return
 	}
 
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "no-cache")
-	w.WriteHeader(http.StatusOK)
-	w.Write(advertisement) //nolint:errcheck
+	c.Header("Cache-Control", "no-cache")
+	c.Data(http.StatusOK, contentType, advertisement)
 
 	h.log.Info("info_refs complete", zap.String("repo_id", repoID))
 }
 
 // uploadPackHandler handles POST /{namespace}/{repo}/git-upload-pack
-func (h *handler) uploadPackHandler(w http.ResponseWriter, r *http.Request) {
-	namespace := r.PathValue("namespace")
-	repo := r.PathValue("repo")
+func (h *handler) uploadPackHandler(c *gin.Context) {
+	namespace := c.Param("namespace")
+	repo := c.Param("repo")
 
 	repoID, ok := h.resolveRepo(namespace, repo)
 	if !ok {
-		gitPktLineError(w, http.StatusNotFound, "repository not found")
+		h.gitPktLineError(c.Writer, http.StatusNotFound, "repository not found")
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	body, err := c.GetRawData()
 	if err != nil {
 		h.log.Error("upload_pack: read body error", zap.Error(err))
-		gitPktLineError(w, http.StatusBadRequest, "failed to read request body")
+		h.gitPktLineError(c.Writer, http.StatusBadRequest, "failed to read request body")
 		return
 	}
 
 	h.log.Info("upload_pack start", zap.String("repo_id", repoID), zap.Int("body_bytes", len(body)))
 
-	reader, err := h.git.UploadPack(r.Context(), repoID, body)
+	reader, err := h.git.UploadPack(c.Request.Context(), repoID, body)
 	if err != nil {
 		h.log.Error("upload_pack: git service error", zap.Error(err))
-		gitPktLineError(w, http.StatusServiceUnavailable, "service unavailable")
+		h.gitPktLineError(c.Writer, http.StatusServiceUnavailable, "service unavailable")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Transfer-Encoding", "chunked")
-	w.WriteHeader(http.StatusOK)
+	c.Header("Content-Type", "application/x-git-upload-pack-result")
+	c.Header("Cache-Control", "no-cache")
+	c.Status(http.StatusOK)
 
-	totalBytes, err := io.Copy(w, reader)
+	totalBytes, err := io.Copy(c.Writer, reader)
 	if err != nil {
 		h.log.Error("upload_pack: stream error", zap.Error(err))
 		return
@@ -145,46 +138,39 @@ func (h *handler) uploadPackHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // receivePackHandler handles POST /{namespace}/{repo}/git-receive-pack
-func (h *handler) receivePackHandler(w http.ResponseWriter, r *http.Request) {
-	namespace := r.PathValue("namespace")
-	repo := r.PathValue("repo")
+func (h *handler) receivePackHandler(c *gin.Context) {
+	namespace := c.Param("namespace")
+	repo := c.Param("repo")
 
 	repoID, ok := h.resolveRepo(namespace, repo)
 	if !ok {
-		gitPktLineError(w, http.StatusNotFound, "repository not found")
+		h.gitPktLineError(c.Writer, http.StatusNotFound, "repository not found")
 		return
 	}
 
 	h.log.Info("receive_pack start", zap.String("repo_id", repoID))
 
-	reportStatus, err := h.git.ReceivePack(r.Context(), repoID, r.Body)
+	reportStatus, err := h.git.ReceivePack(c.Request.Context(), repoID, c.Request.Body)
 	if err != nil {
 		h.log.Error("receive_pack: git service error", zap.Error(err))
-		gitPktLineError(w, http.StatusServiceUnavailable, "service unavailable")
+		h.gitPktLineError(c.Writer, http.StatusServiceUnavailable, "service unavailable")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/x-git-receive-pack-result")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.WriteHeader(http.StatusOK)
-	w.Write(reportStatus) //nolint:errcheck
+	c.Header("Cache-Control", "no-cache")
+	c.Data(http.StatusOK, "application/x-git-receive-pack-result", reportStatus)
 
 	h.log.Info("receive_pack complete", zap.String("repo_id", repoID), zap.Int("report_status_bytes", len(reportStatus)))
 }
 
 // NewMux creates an http.Handler with all Git smart HTTP routes registered.
-func NewMux(git GitClient, resolver RepoResolver, log *zap.Logger, health http.Handler) http.Handler {
-	h := newHandlerWithLogger(git, resolver, log)
-	mux := http.NewServeMux()
+func NewMux(git GitClient, resolver RepoResolver, log *zap.Logger) http.Handler {
+	h := newHandler(git, resolver, log)
+	r := gin.New()
 
-	mux.HandleFunc("GET /{namespace}/{repo}/info/refs", h.infoRefsHandler)
-	mux.HandleFunc("POST /{namespace}/{repo}/git-upload-pack", h.uploadPackHandler)
-	mux.HandleFunc("POST /{namespace}/{repo}/git-receive-pack", h.receivePackHandler)
+	r.GET("/:namespace/:repo/info/refs", h.infoRefsHandler)
+	r.POST("/:namespace/:repo/git-upload-pack", h.uploadPackHandler)
+	r.POST("/:namespace/:repo/git-receive-pack", h.receivePackHandler)
 
-	if health != nil {
-		mux.Handle("/health", health)
-		mux.Handle("/ready", health)
-	}
-
-	return mux
+	return r
 }
