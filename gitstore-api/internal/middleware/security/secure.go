@@ -46,7 +46,8 @@ type RateLimit struct {
 }
 
 type client struct {
-	limiter *rate.Limiter
+	limiter  *rate.Limiter
+	lastSeen time.Time
 }
 
 type authenticatorFunc func(*gin.Context, auth.AuthRequest, *Authenticate) (context.Context, *auth.Principal, bool)
@@ -92,10 +93,30 @@ func NewAuthorizeWithStore(registry *auth.ProviderRegistry, store datastoreGette
 }
 
 func NewRateLimit(r float64, b int) RateLimit {
-	return RateLimit{
+	rl := RateLimit{
 		clients: make(map[string]*client),
 		limit:   rate.Limit(r),
 		burst:   b,
+	}
+	go rl.cleanup()
+	return rl
+}
+
+// cleanup evicts entries that have not been seen for 10 minutes. Runs forever;
+// the goroutine is intentionally leaked for the lifetime of the server process.
+func (r *RateLimit) cleanup() {
+	const ttl = 10 * time.Minute
+	ticker := time.NewTicker(ttl)
+	defer ticker.Stop()
+	for range ticker.C {
+		cutoff := time.Now().Add(-ttl)
+		r.mu.Lock()
+		for ip, c := range r.clients {
+			if c.lastSeen.Before(cutoff) {
+				delete(r.clients, ip)
+			}
+		}
+		r.mu.Unlock()
 	}
 }
 
@@ -139,37 +160,48 @@ func bearerAuth(c *gin.Context, req auth.AuthRequest, a *Authenticate) (context.
 func basicAuth(c *gin.Context, req auth.AuthRequest, a *Authenticate) (context.Context, *auth.Principal, bool) {
 	ctx := c.Request.Context()
 	principal, decision, err := a.registry.AuthN().Authenticate(ctx, req)
+	// Derive the service label here where the query string is available.
+	svc := resolveService(c.Request.URL.Path, c.Query("service"))
 	if err != nil {
 		// Transient error (e.g. DB down, provider unreachable) — do not prompt for credentials.
 		a.logger.Error("auth chain transient error", zap.Error(err))
-		a.recordAuth("error", c.Request.URL.Path)
+		a.recordAuthService("error", svc)
 		c.AbortWithStatus(http.StatusServiceUnavailable)
 		return ctx, principal, c.IsAborted()
 	}
 	if decision.Outcome == auth.OutcomeDeny {
 		a.logger.Warn("auth denied", zap.String("reason", decision.Reason))
-		a.recordAuth("deny", c.Request.URL.Path)
+		a.recordAuthService("deny", svc)
 		// 401 + WWW-Authenticate so Git credential helpers prompt for credentials.
 		c.Header("WWW-Authenticate", `Basic realm="GitStore"`)
 		c.AbortWithStatus(http.StatusUnauthorized)
 		return ctx, principal, c.IsAborted()
 	}
-	a.recordAuth("allow", c.Request.URL.Path)
+	a.recordAuthService("allow", svc)
 	return ctx, principal, c.IsAborted()
 }
 
-// recordAuth increments the auth outcome counter if metrics are configured.
-// service is derived from the URL path suffix.
-func (a *Authenticate) recordAuth(outcome, path string) {
+// resolveService maps a URL path + optional service query param to a metric label.
+// For /info/refs the ?service= query param disambiguates upload-pack vs receive-pack.
+func resolveService(path, serviceParam string) string {
+	switch {
+	case strings.HasSuffix(path, "/git-upload-pack"):
+		return "upload_pack"
+	case strings.HasSuffix(path, "/git-receive-pack"):
+		return "receive_pack"
+	case strings.HasSuffix(path, "/info/refs"):
+		if serviceParam == "git-receive-pack" {
+			return "receive_pack"
+		}
+		return "upload_pack"
+	}
+	return "unknown"
+}
+
+// recordAuthService increments the auth outcome counter if metrics are configured.
+func (a *Authenticate) recordAuthService(outcome, service string) {
 	if a.authCounts == nil {
 		return
-	}
-	service := "unknown"
-	switch {
-	case strings.HasSuffix(path, "/git-upload-pack") || strings.HasSuffix(path, "/info/refs"):
-		service = "upload_pack"
-	case strings.HasSuffix(path, "/git-receive-pack"):
-		service = "receive_pack"
 	}
 	a.authCounts.WithLabelValues(outcome, service).Inc()
 }
@@ -296,7 +328,10 @@ func (a *Authorize) PushContextInserter(c *gin.Context) {
 	}
 
 	pc := &gitv1.PushContext{
-		RepositoryId: repoID,
+		RepositoryId:          repoID,
+		Namespace:             strings.TrimSuffix(c.Param("namespace"), ".git"),
+		RepositoryName:        repo.Name,
+		ConfigResourceVersion: repo.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		Actor: &gitv1.AuthContext{
 			Subject:    principal.Subject,
 			Issuer:     principal.Issuer,
@@ -324,6 +359,7 @@ func (r *RateLimit) RateLimiter(c *gin.Context) {
 		r.clients[ip] = &client{limiter: rate.NewLimiter(r.limit, r.burst)}
 	}
 	cl := r.clients[ip]
+	cl.lastSeen = time.Now()
 	r.mu.Unlock()
 	if !cl.limiter.Allow() {
 		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{

@@ -5,7 +5,6 @@ package githttp
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -50,16 +49,10 @@ func newHandler(git GitClient, log *zap.Logger) *handler {
 	return &handler{git: git, log: log}
 }
 
-// gitPktLineError writes a Git pkt-line ERR response.
+// gitPktLineError writes a Git pkt-line ERR response, logging any write failure.
 func (h *handler) gitPktLineError(w http.ResponseWriter, status int, msg string) {
-	body := fmt.Sprintf("ERR %s", msg)
-	pktLen := len(body) + 4
-	line := fmt.Sprintf("%04x%s", pktLen, body)
-	w.WriteHeader(status)
-	_, err := w.Write([]byte(line))
-	if err != nil {
-		h.log.Error("failed to write response", zap.Error(err))
-		return
+	if _, err := gitPktLineErrorRaw(w, status, msg); err != nil {
+		h.log.Error("failed to write pkt-line error response", zap.Error(err))
 	}
 }
 
@@ -150,14 +143,14 @@ func (h *handler) receivePackHandler(c *gin.Context) {
 	h.log.Info("receive_pack complete", zap.String("repo_id", repoID), zap.Int("report_status_bytes", len(reportStatus)))
 }
 
-// NewMux creates an http.Handler with all Git smart HTTP routes registered.
-// When deps.Store is non-nil, RepoResolver and GitHttpAuthorizer middleware are wired in.
-func NewMux(deps SmartHttpDeps) http.Handler {
-	return NewMuxWithStore(deps)
-}
+// NewMux is an alias for NewMuxWithStore retained for backward compatibility.
+// For production push support use NewMuxWithStoreAndAuthz.
+func NewMux(deps SmartHttpDeps) http.Handler { return NewMuxWithStore(deps) }
 
 // NewMuxWithStore creates an http.Handler with all Git smart HTTP routes registered,
 // including RepoResolver and GitHttpAuthorizer middleware.
+// PushContextInserter is NOT wired; pushes will be rejected by the git-service because
+// push_context is required. Use NewMuxWithStoreAndAuthz for production push support.
 func NewMuxWithStore(deps SmartHttpDeps) http.Handler {
 	return newMux(deps, false)
 }
@@ -216,7 +209,9 @@ func legacyRepoResolver(resolver RepoResolverFunc, log *zap.Logger) gin.HandlerF
 		repo := strings.TrimSuffix(c.Param("repo"), ".git")
 		repoID, ok := resolver(namespace, repo)
 		if !ok {
-			gitPktLineErrorRaw(c.Writer, http.StatusNotFound, "repository not found")
+			if _, err := gitPktLineErrorRaw(c.Writer, http.StatusNotFound, "repository not found"); err != nil {
+				log.Error("failed to write pkt-line error response", zap.Error(err))
+			}
 			c.Abort()
 			return
 		}

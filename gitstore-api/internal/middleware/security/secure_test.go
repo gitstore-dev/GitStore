@@ -15,10 +15,10 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
-	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -196,8 +196,8 @@ func TestPushContextInserter(t *testing.T) {
 	const nsID = "01960000-0000-7000-8000-000000000010"
 	principal := &auth.Principal{Subject: "admin", Issuer: "static-admin", AuthMethod: "basic", Roles: []string{"admin"}}
 
-	store := &testStore{
-		getRepository: func(_ context.Context, id string) (*datastore.Repository, error) {
+	store := &testutil.StubStore{
+		GetRepositoryFunc: func(_ context.Context, id string) (*datastore.Repository, error) {
 			if id != repoID {
 				return nil, datastore.ErrNotFound
 			}
@@ -251,117 +251,6 @@ func TestPushContextInserter(t *testing.T) {
 	assert.Equal(t, int64(52428800), pc.Policy.MaxPackSizeBytes)
 	assert.Equal(t, int64(10485760), pc.Policy.MaxFileSizeBytes)
 }
-
-// testStore implements a minimal datastore.Datastore for security tests.
-type testStore struct {
-	getRepository func(ctx context.Context, id string) (*datastore.Repository, error)
-}
-
-func (s *testStore) GetRepository(ctx context.Context, id string) (*datastore.Repository, error) {
-	if s.getRepository != nil {
-		return s.getRepository(ctx, id)
-	}
-	return nil, datastore.ErrNotFound
-}
-
-// Remaining Datastore methods as no-ops.
-func (s *testStore) CreateProduct(_ context.Context, _ *datastore.Product) error { return nil }
-func (s *testStore) GetProduct(_ context.Context, _ string) (*datastore.Product, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *testStore) GetProductByName(_ context.Context, _, _ string) (*datastore.Product, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *testStore) ListProducts(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
-	return &datastore.PageResult[datastore.Product]{}, nil
-}
-func (s *testStore) UpdateProduct(_ context.Context, _ *datastore.Product) error { return nil }
-func (s *testStore) DeleteProduct(_ context.Context, _ string) error             { return nil }
-func (s *testStore) CreateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
-	return nil
-}
-func (s *testStore) GetCategoryTaxonomy(_ context.Context, _ string) (*datastore.CategoryTaxonomy, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *testStore) GetCategoryTaxonomyByName(_ context.Context, _, _ string) (*datastore.CategoryTaxonomy, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *testStore) ListCategoryTaxonomies(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
-	return &datastore.PageResult[datastore.CategoryTaxonomy]{}, nil
-}
-func (s *testStore) UpdateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
-	return nil
-}
-func (s *testStore) DeleteCategoryTaxonomy(_ context.Context, _ string) error { return nil }
-func (s *testStore) CreateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
-	return nil
-}
-func (s *testStore) GetProductVariant(_ context.Context, _ string) (*datastore.ProductVariant, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *testStore) GetProductVariantByName(_ context.Context, _, _ string) (*datastore.ProductVariant, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *testStore) GetProductVariantBySKU(_ context.Context, _, _ string) (*datastore.ProductVariant, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *testStore) ListProductVariants(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.ProductVariant], error) {
-	return &datastore.PageResult[datastore.ProductVariant]{}, nil
-}
-func (s *testStore) ListProductVariantsByProductRef(_ context.Context, _, _ string) ([]*datastore.ProductVariant, error) {
-	return nil, nil
-}
-func (s *testStore) UpdateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
-	return nil
-}
-func (s *testStore) DeleteProductVariant(_ context.Context, _ string) error { return nil }
-func (s *testStore) CreateCollection(_ context.Context, _ *datastore.Collection) error {
-	return nil
-}
-func (s *testStore) GetCollection(_ context.Context, _ string) (*datastore.Collection, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *testStore) GetCollectionByName(_ context.Context, _, _ string) (*datastore.Collection, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *testStore) ListCollections(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
-	return &datastore.PageResult[datastore.Collection]{}, nil
-}
-func (s *testStore) UpdateCollection(_ context.Context, _ *datastore.Collection) error { return nil }
-func (s *testStore) DeleteCollection(_ context.Context, _ string) error                { return nil }
-func (s *testStore) ListProductsByLabelSelector(_ context.Context, _ string, _ catalog.LabelSelector) ([]*datastore.Product, error) {
-	return nil, nil
-}
-func (s *testStore) CreateNamespace(_ context.Context, _ *datastore.Namespace) error { return nil }
-func (s *testStore) GetNamespace(_ context.Context, _ string) (*datastore.Namespace, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *testStore) GetNamespaceByIdentifier(_ context.Context, _ string) (*datastore.Namespace, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *testStore) ListNamespaces(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {
-	return &datastore.PageResult[datastore.Namespace]{}, nil
-}
-func (s *testStore) DeleteNamespace(_ context.Context, _ string) error                 { return nil }
-func (s *testStore) CreateRepository(_ context.Context, _ *datastore.Repository) error { return nil }
-func (s *testStore) ListRepositoriesByNamespace(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
-	return &datastore.PageResult[datastore.Repository]{}, nil
-}
-func (s *testStore) UpdateRepository(_ context.Context, _ *datastore.Repository) error { return nil }
-func (s *testStore) DeleteRepository(_ context.Context, _ string) error                { return nil }
-func (s *testStore) CreateNamespaceMapping(_ context.Context, _ *datastore.NamespaceMapping) error {
-	return nil
-}
-func (s *testStore) LookupRepository(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *testStore) LookupNamespaceByRepoID(_ context.Context, _ string) (*datastore.NamespaceMapping, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *testStore) RenameRepository(_ context.Context, _, _, _ string) error    { return nil }
-func (s *testStore) TransferRepository(_ context.Context, _, _, _ string) error  { return nil }
-func (s *testStore) DeleteNamespaceMapping(_ context.Context, _, _ string) error { return nil }
-func (s *testStore) Close() error                                                { return nil }
 
 // T013: OutcomeAllow passes through to the next handler.
 func TestBasicAuthAllow(t *testing.T) {

@@ -19,11 +19,11 @@ import (
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
-	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -375,126 +375,6 @@ func TestHandler_UnknownRepo_Returns404(t *testing.T) {
 	}
 }
 
-// stubStore is a minimal Datastore stub for handler tests.
-// Only GetNamespaceByIdentifier and LookupRepository are implemented.
-type stubStore struct {
-	getNamespaceByIdentifier func(ctx context.Context, identifier string) (*datastore.Namespace, error)
-	lookupRepository         func(ctx context.Context, namespaceID, name string) (*datastore.NamespaceMapping, error)
-	getRepository            func(ctx context.Context, id string) (*datastore.Repository, error)
-}
-
-func (s *stubStore) GetNamespaceByIdentifier(ctx context.Context, identifier string) (*datastore.Namespace, error) {
-	if s.getNamespaceByIdentifier != nil {
-		return s.getNamespaceByIdentifier(ctx, identifier)
-	}
-	return nil, datastore.ErrNotFound
-}
-func (s *stubStore) LookupRepository(ctx context.Context, namespaceID, name string) (*datastore.NamespaceMapping, error) {
-	if s.lookupRepository != nil {
-		return s.lookupRepository(ctx, namespaceID, name)
-	}
-	return nil, datastore.ErrNotFound
-}
-func (s *stubStore) GetRepository(ctx context.Context, id string) (*datastore.Repository, error) {
-	if s.getRepository != nil {
-		return s.getRepository(ctx, id)
-	}
-	return nil, datastore.ErrNotFound
-}
-
-// Implement the full Datastore interface as no-ops.
-func (s *stubStore) CreateProduct(_ context.Context, _ *datastore.Product) error { return nil }
-func (s *stubStore) GetProduct(_ context.Context, _ string) (*datastore.Product, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *stubStore) GetProductByName(_ context.Context, _, _ string) (*datastore.Product, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *stubStore) ListProducts(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
-	return &datastore.PageResult[datastore.Product]{}, nil
-}
-func (s *stubStore) UpdateProduct(_ context.Context, _ *datastore.Product) error { return nil }
-func (s *stubStore) DeleteProduct(_ context.Context, _ string) error             { return nil }
-func (s *stubStore) CreateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
-	return nil
-}
-func (s *stubStore) GetCategoryTaxonomy(_ context.Context, _ string) (*datastore.CategoryTaxonomy, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *stubStore) GetCategoryTaxonomyByName(_ context.Context, _, _ string) (*datastore.CategoryTaxonomy, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *stubStore) ListCategoryTaxonomies(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
-	return &datastore.PageResult[datastore.CategoryTaxonomy]{}, nil
-}
-func (s *stubStore) UpdateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
-	return nil
-}
-func (s *stubStore) DeleteCategoryTaxonomy(_ context.Context, _ string) error { return nil }
-func (s *stubStore) CreateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
-	return nil
-}
-func (s *stubStore) GetProductVariant(_ context.Context, _ string) (*datastore.ProductVariant, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *stubStore) GetProductVariantByName(_ context.Context, _, _ string) (*datastore.ProductVariant, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *stubStore) GetProductVariantBySKU(_ context.Context, _, _ string) (*datastore.ProductVariant, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *stubStore) ListProductVariants(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.ProductVariant], error) {
-	return &datastore.PageResult[datastore.ProductVariant]{}, nil
-}
-func (s *stubStore) ListProductVariantsByProductRef(_ context.Context, _, _ string) ([]*datastore.ProductVariant, error) {
-	return nil, nil
-}
-func (s *stubStore) UpdateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
-	return nil
-}
-func (s *stubStore) DeleteProductVariant(_ context.Context, _ string) error { return nil }
-func (s *stubStore) CreateCollection(_ context.Context, _ *datastore.Collection) error {
-	return nil
-}
-func (s *stubStore) GetCollection(_ context.Context, _ string) (*datastore.Collection, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *stubStore) GetCollectionByName(_ context.Context, _, _ string) (*datastore.Collection, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *stubStore) ListCollections(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
-	return &datastore.PageResult[datastore.Collection]{}, nil
-}
-func (s *stubStore) UpdateCollection(_ context.Context, _ *datastore.Collection) error { return nil }
-func (s *stubStore) DeleteCollection(_ context.Context, _ string) error                { return nil }
-func (s *stubStore) ListProductsByLabelSelector(_ context.Context, _ string, _ catalog.LabelSelector) ([]*datastore.Product, error) {
-	return nil, nil
-}
-func (s *stubStore) CreateNamespace(_ context.Context, _ *datastore.Namespace) error { return nil }
-func (s *stubStore) GetNamespace(_ context.Context, _ string) (*datastore.Namespace, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *stubStore) ListNamespaces(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {
-	return &datastore.PageResult[datastore.Namespace]{}, nil
-}
-func (s *stubStore) DeleteNamespace(_ context.Context, _ string) error                 { return nil }
-func (s *stubStore) CreateRepository(_ context.Context, _ *datastore.Repository) error { return nil }
-func (s *stubStore) ListRepositoriesByNamespace(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
-	return &datastore.PageResult[datastore.Repository]{}, nil
-}
-func (s *stubStore) UpdateRepository(_ context.Context, _ *datastore.Repository) error { return nil }
-func (s *stubStore) DeleteRepository(_ context.Context, _ string) error                { return nil }
-func (s *stubStore) CreateNamespaceMapping(_ context.Context, _ *datastore.NamespaceMapping) error {
-	return nil
-}
-func (s *stubStore) LookupNamespaceByRepoID(_ context.Context, _ string) (*datastore.NamespaceMapping, error) {
-	return nil, datastore.ErrNotFound
-}
-func (s *stubStore) RenameRepository(_ context.Context, _, _, _ string) error    { return nil }
-func (s *stubStore) TransferRepository(_ context.Context, _, _, _ string) error  { return nil }
-func (s *stubStore) DeleteNamespaceMapping(_ context.Context, _, _ string) error { return nil }
-func (s *stubStore) Close() error                                                { return nil }
-
 // stubAuthZProvider is a minimal AuthZProvider for tests.
 type stubAuthZProvider struct {
 	decision auth.Decision
@@ -508,7 +388,7 @@ func (s *stubAuthZProvider) Authorize(_ context.Context, _ *auth.Principal, _ st
 
 // T021: RepoResolver returns 404 pkt-line for unknown namespace/repo.
 func TestRepoResolverNotFound(t *testing.T) {
-	store := &stubStore{} // both lookups return ErrNotFound by default
+	store := &testutil.StubStore{} // both lookups return ErrNotFound by default
 
 	router := NewMuxWithStore(SmartHttpDeps{
 		GitClient:        &mockGitClient{},
@@ -536,11 +416,11 @@ func TestRepoResolverNotFound(t *testing.T) {
 // T022: RepoResolver stores repoID in gin context for known repo.
 func TestRepoResolverSetsContext(t *testing.T) {
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
-	store := &stubStore{
-		getNamespaceByIdentifier: func(_ context.Context, id string) (*datastore.Namespace, error) {
+	store := &testutil.StubStore{
+		GetNamespaceByIdentifierFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
 			return &datastore.Namespace{ID: "ns-id-1", Identifier: id}, nil
 		},
-		lookupRepository: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
+		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
 			return &datastore.NamespaceMapping{RepoID: wantRepoID}, nil
 		},
 	}
@@ -587,11 +467,11 @@ func TestGitHttpAuthorizerReadOnly(t *testing.T) {
 	)
 
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
-	store := &stubStore{
-		getNamespaceByIdentifier: func(_ context.Context, id string) (*datastore.Namespace, error) {
+	store := &testutil.StubStore{
+		GetNamespaceByIdentifierFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
 			return &datastore.Namespace{ID: "ns-id-1", Identifier: id}, nil
 		},
-		lookupRepository: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
+		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
 			return &datastore.NamespaceMapping{RepoID: wantRepoID}, nil
 		},
 	}
@@ -628,11 +508,11 @@ func TestGitHttpAuthorizerWriteAllowed(t *testing.T) {
 	)
 
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
-	store := &stubStore{
-		getNamespaceByIdentifier: func(_ context.Context, id string) (*datastore.Namespace, error) {
+	store := &testutil.StubStore{
+		GetNamespaceByIdentifierFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
 			return &datastore.Namespace{ID: "ns-id-1", Identifier: id}, nil
 		},
-		lookupRepository: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
+		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
 			return &datastore.NamespaceMapping{RepoID: wantRepoID}, nil
 		},
 	}
@@ -715,14 +595,14 @@ func TestReceivePackAttachesPushContext(t *testing.T) {
 	const repoID = "01960000-0000-7000-8000-000000000001"
 	const nsID = "ns-id-1"
 
-	store := &stubStore{
-		getNamespaceByIdentifier: func(_ context.Context, id string) (*datastore.Namespace, error) {
+	store := &testutil.StubStore{
+		GetNamespaceByIdentifierFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
 			return &datastore.Namespace{ID: nsID, Identifier: id}, nil
 		},
-		lookupRepository: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
+		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
 			return &datastore.NamespaceMapping{RepoID: repoID}, nil
 		},
-		getRepository: func(_ context.Context, _ string) (*datastore.Repository, error) {
+		GetRepositoryFunc: func(_ context.Context, _ string) (*datastore.Repository, error) {
 			return &datastore.Repository{
 				ID:               repoID,
 				NamespaceID:      nsID,

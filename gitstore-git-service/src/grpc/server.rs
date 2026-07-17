@@ -894,8 +894,11 @@ impl GitService for GitServiceImpl {
                         let bytes = chunk.pack_data.len();
                         total_bytes += bytes as i64;
                         if max_pack_size_bytes > 0 && total_bytes > max_pack_size_bytes {
-                            // Limit exceeded — drop tx2 so stage_pack_from_reader sees EOF
-                            // and will propagate an error.
+                            // Send the sentinel string so LimitedReader's map_err closure
+                            // can surface RESOURCE_EXHAUSTED instead of INTERNAL.
+                            let _ = tx2.send(
+                                b"pack size limit exceeded (streaming)".to_vec(),
+                            );
                             break;
                         }
                         if !chunk.pack_data.is_empty() && tx2.send(chunk.pack_data).is_err() {

@@ -27,14 +27,18 @@ func RepoResolver(store datastore.Datastore, log *zap.Logger) gin.HandlerFunc {
 
 		ns, err := store.GetNamespaceByIdentifier(c.Request.Context(), namespace)
 		if err != nil || ns == nil {
-			gitPktLineErrorRaw(c.Writer, http.StatusNotFound, "repository not found")
+			if _, werr := gitPktLineErrorRaw(c.Writer, http.StatusNotFound, "repository not found"); werr != nil {
+				log.Error("failed to write pkt-line error response", zap.Error(werr))
+			}
 			c.Abort()
 			return
 		}
 
 		mapping, err := store.LookupRepository(c.Request.Context(), ns.ID, repo)
 		if err != nil || mapping == nil {
-			gitPktLineErrorRaw(c.Writer, http.StatusNotFound, "repository not found")
+			if _, werr := gitPktLineErrorRaw(c.Writer, http.StatusNotFound, "repository not found"); werr != nil {
+				log.Error("failed to write pkt-line error response", zap.Error(werr))
+			}
 			c.Abort()
 			return
 		}
@@ -45,11 +49,12 @@ func RepoResolver(store datastore.Datastore, log *zap.Logger) gin.HandlerFunc {
 	}
 }
 
-// gitPktLineErrorRaw writes a Git pkt-line ERR response directly to a http.ResponseWriter.
-func gitPktLineErrorRaw(w http.ResponseWriter, status int, msg string) {
+// gitPktLineErrorRaw writes a Git pkt-line ERR response directly to a http.ResponseWriter
+// and returns any write error so callers can decide whether to log it.
+func gitPktLineErrorRaw(w http.ResponseWriter, status int, msg string) (int, error) {
 	body := fmt.Sprintf("ERR %s", msg)
 	pktLen := len(body) + 4
 	line := fmt.Sprintf("%04x%s", pktLen, body)
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(line))
+	return w.Write([]byte(line))
 }

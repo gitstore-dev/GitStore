@@ -913,15 +913,49 @@ pub fn check_blob_sizes_in_quarantine_paths(
         let pack_entry = pack_file
             .entry(entry.pack_offset)
             .with_context(|| format!("read pack entry at offset {}", entry.pack_offset))?;
-        if let gix_pack::data::entry::Header::Blob = pack_entry.header {
-            if pack_entry.decompressed_size > max_file_size_bytes {
-                anyhow::bail!(
-                    "blob {} has size {} bytes which exceeds the {} byte file size limit",
-                    entry.oid,
-                    pack_entry.decompressed_size,
-                    max_file_size_bytes
-                );
+        // Check non-delta blobs directly. Delta entries (OFS_DELTA / REF_DELTA) that
+        // resolve to blobs must be decoded to obtain the true object size; we use
+        // decompressed_size only for the base-object (Blob) case where it IS the
+        // uncompressed blob size.
+        match pack_entry.header {
+            gix_pack::data::entry::Header::Blob => {
+                if pack_entry.decompressed_size > max_file_size_bytes {
+                    anyhow::bail!(
+                        "blob {} has size {} bytes which exceeds the {} byte file size limit",
+                        entry.oid,
+                        pack_entry.decompressed_size,
+                        max_file_size_bytes
+                    );
+                }
             }
+            gix_pack::data::entry::Header::OfsDelta { .. }
+            | gix_pack::data::entry::Header::RefDelta { .. } => {
+                // Delta-encoded entry: decode to resolve the true object size and kind.
+                let mut out = Vec::new();
+                let mut inflate = gix::features::zlib::Inflate::default();
+                let outcome = pack_file
+                    .decode_entry(
+                        pack_entry,
+                        &mut out,
+                        &mut inflate,
+                        &|_, _| None,
+                        &mut gix_pack::cache::Never,
+                    )
+                    .with_context(|| {
+                        format!("decode delta entry at offset {}", entry.pack_offset)
+                    })?;
+                if outcome.kind == gix::object::Kind::Blob
+                    && outcome.object_size > max_file_size_bytes
+                {
+                    anyhow::bail!(
+                        "blob {} has size {} bytes which exceeds the {} byte file size limit",
+                        entry.oid,
+                        outcome.object_size,
+                        max_file_size_bytes
+                    );
+                }
+            }
+            _ => {}
         }
     }
     Ok(())
