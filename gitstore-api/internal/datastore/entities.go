@@ -208,6 +208,10 @@ type Repository struct {
 	CreatedBy     string
 	UpdatedAt     time.Time
 	UpdatedBy     string
+
+	// Push policy limits. Zero means no limit enforced (FR-015).
+	MaxPackSizeBytes int64
+	MaxFileSizeBytes int64
 }
 
 // NamespaceMapping is the join record binding (NamespaceID, Name) → RepoID.

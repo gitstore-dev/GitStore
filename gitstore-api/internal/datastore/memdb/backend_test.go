@@ -449,3 +449,35 @@ func TestMemdb_DeleteNamespaceMapping(t *testing.T) {
 	_, err := ds.LookupRepository(ctx, nsID1, "to-delete")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
+
+// T008: push policy fields round-trip through CreateRepository / GetRepository.
+func TestMemdb_Repository_PushPolicyRoundTrip(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+
+	r := repoFixture(repoID1, nsID1, "policy-repo")
+	r.MaxPackSizeBytes = 0 // zero = unlimited (FR-015)
+	r.MaxFileSizeBytes = 0 // zero = unlimited (FR-015)
+	require.NoError(t, ds.CreateRepository(ctx, r))
+
+	got, err := ds.GetRepository(ctx, repoID1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), got.MaxPackSizeBytes)
+	assert.Equal(t, int64(0), got.MaxFileSizeBytes)
+}
+
+// T008 (non-zero): verify non-zero policy limits also round-trip.
+func TestMemdb_Repository_PushPolicyNonZeroRoundTrip(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+
+	r := repoFixture(repoID1, nsID1, "policy-repo-limits")
+	r.MaxPackSizeBytes = 52428800 // 50 MiB
+	r.MaxFileSizeBytes = 10485760 // 10 MiB
+	require.NoError(t, ds.CreateRepository(ctx, r))
+
+	got, err := ds.GetRepository(ctx, repoID1)
+	require.NoError(t, err)
+	assert.Equal(t, int64(52428800), got.MaxPackSizeBytes)
+	assert.Equal(t, int64(10485760), got.MaxFileSizeBytes)
+}

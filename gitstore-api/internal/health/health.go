@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 
-// Health check handlers for API service
+// Package health check handlers for API service
 package health
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
@@ -77,22 +78,21 @@ func NewHandler(deps HandlerDeps) *Handler {
 
 // Health handles /health endpoint - basic liveness check
 // Returns 200 if service is running, regardless of dependencies
-func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) Health(c *gin.Context) {
 	response := HealthResponse{
 		Status:    StatusHealthy,
 		Version:   h.version,
 		Timestamp: h.clock.Now(),
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	c.Header("Content-Type", "application/json")
+	c.JSON(http.StatusOK, response)
 }
 
 // Ready handles /ready endpoint - readiness check
 // Returns 200 only if service is ready to accept traffic
-func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+func (h *Handler) Ready(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 
 	checks := h.performChecks(ctx)
@@ -117,9 +117,8 @@ func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
 		Checks:    checks,
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(httpStatus)
-	json.NewEncoder(w).Encode(response)
+	c.Header("Content-Type", "application/json")
+	c.JSON(httpStatus, response)
 }
 
 func (h *Handler) performChecks(ctx context.Context) map[string]Check {
@@ -170,6 +169,12 @@ func (h *Handler) checkDatastore(ctx context.Context) Check {
 		Status:  StatusHealthy,
 		Message: "datastore operational",
 	}
+}
+
+// Metrics serves the Prometheus metrics endpoint using the default registry.
+// All instrumented components (datastore, gRPC client, auth outcomes) are included.
+func (h *Handler) Metrics(c *gin.Context) {
+	promhttp.Handler().ServeHTTP(c.Writer, c.Request)
 }
 
 func (h *Handler) checkUptime() Check {

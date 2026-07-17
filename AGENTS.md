@@ -21,6 +21,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - No new dependencies (033-auth-phase-4); `cmd/gitctl` replaces `cmd/hashpw`; `GITSTORE_AUTH__GRPC__HMAC_SECRET` required on both services (033-auth-phase-4)
 - No datastore changes (033-auth-phase-4)
 - Rust 1.x (`gitstore-git-service`) + Go 1.25 (`gitstore-api`) (034-admission-path-cleanup)
+- Go 1.25 (gitstore-api) · Rust 1.x (gitstore-git-service) + `github.com/gin-gonic/gin`, `go-grpc-prometheus`, `prometheus/client_golang`, `gix 0.84.0`, `tonic 0.14` (035-git-http-auth)
+- Push policy fields added to `datastore.Repository` struct; resolved via existing `store.GetRepository` after `LookupRepository` (035-git-http-auth)
 
 ## Commands
 
@@ -62,9 +64,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 035-git-http-auth: Added Go 1.25 (gitstore-api) · Rust 1.x (gitstore-git-service) + `github.com/gin-gonic/gin`, `go-grpc-prometheus`, `prometheus/client_golang`, `gix 0.84.0`, `tonic 0.14`
 - 034-admission-path-cleanup: `changed_paths` populated in Rust admission handler via gix tree diff; legacy `OldCommitSha==""` fallback path removed from Go API; `operationForEntry` returns existing object to eliminate double DB lookup per resource
 - 033-auth-phase-4: No new deps; `cmd/gitctl` binary (`hash-password`, `gen-jwt-secret`, `gen-hmac-secret`); `GITSTORE_AUTH__GRPC__HMAC_SECRET` config key; `HmacInterceptor` in Rust git-service; `hmacCreds` PerRPCCredentials in Go API
-- 031-pluggable-authn-authz: Added Go 1.25 (gitstore-api) + `golang-jwt/v5 v5.3.1` (already in go.mod), `github.com/spf13/viper v1.21.0`, `go.uber.org/zap v1.28.0`, `golang.org/x/crypto` (bcrypt, already in go.mod)
 
 
 <!-- MANUAL ADDITIONS START -->

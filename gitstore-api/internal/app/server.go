@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/lru"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/99designs/gqlgen/graphql/playground"
+	"github.com/gin-gonic/gin"
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
@@ -37,8 +37,8 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	"github.com/gitstore-dev/gitstore/api/internal/health"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
+	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
-	"github.com/spf13/viper"
 	"github.com/vektah/gqlparser/v2/ast"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -85,73 +85,53 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, fmt.Errorf("create datastore: %w", err)
 	}
 	store = datastore.NewInstrumentedDatastore(store, cfg.Datastore.Backend, log)
+	ids := apiruntime.UUIDGenerator{}
 
 	gitClient, err := gitclient.NewClientWithAddr(cfg.Git.Grpc.Uri, cfg.Auth.Grpc.HmacSecret)
 	if err != nil {
-		store.Close()
+		_ = store.Close()
 		return nil, fmt.Errorf("connect git-service: %w", err)
 	}
-
 	registry, rbacReloader, providerShutdowns, err := buildProviderRegistry(cfg, log)
 	if err != nil {
-		gitClient.Close()
-		store.Close()
+		_ = gitClient.Close()
+		_ = store.Close()
 		return nil, fmt.Errorf("build auth provider registry: %w", err)
 	}
 	log.Info("auth providers ready",
-		zap.String("authn_chain", strings.Join(cfg.Auth.AuthN.Chain, ",")),
+		zap.Strings("authn_chain", cfg.Auth.AuthN.Chain),
 		zap.String("authz_provider", cfg.Auth.AuthZ.Provider),
 		zap.String("userdir_provider", cfg.Auth.UserDir.Provider),
 	)
 
-	gqlHandler, err := NewGraphQLHandler(store, gitClient, log, registry, clock, nil)
+	gqlRouter, err := NewGraphQLHandler(store, gitClient, log, registry, clock, ids)
 	if err != nil {
-		gitClient.Close()
-		store.Close()
+		_ = gitClient.Close()
+		_ = store.Close()
 		return nil, err
 	}
 
-	healthHandler := health.NewHandler(health.HandlerDeps{
-		Store:   store,
-		Logger:  log,
-		Version: version,
-		Clock:   clock,
-	})
-
-	mux := http.NewServeMux()
-	mux.Handle("/graphql", gqlHandler)
-	mux.Handle("/playground", playground.Handler("GraphQL Playground", "/graphql"))
-	mux.HandleFunc("/health", healthHandler.Health)
-	mux.HandleFunc("/ready", healthHandler.Ready)
-
-	var httpHandler http.Handler = mux
-	httpHandler = middleware.CORSMiddleware(httpHandler)
-	httpHandler = middleware.RequestIDMiddleware(httpHandler)
+	router := healthHandler(gqlRouter, store, log, clock)
+	var graphQlHandler http.Handler = router
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Api.Port),
-		Handler:      httpHandler,
+		Handler:      graphQlHandler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
-	gitResolver := func(namespace, repo string) (string, bool) {
-		ctx := context.Background()
-		ns, err := store.GetNamespaceByIdentifier(ctx, namespace)
-		if err != nil || ns == nil {
-			return "", false
-		}
-		mapping, err := store.LookupRepository(ctx, ns.ID, repo)
-		if err != nil || mapping == nil {
-			return "", false
-		}
-		return mapping.RepoID, true
-	}
-	gitMux := githttp.NewMux(gitClient, gitResolver, log)
-	gitServer := &http.Server{
+	gitHttpHandler := githttp.NewMuxWithStoreAndAuthz(githttp.SmartHttpDeps{
+		GitClient: gitClient,
+		Store:     store,
+		Logger:    log,
+		Ids:       ids,
+		Registry:  registry,
+	})
+	gitHttpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Api.GitPort),
-		Handler:      middleware.RequestIDMiddleware(gitMux),
+		Handler:      gitHttpHandler,
 		ReadTimeout:  0,
 		WriteTimeout: 0,
 		IdleTimeout:  60 * time.Second,
@@ -159,8 +139,8 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 
 	grpcListener, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Api.GrpcPort))
 	if err != nil {
-		gitClient.Close()
-		store.Close()
+		_ = gitClient.Close()
+		_ = store.Close()
 		return nil, fmt.Errorf("listen on catalog gRPC port %d: %w", cfg.Api.GrpcPort, err)
 	}
 	grpcServer := grpc.NewServer()
@@ -171,9 +151,9 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		Clock:     clock,
 	})
 	if err != nil {
-		grpcListener.Close()
-		gitClient.Close()
-		store.Close()
+		_ = grpcListener.Close()
+		_ = gitClient.Close()
+		_ = store.Close()
 		return nil, err
 	}
 	catalogv1.RegisterCatalogServiceServer(grpcServer, catalogServer)
@@ -184,7 +164,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		store:            store,
 		gitClient:        gitClient,
 		httpServer:       httpServer,
-		gitServer:        gitServer,
+		gitServer:        gitHttpServer,
 		grpcServer:       grpcServer,
 		grpcListener:     grpcListener,
 		rbacReloader:     rbacReloader,
@@ -193,7 +173,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 }
 
 // NewGraphQLHandler builds a GraphQL HTTP handler.
-func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log *zap.Logger, registry *auth.ProviderRegistry, clock apiruntime.Clock, ids apiruntime.IDGenerator) (http.Handler, error) {
+func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log *zap.Logger, registry *auth.ProviderRegistry, clock apiruntime.Clock, ids apiruntime.IDGenerator) (*gin.Engine, error) {
 	if registry == nil || registry.AuthN() == nil {
 		return nil, fmt.Errorf("app: auth provider registry is required")
 	}
@@ -227,41 +207,54 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 		Cache: lru.New[string](100),
 	})
 
-	gqlHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gqlServer.ServeHTTP(w, r)
+	gqlHandler := gin.HandlerFunc(func(c *gin.Context) {
+		gqlServer.ServeHTTP(c.Writer, c.Request)
 	})
 
-	return middleware.ChainAuthMiddleware(registry, log)(gqlHandler), nil
+	authenticateMiddleware := security.NewAuthenticate(registry, log)
+	rateLimitMiddleware := security.NewRateLimit(10, 20)
+	requestIdMiddleware := middleware.NewRequestId(ids)
+
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(requestIdMiddleware.RequestIdInserter)
+	r.Use(security.CorsConfiguration())
+	r.Use(rateLimitMiddleware.RateLimiter)
+	r.GET("/playground", playgroundHandler)
+	routerGroup := r.Group("/")
+	routerGroup.Use(authenticateMiddleware.Authenticator)
+	routerGroup.Use(security.SecureHeaders)
+	routerGroup.POST("/graphql", gqlHandler)
+	return r, nil
+}
+
+func playgroundHandler(c *gin.Context) {
+	h := playground.Handler("GraphQL Playground", "/graphql")
+	h.ServeHTTP(c.Writer, c.Request)
+}
+
+func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock) *gin.Engine {
+	healthHandler := health.NewHandler(health.HandlerDeps{
+		Store:   store,
+		Logger:  log,
+		Version: version,
+		Clock:   clock,
+	})
+
+	router.GET("/health", healthHandler.Health)
+	router.GET("/ready", healthHandler.Ready)
+	router.GET("/metrics", healthHandler.Metrics)
+	return router
 }
 
 // buildProviderRegistry constructs a ProviderRegistry from the application config.
-// It reads authn chain, authz provider, and userdir provider from cfg and environment.
+// It reads authn chain, authz provider, and userdir provider from the resolved config.
 // The second return value is non-nil when rbac-local is active — callers may use it
 // for SIGHUP-triggered policy reloads. The third return value lists providers that
 // own background goroutines and must be shut down when the server stops.
 func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderRegistry, policyReloader, []providerShutdowner, error) {
-	// Build a viper instance with the same env-var scheme so provider constructors
-	// can read their config using viper.GetString("auth.xxx") with the GITSTORE__ prefix.
-	v := viper.New()
-	v.SetEnvPrefix("GITSTORE")
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
-	v.AutomaticEnv()
-
-	// Seed values from the already-parsed config struct so defaults propagate even
-	// when env vars are absent.
-	v.SetDefault("auth.admin.username", cfg.Auth.Admin.Username)
-	v.SetDefault("auth.admin.password_hash", cfg.Auth.Admin.Password)
-	v.SetDefault("auth.jwt.secret", cfg.Auth.JWT.Secret)
-	v.SetDefault("auth.jwt.duration", cfg.Auth.JWT.Duration)
-	v.SetDefault("auth.jwt.issuer", cfg.Auth.JWT.Issuer)
-	v.SetDefault("auth.jwt.refresh_grace", cfg.Auth.JWT.RefreshGrace)
-	v.SetDefault("auth.authn.chain", cfg.Auth.AuthN.Chain)
-	v.SetDefault("auth.authz.provider", cfg.Auth.AuthZ.Provider)
-	v.SetDefault("auth.userdir.provider", cfg.Auth.UserDir.Provider)
-	v.SetDefault("auth.rbac.policy_file", cfg.Auth.RBAC.PolicyFile)
-
 	// Build AuthN providers in chain order.
-	chain := v.GetStringSlice("auth.authn.chain")
+	chain := cfg.Auth.AuthN.Chain
 	if len(chain) == 0 {
 		chain = []string{"static-admin", "anonymous"}
 	}
@@ -271,7 +264,7 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 	for _, name := range chain {
 		switch name {
 		case "static-admin":
-			p, err := staticadmin.New(v, log)
+			p, err := staticadmin.New(cfg.Auth, log)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("init static-admin provider: %w", err)
 			}
@@ -287,9 +280,9 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 	// Build AuthZ provider.
 	var authzProvider auth.AuthZProvider
 	var reloader policyReloader
-	switch v.GetString("auth.authz.provider") {
+	switch cfg.Auth.AuthZ.Provider {
 	case "rbac-local":
-		p, err := rbaclocal.New(v, log)
+		p, err := rbaclocal.New(cfg.Auth.RBAC, log)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("init rbac-local authz provider: %w", err)
 		}
@@ -299,7 +292,7 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 		// Default to allow-all so existing deployments without explicit config are unaffected.
 		authzProvider = allowall.New(log)
 	default:
-		return nil, nil, nil, fmt.Errorf("unknown authz provider %q", v.GetString("auth.authz.provider"))
+		return nil, nil, nil, fmt.Errorf("unknown authz provider %q", cfg.Auth.AuthZ.Provider)
 	}
 
 	// Build UserDir provider.
@@ -376,9 +369,9 @@ func (s *Server) Close() {
 		_ = s.grpcListener.Close()
 	}
 	if s.gitClient != nil {
-		s.gitClient.Close()
+		_ = s.gitClient.Close()
 	}
 	if s.store != nil {
-		s.store.Close()
+		_ = s.store.Close()
 	}
 }

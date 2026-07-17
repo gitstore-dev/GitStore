@@ -32,6 +32,30 @@ pub mod catalog_proto {
 use proto::git_service_server::GitService;
 use proto::*;
 
+use crate::git::hooks::HookContext;
+
+/// T047: Convert a proto PushContext into a HookContext for the pipeline.
+impl From<&PushContext> for HookContext {
+    fn from(ctx: &PushContext) -> Self {
+        let actor = ctx.actor.as_ref();
+        HookContext {
+            actor_subject: actor.map(|a| a.subject.clone()).unwrap_or_default(),
+            actor_auth_method: actor.map(|a| a.auth_method.clone()).unwrap_or_default(),
+            max_pack_size_bytes: ctx
+                .policy
+                .as_ref()
+                .map(|p| p.max_pack_size_bytes)
+                .unwrap_or(0),
+            max_file_size_bytes: ctx
+                .policy
+                .as_ref()
+                .map(|p| p.max_file_size_bytes)
+                .unwrap_or(0),
+            config_resource_version: ctx.config_resource_version.clone(),
+        }
+    }
+}
+
 pub struct GitServiceImpl {
     pub data_root: Arc<PathBuf>,
     pub repo_locks: Arc<DashMap<String, Arc<RwLock<()>>>>,
@@ -804,6 +828,28 @@ impl GitService for GitServiceImpl {
             .ok_or_else(|| Status::invalid_argument("empty stream"))?;
 
         let repo_id = first.repository_id.clone();
+
+        // T040: Validate push_context presence and repo_id consistency (FR-011).
+        let push_ctx = first.push_context.as_ref().ok_or_else(|| {
+            Status::invalid_argument("push_context is required on the first chunk")
+        })?;
+        if push_ctx.repository_id != repo_id {
+            return Err(Status::invalid_argument(format!(
+                "push_context.repository_id ({}) does not match chunk.repository_id ({})",
+                push_ctx.repository_id, repo_id
+            )));
+        }
+
+        // T041: Extract pack size limit before any pack I/O.
+        let max_pack_size_bytes: i64 = push_ctx
+            .policy
+            .as_ref()
+            .map(|p| p.max_pack_size_bytes)
+            .unwrap_or(0);
+
+        // T051: Build HookContext from validated PushContext.
+        let hook_ctx = crate::git::hooks::HookContext::from(push_ctx);
+
         let repo_path = resolve_repo_path(&self.data_root, &repo_id)?;
         let lock = get_or_insert_lock(&self.repo_locks, &repo_id);
         let _guard = lock.write().await;
@@ -823,6 +869,14 @@ impl GitService for GitServiceImpl {
             info!(repo_id = %repo_id, "receive_pack: branch deletion — skipping pack staging");
             None
         } else {
+            // T041: Check initial pack bytes against limit before sending to channel.
+            if max_pack_size_bytes > 0 && initial_pack.len() as i64 > max_pack_size_bytes {
+                return Err(Status::resource_exhausted(format!(
+                    "pack size exceeds limit of {} bytes",
+                    max_pack_size_bytes
+                )));
+            }
+
             // Channel bridge: tokio async stream → sync Read
             let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(16);
 
@@ -835,8 +889,16 @@ impl GitService for GitServiceImpl {
                 let tx2 = tx.clone();
                 tokio::spawn(async move {
                     let mut idx = 1u32;
+                    let mut total_bytes: i64 = 0;
                     while let Ok(Some(chunk)) = stream.message().await {
                         let bytes = chunk.pack_data.len();
+                        total_bytes += bytes as i64;
+                        if max_pack_size_bytes > 0 && total_bytes > max_pack_size_bytes {
+                            // Send the sentinel string so LimitedReader's map_err closure
+                            // can surface RESOURCE_EXHAUSTED instead of INTERNAL.
+                            let _ = tx2.send(b"pack size limit exceeded (streaming)".to_vec());
+                            break;
+                        }
                         if !chunk.pack_data.is_empty() && tx2.send(chunk.pack_data).is_err() {
                             break;
                         }
@@ -856,18 +918,58 @@ impl GitService for GitServiceImpl {
                 gix::open(&repo_path).map_err(|e| Status::internal(format!("open repo: {}", e)))?;
             let odb = (*repo_for_odb.objects).clone();
 
-            // Stage pack from channel reader in a blocking thread
+            // T041: Use a LimitedReader that enforces max_pack_size_bytes.
             let q = tokio::task::spawn_blocking(move || {
                 let reader = crate::git::pack_server::ChannelReader::new(rx);
-                crate::git::pack_server::stage_pack_from_reader(reader, Some(odb))
+                if max_pack_size_bytes > 0 {
+                    let limited = crate::git::pack_server::LimitedReader::new(
+                        reader,
+                        max_pack_size_bytes as u64,
+                    );
+                    crate::git::pack_server::stage_pack_from_reader(limited, Some(odb))
+                } else {
+                    crate::git::pack_server::stage_pack_from_reader(reader, Some(odb))
+                }
             })
             .await
             .map_err(|e| Status::internal(format!("spawn_blocking join: {}", e)))?
-            .map_err(|e| Status::internal(format!("stage pack: {}", e)))?;
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("pack size limit exceeded") {
+                    Status::resource_exhausted(msg)
+                } else {
+                    Status::internal(format!("stage pack: {}", e))
+                }
+            })?;
 
             info!(repo_id = %repo_id, "receive_pack: pack staged in quarantine");
             Some(q)
         };
+
+        // T042: Enforce blob size limit on quarantined objects before any ref update.
+        let max_file_size_bytes: i64 = first
+            .push_context
+            .as_ref()
+            .and_then(|ctx| ctx.policy.as_ref())
+            .map(|p| p.max_file_size_bytes)
+            .unwrap_or(0);
+        if max_file_size_bytes > 0 {
+            if let Some(ref q) = quarantine {
+                let pack_path = q.pack_path.clone();
+                let index_path = q.index_path.clone();
+                let limit = max_file_size_bytes as u64;
+                tokio::task::spawn_blocking(move || {
+                    crate::git::pack_server::check_blob_sizes_in_quarantine_paths(
+                        &pack_path,
+                        &index_path,
+                        limit,
+                    )
+                })
+                .await
+                .map_err(|e| Status::internal(format!("blob check join: {}", e)))?
+                .map_err(|e| Status::resource_exhausted(e.to_string()))?;
+            }
+        }
 
         // Build ref_updates from ref_commands
         let ref_updates: Vec<RefUpdate> = ref_commands
@@ -912,6 +1014,7 @@ impl GitService for GitServiceImpl {
                 &repo_path_pipeline,
                 &pipeline_updates,
                 quarantine_path.as_deref(),
+                &hook_ctx,
             )
             .await
         {
@@ -938,6 +1041,8 @@ impl GitService for GitServiceImpl {
         let accepted_updates_for_callbacks = accepted_updates.clone();
         let repo_path_commit = repo_path.clone();
         let pipeline_clone = Arc::clone(&pipeline);
+        let hook_ctx_txn = hook_ctx.clone();
+        let hook_ctx_post = hook_ctx.clone();
         // Result is either Ok(rt_committed) or Err(Status); we also need to know if the
         // reference-transaction veto fired so we can call the right observation callback.
         enum TxnOutcome {
@@ -1020,6 +1125,7 @@ impl GitService for GitServiceImpl {
                     pipeline_clone.run_reference_transaction_prepared(
                         &repo_path_commit,
                         &accepted_updates_clone,
+                        &hook_ctx_txn,
                     ),
                 )
             });
@@ -1061,7 +1167,12 @@ impl GitService for GitServiceImpl {
 
         info!(repo_id = %repo_id, "receive_pack: refs committed");
 
-        pipeline.run_post_receive(&repo_path, &accepted_updates_for_callbacks, &repo_id);
+        pipeline.run_post_receive(
+            &repo_path,
+            &accepted_updates_for_callbacks,
+            &repo_id,
+            &hook_ctx_post,
+        );
 
         let report_status = build_report_status(
             &ref_updates,
@@ -1890,5 +2001,283 @@ mod tests {
         let (ra, rb) = tokio::join!(h_a, h_b);
         assert!(!ra.unwrap().into_inner().commit_sha.is_empty());
         assert!(!rb.unwrap().into_inner().commit_sha.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // T031-T034, T045: receive_pack PushContext validation and policy enforcement
+    // -----------------------------------------------------------------------
+
+    const TEST_REPO_H: &str = "01960000-0000-7000-8000-000000000030";
+    const TEST_REPO_I: &str = "01960000-0000-7000-8000-000000000031";
+
+    /// Spawn an in-process tonic gRPC server and return a connected client.
+    /// The server is bound to a random OS-assigned port.
+    async fn make_grpc_client(
+        data_root: std::path::PathBuf,
+    ) -> proto::git_service_client::GitServiceClient<tonic::transport::Channel> {
+        use proto::git_service_server::GitServiceServer;
+
+        let svc = make_test_service(&data_root);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(GitServiceServer::new(svc))
+                .serve_with_incoming(incoming)
+                .await
+                .unwrap();
+        });
+        // Brief pause to let the server start accepting.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let url = format!("http://{}", addr);
+        proto::git_service_client::GitServiceClient::connect(url)
+            .await
+            .unwrap()
+    }
+
+    /// Builds a minimal delete-only ReceivePackRequest (no PACK data, no push_context).
+    fn delete_ref_cmd(repo_id: &str, ref_name: &str, old_oid: &str) -> ReceivePackRequest {
+        ReceivePackRequest {
+            repository_id: repo_id.to_string(),
+            ref_commands: vec![RefCommand {
+                old_oid: old_oid.to_string(),
+                new_oid: "0000000000000000000000000000000000000000".to_string(),
+                ref_name: ref_name.to_string(),
+            }],
+            pack_data: vec![],
+            is_last: true,
+            push_context: None,
+        }
+    }
+
+    /// Builds a minimal delete-only ReceivePackRequest with a valid push_context.
+    fn delete_ref_cmd_with_ctx(
+        repo_id: &str,
+        ref_name: &str,
+        old_oid: &str,
+        push_ctx: PushContext,
+    ) -> ReceivePackRequest {
+        ReceivePackRequest {
+            repository_id: repo_id.to_string(),
+            ref_commands: vec![RefCommand {
+                old_oid: old_oid.to_string(),
+                new_oid: "0000000000000000000000000000000000000000".to_string(),
+                ref_name: ref_name.to_string(),
+            }],
+            pack_data: vec![],
+            is_last: true,
+            push_context: Some(push_ctx),
+        }
+    }
+
+    /// Returns a minimal valid PushContext for `repo_id`.
+    fn minimal_push_ctx(repo_id: &str) -> PushContext {
+        PushContext {
+            repository_id: repo_id.to_string(),
+            namespace: "ns".to_string(),
+            repository_name: "repo".to_string(),
+            config_resource_version: String::new(),
+            actor: None,
+            policy: None,
+        }
+    }
+
+    /// Build a full pack file containing all objects reachable from `tip_oid` in `src_repo`.
+    /// Returns raw PACK bytes suitable for inclusion in a ReceivePackRequest.
+    fn build_pack_bytes_from_repo(src_repo: &gix::Repository, tip_oid: gix::ObjectId) -> Vec<u8> {
+        crate::git::pack_server::build_pack_for_wants(src_repo, &[tip_oid.to_string()], &[])
+            .expect("build pack for test")
+    }
+
+    #[tokio::test]
+    async fn test_receive_pack_rejects_missing_push_context() {
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_H);
+        let mut client = make_grpc_client(dir.path().to_path_buf()).await;
+
+        // Get current HEAD OID so we can form a valid ref command
+        let repo_path = fanout_path(dir.path(), TEST_REPO_H).unwrap();
+        let repo = gix::open(&repo_path).unwrap();
+        let head_oid = repo.head_id().unwrap().to_string();
+
+        // Send first chunk with NO push_context — must be rejected InvalidArgument
+        let chunks = vec![delete_ref_cmd(TEST_REPO_H, "refs/heads/main", &head_oid)];
+        let stream = tokio_stream::iter(chunks);
+        let result = client.receive_pack(stream).await;
+        let status = result.unwrap_err();
+        assert_eq!(
+            status.code(),
+            tonic::Code::InvalidArgument,
+            "missing push_context must return InvalidArgument, got: {:?}",
+            status
+        );
+    }
+
+    #[tokio::test]
+    async fn test_receive_pack_rejects_inconsistent_repo_id() {
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_H);
+        let mut client = make_grpc_client(dir.path().to_path_buf()).await;
+
+        let repo_path = fanout_path(dir.path(), TEST_REPO_H).unwrap();
+        let repo = gix::open(&repo_path).unwrap();
+        let head_oid = repo.head_id().unwrap().to_string();
+
+        // push_context.repository_id differs from chunk.repository_id — must be rejected
+        let mut ctx = minimal_push_ctx("different-uuid-that-does-not-match");
+        ctx.repository_id = "different-uuid-that-does-not-match".to_string();
+        let chunk = ReceivePackRequest {
+            repository_id: TEST_REPO_H.to_string(),
+            ref_commands: vec![RefCommand {
+                old_oid: head_oid.clone(),
+                new_oid: "0000000000000000000000000000000000000000".to_string(),
+                ref_name: "refs/heads/main".to_string(),
+            }],
+            pack_data: vec![],
+            is_last: true,
+            push_context: Some(ctx),
+        };
+        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        let status = result.unwrap_err();
+        assert_eq!(
+            status.code(),
+            tonic::Code::InvalidArgument,
+            "mismatched push_context.repository_id must return InvalidArgument, got: {:?}",
+            status
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pack_size_limit_enforced() {
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_I);
+        let mut client = make_grpc_client(dir.path().to_path_buf()).await;
+
+        // Build a push context with max_pack_size_bytes = 1 (tiny — any pack will exceed it)
+        let ctx = PushContext {
+            repository_id: TEST_REPO_I.to_string(),
+            namespace: "ns".to_string(),
+            repository_name: "repo".to_string(),
+            config_resource_version: String::new(),
+            actor: None,
+            policy: Some(PushPolicy {
+                max_pack_size_bytes: 1,
+                max_file_size_bytes: 0,
+            }),
+        };
+
+        // Build a pack payload: minimal data > 1 byte to trip the limit
+        // We'll send pack_data of 8 bytes (just enough to exceed 1-byte limit)
+        let chunk = ReceivePackRequest {
+            repository_id: TEST_REPO_I.to_string(),
+            ref_commands: vec![RefCommand {
+                old_oid: "0000000000000000000000000000000000000000".to_string(),
+                new_oid: "a".repeat(40),
+                ref_name: "refs/heads/feature".to_string(),
+            }],
+            pack_data: b"PACK\x00\x00\x00\x02".to_vec(), // 8 bytes > 1 byte limit
+            is_last: true,
+            push_context: Some(ctx),
+        };
+
+        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        let status = result.unwrap_err();
+        assert_eq!(
+            status.code(),
+            tonic::Code::ResourceExhausted,
+            "pack exceeding max_pack_size_bytes must return ResourceExhausted, got: {:?}",
+            status
+        );
+    }
+
+    #[tokio::test]
+    async fn test_file_size_limit_enforced() {
+        // Create a target repo (empty, to accept a new push) and a source repo with a commit.
+        let dir = TempDir::new().unwrap();
+        let target_id = TEST_REPO_I;
+
+        // Initialise an empty bare target repo that can accept a push.
+        let target_path = fanout_path(dir.path(), target_id).unwrap();
+        std::fs::create_dir_all(target_path.parent().unwrap()).unwrap();
+        gix::init_bare(&target_path).unwrap();
+
+        // Build a source repo with a commit whose blob is 7 bytes ("initial") > 1 byte limit.
+        let src_dir = TempDir::new().unwrap();
+        bare_repo_with_main(src_dir.path(), TEST_REPO_H);
+        let src_path = fanout_path(src_dir.path(), TEST_REPO_H).unwrap();
+        let src_repo = gix::open(&src_path).unwrap();
+        let tip_oid = src_repo.head_id().unwrap().detach();
+        let pack_bytes = build_pack_bytes_from_repo(&src_repo, tip_oid);
+
+        let mut client = make_grpc_client(dir.path().to_path_buf()).await;
+
+        let ctx = PushContext {
+            repository_id: target_id.to_string(),
+            namespace: "ns".to_string(),
+            repository_name: "repo".to_string(),
+            config_resource_version: String::new(),
+            actor: None,
+            policy: Some(PushPolicy {
+                max_pack_size_bytes: 0,
+                max_file_size_bytes: 1, // 1 byte — any blob will exceed this
+            }),
+        };
+
+        let chunk = ReceivePackRequest {
+            repository_id: target_id.to_string(),
+            ref_commands: vec![RefCommand {
+                old_oid: "0000000000000000000000000000000000000000".to_string(),
+                new_oid: tip_oid.to_string(),
+                ref_name: "refs/heads/main".to_string(),
+            }],
+            pack_data: pack_bytes,
+            is_last: true,
+            push_context: Some(ctx),
+        };
+
+        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        let status = result.unwrap_err();
+        assert_eq!(
+            status.code(),
+            tonic::Code::ResourceExhausted,
+            "blob exceeding max_file_size_bytes must return ResourceExhausted, got: {:?}",
+            status
+        );
+    }
+
+    #[tokio::test]
+    async fn test_zero_limits_mean_unlimited() {
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_H);
+        let mut client = make_grpc_client(dir.path().to_path_buf()).await;
+
+        let repo_path = fanout_path(dir.path(), TEST_REPO_H).unwrap();
+        let repo = gix::open(&repo_path).unwrap();
+        let head_oid = repo.head_id().unwrap().to_string();
+
+        // Both limits = 0 (unlimited) — a delete-only push with a large push_context should succeed
+        let ctx = PushContext {
+            repository_id: TEST_REPO_H.to_string(),
+            namespace: "ns".to_string(),
+            repository_name: "repo".to_string(),
+            config_resource_version: String::new(),
+            actor: None,
+            policy: Some(PushPolicy {
+                max_pack_size_bytes: 0,
+                max_file_size_bytes: 0,
+            }),
+        };
+        let chunk = delete_ref_cmd_with_ctx(TEST_REPO_H, "refs/heads/main", &head_oid, ctx);
+        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
+        // With zero limits the push should not be rejected for size reasons;
+        // it may fail for other reasons (e.g. ref update semantics) but not ResourceExhausted
+        if let Err(status) = &result {
+            assert_ne!(
+                status.code(),
+                tonic::Code::ResourceExhausted,
+                "zero limits must never trigger size rejection"
+            );
+        }
     }
 }

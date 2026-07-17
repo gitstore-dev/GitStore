@@ -4,7 +4,7 @@
 package memdb
 
 import (
-	memdb "github.com/hashicorp/go-memdb"
+	"github.com/hashicorp/go-memdb"
 )
 
 // schema defines all tables and indices for the in-memory datastore.

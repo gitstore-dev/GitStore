@@ -13,11 +13,11 @@ import (
 
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -33,21 +33,25 @@ func mustBcrypt(t *testing.T, password string) string {
 	return string(h)
 }
 
-func newTestViper(t *testing.T, duration string) *viper.Viper {
+func newTestConfig(t *testing.T, duration string) config.AuthConfig {
 	t.Helper()
-	v := viper.New()
-	v.SetDefault("auth.admin.username", "admin")
-	v.SetDefault("auth.admin.password_hash", mustBcrypt(t, "testpass"))
-	v.SetDefault("auth.jwt.secret", "test-secret")
-	v.SetDefault("auth.jwt.issuer", "gitstore")
-	v.SetDefault("auth.jwt.duration", duration)
-	v.SetDefault("auth.jwt.refresh_grace", "60s")
-	return v
+	return config.AuthConfig{
+		Admin: config.UserConfig{
+			Username: "admin",
+			Password: mustBcrypt(t, "testpass"),
+		},
+		JWT: config.JWTConfig{
+			Secret:       "test-secret",
+			Issuer:       "gitstore",
+			Duration:     duration,
+			RefreshGrace: "60s",
+		},
+	}
 }
 
-func newTestRegistry(t *testing.T, v *viper.Viper) (*authpkg.ProviderRegistry, *staticadmin.StaticAdminProvider) {
+func newTestRegistry(t *testing.T, cfg config.AuthConfig) (*authpkg.ProviderRegistry, *staticadmin.StaticAdminProvider) {
 	t.Helper()
-	p, err := staticadmin.New(v, zap.NewNop())
+	p, err := staticadmin.New(cfg, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(p.Shutdown)
 	chain := authpkg.NewChainedAuthN(p)
@@ -81,8 +85,8 @@ func ctxWithPrincipalAndRawToken(principal *authpkg.Principal, rawToken string) 
 // --- US1: Logout ---
 
 func TestLogout_AuthenticatedBearer_ReturnsSuccess(t *testing.T) {
-	v := newTestViper(t, "1h")
-	reg, p := newTestRegistry(t, v)
+	cfg := newTestConfig(t, "1h")
+	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
 	token, exp, err := p.IssueToken("admin")
@@ -104,8 +108,8 @@ func TestLogout_AuthenticatedBearer_ReturnsSuccess(t *testing.T) {
 }
 
 func TestLogout_UnauthenticatedCaller_ReturnsError(t *testing.T) {
-	v := newTestViper(t, "1h")
-	reg, _ := newTestRegistry(t, v)
+	cfg := newTestConfig(t, "1h")
+	reg, _ := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
 	// Anonymous principal (AuthMethod == "none")
@@ -116,8 +120,8 @@ func TestLogout_UnauthenticatedCaller_ReturnsError(t *testing.T) {
 }
 
 func TestLogout_NilPrincipal_ReturnsError(t *testing.T) {
-	v := newTestViper(t, "1h")
-	reg, _ := newTestRegistry(t, v)
+	cfg := newTestConfig(t, "1h")
+	reg, _ := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
 	_, err := r.Logout(context.Background(), model.LogoutInput{})
@@ -125,8 +129,8 @@ func TestLogout_NilPrincipal_ReturnsError(t *testing.T) {
 }
 
 func TestLogout_EmptyTokenID_NoOp_ReturnsSuccess(t *testing.T) {
-	v := newTestViper(t, "1h")
-	reg, _ := newTestRegistry(t, v)
+	cfg := newTestConfig(t, "1h")
+	reg, _ := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
 	// Basic Auth session — no TokenID
@@ -147,8 +151,8 @@ func TestLogout_EmptyTokenID_NoOp_ReturnsSuccess(t *testing.T) {
 // --- US2: RefreshToken ---
 
 func TestRefreshToken_ValidToken_ReturnsNewSession(t *testing.T) {
-	v := newTestViper(t, "1h")
-	reg, p := newTestRegistry(t, v)
+	cfg := newTestConfig(t, "1h")
+	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
 	token, _, err := p.IssueToken("admin")
@@ -167,8 +171,8 @@ func TestRefreshToken_ValidToken_ReturnsNewSession(t *testing.T) {
 }
 
 func TestRefreshToken_ExpiredWithinGrace_Succeeds(t *testing.T) {
-	v := newTestViper(t, "-30s") // token expired 30s ago, grace is 60s
-	reg, p := newTestRegistry(t, v)
+	cfg := newTestConfig(t, "-30s") // token expired 30s ago, grace is 60s
+	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
 	token, _, err := p.IssueToken("admin")
@@ -184,8 +188,8 @@ func TestRefreshToken_ExpiredWithinGrace_Succeeds(t *testing.T) {
 }
 
 func TestRefreshToken_ExpiredBeyondGrace_ReturnsError(t *testing.T) {
-	v := newTestViper(t, "-5m") // token expired 5 minutes ago, grace is 60s
-	reg, p := newTestRegistry(t, v)
+	cfg := newTestConfig(t, "-5m") // token expired 5 minutes ago, grace is 60s
+	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
 	token, _, err := p.IssueToken("admin")
@@ -199,8 +203,8 @@ func TestRefreshToken_ExpiredBeyondGrace_ReturnsError(t *testing.T) {
 }
 
 func TestRefreshToken_RevokedToken_ReturnsError(t *testing.T) {
-	v := newTestViper(t, "1h")
-	reg, p := newTestRegistry(t, v)
+	cfg := newTestConfig(t, "1h")
+	reg, p := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
 	token, exp, err := p.IssueToken("admin")
@@ -218,8 +222,8 @@ func TestRefreshToken_RevokedToken_ReturnsError(t *testing.T) {
 }
 
 func TestRefreshToken_NoRawToken_ReturnsError(t *testing.T) {
-	v := newTestViper(t, "1h")
-	reg, _ := newTestRegistry(t, v)
+	cfg := newTestConfig(t, "1h")
+	reg, _ := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
 	// No raw token in context — unauthenticated or Basic Auth session
@@ -233,8 +237,8 @@ func TestRefreshToken_NoRawToken_ReturnsError(t *testing.T) {
 // --- US3: Login migration ---
 
 func TestLogin_ValidCredentials_ReturnsSession(t *testing.T) {
-	v := newTestViper(t, "1h")
-	reg, _ := newTestRegistry(t, v)
+	cfg := newTestConfig(t, "1h")
+	reg, _ := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
 	input := model.LoginInput{Username: "admin", Password: "testpass"}
@@ -251,8 +255,8 @@ func TestLogin_ValidCredentials_ReturnsSession(t *testing.T) {
 }
 
 func TestLogin_InvalidPassword_ReturnsError(t *testing.T) {
-	v := newTestViper(t, "1h")
-	reg, _ := newTestRegistry(t, v)
+	cfg := newTestConfig(t, "1h")
+	reg, _ := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
 	_, err := r.Login(context.Background(), model.LoginInput{Username: "admin", Password: "wrongpass"})

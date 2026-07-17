@@ -117,6 +117,6 @@ type Datastore interface {
 	TransferRepository(ctx context.Context, repoID, fromNamespaceID, toNamespaceID string) error
 	DeleteNamespaceMapping(ctx context.Context, namespaceID, name string) error
 
-	// Lifecycle
+	// Close lifecycle function
 	Close() error
 }

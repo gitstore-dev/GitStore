@@ -7,31 +7,39 @@ package middleware
 
 import (
 	"context"
-	"net/http"
 
-	"github.com/google/uuid"
+	"github.com/gin-gonic/gin"
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 )
 
 type contextKey string
 
 const RequestIDKey contextKey = "request_id"
 
-// RequestIDMiddleware adds a unique request ID to each request
-func RequestIDMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check if request ID already exists in header
-		requestID := r.Header.Get("X-Request-ID")
-		if requestID == "" {
-			requestID = uuid.New().String()
-		}
+type RequestId struct {
+	ids apiruntime.IDGenerator
+}
 
-		// Add request ID to response header
-		w.Header().Set("X-Request-ID", requestID)
+func NewRequestId(ids apiruntime.IDGenerator) RequestId {
+	return RequestId{
+		ids: ids,
+	}
+}
 
-		// Add request ID to context
-		ctx := context.WithValue(r.Context(), RequestIDKey, requestID)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+// RequestIdInserter adds X-Request-Id response header per request pipeline
+func (req *RequestId) RequestIdInserter(c *gin.Context) {
+	// Check if request ID already exists in header
+	requestID := c.GetHeader("X-Request-ID")
+	if requestID == "" {
+		requestID = req.ids.NewID()
+	}
+
+	c.Header("X-Request-ID", requestID)
+
+	// Add request ID to context
+	ctx := context.WithValue(c.Request.Context(), RequestIDKey, requestID)
+	c.Request = c.Request.WithContext(ctx)
+	c.Next()
 }
 
 // GetRequestID retrieves the request ID from context

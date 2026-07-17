@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/spf13/viper"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -32,25 +32,25 @@ type StaticAdminProvider struct {
 	logger       *zap.Logger
 }
 
-func New(cfg *viper.Viper, logger *zap.Logger) (*StaticAdminProvider, error) {
-	username := cfg.GetString("auth.admin.username")
+func New(cfg config.AuthConfig, logger *zap.Logger) (*StaticAdminProvider, error) {
+	username := cfg.Admin.Username
 	if username == "" {
 		username = "admin"
 	}
-	hash := cfg.GetString("auth.admin.password_hash")
+	hash := cfg.Admin.Password
 	if hash == "" {
 		return nil, errors.New("staticadmin: GITSTORE_AUTH__ADMIN__PASSWORD_HASH is required")
 	}
-	secret := cfg.GetString("auth.jwt.secret")
+	secret := cfg.JWT.Secret
 	if secret == "" {
 		return nil, errors.New("staticadmin: GITSTORE_AUTH__JWT__SECRET is required")
 	}
-	issuer := cfg.GetString("auth.jwt.issuer")
+	issuer := cfg.JWT.Issuer
 	if issuer == "" {
 		issuer = "gitstore"
 	}
 	duration := 24 * time.Hour
-	if d := cfg.GetString("auth.jwt.duration"); d != "" {
+	if d := cfg.JWT.Duration; d != "" {
 		parsed, err := time.ParseDuration(d)
 		if err != nil {
 			return nil, fmt.Errorf("staticadmin: invalid jwt duration %q: %w", d, err)
@@ -58,7 +58,7 @@ func New(cfg *viper.Viper, logger *zap.Logger) (*StaticAdminProvider, error) {
 		duration = parsed
 	}
 	refreshGrace := 60 * time.Second
-	if g := cfg.GetString("auth.jwt.refresh_grace"); g != "" {
+	if g := cfg.JWT.RefreshGrace; g != "" {
 		parsed, err := time.ParseDuration(g)
 		if err != nil {
 			return nil, fmt.Errorf("staticadmin: invalid refresh_grace %q: %w", g, err)

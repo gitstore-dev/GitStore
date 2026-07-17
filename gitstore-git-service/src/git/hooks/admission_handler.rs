@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use tracing::error;
 
-use super::{AdmissionDecision, AdmissionHandler, RefUpdate};
+use super::{AdmissionDecision, AdmissionHandler, HookContext, RefUpdate};
 use crate::git::tree_diff::{collect_diff_paths_from_trees, collect_paths_from_tree, get_tree_id};
 
 // Re-export catalog proto types.
@@ -57,7 +57,14 @@ impl AdmissionHandler for AdmissionControlHandler {
         updates: &[RefUpdate],
         repository_id: &str,
         git_dir: &std::path::Path,
+        hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
+        tracing::info!(
+            actor_subject = %hook_ctx.actor_subject,
+            actor_auth_method = %hook_ctx.actor_auth_method,
+            repository_id,
+            "admission_control: admit called"
+        );
         // Open the repository once for all matching updates so we don't pay
         // a gix::open (config read + ODB setup) per ref update in a multi-ref push.
         let repo = if git_dir.as_os_str().is_empty() {
@@ -216,6 +223,18 @@ mod tests {
     use tokio::time::Duration;
     use tonic::{transport::Server, Request, Response, Status};
 
+    use super::super::HookContext;
+
+    fn make_hook_context(actor_subject: &str) -> HookContext {
+        HookContext {
+            actor_subject: actor_subject.to_string(),
+            actor_auth_method: "basic".to_string(),
+            max_pack_size_bytes: 0,
+            max_file_size_bytes: 0,
+            config_resource_version: String::new(),
+        }
+    }
+
     struct MockCatalogService {
         admit_call_count: Arc<AtomicU32>,
     }
@@ -282,7 +301,13 @@ mod tests {
 
         let updates = vec![make_update("refs/heads/main", false)];
         let result = handler
-            .admit("post-receive", &updates, "repo-1", std::path::Path::new(""))
+            .admit(
+                "post-receive",
+                &updates,
+                "repo-1",
+                std::path::Path::new(""),
+                &HookContext::default(),
+            )
             .await
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
@@ -308,7 +333,13 @@ mod tests {
 
         let updates = vec![make_update("refs/heads/feature/my-feature", false)];
         let result = handler
-            .admit("post-receive", &updates, "repo-1", std::path::Path::new(""))
+            .admit(
+                "post-receive",
+                &updates,
+                "repo-1",
+                std::path::Path::new(""),
+                &HookContext::default(),
+            )
             .await
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
@@ -331,7 +362,13 @@ mod tests {
 
         let updates = vec![make_update("refs/heads/main", false)];
         let result = handler
-            .admit("post-receive", &updates, "repo-1", std::path::Path::new(""))
+            .admit(
+                "post-receive",
+                &updates,
+                "repo-1",
+                std::path::Path::new(""),
+                &HookContext::default(),
+            )
             .await
             .unwrap();
         // Must always return Accept — errors are fire-and-forget
@@ -350,7 +387,13 @@ mod tests {
 
         let updates = vec![make_update("refs/heads/main", true)]; // zero old_oid
         let result = handler
-            .admit("post-receive", &updates, "repo-1", std::path::Path::new(""))
+            .admit(
+                "post-receive",
+                &updates,
+                "repo-1",
+                std::path::Path::new(""),
+                &HookContext::default(),
+            )
             .await
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
@@ -376,7 +419,13 @@ mod tests {
 
         let updates = vec![make_update("refs/heads/main-old", false)];
         let result = handler
-            .admit("post-receive", &updates, "repo-1", std::path::Path::new(""))
+            .admit(
+                "post-receive",
+                &updates,
+                "repo-1",
+                std::path::Path::new(""),
+                &HookContext::default(),
+            )
             .await
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
@@ -410,6 +459,7 @@ mod tests {
                 &[update],
                 "repo-1",
                 std::path::Path::new(""),
+                &HookContext::default(),
             )
             .await
             .unwrap();
@@ -444,6 +494,7 @@ mod tests {
                 &[update],
                 "repo-1",
                 std::path::Path::new(""),
+                &HookContext::default(),
             )
             .await
             .unwrap();
@@ -469,7 +520,13 @@ mod tests {
 
         let updates = vec![make_update("refs/heads/feature/my-feature", false)];
         let result = handler
-            .admit("post-receive", &updates, "repo-1", std::path::Path::new(""))
+            .admit(
+                "post-receive",
+                &updates,
+                "repo-1",
+                std::path::Path::new(""),
+                &HookContext::default(),
+            )
             .await
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
@@ -720,6 +777,41 @@ mod tests {
             paths.contains(&"catalog/widget.md".to_string()),
             "new subtree file must be emitted: {:?}",
             paths
+        );
+    }
+
+    // T043: calling admit with HookContext carrying actor_subject logs the subject.
+    #[tracing_test::traced_test]
+    #[tokio::test]
+    async fn test_hook_context_actor_subject_logged() {
+        let count = Arc::new(AtomicU32::new(0));
+        let addr = start_mock_server(count.clone()).await;
+
+        let handler = AdmissionControlHandler::connect(&addr, "refs/heads/main".to_string())
+            .await
+            .unwrap();
+
+        let hook_ctx = make_hook_context("test-user");
+        let updates = vec![make_update("refs/heads/main", false)];
+        let result = handler
+            .admit(
+                "post-receive",
+                &updates,
+                "repo-1",
+                std::path::Path::new(""),
+                &hook_ctx,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, AdmissionDecision::Accept));
+
+        // Allow the spawned task time to complete.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        // Verify actor_subject is present in the captured log output.
+        assert!(
+            logs_contain("test-user"),
+            "actor_subject must appear in log"
         );
     }
 }

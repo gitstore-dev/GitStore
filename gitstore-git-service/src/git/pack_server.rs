@@ -10,7 +10,7 @@ use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 use gix::refs::TargetRef;
 use tracing::info;
 
-use super::hooks::RefUpdate;
+use super::hooks::{HookContext, RefUpdate};
 
 /// In-process replacement for the four `git upload-pack` / `git receive-pack`
 /// shell-out call sites in the HTTP git server.
@@ -148,6 +148,7 @@ impl HttpPackServer {
                 &self.repo_path,
                 &hook_updates,
                 quarantine_path.as_deref(),
+                &HookContext::default(),
             ))
         });
 
@@ -242,7 +243,11 @@ impl HttpPackServer {
             // reference-transaction/prepared veto check (sync path uses NoopAdmissionHandler).
             let veto_result = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(
-                    pipeline.run_reference_transaction_prepared(&self.repo_path, &accepted_updates),
+                    pipeline.run_reference_transaction_prepared(
+                        &self.repo_path,
+                        &accepted_updates,
+                        &HookContext::default(),
+                    ),
                 )
             });
 
@@ -282,7 +287,12 @@ impl HttpPackServer {
             drop(quarantine);
         }
 
-        pipeline.run_post_receive(&self.repo_path, &accepted_updates, "");
+        pipeline.run_post_receive(
+            &self.repo_path,
+            &accepted_updates,
+            "",
+            &HookContext::default(),
+        );
 
         // Build report-status response.
         let accepted_set: std::collections::HashSet<usize> =
@@ -731,6 +741,37 @@ pub struct Quarantine {
     pub num_objects: u32,
 }
 
+/// A `Read` impl that wraps another reader and returns an error when a byte limit is exceeded.
+pub struct LimitedReader<R: std::io::Read> {
+    inner: R,
+    limit: u64,
+    read_so_far: u64,
+}
+
+impl<R: std::io::Read> LimitedReader<R> {
+    pub fn new(inner: R, limit: u64) -> Self {
+        Self {
+            inner,
+            limit,
+            read_so_far: 0,
+        }
+    }
+}
+
+impl<R: std::io::Read> std::io::Read for LimitedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read_so_far += n as u64;
+        if self.read_so_far > self.limit {
+            return Err(std::io::Error::other(format!(
+                "pack size limit exceeded: read {} bytes, limit is {} bytes",
+                self.read_so_far, self.limit
+            )));
+        }
+        Ok(n)
+    }
+}
+
 /// A `Read` impl that drains a sync_channel receiver of `Vec<u8>` chunks.
 pub struct ChannelReader {
     pub rx: std::sync::mpsc::Receiver<Vec<u8>>,
@@ -842,6 +883,81 @@ fn move_file(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
     }
     std::fs::copy(src, dst).context("copy file")?;
     std::fs::remove_file(src).context("remove source file")?;
+    Ok(())
+}
+
+/// Check that no blob in the quarantined pack exceeds `max_file_size_bytes`.
+/// Returns an error naming the first offending object if the limit is exceeded.
+/// A limit of 0 means "no limit enforced".
+pub fn check_blob_sizes_in_quarantine(q: &Quarantine, max_file_size_bytes: u64) -> Result<()> {
+    check_blob_sizes_in_quarantine_paths(&q.pack_path, &q.index_path, max_file_size_bytes)
+}
+
+/// Path-based variant of [`check_blob_sizes_in_quarantine`] — used from async contexts
+/// where passing `&Quarantine` across `spawn_blocking` is not possible.
+pub fn check_blob_sizes_in_quarantine_paths(
+    pack_path: &std::path::Path,
+    index_path: &std::path::Path,
+    max_file_size_bytes: u64,
+) -> Result<()> {
+    if max_file_size_bytes == 0 {
+        return Ok(());
+    }
+
+    let pack_file = gix_pack::data::File::at(pack_path, gix::hash::Kind::Sha1)
+        .with_context(|| format!("open quarantine pack {}", pack_path.display()))?;
+    let index_file = gix_pack::index::File::at(index_path, gix::hash::Kind::Sha1)
+        .with_context(|| format!("open quarantine index {}", index_path.display()))?;
+
+    for entry in index_file.iter() {
+        let pack_entry = pack_file
+            .entry(entry.pack_offset)
+            .with_context(|| format!("read pack entry at offset {}", entry.pack_offset))?;
+        // Check non-delta blobs directly. Delta entries (OFS_DELTA / REF_DELTA) that
+        // resolve to blobs must be decoded to obtain the true object size; we use
+        // decompressed_size only for the base-object (Blob) case where it IS the
+        // uncompressed blob size.
+        match pack_entry.header {
+            gix_pack::data::entry::Header::Blob => {
+                if pack_entry.decompressed_size > max_file_size_bytes {
+                    anyhow::bail!(
+                        "blob {} has size {} bytes which exceeds the {} byte file size limit",
+                        entry.oid,
+                        pack_entry.decompressed_size,
+                        max_file_size_bytes
+                    );
+                }
+            }
+            gix_pack::data::entry::Header::OfsDelta { .. }
+            | gix_pack::data::entry::Header::RefDelta { .. } => {
+                // Delta-encoded entry: decode to resolve the true object size and kind.
+                let mut out = Vec::new();
+                let mut inflate = gix::features::zlib::Inflate::default();
+                let outcome = pack_file
+                    .decode_entry(
+                        pack_entry,
+                        &mut out,
+                        &mut inflate,
+                        &|_, _| None,
+                        &mut gix_pack::cache::Never,
+                    )
+                    .with_context(|| {
+                        format!("decode delta entry at offset {}", entry.pack_offset)
+                    })?;
+                if outcome.kind == gix::object::Kind::Blob
+                    && outcome.object_size > max_file_size_bytes
+                {
+                    anyhow::bail!(
+                        "blob {} has size {} bytes which exceeds the {} byte file size limit",
+                        entry.oid,
+                        outcome.object_size,
+                        max_file_size_bytes
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
     Ok(())
 }
 

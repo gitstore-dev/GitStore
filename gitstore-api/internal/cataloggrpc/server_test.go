@@ -1314,7 +1314,7 @@ body
 // ---------------------------------------------------------------------------
 
 // newTestDatastore creates a fresh in-memory store pre-seeded with a namespace
-// (identifier "gitstore") and a repository (ID "repo-1") so that
+// (identifier "gitstore") and a repository (ID "00000000-0000-0000-0000-000000000001") so that
 // AdmitResources can resolve the namespace identifier from the push context.
 func newTestDatastore(t *testing.T) datastore.Datastore {
 	t.Helper()
@@ -1907,8 +1907,8 @@ func TestOperationForEntryReturnsCachedObject(t *testing.T) {
 // Before T020-T021: admitProduct calls GetProductByName internally (after operationForEntry
 // may also call it) → potentially 2 calls. After refactor: exactly 1 call total.
 func TestAdmitProductSingleDBRead(t *testing.T) {
-	real := newTestDatastore(t)
-	spy := &spyDatastore{Datastore: real}
+	store := newTestDatastore(t)
+	spy := &spyDatastore{Datastore: store}
 	zero := strings.Repeat("0", 40)
 	a := strings.Repeat("a", 40)
 	b := strings.Repeat("b", 40)

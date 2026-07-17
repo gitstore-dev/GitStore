@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use gitstore::git::hooks::{
-    AdmissionDecision, AdmissionHandler, RefUpdate, ResourceBlob, ValidationHandler,
+    AdmissionDecision, AdmissionHandler, HookContext, RefUpdate, ResourceBlob, ValidationHandler,
 };
 
 /// Create a bare git repository at `dir` and return its path.
@@ -115,6 +115,7 @@ impl AdmissionHandler for RejectingAdmissionHandler {
         _updates: &[RefUpdate],
         _repository_id: &str,
         _git_dir: &std::path::Path,
+        _hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
         Ok(AdmissionDecision::Reject(self.0.clone()))
     }
@@ -131,6 +132,7 @@ impl AdmissionHandler for PerRefRejectingHandler {
         updates: &[RefUpdate],
         _repository_id: &str,
         _git_dir: &std::path::Path,
+        _hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
         // When called per-ref (single update), identify position by ref_name tag
         // The handler is called once per ref, so updates.len() == 1 in update phase.
@@ -161,6 +163,7 @@ impl AdmissionHandler for SlowAdmissionHandler {
         _updates: &[RefUpdate],
         _repository_id: &str,
         _git_dir: &std::path::Path,
+        _hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
         tokio::time::sleep(Duration::from_secs(10)).await;
         Ok(AdmissionDecision::Accept)
@@ -185,6 +188,7 @@ impl AdmissionHandler for CountingAdmissionHandler {
         _updates: &[RefUpdate],
         _repository_id: &str,
         _git_dir: &std::path::Path,
+        _hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(AdmissionDecision::Accept)
@@ -200,7 +204,11 @@ pub struct PerRefRejectingValidationHandler(pub std::collections::HashSet<usize>
 
 #[async_trait]
 impl ValidationHandler for PerRefRejectingValidationHandler {
-    async fn validate(&self, _blobs: &[ResourceBlob]) -> anyhow::Result<AdmissionDecision> {
+    async fn validate(
+        &self,
+        _blobs: &[ResourceBlob],
+        _hook_ctx: &HookContext,
+    ) -> anyhow::Result<AdmissionDecision> {
         Ok(AdmissionDecision::Accept)
     }
 }
@@ -210,7 +218,11 @@ pub struct RejectingValidationHandler(pub String);
 
 #[async_trait]
 impl ValidationHandler for RejectingValidationHandler {
-    async fn validate(&self, _blobs: &[ResourceBlob]) -> anyhow::Result<AdmissionDecision> {
+    async fn validate(
+        &self,
+        _blobs: &[ResourceBlob],
+        _hook_ctx: &HookContext,
+    ) -> anyhow::Result<AdmissionDecision> {
         Ok(AdmissionDecision::Reject(self.0.clone()))
     }
 }
@@ -220,7 +232,11 @@ pub struct SlowValidationHandler;
 
 #[async_trait]
 impl ValidationHandler for SlowValidationHandler {
-    async fn validate(&self, _blobs: &[ResourceBlob]) -> anyhow::Result<AdmissionDecision> {
+    async fn validate(
+        &self,
+        _blobs: &[ResourceBlob],
+        _hook_ctx: &HookContext,
+    ) -> anyhow::Result<AdmissionDecision> {
         tokio::time::sleep(Duration::from_secs(10)).await;
         Ok(AdmissionDecision::Accept)
     }
@@ -238,7 +254,11 @@ impl CountingValidationHandler {
 
 #[async_trait]
 impl ValidationHandler for CountingValidationHandler {
-    async fn validate(&self, _blobs: &[ResourceBlob]) -> anyhow::Result<AdmissionDecision> {
+    async fn validate(
+        &self,
+        _blobs: &[ResourceBlob],
+        _hook_ctx: &HookContext,
+    ) -> anyhow::Result<AdmissionDecision> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(AdmissionDecision::Accept)
     }

@@ -95,6 +95,9 @@ func (c *Client) ReceivePack(ctx context.Context, repoID string, body io.Reader)
 		return nil, fmt.Errorf("parse ref commands: %w", err)
 	}
 
+	// Read PushContext from context — set by PushContextInserter middleware.
+	pushCtx := PushContextFromContext(ctx)
+
 	const chunkSize = 64 * 1024
 	buf := make([]byte, chunkSize)
 	first := true
@@ -108,6 +111,7 @@ func (c *Client) ReceivePack(ctx context.Context, repoID string, body io.Reader)
 					RefCommands:  refCmds,
 					PackData:     buf[:n],
 					IsLast:       readErr == io.EOF,
+					PushContext:  pushCtx,
 				}
 				first = false
 			} else {
@@ -134,6 +138,7 @@ func (c *Client) ReceivePack(ctx context.Context, repoID string, body io.Reader)
 			RepositoryId: repoID,
 			RefCommands:  refCmds,
 			IsLast:       true,
+			PushContext:  pushCtx,
 		}); err != nil {
 			return nil, fmt.Errorf("send ref-only chunk: %w", err)
 		}
