@@ -15,7 +15,7 @@ use crate::config::GitReceivePackHooks;
 use crate::git::tree_diff::{decode_tree, get_tree_id, make_path};
 
 // ---------------------------------------------------------------------------
-// Shared data type
+// Shared data types
 // ---------------------------------------------------------------------------
 
 /// A single ref update passed to all hook phases.
@@ -24,6 +24,23 @@ pub struct RefUpdate {
     pub ref_name: String,
     pub old_oid: String,
     pub new_oid: String,
+}
+
+/// Typed actor and policy context propagated through the hook pipeline.
+/// Derived from the `PushContext` proto on the first gRPC chunk; immutable for
+/// the lifetime of the push. Every pipeline stage receives a reference to this.
+#[derive(Clone, Debug, Default)]
+pub struct HookContext {
+    /// Principal identifier (e.g. "admin", OIDC sub claim).
+    pub actor_subject: String,
+    /// Auth mechanism (e.g. "basic", "bearer").
+    pub actor_auth_method: String,
+    /// Pack size limit; 0 = unlimited.
+    pub max_pack_size_bytes: i64,
+    /// Per-blob size limit; 0 = unlimited.
+    pub max_file_size_bytes: i64,
+    /// Opaque audit tag from the datastore record.
+    pub config_resource_version: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +97,11 @@ pub struct ResourceBlob {
 /// from the quarantine area and returns an admission decision.
 #[async_trait]
 pub trait ValidationHandler: Send + Sync {
-    async fn validate(&self, blobs: &[ResourceBlob]) -> anyhow::Result<AdmissionDecision>;
+    async fn validate(
+        &self,
+        blobs: &[ResourceBlob],
+        hook_ctx: &HookContext,
+    ) -> anyhow::Result<AdmissionDecision>;
 }
 
 /// Default no-op implementation — always accepts.
@@ -88,7 +109,11 @@ pub struct NoopValidationHandler;
 
 #[async_trait]
 impl ValidationHandler for NoopValidationHandler {
-    async fn validate(&self, _blobs: &[ResourceBlob]) -> anyhow::Result<AdmissionDecision> {
+    async fn validate(
+        &self,
+        _blobs: &[ResourceBlob],
+        _hook_ctx: &HookContext,
+    ) -> anyhow::Result<AdmissionDecision> {
         Ok(AdmissionDecision::Accept)
     }
 }
@@ -106,6 +131,7 @@ pub trait AdmissionHandler: Send + Sync {
         updates: &[RefUpdate],
         repository_id: &str,
         git_dir: &std::path::Path,
+        hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision>;
 }
 
@@ -120,6 +146,7 @@ impl AdmissionHandler for NoopAdmissionHandler {
         _updates: &[RefUpdate],
         _repository_id: &str,
         _git_dir: &std::path::Path,
+        _hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
         Ok(AdmissionDecision::Accept)
     }
@@ -180,13 +207,19 @@ impl HookPipeline {
         git_dir: &Path,
         updates: &[RefUpdate],
         quarantine_dir: Option<&Path>,
+        hook_ctx: &HookContext,
     ) -> Result<Vec<usize>, HookRejection> {
         // --- pre-receive (once per push, all-or-nothing) ---
         if self.config.pre_receive.enabled {
             let decision = self
-                .run_schema_validation("pre-receive", git_dir, updates, quarantine_dir, || {
-                    run_pre_receive(git_dir, updates)
-                })
+                .run_schema_validation(
+                    "pre-receive",
+                    git_dir,
+                    updates,
+                    quarantine_dir,
+                    hook_ctx,
+                    || run_pre_receive(git_dir, updates),
+                )
                 .await;
             if let HookDecision::Reject(reason) = decision {
                 let reason = non_empty(reason, "rejected by pre-receive");
@@ -207,9 +240,14 @@ impl HookPipeline {
         // --- proc-receive (once per push, all-or-nothing) ---
         if self.config.proc_receive.enabled {
             let decision = self
-                .run_schema_validation("proc-receive", git_dir, updates, quarantine_dir, || {
-                    run_proc_receive(git_dir, updates)
-                })
+                .run_schema_validation(
+                    "proc-receive",
+                    git_dir,
+                    updates,
+                    quarantine_dir,
+                    hook_ctx,
+                    || run_proc_receive(git_dir, updates),
+                )
                 .await;
             if let HookDecision::Reject(reason) = decision {
                 let reason = non_empty(reason, "rejected by proc-receive");
@@ -236,7 +274,7 @@ impl HookPipeline {
             }
             let single = std::slice::from_ref(update);
             let decision = self
-                .run_schema_validation("update", git_dir, single, quarantine_dir, || {
+                .run_schema_validation("update", git_dir, single, quarantine_dir, hook_ctx, || {
                     run_update(git_dir, update)
                 })
                 .await;
@@ -268,6 +306,7 @@ impl HookPipeline {
         &self,
         git_dir: &Path,
         updates: &[RefUpdate],
+        hook_ctx: &HookContext,
     ) -> Result<(), HookRejection> {
         if !self.config.reference_transaction.enabled {
             return Ok(());
@@ -279,6 +318,7 @@ impl HookPipeline {
                 git_dir,
                 updates,
                 None,
+                hook_ctx,
                 || HookDecision::Accept,
             )
             .await;
@@ -334,7 +374,13 @@ impl HookPipeline {
 
     /// Called after refs are committed. Spawns the admission control handler
     /// (fire-and-forget) and logs phase completion.
-    pub fn run_post_receive(&self, git_dir: &Path, updates: &[RefUpdate], repository_id: &str) {
+    pub fn run_post_receive(
+        &self,
+        git_dir: &Path,
+        updates: &[RefUpdate],
+        repository_id: &str,
+        hook_ctx: &HookContext,
+    ) {
         if !self.config.post_receive.enabled {
             return;
         }
@@ -345,6 +391,7 @@ impl HookPipeline {
             let updates_owned = updates.to_vec();
             let repository_id = repository_id.to_string();
             let git_dir_owned = git_dir.to_path_buf();
+            let hook_ctx_owned = hook_ctx.clone();
             tokio::spawn(async move {
                 if let Err(e) = handler
                     .admit(
@@ -352,6 +399,7 @@ impl HookPipeline {
                         &updates_owned,
                         &repository_id,
                         &git_dir_owned,
+                        &hook_ctx_owned,
                     )
                     .await
                 {
@@ -386,6 +434,7 @@ impl HookPipeline {
         git_dir: &Path,
         updates: &[RefUpdate],
         quarantine_dir: Option<&Path>,
+        hook_ctx: &HookContext,
         phase_fn: F,
     ) -> HookDecision
     where
@@ -401,7 +450,7 @@ impl HookPipeline {
             let blobs = extract_resource_blobs(git_dir, updates, quarantine_dir);
             let result = tokio::time::timeout(
                 self.schema_validation_timeout,
-                self.validation_handler.validate(&blobs),
+                self.validation_handler.validate(&blobs, hook_ctx),
             )
             .await;
             let duration_ms = start.elapsed().as_millis() as u64;
@@ -432,7 +481,8 @@ impl HookPipeline {
         if phase == self.admission_control_phase && phase != "post-receive" {
             let result = tokio::time::timeout(
                 self.schema_validation_timeout,
-                self.admission_handler.admit(phase, updates, "", git_dir),
+                self.admission_handler
+                    .admit(phase, updates, "", git_dir, hook_ctx),
             )
             .await;
             match result {
@@ -812,7 +862,13 @@ mod tests {
             new_oid: "a".repeat(40),
         }];
         let result = h
-            .admit("pre-receive", &updates, "", std::path::Path::new(""))
+            .admit(
+                "pre-receive",
+                &updates,
+                "",
+                std::path::Path::new(""),
+                &HookContext::default(),
+            )
             .await
             .unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
@@ -859,7 +915,12 @@ mod tests {
             make_update("refs/heads/dev"),
         ];
         let result = pipeline
-            .run(std::path::Path::new("/tmp"), &updates, None)
+            .run(
+                std::path::Path::new("/tmp"),
+                &updates,
+                None,
+                &HookContext::default(),
+            )
             .await
             .unwrap();
         assert_eq!(result, vec![0, 1]);
@@ -873,7 +934,12 @@ mod tests {
         let pipeline = make_pipeline(cfg);
         let updates = vec![make_update("refs/heads/main")];
         let result = pipeline
-            .run(std::path::Path::new("/tmp"), &updates, None)
+            .run(
+                std::path::Path::new("/tmp"),
+                &updates,
+                None,
+                &HookContext::default(),
+            )
             .await
             .unwrap();
         assert_eq!(result, vec![0]);

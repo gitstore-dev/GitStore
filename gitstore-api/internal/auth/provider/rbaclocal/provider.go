@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
-	"github.com/spf13/viper"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"go.uber.org/zap"
 )
 
@@ -21,8 +21,8 @@ type RBACLocalProvider struct {
 	logger *zap.Logger
 }
 
-func New(cfg *viper.Viper, logger *zap.Logger) (*RBACLocalProvider, error) {
-	path := cfg.GetString("auth.rbac.policy_file")
+func New(cfg config.RBACConfig, logger *zap.Logger) (*RBACLocalProvider, error) {
+	path := cfg.PolicyFile
 	if path == "" {
 		path = "policy.yaml"
 	}

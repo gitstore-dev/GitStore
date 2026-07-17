@@ -24,13 +24,13 @@ func main() {
 	cfg, err := config.Load()
 	gin.SetMode(gin.ReleaseMode)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
 		os.Exit(1)
 	}
 
 	log, err := logger.InitLogger(cfg.Log.Level, cfg.Log.Format)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
 	defer func() { _ = log.Sync() }()

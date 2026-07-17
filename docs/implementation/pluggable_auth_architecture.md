@@ -333,7 +333,7 @@ func (c *ChainedAuthN) RevokeSession(ctx context.Context, jti string, expiresAt 
 // File: gitstore-api/internal/auth/provider/staticadmin/provider.go
 package staticadmin
 
-// Config keys (Viper paths → env vars):
+// Resolved config fields (loaded from Viper paths/env vars by internal/config):
 //   auth.admin.username       → GITSTORE_AUTH__ADMIN__USERNAME       (default "admin")
 //   auth.admin.password_hash  → GITSTORE_AUTH__ADMIN__PASSWORD_HASH  (required)
 //
@@ -345,9 +345,9 @@ type StaticAdminProvider struct {
     blacklist    *sessionBlacklist
 }
 
-func New(cfg *viper.Viper, logger *zap.Logger) (*StaticAdminProvider, error) {
-    username := cfg.GetString("auth.admin.username")
-    hash := cfg.GetString("auth.admin.password_hash")
+func New(cfg config.AuthConfig, logger *zap.Logger) (*StaticAdminProvider, error) {
+    username := cfg.Admin.Username
+    hash := cfg.Admin.Password
     if hash == "" {
         return nil, errors.New("staticadmin: GITSTORE_AUTH__ADMIN__PASSWORD_HASH is required")
     }
@@ -496,7 +496,7 @@ func (p *AllowAllProvider) Authorize(_ context.Context, _ *auth.Principal, actio
 // File: gitstore-api/internal/auth/provider/rbaclocal/provider.go
 package rbaclocal
 
-// Config keys (Viper paths → env vars):
+// Resolved config fields (loaded from Viper paths/env vars by internal/config):
 //   auth.rbac.policy_file → GITSTORE_AUTH__RBAC__POLICY_FILE (default "policy.yaml")
 
 type RBACLocalProvider struct {
@@ -506,8 +506,8 @@ type RBACLocalProvider struct {
     logger *zap.Logger
 }
 
-func New(cfg *viper.Viper, logger *zap.Logger) (*RBACLocalProvider, error) {
-    path := cfg.GetString("auth.rbac.policy_file")
+func New(cfg config.RBACConfig, logger *zap.Logger) (*RBACLocalProvider, error) {
+    path := cfg.PolicyFile
     if path == "" { path = "policy.yaml" }
     p := &RBACLocalProvider{path: path, logger: logger}
     return p, p.reload()
@@ -845,25 +845,30 @@ The git-service validates the API as the inter-service caller via the HMAC metad
 **Go layer — githttp/handler.go changes:**
 
 ```go
-// AuthenticatedGitHandler wraps the existing githttp.NewMux handler.
-// It calls ChainedAuthN and either serves the request or returns 401.
-func AuthenticatedGitHandler(chain *auth.ChainedAuthN, inner http.Handler, logger *zap.Logger) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        req := auth.AuthRequest{
-            Header:     r.Header,
-            RemoteAddr: r.RemoteAddr,
-        }
-        principal, decision, err := chain.Authenticate(r.Context(), req)
-        if err != nil || decision.Outcome == auth.OutcomeDeny {
-            w.Header().Set("WWW-Authenticate", `Basic realm="GitStore"`)
-            // Return 401 (not 403) so that Git credential helpers prompt for credentials.
-            http.Error(w, "unauthorized", http.StatusUnauthorized)
-            return
-        }
-        // Store principal in context for downstream use.
-        ctx := auth.ContextWithPrincipal(r.Context(), principal)
-        inner.ServeHTTP(w, r.WithContext(ctx))
-    })
+// BasicAuthenticator authenticates a request through the active provider chain.
+// Anonymous access passes through as a Principal with AuthMethod "none"; denied
+// credentials return 401 before the request reaches git-service.
+// Authenticates git smart http.
+func (a *Authenticate) BasicAuthenticator(c *gin.Context) {
+	if a.logger == nil {
+		a.logger = zap.NewNop()
+	}
+	req := auth.AuthRequest{
+		Header:     c.Request.Header, 
+		RemoteAddr: c.RemoteIP(),
+	}
+    ctx := c.Request.Context()
+	principal, decision, err := a.registry.AuthN().Authenticate(ctx, req)
+	if err != nil || decision.Outcome == auth.OutcomeDeny {
+		c.Header("WWW-Authenticate", `Basic realm="GitStore"`)
+		// Return 401 (not 403) so that Git credential helpers prompt for credentials.
+		c.AbortWithStatus(http.StatusUnauthorized)
+		return
+	}
+	// Store principal in context for downstream use.
+	ctx = auth.ContextWithPrincipal(ctx, principal)
+    c.Request = c.Request.WithContext(ctx)
+	c.Next()
 }
 ```
 
@@ -1114,11 +1119,33 @@ fn default_http_auth_mode() -> String { "header".into() }
 **Test strategy:** Unit tests: `HmacInterceptor` rejects missing/wrong token, accepts correct token and previous token during rotation window; `hmacCreds.GetRequestMetadata` injects `Authorization: Bearer` header; config validation fails on empty secret.
 **Rollback trigger:** Any gRPC call from API to git-service fails in CI.
 
-### Phase 5 — Git smart-HTTP authentication
+### Phase 5 — Git smart-HTTP authentication ✅ COMPLETE (035)
 **Milestone:** `auth-framework-git-v1`
-**Deliverable:** `AuthenticatedGitHandler` wrapping existing `githttp.Handler`; repository read/write authorization before invoking git-service; effective push policy resolved by API; `PushContext`/`AuthContext` sent on the first `ReceivePackRequest`; git-service enforces `PushPolicy` and passes a typed `HookContext` to the in-process hook pipeline.
-**Affected packages:** `gitstore-api/internal/githttp/`, `gitstore-api/internal/gitclient/`, `shared/proto/gitstore/git/v1/`, `gitstore-git-service/src/grpc/`, `gitstore-git-service/src/git/hooks/`
-**Test strategy:** Integration test: unauthenticated push to port 5000 returns 401; unauthorized push is rejected before git-service invocation; authenticated push includes `PushContext`; git-service rejects receive-pack streams missing first-chunk context; repository-tightened pack/file limits are enforced; hook/admission logs include the sanitized actor subject from `HookContext`.
+**Deliverable:** Gin middleware chain (`BasicAuthenticator` → `RepoResolver` → `GitHttpAuthorizer` → `PushContextInserter`) enforcing auth/authz before any git-service contact; `PushContext` proto attached to first `ReceivePackRequest` chunk carrying actor identity, auth method, and push policy; git-service enforces `max_pack_size_bytes` and `max_file_size_bytes` limits; typed `HookContext` threaded through all `HookPipeline` stages; admission log entries include `actor_subject`.
+**Affected packages:** `gitstore-api/internal/githttp/`, `gitstore-api/internal/middleware/security/`, `gitstore-api/internal/gitclient/`, `gitstore-api/internal/health/`, `gitstore-api/internal/app/`, `shared/proto/gitstore/git/v1/`, `gitstore-git-service/src/grpc/`, `gitstore-git-service/src/git/hooks/`, `gitstore-git-service/src/git/pack_server.rs`
+
+**Middleware chain order:**
+```
+BasicAuthenticator → RepoResolver → GitHttpAuthorizer → [PushContextInserter on receive-pack only]
+```
+
+**PushContext propagation:**
+1. `PushContextInserter` middleware builds `gitv1.PushContext` (actor, policy) from gin context + `store.GetRepository`.
+2. `gitclient.ReceivePack` reads `PushContext` from `context.Value` and attaches it to the first `ReceivePackRequest` chunk.
+3. `receive_pack` in Rust validates `push_context` presence and `repository_id` consistency (FR-011).
+4. `HookContext::from(&PushContext)` maps proto fields to a typed struct passed to all pipeline stages.
+
+**Enforcement points:**
+- 401 + `WWW-Authenticate: Basic realm="GitStore"` on credential rejection.
+- 503 on transient auth errors (chain returns `err != nil`).
+- 404 pkt-line on unknown namespace/repository.
+- 403 on insufficient permissions (`repository.read` required for upload-pack, `repository.write` for receive-pack).
+- `resource_exhausted` gRPC status when `max_pack_size_bytes` or `max_file_size_bytes` exceeded.
+- `invalid_argument` gRPC status when `push_context` is missing or inconsistent.
+
+**Observability:** `gitstore_git_http_auth_requests_total{outcome, service}` counter; `GET /metrics` endpoint serving Prometheus exposition format.
+
+**Test strategy:** Unit tests for each middleware (`TestBasicAuthTransientError`, `TestBasicAuthCredentialRejection`, `TestBasicAuthAllow`, `TestRepoResolverNotFound`, `TestGitHttpAuthorizerReadOnly`, `TestPushContextInserter`, `TestReceivePackAttachesPushContext`); Rust unit tests for pack/blob size enforcement and push_context validation; integration tests verify full hook pipeline with `HookContext` propagation.
 **Rollback trigger:** Legitimate push/fetch from an authenticated client fails.
 
 ### Phase 6 — OIDC JWT provider

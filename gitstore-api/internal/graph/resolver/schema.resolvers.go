@@ -13,6 +13,7 @@ import (
 )
 
 // PublishCatalog is the resolver for the publishCatalog field.
+// TODO(remove)
 func (r *mutationResolver) PublishCatalog(ctx context.Context, input model.PublishCatalogInput) (*model.PublishCatalogPayload, error) {
 	message := input.Message
 	if message == "" {
@@ -61,6 +62,7 @@ func (r *queryResolver) Nodes(ctx context.Context, ids []string) ([]model.Node, 
 }
 
 // CatalogVersion is the resolver for the catalogVersion field.
+// TODO(remove)
 func (r *queryResolver) CatalogVersion(ctx context.Context) (*model.CatalogVersion, error) {
 	stats := r.getCatalogStats(ctx)
 	return &model.CatalogVersion{

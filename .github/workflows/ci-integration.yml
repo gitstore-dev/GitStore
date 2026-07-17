@@ -72,7 +72,6 @@ jobs:
       run: |
         echo "Waiting for gitstore-api (GraphQL + git HTTP)..."
         timeout 60 sh -c 'until curl -sf http://localhost:4000/health; do sleep 2; done'
-        timeout 60 sh -c 'until curl -sf http://localhost:5000/health; do sleep 2; done'
         docker compose ps
 
     - name: Wait for git-service gRPC to be ready
@@ -91,7 +90,7 @@ jobs:
         git config --global user.name "CI"
         git config --global init.defaultBranch main
         tmpdir=$(mktemp -d)
-        git clone http://localhost:5000/gitci/catalog.git "$tmpdir"
+        git clone http://admin:admin123@localhost:5000/gitci/catalog.git "$tmpdir"
         echo "# CI seed" > "$tmpdir/README.md"
         git -C "$tmpdir" add README.md
         git -C "$tmpdir" commit -m "ci: seed initial commit"
@@ -165,7 +164,6 @@ jobs:
         run: |
           echo "Waiting for gitstore-api (GraphQL + git HTTP)..."
           timeout 90 sh -c 'until curl -sf http://localhost:4000/health; do sleep 2; done'
-          timeout 60 sh -c 'until curl -sf http://localhost:5000/health; do sleep 2; done'
           docker compose -f compose.yml -f compose.scylla.yml ps
 
       - name: Wait for git-service gRPC to be ready
@@ -183,7 +181,7 @@ jobs:
           git config --global user.name "CI"
           git config --global init.defaultBranch main
           tmpdir=$(mktemp -d)
-          git clone http://localhost:5000/gitci/catalog.git "$tmpdir"
+          git clone http://admin:admin123@localhost:5000/gitci/catalog.git "$tmpdir"
           echo "# CI seed" > "$tmpdir/README.md"
           git -C "$tmpdir" add README.md
           git -C "$tmpdir" commit -m "ci: seed initial commit"

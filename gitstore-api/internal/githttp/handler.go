@@ -12,6 +12,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/middleware"
+	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -22,25 +28,26 @@ type GitClient interface {
 	ReceivePack(ctx context.Context, repoID string, body io.Reader) ([]byte, error)
 }
 
-// RepoResolver resolves (namespace, repo) to a stable repository ID.
-type RepoResolver func(namespace, repo string) (string, bool)
+type SmartHttpDeps struct {
+	GitClient        GitClient
+	RepoResolverFunc RepoResolverFunc
+	Store            datastore.Datastore
+	Logger           *zap.Logger
+	Ids              apiruntime.IDGenerator
+	Registry         *auth.ProviderRegistry
+}
+
+// RepoResolverFunc resolves (namespace, repo) to a stable repository ID.
+type RepoResolverFunc func(namespace, repo string) (string, bool)
 
 // handler holds the dependencies for Git smart HTTP request handlers.
 type handler struct {
-	git      GitClient
-	resolver RepoResolver
-	log      *zap.Logger
+	git GitClient
+	log *zap.Logger
 }
 
-// newHandlerWithLogger creates a handler with a real logger.
-func newHandler(git GitClient, resolver RepoResolver, log *zap.Logger) *handler {
-	return &handler{git: git, resolver: resolver, log: log}
-}
-
-// resolveRepo strips ".git" suffix and looks up the repo_id.
-func (h *handler) resolveRepo(namespace, repo string) (string, bool) {
-	repo = strings.TrimSuffix(repo, ".git")
-	return h.resolver(namespace, repo)
+func newHandler(git GitClient, log *zap.Logger) *handler {
+	return &handler{git: git, log: log}
 }
 
 // gitPktLineError writes a Git pkt-line ERR response.
@@ -58,15 +65,9 @@ func (h *handler) gitPktLineError(w http.ResponseWriter, status int, msg string)
 
 // infoRefsHandler handles GET /{namespace}/{repo}/info/refs?service=git-*
 func (h *handler) infoRefsHandler(c *gin.Context) {
-	namespace := c.Param("namespace")
-	repo := c.Param("repo")
 	svcParam := c.Query("service")
 
-	repoID, ok := h.resolveRepo(namespace, repo)
-	if !ok {
-		h.gitPktLineError(c.Writer, http.StatusNotFound, "repository not found")
-		return
-	}
+	repoID := c.MustGet(repoIDKey).(string)
 
 	var service gitv1.Service
 	var contentType string
@@ -99,14 +100,7 @@ func (h *handler) infoRefsHandler(c *gin.Context) {
 
 // uploadPackHandler handles POST /{namespace}/{repo}/git-upload-pack
 func (h *handler) uploadPackHandler(c *gin.Context) {
-	namespace := c.Param("namespace")
-	repo := c.Param("repo")
-
-	repoID, ok := h.resolveRepo(namespace, repo)
-	if !ok {
-		h.gitPktLineError(c.Writer, http.StatusNotFound, "repository not found")
-		return
-	}
+	repoID := c.MustGet(repoIDKey).(string)
 
 	body, err := c.GetRawData()
 	if err != nil {
@@ -139,14 +133,7 @@ func (h *handler) uploadPackHandler(c *gin.Context) {
 
 // receivePackHandler handles POST /{namespace}/{repo}/git-receive-pack
 func (h *handler) receivePackHandler(c *gin.Context) {
-	namespace := c.Param("namespace")
-	repo := c.Param("repo")
-
-	repoID, ok := h.resolveRepo(namespace, repo)
-	if !ok {
-		h.gitPktLineError(c.Writer, http.StatusNotFound, "repository not found")
-		return
-	}
+	repoID := c.MustGet(repoIDKey).(string)
 
 	h.log.Info("receive_pack start", zap.String("repo_id", repoID))
 
@@ -164,13 +151,76 @@ func (h *handler) receivePackHandler(c *gin.Context) {
 }
 
 // NewMux creates an http.Handler with all Git smart HTTP routes registered.
-func NewMux(git GitClient, resolver RepoResolver, log *zap.Logger) http.Handler {
-	h := newHandler(git, resolver, log)
+// When deps.Store is non-nil, RepoResolver and GitHttpAuthorizer middleware are wired in.
+func NewMux(deps SmartHttpDeps) http.Handler {
+	return NewMuxWithStore(deps)
+}
+
+// NewMuxWithStore creates an http.Handler with all Git smart HTTP routes registered,
+// including RepoResolver and GitHttpAuthorizer middleware.
+func NewMuxWithStore(deps SmartHttpDeps) http.Handler {
+	return newMux(deps, false)
+}
+
+// NewMuxWithStoreAndAuthz is like NewMuxWithStore but also wires PushContextInserter
+// on the receive-pack route. Used when the full push-policy pipeline is needed.
+func NewMuxWithStoreAndAuthz(deps SmartHttpDeps) http.Handler {
+	return newMux(deps, true)
+}
+
+func newMux(deps SmartHttpDeps, withPushCtx bool) http.Handler {
+	h := newHandler(deps.GitClient, deps.Logger)
 	r := gin.New()
+
+	requestIdMiddleware := middleware.NewRequestId(deps.Ids)
+	authenticateMiddleware := security.NewAuthenticate(deps.Registry, deps.Logger, prometheus.DefaultRegisterer)
+
+	var authorizeMiddleware security.Authorize
+	if deps.Store != nil {
+		authorizeMiddleware = security.NewAuthorizeWithStore(deps.Registry, deps.Store, deps.Logger)
+	} else {
+		authorizeMiddleware = security.NewAuthorize(deps.Registry, deps.Logger)
+	}
+
+	r.Use(requestIdMiddleware.RequestIdInsertor)
+	r.Use(authenticateMiddleware.BasicAuthenticator)
+
+	var repoResolverMW gin.HandlerFunc
+	if deps.Store != nil {
+		repoResolverMW = RepoResolver(deps.Store, deps.Logger)
+	} else {
+		// Legacy path: use the injected RepoResolverFunc and set repoIDKey manually.
+		repoResolverMW = legacyRepoResolver(deps.RepoResolverFunc, deps.Logger)
+	}
+	r.Use(repoResolverMW)
+	r.Use(authorizeMiddleware.GitHttpAuthorizer)
 
 	r.GET("/:namespace/:repo/info/refs", h.infoRefsHandler)
 	r.POST("/:namespace/:repo/git-upload-pack", h.uploadPackHandler)
-	r.POST("/:namespace/:repo/git-receive-pack", h.receivePackHandler)
+	if withPushCtx && deps.Store != nil {
+		r.POST("/:namespace/:repo/git-receive-pack",
+			authorizeMiddleware.PushContextInserter,
+			h.receivePackHandler,
+		)
+	} else {
+		r.POST("/:namespace/:repo/git-receive-pack", h.receivePackHandler)
+	}
 
 	return r
+}
+
+// legacyRepoResolver wraps the old RepoResolverFunc in a gin middleware that sets repoIDKey.
+func legacyRepoResolver(resolver RepoResolverFunc, log *zap.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		namespace := c.Param("namespace")
+		repo := strings.TrimSuffix(c.Param("repo"), ".git")
+		repoID, ok := resolver(namespace, repo)
+		if !ok {
+			gitPktLineErrorRaw(c.Writer, http.StatusNotFound, "repository not found")
+			c.Abort()
+			return
+		}
+		c.Set(repoIDKey, repoID)
+		c.Next()
+	}
 }

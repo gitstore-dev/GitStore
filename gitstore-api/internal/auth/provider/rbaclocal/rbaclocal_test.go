@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
-	"github.com/spf13/viper"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -44,9 +44,7 @@ func newRBACProvider(t *testing.T, policyContent string) *RBACLocalProvider {
 	policyPath := filepath.Join(dir, "policy.yaml")
 	require.NoError(t, os.WriteFile(policyPath, []byte(policyContent), 0600))
 
-	v := viper.New()
-	v.SetDefault("auth.rbac.policy_file", policyPath)
-	p, err := New(v, zap.NewNop())
+	p, err := New(config.RBACConfig{PolicyFile: policyPath}, zap.NewNop())
 	require.NoError(t, err)
 	return p
 }

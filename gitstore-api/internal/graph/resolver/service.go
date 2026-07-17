@@ -621,7 +621,7 @@ func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespaceID,
 // Storage is removed first; only on success do we drop the metadata rows. This
 // avoids leaving an orphaned .git directory when the gRPC call transiently
 // fails, since the caller can retry against the still-resolvable repo_id.
-func (s *Service) DeleteRepository(ctx context.Context, repoID, callerUsername string) error {
+func (s *Service) DeleteRepository(ctx context.Context, repoID, _ string) error {
 	repo, err := s.store.GetRepository(ctx, repoID)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {

@@ -22,7 +22,8 @@ type stubProvider struct {
 	reason  string
 }
 
-func (s *stubProvider) Name() string                     { return s.name }
+func (s *stubProvider) Name() string { return s.name }
+
 func (s *stubProvider) Capabilities() authpkg.Capability { return authpkg.CapAuthenticate }
 
 func (s *stubProvider) Authenticate(_ context.Context, _ authpkg.AuthRequest) (*authpkg.Principal, authpkg.Decision, error) {
