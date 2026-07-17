@@ -792,7 +792,7 @@ func (m *memdbDatastore) RenameRepository(_ context.Context, namespaceID, oldNam
 	return nil
 }
 
-func (m *memdbDatastore) TransferRepository(_ context.Context, repoID, fromNamespaceID, toNamespaceID string) error {
+func (m *memdbDatastore) TransferRepository(_ context.Context, repoID, _, toNamespaceID string) error {
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("namespace_mapping", "repo_id", repoID)
 	if raw == nil {

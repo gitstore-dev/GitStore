@@ -616,9 +616,6 @@ func datastoreNamespaceTierToModel(t datastore.NamespaceTier) model.NamespaceTie
 	}
 }
 
-// datastoreRepositoryToModel converts a datastore Repository to the GraphQL model.
-// ns may be nil if the namespace resolver has not been called yet; in that case
-// the Namespace field is left nil and must be resolved via a field resolver.
 // DatastoreVariantToGraphQL converts a datastore ProductVariant to the GraphQL model.
 func DatastoreVariantToGraphQL(v *datastore.ProductVariant) *model.ProductVariant {
 	if v == nil {

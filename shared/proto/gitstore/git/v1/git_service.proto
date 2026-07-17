@@ -34,6 +34,37 @@ package gitstore.git.v1;
 
 option go_package = "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1;gitv1";
 
+// ─── Push context messages (035-git-http-auth) ────────────────────────────────
+
+// AuthContext is a sanitised snapshot of the authenticated principal's identity.
+// It MUST NOT carry raw credentials, tokens, or password hashes.
+message AuthContext {
+  string subject     = 1; // principal identifier (e.g. "admin", OIDC sub claim)
+  string issuer      = 2; // auth provider (e.g. "static-admin", OIDC issuer URL)
+  string auth_method = 3; // mechanism used (e.g. "basic", "bearer", "none")
+  repeated string roles  = 4;
+  repeated string groups = 5;
+  repeated string scopes = 6;
+}
+
+// PushPolicy carries per-repository push limits resolved from the Repository
+// datastore record. A zero value for any limit field means "no limit enforced".
+message PushPolicy {
+  int64 max_pack_size_bytes = 1; // 0 = unlimited
+  int64 max_file_size_bytes = 2; // 0 = unlimited
+}
+
+// PushContext is attached to the first chunk of every ReceivePackRequest stream.
+// It is immutable for the lifetime of the stream.
+message PushContext {
+  string namespace               = 1;
+  string repository_name         = 2;
+  string repository_id           = 3; // MUST match the repository_id field on the enclosing chunk
+  string config_resource_version = 4; // opaque audit tag; not interpreted by git-service
+  AuthContext actor              = 5;
+  PushPolicy  policy             = 6;
+}
+
 // GitService provides raw git primitive operations over gRPC.
 // All operations are scoped to a repository identified by its stable repo_id (UUIDv7).
 // Callers (gitstore-api) MUST resolve namespace/name → repo_id before calling any RPC.
@@ -137,6 +168,12 @@ message ReceivePackRequest {
   // is_last signals that this is the final chunk. The git service finalises
   // pack indexing and proceeds to ref validation upon receiving this flag.
   bool is_last = 3;
+
+  // push_context MUST be set on the first chunk only.
+  // git-service MUST reject the stream if this field is absent on the first chunk.
+  // git-service MUST reject the stream if push_context.repository_id !=
+  // this chunk's repository_id field (FR-011).
+  PushContext push_context = 4;
 }
 
 // RefCommand represents one ref-update instruction from a git push.

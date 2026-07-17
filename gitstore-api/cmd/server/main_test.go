@@ -8,18 +8,21 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/gitstore-dev/gitstore/api/internal/app"
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
-	"github.com/spf13/viper"
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -31,6 +34,11 @@ type mockGitWriter struct {
 	commitCalls    []gitclient.CommitFileParams
 	deleteCalls    []gitclient.DeleteFileParams
 	createTagCalls []gitclient.CreateTagParams
+}
+
+func TestMain(m *testing.M) {
+	gin.SetMode(gin.TestMode)
+	os.Exit(m.Run())
 }
 
 func (m *mockGitWriter) CommitFile(_ context.Context, p gitclient.CommitFileParams) (string, error) {
@@ -67,14 +75,19 @@ func newTestGraphQLRegistry(t *testing.T) *authpkg.ProviderRegistry {
 	hash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.MinCost)
 	require.NoError(t, err)
 
-	v := viper.New()
-	v.SetDefault("auth.admin.username", "admin")
-	v.SetDefault("auth.admin.password_hash", string(hash))
-	v.SetDefault("auth.jwt.secret", "dev-secret")
-	v.SetDefault("auth.jwt.issuer", "gitstore")
-	v.SetDefault("auth.jwt.duration", "2h")
+	cfg := config.AuthConfig{
+		Admin: config.UserConfig{
+			Username: "admin",
+			Password: string(hash),
+		},
+		JWT: config.JWTConfig{
+			Secret:   "dev-secret",
+			Issuer:   "gitstore",
+			Duration: "2h",
+		},
+	}
 
-	staticAdmin, err := staticadmin.New(v, zap.NewNop())
+	staticAdmin, err := staticadmin.New(cfg, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(staticAdmin.Shutdown)
 
@@ -89,7 +102,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 
-	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, nil)
+	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, apiruntime.NewSequenceIDGenerator())
 	require.NoError(t, err)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
@@ -124,7 +137,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	assert.True(t, loginResponse.Data.Login.Session.User.IsAdmin)
 
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
-		"query": "mutation { createNamespace(input: { clientMutationId: \"create-alice\", identifier: \"alice\", tier: USER }) { clientMutationId namespace { identifier createdBy } } }"
+		"query": "mutation { createNamespace(input: { identifier: \"alice\", tier: USER }) { clientMutationId namespace { identifier createdBy } } }"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+loginResponse.Data.Login.Session.Token)
@@ -136,8 +149,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	var response struct {
 		Data struct {
 			CreateNamespace struct {
-				ClientMutationID string `json:"clientMutationId"`
-				Namespace        struct {
+				Namespace struct {
 					Identifier string `json:"identifier"`
 					CreatedBy  string `json:"createdBy"`
 				} `json:"namespace"`
@@ -149,7 +161,6 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	require.Empty(t, response.Errors)
-	assert.Equal(t, "create-alice", response.Data.CreateNamespace.ClientMutationID)
 	assert.Equal(t, "alice", response.Data.CreateNamespace.Namespace.Identifier)
 	assert.Equal(t, "admin", response.Data.CreateNamespace.Namespace.CreatedBy)
 
@@ -190,7 +201,7 @@ func TestGraphQLHandlerRejectsLoginWithInvalidCredentials(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 
-	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, nil)
+	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, apiruntime.NewSequenceIDGenerator())
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
@@ -216,7 +227,7 @@ func TestGraphQLHandlerRejectsNamespaceMutationWithoutBearerToken(t *testing.T) 
 	store, err := memdb.New()
 	require.NoError(t, err)
 
-	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, nil)
+	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, apiruntime.NewSequenceIDGenerator())
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
 		"query": "mutation { createNamespace(input: { identifier: \"alice\", tier: USER }) { namespace { identifier } } }"

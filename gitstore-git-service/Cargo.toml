@@ -26,6 +26,7 @@ regex = "1"
 subtle = "2"
 
 [dev-dependencies]
+tracing-test = "0.2"
 
 [build-dependencies]
 
