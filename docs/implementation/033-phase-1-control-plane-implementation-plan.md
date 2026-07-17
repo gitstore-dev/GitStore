@@ -1,6 +1,6 @@
 # Phase 1 Control-Plane Implementation Plan
 
-**Status**: Proposed
+**Status**: Partially implemented — Wave 1 auth/admission closed; Wave 1 control-plane contracts open; Wave 2 partially closed
 
 **Date**: 2026-06-26
 
@@ -79,12 +79,14 @@ These close before any catalog resource work is trustworthy.
 
 | Priority | Issue / Work item                                       | What it provides                                                                           | ADR dependency            |
 |----------|---------------------------------------------------------|--------------------------------------------------------------------------------------------|---------------------------|
-| P0       | GH#225, GH#226 (authn phases 1–3, merged)               | Identity on all write paths                                                                | ADR-0002, ADR-0003        |
-| P0       | GH#126 (phase 4 — HMAC gRPC, `cmd/gitctl`)              | Secure git-service channel                                                                 | ADR-0003                  |
-| P0       | GH#123 (API Admission Controller contract)              | Push rejection envelope; admission chain                                                   | ADR-0004 through ADR-0008 |
-| P0       | GH#174 (Namespace Validation and Admission Matrix)      | Namespace `Active` enforcement at admission                                                | ADR-0002                  |
-| P1       | GH#165 (Namespace lifecycle)                            | `createNamespace`/`deleteNamespace` foreground finalizer; `gitstore-system` auto-provision | ADR-0002                  |
-| P1       | GH#40 / GH#67 (Repository lifecycle, API-driven create) | Repository CRUD; `gitstore-system` convention; foreground finalizer                        | ADR-0003                  |
+| P0       | ~~GH#225, GH#226 (authn phases 1–3)~~ ✅ CLOSED (specs 031–033, PRs #317 #318 #319 #321) | Identity on all write paths                                                                | ADR-0002, ADR-0003        |
+| P0       | ~~GH#126 (phase 4 — HMAC gRPC, `cmd/gitctl`)~~ ✅ CLOSED (spec 033, PR #319)             | Secure git-service channel                                                                 | ADR-0003                  |
+| P0       | ~~GH#123 (API Admission Controller contract)~~ ✅ CLOSED                                  | Push rejection envelope; admission chain                                                   | ADR-0004 through ADR-0008 |
+| P0       | GH#173 (Namespace Validation and Admission Matrix) **OPEN**                               | Namespace `Active` enforcement at admission                                                | ADR-0002                  |
+| P0       | GH#170 (Declarative Namespace Resource Contract) **OPEN**                                 | `.spec`/`.status` schema; lifecycle states                                                 | ADR-0002                  |
+| P0       | GH#249 (Repository Resource Contract) **OPEN**                                            | Kubernetes-style declarative schema for Repository                                         | ADR-0003                  |
+| P1       | GH#165 (Controller Manager Reconciliation Loop) **OPEN**                                  | `createNamespace`/`deleteNamespace` foreground finalizer; `gitstore-system` auto-provision | ADR-0002                  |
+| P1       | ~~GH#40 / GH#67 (Repository lifecycle, API-driven create)~~ ✅ CLOSED                     | Repository CRUD; `gitstore-system` convention; foreground finalizer                        | ADR-0003                  |
 
 ### Wave 2 — Core catalog resource contracts
 
@@ -92,32 +94,37 @@ These implement the Phase 1 exit criteria for git-backed catalog resources.
 
 | Priority | Issue / Work item                                        | What it provides                                                                                     | ADR dependency |
 |----------|----------------------------------------------------------|------------------------------------------------------------------------------------------------------|----------------|
-| P1       | GH#77 (Product frontmatter)                              | `createProduct`/`updateProduct`/`deleteProduct`; admission; finalizer                                | ADR-0004       |
-| P1       | GH#82 remaining (CategoryTaxonomy deletion + controller) | Deletion rejection when children/products exist; `ancestorPath` recomputation; cycle detection       | ADR-0006       |
-| P1       | GH#79 (File frontmatter baseline)                        | `createFile`/`updateFile`/`deleteFile`; fileRef reference check at delete                            | ADR-0008       |
-| P1       | GH#143 (ProductVariant as sellable unit)                 | Enforce `spec.productRef` required; `ProductResolved` condition; variant-first contract              | ADR-0005       |
-| P1       | GH#84 (Collection remaining work)                        | `createCollection`/`updateCollection`/`deleteCollection`; selector evaluation; membership projection | ADR-0007       |
+| P1       | ~~GH#77 (Product frontmatter)~~ ✅ CLOSED                | `createProduct`/`updateProduct`/`deleteProduct`; admission; finalizer                                | ADR-0004       |
+| P1       | ~~GH#82 (CategoryTaxonomy deletion + controller)~~ ✅ CLOSED | Deletion rejection when children/products exist; `ancestorPath` recomputation; cycle detection    | ADR-0006       |
+| P1       | GH#79 (File frontmatter baseline) **OPEN**               | `createFile`/`updateFile`/`deleteFile`; fileRef reference check at delete                            | ADR-0008       |
+| P1       | ~~GH#143 (ProductVariant as sellable unit)~~ ✅ CLOSED    | Enforce `spec.productRef` required; `ProductResolved` condition; variant-first contract              | ADR-0005       |
+| P1       | ~~GH#84 (Collection remaining work)~~ ✅ CLOSED           | `createCollection`/`updateCollection`/`deleteCollection`; selector evaluation; membership projection | ADR-0007       |
 
-ProductVariant frontmatter (GH#83) is already closed; GH#143 closes the contract
-enforcement gap.
+GH#83 (ProductVariant frontmatter), GH#77 (Product), GH#84 (Collection), GH#82 (CategoryTaxonomy),
+and GH#143 (variant-first contract) are all closed. Only GH#79 (File) remains open in Wave 2.
 
 ### Wave 3 — Lifecycle versioning and admission hardening
 
 | Priority | Issue / Work item                                                | What it provides                                                                         | ADR dependency            |
 |----------|------------------------------------------------------------------|------------------------------------------------------------------------------------------|---------------------------|
-| P1       | GH#137 (Object Lifecycle Versioning Contract)                    | UID preservation on rename/move; resourceVersion monotonicity; delete/recreate semantics | ADR-0004 through ADR-0008 |
-| P1       | GH#134 (Separate Markdown Parsing Layer from Catalog Validation) | Prevents validator complexity from blocking resource evolution                           | ADR-0004 through ADR-0008 |
-| P1       | GH#135 (Stable Catalog Resource Identity)                        | `metadata.name` as identity anchor; provenance vs identity separation                    | All ADRs                  |
-| P2       | Push rejection diagnostics contract (new issue)                  | Structured error format for admission failures; needed for GraphQL mutation consumers    | ADR-0004 through ADR-0008 |
+| P1       | ~~GH#137 (Object Lifecycle Versioning Contract)~~ ✅ CLOSED    | UID preservation on rename/move; resourceVersion monotonicity; delete/recreate semantics | ADR-0004 through ADR-0008 |
+| P1       | ~~GH#134 (Separate Markdown Parsing Layer)~~ ✅ CLOSED         | Prevents validator complexity from blocking resource evolution                           | ADR-0004 through ADR-0008 |
+| P1       | ~~GH#135 (Stable Catalog Resource Identity)~~ ✅ CLOSED        | `metadata.name` as identity anchor; provenance vs identity separation                    | All ADRs                  |
+| P2       | Push rejection diagnostics contract (new issue)                 | Structured error format for admission failures; needed for GraphQL mutation consumers    | ADR-0004 through ADR-0008 |
 
 ### Wave 4 — Controller reconciliation substrate
 
 | Priority | Issue / Work item                                                          | What it provides                                                         | ADR dependency                |
 |----------|----------------------------------------------------------------------------|--------------------------------------------------------------------------|-------------------------------|
-| P1       | GH#131 (Watch API with resourceVersion resume)                             | Controller re-queue on resource change; event cursor                     | ADR-0004 through ADR-0008     |
-| P1       | GH#177, GH#178, GH#179 (Status subresource, write boundaries, concurrency) | `StatusPatch` with optimistic concurrency; controller-only status writes | All status conditions in ADRs |
-| P1       | GH#176 (Namespace Watch Contract)                                          | Namespace controller reconcile loop                                      | ADR-0002                      |
-| P2       | GH#182, GH#183, GH#188 (resume, integration tests, runbook)                | Phase 1 exit quality gate                                                | All ADRs                      |
+| P1       | GH#131 (Watch API with resourceVersion resume) **OPEN**                       | Controller re-queue on resource change; event cursor                     | ADR-0004 through ADR-0008     |
+| P1       | GH#176 (Status Subresource Schema — GraphQL mutation contract) **OPEN**       | `StatusPatch` shape and GraphQL contract for core and CRD kinds          | All status conditions in ADRs |
+| P1       | GH#177 (Status Write Boundaries) **OPEN**                                     | Controller-only status writes; authorization enforcement                 | All status conditions in ADRs |
+| P1       | GH#178 (Status Concurrency — resourceVersion preconditions) **OPEN**          | Optimistic concurrency; conflict semantics                               | All status conditions in ADRs |
+| P1       | GH#174 (Namespace Watch Contract) **OPEN**                                    | Namespace controller reconcile loop                                      | ADR-0002                      |
+| P1       | GH#165 (Controller Manager Reconciliation Loop) **OPEN**                      | Per-kind reconcilers; GH#244 CategoryTaxonomy controller is a child      | ADR-0002–0008                 |
+| P2       | GH#179 (Status Integration Tests + Authoring Guide) **OPEN**                  | Phase 2 quality gate for status semantics                                | All ADRs                      |
+| P2       | GH#182 (Controller Startup Resume) **OPEN**                                   | List-then-watch; resourceVersion checkpointing                           | All ADRs                      |
+| P2       | GH#183 (Controller Integration Tests + Runbook) **OPEN**                      | Phase 2 exit quality gate; operations guide                              | All ADRs                      |
 
 ## GraphQL mutations — first to implement
 
@@ -185,15 +192,12 @@ datastore at admission time.
 
 ## Phase 1 exit criteria (from `docs/implementation/phases.md`)
 
-- [ ] Git push is admission-controlled end-to-end in local/dev environment.
-- [ ] All core alpha resources (Namespace, Repository, Product, ProductVariant,
-  CategoryTaxonomy, Collection, File) have stable contracts.
-- [ ] GraphQL reads remain correct after admitted pushes.
-- [ ] Repository authorization is enforced (GH#126).
-- [ ] `make pr-ready` gate is green.
-- [ ] Foreground finalizers enforce deletion ordering for Namespace → Repository →
-  catalog resources.
-- [ ] Cross-namespace references are rejected at admission time.
-- [ ] `gitstore-system` repository is auto-provisioned on namespace bootstrap.
-- [ ] GraphQL mutations for all seven resource kinds delegate to git; no direct
-  datastore writes for catalog resources.
+- [x] Git push is admission-controlled end-to-end in local/dev environment (GH#123 ✅).
+- [ ] All core alpha resources have stable contracts — Product ✅, ProductVariant ✅, CategoryTaxonomy ✅, Collection ✅; **File (#79 open)**, **Namespace contract (#170 open)**, **Repository contract (#249 open)**.
+- [x] GraphQL reads remain correct after admitted pushes.
+- [x] Repository authorization is enforced (GH#126 ✅, spec 033/035).
+- [x] `make pr-ready` gate is green.
+- [ ] Foreground finalizers enforce deletion ordering for Namespace → Repository → catalog resources (GH#165, GH#173).
+- [ ] Cross-namespace references are rejected at admission time (GH#173).
+- [ ] `gitstore-system` repository is auto-provisioned on namespace bootstrap (GH#165).
+- [ ] GraphQL mutations for all seven resource kinds delegate to git; no direct datastore writes for catalog resources (GH#165).
