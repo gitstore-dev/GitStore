@@ -39,7 +39,6 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vektah/gqlparser/v2/ast"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -93,8 +92,6 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("connect git-service: %w", err)
 	}
-	gitclient.RegisterClientMetrics(prometheus.DefaultRegisterer)
-
 	registry, rbacReloader, providerShutdowns, err := buildProviderRegistry(cfg, log)
 	if err != nil {
 		_ = gitClient.Close()
@@ -220,7 +217,7 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 
 	r := gin.New()
 	r.Use(gin.Recovery())
-	r.Use(requestIdMiddleware.RequestIdInsertor)
+	r.Use(requestIdMiddleware.RequestIdInserter)
 	r.Use(security.CorsConfiguration())
 	r.Use(rateLimitMiddleware.RateLimiter)
 	r.GET("/playground", playgroundHandler)

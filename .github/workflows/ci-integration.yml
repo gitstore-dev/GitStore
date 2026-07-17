@@ -45,6 +45,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # Stub credentials available to every step (including Collect logs / Cleanup)
+    # so docker compose can interpolate compose.yml without the :? guard firing.
+    env:
+      GITSTORE_GIT__DATA_DIR: ./data/repos
+      GITSTORE_AUTH__ADMIN__USERNAME: admin
+      GITSTORE_AUTH__ADMIN__PASSWORD_HASH: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
+      GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
+      GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
 
     steps:
     - uses: actions/checkout@v6
@@ -60,13 +68,6 @@ jobs:
 
     - name: Build and start core stack
       run: docker compose up -d --build
-      env:
-        GITSTORE_GIT__DATA_DIR: ./data/repos
-        # Stub credentials — integration tests exercise the API but don't verify auth secrets
-        GITSTORE_AUTH__ADMIN__USERNAME: admin
-        GITSTORE_AUTH__ADMIN__PASSWORD_HASH: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
-        GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
-        GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
 
     - name: Wait for services to be healthy
       run: |
@@ -135,6 +136,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      GITSTORE_GIT__DATA_DIR: ./data/repos
+      GITSTORE_AUTH__ADMIN__USERNAME: admin
+      GITSTORE_AUTH__ADMIN__PASSWORD_HASH: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
+      GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
+      GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
 
     steps:
       - uses: actions/checkout@v6
@@ -150,12 +157,6 @@ jobs:
 
       - name: Build and start core stack with ScyllaDB
         run: docker compose -f compose.yml -f compose.scylla.yml up -d --build
-        env:
-          GITSTORE_GIT__DATA_DIR: ./data/repos
-          GITSTORE_AUTH__ADMIN__USERNAME: admin
-          GITSTORE_AUTH__ADMIN__PASSWORD_HASH: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
-          GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
-          GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
 
       - name: Wait for ScyllaDB to be healthy
         run: timeout 120 sh -c 'until nc -z localhost 9042; do sleep 2; done'

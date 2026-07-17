@@ -26,8 +26,8 @@ func NewRequestId(ids apiruntime.IDGenerator) RequestId {
 	}
 }
 
-// RequestIdInsertor adds X-Request-Id response header per request pipeline
-func (req *RequestId) RequestIdInsertor(c *gin.Context) {
+// RequestIdInserter adds X-Request-Id response header per request pipeline
+func (req *RequestId) RequestIdInserter(c *gin.Context) {
 	// Check if request ID already exists in header
 	requestID := c.GetHeader("X-Request-ID")
 	if requestID == "" {

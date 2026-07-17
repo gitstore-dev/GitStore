@@ -182,7 +182,7 @@ func newMux(deps SmartHttpDeps, withPushCtx bool) http.Handler {
 		authorizeMiddleware = security.NewAuthorize(deps.Registry, deps.Logger)
 	}
 
-	r.Use(requestIdMiddleware.RequestIdInsertor)
+	r.Use(requestIdMiddleware.RequestIdInserter)
 	r.Use(authenticateMiddleware.BasicAuthenticator)
 
 	var repoResolverMW gin.HandlerFunc
