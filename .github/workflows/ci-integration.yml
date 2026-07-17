@@ -91,7 +91,7 @@ jobs:
         git config --global user.name "CI"
         git config --global init.defaultBranch main
         git config --global credential.helper store
-        printf 'http://admin:admin123@localhost:5000\n' | git credential approve
+        printf 'protocol=http\nhost=localhost:5000\nusername=admin\npassword=admin123\n\n' | git credential approve
         tmpdir=$(mktemp -d)
         git clone http://localhost:5000/gitci/catalog.git "$tmpdir"
         echo "# CI seed" > "$tmpdir/README.md"
