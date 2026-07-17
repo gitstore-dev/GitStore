@@ -43,7 +43,6 @@ type RateLimit struct {
 	limit   rate.Limit
 	burst   int
 	clients map[string]*client
-	stopCh  chan struct{}
 }
 
 type client struct {
@@ -51,27 +50,6 @@ type client struct {
 }
 
 type authenticatorFunc func(*gin.Context, auth.AuthRequest, *Authenticate) (context.Context, *auth.Principal, bool)
-
-// cleanup periodically removes expired buckets.
-// TODO refine cleanup function
-func (r *RateLimit) cleanup() {
-	ticker := time.NewTicker(time.Duration(5 * r.limit))
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			r.mu.Lock()
-			for key, c := range r.clients {
-				if c.limiter.Tokens() > float64(r.limit) {
-					delete(r.clients, key)
-				}
-			}
-			r.mu.Unlock()
-		case <-r.stopCh:
-			return
-		}
-	}
-}
 
 // NewAuthenticate creates a new Authenticate middleware.
 // Pass a non-nil prometheus.Registerer to enable auth outcome metrics.
@@ -118,7 +96,6 @@ func NewRateLimit(r float64, b int) RateLimit {
 		clients: make(map[string]*client),
 		limit:   rate.Limit(r),
 		burst:   b,
-		stopCh:  make(chan struct{}),
 	}
 }
 

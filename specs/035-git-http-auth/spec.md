@@ -2,7 +2,7 @@
 
 **Feature Branch**: `035-git-http-auth`  
 **Created**: 2026-06-27  
-**Status**: Draft  
+**Status**: Closed  
 **Input**: Auth Phase 5 — gate all Git smart-HTTP traffic through the pluggable AuthN/AuthZ framework; enforce per-push policies end-to-end from API through to git-service hook pipeline.
 
 ## Clarifications
