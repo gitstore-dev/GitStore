@@ -92,8 +92,8 @@ func NewAuthorizeWithStore(registry *auth.ProviderRegistry, store datastoreGette
 	}
 }
 
-func NewRateLimit(r float64, b int) RateLimit {
-	rl := RateLimit{
+func NewRateLimit(r float64, b int) *RateLimit {
+	rl := &RateLimit{
 		clients: make(map[string]*client),
 		limit:   rate.Limit(r),
 		burst:   b,

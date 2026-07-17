@@ -896,9 +896,7 @@ impl GitService for GitServiceImpl {
                         if max_pack_size_bytes > 0 && total_bytes > max_pack_size_bytes {
                             // Send the sentinel string so LimitedReader's map_err closure
                             // can surface RESOURCE_EXHAUSTED instead of INTERNAL.
-                            let _ = tx2.send(
-                                b"pack size limit exceeded (streaming)".to_vec(),
-                            );
+                            let _ = tx2.send(b"pack size limit exceeded (streaming)".to_vec());
                             break;
                         }
                         if !chunk.pack_data.is_empty() && tx2.send(chunk.pack_data).is_err() {
