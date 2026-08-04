@@ -180,7 +180,6 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 	rootResolver, err := resolver.NewResolver(resolver.ResolverDeps{
 		Store:       store,
 		GitWriter:   writer,
-		AuthZ:       registry.AuthZ(),
 		Registry:    registry,
 		Logger:      log,
 		Clock:       clock,
