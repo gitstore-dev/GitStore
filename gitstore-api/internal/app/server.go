@@ -207,11 +207,17 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 		Cache: lru.New[string](100),
 	})
 
+	authenticateMiddleware := security.NewAuthenticate(registry, log)
+	authorizeMiddleware := security.NewAuthorize(registry, log)
+	gqlServer.AroundOperations(authenticateMiddleware.GraphQLAuthenticator)
+	gqlServer.AroundOperations(authorizeMiddleware.GraphQLAuthorizer)
+
 	gqlHandler := gin.HandlerFunc(func(c *gin.Context) {
+		ctx := security.ContextWithRemoteAddr(c.Request.Context(), c.RemoteIP())
+		c.Request = c.Request.WithContext(ctx)
 		gqlServer.ServeHTTP(c.Writer, c.Request)
 	})
 
-	authenticateMiddleware := security.NewAuthenticate(registry, log)
 	rateLimitMiddleware := security.NewRateLimit(10, 20)
 	requestIdMiddleware := middleware.NewRequestId(ids)
 
@@ -221,10 +227,7 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 	r.Use(security.CorsConfiguration())
 	r.Use(rateLimitMiddleware.RateLimiter)
 	r.GET("/playground", playgroundHandler)
-	routerGroup := r.Group("/")
-	routerGroup.Use(authenticateMiddleware.Authenticator)
-	routerGroup.Use(security.SecureHeaders)
-	routerGroup.POST("/graphql", gqlHandler)
+	r.POST("/graphql", security.SecureHeaders, gqlHandler)
 	return r, nil
 }
 

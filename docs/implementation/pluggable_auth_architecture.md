@@ -1148,14 +1148,21 @@ BasicAuthenticator → RepoResolver → GitHttpAuthorizer → [PushContextInsert
 **Test strategy:** Unit tests for each middleware (`TestBasicAuthTransientError`, `TestBasicAuthCredentialRejection`, `TestBasicAuthAllow`, `TestRepoResolverNotFound`, `TestGitHttpAuthorizerReadOnly`, `TestPushContextInserter`, `TestReceivePackAttachesPushContext`); Rust unit tests for pack/blob size enforcement and push_context validation; integration tests verify full hook pipeline with `HookContext` propagation.
 **Rollback trigger:** Legitimate push/fetch from an authenticated client fails.
 
-### Phase 6 — OIDC JWT provider
+### Phase 6 — GraphQL auth/authz middleware centralization ✅ COMPLETE
+**Milestone:** `auth-framework-graphql-v1`
+**Deliverable:** GraphQL authentication moved from Gin route middleware to gqlgen operation middleware (`AroundOperations`) via `GraphQLAuthenticator`. A new `GraphQLAuthorizer` operation middleware provides a centralized GraphQL security seam and enforces authentication for non-login mutations. Principal and raw bearer token propagation now occur in GraphQL middleware context instead of Gin route hooks.
+**Affected packages:** `gitstore-api/internal/app/`, `gitstore-api/internal/middleware/security/`, `gitstore-api/cmd/server/`
+**Test strategy:** Unit tests for GraphQL middleware decision paths (valid bearer, invalid bearer, anonymous mutation deny, login allow) plus GraphQL handler test for invalid bearer rejection.
+**Rollback trigger:** GraphQL login or authenticated mutation flows regress, or unauthenticated mutations are no longer blocked.
+
+### Phase 7 — OIDC JWT provider
 **Milestone:** `auth-framework-v2`
 **Deliverable:** `OIDCJWTProvider`; `go-oidc/v3` added to `go.mod`; local-secure profile end-to-end tested.
 **Affected packages:** `gitstore-api/internal/auth/provider/oidcjwt/`, `go.mod`
 **Test strategy:** Unit test with a mock JWKS server; integration test with a real local IdP (e.g., Dex running in Docker Compose test profile); test key rotation forced-refresh behavior.
 **Rollback trigger:** OIDC provider causes 500s on valid tokens, or breaks the static-admin fallback in the chain.
 
-### Phase 7 — OPA production AuthZ provider
+### Phase 8 — OPA production AuthZ provider
 **Milestone:** `auth-framework-v3`
 **Deliverable:** `OPAProvider` calling the OPA sidecar HTTP API; production `.env` profile wires `GITSTORE_AUTH__AUTHZ__PROVIDER=opa`; Rego policy equivalent to `policy.yaml` bundled.
 **Affected packages:** `gitstore-api/internal/auth/provider/opa/`, production deployment config
