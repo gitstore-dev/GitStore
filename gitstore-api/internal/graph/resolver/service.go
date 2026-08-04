@@ -225,7 +225,8 @@ func (s *Service) UpdateCollection(ctx context.Context, uid string, input map[st
 // ── Namespace ─────────────────────────────────────────────────────────────────
 
 // CreateNamespace validates and creates a new namespace.
-func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespaceInput, callerUsername string, isAdmin bool) (*datastore.Namespace, error) {
+// Authorization is enforced in GraphQL middleware before this method is called.
+func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespaceInput, callerUsername string) (*datastore.Namespace, error) {
 	identifier := strings.ToLower(strings.TrimSpace(input.Identifier))
 
 	if !identifierRegex.MatchString(identifier) {
@@ -239,13 +240,6 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 		return nil, gqlerror.Errorf("invalid namespace tier %q: must be USER or ORGANIZATION; enterprise and other tier values are not supported", input.Tier)
 	}
 	tier := datastoreNamespaceTierFromModel(input.Tier)
-
-	// ORGANIZATION namespaces require admin role.
-	if tier == datastore.NamespaceTierOrganization {
-		if !isAdmin {
-			return nil, gqlerror.Errorf("permission denied: only admins can create ORGANIZATION namespaces")
-		}
-	}
 
 	now := s.clock.Now()
 	var displayName string
@@ -312,20 +306,15 @@ func (s *Service) ListNamespaces(ctx context.Context, params datastore.PageParam
 	return result, nil
 }
 
-// DeleteNamespace deletes a namespace after authorisation and safety checks.
-func (s *Service) DeleteNamespace(ctx context.Context, identifier string, callerUsername string, isAdmin bool) error {
+// DeleteNamespace deletes a namespace after safety checks.
+// Authorization is enforced in GraphQL middleware before this method is called.
+func (s *Service) DeleteNamespace(ctx context.Context, identifier string) error {
 	ns, err := s.store.GetNamespaceByIdentifier(ctx, identifier)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
 			return gqlerror.Errorf("namespace %q not found", identifier)
 		}
 		return gqlerror.Errorf("failed to retrieve namespace")
-	}
-
-	// Determine whether this is own-namespace or any-namespace deletion.
-	isOwner := ns.CreatedBy == callerUsername
-	if !isOwner && !isAdmin {
-		return gqlerror.Errorf("permission denied: only the namespace owner or an admin may delete this namespace")
 	}
 
 	// TODO: enforce when repositories table exists

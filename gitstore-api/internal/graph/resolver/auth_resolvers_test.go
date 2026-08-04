@@ -107,16 +107,17 @@ func TestLogout_AuthenticatedBearer_ReturnsSuccess(t *testing.T) {
 	assert.True(t, payload.Success)
 }
 
-func TestLogout_UnauthenticatedCaller_ReturnsError(t *testing.T) {
+func TestLogout_AnonymousPrincipal_NoOpReturnsSuccess(t *testing.T) {
 	cfg := newTestConfig(t, "1h")
 	reg, _ := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	// Anonymous principal (AuthMethod == "none")
 	ctx := ctxWithPrincipal(authpkg.Anonymous())
 
-	_, err := r.Logout(ctx, model.LogoutInput{})
-	require.Error(t, err)
+	payload, err := r.Logout(ctx, model.LogoutInput{})
+	require.NoError(t, err)
+	require.NotNil(t, payload)
+	assert.True(t, payload.Success)
 }
 
 func TestLogout_NilPrincipal_ReturnsError(t *testing.T) {

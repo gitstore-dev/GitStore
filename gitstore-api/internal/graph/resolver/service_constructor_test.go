@@ -65,7 +65,7 @@ func TestServiceCreateNamespaceAndRepositoryUsesInjectedClockAndIDs(t *testing.T
 	ns, err := svc.CreateNamespace(ctx, model.CreateNamespaceInput{
 		Identifier: "acme",
 		Tier:       model.NamespaceTierUser,
-	}, "admin", true)
+	}, "admin")
 	require.NoError(t, err)
 	assert.Equal(t, namespaceID, ns.ID)
 	assert.Equal(t, now, ns.CreatedAt)

@@ -36,6 +36,7 @@ type Authorize struct {
 // datastoreGetter is the minimal datastore interface needed by the security middleware.
 type datastoreGetter interface {
 	GetRepository(ctx context.Context, id string) (*datastore.Repository, error)
+	GetNamespaceByIdentifier(ctx context.Context, identifier string) (*datastore.Namespace, error)
 }
 
 type RateLimit struct {
