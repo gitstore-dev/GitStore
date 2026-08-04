@@ -10,14 +10,13 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 // CreateNamespace is the resolver for the createNamespace field.
 func (r *mutationResolver) CreateNamespace(ctx context.Context, input model.CreateNamespaceInput) (*model.CreateNamespacePayload, error) {
 	p := auth.PrincipalFromContext(ctx)
-	if p == nil || p.AuthMethod == "none" {
-		return nil, gqlerror.Errorf("authentication required")
+	if p == nil {
+		p = auth.Anonymous()
 	}
 
 	ns, err := r.service.CreateNamespace(ctx, input, p.Subject, p.IsAdmin())
@@ -34,8 +33,8 @@ func (r *mutationResolver) CreateNamespace(ctx context.Context, input model.Crea
 // DeleteNamespace is the resolver for the deleteNamespace field.
 func (r *mutationResolver) DeleteNamespace(ctx context.Context, input model.DeleteNamespaceInput) (*model.DeleteNamespacePayload, error) {
 	p := auth.PrincipalFromContext(ctx)
-	if p == nil || p.AuthMethod == "none" {
-		return nil, gqlerror.Errorf("authentication required")
+	if p == nil {
+		p = auth.Anonymous()
 	}
 
 	if err := r.service.DeleteNamespace(ctx, input.Identifier, p.Subject, p.IsAdmin()); err != nil {
