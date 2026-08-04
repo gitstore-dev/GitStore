@@ -80,8 +80,9 @@ func (r *Resolver) Logout(ctx context.Context, input model.LogoutInput) (*model.
 	}
 
 	principal := auth.PrincipalFromContext(ctx)
-	if principal == nil || principal.AuthMethod == "none" {
-		return nil, gqlerror.Errorf("authentication required")
+	if principal == nil {
+		r.logger.Error("logout principal missing from context")
+		return nil, gqlerror.Errorf("internal server error")
 	}
 
 	// Empty TokenID means a Basic Auth session with no jti — nothing to revoke.
@@ -114,7 +115,7 @@ func (r *Resolver) RefreshToken(ctx context.Context, input model.RefreshTokenInp
 
 	rawToken := auth.RawTokenFromContext(ctx)
 	if rawToken == "" {
-		return nil, gqlerror.Errorf("authentication required")
+		return nil, gqlerror.Errorf("refresh token requires bearer authentication")
 	}
 
 	newToken, exp, err := r.registry.AuthN().RefreshSession(ctx, rawToken)

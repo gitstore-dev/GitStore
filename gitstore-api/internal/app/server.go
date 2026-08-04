@@ -207,9 +207,10 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 	})
 
 	authenticateMiddleware := security.NewAuthenticate(registry, log)
-	authorizeMiddleware := security.NewAuthorize(registry, log)
+	authorizeMiddleware := security.NewAuthorizeWithStore(registry, store, log)
 	gqlServer.AroundOperations(authenticateMiddleware.GraphQLAuthenticator)
 	gqlServer.AroundOperations(authorizeMiddleware.GraphQLAuthorizer)
+	gqlServer.AroundFields(authorizeMiddleware.GraphQLFieldAuthorizer)
 
 	gqlHandler := gin.HandlerFunc(func(c *gin.Context) {
 		ctx := security.ContextWithRemoteAddr(c.Request.Context(), c.RemoteIP())

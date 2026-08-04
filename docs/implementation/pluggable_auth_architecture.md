@@ -1153,6 +1153,8 @@ BasicAuthenticator → RepoResolver → GitHttpAuthorizer → [PushContextInsert
 **Deliverable:** GraphQL authentication moved from Gin route middleware to gqlgen operation middleware (`AroundOperations`) via `GraphQLAuthenticator`. A new `GraphQLAuthorizer` operation middleware provides a centralized GraphQL security seam and enforces authentication for non-login mutations. Principal and raw bearer token propagation now occur in GraphQL middleware context instead of Gin route hooks.
 **Affected packages:** `gitstore-api/internal/app/`, `gitstore-api/internal/middleware/security/`, `gitstore-api/cmd/server/`
 **Test strategy:** Unit tests for GraphQL middleware decision paths (valid bearer, invalid bearer, anonymous mutation deny, login allow) plus GraphQL handler test for invalid bearer rejection.
+**Auth responsibility boundary:** GraphQL authn/authz checks for mutation access and namespace policy decisions (`namespace.create.organization`, `namespace.delete.{own,any}`) run in gqlgen middleware (`AroundOperations` + `AroundFields`). Resolver/service layers keep business validation and datastore rules only.
+**Justified exceptions:** `login` intentionally performs credential verification inside its resolver because credentials are GraphQL input payloads (not request headers). `logout`/`refreshToken` resolvers keep token lifecycle execution (revoke/refresh calls), while authentication gating and bearer-token presence requirements are enforced by middleware.
 **Rollback trigger:** GraphQL login or authenticated mutation flows regress, or unauthenticated mutations are no longer blocked.
 
 ### Phase 7 — OIDC JWT provider
