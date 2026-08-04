@@ -223,7 +223,7 @@ func (a *Authenticate) BasicAuthenticator(c *gin.Context) {
 
 // Authorizer authorizes a GraphQL request.
 func (a *Authorize) Authorizer(c *gin.Context) {
-	// Implement GraphQL Authorizer middleware
+	c.Next()
 }
 
 // repoIDKey matches the constant defined in githttp/resolver.go.

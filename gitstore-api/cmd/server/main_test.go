@@ -247,3 +247,30 @@ func TestGraphQLHandlerRejectsNamespaceMutationWithoutBearerToken(t *testing.T) 
 	require.NotEmpty(t, response.Errors)
 	assert.Contains(t, response.Errors[0].Message, "authentication required")
 }
+
+func TestGraphQLHandlerRejectsMutationWithInvalidBearerToken(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+
+	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, apiruntime.NewSequenceIDGenerator())
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
+		"query": "mutation { createNamespace(input: { identifier: \"alice\", tier: USER }) { namespace { identifier } } }"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer invalid-token")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.NotEmpty(t, response.Errors)
+	assert.Contains(t, response.Errors[0].Message, "invalid or expired credentials")
+}
