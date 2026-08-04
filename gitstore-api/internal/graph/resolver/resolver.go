@@ -41,15 +41,10 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 	if deps.Logger == nil {
 		return nil, errMissingLogger
 	}
-	var authz auth.AuthZProvider
-	if deps.Registry != nil {
-		authz = deps.Registry.AuthZ()
-	}
 	SetConverterLogger(deps.Logger)
 	svc, err := NewService(ServiceDeps{
 		Store:       deps.Store,
 		GitWriter:   deps.GitWriter,
-		AuthZ:       authz,
 		Logger:      deps.Logger,
 		Clock:       deps.Clock,
 		IDGenerator: deps.IDGenerator,
