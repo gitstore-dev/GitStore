@@ -79,10 +79,12 @@ func (r *Resolver) Logout(ctx context.Context, input model.LogoutInput) (*model.
 		return nil, gqlerror.Errorf("authentication service unavailable")
 	}
 
+	// GraphQLAuthorizer already denies anonymous principals for non-login
+	// mutations; this check is defense-in-depth so Logout fails closed even
+	// if invoked without the operation middleware (e.g. direct resolver call).
 	principal := auth.PrincipalFromContext(ctx)
-	if principal == nil {
-		r.logger.Error("logout principal missing from context")
-		return nil, gqlerror.Errorf("internal server error")
+	if principal == nil || principal.AuthMethod == "none" {
+		return nil, gqlerror.Errorf("authentication required")
 	}
 
 	// Empty TokenID means a Basic Auth session with no jti — nothing to revoke.
