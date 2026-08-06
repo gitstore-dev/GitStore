@@ -101,7 +101,7 @@ func (a *Authorize) GraphQLAuthorizer(ctx context.Context, next graphql.Operatio
 		ctx = auth.ContextWithPrincipal(ctx, principal)
 	}
 
-	if requiresAuthenticatedPrincipal(opCtx.Operation, opCtx.Doc) && principal.AuthMethod == "none" {
+	if requiresAuthenticatedPrincipal(opCtx) && principal.AuthMethod == "none" {
 		return graphql.OneShot(graphql.ErrorResponse(ctx, "authentication required"))
 	}
 
@@ -235,44 +235,18 @@ func nestedStringArg(args map[string]any, parent, key string) (string, bool) {
 	return field.String(), true
 }
 
-func requiresAuthenticatedPrincipal(op *ast.OperationDefinition, doc *ast.QueryDocument) bool {
-	if op == nil || op.Operation != ast.Mutation {
+// requiresAuthenticatedPrincipal reports whether the operation executes any
+// root mutation field other than "login"/"__typename". It delegates to
+// graphql.CollectFields — the same field-collection gqlgen itself uses to
+// decide what will actually run — so fragment spreads, inline fragments, and
+// @skip/@include directives are honored instead of re-derived by hand.
+func requiresAuthenticatedPrincipal(opCtx *graphql.OperationContext) bool {
+	if opCtx == nil || opCtx.Operation == nil || opCtx.Operation.Operation != ast.Mutation {
 		return false
 	}
-	var fragments ast.FragmentDefinitionList
-	if doc != nil {
-		fragments = doc.Fragments
-	}
-	return selectionSetRequiresAuthentication(op.SelectionSet, fragments, make(map[string]bool))
-}
-
-func selectionSetRequiresAuthentication(selections ast.SelectionSet, fragments ast.FragmentDefinitionList, visiting map[string]bool) bool {
-	for _, selection := range selections {
-		switch selection := selection.(type) {
-		case *ast.Field:
-			if selection.Name != "login" && selection.Name != "__typename" {
-				return true
-			}
-		case *ast.InlineFragment:
-			if selectionSetRequiresAuthentication(selection.SelectionSet, fragments, visiting) {
-				return true
-			}
-		case *ast.FragmentSpread:
-			definition := selection.Definition
-			if definition == nil {
-				definition = fragments.ForName(selection.Name)
-			}
-			// Validated documents always resolve fragment spreads. Fail closed if
-			// an incomplete or cyclic AST reaches this security boundary.
-			if definition == nil || visiting[definition.Name] {
-				return true
-			}
-			visiting[definition.Name] = true
-			requiresAuth := selectionSetRequiresAuthentication(definition.SelectionSet, fragments, visiting)
-			delete(visiting, definition.Name)
-			if requiresAuth {
-				return true
-			}
+	for _, field := range graphql.CollectFields(opCtx, opCtx.Operation.SelectionSet, []string{"Mutation"}) {
+		if field.Name != "login" && field.Name != "__typename" {
+			return true
 		}
 	}
 	return false

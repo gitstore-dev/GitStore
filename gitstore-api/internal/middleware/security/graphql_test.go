@@ -204,6 +204,127 @@ func TestGraphQLAuthorizerRequiresAuthForMutationInInlineFragment(t *testing.T) 
 	assertAnonymousOperationRejected(t, opCtx)
 }
 
+func TestGraphQLAuthorizerAllowsLoginViaFragmentSpreadForAnonymous(t *testing.T) {
+	fragment := &ast.FragmentDefinition{
+		Name:          "Login",
+		TypeCondition: "Mutation",
+		SelectionSet: ast.SelectionSet{
+			&ast.Field{Name: "login"},
+		},
+	}
+	opCtx := &graphql.OperationContext{
+		Headers: http.Header{},
+		Doc: &ast.QueryDocument{
+			Fragments: ast.FragmentDefinitionList{fragment},
+		},
+		Operation: &ast.OperationDefinition{
+			Operation: ast.Mutation,
+			SelectionSet: ast.SelectionSet{
+				&ast.FragmentSpread{Name: fragment.Name},
+			},
+		},
+	}
+
+	registry, _ := newTestRegistry(t)
+	ctx := graphql.WithOperationContext(context.Background(), opCtx)
+	authn := NewAuthenticate(registry, zap.NewNop())
+	authz := NewAuthorize(registry, zap.NewNop())
+	called := false
+	final := func(context.Context) graphql.ResponseHandler {
+		called = true
+		return graphql.OneShot(&graphql.Response{Data: []byte(`{"ok":true}`)})
+	}
+
+	resp := authn.GraphQLAuthenticator(ctx, func(inner context.Context) graphql.ResponseHandler {
+		return authz.GraphQLAuthorizer(inner, final)
+	})(ctx)
+	require.NotNil(t, resp)
+	require.Nil(t, resp.Errors)
+	assert.True(t, called)
+}
+
+func TestGraphQLAuthorizerRequiresAuthForSecondRootFieldAfterLogin(t *testing.T) {
+	opCtx := &graphql.OperationContext{
+		Headers: http.Header{},
+		Operation: &ast.OperationDefinition{
+			Operation: ast.Mutation,
+			SelectionSet: ast.SelectionSet{
+				&ast.Field{Name: "login"},
+				&ast.Field{Name: "createNamespace"},
+			},
+		},
+	}
+
+	assertAnonymousOperationRejected(t, opCtx)
+}
+
+func TestGraphQLAuthorizerHonorsSkipDirectiveOnMutationField(t *testing.T) {
+	opCtx := &graphql.OperationContext{
+		Headers:   http.Header{},
+		Variables: map[string]any{"skipCreate": true},
+		Operation: &ast.OperationDefinition{
+			Operation: ast.Mutation,
+			SelectionSet: ast.SelectionSet{
+				&ast.Field{Name: "login"},
+				&ast.Field{
+					Name: "createNamespace",
+					Directives: ast.DirectiveList{
+						&ast.Directive{
+							Name: "skip",
+							Arguments: ast.ArgumentList{
+								{Name: "if", Value: &ast.Value{Kind: ast.Variable, Raw: "skipCreate"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	registry, _ := newTestRegistry(t)
+	ctx := graphql.WithOperationContext(context.Background(), opCtx)
+	authn := NewAuthenticate(registry, zap.NewNop())
+	authz := NewAuthorize(registry, zap.NewNop())
+	called := false
+	final := func(context.Context) graphql.ResponseHandler {
+		called = true
+		return graphql.OneShot(&graphql.Response{Data: []byte(`{"ok":true}`)})
+	}
+
+	resp := authn.GraphQLAuthenticator(ctx, func(inner context.Context) graphql.ResponseHandler {
+		return authz.GraphQLAuthorizer(inner, final)
+	})(ctx)
+	require.NotNil(t, resp)
+	require.Nil(t, resp.Errors)
+	assert.True(t, called)
+}
+
+func TestGraphQLAuthorizerRequiresAuthWhenSkipConditionFalse(t *testing.T) {
+	opCtx := &graphql.OperationContext{
+		Headers:   http.Header{},
+		Variables: map[string]any{"skipCreate": false},
+		Operation: &ast.OperationDefinition{
+			Operation: ast.Mutation,
+			SelectionSet: ast.SelectionSet{
+				&ast.Field{Name: "login"},
+				&ast.Field{
+					Name: "createNamespace",
+					Directives: ast.DirectiveList{
+						&ast.Directive{
+							Name: "skip",
+							Arguments: ast.ArgumentList{
+								{Name: "if", Value: &ast.Value{Kind: ast.Variable, Raw: "skipCreate"}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	assertAnonymousOperationRejected(t, opCtx)
+}
+
 func assertAnonymousOperationRejected(t *testing.T, opCtx *graphql.OperationContext) {
 	t.Helper()
 	registry, _ := newTestRegistry(t)
