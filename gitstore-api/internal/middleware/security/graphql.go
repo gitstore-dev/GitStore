@@ -200,20 +200,15 @@ func (a *Authorize) namespaceDeleteAction(ctx context.Context, identifier string
 	return ns, "namespace.delete.any", nil
 }
 
+// nestedStringArg reads a string field off a gqlgen-generated input struct
+// (e.g. args["input"].tier). gqlgen always unmarshals GraphQL input objects
+// into their generated struct type before FieldContext.Args is populated, so
+// only the struct-based representation is handled here.
 func nestedStringArg(args map[string]any, parent, key string) (string, bool) {
 	parentVal, ok := args[parent]
 	if !ok || parentVal == nil {
 		return "", false
 	}
-	// map-based argument representation
-	if m, ok := parentVal.(map[string]any); ok {
-		v, ok := m[key]
-		if !ok || v == nil {
-			return "", false
-		}
-		return fmt.Sprint(v), true
-	}
-	// struct-based argument representation (gqlgen generated input types)
 	rv := reflect.ValueOf(parentVal)
 	if rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
