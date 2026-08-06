@@ -36,6 +36,7 @@ type Authorize struct {
 // datastoreGetter is the minimal datastore interface needed by the security middleware.
 type datastoreGetter interface {
 	GetRepository(ctx context.Context, id string) (*datastore.Repository, error)
+	GetNamespaceByIdentifier(ctx context.Context, identifier string) (*datastore.Namespace, error)
 }
 
 type RateLimit struct {
@@ -219,11 +220,6 @@ func (a *Authenticate) Authenticator(c *gin.Context) {
 // Authenticates git smart http.
 func (a *Authenticate) BasicAuthenticator(c *gin.Context) {
 	a.authenticator(c, basicAuth)
-}
-
-// Authorizer authorizes a GraphQL request.
-func (a *Authorize) Authorizer(c *gin.Context) {
-	// Implement GraphQL Authorizer middleware
 }
 
 // repoIDKey matches the constant defined in githttp/resolver.go.

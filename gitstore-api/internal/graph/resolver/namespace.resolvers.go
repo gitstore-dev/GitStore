@@ -8,19 +8,14 @@ package resolver
 import (
 	"context"
 
-	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 // CreateNamespace is the resolver for the createNamespace field.
 func (r *mutationResolver) CreateNamespace(ctx context.Context, input model.CreateNamespaceInput) (*model.CreateNamespacePayload, error) {
-	p := auth.PrincipalFromContext(ctx)
-	if p == nil || p.AuthMethod == "none" {
-		return nil, gqlerror.Errorf("authentication required")
-	}
-
-	ns, err := r.service.CreateNamespace(ctx, input, p.Subject, p.IsAdmin())
+	ns, err := r.service.CreateNamespace(ctx, input, callerUsernameOrAnon(ctx, r))
 	if err != nil {
 		return nil, err
 	}
@@ -33,12 +28,11 @@ func (r *mutationResolver) CreateNamespace(ctx context.Context, input model.Crea
 
 // DeleteNamespace is the resolver for the deleteNamespace field.
 func (r *mutationResolver) DeleteNamespace(ctx context.Context, input model.DeleteNamespaceInput) (*model.DeleteNamespacePayload, error) {
-	p := auth.PrincipalFromContext(ctx)
-	if p == nil || p.AuthMethod == "none" {
-		return nil, gqlerror.Errorf("authentication required")
+	ns, ok := security.AuthorizedNamespaceForDeletion(ctx)
+	if !ok || ns.Identifier != input.Identifier {
+		return nil, gqlerror.Errorf("namespace deletion authorization context is missing")
 	}
-
-	if err := r.service.DeleteNamespace(ctx, input.Identifier, p.Subject, p.IsAdmin()); err != nil {
+	if err := r.service.DeleteNamespace(ctx, ns); err != nil {
 		return nil, err
 	}
 

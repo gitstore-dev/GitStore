@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
@@ -41,7 +40,6 @@ var reservedIdentifiers = map[string]struct{}{
 type Service struct {
 	store     datastore.Datastore
 	gitWriter GitWriter
-	authz     auth.AuthZProvider
 	logger    *zap.Logger
 	clock     apiruntime.Clock
 	ids       apiruntime.IDGenerator
@@ -61,7 +59,6 @@ type GitWriter interface {
 type ServiceDeps struct {
 	Store       datastore.Datastore
 	GitWriter   GitWriter
-	AuthZ       auth.AuthZProvider
 	Logger      *zap.Logger
 	Clock       apiruntime.Clock
 	IDGenerator apiruntime.IDGenerator
@@ -86,7 +83,6 @@ func NewService(deps ServiceDeps) (*Service, error) {
 	return &Service{
 		store:     deps.Store,
 		gitWriter: deps.GitWriter,
-		authz:     deps.AuthZ,
 		logger:    deps.Logger,
 		clock:     clock,
 		ids:       ids,
@@ -229,7 +225,8 @@ func (s *Service) UpdateCollection(ctx context.Context, uid string, input map[st
 // ── Namespace ─────────────────────────────────────────────────────────────────
 
 // CreateNamespace validates and creates a new namespace.
-func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespaceInput, callerUsername string, isAdmin bool) (*datastore.Namespace, error) {
+// Authorization is enforced in GraphQL middleware before this method is called.
+func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespaceInput, callerUsername string) (*datastore.Namespace, error) {
 	identifier := strings.ToLower(strings.TrimSpace(input.Identifier))
 
 	if !identifierRegex.MatchString(identifier) {
@@ -243,27 +240,6 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 		return nil, gqlerror.Errorf("invalid namespace tier %q: must be USER or ORGANIZATION; enterprise and other tier values are not supported", input.Tier)
 	}
 	tier := datastoreNamespaceTierFromModel(input.Tier)
-
-	// ORGANIZATION namespaces require explicit authorization.
-	if tier == datastore.NamespaceTierOrganization {
-		principal := auth.PrincipalFromContext(ctx)
-		if principal == nil {
-			principal = auth.Anonymous()
-		}
-		if s.authz != nil {
-			decision, err := s.authz.Authorize(ctx, principal, "namespace.create.organization",
-				auth.ResourceContext{Kind: "namespace", Attrs: map[string]any{"tier": string(tier)}})
-			if err != nil {
-				return nil, gqlerror.Errorf("authorization error")
-			}
-			if decision.Outcome == auth.OutcomeDeny {
-				return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
-			}
-		} else if !isAdmin {
-			// Fallback when no authz provider is wired (tests using nil Service.authz).
-			return nil, gqlerror.Errorf("permission denied: only admins can create ORGANIZATION namespaces")
-		}
-	}
 
 	now := s.clock.Now()
 	var displayName string
@@ -330,51 +306,24 @@ func (s *Service) ListNamespaces(ctx context.Context, params datastore.PageParam
 	return result, nil
 }
 
-// DeleteNamespace deletes a namespace after authorisation and safety checks.
-func (s *Service) DeleteNamespace(ctx context.Context, identifier string, callerUsername string, isAdmin bool) error {
-	ns, err := s.store.GetNamespaceByIdentifier(ctx, identifier)
-	if err != nil {
-		if errors.Is(err, datastore.ErrNotFound) {
-			return gqlerror.Errorf("namespace %q not found", identifier)
-		}
-		return gqlerror.Errorf("failed to retrieve namespace")
-	}
-
-	// Determine whether this is own-namespace or any-namespace deletion.
-	isOwner := ns.CreatedBy == callerUsername
-	action := "namespace.delete.any"
-	if isOwner {
-		action = "namespace.delete.own"
-	}
-	principal := auth.PrincipalFromContext(ctx)
-	if principal == nil {
-		principal = auth.Anonymous()
-	}
-	if s.authz != nil {
-		decision, err := s.authz.Authorize(ctx, principal, action,
-			auth.ResourceContext{Kind: "namespace", Name: identifier, OwnerSub: ns.CreatedBy})
-		if err != nil {
-			return gqlerror.Errorf("authorization error")
-		}
-		if decision.Outcome == auth.OutcomeDeny {
-			return gqlerror.Errorf("permission denied: %s", decision.Reason)
-		}
-	} else if !isOwner && !isAdmin {
-		// Fallback for tests using nil authz.
-		return gqlerror.Errorf("permission denied: only the namespace owner or an admin may delete this namespace")
+// DeleteNamespace deletes a namespace after safety checks.
+// Authorization is enforced in GraphQL middleware before this method is called.
+func (s *Service) DeleteNamespace(ctx context.Context, ns *datastore.Namespace) error {
+	if ns == nil || ns.ID == "" {
+		return gqlerror.Errorf("namespace deletion target is missing")
 	}
 
 	// TODO: enforce when repositories table exists
 	if hasRepositories(ns.ID) {
-		return gqlerror.Errorf("namespace %q contains repositories and cannot be deleted", identifier)
+		return gqlerror.Errorf("namespace %q contains repositories and cannot be deleted", ns.Identifier)
 	}
 
 	if err := s.store.DeleteNamespace(ctx, ns.ID); err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
-			return gqlerror.Errorf("namespace %q not found", identifier)
+			return gqlerror.Errorf("namespace %q not found", ns.Identifier)
 		}
 		s.logger.Error("failed to delete namespace",
-			zap.String("identifier", identifier),
+			zap.String("identifier", ns.Identifier),
 			zap.Error(err),
 		)
 		return gqlerror.Errorf("failed to delete namespace")

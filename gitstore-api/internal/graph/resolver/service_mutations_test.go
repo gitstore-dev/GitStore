@@ -8,7 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
@@ -81,18 +80,11 @@ func (m *mockGitWriter) CreateTag(_ context.Context, p gitclient.CreateTagParams
 // newTestSvc builds a Service backed by an in-memory datastore.
 func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
 	t.Helper()
-	return newTestSvcWithAuthZ(t, writer, nil)
-}
-
-// newTestSvcWithAuthZ builds a Service with an explicit AuthZ provider.
-func newTestSvcWithAuthZ(t *testing.T, writer *mockGitWriter, authz auth.AuthZProvider) *resolver.Service {
-	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
 	svc, err := resolver.NewService(resolver.ServiceDeps{
 		Store:     store,
 		GitWriter: writer,
-		AuthZ:     authz,
 		Logger:    zap.NewNop(),
 	})
 	require.NoError(t, err)

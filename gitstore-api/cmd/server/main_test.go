@@ -98,6 +98,16 @@ func newTestGraphQLRegistry(t *testing.T) *authpkg.ProviderRegistry {
 	)
 }
 
+func TestGraphQLHandlerRequiresAuthZProvider(t *testing.T) {
+	registry := newTestGraphQLRegistry(t)
+	registry.Swap(registry.AuthN(), nil, nil)
+
+	handler, err := app.NewGraphQLHandler(nil, nil, zap.NewNop(), registry, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, handler)
+	assert.Contains(t, err.Error(), "authn and authz provider registry is required")
+}
+
 func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -106,7 +116,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	require.NoError(t, err)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
-		"query": "mutation { login(input: { username: \"admin\", password: \"admin123\" }) { session { token user { username isAdmin } } } }"
+		"query": "mutation { login(input: { username: \"admin\", password: \"admin123\" }) { token { accessToken tokenType } } }"
 	}`))
 	loginReq.Header.Set("Content-Type", "application/json")
 	loginW := httptest.NewRecorder()
@@ -117,13 +127,10 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	var loginResponse struct {
 		Data struct {
 			Login struct {
-				Session struct {
-					Token string `json:"token"`
-					User  struct {
-						Username string `json:"username"`
-						IsAdmin  bool   `json:"isAdmin"`
-					} `json:"user"`
-				} `json:"session"`
+				Token struct {
+					AccessToken string `json:"accessToken"`
+					TokenType   string `json:"tokenType"`
+				} `json:"token"`
 			} `json:"login"`
 		} `json:"data"`
 		Errors []struct {
@@ -132,15 +139,14 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(loginW.Body.Bytes(), &loginResponse))
 	require.Empty(t, loginResponse.Errors)
-	require.NotEmpty(t, loginResponse.Data.Login.Session.Token)
-	assert.Equal(t, "admin", loginResponse.Data.Login.Session.User.Username)
-	assert.True(t, loginResponse.Data.Login.Session.User.IsAdmin)
+	require.NotEmpty(t, loginResponse.Data.Login.Token.AccessToken)
+	assert.Equal(t, "Bearer", loginResponse.Data.Login.Token.TokenType)
 
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
 		"query": "mutation { createNamespace(input: { identifier: \"alice\", tier: USER }) { clientMutationId namespace { identifier createdBy } } }"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+loginResponse.Data.Login.Session.Token)
+	req.Header.Set("Authorization", "Bearer "+loginResponse.Data.Login.Token.AccessToken)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -205,7 +211,7 @@ func TestGraphQLHandlerRejectsLoginWithInvalidCredentials(t *testing.T) {
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
-		"query": "mutation { login(input: { username: \"admin\", password: \"wrong\" }) { session { token } } }"
+		"query": "mutation { login(input: { username: \"admin\", password: \"wrong\" }) { token { accessToken } } }"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -246,4 +252,31 @@ func TestGraphQLHandlerRejectsNamespaceMutationWithoutBearerToken(t *testing.T) 
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	require.NotEmpty(t, response.Errors)
 	assert.Contains(t, response.Errors[0].Message, "authentication required")
+}
+
+func TestGraphQLHandlerRejectsMutationWithInvalidBearerToken(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+
+	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, apiruntime.NewSequenceIDGenerator())
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
+		"query": "mutation { createNamespace(input: { identifier: \"alice\", tier: USER }) { namespace { identifier } } }"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer invalid-token")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var response struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.NotEmpty(t, response.Errors)
+	assert.Contains(t, response.Errors[0].Message, "invalid or expired credentials")
 }

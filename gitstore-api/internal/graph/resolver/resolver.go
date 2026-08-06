@@ -30,7 +30,6 @@ type Resolver struct {
 type ResolverDeps struct {
 	Store       datastore.Datastore
 	GitWriter   GitWriter
-	AuthZ       auth.AuthZProvider
 	Registry    *auth.ProviderRegistry
 	Logger      *zap.Logger
 	Clock       apiruntime.Clock
@@ -46,7 +45,6 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 	svc, err := NewService(ServiceDeps{
 		Store:       deps.Store,
 		GitWriter:   deps.GitWriter,
-		AuthZ:       deps.AuthZ,
 		Logger:      deps.Logger,
 		Clock:       deps.Clock,
 		IDGenerator: deps.IDGenerator,

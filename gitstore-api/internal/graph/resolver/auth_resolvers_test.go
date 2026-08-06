@@ -77,11 +77,6 @@ func ctxWithPrincipal(principal *authpkg.Principal) context.Context {
 	return authpkg.ContextWithPrincipal(context.Background(), principal)
 }
 
-func ctxWithPrincipalAndRawToken(principal *authpkg.Principal, rawToken string) context.Context {
-	ctx := authpkg.ContextWithPrincipal(context.Background(), principal)
-	return authpkg.ContextWithRawToken(ctx, rawToken)
-}
-
 // --- US1: Logout ---
 
 func TestLogout_AuthenticatedBearer_ReturnsSuccess(t *testing.T) {
@@ -107,16 +102,16 @@ func TestLogout_AuthenticatedBearer_ReturnsSuccess(t *testing.T) {
 	assert.True(t, payload.Success)
 }
 
-func TestLogout_UnauthenticatedCaller_ReturnsError(t *testing.T) {
+func TestLogout_AnonymousPrincipal_ReturnsError(t *testing.T) {
 	cfg := newTestConfig(t, "1h")
 	reg, _ := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	// Anonymous principal (AuthMethod == "none")
 	ctx := ctxWithPrincipal(authpkg.Anonymous())
 
 	_, err := r.Logout(ctx, model.LogoutInput{})
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "authentication required")
 }
 
 func TestLogout_NilPrincipal_ReturnsError(t *testing.T) {
@@ -158,16 +153,15 @@ func TestRefreshToken_ValidToken_ReturnsNewSession(t *testing.T) {
 	token, _, err := p.IssueToken("admin")
 	require.NoError(t, err)
 
-	principal := &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin"}
-	ctx := ctxWithPrincipalAndRawToken(principal, token)
-
-	payload, err := r.RefreshToken(ctx, model.RefreshTokenInput{})
+	payload, err := r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: token})
 	require.NoError(t, err)
 	require.NotNil(t, payload)
-	require.NotNil(t, payload.Session)
-	assert.NotEmpty(t, payload.Session.Token)
-	assert.NotEqual(t, token, payload.Session.Token, "refreshed token must differ from original")
-	assert.False(t, payload.Session.ExpiresAt.IsZero())
+	assert.NotEmpty(t, payload.Token.AccessToken)
+	assert.Equal(t, "Bearer", payload.Token.TokenType)
+	assert.Greater(t, payload.Token.ExpiresIn, int32(0))
+	require.NotNil(t, payload.Token.RefreshToken)
+	assert.NotEqual(t, token, payload.Token.AccessToken, "refreshed token must differ from original")
+	assert.Equal(t, payload.Token.AccessToken, *payload.Token.RefreshToken)
 }
 
 func TestRefreshToken_ExpiredWithinGrace_Succeeds(t *testing.T) {
@@ -178,13 +172,10 @@ func TestRefreshToken_ExpiredWithinGrace_Succeeds(t *testing.T) {
 	token, _, err := p.IssueToken("admin")
 	require.NoError(t, err)
 
-	principal := &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin"}
-	ctx := ctxWithPrincipalAndRawToken(principal, token)
-
-	payload, err := r.RefreshToken(ctx, model.RefreshTokenInput{})
+	payload, err := r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: token})
 	require.NoError(t, err)
 	require.NotNil(t, payload)
-	assert.NotEmpty(t, payload.Session.Token)
+	assert.NotEmpty(t, payload.Token.AccessToken)
 }
 
 func TestRefreshToken_ExpiredBeyondGrace_ReturnsError(t *testing.T) {
@@ -195,10 +186,7 @@ func TestRefreshToken_ExpiredBeyondGrace_ReturnsError(t *testing.T) {
 	token, _, err := p.IssueToken("admin")
 	require.NoError(t, err)
 
-	principal := &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin"}
-	ctx := ctxWithPrincipalAndRawToken(principal, token)
-
-	_, err = r.RefreshToken(ctx, model.RefreshTokenInput{})
+	_, err = r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: token})
 	require.Error(t, err)
 }
 
@@ -214,29 +202,49 @@ func TestRefreshToken_RevokedToken_ReturnsError(t *testing.T) {
 	err = p.RevokeSession(context.Background(), jti, exp)
 	require.NoError(t, err)
 
-	principal := &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin"}
-	ctx := ctxWithPrincipalAndRawToken(principal, token)
-
-	_, err = r.RefreshToken(ctx, model.RefreshTokenInput{})
+	_, err = r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: token})
 	require.Error(t, err)
 }
 
-func TestRefreshToken_NoRawToken_ReturnsError(t *testing.T) {
+func TestRefreshToken_EmptyRefreshToken_ReturnsError(t *testing.T) {
 	cfg := newTestConfig(t, "1h")
 	reg, _ := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	// No raw token in context — unauthenticated or Basic Auth session
-	principal := &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin"}
-	ctx := ctxWithPrincipal(principal)
-
-	_, err := r.RefreshToken(ctx, model.RefreshTokenInput{})
+	_, err := r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: ""})
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refresh token is required")
+}
+
+func TestRefreshToken_UnsupportedScope_ReturnsError(t *testing.T) {
+	cfg := newTestConfig(t, "1h")
+	reg, p := newTestRegistry(t, cfg)
+	r := newTestResolver(t, reg)
+
+	token, _, err := p.IssueToken("admin")
+	require.NoError(t, err)
+	scope := "catalog:read"
+	_, err = r.RefreshToken(context.Background(), model.RefreshTokenInput{
+		RefreshToken: token,
+		Scope:        &scope,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scope requests are not supported")
+}
+
+func TestRefreshToken_InvalidToken_ReturnsClientAuthError(t *testing.T) {
+	cfg := newTestConfig(t, "1h")
+	reg, _ := newTestRegistry(t, cfg)
+	r := newTestResolver(t, reg)
+
+	_, err := r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: "not-a-jwt"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid or expired refresh token")
 }
 
 // --- US3: Login migration ---
 
-func TestLogin_ValidCredentials_ReturnsSession(t *testing.T) {
+func TestLogin_ValidCredentials_ReturnsTokenPayload(t *testing.T) {
 	cfg := newTestConfig(t, "1h")
 	reg, _ := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
@@ -246,12 +254,13 @@ func TestLogin_ValidCredentials_ReturnsSession(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, payload)
-	require.NotNil(t, payload.Session)
-	assert.NotEmpty(t, payload.Session.Token)
-	assert.False(t, payload.Session.ExpiresAt.IsZero())
-	require.NotNil(t, payload.Session.User)
-	assert.Equal(t, "admin", payload.Session.User.Username)
-	assert.True(t, payload.Session.User.IsAdmin, "admin user must have isAdmin=true derived from principal roles")
+	assert.NotEmpty(t, payload.Token.AccessToken)
+	assert.Equal(t, "Bearer", payload.Token.TokenType)
+	assert.Greater(t, payload.Token.ExpiresIn, int32(0))
+	require.NotNil(t, payload.Token.RefreshToken)
+	assert.Equal(t, payload.Token.AccessToken, *payload.Token.RefreshToken)
+	assert.Nil(t, payload.Token.Scope)
+	assert.Nil(t, payload.Token.IDToken)
 }
 
 func TestLogin_InvalidPassword_ReturnsError(t *testing.T) {
@@ -261,6 +270,17 @@ func TestLogin_InvalidPassword_ReturnsError(t *testing.T) {
 
 	_, err := r.Login(context.Background(), model.LoginInput{Username: "admin", Password: "wrongpass"})
 	require.Error(t, err)
+}
+
+func TestLogin_UnsupportedScope_ReturnsError(t *testing.T) {
+	cfg := newTestConfig(t, "1h")
+	reg, _ := newTestRegistry(t, cfg)
+	r := newTestResolver(t, reg)
+	scope := "catalog:read"
+
+	_, err := r.Login(context.Background(), model.LoginInput{Username: "admin", Password: "testpass", Scope: &scope})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scope requests are not supported")
 }
 
 func TestLogin_NilRegistry_ReturnsError(t *testing.T) {
@@ -304,9 +324,7 @@ func TestRefreshToken_NilRegistry_ReturnsError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	principal := &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin"}
-	ctx := ctxWithPrincipalAndRawToken(principal, "some.bearer.token")
-	_, err = r.RefreshToken(ctx, model.RefreshTokenInput{})
+	_, err = r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: "some.refresh.token"})
 	require.Error(t, err)
 }
 

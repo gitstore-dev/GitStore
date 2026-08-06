@@ -15,24 +15,34 @@ type User {
   isAdmin: Boolean!
 }
 
-"""
-Authentication session response
-"""
-type AuthSession {
-  """
-  JWT token for authentication
-  """
-  token: String!
+"""OIDC-compatible token response."""
+type TokenResponse {
+  """Access token used for authenticated API calls."""
+  accessToken: String!
+
+  """Token type. Always `Bearer` for GitStore-issued tokens."""
+  tokenType: String!
+
+  """Seconds until the access token expires."""
+  expiresIn: Int!
 
   """
-  Token expiration time (ISO 8601)
+  Refresh token used to obtain a new access token.
+  For local providers, this is currently a GitStore-issued token.
   """
-  expiresAt: DateTime!
+  refreshToken: String
 
   """
-  Authenticated user information
+  Granted scope set as a space-delimited string.
+  Scope requests are currently unsupported and this field is null.
   """
-  user: User!
+  scope: String
+
+  """
+  OIDC ID token when available.
+  GitStore local providers currently do not issue this field.
+  """
+  idToken: String
 }
 
 """
@@ -48,6 +58,12 @@ input LoginInput {
   Password
   """
   password: String!
+
+  """
+  Optional OAuth2 scope request.
+  Scope requests are currently unsupported by local providers.
+  """
+  scope: String
 }
 
 """
@@ -55,9 +71,9 @@ Login mutation payload (Relay pattern)
 """
 type LoginPayload {
   """
-  Authentication session (token + user info)
+  OIDC-compatible token payload.
   """
-  session: AuthSession
+  token: TokenResponse!
 }
 
 """
@@ -86,10 +102,15 @@ Refresh token mutation input (Relay pattern)
 """
 input RefreshTokenInput {
   """
-  TODO: Is it safe to remove and empty Input?
-  Client mutation ID for request tracking (Relay pattern)
+  Refresh token used to issue a new access token.
   """
-  clientMutationId: String
+  refreshToken: String!
+
+  """
+  Optional OAuth2 scope request.
+  Scope requests are currently unsupported by local providers.
+  """
+  scope: String
 }
 
 """
@@ -97,9 +118,9 @@ Refresh token mutation payload (Relay pattern)
 """
 type RefreshTokenPayload {
   """
-  New authentication session
+  OIDC-compatible token payload.
   """
-  session: AuthSession
+  token: TokenResponse!
 }
 
 # Add authentication mutations to the Mutation type
