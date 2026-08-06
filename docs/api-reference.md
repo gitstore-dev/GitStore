@@ -21,20 +21,23 @@ Public read access depends on resolver and deployment policy. Protected mutation
 Authorization: Bearer <token>
 ```
 
-First-party login is GraphQL-only via the `login(input:)` mutation.
+GitStore delegates OAuth2/OIDC federation to external identity providers. The GraphQL `login`
+mutation is a local-provider convenience (for example `static-admin`) and returns an OIDC-style
+token payload. External providers such as `oidc-jwt` are expected to authenticate out-of-band and
+present a token to GitStore for verification.
 
 Login:
 
 ```graphql
 mutation Login {
   login(input: { username: "admin", password: "<password>" }) {
-    session {
-      token
-      expiresAt
-      user {
-        username
-        isAdmin
-      }
+    token {
+      accessToken
+      tokenType
+      expiresIn
+      refreshToken
+      scope
+      idToken
     }
   }
 }
@@ -44,10 +47,14 @@ Refresh:
 
 ```graphql
 mutation RefreshToken {
-  refreshToken(input: {}) {
-    session {
-      token
-      expiresAt
+  refreshToken(input: { refreshToken: "<refresh-token>" }) {
+    token {
+      accessToken
+      tokenType
+      expiresIn
+      refreshToken
+      scope
+      idToken
     }
   }
 }
@@ -62,6 +69,8 @@ mutation Logout {
   }
 }
 ```
+
+`scope` requests are currently unsupported for local providers; send no scope to avoid a validation error.
 
 ## Operation Summary
 
@@ -89,9 +98,9 @@ mutation Logout {
 
 | Operation | Purpose |
 |---|---|
-| `login(input: LoginInput!)` | Create a JWT session |
+| `login(input: LoginInput!)` | Create an OIDC-style token response for local providers |
 | `logout(input: LogoutInput!)` | End the current session |
-| `refreshToken(input: RefreshTokenInput!)` | Refresh a JWT session |
+| `refreshToken(input: RefreshTokenInput!)` | Exchange a refresh token for a new OIDC-style token response |
 | `createNamespace(input: CreateNamespaceInput!)` | Create a namespace |
 | `deleteNamespace(input: DeleteNamespaceInput!)` | Delete an empty namespace |
 | `createRepository(input: CreateRepositoryInput!)` | Create a repository in a namespace |

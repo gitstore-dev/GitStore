@@ -376,24 +376,40 @@ curl -s http://localhost:4000/graphql \
 
 Use GraphQL mutations for authentication, namespaces, and repositories. The Make bootstrap targets wrap these calls for the common local workflow.
 
-First-party login is GraphQL-only via the `login(input:)` mutation.
+GitStore delegates OAuth2/OIDC federation to external identity providers. The GraphQL
+`login(input:)` mutation is a convenience flow for local providers (for example `static-admin`).
 
 Login:
 
 ```graphql
 mutation Login {
   login(input: { username: "admin", password: "<password>" }) {
-    session {
-      token
-      expiresAt
-      user {
-        username
-        isAdmin
-      }
+    token {
+      accessToken
+      tokenType
+      expiresIn
+      refreshToken
     }
   }
 }
 ```
+
+Refresh:
+
+```graphql
+mutation RefreshToken {
+  refreshToken(input: { refreshToken: "<refresh-token>" }) {
+    token {
+      accessToken
+      tokenType
+      expiresIn
+      refreshToken
+    }
+  }
+}
+```
+
+`scope` requests are currently unsupported by local providers.
 
 Create a namespace and repository manually when you need custom provisioning. See [API Reference](api-reference.md#mutation-operations) for the exact inputs.
 

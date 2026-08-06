@@ -131,6 +131,35 @@ func TestGraphQLAuthorizerAllowsLoginMutationForAnonymous(t *testing.T) {
 	assert.True(t, called)
 }
 
+func TestGraphQLAuthorizerAllowsRefreshTokenMutationForAnonymous(t *testing.T) {
+	registry, _ := newTestRegistry(t)
+	opCtx := &graphql.OperationContext{
+		Headers: http.Header{},
+		Operation: &ast.OperationDefinition{
+			Operation: ast.Mutation,
+			SelectionSet: ast.SelectionSet{
+				&ast.Field{Name: "refreshToken"},
+			},
+		},
+	}
+	ctx := graphql.WithOperationContext(context.Background(), opCtx)
+
+	authn := NewAuthenticate(registry, zap.NewNop())
+	authz := NewAuthorize(registry, zap.NewNop())
+	called := false
+	final := func(context.Context) graphql.ResponseHandler {
+		called = true
+		return graphql.OneShot(&graphql.Response{Data: []byte(`{"ok":true}`)})
+	}
+
+	resp := authn.GraphQLAuthenticator(ctx, func(inner context.Context) graphql.ResponseHandler {
+		return authz.GraphQLAuthorizer(inner, final)
+	})(ctx)
+	require.NotNil(t, resp)
+	require.Nil(t, resp.Errors)
+	assert.True(t, called)
+}
+
 func TestGraphQLAuthorizerAllowsLoginMutationWithRootTypenameForAnonymous(t *testing.T) {
 	registry, _ := newTestRegistry(t)
 	opCtx := &graphql.OperationContext{
