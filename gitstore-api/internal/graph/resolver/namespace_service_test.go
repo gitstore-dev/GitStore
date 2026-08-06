@@ -153,10 +153,10 @@ func TestGetNamespaceByIdentifier_notFound(t *testing.T) {
 func TestDeleteNamespace_owner_success(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	input := model.CreateNamespaceInput{Identifier: "to-delete", Tier: model.NamespaceTierUser}
-	_, err := svc.CreateNamespace(context.Background(), input, "alice")
+	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 
-	err = svc.DeleteNamespace(context.Background(), "to-delete")
+	err = svc.DeleteNamespace(context.Background(), ns)
 	require.NoError(t, err)
 
 	_, err = svc.GetNamespaceByIdentifier(context.Background(), "to-delete")
@@ -166,36 +166,43 @@ func TestDeleteNamespace_owner_success(t *testing.T) {
 func TestDeleteNamespace_admin_canDeleteAny(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	input := model.CreateNamespaceInput{Identifier: "owned-by-alice", Tier: model.NamespaceTierUser}
-	_, err := svc.CreateNamespace(context.Background(), input, "alice")
+	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 
 	// admin deletes alice's namespace
-	err = svc.DeleteNamespace(context.Background(), "owned-by-alice")
+	err = svc.DeleteNamespace(context.Background(), ns)
 	require.NoError(t, err)
 }
 
 func TestDeleteNamespace_withoutAuthorizationCheck_serviceAllowsDelete(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	input := model.CreateNamespaceInput{Identifier: "alices-ns", Tier: model.NamespaceTierUser}
-	_, err := svc.CreateNamespace(context.Background(), input, "alice")
+	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 
-	err = svc.DeleteNamespace(context.Background(), "alices-ns")
+	err = svc.DeleteNamespace(context.Background(), ns)
 	require.NoError(t, err)
 }
 
 func TestDeleteNamespace_unknownIdentifier_notFound(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
-	err := svc.DeleteNamespace(context.Background(), "does-not-exist")
+	err := svc.DeleteNamespace(context.Background(), &datastore.Namespace{ID: "does-not-exist", Identifier: "does-not-exist"})
 	assert.Error(t, err)
 }
 
-func TestDeleteNamespace_serviceDoesNotRequireCallerIdentity(t *testing.T) {
+func TestDeleteNamespace_recreatedIdentifierDoesNotDeleteReplacement(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	input := model.CreateNamespaceInput{Identifier: "auth-test-ns", Tier: model.NamespaceTierUser}
-	_, err := svc.CreateNamespace(context.Background(), input, "alice")
+	authorized, err := svc.CreateNamespace(context.Background(), input, "alice")
+	require.NoError(t, err)
+	require.NoError(t, svc.Store().DeleteNamespace(context.Background(), authorized.ID))
+	replacement, err := svc.CreateNamespace(context.Background(), input, "mallory")
 	require.NoError(t, err)
 
-	err = svc.DeleteNamespace(context.Background(), "auth-test-ns")
+	err = svc.DeleteNamespace(context.Background(), authorized)
+	require.Error(t, err)
+
+	got, err := svc.GetNamespaceByIdentifier(context.Background(), input.Identifier)
 	require.NoError(t, err)
+	assert.Equal(t, replacement.ID, got.ID)
 }

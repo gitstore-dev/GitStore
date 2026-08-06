@@ -20,6 +20,7 @@ import (
 )
 
 type remoteAddrContextKey struct{}
+type authorizedNamespaceDeleteContextKey struct{}
 
 // ContextWithRemoteAddr stores the caller IP/remote address so GraphQL auth
 // middleware can pass it to providers without depending on Gin internals.
@@ -30,6 +31,13 @@ func ContextWithRemoteAddr(ctx context.Context, remoteAddr string) context.Conte
 func remoteAddrFromContext(ctx context.Context) string {
 	remoteAddr, _ := ctx.Value(remoteAddrContextKey{}).(string)
 	return remoteAddr
+}
+
+// AuthorizedNamespaceForDeletion returns the exact namespace record whose
+// deletion was authorized by GraphQLFieldAuthorizer.
+func AuthorizedNamespaceForDeletion(ctx context.Context) (*datastore.Namespace, bool) {
+	ns, ok := ctx.Value(authorizedNamespaceDeleteContextKey{}).(*datastore.Namespace)
+	return ns, ok && ns != nil
 }
 
 // GraphQLAuthenticator authenticates each GraphQL operation via the active
@@ -93,7 +101,7 @@ func (a *Authorize) GraphQLAuthorizer(ctx context.Context, next graphql.Operatio
 		ctx = auth.ContextWithPrincipal(ctx, principal)
 	}
 
-	if requiresAuthenticatedPrincipal(opCtx.Operation) && principal.AuthMethod == "none" {
+	if requiresAuthenticatedPrincipal(opCtx.Operation, opCtx.Doc) && principal.AuthMethod == "none" {
 		return graphql.OneShot(graphql.ErrorResponse(ctx, "authentication required"))
 	}
 
@@ -143,11 +151,10 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if !ok || identifier == "" {
 			return next(ctx)
 		}
-		action, ownerSub, err := a.namespaceDeleteAction(ctx, identifier, principal)
+		ns, action, err := a.namespaceDeleteAction(ctx, identifier, principal)
 		if err != nil {
 			if errors.Is(err, datastore.ErrNotFound) {
-				// Preserve existing resolver/service behavior for unknown namespaces.
-				return next(ctx)
+				return nil, gqlerror.Errorf("namespace %q not found", identifier)
 			}
 			return nil, gqlerror.Errorf("authorization error")
 		}
@@ -155,7 +162,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		decision, err := authz.Authorize(ctx, principal, action, auth.ResourceContext{
 			Kind:     "namespace",
 			Name:     identifier,
-			OwnerSub: ownerSub,
+			OwnerSub: ns.CreatedBy,
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
@@ -163,6 +170,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if decision.Outcome == auth.OutcomeDeny {
 			return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
 		}
+		ctx = context.WithValue(ctx, authorizedNamespaceDeleteContextKey{}, ns)
 	case "refreshToken":
 		if auth.RawTokenFromContext(ctx) == "" {
 			return nil, gqlerror.Errorf("refresh token requires bearer authentication")
@@ -172,19 +180,18 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	return next(ctx)
 }
 
-func (a *Authorize) namespaceDeleteAction(ctx context.Context, identifier string, principal *auth.Principal) (action string, ownerSub string, err error) {
+func (a *Authorize) namespaceDeleteAction(ctx context.Context, identifier string, principal *auth.Principal) (ns *datastore.Namespace, action string, err error) {
 	if a.store == nil {
-		return "", "", fmt.Errorf("authorization store is not configured")
+		return nil, "", fmt.Errorf("authorization store is not configured")
 	}
-	ns, err := a.store.GetNamespaceByIdentifier(ctx, identifier)
+	ns, err = a.store.GetNamespaceByIdentifier(ctx, identifier)
 	if err != nil {
-		return "", "", err
+		return nil, "", err
 	}
-	ownerSub = ns.CreatedBy
-	if ownerSub == principal.Subject {
-		return "namespace.delete.own", ownerSub, nil
+	if ns.CreatedBy == principal.Subject {
+		return ns, "namespace.delete.own", nil
 	}
-	return "namespace.delete.any", ownerSub, nil
+	return ns, "namespace.delete.any", nil
 }
 
 func nestedStringArg(args map[string]any, parent, key string) (string, bool) {
@@ -227,17 +234,44 @@ func nestedStringArg(args map[string]any, parent, key string) (string, bool) {
 	return field.String(), true
 }
 
-func requiresAuthenticatedPrincipal(op *ast.OperationDefinition) bool {
+func requiresAuthenticatedPrincipal(op *ast.OperationDefinition, doc *ast.QueryDocument) bool {
 	if op == nil || op.Operation != ast.Mutation {
 		return false
 	}
-	for _, selection := range op.SelectionSet {
-		field, ok := selection.(*ast.Field)
-		if !ok {
-			continue
-		}
-		if field.Name != "login" {
-			return true
+	var fragments ast.FragmentDefinitionList
+	if doc != nil {
+		fragments = doc.Fragments
+	}
+	return selectionSetRequiresAuthentication(op.SelectionSet, fragments, make(map[string]bool))
+}
+
+func selectionSetRequiresAuthentication(selections ast.SelectionSet, fragments ast.FragmentDefinitionList, visiting map[string]bool) bool {
+	for _, selection := range selections {
+		switch selection := selection.(type) {
+		case *ast.Field:
+			if selection.Name != "login" {
+				return true
+			}
+		case *ast.InlineFragment:
+			if selectionSetRequiresAuthentication(selection.SelectionSet, fragments, visiting) {
+				return true
+			}
+		case *ast.FragmentSpread:
+			definition := selection.Definition
+			if definition == nil {
+				definition = fragments.ForName(selection.Name)
+			}
+			// Validated documents always resolve fragment spreads. Fail closed if
+			// an incomplete or cyclic AST reaches this security boundary.
+			if definition == nil || visiting[definition.Name] {
+				return true
+			}
+			visiting[definition.Name] = true
+			requiresAuth := selectionSetRequiresAuthentication(definition.SelectionSet, fragments, visiting)
+			delete(visiting, definition.Name)
+			if requiresAuth {
+				return true
+			}
 		}
 	}
 	return false

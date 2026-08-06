@@ -131,6 +131,70 @@ func TestGraphQLAuthorizerAllowsLoginMutationForAnonymous(t *testing.T) {
 	assert.True(t, called)
 }
 
+func TestGraphQLAuthorizerRequiresAuthForMutationInNamedFragment(t *testing.T) {
+	fragment := &ast.FragmentDefinition{
+		Name:          "MutationFields",
+		TypeCondition: "Mutation",
+		SelectionSet: ast.SelectionSet{
+			&ast.Field{Name: "createRepository"},
+		},
+	}
+	opCtx := &graphql.OperationContext{
+		Headers: http.Header{},
+		Doc: &ast.QueryDocument{
+			Fragments: ast.FragmentDefinitionList{fragment},
+		},
+		Operation: &ast.OperationDefinition{
+			Operation: ast.Mutation,
+			SelectionSet: ast.SelectionSet{
+				&ast.FragmentSpread{Name: fragment.Name},
+			},
+		},
+	}
+
+	assertAnonymousOperationRejected(t, opCtx)
+}
+
+func TestGraphQLAuthorizerRequiresAuthForMutationInInlineFragment(t *testing.T) {
+	opCtx := &graphql.OperationContext{
+		Headers: http.Header{},
+		Operation: &ast.OperationDefinition{
+			Operation: ast.Mutation,
+			SelectionSet: ast.SelectionSet{
+				&ast.InlineFragment{
+					TypeCondition: "Mutation",
+					SelectionSet: ast.SelectionSet{
+						&ast.Field{Name: "createRepository"},
+					},
+				},
+			},
+		},
+	}
+
+	assertAnonymousOperationRejected(t, opCtx)
+}
+
+func assertAnonymousOperationRejected(t *testing.T, opCtx *graphql.OperationContext) {
+	t.Helper()
+	registry, _ := newTestRegistry(t)
+	ctx := graphql.WithOperationContext(context.Background(), opCtx)
+	authn := NewAuthenticate(registry, zap.NewNop())
+	authz := NewAuthorize(registry, zap.NewNop())
+	called := false
+	final := func(context.Context) graphql.ResponseHandler {
+		called = true
+		return graphql.OneShot(&graphql.Response{Data: []byte(`{"ok":true}`)})
+	}
+
+	resp := authn.GraphQLAuthenticator(ctx, func(inner context.Context) graphql.ResponseHandler {
+		return authz.GraphQLAuthorizer(inner, final)
+	})(ctx)
+	require.NotNil(t, resp)
+	require.NotEmpty(t, resp.Errors)
+	assert.False(t, called)
+	assert.Contains(t, resp.Errors[0].Message, "authentication required")
+}
+
 type stubAuthZProvider struct {
 	decision auth.Decision
 	err      error
@@ -197,4 +261,33 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {
 	assert.False(t, called)
 	assert.Contains(t, err.Error(), "permission denied")
 	assert.Equal(t, "namespace.delete.any", authz.action)
+}
+
+func TestGraphQLFieldAuthorizerDeleteNamespacePassesAuthorizedRecord(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	registry := auth.NewProviderRegistry(nil, authz, nil)
+	authorized := &datastore.Namespace{ID: "namespace-id", Identifier: "acme", CreatedBy: "alice"}
+	store := &testutil.StubStore{
+		GetNamespaceByIdentifierFunc: func(_ context.Context, _ string) (*datastore.Namespace, error) {
+			return authorized, nil
+		},
+	}
+	mw := NewAuthorizeWithStore(registry, store, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "alice", AuthMethod: "static-admin"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Mutation",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
+		Args: map[string]any{
+			"input": model.DeleteNamespaceInput{Identifier: "acme"},
+		},
+	})
+
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(nextCtx context.Context) (any, error) {
+		got, ok := AuthorizedNamespaceForDeletion(nextCtx)
+		require.True(t, ok)
+		assert.Same(t, authorized, got)
+		return "ok", nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "namespace.delete.own", authz.action)
 }
