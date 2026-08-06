@@ -174,8 +174,8 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 
 // NewGraphQLHandler builds a GraphQL HTTP handler.
 func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log *zap.Logger, registry *auth.ProviderRegistry, clock apiruntime.Clock, ids apiruntime.IDGenerator) (*gin.Engine, error) {
-	if registry == nil || registry.AuthN() == nil {
-		return nil, fmt.Errorf("app: auth provider registry is required")
+	if registry == nil || registry.AuthN() == nil || registry.AuthZ() == nil {
+		return nil, fmt.Errorf("app: authn and authz provider registry is required")
 	}
 	rootResolver, err := resolver.NewResolver(resolver.ResolverDeps{
 		Store:       store,

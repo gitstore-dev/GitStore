@@ -123,9 +123,9 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	if principal == nil {
 		principal = auth.Anonymous()
 	}
-	authz := a.registry.AuthZ()
-	if authz == nil {
-		return next(ctx)
+	var authz auth.AuthZProvider
+	if a.registry != nil {
+		authz = a.registry.AuthZ()
 	}
 
 	switch fc.Field.Name {
@@ -133,6 +133,9 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		tier, ok := nestedStringArg(fc.Args, "input", "tier")
 		if !ok || tier != "ORGANIZATION" {
 			return next(ctx)
+		}
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
 		decision, err := authz.Authorize(ctx, principal, "namespace.create.organization", auth.ResourceContext{
 			Kind: "namespace",
@@ -150,6 +153,9 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		identifier, ok := nestedStringArg(fc.Args, "input", "identifier")
 		if !ok || identifier == "" {
 			return next(ctx)
+		}
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
 		ns, action, err := a.namespaceDeleteAction(ctx, identifier, principal)
 		if err != nil {
@@ -249,7 +255,7 @@ func selectionSetRequiresAuthentication(selections ast.SelectionSet, fragments a
 	for _, selection := range selections {
 		switch selection := selection.(type) {
 		case *ast.Field:
-			if selection.Name != "login" {
+			if selection.Name != "login" && selection.Name != "__typename" {
 				return true
 			}
 		case *ast.InlineFragment:

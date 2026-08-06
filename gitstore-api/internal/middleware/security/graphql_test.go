@@ -131,6 +131,36 @@ func TestGraphQLAuthorizerAllowsLoginMutationForAnonymous(t *testing.T) {
 	assert.True(t, called)
 }
 
+func TestGraphQLAuthorizerAllowsLoginMutationWithRootTypenameForAnonymous(t *testing.T) {
+	registry, _ := newTestRegistry(t)
+	opCtx := &graphql.OperationContext{
+		Headers: http.Header{},
+		Operation: &ast.OperationDefinition{
+			Operation: ast.Mutation,
+			SelectionSet: ast.SelectionSet{
+				&ast.Field{Name: "login"},
+				&ast.Field{Name: "__typename"},
+			},
+		},
+	}
+	ctx := graphql.WithOperationContext(context.Background(), opCtx)
+
+	authn := NewAuthenticate(registry, zap.NewNop())
+	authz := NewAuthorize(registry, zap.NewNop())
+	called := false
+	final := func(context.Context) graphql.ResponseHandler {
+		called = true
+		return graphql.OneShot(&graphql.Response{Data: []byte(`{"ok":true}`)})
+	}
+
+	resp := authn.GraphQLAuthenticator(ctx, func(inner context.Context) graphql.ResponseHandler {
+		return authz.GraphQLAuthorizer(inner, final)
+	})(ctx)
+	require.NotNil(t, resp)
+	require.Nil(t, resp.Errors)
+	assert.True(t, called)
+}
+
 func TestGraphQLAuthorizerRequiresAuthForMutationInNamedFragment(t *testing.T) {
 	fragment := &ast.FragmentDefinition{
 		Name:          "MutationFields",
@@ -232,6 +262,31 @@ func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationUsesPolicy(t *testing.
 	require.NoError(t, err)
 	assert.True(t, called)
 	assert.Equal(t, "namespace.create.organization", authz.action)
+}
+
+func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationFailsWithoutAuthZ(t *testing.T) {
+	registry := auth.NewProviderRegistry(nil, nil, nil)
+	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "bob", AuthMethod: "static-admin"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Mutation",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "createNamespace"}},
+		Args: map[string]any{
+			"input": model.CreateNamespaceInput{
+				Identifier: "acme",
+				Tier:       model.NamespaceTierOrganization,
+			},
+		},
+	})
+
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+		called = true
+		return "ok", nil
+	})
+	require.Error(t, err)
+	assert.False(t, called)
+	assert.Contains(t, err.Error(), "authorization service unavailable")
 }
 
 func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {

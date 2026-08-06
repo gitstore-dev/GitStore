@@ -98,6 +98,16 @@ func newTestGraphQLRegistry(t *testing.T) *authpkg.ProviderRegistry {
 	)
 }
 
+func TestGraphQLHandlerRequiresAuthZProvider(t *testing.T) {
+	registry := newTestGraphQLRegistry(t)
+	registry.Swap(registry.AuthN(), nil, nil)
+
+	handler, err := app.NewGraphQLHandler(nil, nil, zap.NewNop(), registry, nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, handler)
+	assert.Contains(t, err.Error(), "authn and authz provider registry is required")
+}
+
 func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
