@@ -19,16 +19,6 @@ type Node interface {
 	GetID() string
 }
 
-// Authentication session response
-type AuthSession struct {
-	// JWT token for authentication
-	Token string `json:"token"`
-	// Token expiration time (ISO 8601)
-	ExpiresAt time.Time `json:"expiresAt"`
-	// Authenticated user information
-	User *User `json:"user"`
-}
-
 // A pointer to another catalogue resource.
 type CatalogObjectReference struct {
 	APIVersion      *string `json:"apiVersion,omitempty"`
@@ -326,7 +316,7 @@ type CreateCollectionPayload struct {
 
 // Input for creating a new namespace.
 type CreateNamespaceInput struct {
-	// Client mutation ID for request tracking (Relay pattern).
+	// TODO: Remove, deprecated in relay
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The human-readable identifier for the namespace.
 	// Must be globally unique across all tiers.
@@ -344,7 +334,7 @@ type CreateNamespaceInput struct {
 
 // Payload returned after successfully creating a namespace.
 type CreateNamespacePayload struct {
-	// Client mutation ID for request tracking (Relay pattern).
+	// TODO: Remove, deprecated in relay
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The newly created namespace.
 	Namespace *Namespace `json:"namespace"`
@@ -390,7 +380,7 @@ type DeleteCollectionPayload struct {
 
 // Input for deleting a namespace.
 type DeleteNamespaceInput struct {
-	// Client mutation ID for request tracking (Relay pattern).
+	// TODO: Remove, deprecated in relay
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The identifier of the namespace to delete.
 	// Deletion is blocked if any repositories exist within the namespace.
@@ -400,7 +390,7 @@ type DeleteNamespaceInput struct {
 
 // Payload returned after successfully deleting a namespace.
 type DeleteNamespacePayload struct {
-	// Client mutation ID for request tracking (Relay pattern).
+	// TODO: Remove, deprecated in relay
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The identifier of the deleted namespace.
 	DeletedIdentifier string `json:"deletedIdentifier"`
@@ -472,32 +462,30 @@ type LabelSelectorRequirement struct {
 
 // Login mutation input (Relay pattern)
 type LoginInput struct {
-	// Client mutation ID for request tracking (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Username
 	Username string `json:"username"`
 	// Password
 	Password string `json:"password"`
+	// Optional OAuth2 scope request.
+	// Scope requests are currently unsupported by local providers.
+	Scope *string `json:"scope,omitempty"`
 }
 
 // Login mutation payload (Relay pattern)
 type LoginPayload struct {
-	// Client mutation ID for request tracking (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// Authentication session (token + user info)
-	Session *AuthSession `json:"session,omitempty"`
+	// OIDC-compatible token payload.
+	Token *TokenResponse `json:"token"`
 }
 
 // Logout mutation input (Relay pattern)
 type LogoutInput struct {
+	// TODO: Is it safe to remove and empty Input?
 	// Client mutation ID for request tracking (Relay pattern)
 	ClientMutationID *string `json:"clientMutationId,omitempty"`
 }
 
 // Logout mutation payload (Relay pattern)
 type LogoutPayload struct {
-	// Client mutation ID for request tracking (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Success indicator
 	Success bool `json:"success"`
 }
@@ -868,16 +856,17 @@ type Query struct {
 
 // Refresh token mutation input (Relay pattern)
 type RefreshTokenInput struct {
-	// Client mutation ID for request tracking (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
+	// Refresh token used to issue a new access token.
+	RefreshToken string `json:"refreshToken"`
+	// Optional OAuth2 scope request.
+	// Scope requests are currently unsupported by local providers.
+	Scope *string `json:"scope,omitempty"`
 }
 
 // Refresh token mutation payload (Relay pattern)
 type RefreshTokenPayload struct {
-	// Client mutation ID for request tracking (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	// New authentication session
-	Session *AuthSession `json:"session,omitempty"`
+	// OIDC-compatible token payload.
+	Token *TokenResponse `json:"token"`
 }
 
 type RenameRepositoryInput struct {
@@ -1059,6 +1048,25 @@ type SelectedOptionDefinition struct {
 type StrategyDefinition struct {
 	// Strategy identifier (e.g. fixed, percentage_discount, cost_plus).
 	Type string `json:"type"`
+}
+
+// OIDC-compatible token response.
+type TokenResponse struct {
+	// Access token used for authenticated API calls.
+	AccessToken string `json:"accessToken"`
+	// Token type. Always `Bearer` for GitStore-issued tokens.
+	TokenType string `json:"tokenType"`
+	// Seconds until the access token expires.
+	ExpiresIn int32 `json:"expiresIn"`
+	// Refresh token used to obtain a new access token.
+	// For local providers, this is currently a GitStore-issued token.
+	RefreshToken *string `json:"refreshToken,omitempty"`
+	// Granted scope set as a space-delimited string.
+	// Scope requests are currently unsupported and this field is null.
+	Scope *string `json:"scope,omitempty"`
+	// OIDC ID token when available.
+	// GitStore local providers currently do not issue this field.
+	IDToken *string `json:"idToken,omitempty"`
 }
 
 type TransferRepositoryInput struct {

@@ -177,10 +177,6 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
 		}
 		ctx = context.WithValue(ctx, authorizedNamespaceDeleteContextKey{}, ns)
-	case "refreshToken":
-		if auth.RawTokenFromContext(ctx) == "" {
-			return nil, gqlerror.Errorf("refresh token requires bearer authentication")
-		}
 	}
 
 	return next(ctx)
@@ -236,7 +232,8 @@ func nestedStringArg(args map[string]any, parent, key string) (string, bool) {
 }
 
 // requiresAuthenticatedPrincipal reports whether the operation executes any
-// root mutation field other than "login"/"__typename". It delegates to
+// root mutation field other than "login", "refreshToken", or "__typename".
+// It delegates to
 // graphql.CollectFields — the same field-collection gqlgen itself uses to
 // decide what will actually run — so fragment spreads, inline fragments, and
 // @skip/@include directives are honored instead of re-derived by hand.
@@ -245,7 +242,7 @@ func requiresAuthenticatedPrincipal(opCtx *graphql.OperationContext) bool {
 		return false
 	}
 	for _, field := range graphql.CollectFields(opCtx, opCtx.Operation.SelectionSet, []string{"Mutation"}) {
-		if field.Name != "login" && field.Name != "__typename" {
+		if field.Name != "login" && field.Name != "refreshToken" && field.Name != "__typename" {
 			return true
 		}
 	}
