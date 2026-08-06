@@ -32,6 +32,20 @@ type StaticAdminProvider struct {
 	logger       *zap.Logger
 }
 
+// refreshClaims keeps the token's real expiration available for the refresh
+// grace-window check while preventing the JWT validator from rejecting an
+// otherwise valid, recently expired token. The exp claim is still required.
+type refreshClaims struct {
+	jwt.RegisteredClaims
+}
+
+func (c refreshClaims) GetExpirationTime() (*jwt.NumericDate, error) {
+	if c.ExpiresAt == nil {
+		return nil, nil
+	}
+	return jwt.NewNumericDate(time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC)), nil
+}
+
 func New(cfg config.AuthConfig, logger *zap.Logger) (*StaticAdminProvider, error) {
 	username := cfg.Admin.Username
 	if username == "" {
@@ -186,16 +200,18 @@ func (p *StaticAdminProvider) RevokeSession(_ context.Context, jti string, expir
 }
 
 func (p *StaticAdminProvider) RefreshSession(_ context.Context, oldToken string) (string, time.Time, error) {
-	// Parse ignoring expiry to allow refreshing recently-expired tokens.
-	claims := &jwt.RegisteredClaims{}
+	// Validate signature and every registered claim except the actual expiration
+	// instant. refreshClaims still requires exp to be present, and the real value
+	// is checked against refreshGrace below.
+	claims := &refreshClaims{}
 	_, err := jwt.ParseWithClaims(oldToken, claims, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return p.jwtSecret, nil
-	}, jwt.WithoutClaimsValidation())
+	}, jwt.WithLeeway(2*time.Minute), jwt.WithIssuer(p.jwtIssuer), jwt.WithExpirationRequired())
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("staticadmin: refresh: %w", err)
+		return "", time.Time{}, fmt.Errorf("staticadmin: refresh: %w", auth.ErrInvalidToken)
 	}
 
 	// Enforce grace window: reject tokens that expired longer ago than refreshGrace.

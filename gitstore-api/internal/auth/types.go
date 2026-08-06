@@ -19,6 +19,9 @@ var ErrTokenTooOld = errors.New("auth: token too old to refresh")
 // ErrTokenRevoked is returned when a token has been explicitly revoked.
 var ErrTokenRevoked = errors.New("auth: token has been revoked")
 
+// ErrInvalidToken is returned when a refresh token cannot be parsed or validated.
+var ErrInvalidToken = errors.New("auth: invalid token")
+
 // Outcome is the result of an auth decision.
 type Outcome uint8
 

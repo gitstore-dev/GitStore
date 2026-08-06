@@ -33,12 +33,6 @@ type DirectiveRoot struct {
 }
 
 type ComplexityRoot struct {
-	AuthSession struct {
-		ExpiresAt func(childComplexity int) int
-		Token     func(childComplexity int) int
-		User      func(childComplexity int) int
-	}
-
 	CatalogObjectReference struct {
 		APIVersion      func(childComplexity int) int
 		FieldPath       func(childComplexity int) int
@@ -264,13 +258,11 @@ type ComplexityRoot struct {
 	}
 
 	LoginPayload struct {
-		ClientMutationID func(childComplexity int) int
-		Session          func(childComplexity int) int
+		Token func(childComplexity int) int
 	}
 
 	LogoutPayload struct {
-		ClientMutationID func(childComplexity int) int
-		Success          func(childComplexity int) int
+		Success func(childComplexity int) int
 	}
 
 	MediaDefinition struct {
@@ -518,8 +510,7 @@ type ComplexityRoot struct {
 	}
 
 	RefreshTokenPayload struct {
-		ClientMutationID func(childComplexity int) int
-		Session          func(childComplexity int) int
+		Token func(childComplexity int) int
 	}
 
 	RenameRepositoryPayload struct {
@@ -624,6 +615,15 @@ type ComplexityRoot struct {
 		Type func(childComplexity int) int
 	}
 
+	TokenResponse struct {
+		AccessToken  func(childComplexity int) int
+		ExpiresIn    func(childComplexity int) int
+		IDToken      func(childComplexity int) int
+		RefreshToken func(childComplexity int) int
+		Scope        func(childComplexity int) int
+		TokenType    func(childComplexity int) int
+	}
+
 	TransferRepositoryPayload struct {
 		ClientMutationID func(childComplexity int) int
 		Repository       func(childComplexity int) int
@@ -665,27 +665,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 	ec := newExecutionContext(nil, e, nil)
 	_ = ec
 	switch typeName + "." + field {
-
-	case "AuthSession.expiresAt":
-		if e.ComplexityRoot.AuthSession.ExpiresAt == nil {
-			break
-		}
-
-		return e.ComplexityRoot.AuthSession.ExpiresAt(childComplexity), true
-
-	case "AuthSession.token":
-		if e.ComplexityRoot.AuthSession.Token == nil {
-			break
-		}
-
-		return e.ComplexityRoot.AuthSession.Token(childComplexity), true
-
-	case "AuthSession.user":
-		if e.ComplexityRoot.AuthSession.User == nil {
-			break
-		}
-
-		return e.ComplexityRoot.AuthSession.User(childComplexity), true
 
 	case "CatalogObjectReference.apiVersion":
 		if e.ComplexityRoot.CatalogObjectReference.APIVersion == nil {
@@ -1572,26 +1551,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.LabelSelectorRequirement.Values(childComplexity), true
 
-	case "LoginPayload.clientMutationId":
-		if e.ComplexityRoot.LoginPayload.ClientMutationID == nil {
+	case "LoginPayload.token":
+		if e.ComplexityRoot.LoginPayload.Token == nil {
 			break
 		}
 
-		return e.ComplexityRoot.LoginPayload.ClientMutationID(childComplexity), true
-
-	case "LoginPayload.session":
-		if e.ComplexityRoot.LoginPayload.Session == nil {
-			break
-		}
-
-		return e.ComplexityRoot.LoginPayload.Session(childComplexity), true
-
-	case "LogoutPayload.clientMutationId":
-		if e.ComplexityRoot.LogoutPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.LogoutPayload.ClientMutationID(childComplexity), true
+		return e.ComplexityRoot.LoginPayload.Token(childComplexity), true
 
 	case "LogoutPayload.success":
 		if e.ComplexityRoot.LogoutPayload.Success == nil {
@@ -2838,19 +2803,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.Repository(childComplexity, args["by"].(model.RepositoryBy)), true
 
-	case "RefreshTokenPayload.clientMutationId":
-		if e.ComplexityRoot.RefreshTokenPayload.ClientMutationID == nil {
+	case "RefreshTokenPayload.token":
+		if e.ComplexityRoot.RefreshTokenPayload.Token == nil {
 			break
 		}
 
-		return e.ComplexityRoot.RefreshTokenPayload.ClientMutationID(childComplexity), true
-
-	case "RefreshTokenPayload.session":
-		if e.ComplexityRoot.RefreshTokenPayload.Session == nil {
-			break
-		}
-
-		return e.ComplexityRoot.RefreshTokenPayload.Session(childComplexity), true
+		return e.ComplexityRoot.RefreshTokenPayload.Token(childComplexity), true
 
 	case "RenameRepositoryPayload.clientMutationId":
 		if e.ComplexityRoot.RenameRepositoryPayload.ClientMutationID == nil {
@@ -3230,6 +3188,48 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.StrategyDefinition.Type(childComplexity), true
 
+	case "TokenResponse.accessToken":
+		if e.ComplexityRoot.TokenResponse.AccessToken == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenResponse.AccessToken(childComplexity), true
+
+	case "TokenResponse.expiresIn":
+		if e.ComplexityRoot.TokenResponse.ExpiresIn == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenResponse.ExpiresIn(childComplexity), true
+
+	case "TokenResponse.idToken":
+		if e.ComplexityRoot.TokenResponse.IDToken == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenResponse.IDToken(childComplexity), true
+
+	case "TokenResponse.refreshToken":
+		if e.ComplexityRoot.TokenResponse.RefreshToken == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenResponse.RefreshToken(childComplexity), true
+
+	case "TokenResponse.scope":
+		if e.ComplexityRoot.TokenResponse.Scope == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenResponse.Scope(childComplexity), true
+
+	case "TokenResponse.tokenType":
+		if e.ComplexityRoot.TokenResponse.TokenType == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TokenResponse.TokenType(childComplexity), true
+
 	case "TransferRepositoryPayload.clientMutationId":
 		if e.ComplexityRoot.TransferRepositoryPayload.ClientMutationID == nil {
 			break
@@ -3442,35 +3442,40 @@ type User {
   isAdmin: Boolean!
 }
 
-"""
-Authentication session response
-"""
-type AuthSession {
-  """
-  JWT token for authentication
-  """
-  token: String!
+"""OIDC-compatible token response."""
+type TokenResponse {
+  """Access token used for authenticated API calls."""
+  accessToken: String!
+
+  """Token type. Always ` + "`" + `Bearer` + "`" + ` for GitStore-issued tokens."""
+  tokenType: String!
+
+  """Seconds until the access token expires."""
+  expiresIn: Int!
 
   """
-  Token expiration time (ISO 8601)
+  Refresh token used to obtain a new access token.
+  For local providers, this is currently a GitStore-issued token.
   """
-  expiresAt: DateTime!
+  refreshToken: String
 
   """
-  Authenticated user information
+  Granted scope set as a space-delimited string.
+  Scope requests are currently unsupported and this field is null.
   """
-  user: User!
+  scope: String
+
+  """
+  OIDC ID token when available.
+  GitStore local providers currently do not issue this field.
+  """
+  idToken: String
 }
 
 """
 Login mutation input (Relay pattern)
 """
 input LoginInput {
-  """
-  Client mutation ID for request tracking (Relay pattern)
-  """
-  clientMutationId: String
-
   """
   Username
   """
@@ -3480,6 +3485,12 @@ input LoginInput {
   Password
   """
   password: String!
+
+  """
+  Optional OAuth2 scope request.
+  Scope requests are currently unsupported by local providers.
+  """
+  scope: String
 }
 
 """
@@ -3487,14 +3498,9 @@ Login mutation payload (Relay pattern)
 """
 type LoginPayload {
   """
-  Client mutation ID for request tracking (Relay pattern)
+  OIDC-compatible token payload.
   """
-  clientMutationId: String
-
-  """
-  Authentication session (token + user info)
-  """
-  session: AuthSession
+  token: TokenResponse!
 }
 
 """
@@ -3502,6 +3508,7 @@ Logout mutation input (Relay pattern)
 """
 input LogoutInput {
   """
+  TODO: Is it safe to remove and empty Input?
   Client mutation ID for request tracking (Relay pattern)
   """
   clientMutationId: String
@@ -3511,11 +3518,6 @@ input LogoutInput {
 Logout mutation payload (Relay pattern)
 """
 type LogoutPayload {
-  """
-  Client mutation ID for request tracking (Relay pattern)
-  """
-  clientMutationId: String
-
   """
   Success indicator
   """
@@ -3527,9 +3529,15 @@ Refresh token mutation input (Relay pattern)
 """
 input RefreshTokenInput {
   """
-  Client mutation ID for request tracking (Relay pattern)
+  Refresh token used to issue a new access token.
   """
-  clientMutationId: String
+  refreshToken: String!
+
+  """
+  Optional OAuth2 scope request.
+  Scope requests are currently unsupported by local providers.
+  """
+  scope: String
 }
 
 """
@@ -3537,14 +3545,9 @@ Refresh token mutation payload (Relay pattern)
 """
 type RefreshTokenPayload {
   """
-  Client mutation ID for request tracking (Relay pattern)
+  OIDC-compatible token payload.
   """
-  clientMutationId: String
-
-  """
-  New authentication session
-  """
-  session: AuthSession
+  token: TokenResponse!
 }
 
 # Add authentication mutations to the Mutation type
@@ -4471,7 +4474,7 @@ Input for creating a new namespace.
 """
 input CreateNamespaceInput {
   """
-  Client mutation ID for request tracking (Relay pattern).
+  TODO: Remove, deprecated in relay
   """
   clientMutationId: String
 
@@ -4502,7 +4505,7 @@ Input for deleting a namespace.
 """
 input DeleteNamespaceInput {
   """
-  Client mutation ID for request tracking (Relay pattern).
+  TODO: Remove, deprecated in relay
   """
   clientMutationId: String
 
@@ -4519,7 +4522,7 @@ Payload returned after successfully creating a namespace.
 """
 type CreateNamespacePayload {
   """
-  Client mutation ID for request tracking (Relay pattern).
+  TODO: Remove, deprecated in relay
   """
   clientMutationId: String
 
@@ -4534,7 +4537,7 @@ Payload returned after successfully deleting a namespace.
 """
 type DeleteNamespacePayload {
   """
-  Client mutation ID for request tracking (Relay pattern).
+  TODO: Remove, deprecated in relay
   """
   clientMutationId: String
 
@@ -5655,18 +5658,6 @@ var parsedSchema = gqlparser.MustLoadSchema(sources...)
 // Each function is generated once per unique object type, deduplicating the
 // switch statements that were previously inlined in every fieldContext_* function.
 
-func (ec *executionContext) childFields_AuthSession(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "token":
-		return ec.fieldContext_AuthSession_token(ctx, field)
-	case "expiresAt":
-		return ec.fieldContext_AuthSession_expiresAt(ctx, field)
-	case "user":
-		return ec.fieldContext_AuthSession_user(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type AuthSession", field.Name)
-}
-
 func (ec *executionContext) childFields_CatalogObjectReference(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "apiVersion":
@@ -6117,18 +6108,14 @@ func (ec *executionContext) childFields_LabelSelectorRequirement(ctx context.Con
 
 func (ec *executionContext) childFields_LoginPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_LoginPayload_clientMutationId(ctx, field)
-	case "session":
-		return ec.fieldContext_LoginPayload_session(ctx, field)
+	case "token":
+		return ec.fieldContext_LoginPayload_token(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type LoginPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_LogoutPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_LogoutPayload_clientMutationId(ctx, field)
 	case "success":
 		return ec.fieldContext_LogoutPayload_success(ctx, field)
 	}
@@ -6549,10 +6536,8 @@ func (ec *executionContext) childFields_QuantityDefinition(ctx context.Context, 
 
 func (ec *executionContext) childFields_RefreshTokenPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_RefreshTokenPayload_clientMutationId(ctx, field)
-	case "session":
-		return ec.fieldContext_RefreshTokenPayload_session(ctx, field)
+	case "token":
+		return ec.fieldContext_RefreshTokenPayload_token(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type RefreshTokenPayload", field.Name)
 }
@@ -6761,6 +6746,24 @@ func (ec *executionContext) childFields_StrategyDefinition(ctx context.Context, 
 	return nil, fmt.Errorf("no field named %q was found under type StrategyDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_TokenResponse(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "accessToken":
+		return ec.fieldContext_TokenResponse_accessToken(ctx, field)
+	case "tokenType":
+		return ec.fieldContext_TokenResponse_tokenType(ctx, field)
+	case "expiresIn":
+		return ec.fieldContext_TokenResponse_expiresIn(ctx, field)
+	case "refreshToken":
+		return ec.fieldContext_TokenResponse_refreshToken(ctx, field)
+	case "scope":
+		return ec.fieldContext_TokenResponse_scope(ctx, field)
+	case "idToken":
+		return ec.fieldContext_TokenResponse_idToken(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TokenResponse", field.Name)
+}
+
 func (ec *executionContext) childFields_TransferRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "clientMutationId":
@@ -6791,16 +6794,6 @@ func (ec *executionContext) childFields_UpdateCollectionPayload(ctx context.Cont
 		return ec.fieldContext_UpdateCollectionPayload_conflict(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateCollectionPayload", field.Name)
-}
-
-func (ec *executionContext) childFields_User(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "username":
-		return ec.fieldContext_User_username(ctx, field)
-	case "isAdmin":
-		return ec.fieldContext_User_isAdmin(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type User", field.Name)
 }
 
 func (ec *executionContext) childFields_VariantSummaryDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

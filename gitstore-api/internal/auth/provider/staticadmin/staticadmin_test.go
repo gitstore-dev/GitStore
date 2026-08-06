@@ -8,9 +8,11 @@ import (
 	"encoding/base64"
 	"net/http"
 	"testing"
+	"time"
 
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -233,4 +235,52 @@ func TestStaticAdmin_RefreshSession_BeyondGrace_Fails(t *testing.T) {
 	_, _, err = p.RefreshSession(context.Background(), token)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, authpkg.ErrTokenTooOld)
+}
+
+func TestStaticAdmin_RefreshSession_InvalidToken_Fails(t *testing.T) {
+	cfg := newTestConfig("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
+	p, err := New(cfg, zap.NewNop())
+	require.NoError(t, err)
+
+	_, _, err = p.RefreshSession(context.Background(), "not-a-jwt")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, authpkg.ErrInvalidToken)
+}
+
+func TestStaticAdmin_RefreshSession_InvalidClaimsFail(t *testing.T) {
+	cfg := newTestConfig("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
+	p, err := New(cfg, zap.NewNop())
+	require.NoError(t, err)
+
+	now := time.Now()
+	tests := map[string]jwt.RegisteredClaims{
+		"wrong issuer": {
+			Subject:   "admin",
+			Issuer:    "old-gitstore",
+			NotBefore: jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+		},
+		"future not-before": {
+			Subject:   "admin",
+			Issuer:    "gitstore",
+			NotBefore: jwt.NewNumericDate(now.Add(10 * time.Minute)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+		},
+		"missing expiration": {
+			Subject:   "admin",
+			Issuer:    "gitstore",
+			NotBefore: jwt.NewNumericDate(now),
+		},
+	}
+
+	for name, claims := range tests {
+		t.Run(name, func(t *testing.T) {
+			token, signErr := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(cfg.JWT.Secret))
+			require.NoError(t, signErr)
+
+			_, _, refreshErr := p.RefreshSession(context.Background(), token)
+			require.Error(t, refreshErr)
+			assert.ErrorIs(t, refreshErr, authpkg.ErrInvalidToken)
+		})
+	}
 }

@@ -228,7 +228,7 @@ bootstrap-token: bootstrap-tools ## Login and print/cache a bootstrap bearer tok
 		exit 2; \
 	fi
 	@mkdir -p "$$(dirname "$${BOOTSTRAP_TOKEN_CACHE}")"
-	@query='mutation Login($$username: String!, $$password: String!) { login(input: { username: $$username, password: $$password }) { session { token } } }'; \
+	@query='mutation Login($$username: String!, $$password: String!) { login(input: { username: $$username, password: $$password }) { token { accessToken } } }'; \
 	payload=$$(jq -n --arg query "$$query" --arg username "$${ADMIN_USERNAME}" --arg password "$${ADMIN_PASSWORD}" '{query: $$query, variables: {username: $$username, password: $$password}}'); \
 	response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' --data "$$payload" "$${API_URL}") || { \
 		echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
@@ -239,7 +239,7 @@ bootstrap-token: bootstrap-tools ## Login and print/cache a bootstrap bearer tok
 		echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match the hash in gitstore-api/.env (run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate)."; \
 		exit 1; \
 	fi; \
-	token=$$(echo "$$response" | jq -er '.data.login.session.token // empty') || { \
+	token=$$(echo "$$response" | jq -er '.data.login.token.accessToken // empty') || { \
 		echo "Login response did not contain a token. Check ADMIN_USERNAME, ADMIN_PASSWORD, and API_URL."; \
 		echo "Hint: run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate the password hash in gitstore-api/.env."; \
 		exit 1; \
@@ -257,7 +257,7 @@ bootstrap-namespace: bootstrap-tools ## Create only the bootstrap namespace.
 			echo "ADMIN_PASSWORD is required unless BOOTSTRAP_TOKEN is provided or $${BOOTSTRAP_TOKEN_CACHE} exists"; \
 			exit 2; \
 		fi; \
-		query='mutation Login($$username: String!, $$password: String!) { login(input: { username: $$username, password: $$password }) { session { token } } }'; \
+		query='mutation Login($$username: String!, $$password: String!) { login(input: { username: $$username, password: $$password }) { token { accessToken } } }'; \
 		payload=$$(jq -n --arg query "$$query" --arg username "$${ADMIN_USERNAME}" --arg password "$${ADMIN_PASSWORD}" '{query: $$query, variables: {username: $$username, password: $$password}}'); \
 		response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' --data "$$payload" "$${API_URL}") || { \
 			echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
@@ -268,7 +268,7 @@ bootstrap-namespace: bootstrap-tools ## Create only the bootstrap namespace.
 			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match the hash in gitstore-api/.env (run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate)."; \
 			exit 1; \
 		fi; \
-		token=$$(echo "$$response" | jq -er '.data.login.session.token // empty') || { \
+		token=$$(echo "$$response" | jq -er '.data.login.token.accessToken // empty') || { \
 			echo "Login response did not contain a token."; \
 			echo "Hint: run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate the password hash in gitstore-api/.env."; \
 			exit 1; \
@@ -295,7 +295,7 @@ bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; n
 			echo "ADMIN_PASSWORD is required unless BOOTSTRAP_TOKEN is provided or $${BOOTSTRAP_TOKEN_CACHE} exists"; \
 			exit 2; \
 		fi; \
-		query='mutation Login($$username: String!, $$password: String!) { login(input: { username: $$username, password: $$password }) { session { token } } }'; \
+		query='mutation Login($$username: String!, $$password: String!) { login(input: { username: $$username, password: $$password }) { token { accessToken } } }'; \
 		payload=$$(jq -n --arg query "$$query" --arg username "$${ADMIN_USERNAME}" --arg password "$${ADMIN_PASSWORD}" '{query: $$query, variables: {username: $$username, password: $$password}}'); \
 		response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' --data "$$payload" "$${API_URL}") || { \
 			echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
@@ -306,7 +306,7 @@ bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; n
 			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match the hash in gitstore-api/.env (run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate)."; \
 			exit 1; \
 		fi; \
-		token=$$(echo "$$response" | jq -er '.data.login.session.token // empty') || { \
+		token=$$(echo "$$response" | jq -er '.data.login.token.accessToken // empty') || { \
 			echo "Login response did not contain a token."; \
 			echo "Hint: run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate the password hash in gitstore-api/.env."; \
 			exit 1; \
