@@ -308,26 +308,22 @@ func (s *Service) ListNamespaces(ctx context.Context, params datastore.PageParam
 
 // DeleteNamespace deletes a namespace after safety checks.
 // Authorization is enforced in GraphQL middleware before this method is called.
-func (s *Service) DeleteNamespace(ctx context.Context, identifier string) error {
-	ns, err := s.store.GetNamespaceByIdentifier(ctx, identifier)
-	if err != nil {
-		if errors.Is(err, datastore.ErrNotFound) {
-			return gqlerror.Errorf("namespace %q not found", identifier)
-		}
-		return gqlerror.Errorf("failed to retrieve namespace")
+func (s *Service) DeleteNamespace(ctx context.Context, ns *datastore.Namespace) error {
+	if ns == nil || ns.ID == "" {
+		return gqlerror.Errorf("namespace deletion target is missing")
 	}
 
 	// TODO: enforce when repositories table exists
 	if hasRepositories(ns.ID) {
-		return gqlerror.Errorf("namespace %q contains repositories and cannot be deleted", identifier)
+		return gqlerror.Errorf("namespace %q contains repositories and cannot be deleted", ns.Identifier)
 	}
 
 	if err := s.store.DeleteNamespace(ctx, ns.ID); err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
-			return gqlerror.Errorf("namespace %q not found", identifier)
+			return gqlerror.Errorf("namespace %q not found", ns.Identifier)
 		}
 		s.logger.Error("failed to delete namespace",
-			zap.String("identifier", identifier),
+			zap.String("identifier", ns.Identifier),
 			zap.Error(err),
 		)
 		return gqlerror.Errorf("failed to delete namespace")
