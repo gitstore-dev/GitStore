@@ -232,6 +232,16 @@ func TestRefreshToken_UnsupportedScope_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "scope requests are not supported")
 }
 
+func TestRefreshToken_InvalidToken_ReturnsClientAuthError(t *testing.T) {
+	cfg := newTestConfig(t, "1h")
+	reg, _ := newTestRegistry(t, cfg)
+	r := newTestResolver(t, reg)
+
+	_, err := r.RefreshToken(context.Background(), model.RefreshTokenInput{RefreshToken: "not-a-jwt"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid or expired refresh token")
+}
+
 // --- US3: Login migration ---
 
 func TestLogin_ValidCredentials_ReturnsTokenPayload(t *testing.T) {

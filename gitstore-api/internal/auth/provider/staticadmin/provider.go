@@ -195,7 +195,7 @@ func (p *StaticAdminProvider) RefreshSession(_ context.Context, oldToken string)
 		return p.jwtSecret, nil
 	}, jwt.WithoutClaimsValidation())
 	if err != nil {
-		return "", time.Time{}, fmt.Errorf("staticadmin: refresh: %w", err)
+		return "", time.Time{}, fmt.Errorf("staticadmin: refresh: %w", auth.ErrInvalidToken)
 	}
 
 	// Enforce grace window: reject tokens that expired longer ago than refreshGrace.

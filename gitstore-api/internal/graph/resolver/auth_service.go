@@ -116,6 +116,8 @@ func (r *Resolver) RefreshToken(ctx context.Context, input model.RefreshTokenInp
 		switch {
 		case errors.Is(err, auth.ErrNotSupported):
 			return nil, gqlerror.Errorf("token refresh not supported by active auth configuration")
+		case errors.Is(err, auth.ErrInvalidToken):
+			return nil, gqlerror.Errorf("invalid or expired refresh token")
 		case errors.Is(err, auth.ErrTokenTooOld):
 			return nil, gqlerror.Errorf("token too old to refresh, please log in again")
 		case errors.Is(err, auth.ErrTokenRevoked):

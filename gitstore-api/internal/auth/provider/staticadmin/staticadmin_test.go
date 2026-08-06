@@ -234,3 +234,13 @@ func TestStaticAdmin_RefreshSession_BeyondGrace_Fails(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, authpkg.ErrTokenTooOld)
 }
+
+func TestStaticAdmin_RefreshSession_InvalidToken_Fails(t *testing.T) {
+	cfg := newTestConfig("admin", mustBcrypt(t, "testpass"), "test-secret-key", "gitstore")
+	p, err := New(cfg, zap.NewNop())
+	require.NoError(t, err)
+
+	_, _, err = p.RefreshSession(context.Background(), "not-a-jwt")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, authpkg.ErrInvalidToken)
+}
