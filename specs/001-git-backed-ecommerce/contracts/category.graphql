@@ -79,10 +79,6 @@ Input for creating a category
 """
 input CreateCategoryInput {
   """
-  Client mutation ID (Relay pattern)
-  """
-
-  """
   Category name
   """
   name: String!
@@ -113,10 +109,6 @@ Payload for createCategory mutation
 """
 type CreateCategoryPayload {
   """
-  Client mutation ID (Relay pattern)
-  """
-
-  """
   The created category
   """
   category: Category
@@ -126,10 +118,6 @@ type CreateCategoryPayload {
 Input for updating a category
 """
 input UpdateCategoryInput {
-  """
-  Client mutation ID (Relay pattern)
-  """
-
   """
   Category ID to update
   """
@@ -171,10 +159,6 @@ Payload for updateCategory mutation
 """
 type UpdateCategoryPayload {
   """
-  Client mutation ID (Relay pattern)
-  """
-
-  """
   The updated category
   """
   category: Category
@@ -190,10 +174,6 @@ Input for deleting a category
 """
 input DeleteCategoryInput {
   """
-  Client mutation ID (Relay pattern)
-  """
-
-  """
   Category ID to delete
   """
   id: ID!
@@ -203,10 +183,6 @@ input DeleteCategoryInput {
 Payload for deleteCategory mutation
 """
 type DeleteCategoryPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-
   """
   Deleted category ID
   """
@@ -222,10 +198,6 @@ type DeleteCategoryPayload {
 Input for reordering categories (drag-and-drop)
 """
 input ReorderCategoriesInput {
-  """
-  Client mutation ID (Relay pattern)
-  """
-
   """
   Ordered list of category IDs within parent
   """
@@ -251,10 +223,6 @@ input ReorderCategoriesInput {
 Payload for reorderCategories mutation
 """
 type ReorderCategoriesPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-
   """
   Updated categories
   """

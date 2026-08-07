@@ -152,10 +152,6 @@ Input for creating a new namespace.
 """
 input CreateNamespaceInput {
   """
-  Client mutation ID for request tracking (Relay pattern).
-  """
-
-  """
   The human-readable identifier for the namespace.
   Must be globally unique across all tiers.
   DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
@@ -188,10 +184,6 @@ Input for deleting a namespace.
 """
 input DeleteNamespaceInput {
   """
-  Client mutation ID for request tracking (Relay pattern).
-  """
-
-  """
   The identifier of the namespace to delete.
   Deletion is blocked if any repositories exist within the namespace.
   Requires the caller to be the namespace owner (createdBy) or isAdmin.
@@ -208,10 +200,6 @@ Payload returned after successfully creating a namespace.
 """
 type CreateNamespacePayload {
   """
-  Client mutation ID for request tracking (Relay pattern).
-  """
-
-  """
   The newly created namespace.
   """
   namespace: Namespace!
@@ -221,10 +209,6 @@ type CreateNamespacePayload {
 Payload returned after successfully deleting a namespace.
 """
 type DeleteNamespacePayload {
-  """
-  Client mutation ID for request tracking (Relay pattern).
-  """
-
   """
   The identifier of the deleted namespace.
   """

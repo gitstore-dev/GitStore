@@ -119,10 +119,6 @@ Input for creating a product
 """
 input CreateProductInput {
   """
-  Client mutation ID (Relay pattern)
-  """
-
-  """
   Stock Keeping Unit (must be unique)
   """
   sku: String!
@@ -183,10 +179,6 @@ Payload for createProduct mutation
 """
 type CreateProductPayload {
   """
-  Client mutation ID (Relay pattern)
-  """
-
-  """
   The created product
   """
   product: Product
@@ -196,10 +188,6 @@ type CreateProductPayload {
 Input for updating a product
 """
 input UpdateProductInput {
-  """
-  Client mutation ID (Relay pattern)
-  """
-
   """
   Product ID to update
   """
@@ -276,10 +264,6 @@ Payload for updateProduct mutation
 """
 type UpdateProductPayload {
   """
-  Client mutation ID (Relay pattern)
-  """
-
-  """
   The updated product
   """
   product: Product
@@ -295,10 +279,6 @@ Input for deleting a product
 """
 input DeleteProductInput {
   """
-  Client mutation ID (Relay pattern)
-  """
-
-  """
   Product ID to delete
   """
   id: ID!
@@ -308,10 +288,6 @@ input DeleteProductInput {
 Payload for deleteProduct mutation
 """
 type DeleteProductPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-
   """
   Deleted product ID
   """
