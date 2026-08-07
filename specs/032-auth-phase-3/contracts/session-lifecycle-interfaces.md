@@ -5,47 +5,49 @@
 
 ---
 
-## GraphQL Schema (unchanged)
+## GraphQL Schema
 
-The following schema is already defined in `shared/schemas/auth.graphqls` and requires **no changes** in Phase 3. It is reproduced here as the stable external contract.
+The following schema mirrors `shared/schemas/auth.graphqls` and is reproduced here as the stable external contract.
 
 ```graphql
-type AuthSession {
-  token:     String!
-  expiresAt: DateTime!
-  user:      User!
-}
-
 type User {
   username: String!
   isAdmin:  Boolean!
 }
 
+type TokenResponse {
+  accessToken: String!
+  tokenType: String!
+  expiresIn: Int!
+  refreshToken: String
+  scope: String
+  idToken: String
+}
+
 input LoginInput {
   username: String!
   password: String!
+  scope: String
 }
 type LoginPayload {
-  session: AuthSession
+  token: TokenResponse!
 }
 
-input LogoutInput {
-  clientMutationId: String   # retained for schema compatibility; ignored in Phase 3
-}
 type LogoutPayload {
   success: Boolean!
 }
 
 input RefreshTokenInput {
-  clientMutationId: String   # retained for schema compatibility; ignored in Phase 3
+  refreshToken: String!
+  scope: String
 }
 type RefreshTokenPayload {
-  session: AuthSession
+  token: TokenResponse!
 }
 
 extend type Mutation {
   login(input: LoginInput!): LoginPayload!
-  logout(input: LogoutInput!): LogoutPayload!
+  logout: LogoutPayload!
   refreshToken(input: RefreshTokenInput!): RefreshTokenPayload!
 }
 ```

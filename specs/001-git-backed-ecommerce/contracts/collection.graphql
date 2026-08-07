@@ -64,11 +64,6 @@ Input for creating a collection
 """
 input CreateCollectionInput {
   """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
   Collection name
   """
   name: String!
@@ -99,11 +94,6 @@ Payload for createCollection mutation
 """
 type CreateCollectionPayload {
   """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
   The created collection
   """
   collection: Collection
@@ -113,11 +103,6 @@ type CreateCollectionPayload {
 Input for updating a collection
 """
 input UpdateCollectionInput {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
   """
   Collection ID to update
   """
@@ -159,11 +144,6 @@ Payload for updateCollection mutation
 """
 type UpdateCollectionPayload {
   """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
   The updated collection
   """
   collection: Collection
@@ -179,11 +159,6 @@ Input for deleting a collection
 """
 input DeleteCollectionInput {
   """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
   Collection ID to delete
   """
   id: ID!
@@ -193,11 +168,6 @@ input DeleteCollectionInput {
 Payload for deleteCollection mutation
 """
 type DeleteCollectionPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
   """
   Deleted collection ID
   """
@@ -209,11 +179,6 @@ Input for reordering collections (drag-and-drop)
 """
 input ReorderCollectionsInput {
   """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
   Ordered list of collection IDs
   """
   orderedIds: [ID!]!
@@ -223,11 +188,6 @@ input ReorderCollectionsInput {
 Payload for reorderCollections mutation
 """
 type ReorderCollectionsPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
   """
   Updated collections
   """
@@ -268,11 +228,6 @@ Input for publishing catalog changes
 """
 input PublishCatalogInput {
   """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
-  """
   Release version tag (e.g., v1.0.0)
   """
   version: String!
@@ -287,11 +242,6 @@ input PublishCatalogInput {
 Payload for publishCatalog mutation
 """
 type PublishCatalogPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
-
   """
   New catalog version
   """

@@ -140,7 +140,6 @@ Key resolved decisions:
 
 ### No schema changes
 
-`shared/schemas/auth.graphqls` is unchanged. `clientMutationId` fields in `LogoutInput` and `RefreshTokenInput` are retained as-is.
 
 ## Complexity Tracking
 

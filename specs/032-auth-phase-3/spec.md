@@ -131,7 +131,6 @@ non-admin user (once non-admin users exist) must receive `user.isAdmin: false`.
 ## Assumptions
 
 - The `static-admin` provider's `RevokeSession` and `RefreshSession` implementations (added in Phase 1) are correct and require no functional changes; Phase 3 only wires the resolvers to call them.
-- The `clientMutationId` fields in `LogoutInput` and `RefreshTokenInput` are intentionally left in the schema for this phase; removal is a separate schema-hygiene task.
 - The in-memory blacklist loses its state on server restart — this is an accepted limitation for single-instance deployments. Persistent blacklist storage is deferred to a later phase.
 - No new GraphQL schema types or fields are required; the `logout` and `refreshToken` mutations are already defined in `shared/schemas/auth.graphqls`.
 - The `refreshToken` mutation uses the caller's current bearer token as the old-token input; no separate `oldToken` argument is needed in the schema.

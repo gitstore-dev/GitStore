@@ -165,7 +165,6 @@ export function CollectionList({ onEdit, onDelete }: CollectionListProps) {
       // await reorderCollections({
       //   variables: {
       //     input: {
-      //       clientMutationId: uuidv4(),
       //       collectionIds: updated.map(c => c.id),
       //     },
       //   },

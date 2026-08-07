@@ -64,7 +64,7 @@ Logout:
 
 ```graphql
 mutation Logout {
-  logout(input: {}) {
+  logout {
     success
   }
 }
@@ -99,7 +99,7 @@ mutation Logout {
 | Operation | Purpose |
 |---|---|
 | `login(input: LoginInput!)` | Create an OIDC-style token response for local providers |
-| `logout(input: LogoutInput!)` | End the current session |
+| `logout` | End the current session |
 | `refreshToken(input: RefreshTokenInput!)` | Exchange a refresh token for a new OIDC-style token response |
 | `createNamespace(input: CreateNamespaceInput!)` | Create a namespace |
 | `deleteNamespace(input: DeleteNamespaceInput!)` | Delete an empty namespace |
@@ -593,14 +593,12 @@ Creates a namespace.
 mutation CreateNamespace {
   createNamespace(
     input: {
-      clientMutationId: "create-gitstore-test"
-      identifier: "gitstore-test"
+            identifier: "gitstore-test"
       displayName: "GitStore Test"
       tier: USER
     }
   ) {
-    clientMutationId
-    namespace {
+        namespace {
       id
       identifier
       displayName
@@ -617,7 +615,6 @@ Input fields:
 | `identifier` | yes | Globally unique DNS-label namespace identifier |
 | `displayName` | no | Human-friendly name |
 | `tier` | yes | `USER` or `ORGANIZATION` |
-| `clientMutationId` | no | Relay request tracking |
 
 ### deleteNamespace
 
@@ -627,12 +624,10 @@ Deletes an empty namespace. Deletion is blocked if repositories remain.
 mutation DeleteNamespace {
   deleteNamespace(
     input: {
-      clientMutationId: "delete-gitstore-test"
-      identifier: "gitstore-test"
+            identifier: "gitstore-test"
     }
   ) {
-    clientMutationId
-    deletedIdentifier
+        deletedIdentifier
   }
 }
 ```
@@ -645,14 +640,12 @@ Creates a repository in a namespace.
 mutation CreateRepository($namespaceId: ID!) {
   createRepository(
     input: {
-      clientMutationId: "create-catalog"
-      namespaceId: $namespaceId
+            namespaceId: $namespaceId
       name: "catalog"
       defaultBranch: "main"
     }
   ) {
-    clientMutationId
-    repository {
+        repository {
       id
       name
       defaultBranch
@@ -671,13 +664,11 @@ mutation CreateRepository($namespaceId: ID!) {
 mutation RenameRepository($repositoryId: ID!) {
   renameRepository(
     input: {
-      clientMutationId: "rename-catalog"
-      repositoryId: $repositoryId
+            repositoryId: $repositoryId
       newName: "summer-catalog"
     }
   ) {
-    clientMutationId
-    repository {
+        repository {
       id
       name
     }
@@ -691,13 +682,11 @@ mutation RenameRepository($repositoryId: ID!) {
 mutation TransferRepository($repositoryId: ID!, $targetNamespaceId: ID!) {
   transferRepository(
     input: {
-      clientMutationId: "transfer-catalog"
-      repositoryId: $repositoryId
+            repositoryId: $repositoryId
       targetNamespaceId: $targetNamespaceId
     }
   ) {
-    clientMutationId
-    repository {
+        repository {
       id
       name
       namespace {
@@ -716,12 +705,10 @@ Deletes repository metadata and storage.
 mutation DeleteRepository($repositoryId: ID!) {
   deleteRepository(
     input: {
-      clientMutationId: "delete-catalog"
-      repositoryId: $repositoryId
+            repositoryId: $repositoryId
     }
   ) {
-    clientMutationId
-    deletedRepositoryId
+        deletedRepositoryId
   }
 }
 ```

@@ -284,8 +284,6 @@ type CollectionStatus struct {
 
 // Input for creating a category
 type CreateCategoryInput struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Category name
 	Name string `json:"name"`
 	// URL-friendly slug (must be unique)
@@ -300,8 +298,6 @@ type CreateCategoryInput struct {
 
 // Payload for createCategory mutation
 type CreateCategoryPayload struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The created category
 	Category *Category `json:"category,omitempty"`
 }
@@ -316,8 +312,6 @@ type CreateCollectionPayload struct {
 
 // Input for creating a new namespace.
 type CreateNamespaceInput struct {
-	// TODO: Remove, deprecated in relay
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The human-readable identifier for the namespace.
 	// Must be globally unique across all tiers.
 	// DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
@@ -334,36 +328,28 @@ type CreateNamespaceInput struct {
 
 // Payload returned after successfully creating a namespace.
 type CreateNamespacePayload struct {
-	// TODO: Remove, deprecated in relay
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The newly created namespace.
 	Namespace *Namespace `json:"namespace"`
 }
 
 type CreateRepositoryInput struct {
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	NamespaceID      string  `json:"namespaceId"`
-	Name             string  `json:"name"`
-	DefaultBranch    *string `json:"defaultBranch,omitempty"`
+	NamespaceID   string  `json:"namespaceId"`
+	Name          string  `json:"name"`
+	DefaultBranch *string `json:"defaultBranch,omitempty"`
 }
 
 type CreateRepositoryPayload struct {
-	ClientMutationID *string     `json:"clientMutationId,omitempty"`
-	Repository       *Repository `json:"repository"`
+	Repository *Repository `json:"repository"`
 }
 
 // Input for deleting a category
 type DeleteCategoryInput struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Category ID to delete
 	ID string `json:"id"`
 }
 
 // Payload for deleteCategory mutation
 type DeleteCategoryPayload struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Deleted category ID
 	DeletedCategoryID *string `json:"deletedCategoryId,omitempty"`
 	// Orphaned product IDs (products that referenced this category)
@@ -380,8 +366,6 @@ type DeleteCollectionPayload struct {
 
 // Input for deleting a namespace.
 type DeleteNamespaceInput struct {
-	// TODO: Remove, deprecated in relay
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The identifier of the namespace to delete.
 	// Deletion is blocked if any repositories exist within the namespace.
 	// Requires the caller to be the namespace owner (createdBy) or isAdmin.
@@ -390,20 +374,16 @@ type DeleteNamespaceInput struct {
 
 // Payload returned after successfully deleting a namespace.
 type DeleteNamespacePayload struct {
-	// TODO: Remove, deprecated in relay
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The identifier of the deleted namespace.
 	DeletedIdentifier string `json:"deletedIdentifier"`
 }
 
 type DeleteRepositoryInput struct {
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	RepositoryID     string  `json:"repositoryId"`
+	RepositoryID string `json:"repositoryId"`
 }
 
 type DeleteRepositoryPayload struct {
-	ClientMutationID    *string `json:"clientMutationId,omitempty"`
-	DeletedRepositoryID string  `json:"deletedRepositoryId"`
+	DeletedRepositoryID string `json:"deletedRepositoryId"`
 }
 
 // Gate that controls when a price template is eligible.
@@ -475,13 +455,6 @@ type LoginInput struct {
 type LoginPayload struct {
 	// OIDC-compatible token payload.
 	Token *TokenResponse `json:"token"`
-}
-
-// Logout mutation input (Relay pattern)
-type LogoutInput struct {
-	// TODO: Is it safe to remove and empty Input?
-	// Client mutation ID for request tracking (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 }
 
 // Logout mutation payload (Relay pattern)
@@ -833,14 +806,12 @@ type ProductVariantStatus struct {
 }
 
 type PublishCatalogInput struct {
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
-	Version          string  `json:"version"`
-	Message          string  `json:"message"`
+	Version string `json:"version"`
+	Message string `json:"message"`
 }
 
 type PublishCatalogPayload struct {
-	ClientMutationID *string         `json:"clientMutationId,omitempty"`
-	CatalogVersion   *CatalogVersion `json:"catalogVersion,omitempty"`
+	CatalogVersion *CatalogVersion `json:"catalogVersion,omitempty"`
 }
 
 // Inclusive quantity range that must be satisfied for a price template to apply.
@@ -870,21 +841,17 @@ type RefreshTokenPayload struct {
 }
 
 type RenameRepositoryInput struct {
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Relay ID of the repository to rename.
 	RepositoryID string `json:"repositoryId"`
 	NewName      string `json:"newName"`
 }
 
 type RenameRepositoryPayload struct {
-	ClientMutationID *string     `json:"clientMutationId,omitempty"`
-	Repository       *Repository `json:"repository"`
+	Repository *Repository `json:"repository"`
 }
 
 // Input for reordering categories (drag-and-drop)
 type ReorderCategoriesInput struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Ordered list of category IDs within parent
 	OrderedIds []string `json:"orderedIds"`
 	// Parent category ID (null for root categories)
@@ -897,8 +864,6 @@ type ReorderCategoriesInput struct {
 
 // Payload for reorderCategories mutation
 type ReorderCategoriesPayload struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Updated categories
 	Categories []*Category `json:"categories,omitempty"`
 }
@@ -1070,7 +1035,6 @@ type TokenResponse struct {
 }
 
 type TransferRepositoryInput struct {
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Relay ID of the repository to transfer.
 	RepositoryID string `json:"repositoryId"`
 	// Relay ID of the destination namespace.
@@ -1078,14 +1042,11 @@ type TransferRepositoryInput struct {
 }
 
 type TransferRepositoryPayload struct {
-	ClientMutationID *string     `json:"clientMutationId,omitempty"`
-	Repository       *Repository `json:"repository"`
+	Repository *Repository `json:"repository"`
 }
 
 // Input for updating a category
 type UpdateCategoryInput struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// Category ID to update
 	ID string `json:"id"`
 	// New name
@@ -1105,8 +1066,6 @@ type UpdateCategoryInput struct {
 
 // Payload for updateCategory mutation
 type UpdateCategoryPayload struct {
-	// Client mutation ID (Relay pattern)
-	ClientMutationID *string `json:"clientMutationId,omitempty"`
 	// The updated category
 	Category *Category `json:"category,omitempty"`
 	// Conflict information (if optimistic lock failed)
