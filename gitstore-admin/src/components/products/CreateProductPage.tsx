@@ -41,7 +41,6 @@ export function CreateProductPage() {
       // const result = await createProduct({
       //   variables: {
       //     input: {
-      //       clientMutationId: uuidv4(),
       //       title: product.title,
       //       sku: product.sku,
       //       price: product.price,

@@ -5,7 +5,6 @@ import { Client } from 'urql';
 
 // Types matching GraphQL schema
 interface PublishCatalogInput {
-  clientMutationId?: string;
   version: string; // Required in schema
   message: string;
 }
@@ -24,7 +23,6 @@ interface CatalogVersion {
 }
 
 interface PublishCatalogPayload {
-  clientMutationId?: string | null;
   catalogVersion?: CatalogVersion | null;
 }
 
@@ -45,7 +43,6 @@ export async function publishCatalog(
   const PUBLISH_CATALOG_MUTATION = `
     mutation PublishCatalog($input: PublishCatalogInput!) {
       publishCatalog(input: $input) {
-        clientMutationId
         catalogVersion {
           tag
           commit
@@ -67,7 +64,6 @@ export async function publishCatalog(
       PUBLISH_CATALOG_MUTATION,
       {
         input: {
-          clientMutationId: generateClientMutationId(),
           version,
           message,
         },

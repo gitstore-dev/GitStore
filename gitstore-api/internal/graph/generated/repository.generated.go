@@ -29,29 +29,6 @@ import (
 
 // region    **************************** field.gotpl *****************************
 
-func (ec *executionContext) _CreateRepositoryPayload_clientMutationId(ctx context.Context, field graphql.CollectedField, obj *model.CreateRepositoryPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CreateRepositoryPayload_clientMutationId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ClientMutationID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_CreateRepositoryPayload_clientMutationId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CreateRepositoryPayload", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
 func (ec *executionContext) _CreateRepositoryPayload_repository(ctx context.Context, field graphql.CollectedField, obj *model.CreateRepositoryPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -84,29 +61,6 @@ func (ec *executionContext) fieldContext_CreateRepositoryPayload_repository(_ co
 	return fc, nil
 }
 
-func (ec *executionContext) _DeleteRepositoryPayload_clientMutationId(ctx context.Context, field graphql.CollectedField, obj *model.DeleteRepositoryPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_DeleteRepositoryPayload_clientMutationId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ClientMutationID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_DeleteRepositoryPayload_clientMutationId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("DeleteRepositoryPayload", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
 func (ec *executionContext) _DeleteRepositoryPayload_deletedRepositoryId(ctx context.Context, field graphql.CollectedField, obj *model.DeleteRepositoryPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -128,29 +82,6 @@ func (ec *executionContext) _DeleteRepositoryPayload_deletedRepositoryId(ctx con
 }
 func (ec *executionContext) fieldContext_DeleteRepositoryPayload_deletedRepositoryId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("DeleteRepositoryPayload", field, false, false, errors.New("field of type ID does not have child fields"))
-}
-
-func (ec *executionContext) _RenameRepositoryPayload_clientMutationId(ctx context.Context, field graphql.CollectedField, obj *model.RenameRepositoryPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_RenameRepositoryPayload_clientMutationId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ClientMutationID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_RenameRepositoryPayload_clientMutationId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("RenameRepositoryPayload", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _RenameRepositoryPayload_repository(ctx context.Context, field graphql.CollectedField, obj *model.RenameRepositoryPayload) (ret graphql.Marshaler) {
@@ -566,29 +497,6 @@ func (ec *executionContext) fieldContext_RepositoryEdge_node(_ context.Context, 
 	return fc, nil
 }
 
-func (ec *executionContext) _TransferRepositoryPayload_clientMutationId(ctx context.Context, field graphql.CollectedField, obj *model.TransferRepositoryPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_TransferRepositoryPayload_clientMutationId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ClientMutationID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_TransferRepositoryPayload_clientMutationId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("TransferRepositoryPayload", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
 func (ec *executionContext) _TransferRepositoryPayload_repository(ctx context.Context, field graphql.CollectedField, obj *model.TransferRepositoryPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -636,20 +544,13 @@ func (ec *executionContext) unmarshalInputCreateRepositoryInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"clientMutationId", "namespaceId", "name", "defaultBranch"}
+	fieldsInOrder := [...]string{"namespaceId", "name", "defaultBranch"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "clientMutationId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clientMutationId"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ClientMutationID = data
 		case "namespaceId":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespaceId"))
 			data, err := ec.unmarshalNID2string(ctx, v)
@@ -687,20 +588,13 @@ func (ec *executionContext) unmarshalInputDeleteRepositoryInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"clientMutationId", "repositoryId"}
+	fieldsInOrder := [...]string{"repositoryId"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "clientMutationId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clientMutationId"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ClientMutationID = data
 		case "repositoryId":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repositoryId"))
 			data, err := ec.unmarshalNID2string(ctx, v)
@@ -724,20 +618,13 @@ func (ec *executionContext) unmarshalInputRenameRepositoryInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"clientMutationId", "repositoryId", "newName"}
+	fieldsInOrder := [...]string{"repositoryId", "newName"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "clientMutationId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clientMutationId"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ClientMutationID = data
 		case "repositoryId":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repositoryId"))
 			data, err := ec.unmarshalNID2string(ctx, v)
@@ -842,20 +729,13 @@ func (ec *executionContext) unmarshalInputTransferRepositoryInput(ctx context.Co
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"clientMutationId", "repositoryId", "targetNamespaceId"}
+	fieldsInOrder := [...]string{"repositoryId", "targetNamespaceId"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "clientMutationId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clientMutationId"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ClientMutationID = data
 		case "repositoryId":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repositoryId"))
 			data, err := ec.unmarshalNID2string(ctx, v)
@@ -894,8 +774,6 @@ func (ec *executionContext) _CreateRepositoryPayload(ctx context.Context, sel as
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("CreateRepositoryPayload")
-		case "clientMutationId":
-			out.Values[i] = ec._CreateRepositoryPayload_clientMutationId(ctx, field, obj)
 		case "repository":
 			out.Values[i] = ec._CreateRepositoryPayload_repository(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -935,8 +813,6 @@ func (ec *executionContext) _DeleteRepositoryPayload(ctx context.Context, sel as
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("DeleteRepositoryPayload")
-		case "clientMutationId":
-			out.Values[i] = ec._DeleteRepositoryPayload_clientMutationId(ctx, field, obj)
 		case "deletedRepositoryId":
 			out.Values[i] = ec._DeleteRepositoryPayload_deletedRepositoryId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -976,8 +852,6 @@ func (ec *executionContext) _RenameRepositoryPayload(ctx context.Context, sel as
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("RenameRepositoryPayload")
-		case "clientMutationId":
-			out.Values[i] = ec._RenameRepositoryPayload_clientMutationId(ctx, field, obj)
 		case "repository":
 			out.Values[i] = ec._RenameRepositoryPayload_repository(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -1194,8 +1068,6 @@ func (ec *executionContext) _TransferRepositoryPayload(ctx context.Context, sel 
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("TransferRepositoryPayload")
-		case "clientMutationId":
-			out.Values[i] = ec._TransferRepositoryPayload_clientMutationId(ctx, field, obj)
 		case "repository":
 			out.Values[i] = ec._TransferRepositoryPayload_repository(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

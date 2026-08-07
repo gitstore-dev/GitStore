@@ -1248,29 +1248,6 @@ func (ec *executionContext) fieldContext_CategoryTaxonomyStatus_resolved(_ conte
 	return fc, nil
 }
 
-func (ec *executionContext) _CreateCategoryPayload_clientMutationId(ctx context.Context, field graphql.CollectedField, obj *model.CreateCategoryPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CreateCategoryPayload_clientMutationId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ClientMutationID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_CreateCategoryPayload_clientMutationId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CreateCategoryPayload", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
 func (ec *executionContext) _CreateCategoryPayload_category(ctx context.Context, field graphql.CollectedField, obj *model.CreateCategoryPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1301,29 +1278,6 @@ func (ec *executionContext) fieldContext_CreateCategoryPayload_category(_ contex
 		},
 	}
 	return fc, nil
-}
-
-func (ec *executionContext) _DeleteCategoryPayload_clientMutationId(ctx context.Context, field graphql.CollectedField, obj *model.DeleteCategoryPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_DeleteCategoryPayload_clientMutationId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ClientMutationID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_DeleteCategoryPayload_clientMutationId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("DeleteCategoryPayload", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _DeleteCategoryPayload_deletedCategoryId(ctx context.Context, field graphql.CollectedField, obj *model.DeleteCategoryPayload) (ret graphql.Marshaler) {
@@ -1416,29 +1370,6 @@ func (ec *executionContext) _KeyValuePair_value(ctx context.Context, field graph
 }
 func (ec *executionContext) fieldContext_KeyValuePair_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("KeyValuePair", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ReorderCategoriesPayload_clientMutationId(ctx context.Context, field graphql.CollectedField, obj *model.ReorderCategoriesPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ReorderCategoriesPayload_clientMutationId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ClientMutationID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_ReorderCategoriesPayload_clientMutationId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ReorderCategoriesPayload", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _ReorderCategoriesPayload_categories(ctx context.Context, field graphql.CollectedField, obj *model.ReorderCategoriesPayload) (ret graphql.Marshaler) {
@@ -1565,29 +1496,6 @@ func (ec *executionContext) fieldContext_ResolvedCategoryTaxonomy_productCount(_
 	return graphql.NewScalarFieldContext("ResolvedCategoryTaxonomy", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
-func (ec *executionContext) _UpdateCategoryPayload_clientMutationId(ctx context.Context, field graphql.CollectedField, obj *model.UpdateCategoryPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_UpdateCategoryPayload_clientMutationId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ClientMutationID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_UpdateCategoryPayload_clientMutationId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("UpdateCategoryPayload", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
 func (ec *executionContext) _UpdateCategoryPayload_category(ctx context.Context, field graphql.CollectedField, obj *model.UpdateCategoryPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1667,20 +1575,13 @@ func (ec *executionContext) unmarshalInputCreateCategoryInput(ctx context.Contex
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"clientMutationId", "name", "slug", "parentId", "displayOrder", "body"}
+	fieldsInOrder := [...]string{"name", "slug", "parentId", "displayOrder", "body"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "clientMutationId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clientMutationId"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ClientMutationID = data
 		case "name":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
 			data, err := ec.unmarshalNString2string(ctx, v)
@@ -1732,20 +1633,13 @@ func (ec *executionContext) unmarshalInputDeleteCategoryInput(ctx context.Contex
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"clientMutationId", "id"}
+	fieldsInOrder := [...]string{"id"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "clientMutationId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clientMutationId"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ClientMutationID = data
 		case "id":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
 			data, err := ec.unmarshalNID2string(ctx, v)
@@ -1769,20 +1663,13 @@ func (ec *executionContext) unmarshalInputReorderCategoriesInput(ctx context.Con
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"clientMutationId", "orderedIds", "parentId", "movedCategoryId", "newParentId"}
+	fieldsInOrder := [...]string{"orderedIds", "parentId", "movedCategoryId", "newParentId"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "clientMutationId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clientMutationId"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ClientMutationID = data
 		case "orderedIds":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("orderedIds"))
 			data, err := ec.unmarshalNID2ᚕstringᚄ(ctx, v)
@@ -1827,20 +1714,13 @@ func (ec *executionContext) unmarshalInputUpdateCategoryInput(ctx context.Contex
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"clientMutationId", "id", "name", "slug", "parentId", "displayOrder", "body", "version"}
+	fieldsInOrder := [...]string{"id", "name", "slug", "parentId", "displayOrder", "body", "version"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "clientMutationId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clientMutationId"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ClientMutationID = data
 		case "id":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
 			data, err := ec.unmarshalNID2string(ctx, v)
@@ -2404,8 +2284,6 @@ func (ec *executionContext) _CreateCategoryPayload(ctx context.Context, sel ast.
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("CreateCategoryPayload")
-		case "clientMutationId":
-			out.Values[i] = ec._CreateCategoryPayload_clientMutationId(ctx, field, obj)
 		case "category":
 			out.Values[i] = ec._CreateCategoryPayload_category(ctx, field, obj)
 		default:
@@ -2442,8 +2320,6 @@ func (ec *executionContext) _DeleteCategoryPayload(ctx context.Context, sel ast.
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("DeleteCategoryPayload")
-		case "clientMutationId":
-			out.Values[i] = ec._DeleteCategoryPayload_clientMutationId(ctx, field, obj)
 		case "deletedCategoryId":
 			out.Values[i] = ec._DeleteCategoryPayload_deletedCategoryId(ctx, field, obj)
 		case "orphanedProductIds":
@@ -2526,8 +2402,6 @@ func (ec *executionContext) _ReorderCategoriesPayload(ctx context.Context, sel a
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("ReorderCategoriesPayload")
-		case "clientMutationId":
-			out.Values[i] = ec._ReorderCategoriesPayload_clientMutationId(ctx, field, obj)
 		case "categories":
 			out.Values[i] = ec._ReorderCategoriesPayload_categories(ctx, field, obj)
 		default:
@@ -2618,8 +2492,6 @@ func (ec *executionContext) _UpdateCategoryPayload(ctx context.Context, sel ast.
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("UpdateCategoryPayload")
-		case "clientMutationId":
-			out.Values[i] = ec._UpdateCategoryPayload_clientMutationId(ctx, field, obj)
 		case "category":
 			out.Values[i] = ec._UpdateCategoryPayload_category(ctx, field, obj)
 		case "conflict":

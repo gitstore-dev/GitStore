@@ -96,7 +96,7 @@ func TestLogout_AuthenticatedBearer_ReturnsSuccess(t *testing.T) {
 	}
 	ctx := ctxWithPrincipal(principal)
 
-	payload, err := r.Logout(ctx, model.LogoutInput{})
+	payload, err := r.Logout(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, payload)
 	assert.True(t, payload.Success)
@@ -109,7 +109,7 @@ func TestLogout_AnonymousPrincipal_ReturnsError(t *testing.T) {
 
 	ctx := ctxWithPrincipal(authpkg.Anonymous())
 
-	_, err := r.Logout(ctx, model.LogoutInput{})
+	_, err := r.Logout(ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "authentication required")
 }
@@ -119,7 +119,7 @@ func TestLogout_NilPrincipal_ReturnsError(t *testing.T) {
 	reg, _ := newTestRegistry(t, cfg)
 	r := newTestResolver(t, reg)
 
-	_, err := r.Logout(context.Background(), model.LogoutInput{})
+	_, err := r.Logout(context.Background())
 	require.Error(t, err)
 }
 
@@ -137,7 +137,7 @@ func TestLogout_EmptyTokenID_NoOp_ReturnsSuccess(t *testing.T) {
 	}
 	ctx := ctxWithPrincipal(principal)
 
-	payload, err := r.Logout(ctx, model.LogoutInput{})
+	payload, err := r.Logout(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, payload)
 	assert.True(t, payload.Success)
@@ -310,7 +310,7 @@ func TestLogout_NilRegistry_ReturnsError(t *testing.T) {
 
 	principal := &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin", TokenID: "some-jti"}
 	ctx := ctxWithPrincipal(principal)
-	_, err = r.Logout(ctx, model.LogoutInput{})
+	_, err = r.Logout(ctx)
 	require.Error(t, err)
 }
 

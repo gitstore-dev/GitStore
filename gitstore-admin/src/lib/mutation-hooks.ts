@@ -36,7 +36,6 @@ export function useCreateProduct() {
   return useMutation(`
     mutation CreateProduct($input: CreateProductInput!) {
       createProduct(input: $input) {
-        clientMutationId
         product {
           id
           title
@@ -65,7 +64,6 @@ export function useUpdateProduct() {
   return useMutation(`
     mutation UpdateProduct($input: UpdateProductInput!) {
       updateProduct(input: $input) {
-        clientMutationId
         product {
           id
           title
@@ -94,7 +92,6 @@ export function useDeleteProduct() {
   return useMutation(`
     mutation DeleteProduct($input: DeleteProductInput!) {
       deleteProduct(input: $input) {
-        clientMutationId
         success
       }
     }
@@ -108,7 +105,6 @@ export function useCreateCategory() {
   return useMutation(`
     mutation CreateCategory($input: CreateCategoryInput!) {
       createCategory(input: $input) {
-        clientMutationId
         category {
           id
           name
@@ -132,7 +128,6 @@ export function useUpdateCategory() {
   return useMutation(`
     mutation UpdateCategory($input: UpdateCategoryInput!) {
       updateCategory(input: $input) {
-        clientMutationId
         category {
           id
           name
@@ -156,7 +151,6 @@ export function useDeleteCategory() {
   return useMutation(`
     mutation DeleteCategory($input: DeleteCategoryInput!) {
       deleteCategory(input: $input) {
-        clientMutationId
         success
       }
     }
@@ -170,7 +164,6 @@ export function useReorderCategories() {
   return useMutation(`
     mutation ReorderCategories($input: ReorderCategoriesInput!) {
       reorderCategories(input: $input) {
-        clientMutationId
         categories {
           id
           displayOrder
@@ -188,7 +181,6 @@ export function useCreateCollection() {
   return useMutation(`
     mutation CreateCollection($input: CreateCollectionInput!) {
       createCollection(input: $input) {
-        clientMutationId
         collection {
           id
           name
@@ -212,7 +204,6 @@ export function useUpdateCollection() {
   return useMutation(`
     mutation UpdateCollection($input: UpdateCollectionInput!) {
       updateCollection(input: $input) {
-        clientMutationId
         collection {
           id
           name
@@ -236,7 +227,6 @@ export function useDeleteCollection() {
   return useMutation(`
     mutation DeleteCollection($input: DeleteCollectionInput!) {
       deleteCollection(input: $input) {
-        clientMutationId
         success
       }
     }
@@ -250,7 +240,6 @@ export function useReorderCollections() {
   return useMutation(`
     mutation ReorderCollections($input: ReorderCollectionsInput!) {
       reorderCollections(input: $input) {
-        clientMutationId
         collections {
           id
           displayOrder

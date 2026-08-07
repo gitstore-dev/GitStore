@@ -24,7 +24,6 @@ description: "Task list for Repository Storage Identity and Path Strategy"
 **Purpose**: API-First gate (Constitution Principle II). All contracts must be committed before any implementation.
 
 - [X] T001 Update `shared/proto/gitstore/git/v1/git_service.proto` from `specs/010-repo-storage-identity/contracts/grpc.git_service.proto` — add `storage_class` field to `CreateRepositoryRequest`, `storage_path` to `CreateRepositoryResponse`, and update `repository_id` comments to reflect UUIDv7 semantics
-- [X] T002 [P] Add `specs/010-repo-storage-identity/contracts/graphql.repository.graphqls` content to `shared/schemas/repository.graphqls` (new file) — `Repository` type, `RepositoryEdge`, `RepositoryConnection`, `RepositoryBy`, `RepositoryNamespacePath`, all four mutations (`createRepository`, `renameRepository`, `transferRepository`, `deleteRepository`) with their input/payload types; add `clientMutationId: String` to every mutation input and payload type
 - [X] T003 Update `gitstore-api/internal/datastore/scylla/migrations/001_initial_schema.cql` in-place — add `repositories` table and `namespace_mappings` table as defined in `specs/010-repo-storage-identity/data-model.md` (D-003: no new migration files)
 - [X] T004 [P] Update `gitstore-api/internal/datastore/scylla/migrations/002_add_initial_indices.cql` in-place — add `repositories_by_namespace` and `mappings_by_repo_id` indices
 - [X] T005 Regenerate gRPC Go bindings from `shared/proto/gitstore/git/v1/git_service.proto` using `protoc` — verify generated files in `api/gen/gitstore/git/v1/`
@@ -244,7 +243,6 @@ Agent B: T024–T030 (Rust fanout resolver for US2)
 - Constitution Principle I (Test-First): every implementation task must be preceded by a failing test
 - Constitution Principle II (API-First): Phase 1 contracts must be committed before Phase 2+
 - Constitution Principle IV (Observability): all lookup, rename, transfer, and gRPC delegation calls must emit structured log entries
-- `clientMutationId: String` must appear in every GraphQL mutation input type AND every payload type
 - `StoragePath` is **derived, never stored** (D-005): compute it from `repo_id` on the fly in both Go and Rust
 - No migration files created — update `001_initial_schema.cql` and `002_add_initial_indices.cql` in-place (D-003, ALPHA)
 - `namespace` memdb table index uses `memdb.UUIDFieldIndex{Field: "ID"}` (already updated in last commit)

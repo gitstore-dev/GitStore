@@ -166,8 +166,6 @@ If the version doesn't match (concurrent modification), the mutation returns a `
 ## Relay Pattern
 
 All mutations follow the Relay pattern with:
-- Input object with `clientMutationId` for request tracking
-- Payload object with `clientMutationId` echoed back
 
 ```tsx
 const [createProduct] = useCreateProductMutation();
@@ -175,7 +173,6 @@ const [createProduct] = useCreateProductMutation();
 await createProduct({
   variables: {
     input: {
-      clientMutationId: 'unique-request-id',
       title: 'New Product',
       // ... other fields
     },

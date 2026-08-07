@@ -32,8 +32,6 @@ Cursor-based pagination for lists:
 
 ### Mutation Pattern
 Standardized mutation input/payload structure:
-- Input: `clientMutationId` for request tracking
-- Payload: `clientMutationId` echo, entity result, errors array
 
 ## Key Features
 
@@ -118,7 +116,6 @@ query CategoryTree {
 ```graphql
 mutation CreateProduct($input: CreateProductInput!) {
   createProduct(input: $input) {
-    clientMutationId
     product {
       id
       sku
@@ -132,7 +129,6 @@ mutation CreateProduct($input: CreateProductInput!) {
 ```graphql
 mutation UpdateProduct($input: UpdateProductInput!) {
   updateProduct(input: $input) {
-    clientMutationId
     product {
       id
       title
@@ -151,7 +147,6 @@ mutation UpdateProduct($input: UpdateProductInput!) {
 ```graphql
 mutation PublishCatalog($input: PublishCatalogInput!) {
   publishCatalog(input: $input) {
-    clientMutationId
     catalogVersion {
       tag
       commit

@@ -77,17 +77,6 @@ type LoginPayload {
 }
 
 """
-Logout mutation input (Relay pattern)
-"""
-input LogoutInput {
-  """
-  TODO: Is it safe to remove and empty Input?
-  Client mutation ID for request tracking (Relay pattern)
-  """
-  clientMutationId: String
-}
-
-"""
 Logout mutation payload (Relay pattern)
 """
 type LogoutPayload {
@@ -133,7 +122,7 @@ extend type Mutation {
   """
   Logout and invalidate current session
   """
-  logout(input: LogoutInput!): LogoutPayload!
+  logout: LogoutPayload!
 
   """
   Refresh authentication token
