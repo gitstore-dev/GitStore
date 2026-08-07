@@ -72,7 +72,7 @@ func (r *Resolver) Login(ctx context.Context, input model.LoginInput) (*model.Lo
 }
 
 // Logout implements the logout mutation on the base Resolver so it can be unit-tested directly.
-func (r *Resolver) Logout(ctx context.Context, input model.LogoutInput) (*model.LogoutPayload, error) {
+func (r *Resolver) Logout(ctx context.Context) (*model.LogoutPayload, error) {
 	if r.registry == nil {
 		return nil, gqlerror.Errorf("authentication service unavailable")
 	}

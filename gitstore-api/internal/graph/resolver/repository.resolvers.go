@@ -37,8 +37,7 @@ func (r *mutationResolver) CreateRepository(ctx context.Context, input model.Cre
 		zap.String("repo_id", repo.ID),
 	)
 	return &model.CreateRepositoryPayload{
-		ClientMutationID: input.ClientMutationID,
-		Repository:       datastoreRepositoryToModel(repo, ns, r.storageDataDir),
+		Repository: datastoreRepositoryToModel(repo, ns, r.storageDataDir),
 	}, nil
 }
 
@@ -61,8 +60,7 @@ func (r *mutationResolver) RenameRepository(ctx context.Context, input model.Ren
 		zap.String("new_name", input.NewName),
 	)
 	return &model.RenameRepositoryPayload{
-		ClientMutationID: input.ClientMutationID,
-		Repository:       datastoreRepositoryToModel(repo, ns, r.storageDataDir),
+		Repository: datastoreRepositoryToModel(repo, ns, r.storageDataDir),
 	}, nil
 }
 
@@ -89,8 +87,7 @@ func (r *mutationResolver) TransferRepository(ctx context.Context, input model.T
 		zap.String("to_namespace_id", targetNsID),
 	)
 	return &model.TransferRepositoryPayload{
-		ClientMutationID: input.ClientMutationID,
-		Repository:       datastoreRepositoryToModel(repo, ns, r.storageDataDir),
+		Repository: datastoreRepositoryToModel(repo, ns, r.storageDataDir),
 	}, nil
 }
 
@@ -105,7 +102,6 @@ func (r *mutationResolver) DeleteRepository(ctx context.Context, input model.Del
 	}
 	r.logger.Info("delete repository", zap.String("repo_id", repoID))
 	return &model.DeleteRepositoryPayload{
-		ClientMutationID:    input.ClientMutationID,
 		DeletedRepositoryID: mustEncodeNodeID(nodeKindRepository, repoID),
 	}, nil
 }

@@ -17,8 +17,8 @@ func (r *mutationResolver) Login(ctx context.Context, input model.LoginInput) (*
 }
 
 // Logout is the resolver for the logout field.
-func (r *mutationResolver) Logout(ctx context.Context, input model.LogoutInput) (*model.LogoutPayload, error) {
-	return r.Resolver.Logout(ctx, input)
+func (r *mutationResolver) Logout(ctx context.Context) (*model.LogoutPayload, error) {
+	return r.Resolver.Logout(ctx)
 }
 
 // RefreshToken is the resolver for the refreshToken field.

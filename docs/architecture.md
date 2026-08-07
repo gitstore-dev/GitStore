@@ -530,9 +530,8 @@ All namespace operations are GraphQL, consistent with the rest of the domain API
 ```graphql
 # Create a user namespace
 mutation {
-  createNamespace(input: { clientMutationId: "create-acme-corp", identifier: "acme-corp", tier: USER }) {
-    clientMutationId
-    namespace { id identifier tier createdAt createdBy }
+  createNamespace(input: { identifier: "acme-corp", tier: USER }) {
+        namespace { id identifier tier createdAt createdBy }
   }
 }
 
@@ -565,9 +564,8 @@ query {
 
 # Delete a namespace (owner or admin only)
 mutation {
-  deleteNamespace(input: { clientMutationId: "delete-acme-corp", identifier: "acme-corp" }) {
-    clientMutationId
-    deletedIdentifier
+  deleteNamespace(input: { identifier: "acme-corp" }) {
+        deletedIdentifier
   }
 }
 ```

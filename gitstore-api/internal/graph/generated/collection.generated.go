@@ -1418,29 +1418,6 @@ func (ec *executionContext) fieldContext_LabelSelectorRequirement_values(_ conte
 	return graphql.NewScalarFieldContext("LabelSelectorRequirement", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _PublishCatalogPayload_clientMutationId(ctx context.Context, field graphql.CollectedField, obj *model.PublishCatalogPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_PublishCatalogPayload_clientMutationId(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ClientMutationID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_PublishCatalogPayload_clientMutationId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("PublishCatalogPayload", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
 func (ec *executionContext) _PublishCatalogPayload_catalogVersion(ctx context.Context, field graphql.CollectedField, obj *model.PublishCatalogPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1635,20 +1612,13 @@ func (ec *executionContext) unmarshalInputPublishCatalogInput(ctx context.Contex
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"clientMutationId", "version", "message"}
+	fieldsInOrder := [...]string{"version", "message"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "clientMutationId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clientMutationId"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.ClientMutationID = data
 		case "version":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("version"))
 			data, err := ec.unmarshalNString2string(ctx, v)
@@ -2434,8 +2404,6 @@ func (ec *executionContext) _PublishCatalogPayload(ctx context.Context, sel ast.
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("PublishCatalogPayload")
-		case "clientMutationId":
-			out.Values[i] = ec._PublishCatalogPayload_clientMutationId(ctx, field, obj)
 		case "catalogVersion":
 			out.Values[i] = ec._PublishCatalogPayload_catalogVersion(ctx, field, obj)
 		default:

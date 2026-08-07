@@ -527,7 +527,7 @@ Nodes (45): Fn, CatalogService, Send, Sync, make_blob(), MockCatalogService, Adm
 
 ### Community 17 - "Generated GraphQL Codegen & gRPC Clients"
 Cohesion: 0.06
-Nodes (37): gitstore-admin codegen.yml, Admin GraphQL codegen config (typescript, typescript-operations, typescript-react-apollo), gitstore-admin GraphQL Operations README, Generated Apollo hooks (use[Operation]Query/Mutation), Optimistic locking (version-based update conflicts), Relay mutation pattern (clientMutationId input/payload), CatalogServiceClient, CatalogServiceClient<T> (+29 more)
+Nodes (37): gitstore-admin codegen.yml, Admin GraphQL codegen config (typescript, typescript-operations, typescript-react-apollo), gitstore-admin GraphQL Operations README, Generated Apollo hooks (use[Operation]Query/Mutation), Optimistic locking (version-based update conflicts), Relay mutation pattern ( input/payload), CatalogServiceClient, CatalogServiceClient<T> (+29 more)
 
 ### Community 18 - "Git Upload-Pack Server (Rust)"
 Cohesion: 0.10

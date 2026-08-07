@@ -30,8 +30,7 @@ func (r *mutationResolver) PublishCatalog(ctx context.Context, input model.Publi
 		Stats:       stats,
 	}
 	return &model.PublishCatalogPayload{
-		ClientMutationID: input.ClientMutationID,
-		CatalogVersion:   version,
+		CatalogVersion: version,
 	}, nil
 }
 

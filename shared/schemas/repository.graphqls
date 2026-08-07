@@ -140,19 +140,16 @@ extend type Mutation {
 }
 
 input CreateRepositoryInput {
-  clientMutationId: String
   namespaceId: ID!
   name: String!
   defaultBranch: String
 }
 
 type CreateRepositoryPayload {
-  clientMutationId: String
   repository: Repository!
 }
 
 input RenameRepositoryInput {
-  clientMutationId: String
   """
   Relay ID of the repository to rename.
   """
@@ -161,12 +158,10 @@ input RenameRepositoryInput {
 }
 
 type RenameRepositoryPayload {
-  clientMutationId: String
   repository: Repository!
 }
 
 input TransferRepositoryInput {
-  clientMutationId: String
   """
   Relay ID of the repository to transfer.
   """
@@ -178,16 +173,13 @@ input TransferRepositoryInput {
 }
 
 type TransferRepositoryPayload {
-  clientMutationId: String
   repository: Repository!
 }
 
 input DeleteRepositoryInput {
-  clientMutationId: String
   repositoryId: ID!
 }
 
 type DeleteRepositoryPayload {
-  clientMutationId: String
   deletedRepositoryId: ID!
 }

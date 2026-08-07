@@ -2,7 +2,6 @@
 
 mutation CreateProduct($input: CreateProductInput!) {
   createProduct(input: $input) {
-    clientMutationId
     product {
       id
       title
@@ -25,7 +24,6 @@ mutation CreateProduct($input: CreateProductInput!) {
 
 mutation UpdateProduct($input: UpdateProductInput!) {
   updateProduct(input: $input) {
-    clientMutationId
     product {
       id
       title
@@ -54,7 +52,6 @@ mutation UpdateProduct($input: UpdateProductInput!) {
 
 mutation DeleteProduct($input: DeleteProductInput!) {
   deleteProduct(input: $input) {
-    clientMutationId
     deletedProductId
   }
 }
@@ -63,7 +60,6 @@ mutation DeleteProduct($input: DeleteProductInput!) {
 
 mutation CreateCategory($input: CreateCategoryInput!) {
   createCategory(input: $input) {
-    clientMutationId
     category {
       id
       name
@@ -81,7 +77,6 @@ mutation CreateCategory($input: CreateCategoryInput!) {
 
 mutation UpdateCategory($input: UpdateCategoryInput!) {
   updateCategory(input: $input) {
-    clientMutationId
     category {
       id
       name
@@ -105,14 +100,12 @@ mutation UpdateCategory($input: UpdateCategoryInput!) {
 
 mutation DeleteCategory($input: DeleteCategoryInput!) {
   deleteCategory(input: $input) {
-    clientMutationId
     deletedCategoryId
   }
 }
 
 mutation ReorderCategories($input: ReorderCategoriesInput!) {
   reorderCategories(input: $input) {
-    clientMutationId
     categories {
       id
       name
@@ -126,7 +119,6 @@ mutation ReorderCategories($input: ReorderCategoriesInput!) {
 
 mutation CreateCollection($input: CreateCollectionInput!) {
   createCollection(input: $input) {
-    clientMutationId
     collection {
       id
       name
@@ -144,7 +136,6 @@ mutation CreateCollection($input: CreateCollectionInput!) {
 
 mutation UpdateCollection($input: UpdateCollectionInput!) {
   updateCollection(input: $input) {
-    clientMutationId
     collection {
       id
       name
@@ -168,14 +159,12 @@ mutation UpdateCollection($input: UpdateCollectionInput!) {
 
 mutation DeleteCollection($input: DeleteCollectionInput!) {
   deleteCollection(input: $input) {
-    clientMutationId
     deletedCollectionId
   }
 }
 
 mutation ReorderCollections($input: ReorderCollectionsInput!) {
   reorderCollections(input: $input) {
-    clientMutationId
     collections {
       id
       name
@@ -189,7 +178,6 @@ mutation ReorderCollections($input: ReorderCollectionsInput!) {
 
 mutation PublishCatalog($input: PublishCatalogInput!) {
   publishCatalog(input: $input) {
-    clientMutationId
     tagName
     commitHash
     pushedAt

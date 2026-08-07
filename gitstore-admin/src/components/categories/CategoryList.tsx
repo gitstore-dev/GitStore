@@ -195,7 +195,6 @@ export function CategoryList({ onEdit, onDelete, onAddChild }: CategoryListProps
       // await reorderCategories({
       //   variables: {
       //     input: {
-      //       clientMutationId: uuidv4(),
       //       categoryIds: reorderedCategories.map(cat => cat.id),
       //     },
       //   },

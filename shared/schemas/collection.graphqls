@@ -310,13 +310,11 @@ type DeleteCollectionPayload {
 # ============================================================================
 
 input PublishCatalogInput {
-  clientMutationId: String
   version: String!
   message: String!
 }
 
 type PublishCatalogPayload {
-  clientMutationId: String
   catalogVersion: CatalogVersion
 }
 
