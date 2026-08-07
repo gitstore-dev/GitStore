@@ -228,6 +228,9 @@ uri = "http://localhost:6000"
 | `controller.api_uri`                 | `GITSTORE_CONTROLLER__API_URI`                 | string   | `http://localhost:4000/graphql` | No       | No        | GraphQL API URI used by reconcilers                         |
 | `controller.default_max_attempts`    | `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`    | integer  | `5`                             | No       | No        | Retry limit before quarantine                               |
 | `controller.default_stall_threshold` | `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | duration | `5m`                            | No       | No        | Worker stall threshold                                      |
+| `controller.checkpoint_dir`          | `GITSTORE_CONTROLLER__CHECKPOINT_DIR`          | string   | `.gitstore/checkpoints`         | No       | No        | Directory for the filesystem checkpoint store (one file per kind) |
+| `controller.checkpoint_flush_interval_events` | `GITSTORE_CONTROLLER__CHECKPOINT_FLUSH_INTERVAL_EVENTS` | integer | `100` | No | No | Watch events between checkpoint persists |
+| `controller.max_watch_backoff`       | `GITSTORE_CONTROLLER__MAX_WATCH_BACKOFF`       | duration | `30s`                           | No       | No        | Cap on exponential backoff between watch-stream reconnect attempts |
 | `log.level`                          | `GITSTORE_LOG__LEVEL`                          | string   | `info`                          | No       | No        | `debug` \| `info` \| `warn` \| `error`                      |
 | `log.format`                         | `GITSTORE_LOG__FORMAT`                         | string   | `json`                          | No       | No        | `json` \| `text`                                            |
 
@@ -239,11 +242,21 @@ port = 5001
 api_uri = "http://localhost:4000/graphql"
 default_max_attempts = 5
 default_stall_threshold = "5m"
+checkpoint_dir = ".gitstore/checkpoints"
+checkpoint_flush_interval_events = 100
+max_watch_backoff = "30s"
 
 [log]
 level = "info"
 format = "json"
 ```
+
+List-then-watch bootstrap, restart resume, and expired-watch-cursor recovery for registered
+resource kinds (spec 036) persist a per-kind `resourceVersion` checkpoint under `checkpoint_dir`.
+Checkpoint health — last successful write time, replay backlog, and write-failure count — is
+exposed on the existing `/metrics` endpoint as `gitstore_controller_checkpoint_last_write_timestamp_seconds`,
+`gitstore_controller_checkpoint_replay_backlog`, and `gitstore_controller_checkpoint_write_failures_total`
+(all labeled by `kind`).
 
 ---
 

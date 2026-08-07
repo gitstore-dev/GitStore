@@ -144,6 +144,7 @@ Runtime pieces:
 - Panic capture with stack traces.
 - Per-kind health statistics.
 - Prometheus metrics.
+- List-then-watch bootstrap and `resourceVersion` checkpointing per registered kind (`internal/checkpoint`, `internal/listwatch`) — populates the informer cache on first start, resumes a watch stream from a persisted checkpoint after a restart, and recovers from a compacted watch cursor by re-listing. See [`specs/036-controller-startup-resume`](../specs/036-controller-startup-resume/quickstart.md) for the `Runner[T]`/`ListWatcher[T]` wiring pattern; no concrete transport ships yet.
 
 HTTP surface on port `5001`:
 
@@ -365,6 +366,9 @@ Use Conventional Commits.
 | `GITSTORE_CONTROLLER__API_URI`                 | `http://localhost:4000/graphql` | API endpoint for reconciliation |
 | `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`    | `5`                             | Retry limit before quarantine   |
 | `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | `5m`                            | Worker stall threshold          |
+| `GITSTORE_CONTROLLER__CHECKPOINT_DIR`          | `.gitstore/checkpoints`         | Filesystem checkpoint store directory (one file per kind) |
+| `GITSTORE_CONTROLLER__CHECKPOINT_FLUSH_INTERVAL_EVENTS` | `100`                  | Watch events between checkpoint persists |
+| `GITSTORE_CONTROLLER__MAX_WATCH_BACKOFF`       | `30s`                           | Cap on watch-reconnect exponential backoff |
 
 See [configuration.md](configuration.md) for the operator reference.
 
@@ -381,6 +385,7 @@ Spec quickstarts are useful implementation references, but they are not user-fac
 | `024-product-variant`              | [quickstart](../specs/024-product-variant/quickstart.md), [plan](../specs/024-product-variant/plan.md)                           |
 | `025-controller-manager-runtime`   | [quickstart](../specs/025-controller-manager-runtime/quickstart.md), [plan](../specs/025-controller-manager-runtime/plan.md)     |
 | `026-reconcile-handler`            | [quickstart](../specs/026-reconcile-handler/quickstart.md), [plan](../specs/026-reconcile-handler/plan.md)                       |
+| `036-controller-startup-resume`    | [quickstart](../specs/036-controller-startup-resume/quickstart.md), [plan](../specs/036-controller-startup-resume/plan.md)       |
 
 ## Related Docs
 

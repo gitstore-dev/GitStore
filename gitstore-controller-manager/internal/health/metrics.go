@@ -34,4 +34,19 @@ var (
 		Name: "gitstore_controller_reconcile_total",
 		Help: "Total reconcile attempts per kind and result.",
 	}, []string{"kind", "result"})
+
+	CheckpointLastWriteTimestamp = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "gitstore_controller_checkpoint_last_write_timestamp_seconds",
+		Help: "Unix timestamp of the last successful checkpoint write per kind.",
+	}, []string{"kind"})
+
+	CheckpointWriteFailuresTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "gitstore_controller_checkpoint_write_failures_total",
+		Help: "Total failed checkpoint write attempts per kind.",
+	}, []string{"kind"})
+
+	CheckpointReplayBacklog = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "gitstore_controller_checkpoint_replay_backlog",
+		Help: "Number of watch events enqueued as work items but not yet dispatched, per kind.",
+	}, []string{"kind"})
 )
