@@ -34,6 +34,18 @@ type ControllerConfig struct {
 	// DefaultStallThreshold is parsed at startup into StallThreshold.
 	DefaultStallThresholdStr string        `mapstructure:"default_stall_threshold"`
 	DefaultStallThreshold    time.Duration `mapstructure:"-"`
+
+	// CheckpointDir is the directory used by the filesystem CheckpointStore
+	// (one JSON file per registered kind).
+	CheckpointDir string `mapstructure:"checkpoint_dir"`
+
+	// CheckpointFlushIntervalEvents is the number of watch events processed
+	// between checkpoint persists (an event count, not a duration).
+	CheckpointFlushIntervalEvents int `mapstructure:"checkpoint_flush_interval_events"`
+
+	// MaxWatchBackoffStr is parsed at startup into MaxWatchBackoff.
+	MaxWatchBackoffStr string        `mapstructure:"max_watch_backoff"`
+	MaxWatchBackoff    time.Duration `mapstructure:"-"`
 }
 
 // LogConfig holds logger settings.
@@ -52,6 +64,9 @@ func Load() (*Config, error) {
 	v.SetDefault("controller.api_uri", "http://localhost:4000/graphql")
 	v.SetDefault("controller.default_max_attempts", 5)
 	v.SetDefault("controller.default_stall_threshold", "5m")
+	v.SetDefault("controller.checkpoint_dir", ".gitstore/checkpoints")
+	v.SetDefault("controller.checkpoint_flush_interval_events", 100)
+	v.SetDefault("controller.max_watch_backoff", "30s")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 
@@ -97,6 +112,19 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("controller.default_stall_threshold is not a valid duration: %w", err)
 	}
 	cfg.Controller.DefaultStallThreshold = d
+
+	if cfg.Controller.CheckpointDir == "" {
+		return fmt.Errorf("controller.checkpoint_dir must not be empty")
+	}
+	if cfg.Controller.CheckpointFlushIntervalEvents < 1 {
+		return fmt.Errorf("controller.checkpoint_flush_interval_events must be >= 1")
+	}
+
+	maxBackoff, err := time.ParseDuration(cfg.Controller.MaxWatchBackoffStr)
+	if err != nil {
+		return fmt.Errorf("controller.max_watch_backoff is not a valid duration: %w", err)
+	}
+	cfg.Controller.MaxWatchBackoff = maxBackoff
 
 	if err := validateLogFormat(&cfg.Log); err != nil {
 		return err

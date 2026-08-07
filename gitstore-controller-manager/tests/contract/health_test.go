@@ -13,8 +13,12 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestHealth_JSONFieldsPresent(t *testing.T) {
@@ -180,4 +184,139 @@ func TestHealth_MetricsEndpointResponds(t *testing.T) {
 
 func contains(s, sub string) bool {
 	return strings.Contains(s, sub)
+}
+
+// T036: checkpoint metrics update on successful and failed flush.
+func TestHealth_CheckpointLastWriteTimestamp_UpdatesOnSave(t *testing.T) {
+	store := checkpoint.NewMemoryStore()
+	lw := &stubListWatcher[widget]{listResp: listwatch.ListResponse[widget]{ResourceVersion: "0"}}
+	sw := newStubWatcher([]listwatch.WatchEvent[widget]{
+		{Type: listwatch.Added, Object: widget{Namespace: "ns", Name: "a"}, ResourceVersion: "1"},
+	}, nil)
+	lw.watchers = []*stubWatcher[widget]{sw}
+
+	r, _, _ := newRunner(t, lw, store)
+	r.FlushIntervalEvents = 1
+	r.Kind = "HealthWidgetA"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	before := testutil.ToFloat64(health.CheckpointLastWriteTimestamp.WithLabelValues("HealthWidgetA"))
+
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	deadline := time.After(400 * time.Millisecond)
+	for {
+		if testutil.ToFloat64(health.CheckpointLastWriteTimestamp.WithLabelValues("HealthWidgetA")) > before {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("expected CheckpointLastWriteTimestamp to update after a successful flush")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-done
+}
+
+func TestHealth_CheckpointWriteFailuresTotal_IncrementsOnFailure(t *testing.T) {
+	store := &failingStore{inner: checkpoint.NewMemoryStore(), failCount: 3}
+	lw := &stubListWatcher[widget]{listResp: listwatch.ListResponse[widget]{ResourceVersion: "0"}}
+	sw := newStubWatcher([]listwatch.WatchEvent[widget]{
+		{Type: listwatch.Added, Object: widget{Namespace: "ns", Name: "a"}, ResourceVersion: "1"},
+	}, nil)
+	lw.watchers = []*stubWatcher[widget]{sw}
+
+	r, _, _ := newRunner(t, lw, store)
+	r.FlushIntervalEvents = 1
+	r.Kind = "HealthWidgetB"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	before := testutil.ToFloat64(health.CheckpointWriteFailuresTotal.WithLabelValues("HealthWidgetB"))
+
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	deadline := time.After(800 * time.Millisecond)
+	for {
+		if testutil.ToFloat64(health.CheckpointWriteFailuresTotal.WithLabelValues("HealthWidgetB"))-before >= 3 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("expected CheckpointWriteFailuresTotal to increment at least 3 times")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-done
+}
+
+// T037: replay backlog metric tracks the manager's existing queue depth.
+func TestHealth_CheckpointReplayBacklog_TracksQueueDepth(t *testing.T) {
+	mgr := manager.New()
+	c := cache.New[string]()
+	c.MarkSynced()
+	// Slow reconciler so enqueued items pile up in the queue instead of
+	// draining immediately, giving KindStats() a non-zero depth to report.
+	block := make(chan struct{})
+	slow := &blockingReconciler{unblock: block}
+	if err := mgr.Register(manager.ReconcilerRegistration{
+		Kind:            "HealthWidgetC",
+		Reconciler:      slow,
+		Cache:           c,
+		MaxAttempts:     1,
+		InitialInterval: time.Millisecond,
+		MaxInterval:     5 * time.Millisecond,
+		Multiplier:      2.0,
+		StallThreshold:  time.Minute,
+		WorkerCount:     1,
+	}); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go func() { _ = mgr.Start(ctx) }()
+
+	for i := range 5 {
+		key := types.WorkItemKey{Kind: "HealthWidgetC", Namespace: "ns", Name: string(rune('a' + i))}
+		if err := mgr.Enqueue(key); err != nil {
+			t.Fatalf("Enqueue failed: %v", err)
+		}
+	}
+
+	deadline := time.After(1 * time.Second)
+	var stats map[string]health.KindStat
+	for {
+		stats = mgr.KindStats()
+		if stats["HealthWidgetC"].QueueDepth > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("expected non-zero queue depth before checking replay backlog metric")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	got := testutil.ToFloat64(health.CheckpointReplayBacklog.WithLabelValues("HealthWidgetC"))
+	want := float64(stats["HealthWidgetC"].QueueDepth)
+	if got != want {
+		t.Errorf("CheckpointReplayBacklog = %v, want %v (KindStats().QueueDepth)", got, want)
+	}
+	close(block)
+	cancel()
+}
+
+type blockingReconciler struct{ unblock <-chan struct{} }
+
+func (b *blockingReconciler) Reconcile(_ context.Context, _ manager.WorkItemKey) manager.ReconcileResult {
+	<-b.unblock
+	return types.ResultOK()
 }
