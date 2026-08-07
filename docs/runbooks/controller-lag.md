@@ -12,7 +12,7 @@ The controller manager's work queue for one or more resource kinds is growing, o
    gitstore_controller_queue_depth{kind="<Kind>"}
    ```
 
-   A sustained upward trend (rather than a transient spike) indicates the controller is not draining work as fast as it arrives.
+   This gauge includes items still in the manager queue plus tasks submitted to the worker pool that are waiting for a worker; actively running reconciles are reported separately. A sustained upward trend (rather than a transient spike) therefore remains visible after the dispatcher has handed work to a saturated pool and indicates the controller is not draining work as fast as it arrives.
 
 2. Check active worker utilization for the same kind:
 

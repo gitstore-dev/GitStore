@@ -157,6 +157,7 @@ func TestIntegration_Restart_ResumesFromCheckpoint_NoLostOrDuplicateWork(t *test
 
 	reconciled1 := make(map[types.WorkItemKey]int)
 	var reconciledMu1 sync.Mutex
+	completedAck := make(chan struct{}, 1)
 	mgr1 := manager.New()
 	reconciler1 := &blockingSelectReconciler{
 		allow: map[types.WorkItemKey]bool{widgetKey(completed): true},
@@ -167,9 +168,15 @@ func TestIntegration_Restart_ResumesFromCheckpoint_NoLostOrDuplicateWork(t *test
 		},
 	}
 	if err := mgr1.Register(manager.ReconcilerRegistration{
-		Kind:            "Widget",
-		Reconciler:      reconciler1,
-		Cache:           cache1,
+		Kind:       "Widget",
+		Reconciler: reconciler1,
+		Cache:      cache1,
+		OnSuccess: func(key types.WorkItemKey) {
+			runner1.MarkCompleted(key)
+			if key == widgetKey(completed) {
+				completedAck <- struct{}{}
+			}
+		},
 		MaxAttempts:     3,
 		InitialInterval: 5 * time.Millisecond,
 		MaxInterval:     20 * time.Millisecond,
@@ -189,15 +196,10 @@ func TestIntegration_Restart_ResumesFromCheckpoint_NoLostOrDuplicateWork(t *test
 	mgrDone1 := make(chan error, 1)
 	go func() { mgrDone1 <- mgr1.Start(ctx1) }()
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		reconciledMu1.Lock()
-		n := reconciled1[widgetKey(completed)]
-		reconciledMu1.Unlock()
-		if n >= 1 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-completedAck:
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected 'completed' item to reconcile successfully before simulated restart")
 	}
 	reconciledMu1.Lock()
 	completedCalls := reconciled1[widgetKey(completed)]
@@ -217,14 +219,9 @@ func TestIntegration_Restart_ResumesFromCheckpoint_NoLostOrDuplicateWork(t *test
 	<-mgrDone1
 
 	// --- Second run: fresh Runner + Manager against the same Store. On
-	// resume, the Runner restores its cache from the checkpoint snapshot and
-	// re-enqueues every cached item (a level-triggered resync, per
-	// tests/contract/listwatch_resume_test.go::TestRunner_Resume_RestoresCacheAndReplaysDurableWork)
-	// — it does NOT skip re-listing work items merely because they succeeded
-	// before the restart. What FR-003 requires is: (a) no List call is made
-	// (b) the previously-pending item is reconciled to completion, and
-	// (c) every resource is reconciled exactly once during this resume
-	// cycle — no item loops/duplicates within the same run.
+	// resume, the Runner restores its cache from the checkpoint snapshot but
+	// enqueues only durable ReplayKeys. The successful item was removed from
+	// that set by OnSuccess; the unfinished item remains pending.
 	lw2 := &stubListWatcher[widget]{}
 	runner2, cache2, _ := newRunner(t, lw2, store)
 
@@ -243,6 +240,7 @@ func TestIntegration_Restart_ResumesFromCheckpoint_NoLostOrDuplicateWork(t *test
 		Kind:            "Widget",
 		Reconciler:      reconciler2,
 		Cache:           cache2,
+		OnSuccess:       runner2.MarkCompleted,
 		MaxAttempts:     3,
 		InitialInterval: 5 * time.Millisecond,
 		MaxInterval:     20 * time.Millisecond,
@@ -285,8 +283,8 @@ func TestIntegration_Restart_ResumesFromCheckpoint_NoLostOrDuplicateWork(t *test
 	if reconciled2[widgetKey(pending)] != 1 {
 		t.Errorf("'pending' item reconcile count after resume = %d, want exactly 1 (no lost work)", reconciled2[widgetKey(pending)])
 	}
-	if reconciled2[widgetKey(completed)] > 1 {
-		t.Errorf("'completed' item reconcile count after resume = %d, want at most 1 (no duplicate/looping re-dispatch within the resume cycle)", reconciled2[widgetKey(completed)])
+	if reconciled2[widgetKey(completed)] != 0 {
+		t.Errorf("'completed' item reconcile count after resume = %d, want 0 (already-completed work must not replay)", reconciled2[widgetKey(completed)])
 	}
 }
 

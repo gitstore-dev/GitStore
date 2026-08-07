@@ -2,21 +2,21 @@
 
 **Feature**: [spec.md](./spec.md) | **Plan**: [plan.md](./plan.md)
 
-This feature adds no persistent data model or new production entities — it exercises and documents entities already defined in `gitstore-controller-manager`. This document maps the spec's Key Entities to their existing concrete types so tests and runbooks reference the real names.
+This feature extends the existing manager/list-watch handshake so successful work is removed from the checkpoint's durable replay set. It otherwise exercises and documents entities already defined in `gitstore-controller-manager`.
 
 ## Entity Mapping
 
 | Spec Key Entity | Concrete Type | Location | Notes |
 |---|---|---|---|
 | Reconcile Outcome | `types.ReconcileResult` (sealed: `Success`, `RequeueAfter`, `TransientFailure`, `TerminalFailure`) | `internal/types/types.go:23` | Attempt count is tracked by `retry.PoisonItem.Attempts` once quarantined; in-flight attempt count lives in the `retry` package's backoff loop, not a persisted field. |
-| Checkpoint | `checkpoint.Record{Kind, ResourceVersion, Snapshot, ReplayKeys, WrittenAt}` | `internal/checkpoint/checkpoint.go:20` | Persisted via `checkpoint.Store.Save`; `MemoryStore` and `FilesystemStore` are the two existing implementations under test. |
+| Checkpoint | `checkpoint.Record{Kind, ResourceVersion, Snapshot, ReplayKeys, WrittenAt}` | `internal/checkpoint/checkpoint.go:20` | `ReplayKeys` contains unfinished work only; `Runner.MarkCompleted` removes successful work before the next persist. `MemoryStore` and `FilesystemStore` are the two implementations under test. |
 | Status Condition | `status.Condition{Type, Status, ObservedGeneration, LastTransitionTime, Reason, Message}` | `internal/status/patch.go:16` | Written as part of a `status.StatusPatch`; conflict detection surfaces as `types.ErrConflict` from `status.StatusClient.Apply`. |
 | Runbook | New markdown documents (no Go type) | `docs/runbooks/*.md` | Structure: Symptom → Diagnostic Steps → Recovery Actions → Verification (see research.md). |
 | Observability Signal | Prometheus metrics in `health` package: `QueueDepth`, `ActiveWorkers`, `PoisonItemsTotal`, `StalledWorkers`, `ReconcileTotal`, `CheckpointLastWriteTimestamp`, `CheckpointWriteFailuresTotal`, `CheckpointReplayBacklog` | `internal/health/metrics.go` | Also includes the poison-item HTTP API (`GET /controller/v1/poison/{kind}`, `GET /controller/v1/poison/_all`, `POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue`) registered in `cmd/controller/main.go`. |
 
-## Supporting Types Used by Tests (no changes)
+## Supporting Types Used by Tests
 
-- `manager.ReconcilerRegistration{Kind, Reconciler, Cache, MaxAttempts, InitialInterval, MaxInterval, Multiplier, StallThreshold, WorkerCount}` — `internal/manager/types.go:32`. Tests register fake reconcilers per scenario the same way `tests/contract/manager_dispatch_test.go` does.
+- `manager.ReconcilerRegistration{Kind, Reconciler, Cache, OnSuccess, MaxAttempts, InitialInterval, MaxInterval, Multiplier, StallThreshold, WorkerCount}` — `internal/manager/types.go:32`. `OnSuccess` is wired to `Runner.MarkCompleted` when restart replay must distinguish successful work from pending work.
 - `retry.PoisonItem{Key, Attempts, LastError}` — `internal/retry/quarantine.go`. Read via `Manager.QuarantineStore(kind)` / `Manager.AllPoisonItems()`.
 - `listwatch.Runner[T]{Kind, ListWatcher, Cache, Store, Enqueue, KeyFunc, RevisionFunc, FlushIntervalEvents, MaxBackoff, Log}` — `internal/listwatch/runner.go:50`. Tests supply a fake `ListWatcher[T]` (same pattern as `tests/contract/listwatch_resume_test.go`) to simulate list/watch/disconnect/expiry behavior deterministically.
 - `listwatch.ErrWatchExpired` — `internal/listwatch/types.go:47`. Injected by the fake `ListWatcher[T]` to trigger replay-window-exceeded fallback (FR-006).

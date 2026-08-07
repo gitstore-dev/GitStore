@@ -87,6 +87,7 @@ type stubListWatcher[T any] struct {
 	watchers      []*stubWatcher[T]
 	watchCalls    atomic.Int32
 	watchRVs      []string // resourceVersion argument observed on each Watch call
+	watchTimes    []time.Time
 	watchErr      error
 	watchErrQueue []error
 }
@@ -112,6 +113,7 @@ func (lw *stubListWatcher[T]) Watch(_ context.Context, resourceVersion string) (
 	lw.mu.Lock()
 	defer lw.mu.Unlock()
 	lw.watchRVs = append(lw.watchRVs, resourceVersion)
+	lw.watchTimes = append(lw.watchTimes, time.Now())
 	idx := int(lw.watchCalls.Add(1)) - 1
 	if idx < len(lw.watchErrQueue) && lw.watchErrQueue[idx] != nil {
 		return nil, lw.watchErrQueue[idx]
@@ -130,6 +132,14 @@ func (lw *stubListWatcher[T]) Watch(_ context.Context, resourceVersion string) (
 }
 
 func (lw *stubListWatcher[T]) watchCallCount() int { return int(lw.watchCalls.Load()) }
+
+func (lw *stubListWatcher[T]) watchCallTimes() []time.Time {
+	lw.mu.Lock()
+	defer lw.mu.Unlock()
+	out := make([]time.Time, len(lw.watchTimes))
+	copy(out, lw.watchTimes)
+	return out
+}
 
 // enqueueRecorder collects WorkItemKeys passed to a Runner's Enqueue
 // callback under a mutex, so tests can safely read them from a different
@@ -225,41 +235,46 @@ func (r *scriptedReconciler) Reconcile(_ context.Context, key types.WorkItemKey)
 
 func (r *scriptedReconciler) callCount() int64 { return r.calls.Load() }
 
-// fakeStatusClient implements status.StatusClient. It records every applied
-// patch keyed by WorkItemKey and can be configured to return
-// types.ErrConflict for a specific (key, call-number) pair.
+// fakeStatusClient implements status.StatusClient with optimistic concurrency:
+// Apply rejects patches whose ResourceVersion does not match the key's current
+// version and advances the version after each successful write.
 type fakeStatusClient struct {
 	mu sync.Mutex
 
-	applied  map[types.WorkItemKey][]*status.StatusPatch
-	calls    map[types.WorkItemKey]int
-	conflict map[types.WorkItemKey]int // call number (1-indexed) that should return ErrConflict for that key
+	applied         map[types.WorkItemKey][]*status.StatusPatch
+	calls           map[types.WorkItemKey]int
+	resourceVersion map[types.WorkItemKey]string
 }
 
 func newFakeStatusClient() *fakeStatusClient {
 	return &fakeStatusClient{
-		applied:  make(map[types.WorkItemKey][]*status.StatusPatch),
-		calls:    make(map[types.WorkItemKey]int),
-		conflict: make(map[types.WorkItemKey]int),
+		applied:         make(map[types.WorkItemKey][]*status.StatusPatch),
+		calls:           make(map[types.WorkItemKey]int),
+		resourceVersion: make(map[types.WorkItemKey]string),
 	}
 }
 
-// failOnCall configures Apply to return types.ErrConflict on the nth call
-// (1-indexed) for the given key, without recording that patch as applied.
-func (c *fakeStatusClient) failOnCall(key types.WorkItemKey, n int) {
+func (c *fakeStatusClient) setResourceVersion(key types.WorkItemKey, resourceVersion string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.conflict[key] = n
+	c.resourceVersion[key] = resourceVersion
+}
+
+func (c *fakeStatusClient) currentResourceVersion(key types.WorkItemKey) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.resourceVersion[key]
 }
 
 func (c *fakeStatusClient) Apply(_ context.Context, key types.WorkItemKey, patch *status.StatusPatch) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls[key]++
-	if n, ok := c.conflict[key]; ok && c.calls[key] == n {
+	if patch.ResourceVersion != c.resourceVersion[key] {
 		return types.ErrConflict
 	}
 	c.applied[key] = append(c.applied[key], patch)
+	c.resourceVersion[key] = fmt.Sprintf("rv-applied-%d", c.calls[key])
 	return nil
 }
 

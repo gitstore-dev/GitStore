@@ -6,6 +6,7 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,12 +23,7 @@ import (
 func TestIntegration_StatusConflict_StaleWriteRejected(t *testing.T) {
 	client := newFakeStatusClient()
 	key := types.WorkItemKey{Kind: "Widget", Namespace: "ns", Name: "w1"}
-
-	// The 1st call for this key (the "newer" write, submitted first in this
-	// deterministic simulation) succeeds and commits. The 2nd call (the
-	// "stale" write, captured against an older resourceVersion but submitted
-	// after) is configured to be rejected.
-	client.failOnCall(key, 2)
+	client.setResourceVersion(key, "rv-2")
 
 	newGen := int64(2)
 	newRev := "main@sha1:new"
@@ -60,12 +56,21 @@ func TestIntegration_StatusConflict_StaleWriteRejected(t *testing.T) {
 type statusConflictReconciler struct {
 	client *fakeStatusClient
 	key    types.WorkItemKey
+	mu     sync.Mutex
+	first  bool
 }
 
 func (r *statusConflictReconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
+	r.mu.Lock()
+	resourceVersion := r.client.currentResourceVersion(key)
+	if r.first {
+		resourceVersion = "rv-stale"
+		r.first = false
+	}
+	r.mu.Unlock()
 	gen := int64(1)
 	rev := "main@sha1:abc"
-	patch := &status.StatusPatch{ResourceVersion: "rv-current", ObservedGeneration: &gen, LastAppliedRevision: &rev}
+	patch := &status.StatusPatch{ResourceVersion: resourceVersion, ObservedGeneration: &gen, LastAppliedRevision: &rev}
 	if err := r.client.Apply(ctx, key, patch); err != nil {
 		if errors.Is(err, types.ErrConflict) {
 			// Re-fetch current state and retry — a conflict is not fatal.
@@ -88,9 +93,9 @@ func TestIntegration_StatusConflict_ControllerRetriesAfterConflict(t *testing.T)
 	key := types.WorkItemKey{Kind: kind, Namespace: "ns", Name: "w1"}
 
 	client := newFakeStatusClient()
-	client.failOnCall(key, 1) // first Apply call conflicts; second succeeds
+	client.setResourceVersion(key, "rv-current")
 
-	r := &statusConflictReconciler{client: client, key: key}
+	r := &statusConflictReconciler{client: client, key: key, first: true}
 	mgr := manager.New()
 	c := cache.New[string]()
 	c.MarkSynced()

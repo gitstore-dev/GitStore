@@ -12,6 +12,7 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -31,17 +32,18 @@ import (
 // TestObservability_ActiveWorkers_ReflectsRunningReconciles cover
 // contracts/runbook-signal-contract.md rows 1-2 (controller-lag.md).
 //
-// Manager.Start is deliberately never called here: the dispatch loop drains
-// the internal queue in a tight, non-blocking loop (Submit to the worker
-// pool does not wait for a free worker), so once Start is running, enqueued
-// items leave the Queue almost immediately regardless of pool saturation —
-// making QueueDepth a highly transient signal in practice, not a stable
-// backlog counter. To deterministically observe a non-zero depth, this test
-// enqueues without starting the dispatch loop at all, holding items in the
-// queue indefinitely.
+// Queue depth includes both the manager queue and tasks waiting inside the
+// worker pool, so it remains meaningful after the dispatch loop has submitted
+// work to a saturated pool.
 func TestObservability_QueueDepth_ReflectsPendingItems(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	kind := "Widget-US5-QueueDepth"
-	r := newScriptedReconciler(types.ResultOK())
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	defer close(release)
+	r := &blockingUntilReleased{started: started, release: release}
 	mgr := manager.New()
 	c := cache.New[string]()
 	c.MarkSynced()
@@ -59,18 +61,32 @@ func TestObservability_QueueDepth_ReflectsPendingItems(t *testing.T) {
 		t.Fatalf("Register failed: %v", err)
 	}
 
-	const pending = 4
-	for i := 0; i < pending; i++ {
+	go func() { _ = mgr.Start(ctx) }()
+
+	const total = 4
+	for i := 0; i < total; i++ {
 		key := types.WorkItemKey{Kind: kind, Namespace: "ns", Name: "pending" + string(rune('0'+i))}
 		if err := mgr.Enqueue(key); err != nil {
 			t.Fatalf("Enqueue failed: %v", err)
 		}
 	}
 
-	mgr.KindStats()
-	if v := testutil.ToFloat64(health.QueueDepth.WithLabelValues(kind)); v != pending {
-		t.Errorf("QueueDepth{%s} = %v, want %d", kind, v, pending)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconciler never started")
 	}
+
+	wantPending := total - 1 // one running worker; the rest wait in Pond
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mgr.KindStats()
+		if testutil.ToFloat64(health.QueueDepth.WithLabelValues(kind)) == float64(wantPending) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Errorf("QueueDepth{%s} = %v, want %d waiting tasks while pool is saturated", kind, testutil.ToFloat64(health.QueueDepth.WithLabelValues(kind)), wantPending)
 }
 
 func TestObservability_ActiveWorkers_ReflectsRunningReconciles(t *testing.T) {
@@ -145,11 +161,9 @@ func TestObservability_StalledWorkers_SetWhenNoRecentSuccess(t *testing.T) {
 	defer cancel()
 
 	kind := "Widget-US5-Stalled"
-	// KindStats defines "stalled" as: at least one success has ever
-	// occurred (lastSuccess is non-zero) AND time.Since(lastSuccess) >
-	// StallThreshold. So: succeed once (sets lastSuccess), wait past a tiny
-	// StallThreshold with no further success, then observe the gauge flip.
-	r := newScriptedReconciler(types.ResultOK())
+	// No reconcile ever succeeds: the manager must still mark the kind stalled
+	// after the threshold, and a /metrics scrape must refresh the gauge.
+	r := newScriptedReconciler(types.ResultTransient(errors.New("persistent failure")))
 	mgr := manager.New()
 	c := cache.New[string]()
 	c.MarkSynced()
@@ -181,15 +195,18 @@ func TestObservability_StalledWorkers_SetWhenNoRecentSuccess(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	mgr.KindStats()
-	if v := testutil.ToFloat64(health.StalledWorkers.WithLabelValues(kind)); v != 0 {
-		t.Fatalf("StalledWorkers{%s} immediately after success = %v, want 0", kind, v)
+	if r.callCount() == 0 {
+		t.Fatal("reconciler was never called")
 	}
 
-	time.Sleep(100 * time.Millisecond) // exceed the 50ms StallThreshold with no further success
-	mgr.KindStats()
+	time.Sleep(100 * time.Millisecond)
+	rec := httptest.NewRecorder()
+	health.NewMetricsHandler(mgr).ServeHTTP(rec, httptest.NewRequest("GET", "/metrics", nil))
+	if rec.Code != 200 {
+		t.Fatalf("GET /metrics status = %d, want 200", rec.Code)
+	}
 	if v := testutil.ToFloat64(health.StalledWorkers.WithLabelValues(kind)); v != 1 {
-		t.Errorf("StalledWorkers{%s} after exceeding StallThreshold with no new success = %v, want 1", kind, v)
+		t.Errorf("StalledWorkers{%s} after scrape and no successful reconcile = %v, want 1", kind, v)
 	}
 }
 

@@ -44,6 +44,14 @@ func TestIntegration_Disconnect_ReconnectsWithBackoff(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+	watchTimes := lw.watchCallTimes()
+	reconnectDelay := watchTimes[1].Sub(watchTimes[0])
+	if reconnectDelay < 40*time.Millisecond {
+		t.Errorf("reconnect delay = %v, want bounded backoff (at least 40ms for the 100ms randomized initial interval)", reconnectDelay)
+	}
+	if reconnectDelay > 500*time.Millisecond {
+		t.Errorf("reconnect delay = %v, want no more than configured 200ms cap plus scheduling tolerance", reconnectDelay)
+	}
 	cancel()
 	<-done
 }
@@ -126,7 +134,10 @@ func TestIntegration_ReplayWindowExceeded_FallsBackToFullBootstrap(t *testing.T)
 	item := widget{Namespace: "ns", Name: "a", ResourceVersion: "1"}
 
 	lw := &stubListWatcher[widget]{
-		listResp: listwatch.ListResponse[widget]{Items: []widget{item}, ResourceVersion: "100"},
+		listRespQueue: []listwatch.ListResponse[widget]{
+			{Items: []widget{item}, ResourceVersion: "100"},
+			{Items: []widget{{Namespace: "ns", Name: "a", ResourceVersion: "2"}}, ResourceVersion: "200"},
+		},
 	}
 	expiredWatcher := newStubWatcher[widget](nil, listwatch.ErrWatchExpired)
 	expiredWatcher.closeNow()
@@ -142,7 +153,7 @@ func TestIntegration_ReplayWindowExceeded_FallsBackToFullBootstrap(t *testing.T)
 	go func() { done <- r.Run(ctx) }()
 
 	deadline := time.After(1200 * time.Millisecond)
-	for lw.listCalls.Load() < 1 {
+	for lw.listCalls.Load() < 2 {
 		select {
 		case <-deadline:
 			t.Fatal("expected a fresh List after watch cursor expired (replay window exceeded)")
@@ -154,7 +165,7 @@ func TestIntegration_ReplayWindowExceeded_FallsBackToFullBootstrap(t *testing.T)
 	saveDeadline := time.After(1000 * time.Millisecond)
 	for {
 		rec, err := store.Load(context.Background(), "Widget")
-		if err == nil && rec.ResourceVersion == "100" {
+		if err == nil && rec.ResourceVersion == "200" {
 			break
 		}
 		select {
@@ -168,5 +179,8 @@ func TestIntegration_ReplayWindowExceeded_FallsBackToFullBootstrap(t *testing.T)
 
 	if lw.watchCallCount() < 2 {
 		t.Errorf("expected at least 2 Watch calls (expired + post-relist resume), got %d", lw.watchCallCount())
+	}
+	if got := lw.watchRVs[1]; got != "200" {
+		t.Errorf("post-relist Watch resourceVersion = %q, want 200 from the recovery List", got)
 	}
 }
