@@ -252,7 +252,9 @@ format = "json"
 ```
 
 List-then-watch bootstrap, restart resume, and expired-watch-cursor recovery for registered
-resource kinds (spec 036) persist a per-kind `resourceVersion` checkpoint under `checkpoint_dir`.
+resource kinds (spec 036) persist a per-kind restart checkpoint under `checkpoint_dir`. Each
+checkpoint contains the `resourceVersion`, cache snapshot, and deletion replay keys needed to
+restore volatile controller state without losing queued reconciliation work.
 Checkpoint health — last successful write time, replay backlog, and write-failure count — is
 exposed on the existing `/metrics` endpoint as `gitstore_controller_checkpoint_last_write_timestamp_seconds`,
 `gitstore_controller_checkpoint_replay_backlog`, and `gitstore_controller_checkpoint_write_failures_total`

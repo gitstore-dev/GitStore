@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
 
 // MemoryStore is an in-memory Store implementation for tests. It is not
@@ -29,13 +31,25 @@ func (s *MemoryStore) Load(_ context.Context, kind string) (Record, error) {
 	if !ok {
 		return Record{}, fmt.Errorf("checkpoint: no record for kind %q", kind)
 	}
-	return rec, nil
+	if err := validateRecord(kind, rec); err != nil {
+		return Record{}, err
+	}
+	return cloneRecord(rec), nil
 }
 
 // Save stores rec under rec.Kind, overwriting any previous value.
 func (s *MemoryStore) Save(_ context.Context, rec Record) error {
+	if err := validateRecord(rec.Kind, rec); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.records[rec.Kind] = rec
+	s.records[rec.Kind] = cloneRecord(rec)
 	return nil
+}
+
+func cloneRecord(rec Record) Record {
+	rec.Snapshot = append([]byte(nil), rec.Snapshot...)
+	rec.ReplayKeys = append([]types.WorkItemKey(nil), rec.ReplayKeys...)
+	return rec
 }

@@ -43,12 +43,18 @@ func (s *FilesystemStore) Load(_ context.Context, kind string) (Record, error) {
 	if err := json.Unmarshal(data, &rec); err != nil {
 		return Record{}, fmt.Errorf("checkpoint: failed to parse %q: %w", kind, err)
 	}
+	if err := validateRecord(kind, rec); err != nil {
+		return Record{}, err
+	}
 	return rec, nil
 }
 
 // Save atomically writes rec to its kind's checkpoint file: write to a temp
 // file in Dir, fsync, close, then rename into place.
 func (s *FilesystemStore) Save(_ context.Context, rec Record) error {
+	if err := validateRecord(rec.Kind, rec); err != nil {
+		return err
+	}
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("checkpoint: failed to marshal %q: %w", rec.Kind, err)
@@ -75,6 +81,25 @@ func (s *FilesystemStore) Save(_ context.Context, rec Record) error {
 
 	if err := os.Rename(tmpName, s.path(rec.Kind)); err != nil {
 		return fmt.Errorf("checkpoint: failed to rename checkpoint for %q: %w", rec.Kind, err)
+	}
+	return nil
+}
+
+func validateRecord(kind string, rec Record) error {
+	if rec.Kind == "" || rec.Kind != kind {
+		return fmt.Errorf("checkpoint: invalid kind %q for %q", rec.Kind, kind)
+	}
+	if rec.ResourceVersion == "" {
+		return fmt.Errorf("checkpoint: resourceVersion is empty for %q", kind)
+	}
+	var items []json.RawMessage
+	if len(rec.Snapshot) == 0 || json.Unmarshal(rec.Snapshot, &items) != nil || items == nil {
+		return fmt.Errorf("checkpoint: snapshot is missing or invalid for %q", kind)
+	}
+	for _, key := range rec.ReplayKeys {
+		if key.Kind != kind {
+			return fmt.Errorf("checkpoint: replay key kind %q does not match %q", key.Kind, kind)
+		}
 	}
 	return nil
 }

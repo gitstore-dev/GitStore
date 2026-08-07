@@ -8,14 +8,20 @@ package checkpoint
 
 import (
 	"context"
+	"encoding/json"
 	"time"
+
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
 
-// Record binds a resource kind to the resourceVersion of the last event (or
-// list completion) successfully processed by the controller.
+// Record contains everything required to resume a kind without re-listing.
+// Snapshot rebuilds the volatile informer cache, while ReplayKeys preserves
+// deletion tombstones that may not have completed before a crash.
 type Record struct {
 	Kind            string
 	ResourceVersion string
+	Snapshot        json.RawMessage
+	ReplayKeys      []types.WorkItemKey
 	WrittenAt       time.Time
 }
 

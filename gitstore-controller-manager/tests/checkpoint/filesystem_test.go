@@ -20,7 +20,7 @@ func TestFilesystemStore_SaveThenLoad_RoundTrips(t *testing.T) {
 		t.Fatalf("NewFilesystemStore: %v", err)
 	}
 
-	want := checkpoint.Record{Kind: "Widget", ResourceVersion: "42", WrittenAt: time.Now().Truncate(time.Second)}
+	want := checkpoint.Record{Kind: "Widget", ResourceVersion: "42", Snapshot: []byte("[]"), WrittenAt: time.Now().Truncate(time.Second)}
 	if err := store.Save(context.Background(), want); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestFilesystemStore_AtomicWrite_NoPartialFileOnCrash(t *testing.T) {
 		t.Fatalf("NewFilesystemStore: %v", err)
 	}
 
-	if err := store.Save(context.Background(), checkpoint.Record{Kind: "Widget", ResourceVersion: "1"}); err != nil {
+	if err := store.Save(context.Background(), checkpoint.Record{Kind: "Widget", ResourceVersion: "1", Snapshot: []byte("[]")}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -93,10 +93,10 @@ func TestFilesystemStore_OneFilePerKind_Isolated(t *testing.T) {
 		t.Fatalf("NewFilesystemStore: %v", err)
 	}
 
-	if err := store.Save(context.Background(), checkpoint.Record{Kind: "A", ResourceVersion: "1"}); err != nil {
+	if err := store.Save(context.Background(), checkpoint.Record{Kind: "A", ResourceVersion: "1", Snapshot: []byte("[]")}); err != nil {
 		t.Fatalf("Save A: %v", err)
 	}
-	if err := store.Save(context.Background(), checkpoint.Record{Kind: "B", ResourceVersion: "99"}); err != nil {
+	if err := store.Save(context.Background(), checkpoint.Record{Kind: "B", ResourceVersion: "99", Snapshot: []byte("[]")}); err != nil {
 		t.Fatalf("Save B: %v", err)
 	}
 
@@ -115,5 +115,35 @@ func TestFilesystemStore_OneFilePerKind_Isolated(t *testing.T) {
 
 	if _, err := store.Load(context.Background(), "B"); err == nil {
 		t.Error("expected B to be unreadable after corruption")
+	}
+}
+
+func TestFilesystemStore_SemanticallyInvalidRecord_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Widget.checkpoint.json"), []byte(`{"Kind":"Other","ResourceVersion":"42","Snapshot":[]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	store, err := checkpoint.NewFilesystemStore(dir)
+	if err != nil {
+		t.Fatalf("NewFilesystemStore: %v", err)
+	}
+
+	if _, err := store.Load(context.Background(), "Widget"); err == nil {
+		t.Error("expected error loading checkpoint with mismatched kind")
+	}
+}
+
+func TestFilesystemStore_MissingSnapshot_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Widget.checkpoint.json"), []byte(`{"Kind":"Widget","ResourceVersion":"42"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	store, err := checkpoint.NewFilesystemStore(dir)
+	if err != nil {
+		t.Fatalf("NewFilesystemStore: %v", err)
+	}
+
+	if _, err := store.Load(context.Background(), "Widget"); err == nil {
+		t.Error("expected error loading checkpoint without a snapshot")
 	}
 }

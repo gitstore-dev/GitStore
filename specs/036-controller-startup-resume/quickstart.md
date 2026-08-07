@@ -97,14 +97,14 @@ if err := mgr.Start(ctx); err != nil {
 
 ```
 No checkpoint file at cfg.Controller.CheckpointDir/MyResource.checkpoint.json
-  → Runner performs a full List, populates cache, MarkSynced, enqueues everything,
-    writes a fresh checkpoint.
+  → Runner performs a full List, populates the cache, persists the snapshot and replay keys,
+    then marks the cache synced and enqueues everything.
 
 Valid checkpoint file present
-  → Runner skips List entirely, opens Watch directly at the checkpointed resourceVersion.
-    Dispatch begins as soon as the first batch of resumed events is processed — no re-list (SC-001).
+  → Runner restores the cache snapshot, marks it synced, re-enqueues snapshot resources and
+    deletion replay keys, and opens Watch directly at the checkpointed resourceVersion — no re-list.
 
-Checkpoint file missing/corrupt/unreadable
+Checkpoint file missing/corrupt/unreadable/semantically invalid
   → Treated identically to "no checkpoint" — falls back to full List-then-watch (FR-008).
 ```
 

@@ -5,6 +5,7 @@ package contract_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -86,10 +87,11 @@ type stubListWatcher[T any] struct {
 	listFailures  int // number of times List fails before succeeding
 	listCalls     atomic.Int32
 
-	watchers   []*stubWatcher[T]
-	watchCalls atomic.Int32
-	watchRVs   []string // resourceVersion argument observed on each Watch call
-	watchErr   error
+	watchers      []*stubWatcher[T]
+	watchCalls    atomic.Int32
+	watchRVs      []string // resourceVersion argument observed on each Watch call
+	watchErr      error
+	watchErrQueue []error
 }
 
 func (lw *stubListWatcher[T]) List(_ context.Context) (listwatch.ListResponse[T], error) {
@@ -114,6 +116,9 @@ func (lw *stubListWatcher[T]) Watch(_ context.Context, resourceVersion string) (
 	defer lw.mu.Unlock()
 	lw.watchRVs = append(lw.watchRVs, resourceVersion)
 	idx := int(lw.watchCalls.Add(1)) - 1
+	if idx < len(lw.watchErrQueue) && lw.watchErrQueue[idx] != nil {
+		return nil, lw.watchErrQueue[idx]
+	}
 	if lw.watchErr != nil {
 		return nil, lw.watchErr
 	}
@@ -125,6 +130,23 @@ func (lw *stubListWatcher[T]) Watch(_ context.Context, resourceVersion string) (
 	w := newStubWatcher[T](nil, nil)
 	w.closeNow()
 	return w, nil
+}
+
+func widgetCheckpoint(t *testing.T, resourceVersion string, items []widget, replayKeys ...types.WorkItemKey) checkpoint.Record {
+	t.Helper()
+	if items == nil {
+		items = []widget{}
+	}
+	snapshot, err := json.Marshal(items)
+	if err != nil {
+		t.Fatalf("marshal checkpoint snapshot: %v", err)
+	}
+	return checkpoint.Record{
+		Kind:            "Widget",
+		ResourceVersion: resourceVersion,
+		Snapshot:        snapshot,
+		ReplayKeys:      replayKeys,
+	}
 }
 
 // enqueueRecorder collects WorkItemKeys passed to a Runner's Enqueue
@@ -179,6 +201,7 @@ func TestRunner_Bootstrap_ListsAndEnqueuesAll(t *testing.T) {
 	for i := range 50 {
 		items = append(items, widget{Namespace: "ns", Name: fmt.Sprintf("w%d", i), ResourceVersion: "1"})
 	}
+
 	lw := &stubListWatcher[widget]{listResp: listwatch.ListResponse[widget]{Items: items, ResourceVersion: "100"}}
 	r, c, enqueued := newRunner(t, lw, checkpoint.NewMemoryStore())
 
@@ -198,6 +221,38 @@ func TestRunner_Bootstrap_ListsAndEnqueuesAll(t *testing.T) {
 	if enqueued.len() != 50 {
 		t.Errorf("expected 50 enqueued keys, got %d", enqueued.len())
 	}
+}
+
+func TestRunner_Bootstrap_PersistsListCheckpointBeforeWatch(t *testing.T) {
+	store := checkpoint.NewMemoryStore()
+	item := widget{Namespace: "ns", Name: "a", ResourceVersion: "1"}
+	lw := &stubListWatcher[widget]{
+		listResp: listwatch.ListResponse[widget]{Items: []widget{item}, ResourceVersion: "100"},
+	}
+	r, _, _ := newRunner(t, lw, store)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	deadline := time.After(200 * time.Millisecond)
+	for {
+		rec, err := store.Load(context.Background(), "Widget")
+		if err == nil {
+			if rec.ResourceVersion != "100" {
+				t.Fatalf("checkpoint ResourceVersion = %q, want 100", rec.ResourceVersion)
+			}
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("bootstrap list checkpoint was not persisted")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-done
 }
 
 func TestRunner_Bootstrap_NoDispatchBeforeSynced(t *testing.T) {

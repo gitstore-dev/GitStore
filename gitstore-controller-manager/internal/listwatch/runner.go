@@ -5,7 +5,9 @@ package listwatch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/cenkalti/backoff/v5"
@@ -68,6 +70,8 @@ type Runner[T any] struct {
 	currentRV string
 
 	eventsSinceFlush int
+	checkpointDirty  bool
+	replayKeys       map[types.WorkItemKey]struct{}
 }
 
 // Run blocks until ctx is cancelled or an unrecoverable error occurs.
@@ -75,6 +79,7 @@ type Runner[T any] struct {
 // caller is responsible for not starting a second Runner for the same kind.
 func (r *Runner[T]) Run(ctx context.Context) error {
 	r.applyDefaults()
+	defer r.finalFlush(ctx)
 
 	pendingDedup, err := r.bootstrapOrResume(ctx)
 	if err != nil {
@@ -99,9 +104,9 @@ func (r *Runner[T]) applyDefaults() {
 // the bootstrap list (empty on resume, since no list occurs).
 func (r *Runner[T]) bootstrapOrResume(ctx context.Context) (map[types.WorkItemKey]string, error) {
 	if rec, err := r.Store.Load(ctx, r.Kind); err == nil {
-		r.currentRV = rec.ResourceVersion
-		r.Cache.MarkSynced()
-		return map[types.WorkItemKey]string{}, nil
+		if err := r.restoreCheckpoint(rec); err == nil {
+			return map[types.WorkItemKey]string{}, nil
+		}
 	}
 
 	listResp, err := r.retryList(ctx)
@@ -110,11 +115,46 @@ func (r *Runner[T]) bootstrapOrResume(ctx context.Context) (map[types.WorkItemKe
 	}
 
 	pendingDedup := r.applyListSnapshot(listResp)
+	if err := r.flushWithBackoff(ctx); err != nil {
+		return nil, err
+	}
+	r.Cache.MarkSynced()
+	for key := range pendingDedup {
+		r.enqueue(key)
+	}
 	return pendingDedup, nil
 }
 
-// applyListSnapshot populates the cache from a ListResponse, marks it
-// synced, enqueues every listed key, advances currentRV, and returns the
+func (r *Runner[T]) restoreCheckpoint(rec checkpoint.Record) error {
+	var items []T
+	if err := json.Unmarshal(rec.Snapshot, &items); err != nil {
+		return fmt.Errorf("restore checkpoint snapshot: %w", err)
+	}
+	for _, key := range rec.ReplayKeys {
+		if key.Kind != r.Kind {
+			return fmt.Errorf("restore checkpoint: replay key kind %q does not match %q", key.Kind, r.Kind)
+		}
+	}
+
+	r.replayKeys = make(map[types.WorkItemKey]struct{}, len(rec.ReplayKeys))
+	for _, item := range items {
+		r.Cache.Set(r.KeyFunc(item), item)
+	}
+	for _, key := range rec.ReplayKeys {
+		r.replayKeys[key] = struct{}{}
+	}
+	r.currentRV = rec.ResourceVersion
+	r.Cache.MarkSynced()
+	for _, item := range items {
+		r.enqueue(r.KeyFunc(item))
+	}
+	for key := range r.replayKeys {
+		r.enqueue(key)
+	}
+	return nil
+}
+
+// applyListSnapshot populates the cache from a ListResponse and returns the
 // transition-dedup set: per key, the object revision observed at list time.
 // It is consulted exactly once per key — on the first watch event for that
 // key — to suppress a duplicate enqueue when the event describes the same
@@ -123,16 +163,14 @@ func (r *Runner[T]) bootstrapOrResume(ctx context.Context) (map[types.WorkItemKe
 // Assumptions).
 func (r *Runner[T]) applyListSnapshot(listResp ListResponse[T]) map[types.WorkItemKey]string {
 	pendingDedup := make(map[types.WorkItemKey]string, len(listResp.Items))
+	r.replayKeys = make(map[types.WorkItemKey]struct{})
 	for _, item := range listResp.Items {
 		key := r.KeyFunc(item)
 		r.Cache.Set(key, item)
 		pendingDedup[key] = r.RevisionFunc(item)
 	}
-	r.Cache.MarkSynced()
-	for key := range pendingDedup {
-		r.enqueue(key)
-	}
 	r.currentRV = listResp.ResourceVersion
+	r.checkpointDirty = true
 	return pendingDedup
 }
 
@@ -178,6 +216,15 @@ func (r *Runner[T]) watchLoop(ctx context.Context, pendingDedup map[types.WorkIt
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			if errors.Is(err, ErrWatchExpired) {
+				newDedup, recoverErr := r.recoverFromExpiry(ctx)
+				if recoverErr != nil {
+					return recoverErr
+				}
+				pendingDedup = newDedup
+				reconnectBackoff.Reset()
+				continue
+			}
 			if !r.sleepBackoff(ctx, reconnectBackoff, err) {
 				return ctx.Err()
 			}
@@ -185,11 +232,13 @@ func (r *Runner[T]) watchLoop(ctx context.Context, pendingDedup map[types.WorkIt
 		}
 		reconnectBackoff.Reset()
 
-		closeErr := r.drainWatcher(ctx, watcher, pendingDedup)
+		closeErr, processErr := r.drainWatcher(ctx, watcher, pendingDedup)
 		watcher.Stop()
+		if processErr != nil {
+			return processErr
+		}
 
 		if ctx.Err() != nil {
-			r.finalFlush(ctx)
 			return ctx.Err()
 		}
 
@@ -230,16 +279,18 @@ func (r *Runner[T]) sleepBackoff(ctx context.Context, b *backoff.ExponentialBack
 
 // drainWatcher processes events from watcher until its channel closes or
 // ctx is cancelled, returning watcher.Err() in the former case.
-func (r *Runner[T]) drainWatcher(ctx context.Context, watcher Watcher[T], pendingDedup map[types.WorkItemKey]string) error {
+func (r *Runner[T]) drainWatcher(ctx context.Context, watcher Watcher[T], pendingDedup map[types.WorkItemKey]string) (error, error) {
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return nil, nil
 		case ev, ok := <-watcher.Events():
 			if !ok {
-				return watcher.Err()
+				return watcher.Err(), nil
 			}
-			r.handleEvent(ctx, ev, pendingDedup)
+			if err := r.handleEvent(ctx, ev, pendingDedup); err != nil {
+				return nil, err
+			}
 		}
 	}
 }
@@ -253,7 +304,7 @@ func (r *Runner[T]) drainWatcher(ctx context.Context, watcher Watcher[T], pendin
 func (r *Runner[T]) recoverFromExpiry(ctx context.Context) (map[types.WorkItemKey]string, error) {
 	r.log().Warn("watch cursor expired; re-listing", zap.String("kind", r.Kind))
 	r.currentRV = ""
-	r.eventsSinceFlush = 0
+	r.checkpointDirty = true
 
 	listResp, err := r.retryList(ctx)
 	if err != nil {
@@ -261,18 +312,33 @@ func (r *Runner[T]) recoverFromExpiry(ctx context.Context) (map[types.WorkItemKe
 	}
 
 	pendingDedup := make(map[types.WorkItemKey]string, len(listResp.Items))
+	listedKeys := make(map[types.WorkItemKey]struct{}, len(listResp.Items))
 	for _, item := range listResp.Items {
 		key := r.KeyFunc(item)
 		newRev := r.RevisionFunc(item)
+		listedKeys[key] = struct{}{}
 		cached, ok := r.Cache.Get(key)
 		r.Cache.Set(key, item)
+		delete(r.replayKeys, key)
 		pendingDedup[key] = newRev
 		if !ok || r.RevisionFunc(cached) != newRev {
 			r.enqueue(key)
 		}
 	}
+	for _, cached := range r.Cache.List() {
+		key := r.KeyFunc(cached)
+		if _, ok := listedKeys[key]; ok {
+			continue
+		}
+		r.Cache.Delete(key)
+		r.rememberForReplay(key)
+		r.enqueue(key)
+	}
 	r.currentRV = listResp.ResourceVersion
-	r.flushWithBackoff(ctx)
+	r.checkpointDirty = true
+	if err := r.flushWithBackoff(ctx); err != nil {
+		return nil, err
+	}
 
 	return pendingDedup, nil
 }
@@ -281,9 +347,10 @@ func (r *Runner[T]) recoverFromExpiry(ctx context.Context) (map[types.WorkItemKe
 // suppressed by the list-to-watch transition dedup or the event is a
 // Bookmark, enqueues a work item. It also advances the flush counter and
 // applies backpressure at the configured flush interval (FR-005, SC-004).
-func (r *Runner[T]) handleEvent(ctx context.Context, ev WatchEvent[T], pendingDedup map[types.WorkItemKey]string) {
+func (r *Runner[T]) handleEvent(ctx context.Context, ev WatchEvent[T], pendingDedup map[types.WorkItemKey]string) error {
 	r.currentRV = ev.ResourceVersion
 	r.eventsSinceFlush++
+	r.checkpointDirty = true
 
 	if ev.Type != Bookmark {
 		key := r.KeyFunc(ev.Object)
@@ -304,42 +371,47 @@ func (r *Runner[T]) handleEvent(ctx context.Context, ev WatchEvent[T], pendingDe
 			switch ev.Type {
 			case Added, Modified:
 				r.Cache.Set(key, ev.Object)
+				delete(r.replayKeys, key)
 			case Deleted:
 				r.Cache.Delete(key)
+				r.rememberForReplay(key)
 			}
 			r.enqueue(key)
 		}
 	}
 
 	if r.eventsSinceFlush >= r.FlushIntervalEvents {
-		r.flushWithBackoff(ctx)
+		return r.flushWithBackoff(ctx)
 	}
+	return nil
 }
 
 // finalFlush attempts one best-effort Save on shutdown — it does not retry
 // indefinitely since the process is exiting.
 func (r *Runner[T]) finalFlush(ctx context.Context) {
-	if r.eventsSinceFlush == 0 {
+	if !r.checkpointDirty {
 		return
 	}
-	if err := r.Store.Save(context.WithoutCancel(ctx), checkpoint.Record{
-		Kind:            r.Kind,
-		ResourceVersion: r.currentRV,
-		WrittenAt:       time.Now(),
-	}); err != nil {
+	rec, err := r.checkpointRecord()
+	if err != nil {
+		r.log().Warn("final checkpoint snapshot failed", zap.String("kind", r.Kind), zap.Error(err))
+		return
+	}
+	if err := r.Store.Save(context.WithoutCancel(ctx), rec); err != nil {
 		health.CheckpointWriteFailuresTotal.WithLabelValues(r.Kind).Inc()
 		r.log().Warn("final checkpoint flush on shutdown failed", zap.String("kind", r.Kind), zap.Error(err))
 		return
 	}
 	health.CheckpointLastWriteTimestamp.WithLabelValues(r.Kind).Set(float64(time.Now().Unix()))
 	r.eventsSinceFlush = 0
+	r.checkpointDirty = false
 }
 
 // flushWithBackoff persists the current checkpoint, retrying with backoff on
 // failure. The caller MUST NOT consume further watch events while this is
 // in progress — that is what bounds the replay window to FlushIntervalEvents
 // even under a sustained write outage (FR-005, SC-004).
-func (r *Runner[T]) flushWithBackoff(ctx context.Context) {
+func (r *Runner[T]) flushWithBackoff(ctx context.Context) error {
 	b := backoff.NewExponentialBackOff()
 	b.InitialInterval = defaultFlushRetryInitialInterval
 	b.MaxInterval = r.MaxBackoff
@@ -348,17 +420,18 @@ func (r *Runner[T]) flushWithBackoff(ctx context.Context) {
 
 	for {
 		if ctx.Err() != nil {
-			return
+			return ctx.Err()
 		}
-		err := r.Store.Save(ctx, checkpoint.Record{
-			Kind:            r.Kind,
-			ResourceVersion: r.currentRV,
-			WrittenAt:       time.Now(),
-		})
+		rec, err := r.checkpointRecord()
+		if err != nil {
+			return err
+		}
+		err = r.Store.Save(ctx, rec)
 		if err == nil {
 			health.CheckpointLastWriteTimestamp.WithLabelValues(r.Kind).Set(float64(time.Now().Unix()))
 			r.eventsSinceFlush = 0
-			return
+			r.checkpointDirty = false
+			return nil
 		}
 
 		health.CheckpointWriteFailuresTotal.WithLabelValues(r.Kind).Inc()
@@ -370,10 +443,35 @@ func (r *Runner[T]) flushWithBackoff(ctx context.Context) {
 		)
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-time.After(d):
 		}
 	}
+}
+
+func (r *Runner[T]) checkpointRecord() (checkpoint.Record, error) {
+	snapshot, err := json.Marshal(r.Cache.List())
+	if err != nil {
+		return checkpoint.Record{}, fmt.Errorf("marshal checkpoint snapshot: %w", err)
+	}
+	replayKeys := make([]types.WorkItemKey, 0, len(r.replayKeys))
+	for key := range r.replayKeys {
+		replayKeys = append(replayKeys, key)
+	}
+	return checkpoint.Record{
+		Kind:            r.Kind,
+		ResourceVersion: r.currentRV,
+		Snapshot:        snapshot,
+		ReplayKeys:      replayKeys,
+		WrittenAt:       time.Now(),
+	}, nil
+}
+
+func (r *Runner[T]) rememberForReplay(key types.WorkItemKey) {
+	if r.replayKeys == nil {
+		r.replayKeys = make(map[types.WorkItemKey]struct{})
+	}
+	r.replayKeys[key] = struct{}{}
 }
 
 // enqueue calls Enqueue, logging (not panicking) on failure.

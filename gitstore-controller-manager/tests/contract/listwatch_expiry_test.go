@@ -70,6 +70,7 @@ func TestRunner_ExpiryRecovery_EnqueuesOnlyChangedResources(t *testing.T) {
 			{Items: []widget{unchanged, changedBefore}, ResourceVersion: "10"},
 		},
 	}
+
 	expiredWatcher := newStubWatcher[widget](nil, listwatch.ErrWatchExpired)
 	expiredWatcher.closeNow()
 	finalWatcher := newStubWatcher[widget](nil, nil)
@@ -117,6 +118,50 @@ func TestRunner_ExpiryRecovery_EnqueuesOnlyChangedResources(t *testing.T) {
 	// re-list diff, since its revision changed from 1 to 2.
 	if changedCount != 2 {
 		t.Errorf("expected 'changed' to be enqueued twice (bootstrap + re-list diff), got %d", changedCount)
+	}
+}
+
+func TestRunner_ExpiryRecovery_RemovesAndEnqueuesMissingResources(t *testing.T) {
+	store := checkpoint.NewMemoryStore()
+	deleted := widget{Namespace: "ns", Name: "deleted", ResourceVersion: "1"}
+	lw := &stubListWatcher[widget]{
+		listResp: listwatch.ListResponse[widget]{ResourceVersion: "20"},
+		listRespQueue: []listwatch.ListResponse[widget]{
+			{Items: []widget{deleted}, ResourceVersion: "10"},
+		},
+	}
+	expired := newStubWatcher[widget](nil, listwatch.ErrWatchExpired)
+	expired.closeNow()
+	lw.watchers = []*stubWatcher[widget]{expired}
+
+	r, c, enqueued := newRunner(t, lw, store)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	deadline := time.After(800 * time.Millisecond)
+	for lw.listCalls.Load() < 2 {
+		select {
+		case <-deadline:
+			t.Fatal("expected expiry recovery re-list")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-done
+
+	if _, ok := c.Get(widgetKey(deleted)); ok {
+		t.Error("expected resource omitted from recovery snapshot to be removed from cache")
+	}
+	count := 0
+	for _, key := range enqueued.snapshot() {
+		if key == widgetKey(deleted) {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Errorf("deleted key enqueue count = %d, want 2 (bootstrap and deletion)", count)
 	}
 }
 

@@ -17,7 +17,7 @@ func TestMemoryStore_SaveThenLoad(t *testing.T) {
 		t.Error("expected error loading before any Save, got nil")
 	}
 
-	want := checkpoint.Record{Kind: "Widget", ResourceVersion: "7"}
+	want := checkpoint.Record{Kind: "Widget", ResourceVersion: "7", Snapshot: []byte("[]")}
 	if err := store.Save(context.Background(), want); err != nil {
 		t.Fatalf("Save: %v", err)
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -50,7 +51,7 @@ func (s *failingStore) savedCount() int {
 
 func TestRunner_Resume_SkipsListPhase(t *testing.T) {
 	store := checkpoint.NewMemoryStore()
-	if err := store.Save(context.Background(), checkpoint.Record{Kind: "Widget", ResourceVersion: "500"}); err != nil {
+	if err := store.Save(context.Background(), widgetCheckpoint(t, "500", nil)); err != nil {
 		t.Fatalf("seed Save: %v", err)
 	}
 
@@ -74,7 +75,7 @@ func TestRunner_Resume_SkipsListPhase(t *testing.T) {
 
 func TestRunner_Resume_WatchesFromCheckpointedVersion(t *testing.T) {
 	store := checkpoint.NewMemoryStore()
-	if err := store.Save(context.Background(), checkpoint.Record{Kind: "Widget", ResourceVersion: "500"}); err != nil {
+	if err := store.Save(context.Background(), widgetCheckpoint(t, "500", nil)); err != nil {
 		t.Fatalf("seed Save: %v", err)
 	}
 
@@ -96,8 +97,41 @@ func TestRunner_Resume_WatchesFromCheckpointedVersion(t *testing.T) {
 	}
 }
 
+func TestRunner_Resume_RestoresCacheAndReplaysDurableWork(t *testing.T) {
+	store := checkpoint.NewMemoryStore()
+	item := widget{Namespace: "ns", Name: "a", ResourceVersion: "5"}
+	deletedKey := types.WorkItemKey{Kind: "Widget", Namespace: "ns", Name: "deleted"}
+	if err := store.Save(context.Background(), widgetCheckpoint(t, "500", []widget{item}, deletedKey)); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+
+	lw := &stubListWatcher[widget]{}
+	r, c, enqueued := newRunner(t, lw, store)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+	<-done
+
+	if cached, ok := c.Get(widgetKey(item)); !ok || cached != item {
+		t.Errorf("restored cache item = %+v (ok=%v), want %+v", cached, ok, item)
+	}
+	seen := map[types.WorkItemKey]bool{}
+	for _, key := range enqueued.snapshot() {
+		seen[key] = true
+	}
+	if !seen[widgetKey(item)] || !seen[deletedKey] {
+		t.Errorf("replayed keys = %+v, want current and deleted keys", enqueued.snapshot())
+	}
+}
+
 func TestRunner_Flush_PersistsAfterNEvents(t *testing.T) {
-	store := &failingStore{inner: checkpoint.NewMemoryStore()}
+	inner := checkpoint.NewMemoryStore()
+	if err := inner.Save(context.Background(), widgetCheckpoint(t, "0", nil)); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+	store := &failingStore{inner: inner}
 	lw := &stubListWatcher[widget]{listResp: listwatch.ListResponse[widget]{ResourceVersion: "0"}}
 	events := []listwatch.WatchEvent[widget]{
 		{Type: listwatch.Added, Object: widget{Namespace: "ns", Name: "a"}, ResourceVersion: "1"},
@@ -132,7 +166,11 @@ func TestRunner_Flush_PersistsAfterNEvents(t *testing.T) {
 }
 
 func TestRunner_Flush_PersistsOnCleanShutdown(t *testing.T) {
-	store := &failingStore{inner: checkpoint.NewMemoryStore()}
+	inner := checkpoint.NewMemoryStore()
+	if err := inner.Save(context.Background(), widgetCheckpoint(t, "0", nil)); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+	store := &failingStore{inner: inner}
 	lw := &stubListWatcher[widget]{listResp: listwatch.ListResponse[widget]{ResourceVersion: "0"}}
 	events := []listwatch.WatchEvent[widget]{
 		{Type: listwatch.Added, Object: widget{Namespace: "ns", Name: "a"}, ResourceVersion: "1"},
@@ -159,7 +197,11 @@ func TestRunner_Flush_PersistsOnCleanShutdown(t *testing.T) {
 }
 
 func TestRunner_Backpressure_PausesOnWriteFailure_ResumesOnSuccess(t *testing.T) {
-	store := &failingStore{inner: checkpoint.NewMemoryStore(), failCount: 2}
+	inner := checkpoint.NewMemoryStore()
+	if err := inner.Save(context.Background(), widgetCheckpoint(t, "0", nil)); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+	store := &failingStore{inner: inner, failCount: 2}
 	lw := &stubListWatcher[widget]{listResp: listwatch.ListResponse[widget]{ResourceVersion: "0"}}
 	events := []listwatch.WatchEvent[widget]{
 		{Type: listwatch.Added, Object: widget{Namespace: "ns", Name: "a"}, ResourceVersion: "1"},
@@ -200,7 +242,11 @@ func TestRunner_Backpressure_PausesOnWriteFailure_ResumesOnSuccess(t *testing.T)
 }
 
 func TestRunner_Backpressure_BoundedReplayWindow(t *testing.T) {
-	store := &failingStore{inner: checkpoint.NewMemoryStore(), failCount: 5}
+	inner := checkpoint.NewMemoryStore()
+	if err := inner.Save(context.Background(), widgetCheckpoint(t, "0", nil)); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+	store := &failingStore{inner: inner, failCount: 5}
 	lw := &stubListWatcher[widget]{listResp: listwatch.ListResponse[widget]{ResourceVersion: "0"}}
 	var events []listwatch.WatchEvent[widget]
 	for i := 1; i <= 10; i++ {
@@ -234,7 +280,7 @@ func TestRunner_Backpressure_BoundedReplayWindow(t *testing.T) {
 
 func TestRunner_TransientReconnect_UsesInMemoryCheckpoint_NotPersisted(t *testing.T) {
 	store := checkpoint.NewMemoryStore()
-	if err := store.Save(context.Background(), checkpoint.Record{Kind: "Widget", ResourceVersion: "10"}); err != nil {
+	if err := store.Save(context.Background(), widgetCheckpoint(t, "10", nil)); err != nil {
 		t.Fatalf("seed Save: %v", err)
 	}
 
@@ -275,6 +321,65 @@ func TestRunner_TransientReconnect_UsesInMemoryCheckpoint_NotPersisted(t *testin
 	}
 	if lw.watchRVs[1] != "20" {
 		t.Errorf("reconnect Watch resourceVersion = %q, want 20 (in-memory cursor, not persisted 10)", lw.watchRVs[1])
+	}
+}
+
+func TestRunner_WatchOpenExpiry_RelistsImmediately(t *testing.T) {
+	store := checkpoint.NewMemoryStore()
+	if err := store.Save(context.Background(), widgetCheckpoint(t, "10", nil)); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+	lw := &stubListWatcher[widget]{
+		listResp:      listwatch.ListResponse[widget]{ResourceVersion: "20"},
+		watchErrQueue: []error{listwatch.ErrWatchExpired},
+	}
+	r, _, _ := newRunner(t, lw, store)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	deadline := time.After(400 * time.Millisecond)
+	for lw.listCalls.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("expected immediate re-list after Watch rejected expired cursor")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-done
+}
+
+func TestRunner_ReconnectCancellation_PerformsFinalFlush(t *testing.T) {
+	inner := checkpoint.NewMemoryStore()
+	if err := inner.Save(context.Background(), widgetCheckpoint(t, "0", nil)); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+	store := &failingStore{inner: inner}
+	watcher := newStubWatcher([]listwatch.WatchEvent[widget]{
+		{Type: listwatch.Bookmark, ResourceVersion: "1"},
+	}, errors.New("transient"))
+	watcher.closeNow()
+	lw := &stubListWatcher[widget]{watchers: []*stubWatcher[widget]{watcher}}
+	r, _, _ := newRunner(t, lw, store)
+	r.FlushIntervalEvents = 100
+	r.MaxBackoff = time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	rec, err := inner.Load(context.Background(), "Widget")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if rec.ResourceVersion != "1" {
+		t.Errorf("final checkpoint ResourceVersion = %q, want 1", rec.ResourceVersion)
 	}
 }
 

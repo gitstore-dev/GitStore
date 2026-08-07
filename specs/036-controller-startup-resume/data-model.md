@@ -6,12 +6,14 @@
 
 **Package**: `github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint`
 
-**Description**: A persisted record binding a resource kind to the `resourceVersion` of the last event (or list completion) successfully processed. Spec's "Checkpoint" entity.
+**Description**: A persisted restart record binding a resource kind to its watch cursor, informer-cache snapshot, and deletion replay keys.
 
 ```go
 type Record struct {
     Kind            string
     ResourceVersion string
+    Snapshot        json.RawMessage
+    ReplayKeys      []types.WorkItemKey
     WrittenAt       time.Time
 }
 ```
@@ -19,6 +21,8 @@ type Record struct {
 **Invariants**:
 - `Kind` MUST be non-empty and MUST match the file/map key it is stored under.
 - `ResourceVersion` is an opaque string — never parsed numerically or compared with `<`/`>` (per spec Assumptions); only equality and "cursor to resume from" semantics apply.
+- `Snapshot` MUST encode the complete cache state at `ResourceVersion`; resume restores it before marking the cache synced.
+- Every `ReplayKeys` entry MUST match `Kind`. The set contains deletion tombstones; current resources are replayed directly from `Snapshot`.
 - `WrittenAt` is informational (used to derive checkpoint age for FR-013/US4); it is NOT used for correctness decisions.
 
 ---
