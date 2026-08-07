@@ -92,7 +92,7 @@ Expected: `errors[0].message` contains `"token has been revoked"`.
 curl -s -X POST http://localhost:4000/graphql \
   -H "Authorization: Bearer $NEW_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"query":"mutation { logout(input:{}) { success } }"}'
+  -d '{"query":"mutation { logout { success } }"}'
 ```
 
 Expected: `{ "data": { "logout": { "success": true } } }`.
