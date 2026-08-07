@@ -130,6 +130,58 @@ Platform ecosystem, AI-driven features, and deep customisation.
   - Override/enhance checkout, recommendations, asset management, etc.
   - Compare WASM vs OCI approaches
 
+ye- **Git Service** - Extend the hooks
+  - Current hooks are defined within the binary
+    ```toml
+    [hooks.git_receive_pack]
+    pre_receive           = { enabled = true }
+    update                = { enabled = true }
+    post_receive          = { enabled = true }
+    proc_receive          = { enabled = true }
+    post_update           = { enabled = true }
+    reference_transaction = { enabled = true }
+
+    [schema_validation]
+    phase = "pre-receive"
+    timeout_secs = 10
+
+    [admission_control]
+    phase = "post-receive"
+    branch_pattern = "refs/heads/main"
+    ```
+  - Proposed git hooks via webhooks
+    ```toml
+    [hooks.git_receive_pack]
+    pre_receive           = { enabled = true }
+    update                = { enabled = true }
+    post_receive          = { enabled = true }
+    proc_receive          = { enabled = true }
+    post_update           = { enabled = true }
+    reference_transaction = { enabled = true }
+
+    [hooks.webhook]
+    pre_receive = [ # Payload inspired by Ory Actions
+      {
+        url = "https://hooks.git.com/git_receive_pack/pre_receive",
+        method = "POST",
+        body = "base64://ENCODED_JSONNET",
+        auth = {
+          type = "bearer",
+          config = {
+            name = "Authorization",
+            value = "{{ API Key value }}",
+            in = "header"
+          }
+        }
+      }
+    ]
+    update = []
+    post_receive = []
+    proc_receive = []
+    post_update = []
+    reference_transaction = []
+    ```
+
 #### Automation & Organization
 
 - **CI/CD: GitStore Actions** — Workflow canvas for catalogue build/test/deploy

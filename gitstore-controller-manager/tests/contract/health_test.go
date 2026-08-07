@@ -161,6 +161,13 @@ func TestHealth_DuplicateKind_FatalBeforeStart(t *testing.T) {
 
 func TestHealth_MetricsEndpointResponds(t *testing.T) {
 	mgr := manager.New()
+	if err := mgr.Register(manager.ReconcilerRegistration{
+		Kind:       "MetricsWidget",
+		Reconciler: &countingReconciler{},
+		Cache:      newSyncedCache(),
+	}); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
 	handler := health.NewMetricsHandler(mgr)
 
 	rec := httptest.NewRecorder()

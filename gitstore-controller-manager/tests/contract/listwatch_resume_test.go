@@ -97,7 +97,7 @@ func TestRunner_Resume_WatchesFromCheckpointedVersion(t *testing.T) {
 	}
 }
 
-func TestRunner_Resume_RestoresCacheAndReplaysDurableWork(t *testing.T) {
+func TestRunner_Resume_RestoresCacheAndReplaysOnlyDurableWork(t *testing.T) {
 	store := checkpoint.NewMemoryStore()
 	item := widget{Namespace: "ns", Name: "a", ResourceVersion: "5"}
 	deletedKey := types.WorkItemKey{Kind: "Widget", Namespace: "ns", Name: "deleted"}
@@ -117,12 +117,9 @@ func TestRunner_Resume_RestoresCacheAndReplaysDurableWork(t *testing.T) {
 	if cached, ok := c.Get(widgetKey(item)); !ok || cached != item {
 		t.Errorf("restored cache item = %+v (ok=%v), want %+v", cached, ok, item)
 	}
-	seen := map[types.WorkItemKey]bool{}
-	for _, key := range enqueued.snapshot() {
-		seen[key] = true
-	}
-	if !seen[widgetKey(item)] || !seen[deletedKey] {
-		t.Errorf("replayed keys = %+v, want current and deleted keys", enqueued.snapshot())
+	got := enqueued.snapshot()
+	if len(got) != 1 || got[0] != deletedKey {
+		t.Errorf("replayed keys = %+v, want only durable pending key %v", got, deletedKey)
 	}
 }
 

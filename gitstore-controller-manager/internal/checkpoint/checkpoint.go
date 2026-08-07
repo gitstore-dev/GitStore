@@ -16,7 +16,7 @@ import (
 
 // Record contains everything required to resume a kind without re-listing.
 // Snapshot rebuilds the volatile informer cache, while ReplayKeys preserves
-// deletion tombstones that may not have completed before a crash.
+// work that has not completed, including deletion tombstones, across a crash.
 type Record struct {
 	Kind            string
 	ResourceVersion string
