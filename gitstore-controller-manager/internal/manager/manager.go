@@ -93,6 +93,7 @@ func (m *Manager) Register(reg ReconcilerRegistration) error {
 	health.ActiveWorkers.WithLabelValues(reg.Kind).Set(0)
 	health.QueueDepth.WithLabelValues(reg.Kind).Set(0)
 	health.PoisonItemsTotal.WithLabelValues(reg.Kind).Set(0)
+	health.StalledWorkers.WithLabelValues(reg.Kind).Set(0)
 	return nil
 }
 
@@ -156,6 +157,11 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 		lastSuccess := ks.lastSuccess
 		ks.mu.Unlock()
 		stalled := !lastSuccess.IsZero() && time.Since(lastSuccess) > ks.reg.StallThreshold
+		if stalled {
+			health.StalledWorkers.WithLabelValues(kind).Set(1)
+		} else {
+			health.StalledWorkers.WithLabelValues(kind).Set(0)
+		}
 
 		out[kind] = health.KindStat{
 			ActiveWorkers: active,
