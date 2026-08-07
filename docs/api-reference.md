@@ -64,7 +64,7 @@ Logout:
 
 ```graphql
 mutation Logout {
-  logout(input: {}) {
+  logout {
     success
   }
 }
@@ -99,7 +99,7 @@ mutation Logout {
 | Operation | Purpose |
 |---|---|
 | `login(input: LoginInput!)` | Create an OIDC-style token response for local providers |
-| `logout(input: LogoutInput!)` | End the current session |
+| `logout` | End the current session |
 | `refreshToken(input: RefreshTokenInput!)` | Exchange a refresh token for a new OIDC-style token response |
 | `createNamespace(input: CreateNamespaceInput!)` | Create a namespace |
 | `deleteNamespace(input: DeleteNamespaceInput!)` | Delete an empty namespace |
