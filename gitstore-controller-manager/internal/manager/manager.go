@@ -150,6 +150,7 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 		health.ActiveWorkers.WithLabelValues(kind).Set(float64(active))
 		health.QueueDepth.WithLabelValues(kind).Set(float64(depth))
 		health.PoisonItemsTotal.WithLabelValues(kind).Set(float64(poison))
+		health.CheckpointReplayBacklog.WithLabelValues(kind).Set(float64(depth))
 
 		ks.mu.Lock()
 		lastSuccess := ks.lastSuccess

@@ -37,6 +37,15 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Controller.DefaultStallThreshold != 5*time.Minute {
 		t.Errorf("DefaultStallThreshold = %v, want 5m", cfg.Controller.DefaultStallThreshold)
 	}
+	if cfg.Controller.CheckpointDir != ".gitstore/checkpoints" {
+		t.Errorf("CheckpointDir = %q, want .gitstore/checkpoints", cfg.Controller.CheckpointDir)
+	}
+	if cfg.Controller.CheckpointFlushIntervalEvents != 100 {
+		t.Errorf("CheckpointFlushIntervalEvents = %d, want 100", cfg.Controller.CheckpointFlushIntervalEvents)
+	}
+	if cfg.Controller.MaxWatchBackoff != 30*time.Second {
+		t.Errorf("MaxWatchBackoff = %v, want 30s", cfg.Controller.MaxWatchBackoff)
+	}
 	if cfg.Log.Level != "info" {
 		t.Errorf("Log.Level = %q, want info", cfg.Log.Level)
 	}
@@ -51,6 +60,9 @@ func TestLoad_EnvOverrides(t *testing.T) {
 		"GITSTORE_CONTROLLER__API_URI", "http://api.example.com/graphql",
 		"GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS", "10",
 		"GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD", "2m",
+		"GITSTORE_CONTROLLER__CHECKPOINT_DIR", "/tmp/checkpoints",
+		"GITSTORE_CONTROLLER__CHECKPOINT_FLUSH_INTERVAL_EVENTS", "50",
+		"GITSTORE_CONTROLLER__MAX_WATCH_BACKOFF", "1m",
 		"GITSTORE_LOG__LEVEL", "debug",
 		"GITSTORE_LOG__FORMAT", "text",
 	)
@@ -71,6 +83,15 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	}
 	if cfg.Controller.DefaultStallThreshold != 2*time.Minute {
 		t.Errorf("DefaultStallThreshold = %v, want 2m", cfg.Controller.DefaultStallThreshold)
+	}
+	if cfg.Controller.CheckpointDir != "/tmp/checkpoints" {
+		t.Errorf("CheckpointDir = %q, want /tmp/checkpoints", cfg.Controller.CheckpointDir)
+	}
+	if cfg.Controller.CheckpointFlushIntervalEvents != 50 {
+		t.Errorf("CheckpointFlushIntervalEvents = %d, want 50", cfg.Controller.CheckpointFlushIntervalEvents)
+	}
+	if cfg.Controller.MaxWatchBackoff != time.Minute {
+		t.Errorf("MaxWatchBackoff = %v, want 1m", cfg.Controller.MaxWatchBackoff)
 	}
 	if cfg.Log.Level != "debug" {
 		t.Errorf("Log.Level = %q, want debug", cfg.Log.Level)
@@ -159,6 +180,18 @@ func TestLoad_ValidationErrors(t *testing.T) {
 			envKey:  "GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD",
 			envVal:  "not-a-duration",
 			wantErr: "controller.default_stall_threshold",
+		},
+		{
+			name:    "checkpoint flush interval zero",
+			envKey:  "GITSTORE_CONTROLLER__CHECKPOINT_FLUSH_INTERVAL_EVENTS",
+			envVal:  "0",
+			wantErr: "controller.checkpoint_flush_interval_events",
+		},
+		{
+			name:    "invalid max watch backoff",
+			envKey:  "GITSTORE_CONTROLLER__MAX_WATCH_BACKOFF",
+			envVal:  "not-a-duration",
+			wantErr: "controller.max_watch_backoff",
 		},
 		{
 			name:    "invalid log format",

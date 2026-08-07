@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/api"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
@@ -34,6 +35,20 @@ func main() {
 	defer log.Sync() //nolint:errcheck
 
 	mgr := manager.New().WithLogger(log)
+
+	// checkpointStore is shared across every kind's listwatch.Runner[T]
+	// (spec 036): each Runner persists into its own file within this
+	// directory (checkpoint.FilesystemStore, one file per kind). No
+	// concrete kind is wired here yet — gitstore-api exposes no
+	// watch/subscription transport as of this spec (see
+	// specs/036-controller-startup-resume/research.md §1). The first spec
+	// introducing a concrete resource kind constructs its
+	// listwatch.Runner[T] using this store, cfg.Controller.CheckpointFlushIntervalEvents,
+	// and cfg.Controller.MaxWatchBackoff, following the pattern in
+	// specs/036-controller-startup-resume/quickstart.md.
+	if _, err := checkpoint.NewFilesystemStore(cfg.Controller.CheckpointDir); err != nil {
+		log.Fatal("failed to init checkpoint store", zap.Error(err))
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
