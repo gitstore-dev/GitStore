@@ -51,6 +51,10 @@ func NewHandler(mgr ManagerStats) http.Handler {
 }
 
 // NewMetricsHandler returns an http.Handler for GET /metrics (Prometheus scrape).
-func NewMetricsHandler(_ ManagerStats) http.Handler {
-	return promhttp.Handler()
+func NewMetricsHandler(mgr ManagerStats) http.Handler {
+	metrics := promhttp.Handler()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mgr.KindStats()
+		metrics.ServeHTTP(w, r)
+	})
 }

@@ -240,6 +240,7 @@ Important directories:
 | `internal/health`  | Health and metrics handlers       |
 | `internal/api`     | Poison-item API                   |
 | `tests/contract`   | Runtime contract tests            |
+| `tests/integration`| End-to-end scenario tests (real Manager + Runner + Store wired together) |
 
 Commands:
 
@@ -248,6 +249,14 @@ make controller
 cd gitstore-controller-manager
 go test ./...
 ```
+
+Operations runbooks:
+
+| Runbook | Symptom |
+|---------|---------|
+| [`controller-lag`](runbooks/controller-lag.md) | Queue depth growing, reconciles falling behind |
+| [`controller-replay-window-exceeded`](runbooks/controller-replay-window-exceeded.md) | Watch cursor expired / relist triggered |
+| [`controller-poisoned-item`](runbooks/controller-poisoned-item.md) | A resource repeatedly fails reconciliation |
 
 ### `gitstore-admin`
 
