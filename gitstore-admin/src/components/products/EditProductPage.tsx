@@ -105,7 +105,6 @@ export function EditProductPage({ productId }: EditProductPageProps) {
       // const result = await updateProduct({
       //   variables: {
       //     input: {
-      //       clientMutationId: uuidv4(),
       //       id: productId,
       //       version: product.version, // Optimistic lock version
       //       title: updatedProduct.title,
