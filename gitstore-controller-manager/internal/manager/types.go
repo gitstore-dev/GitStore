@@ -36,6 +36,11 @@ type ReconcilerRegistration struct {
 	// Cache gates dispatch until HasSynced() returns true (FR-013).
 	Cache syncChecker
 
+	// OnSuccess is called after a work item reconciles successfully. A
+	// list-watch runner can use it to remove completed work from its durable
+	// replay set before the next checkpoint is written.
+	OnSuccess func(WorkItemKey)
+
 	MaxAttempts     int
 	InitialInterval time.Duration
 	MaxInterval     time.Duration

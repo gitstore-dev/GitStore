@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v5"
@@ -69,9 +70,11 @@ type Runner[T any] struct {
 	// FlushIntervalEvents-1 events.
 	currentRV string
 
-	eventsSinceFlush int
-	checkpointDirty  bool
-	replayKeys       map[types.WorkItemKey]struct{}
+	eventsSinceFlush  int
+	replayMu          sync.Mutex
+	checkpointDirty   bool
+	checkpointVersion uint64
+	replayKeys        map[types.WorkItemKey]struct{}
 }
 
 // Run blocks until ctx is cancelled or an unrecoverable error occurs.
@@ -136,19 +139,19 @@ func (r *Runner[T]) restoreCheckpoint(rec checkpoint.Record) error {
 		}
 	}
 
-	r.replayKeys = make(map[types.WorkItemKey]struct{}, len(rec.ReplayKeys))
+	replayKeys := make(map[types.WorkItemKey]struct{}, len(rec.ReplayKeys))
 	for _, item := range items {
 		r.Cache.Set(r.KeyFunc(item), item)
 	}
 	for _, key := range rec.ReplayKeys {
-		r.replayKeys[key] = struct{}{}
+		replayKeys[key] = struct{}{}
 	}
+	r.replayMu.Lock()
+	r.replayKeys = replayKeys
+	r.replayMu.Unlock()
 	r.currentRV = rec.ResourceVersion
 	r.Cache.MarkSynced()
-	for _, item := range items {
-		r.enqueue(r.KeyFunc(item))
-	}
-	for key := range r.replayKeys {
+	for _, key := range rec.ReplayKeys {
 		r.enqueue(key)
 	}
 	return nil
@@ -163,14 +166,19 @@ func (r *Runner[T]) restoreCheckpoint(rec checkpoint.Record) error {
 // Assumptions).
 func (r *Runner[T]) applyListSnapshot(listResp ListResponse[T]) map[types.WorkItemKey]string {
 	pendingDedup := make(map[types.WorkItemKey]string, len(listResp.Items))
-	r.replayKeys = make(map[types.WorkItemKey]struct{})
+	replayKeys := make(map[types.WorkItemKey]struct{}, len(listResp.Items))
 	for _, item := range listResp.Items {
 		key := r.KeyFunc(item)
 		r.Cache.Set(key, item)
 		pendingDedup[key] = r.RevisionFunc(item)
+		replayKeys[key] = struct{}{}
 	}
-	r.currentRV = listResp.ResourceVersion
+	r.replayMu.Lock()
+	r.replayKeys = replayKeys
 	r.checkpointDirty = true
+	r.checkpointVersion++
+	r.replayMu.Unlock()
+	r.currentRV = listResp.ResourceVersion
 	return pendingDedup
 }
 
@@ -304,7 +312,7 @@ func (r *Runner[T]) drainWatcher(ctx context.Context, watcher Watcher[T], pendin
 func (r *Runner[T]) recoverFromExpiry(ctx context.Context) (map[types.WorkItemKey]string, error) {
 	r.log().Warn("watch cursor expired; re-listing", zap.String("kind", r.Kind))
 	r.currentRV = ""
-	r.checkpointDirty = true
+	r.markCheckpointDirty()
 
 	listResp, err := r.retryList(ctx)
 	if err != nil {
@@ -319,9 +327,9 @@ func (r *Runner[T]) recoverFromExpiry(ctx context.Context) (map[types.WorkItemKe
 		listedKeys[key] = struct{}{}
 		cached, ok := r.Cache.Get(key)
 		r.Cache.Set(key, item)
-		delete(r.replayKeys, key)
 		pendingDedup[key] = newRev
 		if !ok || r.RevisionFunc(cached) != newRev {
+			r.rememberForReplay(key)
 			r.enqueue(key)
 		}
 	}
@@ -335,7 +343,7 @@ func (r *Runner[T]) recoverFromExpiry(ctx context.Context) (map[types.WorkItemKe
 		r.enqueue(key)
 	}
 	r.currentRV = listResp.ResourceVersion
-	r.checkpointDirty = true
+	r.markCheckpointDirty()
 	if err := r.flushWithBackoff(ctx); err != nil {
 		return nil, err
 	}
@@ -350,7 +358,7 @@ func (r *Runner[T]) recoverFromExpiry(ctx context.Context) (map[types.WorkItemKe
 func (r *Runner[T]) handleEvent(ctx context.Context, ev WatchEvent[T], pendingDedup map[types.WorkItemKey]string) error {
 	r.currentRV = ev.ResourceVersion
 	r.eventsSinceFlush++
-	r.checkpointDirty = true
+	r.markCheckpointDirty()
 
 	if ev.Type != Bookmark {
 		key := r.KeyFunc(ev.Object)
@@ -371,11 +379,10 @@ func (r *Runner[T]) handleEvent(ctx context.Context, ev WatchEvent[T], pendingDe
 			switch ev.Type {
 			case Added, Modified:
 				r.Cache.Set(key, ev.Object)
-				delete(r.replayKeys, key)
 			case Deleted:
 				r.Cache.Delete(key)
-				r.rememberForReplay(key)
 			}
+			r.rememberForReplay(key)
 			r.enqueue(key)
 		}
 	}
@@ -389,10 +396,10 @@ func (r *Runner[T]) handleEvent(ctx context.Context, ev WatchEvent[T], pendingDe
 // finalFlush attempts one best-effort Save on shutdown — it does not retry
 // indefinitely since the process is exiting.
 func (r *Runner[T]) finalFlush(ctx context.Context) {
-	if !r.checkpointDirty {
+	if !r.isCheckpointDirty() {
 		return
 	}
-	rec, err := r.checkpointRecord()
+	rec, version, err := r.checkpointRecord()
 	if err != nil {
 		r.log().Warn("final checkpoint snapshot failed", zap.String("kind", r.Kind), zap.Error(err))
 		return
@@ -404,7 +411,7 @@ func (r *Runner[T]) finalFlush(ctx context.Context) {
 	}
 	health.CheckpointLastWriteTimestamp.WithLabelValues(r.Kind).Set(float64(time.Now().Unix()))
 	r.eventsSinceFlush = 0
-	r.checkpointDirty = false
+	r.clearCheckpointDirty(version)
 }
 
 // flushWithBackoff persists the current checkpoint, retrying with backoff on
@@ -422,7 +429,7 @@ func (r *Runner[T]) flushWithBackoff(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		rec, err := r.checkpointRecord()
+		rec, version, err := r.checkpointRecord()
 		if err != nil {
 			return err
 		}
@@ -430,7 +437,7 @@ func (r *Runner[T]) flushWithBackoff(ctx context.Context) error {
 		if err == nil {
 			health.CheckpointLastWriteTimestamp.WithLabelValues(r.Kind).Set(float64(time.Now().Unix()))
 			r.eventsSinceFlush = 0
-			r.checkpointDirty = false
+			r.clearCheckpointDirty(version)
 			return nil
 		}
 
@@ -449,11 +456,14 @@ func (r *Runner[T]) flushWithBackoff(ctx context.Context) error {
 	}
 }
 
-func (r *Runner[T]) checkpointRecord() (checkpoint.Record, error) {
+func (r *Runner[T]) checkpointRecord() (checkpoint.Record, uint64, error) {
 	snapshot, err := json.Marshal(r.Cache.List())
 	if err != nil {
-		return checkpoint.Record{}, fmt.Errorf("marshal checkpoint snapshot: %w", err)
+		return checkpoint.Record{}, 0, fmt.Errorf("marshal checkpoint snapshot: %w", err)
 	}
+	r.replayMu.Lock()
+	defer r.replayMu.Unlock()
+	version := r.checkpointVersion
 	replayKeys := make([]types.WorkItemKey, 0, len(r.replayKeys))
 	for key := range r.replayKeys {
 		replayKeys = append(replayKeys, key)
@@ -464,14 +474,52 @@ func (r *Runner[T]) checkpointRecord() (checkpoint.Record, error) {
 		Snapshot:        snapshot,
 		ReplayKeys:      replayKeys,
 		WrittenAt:       time.Now(),
-	}, nil
+	}, version, nil
 }
 
 func (r *Runner[T]) rememberForReplay(key types.WorkItemKey) {
+	r.replayMu.Lock()
+	defer r.replayMu.Unlock()
 	if r.replayKeys == nil {
 		r.replayKeys = make(map[types.WorkItemKey]struct{})
 	}
 	r.replayKeys[key] = struct{}{}
+	r.checkpointDirty = true
+	r.checkpointVersion++
+}
+
+// MarkCompleted removes a successfully reconciled key from the durable replay
+// set. It is safe to use as manager.ReconcilerRegistration.OnSuccess.
+func (r *Runner[T]) MarkCompleted(key types.WorkItemKey) {
+	r.replayMu.Lock()
+	defer r.replayMu.Unlock()
+	if _, ok := r.replayKeys[key]; !ok {
+		return
+	}
+	delete(r.replayKeys, key)
+	r.checkpointDirty = true
+	r.checkpointVersion++
+}
+
+func (r *Runner[T]) markCheckpointDirty() {
+	r.replayMu.Lock()
+	r.checkpointDirty = true
+	r.checkpointVersion++
+	r.replayMu.Unlock()
+}
+
+func (r *Runner[T]) isCheckpointDirty() bool {
+	r.replayMu.Lock()
+	defer r.replayMu.Unlock()
+	return r.checkpointDirty
+}
+
+func (r *Runner[T]) clearCheckpointDirty(version uint64) {
+	r.replayMu.Lock()
+	if r.checkpointVersion == version {
+		r.checkpointDirty = false
+	}
+	r.replayMu.Unlock()
 }
 
 // enqueue calls Enqueue, logging (not panicking) on failure.

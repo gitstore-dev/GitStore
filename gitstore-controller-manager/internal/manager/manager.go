@@ -40,6 +40,7 @@ type kindState struct {
 
 	mu          sync.Mutex
 	lastSuccess time.Time
+	startedAt   time.Time
 }
 
 // Manager supervises one controller (queue + pool + reconciler) per registered kind.
@@ -93,6 +94,7 @@ func (m *Manager) Register(reg ReconcilerRegistration) error {
 	health.ActiveWorkers.WithLabelValues(reg.Kind).Set(0)
 	health.QueueDepth.WithLabelValues(reg.Kind).Set(0)
 	health.PoisonItemsTotal.WithLabelValues(reg.Kind).Set(0)
+	health.StalledWorkers.WithLabelValues(reg.Kind).Set(0)
 	return nil
 }
 
@@ -144,7 +146,7 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 	out := make(map[string]health.KindStat, len(m.kinds))
 	for kind, ks := range m.kinds {
 		active := ks.pool.RunningWorkers()
-		depth := ks.q.Len()
+		depth := ks.q.Len() + int(ks.pool.WaitingTasks())
 		poison := ks.quarantine.Len()
 
 		health.ActiveWorkers.WithLabelValues(kind).Set(float64(active))
@@ -154,8 +156,18 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 
 		ks.mu.Lock()
 		lastSuccess := ks.lastSuccess
+		startedAt := ks.startedAt
 		ks.mu.Unlock()
-		stalled := !lastSuccess.IsZero() && time.Since(lastSuccess) > ks.reg.StallThreshold
+		stallBaseline := lastSuccess
+		if stallBaseline.IsZero() {
+			stallBaseline = startedAt
+		}
+		stalled := !stallBaseline.IsZero() && time.Since(stallBaseline) > ks.reg.StallThreshold
+		if stalled {
+			health.StalledWorkers.WithLabelValues(kind).Set(1)
+		} else {
+			health.StalledWorkers.WithLabelValues(kind).Set(0)
+		}
 
 		out[kind] = health.KindStat{
 			ActiveWorkers: active,
@@ -205,6 +217,11 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	var wg sync.WaitGroup
 	for _, ks := range kinds {
+		ks.mu.Lock()
+		if ks.startedAt.IsZero() {
+			ks.startedAt = time.Now()
+		}
+		ks.mu.Unlock()
 		wg.Add(1)
 		go func(ks *kindState) {
 			defer wg.Done()
@@ -279,6 +296,9 @@ func (m *Manager) dispatch(ctx context.Context, ks *kindState, key WorkItemKey) 
 		ks.mu.Lock()
 		ks.lastSuccess = time.Now()
 		ks.mu.Unlock()
+		if ks.reg.OnSuccess != nil {
+			ks.reg.OnSuccess(key)
+		}
 		health.ReconcileTotal.WithLabelValues(key.Kind, "success").Inc()
 		log.Debug("reconciled successfully")
 
@@ -379,6 +399,9 @@ func (m *Manager) handleTransient(
 		ks.mu.Lock()
 		ks.lastSuccess = time.Now()
 		ks.mu.Unlock()
+		if ks.reg.OnSuccess != nil {
+			ks.reg.OnSuccess(key)
+		}
 		health.ReconcileTotal.WithLabelValues(key.Kind, "success").Inc()
 		log.Debug("reconciled successfully after retries", zap.Int("attempts", attempts+1))
 	case retry.ResultQuarantine:

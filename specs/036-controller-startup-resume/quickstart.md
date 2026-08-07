@@ -48,19 +48,10 @@ if err != nil {
 }
 ```
 
-### 3. Register the reconciler (spec 026, unchanged) and construct the Runner
+### 3. Construct the Runner and register the reconciler
 
 ```go
 myCache := cache.New[MyResource]()
-
-if err := mgr.Register(manager.ReconcilerRegistration{
-    Kind:       "MyResource",
-    Reconciler: mycontroller.NewMyReconciler(myCache, statusClient),
-    Cache:      myCache, // same cache instance — Runner writes it, Reconciler reads it read-only
-}); err != nil {
-    log.Fatal("failed to register reconciler", zap.Error(err))
-}
-
 runner := &listwatch.Runner[MyResource]{
     Kind:        "MyResource",
     ListWatcher: &myListWatcher{},
@@ -74,6 +65,15 @@ runner := &listwatch.Runner[MyResource]{
     FlushIntervalEvents:  cfg.Controller.CheckpointFlushIntervalEvents,
     MaxBackoff:           cfg.Controller.MaxWatchBackoff,
     Log:                  log,
+}
+
+if err := mgr.Register(manager.ReconcilerRegistration{
+    Kind:       "MyResource",
+    Reconciler: mycontroller.NewMyReconciler(myCache, statusClient),
+    Cache:      myCache, // same cache instance — Runner writes it, Reconciler reads it read-only
+    OnSuccess:  runner.MarkCompleted,
+}); err != nil {
+    log.Fatal("failed to register reconciler", zap.Error(err))
 }
 ```
 
