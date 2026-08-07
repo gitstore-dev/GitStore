@@ -2,7 +2,7 @@
 
 **Feature Branch**: `038-controller-integration-tests-runbook`  
 **Created**: 2026-08-06  
-**Status**: Draft  
+**Status**: Closed  
 **Input**: User description: "Controller Integration Tests + Operations Runbook (Resume, Conflicts, Poison Retries) — GitHub issue #183, parent initiative #165. Add integration coverage and operational runbooks for controller manager behavior in normal and failure scenarios: integration tests for successful reconcile, retry, resume, and status conflict handling; tests for disconnect/reconnect and replay recovery behavior; runbooks for controller lag, replay-window exceeded, and poisoned queue item handling; validate observability hooks and metrics needed for operations. Depends on spec 025 (controller manager runtime), spec 026 (reconcile handler), and spec 036 (controller startup resume / list-then-watch / resourceVersion checkpointing), all merged."
 
 ## User Scenarios & Testing *(mandatory)*

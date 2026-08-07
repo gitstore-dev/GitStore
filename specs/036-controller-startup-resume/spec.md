@@ -2,7 +2,7 @@
 
 **Feature Branch**: `036-controller-startup-resume`  
 **Created**: 2026-07-17  
-**Status**: Draft  
+**Status**: Closed  
 **Input**: User description: "Controller Startup Resume: List-Then-Watch and resourceVersion Checkpointing" (initiative #165 sub-issue #182)
 
 ## Clarifications
