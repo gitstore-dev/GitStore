@@ -85,3 +85,6 @@ graphify-out/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/
 
 # speckit extension catalog cache (downloaded from remote, machine-local)
 .specify/extensions/.cache/
+
+# Codex hook config embeds an absolute path to the local graphify binary
+.codex/hooks.json
