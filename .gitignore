@@ -75,3 +75,16 @@ gitstore-controller-manager/coverage.txt
 /out/
 docs/resources/file.md
 .claude/
+
+# graphify local-machine state (not portable across clones)
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+graphify-out/cost.json
+graphify-out/cache/
+graphify-out/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/
+
+# speckit extension catalog cache (downloaded from remote, machine-local)
+.specify/extensions/.cache/
+
+# Codex hook config embeds an absolute path to the local graphify binary
+.codex/hooks.json
