@@ -27461,7 +27461,7 @@
       "norm_label": ".fieldcontext_categorytaxonomystatus_resolved()"
     },
     {
-      "label": "._CreateCategoryPayload_clientMutationId()",
+      "label": "._CreateCategoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/category.generated.go",
       "source_location": "L1251",
@@ -27472,7 +27472,7 @@
       "norm_label": "._createcategorypayload_clientmutationid()"
     },
     {
-      "label": ".fieldContext_CreateCategoryPayload_clientMutationId()",
+      "label": ".fieldContext_CreateCategoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/category.generated.go",
       "source_location": "L1270",
@@ -27505,7 +27505,7 @@
       "norm_label": ".fieldcontext_createcategorypayload_category()"
     },
     {
-      "label": "._DeleteCategoryPayload_clientMutationId()",
+      "label": "._DeleteCategoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/category.generated.go",
       "source_location": "L1306",
@@ -27516,7 +27516,7 @@
       "norm_label": "._deletecategorypayload_clientmutationid()"
     },
     {
-      "label": ".fieldContext_DeleteCategoryPayload_clientMutationId()",
+      "label": ".fieldContext_DeleteCategoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/category.generated.go",
       "source_location": "L1325",
@@ -27615,7 +27615,7 @@
       "norm_label": ".fieldcontext_keyvaluepair_value()"
     },
     {
-      "label": "._ReorderCategoriesPayload_clientMutationId()",
+      "label": "._ReorderCategoriesPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/category.generated.go",
       "source_location": "L1421",
@@ -27626,7 +27626,7 @@
       "norm_label": "._reordercategoriespayload_clientmutationid()"
     },
     {
-      "label": ".fieldContext_ReorderCategoriesPayload_clientMutationId()",
+      "label": ".fieldContext_ReorderCategoriesPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/category.generated.go",
       "source_location": "L1440",
@@ -27758,7 +27758,7 @@
       "norm_label": ".fieldcontext_resolvedcategorytaxonomy_productcount()"
     },
     {
-      "label": "._UpdateCategoryPayload_clientMutationId()",
+      "label": "._UpdateCategoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/category.generated.go",
       "source_location": "L1568",
@@ -27769,7 +27769,7 @@
       "norm_label": "._updatecategorypayload_clientmutationid()"
     },
     {
-      "label": ".fieldContext_UpdateCategoryPayload_clientMutationId()",
+      "label": ".fieldContext_UpdateCategoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/category.generated.go",
       "source_location": "L1587",
@@ -29617,7 +29617,7 @@
       "norm_label": ".fieldcontext_labelselectorrequirement_values()"
     },
     {
-      "label": "._PublishCatalogPayload_clientMutationId()",
+      "label": "._PublishCatalogPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/collection.generated.go",
       "source_location": "L1421",
@@ -29639,7 +29639,7 @@
       "norm_label": "publishcatalogpayload"
     },
     {
-      "label": ".fieldContext_PublishCatalogPayload_clientMutationId()",
+      "label": ".fieldContext_PublishCatalogPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/collection.generated.go",
       "source_location": "L1440",
@@ -30387,7 +30387,7 @@
       "norm_label": "executioncontext"
     },
     {
-      "label": "._CreateNamespacePayload_clientMutationId()",
+      "label": "._CreateNamespacePayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/namespace.generated.go",
       "source_location": "L32",
@@ -30431,7 +30431,7 @@
       "norm_label": "marshaler"
     },
     {
-      "label": ".fieldContext_CreateNamespacePayload_clientMutationId()",
+      "label": ".fieldContext_CreateNamespacePayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/namespace.generated.go",
       "source_location": "L51",
@@ -30475,7 +30475,7 @@
       "norm_label": ".fieldcontext_createnamespacepayload_namespace()"
     },
     {
-      "label": "._DeleteNamespacePayload_clientMutationId()",
+      "label": "._DeleteNamespacePayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/namespace.generated.go",
       "source_location": "L87",
@@ -30486,7 +30486,7 @@
       "norm_label": "._deletenamespacepayload_clientmutationid()"
     },
     {
-      "label": ".fieldContext_DeleteNamespacePayload_clientMutationId()",
+      "label": ".fieldContext_DeleteNamespacePayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/namespace.generated.go",
       "source_location": "L106",
@@ -37636,7 +37636,7 @@
       "norm_label": "executioncontext"
     },
     {
-      "label": "._CreateRepositoryPayload_clientMutationId()",
+      "label": "._CreateRepositoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/repository.generated.go",
       "source_location": "L32",
@@ -37680,7 +37680,7 @@
       "norm_label": "marshaler"
     },
     {
-      "label": ".fieldContext_CreateRepositoryPayload_clientMutationId()",
+      "label": ".fieldContext_CreateRepositoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/repository.generated.go",
       "source_location": "L51",
@@ -37724,7 +37724,7 @@
       "norm_label": ".fieldcontext_createrepositorypayload_repository()"
     },
     {
-      "label": "._DeleteRepositoryPayload_clientMutationId()",
+      "label": "._DeleteRepositoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/repository.generated.go",
       "source_location": "L87",
@@ -37735,7 +37735,7 @@
       "norm_label": "._deleterepositorypayload_clientmutationid()"
     },
     {
-      "label": ".fieldContext_DeleteRepositoryPayload_clientMutationId()",
+      "label": ".fieldContext_DeleteRepositoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/repository.generated.go",
       "source_location": "L106",
@@ -37768,7 +37768,7 @@
       "norm_label": ".fieldcontext_deleterepositorypayload_deletedrepositoryid()"
     },
     {
-      "label": "._RenameRepositoryPayload_clientMutationId()",
+      "label": "._RenameRepositoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/repository.generated.go",
       "source_location": "L133",
@@ -37779,7 +37779,7 @@
       "norm_label": "._renamerepositorypayload_clientmutationid()"
     },
     {
-      "label": ".fieldContext_RenameRepositoryPayload_clientMutationId()",
+      "label": ".fieldContext_RenameRepositoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/repository.generated.go",
       "source_location": "L152",
@@ -38153,7 +38153,7 @@
       "norm_label": ".fieldcontext_repositoryedge_node()"
     },
     {
-      "label": "._TransferRepositoryPayload_clientMutationId()",
+      "label": "._TransferRepositoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/repository.generated.go",
       "source_location": "L569",
@@ -38164,7 +38164,7 @@
       "norm_label": "._transferrepositorypayload_clientmutationid()"
     },
     {
-      "label": ".fieldContext_TransferRepositoryPayload_clientMutationId()",
+      "label": ".fieldContext_TransferRepositoryPayload_()",
       "file_type": "code",
       "source_file": "gitstore-api/internal/graph/generated/repository.generated.go",
       "source_location": "L588",
@@ -70249,7 +70249,7 @@
       "id": "gitstore_admin_src_graphql_readme_optimistic_locking"
     },
     {
-      "label": "Relay mutation pattern (clientMutationId input/payload)",
+      "label": "Relay mutation pattern ( input/payload)",
       "file_type": "concept",
       "source_file": "gitstore-admin/src/graphql/README.md",
       "source_location": null,

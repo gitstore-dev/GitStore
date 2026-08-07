@@ -124,7 +124,6 @@ input CreateNamespaceInput {
   """
   Client mutation ID for request tracking (Relay pattern).
   """
-  clientMutationId: String
 
   """
   The human-readable identifier for the namespace.
@@ -153,7 +152,6 @@ input DeleteNamespaceInput {
   """
   Client mutation ID for request tracking (Relay pattern).
   """
-  clientMutationId: String
 
   """
   The identifier of the namespace to delete.
@@ -170,7 +168,6 @@ type CreateNamespacePayload {
   """
   Client mutation ID for request tracking (Relay pattern).
   """
-  clientMutationId: String
 
   """
   The newly created namespace.
@@ -185,7 +182,6 @@ type DeleteNamespacePayload {
   """
   Client mutation ID for request tracking (Relay pattern).
   """
-  clientMutationId: String
 
   """
   The identifier of the deleted namespace.

@@ -66,7 +66,6 @@ input CreateCollectionInput {
   """
   Client mutation ID (Relay pattern)
   """
-  clientMutationId: String
 
   """
   Collection name
@@ -101,7 +100,6 @@ type CreateCollectionPayload {
   """
   Client mutation ID (Relay pattern)
   """
-  clientMutationId: String
 
   """
   The created collection
@@ -116,7 +114,6 @@ input UpdateCollectionInput {
   """
   Client mutation ID (Relay pattern)
   """
-  clientMutationId: String
 
   """
   Collection ID to update
@@ -161,7 +158,6 @@ type UpdateCollectionPayload {
   """
   Client mutation ID (Relay pattern)
   """
-  clientMutationId: String
 
   """
   The updated collection
@@ -181,7 +177,6 @@ input DeleteCollectionInput {
   """
   Client mutation ID (Relay pattern)
   """
-  clientMutationId: String
 
   """
   Collection ID to delete
@@ -196,7 +191,6 @@ type DeleteCollectionPayload {
   """
   Client mutation ID (Relay pattern)
   """
-  clientMutationId: String
 
   """
   Deleted collection ID
@@ -211,7 +205,6 @@ input ReorderCollectionsInput {
   """
   Client mutation ID (Relay pattern)
   """
-  clientMutationId: String
 
   """
   Ordered list of collection IDs
@@ -226,7 +219,6 @@ type ReorderCollectionsPayload {
   """
   Client mutation ID (Relay pattern)
   """
-  clientMutationId: String
 
   """
   Updated collections
@@ -270,7 +262,6 @@ input PublishCatalogInput {
   """
   Client mutation ID (Relay pattern)
   """
-  clientMutationId: String
 
   """
   Release version tag (e.g., v1.0.0)
@@ -290,7 +281,6 @@ type PublishCatalogPayload {
   """
   Client mutation ID (Relay pattern)
   """
-  clientMutationId: String
 
   """
   New catalog version

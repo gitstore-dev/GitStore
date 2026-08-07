@@ -30,14 +30,12 @@ type LoginPayload {
 }
 
 input LogoutInput {
-  clientMutationId: String   # retained for schema compatibility; ignored in Phase 3
 }
 type LogoutPayload {
   success: Boolean!
 }
 
 input RefreshTokenInput {
-  clientMutationId: String   # retained for schema compatibility; ignored in Phase 3
 }
 type RefreshTokenPayload {
   session: AuthSession

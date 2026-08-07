@@ -186,8 +186,7 @@ type ComplexityRoot struct {
 	}
 
 	CreateCategoryPayload struct {
-		Category         func(childComplexity int) int
-		ClientMutationID func(childComplexity int) int
+		Category func(childComplexity int) int
 	}
 
 	CreateCollectionPayload struct {
@@ -195,17 +194,14 @@ type ComplexityRoot struct {
 	}
 
 	CreateNamespacePayload struct {
-		ClientMutationID func(childComplexity int) int
-		Namespace        func(childComplexity int) int
+		Namespace func(childComplexity int) int
 	}
 
 	CreateRepositoryPayload struct {
-		ClientMutationID func(childComplexity int) int
-		Repository       func(childComplexity int) int
+		Repository func(childComplexity int) int
 	}
 
 	DeleteCategoryPayload struct {
-		ClientMutationID   func(childComplexity int) int
 		DeletedCategoryID  func(childComplexity int) int
 		OrphanedProductIds func(childComplexity int) int
 	}
@@ -215,12 +211,10 @@ type ComplexityRoot struct {
 	}
 
 	DeleteNamespacePayload struct {
-		ClientMutationID  func(childComplexity int) int
 		DeletedIdentifier func(childComplexity int) int
 	}
 
 	DeleteRepositoryPayload struct {
-		ClientMutationID    func(childComplexity int) int
 		DeletedRepositoryID func(childComplexity int) int
 	}
 
@@ -279,7 +273,7 @@ type ComplexityRoot struct {
 		DeleteNamespace    func(childComplexity int, input model.DeleteNamespaceInput) int
 		DeleteRepository   func(childComplexity int, input model.DeleteRepositoryInput) int
 		Login              func(childComplexity int, input model.LoginInput) int
-		Logout             func(childComplexity int, input model.LogoutInput) int
+		Logout             func(childComplexity int) int
 		PublishCatalog     func(childComplexity int, input model.PublishCatalogInput) int
 		RefreshToken       func(childComplexity int, input model.RefreshTokenInput) int
 		RenameRepository   func(childComplexity int, input model.RenameRepositoryInput) int
@@ -482,8 +476,7 @@ type ComplexityRoot struct {
 	}
 
 	PublishCatalogPayload struct {
-		CatalogVersion   func(childComplexity int) int
-		ClientMutationID func(childComplexity int) int
+		CatalogVersion func(childComplexity int) int
 	}
 
 	QuantityDefinition struct {
@@ -514,13 +507,11 @@ type ComplexityRoot struct {
 	}
 
 	RenameRepositoryPayload struct {
-		ClientMutationID func(childComplexity int) int
-		Repository       func(childComplexity int) int
+		Repository func(childComplexity int) int
 	}
 
 	ReorderCategoriesPayload struct {
-		Categories       func(childComplexity int) int
-		ClientMutationID func(childComplexity int) int
+		Categories func(childComplexity int) int
 	}
 
 	Repository struct {
@@ -625,14 +616,12 @@ type ComplexityRoot struct {
 	}
 
 	TransferRepositoryPayload struct {
-		ClientMutationID func(childComplexity int) int
-		Repository       func(childComplexity int) int
+		Repository func(childComplexity int) int
 	}
 
 	UpdateCategoryPayload struct {
-		Category         func(childComplexity int) int
-		ClientMutationID func(childComplexity int) int
-		Conflict         func(childComplexity int) int
+		Category func(childComplexity int) int
+		Conflict func(childComplexity int) int
 	}
 
 	UpdateCollectionPayload struct {
@@ -1348,26 +1337,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CreateCategoryPayload.Category(childComplexity), true
 
-	case "CreateCategoryPayload.clientMutationId":
-		if e.ComplexityRoot.CreateCategoryPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CreateCategoryPayload.ClientMutationID(childComplexity), true
-
 	case "CreateCollectionPayload.collection":
 		if e.ComplexityRoot.CreateCollectionPayload.Collection == nil {
 			break
 		}
 
 		return e.ComplexityRoot.CreateCollectionPayload.Collection(childComplexity), true
-
-	case "CreateNamespacePayload.clientMutationId":
-		if e.ComplexityRoot.CreateNamespacePayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CreateNamespacePayload.ClientMutationID(childComplexity), true
 
 	case "CreateNamespacePayload.namespace":
 		if e.ComplexityRoot.CreateNamespacePayload.Namespace == nil {
@@ -1376,26 +1351,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CreateNamespacePayload.Namespace(childComplexity), true
 
-	case "CreateRepositoryPayload.clientMutationId":
-		if e.ComplexityRoot.CreateRepositoryPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CreateRepositoryPayload.ClientMutationID(childComplexity), true
-
 	case "CreateRepositoryPayload.repository":
 		if e.ComplexityRoot.CreateRepositoryPayload.Repository == nil {
 			break
 		}
 
 		return e.ComplexityRoot.CreateRepositoryPayload.Repository(childComplexity), true
-
-	case "DeleteCategoryPayload.clientMutationId":
-		if e.ComplexityRoot.DeleteCategoryPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.DeleteCategoryPayload.ClientMutationID(childComplexity), true
 
 	case "DeleteCategoryPayload.deletedCategoryId":
 		if e.ComplexityRoot.DeleteCategoryPayload.DeletedCategoryID == nil {
@@ -1418,26 +1379,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.DeleteCollectionPayload.DeletedCollectionID(childComplexity), true
 
-	case "DeleteNamespacePayload.clientMutationId":
-		if e.ComplexityRoot.DeleteNamespacePayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.DeleteNamespacePayload.ClientMutationID(childComplexity), true
-
 	case "DeleteNamespacePayload.deletedIdentifier":
 		if e.ComplexityRoot.DeleteNamespacePayload.DeletedIdentifier == nil {
 			break
 		}
 
 		return e.ComplexityRoot.DeleteNamespacePayload.DeletedIdentifier(childComplexity), true
-
-	case "DeleteRepositoryPayload.clientMutationId":
-		if e.ComplexityRoot.DeleteRepositoryPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.DeleteRepositoryPayload.ClientMutationID(childComplexity), true
 
 	case "DeleteRepositoryPayload.deletedRepositoryId":
 		if e.ComplexityRoot.DeleteRepositoryPayload.DeletedRepositoryID == nil {
@@ -1685,12 +1632,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			break
 		}
 
-		args, err := ec.field_Mutation_logout_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Mutation.Logout(childComplexity, args["input"].(model.LogoutInput)), true
+		return e.ComplexityRoot.Mutation.Logout(childComplexity), true
 
 	case "Mutation.publishCatalog":
 		if e.ComplexityRoot.Mutation.PublishCatalog == nil {
@@ -2607,13 +2549,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.PublishCatalogPayload.CatalogVersion(childComplexity), true
 
-	case "PublishCatalogPayload.clientMutationId":
-		if e.ComplexityRoot.PublishCatalogPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.PublishCatalogPayload.ClientMutationID(childComplexity), true
-
 	case "QuantityDefinition.max":
 		if e.ComplexityRoot.QuantityDefinition.Max == nil {
 			break
@@ -2810,13 +2745,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.RefreshTokenPayload.Token(childComplexity), true
 
-	case "RenameRepositoryPayload.clientMutationId":
-		if e.ComplexityRoot.RenameRepositoryPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.RenameRepositoryPayload.ClientMutationID(childComplexity), true
-
 	case "RenameRepositoryPayload.repository":
 		if e.ComplexityRoot.RenameRepositoryPayload.Repository == nil {
 			break
@@ -2830,13 +2758,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ReorderCategoriesPayload.Categories(childComplexity), true
-
-	case "ReorderCategoriesPayload.clientMutationId":
-		if e.ComplexityRoot.ReorderCategoriesPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ReorderCategoriesPayload.ClientMutationID(childComplexity), true
 
 	case "Repository.createdAt":
 		if e.ComplexityRoot.Repository.CreatedAt == nil {
@@ -3230,13 +3151,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.TokenResponse.TokenType(childComplexity), true
 
-	case "TransferRepositoryPayload.clientMutationId":
-		if e.ComplexityRoot.TransferRepositoryPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.TransferRepositoryPayload.ClientMutationID(childComplexity), true
-
 	case "TransferRepositoryPayload.repository":
 		if e.ComplexityRoot.TransferRepositoryPayload.Repository == nil {
 			break
@@ -3250,13 +3164,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.UpdateCategoryPayload.Category(childComplexity), true
-
-	case "UpdateCategoryPayload.clientMutationId":
-		if e.ComplexityRoot.UpdateCategoryPayload.ClientMutationID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.UpdateCategoryPayload.ClientMutationID(childComplexity), true
 
 	case "UpdateCategoryPayload.conflict":
 		if e.ComplexityRoot.UpdateCategoryPayload.Conflict == nil {
@@ -3335,7 +3242,6 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputDeleteNamespaceInput,
 		ec.unmarshalInputDeleteRepositoryInput,
 		ec.unmarshalInputLoginInput,
-		ec.unmarshalInputLogoutInput,
 		ec.unmarshalInputNamespaceBy,
 		ec.unmarshalInputProductBy,
 		ec.unmarshalInputProductNamespacePath,
@@ -3504,17 +3410,6 @@ type LoginPayload {
 }
 
 """
-Logout mutation input (Relay pattern)
-"""
-input LogoutInput {
-  """
-  TODO: Is it safe to remove and empty Input?
-  Client mutation ID for request tracking (Relay pattern)
-  """
-  clientMutationId: String
-}
-
-"""
 Logout mutation payload (Relay pattern)
 """
 type LogoutPayload {
@@ -3560,7 +3455,7 @@ extend type Mutation {
   """
   Logout and invalidate current session
   """
-  logout(input: LogoutInput!): LogoutPayload!
+  logout: LogoutPayload!
 
   """
   Refresh authentication token
@@ -3602,7 +3497,7 @@ extend type Mutation {
   Delete a category
   """
   deleteCategory(input: DeleteCategoryInput!): DeleteCategoryPayload!
-  
+
   """
   Reorder categories (drag-and-drop)
   """
@@ -3801,10 +3696,8 @@ type CategoryConnection {
 Input for creating a category
 """
 input CreateCategoryInput {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
+
+
 
   """
   Category name
@@ -3836,10 +3729,8 @@ input CreateCategoryInput {
 Payload for createCategory mutation
 """
 type CreateCategoryPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
+
+
 
   """
   The created category
@@ -3851,10 +3742,8 @@ type CreateCategoryPayload {
 Input for updating a category
 """
 input UpdateCategoryInput {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
+
+
 
   """
   Category ID to update
@@ -3897,10 +3786,8 @@ input UpdateCategoryInput {
 Payload for updateCategory mutation
 """
 type UpdateCategoryPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
+
+
 
   """
   The updated category
@@ -3917,10 +3804,8 @@ type UpdateCategoryPayload {
 Input for deleting a category
 """
 input DeleteCategoryInput {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
+
+
 
   """
   Category ID to delete
@@ -3932,10 +3817,8 @@ input DeleteCategoryInput {
 Payload for deleteCategory mutation
 """
 type DeleteCategoryPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
+
+
 
   """
   Deleted category ID
@@ -3952,10 +3835,8 @@ type DeleteCategoryPayload {
 Input for reordering categories (drag-and-drop)
 """
 input ReorderCategoriesInput {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
+
+
 
   """
   Ordered list of category IDs within parent
@@ -3982,10 +3863,8 @@ input ReorderCategoriesInput {
 Payload for reorderCategories mutation
 """
 type ReorderCategoriesPayload {
-  """
-  Client mutation ID (Relay pattern)
-  """
-  clientMutationId: String
+
+
 
   """
   Updated categories
@@ -4332,13 +4211,11 @@ type DeleteCollectionPayload {
 # ============================================================================
 
 input PublishCatalogInput {
-  clientMutationId: String
   version: String!
   message: String!
 }
 
 type PublishCatalogPayload {
-  clientMutationId: String
   catalogVersion: CatalogVersion
 }
 
@@ -4474,11 +4351,6 @@ Input for creating a new namespace.
 """
 input CreateNamespaceInput {
   """
-  TODO: Remove, deprecated in relay
-  """
-  clientMutationId: String
-
-  """
   The human-readable identifier for the namespace.
   Must be globally unique across all tiers.
   DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
@@ -4505,11 +4377,6 @@ Input for deleting a namespace.
 """
 input DeleteNamespaceInput {
   """
-  TODO: Remove, deprecated in relay
-  """
-  clientMutationId: String
-
-  """
   The identifier of the namespace to delete.
   Deletion is blocked if any repositories exist within the namespace.
   Requires the caller to be the namespace owner (createdBy) or isAdmin.
@@ -4522,11 +4389,6 @@ Payload returned after successfully creating a namespace.
 """
 type CreateNamespacePayload {
   """
-  TODO: Remove, deprecated in relay
-  """
-  clientMutationId: String
-
-  """
   The newly created namespace.
   """
   namespace: Namespace!
@@ -4536,11 +4398,6 @@ type CreateNamespacePayload {
 Payload returned after successfully deleting a namespace.
 """
 type DeleteNamespacePayload {
-  """
-  TODO: Remove, deprecated in relay
-  """
-  clientMutationId: String
-
   """
   The identifier of the deleted namespace.
   """
@@ -5401,19 +5258,16 @@ extend type Mutation {
 }
 
 input CreateRepositoryInput {
-  clientMutationId: String
   namespaceId: ID!
   name: String!
   defaultBranch: String
 }
 
 type CreateRepositoryPayload {
-  clientMutationId: String
   repository: Repository!
 }
 
 input RenameRepositoryInput {
-  clientMutationId: String
   """
   Relay ID of the repository to rename.
   """
@@ -5422,12 +5276,10 @@ input RenameRepositoryInput {
 }
 
 type RenameRepositoryPayload {
-  clientMutationId: String
   repository: Repository!
 }
 
 input TransferRepositoryInput {
-  clientMutationId: String
   """
   Relay ID of the repository to transfer.
   """
@@ -5439,17 +5291,14 @@ input TransferRepositoryInput {
 }
 
 type TransferRepositoryPayload {
-  clientMutationId: String
   repository: Repository!
 }
 
 input DeleteRepositoryInput {
-  clientMutationId: String
   repositoryId: ID!
 }
 
 type DeleteRepositoryPayload {
-  clientMutationId: String
   deletedRepositoryId: ID!
 }
 `, BuiltIn: false},
@@ -5964,8 +5813,6 @@ func (ec *executionContext) childFields_CollectionStatus(ctx context.Context, fi
 
 func (ec *executionContext) childFields_CreateCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_CreateCategoryPayload_clientMutationId(ctx, field)
 	case "category":
 		return ec.fieldContext_CreateCategoryPayload_category(ctx, field)
 	}
@@ -5982,8 +5829,6 @@ func (ec *executionContext) childFields_CreateCollectionPayload(ctx context.Cont
 
 func (ec *executionContext) childFields_CreateNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_CreateNamespacePayload_clientMutationId(ctx, field)
 	case "namespace":
 		return ec.fieldContext_CreateNamespacePayload_namespace(ctx, field)
 	}
@@ -5992,8 +5837,6 @@ func (ec *executionContext) childFields_CreateNamespacePayload(ctx context.Conte
 
 func (ec *executionContext) childFields_CreateRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_CreateRepositoryPayload_clientMutationId(ctx, field)
 	case "repository":
 		return ec.fieldContext_CreateRepositoryPayload_repository(ctx, field)
 	}
@@ -6002,8 +5845,6 @@ func (ec *executionContext) childFields_CreateRepositoryPayload(ctx context.Cont
 
 func (ec *executionContext) childFields_DeleteCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_DeleteCategoryPayload_clientMutationId(ctx, field)
 	case "deletedCategoryId":
 		return ec.fieldContext_DeleteCategoryPayload_deletedCategoryId(ctx, field)
 	case "orphanedProductIds":
@@ -6022,8 +5863,6 @@ func (ec *executionContext) childFields_DeleteCollectionPayload(ctx context.Cont
 
 func (ec *executionContext) childFields_DeleteNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_DeleteNamespacePayload_clientMutationId(ctx, field)
 	case "deletedIdentifier":
 		return ec.fieldContext_DeleteNamespacePayload_deletedIdentifier(ctx, field)
 	}
@@ -6032,8 +5871,6 @@ func (ec *executionContext) childFields_DeleteNamespacePayload(ctx context.Conte
 
 func (ec *executionContext) childFields_DeleteRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_DeleteRepositoryPayload_clientMutationId(ctx, field)
 	case "deletedRepositoryId":
 		return ec.fieldContext_DeleteRepositoryPayload_deletedRepositoryId(ctx, field)
 	}
@@ -6516,8 +6353,6 @@ func (ec *executionContext) childFields_ProductVariantStatus(ctx context.Context
 
 func (ec *executionContext) childFields_PublishCatalogPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_PublishCatalogPayload_clientMutationId(ctx, field)
 	case "catalogVersion":
 		return ec.fieldContext_PublishCatalogPayload_catalogVersion(ctx, field)
 	}
@@ -6544,8 +6379,6 @@ func (ec *executionContext) childFields_RefreshTokenPayload(ctx context.Context,
 
 func (ec *executionContext) childFields_RenameRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_RenameRepositoryPayload_clientMutationId(ctx, field)
 	case "repository":
 		return ec.fieldContext_RenameRepositoryPayload_repository(ctx, field)
 	}
@@ -6554,8 +6387,6 @@ func (ec *executionContext) childFields_RenameRepositoryPayload(ctx context.Cont
 
 func (ec *executionContext) childFields_ReorderCategoriesPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_ReorderCategoriesPayload_clientMutationId(ctx, field)
 	case "categories":
 		return ec.fieldContext_ReorderCategoriesPayload_categories(ctx, field)
 	}
@@ -6766,8 +6597,6 @@ func (ec *executionContext) childFields_TokenResponse(ctx context.Context, field
 
 func (ec *executionContext) childFields_TransferRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_TransferRepositoryPayload_clientMutationId(ctx, field)
 	case "repository":
 		return ec.fieldContext_TransferRepositoryPayload_repository(ctx, field)
 	}
@@ -6776,8 +6605,6 @@ func (ec *executionContext) childFields_TransferRepositoryPayload(ctx context.Co
 
 func (ec *executionContext) childFields_UpdateCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "clientMutationId":
-		return ec.fieldContext_UpdateCategoryPayload_clientMutationId(ctx, field)
 	case "category":
 		return ec.fieldContext_UpdateCategoryPayload_category(ctx, field)
 	case "conflict":

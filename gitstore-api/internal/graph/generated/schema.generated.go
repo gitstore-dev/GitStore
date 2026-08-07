@@ -24,7 +24,7 @@ import (
 type MutationResolver interface {
 	PublishCatalog(ctx context.Context, input model.PublishCatalogInput) (*model.PublishCatalogPayload, error)
 	Login(ctx context.Context, input model.LoginInput) (*model.LoginPayload, error)
-	Logout(ctx context.Context, input model.LogoutInput) (*model.LogoutPayload, error)
+	Logout(ctx context.Context) (*model.LogoutPayload, error)
 	RefreshToken(ctx context.Context, input model.RefreshTokenInput) (*model.RefreshTokenPayload, error)
 	CreateCategory(ctx context.Context, input model.CreateCategoryInput) (*model.CreateCategoryPayload, error)
 	UpdateCategory(ctx context.Context, input model.UpdateCategoryInput) (*model.UpdateCategoryPayload, error)
@@ -180,20 +180,6 @@ func (ec *executionContext) field_Mutation_login_args(ctx context.Context, rawAr
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
 		func(ctx context.Context, v any) (model.LoginInput, error) {
 			return ec.unmarshalNLoginInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLoginInput(ctx, v)
-		})
-	if err != nil {
-		return nil, err
-	}
-	args["input"] = arg0
-	return args, nil
-}
-
-func (ec *executionContext) field_Mutation_logout_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
-		func(ctx context.Context, v any) (model.LogoutInput, error) {
-			return ec.unmarshalNLogoutInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLogoutInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
@@ -791,8 +777,7 @@ func (ec *executionContext) _Mutation_logout(ctx context.Context, field graphql.
 			return ec.fieldContext_Mutation_logout(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Mutation().Logout(ctx, fc.Args["input"].(model.LogoutInput))
+			return ec.Resolvers.Mutation().Logout(ctx)
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.LogoutPayload) graphql.Marshaler {
@@ -802,7 +787,7 @@ func (ec *executionContext) _Mutation_logout(ctx context.Context, field graphql.
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_Mutation_logout(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_Mutation_logout(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "Mutation",
 		Field:      field,
@@ -811,17 +796,6 @@ func (ec *executionContext) fieldContext_Mutation_logout(ctx context.Context, fi
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_LogoutPayload(ctx, field)
 		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Mutation_logout_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
 	}
 	return fc, nil
 }
