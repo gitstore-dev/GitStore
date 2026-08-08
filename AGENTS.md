@@ -23,6 +23,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - Rust 1.x (`gitstore-git-service`) + Go 1.25 (`gitstore-api`) (034-admission-path-cleanup)
 - Go 1.25 (gitstore-api) · Rust 1.x (gitstore-git-service) + `github.com/gin-gonic/gin`, `go-grpc-prometheus`, `prometheus/client_golang`, `gix 0.84.0`, `tonic 0.14` (035-git-http-auth)
 - Push policy fields added to `datastore.Repository` struct; resolved via existing `store.GetRepository` after `LookupRepository` (035-git-http-auth)
+- Go 1.25 (`gitstore-api`, `gitstore-controller-manager`) + `github.com/99designs/gqlgen v0.17.90` (GraphQL server + subscription transport, already wired via `transport.Websocket` in `gitstore-api/internal/app/server.go`), existing `internal/auth.AuthZProvider`/rbac-local action-string model, existing `internal/listwatch.ListWatcher[T]`/`Watcher[T]`/`WatchEvent[T]` interfaces in `gitstore-controller-manager` (defined by spec 036, no concrete implementation yet), existing `internal/status.StatusClient` interface in `gitstore-controller-manager` (defined by spec 026, no concrete implementation yet) (040-controller-watch-status-api)
+- No new storage. Reuses existing `datastore.Datastore` (`go-memdb` dev / ScyllaDB prod) `CategoryTaxonomy` rows and their existing `resource_version` column/field — no schema migration required for the resourceVersion mechanism itself, since it already exists and is incremented on every `UpdateCategoryTaxonomy` call (see `nextResourceVersion` in `gitstore-api/internal/cataloggrpc/server.go`) (040-controller-watch-status-api)
 
 ## Commands
 
@@ -64,9 +66,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 040-controller-watch-status-api: Added Go 1.25 (`gitstore-api`, `gitstore-controller-manager`) + `github.com/99designs/gqlgen v0.17.90` (GraphQL server + subscription transport, already wired via `transport.Websocket` in `gitstore-api/internal/app/server.go`), existing `internal/auth.AuthZProvider`/rbac-local action-string model, existing `internal/listwatch.ListWatcher[T]`/`Watcher[T]`/`WatchEvent[T]` interfaces in `gitstore-controller-manager` (defined by spec 036, no concrete implementation yet), existing `internal/status.StatusClient` interface in `gitstore-controller-manager` (defined by spec 026, no concrete implementation yet)
 - 035-git-http-auth: Added Go 1.25 (gitstore-api) · Rust 1.x (gitstore-git-service) + `github.com/gin-gonic/gin`, `go-grpc-prometheus`, `prometheus/client_golang`, `gix 0.84.0`, `tonic 0.14`
 - 034-admission-path-cleanup: `changed_paths` populated in Rust admission handler via gix tree diff; legacy `OldCommitSha==""` fallback path removed from Go API; `operationForEntry` returns existing object to eliminate double DB lookup per resource
-- 033-auth-phase-4: No new deps; `cmd/gitctl` binary (`hash-password`, `gen-jwt-secret`, `gen-hmac-secret`); `GITSTORE_AUTH__GRPC__HMAC_SECRET` config key; `HmacInterceptor` in Rust git-service; `hmacCreds` PerRPCCredentials in Go API
 
 
 <!-- MANUAL ADDITIONS START -->
@@ -97,7 +99,7 @@ Common bootstrap variables:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/038-controller-integration-tests-runbook/plan.md
+at specs/040-controller-watch-status-api/plan.md
 <!-- SPECKIT END -->
 
 ## graphify

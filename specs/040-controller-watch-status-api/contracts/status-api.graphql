@@ -1,0 +1,123 @@
+# Contract: Status Subresource API (issue #166 / #176-179)
+# Additive change to shared/schemas/category.graphqls.
+# Mirrors gitstore-controller-manager/internal/status.StatusPatch and
+# StatusClient (spec 026) field-for-field so the wire contract and the
+# existing Go client contract stay mechanically aligned.
+
+extend type Mutation {
+  """
+  Partial-merge update to a CategoryTaxonomy's .status sub-resource.
+  Only non-null input fields are changed; all other existing status
+  fields are left unchanged (FR-008). Requires resourceVersion to
+  match the resource's current value or the request fails with a
+  StatusConflict (FR-009). Rejects any attempt to alter .spec or
+  author-controlled .metadata by construction — this input type has
+  no such fields (FR-010). Requires controller-level authorization
+  independent of the resourceVersion outcome (FR-011).
+  """
+  updateCategoryTaxonomyStatus(
+    input: UpdateCategoryTaxonomyStatusInput!
+  ): UpdateCategoryTaxonomyStatusPayload!
+}
+
+input UpdateCategoryTaxonomyStatusInput {
+  name: String!
+  namespace: String!
+
+  """
+  Required optimistic-concurrency precondition (FR-009). Must equal
+  the resource's current metadata.resourceVersion.
+  """
+  resourceVersion: String!
+
+  """Null = unchanged. Set on every successful reconcile per spec 026 FR-008."""
+  observedGeneration: Int
+
+  """Null = unchanged, e.g. "main@sha1:a1b2c3d"."""
+  lastAppliedRevision: String
+
+  """Null = unchanged. Non-null = full replacement of the conditions slice."""
+  conditions: [ConditionInput!]
+
+  """Null = unchanged. Kind-specific — not part of any generic patch shape."""
+  resolved: ResolvedCategoryTaxonomyInput
+}
+
+input ConditionInput {
+  type: String!
+  status: String! # "True" | "False" | "Unknown"
+  observedGeneration: Int!
+  lastTransitionTime: DateTime!
+  reason: String
+  message: String
+}
+
+input ResolvedCategoryTaxonomyInput {
+  depth: Int!
+  ancestorPath: String!
+  childCount: Int!
+  productCount: Int!
+}
+
+type UpdateCategoryTaxonomyStatusPayload {
+  """Null when the write failed (conflict or not-found)."""
+  category: Category
+
+  """Non-null only when the resourceVersion precondition failed."""
+  conflict: StatusConflict
+}
+
+type StatusConflict {
+  """The resource's actual current resourceVersion, for retry."""
+  currentResourceVersion: String!
+
+  """Current state of the resource, avoiding a second round-trip."""
+  current: Category!
+}
+
+# ---- Error signaling ----
+#
+# Resource not found (FR-012): distinct from a conflict on an existing
+# resource. Returned as a GraphQL error with extensions.code == "NOT_FOUND",
+# NOT as a null-category/null-conflict payload — this makes the
+# not-found case unambiguous to a caller inspecting the response shape
+# alone, without needing to check for "both fields null" as a third state.
+#
+# Unauthorized caller (FR-011): returned as a GraphQL error with
+# extensions.code == "FORBIDDEN", evaluated in
+# internal/middleware/security/graphql.go's GraphQLFieldAuthorizer
+# BEFORE the resolver touches the datastore — an unauthorized caller
+# with a stale resourceVersion sees FORBIDDEN, not a conflict payload
+# (User Story 2 AC5: rejected "independent of whether resourceVersion matches").
+#
+# Authorization action string: "categoryTaxonomy.status.write"
+# (research.md R5), evaluated via the existing
+# auth.AuthZProvider.Authorize(ctx, principal, action, resourceContext)
+# interface — no new authorization primitive introduced.
+
+# ---- Client-side contract mapping (gitstore-controller-manager) ----
+#
+# This mutation is the wire-level counterpart of the Go-side contract in
+# gitstore-controller-manager/internal/status. StatusPatch gains ONE new
+# field for this spec (research.md R8) — the Apply method signature is
+# UNCHANGED:
+#
+#   type StatusPatch struct {
+#       ResourceVersion     string
+#       ObservedGeneration  *int64
+#       LastAppliedRevision *string
+#       Conditions          []*Condition
+#       Resolved            json.RawMessage // NEW (R8): nil = unchanged;
+#                                            // kind-specific, marshaled by
+#                                            // the reconciler itself
+#   }
+#   type StatusClient interface {
+#       Apply(ctx context.Context, key types.WorkItemKey, patch *StatusPatch) error
+#   }
+#
+# A new concrete graphqlStatusClient (gitstore-controller-manager/internal/status/graphql_status_client.go)
+# implements StatusClient by calling this mutation, translating:
+#   - types.ErrConflict  <- StatusConflict payload OR a resourceVersion-mismatch error
+#   - other errors        <- any other GraphQL error (network, FORBIDDEN, NOT_FOUND)
+# patch.Resolved (if non-nil) is unmarshaled into the `resolved:
+# ResolvedCategoryTaxonomyInput` argument above — see quickstart.md.

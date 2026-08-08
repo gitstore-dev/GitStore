@@ -3410,8 +3410,8 @@
     "semantic_hash": ""
   },
   ".specify/feature.json": {
-    "mtime": 1786138147.0300355,
-    "ast_hash": "37f5c46cab625e2fb34d110e4d79c26e",
+    "mtime": 1786138193.5870457,
+    "ast_hash": "8f17b267d7974feb3a92bb188ba81fd8",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/tests/integration/disconnect_reconnect_test.go": {
@@ -3507,6 +3507,16 @@
   "specs/038-controller-integration-tests-runbook/tasks.md": {
     "mtime": 1786116146.6317995,
     "ast_hash": "2e9a58fc23cde8be505373e6eb14aa34",
+    "semantic_hash": ""
+  },
+  "specs/040-controller-watch-status-api/checklists/requirements.md": {
+    "mtime": 1786138322.8041105,
+    "ast_hash": "b02d6219be23cc652d6b37fba405be8a",
+    "semantic_hash": ""
+  },
+  "specs/040-controller-watch-status-api/spec.md": {
+    "mtime": 1786138313.306521,
+    "ast_hash": "77ea8ea0105228b28137fe9387dd7f71",
     "semantic_hash": ""
   }
 }

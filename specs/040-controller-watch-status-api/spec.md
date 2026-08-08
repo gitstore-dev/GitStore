@@ -1,8 +1,8 @@
 # Feature Specification: Controller Watch API and Status Subresource Contract
 
-**Feature Branch**: `040-controller-watch-status-api`
-**Created**: 2026-08-07
-**Status**: Draft
+**Feature Branch**: `040-controller-watch-status-api`  
+**Created**: 2026-08-07  
+**Status**: Draft  
 **Input**: User description: "Controller Watch API and Status Subresource Contract: define a GraphQL Subscription-based watch mechanism (watchProducts, watchCategories, etc. for core kinds; watchResources(kind) for CRDs) and a status-subresource mutation contract (patch/update per kind) so controller-manager reconcilers can list-then-watch resource changes and write status back with resourceVersion-based optimistic concurrency. Unblocks issue #244 (CategoryTaxonomy Controller Reconciliation, spec 039) and issue #165's controller-manager initiative. Covers GitHub issues #131 (Controller Watch API with resourceVersion Resume) and #166 (GraphQL Status Subresource Contract for Controllers, including sub-issues #176 schema, #177 authorization, #178 concurrency/conflict semantics, #179 integration tests)."
 
 ## User Scenarios & Testing *(mandatory)*

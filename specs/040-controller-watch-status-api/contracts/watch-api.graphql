@@ -1,0 +1,140 @@
+# Contract: Watch API (issue #131)
+# Additive changes to shared/schemas/category.graphqls and shared/schemas/schema.graphqls.
+# This file is a contract sketch for planning purposes — actual implementation edits
+# the real .graphqls files directly; gqlgen regenerates internal/graph/generated/.
+
+# ---- shared/schemas/schema.graphqls (schema root) ----
+
+extend type Subscription {
+  """
+  Generic list-then-watch entry point for any resource kind, including
+  CRD-defined kinds not built into the core schema (FR-006).
+  Core kinds SHOULD prefer their dedicated per-kind subscription
+  (e.g. watchCategoryTaxonomies) for compile-time-typed payloads;
+  this field exists so a kind unknown to the schema at build time can
+  still be watched (FR-006, SC-005).
+
+  Behavior:
+  - resourceVersion omitted/empty: server MUST NOT perform an implicit
+    "list" here — Subscription fields deliver only a stream. Callers
+    obtain the initial list via the kind's existing list query
+    (e.g. `categories`) and then open this subscription with the
+    resourceVersion returned by that list.
+  - resourceVersion present but expired (older than server retention):
+    the subscription terminates immediately with a WATCH_EXPIRED
+    extension error (FR-004) instead of silently resuming from scratch.
+  - resourceVersion present and valid: only events after that cursor
+    are delivered, in admission order for that kind (FR-002, FR-003).
+  """
+  watchResources(
+    kind: String!
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): WatchEvent!
+}
+
+"""
+A single change notification for a watched resource kind.
+"""
+type WatchEvent {
+  type: WatchEventType!
+  kind: String!
+  namespace: String
+  name: String!
+
+  """
+  Opaque resume cursor. Present on every event, including BOOKMARK.
+  """
+  resourceVersion: String!
+
+  """
+  Full resource payload for ADDED/MODIFIED. Null for DELETED/BOOKMARK.
+  JSON-boxed because the generic watchResources path has no
+  compile-time-known shape for CRD kinds (research.md R7).
+  """
+  object: JSON
+}
+
+enum WatchEventType {
+  ADDED
+  MODIFIED
+  DELETED
+
+  """
+  Carries only a resourceVersion advance with no object change — used
+  to let a long-idle subscription periodically refresh its cursor
+  without a corresponding resource change. object is always null.
+  """
+  BOOKMARK
+}
+
+"""
+Input mirror of the existing (output-only) LabelSelector type, needed
+because GraphQL requires distinct input/output types for structured
+arguments.
+"""
+input LabelSelectorInput {
+  matchLabels: [KeyValuePairInput!]
+  matchExpressions: [LabelSelectorRequirementInput!]
+}
+
+input LabelSelectorRequirementInput {
+  key: String!
+  operator: LabelSelectorOperator!
+  values: [String!]
+}
+
+input KeyValuePairInput {
+  key: String!
+  value: String!
+}
+
+# ---- shared/schemas/category.graphqls (per-kind entry point) ----
+
+extend type Subscription {
+  """
+  Dedicated, compile-time-typed watch entry point for CategoryTaxonomy.
+  Same list-then-watch/resourceVersion/expiry semantics as the generic
+  watchResources field (FR-001 through FR-004), scoped to this kind.
+  Callers obtain the initial list via the existing `categories` query.
+  """
+  watchCategoryTaxonomies(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): CategoryWatchEvent!
+}
+
+"""
+CategoryTaxonomy-specific watch event. Carries the same envelope as
+WatchEvent but with a strongly-typed `category` field instead of a
+JSON-boxed `object`, so core-kind consumers get full type safety.
+"""
+type CategoryWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+
+  """
+  Full Category resource for ADDED/MODIFIED. Null for DELETED/BOOKMARK.
+  """
+  category: Category
+}
+
+# ---- Error signaling ----
+#
+# Expired-cursor (FR-004): subscription terminates with a GraphQL error
+# whose `extensions.code == "WATCH_EXPIRED"`. Clients (the
+# controller-manager's listwatch.Watcher[T] adapter) MUST map this to
+# listwatch.ErrWatchExpired via errors.Is-compatible wrapping on the
+# client side, triggering Runner[T].recoverFromExpiry (existing logic,
+# spec 036 — no client-side change needed beyond the adapter itself).
+#
+# Namespace/selector filter transitions (FR-013): when a resource
+# transitions from matching to not-matching an active filter (or the
+# reverse), the server emits a synthetic DELETED (on exit) or ADDED
+# (on entry) event respectively, even though the underlying resource
+# was only MODIFIED — this keeps the subscriber's view consistent
+# with what a fresh List() against the same filter would return.
