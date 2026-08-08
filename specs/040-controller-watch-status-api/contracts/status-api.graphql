@@ -80,12 +80,18 @@ type UpdateCategoryStatusPayload {
   conflict: StatusConflict
 }
 
+"""
+Shared by both the per-kind (updateCategoryStatus) and generic
+(updateResourceStatus) mutations — kept minimal (no Category-typed
+field) since the generic path has no statically-typed resource
+representation for an arbitrary CRD kind (research.md R11). A caller
+that wants the full current resource after a conflict re-fetches it
+via the kind's own read query, using currentResourceVersion to
+confirm it observed the right version.
+"""
 type StatusConflict {
   """The resource's actual current resourceVersion, for retry."""
   currentResourceVersion: String!
-
-  """Current state of the resource, avoiding a second round-trip."""
-  current: Category!
 }
 
 # ---- Generic CRD-kind status write (FR-006, SC-005) ----

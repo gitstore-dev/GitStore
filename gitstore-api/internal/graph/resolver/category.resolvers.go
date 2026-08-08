@@ -59,6 +59,11 @@ func (r *mutationResolver) ReorderCategories(ctx context.Context, input model.Re
 	return nil, errors.New("category mutations are managed via git push")
 }
 
+// UpdateCategoryStatus is the resolver for the updateCategoryStatus field.
+func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model.UpdateCategoryStatusInput) (*model.UpdateCategoryStatusPayload, error) {
+	panic(fmt.Errorf("not implemented: UpdateCategoryStatus - updateCategoryStatus"))
+}
+
 // Category is the resolver for the category field.
 func (r *queryResolver) Category(ctx context.Context, by model.CategoryBy) (*model.Category, error) {
 	switch {
@@ -92,6 +97,11 @@ func (r *queryResolver) Categories(ctx context.Context, first *int32, after *str
 		return nil, fmt.Errorf("failed to get categories: %w", err)
 	}
 	return BuildCategoryConnection(result), nil
+}
+
+// WatchCategories is the resolver for the watchCategories field.
+func (r *subscriptionResolver) WatchCategories(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.CategoryWatchEvent, error) {
+	panic(fmt.Errorf("not implemented: WatchCategories - watchCategories"))
 }
 
 // Category returns generated.CategoryResolver implementation.

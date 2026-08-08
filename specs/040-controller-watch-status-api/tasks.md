@@ -26,11 +26,11 @@ Two existing Go modules, each with its own `internal/` and `tests/` tree:
 
 **Purpose**: Schema scaffolding shared by every user story — nothing here is testable on its own, but every story's contract tests depend on the generated types existing.
 
-- [ ] T001 Add `WatchEventType` enum, `WatchEvent` type, `LabelSelectorInput`/`LabelSelectorRequirementInput`/`KeyValuePairInput` input types, and the `watchResources(kind:, namespace:, selector:, resourceVersion:)` Subscription field to `shared/schemas/schema.graphqls` per `contracts/watch-api.graphql`
-- [ ] T002 Add `watchCategories(namespace:, selector:, resourceVersion:)` Subscription field and `CategoryWatchEvent` type to `shared/schemas/category.graphqls` per `contracts/watch-api.graphql`
-- [ ] T003 Add `ConditionInput`, `ResolvedCategoryTaxonomyInput`, `UpdateCategoryStatusInput`, `UpdateCategoryStatusPayload`, `StatusConflict`, and the `updateCategoryStatus(input:)` Mutation field to `shared/schemas/category.graphqls` per `contracts/status-api.graphql`
-- [ ] T004 Add `UpdateResourceStatusInput`, `UpdateResourceStatusPayload`, and the `updateResourceStatus(input:)` Mutation field to `shared/schemas/schema.graphqls` per `contracts/status-api.graphql`
-- [ ] T005 Run gqlgen codegen (`cd gitstore-api && go generate ./...` or the project's documented gqlgen invocation) to regenerate `internal/graph/generated/` and `internal/graph/model/models_gen.go` from T001-T004; confirm the build compiles with stub resolvers returning `panic("not implemented")` for the new fields (depends on T001-T004)
+- [x] T001 Add `WatchEventType` enum, `WatchEvent` type, `LabelSelectorInput`/`LabelSelectorRequirementInput`/`KeyValuePairInput` input types, and the `watchResources(kind:, namespace:, selector:, resourceVersion:)` Subscription field to `shared/schemas/schema.graphqls` per `contracts/watch-api.graphql`
+- [x] T002 Add `watchCategories(namespace:, selector:, resourceVersion:)` Subscription field and `CategoryWatchEvent` type to `shared/schemas/category.graphqls` per `contracts/watch-api.graphql`
+- [x] T003 Add `ConditionInput` (schema.graphqls, shared), `ResolvedCategoryTaxonomyInput`, `UpdateCategoryStatusInput`, `UpdateCategoryStatusPayload`, `StatusConflict` (schema.graphqls, shared per research.md R11), and the `updateCategoryStatus(input:)` Mutation field to `shared/schemas/category.graphqls` per `contracts/status-api.graphql`. Also applied the R9 rename (`ancestorPath` → `path: [String!]!`) to the pre-existing output type `ResolvedCategoryTaxonomy`, resolving its TODO.
+- [x] T004 Add `UpdateResourceStatusInput`, `UpdateResourceStatusPayload`, and the `updateResourceStatus(input:)` Mutation field to `shared/schemas/schema.graphqls` per `contracts/status-api.graphql`
+- [x] T005 Ran gqlgen codegen (`cd gitstore-api && go generate ./...`); regenerated `internal/graph/generated/`, `internal/graph/model/models_gen.go`, and stub resolvers in `category.resolvers.go`/`schema.resolvers.go` (`UpdateCategoryStatus`, `WatchCategories`, `UpdateResourceStatus`, `WatchResources`, all `panic("not implemented")`); `go build ./...` compiles clean
 
 **Checkpoint**: Schema compiles and generates stub resolver signatures. No behavior yet — this only unblocks writing contract tests against real generated types.
 

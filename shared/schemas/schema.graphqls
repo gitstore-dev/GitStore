@@ -4,6 +4,7 @@
 schema {
   query: Query
   mutation: Mutation
+  subscription: Subscription
 }
 
 # ============================================================================
@@ -78,6 +79,163 @@ type Mutation {
   TODO: Remove. It is unclear which repository we're are publishing to.
   """
   publishCatalog(input: PublishCatalogInput!): PublishCatalogPayload!
+}
+
+# ============================================================================
+# Subscription Root
+# ============================================================================
+
+type Subscription {
+  """
+  Generic list-then-watch entry point for any resource kind, including
+  CRD-defined kinds not built into the core schema (FR-006, spec 040).
+  Core kinds SHOULD prefer their dedicated per-kind subscription (e.g.
+  watchCategories) for compile-time-typed payloads; this field exists
+  so a kind unknown to the schema at build time can still be watched
+  (FR-006, SC-005).
+
+  Behavior:
+  - resourceVersion omitted/empty: no implicit "list" is performed —
+    subscriptions deliver only a stream. Callers obtain the initial
+    list via the kind's existing list query and then open this
+    subscription with the resourceVersion returned by that list.
+  - resourceVersion present but expired (older than server retention):
+    the subscription terminates immediately with a WATCH_EXPIRED
+    extension error (FR-004) instead of silently resuming from scratch.
+  - resourceVersion present and valid: only events after that cursor
+    are delivered, in admission order for that kind (FR-002, FR-003).
+  """
+  watchResources(
+    kind: String!
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): WatchEvent!
+}
+
+# ============================================================================
+# Watch API (spec 040)
+# ============================================================================
+
+"""
+A single change notification for a watched resource kind, delivered by
+the generic watchResources subscription.
+"""
+type WatchEvent {
+  type: WatchEventType!
+  kind: String!
+  namespace: String
+  name: String!
+
+  """
+  Opaque resume cursor. Present on every event, including BOOKMARK.
+  """
+  resourceVersion: String!
+
+  """
+  Full resource payload for ADDED/MODIFIED. Null for DELETED/BOOKMARK.
+  JSON-boxed because the generic watchResources path has no
+  compile-time-known shape for CRD kinds.
+  """
+  object: JSON
+}
+
+enum WatchEventType {
+  ADDED
+  MODIFIED
+  DELETED
+
+  """
+  Carries only a resourceVersion advance with no object change — used
+  to let a long-idle subscription periodically refresh its cursor
+  without a corresponding resource change. object is always null.
+  """
+  BOOKMARK
+}
+
+"""
+Input mirror of the existing (output-only) LabelSelector type, needed
+because GraphQL requires distinct input/output types for structured
+arguments.
+"""
+input LabelSelectorInput {
+  matchLabels: [KeyValuePairInput!]
+  matchExpressions: [LabelSelectorRequirementInput!]
+}
+
+input LabelSelectorRequirementInput {
+  key: String!
+  operator: LabelSelectorOperator!
+  values: [String!]
+}
+
+input KeyValuePairInput {
+  key: String!
+  value: String!
+}
+
+# ============================================================================
+# Status Subresource API (spec 040)
+# ============================================================================
+
+extend type Mutation {
+  """
+  Generic status-subresource write for CRD-defined kinds that have no
+  compile-time-known `resolved` shape. Core kinds SHOULD use their
+  dedicated per-kind mutation (e.g. updateCategoryStatus) instead —
+  this field exists so a kind unknown to the schema at build time can
+  still write status (FR-006, SC-005). Semantics (partial-merge,
+  resourceVersion precondition, spec-write rejection by construction,
+  controller authorization) are identical to the per-kind mutations.
+  """
+  updateResourceStatus(
+    input: UpdateResourceStatusInput!
+  ): UpdateResourceStatusPayload!
+}
+
+input UpdateResourceStatusInput {
+  kind: String!
+  name: String!
+  namespace: String!
+  resourceVersion: String!
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [ConditionInput!]
+
+  """
+  Kind-specific resolved payload, JSON-boxed since no static input type
+  exists for an arbitrary CRD kind (mirrors WatchEvent.object).
+  """
+  resolved: JSON
+}
+
+type UpdateResourceStatusPayload {
+  """JSON-boxed current resource state; null when the write failed."""
+  object: JSON
+
+  conflict: StatusConflict
+}
+
+"""
+A named status condition input, mirroring the Kubernetes condition
+convention used by CategoryCondition/ProductCondition et al.
+"""
+input ConditionInput {
+  type: String!
+  status: String! # "True" | "False" | "Unknown"
+  observedGeneration: Int!
+  lastTransitionTime: DateTime!
+  reason: String
+  message: String
+}
+
+"""
+Optimistic-concurrency conflict payload shared by all status-write
+mutations (per-kind and generic).
+"""
+type StatusConflict {
+  """The resource's actual current resourceVersion, for retry."""
+  currentResourceVersion: String!
 }
 
 # ============================================================================

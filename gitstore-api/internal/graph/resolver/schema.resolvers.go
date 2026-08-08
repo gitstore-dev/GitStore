@@ -7,6 +7,7 @@ package resolver
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -32,6 +33,11 @@ func (r *mutationResolver) PublishCatalog(ctx context.Context, input model.Publi
 	return &model.PublishCatalogPayload{
 		CatalogVersion: version,
 	}, nil
+}
+
+// UpdateResourceStatus is the resolver for the updateResourceStatus field.
+func (r *mutationResolver) UpdateResourceStatus(ctx context.Context, input model.UpdateResourceStatusInput) (*model.UpdateResourceStatusPayload, error) {
+	panic(fmt.Errorf("not implemented: UpdateResourceStatus - updateResourceStatus"))
 }
 
 // Node is the resolver for the node field.
@@ -73,11 +79,20 @@ func (r *queryResolver) CatalogVersion(ctx context.Context) (*model.CatalogVersi
 	}, nil
 }
 
+// WatchResources is the resolver for the watchResources field.
+func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.WatchEvent, error) {
+	panic(fmt.Errorf("not implemented: WatchResources - watchResources"))
+}
+
 // Mutation returns generated.MutationResolver implementation.
 func (r *Resolver) Mutation() generated.MutationResolver { return &mutationResolver{r} }
 
 // Query returns generated.QueryResolver implementation.
 func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 
+// Subscription returns generated.SubscriptionResolver implementation.
+func (r *Resolver) Subscription() generated.SubscriptionResolver { return &subscriptionResolver{r} }
+
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
+type subscriptionResolver struct{ *Resolver }

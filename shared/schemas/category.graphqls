@@ -38,6 +38,33 @@ extend type Mutation {
   """
   reorderCategories(input: ReorderCategoriesInput!): ReorderCategoriesPayload!
 
+  """
+  Partial-merge update to a CategoryTaxonomy's .status sub-resource.
+  Only non-null input fields are changed; all other existing status
+  fields are left unchanged (FR-008, spec 040). Requires
+  resourceVersion to match the resource's current value or the
+  request fails with a StatusConflict (FR-009). Rejects any attempt
+  to alter .spec or author-controlled .metadata by construction —
+  this input type has no such fields (FR-010). Requires
+  controller-level authorization independent of the resourceVersion
+  outcome (FR-011).
+  """
+  updateCategoryStatus(input: UpdateCategoryStatusInput!): UpdateCategoryStatusPayload!
+}
+
+extend type Subscription {
+  """
+  Dedicated, compile-time-typed watch entry point for CategoryTaxonomy.
+  Same list-then-watch/resourceVersion/expiry semantics as the generic
+  watchResources field (FR-001 through FR-004, spec 040), scoped to
+  this kind. Callers obtain the initial list via the existing
+  `categories` query.
+  """
+  watchCategories(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): CategoryWatchEvent!
 }
 
 """
@@ -182,8 +209,16 @@ Controller-computed category hierarchy metadata.
 """
 type ResolvedCategoryTaxonomy {
   depth: Int!
-  # TODO: Change to 'path: [String!]!'
-  ancestorPath: String!
+
+  """
+  Ancestor path from root to self, e.g. ["electronics", "computers",
+  "laptops"] for the "laptops" category (root-to-self order). A root
+  category's path is a single-element array containing its own name.
+  Distinct from Category.path, which is a read-time-derived field
+  computed from the separate ancestor_path datastore column (see
+  specs/040-controller-watch-status-api/research.md R9/R10).
+  """
+  path: [String!]!
   childCount: Int!
   productCount: Int!
 }
@@ -432,4 +467,74 @@ type CategoryOptimisticLockConflict {
   Diff between current and attempted
   """
   diff: String!
+}
+
+# ============================================================================
+# Status Subresource API (spec 040)
+# ============================================================================
+
+input UpdateCategoryStatusInput {
+  name: String!
+  namespace: String!
+
+  """
+  Required optimistic-concurrency precondition (FR-009). Must equal
+  the resource's current metadata.resourceVersion.
+  """
+  resourceVersion: String!
+
+  """Null = unchanged. Set on every successful reconcile per spec 026 FR-008."""
+  observedGeneration: Int
+
+  """Null = unchanged, e.g. "main@sha1:a1b2c3d"."""
+  lastAppliedRevision: String
+
+  """Null = unchanged. Non-null = full replacement of the conditions slice."""
+  conditions: [ConditionInput!]
+
+  """Null = unchanged. Kind-specific — not part of any generic patch shape."""
+  resolved: ResolvedCategoryTaxonomyInput
+}
+
+input ResolvedCategoryTaxonomyInput {
+  depth: Int!
+
+  """
+  Ancestor path from root to self, e.g. ["electronics", "computers",
+  "laptops"] (root-to-self order). A root category's path is a
+  single-element array containing its own name.
+  """
+  path: [String!]!
+  childCount: Int!
+  productCount: Int!
+}
+
+type UpdateCategoryStatusPayload {
+  """Null when the write failed (conflict or not-found)."""
+  category: Category
+
+  """Non-null only when the resourceVersion precondition failed."""
+  conflict: StatusConflict
+}
+
+# ============================================================================
+# Watch API (spec 040)
+# ============================================================================
+
+"""
+CategoryTaxonomy-specific watch event. Carries the same envelope as
+the generic WatchEvent but with a strongly-typed `category` field
+instead of a JSON-boxed `object`, so core-kind consumers get full
+type safety.
+"""
+type CategoryWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+
+  """
+  Full Category resource for ADDED/MODIFIED. Null for DELETED/BOOKMARK.
+  """
+  category: Category
 }

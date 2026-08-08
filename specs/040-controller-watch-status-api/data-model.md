@@ -66,10 +66,11 @@ Mirrors the (renamed — see research.md R9) `ResolvedCategoryTaxonomy` output t
 
 ### StatusConflict
 
+Shared by both `updateCategoryStatus` and the generic `updateResourceStatus` (research.md R11 — kept minimal, no `Category`-typed field, since the generic path has no statically-typed resource for an arbitrary CRD kind).
+
 | Field                    | Type       | Notes                                                                         |
 |--------------------------|------------|-------------------------------------------------------------------------------|
 | `currentResourceVersion` | `String!`  | The resource's actual current version, for the caller to re-fetch and retry   |
-| `current`                | `Category` | Current state of the resource, so the caller doesn't need a second round-trip |
 
 ### UpdateResourceStatusInput / UpdateResourceStatusPayload (generic CRD-kind counterpart)
 
