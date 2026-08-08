@@ -69,6 +69,9 @@ func (s *StubStore) UpdateCategoryTaxonomy(_ context.Context, _ *datastore.Categ
 	return nil
 }
 func (s *StubStore) DeleteCategoryTaxonomy(_ context.Context, _ string) error { return nil }
+func (s *StubStore) UpdateCategoryTaxonomyStatus(_ context.Context, _, _ string, _ datastore.CategoryTaxonomyStatusPatch) (*datastore.CategoryTaxonomy, error) {
+	return nil, nil
+}
 func (s *StubStore) CreateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
 	return nil
 }

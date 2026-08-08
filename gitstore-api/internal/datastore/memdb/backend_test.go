@@ -5,9 +5,11 @@ package memdb_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/stretchr/testify/assert"
@@ -228,6 +230,82 @@ func TestMemdb_UpdateCategoryTaxonomy_NotFound(t *testing.T) {
 	c := categoryTaxonomyFixture("b0000000-0000-0000-0000-000000000099", "ghost-cat")
 	err := ds.UpdateCategoryTaxonomy(context.Background(), c)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestMemdb_UpdateCategoryTaxonomyStatus_AppliesPatchAndAdvancesResourceVersion(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	c := categoryTaxonomyFixture("b0000000-0000-0000-0000-000000000010", "status-cat")
+	require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
+
+	generation := int64(1)
+	updated, err := ds.UpdateCategoryTaxonomyStatus(ctx, c.Namespace, c.Name, datastore.CategoryTaxonomyStatusPatch{
+		ResourceVersion:    c.ResourceVersion,
+		ObservedGeneration: &generation,
+		Resolved: &catalog.ResolvedCategoryTaxonomy{
+			Depth: 0,
+			Path:  []string{"status-cat"},
+		},
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, c.ResourceVersion, updated.ResourceVersion)
+
+	var status catalog.CategoryTaxonomyStatus
+	require.NoError(t, json.Unmarshal(updated.Status, &status))
+	assert.Equal(t, generation, status.ObservedGeneration)
+	require.NotNil(t, status.Resolved)
+	assert.Equal(t, []string{"status-cat"}, status.Resolved.Path)
+
+	got, err := ds.GetCategoryTaxonomyByName(ctx, c.Namespace, c.Name)
+	require.NoError(t, err)
+	assert.Equal(t, updated.ResourceVersion, got.ResourceVersion)
+}
+
+func TestMemdb_UpdateCategoryTaxonomyStatus_StaleResourceVersionReturnsConflict(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	c := categoryTaxonomyFixture("b0000000-0000-0000-0000-000000000011", "conflict-cat")
+	require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
+
+	_, err := ds.UpdateCategoryTaxonomyStatus(ctx, c.Namespace, c.Name, datastore.CategoryTaxonomyStatusPatch{
+		ResourceVersion: "stale-version",
+	})
+	require.ErrorIs(t, err, datastore.ErrConflict)
+}
+
+func TestMemdb_UpdateCategoryTaxonomyStatus_NotFound(t *testing.T) {
+	ds := newBackend(t)
+	_, err := ds.UpdateCategoryTaxonomyStatus(context.Background(), "test-ns", "no-such-cat", datastore.CategoryTaxonomyStatusPatch{
+		ResourceVersion: "1",
+	})
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestMemdb_UpdateCategoryTaxonomyStatus_PartialMergePreservesUnsetFields(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	c := categoryTaxonomyFixture("b0000000-0000-0000-0000-000000000012", "partial-cat")
+	require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
+
+	revision := "main@sha1:abc123"
+	updated, err := ds.UpdateCategoryTaxonomyStatus(ctx, c.Namespace, c.Name, datastore.CategoryTaxonomyStatusPatch{
+		ResourceVersion:     c.ResourceVersion,
+		LastAppliedRevision: &revision,
+	})
+	require.NoError(t, err)
+
+	// Second patch only sets ObservedGeneration -- LastAppliedRevision must survive unchanged.
+	generation := int64(2)
+	updated2, err := ds.UpdateCategoryTaxonomyStatus(ctx, c.Namespace, c.Name, datastore.CategoryTaxonomyStatusPatch{
+		ResourceVersion:    updated.ResourceVersion,
+		ObservedGeneration: &generation,
+	})
+	require.NoError(t, err)
+
+	var status catalog.CategoryTaxonomyStatus
+	require.NoError(t, json.Unmarshal(updated2.Status, &status))
+	assert.Equal(t, revision, status.LastAppliedRevision)
+	assert.Equal(t, generation, status.ObservedGeneration)
 }
 
 // ── Collection tests ──────────────────────────────────────────────────────────

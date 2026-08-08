@@ -593,6 +593,41 @@ func (s *scyllaDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *datasto
 	return nil
 }
 
+func (s *scyllaDatastore) UpdateCategoryTaxonomyStatus(ctx context.Context, namespace, name string, patch datastore.CategoryTaxonomyStatusPatch) (*datastore.CategoryTaxonomy, error) {
+	existing, err := s.GetCategoryTaxonomyByName(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	observedResourceVersion := existing.ResourceVersion
+
+	if applyErr := datastore.ApplyCategoryTaxonomyStatusPatch(existing, patch); applyErr != nil {
+		return nil, applyErr
+	}
+
+	row := toCategoryTaxonomyRow(existing)
+	existingUID := mustParseUUID(existing.UID)
+
+	// Lightweight transaction (IF resource_version=?) closes the race
+	// between the read above and this write: if another writer updated
+	// the row concurrently, the condition fails and applied is false,
+	// which we surface as ErrConflict rather than silently overwriting a
+	// newer version (spec 040 FR-009).
+	const updStatus = "UPDATE category_taxonomy SET resource_version=?, status=? " +
+		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
+	applied, err := s.session.Query(updStatus, nil).WithContext(ctx).Bind(
+		row.ResourceVersion, row.Status,
+		row.Namespace, row.CreationTimestamp, existingUID,
+		observedResourceVersion,
+	).ExecCASRelease()
+	if err != nil {
+		return nil, fmt.Errorf("scylla: update category_taxonomy status: %w", err)
+	}
+	if !applied {
+		return nil, datastore.ErrConflict
+	}
+	return existing, nil
+}
+
 func (s *scyllaDatastore) DeleteCategoryTaxonomy(ctx context.Context, uid string) error {
 	c, err := s.GetCategoryTaxonomy(ctx, uid)
 	if err != nil {
