@@ -94,16 +94,18 @@ CREATE TABLE IF NOT EXISTS namespace_mappings (
 );
 
 CREATE TABLE IF NOT EXISTS repositories (
-    bucket         text,
-    created_at     timestamp,
-    id             uuid,
-    namespace_id   uuid,
-    name           text,
-    default_branch text,
-    storage_class  text,
-    created_by     text,
-    updated_at     timestamp,
-    updated_by     text,
+    bucket              text,
+    created_at          timestamp,
+    id                  uuid,
+    namespace_id        uuid,
+    name                text,
+    default_branch      text,
+    storage_class       text,
+    created_by          text,
+    max_pack_size_bytes bigint,
+    max_file_size_bytes bigint,
+    updated_at          timestamp,
+    updated_by          text,
     PRIMARY KEY (bucket, created_at, id)
 ) WITH CLUSTERING ORDER BY (created_at DESC, id DESC);
 
