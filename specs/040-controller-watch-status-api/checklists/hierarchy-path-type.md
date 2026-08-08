@@ -1,7 +1,7 @@
 # Hierarchy Path Type Checklist: ancestorPath → path Rename
 
-**Purpose**: Validate requirement quality (completeness, clarity, consistency, traceability) for changing the CategoryTaxonomy hierarchy path field from a slash-separated `ancestorPath: String!` to a `path: [String!]!` array, across spec 039 (CategoryTaxonomy Controller Reconciliation), spec 040 (Controller Watch API and Status Subresource Contract), and the pre-existing schema TODO.
-**Created**: 2026-08-07
+**Purpose**: Validate requirement quality (completeness, clarity, consistency, traceability) for changing the CategoryTaxonomy hierarchy path field from a slash-separated `ancestorPath: String!` to a `path: [String!]!` array, across spec 039 (CategoryTaxonomy Controller Reconciliation), spec 040 (Controller Watch API and Status Subresource Contract), and the pre-existing schema TODO.  
+**Created**: 2026-08-07  
 **Feature**: [spec.md](../spec.md) (040-controller-watch-status-api); also covers `specs/039-category-taxonomy-reconciler/spec.md` on branch `039-category-taxonomy-reconciler`
 
 **Note**: This checklist tests whether the REQUIREMENTS are well-specified for this rename, not whether any code implements it correctly. No implementation has been written yet — the rename decision itself is still open.
