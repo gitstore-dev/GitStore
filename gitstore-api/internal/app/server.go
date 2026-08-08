@@ -31,6 +31,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	dsfactory "github.com/gitstore-dev/gitstore/api/internal/datastore/factory"
+	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/githttp"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
@@ -45,6 +46,10 @@ import (
 )
 
 const version = "1.0.0"
+
+// eventBusCapacity is the number of recent events retained per resource
+// kind for watch-subscription resume (spec 040, research.md R3).
+const eventBusCapacity = 1000
 
 // policyReloader can reload its policy from disk.
 type policyReloader interface {
@@ -104,7 +109,12 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		zap.String("userdir_provider", cfg.Auth.UserDir.Provider),
 	)
 
-	gqlRouter, err := NewGraphQLHandler(store, gitClient, log, registry, clock, ids)
+	// eventBus fans out CategoryTaxonomy admission events to GraphQL watch
+	// subscriptions (spec 040). Shared between the gRPC admission path
+	// (publisher) and the GraphQL resolvers (subscribers).
+	eventBus := eventbus.New(eventBusCapacity)
+
+	gqlRouter, err := NewGraphQLHandler(store, gitClient, log, registry, clock, ids, eventBus)
 	if err != nil {
 		_ = gitClient.Close()
 		_ = store.Close()
@@ -149,6 +159,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		GitClient: gitClient,
 		Logger:    log,
 		Clock:     clock,
+		EventBus:  eventBus,
 	})
 	if err != nil {
 		_ = grpcListener.Close()
@@ -173,7 +184,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 }
 
 // NewGraphQLHandler builds a GraphQL HTTP handler.
-func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log *zap.Logger, registry *auth.ProviderRegistry, clock apiruntime.Clock, ids apiruntime.IDGenerator) (*gin.Engine, error) {
+func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log *zap.Logger, registry *auth.ProviderRegistry, clock apiruntime.Clock, ids apiruntime.IDGenerator, eventBus *eventbus.Bus) (*gin.Engine, error) {
 	if registry == nil || registry.AuthN() == nil || registry.AuthZ() == nil {
 		return nil, fmt.Errorf("app: authn and authz provider registry is required")
 	}
@@ -184,6 +195,7 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 		Logger:      log,
 		Clock:       clock,
 		IDGenerator: ids,
+		EventBus:    eventBus,
 	})
 	if err != nil {
 		return nil, err

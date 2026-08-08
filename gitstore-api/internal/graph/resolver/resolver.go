@@ -10,6 +10,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"go.uber.org/zap"
 )
@@ -24,6 +25,7 @@ type Resolver struct {
 	registry       *auth.ProviderRegistry
 	storageDataDir string // data_dir used to build storagePath in responses; defaults to "/data"
 	clock          apiruntime.Clock
+	eventBus       *eventbus.Bus
 }
 
 // ResolverDeps contains dependencies for the root GraphQL resolver.
@@ -34,6 +36,9 @@ type ResolverDeps struct {
 	Logger      *zap.Logger
 	Clock       apiruntime.Clock
 	IDGenerator apiruntime.IDGenerator
+	// EventBus backs the watchCategories/watchResources subscription
+	// resolvers (spec 040). Optional — nil disables watch subscriptions.
+	EventBus *eventbus.Bus
 }
 
 // NewResolver creates a new GraphQL resolver.
@@ -63,6 +68,7 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 		registry:       deps.Registry,
 		storageDataDir: "/data",
 		clock:          clock,
+		eventBus:       deps.EventBus,
 	}, nil
 }
 
