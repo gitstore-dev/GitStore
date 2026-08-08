@@ -10,7 +10,7 @@ extend type Subscription {
   Generic list-then-watch entry point for any resource kind, including
   CRD-defined kinds not built into the core schema (FR-006).
   Core kinds SHOULD prefer their dedicated per-kind subscription
-  (e.g. watchCategoryTaxonomies) for compile-time-typed payloads;
+  (e.g. watchCategories) for compile-time-typed payloads;
   this field exists so a kind unknown to the schema at build time can
   still be watched (FR-006, SC-005).
 
@@ -99,7 +99,7 @@ extend type Subscription {
   watchResources field (FR-001 through FR-004), scoped to this kind.
   Callers obtain the initial list via the existing `categories` query.
   """
-  watchCategoryTaxonomies(
+  watchCategories(
     namespace: String
     selector: LabelSelectorInput
     resourceVersion: String

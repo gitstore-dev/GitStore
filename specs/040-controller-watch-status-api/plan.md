@@ -1,6 +1,6 @@
 # Implementation Plan: Controller Watch API and Status Subresource Contract
 
-**Branch**: `040-controller-watch-status-api` | **Date**: 2026-08-07 | **Spec**: [spec.md](./spec.md)
+**Branch**: `040-controller-watch-status-api` | **Date**: 2026-08-07 | **Spec**: [spec.md](./spec.md)  
 **Input**: Feature specification from `/specs/040-controller-watch-status-api/spec.md`
 
 ## Summary
@@ -51,18 +51,18 @@ specs/[###-feature]/
 
 ```text
 shared/schemas/
-├── category.graphqls          # extend type Subscription { watchCategoryTaxonomies(...) }; extend type Mutation { updateCategoryTaxonomyStatus(...) }
+├── category.graphqls          # extend type Subscription { watchCategories(...) }; extend type Mutation { updateCategoryStatus(...) }
 └── schema.graphqls            # extend type Subscription { watchResources(kind: String!, ...) } — generic CRD entry point
 
 gitstore-api/
 ├── internal/graph/
 │   ├── resolver/
-│   │   ├── category_resolver.go            # watchCategoryTaxonomies subscription resolver, updateCategoryTaxonomyStatus mutation resolver (new files/additions)
-│   │   └── watch_resources_resolver.go     # generic watchResources(kind) resolver (new)
+│   │   ├── category_resolver.go            # watchCategories subscription resolver, updateCategoryStatus mutation resolver (new files/additions)
+│   │   └── watch_resources_resolver.go     # generic watchResources(kind) subscription resolver + updateResourceStatus mutation resolver (new)
 │   └── generated/                          # gqlgen-regenerated output (go generate ./... in gitstore-api)
 ├── internal/eventbus/                      # new: in-process change-notification fan-out from admission (cataloggrpc) to subscription resolvers
 ├── internal/middleware/security/
-│   └── graphql.go                          # extend GraphQLFieldAuthorizer with a status-write action check (e.g. "categoryTaxonomy.status.write")
+│   └── graphql.go                          # extend GraphQLFieldAuthorizer with a status-write action check (e.g. "category.status.write")
 └── tests/contract/
     └── watch_status_test.go                # new: contract tests for Subscription delivery, resourceVersion resume, expired-cursor signal, status-update conflict/authz/spec-rejection
 

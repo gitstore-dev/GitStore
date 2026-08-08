@@ -15,12 +15,12 @@ extend type Mutation {
   no such fields (FR-010). Requires controller-level authorization
   independent of the resourceVersion outcome (FR-011).
   """
-  updateCategoryTaxonomyStatus(
-    input: UpdateCategoryTaxonomyStatusInput!
-  ): UpdateCategoryTaxonomyStatusPayload!
+  updateCategoryStatus(
+    input: UpdateCategoryStatusInput!
+  ): UpdateCategoryStatusPayload!
 }
 
-input UpdateCategoryTaxonomyStatusInput {
+input UpdateCategoryStatusInput {
   name: String!
   namespace: String!
 
@@ -59,7 +59,7 @@ input ResolvedCategoryTaxonomyInput {
   productCount: Int!
 }
 
-type UpdateCategoryTaxonomyStatusPayload {
+type UpdateCategoryStatusPayload {
   """Null when the write failed (conflict or not-found)."""
   category: Category
 
@@ -74,6 +74,56 @@ type StatusConflict {
   """Current state of the resource, avoiding a second round-trip."""
   current: Category!
 }
+
+# ---- Generic CRD-kind status write (FR-006, SC-005) ----
+# shared/schemas/schema.graphqls (schema root) — the CRD-kind counterpart
+# to updateCategoryStatus above, mirroring the per-kind/generic
+# split already used for watch (watchCategories vs. watchResources,
+# see contracts/watch-api.graphql).
+
+extend type Mutation {
+  """
+  Generic status-subresource write for CRD-defined kinds that have no
+  compile-time-known `resolved` shape (research.md R4/R7). Core kinds
+  SHOULD use their dedicated per-kind mutation (e.g.
+  updateCategoryStatus) instead — this field exists so a kind
+  unknown to the schema at build time can still write status (FR-006,
+  SC-005). Semantics (partial-merge, resourceVersion precondition,
+  spec-write rejection by construction, controller authorization) are
+  identical to the per-kind mutations.
+  """
+  updateResourceStatus(
+    input: UpdateResourceStatusInput!
+  ): UpdateResourceStatusPayload!
+}
+
+input UpdateResourceStatusInput {
+  kind: String!
+  name: String!
+  namespace: String!
+  resourceVersion: String!
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [ConditionInput!]
+
+  """
+  Kind-specific resolved payload, JSON-boxed since no static input type
+  exists for an arbitrary CRD kind (mirrors WatchEvent.object).
+  """
+  resolved: JSON
+}
+
+type UpdateResourceStatusPayload {
+  """JSON-boxed current resource state; null when the write failed."""
+  object: JSON
+
+  conflict: StatusConflict
+}
+
+# Authorization action string for the generic path: "<kind>.status.write"
+# with kind lowerCamelCased (e.g. a CRD kind "BackfillJob" authorizes
+# against "backfillJob.status.write"), evaluated the same way as the
+# per-kind action in research.md R5.
 
 # ---- Error signaling ----
 #
@@ -90,7 +140,7 @@ type StatusConflict {
 # with a stale resourceVersion sees FORBIDDEN, not a conflict payload
 # (User Story 2 AC5: rejected "independent of whether resourceVersion matches").
 #
-# Authorization action string: "categoryTaxonomy.status.write"
+# Authorization action string: "category.status.write"
 # (research.md R5), evaluated via the existing
 # auth.AuthZProvider.Authorize(ctx, principal, action, resourceContext)
 # interface — no new authorization primitive introduced.

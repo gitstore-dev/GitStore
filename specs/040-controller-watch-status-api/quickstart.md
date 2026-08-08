@@ -20,7 +20,7 @@ func (lw *CategoryTaxonomyListWatcher) List(ctx context.Context) (ListResponse[C
 }
 
 func (lw *CategoryTaxonomyListWatcher) Watch(ctx context.Context, resourceVersion string) (Watcher[CategoryTaxonomy], error) {
-    // Open a subscription: subscription { watchCategoryTaxonomies(resourceVersion: $rv) { ... } }
+    // Open a subscription: subscription { watchCategories(resourceVersion: $rv) { ... } }
     // On a WATCH_EXPIRED extension error, return an error satisfying
     // errors.Is(err, listwatch.ErrWatchExpired).
 }
@@ -42,7 +42,7 @@ type graphqlStatusClient struct {
 }
 
 func (c *graphqlStatusClient) Apply(ctx context.Context, key types.WorkItemKey, patch *StatusPatch) error {
-    // mutation { updateCategoryTaxonomyStatus(input: {
+    // mutation { updateCategoryStatus(input: {
     //   name: $key.Name, namespace: $key.Namespace,
     //   resourceVersion: $patch.ResourceVersion,
     //   observedGeneration: $patch.ObservedGeneration,
@@ -114,7 +114,7 @@ Add a `controller` role to `policy.yaml` (rbac-local) granting the new status-wr
 roles:
   controller:
     allow:
-      - "categoryTaxonomy.status.write"
+      - "category.status.write"
 role_bindings:
   controller: [controller-manager]
 ```
