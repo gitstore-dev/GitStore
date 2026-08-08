@@ -2,6 +2,8 @@
 
 This extends the spec 026 quickstart (`specs/026-reconcile-handler/quickstart.md`) with the two previously-missing pieces: a concrete `ListWatcher[T]` and a concrete `StatusClient`, both backed by the `gitstore-api` GraphQL server introduced in this spec.
 
+**Implementation status**: The `gitstore-api`-side GraphQL contract (steps 4's mutation shape, step 5's authorization model) is fully implemented and tested — see `internal/graph/resolver/category.resolvers.go`, `schema.resolvers.go`, `status_patch.go`, `watch.go`. Steps 1-3 (the `gitstore-controller-manager`-side `ListWatcher`/`StatusClient` adapters) remain pseudocode/forward guidance — they are deferred pending a GraphQL WebSocket client dependency, per `tasks.md`'s Implementation Status Notes. `StatusPatch.Resolved` (step 4) is implemented and tested today.
+
 ## 1. Wire a concrete ListWatcher[T] for CategoryTaxonomy
 
 ```go
