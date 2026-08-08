@@ -112,6 +112,7 @@ func (b *Bus) Publish(ev Event) {
 			// subscriber's next resume will detect the gap via
 			// ErrWatchExpired once its cursor falls outside the
 			// retained window.
+			EventsDroppedTotal.WithLabelValues(ev.Kind).Inc()
 		}
 	}
 }
@@ -142,10 +143,12 @@ func (b *Bus) Subscribe(kind string, resourceVersion string) (<-chan Event, func
 			}
 		}
 		if idx == -1 {
+			WatchExpiredTotal.WithLabelValues(kind).Inc()
 			return nil, nil, ErrWatchExpired
 		}
 		replay = retained[idx+1:]
 	}
+	SubscriptionsOpenedTotal.WithLabelValues(kind, boolLabel(resourceVersion != "")).Inc()
 
 	s := &subscriber{ch: make(chan Event, 64)}
 	kb.subscribers[s] = struct{}{}
@@ -162,6 +165,13 @@ func (b *Bus) Subscribe(kind string, resourceVersion string) (<-chan Event, func
 	}
 
 	return s.ch, unsubscribe, nil
+}
+
+func boolLabel(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // retainedLocked returns the currently retained events for a kind, oldest
