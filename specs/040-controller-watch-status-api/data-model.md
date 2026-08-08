@@ -55,7 +55,7 @@ Mirrors the existing `CategoryCondition` output type and the controller-manager'
 
 ### ResolvedCategoryTaxonomyInput
 
-Mirrors the existing `ResolvedCategoryTaxonomy` output type: `depth: Int!`, `ancestorPath: String!`, `childCount: Int!`, `productCount: Int!`.
+Mirrors the (renamed — see research.md R9) `ResolvedCategoryTaxonomy` output type: `depth: Int!`, `path: [String!]!`, `childCount: Int!`, `productCount: Int!`. `path` is root-to-self ordered (e.g. `["electronics", "computers", "laptops"]`); a root category's `path` is a single-element array containing its own name. This is distinct from `Category.path`, a read-time-derived field on a different type (`Category`, not `ResolvedCategoryTaxonomy`) computed from the same underlying materialized data.
 
 ### UpdateCategoryStatusPayload
 

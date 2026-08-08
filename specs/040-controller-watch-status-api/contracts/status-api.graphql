@@ -54,7 +54,20 @@ input ConditionInput {
 
 input ResolvedCategoryTaxonomyInput {
   depth: Int!
-  ancestorPath: String!
+
+  """
+  Ancestor path from root to self, e.g. ["electronics", "computers",
+  "laptops"] for the "laptops" category (root-to-self order). A root
+  category's path is a single-element array containing its own name.
+  Replaces the legacy slash-separated ResolvedCategoryTaxonomy.ancestorPath
+  string field (resolves the TODO on that field in
+  shared/schemas/category.graphqls) — this input mirrors the renamed
+  output field so both sides of the wire agree on shape (research.md R9).
+  Distinct from Category.path, which is a read-time-derived field on a
+  different GraphQL type (Category, not ResolvedCategoryTaxonomy) computed
+  from the same underlying data.
+  """
+  path: [String!]!
   childCount: Int!
   productCount: Int!
 }
@@ -171,3 +184,5 @@ type UpdateResourceStatusPayload {
 #   - other errors        <- any other GraphQL error (network, FORBIDDEN, NOT_FOUND)
 # patch.Resolved (if non-nil) is unmarshaled into the `resolved:
 # ResolvedCategoryTaxonomyInput` argument above — see quickstart.md.
+# Note: patch.Resolved's `path` field is `[]string`, not the legacy
+# slash-separated string (research.md R9).

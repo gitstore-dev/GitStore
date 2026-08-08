@@ -61,10 +61,10 @@ func (c *graphqlStatusClient) Apply(ctx context.Context, key types.WorkItemKey, 
 
 ```go
 type resolvedCategoryTaxonomy struct {
-    Depth        int8   `json:"depth"`
-    AncestorPath string `json:"ancestorPath"`
-    ChildCount   int64  `json:"childCount"`
-    ProductCount int64  `json:"productCount"`
+    Depth        int8     `json:"depth"`
+    Path         []string `json:"path"` // root-to-self, e.g. ["electronics", "computers", "laptops"]
+    ChildCount   int64    `json:"childCount"`
+    ProductCount int64    `json:"productCount"`
 }
 
 func (r *CategoryTaxonomyReconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
@@ -73,7 +73,7 @@ func (r *CategoryTaxonomyReconciler) Reconcile(ctx context.Context, key types.Wo
         return types.ResultTerminal(errors.New("resource deleted"))
     }
 
-    resolved, conditions := r.computeHierarchy(obj) // depth, ancestorPath, childCount, productCount + ParentResolved/Acyclic/Ready
+    resolved, conditions := r.computeHierarchy(obj) // depth, path, childCount, productCount + ParentResolved/Acyclic/Ready
     resolvedJSON, err := json.Marshal(resolved)
     if err != nil {
         return types.ResultTerminal(err)
