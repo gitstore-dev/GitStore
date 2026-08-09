@@ -1595,9 +1595,9 @@
     "semantic_hash": "e28050c013d78b425cd002bf2ee659c2"
   },
   ".github/workflows/ci-integration.yml": {
-    "mtime": 1784317776.038271,
-    "ast_hash": "eff092b1764e9583add1e0efc1341fa9",
-    "semantic_hash": "eff092b1764e9583add1e0efc1341fa9"
+    "mtime": 1786295032.6792943,
+    "ast_hash": "afc6e2a206ae75c71cbfb0e273dd98c5",
+    "semantic_hash": ""
   },
   ".github/workflows/ci-proto.yml": {
     "mtime": 1782471612.4760787,
@@ -1755,9 +1755,9 @@
     "semantic_hash": "30517621f6e64bd25df81fdb42121214"
   },
   "compose.yml": {
-    "mtime": 1783717212.724506,
-    "ast_hash": "49fa303bc60aa13b82cb4201b177672d",
-    "semantic_hash": "49fa303bc60aa13b82cb4201b177672d"
+    "mtime": 1786294975.9889991,
+    "ast_hash": "d1fee062d7a6abdfbef03f2c408161d8",
+    "semantic_hash": ""
   },
   "docs/ADRs/0001-secretref-reference-contract.md": {
     "mtime": 1782471612.477041,
@@ -3515,8 +3515,8 @@
     "semantic_hash": ""
   },
   "specs/040-controller-watch-status-api/spec.md": {
-    "mtime": 1786238585.2105305,
-    "ast_hash": "acda628388dd196fa4cf96649e3e1595",
+    "mtime": 1786256688.926,
+    "ast_hash": "c1e7e2aeb10b66cc64ee978155499619",
     "semantic_hash": ""
   },
   "specs/040-controller-watch-status-api/checklists/hierarchy-path-type.md": {
@@ -3640,8 +3640,8 @@
     "semantic_hash": ""
   },
   "specs/039-category-taxonomy-reconciler/spec.md": {
-    "mtime": 1786233342.6465929,
-    "ast_hash": "6ecc55b480fae2296deae6718c436457",
+    "mtime": 1786256688.933,
+    "ast_hash": "ac023bad73aea14a0497cc01500f8981",
     "semantic_hash": ""
   },
   "specs/039-category-taxonomy-reconciler/tasks.md": {

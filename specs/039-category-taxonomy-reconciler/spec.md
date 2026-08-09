@@ -2,7 +2,7 @@
 
 **Feature Branch**: `039-category-taxonomy-reconciler`  
 **Created**: 2026-08-07  
-**Status**: Draft  
+**Status**: Closed  
 **Input**: User description: "CategoryTaxonomy Controller Reconciliation: implement the controller reconciliation loop for CategoryTaxonomy resources per GitHub issue #244. Compute and write CategoryTaxonomyStatus.resolved (hierarchy depth, materialized ancestorPath e.g. electronics/computers/laptops, child count, product count). Set ParentResolved, Acyclic, and Ready status conditions after each reconcile. Surface File reference existence as a status condition for optional:false media entries (FR-009 controller portion, related #165) without rejecting the push. Include integration tests covering a depth-3 hierarchy, cycle detection via status, and the file-ref condition, plus runbook/observability notes for reconciliation lag. Out of scope: CategoryTaxonomy push-time validation (covered by spec 021/#204-206) and deletion/GC semantics (covered by #243). Uses the reconcile handler interface from #181 (spec 026) and the controller manager runtime from #180 (spec 025). Resolves the AncestorPath staleness-on-parent-move/delete edge case noted from prior work."
 
 ## User Scenarios & Testing *(mandatory)*
