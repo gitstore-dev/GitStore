@@ -30,7 +30,16 @@ type CategoryTaxonomy struct {
 	// ParentRefName is empty when this category has no parent (root candidate).
 	// Mirrors spec.parentRef.name.
 	ParentRefName string
-	Status        status.ResourceStatus
+	// Media mirrors spec.media, used by the required-file-reference
+	// condition (US3, FR-010/FR-011).
+	Media  []MediaRef
+	Status status.ResourceStatus
+}
+
+// MediaRef mirrors one spec.media[].fileRef entry.
+type MediaRef struct {
+	Name     string
+	Optional bool
 }
 
 // ResolvedCategoryTaxonomy is the JSON payload the reconciler marshals into
@@ -124,11 +133,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		return types.ResultTransient(fmt.Errorf("categorytaxonomy: marshal resolved status: %w", err))
 	}
 
+	parentResolvedCond := computeParentResolved(r.cache, current)
+	acyclicCond := computeAcyclic(inCycle[current.Name])
+	fileRefCond := computeFileRefCondition(current)
+	readyCond := computeReady(parentResolvedCond, acyclicCond, fileRefCond)
+
+	conditions := []*status.Condition{&parentResolvedCond, &acyclicCond}
+	if fileRefCond != nil {
+		conditions = append(conditions, fileRefCond)
+	}
+	conditions = append(conditions, &readyCond)
+	preserveLastTransitionTimes(conditions, current.Status.Conditions)
+
 	gen := current.Generation
 	patch := &status.StatusPatch{
 		ResourceVersion:    current.ResourceVersion,
 		ObservedGeneration: &gen,
 		Resolved:           resolvedJSON,
+		Conditions:         conditions,
 	}
 
 	if patch.IsNoOp(current.Status) {
@@ -158,6 +180,25 @@ func previousResolved(raw json.RawMessage) *ResolvedCategoryTaxonomy {
 		return nil
 	}
 	return &r
+}
+
+// preserveLastTransitionTimes copies LastTransitionTime from a matching
+// (same Type and Status) prior condition onto each freshly computed one, so
+// a condition that hasn't actually transitioned doesn't get a new timestamp
+// on every reconcile — which would otherwise defeat IsNoOp's no-op
+// suppression (FR-013) even when nothing observable changed.
+func preserveLastTransitionTimes(fresh []*status.Condition, prior []*status.Condition) {
+	priorByType := make(map[string]*status.Condition, len(prior))
+	for _, p := range prior {
+		if p != nil {
+			priorByType[p.Type] = p
+		}
+	}
+	for _, f := range fresh {
+		if p, ok := priorByType[f.Type]; ok && p.Status == f.Status {
+			f.LastTransitionTime = p.LastTransitionTime
+		}
+	}
 }
 
 func hierarchyChanged(previous *ResolvedCategoryTaxonomy, current ResolvedCategoryTaxonomy) bool {

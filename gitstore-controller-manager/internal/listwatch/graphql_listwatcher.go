@@ -8,10 +8,26 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/categorytaxonomy"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 )
+
+const categoryFields = `
+  metadata { uid name namespace resourceVersion generation }
+  spec {
+    parentRef { name }
+    media { fileRef { name optional } }
+  }
+  status {
+    observedGeneration
+    lastAppliedRevision
+    conditions { type status observedGeneration lastTransitionTime reason message }
+    resolved { depth path childCount productCount }
+  }
+`
 
 const categoriesListQuery = `
 query($after: String) {
@@ -19,8 +35,7 @@ query($after: String) {
     edges {
       cursor
       node {
-        metadata { uid name namespace resourceVersion generation }
-        spec { parentRef { name } }
+` + categoryFields + `
       }
     }
     pageInfo { hasNextPage endCursor }
@@ -35,8 +50,7 @@ subscription($resourceVersion: String) {
     name
     resourceVersion
     category {
-      metadata { uid name namespace resourceVersion generation }
-      spec { parentRef { name } }
+` + categoryFields + `
     }
   }
 }`
@@ -49,15 +63,47 @@ type categoryMetadataJSON struct {
 	Generation      int64  `json:"generation"`
 }
 
+type mediaJSON struct {
+	FileRef struct {
+		Name     string `json:"name"`
+		Optional bool   `json:"optional"`
+	} `json:"fileRef"`
+}
+
 type categorySpecJSON struct {
 	ParentRef *struct {
 		Name string `json:"name"`
 	} `json:"parentRef"`
+	Media []mediaJSON `json:"media"`
+}
+
+type conditionJSON struct {
+	Type               string    `json:"type"`
+	Status             string    `json:"status"`
+	ObservedGeneration int64     `json:"observedGeneration"`
+	LastTransitionTime time.Time `json:"lastTransitionTime"`
+	Reason             string    `json:"reason"`
+	Message            string    `json:"message"`
+}
+
+type resolvedJSON struct {
+	Depth        int8     `json:"depth"`
+	Path         []string `json:"path"`
+	ChildCount   int64    `json:"childCount"`
+	ProductCount int64    `json:"productCount"`
+}
+
+type categoryStatusJSON struct {
+	ObservedGeneration  int64           `json:"observedGeneration"`
+	LastAppliedRevision string          `json:"lastAppliedRevision"`
+	Conditions          []conditionJSON `json:"conditions"`
+	Resolved            *resolvedJSON   `json:"resolved"`
 }
 
 type categoryNodeJSON struct {
 	Metadata categoryMetadataJSON `json:"metadata"`
 	Spec     categorySpecJSON     `json:"spec"`
+	Status   *categoryStatusJSON  `json:"status"`
 }
 
 func (n categoryNodeJSON) toCategoryTaxonomy() categorytaxonomy.CategoryTaxonomy {
@@ -70,6 +116,37 @@ func (n categoryNodeJSON) toCategoryTaxonomy() categorytaxonomy.CategoryTaxonomy
 	}
 	if n.Spec.ParentRef != nil {
 		c.ParentRefName = n.Spec.ParentRef.Name
+	}
+	for _, m := range n.Spec.Media {
+		c.Media = append(c.Media, categorytaxonomy.MediaRef{Name: m.FileRef.Name, Optional: m.FileRef.Optional})
+	}
+	if n.Status != nil {
+		c.Status = status.ResourceStatus{
+			ResourceVersion:     n.Metadata.ResourceVersion,
+			ObservedGeneration:  n.Status.ObservedGeneration,
+			LastAppliedRevision: n.Status.LastAppliedRevision,
+		}
+		for _, cond := range n.Status.Conditions {
+			c.Status.Conditions = append(c.Status.Conditions, &status.Condition{
+				Type:               cond.Type,
+				Status:             cond.Status,
+				ObservedGeneration: cond.ObservedGeneration,
+				LastTransitionTime: cond.LastTransitionTime,
+				Reason:             cond.Reason,
+				Message:            cond.Message,
+			})
+		}
+		if n.Status.Resolved != nil {
+			resolvedJSON, err := json.Marshal(categorytaxonomy.ResolvedCategoryTaxonomy{
+				Depth:        n.Status.Resolved.Depth,
+				Path:         n.Status.Resolved.Path,
+				ChildCount:   n.Status.Resolved.ChildCount,
+				ProductCount: n.Status.Resolved.ProductCount,
+			})
+			if err == nil {
+				c.Status.Resolved = resolvedJSON
+			}
+		}
 	}
 	return c
 }
@@ -173,9 +250,11 @@ type categoryWatcher struct {
 	err    error
 }
 
-func (w *categoryWatcher) Events() <-chan WatchEvent[categorytaxonomy.CategoryTaxonomy] { return w.events }
-func (w *categoryWatcher) Err() error                                                   { return w.err }
-func (w *categoryWatcher) Stop()                                                        { w.sub.Stop() }
+func (w *categoryWatcher) Events() <-chan WatchEvent[categorytaxonomy.CategoryTaxonomy] {
+	return w.events
+}
+func (w *categoryWatcher) Err() error { return w.err }
+func (w *categoryWatcher) Stop()      { w.sub.Stop() }
 
 func (w *categoryWatcher) run() {
 	defer close(w.events)

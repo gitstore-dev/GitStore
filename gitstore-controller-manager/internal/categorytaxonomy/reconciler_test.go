@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
@@ -97,9 +98,15 @@ func TestReconcile_NoOpWhenPatchMatchesCurrentStatus(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	root.ResourceVersion = "1"
+	now := time.Now()
 	root.Status = status.ResourceStatus{
 		ResourceVersion: "1",
 		Resolved:        resolved,
+		Conditions: []*status.Condition{
+			{Type: "ParentResolved", Status: "True", LastTransitionTime: now},
+			{Type: "Acyclic", Status: "True", LastTransitionTime: now},
+			{Type: "Ready", Status: "True", LastTransitionTime: now},
+		},
 	}
 	c := seedCache(t, root)
 

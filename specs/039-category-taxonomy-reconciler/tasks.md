@@ -86,17 +86,17 @@ Single existing Go module: `gitstore-controller-manager/`, with its established 
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T022 [P] [US2] Unit test: `ParentResolved=True` when `parentRef` is absent or resolves; `False` with a reason/message when it names a nonexistent category, in `gitstore-controller-manager/internal/categorytaxonomy/conditions_test.go` — write first, confirm failing
+- [x] T022 [P] [US2] Unit test: `ParentResolved=True` when `parentRef` is absent or resolves; `False` with a reason/message when it names a nonexistent category, in `gitstore-controller-manager/internal/categorytaxonomy/conditions_test.go` — written first, confirmed failing, then passing
 - [x] T023 [P] [US2] Unit test: cycle detection (research.md R3's reimplemented DFS) correctly identifies a self-referencing category and a two-node A→B→A cycle as cycle participants, and correctly identifies an acyclic chain as not, in `gitstore-controller-manager/internal/categorytaxonomy/hierarchy_test.go` — implemented alongside T018 since `detectCycles` lives in the same file `Reconcile` needed it from immediately; done ahead of schedule
-- [ ] T024 [P] [US2] Unit test: `Acyclic=False` for every cycle participant; `path`/`depth` are left at their prior values (not recomputed, not reset) for cycle participants (FR-008); breaking the cycle on a later reconcile transitions `Acyclic` back to `True` and resumes normal recomputation, in `gitstore-controller-manager/internal/categorytaxonomy/conditions_test.go`
-- [ ] T025 [P] [US2] Unit test: `Ready=True` only when `ParentResolved`, `Acyclic`, and the required-file-reference condition (US3, defaults to satisfied when no `optional: false` media exists) are all `True`; `Ready=False` if any is not, in `gitstore-controller-manager/internal/categorytaxonomy/conditions_test.go`
+- [x] T024 [P] [US2] Unit test: `Acyclic=False` for every cycle participant; `path`/`depth` are left at their prior values (not recomputed, not reset) for cycle participants (FR-008); breaking the cycle on a later reconcile transitions `Acyclic` back to `True` and resumes normal recomputation, in `gitstore-controller-manager/internal/categorytaxonomy/conditions_test.go`
+- [x] T025 [P] [US2] Unit test: `Ready=True` only when `ParentResolved`, `Acyclic`, and the required-file-reference condition (US3, defaults to satisfied when no `optional: false` media exists) are all `True`; `Ready=False` if any is not, in `gitstore-controller-manager/internal/categorytaxonomy/conditions_test.go`
 - [ ] T026 [P] [US2] Integration test (FR-015): construct a two-node cycle across two pushes against a running `gitstore-api`; assert `Acyclic=False` observable in status for both participants; break the cycle with a follow-up push and assert `Acyclic` transitions to `True`, in `gitstore-controller-manager/tests/integration/categorytaxonomy_integration_test.go`
 
 ### Implementation for User Story 2
 
-- [ ] T027 [US2] Implement `computeParentResolved`/`computeAcyclic`/`computeReady` condition builders in `gitstore-controller-manager/internal/categorytaxonomy/conditions.go` (new file) (depends on T022-T025)
+- [x] T027 [US2] Implemented `computeParentResolved`/`computeAcyclic`/`computeReady` condition builders in `gitstore-controller-manager/internal/categorytaxonomy/conditions.go` (new file)
 - [x] T028 [US2] Wired the cycle-detection result from T023 into `Reconcile` (reconciler.go) so cycle participants skip path/depth recomputation per FR-008, keeping their last-observed values while `ChildCount` still updates — done ahead of schedule as part of T020, since `Reconcile` cannot correctly implement FR-008 without checking cycle membership up front (depends on T018, T023, T027)
-- [ ] T029 [US2] Wire `computeParentResolved`/`computeAcyclic`/`computeReady` into `CategoryTaxonomyReconciler.Reconcile`'s condition-building step, merging with the file-ref condition placeholder from US3 (depends on T020, T027)
+- [x] T029 [US2] Wired `computeParentResolved`/`computeAcyclic`/`computeReady` into `Reconcile`'s condition-building step, merged with the file-ref condition placeholder (`computeFileRefCondition`, done alongside since it's a `nil`-able return threaded through the same slice). Also fixed a real bug found while wiring this in: `LastTransitionTime` was being set to `time.Now()` on every reconcile regardless of whether the condition actually transitioned, which would have defeated `IsNoOp`'s no-op suppression (FR-013) forever — added `preserveLastTransitionTimes` to copy the prior timestamp forward when `Type`+`Status` are unchanged.
 
 **Checkpoint**: User Stories 1 AND 2 both work independently and together — hierarchy fields are correct and frozen-on-cycle, conditions are trustworthy.
 
@@ -110,14 +110,14 @@ Single existing Go module: `gitstore-controller-manager/`, with its established 
 
 ### Tests for User Story 3 ⚠️
 
-- [ ] T030 [P] [US3] Unit test: an `optional: false` media entry produces a required-file-reference condition with status `Unknown` (research.md R5 — `File`/#79 is not yet queryable, so the check cannot assert `True` or `False`); an `optional: true` entry produces no condition at all, in `gitstore-controller-manager/internal/categorytaxonomy/fileref_test.go` — write first, confirm failing
-- [ ] T031 [P] [US3] Unit test: a category with zero media entries produces no required-file-reference condition, and `Ready` is unaffected by its absence, in `gitstore-controller-manager/internal/categorytaxonomy/fileref_test.go`
+- [x] T030 [P] [US3] Unit test: an `optional: false` media entry produces a required-file-reference condition with status `Unknown` (research.md R5 — `File`/#79 is not yet queryable, so the check cannot assert `True` or `False`); an `optional: true` entry produces no condition at all, in `gitstore-controller-manager/internal/categorytaxonomy/fileref_test.go` — written first, confirmed failing, then passing
+- [x] T031 [P] [US3] Unit test: a category with zero media entries produces no required-file-reference condition, and `Ready` is unaffected by its absence, in `gitstore-controller-manager/internal/categorytaxonomy/fileref_test.go`
 - [ ] T032 [P] [US3] Integration test (FR-015): push a category with `optional: false` media naming a missing file against a running `gitstore-api`; assert the push is accepted and the resulting status carries the `Unknown` condition; repeat with `optional: true` and assert no failing condition, in `gitstore-controller-manager/tests/integration/categorytaxonomy_integration_test.go`
 
 ### Implementation for User Story 3
 
-- [ ] T033 [US3] Implement `computeFileRefCondition` (iterates `spec.media`, emits an `Unknown`-status condition per `optional: false` entry, no condition for `optional: true`) in `gitstore-controller-manager/internal/categorytaxonomy/fileref.go` (depends on T030, T031)
-- [ ] T034 [US3] Wire `computeFileRefCondition` into `CategoryTaxonomyReconciler.Reconcile`'s condition-building step (replacing the US2 placeholder) and into `computeReady`'s inputs (depends on T029, T033)
+- [x] T033 [US3] Implemented `computeFileRefCondition` (iterates `spec.media`, emits an `Unknown`-status condition per `optional: false` entry, no condition for `optional: true`) in `gitstore-controller-manager/internal/categorytaxonomy/fileref.go`. Also added the `CategoryTaxonomy.Media []MediaRef` cache field (was missing from the T011 data model) and populated it in `CategoryTaxonomyListWatcher`'s GraphQL query/mapping, since this condition needs it from real list/watch data, not just tests.
+- [x] T034 [US3] Wired `computeFileRefCondition` into `Reconcile`'s condition-building step and into `computeReady`'s inputs — done as part of T029 since both conditions are threaded through the same slice.
 
 **Checkpoint**: All three user stories are independently functional and integrated. The reconciler is feature-complete per the spec.
 
