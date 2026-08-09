@@ -8,15 +8,15 @@ No new datastore tables, columns, or GraphQL schema changes. This spec adds Go t
 
 The type held in the reconciler's `cache.Cache[CategoryTaxonomy]`, populated by the `Runner[CategoryTaxonomy]`'s list-then-watch loop against `watchCategories`/`categories`.
 
-| Field | Type | Notes |
-|---|---|---|
-| `UID` | `string` | |
-| `Namespace` | `string` | |
-| `Name` | `string` | |
-| `Generation` | `int64` | |
-| `ResourceVersion` | `string` | |
-| `ParentRefName` | `string` | Empty = no parent (root candidate). Mirrors `spec.parentRef.name`. |
-| `Status` | `status.ResourceStatus` | Existing type from spec 026/040 — carries `ObservedGeneration`, `LastAppliedRevision`, `Conditions`, `Resolved` (JSON bytes) as last observed, for `IsNoOp` comparison |
+| Field             | Type                    | Notes                                                                                                                                                                  |
+|-------------------|-------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `UID`             | `string`                |                                                                                                                                                                        |
+| `Namespace`       | `string`                |                                                                                                                                                                        |
+| `Name`            | `string`                |                                                                                                                                                                        |
+| `Generation`      | `int64`                 |                                                                                                                                                                        |
+| `ResourceVersion` | `string`                |                                                                                                                                                                        |
+| `ParentRefName`   | `string`                | Empty = no parent (root candidate). Mirrors `spec.parentRef.name`.                                                                                                     |
+| `Status`          | `status.ResourceStatus` | Existing type from spec 026/040 — carries `ObservedGeneration`, `LastAppliedRevision`, `Conditions`, `Resolved` (JSON bytes) as last observed, for `IsNoOp` comparison |
 
 ### ResolvedCategoryTaxonomy (JSON payload the reconciler marshals into `StatusPatch.Resolved`)
 
