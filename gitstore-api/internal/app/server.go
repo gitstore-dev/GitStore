@@ -51,6 +51,15 @@ const version = "1.0.0"
 // kind for watch-subscription resume (spec 040, research.md R3).
 const eventBusCapacity = 1000
 
+// defaultRateLimitPerSecond/defaultRateLimitBurst mirror config.Load's
+// api.rate_limit_per_second/api.rate_limit_burst defaults, used as a
+// fallback when NewGraphQLHandler is called directly with a zero value
+// (e.g. by tests that don't go through config.Load).
+const (
+	defaultRateLimitPerSecond = 50
+	defaultRateLimitBurst     = 100
+)
+
 // policyReloader can reload its policy from disk.
 type policyReloader interface {
 	Reload() error
@@ -114,7 +123,17 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	// (publisher) and the GraphQL resolvers (subscribers).
 	eventBus := eventbus.New(eventBusCapacity)
 
-	gqlRouter, err := NewGraphQLHandler(store, gitClient, log, registry, clock, ids, eventBus)
+	gqlRouter, err := NewGraphQLHandler(GraphQLHandlerDeps{
+		Store:              store,
+		GitWriter:          gitClient,
+		Logger:             log,
+		Registry:           registry,
+		Clock:              clock,
+		IDs:                ids,
+		EventBus:           eventBus,
+		RateLimitPerSecond: cfg.Api.RateLimitPerSecond,
+		RateLimitBurst:     cfg.Api.RateLimitBurst,
+	})
 	if err != nil {
 		_ = gitClient.Close()
 		_ = store.Close()
@@ -183,19 +202,39 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	}, nil
 }
 
+// GraphQLHandlerDeps are the dependencies for NewGraphQLHandler.
+type GraphQLHandlerDeps struct {
+	Store     datastore.Datastore
+	GitWriter resolver.GitWriter
+	Logger    *zap.Logger
+	Registry  *auth.ProviderRegistry
+	Clock     apiruntime.Clock
+	IDs       apiruntime.IDGenerator
+	// EventBus backs the watchCategories/watchResources subscription
+	// resolvers (spec 040). Optional — nil disables watch subscriptions.
+	EventBus *eventbus.Bus
+	// RateLimitPerSecond/RateLimitBurst configure the per-client-IP token
+	// bucket guarding /graphql. A zero RateLimitPerSecond falls back to
+	// defaultRateLimitPerSecond/defaultRateLimitBurst (the same defaults
+	// config.Load applies), so callers that leave this zero-valued (e.g.
+	// tests) keep working unchanged.
+	RateLimitPerSecond float64
+	RateLimitBurst     int
+}
+
 // NewGraphQLHandler builds a GraphQL HTTP handler.
-func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log *zap.Logger, registry *auth.ProviderRegistry, clock apiruntime.Clock, ids apiruntime.IDGenerator, eventBus *eventbus.Bus) (*gin.Engine, error) {
-	if registry == nil || registry.AuthN() == nil || registry.AuthZ() == nil {
+func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
+	if deps.Registry == nil || deps.Registry.AuthN() == nil || deps.Registry.AuthZ() == nil {
 		return nil, fmt.Errorf("app: authn and authz provider registry is required")
 	}
 	rootResolver, err := resolver.NewResolver(resolver.ResolverDeps{
-		Store:       store,
-		GitWriter:   writer,
-		Registry:    registry,
-		Logger:      log,
-		Clock:       clock,
-		IDGenerator: ids,
-		EventBus:    eventBus,
+		Store:       deps.Store,
+		GitWriter:   deps.GitWriter,
+		Registry:    deps.Registry,
+		Logger:      deps.Logger,
+		Clock:       deps.Clock,
+		IDGenerator: deps.IDs,
+		EventBus:    deps.EventBus,
 	})
 	if err != nil {
 		return nil, err
@@ -218,8 +257,8 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 		Cache: lru.New[string](100),
 	})
 
-	authenticateMiddleware := security.NewAuthenticate(registry, log)
-	authorizeMiddleware := security.NewAuthorizeWithStore(registry, store, log)
+	authenticateMiddleware := security.NewAuthenticate(deps.Registry, deps.Logger)
+	authorizeMiddleware := security.NewAuthorizeWithStore(deps.Registry, deps.Store, deps.Logger)
 	gqlServer.AroundOperations(authenticateMiddleware.GraphQLAuthenticator)
 	gqlServer.AroundOperations(authorizeMiddleware.GraphQLAuthorizer)
 	gqlServer.AroundFields(authorizeMiddleware.GraphQLFieldAuthorizer)
@@ -230,8 +269,16 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 		gqlServer.ServeHTTP(c.Writer, c.Request)
 	})
 
-	rateLimitMiddleware := security.NewRateLimit(10, 20)
-	requestIdMiddleware := middleware.NewRequestId(ids)
+	rateLimitPerSecond := deps.RateLimitPerSecond
+	if rateLimitPerSecond <= 0 {
+		rateLimitPerSecond = defaultRateLimitPerSecond
+	}
+	rateLimitBurst := deps.RateLimitBurst
+	if rateLimitBurst <= 0 {
+		rateLimitBurst = defaultRateLimitBurst
+	}
+	rateLimitMiddleware := security.NewRateLimit(rateLimitPerSecond, rateLimitBurst)
+	requestIdMiddleware := middleware.NewRequestId(deps.IDs)
 
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -240,6 +287,11 @@ func NewGraphQLHandler(store datastore.Datastore, writer resolver.GitWriter, log
 	r.Use(rateLimitMiddleware.RateLimiter)
 	r.GET("/playground", playgroundHandler)
 	r.POST("/graphql", security.SecureHeaders, gqlHandler)
+	// GET /graphql serves the graphql-transport-ws WebSocket upgrade for
+	// subscriptions (spec 040) — transport.Websocket handles the upgrade
+	// itself; a plain GET without the Upgrade header falls through to
+	// gqlgen's own "must be POST" response.
+	r.GET("/graphql", security.SecureHeaders, gqlHandler)
 	return r, nil
 }
 

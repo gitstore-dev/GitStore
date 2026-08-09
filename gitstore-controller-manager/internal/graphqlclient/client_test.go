@@ -283,3 +283,45 @@ func TestSubscribe_ServerErrorSurfacedViaErr(t *testing.T) {
 		t.Errorf("Extensions[code] = %v, want WATCH_EXPIRED", gqlErr.Extensions["code"])
 	}
 }
+
+// TestSubscribe_NextMessageWithErrorsSurfacedViaErr covers gqlgen's actual
+// wire behavior: a resolver-returned GraphQL error raised before the
+// subscription stream opens (e.g. WATCH_EXPIRED from watchCategories) is
+// delivered as a "next" message with a populated errors array and a null
+// data field — not as a protocol-level "error" message. A client that only
+// checks msg.Type == "error" would silently decode this into a zero-valued
+// event instead of surfacing the error.
+func TestSubscribe_NextMessageWithErrorsSurfacedViaErr(t *testing.T) {
+	srv := stubGraphQLWSServer(t, []map[string]any{
+		{"type": "next", "payload": map[string]any{
+			"data":   map[string]any{"watchCategories": nil},
+			"errors": []map[string]any{{"message": "watch cursor expired; re-list and resume from a fresh cursor", "extensions": map[string]any{"code": "WATCH_EXPIRED"}}},
+		}},
+	})
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	c := graphqlclient.New(wsURL, "test-token")
+	sub, err := c.Subscribe(context.Background(), `subscription { watchCategories { name } }`, nil)
+	if err != nil {
+		t.Fatalf("Subscribe failed: %v", err)
+	}
+	defer sub.Stop()
+
+	select {
+	case _, ok := <-sub.Next():
+		if ok {
+			t.Error("channel should close when a next message carries errors")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for channel close")
+	}
+
+	var gqlErr *graphqlclient.Error
+	if !errors.As(sub.Err(), &gqlErr) {
+		t.Fatalf("expected *graphqlclient.Error, got %T: %v", sub.Err(), sub.Err())
+	}
+	if gqlErr.Extensions["code"] != "WATCH_EXPIRED" {
+		t.Errorf("Extensions[code] = %v, want WATCH_EXPIRED", gqlErr.Extensions["code"])
+	}
+}

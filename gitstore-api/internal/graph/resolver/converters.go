@@ -383,6 +383,12 @@ func categoryStatusFromJSON(raw json.RawMessage) *model.CategoryTaxonomyStatus {
 		ObservedGeneration  int32          `json:"observedGeneration"`
 		LastAppliedRevision string         `json:"lastAppliedRevision"`
 		Conditions          []rawCondition `json:"conditions"`
+		Resolved            *struct {
+			Depth        int32    `json:"depth"`
+			Path         []string `json:"path"`
+			ChildCount   int32    `json:"childCount"`
+			ProductCount int32    `json:"productCount"`
+		} `json:"resolved"`
 	}
 	if err := json.Unmarshal(raw, &rs); err != nil {
 		converterLogger.Warn("category blob unmarshal error", zap.String("field", "status"), zap.Error(err))
@@ -406,10 +412,20 @@ func categoryStatusFromJSON(raw json.RawMessage) *model.CategoryTaxonomyStatus {
 		}
 		conditions = append(conditions, cond)
 	}
+	var resolved *model.ResolvedCategoryTaxonomy
+	if rs.Resolved != nil {
+		resolved = &model.ResolvedCategoryTaxonomy{
+			Depth:        rs.Resolved.Depth,
+			Path:         rs.Resolved.Path,
+			ChildCount:   rs.Resolved.ChildCount,
+			ProductCount: rs.Resolved.ProductCount,
+		}
+	}
 	return &model.CategoryTaxonomyStatus{
 		ObservedGeneration:  rs.ObservedGeneration,
 		LastAppliedRevision: rs.LastAppliedRevision,
 		Conditions:          conditions,
+		Resolved:            resolved,
 	}
 }
 

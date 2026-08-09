@@ -95,6 +95,28 @@ func TestList_PaginatesToCompletionAndReturnsHighestResourceVersion(t *testing.T
 	}
 }
 
+func TestList_EmptyDatasetReturnsNonEmptySentinelResourceVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"categories":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`))
+	}))
+	defer srv.Close()
+
+	client := graphqlclient.New(srv.URL, "test-token")
+	lw := listwatch.NewCategoryTaxonomyListWatcher(client)
+
+	resp, err := lw.List(context.Background())
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(resp.Items) != 0 {
+		t.Errorf("len(Items) = %d, want 0", len(resp.Items))
+	}
+	if resp.ResourceVersion == "" {
+		t.Error("ResourceVersion must not be empty even for a zero-item list (checkpoint.FilesystemStore rejects an empty cursor)")
+	}
+}
+
 func TestList_HTTPErrorReturnsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)

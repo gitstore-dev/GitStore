@@ -17,6 +17,8 @@ func clearEnv(t *testing.T) func() {
 	t.Helper()
 	keys := []string{
 		"GITSTORE_API__PORT",
+		"GITSTORE_API__RATE_LIMIT_PER_SECOND",
+		"GITSTORE_API__RATE_LIMIT_BURST",
 		"GITSTORE_GIT__GRPC__URI",
 		"GITSTORE_GIT__WS__URI",
 		"GITSTORE_GIT__HTTP__URI",
@@ -75,6 +77,8 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 
 	assert.Equal(t, 4000, cfg.Api.Port)
 	assert.Equal(t, 5000, cfg.Api.GitPort)
+	assert.Equal(t, float64(50), cfg.Api.RateLimitPerSecond)
+	assert.Equal(t, 100, cfg.Api.RateLimitBurst)
 	assert.Equal(t, "dns:///localhost:50051", cfg.Git.Grpc.Uri)
 	assert.Equal(t, 300, cfg.Cache.TTL)
 	assert.Equal(t, "info", cfg.Log.Level)
@@ -89,6 +93,8 @@ func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	defer restore()
 	setRequiredAuth(t)
 	os.Setenv("GITSTORE_API__PORT", "8888")
+	os.Setenv("GITSTORE_API__RATE_LIMIT_PER_SECOND", "5")
+	os.Setenv("GITSTORE_API__RATE_LIMIT_BURST", "15")
 	os.Setenv("GITSTORE_LOG__LEVEL", "debug")
 	os.Setenv("GITSTORE_LOG__FORMAT", "text")
 	os.Setenv("GITSTORE_AUTH__JWT__REFRESH_GRACE", "30s")
@@ -98,6 +104,8 @@ func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	require.NotNil(t, cfg)
 
 	assert.Equal(t, 8888, cfg.Api.Port)
+	assert.Equal(t, float64(5), cfg.Api.RateLimitPerSecond)
+	assert.Equal(t, 15, cfg.Api.RateLimitBurst)
 	assert.Equal(t, "debug", cfg.Log.Level)
 	assert.Equal(t, "text", cfg.Log.Format)
 	assert.Equal(t, "30s", cfg.Auth.JWT.RefreshGrace)

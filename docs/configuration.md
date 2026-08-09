@@ -38,6 +38,8 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 | `api.port`      | `GITSTORE_API__PORT`      | integer | `4000`  | No       | No        | HTTP port the GraphQL API server listens on (1–65535)   |
 | `api.git_port`  | `GITSTORE_API__GIT_PORT`  | integer | `5000`  | No       | No        | Git Smart HTTP port the API server listens on (1–65535) |
 | `api.grpc_port` | `GITSTORE_API__GRPC_PORT` | integer | `6000`  | No       | No        | CatalogService gRPC port called by gitstore-git-service |
+| `api.rate_limit_per_second` | `GITSTORE_API__RATE_LIMIT_PER_SECOND` | float | `50` | No | No | Sustained per-client-IP request rate allowed on `/graphql` |
+| `api.rate_limit_burst` | `GITSTORE_API__RATE_LIMIT_BURST` | integer | `100` | No | No | Per-client-IP token-bucket burst size on top of `api.rate_limit_per_second` |
 
 ### Git Service Connection
 

@@ -176,9 +176,19 @@ func NewCategoryTaxonomyListWatcher(client *graphqlclient.Client) *CategoryTaxon
 	return &CategoryTaxonomyListWatcher{client: client}
 }
 
+// noResourceVersionSentinel is returned by List when the namespace has zero
+// CategoryTaxonomy resources, so there is no real resourceVersion to report
+// yet. checkpoint.FilesystemStore/spec 036's ListWatcher contract require a
+// non-empty cursor from List (an empty string is reserved for "no checkpoint
+// exists"), but gitstore-api's real resourceVersions are always >= "1"
+// (nextResourceVersion), so "0" can never collide with one. Watch treats it
+// identically to "" (subscribe from the beginning).
+const noResourceVersionSentinel = "0"
+
 // List paginates the categories query to completion, returning every
 // CategoryTaxonomy and the highest observed resourceVersion as the list-time
-// cursor.
+// cursor. When the namespace has zero categories, ResourceVersion is
+// noResourceVersionSentinel rather than "" (see its doc comment).
 func (lw *CategoryTaxonomyListWatcher) List(ctx context.Context) (ListResponse[categorytaxonomy.CategoryTaxonomy], error) {
 	var items []categorytaxonomy.CategoryTaxonomy
 	highestRV := ""
@@ -206,11 +216,17 @@ func (lw *CategoryTaxonomyListWatcher) List(ctx context.Context) (ListResponse[c
 		after = resp.Categories.PageInfo.EndCursor
 	}
 
+	if highestRV == "" {
+		highestRV = noResourceVersionSentinel
+	}
 	return ListResponse[categorytaxonomy.CategoryTaxonomy]{Items: items, ResourceVersion: highestRV}, nil
 }
 
 // Watch opens a watchCategories subscription starting after resourceVersion.
 func (lw *CategoryTaxonomyListWatcher) Watch(ctx context.Context, resourceVersion string) (Watcher[categorytaxonomy.CategoryTaxonomy], error) {
+	if resourceVersion == noResourceVersionSentinel {
+		resourceVersion = ""
+	}
 	vars := map[string]any{}
 	if resourceVersion != "" {
 		vars["resourceVersion"] = resourceVersion

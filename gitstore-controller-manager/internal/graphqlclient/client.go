@@ -251,10 +251,22 @@ func (s *subscription) readLoop() {
 		switch msg.Type {
 		case "next":
 			var payload struct {
-				Data json.RawMessage `json:"data"`
+				Data   json.RawMessage `json:"data"`
+				Errors []*Error        `json:"errors"`
 			}
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 				s.setErr(fmt.Errorf("graphqlclient: decode next payload: %w", err))
+				return
+			}
+			// gqlgen's websocket transport delivers a resolver-returned
+			// GraphQL error (e.g. WATCH_EXPIRED, raised before the
+			// subscription channel even opens) as a "next" message with a
+			// populated errors array and no data, not as a protocol-level
+			// "error" message — the latter is reserved for panics/executor
+			// failures during an already-open stream. Treat both the same
+			// way: surface the error and end the subscription.
+			if len(payload.Errors) > 0 {
+				s.setErr(payload.Errors[0])
 				return
 			}
 			select {
