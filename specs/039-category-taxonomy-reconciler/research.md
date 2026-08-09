@@ -1,0 +1,60 @@
+# Research: CategoryTaxonomy Controller Reconciliation
+
+## R1: GraphQL client dependency for `gitstore-controller-manager`
+
+**Decision**: Use `gorilla/websocket` directly (no full-featured GraphQL client library) for the subscription transport, plus a hand-rolled minimal `graphqlclient` package for query/mutation POST requests over `net/http`. The client speaks gqlgen's `graphql-transport-ws` subprotocol explicitly.
+
+**Rationale**: `gitstore-api`'s WebSocket transport (`transport.Websocket` in `internal/app/server.go`) is `github.com/99designs/gqlgen/graphql/handler/transport`, which negotiates either the legacy `graphql-ws` or the modern `graphql-transport-ws` subprotocol depending on what the client offers, and is already backed by `github.com/gorilla/websocket` (present in `gitstore-api/go.mod` as an indirect dependency of gqlgen). A minimal client needs only: (1) a POST-based query/mutation call for `List()` and `Apply()` (a single `http.Client` request, no library needed), and (2) a `graphql-transport-ws` dial-and-message-loop for `Watch()`. Both are small enough (a few hundred lines total) that writing them directly against `gorilla/websocket` and `net/http` avoids pulling in a full third-party GraphQL client SDK (e.g. `hasura/go-graphql-client`, `Khan/genqlient`) whose subscription support may not exactly match gqlgen's negotiated protocol, and keeps the surface area this spec owns small and testable.
+
+**Alternatives considered**:
+- *`hasura/go-graphql-client`*: provides both HTTP and WebSocket-subscription support out of the box. Rejected as the primary choice because its subscription implementation targets the legacy `graphql-ws` protocol conventions and would need verification/patching against gqlgen's `graphql-transport-ws` negotiation; a hand-rolled client that speaks the exact protocol `gitstore-api` serves removes that uncertainty. Revisit if the hand-rolled client's message-loop code grows unwieldy.
+- *`Khan/genqlient`*: a code-generating typed client. Rejected — it optimizes for compile-time query validation against a schema file, which is valuable for a large, evolving client surface, but this reconciler only ever issues two fixed operations (`categories` list query, `watchCategories` subscription, `updateCategoryStatus` mutation) — generating a whole client SDK for three operations is disproportionate (Simplicity/YAGNI).
+- *A raw `net/http` + manually-framed WebSocket implementation (no `gorilla/websocket`)*: rejected — reimplementing RFC 6455 framing by hand when a well-tested library the server side already depends on transitively is available would be needless risk for no benefit.
+
+## R2: Hierarchy computation algorithm (depth, path, descendant recompute)
+
+**Decision**: On each reconcile of a `CategoryTaxonomy`, walk from the resource up to its root via `parentRef` using the reconciler's own `Cache[T]` (populated by the `Runner[T]`'s list-then-watch loop), building `path` as the reversed walk and `depth` as `len(path)-1`. When a category's own `path`/`depth` changes as a result of a reconcile, the reconciler additionally re-enqueues every direct child found in the cache (a linear scan keyed by `parentRef`, since the cache has no reverse index) so FR-005's "recompute descendants even when they weren't in the triggering push" requirement is satisfied without needing the watch layer to synthesize extra events.
+
+**Rationale**: This mirrors the existing `gitstore-api` admission-time computation in `cataloggrpc/server.go`'s `admitCategoryTaxonomyWithContext` (which builds `ancestorPath` by walking to the parent and appending, using an in-push map for co-created chains) but at reconcile time using the full `Cache[T]`, which already holds the entire kind's population (per the list-then-watch contract from spec 036) rather than only the current push's siblings. Re-enqueuing children on a path change is the mechanism level-triggered reconcilers use to propagate a change without a fan-out at the event-publishing layer — this keeps the "publish one event per admitted resource" simplicity of spec 040's `eventbus.Bus` unchanged; the reconciler owns the propagation logic. `WorkItemKey`-based re-enqueue already exists as `manager.Manager.Enqueue`/`Requeue`, so no new primitive is needed.
+
+**Alternatives considered**:
+- *Emit a synthetic event per affected descendant from `gitstore-api`'s admission path*: rejected — this pushes hierarchy-propagation logic into the admission/event-publishing layer, which spec 040 deliberately kept generic (one event per admitted resource, no kind-specific fan-out logic). Handling it reconciler-side keeps that layer simple and kind-agnostic.
+- *Recompute the entire kind's hierarchy from scratch on every reconcile (no targeted re-enqueue)*: rejected — wasteful (O(n) work per single-node change) and does not match the level-triggered, per-resource `Reconcile(ctx, key)` contract, which operates on one `WorkItemKey` at a time.
+
+## R3: Cycle detection at reconcile time
+
+**Decision**: Reuse the existing `gitstore-api/internal/admission/catalog.DetectCycles(parentMap map[string]string) map[string]bool` algorithm's approach (three-color DFS) reimplemented against the reconciler's own `Cache[T]` snapshot (`name -> parentRef.name` for every cached `CategoryTaxonomy` in the same namespace) rather than importing the `gitstore-api` package directly (which would create a cross-module dependency `gitstore-controller-manager` does not otherwise have).
+
+**Rationale**: The admission-time algorithm already solves exactly this problem (cycle detection over a name→parent adjacency map) and is unit-tested (`category_taxonomy_policy_test.go`). Reimplementing the same ~20-line DFS against the controller-manager's own map type avoids adding a Go module dependency from `gitstore-controller-manager` on `gitstore-api` purely for one utility function — the two modules are deliberately kept independent (each has its own `go.mod`), and introducing a cross-import for a single small algorithm would be a heavier coupling than duplicating ~20 lines with a comment cross-referencing the original.
+
+**Alternatives considered**:
+- *Import `gitstore-api/internal/admission/catalog` directly*: rejected — `internal/` packages are not importable across modules in Go regardless of module boundaries, so this is not actually possible; noted here only to rule it out explicitly.
+- *Extract the cycle-detection algorithm into a shared, versioned module*: rejected as premature — two callers (admission-time and reconcile-time) sharing ~20 lines of DFS does not yet justify a new shared-library module and its versioning/release overhead (Simplicity/YAGNI). Revisit if a third caller appears.
+
+## R4: `productCount` computation
+
+**Decision**: Add `ListProductsByCategoryRef(ctx, namespace, categoryName string) ([]*Product, error)` to the `gitstore-api` `Datastore` interface (implemented for memdb and scylla), and have the reconciler call it through the same GraphQL query mechanism as `List()` (a `products(namespace: ..., categoryRef: ...)` query field, or a dedicated count field) — **deferred to task-level design**; the minimal viable approach for this spec is to reuse the existing `categories`/`products` list query and filter client-side by `spec.categoryRef.name == this category's name`, since introducing a new server-side filter/count field is out of this spec's stated scope (spec 040 already shipped; this spec should not require another `gitstore-api` schema change).
+
+**Rationale**: `datastore.Datastore` already has `ListProductsByLabelSelector` as a precedent for a targeted list method, but adding a new `ListProductsByCategoryRef` (and exposing it via GraphQL) would be new server-side surface area belonging to spec 040's territory (or a new small spec), not this one. Client-side filtering via the existing paginated `products` query keeps this spec's server-side footprint at zero, matching this spec's Assumptions ("no new datastore tables... resourceVersion mechanism itself... already exists"). This does cost more data transfer per reconcile (fetching all products in a namespace to count matches) — acceptable given the constitution's scale target (up to 1,000,000 products total, but any single category's product count is expected to be far smaller than the full catalogue, and reconciliation is not latency-sensitive per this spec's Performance Goals).
+
+**Alternatives considered**:
+- *Add a server-side `productCount(categoryRef: ...)` GraphQL field now*: rejected for this spec — would require touching `gitstore-api`'s schema/resolvers again, which this plan scopes out; can be proposed as a follow-on optimization once the reconciler's actual query volume against `products` is observed to be a real bottleneck.
+- *Maintain a separate reverse-index cache in the controller-manager (category name → product count) updated via a `Product` watch subscription*: rejected as premature complexity — this spec does not need to watch `Product` at all for any other reason, and adding a second watched kind purely to maintain a denormalized count is a significant scope increase for a single computed field.
+
+## R5: Required-file-reference condition (US3)
+
+**Decision**: Per the spec's own Assumptions (already resolved during spec 039's authoring, not re-litigated here): since `File` (issue #79) is not yet a queryable datastore entity, the reconciler sets the required-file-reference condition to `Unknown` status (not `True`/`False`) for every `optional: false` media entry, with a message stating the check could not be performed. No datastore or GraphQL query for `File` existence is attempted.
+
+**Rationale**: This is a direct implementation of the spec's Assumptions section, restated here for Phase 1 traceability. `catalog.ConditionStatus` already defines `ConditionUnknown` as a valid value (`gitstore-api/internal/catalog/status.go`), so no new enum value is needed on the `gitstore-api` side — the existing `Condition.Status` field already accepts `"Unknown"`.
+
+**Alternatives considered**: None — this was already decided in the spec's Assumptions; Phase 0 research confirms no new schema value is needed to implement it.
+
+## R6: Runbook approach (FR-016, SC-005)
+
+**Decision**: Extend the existing `docs/runbooks/controller-lag.md` with a short "CategoryTaxonomy-specific notes" section, rather than writing a new standalone runbook file, since the generic lag signals (`gitstore_controller_queue_depth`, `gitstore_controller_stalled_workers`, `gitstore_controller_reconcile_total`) already fully cover "is this kind falling behind" — the only kind-specific addition needed is how to distinguish a `CategoryTaxonomy` that is stalled because of a genuine failure from one that is intentionally not making hierarchy progress because it (or an ancestor) is cycle-blocked (FR-008's "MUST NOT compute... for a category currently participating in a detected cycle").
+
+**Rationale**: Duplicating the entire generic-lag runbook into a new `controller-category-taxonomy-lag.md` file would fork content that must then be kept in sync across two files for every future generic-signal change. A short kind-specific addendum to the existing file, cross-referenced the same way `controller-lag.md` already cross-references `controller-poisoned-item.md`/`controller-replay-window-exceeded.md`, keeps one canonical source for the generic diagnostic flow.
+
+**Alternatives considered**:
+- *A new standalone runbook*: rejected per the duplication concern above.
+- *No runbook change, rely entirely on the generic controller-lag runbook as-is*: rejected — it does not mention the `Acyclic` condition at all, so an operator following it today would not know to check whether a "stalled-looking" `CategoryTaxonomy` is actually cycle-blocked (a different remediation than a genuine failure) — this fails FR-016/SC-005's "without reading controller source code" bar.
