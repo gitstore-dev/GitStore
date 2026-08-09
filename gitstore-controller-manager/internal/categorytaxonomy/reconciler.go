@@ -108,6 +108,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		if previous != nil {
 			resolved.Depth = previous.Depth
 			resolved.Path = previous.Path
+		} else {
+			// No prior resolved value exists yet (first-ever reconcile of a
+			// cycle participant) — Path must still be a valid non-null
+			// [String!]! per the GraphQL schema. Fall back to a single-element
+			// slice containing self's own name, the same sentinel a root
+			// category's Path uses, since nothing has been walked yet.
+			resolved.Path = []string{current.Name}
 		}
 		var childCount int64
 		for _, item := range r.cache.List() {

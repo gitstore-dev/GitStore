@@ -3645,13 +3645,13 @@
     "semantic_hash": ""
   },
   "specs/039-category-taxonomy-reconciler/tasks.md": {
-    "mtime": 1786252859.8368604,
-    "ast_hash": "a4075f822317d3bcf00d19c809f441e0",
+    "mtime": 1786256037.6385581,
+    "ast_hash": "0ef11c932ef167b0f18109e95210d180",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/internal/categorytaxonomy/reconciler.go": {
-    "mtime": 1786245733.8167453,
-    "ast_hash": "d0e91c56d22f0cca1546f1115352344d",
+    "mtime": 1786255038.878479,
+    "ast_hash": "103005c2f21d1bb93499afa67bb8b26a",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/internal/listwatch/graphql_listwatcher.go": {
@@ -3700,8 +3700,8 @@
     "semantic_hash": ""
   },
   "gitstore-controller-manager/internal/categorytaxonomy/conditions_test.go": {
-    "mtime": 1786245545.377241,
-    "ast_hash": "4fec387d1bb22f6fdfeb0492b05a89a2",
+    "mtime": 1786255058.5892615,
+    "ast_hash": "7057dafd652fc117dda6c1e6b6f45c08",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/internal/categorytaxonomy/fileref.go": {
@@ -3712,6 +3712,11 @@
   "gitstore-controller-manager/internal/categorytaxonomy/fileref_test.go": {
     "mtime": 1786245678.5360427,
     "ast_hash": "f169fb318101a7cfff2cc4ddcd110859",
+    "semantic_hash": ""
+  },
+  "tests/integration/categorytaxonomy_reconciler_test.go": {
+    "mtime": 1786254743.6515512,
+    "ast_hash": "0a9becd8686d0654e644d91dec5c9249",
     "semantic_hash": ""
   }
 }

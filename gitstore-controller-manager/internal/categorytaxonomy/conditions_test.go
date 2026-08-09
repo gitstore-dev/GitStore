@@ -149,6 +149,32 @@ func TestReconcile_CycleParticipant_PathDepthFrozen_AcyclicFalse(t *testing.T) {
 	}
 }
 
+func TestReconcile_CycleParticipant_FirstReconcile_PathNeverNull(t *testing.T) {
+	// a -> b -> a, neither has ever been reconciled before (no prior
+	// resolved status at all) — Path must still be a valid non-null
+	// [String!]! slice, not the Go zero value (nil), which would marshal to
+	// JSON null and fail the GraphQL schema's non-null Path validation.
+	a := CategoryTaxonomy{Namespace: "acme", Name: "a", ParentRefName: "b", ResourceVersion: "1"}
+	b := CategoryTaxonomy{Namespace: "acme", Name: "b", ParentRefName: "a", ResourceVersion: "1"}
+	c := seedCache(t, a, b)
+
+	sc := &fakeStatusClient{}
+	r := NewReconciler(c, sc, noProducts, nil)
+
+	r.Reconcile(context.Background(), key("acme", "a"))
+
+	if sc.callCount() != 1 {
+		t.Fatalf("expected exactly 1 Apply call, got %d", sc.callCount())
+	}
+	var resolved ResolvedCategoryTaxonomy
+	if err := json.Unmarshal(sc.calls[0].Resolved, &resolved); err != nil {
+		t.Fatalf("unmarshal patch.Resolved: %v", err)
+	}
+	if resolved.Path == nil {
+		t.Fatal("Path must not be nil on a cycle participant's first-ever reconcile (would marshal to JSON null, rejected by the non-null GraphQL schema)")
+	}
+}
+
 func TestReconcile_CycleBroken_AcyclicTrueAndRecomputes(t *testing.T) {
 	// "a" no longer references "b" -- cycle is broken; "b" is now a root.
 	prevResolved, _ := json.Marshal(ResolvedCategoryTaxonomy{Depth: 3, Path: []string{"x", "y", "z", "b"}})
