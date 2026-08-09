@@ -23,10 +23,10 @@ Single existing Go module: `gitstore-controller-manager/`, with its established 
 
 **Purpose**: Add the GraphQL client dependency and minimal client package every subsequent phase needs. Nothing here is independently useful, but every other phase's tests depend on it existing.
 
-- [ ] T001 Add `github.com/gorilla/websocket` to `gitstore-controller-manager/go.mod` (research.md R1 — the same library `gitstore-api`'s gqlgen transport already depends on transitively)
-- [ ] T002 [P] Unit tests for `graphqlclient.Client.Query`/`Mutate` (POST request shape, `Authorization: Bearer` header, GraphQL `data`/`errors` decoding, `extensions.code` surfaced to the caller) against an `httptest.Server` stub, in `gitstore-controller-manager/internal/graphqlclient/client_test.go` — write first, confirm failing
-- [ ] T003 [P] Unit tests for `graphqlclient.Client.Subscribe` (`graphql-transport-ws` `connection_init`/`connection_ack` handshake, `subscribe` message, `next` payload streaming, `Stop()` closes the channel, a server-sent GraphQL error surfaces via `Err()`) against a `httptest.Server`-backed WebSocket stub, in `gitstore-controller-manager/internal/graphqlclient/client_test.go`
-- [ ] T004 Implement `graphqlclient.Client` (`Query`, `Mutate`, `Subscribe`, the `Subscription` interface) in `gitstore-controller-manager/internal/graphqlclient/client.go` per contracts/reconciler-contract.md's `graphqlclient` section (depends on T001-T003)
+- [x] T001 Added `github.com/gorilla/websocket v1.5.3` to `gitstore-controller-manager/go.mod` (research.md R1) via `go get` + `go mod tidy`
+- [x] T002 [P] Unit tests for `graphqlclient.Client.Query`/`Mutate` in `gitstore-controller-manager/internal/graphqlclient/client_test.go` — written first, confirmed failing (package didn't exist), then passing. Uses plain `testing` (not testify), matching this module's existing convention — no testify usage found elsewhere in `gitstore-controller-manager`.
+- [x] T003 [P] Unit tests for `graphqlclient.Client.Subscribe` (handshake, next-message streaming, `Stop()`, server-error-via-`Err()`) in the same file, against a `graphql-transport-ws` stub `httptest.Server` — written first, confirmed failing, then passing
+- [x] T004 Implemented `graphqlclient.Client` (`Query`, `Mutate`, `Subscribe`, `Subscription` interface, `Error` type) in `gitstore-controller-manager/internal/graphqlclient/client.go`. All 8 tests pass, `-race` clean.
 
 **Checkpoint**: A minimal GraphQL client exists and is tested in isolation. No reconciler-specific code yet.
 
