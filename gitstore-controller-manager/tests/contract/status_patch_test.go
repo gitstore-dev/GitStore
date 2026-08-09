@@ -138,3 +138,52 @@ func TestStatusClient_NoOpPatch_SkipsApply(t *testing.T) {
 		t.Errorf("Apply should not have been called, got %d calls", mock.callCount)
 	}
 }
+
+// T034: IsNoOp treats a nil patch.Resolved as "unchanged" regardless of
+// current.Resolved's value (research.md R8).
+func TestStatusPatch_IsNoOp_NilResolvedIsUnchanged(t *testing.T) {
+	current := status.ResourceStatus{
+		ResourceVersion: "rv-1",
+		Resolved:        []byte(`{"depth":1}`),
+	}
+	patch := status.StatusPatch{
+		ResourceVersion: "rv-1",
+		Resolved:        nil,
+	}
+
+	if !patch.IsNoOp(current) {
+		t.Error("expected IsNoOp=true when patch.Resolved is nil, regardless of current.Resolved")
+	}
+}
+
+// T034: IsNoOp returns false when patch.Resolved differs from current.Resolved.
+func TestStatusPatch_IsNoOp_ResolvedDiffers(t *testing.T) {
+	current := status.ResourceStatus{
+		ResourceVersion: "rv-1",
+		Resolved:        []byte(`{"depth":1}`),
+	}
+	patch := status.StatusPatch{
+		ResourceVersion: "rv-1",
+		Resolved:        []byte(`{"depth":2}`),
+	}
+
+	if patch.IsNoOp(current) {
+		t.Error("expected IsNoOp=false when patch.Resolved differs from current.Resolved")
+	}
+}
+
+// T034: IsNoOp returns true when patch.Resolved byte-for-byte matches current.Resolved.
+func TestStatusPatch_IsNoOp_ResolvedMatches(t *testing.T) {
+	current := status.ResourceStatus{
+		ResourceVersion: "rv-1",
+		Resolved:        []byte(`{"depth":1}`),
+	}
+	patch := status.StatusPatch{
+		ResourceVersion: "rv-1",
+		Resolved:        []byte(`{"depth":1}`),
+	}
+
+	if !patch.IsNoOp(current) {
+		t.Error("expected IsNoOp=true when patch.Resolved matches current.Resolved")
+	}
+}

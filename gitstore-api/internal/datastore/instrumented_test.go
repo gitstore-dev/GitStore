@@ -59,6 +59,9 @@ func (s *stubDatastore) UpdateCategoryTaxonomy(_ context.Context, _ *datastore.C
 func (s *stubDatastore) DeleteCategoryTaxonomy(_ context.Context, _ string) error {
 	return s.getProductErr
 }
+func (s *stubDatastore) UpdateCategoryTaxonomyStatus(_ context.Context, _, _ string, _ datastore.CategoryTaxonomyStatusPatch) (*datastore.CategoryTaxonomy, error) {
+	return nil, s.getProductErr
+}
 func (s *stubDatastore) CreateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
 	return s.getProductErr
 }

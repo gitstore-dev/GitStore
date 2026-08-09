@@ -170,6 +170,19 @@ type CategoryTaxonomyStatus struct {
 	Resolved            *ResolvedCategoryTaxonomy `json:"resolved,omitempty"`
 }
 
+// CategoryTaxonomy-specific watch event. Carries the same envelope as
+// the generic WatchEvent but with a strongly-typed `category` field
+// instead of a JSON-boxed `object`, so core-kind consumers get full
+// type safety.
+type CategoryWatchEvent struct {
+	Type            WatchEventType `json:"type"`
+	Namespace       *string        `json:"namespace,omitempty"`
+	Name            string         `json:"name"`
+	ResourceVersion string         `json:"resourceVersion"`
+	// Full Category resource for ADDED/MODIFIED. Null for DELETED/BOOKMARK.
+	Category *Category `json:"category,omitempty"`
+}
+
 // A Collection is a namespace-scoped catalog resource that groups products via
 // a declarative label selector. Defined by git push; mutations are not supported.
 type Collection struct {
@@ -280,6 +293,17 @@ type CollectionStatus struct {
 	Conditions []*CollectionCondition `json:"conditions"`
 	// Resolved membership snapshot (cached hint; collection.products is authoritative).
 	Resolved *ResolvedCollectionDefinition `json:"resolved,omitempty"`
+}
+
+// A named status condition input, mirroring the Kubernetes condition
+// convention used by CategoryCondition/ProductCondition et al.
+type ConditionInput struct {
+	Type               string    `json:"type"`
+	Status             string    `json:"status"`
+	ObservedGeneration int32     `json:"observedGeneration"`
+	LastTransitionTime time.Time `json:"lastTransitionTime"`
+	Reason             *string   `json:"reason,omitempty"`
+	Message            *string   `json:"message,omitempty"`
 }
 
 // Input for creating a category
@@ -420,6 +444,11 @@ type KeyValuePair struct {
 	Value string `json:"value"`
 }
 
+type KeyValuePairInput struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
 // A label selector that matches products by their labels.
 // matchLabels and matchExpressions are combined with logical AND.
 // An empty selector (all fields absent) matches nothing.
@@ -430,6 +459,14 @@ type LabelSelector struct {
 	MatchExpressions []*LabelSelectorRequirement `json:"matchExpressions"`
 }
 
+// Input mirror of the existing (output-only) LabelSelector type, needed
+// because GraphQL requires distinct input/output types for structured
+// arguments.
+type LabelSelectorInput struct {
+	MatchLabels      []*KeyValuePairInput             `json:"matchLabels,omitempty"`
+	MatchExpressions []*LabelSelectorRequirementInput `json:"matchExpressions,omitempty"`
+}
+
 // A single label selector expression with set-based semantics.
 type LabelSelectorRequirement struct {
 	// The label key this requirement applies to.
@@ -438,6 +475,12 @@ type LabelSelectorRequirement struct {
 	Operator LabelSelectorOperator `json:"operator"`
 	// The set of values. Required for IN and NOT_IN; must be empty for EXISTS and DOES_NOT_EXIST.
 	Values []string `json:"values"`
+}
+
+type LabelSelectorRequirementInput struct {
+	Key      string                `json:"key"`
+	Operator LabelSelectorOperator `json:"operator"`
+	Values   []string              `json:"values,omitempty"`
 }
 
 // Login mutation input (Relay pattern)
@@ -932,10 +975,26 @@ type ResolvedCategoryDefinition struct {
 
 // Controller-computed category hierarchy metadata.
 type ResolvedCategoryTaxonomy struct {
-	Depth        int32  `json:"depth"`
-	AncestorPath string `json:"ancestorPath"`
-	ChildCount   int32  `json:"childCount"`
-	ProductCount int32  `json:"productCount"`
+	Depth int32 `json:"depth"`
+	// Ancestor path from root to self, e.g. ["electronics", "computers",
+	// "laptops"] for the "laptops" category (root-to-self order). A root
+	// category's path is a single-element array containing its own name.
+	// Distinct from Category.path, which is a read-time-derived field
+	// computed from the separate ancestor_path datastore column (see
+	// specs/040-controller-watch-status-api/research.md R9/R10).
+	Path         []string `json:"path"`
+	ChildCount   int32    `json:"childCount"`
+	ProductCount int32    `json:"productCount"`
+}
+
+type ResolvedCategoryTaxonomyInput struct {
+	Depth int32 `json:"depth"`
+	// Ancestor path from root to self, e.g. ["electronics", "computers",
+	// "laptops"] (root-to-self order). A root category's path is a
+	// single-element array containing its own name.
+	Path         []string `json:"path"`
+	ChildCount   int32    `json:"childCount"`
+	ProductCount int32    `json:"productCount"`
 }
 
 // Resolved membership information cached at last admission.
@@ -1009,10 +1068,20 @@ type SelectedOptionDefinition struct {
 	Value string `json:"value"`
 }
 
+// Optimistic-concurrency conflict payload shared by all status-write
+// mutations (per-kind and generic).
+type StatusConflict struct {
+	// The resource's actual current resourceVersion, for retry.
+	CurrentResourceVersion string `json:"currentResourceVersion"`
+}
+
 // Pricing strategy applied when this price template is selected.
 type StrategyDefinition struct {
 	// Strategy identifier (e.g. fixed, percentage_discount, cost_plus).
 	Type string `json:"type"`
+}
+
+type Subscription struct {
 }
 
 // OIDC-compatible token response.
@@ -1072,6 +1141,29 @@ type UpdateCategoryPayload struct {
 	Conflict *CategoryOptimisticLockConflict `json:"conflict,omitempty"`
 }
 
+type UpdateCategoryStatusInput struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	// Required optimistic-concurrency precondition (FR-009). Must equal
+	// the resource's current metadata.resourceVersion.
+	ResourceVersion string `json:"resourceVersion"`
+	// Null = unchanged. Set on every successful reconcile per spec 026 FR-008.
+	ObservedGeneration *int32 `json:"observedGeneration,omitempty"`
+	// Null = unchanged, e.g. "main@sha1:a1b2c3d".
+	LastAppliedRevision *string `json:"lastAppliedRevision,omitempty"`
+	// Null = unchanged. Non-null = full replacement of the conditions slice.
+	Conditions []*ConditionInput `json:"conditions,omitempty"`
+	// Null = unchanged. Kind-specific — not part of any generic patch shape.
+	Resolved *ResolvedCategoryTaxonomyInput `json:"resolved,omitempty"`
+}
+
+type UpdateCategoryStatusPayload struct {
+	// Null when the write failed (conflict or not-found).
+	Category *Category `json:"category,omitempty"`
+	// Non-null only when the resourceVersion precondition failed.
+	Conflict *StatusConflict `json:"conflict,omitempty"`
+}
+
 type UpdateCollectionInput struct {
 	ID string `json:"id"`
 }
@@ -1079,6 +1171,25 @@ type UpdateCollectionInput struct {
 type UpdateCollectionPayload struct {
 	Collection *Collection                       `json:"collection,omitempty"`
 	Conflict   *CollectionOptimisticLockConflict `json:"conflict,omitempty"`
+}
+
+type UpdateResourceStatusInput struct {
+	Kind                string            `json:"kind"`
+	Name                string            `json:"name"`
+	Namespace           string            `json:"namespace"`
+	ResourceVersion     string            `json:"resourceVersion"`
+	ObservedGeneration  *int32            `json:"observedGeneration,omitempty"`
+	LastAppliedRevision *string           `json:"lastAppliedRevision,omitempty"`
+	Conditions          []*ConditionInput `json:"conditions,omitempty"`
+	// Kind-specific resolved payload, JSON-boxed since no static input type
+	// exists for an arbitrary CRD kind (mirrors WatchEvent.object).
+	Resolved map[string]any `json:"resolved,omitempty"`
+}
+
+type UpdateResourceStatusPayload struct {
+	// JSON-boxed current resource state; null when the write failed.
+	Object   map[string]any  `json:"object,omitempty"`
+	Conflict *StatusConflict `json:"conflict,omitempty"`
 }
 
 // Authenticated user information
@@ -1093,6 +1204,21 @@ type VariantSummaryDefinition struct {
 	Total       int32 `json:"total"`
 	Ready       int32 `json:"ready"`
 	Unavailable int32 `json:"unavailable"`
+}
+
+// A single change notification for a watched resource kind, delivered by
+// the generic watchResources subscription.
+type WatchEvent struct {
+	Type      WatchEventType `json:"type"`
+	Kind      string         `json:"kind"`
+	Namespace *string        `json:"namespace,omitempty"`
+	Name      string         `json:"name"`
+	// Opaque resume cursor. Present on every event, including BOOKMARK.
+	ResourceVersion string `json:"resourceVersion"`
+	// Full resource payload for ADDED/MODIFIED. Null for DELETED/BOOKMARK.
+	// JSON-boxed because the generic watchResources path has no
+	// compile-time-known shape for CRD kinds.
+	Object map[string]any `json:"object,omitempty"`
 }
 
 type ConditionStatus string
@@ -1573,6 +1699,68 @@ func (e *ProductVariantConditionType) UnmarshalJSON(b []byte) error {
 }
 
 func (e ProductVariantConditionType) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type WatchEventType string
+
+const (
+	WatchEventTypeAdded    WatchEventType = "ADDED"
+	WatchEventTypeModified WatchEventType = "MODIFIED"
+	WatchEventTypeDeleted  WatchEventType = "DELETED"
+	// Carries only a resourceVersion advance with no object change — used
+	// to let a long-idle subscription periodically refresh its cursor
+	// without a corresponding resource change. object is always null.
+	WatchEventTypeBookmark WatchEventType = "BOOKMARK"
+)
+
+var AllWatchEventType = []WatchEventType{
+	WatchEventTypeAdded,
+	WatchEventTypeModified,
+	WatchEventTypeDeleted,
+	WatchEventTypeBookmark,
+}
+
+func (e WatchEventType) IsValid() bool {
+	switch e {
+	case WatchEventTypeAdded, WatchEventTypeModified, WatchEventTypeDeleted, WatchEventTypeBookmark:
+		return true
+	}
+	return false
+}
+
+func (e WatchEventType) String() string {
+	return string(e)
+}
+
+func (e *WatchEventType) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = WatchEventType(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid WatchEventType", str)
+	}
+	return nil
+}
+
+func (e WatchEventType) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *WatchEventType) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e WatchEventType) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

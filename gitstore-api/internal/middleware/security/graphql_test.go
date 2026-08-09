@@ -5,6 +5,7 @@ package security
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/ast"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
 
@@ -495,4 +497,88 @@ func TestGraphQLFieldAuthorizerDeleteNamespacePassesAuthorizedRecord(t *testing.
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "namespace.delete.own", authz.action)
+}
+
+func TestGraphQLFieldAuthorizerUpdateCategoryStatusUsesPolicy(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	registry := auth.NewProviderRegistry(nil, authz, nil)
+
+	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-admin", Roles: []string{"controller"}})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Mutation",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "updateCategoryStatus"}},
+		Args: map[string]any{
+			"input": model.UpdateCategoryStatusInput{
+				Name:            "electronics",
+				Namespace:       "acme-store",
+				ResourceVersion: "1",
+			},
+		},
+	})
+
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+		called = true
+		return "ok", nil
+	})
+	require.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, "category.status.write", authz.action)
+}
+
+func TestGraphQLFieldAuthorizerUpdateCategoryStatusDenyReturnsForbidden(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Deny("stub-authz", "no controller role")}
+	registry := auth.NewProviderRegistry(nil, authz, nil)
+
+	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "eve", AuthMethod: "static-admin"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Mutation",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "updateCategoryStatus"}},
+		Args: map[string]any{
+			"input": model.UpdateCategoryStatusInput{
+				Name:            "electronics",
+				Namespace:       "acme-store",
+				ResourceVersion: "1",
+			},
+		},
+	})
+
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+		called = true
+		return "ok", nil
+	})
+	require.Error(t, err)
+	assert.False(t, called)
+	var gqlErr *gqlerror.Error
+	require.True(t, errors.As(err, &gqlErr))
+	assert.Equal(t, "FORBIDDEN", gqlErr.Extensions["code"])
+}
+
+func TestGraphQLFieldAuthorizerUpdateResourceStatusUsesLowerCamelKindAction(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	registry := auth.NewProviderRegistry(nil, authz, nil)
+
+	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-admin", Roles: []string{"controller"}})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Mutation",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "updateResourceStatus"}},
+		Args: map[string]any{
+			"input": model.UpdateResourceStatusInput{
+				Kind:            "BackfillJob",
+				Name:            "job-1",
+				Namespace:       "acme-store",
+				ResourceVersion: "1",
+			},
+		},
+	})
+
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+		return "ok", nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "backfillJob.status.write", authz.action)
 }
