@@ -3645,8 +3645,8 @@
     "semantic_hash": ""
   },
   "specs/039-category-taxonomy-reconciler/tasks.md": {
-    "mtime": 1786252835.600362,
-    "ast_hash": "62bb59ef45777a7738ffca4c2ad39cf2",
+    "mtime": 1786252859.8368604,
+    "ast_hash": "a4075f822317d3bcf00d19c809f441e0",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/internal/categorytaxonomy/reconciler.go": {
