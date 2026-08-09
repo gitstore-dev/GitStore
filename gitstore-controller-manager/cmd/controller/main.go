@@ -13,10 +13,16 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/api"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/categorytaxonomy"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"go.uber.org/zap"
 )
 
@@ -38,20 +44,18 @@ func main() {
 
 	// checkpointStore is shared across every kind's listwatch.Runner[T]
 	// (spec 036): each Runner persists into its own file within this
-	// directory (checkpoint.FilesystemStore, one file per kind). No
-	// concrete kind is wired here yet — gitstore-api exposes no
-	// watch/subscription transport as of this spec (see
-	// specs/036-controller-startup-resume/research.md §1). The first spec
-	// introducing a concrete resource kind constructs its
-	// listwatch.Runner[T] using this store, cfg.Controller.CheckpointFlushIntervalEvents,
-	// and cfg.Controller.MaxWatchBackoff, following the pattern in
-	// specs/036-controller-startup-resume/quickstart.md.
-	if _, err := checkpoint.NewFilesystemStore(cfg.Controller.CheckpointDir); err != nil {
+	// directory (checkpoint.FilesystemStore, one file per kind).
+	checkpointStore, err := checkpoint.NewFilesystemStore(cfg.Controller.CheckpointDir)
+	if err != nil {
 		log.Fatal("failed to init checkpoint store", zap.Error(err))
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if err := registerCategoryTaxonomy(ctx, mgr, checkpointStore, cfg, log); err != nil {
+		log.Fatal("failed to register CategoryTaxonomy reconciler", zap.Error(err))
+	}
 
 	addr := fmt.Sprintf(":%d", cfg.Controller.Port)
 	srv := &http.Server{
@@ -87,4 +91,56 @@ func buildMux(mgr *manager.Manager) http.Handler {
 	mux.HandleFunc("GET /controller/v1/poison/{kind}", api.ListPoisonHandler(mgr))
 	mux.HandleFunc("POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue", api.RequeuePoisonHandler(mgr))
 	return mux
+}
+
+// registerCategoryTaxonomy wires the GraphQL client, the CategoryTaxonomy
+// list-then-watch adapters (spec 040's client side, deferred to spec 039),
+// and the CategoryTaxonomy reconciler into mgr, then starts its
+// listwatch.Runner on a background goroutine. Per specs/039-category-taxonomy-reconciler/quickstart.md.
+func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger) error {
+	client := graphqlclient.New(cfg.Controller.ApiURI, cfg.Controller.ApiToken)
+	listWatcher := listwatch.NewCategoryTaxonomyListWatcher(client)
+	statusClient := status.NewGraphQLStatusClient(client)
+
+	catCache := cache.New[categorytaxonomy.CategoryTaxonomy]()
+	reconciler := categorytaxonomy.NewReconciler(
+		cache.AsReadOnly(catCache),
+		statusClient,
+		categorytaxonomy.NewProductCounter(client),
+		mgr.Enqueue,
+	)
+
+	runner := &listwatch.Runner[categorytaxonomy.CategoryTaxonomy]{
+		Kind:        "CategoryTaxonomy",
+		ListWatcher: listWatcher,
+		Cache:       catCache,
+		Store:       checkpointStore,
+		Enqueue:     mgr.Enqueue,
+		KeyFunc: func(c categorytaxonomy.CategoryTaxonomy) types.WorkItemKey {
+			return types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: c.Namespace, Name: c.Name}
+		},
+		RevisionFunc:        func(c categorytaxonomy.CategoryTaxonomy) string { return c.ResourceVersion },
+		FlushIntervalEvents: cfg.Controller.CheckpointFlushIntervalEvents,
+		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
+		Log:                 log,
+	}
+
+	if err := mgr.Register(manager.ReconcilerRegistration{
+		Kind:           "CategoryTaxonomy",
+		Reconciler:     reconciler,
+		Cache:          catCache,
+		OnSuccess:      runner.MarkCompleted,
+		MaxAttempts:    cfg.Controller.DefaultMaxAttempts,
+		StallThreshold: cfg.Controller.DefaultStallThreshold,
+	}); err != nil {
+		return fmt.Errorf("register CategoryTaxonomy: %w", err)
+	}
+
+	go func() {
+		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
+			log.Error("CategoryTaxonomy runner exited with error", zap.Error(err))
+		}
+	}()
+
+	return nil
 }

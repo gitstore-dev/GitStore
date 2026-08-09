@@ -28,6 +28,13 @@ type ControllerConfig struct {
 	// ApiURI is the gitstore-api GraphQL URI used as the Watch event source.
 	ApiURI string `mapstructure:"api_uri"`
 
+	// ApiToken is the bearer token the controller-manager presents to
+	// gitstore-api on every GraphQL query/mutation/subscription (spec 040
+	// quickstart step 5 — an ordinary bearer-JWT principal, no new auth
+	// mechanism). Empty is valid for deployments using an anonymous/allowall
+	// authz provider.
+	ApiToken string `mapstructure:"api_token"`
+
 	// DefaultMaxAttempts is the global retry limit before quarantine.
 	DefaultMaxAttempts int `mapstructure:"default_max_attempts"`
 
@@ -62,6 +69,7 @@ func Load() (*Config, error) {
 
 	v.SetDefault("controller.port", 5001)
 	v.SetDefault("controller.api_uri", "http://localhost:4000/graphql")
+	v.SetDefault("controller.api_token", "")
 	v.SetDefault("controller.default_max_attempts", 5)
 	v.SetDefault("controller.default_stall_threshold", "5m")
 	v.SetDefault("controller.checkpoint_dir", ".gitstore/checkpoints")

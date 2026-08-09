@@ -31,6 +31,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Controller.ApiURI != "http://localhost:4000/graphql" {
 		t.Errorf("ApiURI = %q, want http://localhost:4000/graphql", cfg.Controller.ApiURI)
 	}
+	if cfg.Controller.ApiToken != "" {
+		t.Errorf("ApiToken = %q, want empty by default", cfg.Controller.ApiToken)
+	}
 	if cfg.Controller.DefaultMaxAttempts != 5 {
 		t.Errorf("DefaultMaxAttempts = %d, want 5", cfg.Controller.DefaultMaxAttempts)
 	}
@@ -58,6 +61,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	setenv(t,
 		"GITSTORE_CONTROLLER__PORT", "8080",
 		"GITSTORE_CONTROLLER__API_URI", "http://api.example.com/graphql",
+		"GITSTORE_CONTROLLER__API_TOKEN", "test-token",
 		"GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS", "10",
 		"GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD", "2m",
 		"GITSTORE_CONTROLLER__CHECKPOINT_DIR", "/tmp/checkpoints",
@@ -77,6 +81,9 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	}
 	if cfg.Controller.ApiURI != "http://api.example.com/graphql" {
 		t.Errorf("ApiURI = %q", cfg.Controller.ApiURI)
+	}
+	if cfg.Controller.ApiToken != "test-token" {
+		t.Errorf("ApiToken = %q, want test-token", cfg.Controller.ApiToken)
 	}
 	if cfg.Controller.DefaultMaxAttempts != 10 {
 		t.Errorf("DefaultMaxAttempts = %d, want 10", cfg.Controller.DefaultMaxAttempts)
