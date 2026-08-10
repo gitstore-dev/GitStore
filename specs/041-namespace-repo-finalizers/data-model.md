@@ -11,10 +11,8 @@ new read-only existence-check methods to the existing `Datastore` interface
 (`gitstore-api/internal/datastore/datastore.go:134-201`) and changes the internal
 behavior of three existing service methods
 (`gitstore-api/internal/graph/resolver/service.go`). No datastore schema migration is
-required for either backend. memdb indexes the existing `RepositoryID` fields in its
-in-process schema; ScyllaDB uses the existing namespace partition and filters by the
-stored `RepositoryID` with `LIMIT 1`. Repository membership uses the existing
-`NamespaceID` index.
+required for either backend, since both new methods query existing indexed fields
+(`RepositoryID` on catalog entities, `NamespaceID` on `Repository`).
 
 ## Entities (unchanged)
 

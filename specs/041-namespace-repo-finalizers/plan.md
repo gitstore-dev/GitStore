@@ -9,10 +9,9 @@
 no real precondition checks: `hasRepositories()` is a stub that always returns `false`
 (`gitstore-api/internal/graph/resolver/service.go:336-339`), and `DeleteRepository` has
 no check at all for existing catalog resources. `CreateNamespace` also never provisions
-the well-known `gitstore-system` repository. This plan replaces the stub with a real
-existence check against the already-present `RepositoryID` field on every catalog
-entity (a direct memdb index lookup and a namespace-partition-scoped ScyllaDB query),
-adds an equivalent existence check for repositories-in-namespace, and
+the well-known `gitstore-system` repository. This plan replaces the stub with a real,
+indexed existence check against the already-present `RepositoryID` field on every
+catalog entity, adds an equivalent existence check for repositories-in-namespace, and
 adds `gitstore-system` repository auto-provisioning to `CreateNamespace`. All three
 checks are synchronous, precondition-style rejections performed inline in the mutation
 — matching ADR-0002/ADR-0003 steps 1-2 exactly. This plan explicitly does **not**
@@ -30,7 +29,7 @@ research.md Decision 1 for the full rationale.
 **Testing**: Go `testing` + existing integration test harness (`tests/integration/`, `newPushHelper()`/`getEnv()` fixtures) and existing contract test pattern (`gitstore-api/tests/contract/`)
 **Target Platform**: Linux server (existing `gitstore-api` deployment)
 **Project Type**: Backend service — GraphQL API mutation/resolver layer within the existing `gitstore-api` module
-**Performance Goals**: Existence checks must avoid full-table scans and counts. memdb uses direct indexes; ScyllaDB binds the existing namespace partition and applies `LIMIT 1` while filtering by repository ID within that partition.
+**Performance Goals**: Existence checks must be O(1) or O(log n) indexed lookups, not full-table scans — consistent with existing per-namespace/per-repository indexed queries (e.g. `ListRepositoriesByNamespace`)
 **Constraints**: Must not introduce a new `Status`/finalizer state machine for Namespace or Repository (out of scope per spec Assumptions); must not change the `Namespace` or `Repository` datastore entity's existing fields in a breaking way; existence checks must work correctly against both `go-memdb` and ScyllaDB backends
 **Scale/Scope**: 3 mutations changed (`DeleteNamespace`, `DeleteRepository`, `CreateNamespace`); 2 new indexed existence-check datastore methods; no new resource kinds, no new GraphQL types
 
