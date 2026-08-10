@@ -38,6 +38,8 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 | `api.port`      | `GITSTORE_API__PORT`      | integer | `4000`  | No       | No        | HTTP port the GraphQL API server listens on (1–65535)   |
 | `api.git_port`  | `GITSTORE_API__GIT_PORT`  | integer | `5000`  | No       | No        | Git Smart HTTP port the API server listens on (1–65535) |
 | `api.grpc_port` | `GITSTORE_API__GRPC_PORT` | integer | `6000`  | No       | No        | CatalogService gRPC port called by gitstore-git-service |
+| `api.rate_limit_per_second` | `GITSTORE_API__RATE_LIMIT_PER_SECOND` | float | `50` | No | No | Sustained per-client-IP request rate allowed on `/graphql` |
+| `api.rate_limit_burst` | `GITSTORE_API__RATE_LIMIT_BURST` | integer | `100` | No | No | Per-client-IP token-bucket burst size on top of `api.rate_limit_per_second` |
 
 ### Git Service Connection
 
@@ -226,6 +228,7 @@ uri = "http://localhost:6000"
 |--------------------------------------|------------------------------------------------|----------|---------------------------------|----------|-----------|-------------------------------------------------------------|
 | `controller.port`                    | `GITSTORE_CONTROLLER__PORT`                    | integer  | `5001`                          | No       | No        | HTTP port for `/health`, `/metrics`, and `/controller/v1/*` |
 | `controller.api_uri`                 | `GITSTORE_CONTROLLER__API_URI`                 | string   | `http://localhost:4000/graphql` | No       | No        | GraphQL API URI used by reconcilers                         |
+| `controller.api_token`               | `GITSTORE_CONTROLLER__API_TOKEN`               | string   | (empty)                         | No       | Yes       | Bearer token presented to `gitstore-api` on every GraphQL query/mutation/subscription |
 | `controller.default_max_attempts`    | `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`    | integer  | `5`                             | No       | No        | Retry limit before quarantine                               |
 | `controller.default_stall_threshold` | `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | duration | `5m`                            | No       | No        | Worker stall threshold                                      |
 | `controller.checkpoint_dir`          | `GITSTORE_CONTROLLER__CHECKPOINT_DIR`          | string   | `.gitstore/checkpoints`         | No       | No        | Directory for the filesystem checkpoint store (one file per kind) |

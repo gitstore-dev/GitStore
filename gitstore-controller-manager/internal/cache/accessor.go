@@ -9,16 +9,24 @@ import "github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 // Reconcilers receive this interface so they cannot mutate the cache.
 type CacheAccessor[T any] interface {
 	Get(key types.WorkItemKey) (T, bool)
+	// List returns all cached objects. Reconcilers that need to enumerate a
+	// kind's full population (e.g. hierarchy/cycle computation over a
+	// parent-reference adjacency, spec 039) use this instead of Get.
+	List() []T
 }
 
-// readOnlyCache wraps *Cache[T] and exposes only Get, preventing type-assertion
-// escapes to the mutable *Cache[T].
+// readOnlyCache wraps *Cache[T] and exposes only Get/List, preventing
+// type-assertion escapes to the mutable *Cache[T].
 type readOnlyCache[T any] struct {
 	c *Cache[T]
 }
 
 func (r readOnlyCache[T]) Get(key types.WorkItemKey) (T, bool) {
 	return r.c.Get(key)
+}
+
+func (r readOnlyCache[T]) List() []T {
+	return r.c.List()
 }
 
 // AsReadOnly returns a CacheAccessor[T] backed by c. The returned value does

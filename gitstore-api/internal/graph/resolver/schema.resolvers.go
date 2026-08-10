@@ -7,9 +7,15 @@ package resolver
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/vektah/gqlparser/v2/gqlerror"
+	"go.uber.org/zap"
 )
 
 // PublishCatalog is the resolver for the publishCatalog field.
@@ -32,6 +38,71 @@ func (r *mutationResolver) PublishCatalog(ctx context.Context, input model.Publi
 	return &model.PublishCatalogPayload{
 		CatalogVersion: version,
 	}, nil
+}
+
+// UpdateResourceStatus is the resolver for the updateResourceStatus field.
+func (r *mutationResolver) UpdateResourceStatus(ctx context.Context, input model.UpdateResourceStatusInput) (*model.UpdateResourceStatusPayload, error) {
+	switch input.Kind {
+	case "CategoryTaxonomy":
+		return r.updateCategoryTaxonomyStatusGeneric(ctx, input)
+	default:
+		// No generic CRD-kind datastore backend exists yet (research.md
+		// R7 scopes CRD-shape genericity at the datastore layer out of
+		// this spec) — only kinds with a concrete status-write backend
+		// can be reached through this generic mutation today.
+		return nil, &gqlerror.Error{
+			Message:    fmt.Sprintf("kind %q is not registered for status writes", input.Kind),
+			Extensions: map[string]any{"code": "NOT_FOUND"},
+		}
+	}
+}
+
+// updateCategoryTaxonomyStatusGeneric backs the generic updateResourceStatus
+// mutation for kind "CategoryTaxonomy", reusing the same datastore write
+// path as the dedicated updateCategoryStatus mutation. The JSON-boxed
+// input.Resolved is decoded into the typed ResolvedCategoryTaxonomy shape.
+func (r *mutationResolver) updateCategoryTaxonomyStatusGeneric(ctx context.Context, input model.UpdateResourceStatusInput) (*model.UpdateResourceStatusPayload, error) {
+	patch := datastore.CategoryTaxonomyStatusPatch{
+		ResourceVersion: input.ResourceVersion,
+	}
+	if input.ObservedGeneration != nil {
+		gen := int64(*input.ObservedGeneration)
+		patch.ObservedGeneration = &gen
+	}
+	patch.LastAppliedRevision = input.LastAppliedRevision
+	if input.Conditions != nil {
+		patch.Conditions = toConditions(input.Conditions)
+	}
+	if input.Resolved != nil {
+		patch.Resolved = resolvedFromJSONMap(input.Resolved)
+	}
+
+	updated, err := r.store.UpdateCategoryTaxonomyStatus(ctx, input.Namespace, input.Name, patch)
+	if err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			StatusWriteConflictsTotal.WithLabelValues(input.Kind).Inc()
+			r.logger.Info("status write conflict",
+				zap.String("kind", input.Kind),
+				zap.String("namespace", input.Namespace),
+				zap.String("name", input.Name))
+			current, getErr := r.store.GetCategoryTaxonomyByName(ctx, input.Namespace, input.Name)
+			if getErr != nil {
+				return nil, gqlerror.Errorf("status update conflict, and could not re-fetch current version: %v", getErr)
+			}
+			return &model.UpdateResourceStatusPayload{
+				Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion},
+			}, nil
+		}
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, &gqlerror.Error{
+				Message:    fmt.Sprintf("%s %s/%s not found", input.Kind, input.Namespace, input.Name),
+				Extensions: map[string]any{"code": "NOT_FOUND"},
+			}
+		}
+		return nil, gqlerror.Errorf("update resource status: %v", err)
+	}
+	r.publishCategoryTaxonomyStatusEvent(updated)
+	return &model.UpdateResourceStatusPayload{Object: categoryTaxonomyToJSONMap(updated)}, nil
 }
 
 // Node is the resolver for the node field.
@@ -73,11 +144,67 @@ func (r *queryResolver) CatalogVersion(ctx context.Context) (*model.CatalogVersi
 	}, nil
 }
 
+// WatchResources is the resolver for the watchResources field.
+func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.WatchEvent, error) {
+	if r.eventBus == nil {
+		return nil, gqlerror.Errorf("watch subscriptions are not available")
+	}
+	rv := ""
+	if resourceVersion != nil {
+		rv = *resourceVersion
+	}
+	events, unsubscribe, err := r.eventBus.Subscribe(kind, rv)
+	if err != nil {
+		if errors.Is(err, eventbus.ErrWatchExpired) {
+			r.logger.Warn("watch cursor expired; controller must re-list",
+				zap.String("kind", kind),
+				zap.String("resource_version", rv))
+			return nil, &gqlerror.Error{
+				Message:    "watch cursor expired; re-list and resume from a fresh cursor",
+				Extensions: map[string]any{"code": "WATCH_EXPIRED"},
+			}
+		}
+		return nil, gqlerror.Errorf("watch subscription failed: %v", err)
+	}
+	r.logger.Debug("watch subscription opened",
+		zap.String("kind", kind),
+		zap.Bool("resumed", rv != ""))
+
+	out := make(chan *model.WatchEvent, 16)
+	go func() {
+		defer close(out)
+		defer unsubscribe()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				if !categoryEventMatchesFilters(ev, namespace) || !categoryEventMatchesSelector(ev, selector) {
+					continue
+				}
+				select {
+				case out <- toGenericWatchEvent(kind, ev):
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
 // Mutation returns generated.MutationResolver implementation.
 func (r *Resolver) Mutation() generated.MutationResolver { return &mutationResolver{r} }
 
 // Query returns generated.QueryResolver implementation.
 func (r *Resolver) Query() generated.QueryResolver { return &queryResolver{r} }
 
+// Subscription returns generated.SubscriptionResolver implementation.
+func (r *Resolver) Subscription() generated.SubscriptionResolver { return &subscriptionResolver{r} }
+
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
+type subscriptionResolver struct{ *Resolver }

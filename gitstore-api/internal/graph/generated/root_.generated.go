@@ -27,6 +27,7 @@ type ResolverRoot interface {
 	Mutation() MutationResolver
 	Product() ProductResolver
 	Query() QueryResolver
+	Subscription() SubscriptionResolver
 }
 
 type DirectiveRoot struct {
@@ -124,6 +125,14 @@ type ComplexityRoot struct {
 		LastAppliedRevision func(childComplexity int) int
 		ObservedGeneration  func(childComplexity int) int
 		Resolved            func(childComplexity int) int
+	}
+
+	CategoryWatchEvent struct {
+		Category        func(childComplexity int) int
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Type            func(childComplexity int) int
 	}
 
 	Collection struct {
@@ -264,23 +273,25 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
-		CreateCategory     func(childComplexity int, input model.CreateCategoryInput) int
-		CreateCollection   func(childComplexity int, input model.CreateCollectionInput) int
-		CreateNamespace    func(childComplexity int, input model.CreateNamespaceInput) int
-		CreateRepository   func(childComplexity int, input model.CreateRepositoryInput) int
-		DeleteCategory     func(childComplexity int, input model.DeleteCategoryInput) int
-		DeleteCollection   func(childComplexity int, input model.DeleteCollectionInput) int
-		DeleteNamespace    func(childComplexity int, input model.DeleteNamespaceInput) int
-		DeleteRepository   func(childComplexity int, input model.DeleteRepositoryInput) int
-		Login              func(childComplexity int, input model.LoginInput) int
-		Logout             func(childComplexity int) int
-		PublishCatalog     func(childComplexity int, input model.PublishCatalogInput) int
-		RefreshToken       func(childComplexity int, input model.RefreshTokenInput) int
-		RenameRepository   func(childComplexity int, input model.RenameRepositoryInput) int
-		ReorderCategories  func(childComplexity int, input model.ReorderCategoriesInput) int
-		TransferRepository func(childComplexity int, input model.TransferRepositoryInput) int
-		UpdateCategory     func(childComplexity int, input model.UpdateCategoryInput) int
-		UpdateCollection   func(childComplexity int, input model.UpdateCollectionInput) int
+		CreateCategory       func(childComplexity int, input model.CreateCategoryInput) int
+		CreateCollection     func(childComplexity int, input model.CreateCollectionInput) int
+		CreateNamespace      func(childComplexity int, input model.CreateNamespaceInput) int
+		CreateRepository     func(childComplexity int, input model.CreateRepositoryInput) int
+		DeleteCategory       func(childComplexity int, input model.DeleteCategoryInput) int
+		DeleteCollection     func(childComplexity int, input model.DeleteCollectionInput) int
+		DeleteNamespace      func(childComplexity int, input model.DeleteNamespaceInput) int
+		DeleteRepository     func(childComplexity int, input model.DeleteRepositoryInput) int
+		Login                func(childComplexity int, input model.LoginInput) int
+		Logout               func(childComplexity int) int
+		PublishCatalog       func(childComplexity int, input model.PublishCatalogInput) int
+		RefreshToken         func(childComplexity int, input model.RefreshTokenInput) int
+		RenameRepository     func(childComplexity int, input model.RenameRepositoryInput) int
+		ReorderCategories    func(childComplexity int, input model.ReorderCategoriesInput) int
+		TransferRepository   func(childComplexity int, input model.TransferRepositoryInput) int
+		UpdateCategory       func(childComplexity int, input model.UpdateCategoryInput) int
+		UpdateCategoryStatus func(childComplexity int, input model.UpdateCategoryStatusInput) int
+		UpdateCollection     func(childComplexity int, input model.UpdateCollectionInput) int
+		UpdateResourceStatus func(childComplexity int, input model.UpdateResourceStatusInput) int
 	}
 
 	Namespace struct {
@@ -544,9 +555,9 @@ type ComplexityRoot struct {
 	}
 
 	ResolvedCategoryTaxonomy struct {
-		AncestorPath func(childComplexity int) int
 		ChildCount   func(childComplexity int) int
 		Depth        func(childComplexity int) int
+		Path         func(childComplexity int) int
 		ProductCount func(childComplexity int) int
 	}
 
@@ -602,8 +613,17 @@ type ComplexityRoot struct {
 		Value func(childComplexity int) int
 	}
 
+	StatusConflict struct {
+		CurrentResourceVersion func(childComplexity int) int
+	}
+
 	StrategyDefinition struct {
 		Type func(childComplexity int) int
+	}
+
+	Subscription struct {
+		WatchCategories func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchResources  func(childComplexity int, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 	}
 
 	TokenResponse struct {
@@ -624,9 +644,19 @@ type ComplexityRoot struct {
 		Conflict func(childComplexity int) int
 	}
 
+	UpdateCategoryStatusPayload struct {
+		Category func(childComplexity int) int
+		Conflict func(childComplexity int) int
+	}
+
 	UpdateCollectionPayload struct {
 		Collection func(childComplexity int) int
 		Conflict   func(childComplexity int) int
+	}
+
+	UpdateResourceStatusPayload struct {
+		Conflict func(childComplexity int) int
+		Object   func(childComplexity int) int
 	}
 
 	User struct {
@@ -638,6 +668,15 @@ type ComplexityRoot struct {
 		Ready       func(childComplexity int) int
 		Total       func(childComplexity int) int
 		Unavailable func(childComplexity int) int
+	}
+
+	WatchEvent struct {
+		Kind            func(childComplexity int) int
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		Object          func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Type            func(childComplexity int) int
 	}
 }
 
@@ -1079,6 +1118,41 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CategoryTaxonomyStatus.Resolved(childComplexity), true
+
+	case "CategoryWatchEvent.category":
+		if e.ComplexityRoot.CategoryWatchEvent.Category == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryWatchEvent.Category(childComplexity), true
+
+	case "CategoryWatchEvent.name":
+		if e.ComplexityRoot.CategoryWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryWatchEvent.Name(childComplexity), true
+
+	case "CategoryWatchEvent.namespace":
+		if e.ComplexityRoot.CategoryWatchEvent.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryWatchEvent.Namespace(childComplexity), true
+
+	case "CategoryWatchEvent.resourceVersion":
+		if e.ComplexityRoot.CategoryWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryWatchEvent.ResourceVersion(childComplexity), true
+
+	case "CategoryWatchEvent.type":
+		if e.ComplexityRoot.CategoryWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CategoryWatchEvent.Type(childComplexity), true
 
 	case "Collection.apiVersion":
 		if e.ComplexityRoot.Collection.APIVersion == nil {
@@ -1706,6 +1780,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.UpdateCategory(childComplexity, args["input"].(model.UpdateCategoryInput)), true
 
+	case "Mutation.updateCategoryStatus":
+		if e.ComplexityRoot.Mutation.UpdateCategoryStatus == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateCategoryStatus_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateCategoryStatus(childComplexity, args["input"].(model.UpdateCategoryStatusInput)), true
+
 	case "Mutation.updateCollection":
 		if e.ComplexityRoot.Mutation.UpdateCollection == nil {
 			break
@@ -1717,6 +1803,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.UpdateCollection(childComplexity, args["input"].(model.UpdateCollectionInput)), true
+
+	case "Mutation.updateResourceStatus":
+		if e.ComplexityRoot.Mutation.UpdateResourceStatus == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateResourceStatus_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateResourceStatus(childComplexity, args["input"].(model.UpdateResourceStatusInput)), true
 
 	case "Namespace.createdAt":
 		if e.ComplexityRoot.Namespace.CreatedAt == nil {
@@ -2878,13 +2976,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ResolvedCategoryDefinition.Path(childComplexity), true
 
-	case "ResolvedCategoryTaxonomy.ancestorPath":
-		if e.ComplexityRoot.ResolvedCategoryTaxonomy.AncestorPath == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ResolvedCategoryTaxonomy.AncestorPath(childComplexity), true
-
 	case "ResolvedCategoryTaxonomy.childCount":
 		if e.ComplexityRoot.ResolvedCategoryTaxonomy.ChildCount == nil {
 			break
@@ -2898,6 +2989,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ResolvedCategoryTaxonomy.Depth(childComplexity), true
+
+	case "ResolvedCategoryTaxonomy.path":
+		if e.ComplexityRoot.ResolvedCategoryTaxonomy.Path == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedCategoryTaxonomy.Path(childComplexity), true
 
 	case "ResolvedCategoryTaxonomy.productCount":
 		if e.ComplexityRoot.ResolvedCategoryTaxonomy.ProductCount == nil {
@@ -3102,12 +3200,43 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.SelectedOptionDefinition.Value(childComplexity), true
 
+	case "StatusConflict.currentResourceVersion":
+		if e.ComplexityRoot.StatusConflict.CurrentResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StatusConflict.CurrentResourceVersion(childComplexity), true
+
 	case "StrategyDefinition.type":
 		if e.ComplexityRoot.StrategyDefinition.Type == nil {
 			break
 		}
 
 		return e.ComplexityRoot.StrategyDefinition.Type(childComplexity), true
+
+	case "Subscription.watchCategories":
+		if e.ComplexityRoot.Subscription.WatchCategories == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchCategories_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchCategories(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
+	case "Subscription.watchResources":
+		if e.ComplexityRoot.Subscription.WatchResources == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchResources_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchResources(childComplexity, args["kind"].(string), args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
 
 	case "TokenResponse.accessToken":
 		if e.ComplexityRoot.TokenResponse.AccessToken == nil {
@@ -3172,6 +3301,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateCategoryPayload.Conflict(childComplexity), true
 
+	case "UpdateCategoryStatusPayload.category":
+		if e.ComplexityRoot.UpdateCategoryStatusPayload.Category == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateCategoryStatusPayload.Category(childComplexity), true
+
+	case "UpdateCategoryStatusPayload.conflict":
+		if e.ComplexityRoot.UpdateCategoryStatusPayload.Conflict == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateCategoryStatusPayload.Conflict(childComplexity), true
+
 	case "UpdateCollectionPayload.collection":
 		if e.ComplexityRoot.UpdateCollectionPayload.Collection == nil {
 			break
@@ -3185,6 +3328,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.UpdateCollectionPayload.Conflict(childComplexity), true
+
+	case "UpdateResourceStatusPayload.conflict":
+		if e.ComplexityRoot.UpdateResourceStatusPayload.Conflict == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateResourceStatusPayload.Conflict(childComplexity), true
+
+	case "UpdateResourceStatusPayload.object":
+		if e.ComplexityRoot.UpdateResourceStatusPayload.Object == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateResourceStatusPayload.Object(childComplexity), true
 
 	case "User.isAdmin":
 		if e.ComplexityRoot.User.IsAdmin == nil {
@@ -3221,6 +3378,48 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.VariantSummaryDefinition.Unavailable(childComplexity), true
 
+	case "WatchEvent.kind":
+		if e.ComplexityRoot.WatchEvent.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WatchEvent.Kind(childComplexity), true
+
+	case "WatchEvent.name":
+		if e.ComplexityRoot.WatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WatchEvent.Name(childComplexity), true
+
+	case "WatchEvent.namespace":
+		if e.ComplexityRoot.WatchEvent.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WatchEvent.Namespace(childComplexity), true
+
+	case "WatchEvent.object":
+		if e.ComplexityRoot.WatchEvent.Object == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WatchEvent.Object(childComplexity), true
+
+	case "WatchEvent.resourceVersion":
+		if e.ComplexityRoot.WatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WatchEvent.ResourceVersion(childComplexity), true
+
+	case "WatchEvent.type":
+		if e.ComplexityRoot.WatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.WatchEvent.Type(childComplexity), true
+
 	}
 	return 0, false
 }
@@ -3233,6 +3432,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCategoryNamespacePath,
 		ec.unmarshalInputCollectionBy,
 		ec.unmarshalInputCollectionNamespacePath,
+		ec.unmarshalInputConditionInput,
 		ec.unmarshalInputCreateCategoryInput,
 		ec.unmarshalInputCreateCollectionInput,
 		ec.unmarshalInputCreateNamespaceInput,
@@ -3241,6 +3441,9 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputDeleteCollectionInput,
 		ec.unmarshalInputDeleteNamespaceInput,
 		ec.unmarshalInputDeleteRepositoryInput,
+		ec.unmarshalInputKeyValuePairInput,
+		ec.unmarshalInputLabelSelectorInput,
+		ec.unmarshalInputLabelSelectorRequirementInput,
 		ec.unmarshalInputLoginInput,
 		ec.unmarshalInputNamespaceBy,
 		ec.unmarshalInputProductBy,
@@ -3253,9 +3456,12 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputReorderCategoriesInput,
 		ec.unmarshalInputRepositoryBy,
 		ec.unmarshalInputRepositoryNamespacePath,
+		ec.unmarshalInputResolvedCategoryTaxonomyInput,
 		ec.unmarshalInputTransferRepositoryInput,
 		ec.unmarshalInputUpdateCategoryInput,
+		ec.unmarshalInputUpdateCategoryStatusInput,
 		ec.unmarshalInputUpdateCollectionInput,
+		ec.unmarshalInputUpdateResourceStatusInput,
 	)
 	first := true
 
@@ -3299,6 +3505,23 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 			ctx = graphql.WithUnmarshalerMap(ctx, inputUnmarshalMap)
 			data := ec._Mutation(ctx, opCtx.Operation.SelectionSet)
 			var buf bytes.Buffer
+			data.MarshalGQL(&buf)
+
+			return &graphql.Response{
+				Data: buf.Bytes(),
+			}
+		}
+	case ast.Subscription:
+		next := ec._Subscription(ctx, opCtx.Operation.SelectionSet)
+
+		var buf bytes.Buffer
+		return func(ctx context.Context) *graphql.Response {
+			buf.Reset()
+			data := next(ctx)
+
+			if data == nil {
+				return nil
+			}
 			data.MarshalGQL(&buf)
 
 			return &graphql.Response{
@@ -3503,6 +3726,33 @@ extend type Mutation {
   """
   reorderCategories(input: ReorderCategoriesInput!): ReorderCategoriesPayload!
 
+  """
+  Partial-merge update to a CategoryTaxonomy's .status sub-resource.
+  Only non-null input fields are changed; all other existing status
+  fields are left unchanged (FR-008, spec 040). Requires
+  resourceVersion to match the resource's current value or the
+  request fails with a StatusConflict (FR-009). Rejects any attempt
+  to alter .spec or author-controlled .metadata by construction —
+  this input type has no such fields (FR-010). Requires
+  controller-level authorization independent of the resourceVersion
+  outcome (FR-011).
+  """
+  updateCategoryStatus(input: UpdateCategoryStatusInput!): UpdateCategoryStatusPayload!
+}
+
+extend type Subscription {
+  """
+  Dedicated, compile-time-typed watch entry point for CategoryTaxonomy.
+  Same list-then-watch/resourceVersion/expiry semantics as the generic
+  watchResources field (FR-001 through FR-004, spec 040), scoped to
+  this kind. Callers obtain the initial list via the existing
+  ` + "`" + `categories` + "`" + ` query.
+  """
+  watchCategories(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): CategoryWatchEvent!
 }
 
 """
@@ -3647,8 +3897,16 @@ Controller-computed category hierarchy metadata.
 """
 type ResolvedCategoryTaxonomy {
   depth: Int!
-  # TODO: Change to 'path: [String!]!'
-  ancestorPath: String!
+
+  """
+  Ancestor path from root to self, e.g. ["electronics", "computers",
+  "laptops"] for the "laptops" category (root-to-self order). A root
+  category's path is a single-element array containing its own name.
+  Distinct from Category.path, which is a read-time-derived field
+  computed from the separate ancestor_path datastore column (see
+  specs/040-controller-watch-status-api/research.md R9/R10).
+  """
+  path: [String!]!
   childCount: Int!
   productCount: Int!
 }
@@ -3897,6 +4155,76 @@ type CategoryOptimisticLockConflict {
   Diff between current and attempted
   """
   diff: String!
+}
+
+# ============================================================================
+# Status Subresource API (spec 040)
+# ============================================================================
+
+input UpdateCategoryStatusInput {
+  name: String!
+  namespace: String!
+
+  """
+  Required optimistic-concurrency precondition (FR-009). Must equal
+  the resource's current metadata.resourceVersion.
+  """
+  resourceVersion: String!
+
+  """Null = unchanged. Set on every successful reconcile per spec 026 FR-008."""
+  observedGeneration: Int
+
+  """Null = unchanged, e.g. "main@sha1:a1b2c3d"."""
+  lastAppliedRevision: String
+
+  """Null = unchanged. Non-null = full replacement of the conditions slice."""
+  conditions: [ConditionInput!]
+
+  """Null = unchanged. Kind-specific — not part of any generic patch shape."""
+  resolved: ResolvedCategoryTaxonomyInput
+}
+
+input ResolvedCategoryTaxonomyInput {
+  depth: Int!
+
+  """
+  Ancestor path from root to self, e.g. ["electronics", "computers",
+  "laptops"] (root-to-self order). A root category's path is a
+  single-element array containing its own name.
+  """
+  path: [String!]!
+  childCount: Int!
+  productCount: Int!
+}
+
+type UpdateCategoryStatusPayload {
+  """Null when the write failed (conflict or not-found)."""
+  category: Category
+
+  """Non-null only when the resourceVersion precondition failed."""
+  conflict: StatusConflict
+}
+
+# ============================================================================
+# Watch API (spec 040)
+# ============================================================================
+
+"""
+CategoryTaxonomy-specific watch event. Carries the same envelope as
+the generic WatchEvent but with a strongly-typed ` + "`" + `category` + "`" + ` field
+instead of a JSON-boxed ` + "`" + `object` + "`" + `, so core-kind consumers get full
+type safety.
+"""
+type CategoryWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+
+  """
+  Full Category resource for ADDED/MODIFIED. Null for DELETED/BOOKMARK.
+  """
+  category: Category
 }
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/collection.graphqls", Input: `# Collection Entity GraphQL Types (Kubernetes-style resource envelope)
@@ -5308,6 +5636,7 @@ type DeleteRepositoryPayload {
 schema {
   query: Query
   mutation: Mutation
+  subscription: Subscription
 }
 
 # ============================================================================
@@ -5382,6 +5711,163 @@ type Mutation {
   TODO: Remove. It is unclear which repository we're are publishing to.
   """
   publishCatalog(input: PublishCatalogInput!): PublishCatalogPayload!
+}
+
+# ============================================================================
+# Subscription Root
+# ============================================================================
+
+type Subscription {
+  """
+  Generic list-then-watch entry point for any resource kind, including
+  CRD-defined kinds not built into the core schema (FR-006, spec 040).
+  Core kinds SHOULD prefer their dedicated per-kind subscription (e.g.
+  watchCategories) for compile-time-typed payloads; this field exists
+  so a kind unknown to the schema at build time can still be watched
+  (FR-006, SC-005).
+
+  Behavior:
+  - resourceVersion omitted/empty: no implicit "list" is performed —
+    subscriptions deliver only a stream. Callers obtain the initial
+    list via the kind's existing list query and then open this
+    subscription with the resourceVersion returned by that list.
+  - resourceVersion present but expired (older than server retention):
+    the subscription terminates immediately with a WATCH_EXPIRED
+    extension error (FR-004) instead of silently resuming from scratch.
+  - resourceVersion present and valid: only events after that cursor
+    are delivered, in admission order for that kind (FR-002, FR-003).
+  """
+  watchResources(
+    kind: String!
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): WatchEvent!
+}
+
+# ============================================================================
+# Watch API (spec 040)
+# ============================================================================
+
+"""
+A single change notification for a watched resource kind, delivered by
+the generic watchResources subscription.
+"""
+type WatchEvent {
+  type: WatchEventType!
+  kind: String!
+  namespace: String
+  name: String!
+
+  """
+  Opaque resume cursor. Present on every event, including BOOKMARK.
+  """
+  resourceVersion: String!
+
+  """
+  Full resource payload for ADDED/MODIFIED. Null for DELETED/BOOKMARK.
+  JSON-boxed because the generic watchResources path has no
+  compile-time-known shape for CRD kinds.
+  """
+  object: JSON
+}
+
+enum WatchEventType {
+  ADDED
+  MODIFIED
+  DELETED
+
+  """
+  Carries only a resourceVersion advance with no object change — used
+  to let a long-idle subscription periodically refresh its cursor
+  without a corresponding resource change. object is always null.
+  """
+  BOOKMARK
+}
+
+"""
+Input mirror of the existing (output-only) LabelSelector type, needed
+because GraphQL requires distinct input/output types for structured
+arguments.
+"""
+input LabelSelectorInput {
+  matchLabels: [KeyValuePairInput!]
+  matchExpressions: [LabelSelectorRequirementInput!]
+}
+
+input LabelSelectorRequirementInput {
+  key: String!
+  operator: LabelSelectorOperator!
+  values: [String!]
+}
+
+input KeyValuePairInput {
+  key: String!
+  value: String!
+}
+
+# ============================================================================
+# Status Subresource API (spec 040)
+# ============================================================================
+
+extend type Mutation {
+  """
+  Generic status-subresource write for CRD-defined kinds that have no
+  compile-time-known ` + "`" + `resolved` + "`" + ` shape. Core kinds SHOULD use their
+  dedicated per-kind mutation (e.g. updateCategoryStatus) instead —
+  this field exists so a kind unknown to the schema at build time can
+  still write status (FR-006, SC-005). Semantics (partial-merge,
+  resourceVersion precondition, spec-write rejection by construction,
+  controller authorization) are identical to the per-kind mutations.
+  """
+  updateResourceStatus(
+    input: UpdateResourceStatusInput!
+  ): UpdateResourceStatusPayload!
+}
+
+input UpdateResourceStatusInput {
+  kind: String!
+  name: String!
+  namespace: String!
+  resourceVersion: String!
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [ConditionInput!]
+
+  """
+  Kind-specific resolved payload, JSON-boxed since no static input type
+  exists for an arbitrary CRD kind (mirrors WatchEvent.object).
+  """
+  resolved: JSON
+}
+
+type UpdateResourceStatusPayload {
+  """JSON-boxed current resource state; null when the write failed."""
+  object: JSON
+
+  conflict: StatusConflict
+}
+
+"""
+A named status condition input, mirroring the Kubernetes condition
+convention used by CategoryCondition/ProductCondition et al.
+"""
+input ConditionInput {
+  type: String!
+  status: String! # "True" | "False" | "Unknown"
+  observedGeneration: Int!
+  lastTransitionTime: DateTime!
+  reason: String
+  message: String
+}
+
+"""
+Optimistic-concurrency conflict payload shared by all status-write
+mutations (per-kind and generic).
+"""
+type StatusConflict {
+  """The resource's actual current resourceVersion, for retry."""
+  currentResourceVersion: String!
 }
 
 # ============================================================================
@@ -5691,6 +6177,22 @@ func (ec *executionContext) childFields_CategoryTaxonomyStatus(ctx context.Conte
 		return ec.fieldContext_CategoryTaxonomyStatus_resolved(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CategoryTaxonomyStatus", field.Name)
+}
+
+func (ec *executionContext) childFields_CategoryWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_CategoryWatchEvent_type(ctx, field)
+	case "namespace":
+		return ec.fieldContext_CategoryWatchEvent_namespace(ctx, field)
+	case "name":
+		return ec.fieldContext_CategoryWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_CategoryWatchEvent_resourceVersion(ctx, field)
+	case "category":
+		return ec.fieldContext_CategoryWatchEvent_category(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CategoryWatchEvent", field.Name)
 }
 
 func (ec *executionContext) childFields_Collection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -6455,8 +6957,8 @@ func (ec *executionContext) childFields_ResolvedCategoryTaxonomy(ctx context.Con
 	switch field.Name {
 	case "depth":
 		return ec.fieldContext_ResolvedCategoryTaxonomy_depth(ctx, field)
-	case "ancestorPath":
-		return ec.fieldContext_ResolvedCategoryTaxonomy_ancestorPath(ctx, field)
+	case "path":
+		return ec.fieldContext_ResolvedCategoryTaxonomy_path(ctx, field)
 	case "childCount":
 		return ec.fieldContext_ResolvedCategoryTaxonomy_childCount(ctx, field)
 	case "productCount":
@@ -6569,6 +7071,14 @@ func (ec *executionContext) childFields_SelectedOptionDefinition(ctx context.Con
 	return nil, fmt.Errorf("no field named %q was found under type SelectedOptionDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_StatusConflict(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "currentResourceVersion":
+		return ec.fieldContext_StatusConflict_currentResourceVersion(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type StatusConflict", field.Name)
+}
+
 func (ec *executionContext) childFields_StrategyDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "type":
@@ -6613,6 +7123,16 @@ func (ec *executionContext) childFields_UpdateCategoryPayload(ctx context.Contex
 	return nil, fmt.Errorf("no field named %q was found under type UpdateCategoryPayload", field.Name)
 }
 
+func (ec *executionContext) childFields_UpdateCategoryStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "category":
+		return ec.fieldContext_UpdateCategoryStatusPayload_category(ctx, field)
+	case "conflict":
+		return ec.fieldContext_UpdateCategoryStatusPayload_conflict(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateCategoryStatusPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_UpdateCollectionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "collection":
@@ -6621,6 +7141,16 @@ func (ec *executionContext) childFields_UpdateCollectionPayload(ctx context.Cont
 		return ec.fieldContext_UpdateCollectionPayload_conflict(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateCollectionPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateResourceStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "object":
+		return ec.fieldContext_UpdateResourceStatusPayload_object(ctx, field)
+	case "conflict":
+		return ec.fieldContext_UpdateResourceStatusPayload_conflict(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateResourceStatusPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_VariantSummaryDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -6633,6 +7163,24 @@ func (ec *executionContext) childFields_VariantSummaryDefinition(ctx context.Con
 		return ec.fieldContext_VariantSummaryDefinition_unavailable(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type VariantSummaryDefinition", field.Name)
+}
+
+func (ec *executionContext) childFields_WatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_WatchEvent_type(ctx, field)
+	case "kind":
+		return ec.fieldContext_WatchEvent_kind(ctx, field)
+	case "namespace":
+		return ec.fieldContext_WatchEvent_namespace(ctx, field)
+	case "name":
+		return ec.fieldContext_WatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_WatchEvent_resourceVersion(ctx, field)
+	case "object":
+		return ec.fieldContext_WatchEvent_object(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WatchEvent", field.Name)
 }
 
 func (ec *executionContext) childFields___Directive(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

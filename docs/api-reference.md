@@ -107,6 +107,15 @@ mutation Logout {
 | `renameRepository(input: RenameRepositoryInput!)` | Rename a repository |
 | `transferRepository(input: TransferRepositoryInput!)` | Move a repository to another namespace |
 | `deleteRepository(input: DeleteRepositoryInput!)` | Delete a repository and its storage |
+| `updateCategoryStatus(input: UpdateCategoryStatusInput!)` | Controller-only partial-merge write to a CategoryTaxonomy's `.status` sub-resource |
+| `updateResourceStatus(input: UpdateResourceStatusInput!)` | Generic, kind-parameterized counterpart of `updateCategoryStatus` for CRD-defined kinds |
+
+### Subscriptions
+
+| Operation | Purpose |
+|---|---|
+| `watchCategories(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | List-then-watch stream of `CategoryTaxonomy` changes |
+| `watchResources(kind: String!, namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Generic, kind-parameterized counterpart of `watchCategories` for CRD-defined kinds |
 
 ## Relay IDs
 
@@ -709,6 +718,91 @@ mutation DeleteRepository($repositoryId: ID!) {
     }
   ) {
         deletedRepositoryId
+  }
+}
+```
+
+### updateCategoryStatus
+
+Controller-only, partial-merge write to a `CategoryTaxonomy`'s `.status` sub-resource. Only non-null input fields are changed; existing status fields not mentioned in the input are left unchanged. Requires `resourceVersion` to match the resource's current value, or the request returns a `conflict` payload (not an error) carrying the resource's actual current version. Requires controller-level authorization (`category.status.write`), independent of whether `resourceVersion` matches. Never alters `.spec` or author-controlled `.metadata` — the input type has no such fields.
+
+```graphql
+mutation UpdateCategoryStatus($input: UpdateCategoryStatusInput!) {
+  updateCategoryStatus(input: $input) {
+    category {
+      metadata {
+        resourceVersion
+      }
+      status {
+        observedGeneration
+        conditions {
+          type
+          status
+        }
+      }
+    }
+    conflict {
+      currentResourceVersion
+    }
+  }
+}
+```
+
+A resource that no longer exists returns a GraphQL error with `extensions.code == "NOT_FOUND"` rather than a `conflict` payload — distinguishing "someone else changed it first" from "it's gone."
+
+### updateResourceStatus
+
+Generic, kind-parameterized counterpart of `updateCategoryStatus` for CRD-defined kinds that have no compile-time-known `resolved` shape. Same partial-merge/precondition/authorization semantics; the resource payload and `resolved` field are JSON-boxed instead of strongly typed.
+
+```graphql
+mutation UpdateResourceStatus($input: UpdateResourceStatusInput!) {
+  updateResourceStatus(input: $input) {
+    object
+    conflict {
+      currentResourceVersion
+    }
+  }
+}
+```
+
+### watchCategories
+
+Subscription: an ordered stream of `CategoryTaxonomy` changes. Pass no `resourceVersion` to start receiving only future changes; pass a previously-observed `resourceVersion` to resume. A cursor that predates the server's retained event window terminates the subscription with a GraphQL error carrying `extensions.code == "WATCH_EXPIRED"` — the caller must re-list (via `categories`) and resume from a fresh cursor rather than assume it is caught up.
+
+```graphql
+subscription WatchCategories($namespace: String, $resourceVersion: String) {
+  watchCategories(namespace: $namespace, resourceVersion: $resourceVersion) {
+    type
+    name
+    resourceVersion
+    category {
+      metadata {
+        name
+        resourceVersion
+      }
+      status {
+        conditions {
+          type
+          status
+        }
+      }
+    }
+  }
+}
+```
+
+### watchResources
+
+Generic, kind-parameterized counterpart of `watchCategories` for CRD-defined kinds. Same list-then-watch/resume/expiry semantics; the resource payload is JSON-boxed via `object`.
+
+```graphql
+subscription WatchResources($kind: String!, $resourceVersion: String) {
+  watchResources(kind: $kind, resourceVersion: $resourceVersion) {
+    type
+    kind
+    name
+    resourceVersion
+    object
   }
 }
 ```

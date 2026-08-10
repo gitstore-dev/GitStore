@@ -10,9 +10,12 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
+	"go.uber.org/zap"
 )
 
 // Products is the resolver for the products field.
@@ -59,6 +62,37 @@ func (r *mutationResolver) ReorderCategories(ctx context.Context, input model.Re
 	return nil, errors.New("category mutations are managed via git push")
 }
 
+// UpdateCategoryStatus is the resolver for the updateCategoryStatus field.
+func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model.UpdateCategoryStatusInput) (*model.UpdateCategoryStatusPayload, error) {
+	patch := toCategoryTaxonomyStatusPatch(input)
+	updated, err := r.store.UpdateCategoryTaxonomyStatus(ctx, input.Namespace, input.Name, patch)
+	if err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			StatusWriteConflictsTotal.WithLabelValues("CategoryTaxonomy").Inc()
+			r.logger.Info("status write conflict",
+				zap.String("kind", "CategoryTaxonomy"),
+				zap.String("namespace", input.Namespace),
+				zap.String("name", input.Name))
+			current, getErr := r.store.GetCategoryTaxonomyByName(ctx, input.Namespace, input.Name)
+			if getErr != nil {
+				return nil, gqlerror.Errorf("status update conflict, and could not re-fetch current version: %v", getErr)
+			}
+			return &model.UpdateCategoryStatusPayload{
+				Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion},
+			}, nil
+		}
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, &gqlerror.Error{
+				Message:    fmt.Sprintf("CategoryTaxonomy %s/%s not found", input.Namespace, input.Name),
+				Extensions: map[string]any{"code": "NOT_FOUND"},
+			}
+		}
+		return nil, gqlerror.Errorf("update category status: %v", err)
+	}
+	r.publishCategoryTaxonomyStatusEvent(updated)
+	return &model.UpdateCategoryStatusPayload{Category: DatastoreCategoryTaxonomyToGraphQL(updated)}, nil
+}
+
 // Category is the resolver for the category field.
 func (r *queryResolver) Category(ctx context.Context, by model.CategoryBy) (*model.Category, error) {
 	switch {
@@ -92,6 +126,58 @@ func (r *queryResolver) Categories(ctx context.Context, first *int32, after *str
 		return nil, fmt.Errorf("failed to get categories: %w", err)
 	}
 	return BuildCategoryConnection(result), nil
+}
+
+// WatchCategories is the resolver for the watchCategories field.
+func (r *subscriptionResolver) WatchCategories(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.CategoryWatchEvent, error) {
+	if r.eventBus == nil {
+		return nil, gqlerror.Errorf("watch subscriptions are not available")
+	}
+	rv := ""
+	if resourceVersion != nil {
+		rv = *resourceVersion
+	}
+	events, unsubscribe, err := r.eventBus.Subscribe("CategoryTaxonomy", rv)
+	if err != nil {
+		if errors.Is(err, eventbus.ErrWatchExpired) {
+			r.logger.Warn("watch cursor expired; controller must re-list",
+				zap.String("kind", "CategoryTaxonomy"),
+				zap.String("resource_version", rv))
+			return nil, &gqlerror.Error{
+				Message:    "watch cursor expired; re-list and resume from a fresh cursor",
+				Extensions: map[string]any{"code": "WATCH_EXPIRED"},
+			}
+		}
+		return nil, gqlerror.Errorf("watch subscription failed: %v", err)
+	}
+	r.logger.Debug("watch subscription opened",
+		zap.String("kind", "CategoryTaxonomy"),
+		zap.Bool("resumed", rv != ""))
+
+	out := make(chan *model.CategoryWatchEvent, 16)
+	go func() {
+		defer close(out)
+		defer unsubscribe()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				if !categoryEventMatchesFilters(ev, namespace) || !categoryEventMatchesSelector(ev, selector) {
+					continue
+				}
+				select {
+				case out <- toCategoryWatchEvent(ev):
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }
 
 // Category returns generated.CategoryResolver implementation.

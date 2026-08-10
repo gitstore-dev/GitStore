@@ -5,6 +5,7 @@ package security
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -65,7 +66,8 @@ func NewAuthenticate(registry *auth.ProviderRegistry, logger *zap.Logger, opts .
 		}, []string{"outcome", "service"})
 		if err := opts[0].Register(counts); err != nil {
 			// Already registered (e.g. multiple NewMux calls in tests or hot-reload) — reuse existing.
-			if are, ok := err.(prometheus.AlreadyRegisteredError); ok {
+			var are prometheus.AlreadyRegisteredError
+			if errors.As(err, &are) {
 				counts = are.ExistingCollector.(*prometheus.CounterVec)
 			}
 		}

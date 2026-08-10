@@ -348,3 +348,27 @@ func TestDatastoreCategoryTaxonomyToGraphQL_NoMedia_ReturnsEmptyMedia(t *testing
 func TestDatastoreCategoryTaxonomyToGraphQL_NilCategoryTaxonomy_ReturnsNil(t *testing.T) {
 	assert.Nil(t, DatastoreCategoryTaxonomyToGraphQL(nil))
 }
+
+func TestDatastoreCategoryTaxonomyToGraphQL_StatusResolvedHydrated(t *testing.T) {
+	c := newTestCategoryTaxonomy()
+	c.Status = json.RawMessage(`{"observedGeneration":1,"lastAppliedRevision":"main@sha1:abc","conditions":[],"resolved":{"depth":2,"path":["electronics","computers","laptops"],"childCount":0,"productCount":3}}`)
+
+	got := DatastoreCategoryTaxonomyToGraphQL(c)
+	require.NotNil(t, got)
+	require.NotNil(t, got.Status)
+	require.NotNil(t, got.Status.Resolved, "status.resolved must be populated from the datastore blob (spec 039/040)")
+	assert.Equal(t, int32(2), got.Status.Resolved.Depth)
+	assert.Equal(t, []string{"electronics", "computers", "laptops"}, got.Status.Resolved.Path)
+	assert.Equal(t, int32(0), got.Status.Resolved.ChildCount)
+	assert.Equal(t, int32(3), got.Status.Resolved.ProductCount)
+}
+
+func TestDatastoreCategoryTaxonomyToGraphQL_StatusWithoutResolved_LeavesResolvedNil(t *testing.T) {
+	c := newTestCategoryTaxonomy()
+	c.Status = json.RawMessage(`{"observedGeneration":1,"lastAppliedRevision":"","conditions":[]}`)
+
+	got := DatastoreCategoryTaxonomyToGraphQL(c)
+	require.NotNil(t, got)
+	require.NotNil(t, got.Status)
+	assert.Nil(t, got.Status.Resolved)
+}
