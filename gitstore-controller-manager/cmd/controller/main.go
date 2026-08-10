@@ -144,12 +144,16 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 		}
 	}
 	catCache.AddEventHandler(cache.EventHandler[categorytaxonomy.CategoryTaxonomy]{
-		OnAdd: func(_ types.WorkItemKey, c categorytaxonomy.CategoryTaxonomy) { enqueueParent(c.Namespace, c.ParentRefName) },
+		OnAdd: func(_ types.WorkItemKey, c categorytaxonomy.CategoryTaxonomy) {
+			enqueueParent(c.Namespace, c.ParentRefName)
+		},
 		OnUpdate: func(_ types.WorkItemKey, old, current categorytaxonomy.CategoryTaxonomy) {
 			enqueueParent(old.Namespace, old.ParentRefName)
 			enqueueParent(current.Namespace, current.ParentRefName)
 		},
-		OnDelete: func(_ types.WorkItemKey, c categorytaxonomy.CategoryTaxonomy) { enqueueParent(c.Namespace, c.ParentRefName) },
+		OnDelete: func(_ types.WorkItemKey, c categorytaxonomy.CategoryTaxonomy) {
+			enqueueParent(c.Namespace, c.ParentRefName)
+		},
 	})
 
 	go func() {
