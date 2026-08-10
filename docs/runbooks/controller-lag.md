@@ -54,3 +54,21 @@ The controller manager's work queue for one or more resource kinds is growing, o
 - `gitstore_controller_queue_depth{kind}` trends back down toward zero (or your steady-state baseline).
 - `gitstore_controller_stalled_workers{kind}` returns to `0`.
 - `rate(gitstore_controller_reconcile_total{kind,result="success"}[5m])` recovers to its prior baseline rate.
+
+## CategoryTaxonomy-specific notes
+
+`CategoryTaxonomy` (spec 039) is one of the kinds this runbook's generic signals cover, with one additional wrinkle: a `CategoryTaxonomy` that looks "stalled" — its `status.resolved.depth`/`.path` haven't changed across several reconciles even though its `parentRef` chain visibly changed — is not necessarily a failing or capacity-starved reconciler. Distinguish the two before escalating:
+
+- **Cycle-blocked (expected, not a bug)**: per FR-008, the reconciler intentionally freezes `depth`/`path` for any `CategoryTaxonomy` currently participating in a parent-reference cycle (including a self-reference) — it does not recompute or reset them while the cycle exists. Check the resource's `Acyclic` condition:
+
+  ```graphql
+  query {
+    category(by: { namespacePath: { namespace: "<ns>", name: "<name>" } }) {
+      status { conditions { type status reason message } }
+    }
+  }
+  ```
+
+  `Acyclic=False` confirms the frozen hierarchy fields are expected behavior, not lag. Every other node in the same cycle reports `Acyclic=False` too — check them with the same query, or via `Acyclic{kind="CategoryTaxonomy"}` style status queries if scripting a sweep. `ChildCount` on cycle participants still updates normally (only `depth`/`path` are frozen), so a moving `childCount` alongside a frozen `depth`/`path` is another confirming signal. Remediation is a catalog fix (correct the `parentRef` that closes the cycle), not a controller-manager action — `gitstore_controller_queue_depth`/`gitstore_controller_stalled_workers` for the `CategoryTaxonomy` kind will look perfectly healthy throughout, since the reconciler is succeeding on every attempt; it is choosing not to recompute hierarchy fields.
+- **Genuinely stalled (this runbook's normal flow applies)**: if `Acyclic=True` for the affected node and its ancestors, but hierarchy fields are still stale, treat it as ordinary lag — follow the generic Diagnostic Steps above (queue depth, worker saturation, `gitstore_controller_stalled_workers{kind="CategoryTaxonomy"}`, reconcile outcome breakdown).
+- A `ParentResolved=False` condition (parent name doesn't resolve in the same namespace) is a separate, non-cycle case where `depth`/`path` are computed normally (the node is simply promoted to root, per the hierarchy walk's missing-ancestor handling) — do not confuse it with a cycle freeze.

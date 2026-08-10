@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"unicode"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
@@ -177,9 +178,60 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
 		}
 		ctx = context.WithValue(ctx, authorizedNamespaceDeleteContextKey{}, ns)
+	case "updateCategoryStatus":
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
+		}
+		name, _ := nestedStringArg(fc.Args, "input", "name")
+		decision, err := authz.Authorize(ctx, principal, "category.status.write", auth.ResourceContext{
+			Kind: "categoryTaxonomy",
+			Name: name,
+		})
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return nil, &gqlerror.Error{
+				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
+				Extensions: map[string]any{"code": "FORBIDDEN"},
+			}
+		}
+	case "updateResourceStatus":
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
+		}
+		kind, _ := nestedStringArg(fc.Args, "input", "kind")
+		name, _ := nestedStringArg(fc.Args, "input", "name")
+		action := lowerCamelFirst(kind) + ".status.write"
+		decision, err := authz.Authorize(ctx, principal, action, auth.ResourceContext{
+			Kind: kind,
+			Name: name,
+		})
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return nil, &gqlerror.Error{
+				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
+				Extensions: map[string]any{"code": "FORBIDDEN"},
+			}
+		}
 	}
 
 	return next(ctx)
+}
+
+// lowerCamelFirst lowercases the first rune of s, matching GraphQL's
+// convention for deriving an authorization action string from a
+// PascalCase resource kind (e.g. "CategoryTaxonomy" -> "categoryTaxonomy",
+// research.md R5's generic-path extension).
+func lowerCamelFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	r[0] = unicode.ToLower(r[0])
+	return string(r)
 }
 
 func (a *Authorize) namespaceDeleteAction(ctx context.Context, identifier string, principal *auth.Principal) (ns *datastore.Namespace, action string, err error) {

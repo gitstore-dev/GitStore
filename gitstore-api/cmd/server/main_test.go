@@ -102,7 +102,7 @@ func TestGraphQLHandlerRequiresAuthZProvider(t *testing.T) {
 	registry := newTestGraphQLRegistry(t)
 	registry.Swap(registry.AuthN(), nil, nil)
 
-	handler, err := app.NewGraphQLHandler(nil, nil, zap.NewNop(), registry, nil, nil)
+	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Logger: zap.NewNop(), Registry: registry})
 	require.Error(t, err)
 	assert.Nil(t, handler)
 	assert.Contains(t, err.Error(), "authn and authz provider registry is required")
@@ -112,7 +112,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 
-	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, apiruntime.NewSequenceIDGenerator())
+	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
 	require.NoError(t, err)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
@@ -205,7 +205,7 @@ func TestGraphQLHandlerRejectsLoginWithInvalidCredentials(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 
-	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, apiruntime.NewSequenceIDGenerator())
+	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
@@ -231,7 +231,7 @@ func TestGraphQLHandlerRejectsNamespaceMutationWithoutBearerToken(t *testing.T) 
 	store, err := memdb.New()
 	require.NoError(t, err)
 
-	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, apiruntime.NewSequenceIDGenerator())
+	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
 		"query": "mutation { createNamespace(input: { identifier: \"alice\", tier: USER }) { namespace { identifier } } }"
@@ -256,7 +256,7 @@ func TestGraphQLHandlerRejectsMutationWithInvalidBearerToken(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 
-	handler, err := app.NewGraphQLHandler(store, &mockGitWriter{}, zap.NewNop(), newTestGraphQLRegistry(t), nil, apiruntime.NewSequenceIDGenerator())
+	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{

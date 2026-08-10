@@ -119,8 +119,12 @@ type CategoryTaxonomyStatus struct {
 
 // ResolvedCategoryTaxonomy holds system-computed hierarchy aggregates for a category.
 type ResolvedCategoryTaxonomy struct {
-	Depth        int8              `json:"depth"`
-	AncestorPath string            `json:"ancestorPath"`
+	Depth int8 `json:"depth"`
+	// Path is the ancestor path from root to self, e.g.
+	// []string{"electronics", "computers", "laptops"} (root-to-self order).
+	// A root category's Path is a single-element slice containing its own
+	// name. See specs/040-controller-watch-status-api/research.md R9/R10.
+	Path         []string          `json:"path"`
 	Ancestors    []ObjectReference `json:"ancestors,omitempty"`
 	ChildCount   int64             `json:"childCount"`
 	ProductCount int64             `json:"productCount"`

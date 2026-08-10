@@ -14,12 +14,14 @@ import (
 // setenv sets environment variables for a test and clears them on cleanup.
 func setenv(t *testing.T, pairs ...string) {
 	t.Helper()
+	t.Setenv("GITSTORE_CONTROLLER__API_TOKEN", "test-token")
 	for i := 0; i+1 < len(pairs); i += 2 {
 		t.Setenv(pairs[i], pairs[i+1])
 	}
 }
 
 func TestLoad_Defaults(t *testing.T) {
+	t.Setenv("GITSTORE_CONTROLLER__API_TOKEN", "test-token")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
@@ -30,6 +32,9 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 	if cfg.Controller.ApiURI != "http://localhost:4000/graphql" {
 		t.Errorf("ApiURI = %q, want http://localhost:4000/graphql", cfg.Controller.ApiURI)
+	}
+	if cfg.Controller.ApiToken != "test-token" {
+		t.Errorf("ApiToken = %q, want test-token", cfg.Controller.ApiToken)
 	}
 	if cfg.Controller.DefaultMaxAttempts != 5 {
 		t.Errorf("DefaultMaxAttempts = %d, want 5", cfg.Controller.DefaultMaxAttempts)
@@ -58,6 +63,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	setenv(t,
 		"GITSTORE_CONTROLLER__PORT", "8080",
 		"GITSTORE_CONTROLLER__API_URI", "http://api.example.com/graphql",
+		"GITSTORE_CONTROLLER__API_TOKEN", "test-token",
 		"GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS", "10",
 		"GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD", "2m",
 		"GITSTORE_CONTROLLER__CHECKPOINT_DIR", "/tmp/checkpoints",
@@ -77,6 +83,9 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	}
 	if cfg.Controller.ApiURI != "http://api.example.com/graphql" {
 		t.Errorf("ApiURI = %q", cfg.Controller.ApiURI)
+	}
+	if cfg.Controller.ApiToken != "test-token" {
+		t.Errorf("ApiToken = %q, want test-token", cfg.Controller.ApiToken)
 	}
 	if cfg.Controller.DefaultMaxAttempts != 10 {
 		t.Errorf("DefaultMaxAttempts = %d, want 10", cfg.Controller.DefaultMaxAttempts)

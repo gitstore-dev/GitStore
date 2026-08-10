@@ -135,6 +135,13 @@ func (d *InstrumentedDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *C
 	return err
 }
 
+func (d *InstrumentedDatastore) UpdateCategoryTaxonomyStatus(ctx context.Context, namespace, name string, patch CategoryTaxonomyStatusPatch) (*CategoryTaxonomy, error) {
+	start := time.Now()
+	c, err := d.next.UpdateCategoryTaxonomyStatus(ctx, namespace, name, patch)
+	d.observe("UpdateCategoryTaxonomyStatus", start, err)
+	return c, err
+}
+
 func (d *InstrumentedDatastore) DeleteCategoryTaxonomy(ctx context.Context, uid string) error {
 	start := time.Now()
 	err := d.next.DeleteCategoryTaxonomy(ctx, uid)

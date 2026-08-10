@@ -24,6 +24,7 @@ import (
 	admcatalog "github.com/gitstore-dev/gitstore/api/internal/admission/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
@@ -75,9 +76,10 @@ func (r *gitClientReader) ResolveRef(ctx context.Context, repositoryID, ref stri
 // Server implements catalogv1.CatalogServiceServer.
 type Server struct {
 	catalogv1.UnimplementedCatalogServiceServer
-	store datastore.Datastore
-	git   GitReader
-	log   *zap.Logger
+	store    datastore.Datastore
+	git      GitReader
+	log      *zap.Logger
+	eventBus *eventbus.Bus // nil-safe: publish is skipped if unset (e.g. in older tests)
 
 	parser ResourceParser
 	clock  apiruntime.Clock
@@ -97,6 +99,11 @@ type ServerDeps struct {
 	IDGenerator             apiruntime.IDGenerator
 	CELEnv                  *cel.Env
 	ExtraValidatingPolicies []admission.ValidatingAdmissionPolicy
+	// EventBus receives a change notification after every successful
+	// CategoryTaxonomy create/update/delete, fanning out to GraphQL watch
+	// subscriptions (spec 040, research.md R2). Optional — nil disables
+	// publishing (e.g. in tests that don't exercise the watch API).
+	EventBus *eventbus.Bus
 }
 
 // newCELEnv constructs a CEL environment for syntax-checking price eligibility expressions.
@@ -146,15 +153,33 @@ func NewServer(deps ServerDeps) (*Server, error) {
 		chain.RegisterValidatingPolicy(p)
 	}
 	return &Server{
-		store:  deps.Store,
-		git:    git,
-		log:    deps.Logger,
-		parser: parser,
-		clock:  clock,
-		ids:    ids,
-		celEnv: celEnv,
-		chain:  chain,
+		store:    deps.Store,
+		git:      git,
+		log:      deps.Logger,
+		eventBus: deps.EventBus,
+		parser:   parser,
+		clock:    clock,
+		ids:      ids,
+		celEnv:   celEnv,
+		chain:    chain,
 	}, nil
+}
+
+// publishCategoryTaxonomyEvent fans out a change notification for the
+// EventBus subscribers of GraphQL watch queries (spec 040). No-op when
+// eventBus is nil (e.g. tests that construct Server directly).
+func (s *Server) publishCategoryTaxonomyEvent(evType eventbus.EventType, c *datastore.CategoryTaxonomy) {
+	if s.eventBus == nil || c == nil {
+		return
+	}
+	s.eventBus.Publish(eventbus.Event{
+		Type:            evType,
+		Kind:            "CategoryTaxonomy",
+		Namespace:       c.Namespace,
+		Name:            c.Name,
+		ResourceVersion: c.ResourceVersion,
+		Object:          c,
+	})
 }
 
 func (s *Server) newUID(kind, name string) (string, bool) {
@@ -661,6 +686,9 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) {
 			zap.String("uid", uid),
 			zap.Error(deleteErr))
 		return
+	}
+	if catTaxonomy, ok := existing.(*datastore.CategoryTaxonomy); ok {
+		s.publishCategoryTaxonomyEvent(eventbus.Deleted, catTaxonomy)
 	}
 	s.log.Info("admit_resources: resource deleted",
 		zap.String("kind", id.Kind),
@@ -1315,6 +1343,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 				zap.String("name", name), zap.Error(cerr))
 			return
 		}
+		s.publishCategoryTaxonomyEvent(eventbus.Added, c)
 		s.log.Info("admit_resources: category created",
 			zap.String("kind", resource.Kind),
 			zap.String("namespace", namespace),
@@ -1358,6 +1387,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 				zap.String("name", name), zap.Error(uerr))
 			return
 		}
+		s.publishCategoryTaxonomyEvent(eventbus.Modified, existing)
 		s.log.Info("admit_resources: category updated",
 			zap.String("kind", resource.Kind),
 			zap.String("namespace", namespace),

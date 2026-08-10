@@ -1,54 +1,54 @@
-# Graph Report - GitStore  (2026-08-07)
+# Graph Report - GitStore  (2026-08-09)
 
 ## Corpus Check
-- 678 files · ~696,367 words
+- 720 files · ~746,305 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 7242 nodes · 18765 edges · 417 communities (304 shown, 113 thin omitted)
-- Extraction: 94% EXTRACTED · 6% INFERRED · 0% AMBIGUOUS · INFERRED: 1143 edges (avg confidence: 0.8)
+- 7842 nodes · 20151 edges · 448 communities (336 shown, 112 thin omitted)
+- Extraction: 94% EXTRACTED · 6% INFERRED · 0% AMBIGUOUS · INFERRED: 1272 edges (avg confidence: 0.8)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `71b1e24d`
+- Built from commit: `f5928ecc`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
-- GraphQL Schema Directives & Introspection
+- Context
 - Context
 - newPushHelper
 - executionContext
-- scyllaDatastore
+- PageParams
 - server_test.go
 - Context
 - scylla/backend_test.go
-- newTestSvc
+- Subscription
 - validator_test.go
 - Data Model: Admission Control Contract
 - Pluggable AuthN/AuthZ Providers & gRPC HMAC
-- Context
+- ._CategorySpec
 - gitstore-api/internal/config/config.go
 - memdbDatastore
-- PageParams
+- PageResult
 - validation_handler.rs
 - CatalogServiceServer<T>
 - pack_server.rs
-- ConditionStatus
+- models_gen.go
 - hooks/mod.rs
 - config.rs
 - InstrumentedDatastore
 - StubStore
 - update-agent-context.sh
 - Project Tech Stack & Make Targets
-- auth_resolvers_test.go
-- models_gen.go
+- graphql_listwatcher.go
+- SelectionSet
 - admission_handler.rs
 - memdb/backend_test.go
 - Context
 - handler_test.go
 - GitServiceImpl
-- PageResult
+- stubDatastore
 - RunPaginationSuite
 - Generated gRPC Types (git.v1, Rust)
 - startMutationContainer
@@ -60,53 +60,53 @@
 - converters_test.go
 - Implementation Plan: Controller Startup Resume — List-Then-Watch and resourceVersion Checkpointing
 - devDependencies
-- executionContext
+- Marshaler
 - Product Frontmatter Type Design (Spec)
 - validation.ts
 - gRPC Git Service Contract Design (Spec)
 - Product Spec Hydration & Hook Wiring (Spec)
 - product_variant_policy_test.go
-- CollectedField
-- Marshaler
+- Context
+- Context
 - Context
 - writeStub
 - Context
 - Manager
-- Response
+- GitServiceClient<T>
 - Admin Architecture & Credential Design Docs
-- .ListRepositoriesByNamespace
+- New
 - server.rs
 - PushContext
 - file_gitstore_git_v1_git_service_proto_rawDescGZIP
 - converters.go
 - API Reference & User Guide Docs
-- newRunner
-- SelectionSet
-- category_taxonomy_policy_test.go
+- IDGenerator
 - Marshaler
+- category_taxonomy_policy_test.go
+- ._CategoryOptimisticLockConflict
 - hook_pipeline.rs
 - ProviderRegistry
 - New
 - product_variant.go
 - repo.rs
-- ._LabelSelectorRequirement
-- New
+- Implementation Plan: CategoryTaxonomy Controller Reconciliation
+- mustEncodeNodeID
 - Header.tsx
-- parsedEntry
+- ObjectReference
 - newRunner
-- WorkItemKey
+- QuarantineStore
 - Runner[T]
 - EncodeKeysetCursor
-- secure.go
+- ProductCondition
 - Collection Contract & Integration Test Specs
 - NewGraphQLHandler
 - ProductVariant Spec Docs
-- Marshaler
+- Context
 - Tasks: Controller Startup Resume — List-Then-Watch and resourceVersion Checkpointing
 - scalars.go
+- CollectedField
 - executionContext
-- executionContext
-- Marshaler
+- HookPipeline
 - ProductVariantConnection
 - Apollo Client Caching & Fragments Skill Docs
 - SelectionSet
@@ -116,82 +116,82 @@
 - Gitoxide Migration & Shellout Removal (Spec)
 - Server
 - status.go
-- toPageParams
+- seedCache
 - ProductForm.tsx
 - CategoriesPage.tsx
 - optimistic-updates.ts
-- StaticAdminProvider
-- Anonymous
+- ._ProductStatus
+- NewProviderRegistry
 - Cache
-- WatchEvent
+- LabelSelectorInput
 - Datastore-Only Resource Docs
-- rbaclocal_test.go
-- QuarantineStore
+- New
+- newWatchTestResolver
 - admission/chain_test.go
 - Git-Backed Ecommerce Founding Spec
 - Namespace & Repo Storage Identity (Spec)
-- CollectedField
-- Time
+- Marshaler
+- ._ResolvedProductVariantDefinition
 - Record
-- contract/health_test.go
-- GitServiceClient<T>
+- newSyncedCache
+- Self
 - Chain
 - auth-context.tsx
 - status_patch_test.go
-- SelectionSet
-- CollectionConnection
-- CollectionForm.tsx
-- ProductCondition
-- newTestInstrumented
-- Category Resolver Tests
-- NewAuthenticate
-- ._VariantSummaryDefinition
-- AdmissionRequest
+- secure.go
+- ._Collection
+- ProductList.tsx
+- NewGraphQLStatusClient
+- catalog_service_grpc.pb.go
+- newCategoryResolverEnv
+- Tasks: CategoryTaxonomy Controller Reconciliation
+- .Load
+- toPageParams
 - dependencies
 - NewChainedAuthN
-- cache_contract_test.go
+- Hierarchy Path Type Checklist: ancestorPath → path Rename
 - NamespaceMapping
-- Collection
+- SelectionSet
 - ProductVariantCondition
 - startBufconn
 - OSS Alignment Service Rename (Spec)
 - GitServiceClient
-- ._ResolvedCategoryDefinition
+- .ListRepositoriesByNamespace
 - .new
 - Service Configuration Reference Docs
 - Product Validation Fixture Examples (Docs)
 - App.tsx
 - GetLatestTagResponse
-- mustEncodeNodeID
+- conditions_test.go
 - .new
 - git/scripts/bash/create-new-feature.sh
 - AnonymousProvider
-- helpers.rs
-- CollectedField
-- EditProductPage.tsx
+- AdmissionDecision
+- Marshaler
+- AdmissionDecision
 - ValidationError
-- .Load
+- AdmissionRequest
 - Pool
 - 004-grpc-git-service/data-model.md
 - OSS Alignment Requirements (Spec)
-- compute_changed_paths_in_repo
-- Context
-- ProductList.tsx
+- CreateProductRoutePage.tsx
+- ._DeleteCollectionPayload
+- validator.go
 - ResourceBlob
 - UploadPackRequest
-- reconciler_contract_test.go
-- Marshaler
-- manager_dispatch_test.go
+- Tasks: Controller Watch API and Status Subresource Contract
+- executionContext
+- Controller-Manager-Side Types (new)
 - Project Constitution Governance
 - 002-production-readiness/spec.md
 - Branch Deletion Admission (Spec)
 - Spec: Admission Path Cleanup — changed_paths Population and Legacy Fallback Removal
 - Cross-Service README Index
-- statusConflictReconciler
+- .Watch
+- CollectionConnection
 - Context
-- Context
+- Research: CategoryTaxonomy Controller Reconciliation
 - CategoryList.tsx
-- CollectionsPage.tsx
 - mutation-hooks.ts
 - MessageState
 - admission_test.go
@@ -199,19 +199,19 @@
 - integration/mod.rs
 - Pack Build Status Helpers (Rust)
 - Git-Backed Ecommerce Requirements Checklist
-- NewCollectionValidatingPolicy
-- NewProductValidatingPolicy
+- SizeCache
+- AppConfig
 - .receive_pack
 - ._OwnerReference
 - Context
 - Message
 - ReceivePackRequest
 - deriveResourceAdmissionOperations
-- newGlobalIDTestResolver
+- manager_dispatch_test.go
 - Upload-Pack Fix (Spec)
 - CommitFileRequest
 - NoneProvider
-- ._InventoryDefinition
+- hierarchy_test.go
 - contracts/datastore.go
 - Entities
 - Admin Protected Route Component
@@ -222,16 +222,16 @@
 - Apollo Client Skill Reference
 - ComplexityRoot
 - 025 Controller Manager Runtime: Plan
-- ._ResolvedPriceSetDefinition
+- CollectedField
 - ._ProductOptionDefinition
 - ._ResolvedFileDefinition
 - ._ResolvedInventoryDefinition
-- .Products
-- SizeCache
+- CollectionsPage.tsx
+- Quickstart: CategoryTaxonomy Reconciler
 - Spec Detail: 022-collection-resource-contract
 - Spec Detail: 021-category-taxonomy
 - cache_test.go
-- retry_quarantine_test.go
+- registerCategoryTaxonomy
 - init_logging
 - Spec Detail: 010-repo-storage-identity
 - Quickstart: Wiring List-Then-Watch and Checkpointing (spec 036)
@@ -241,40 +241,40 @@
 - CategoryTaxonomy
 - Handler
 - ._FileReference
-- New
-- NewFilesystemStore
+- ._ResolvedPriceSetDefinition
+- NewReconciler
 - CI/CD Workflow Detail
 - Repo Script
 - ListFilesResponse
 - gitstore.catalog.v1.rs
 - Request
 - create-new-feature.ps1
-- SelectionSet
+- ._CatalogVersion
 - GetFileRequest
 - GetFileStreamRequest
 - Research: Controller Startup Resume (spec 036)
 - RefCommand
 - UploadPackResponse
-- .fieldContext_Query_category
-- .fieldContext_Query_collection
-- ListPoisonHandler
-- Context
+- UpdateCategoryStatusInput
+- newGlobalIDTestResolver
+- GraphQL Types (new)
+- CategoryTaxonomyStatusPatch
 - 004-grpc-git-service/plan.md
 - git_service.pb.go
 - CreateRepositoryResponse
 - CreateTagResponse
 - UnknownFields
 - TagEntry
-- gitstore-controller-manager/internal/config/config_test.go
+- Contract: CategoryTaxonomy Reconciler and Client Adapters
 - Spec Detail: 034-admission-path-cleanup
 - Implementation Plan: Pluggable AuthN/AuthZ — Phase 1 Interface Foundation
-- fixtures_test.go
-- patch.go
+- newRunner
+- Research: Controller Watch API and Status Subresource Contract
 - ._PriceSet
 - collect_blobs_from_commit
-- ._ResolvedCategoryTaxonomy
+- ._InventoryDefinition
 - GraphQL Field Context Resolvers
-- ._CategoryCondition
+- Time
 - Spec Detail: 020-pre-receive-validation-e2e
 - Admin Module Detail
 - ready.ts
@@ -283,21 +283,21 @@
 - Message
 - Generated gRPC Types (Go, gitstore-api)
 - Spec Detail: 021-category-taxonomy
-- ._LabelSelector
-- .connect
+- ._ResolvedCategoryDefinition
+- AsReadOnly
 - check-go-license-headers.sh
 - check-js-license-headers.sh
 - check-rust-license-headers.sh
 - Spec Detail: 012-smart-http-api
 - .ReceivePack
 - Docs: resources
-- NewService
+- StaticAdminProvider
 - ProductResolver
 - grpc/metrics.rs
 - Spec Detail: 010-repo-storage-identity
 - Spec Detail: 020-pre-receive-validation-e2e
 - Docs: architecture.md
-- .get_file_stream
+- ._VariantSummaryDefinition
 - hmacCreds
 - AdmitResourcesResponse
 - Generated gRPC Types (Go, gitstore-api)
@@ -305,7 +305,7 @@
 - Spec Detail: 021-category-taxonomy
 - Apollo Client Skill Reference
 - Docs: architecture.md
-- ._CollectionSpec
+- ._ProductSpec
 - git_service_test.go
 - auth_test.go
 - update-env-secret.sh
@@ -356,7 +356,7 @@
 - Docs: ideas.md
 - CI/CD Workflow Detail
 - Contract: ListWatcher / Watcher Transport Abstraction
-- ._CreateCollectionPayload
+- categorytaxonomy_reconciler_test.go
 - github.com/gitstore-dev/gitstore/api
 - github.com/gitstore-dev/gitstore/controller-manager
 - github.com/gitstore-dev/gitstore/tests/integration
@@ -375,44 +375,73 @@
 - Spec Detail: 012-smart-http-api
 - Spec Detail: 013-receive-pack-hooks
 - Spec Detail: 013-receive-pack-hooks
-- CreateProductRoutePage.tsx
-- Runner
+- EditProductPage.tsx
+- ._DeleteCategoryPayload
 - AdmitResourcesRequest
 - gitstore-controller-manager/internal/config/config.go
-- GitServiceServer<T>
+- NewMemoryStore
 - FileEntry
-- ._PriceRangeDefinition
-- Runbook: Controller Lag
+- parsedEntry
+- Runbook: Controller Watch API and Status-Write Diagnostics
 - NamespaceTier enum (USER | ORGANIZATION, ENTERPRISE removed)
 - GetFileStreamResponse
-- blockingSelectReconciler
-- .DeleteFile
-- .DeleteRepository
+- executionContext
+- NewDatastore
+- cache_contract_test.go
+- .get_file_stream
+- CountingAdmissionHandler
 - CategoryConnection
-- TestMemoryStore_SaveThenLoad
-- ._CategoryTaxonomyStatus
-- .create_tag
+- CollectedField
 - .specify/scripts/bash/create-new-feature.sh
-- ._SelectedOptionDefinition
-- RawMessage
-- Config
+- ConditionInput
+- ._CatalogStats
+- ._QuantityDefinition
 - Contract: Integration Test Scenarios
-- RWMutex
-- ._DeleteCategoryPayload
-- Int64
-- CategoryObjectMeta
+- CollectionForm.tsx
+- ._ResolvedProductRef
+- ConfigErrors
+- AuthConfig
+- Quickstart: Watch + Status Client for a Reconciler (spec 040)
+- .ValidateResources
+- contract/health_test.go
+- ._CollectionSpec
+- computeParentResolved
+- .DeleteRepository
+- Product
+- NewProductCounter
+- .DeleteFile
+- Condition
+- WorkItemKey
+- Context
+- NewFilesystemStore
+- RawMessage
+- Duration
+- reconciler_contract_test.go
+- executionContext
+- CollectionStatus
+- statusConflictReconciler
+- newTestSvc
+- .fieldContext_Query_category
+- auth_resolvers_test.go
+- Anonymous
+- gitstore-controller-manager/internal/config/config_test.go
+- GitServiceServer<T>
+- TestMemoryStore_SaveThenLoad
+- Marshaler
+- computeFileRefCondition
+- main.rs
 
 ## God Nodes (most connected - your core abstractions)
 1. `executionContext` - 211 edges
 2. `executionContext` - 194 edges
-3. `executionContext` - 166 edges
-4. `executionContext` - 160 edges
-5. `executionContext` - 138 edges
-6. `executionContext` - 132 edges
-7. `executionContext` - 97 edges
-8. `executionContext` - 71 edges
-9. `newCatalogServer()` - 56 edges
-10. `newPushHelper()` - 55 edges
+3. `executionContext` - 192 edges
+4. `executionContext` - 184 edges
+5. `executionContext` - 166 edges
+6. `executionContext` - 134 edges
+7. `executionContext` - 102 edges
+8. `WorkItemKey` - 73 edges
+9. `executionContext` - 71 edges
+10. `newCatalogServer()` - 56 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `Valid Product Example (MacBook Pro M4 Max)` --semantically_similar_to--> `MacBook Pro validate testdata fixture (Product)`  [INFERRED] [semantically similar]
@@ -429,15 +458,15 @@
 ## Import Cycles
 - None detected.
 
-## Communities (417 total, 113 thin omitted)
+## Communities (448 total, 112 thin omitted)
 
-### Community 0 - "GraphQL Schema Directives & Introspection"
+### Community 0 - "Context"
 Cohesion: 0.07
 Nodes (12): Directive, EnumValue, Field, CollectedField, Context, FieldContext, executionContext, Marshaler (+4 more)
 
 ### Community 1 - "Context"
-Cohesion: 0.05
-Nodes (47): CollectedField, Context, FieldContext, executionContext, Marshaler, Repository, SelectionSet, Repository (+39 more)
+Cohesion: 0.06
+Nodes (40): CollectedField, Context, FieldContext, executionContext, Marshaler, Repository, SelectionSet, Repository (+32 more)
 
 ### Community 2 - "newPushHelper"
 Cohesion: 0.05
@@ -447,13 +476,13 @@ Nodes (118): categoryQueryResult, collectionCondition, collectionQueryResult, gq
 Cohesion: 0.06
 Nodes (20): DeferredResult, ExecutableSchema, ExecutionContextState, DirectiveRoot, executableSchema, ResolverRoot, CollectedField, Config (+12 more)
 
-### Community 4 - "scyllaDatastore"
+### Community 4 - "PageParams"
 Cohesion: 0.07
-Nodes (51): fromCategoryTaxonomyRow(), fromCollectionRow(), fromNamespaceRow(), fromProductRow(), fromProductVariantRow(), Collection, Context, LabelSelector (+43 more)
+Nodes (53): PageParams, fromCategoryTaxonomyRow(), fromCollectionRow(), fromNamespaceRow(), fromProductRow(), fromProductVariantRow(), CategoryTaxonomy, Collection (+45 more)
 
 ### Community 5 - "server_test.go"
 Cohesion: 0.07
-Nodes (86): mockGitReader, spyDatastore, admitDelta(), collectMessages(), containsSubstring(), Context, Datastore, Product (+78 more)
+Nodes (85): CollectionValidatingPolicy, ProductValidatingPolicy, mockGitReader, spyDatastore, NewCollectionValidatingPolicy(), T, TestCollectionValidatingPolicy_Collection_ReturnsAllowedNoConditions(), TestCollectionValidatingPolicy_Name() (+77 more)
 
 ### Community 6 - "Context"
 Cohesion: 0.09
@@ -461,15 +490,15 @@ Nodes (22): CollectedField, Context, FieldContext, executionContext, Marshaler, 
 
 ### Community 7 - "scylla/backend_test.go"
 Cohesion: 0.08
-Nodes (78): Datastore, ScyllaConfig, New(), parseHosts(), base64Encode(), contactPointTranslator(), dropKeyspace(), AddressTranslator (+70 more)
+Nodes (79): Datastore, ScyllaConfig, New(), parseHosts(), base64Encode(), contactPointTranslator(), dropKeyspace(), AddressTranslator (+71 more)
 
-### Community 8 - "newTestSvc"
-Cohesion: 0.06
-Nodes (47): DatastoreWithNamespaces, Namespace, NamespaceTier, CommitFileParams, CreateTagParams, DeleteFileParams, Context, Mutex (+39 more)
+### Community 8 - "Subscription"
+Cohesion: 0.12
+Nodes (14): Conn, Dialer, Context, RawMessage, toWebsocketURL(), Client, Error, gqlRequest (+6 more)
 
 ### Community 9 - "validator_test.go"
-Cohesion: 0.07
-Nodes (72): CategoryTaxonomySpec, FieldError, MediaDefinition, extractFrontmatterBlock(), fieldPath(), CollectionSpec, ProductSpec, ProductVariantSpec (+64 more)
+Cohesion: 0.10
+Nodes (54): NewParser(), Reader, T, parseProduct(), TestParse_CategoryRef_MissingName_Rejected(), TestParse_DuplicateOptionNamesRejected(), TestParse_EmptyNameRejected(), TestParse_KindLowercaseRejected() (+46 more)
 
 ### Community 10 - "Data Model: Admission Control Contract"
 Cohesion: 0.10
@@ -479,21 +508,21 @@ Nodes (46): Specification Quality Checklist: Controller Manager Runtime Foundati
 Cohesion: 0.28
 Nodes (15): AllowAllProvider, AnonymousProvider, AuthNProvider interface, AuthZProvider interface, ChainedAuthN, AuthNProvider.IssueSession, ProviderRegistry, RBACLocalProvider (+7 more)
 
-### Community 12 - "Context"
-Cohesion: 0.12
-Nodes (4): CollectedField, Context, FieldContext, executionContext
+### Community 12 - "._CategorySpec"
+Cohesion: 0.23
+Nodes (4): LabelSelector, MediaDefinition, CategorySpec, CollectionSpec
 
 ### Community 13 - "gitstore-api/internal/config/config.go"
-Cohesion: 0.07
-Nodes (40): ApiConfig, AuthConfig, AuthNConfig, AuthZConfig, CacheConfig, DatastoreConfig, GitConfig, GitEndpointConfig (+32 more)
+Cohesion: 0.06
+Nodes (55): ApiConfig, AuthConfig, AuthNConfig, AuthZConfig, CacheConfig, DatastoreConfig, GitConfig, GitEndpointConfig (+47 more)
 
 ### Community 14 - "memdbDatastore"
 Cohesion: 0.08
-Nodes (15): compareKeyset(), decodeCursor(), Collection, Context, LabelSelector, Namespace, Product, ProductVariant (+7 more)
+Nodes (16): compareKeyset(), decodeCursor(), CategoryTaxonomy, Collection, Context, LabelSelector, Namespace, Product (+8 more)
 
-### Community 15 - "PageParams"
-Cohesion: 0.09
-Nodes (17): PageParams, datastoreNamespaceTierFromModel(), fanoutStoragePath(), getStringOrEmpty(), Collection, Context, Datastore, LabelSelector (+9 more)
+### Community 15 - "PageResult"
+Cohesion: 0.08
+Nodes (26): GraphQLHandlerDeps, PageResult, T, T, TestNewServiceDefaultsOptionalDependencies(), TestNewServiceRequiresDatastore(), TestNewServiceRequiresLogger(), TestServiceCreateNamespaceAndRepositoryUsesInjectedClockAndIDs() (+18 more)
 
 ### Community 16 - "validation_handler.rs"
 Cohesion: 0.06
@@ -501,31 +530,31 @@ Nodes (45): Fn, CatalogService, Send, Sync, make_blob(), MockCatalogService, Adm
 
 ### Community 17 - "CatalogServiceServer<T>"
 Cohesion: 0.06
-Nodes (37): gitstore-admin codegen.yml, Admin GraphQL codegen config (typescript, typescript-operations, typescript-react-apollo), gitstore-admin GraphQL Operations README, Generated Apollo hooks (use[Operation]Query/Mutation), Optimistic locking (version-based update conflicts), Relay mutation pattern (clientMutationId input/payload), CatalogServiceClient, CatalogServiceClient<T> (+29 more)
+Nodes (36): gitstore-admin codegen.yml, Admin GraphQL codegen config (typescript, typescript-operations, typescript-react-apollo), gitstore-admin GraphQL Operations README, Generated Apollo hooks (use[Operation]Query/Mutation), Optimistic locking (version-based update conflicts), Relay mutation pattern (clientMutationId input/payload), CatalogServiceClient, CatalogServiceClient<T> (+28 more)
 
 ### Community 18 - "pack_server.rs"
 Cohesion: 0.10
 Nodes (48): build_pack_for_wants(), build_upload_pack_caps(), ChannelReader, check_blob_sizes_in_quarantine(), check_blob_sizes_in_quarantine_paths(), collect_refs(), emit_span(), flush() (+40 more)
 
-### Community 19 - "ConditionStatus"
-Cohesion: 0.05
-Nodes (9): ConditionStatus, EligibilityOperator, InventoryPolicy, InventoryStatus, LabelSelectorOperator, LabelSelectorRequirement, NamespaceTier, ProductConditionType (+1 more)
+### Community 19 - "models_gen.go"
+Cohesion: 0.03
+Nodes (53): Decimal, PriceRuleConstraint, PriceTemplate, QuantityDefinition, ResolvedProductVariantDefinition, SelectedOptionDefinition, StrategyDefinition, VariantSummaryDefinition (+45 more)
 
 ### Community 20 - "hooks/mod.rs"
-Cohesion: 0.09
-Nodes (42): GitReceivePackHooks, HookToggle, make_update(), AdmissionDecision, AdmissionHandler, get_tag_name(), HookContext, HookDecision (+34 more)
+Cohesion: 0.11
+Nodes (27): make_update(), AdmissionDecision, get_tag_name(), HookContext, HookDecision, HookRejection, log_phase(), make_update() (+19 more)
 
 ### Community 21 - "config.rs"
-Cohesion: 0.09
-Nodes (52): ConfigError, AdmissionControlConfig, AppConfig, AuthConfig, CatalogServiceConfig, clear_env(), ConfigErrors, default_toml() (+44 more)
+Cohesion: 0.20
+Nodes (28): clear_env(), HookToggle, load_config_from(), test_absent_env_file_is_no_op(), test_app_config_debug_includes_key_fields(), test_config_file_value_applied_when_no_env_var(), test_default_config_has_new_structure(), test_defaults_applied_when_no_source_set() (+20 more)
 
 ### Community 22 - "InstrumentedDatastore"
-Cohesion: 0.10
-Nodes (11): InstrumentedDatastore, Collection, Context, CounterVec, HistogramVec, LabelSelector, Namespace, Product (+3 more)
+Cohesion: 0.06
+Nodes (35): InstrumentedDatastore, CategoryTaxonomy, Collection, Context, CounterVec, Datastore, HistogramVec, LabelSelector (+27 more)
 
 ### Community 23 - "StubStore"
-Cohesion: 0.09
-Nodes (8): Collection, Context, LabelSelector, Namespace, Product, ProductVariant, Repository, StubStore
+Cohesion: 0.08
+Nodes (9): CategoryTaxonomy, Collection, Context, LabelSelector, Namespace, Product, ProductVariant, Repository (+1 more)
 
 ### Community 24 - "update-agent-context.sh"
 Cohesion: 0.11
@@ -535,21 +564,21 @@ Nodes (23): check-prerequisites.sh script, check_dir(), check_feature_branch(), 
 Cohesion: 0.06
 Nodes (50): API/Data Stack (Go): gqlgen, go-memdb, gocqlx/gocql, validator, zap, uuid, Controller Manager Stack (Go): x/time, pond, backoff, prometheus client_golang, viper, Git Service Stack (Rust): gix, tokio, axum, tonic, tracing, anyhow, serde, GitStore Development Guidelines (AGENTS.md), make bootstrap, make compose, make compose-scylla, make dev (+42 more)
 
-### Community 26 - "auth_resolvers_test.go"
-Cohesion: 0.19
-Nodes (32): ctxWithPrincipal(), extractJTI(), AuthConfig, Context, Resolver, T, mustBcrypt(), newTestConfig() (+24 more)
+### Community 26 - "graphql_listwatcher.go"
+Cohesion: 0.10
+Nodes (29): derefOr(), CategoryTaxonomy, Client, Context, Time, WatchEvent, isWatchExpiredErr(), NewCategoryTaxonomyListWatcher() (+21 more)
 
-### Community 27 - "models_gen.go"
-Cohesion: 0.05
-Nodes (49): Decimal, LabelSelector, LabelSelectorRequirement, MediaDefinition, PriceRuleConstraint, PriceTemplate, QuantityDefinition, ResolvedCategoryTaxonomy (+41 more)
+### Community 27 - "SelectionSet"
+Cohesion: 0.14
+Nodes (6): SelectionSet, CategoryTaxonomyStatus, Category, CreateCategoryPayload, ReorderCategoriesPayload, UpdateCategoryStatusPayload
 
 ### Community 28 - "admission_handler.rs"
 Cohesion: 0.11
-Nodes (42): AtomicU32, add_file_to_repo(), AdmissionControlHandler, compute_changed_paths(), make_hook_context(), make_repo_with_files(), MockCatalogService, AdmissionDecision (+34 more)
+Nodes (43): AtomicU32, add_file_to_repo(), AdmissionControlHandler, compute_changed_paths(), compute_changed_paths_in_repo(), make_hook_context(), make_repo_with_files(), MockCatalogService (+35 more)
 
 ### Community 29 - "memdb/backend_test.go"
-Cohesion: 0.12
-Nodes (48): Datastore, New(), categoryTaxonomyFixture(), collectionFixture(), Collection, Datastore, Product, Repository (+40 more)
+Cohesion: 0.11
+Nodes (53): Datastore, New(), categoryTaxonomyFixture(), collectionFixture(), CategoryTaxonomy, Collection, Datastore, Product (+45 more)
 
 ### Community 30 - "Context"
 Cohesion: 0.12
@@ -563,13 +592,13 @@ Nodes (40): GitClient, handler, RepoResolverFunc, requestContextKey, SmartHttpDe
 Cohesion: 0.08
 Nodes (34): DashMap, GetFileStreamStream, cmp_semver_str(), get_or_insert_lock(), get_tag_message(), GitServiceImpl, resolve_repo_path(), Arc (+26 more)
 
-### Community 33 - "PageResult"
-Cohesion: 0.08
-Nodes (13): Datastore, PageCursor, PageResult, stubDatastore, T, Time, Collection, Context (+5 more)
+### Community 33 - "stubDatastore"
+Cohesion: 0.09
+Nodes (9): stubDatastore, CategoryTaxonomy, Collection, Context, LabelSelector, Namespace, Product, ProductVariant (+1 more)
 
 ### Community 34 - "RunPaginationSuite"
 Cohesion: 0.08
-Nodes (40): Collection, Datastore, Namespace, NamespaceTier, Product, T, newCategoryTaxonomy(), newCollection() (+32 more)
+Nodes (42): CategoryTaxonomy, Collection, Datastore, Namespace, NamespaceTier, Product, T, newCategoryTaxonomy() (+34 more)
 
 ### Community 35 - "Generated gRPC Types (git.v1, Rust)"
 Cohesion: 0.09
@@ -580,16 +609,16 @@ Cohesion: 0.09
 Nodes (32): ClientConn, Context, Client, GitServiceClient, Reader, RefCommand, Service, NewClientWithAddr() (+24 more)
 
 ### Community 37 - "Principal"
-Cohesion: 0.11
-Nodes (23): AllowAllProvider, AuthRequest, Decision, Outcome, Principal, ResourceContext, stubAuthZProvider, Context (+15 more)
+Cohesion: 0.10
+Nodes (25): AllowAllProvider, AuthRequest, Decision, Outcome, Principal, ResourceContext, stubAuthZProvider, Context (+17 more)
 
 ### Community 38 - "ReconcileResult"
-Cohesion: 0.08
-Nodes (27): alwaysFailReconciler, countingReconciler, funcReconciler, Context, safeReconcile(), Duration, ResultAfter(), ResultOK() (+19 more)
+Cohesion: 0.07
+Nodes (42): blockingReconciler, countingReconciler, funcReconciler, Duration, ResultAfter(), ResultOK(), ResultTerminal(), ResultTransient() (+34 more)
 
 ### Community 39 - "Context"
-Cohesion: 0.07
-Nodes (7): CollectedField, Context, FieldContext, executionContext, PageInfo, ProductVariantBy, ProductVariantNamespacePath
+Cohesion: 0.06
+Nodes (5): CollectedField, Context, FieldContext, executionContext, PageInfo
 
 ### Community 40 - "Receive-Pack Hooks & Smart-HTTP Design Decisions"
 Cohesion: 0.05
@@ -600,8 +629,8 @@ Cohesion: 0.05
 Nodes (36): Content Quality, Feature Readiness, Notes, Requirement Completeness, Specification Quality Checklist: Controller Integration Tests + Operations Runbook, Data Model: Controller Integration Tests + Operations Runbook, Entity Mapping, State Transitions Relevant to Test Assertions (+28 more)
 
 ### Community 42 - "converters_test.go"
-Cohesion: 0.12
-Nodes (39): DatastoreCategoryTaxonomyToGraphQL(), DatastoreProductToGraphQL(), Category, OwnerReference, Product, ProductSpec, ProductStatus, ownerRefsFromJSON() (+31 more)
+Cohesion: 0.11
+Nodes (43): DatastoreCategoryTaxonomyToGraphQL(), DatastoreProductToGraphQL(), Category, CategoryTaxonomy, OwnerReference, Product, ProductSpec, ProductStatus (+35 more)
 
 ### Community 43 - "Implementation Plan: Controller Startup Resume — List-Then-Watch and resourceVersion Checkpointing"
 Cohesion: 0.05
@@ -611,9 +640,9 @@ Nodes (36): Content Quality, Feature Readiness, Notes, Requirement Completeness,
 Cohesion: 0.06
 Nodes (35): devDependencies, @graphql-codegen/cli, @graphql-codegen/client-preset, @graphql-codegen/typescript, @graphql-codegen/typescript-operations, @graphql-codegen/typescript-react-apollo, @playwright/test, @types/react (+27 more)
 
-### Community 45 - "executionContext"
-Cohesion: 0.18
-Nodes (3): Collection, executionContext, PublishCatalogInput
+### Community 45 - "Marshaler"
+Cohesion: 0.14
+Nodes (7): Marshaler, SelectionSet, WatchEvent, MarshalDateTime(), Node, StatusConflict, UpdateResourceStatusPayload
 
 ### Community 46 - "Product Frontmatter Type Design (Spec)"
 Cohesion: 0.13
@@ -635,13 +664,13 @@ Nodes (34): Spec Quality Checklist: Product Spec and Status Hydration, Contract:
 Cohesion: 0.12
 Nodes (28): ProductVariantValidatingPolicy, Env, T, newCELEnv(), AdmissionDecision, Context, Datastore, Env (+20 more)
 
-### Community 51 - "CollectedField"
-Cohesion: 0.13
-Nodes (4): CollectedField, FieldContext, ProductSpec, ResolvedProductDefinition
+### Community 51 - "Context"
+Cohesion: 0.16
+Nodes (3): Context, PriceRangeDefinition, ResolvedProductDefinition
 
-### Community 52 - "Marshaler"
-Cohesion: 0.18
-Nodes (4): Marshaler, PriceTemplate, QuantityDefinition, StrategyDefinition
+### Community 52 - "Context"
+Cohesion: 0.27
+Nodes (3): Context, PublishCatalogInput, CollectionCondition
 
 ### Community 53 - "Context"
 Cohesion: 0.14
@@ -657,19 +686,19 @@ Nodes (24): _GitService_CommitFile_Handler(), _GitService_CreateRepository_Handl
 
 ### Community 56 - "Manager"
 Cohesion: 0.09
-Nodes (22): Config, applyDefaults(), Context, Logger, Mutex, ReconcileResult, Time, WorkItemKey (+14 more)
+Nodes (18): applyDefaults(), Config, Context, Mutex, RWMutex, Time, New(), Context (+10 more)
 
-### Community 57 - "Response"
+### Community 57 - "GitServiceClient<T>"
 Cohesion: 0.09
-Nodes (20): CommitFileRequest, CommitFileResponse, CreateRepositoryRequest, CreateRepositoryResponse, DeleteFileRequest, DeleteFileResponse, DeleteRepositoryRequest, DeleteRepositoryResponse (+12 more)
+Nodes (23): GitServiceClient<T>, CommitFileRequest, CommitFileResponse, CreateRepositoryRequest, CreateRepositoryResponse, CreateTagRequest, CreateTagResponse, DeleteFileRequest (+15 more)
 
 ### Community 58 - "Admin Architecture & Credential Design Docs"
 Cohesion: 0.16
 Nodes (32): gitstore-admin architecture topology, gitstore-admin quickstart workflow, gitstore-admin overview, CredentialsRef (future credential-semantics wrapper), SecretRef reference contract, SecretResolver Go interface, gitstore.dev/foreground-deletion finalizer protocol, gitstore-system well-known system repository (+24 more)
 
-### Community 59 - ".ListRepositoriesByNamespace"
-Cohesion: 0.32
-Nodes (8): fromRepositoryRow(), Context, Repository, scyllaDatastore, Time, UUID, toRepositoryRow(), repositoryRow
+### Community 59 - "New"
+Cohesion: 0.47
+Nodes (8): New(), T, key(), TestQueue_BasicEnqueueDequeue(), TestQueue_DeduplicatesSameKey(), TestQueue_DirtyReenqueue(), TestQueue_EnqueueAfterShutdown(), TestQueue_ShutDownUnblocksDequeue()
 
 ### Community 60 - "server.rs"
 Cohesion: 0.18
@@ -684,40 +713,36 @@ Cohesion: 0.08
 Nodes (7): EnumDescriptor, EnumNumber, EnumType, file_gitstore_git_v1_git_service_proto_rawDescGZIP(), InfoRefsRequest, InfoRefsResponse, Service
 
 ### Community 63 - "converters.go"
-Cohesion: 0.11
-Nodes (28): categoryStatusFromJSON(), collectionSpecFromJSON(), collectionStatusFromJSON(), DatastoreCollectionToGraphQL(), datastoreNamespaceTierToModel(), DatastoreNamespaceToGraphQL(), datastoreNamespaceToModel(), DatastoreVariantToGraphQL() (+20 more)
+Cohesion: 0.10
+Nodes (30): categoryStatusFromJSON(), collectionSpecFromJSON(), collectionStatusFromJSON(), DatastoreCollectionToGraphQL(), datastoreNamespaceTierToModel(), DatastoreNamespaceToGraphQL(), datastoreNamespaceToModel(), DatastoreRepositoryToGraphQL() (+22 more)
 
 ### Community 64 - "API Reference & User Guide Docs"
 Cohesion: 0.09
 Nodes (30): Authentication via GraphQL-only login/logout/refreshToken mutations, JWT bearer token, Catalogue writes are Git-driven; resource identity = apiVersion+kind+namespace+metadata.name; file path is provenance only; UID/generation/resourceVersion lifecycle rules; async post-receive admission cannot retroactively reject an accepted push, Category (CategoryTaxonomy) GraphQL type with parent/children/path/depth, Collection GraphQL type with selector-based product membership, GraphQL endpoint contract (http://localhost:4000/graphql, Playground, POST JSON), Namespace GraphQL type (implements Node), Product GraphQL type — non-sellable parent descriptor, ProductVariant GraphQL type — purchasable SKU unit with pricing/inventory (+22 more)
 
-### Community 65 - "newRunner"
-Cohesion: 0.19
-Nodes (24): Store, failingStore, Context, Int32, Mutex, T, TestRunner_Backpressure_BoundedReplayWindow(), TestRunner_Backpressure_PausesOnWriteFailure_ResumesOnSuccess() (+16 more)
+### Community 65 - "IDGenerator"
+Cohesion: 0.13
+Nodes (13): GetRequestID(), Context, NewRequestId(), Mutex, Time, NewFixedClock(), contextKey, RequestId (+5 more)
 
-### Community 66 - "SelectionSet"
-Cohesion: 0.11
-Nodes (7): MediaDefinition, SelectionSet, ProductSpec, ProductStatus, Product, ProductConnection, ProductEdge
+### Community 66 - "Marshaler"
+Cohesion: 0.13
+Nodes (6): Marshaler, MediaDefinition, Product, SelectionSet, ProductConnection, ProductEdge
 
 ### Community 67 - "category_taxonomy_policy_test.go"
-Cohesion: 0.18
-Nodes (23): CategoryTaxonomyValidatingPolicy, buildPushParentMap(), DetectCycles(), AdmissionDecision, Context, Datastore, NewCategoryTaxonomyValidatingPolicy(), condMap() (+15 more)
-
-### Community 68 - "Marshaler"
-Cohesion: 0.15
-Nodes (4): Marshaler, SelectionSet, MarshalDateTime(), Node
+Cohesion: 0.16
+Nodes (25): CategoryTaxonomyValidatingPolicy, buildPushParentMap(), DetectCycles(), AdmissionDecision, Context, Datastore, NewCategoryTaxonomyValidatingPolicy(), condMap() (+17 more)
 
 ### Community 69 - "hook_pipeline.rs"
-Cohesion: 0.26
-Nodes (27): make_bare_repo(), make_commit(), RejectingValidationHandler, PathBuf, String, zero_oid(), all_disabled(), all_enabled() (+19 more)
+Cohesion: 0.25
+Nodes (27): make_bare_repo(), make_commit(), PerRefRejectingHandler, PerRefRejectingValidationHandler, RejectingAdmissionHandler, RejectingValidationHandler, PathBuf, String (+19 more)
 
 ### Community 70 - "ProviderRegistry"
-Cohesion: 0.18
-Nodes (11): AuthNProvider, AuthZProvider, ChainedAuthN, DecisionLogger, ProviderRegistry, UserDirProvider, NewDecisionLogger(), Context (+3 more)
+Cohesion: 0.17
+Nodes (10): AuthNProvider, AuthZProvider, ChainedAuthN, DecisionLogger, ProviderRegistry, UserDirProvider, NewDecisionLogger(), Context (+2 more)
 
 ### Community 71 - "New"
-Cohesion: 0.19
-Nodes (19): New(), newScriptedReconciler(), Context, ReconcileResult, T, WorkItemKey, TestObservability_ActiveWorkers_ReflectsRunningReconciles(), TestObservability_PoisonItemsTotal_IncrementsOnQuarantine() (+11 more)
+Cohesion: 0.36
+Nodes (20): AuthConfig, New(), AuthConfig, T, mustBcrypt(), newTestConfig(), TestStaticAdmin_BasicAuth_Allow(), TestStaticAdmin_BasicAuth_TokenIDEmpty() (+12 more)
 
 ### Community 72 - "product_variant.go"
 Cohesion: 0.07
@@ -727,53 +752,57 @@ Nodes (26): EligibilityDefinition, PriceRuleConstraint, PriceSet, PriceTemplate,
 Cohesion: 0.15
 Nodes (26): Commit, create_repository(), delete_repository(), fanout_path(), fanout_path_collision_free_distinct_uuids(), fanout_path_formula_prefix_extraction(), fanout_path_rejects_dotdot_in_id(), fanout_path_rejects_empty_string() (+18 more)
 
-### Community 75 - "New"
-Cohesion: 0.36
-Nodes (20): AuthConfig, New(), AuthConfig, T, mustBcrypt(), newTestConfig(), TestStaticAdmin_BasicAuth_Allow(), TestStaticAdmin_BasicAuth_TokenIDEmpty() (+12 more)
+### Community 74 - "Implementation Plan: CategoryTaxonomy Controller Reconciliation"
+Cohesion: 0.07
+Nodes (25): Content Quality, Feature Readiness, Notes, Requirement Completeness, Specification Quality Checklist: CategoryTaxonomy Controller Reconciliation, Complexity Tracking, Constitution Check, Documentation (this feature) (+17 more)
+
+### Community 75 - "mustEncodeNodeID"
+Cohesion: 0.41
+Nodes (15): mustEncodeNodeID(), Datastore, Product, queryResolver, T, newProductResolverEnv(), seedProduct(), TestProductResolver_ID_InvalidEncoding_ReturnsNil() (+7 more)
 
 ### Community 76 - "Header.tsx"
 Cohesion: 0.11
 Nodes (19): Header(), styles, EditProductRoutePage(), EditProductRoutePageProps, styles, PublishButton(), PublishButtonProps, styles (+11 more)
 
-### Community 77 - "parsedEntry"
-Cohesion: 0.11
-Nodes (24): CategoryTaxonomyResource, CollectionResource, CollectionSpec, LabelSelector, LabelSelectorRequirement, ObjectMeta, ProductResource, ProductVariantResource (+16 more)
+### Community 77 - "ObjectReference"
+Cohesion: 0.09
+Nodes (21): CollectionSpec, FileReference, InventoryDefinition, LabelSelector, LabelSelectorRequirement, MediaDefinition, ObjectReference, ProductOptionDefinition (+13 more)
 
 ### Community 78 - "newRunner"
-Cohesion: 0.19
-Nodes (23): enqueueRecorder, stubListWatcher, stubWatcher, widget, NewMemoryStore(), Int32, Mutex, T (+15 more)
+Cohesion: 0.18
+Nodes (20): enqueueRecorder, stubListWatcher, stubWatcher, widget, Int32, Mutex, T, newRunner() (+12 more)
 
-### Community 79 - "WorkItemKey"
-Cohesion: 0.17
-Nodes (9): CancelFunc, Cond, Context, Duration, Limiter, Mutex, RateLimitedEnqueue(), Queue (+1 more)
+### Community 79 - "QuarantineStore"
+Cohesion: 0.20
+Nodes (9): RWMutex, Time, NewQuarantineStore(), T, TestQuarantineStore_Len(), TestQuarantineStore_List(), TestQuarantineStore_PutGetDelete(), PoisonItem (+1 more)
 
 ### Community 80 - "Runner[T]"
-Cohesion: 0.20
-Nodes (9): ExponentialBackOff, Context, Duration, ListResponse, T, Watcher, WatchEvent, WorkItemKey (+1 more)
+Cohesion: 0.16
+Nodes (10): ExponentialBackOff, Context, Duration, Mutex, T, WatchEvent, ListWatcher, Runner (+2 more)
 
 ### Community 81 - "EncodeKeysetCursor"
-Cohesion: 0.16
-Nodes (23): DecodeKeysetCursor(), EncodeKeysetCursor(), Time, T, TestDecodeKeysetCursor(), TestEncodeKeysetCursor(), TestKeysetCursorRoundtrip(), BuildCategoryConnection() (+15 more)
+Cohesion: 0.15
+Nodes (24): DecodeKeysetCursor(), EncodeKeysetCursor(), Time, T, TestDecodeKeysetCursor(), TestEncodeKeysetCursor(), TestKeysetCursorRoundtrip(), BuildCategoryConnection() (+16 more)
 
-### Community 82 - "secure.go"
-Cohesion: 0.14
-Nodes (19): basicAuth(), bearerAuth(), CorsConfiguration(), Context, CounterVec, HandlerFunc, Limiter, Mutex (+11 more)
+### Community 82 - "ProductCondition"
+Cohesion: 0.15
+Nodes (3): ResolvedProductDefinition, ProductCondition, ProductStatus
 
 ### Community 83 - "Collection Contract & Integration Test Specs"
 Cohesion: 0.12
 Nodes (26): 022 Collection Resource Contract: Requirements Checklist, 022 Collection Resource Contract: Tasks, 023 Collection Integration Tests: Requirements Checklist, 023 Collection Integration Tests: Collection Validation Error Contract, 023 Collection Integration Tests: Data Model, CollectionResource (frontmatter envelope), CollectionStatus (conditions, resolved.memberCount), LabelSelector (matchLabels + matchExpressions) (+18 more)
 
 ### Community 84 - "NewGraphQLHandler"
-Cohesion: 0.09
-Nodes (35): policyReloader, providerShutdowner, Server, Engine, M, T, newTestGraphQLRegistry(), TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation() (+27 more)
+Cohesion: 0.15
+Nodes (23): policyReloader, providerShutdowner, Server, Engine, M, T, newTestGraphQLRegistry(), TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation() (+15 more)
 
 ### Community 85 - "ProductVariant Spec Docs"
 Cohesion: 0.12
 Nodes (25): ProductVariant Spec Reference, ProductVariant inventory fields (managed, policy, stockLocationRefs), ProductVariant identity/lifecycle, ProductVariant pricing fields (priceSet, PriceTemplate, strategy types, CEL eligibility), Single-pass catalog authoring (Product + ProductVariant co-pushed), ProductVariant status conditions (AdmissionAccepted, ProductResolved, OptionsAccepted, PricingAccepted, MediaAccepted), ProductVariant validation errors, Push Validation and Admission Pipeline (+17 more)
 
-### Community 86 - "Marshaler"
-Cohesion: 0.22
-Nodes (3): Category, Marshaler, CategorySpec
+### Community 86 - "Context"
+Cohesion: 0.13
+Nodes (6): Context, LabelSelectorRequirement, OwnerReference, CategoryObjectMeta, KeyValuePair, LabelSelector
 
 ### Community 87 - "Tasks: Controller Startup Resume — List-Then-Watch and resourceVersion Checkpointing"
 Cohesion: 0.08
@@ -783,9 +812,13 @@ Nodes (25): Dependencies & Execution Order, Format: `[ID] [P?] [Story] Descripti
 Cohesion: 0.18
 Nodes (9): Decimal, Time, Decimal, Marshaler, Time, MarshalDecimal(), MarshalJSON(), UnmarshalDateTime() (+1 more)
 
-### Community 90 - "executionContext"
-Cohesion: 0.15
-Nodes (3): executionContext, ResolvedProductRef, ProductVariantObjectMeta
+### Community 89 - "CollectedField"
+Cohesion: 0.17
+Nodes (3): CollectedField, FieldContext, ProductObjectMeta
+
+### Community 91 - "HookPipeline"
+Cohesion: 0.24
+Nodes (17): GitReceivePackHooks, AdmissionHandler, HookPipeline, make_disabled_config(), make_pipeline(), Arc, Duration, Self (+9 more)
 
 ### Community 92 - "ProductVariantConnection"
 Cohesion: 0.13
@@ -796,8 +829,8 @@ Cohesion: 0.18
 Nodes (22): Caching Reference, InMemoryCache, Fragments Reference, Data Masking, Fragment Colocation, Apollo Client Integration for Client-Side Apps, ApolloProvider, Apollo Client Integration with Next.js App Router (+14 more)
 
 ### Community 94 - "SelectionSet"
-Cohesion: 0.21
-Nodes (3): EligibilityDefinition, PriceRuleConstraint, SelectionSet
+Cohesion: 0.16
+Nodes (4): EligibilityDefinition, PriceRuleConstraint, SelectionSet, StrategyDefinition
 
 ### Community 95 - "Tasks: Controller Integration Tests + Operations Runbook"
 Cohesion: 0.07
@@ -808,24 +841,24 @@ Cohesion: 0.17
 Nodes (11): _GitService_GetFile_Handler(), _GitService_GetFileStream_Handler(), _GitService_ReceivePack_Handler(), _GitService_UploadPack_Handler(), GetFileRequest, GetFileResponse, ServiceRegistrar, RegisterGitServiceServer() (+3 more)
 
 ### Community 97 - "MatchesLabels"
-Cohesion: 0.23
-Nodes (20): containsString(), LabelSelector, MatchesLabels(), T, TestMatchesLabels_CombinedMatchLabelsAndExpressions(), TestMatchesLabels_DoesNotExist_KeyAbsent_ReturnsTrue(), TestMatchesLabels_DoesNotExist_KeyPresent_ReturnsFalse(), TestMatchesLabels_EmptySelector_ReturnsFalse() (+12 more)
+Cohesion: 0.13
+Nodes (32): containsString(), LabelSelector, MatchesLabels(), T, TestMatchesLabels_CombinedMatchLabelsAndExpressions(), TestMatchesLabels_DoesNotExist_KeyAbsent_ReturnsTrue(), TestMatchesLabels_DoesNotExist_KeyPresent_ReturnsFalse(), TestMatchesLabels_EmptySelector_ReturnsFalse() (+24 more)
 
 ### Community 98 - "Gitoxide Migration & Shellout Removal (Spec)"
 Cohesion: 0.15
 Nodes (22): 007-migrate-gitoxide checklists/requirements.md, 007-migrate-gitoxide quickstart.md, Per-request gix::open repository handle pattern, 007-migrate-gitoxide research.md, gix::ThreadSafeRepository cross-thread pattern, gix tree-editor eliminates clone-to-workdir pattern, 007-migrate-gitoxide spec.md, Migrate gitstore-git-service from git2 to gitoxide (+14 more)
 
 ### Community 99 - "Server"
-Cohesion: 0.08
-Nodes (42): Operation, AdmissionContext, gitClientReader, GitReader, resourceAdmissionOperation, resourceIdentity, ResourceParser, Server (+34 more)
+Cohesion: 0.09
+Nodes (35): Operation, AdmissionContext, gitClientReader, GitReader, resourceAdmissionOperation, resourceIdentity, ResourceParser, Server (+27 more)
 
 ### Community 100 - "status.go"
-Cohesion: 0.06
-Nodes (35): CategoryTaxonomyStatus, Condition, FileReference, InventoryDefinition, MediaDefinition, ObjectReference, OwnerReference, PriceRangeDefinition (+27 more)
+Cohesion: 0.10
+Nodes (20): CategoryTaxonomyStatus, Condition, OwnerReference, PriceRangeDefinition, ProductStatus, ResolvedCategoryDefinition, ResolvedFileDefinition, ResolvedProductDefinition (+12 more)
 
-### Community 101 - "toPageParams"
-Cohesion: 0.12
-Nodes (12): Category, Resolver, toPageParams(), Context, Product, queryResolver, Context, Product (+4 more)
+### Community 101 - "seedCache"
+Cohesion: 0.26
+Nodes (12): fakeStatusClient, CategoryTaxonomy, key(), seedCache(), Context, Mutex, T, noProducts() (+4 more)
 
 ### Community 102 - "ProductForm.tsx"
 Cohesion: 0.10
@@ -839,33 +872,29 @@ Nodes (9): CategoriesPage(), styles, CategoryList(), ProductsPage(), styles, Err
 Cohesion: 0.10
 Nodes (6): Category, Collection, Product, NOTE: This file contains optimistic update helpers that were originally for…, TODO: Replace with generated types from codegen, TODO: Update products query cache
 
-### Community 105 - "StaticAdminProvider"
-Cohesion: 0.09
-Nodes (15): UploadPackReceiver, GitService_UploadPackClient, main(), randomBase64URLSecret(), generateJTI(), Context, Duration, RWMutex (+7 more)
-
-### Community 106 - "Anonymous"
-Cohesion: 0.09
-Nodes (27): principalContextKey, rawTokenContextKey, pushContextKeyType, ContextWithRawToken(), Context, PrincipalFromContext(), RawTokenFromContext(), Anonymous() (+19 more)
+### Community 106 - "NewProviderRegistry"
+Cohesion: 0.13
+Nodes (41): ContextWithPrincipal(), NewProviderRegistry(), assertAnonymousOperationRejected(), OperationContext, T, TestGraphQLAuthenticatorInvalidBearerReturnsGraphQLError(), TestGraphQLAuthenticatorValidBearerInjectsPrincipal(), TestGraphQLAuthorizerAllowsLoginMutationForAnonymous() (+33 more)
 
 ### Community 107 - "Cache"
 Cohesion: 0.14
 Nodes (10): Cache, Cache[T], EventHandler, stateReadingReconciler, RWMutex, T, New(), T (+2 more)
 
-### Community 108 - "WatchEvent"
-Cohesion: 0.15
-Nodes (9): stubListWatcher[T], stubWatcher[T], T, Context, EventType, ListResponse, ListWatcher, Watcher (+1 more)
+### Community 108 - "LabelSelectorInput"
+Cohesion: 0.11
+Nodes (15): subscriptionResolver, WatchEvent, categoryEventMatchesFilters(), categoryEventMatchesSelector(), categoryTaxonomyToJSONMap(), CategoryTaxonomy, EventType, Resolver (+7 more)
 
 ### Community 109 - "Datastore-Only Resource Docs"
 Cohesion: 0.11
 Nodes (20): Datastore-Only Resources, Customer (account identity within a namespace), Order (datastore-only purchase lifecycle aggregate), PaymentIntent (datastore-only payment authorization intent), Session (authenticated session and expiry metadata), Git-Backed Resources, CategoryTaxonomy (hierarchical category node), Collection (selector-driven product grouping) (+12 more)
 
-### Community 110 - "rbaclocal_test.go"
-Cohesion: 0.34
-Nodes (15): adminPrincipal(), anonPrincipal(), developerPrincipal(), T, newRBACProvider(), TestRBACLocal_AdminCreateOrganization_Allow(), TestRBACLocal_AdminDeleteAny_Allow(), TestRBACLocal_AnonymousCreateOrganization_Deny() (+7 more)
+### Community 110 - "New"
+Cohesion: 0.37
+Nodes (13): New(), Server, T, stubGraphQLWSServer(), TestMutate_DecodesData(), TestQuery_GraphQLErrorSurfacesExtensionsCode(), TestQuery_HTTPErrorStatusReturnsError(), TestQuery_SendsPostWithBearerAndDecodesData() (+5 more)
 
-### Community 111 - "QuarantineStore"
-Cohesion: 0.20
-Nodes (9): RWMutex, Time, NewQuarantineStore(), T, TestQuarantineStore_Len(), TestQuarantineStore_List(), TestQuarantineStore_PutGetDelete(), PoisonItem (+1 more)
+### Community 111 - "newWatchTestResolver"
+Cohesion: 0.12
+Nodes (38): Bus, Event, EventType, kindBuffer, subscriber, boolLabel(), Mutex, New() (+30 more)
 
 ### Community 112 - "admission/chain_test.go"
 Cohesion: 0.33
@@ -879,25 +908,21 @@ Nodes (16): GraphQL Optimistic Locking (version: DateTime! field), Relay Node In
 Cohesion: 0.15
 Nodes (20): 009-api-namespaces checklists/requirements.md, 009-api-namespaces data-model.md, Namespace entity (isolation boundary), NamespaceTier enum (user/organisation/enterprise), 009-api-namespaces plan.md, 009-api-namespaces quickstart.md, 009-api-namespaces research.md, hasRepositories deletion guard stub (no-op) (+12 more)
 
-### Community 115 - "CollectedField"
-Cohesion: 0.13
-Nodes (4): CollectedField, FieldContext, CollectionCondition, CollectionStatus
-
-### Community 116 - "Time"
-Cohesion: 0.11
-Nodes (9): Time, Context, mutationResolver, queryResolver, namespaceFromContext(), CreateCategoryInput, DeleteCategoryInput, ReorderCategoriesInput (+1 more)
+### Community 115 - "Marshaler"
+Cohesion: 0.19
+Nodes (4): LabelSelector, LabelSelectorRequirement, Marshaler, CollectionObjectMeta
 
 ### Community 117 - "Record"
 Cohesion: 0.19
-Nodes (11): FilesystemStore, MemoryStore, Record, Time, WorkItemKey, Context, validateRecord(), cloneRecord() (+3 more)
+Nodes (11): FilesystemStore, MemoryStore, Record, Store, RawMessage, Time, Context, validateRecord() (+3 more)
 
-### Community 118 - "contract/health_test.go"
-Cohesion: 0.11
-Nodes (22): blockingReconciler, buildMux(), main(), NewHandler(), NewMetricsHandler(), InitLogger(), contains(), Context (+14 more)
+### Community 118 - "newSyncedCache"
+Cohesion: 0.32
+Nodes (11): alwaysFailReconciler, Context, T, newSyncedCache(), TestManager_OtherItemsUnaffectedByPoison(), TestManager_QuarantineNotBypassedByPendingEvent(), TestManager_QuarantinesAfterMaxAttempts(), TestManager_RequeueResetsAttemptCount() (+3 more)
 
-### Community 119 - "GitServiceClient<T>"
-Cohesion: 0.33
-Nodes (3): GitServiceClient<T>, CompressionEncoding, Self
+### Community 119 - "Self"
+Cohesion: 0.24
+Nodes (4): GitServiceClient<tonic::transport::Channel>, CompressionEncoding, D, Self
 
 ### Community 120 - "Chain"
 Cohesion: 0.20
@@ -908,32 +933,40 @@ Cohesion: 0.25
 Nodes (9): ProtectedRoute(), ProtectedRouteProps, AuthContext, AuthContextValue, AuthProviderProps, AuthState, useAuth(), User (+1 more)
 
 ### Community 122 - "status_patch_test.go"
-Cohesion: 0.31
-Nodes (8): mockStatusClient, Context, T, TestStatusClient_Conflict_ReturnsErrConflict(), TestStatusClient_NoOpPatch_SkipsApply(), TestStatusPatch_IsNoOp_AllFieldsMatch(), TestStatusPatch_IsNoOp_OneFieldDiffers(), TestStatusPatch_ObservedGenerationRequired()
+Cohesion: 0.26
+Nodes (11): mockStatusClient, Context, T, TestStatusClient_Conflict_ReturnsErrConflict(), TestStatusClient_NoOpPatch_SkipsApply(), TestStatusPatch_IsNoOp_AllFieldsMatch(), TestStatusPatch_IsNoOp_NilResolvedIsUnchanged(), TestStatusPatch_IsNoOp_OneFieldDiffers() (+3 more)
 
-### Community 123 - "SelectionSet"
-Cohesion: 0.14
-Nodes (7): SelectionSet, CategoryTaxonomyStatus, Category, CategoryOptimisticLockConflict, CreateCategoryPayload, ReorderCategoriesPayload, UpdateCategoryPayload
+### Community 123 - "secure.go"
+Cohesion: 0.15
+Nodes (17): basicAuth(), bearerAuth(), CorsConfiguration(), Context, CounterVec, HandlerFunc, Limiter, Mutex (+9 more)
 
-### Community 125 - "CollectionForm.tsx"
-Cohesion: 0.22
-Nodes (8): Collection, CollectionForm(), CollectionFormProps, styles, Product, ProductSelector(), ProductSelectorProps, styles
+### Community 125 - "ProductList.tsx"
+Cohesion: 0.19
+Nodes (12): formatStatus(), getStatusStyle(), Product, ProductList(), ProductListProps, TODO: Replace with actual GraphQL query when codegen runs, TODO: Use GraphQL mutation, styles (+4 more)
 
-### Community 127 - "newTestInstrumented"
+### Community 126 - "NewGraphQLStatusClient"
+Cohesion: 0.28
+Nodes (13): Client, Condition, NewGraphQLStatusClient(), T, TestApply_ForbiddenExtensionReturnsPlainWrappedError(), TestApply_NonNullConflictMapsToErrConflict(), TestApply_NotFoundExtensionMapsToErrNotFound(), TestApply_SendsUpdateCategoryStatusMutation() (+5 more)
+
+### Community 127 - "catalog_service_grpc.pb.go"
+Cohesion: 0.15
+Nodes (16): _CatalogService_AdmitResources_Handler(), _CatalogService_ValidateResources_Handler(), AdmitResourcesRequest, AdmitResourcesResponse, ClientConnInterface, Context, ServiceRegistrar, UnaryServerInterceptor (+8 more)
+
+### Community 128 - "newCategoryResolverEnv"
+Cohesion: 0.29
+Nodes (18): CategoryTaxonomy, Datastore, queryResolver, T, Time, newCategoryResolverEnv(), seedCategory(), TestCategoryResolver_Categories_BackwardPagination() (+10 more)
+
+### Community 129 - "Tasks: CategoryTaxonomy Controller Reconciliation"
 Cohesion: 0.08
-Nodes (39): _CatalogService_AdmitResources_Handler(), _CatalogService_ValidateResources_Handler(), AdmitResourcesRequest, AdmitResourcesResponse, ClientConnInterface, Context, ServiceRegistrar, UnaryServerInterceptor (+31 more)
+Nodes (24): Dependencies & Execution Order, Format: `[ID] [P?] [Story] Description`, Implementation for User Story 1, Implementation for User Story 2, Implementation for User Story 3, Implementation Strategy, Incremental Delivery, MVP First (User Story 1 Only) (+16 more)
 
-### Community 128 - "Category Resolver Tests"
+### Community 130 - ".Load"
 Cohesion: 0.31
-Nodes (17): Datastore, queryResolver, T, Time, newCategoryResolverEnv(), seedCategory(), TestCategoryResolver_Categories_BackwardPagination(), TestCategoryResolver_Categories_BackwardWithBefore() (+9 more)
+Nodes (24): redact(), clearEnv(), T, setRequiredAuth(), TestLoad_AbsentEnvFileIsNoOp(), TestLoad_ConfigFileValueAppliedWhenNoEnvVar(), TestLoad_DatastoreBackendDefaultsToMemdb(), TestLoad_DatastoreBackendMemdbIsValid() (+16 more)
 
-### Community 129 - "NewAuthenticate"
-Cohesion: 0.13
-Nodes (37): ContextWithPrincipal(), assertAnonymousOperationRejected(), Context, OperationContext, T, TestGraphQLAuthenticatorInvalidBearerReturnsGraphQLError(), TestGraphQLAuthenticatorValidBearerInjectsPrincipal(), TestGraphQLAuthorizerAllowsLoginMutationForAnonymous() (+29 more)
-
-### Community 131 - "AdmissionRequest"
-Cohesion: 0.09
-Nodes (18): AdmissionCondition, AdmissionRequest, Allowed, Denied, GitAdmissionContext, panicPolicy, stubMutatingPolicy, stubMutatingWebhook (+10 more)
+### Community 131 - "toPageParams"
+Cohesion: 0.11
+Nodes (13): Resolver, LabelSelector, specSelectorToCatalog(), toPageParams(), Context, Product, queryResolver, Context (+5 more)
 
 ### Community 132 - "dependencies"
 Cohesion: 0.12
@@ -943,17 +976,17 @@ Nodes (17): astro, @astrojs/react, dependencies, astro, @astrojs/react, graphql,
 Cohesion: 0.27
 Nodes (11): stubProvider, Context, T, Time, TestChain_AllChallenge_ReturnsDeny(), TestChain_AnonymousProvider_CredentialsPresent_Challenge(), TestChain_AnonymousProvider_NoCredentials_AllowAnonymous(), TestChain_ChallengeBeforeAllow_SkipsToNext() (+3 more)
 
-### Community 134 - "cache_contract_test.go"
-Cohesion: 0.20
-Nodes (12): CacheAccessor, readOnlyCache, readOnlyCache[T], AsReadOnly(), T, T, TestCacheAccessor_ReadOnly(), TestInformerCache_EventHandlerFiredOnDelete() (+4 more)
+### Community 134 - "Hierarchy Path Type Checklist: ancestorPath → path Rename"
+Cohesion: 0.05
+Nodes (35): Acceptance Criteria Quality, Ambiguities & Conflicts, Dependencies & Assumptions, Hierarchy Path Type Checklist: ancestorPath → path Rename, Notes, Requirement Clarity, Requirement Completeness, Requirement Consistency (+27 more)
 
 ### Community 135 - "NamespaceMapping"
 Cohesion: 0.35
 Nodes (7): NamespaceMapping, fromMappingRow(), Context, scyllaDatastore, UUID, toMappingRow(), namespaceMappingRow
 
-### Community 136 - "Collection"
-Cohesion: 0.18
-Nodes (4): CollectionSpec, Collection, CollectionOptimisticLockConflict, UpdateCollectionPayload
+### Community 136 - "SelectionSet"
+Cohesion: 0.16
+Nodes (7): PublishCatalogPayload, SelectionSet, CollectionSpec, Collection, CollectionOptimisticLockConflict, CreateCollectionPayload, UpdateCollectionPayload
 
 ### Community 138 - "startBufconn"
 Cohesion: 0.13
@@ -967,8 +1000,12 @@ Nodes (14): gitstore-admin service, gitstore-api service, gitstore-git-service, 
 Cohesion: 0.15
 Nodes (12): ClientConnInterface, GetFileStreamRequest, GetFileStreamResponse, UploadPackRequest, UploadPackResponse, NewGitServiceClient(), Client, ClientConn (+4 more)
 
+### Community 141 - ".ListRepositoriesByNamespace"
+Cohesion: 0.32
+Nodes (8): fromRepositoryRow(), Context, Repository, scyllaDatastore, Time, UUID, toRepositoryRow(), repositoryRow
+
 ### Community 142 - ".new"
-Cohesion: 0.20
+Cohesion: 0.19
 Nodes (10): GitServiceClient, GitServiceServer, Arc, EnabledCompressionEncodings, F, Grpc, InterceptedService, Option (+2 more)
 
 ### Community 143 - "Service Configuration Reference Docs"
@@ -987,9 +1024,9 @@ Nodes (7): App(), AppProps, AuthProvider(), LogContext, Logger, LogLevel, getUrq
 Cohesion: 0.14
 Nodes (3): TagEntry, GetLatestTagResponse, ListTagsResponse
 
-### Community 147 - "mustEncodeNodeID"
-Cohesion: 0.33
-Nodes (17): DatastoreRepositoryToGraphQL(), Repository, mustEncodeNodeID(), Datastore, Product, queryResolver, T, newProductResolverEnv() (+9 more)
+### Community 147 - "conditions_test.go"
+Cohesion: 0.26
+Nodes (13): T, TestComputeAcyclic_CycleParticipantIsFalse(), TestComputeAcyclic_NonParticipantIsTrue(), TestComputeParentResolved_AbsentParentRef(), TestComputeParentResolved_NonexistentParentRef(), TestComputeParentResolved_ResolvingParentRef(), TestComputeReady_AbsentFileRefConditionDoesNotBlockReady(), TestComputeReady_AllTrueYieldsTrue() (+5 more)
 
 ### Community 148 - ".new"
 Cohesion: 0.30
@@ -1003,25 +1040,25 @@ Nodes (5): _extract_highest_number(), get_highest_from_branches(), create-new-fe
 Cohesion: 0.18
 Nodes (5): AnonymousProvider, Capability, Context, Time, New()
 
-### Community 151 - "helpers.rs"
-Cohesion: 0.17
-Nodes (15): AtomicUsize, CountingAdmissionHandler, CountingValidationHandler, PerRefRejectingHandler, PerRefRejectingValidationHandler, RejectingAdmissionHandler, AdmissionDecision, Arc (+7 more)
+### Community 151 - "AdmissionDecision"
+Cohesion: 0.29
+Nodes (6): AdmissionDecision, HookContext, Path, ResourceBlob, SlowAdmissionHandler, SlowValidationHandler
 
-### Community 152 - "CollectedField"
-Cohesion: 0.12
-Nodes (4): CollectedField, FieldContext, ProductVariantSpec, ResolvedProductVariantDefinition
+### Community 152 - "Marshaler"
+Cohesion: 0.22
+Nodes (4): Marshaler, PricingDefinition, ProductVariantSpec, SelectedOptionDefinition
 
-### Community 153 - "EditProductPage.tsx"
-Cohesion: 0.14
-Nodes (13): Conflict, EditProductPage(), EditProductPageProps, Product, TODO: Use GraphQL mutation, TODO: Use GraphQL mutation with force flag, TODO: Replace with actual GraphQL query when codegen runs, TODO: Use GraphQL query (+5 more)
+### Community 153 - "AdmissionDecision"
+Cohesion: 0.18
+Nodes (7): panicPolicy, stubMutatingPolicy, stubMutatingWebhook, stubValidatingPolicy, stubValidatingWebhook, AdmissionDecision, Context
 
 ### Community 154 - "ValidationError"
 Cohesion: 0.15
 Nodes (3): SizeCache, ValidateResourcesResponse, ValidationError
 
-### Community 155 - ".Load"
-Cohesion: 0.31
-Nodes (24): redact(), clearEnv(), T, setRequiredAuth(), TestLoad_AbsentEnvFileIsNoOp(), TestLoad_ConfigFileValueAppliedWhenNoEnvVar(), TestLoad_DatastoreBackendDefaultsToMemdb(), TestLoad_DatastoreBackendMemdbIsValid() (+16 more)
+### Community 155 - "AdmissionRequest"
+Cohesion: 0.11
+Nodes (15): AdmissionCondition, AdmissionRequest, Allowed, Denied, GitAdmissionContext, Trigger, denyingPolicy, recordingPolicy (+7 more)
 
 ### Community 156 - "Pool"
 Cohesion: 0.18
@@ -1035,29 +1072,33 @@ Nodes (12): FR-008: Temporary clones for write mutations, Catalogue Reload State
 Cohesion: 0.18
 Nodes (12): FR-001/FR-002: Rename service dirs + update references, FR-008..FR-012: CI path filtering + integration test requirements, US1: Repository Structure Is Immediately Legible (P1), US2: Core Stack Runs Without Admin Add-On (P1), US3: Integration Tests Validate Core Stack in CI (P1), US4: Admin CI Path-Filtered; Core CI Always Runs (P2), US5: Documentation Reflects Core/Add-On Separation (P2), Phase 1: Setup — structural rename tasks (T001-T011) (+4 more)
 
-### Community 159 - "compute_changed_paths_in_repo"
-Cohesion: 0.37
-Nodes (12): Entry, compute_changed_paths_in_repo(), collect_diff_paths_from_trees(), collect_paths_from_tree(), decode_tree(), get_tree_id(), make_path(), ObjectId (+4 more)
+### Community 159 - "CreateProductRoutePage.tsx"
+Cohesion: 0.22
+Nodes (8): CreateProductPage(), Product, TODO: Replace with actual GraphQL mutation when codegen runs, TODO: Use GraphQL mutation, styles, CreateProductRoutePage(), styles, ProductForm()
 
-### Community 160 - "Context"
-Cohesion: 0.16
-Nodes (6): Context, mutationResolver, queryResolver, CreateCollectionInput, DeleteCollectionInput, UpdateCollectionInput
+### Community 160 - "._DeleteCollectionPayload"
+Cohesion: 0.12
+Nodes (8): Collection, Context, mutationResolver, queryResolver, CreateCollectionInput, DeleteCollectionInput, DeleteCollectionPayload, UpdateCollectionInput
 
-### Community 161 - "ProductList.tsx"
-Cohesion: 0.19
-Nodes (12): formatStatus(), getStatusStyle(), Product, ProductList(), ProductListProps, TODO: Replace with actual GraphQL query when codegen runs, TODO: Use GraphQL mutation, styles (+4 more)
+### Community 161 - "validator.go"
+Cohesion: 0.13
+Nodes (19): CategoryTaxonomyResource, CategoryTaxonomySpec, FieldError, MediaDefinition, extractFrontmatterBlock(), fieldPath(), CollectionSpec, ProductSpec (+11 more)
 
 ### Community 162 - "ResourceBlob"
 Cohesion: 0.16
 Nodes (3): UnknownFields, ResourceBlob, ValidateResourcesRequest
 
-### Community 164 - "reconciler_contract_test.go"
-Cohesion: 0.27
-Nodes (9): stubReconciler, Context, Int64, T, TestQueue_DeduplicatesEnqueue(), TestQueue_DirtyReenqueuesAfterDone(), TestQueue_EnqueueAfterShutDown_ReturnsError(), TestQueue_ShutDown_UnblocksDequeue() (+1 more)
+### Community 164 - "Tasks: Controller Watch API and Status Subresource Contract"
+Cohesion: 0.08
+Nodes (25): Dependencies & Execution Order, Format: `[ID] [P?] [Story] Description`, Implementation for User Story 1, Implementation for User Story 2, Implementation for User Story 3, Implementation Status Notes (as of this pass), Implementation Strategy, Incremental Delivery (+17 more)
 
-### Community 166 - "manager_dispatch_test.go"
-Cohesion: 0.30
-Nodes (11): T, TestManager_CRDKind_DispatchedOnSamePathAsCoreKind(), TestManager_DispatchHeldUntilCacheSynced(), TestManager_DuplicateRegistration_ReturnsError(), TestManager_NilCache_ReturnsError(), TestManager_NilReconciler_ReturnsError(), TestManager_ReconcilerDispatchedOnce(), TestManager_ReconcilerPanic_LogsStackTrace() (+3 more)
+### Community 165 - "executionContext"
+Cohesion: 0.10
+Nodes (3): CollectedField, FieldContext, executionContext
+
+### Community 166 - "Controller-Manager-Side Types (new)"
+Cohesion: 0.22
+Nodes (8): CategoryTaxonomy (cache entity), CategoryTaxonomyListWatcher (new, `internal/listwatch`), Controller-Manager-Side Types (new), Data Model: CategoryTaxonomy Controller Reconciliation, graphqlStatusClient (new, `internal/status`), Relationships, ResolvedCategoryTaxonomy (JSON payload the reconciler marshals into `StatusPatch.Resolved`), Validation Rules (from Functional Requirements)
 
 ### Community 167 - "Project Constitution Governance"
 Cohesion: 0.18
@@ -1079,25 +1120,21 @@ Nodes (7): Checklist: Admission Path Cleanup Requirements Quality, changed_paths
 Cohesion: 0.15
 Nodes (13): docs/admin/README.md, docs/api-reference.md, docs/architecture.md, docs/configuration.md, docs/developer-guide.md, docs/storefront.md, docs/user-guide.md, gitstore-controller-manager/README.md (+5 more)
 
-### Community 172 - "statusConflictReconciler"
-Cohesion: 0.24
-Nodes (9): newFakeStatusClient(), Context, Mutex, ReconcileResult, T, WorkItemKey, TestIntegration_StatusConflict_ControllerRetriesAfterConflict(), TestIntegration_StatusConflict_StaleWriteRejected() (+1 more)
-
-### Community 173 - "Context"
-Cohesion: 0.14
-Nodes (3): Context, Product, ProductStatus
+### Community 172 - ".Watch"
+Cohesion: 0.22
+Nodes (4): stubListWatcher[T], stubWatcher[T], Context, WatchEvent
 
 ### Community 174 - "Context"
 Cohesion: 0.28
 Nodes (6): mockGitClient, stubAuthNProviderWithPrincipal, Context, Reader, Service, Time
 
-### Community 175 - "CategoryList.tsx"
+### Community 175 - "Research: CategoryTaxonomy Controller Reconciliation"
+Cohesion: 0.25
+Nodes (7): R1: GraphQL client dependency for `gitstore-controller-manager`, R2: Hierarchy computation algorithm (depth, path, descendant recompute), R3: Cycle detection at reconcile time, R4: `productCount` computation, R5: Required-file-reference condition (US3), R6: Runbook approach (FR-016, SC-005), Research: CategoryTaxonomy Controller Reconciliation
+
+### Community 176 - "CategoryList.tsx"
 Cohesion: 0.17
 Nodes (11): Category, CategoryListProps, TODO: Use GraphQL mutation, TODO: Use GraphQL mutation, TODO: Replace with actual GraphQL query when codegen runs, TODO: Use GraphQL query, styles, Category (+3 more)
-
-### Community 176 - "CollectionsPage.tsx"
-Cohesion: 0.18
-Nodes (10): Collection, CollectionList(), CollectionListProps, TODO: Use GraphQL mutation, TODO: Use GraphQL mutation, TODO: Replace with actual GraphQL query when codegen runs, TODO: Use GraphQL query, styles (+2 more)
 
 ### Community 178 - "MessageState"
 Cohesion: 0.14
@@ -1123,13 +1160,13 @@ Nodes (13): build_pack_bytes_from_repo(), build_rejection_status(), build_report
 Cohesion: 0.18
 Nodes (9): FR-021: Admin UI rejects push on merge conflicts, FR-023: Orphaned category/collection references marked invalid, FR-025..FR-027: Built-in git engine validation + websocket notifications, US1: Technical User Creates Product Catalog (P1), US2: Organize Products with Categories and Collections (P2), US3: Non-Technical User Manages Catalog via Admin UI (P3), Phase 3: User Story 1 implementation tasks (T025-T053), Phase 4: User Story 2 implementation tasks (T054-T078) (+1 more)
 
-### Community 184 - "NewCollectionValidatingPolicy"
-Cohesion: 0.24
-Nodes (8): CollectionValidatingPolicy, AdmissionDecision, Context, NewCollectionValidatingPolicy(), T, TestCollectionValidatingPolicy_Collection_ReturnsAllowedNoConditions(), TestCollectionValidatingPolicy_Name(), TestCollectionValidatingPolicy_NonCollectionKind_ReturnsAllowed()
+### Community 184 - "SizeCache"
+Cohesion: 0.15
+Nodes (3): SizeCache, DeleteRepositoryResponse, ReceivePackResponse
 
-### Community 185 - "NewProductValidatingPolicy"
-Cohesion: 0.24
-Nodes (8): ProductValidatingPolicy, AdmissionDecision, Context, NewProductValidatingPolicy(), T, TestProductValidatingPolicy_Name(), TestProductValidatingPolicy_NonProductKind_ReturnsAllowed(), TestProductValidatingPolicy_Product_ReturnsAllowedNoConditions()
+### Community 185 - "AppConfig"
+Cohesion: 0.12
+Nodes (18): ConfigError, AdmissionControlConfig, AppConfig, CatalogServiceConfig, default_toml(), GitConfig, GrpcAuthConfig, HooksConfig (+10 more)
 
 ### Community 186 - ".receive_pack"
 Cohesion: 0.20
@@ -1143,9 +1180,9 @@ Nodes (5): Context, FileEntry, Client, ListFilesResponse, TagEntry
 Cohesion: 0.46
 Nodes (11): deriveResourceAdmissionOperations(), collectionDoc(), T, mustParsedEntry(), productDoc(), TestDeriveResourceAdmissionOperations_Create(), TestDeriveResourceAdmissionOperations_Delete(), TestDeriveResourceAdmissionOperations_KindChangeDeleteCreate() (+3 more)
 
-### Community 192 - "newGlobalIDTestResolver"
-Cohesion: 0.41
-Nodes (11): Context, Datastore, Resolver, T, newGlobalIDTestResolver(), seedGlobalIDTestData(), TestLookupProduct_NotFound(), TestLookupProductByName() (+3 more)
+### Community 192 - "manager_dispatch_test.go"
+Cohesion: 0.26
+Nodes (13): T, TestManager_CRDKind_DispatchedOnSamePathAsCoreKind(), TestManager_DispatchHeldUntilCacheSynced(), TestManager_DuplicateRegistration_ReturnsError(), TestManager_NilCache_ReturnsError(), TestManager_NilReconciler_ReturnsError(), TestManager_ReconcilerDispatchedOnce(), TestManager_ReconcilerPanic_LogsStackTrace() (+5 more)
 
 ### Community 193 - "Upload-Pack Fix (Spec)"
 Cohesion: 0.20
@@ -1154,6 +1191,10 @@ Nodes (12): build_pack_for_wants function, handle_upload_pack function, pack_ser
 ### Community 195 - "NoneProvider"
 Cohesion: 0.31
 Nodes (4): UserProfile, Context, New(), NoneProvider
+
+### Community 196 - "hierarchy_test.go"
+Cohesion: 0.26
+Nodes (14): computeHierarchy(), detectCycles(), CategoryTaxonomy, ResolvedCategoryTaxonomy, T, TestComputeHierarchy_ChildAndProductCounts(), TestComputeHierarchy_ChildlessProductlessCategoryReportsZeroNotOmitted(), TestComputeHierarchy_DeletedIntermediateAncestor_RecomputesRelativeToNextAvailable() (+6 more)
 
 ### Community 197 - "contracts/datastore.go"
 Cohesion: 0.24
@@ -1184,20 +1225,24 @@ Cohesion: 0.40
 Nodes (10): speckit-git-commit Skill, speckit-git-feature Skill, speckit-git-initialize Skill, speckit-git-remote Skill, speckit-git-validate Skill, Spec Kit Extensions Hook Configuration, Git Extension Config Template, Git Branching Workflow Extension Manifest (+2 more)
 
 ### Community 205 - "ComplexityRoot"
-Cohesion: 0.27
-Nodes (4): ComplexityRoot, PublishCatalogInput, ProductBy, ProductNamespacePath
+Cohesion: 0.15
+Nodes (8): ComplexityRoot, PublishCatalogInput, CollectionBy, CollectionNamespacePath, ProductBy, ProductNamespacePath, ProductVariantBy, ProductVariantNamespacePath
 
 ### Community 206 - "025 Controller Manager Runtime: Plan"
 Cohesion: 0.70
 Nodes (5): 025 Controller Manager Runtime: Data Model, 025 Controller Manager Runtime: Plan, 025 Controller Manager Runtime: Quickstart, 025 Controller Manager Runtime: Research, 025 Controller Manager Runtime: Spec
 
-### Community 211 - ".Products"
-Cohesion: 0.29
-Nodes (5): Collection, Resolver, LabelSelector, specSelectorToCatalog(), collectionResolver
-
-### Community 212 - "SizeCache"
+### Community 207 - "CollectedField"
 Cohesion: 0.15
-Nodes (3): SizeCache, DeleteRepositoryResponse, ReceivePackResponse
+Nodes (3): CollectedField, FieldContext, PriceTemplate
+
+### Community 211 - "CollectionsPage.tsx"
+Cohesion: 0.18
+Nodes (10): Collection, CollectionList(), CollectionListProps, TODO: Use GraphQL mutation, TODO: Use GraphQL mutation, TODO: Replace with actual GraphQL query when codegen runs, TODO: Use GraphQL query, styles (+2 more)
+
+### Community 212 - "Quickstart: CategoryTaxonomy Reconciler"
+Cohesion: 0.29
+Nodes (6): 1. Wire the GraphQL client, 2. Wire the concrete ListWatcher and StatusClient, 3. Register the Runner and Reconciler exactly as specs 026/036 already document, Quickstart: CategoryTaxonomy Reconciler, Running Tests, Verifying End-to-End
 
 ### Community 213 - "Spec Detail: 022-collection-resource-contract"
 Cohesion: 0.24
@@ -1211,13 +1256,13 @@ Nodes (10): 003_category_taxonomy.cql (ScyllaDB migration), CategoryTaxonomy Fro
 Cohesion: 0.36
 Nodes (9): T, TestCache_ConcurrentAccess(), TestCache_Delete(), TestCache_HasSynced(), TestCache_List(), TestCache_OnAdd_Called(), TestCache_OnDelete_Called(), TestCache_OnUpdate_Called() (+1 more)
 
-### Community 216 - "retry_quarantine_test.go"
-Cohesion: 0.49
-Nodes (9): T, newSyncedCache(), TestManager_OtherItemsUnaffectedByPoison(), TestManager_QuarantineNotBypassedByPendingEvent(), TestManager_QuarantinesAfterMaxAttempts(), TestManager_RequeueResetsAttemptCount(), TestManager_Stalled(), TestPoisonAll_AggregatesAcrossKinds() (+1 more)
+### Community 216 - "registerCategoryTaxonomy"
+Cohesion: 0.13
+Nodes (18): errorBody, Requeuer, buildMux(), Config, Context, main(), registerCategoryTaxonomy(), HandlerFunc (+10 more)
 
 ### Community 217 - "init_logging"
-Cohesion: 0.33
-Nodes (9): ignore_already_initialized(), init_logging(), Box, Error, Send, Sync, test_json_logging_initialization(), test_text_logging_initialization() (+1 more)
+Cohesion: 0.36
+Nodes (8): ignore_already_initialized(), init_logging(), Box, Send, Sync, test_json_logging_initialization(), test_text_logging_initialization(), TryInitError
 
 ### Community 218 - "Spec Detail: 010-repo-storage-identity"
 Cohesion: 0.22
@@ -1232,16 +1277,12 @@ Cohesion: 0.40
 Nodes (9): CategoryTaxonomy, Collection, Namespace, NamespaceTier, Product, ProductVariant, Repository, RawMessage (+1 more)
 
 ### Community 224 - "Handler"
-Cohesion: 0.20
-Nodes (11): Context, Datastore, HealthResponse, Time, NewHandler(), T, TestMetricsEndpoint(), Check (+3 more)
+Cohesion: 0.14
+Nodes (16): Datastore, Resolver, Service, Context, Datastore, HealthResponse, Time, NewHandler() (+8 more)
 
-### Community 226 - "New"
-Cohesion: 0.47
-Nodes (8): New(), T, key(), TestQueue_BasicEnqueueDequeue(), TestQueue_DeduplicatesSameKey(), TestQueue_DirtyReenqueue(), TestQueue_EnqueueAfterShutdown(), TestQueue_ShutDownUnblocksDequeue()
-
-### Community 227 - "NewFilesystemStore"
-Cohesion: 0.47
-Nodes (9): NewFilesystemStore(), T, TestFilesystemStore_AtomicWrite_NoPartialFileOnCrash(), TestFilesystemStore_CorruptFile_ReturnsError(), TestFilesystemStore_MissingFile_ReturnsError(), TestFilesystemStore_MissingSnapshot_ReturnsError(), TestFilesystemStore_OneFilePerKind_Isolated(), TestFilesystemStore_SaveThenLoad_RoundTrips() (+1 more)
+### Community 227 - "NewReconciler"
+Cohesion: 0.18
+Nodes (18): CacheAccessor, CategoryTaxonomy, EnqueueFunc, MediaRef, ProductCounter, Reconciler, ResolvedCategoryTaxonomy, Condition (+10 more)
 
 ### Community 228 - "CI/CD Workflow Detail"
 Cohesion: 0.33
@@ -1263,21 +1304,25 @@ Nodes (8): make_create_req(), CreateRepositoryRequest, CreateRepositoryResponse,
 Cohesion: 0.39
 Nodes (7): ConvertTo-CleanBranchName(), Get-BranchName(), Get-HighestNumberFromBranches(), Get-HighestNumberFromNames(), Get-HighestNumberFromRemoteRefs(), Get-HighestNumberFromSpecs(), Get-NextBranchNumber()
 
-### Community 234 - "SelectionSet"
-Cohesion: 0.20
-Nodes (4): PublishCatalogPayload, SelectionSet, DeleteCollectionPayload, ResolvedCollectionDefinition
-
 ### Community 237 - "Research: Controller Startup Resume (spec 036)"
 Cohesion: 0.20
 Nodes (9): 1. ListWatcher Transport Abstraction, 2. Runner Orchestration Loop & Single-Active-Loop Guarantee (FR-012), 3. Checkpoint Backpressure Mechanism (FR-005, SC-004), 4. Filesystem CheckpointStore — One File Per Kind, Atomic Write, 5. Reconnect vs. Restart — Which Checkpoint Value To Resume From (FR-011), 6. Expiry Recovery and FR-012 Coalescing, 7. ReplayBacklog Metric — Reuse Queue Depth, Don't Add New Bookkeeping, 8. Config Additions — Flush Interval as Event Count, Not Duration (+1 more)
 
-### Community 242 - "ListPoisonHandler"
-Cohesion: 0.43
-Nodes (7): errorBody, Requeuer, HandlerFunc, ResponseWriter, ListPoisonHandler(), RequeuePoisonHandler(), writeJSON()
+### Community 240 - "UpdateCategoryStatusInput"
+Cohesion: 0.26
+Nodes (7): Condition, ResolvedCategoryTaxonomy, toCategoryTaxonomyStatusPatch(), toConditions(), toResolvedCategoryTaxonomy(), ResolvedCategoryTaxonomyInput, UpdateCategoryStatusInput
 
-### Community 243 - "Context"
-Cohesion: 0.17
-Nodes (3): CatalogVersion, Context, CatalogStats
+### Community 241 - "newGlobalIDTestResolver"
+Cohesion: 0.41
+Nodes (11): Context, Datastore, Resolver, T, newGlobalIDTestResolver(), seedGlobalIDTestData(), TestLookupProduct_NotFound(), TestLookupProductByName() (+3 more)
+
+### Community 242 - "GraphQL Types (new)"
+Cohesion: 0.12
+Nodes (16): ConditionInput, Data Model: Controller Watch API and Status Subresource Contract, Event (internal, not exposed directly — mapped to `WatchEvent` at the resolver boundary), EventBus (per-kind ring buffer), GraphQL Types (new), LabelSelectorInput / LabelSelectorRequirementInput (new — input mirrors of existing output types), Relationships, ResolvedCategoryTaxonomyInput (+8 more)
+
+### Community 243 - "CategoryTaxonomyStatusPatch"
+Cohesion: 0.24
+Nodes (9): CategoryTaxonomyStatusPatch, Datastore, PageCursor, ApplyCategoryTaxonomyStatusPatch(), CategoryTaxonomy, Condition, ResolvedCategoryTaxonomy, Time (+1 more)
 
 ### Community 244 - "004-grpc-git-service/plan.md"
 Cohesion: 0.29
@@ -1291,9 +1336,9 @@ Nodes (3): file_gitstore_git_v1_git_service_proto_init(), init(), CommitFileResp
 Cohesion: 0.14
 Nodes (3): UnknownFields, DeleteFileResponse, ListTagsRequest
 
-### Community 250 - "gitstore-controller-manager/internal/config/config_test.go"
-Cohesion: 0.57
-Nodes (7): T, setenv(), TestLoad_Defaults(), TestLoad_EnvOverrides(), TestLoad_LogFormatNormalized(), TestLoad_StallThresholdParsed(), TestLoad_ValidationErrors()
+### Community 250 - "Contract: CategoryTaxonomy Reconciler and Client Adapters"
+Cohesion: 0.33
+Nodes (5): CategoryTaxonomyListWatcher, Contract: CategoryTaxonomy Reconciler and Client Adapters, graphqlclient (new minimal client package), graphqlStatusClient, Reconciler
 
 ### Community 251 - "Spec Detail: 034-admission-path-cleanup"
 Cohesion: 0.57
@@ -1303,21 +1348,25 @@ Nodes (7): AdmissionHandler trait (Rust, admit with git_dir), compute_changed_pa
 Cohesion: 0.15
 Nodes (13): Complexity Tracking, Constitution Check, Documentation (this feature), Implementation Plan: Pluggable AuthN/AuthZ — Phase 1 Interface Foundation, Modified files, New packages, No schema changes, Phase 0 Research Summary (+5 more)
 
-### Community 253 - "fixtures_test.go"
-Cohesion: 0.09
-Nodes (22): Context, Int32, ListResponse, Mutex, ReconcileResult, T, Time, Watcher (+14 more)
+### Community 253 - "newRunner"
+Cohesion: 0.08
+Nodes (26): T, T, TestIntegration_Disconnect_ReconnectsWithBackoff(), TestIntegration_Disconnect_ResourcesChangedDuringOutageReconciledExactlyOnce(), TestIntegration_ReplayWindowExceeded_FallsBackToFullBootstrap(), Context, Int32, Int64 (+18 more)
 
-### Community 254 - "patch.go"
-Cohesion: 0.43
-Nodes (6): conditionsEqual(), Time, Condition, ResourceStatus, StatusClient, StatusPatch
+### Community 254 - "Research: Controller Watch API and Status Subresource Contract"
+Cohesion: 0.15
+Nodes (12): R10: Migration/backfill, breaking-change classification, and datastore storage-format implications of the `path` rename, R11: `StatusConflict` shape — dropping the `current: Category!` field (implementation-time fix), R1: Watch transport mechanism, R2: Change-event production (server-side "what triggers a WatchEvent"), R3: `resourceVersion` semantics and the "expired cursor" signal, R4: Status-update mutation shape and partial-merge semantics, R5: Authorization for controller-level status writes, R6: `.spec`/`.metadata` write-rejection enforcement point (+4 more)
 
 ### Community 256 - "collect_blobs_from_commit"
-Cohesion: 0.42
-Nodes (13): collect_blobs_from_commit(), collect_blobs_from_tree(), collect_changed_blobs(), collect_changed_blobs_from_trees(), extract_resource_blobs(), make_repo_with_files(), ResourceBlob, ObjectId (+5 more)
+Cohesion: 0.22
+Nodes (24): Entry, collect_blobs_from_commit(), collect_blobs_from_tree(), collect_changed_blobs(), collect_changed_blobs_from_trees(), extract_resource_blobs(), make_repo_with_files(), ResourceBlob (+16 more)
 
 ### Community 258 - "GraphQL Field Context Resolvers"
 Cohesion: 0.32
 Nodes (11): anonymous AuthNProvider (last-in-chain explicit anonymous identity), AuthNProvider interface, AuthZProvider interface, ChainedAuthN (first-Allow-wins provider chain), Data Model: Pluggable AuthN/AuthZ Phase 1, Principal (provider-agnostic authenticated identity), ProviderRegistry (thread-safe holder of AuthN chain / AuthZ / UserDir), Quickstart: Pluggable AuthN/AuthZ Phase 1 (+3 more)
+
+### Community 259 - "Time"
+Cohesion: 0.09
+Nodes (12): Time, Category, Context, mutationResolver, queryResolver, Resolver, namespaceFromContext(), CreateCategoryInput (+4 more)
 
 ### Community 260 - "Spec Detail: 020-pre-receive-validation-e2e"
 Cohesion: 0.33
@@ -1343,9 +1392,9 @@ Nodes (11): cmd/gitctl CLI (replaces cmd/hashpw), hmacCreds (Go, PerRPCCredentia
 Cohesion: 0.38
 Nodes (7): CategoryTaxonomyResource (Go struct), CategoryTaxonomySpec (Go struct), CategoryTaxonomy (datastore entity), CategoryTaxonomy Frontmatter and Hierarchy Enforcement (data model), CategoryTaxonomy Frontmatter and Hierarchy Enforcement (plan), CategoryTaxonomy Frontmatter and Hierarchy Enforcement (tasks), Phase 1: Replace Legacy Category (task phase)
 
-### Community 269 - ".connect"
-Cohesion: 0.29
-Nodes (5): GitServiceClient<tonic::transport::Channel>, Context, D, Error, Poll
+### Community 269 - "AsReadOnly"
+Cohesion: 0.36
+Nodes (5): CacheAccessor, readOnlyCache, readOnlyCache[T], AsReadOnly(), T
 
 ### Community 270 - "check-go-license-headers.sh"
 Cohesion: 0.43
@@ -1371,9 +1420,9 @@ Nodes (4): ClientStreamingClient, ClientStreamingServer, ReceivePackRequest, Rec
 Cohesion: 0.33
 Nodes (6): Transient Resources, AdmissionReview (transient pre-persistence review), PriceQuote (transient price calculation), SubjectAccessReview (transient authZ check), TokenReview (transient authN check), ValidationReview (transient structural validation without writing)
 
-### Community 276 - "NewService"
-Cohesion: 0.57
-Nodes (6): T, TestNewServiceDefaultsOptionalDependencies(), TestNewServiceRequiresDatastore(), TestNewServiceRequiresLogger(), TestServiceCreateNamespaceAndRepositoryUsesInjectedClockAndIDs(), NewService()
+### Community 276 - "StaticAdminProvider"
+Cohesion: 0.09
+Nodes (15): UploadPackReceiver, GitService_UploadPackClient, main(), randomBase64URLSecret(), generateJTI(), Context, Duration, RWMutex (+7 more)
 
 ### Community 277 - "ProductResolver"
 Cohesion: 0.33
@@ -1394,10 +1443,6 @@ Nodes (6): integration-test-scylla CI job (new), Pre-Receive Validation End-to-E
 ### Community 281 - "Docs: architecture.md"
 Cohesion: 0.40
 Nodes (5): Proposal 1: API-Led Mutations with Asynchronous Indexing (historical alternative), Proposal 2: Git-Native Ingress with Tag-Gated Publishing (historical alternative), Proposal 3: Initiative-Aligned Control Plane — current target architecture, supersedes Proposals 1 and 2, Fully headless storefront — frontend fully decoupled from backend via APIs, SSG storefront — static site generation with Incremental Static Regeneration (ISR) for partial updates
-
-### Community 282 - ".get_file_stream"
-Cohesion: 0.29
-Nodes (5): GetFileStreamRequest, GetFileStreamResponse, Streaming, UploadPackRequest, UploadPackResponse
 
 ### Community 285 - "Generated gRPC Types (Go, gitstore-api)"
 Cohesion: 0.40
@@ -1443,6 +1488,10 @@ Nodes (4): Phase C: Smart HTTP Handlers in gitstore-api, Decision 4: Second HTTP
 Cohesion: 0.67
 Nodes (3): Direct synthesis for core kinds vs optional federation for external app subgraphs (@key/@extends/@external), Dynamic GraphQL schema synthesis for CRD-style kinds with safe-publish pattern (candidate build, validate, atomic publish, keep last known-good), Hub-and-spoke API versioning conversion model — hub-version storage, WASI conversion hooks for upgrade/downgrade between apiVersions
 
+### Community 298 - "schema.generated.go"
+Cohesion: 0.50
+Nodes (3): MutationResolver, QueryResolver, SubscriptionResolver
+
 ### Community 299 - "CI/CD Workflow Detail"
 Cohesion: 1.00
 Nodes (3): Go License Headers Workflow, JS/TS License Headers Workflow, Rust License Headers Workflow
@@ -1479,49 +1528,149 @@ Nodes (6): Checkpoint Obligations, Contract: Runner[T] — List-Then-Watch Orche
 Cohesion: 0.40
 Nodes (4): Caller Obligations (the `Runner`), Contract: ListWatcher / Watcher Transport Abstraction, Implementor Obligations, Interfaces
 
-### Community 386 - "CreateProductRoutePage.tsx"
-Cohesion: 0.22
-Nodes (8): CreateProductPage(), Product, TODO: Replace with actual GraphQL mutation when codegen runs, TODO: Use GraphQL mutation, styles, CreateProductRoutePage(), styles, ProductForm()
+### Community 360 - "categorytaxonomy_reconciler_test.go"
+Cohesion: 0.34
+Nodes (13): Duration, categoryConditionResult, categoryResolvedResult, categoryStatusResult, categoryWithStatusResult, categoryWithMediaFixture(), conditionByType(), T (+5 more)
 
-### Community 387 - "Runner"
-Cohesion: 0.33
-Nodes (5): Cache, Logger, Mutex, Runner, ListWatcher
+### Community 386 - "EditProductPage.tsx"
+Cohesion: 0.14
+Nodes (13): Conflict, EditProductPage(), EditProductPageProps, Product, TODO: Use GraphQL mutation, TODO: Use GraphQL mutation with force flag, TODO: Replace with actual GraphQL query when codegen runs, TODO: Use GraphQL query (+5 more)
 
 ### Community 389 - "gitstore-controller-manager/internal/config/config.go"
 Cohesion: 0.39
 Nodes (8): ControllerConfig, Config, LogConfig, Duration, LogConfig, Load(), validate(), validateLogFormat()
 
-### Community 390 - "GitServiceServer<T>"
-Cohesion: 0.31
-Nodes (7): GitServiceServer<T>, B, Clone, Future, NamedService, Request, Service
+### Community 390 - "NewMemoryStore"
+Cohesion: 0.29
+Nodes (19): failingStore, NewMemoryStore(), newStubWatcher(), widgetCheckpoint(), Context, Int32, Mutex, T (+11 more)
 
-### Community 393 - "Runbook: Controller Lag"
-Cohesion: 0.11
-Nodes (15): Diagnostic Steps, Recovery Actions, Runbook: Controller Lag, Symptom, Verification, Diagnostic Steps, Recovery Actions, Runbook: Poisoned (Quarantined) Item (+7 more)
+### Community 392 - "parsedEntry"
+Cohesion: 0.18
+Nodes (17): CollectionResource, ObjectMeta, ProductResource, ProductVariantResource, comparableResource, parsedEntry, CollectionSpec, OwnerReference (+9 more)
+
+### Community 393 - "Runbook: Controller Watch API and Status-Write Diagnostics"
+Cohesion: 0.07
+Nodes (23): CategoryTaxonomy-specific notes, Diagnostic Steps, Recovery Actions, Runbook: Controller Lag, Symptom, Verification, Diagnostic Steps, Recovery Actions (+15 more)
 
 ### Community 394 - "NamespaceTier enum (USER | ORGANIZATION, ENTERPRISE removed)"
 Cohesion: 0.50
 Nodes (8): Specification Quality Checklist: Namespace Types — Remove Enterprise, Data Model: Namespace Types — Remove Enterprise, NamespaceTier enum (USER | ORGANIZATION, ENTERPRISE removed), Implementation Plan: Namespace Types — Remove Enterprise, Quickstart: Namespace Types — Remove Enterprise, Research: Namespace Types — Remove Enterprise, Feature Specification: Namespace Types — Remove Enterprise, Tasks: Namespace Types — Remove Enterprise
 
-### Community 396 - "blockingSelectReconciler"
-Cohesion: 0.40
-Nodes (5): Context, Mutex, ReconcileResult, WorkItemKey, blockingSelectReconciler
+### Community 396 - "executionContext"
+Cohesion: 0.16
+Nodes (3): executionContext, ResolvedCategoryTaxonomy, CategoryWatchEvent
 
-### Community 397 - ".DeleteFile"
-Cohesion: 0.50
-Nodes (3): _GitService_DeleteFile_Handler(), DeleteFileRequest, DeleteFileResponse
+### Community 397 - "NewDatastore"
+Cohesion: 0.39
+Nodes (6): Datastore, NewDatastore(), T, TestNewDatastore_EmptyBackendReturnsError(), TestNewDatastore_MemdbReturnsDatastore(), TestNewDatastore_UnknownBackendReturnsError()
 
-### Community 398 - ".DeleteRepository"
-Cohesion: 0.50
-Nodes (3): _GitService_DeleteRepository_Handler(), DeleteRepositoryRequest, DeleteRepositoryResponse
+### Community 398 - "cache_contract_test.go"
+Cohesion: 0.43
+Nodes (7): T, TestCacheAccessor_ReadOnly(), TestInformerCache_EventHandlerFiredOnDelete(), TestInformerCache_EventHandlerFiredOnSet(), TestInformerCache_HasSynced(), TestInformerCache_List(), TestInformerCache_SetGetDelete()
+
+### Community 399 - ".get_file_stream"
+Cohesion: 0.29
+Nodes (5): GetFileStreamRequest, GetFileStreamResponse, Streaming, UploadPackRequest, UploadPackResponse
+
+### Community 400 - "CountingAdmissionHandler"
+Cohesion: 0.62
+Nodes (5): AtomicUsize, CountingAdmissionHandler, CountingValidationHandler, Arc, Self
+
+### Community 402 - "CollectedField"
+Cohesion: 0.11
+Nodes (6): CategoryTaxonomyStatus, CollectedField, FieldContext, ResolvedCategoryTaxonomy, CategoryCondition, CategoryTaxonomyStatus
+
+### Community 404 - "ConditionInput"
+Cohesion: 0.11
+Nodes (12): CatalogVersion, Context, PublishCatalogInput, PublishCatalogPayload, mutationResolver, queryResolver, Resolver, subscriptionResolver (+4 more)
 
 ### Community 407 - "Contract: Integration Test Scenarios"
 Cohesion: 0.12
 Nodes (15): Contract: Integration Test Scenarios, `disconnect_reconnect_test.go`, Non-goals, `observability_test.go`, `poison_item_test.go`, `reconcile_retry_resume_test.go`, `status_conflict_test.go`, Contract: Runbook → Signal Mapping (+7 more)
 
-### Community 444 - "CategoryObjectMeta"
-Cohesion: 0.19
-Nodes (3): OwnerReference, CategoryObjectMeta, KeyValuePair
+### Community 408 - "CollectionForm.tsx"
+Cohesion: 0.22
+Nodes (8): Collection, CollectionForm(), CollectionFormProps, styles, Product, ProductSelector(), ProductSelectorProps, styles
+
+### Community 410 - "ConfigErrors"
+Cohesion: 0.40
+Nodes (4): ConfigErrors, Display, Formatter, Vec
+
+### Community 416 - "Quickstart: Watch + Status Client for a Reconciler (spec 040)"
+Cohesion: 0.25
+Nodes (7): 1. Wire a concrete ListWatcher[T] for CategoryTaxonomy, 2. Register the Runner exactly as spec 036 already documents, 3. Wire a concrete StatusClient, 4. A CategoryTaxonomy reconciler supplying `Resolved`, 5. Registering a controller identity for status writes, Quickstart: Watch + Status Client for a Reconciler (spec 040), Running Tests
+
+### Community 417 - ".ValidateResources"
+Cohesion: 0.33
+Nodes (5): errorToValidationError(), ValidateResourcesRequest, ValidateResourcesResponse, ValidationError, splitValidationErrors()
+
+### Community 418 - "contract/health_test.go"
+Cohesion: 0.36
+Nodes (9): contains(), T, TestHealth_CheckpointLastWriteTimestamp_UpdatesOnSave(), TestHealth_CheckpointReplayBacklog_TracksQueueDepth(), TestHealth_CheckpointWriteFailuresTotal_IncrementsOnFailure(), TestHealth_DuplicateKind_FatalBeforeStart(), TestHealth_JSONFieldsPresent(), TestHealth_MetricsEndpointResponds() (+1 more)
+
+### Community 420 - "computeParentResolved"
+Cohesion: 0.47
+Nodes (5): computeAcyclic(), computeParentResolved(), computeReady(), CategoryTaxonomy, Condition
+
+### Community 421 - ".DeleteRepository"
+Cohesion: 0.50
+Nodes (3): _GitService_DeleteRepository_Handler(), DeleteRepositoryRequest, DeleteRepositoryResponse
+
+### Community 422 - "Product"
+Cohesion: 0.40
+Nodes (3): ProductSpec, ProductStatus, Product
+
+### Community 423 - "NewProductCounter"
+Cohesion: 0.50
+Nodes (3): productsListResponse, Client, NewProductCounter()
+
+### Community 424 - ".DeleteFile"
+Cohesion: 0.50
+Nodes (3): _GitService_DeleteFile_Handler(), DeleteFileRequest, DeleteFileResponse
+
+### Community 426 - "WorkItemKey"
+Cohesion: 0.09
+Nodes (19): CancelFunc, Cond, Context, Duration, Limiter, Mutex, RateLimitedEnqueue(), Context (+11 more)
+
+### Community 428 - "NewFilesystemStore"
+Cohesion: 0.47
+Nodes (9): NewFilesystemStore(), T, TestFilesystemStore_AtomicWrite_NoPartialFileOnCrash(), TestFilesystemStore_CorruptFile_ReturnsError(), TestFilesystemStore_MissingFile_ReturnsError(), TestFilesystemStore_MissingSnapshot_ReturnsError(), TestFilesystemStore_OneFilePerKind_Isolated(), TestFilesystemStore_SaveThenLoad_RoundTrips() (+1 more)
+
+### Community 469 - "reconciler_contract_test.go"
+Cohesion: 0.27
+Nodes (9): stubReconciler, Context, Int64, T, TestQueue_DeduplicatesEnqueue(), TestQueue_DirtyReenqueuesAfterDone(), TestQueue_EnqueueAfterShutDown_ReturnsError(), TestQueue_ShutDown_UnblocksDequeue() (+1 more)
+
+### Community 478 - "statusConflictReconciler"
+Cohesion: 0.32
+Nodes (7): fakeStatusClient, newFakeStatusClient(), Mutex, T, TestIntegration_StatusConflict_ControllerRetriesAfterConflict(), TestIntegration_StatusConflict_StaleWriteRejected(), statusConflictReconciler
+
+### Community 479 - "newTestSvc"
+Cohesion: 0.06
+Nodes (47): DatastoreWithNamespaces, Namespace, NamespaceTier, CommitFileParams, CreateTagParams, DeleteFileParams, Context, Mutex (+39 more)
+
+### Community 519 - "auth_resolvers_test.go"
+Cohesion: 0.25
+Nodes (28): ctxWithPrincipal(), extractJTI(), AuthConfig, Context, Resolver, T, mustBcrypt(), newTestConfig() (+20 more)
+
+### Community 527 - "Anonymous"
+Cohesion: 0.09
+Nodes (28): principalContextKey, rawTokenContextKey, pushContextKeyType, ContextWithRawToken(), Context, PrincipalFromContext(), RawTokenFromContext(), Anonymous() (+20 more)
+
+### Community 540 - "gitstore-controller-manager/internal/config/config_test.go"
+Cohesion: 0.57
+Nodes (7): T, setenv(), TestLoad_Defaults(), TestLoad_EnvOverrides(), TestLoad_LogFormatNormalized(), TestLoad_StallThresholdParsed(), TestLoad_ValidationErrors()
+
+### Community 542 - "GitServiceServer<T>"
+Cohesion: 0.21
+Nodes (9): GitServiceServer<T>, B, Clone, Context, Future, NamedService, Poll, Request (+1 more)
+
+### Community 549 - "computeFileRefCondition"
+Cohesion: 0.33
+Nodes (8): computeFileRefCondition(), CategoryTaxonomy, Condition, T, TestComputeFileRefCondition_MixedMediaOnlyFlagsRequired(), TestComputeFileRefCondition_NoMediaProducesNoCondition(), TestComputeFileRefCondition_OptionalMediaProducesNoCondition(), TestComputeFileRefCondition_RequiredMediaProducesUnknownCondition()
+
+### Community 553 - "main.rs"
+Cohesion: 0.38
+Nodes (6): Args, main(), Box, Option, String, shutdown_signal()
 
 ## Ambiguous Edges - Review These
 - `Phase 1 Control-Plane Implementation Plan` → `CI implementation options exploration for GitStore Actions`  [AMBIGUOUS]
@@ -1532,9 +1681,9 @@ Nodes (3): OwnerReference, CategoryObjectMeta, KeyValuePair
   specs/021-category-taxonomy/spec.md · relation: references
 
 ## Knowledge Gaps
-- **603 isolated node(s):** `Symptom`, `Diagnostic Steps`, `Recovery Actions`, `Verification`, `Checkpoint (`Record`)` (+598 more)
+- **749 isolated node(s):** `Format: `[ID] [P?] [Story] Description``, `Path Conventions`, `Phase 1: Setup (Shared Infrastructure)`, `Phase 2: Foundational (Blocking Prerequisites)`, `Tests for User Story 1 ⚠️` (+744 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **113 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **112 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
@@ -1545,11 +1694,11 @@ _Questions this graph is uniquely positioned to answer:_
   _Edge tagged AMBIGUOUS (relation: conceptually_related_to) - confidence is low._
 - **What is the exact relationship between `Pre-Receive Validation End-to-End (spec)` and `CategoryTaxonomy Frontmatter and Hierarchy Enforcement (spec)`?**
   _Edge tagged AMBIGUOUS (relation: references) - confidence is low._
-- **Why does `newCatalogServer()` connect `server_test.go` to `Server`?**
-  _High betweenness centrality (0.153) - this node is a cross-community bridge._
-- **Why does `GitService` connect `integration/mod.rs` to `GitServiceImpl`, `server.rs`, `.new`?**
-  _High betweenness centrality (0.122) - this node is a cross-community bridge._
-- **Why does `Service` connect `PageParams` to `Server`, `NewService`, `NewGraphQLHandler`?**
-  _High betweenness centrality (0.115) - this node is a cross-community bridge._
-- **What connects `Symptom`, `Diagnostic Steps`, `Recovery Actions` to the rest of the system?**
-  _603 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Why does `PageParams` connect `PageParams` to `stubDatastore`, `toPageParams`, `.ListRepositoriesByNamespace`, `memdbDatastore`, `PageResult`, `EncodeKeysetCursor`, `CategoryTaxonomyStatusPatch`, `InstrumentedDatastore`, `StubStore`, `New`?**
+  _High betweenness centrality (0.063) - this node is a cross-community bridge._
+- **Why does `Clock` connect `Handler` to `IDGenerator`, `Server`, `NewGraphQLHandler`, `PageResult`?**
+  _High betweenness centrality (0.050) - this node is a cross-community bridge._
+- **Why does `Service` connect `PageResult` to `Handler`, `IDGenerator`?**
+  _High betweenness centrality (0.049) - this node is a cross-community bridge._
+- **What connects `Format: `[ID] [P?] [Story] Description``, `Path Conventions`, `Phase 1: Setup (Shared Infrastructure)` to the rest of the system?**
+  _749 weakly-connected nodes found - possible documentation gaps or missing edges._
