@@ -9,6 +9,7 @@ package eventbus
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 )
 
@@ -24,6 +25,10 @@ const (
 // Event is a single change notification published after a successful
 // admission (create/update/delete) of a resource.
 type Event struct {
+	// Cursor is a bus-assigned, per-kind monotonic event cursor used only for
+	// resumable watches. ResourceVersion remains the resource's optimistic
+	// concurrency version and is not unique across resources.
+	Cursor          string
 	Type            EventType
 	Kind            string
 	Namespace       string
@@ -48,6 +53,7 @@ type kindBuffer struct {
 	start       int     // index of the oldest retained event in buf
 	size        int     // number of events currently held (<= capacity)
 	subscribers map[*subscriber]struct{}
+	nextCursor  uint64
 }
 
 // Bus is a bounded, per-kind, in-memory publish-subscribe event bus.
@@ -89,6 +95,8 @@ func (b *Bus) Publish(ev Event) {
 	kb := b.bufferFor(ev.Kind)
 
 	kb.mu.Lock()
+	kb.nextCursor++
+	ev.Cursor = fmt.Sprintf("%d", kb.nextCursor)
 	writeIdx := (kb.start + kb.size) % len(kb.buf)
 	if kb.size == len(kb.buf) {
 		// Full: overwrite the oldest slot and advance start (evict oldest).
@@ -98,23 +106,18 @@ func (b *Bus) Publish(ev Event) {
 		kb.buf[writeIdx] = ev
 		kb.size++
 	}
-	subs := make([]*subscriber, 0, len(kb.subscribers))
 	for s := range kb.subscribers {
-		subs = append(subs, s)
-	}
-	kb.mu.Unlock()
-
-	for _, s := range subs {
 		select {
 		case s.ch <- ev:
 		default:
-			// Slow subscriber: drop rather than block Publish. The
-			// subscriber's next resume will detect the gap via
-			// ErrWatchExpired once its cursor falls outside the
-			// retained window.
+			// A live gap is unrecoverable without a relist. Close the
+			// stream rather than silently allowing a stale cache to advance.
+			delete(kb.subscribers, s)
+			close(s.ch)
 			EventsDroppedTotal.WithLabelValues(ev.Kind).Inc()
 		}
 	}
+	kb.mu.Unlock()
 }
 
 // Subscribe opens a subscription for kind, replaying any retained events
@@ -137,7 +140,7 @@ func (b *Bus) Subscribe(kind string, resourceVersion string) (<-chan Event, func
 	} else {
 		idx := -1
 		for i, e := range retained {
-			if e.ResourceVersion == resourceVersion {
+			if e.Cursor == resourceVersion {
 				idx = i
 				break
 			}
@@ -150,7 +153,9 @@ func (b *Bus) Subscribe(kind string, resourceVersion string) (<-chan Event, func
 	}
 	SubscriptionsOpenedTotal.WithLabelValues(kind, boolLabel(resourceVersion != "")).Inc()
 
-	s := &subscriber{ch: make(chan Event, 64)}
+	// Replay is delivered before Subscribe returns. Size the buffer for the
+	// complete retained suffix so this cannot block while holding kb.mu.
+	s := &subscriber{ch: make(chan Event, max(64, len(replay)))}
 	kb.subscribers[s] = struct{}{}
 
 	for _, e := range replay {
@@ -159,9 +164,14 @@ func (b *Bus) Subscribe(kind string, resourceVersion string) (<-chan Event, func
 
 	unsubscribe := func() {
 		kb.mu.Lock()
-		delete(kb.subscribers, s)
+		_, subscribed := kb.subscribers[s]
+		if subscribed {
+			delete(kb.subscribers, s)
+		}
 		kb.mu.Unlock()
-		close(s.ch)
+		if subscribed {
+			close(s.ch)
+		}
 	}
 
 	return s.ch, unsubscribe, nil

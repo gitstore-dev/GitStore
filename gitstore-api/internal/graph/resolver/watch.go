@@ -75,7 +75,7 @@ func toCategoryWatchEvent(ev eventbus.Event) *model.CategoryWatchEvent {
 	out := &model.CategoryWatchEvent{
 		Type:            toWatchEventType(ev.Type),
 		Name:            ev.Name,
-		ResourceVersion: ev.ResourceVersion,
+		ResourceVersion: ev.Cursor,
 	}
 	if ev.Namespace != "" {
 		ns := ev.Namespace
@@ -99,7 +99,7 @@ func toGenericWatchEvent(kind string, ev eventbus.Event) *model.WatchEvent {
 		Type:            toWatchEventType(ev.Type),
 		Kind:            kind,
 		Name:            ev.Name,
-		ResourceVersion: ev.ResourceVersion,
+		ResourceVersion: ev.Cursor,
 	}
 	if ev.Namespace != "" {
 		ns := ev.Namespace

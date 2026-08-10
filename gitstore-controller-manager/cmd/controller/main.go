@@ -135,6 +135,22 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 	}); err != nil {
 		return fmt.Errorf("register CategoryTaxonomy: %w", err)
 	}
+	// A child's membership contributes to its parent's ChildCount. Requeue both
+	// sides of a reparent operation, and the parent on add/delete, so counts do
+	// not depend on an unrelated future category update.
+	enqueueParent := func(namespace, name string) {
+		if name != "" {
+			_ = mgr.Enqueue(types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: namespace, Name: name})
+		}
+	}
+	catCache.AddEventHandler(cache.EventHandler[categorytaxonomy.CategoryTaxonomy]{
+		OnAdd: func(_ types.WorkItemKey, c categorytaxonomy.CategoryTaxonomy) { enqueueParent(c.Namespace, c.ParentRefName) },
+		OnUpdate: func(_ types.WorkItemKey, old, current categorytaxonomy.CategoryTaxonomy) {
+			enqueueParent(old.Namespace, old.ParentRefName)
+			enqueueParent(current.Namespace, current.ParentRefName)
+		},
+		OnDelete: func(_ types.WorkItemKey, c categorytaxonomy.CategoryTaxonomy) { enqueueParent(c.Namespace, c.ParentRefName) },
+	})
 
 	go func() {
 		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {

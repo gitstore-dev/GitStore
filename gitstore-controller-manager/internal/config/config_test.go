@@ -14,12 +14,14 @@ import (
 // setenv sets environment variables for a test and clears them on cleanup.
 func setenv(t *testing.T, pairs ...string) {
 	t.Helper()
+	t.Setenv("GITSTORE_CONTROLLER__API_TOKEN", "test-token")
 	for i := 0; i+1 < len(pairs); i += 2 {
 		t.Setenv(pairs[i], pairs[i+1])
 	}
 }
 
 func TestLoad_Defaults(t *testing.T) {
+	t.Setenv("GITSTORE_CONTROLLER__API_TOKEN", "test-token")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
@@ -31,8 +33,8 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Controller.ApiURI != "http://localhost:4000/graphql" {
 		t.Errorf("ApiURI = %q, want http://localhost:4000/graphql", cfg.Controller.ApiURI)
 	}
-	if cfg.Controller.ApiToken != "" {
-		t.Errorf("ApiToken = %q, want empty by default", cfg.Controller.ApiToken)
+	if cfg.Controller.ApiToken != "test-token" {
+		t.Errorf("ApiToken = %q, want test-token", cfg.Controller.ApiToken)
 	}
 	if cfg.Controller.DefaultMaxAttempts != 5 {
 		t.Errorf("DefaultMaxAttempts = %d, want 5", cfg.Controller.DefaultMaxAttempts)

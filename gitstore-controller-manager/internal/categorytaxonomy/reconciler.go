@@ -101,6 +101,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 	previous := previousResolved(current.Status.Resolved)
 
 	var resolved ResolvedCategoryTaxonomy
+	productCount := int64(0)
+	if r.productCount != nil {
+		pc, err := r.productCount(ctx, key.Namespace, key.Name)
+		if err != nil {
+			return types.ResultTransient(fmt.Errorf("categorytaxonomy: count products: %w", err))
+		}
+		productCount = pc
+	}
 	if inCycle[current.Name] {
 		// FR-008: cycle participants keep their last-observed Path/Depth —
 		// never recomputed, never reset — while ChildCount/ProductCount
@@ -123,15 +131,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 			}
 		}
 		resolved.ChildCount = childCount
+		resolved.ProductCount = productCount
 	} else {
-		productCount := int64(0)
-		if r.productCount != nil {
-			pc, err := r.productCount(ctx, key.Namespace, key.Name)
-			if err != nil {
-				return types.ResultTransient(fmt.Errorf("categorytaxonomy: count products: %w", err))
-			}
-			productCount = pc
-		}
 		resolved = computeHierarchy(r.cache, current, productCount)
 	}
 

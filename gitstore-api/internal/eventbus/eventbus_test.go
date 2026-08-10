@@ -92,6 +92,42 @@ func TestSubscribe_ResumeFromValidCursor(t *testing.T) {
 	requireNoEvent(t, events)
 }
 
+func TestSubscribe_ResumesUsingUniqueEventCursor(t *testing.T) {
+	bus := eventbus.New(10)
+	bus.Publish(eventbus.Event{Type: eventbus.Added, Kind: "CategoryTaxonomy", Name: "a", ResourceVersion: "1"})
+	bus.Publish(eventbus.Event{Type: eventbus.Added, Kind: "CategoryTaxonomy", Name: "b", ResourceVersion: "1"})
+
+	events, unsubscribe, err := bus.Subscribe("CategoryTaxonomy", "1")
+	require.NoError(t, err)
+	defer unsubscribe()
+	e := mustReceive(t, events)
+	require.Equal(t, "2", e.Cursor)
+	require.Equal(t, "b", e.Name)
+}
+
+func TestSubscribe_ReplayLargerThanLiveBufferDoesNotBlock(t *testing.T) {
+	bus := eventbus.New(1000)
+	for i := 0; i < 1000; i++ {
+		bus.Publish(eventbus.Event{Type: eventbus.Modified, Kind: "CategoryTaxonomy", Name: fmt.Sprintf("c-%d", i), ResourceVersion: "1"})
+	}
+	events, unsubscribe, err := bus.Subscribe("CategoryTaxonomy", "1")
+	require.NoError(t, err)
+	defer unsubscribe()
+	require.Equal(t, "2", mustReceive(t, events).Cursor)
+}
+
+func TestPublish_ExpiresSlowSubscriber(t *testing.T) {
+	bus := eventbus.New(100)
+	events, unsubscribe, err := bus.Subscribe("CategoryTaxonomy", "")
+	require.NoError(t, err)
+	defer unsubscribe()
+	for i := 0; i < 65; i++ {
+		bus.Publish(eventbus.Event{Type: eventbus.Modified, Kind: "CategoryTaxonomy", Name: fmt.Sprintf("c-%d", i), ResourceVersion: "1"})
+	}
+	for range events {
+	}
+}
+
 func TestSubscribe_EmptyCursorSkipsReplay(t *testing.T) {
 	bus := eventbus.New(10)
 

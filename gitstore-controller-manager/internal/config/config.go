@@ -31,8 +31,8 @@ type ControllerConfig struct {
 	// ApiToken is the bearer token the controller-manager presents to
 	// gitstore-api on every GraphQL query/mutation/subscription (spec 040
 	// quickstart step 5 — an ordinary bearer-JWT principal, no new auth
-	// mechanism). Empty is valid for deployments using an anonymous/allowall
-	// authz provider.
+	// mechanism). A controller must authenticate because status mutations are
+	// never authorized for anonymous principals.
 	ApiToken string `mapstructure:"api_token"`
 
 	// DefaultMaxAttempts is the global retry limit before quarantine.
@@ -110,6 +110,9 @@ func validate(cfg *Config) error {
 	}
 	if cfg.Controller.ApiURI == "" {
 		return fmt.Errorf("controller.api_uri must not be empty")
+	}
+	if strings.TrimSpace(cfg.Controller.ApiToken) == "" {
+		return fmt.Errorf("controller.api_token must not be empty")
 	}
 	if cfg.Controller.DefaultMaxAttempts < 1 {
 		return fmt.Errorf("controller.default_max_attempts must be >= 1")
