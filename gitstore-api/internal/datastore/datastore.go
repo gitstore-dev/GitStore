@@ -5,7 +5,10 @@ package datastore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
@@ -16,6 +19,10 @@ var (
 	ErrNotFound        = errors.New("datastore: not found")
 	ErrAlreadyExists   = errors.New("datastore: already exists")
 	ErrInvalidArgument = errors.New("datastore: invalid argument")
+	// ErrConflict is returned by status-only partial-merge writes when the
+	// caller's resourceVersion precondition does not match the resource's
+	// current value (optimistic concurrency, spec 040 FR-009).
+	ErrConflict = errors.New("datastore: resourceVersion conflict")
 )
 
 // DefaultPageSize is used when First/Last is zero.
@@ -54,6 +61,71 @@ type PageResult[T any] struct {
 	TotalCount  int32 // -1 if unknown/expensive to compute
 }
 
+// CategoryTaxonomyStatusPatch is a partial-merge update to a
+// CategoryTaxonomy's .status sub-resource (spec 040 FR-008). Only non-nil
+// fields are applied; ResourceVersion is always required and checked
+// against the resource's current value before any field is written.
+type CategoryTaxonomyStatusPatch struct {
+	ResourceVersion     string
+	ObservedGeneration  *int64
+	LastAppliedRevision *string
+	Conditions          []catalog.Condition // nil = unchanged; non-nil = full replacement
+	Resolved            *catalog.ResolvedCategoryTaxonomy
+}
+
+// ApplyCategoryTaxonomyStatusPatch merges patch into c's status field
+// in place: it checks the resourceVersion precondition (returning
+// ErrConflict on mismatch), applies only non-nil patch fields to the
+// existing status JSON, re-marshals it back into c.Status, and advances
+// c.ResourceVersion. Shared by every backend so the merge/precondition
+// semantics are identical across memdb and scylla (spec 040 FR-008,
+// FR-009; research.md R6).
+func ApplyCategoryTaxonomyStatusPatch(c *CategoryTaxonomy, patch CategoryTaxonomyStatusPatch) error {
+	if patch.ResourceVersion != c.ResourceVersion {
+		return ErrConflict
+	}
+
+	var status catalog.CategoryTaxonomyStatus
+	if len(c.Status) > 0 {
+		if err := json.Unmarshal(c.Status, &status); err != nil {
+			return fmt.Errorf("datastore: unmarshal existing status: %w", err)
+		}
+	}
+
+	if patch.ObservedGeneration != nil {
+		status.ObservedGeneration = *patch.ObservedGeneration
+	}
+	if patch.LastAppliedRevision != nil {
+		status.LastAppliedRevision = *patch.LastAppliedRevision
+	}
+	if patch.Conditions != nil {
+		status.Conditions = patch.Conditions
+	}
+	if patch.Resolved != nil {
+		status.Resolved = patch.Resolved
+	}
+
+	b, err := json.Marshal(status)
+	if err != nil {
+		return fmt.Errorf("datastore: marshal updated status: %w", err)
+	}
+	c.Status = b
+	c.ResourceVersion = nextResourceVersion(c.ResourceVersion)
+	return nil
+}
+
+// nextResourceVersion advances an opaque numeric-string resourceVersion.
+// Mirrors gitstore-api/internal/cataloggrpc/server.go's identically-named
+// admission-time helper (kept separate to avoid an import cycle between
+// datastore and cataloggrpc).
+func nextResourceVersion(current string) string {
+	n, err := strconv.ParseInt(current, 10, 64)
+	if err != nil || n < 1 {
+		return "1"
+	}
+	return strconv.FormatInt(n+1, 10)
+}
+
 // Datastore is the persistence contract for all backends.
 //
 // All implementations must be safe for concurrent use.
@@ -75,6 +147,13 @@ type Datastore interface {
 	ListCategoryTaxonomies(ctx context.Context, namespace string, page PageParams) (*PageResult[CategoryTaxonomy], error)
 	UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error
 	DeleteCategoryTaxonomy(ctx context.Context, uid string) error
+	// UpdateCategoryTaxonomyStatus applies a partial-merge status-only
+	// write, distinct from UpdateCategoryTaxonomy (which replaces the full
+	// object). Returns the updated CategoryTaxonomy on success, ErrConflict
+	// if patch.ResourceVersion does not match the current value, or
+	// ErrNotFound if no resource matches namespace/name (spec 040 FR-009,
+	// FR-010, FR-012; research.md R6).
+	UpdateCategoryTaxonomyStatus(ctx context.Context, namespace, name string, patch CategoryTaxonomyStatusPatch) (*CategoryTaxonomy, error)
 
 	// ProductVariant operations
 	CreateProductVariant(ctx context.Context, v *ProductVariant) error

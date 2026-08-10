@@ -155,7 +155,7 @@
     "semantic_hash": "dd7a26b4debafe5be8c2d030085e2b6c"
   },
   "gitstore-admin/src/components/categories/CategoryList.tsx": {
-    "mtime": 1786112326.1142597,
+    "mtime": 1786116146.5862548,
     "ast_hash": "9e375d99f24f0d1b3521ef853b47d07c",
     "semantic_hash": ""
   },
@@ -170,7 +170,7 @@
     "semantic_hash": "4d1f4336ea1f16aa50a3f171a02b2726"
   },
   "gitstore-admin/src/components/collections/CollectionList.tsx": {
-    "mtime": 1786112326.114787,
+    "mtime": 1786116146.5866013,
     "ast_hash": "0b18cd19b4fbc21811da59bde6196278",
     "semantic_hash": ""
   },
@@ -185,7 +185,7 @@
     "semantic_hash": "fb19c7fb9dce63b0323250ef5fbbe9f8"
   },
   "gitstore-admin/src/components/products/CreateProductPage.tsx": {
-    "mtime": 1786112326.1155794,
+    "mtime": 1786116146.5871491,
     "ast_hash": "fe93031a796a6b0b751b63084b730c97",
     "semantic_hash": ""
   },
@@ -195,7 +195,7 @@
     "semantic_hash": "f91199cd90d107266d990dd3a2af1972"
   },
   "gitstore-admin/src/components/products/EditProductPage.tsx": {
-    "mtime": 1786112326.115815,
+    "mtime": 1786116146.5874138,
     "ast_hash": "679bde504116673c0130f2bb3d28f392",
     "semantic_hash": ""
   },
@@ -275,7 +275,7 @@
     "semantic_hash": "28e129d07fd4742acd365b494c6f571c"
   },
   "gitstore-admin/src/lib/mutation-hooks.ts": {
-    "mtime": 1786112326.1163716,
+    "mtime": 1786116146.588707,
     "ast_hash": "9145d10444dc7588302f9e6d9ba997dc",
     "semantic_hash": ""
   },
@@ -285,7 +285,7 @@
     "semantic_hash": "1f3744b1a49a38118989d3e28258898a"
   },
   "gitstore-admin/src/lib/publish.ts": {
-    "mtime": 1786112326.1165571,
+    "mtime": 1786116146.5890796,
     "ast_hash": "c3da50596d63482db7ec6e644d9ada9a",
     "semantic_hash": ""
   },
@@ -375,8 +375,8 @@
     "semantic_hash": "692c2847e0e2ea22412b7fbf67a1f4f9"
   },
   "gitstore-api/cmd/server/main_test.go": {
-    "mtime": 1786112326.1170328,
-    "ast_hash": "d32a21c89f381ec3a50e55f536a1fd29",
+    "mtime": 1786249503.0517848,
+    "ast_hash": "aa35f9841f8c52cab1572bda97d45268",
     "semantic_hash": ""
   },
   "gitstore-api/gen/gitstore/catalog/v1/catalog_service.pb.go": {
@@ -485,9 +485,9 @@
     "semantic_hash": "143113da3ab73aa0225dac6c86df2c59"
   },
   "gitstore-api/internal/app/server.go": {
-    "mtime": 1786060232.9745502,
-    "ast_hash": "48b8d23014262c089ccd8a680c98a43b",
-    "semantic_hash": "48b8d23014262c089ccd8a680c98a43b"
+    "mtime": 1786249458.429276,
+    "ast_hash": "3e395b4b8732b44bc428cecbf19614fa",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/auth/chain_test.go": {
     "mtime": 1784317776.0441704,
@@ -605,9 +605,9 @@
     "semantic_hash": "c9a6dbab9ce54c459518f6c81b646fe5"
   },
   "gitstore-api/internal/catalog/status.go": {
-    "mtime": 1781116170.6491477,
-    "ast_hash": "1c3ddd5bc0ae07f9ae0122c18a598ce0",
-    "semantic_hash": "1c3ddd5bc0ae07f9ae0122c18a598ce0"
+    "mtime": 1786238585.1832335,
+    "ast_hash": "2a6d54e9908faff3c92133404bdbc41f",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/cataloggrpc/admission_operations.go": {
     "mtime": 1781800917.6394973,
@@ -625,9 +625,9 @@
     "semantic_hash": "bcb5721bc9599966ed489bdf0d027cfa"
   },
   "gitstore-api/internal/cataloggrpc/server.go": {
-    "mtime": 1782585232.0044498,
-    "ast_hash": "9b0375743cc275872a26236d2dd1e84a",
-    "semantic_hash": "9b0375743cc275872a26236d2dd1e84a"
+    "mtime": 1786238585.183712,
+    "ast_hash": "de18b91ebaa9fb5990b3bd136ccc3f82",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/cataloggrpc/server_test.go": {
     "mtime": 1784317776.0459042,
@@ -635,19 +635,19 @@
     "semantic_hash": "1bcfd1dc674d6e941ae8a6e16ca18097"
   },
   "gitstore-api/internal/config/config.go": {
-    "mtime": 1783535312.4742973,
-    "ast_hash": "a4fbf18504f4b743ef047c65db2c905d",
-    "semantic_hash": "a4fbf18504f4b743ef047c65db2c905d"
+    "mtime": 1786249567.2565074,
+    "ast_hash": "9b81ae80958d66e77fa11d554aea49c6",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/config/config_test.go": {
-    "mtime": 1783535312.4745302,
-    "ast_hash": "1d9e26b01c9a76f084489ad7ee61a476",
-    "semantic_hash": "1d9e26b01c9a76f084489ad7ee61a476"
+    "mtime": 1786249359.7087746,
+    "ast_hash": "5779180d6174c67d35486d27137ec437",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/datastore/datastore.go": {
-    "mtime": 1784317776.0462656,
-    "ast_hash": "71890a06b66c247dca8decbd1138f717",
-    "semantic_hash": "71890a06b66c247dca8decbd1138f717"
+    "mtime": 1786238585.1841116,
+    "ast_hash": "5eaa8d07105e6da0eec960573cb0c2c5",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/datastore/entities.go": {
     "mtime": 1784317776.0466235,
@@ -665,24 +665,24 @@
     "semantic_hash": "c162bda6dd7463eca2fccbdcd2e5baa4"
   },
   "gitstore-api/internal/datastore/instrumented.go": {
-    "mtime": 1781800917.6412017,
-    "ast_hash": "dcde9e53068b5a25eb5b1f00c5d6dc9f",
-    "semantic_hash": "dcde9e53068b5a25eb5b1f00c5d6dc9f"
+    "mtime": 1786238585.1844459,
+    "ast_hash": "283a2a62df18fe0af8ea2f913c75b8ba",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/datastore/instrumented_test.go": {
-    "mtime": 1781800917.641424,
-    "ast_hash": "81db774147425e3b3c2f71e02243e70a",
-    "semantic_hash": "81db774147425e3b3c2f71e02243e70a"
+    "mtime": 1786238585.184901,
+    "ast_hash": "5a1cb6c78ec3a5a323efcdc5027577cc",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/datastore/memdb/backend.go": {
-    "mtime": 1784317776.046925,
-    "ast_hash": "46b6fb6173c51d5260b8c06f72eae9d8",
-    "semantic_hash": "46b6fb6173c51d5260b8c06f72eae9d8"
+    "mtime": 1786238585.1853628,
+    "ast_hash": "2b845e687df7ba30542c0007acb2084b",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/datastore/memdb/backend_test.go": {
-    "mtime": 1784317776.047313,
-    "ast_hash": "9852c7fd04369c9fd6d9db9f6046fe6f",
-    "semantic_hash": "9852c7fd04369c9fd6d9db9f6046fe6f"
+    "mtime": 1786238585.1856217,
+    "ast_hash": "48d498774692bd1d0025b09d55d49b0d",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/datastore/memdb/schema.go": {
     "mtime": 1784317776.047633,
@@ -695,9 +695,9 @@
     "semantic_hash": "53b25110d9c05e8cba405ea9295dca13"
   },
   "gitstore-api/internal/datastore/scylla/backend.go": {
-    "mtime": 1781910236.0027094,
-    "ast_hash": "ea41e77edf107afa32ebcd31f3ccdd1c",
-    "semantic_hash": "ea41e77edf107afa32ebcd31f3ccdd1c"
+    "mtime": 1786238585.1860013,
+    "ast_hash": "8e5a8aa74c3e08762b3a01d01c1d12f5",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/datastore/scylla/backend_test.go": {
     "mtime": 1781116170.6534896,
@@ -805,29 +805,29 @@
     "semantic_hash": "c592e091fe00e0e33ebe8ecbf57582e9"
   },
   "gitstore-api/internal/graph/generated/auth.generated.go": {
-    "mtime": 1786112326.1172965,
+    "mtime": 1786116146.590047,
     "ast_hash": "4cb4a30b335b4f24bd965e987af3734c",
     "semantic_hash": ""
   },
   "gitstore-api/internal/graph/generated/category.generated.go": {
-    "mtime": 1786112326.1176927,
-    "ast_hash": "1e061c31ee3b5021b32a44b609fba3ac",
+    "mtime": 1786238585.1877205,
+    "ast_hash": "f64a0261462016068a302ed57e00cafe",
     "semantic_hash": ""
   },
   "gitstore-api/internal/graph/generated/collection.generated.go": {
-    "mtime": 1786112326.11795,
+    "mtime": 1786116146.5909956,
     "ast_hash": "4be327e1564efa121d730e293aa1d8f9",
     "semantic_hash": ""
   },
   "gitstore-api/internal/graph/generated/namespace.generated.go": {
-    "mtime": 1786112326.1183648,
+    "mtime": 1786116146.5913835,
     "ast_hash": "1a6f85215bdb6a4dac529d6fadd2e8db",
     "semantic_hash": ""
   },
   "gitstore-api/internal/graph/generated/prelude.generated.go": {
-    "mtime": 1781007683.1397963,
-    "ast_hash": "840e8fdb5f4b036afde500107bd60aa8",
-    "semantic_hash": "840e8fdb5f4b036afde500107bd60aa8"
+    "mtime": 1786238585.1881456,
+    "ast_hash": "8be5a832399b7e86344ab87ad2118289",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/graph/generated/product.generated.go": {
     "mtime": 1781116170.6555016,
@@ -840,39 +840,39 @@
     "semantic_hash": "f9079dfb8d919374ea27fa26b2adee17"
   },
   "gitstore-api/internal/graph/generated/repository.generated.go": {
-    "mtime": 1786112326.1185896,
+    "mtime": 1786116146.592079,
     "ast_hash": "c3057b4f211a0951f59ce06a033cd816",
     "semantic_hash": ""
   },
   "gitstore-api/internal/graph/generated/root_.generated.go": {
-    "mtime": 1786112326.1191313,
-    "ast_hash": "d59c6e252a5160a9074d2157ac319e6e",
+    "mtime": 1786238585.188982,
+    "ast_hash": "7fa5492c1a5a1c6579cf38e0e5688355",
     "semantic_hash": ""
   },
   "gitstore-api/internal/graph/generated/schema.generated.go": {
-    "mtime": 1786112326.1195557,
-    "ast_hash": "d1d4d8819b7e302efd7bc82238403f71",
+    "mtime": 1786238585.1895502,
+    "ast_hash": "6ecd3b5fb3c33e3bab7b1144d0f1c17a",
     "semantic_hash": ""
   },
   "gitstore-api/internal/graph/model/models_gen.go": {
-    "mtime": 1786112326.1198633,
-    "ast_hash": "2ad5553fcdfcd457a2aacdfc3893cd43",
+    "mtime": 1786238585.1900144,
+    "ast_hash": "51de38b7df47a49e919197417590b383",
     "semantic_hash": ""
   },
   "gitstore-api/internal/graph/resolver/auth.resolvers.go": {
-    "mtime": 1786112326.1202443,
+    "mtime": 1786116146.5948632,
     "ast_hash": "aaa6911a2282646a79e2fd8082ce1bca",
     "semantic_hash": ""
   },
   "gitstore-api/internal/graph/resolver/auth_resolvers_test.go": {
-    "mtime": 1786112326.1205163,
+    "mtime": 1786116146.5954058,
     "ast_hash": "cd1d66c2901cbcb16a6d71a355324762",
     "semantic_hash": ""
   },
   "gitstore-api/internal/graph/resolver/category.resolvers.go": {
-    "mtime": 1781118263.0863395,
-    "ast_hash": "c479da37ac6fe161c5a4153e11936788",
-    "semantic_hash": "c479da37ac6fe161c5a4153e11936788"
+    "mtime": 1786238585.190387,
+    "ast_hash": "0a9f87e663eb43668e2f3e0bf832d5e4",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/graph/resolver/category_resolver_test.go": {
     "mtime": 1781186276.8406453,
@@ -885,14 +885,14 @@
     "semantic_hash": "e4f80a52fe32ca6fbe0254dc3d4a2b3d"
   },
   "gitstore-api/internal/graph/resolver/converters.go": {
-    "mtime": 1784317776.0500634,
-    "ast_hash": "c71e0e64ca1ec2d8319c6449e8e95fc4",
-    "semantic_hash": "c71e0e64ca1ec2d8319c6449e8e95fc4"
+    "mtime": 1786251126.0790687,
+    "ast_hash": "c69589d950ffa0bd43bb5d4b678b69d3",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/graph/resolver/converters_test.go": {
-    "mtime": 1781118263.0872326,
-    "ast_hash": "3113922135e1d0baaa2707a803dfb2fa",
-    "semantic_hash": "3113922135e1d0baaa2707a803dfb2fa"
+    "mtime": 1786251167.4602852,
+    "ast_hash": "0f71d6db97e03b327d02efb27083fe34",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/graph/resolver/global_id.go": {
     "mtime": 1781118263.0877967,
@@ -920,7 +920,7 @@
     "semantic_hash": "35eb03827652017806036f5a73c74184"
   },
   "gitstore-api/internal/graph/resolver/namespace.resolvers.go": {
-    "mtime": 1786112326.1210732,
+    "mtime": 1786116146.5962687,
     "ast_hash": "68b753097dc07ae3fa1dc46ee0c4f9a8",
     "semantic_hash": ""
   },
@@ -960,7 +960,7 @@
     "semantic_hash": "67f81498637c9697503a380951a5786c"
   },
   "gitstore-api/internal/graph/resolver/repository.resolvers.go": {
-    "mtime": 1786112326.1213188,
+    "mtime": 1786116146.5970376,
     "ast_hash": "24fdcb1b83a826f49171afcb28646c3f",
     "semantic_hash": ""
   },
@@ -970,9 +970,9 @@
     "semantic_hash": "05d06f0191f084cd13c3857483c77da7"
   },
   "gitstore-api/internal/graph/resolver/resolver.go": {
-    "mtime": 1786060232.983019,
-    "ast_hash": "933fd23e63e05e0d3f4e824ba9b18995",
-    "semantic_hash": "933fd23e63e05e0d3f4e824ba9b18995"
+    "mtime": 1786238585.1911204,
+    "ast_hash": "4a069a0fe519f1480a9484eb4bd0b7d0",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/graph/resolver/resolver_global_id_test.go": {
     "mtime": 1781186276.8417456,
@@ -980,8 +980,8 @@
     "semantic_hash": "d4f5e5f3555352efb4b83d100223f124"
   },
   "gitstore-api/internal/graph/resolver/schema.resolvers.go": {
-    "mtime": 1786112326.1218302,
-    "ast_hash": "c7a46a4dad095a77e32dbb452236423b",
+    "mtime": 1786238585.1914067,
+    "ast_hash": "f9839700138a8970a45177c3ba2a1671",
     "semantic_hash": ""
   },
   "gitstore-api/internal/graph/resolver/service.go": {
@@ -1030,9 +1030,9 @@
     "semantic_hash": "b598f88f4192f40984250575108333f3"
   },
   "gitstore-api/internal/middleware/security/secure.go": {
-    "mtime": 1786060232.9856818,
-    "ast_hash": "9f3bf16397d0805ef2a2a736f8baaaee",
-    "semantic_hash": "9f3bf16397d0805ef2a2a736f8baaaee"
+    "mtime": 1786238585.193388,
+    "ast_hash": "92990b27625fefcac4dd07193d164e1e",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/middleware/security/secure_test.go": {
     "mtime": 1784317776.052153,
@@ -1045,9 +1045,9 @@
     "semantic_hash": "d09763f4a6b22993241655a9866399af"
   },
   "gitstore-api/internal/testutil/stubstore.go": {
-    "mtime": 1784317776.05248,
-    "ast_hash": "2b517a612449b5d37e679f4375318353",
-    "semantic_hash": "2b517a612449b5d37e679f4375318353"
+    "mtime": 1786238585.193819,
+    "ast_hash": "352f203581b3b44e50e6134aea75b2a5",
+    "semantic_hash": ""
   },
   "gitstore-api/internal/validate/validator.go": {
     "mtime": 1781186276.8469274,
@@ -1105,14 +1105,14 @@
     "semantic_hash": "da030b619138d655c1791d3cd12c6749"
   },
   "gitstore-controller-manager/cmd/controller/main.go": {
-    "mtime": 1786067094.3442073,
-    "ast_hash": "aa4d4b29946d95412befc2f7273184c2",
+    "mtime": 1786244445.2251525,
+    "ast_hash": "029170374593a4b2f43fcedeb2244c54",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/go.mod": {
-    "mtime": 1781910236.0111356,
-    "ast_hash": "0bb6bd86581bd4b679f05881748a1d88",
-    "semantic_hash": "0bb6bd86581bd4b679f05881748a1d88"
+    "mtime": 1786238070.8435678,
+    "ast_hash": "f5ca1733438950df4cff13141a2bb104",
+    "semantic_hash": ""
   },
   "gitstore-controller-manager/internal/api/poison.go": {
     "mtime": 1781800917.6435578,
@@ -1120,9 +1120,9 @@
     "semantic_hash": "defbd8d14fa25bd88c8bb2de4b129ba7"
   },
   "gitstore-controller-manager/internal/cache/accessor.go": {
-    "mtime": 1781708444.3572605,
-    "ast_hash": "93e8f2ff2d35fd602dd79dd43b0e01a9",
-    "semantic_hash": "93e8f2ff2d35fd602dd79dd43b0e01a9"
+    "mtime": 1786242965.1908464,
+    "ast_hash": "3b0e4fbc5ff9254feada46e3b7b86e92",
+    "semantic_hash": ""
   },
   "gitstore-controller-manager/internal/cache/cache.go": {
     "mtime": 1781708444.3574693,
@@ -1135,17 +1135,17 @@
     "semantic_hash": "774024a769b269cebcdfee802bbdc797"
   },
   "gitstore-controller-manager/internal/config/config.go": {
-    "mtime": 1786067094.3455389,
-    "ast_hash": "556ce2fe2d15925f987e284d786e798b",
+    "mtime": 1786244556.055383,
+    "ast_hash": "e309d34dc0d6d7cd43ae059f0b4d24f6",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/internal/config/config_test.go": {
-    "mtime": 1786067094.3458657,
-    "ast_hash": "200b4bffed591b28877cd4caf5229f06",
+    "mtime": 1786244533.5553844,
+    "ast_hash": "e81d382f95d96310a9ef059b22c14a2a",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/internal/health/handler.go": {
-    "mtime": 1786112522.458868,
+    "mtime": 1786116146.5996878,
     "ast_hash": "1844443d26e1c7d41eea7b48c2957191",
     "semantic_hash": ""
   },
@@ -1165,7 +1165,7 @@
     "semantic_hash": "60bae3149324d37d29e0e4ee03ea0807"
   },
   "gitstore-controller-manager/internal/manager/manager.go": {
-    "mtime": 1786112522.8504572,
+    "mtime": 1786116146.6006517,
     "ast_hash": "bedb16fe32e04bf0a9dbba3d2449f77d",
     "semantic_hash": ""
   },
@@ -1175,7 +1175,7 @@
     "semantic_hash": "5f92315d3e2c89c9725280f6cc6e8204"
   },
   "gitstore-controller-manager/internal/manager/types.go": {
-    "mtime": 1786112522.6624174,
+    "mtime": 1786116146.6010244,
     "ast_hash": "1d86b445406e5cfa4cb5021751cf3f11",
     "semantic_hash": ""
   },
@@ -1205,9 +1205,9 @@
     "semantic_hash": "24cdfc77809e64b68de8d6b8711cdf18"
   },
   "gitstore-controller-manager/internal/status/patch.go": {
-    "mtime": 1781708444.3629303,
-    "ast_hash": "60967d135597988d393461f219e9397c",
-    "semantic_hash": "60967d135597988d393461f219e9397c"
+    "mtime": 1786238585.1944509,
+    "ast_hash": "35b3e35b9a9a9b21015cb33f9cd5709c",
+    "semantic_hash": ""
   },
   "gitstore-controller-manager/internal/types/types.go": {
     "mtime": 1781708444.3632507,
@@ -1230,7 +1230,7 @@
     "semantic_hash": "9267fbf37b0c18c18abb4accf38f6b13"
   },
   "gitstore-controller-manager/tests/contract/health_test.go": {
-    "mtime": 1786112941.4013643,
+    "mtime": 1786116146.6019452,
     "ast_hash": "17d786f552950c767aaaff1e10f4b029",
     "semantic_hash": ""
   },
@@ -1260,9 +1260,9 @@
     "semantic_hash": "ea528c685707fb481f124fe2e1f7c75d"
   },
   "gitstore-controller-manager/tests/contract/status_patch_test.go": {
-    "mtime": 1781708444.3655138,
-    "ast_hash": "c27f29217f4da4a013d95273525abd73",
-    "semantic_hash": "c27f29217f4da4a013d95273525abd73"
+    "mtime": 1786238585.1948144,
+    "ast_hash": "e037116e98ab027209154485cf251f1f",
+    "semantic_hash": ""
   },
   "gitstore-git-service/build.rs": {
     "mtime": 1781007683.145364,
@@ -1595,9 +1595,9 @@
     "semantic_hash": "e28050c013d78b425cd002bf2ee659c2"
   },
   ".github/workflows/ci-integration.yml": {
-    "mtime": 1784317776.038271,
-    "ast_hash": "eff092b1764e9583add1e0efc1341fa9",
-    "semantic_hash": "eff092b1764e9583add1e0efc1341fa9"
+    "mtime": 1786295032.6792943,
+    "ast_hash": "afc6e2a206ae75c71cbfb0e273dd98c5",
+    "semantic_hash": ""
   },
   ".github/workflows/ci-proto.yml": {
     "mtime": 1782471612.4760787,
@@ -1675,9 +1675,9 @@
     "semantic_hash": "3d28cf9591870f8d1e3a52298ecd1cd5"
   },
   ".specify/memory/constitution.md": {
-    "mtime": 1781708444.3464558,
-    "ast_hash": "c5588f4b1b52934303fcbbdf42fe5aaa",
-    "semantic_hash": "c5588f4b1b52934303fcbbdf42fe5aaa"
+    "mtime": 1786238585.1808443,
+    "ast_hash": "986b949209267b6c428b19ba3b674bd9",
+    "semantic_hash": ""
   },
   ".specify/templates/agent-file-template.md": {
     "mtime": 1781007683.1201901,
@@ -1715,13 +1715,13 @@
     "semantic_hash": "f2ac035c7d23d79221c84e745d4a9380"
   },
   "AGENTS.md": {
-    "mtime": 1786068186.4114647,
-    "ast_hash": "3d49ffae44a0df7f5a99ad0324548ef4",
+    "mtime": 1786238804.3249598,
+    "ast_hash": "57766e1a811bd20636d1052fb5d984ec",
     "semantic_hash": ""
   },
   "CLAUDE.md": {
-    "mtime": 1786068186.4114647,
-    "ast_hash": "3d49ffae44a0df7f5a99ad0324548ef4",
+    "mtime": 1786238804.3249598,
+    "ast_hash": "57766e1a811bd20636d1052fb5d984ec",
     "semantic_hash": ""
   },
   "README.md": {
@@ -1755,9 +1755,9 @@
     "semantic_hash": "30517621f6e64bd25df81fdb42121214"
   },
   "compose.yml": {
-    "mtime": 1783717212.724506,
-    "ast_hash": "49fa303bc60aa13b82cb4201b177672d",
-    "semantic_hash": "49fa303bc60aa13b82cb4201b177672d"
+    "mtime": 1786294975.9889991,
+    "ast_hash": "d1fee062d7a6abdfbef03f2c408161d8",
+    "semantic_hash": ""
   },
   "docs/ADRs/0001-secretref-reference-contract.md": {
     "mtime": 1782471612.477041,
@@ -1820,12 +1820,12 @@
     "semantic_hash": "03ec8d022db208440c48327722534b9b"
   },
   "docs/api-reference.md": {
-    "mtime": 1786112326.1130161,
-    "ast_hash": "d84f4dedf2694351cf33f92f462a2cd0",
+    "mtime": 1786238585.1816044,
+    "ast_hash": "ed3d688d6914b13f9c2d0c749416212d",
     "semantic_hash": ""
   },
   "docs/architecture.md": {
-    "mtime": 1786112326.113641,
+    "mtime": 1786116146.584119,
     "ast_hash": "a1b25fa74fb97a3082eda444575197cb",
     "semantic_hash": ""
   },
@@ -1840,12 +1840,12 @@
     "semantic_hash": "31589d803342086877e122803f310a92"
   },
   "docs/configuration.md": {
-    "mtime": 1786067094.3433154,
-    "ast_hash": "a69b8cb0c49b3339e829315c02ca58b1",
+    "mtime": 1786249543.523052,
+    "ast_hash": "0456aea759d00755e8b73c8a1c44fa7a",
     "semantic_hash": ""
   },
   "docs/developer-guide.md": {
-    "mtime": 1786071166.0797188,
+    "mtime": 1786116146.584514,
     "ast_hash": "669637642aa3d5909cbec993c9e05a32",
     "semantic_hash": ""
   },
@@ -1855,7 +1855,7 @@
     "semantic_hash": "84d3aa679094dce5d1547df21ce0f0ab"
   },
   "docs/ideas.md": {
-    "mtime": 1786067399.29,
+    "mtime": 1786116146.5851204,
     "ast_hash": "7a9a024570cf908307bde595e2563823",
     "semantic_hash": ""
   },
@@ -1985,7 +1985,7 @@
     "semantic_hash": "06f4fd0741ed8bf3201edb76a132b236"
   },
   "gitstore-admin/src/graphql/README.md": {
-    "mtime": 1786112326.1160185,
+    "mtime": 1786116146.587745,
     "ast_hash": "e05839be058b8f089fd2d9ec8f3283b7",
     "semantic_hash": ""
   },
@@ -2045,7 +2045,7 @@
     "semantic_hash": "37f830ce956cf1af37b6ebe4bd0f7e0c"
   },
   "specs/001-git-backed-ecommerce/contracts/README.md": {
-    "mtime": 1786112326.1355283,
+    "mtime": 1786116146.623484,
     "ast_hash": "2496d56bcd72e432b3a73a9a29a1be37",
     "semantic_hash": ""
   },
@@ -2320,7 +2320,7 @@
     "semantic_hash": "d51ba773bfdbd978aabeaeaf9266386c"
   },
   "specs/009-api-namespaces/quickstart.md": {
-    "mtime": 1786112326.1365776,
+    "mtime": 1786116146.625509,
     "ast_hash": "952fedf35ee31ca633ffa9ed0210bc7b",
     "semantic_hash": ""
   },
@@ -2370,7 +2370,7 @@
     "semantic_hash": "3ccc3ee0d9e5852bc4e5e821456e4d4d"
   },
   "specs/010-repo-storage-identity/tasks.md": {
-    "mtime": 1786112326.1367917,
+    "mtime": 1786116146.6260223,
     "ast_hash": "8b6a70b4dab4df72f995ded7fec84509",
     "semantic_hash": ""
   },
@@ -3140,7 +3140,7 @@
     "semantic_hash": "ea1c7988981aec67b220ef2a5128ac5d"
   },
   "specs/032-auth-phase-3/contracts/session-lifecycle-interfaces.md": {
-    "mtime": 1786112326.137698,
+    "mtime": 1786116146.626546,
     "ast_hash": "38dc2c177b96c7fb25ece3209429eabd",
     "semantic_hash": ""
   },
@@ -3150,12 +3150,12 @@
     "semantic_hash": "34420b9254c02260151c33ca2f33fe17"
   },
   "specs/032-auth-phase-3/plan.md": {
-    "mtime": 1786112326.138,
+    "mtime": 1786116146.6268034,
     "ast_hash": "6d15470750082c76b78381ffcfef0c7e",
     "semantic_hash": ""
   },
   "specs/032-auth-phase-3/quickstart.md": {
-    "mtime": 1786112326.1384795,
+    "mtime": 1786116146.6272373,
     "ast_hash": "82d2a0b7a103e4c2f863f8487faea083",
     "semantic_hash": ""
   },
@@ -3165,7 +3165,7 @@
     "semantic_hash": "f237e6acbebb989c9270ca6f7f3ea7cd"
   },
   "specs/032-auth-phase-3/spec.md": {
-    "mtime": 1786112326.1389146,
+    "mtime": 1786116146.6276343,
     "ast_hash": "97aacb0874d40441a685c805d6d486e3",
     "semantic_hash": ""
   },
@@ -3290,22 +3290,22 @@
     "semantic_hash": "42d0fee56c7905273024223715c69763"
   },
   "gitstore-api/internal/graph/resolver/auth_service.go": {
-    "mtime": 1786112326.1208763,
+    "mtime": 1786116146.5958533,
     "ast_hash": "2126304e10eef781cb0c8e428a50f90f",
     "semantic_hash": ""
   },
   "gitstore-api/internal/middleware/security/graphql.go": {
-    "mtime": 1786060232.9848363,
-    "ast_hash": "c6fb31bafb3951a9bf92f3e1354896e6",
+    "mtime": 1786238585.1922975,
+    "ast_hash": "aaab469776ce09d700630e53f751d001",
     "semantic_hash": ""
   },
   "gitstore-api/internal/middleware/security/graphql_test.go": {
-    "mtime": 1786060232.985145,
-    "ast_hash": "8d908e49e96db126ef5c3f71cc91c1b9",
+    "mtime": 1786238585.1927443,
+    "ast_hash": "fbb6aa5f12fb951b6ce9daafe0723958",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/internal/checkpoint/checkpoint.go": {
-    "mtime": 1786112569.904607,
+    "mtime": 1786116146.5992422,
     "ast_hash": "4668b3894b3a72fd196d1206f7876b45",
     "semantic_hash": ""
   },
@@ -3325,7 +3325,7 @@
     "semantic_hash": ""
   },
   "gitstore-controller-manager/internal/listwatch/runner.go": {
-    "mtime": 1786112917.0588338,
+    "mtime": 1786116146.6001723,
     "ast_hash": "30c52e21f61de8206f022bf75193ba0e",
     "semantic_hash": ""
   },
@@ -3355,7 +3355,7 @@
     "semantic_hash": ""
   },
   "gitstore-controller-manager/tests/contract/listwatch_resume_test.go": {
-    "mtime": 1786112684.544564,
+    "mtime": 1786116146.6023068,
     "ast_hash": "771d67b1a118d78d4344d6937515150b",
     "semantic_hash": ""
   },
@@ -3380,7 +3380,7 @@
     "semantic_hash": ""
   },
   "specs/036-controller-startup-resume/data-model.md": {
-    "mtime": 1786112889.2210288,
+    "mtime": 1786116146.6280537,
     "ast_hash": "58baa0f98faa0aa5028c1f2fd56d8683",
     "semantic_hash": ""
   },
@@ -3390,7 +3390,7 @@
     "semantic_hash": ""
   },
   "specs/036-controller-startup-resume/quickstart.md": {
-    "mtime": 1786112889.0134099,
+    "mtime": 1786116146.6283207,
     "ast_hash": "a60e912fe56b8c7df8f6e00bbe1c331d",
     "semantic_hash": ""
   },
@@ -3400,7 +3400,7 @@
     "semantic_hash": ""
   },
   "specs/036-controller-startup-resume/spec.md": {
-    "mtime": 1786068307.978,
+    "mtime": 1786116146.6288948,
     "ast_hash": "354cb2ac483972a1edd9c06d5f190b43",
     "semantic_hash": ""
   },
@@ -3410,103 +3410,313 @@
     "semantic_hash": ""
   },
   ".specify/feature.json": {
-    "mtime": 1786067879.2721555,
-    "ast_hash": "37f5c46cab625e2fb34d110e4d79c26e",
+    "mtime": 1786238813.154538,
+    "ast_hash": "79b512a6ccaafb48a113aadfe9988e9a",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/tests/integration/disconnect_reconnect_test.go": {
-    "mtime": 1786112716.5631843,
+    "mtime": 1786116146.603038,
     "ast_hash": "78e43c401002bf759a2252e898af3eec",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/tests/integration/doc_test.go": {
-    "mtime": 1786069259.024592,
+    "mtime": 1786116146.6033254,
     "ast_hash": "03ef42107d63a7812fdde64317b0ac1e",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/tests/integration/fixtures_test.go": {
-    "mtime": 1786112662.8611832,
+    "mtime": 1786116146.6038055,
     "ast_hash": "b69dfc1d38dda12d6d243a8339a45322",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/tests/integration/observability_test.go": {
-    "mtime": 1786112787.2138908,
-    "ast_hash": "ed281e6739ff983d8f2c188acf657dd6",
+    "mtime": 1786238585.1951602,
+    "ast_hash": "e862dbbd22a2397f14d1c4b929f64b2b",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/tests/integration/poison_item_test.go": {
-    "mtime": 1786071068.9291797,
+    "mtime": 1786116146.6046224,
     "ast_hash": "96cc5eee74f958c5c675b589a60d269a",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/tests/integration/reconcile_retry_resume_test.go": {
-    "mtime": 1786112780.8600688,
+    "mtime": 1786116146.6049557,
     "ast_hash": "c0666a09108a6a8117e9fc876bbda684",
     "semantic_hash": ""
   },
   "gitstore-controller-manager/tests/integration/status_conflict_test.go": {
-    "mtime": 1786112703.9620397,
+    "mtime": 1786116146.6052969,
     "ast_hash": "813d91e8b15db626ddd6026edbd9a3aa",
     "semantic_hash": ""
   },
   "docs/runbooks/controller-lag.md": {
-    "mtime": 1786112850.4612467,
-    "ast_hash": "bb925a83fc33ff00c5e04bc23780751d",
+    "mtime": 1786246260.6947145,
+    "ast_hash": "75fd8f6815670f1b700f0272cbd8a632",
     "semantic_hash": ""
   },
   "docs/runbooks/controller-poisoned-item.md": {
-    "mtime": 1786072491.567009,
+    "mtime": 1786116146.5856578,
     "ast_hash": "54db49800df56bc28ec20fc1e6d70bf4",
     "semantic_hash": ""
   },
   "docs/runbooks/controller-replay-window-exceeded.md": {
-    "mtime": 1786072470.3139954,
+    "mtime": 1786116146.5859337,
     "ast_hash": "0abb319838a860efa132cb62eb7813bb",
     "semantic_hash": ""
   },
   "specs/038-controller-integration-tests-runbook/checklists/requirements.md": {
-    "mtime": 1786067646.9882002,
+    "mtime": 1786116146.629308,
     "ast_hash": "39f1e8a0b985ad8d11a0458c5e183134",
     "semantic_hash": ""
   },
   "specs/038-controller-integration-tests-runbook/contracts/integration-test-scenarios.md": {
-    "mtime": 1786068125.777977,
+    "mtime": 1786116146.6296222,
     "ast_hash": "9811e10f3258e7b4bd4fb3ff0429c975",
     "semantic_hash": ""
   },
   "specs/038-controller-integration-tests-runbook/contracts/runbook-signal-contract.md": {
-    "mtime": 1786068141.239186,
+    "mtime": 1786116146.6298766,
     "ast_hash": "336bcf2b33ca5caab8e09f7d5d577efe",
     "semantic_hash": ""
   },
   "specs/038-controller-integration-tests-runbook/data-model.md": {
-    "mtime": 1786112889.422408,
+    "mtime": 1786116146.630297,
     "ast_hash": "a324a4281f24194d419bc64f54a98e94",
     "semantic_hash": ""
   },
   "specs/038-controller-integration-tests-runbook/plan.md": {
-    "mtime": 1786068012.7653139,
+    "mtime": 1786116146.6305313,
     "ast_hash": "e8b536732e329c0f65b779d24212a57c",
     "semantic_hash": ""
   },
   "specs/038-controller-integration-tests-runbook/quickstart.md": {
-    "mtime": 1786068160.229474,
+    "mtime": 1786116146.630742,
     "ast_hash": "da57de3ba64dcda776214330da605726",
     "semantic_hash": ""
   },
   "specs/038-controller-integration-tests-runbook/research.md": {
-    "mtime": 1786068076.2339962,
+    "mtime": 1786116146.6310604,
     "ast_hash": "8cceb01e2fd46cd487affefb20e0cab2",
     "semantic_hash": ""
   },
   "specs/038-controller-integration-tests-runbook/spec.md": {
-    "mtime": 1786111844.442,
+    "mtime": 1786116146.631424,
     "ast_hash": "0a4d52aac8d79b2dc669a0b5a529192b",
     "semantic_hash": ""
   },
   "specs/038-controller-integration-tests-runbook/tasks.md": {
-    "mtime": 1786112850.663718,
+    "mtime": 1786116146.6317995,
     "ast_hash": "2e9a58fc23cde8be505373e6eb14aa34",
+    "semantic_hash": ""
+  },
+  "specs/040-controller-watch-status-api/checklists/requirements.md": {
+    "mtime": 1786238585.2083316,
+    "ast_hash": "b02d6219be23cc652d6b37fba405be8a",
+    "semantic_hash": ""
+  },
+  "specs/040-controller-watch-status-api/spec.md": {
+    "mtime": 1786256688.926,
+    "ast_hash": "c1e7e2aeb10b66cc64ee978155499619",
+    "semantic_hash": ""
+  },
+  "specs/040-controller-watch-status-api/checklists/hierarchy-path-type.md": {
+    "mtime": 1786238585.2080448,
+    "ast_hash": "271e9a20161fafd43afcb098c41c4f24",
+    "semantic_hash": ""
+  },
+  "specs/040-controller-watch-status-api/data-model.md": {
+    "mtime": 1786238585.209359,
+    "ast_hash": "c181efd39fc4e173549e7ae76497365c",
+    "semantic_hash": ""
+  },
+  "specs/040-controller-watch-status-api/plan.md": {
+    "mtime": 1786238585.2096167,
+    "ast_hash": "eef530e06c892659c8cef6ee82df26b5",
+    "semantic_hash": ""
+  },
+  "specs/040-controller-watch-status-api/quickstart.md": {
+    "mtime": 1786238585.209926,
+    "ast_hash": "4e605c0874b413bd249bc025e2ccc800",
+    "semantic_hash": ""
+  },
+  "specs/040-controller-watch-status-api/research.md": {
+    "mtime": 1786238585.2102425,
+    "ast_hash": "b882c953438719dcd306cb98c345f6c2",
+    "semantic_hash": ""
+  },
+  "specs/040-controller-watch-status-api/tasks.md": {
+    "mtime": 1786238585.210834,
+    "ast_hash": "606cbacbfaf12362a8cb5f6abc09c5fd",
+    "semantic_hash": ""
+  },
+  "gitstore-api/internal/eventbus/eventbus.go": {
+    "mtime": 1786238585.1868231,
+    "ast_hash": "d7858d53ca4b46f6ce0f27176b081a6e",
+    "semantic_hash": ""
+  },
+  "gitstore-api/internal/eventbus/eventbus_test.go": {
+    "mtime": 1786238585.1870315,
+    "ast_hash": "cd02c38d8948e1bef6aa6d027ef3cb05",
+    "semantic_hash": ""
+  },
+  "gitstore-api/internal/graph/resolver/label_selector.go": {
+    "mtime": 1786238585.1906323,
+    "ast_hash": "919862061552a68e0dbb0ad08211135a",
+    "semantic_hash": ""
+  },
+  "gitstore-api/internal/graph/resolver/label_selector_test.go": {
+    "mtime": 1786238585.190869,
+    "ast_hash": "184a264356a33d7c0c4913f6494fe4b0",
+    "semantic_hash": ""
+  },
+  "gitstore-api/internal/graph/resolver/status_patch.go": {
+    "mtime": 1786238585.1917975,
+    "ast_hash": "9df5a3d9232b947e8e073b36652e14de",
+    "semantic_hash": ""
+  },
+  "gitstore-api/internal/graph/resolver/watch.go": {
+    "mtime": 1786238585.191987,
+    "ast_hash": "a6f6ce3cc07f8de11ae1c521669b8bf6",
+    "semantic_hash": ""
+  },
+  "gitstore-api/tests/contract/watch_status_test.go": {
+    "mtime": 1786238585.1940684,
+    "ast_hash": "b131c7573ccbb296fe8eabd71d90ee89",
+    "semantic_hash": ""
+  },
+  "gitstore-api/internal/eventbus/metrics.go": {
+    "mtime": 1786238585.187268,
+    "ast_hash": "e0ea9b13e55d2e4134d91171abf10f4d",
+    "semantic_hash": ""
+  },
+  "gitstore-api/internal/graph/resolver/status_metrics.go": {
+    "mtime": 1786238585.191656,
+    "ast_hash": "7e58e16a29ce6cbac24aba7c933f95b1",
+    "semantic_hash": ""
+  },
+  "docs/runbooks/controller-watch-status.md": {
+    "mtime": 1786238585.1820626,
+    "ast_hash": "2070028aed7f3e44c33d185cbe63c9b0",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/graphqlclient/client.go": {
+    "mtime": 1786249911.1874557,
+    "ast_hash": "1eaabdcb8876f13ae2eca2c86aaffa76",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/graphqlclient/client_test.go": {
+    "mtime": 1786249933.2183707,
+    "ast_hash": "811019daf0c9dba635bfbb2cfd15c2a7",
+    "semantic_hash": ""
+  },
+  "specs/039-category-taxonomy-reconciler/checklists/requirements.md": {
+    "mtime": 1786233342.6461651,
+    "ast_hash": "5a296594539b23faaadfa510ea686743",
+    "semantic_hash": ""
+  },
+  "specs/039-category-taxonomy-reconciler/contracts/reconciler-contract.md": {
+    "mtime": 1786234312.3985522,
+    "ast_hash": "2ee1adeb52f508f334a9696a349911cc",
+    "semantic_hash": ""
+  },
+  "specs/039-category-taxonomy-reconciler/data-model.md": {
+    "mtime": 1786234693.517,
+    "ast_hash": "c0dca5a8f95ac9c00e0f0610605c6319",
+    "semantic_hash": ""
+  },
+  "specs/039-category-taxonomy-reconciler/plan.md": {
+    "mtime": 1786234434.6762967,
+    "ast_hash": "a28e5a1d1b66dac5c08fea557ac36bd9",
+    "semantic_hash": ""
+  },
+  "specs/039-category-taxonomy-reconciler/quickstart.md": {
+    "mtime": 1786234329.2056131,
+    "ast_hash": "b83c72bf82821daff1df70a2e5515d5e",
+    "semantic_hash": ""
+  },
+  "specs/039-category-taxonomy-reconciler/research.md": {
+    "mtime": 1786234198.1392088,
+    "ast_hash": "4aec2a034b42e510a8b48b28e7f6c85b",
+    "semantic_hash": ""
+  },
+  "specs/039-category-taxonomy-reconciler/spec.md": {
+    "mtime": 1786256688.933,
+    "ast_hash": "ac023bad73aea14a0497cc01500f8981",
+    "semantic_hash": ""
+  },
+  "specs/039-category-taxonomy-reconciler/tasks.md": {
+    "mtime": 1786256037.6385581,
+    "ast_hash": "0ef11c932ef167b0f18109e95210d180",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/categorytaxonomy/reconciler.go": {
+    "mtime": 1786255038.878479,
+    "ast_hash": "103005c2f21d1bb93499afa67bb8b26a",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/listwatch/graphql_listwatcher.go": {
+    "mtime": 1786246577.627971,
+    "ast_hash": "52b124b467350267509a7bdfcf535003",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/listwatch/graphql_listwatcher_test.go": {
+    "mtime": 1786246602.2300098,
+    "ast_hash": "7bad25ba9c3ee9d3f9dd6bd371f64395",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/status/graphql_status_client.go": {
+    "mtime": 1786241049.5311453,
+    "ast_hash": "dc19d5fa05b5aee667d8604dde132f3b",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/status/graphql_status_client_test.go": {
+    "mtime": 1786241020.3669279,
+    "ast_hash": "ba8a39738aad0be8603b1058f717894d",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/categorytaxonomy/hierarchy.go": {
+    "mtime": 1786243388.3772972,
+    "ast_hash": "c3f3cebf87ab5677996a7d05e21a8ba2",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/categorytaxonomy/hierarchy_test.go": {
+    "mtime": 1786243448.532283,
+    "ast_hash": "7c1f174208be05cddc59f10afa97e357",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/categorytaxonomy/products.go": {
+    "mtime": 1786244408.5398815,
+    "ast_hash": "75a0c905a3fb52a2556a8dff7364f93b",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/categorytaxonomy/reconciler_test.go": {
+    "mtime": 1786245764.1795728,
+    "ast_hash": "769f01587e61c590a37b32271a7b33cc",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/categorytaxonomy/conditions.go": {
+    "mtime": 1786245599.5155458,
+    "ast_hash": "8212b25b2230452a04be53afe49133f3",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/categorytaxonomy/conditions_test.go": {
+    "mtime": 1786255058.5892615,
+    "ast_hash": "7057dafd652fc117dda6c1e6b6f45c08",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/categorytaxonomy/fileref.go": {
+    "mtime": 1786245686.646572,
+    "ast_hash": "c9cd1935f7d35f95b48f8d5c2b9f4f0a",
+    "semantic_hash": ""
+  },
+  "gitstore-controller-manager/internal/categorytaxonomy/fileref_test.go": {
+    "mtime": 1786245678.5360427,
+    "ast_hash": "f169fb318101a7cfff2cc4ddcd110859",
+    "semantic_hash": ""
+  },
+  "tests/integration/categorytaxonomy_reconciler_test.go": {
+    "mtime": 1786254743.6515512,
+    "ast_hash": "0a9becd8686d0654e644d91dec5c9249",
     "semantic_hash": ""
   }
 }

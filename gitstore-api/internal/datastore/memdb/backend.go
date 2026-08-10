@@ -466,6 +466,29 @@ func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.
 	return nil
 }
 
+func (m *memdbDatastore) UpdateCategoryTaxonomyStatus(_ context.Context, namespace, name string, patch datastore.CategoryTaxonomyStatusPatch) (*datastore.CategoryTaxonomy, error) {
+	txn := m.db.Txn(true)
+	raw, err := txn.First("category_taxonomy", "name_namespace", namespace, name)
+	if err != nil || raw == nil {
+		txn.Abort()
+		return nil, fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrNotFound, namespace, name)
+	}
+	existing := raw.(*datastore.CategoryTaxonomy)
+	updated := *existing // copy — do not mutate the stored pointer's target before commit
+
+	if applyErr := datastore.ApplyCategoryTaxonomyStatusPatch(&updated, patch); applyErr != nil {
+		txn.Abort()
+		return nil, applyErr
+	}
+
+	if insErr := txn.Insert("category_taxonomy", &updated); insErr != nil {
+		txn.Abort()
+		return nil, fmt.Errorf("memdb: update category_taxonomy status: %w", insErr)
+	}
+	txn.Commit()
+	return &updated, nil
+}
+
 func (m *memdbDatastore) DeleteCategoryTaxonomy(_ context.Context, uid string) error {
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("category_taxonomy", "id", uid)

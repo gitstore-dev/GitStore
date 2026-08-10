@@ -30,6 +30,13 @@ type ApiConfig struct {
 	Port     int `mapstructure:"port"      validate:"min=1,max=65535"`
 	GitPort  int `mapstructure:"git_port"  validate:"min=1,max=65535"`
 	GrpcPort int `mapstructure:"grpc_port" validate:"min=1,max=65535"`
+
+	// RateLimitPerSecond is the sustained per-client-IP request rate allowed
+	// on /graphql before responses are rejected with HTTP 429.
+	RateLimitPerSecond float64 `mapstructure:"rate_limit_per_second" validate:"gt=0"`
+	// RateLimitBurst is the per-client-IP token-bucket burst size layered on
+	// top of RateLimitPerSecond.
+	RateLimitBurst int `mapstructure:"rate_limit_burst" validate:"min=1"`
 }
 
 // GitConfig holds addresses for the git service backends.
@@ -141,6 +148,8 @@ func Load() (*Config, error) {
 	v.SetDefault("api.port", 4000)
 	v.SetDefault("api.git_port", 5000)
 	v.SetDefault("api.grpc_port", 6000)
+	v.SetDefault("api.rate_limit_per_second", 50)
+	v.SetDefault("api.rate_limit_burst", 100)
 	v.SetDefault("git.grpc.uri", "dns:///localhost:50051")
 	v.SetDefault("cache.ttl", 300)
 	v.SetDefault("log.level", "info")
@@ -193,8 +202,10 @@ func Load() (*Config, error) {
 
 	// Warn about keys present in the config file that are not in the known schema.
 	knownKeys := map[string]bool{
-		"api.port": true, "api.git_port": true, "api.grpc_port": true, "git.grpc.uri": true,
-		"cache.ttl": true, "log.level": true, "log.format": true,
+		"api.port": true, "api.git_port": true, "api.grpc_port": true,
+		"api.rate_limit_per_second": true, "api.rate_limit_burst": true,
+		"git.grpc.uri": true,
+		"cache.ttl":    true, "log.level": true, "log.format": true,
 		"auth.admin.username": true, "auth.admin.password_hash": true,
 		"auth.jwt.secret": true, "auth.jwt.duration": true, "auth.jwt.issuer": true, "auth.jwt.refresh_grace": true,
 		"auth.grpc.hmac_secret": true,

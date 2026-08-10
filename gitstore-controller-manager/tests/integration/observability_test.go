@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -64,8 +65,8 @@ func TestObservability_QueueDepth_ReflectsPendingItems(t *testing.T) {
 	go func() { _ = mgr.Start(ctx) }()
 
 	const total = 4
-	for i := 0; i < total; i++ {
-		key := types.WorkItemKey{Kind: kind, Namespace: "ns", Name: "pending" + string(rune('0'+i))}
+	for i := range total {
+		key := types.WorkItemKey{Kind: kind, Namespace: "ns", Name: "pending" + strconv.Itoa(i)}
 		if err := mgr.Enqueue(key); err != nil {
 			t.Fatalf("Enqueue failed: %v", err)
 		}

@@ -50,7 +50,7 @@ Sync Impact Report:
 
 ### VII. Simplicity & YAGNI (You Aren't Gonna Need It)
 
-**Start simple, justify complexity.** No speculative features, premature abstractions, or multi-tenant capabilities until proven necessary. Single admin user model initially (RBAC deferred). In-memory caching preferred over external dependencies. Architecture complexity (polyglot Rust/Go/TypeScript) MUST be justified with clear technical rationale.
+**Start simple, justify complexity.** No speculative features, premature abstractions, or multi-tenant capabilities until proven necessary. In-memory caching preferred over external dependencies. Architecture complexity (polyglot Rust/Go/TypeScript) MUST be justified with clear technical rationale.
 
 **Rationale:** Complexity is a liability. Every dependency, abstraction, and feature adds maintenance burden. GitStore's core value proposition (git-backed catalogues) should not be obscured by premature optimisation or speculative features.
 
@@ -61,14 +61,12 @@ Sync Impact Report:
 GitStore comprises three independent services:
 
 1. **Git Service (Rust)**: Built-in git engine with pre-push validation and gRPC notification stream (pending GH#139)
-2. **GraphQL API (Go)**: Relay-compliant API layer exposing catalogue data with in-memory caching
-3. **Controller Manager (Go)**
-4. **Admin (Astro/React)**: Optional web interface for non-technical users
+2. **GraphQL API (Go)**: Relay-compliant API layer exposing catalogue data
+3. **Controller Manager (Go)**: A control loop that reconciles catalogue desired state
 
 **Justification for Polyglot Architecture:**
 - Rust provides superior performance and memory safety for git operations and validation (critical path)
 - Go offers mature GraphQL ecosystem (gqlgen, Relay support) with strong typing for API contracts
-- TypeScript/Astro provides modern UI development experience with React component ecosystem
 
 **Alternatives Rejected:**
 - Single-language monolith would compromise either git performance (ruling out Go/TypeScript) or GraphQL ecosystem maturity (ruling out Rust)
@@ -76,15 +74,15 @@ GitStore comprises three independent services:
 
 ### Performance Targets
 
-- Storefront catalogue queries: < 500ms for 1000+ products
-- Storefront update latency: < 30 seconds from release tag creation
-- Git push validation: < 5 seconds for 100 file push
+- Storefront catalogue queries: < 50 milliseconds for 5000+ products
+- Storefront update latency: < 5 seconds from git push to controller reconciliation
+- Git push validation: < 5 milliseconds for 500 file push
 
 ### Scale Constraints
 
-- Product catalogue size: up to 1,000,000 products initially
-- Git repository size: < 10GB for Markdown + metadata and media
-- Concurrent admin UI users: 1-5 initially (single admin user authentication)
+- Product catalogue size: up to 5,000,000 products initially
+- Git repository size: < 100GB for Markdown + metadata and media
+- Concurrent admin UI users: 100-500 initially
 
 ## Development Workflow
 

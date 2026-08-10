@@ -5,7 +5,9 @@
 package status
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"slices"
 	"time"
 
@@ -28,6 +30,10 @@ type ResourceStatus struct {
 	ObservedGeneration  int64
 	LastAppliedRevision string
 	Conditions          []*Condition
+	// Resolved holds the kind-specific resolved payload as observed
+	// (JSON-encoded), for comparison in IsNoOp. nil means the currently
+	// observed resource has no resolved payload set.
+	Resolved json.RawMessage
 }
 
 // StatusPatch is a partial-merge update applied to a resource's .status sub-resource.
@@ -37,6 +43,14 @@ type StatusPatch struct {
 	ObservedGeneration  *int64
 	LastAppliedRevision *string
 	Conditions          []*Condition
+	// Resolved is the kind-specific resolved payload (spec 040 research.md
+	// R8) -- NOT part of the generic patch conceptually, but threaded
+	// through as JSON bytes so this package has no compile-time
+	// dependency on any particular kind's resolved struct. nil = unchanged.
+	// The reconciler marshals its own known type before calling Apply;
+	// the StatusClient implementation unmarshals it into the wire
+	// request's kind-specific argument.
+	Resolved json.RawMessage
 }
 
 // IsNoOp returns true when every non-nil field in the patch matches the corresponding
@@ -57,6 +71,9 @@ func (p *StatusPatch) IsNoOp(current ResourceStatus) bool {
 		return false
 	}
 	if p.Conditions != nil && !conditionsEqual(p.Conditions, current.Conditions) {
+		return false
+	}
+	if p.Resolved != nil && !bytes.Equal(p.Resolved, current.Resolved) {
 		return false
 	}
 	return true
