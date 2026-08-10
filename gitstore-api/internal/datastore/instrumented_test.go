@@ -122,6 +122,9 @@ func (s *stubDatastore) ListNamespaces(_ context.Context, _ datastore.PageParams
 func (s *stubDatastore) DeleteNamespace(_ context.Context, _ string) error {
 	return s.getProductErr
 }
+func (s *stubDatastore) HasRepositories(_ context.Context, _ string) (bool, error) {
+	return false, s.getProductErr
+}
 func (s *stubDatastore) CreateRepository(_ context.Context, _ *datastore.Repository) error {
 	return s.getProductErr
 }
@@ -136,6 +139,9 @@ func (s *stubDatastore) UpdateRepository(_ context.Context, _ *datastore.Reposit
 }
 func (s *stubDatastore) DeleteRepository(_ context.Context, _ string) error {
 	return s.getProductErr
+}
+func (s *stubDatastore) HasCatalogResources(_ context.Context, _ string) (bool, error) {
+	return false, s.getProductErr
 }
 func (s *stubDatastore) CreateNamespaceMapping(_ context.Context, _ *datastore.NamespaceMapping) error {
 	return s.getProductErr

@@ -9,6 +9,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -113,6 +114,34 @@ func TestCreateNamespace_enterpriseTier_rejected(t *testing.T) {
 	assert.Contains(t, err.Error(), "enterprise")
 }
 
+func TestCreateNamespace_provisionsSystemRepository(t *testing.T) {
+	svc := newTestSvc(t, &mockGitWriter{})
+	ctx := context.Background()
+	input := model.CreateNamespaceInput{Identifier: "provisions-system-repo", Tier: model.NamespaceTierUser}
+	ns, err := svc.CreateNamespace(ctx, input, "alice")
+	require.NoError(t, err)
+
+	result, err := svc.Store().ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{})
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+	assert.Equal(t, resolver.SystemRepositoryName, result.Items[0].Name)
+}
+
+func TestCreateNamespace_retriedSystemRepositoryProvisioning_noDuplicate(t *testing.T) {
+	svc := newTestSvc(t, &mockGitWriter{})
+	ctx := context.Background()
+	input := model.CreateNamespaceInput{Identifier: "retried-system-repo", Tier: model.NamespaceTierUser}
+	ns, err := svc.CreateNamespace(ctx, input, "alice")
+	require.NoError(t, err)
+
+	err = svc.ProvisionSystemRepository(ctx, ns.ID, "alice")
+	require.NoError(t, err)
+
+	result, err := svc.Store().ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{})
+	require.NoError(t, err)
+	assert.Len(t, result.Items, 1)
+}
+
 // ── namespaces query ───────────────────────────────────────────────────────────
 
 func TestListNamespaces_returnsAll(t *testing.T) {
@@ -150,11 +179,23 @@ func TestGetNamespaceByIdentifier_notFound(t *testing.T) {
 
 // ── deleteNamespace ────────────────────────────────────────────────────────────
 
+// deleteSystemRepository removes the auto-provisioned system repository for
+// ns so a subsequent DeleteNamespace call satisfies the has-repositories
+// precondition (FR-001), matching quickstart.md's documented delete order.
+func deleteSystemRepository(t *testing.T, svc *resolver.Service, ns *datastore.Namespace) {
+	t.Helper()
+	ctx := context.Background()
+	m, err := svc.Store().LookupRepository(ctx, ns.ID, resolver.SystemRepositoryName)
+	require.NoError(t, err)
+	require.NoError(t, svc.DeleteRepository(ctx, m.RepoID, "test"))
+}
+
 func TestDeleteNamespace_owner_success(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	input := model.CreateNamespaceInput{Identifier: "to-delete", Tier: model.NamespaceTierUser}
 	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
+	deleteSystemRepository(t, svc, ns)
 
 	err = svc.DeleteNamespace(context.Background(), ns)
 	require.NoError(t, err)
@@ -168,6 +209,7 @@ func TestDeleteNamespace_admin_canDeleteAny(t *testing.T) {
 	input := model.CreateNamespaceInput{Identifier: "owned-by-alice", Tier: model.NamespaceTierUser}
 	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
+	deleteSystemRepository(t, svc, ns)
 
 	// admin deletes alice's namespace
 	err = svc.DeleteNamespace(context.Background(), ns)
@@ -179,6 +221,7 @@ func TestDeleteNamespace_withoutAuthorizationCheck_serviceAllowsDelete(t *testin
 	input := model.CreateNamespaceInput{Identifier: "alices-ns", Tier: model.NamespaceTierUser}
 	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
+	deleteSystemRepository(t, svc, ns)
 
 	err = svc.DeleteNamespace(context.Background(), ns)
 	require.NoError(t, err)
@@ -188,6 +231,45 @@ func TestDeleteNamespace_unknownIdentifier_notFound(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	err := svc.DeleteNamespace(context.Background(), &datastore.Namespace{ID: "does-not-exist", Identifier: "does-not-exist"})
 	assert.Error(t, err)
+}
+
+func TestDeleteNamespace_withRepository_rejected(t *testing.T) {
+	svc := newTestSvc(t, &mockGitWriter{})
+	ctx := context.Background()
+	input := model.CreateNamespaceInput{Identifier: "ns-with-repo", Tier: model.NamespaceTierUser}
+	ns, err := svc.CreateNamespace(ctx, input, "alice")
+	require.NoError(t, err)
+
+	_, err = svc.CreateRepository(ctx, ns.ID, "some-repo", "main", "default", "alice")
+	require.NoError(t, err)
+
+	err = svc.DeleteNamespace(ctx, ns)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "contains repositories and cannot be deleted")
+
+	_, err = svc.GetNamespaceByIdentifier(ctx, ns.Identifier)
+	require.NoError(t, err)
+
+	result, err := svc.Store().ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{})
+	require.NoError(t, err)
+	assert.Len(t, result.Items, 2) // auto-provisioned system repository + the created one
+}
+
+func TestDeleteNamespace_afterRepositoriesRemoved_succeeds(t *testing.T) {
+	svc := newTestSvc(t, &mockGitWriter{})
+	ctx := context.Background()
+	input := model.CreateNamespaceInput{Identifier: "ns-repo-removed", Tier: model.NamespaceTierUser}
+	ns, err := svc.CreateNamespace(ctx, input, "alice")
+	require.NoError(t, err)
+
+	repo, err := svc.CreateRepository(ctx, ns.ID, "temp-repo", "main", "default", "alice")
+	require.NoError(t, err)
+
+	require.NoError(t, svc.DeleteRepository(ctx, repo.ID, "alice"))
+	deleteSystemRepository(t, svc, ns)
+
+	err = svc.DeleteNamespace(ctx, ns)
+	require.NoError(t, err)
 }
 
 func TestDeleteNamespace_recreatedIdentifierDoesNotDeleteReplacement(t *testing.T) {

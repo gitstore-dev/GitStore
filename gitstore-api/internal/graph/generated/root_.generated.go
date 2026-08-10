@@ -5580,7 +5580,7 @@ extend type Mutation {
   transferRepository(input: TransferRepositoryInput!): TransferRepositoryPayload!
 
   """
-  Delete a repository and its storage.
+  Delete a repository and its storage. Deletion is blocked when the repository contains catalog resources.
   """
   deleteRepository(input: DeleteRepositoryInput!): DeleteRepositoryPayload!
 }

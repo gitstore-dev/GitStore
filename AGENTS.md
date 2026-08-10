@@ -27,6 +27,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - No new storage in `gitstore-controller-manager` (in-memory cache only, per spec 026's existing pattern). On the `gitstore-api` side, reuses the existing `status` JSON blob column on `CategoryTaxonomy` and the `catalog.ResolvedCategoryTaxonomy.Path []string` field (already renamed by spec 040 R9) — no schema or datastore changes required by this spec. (039-category-taxonomy-reconciler)
 - Go 1.25 (`gitstore-api`, `gitstore-controller-manager`) + `github.com/99designs/gqlgen v0.17.90` (GraphQL server + subscription transport, already wired via `transport.Websocket` in `gitstore-api/internal/app/server.go`), existing `internal/auth.AuthZProvider`/rbac-local action-string model, existing `internal/listwatch.ListWatcher[T]`/`Watcher[T]`/`WatchEvent[T]` interfaces in `gitstore-controller-manager` (defined by spec 036, no concrete implementation yet), existing `internal/status.StatusClient` interface in `gitstore-controller-manager` (defined by spec 026, no concrete implementation yet) (040-controller-watch-status-api)
 - No new storage. Reuses existing `datastore.Datastore` (`go-memdb` dev / ScyllaDB prod) `CategoryTaxonomy` rows and their existing `resource_version` column/field — no schema migration required for the resourceVersion mechanism itself, since it already exists and is incremented on every `UpdateCategoryTaxonomy` call (see `nextResourceVersion` in `gitstore-api/internal/cataloggrpc/server.go`) (040-controller-watch-status-api)
+- Go 1.25 (`gitstore-api`) + existing `datastore.Datastore` interface, `go.uber.org/zap`, `github.com/vektah/gqlparser/v2/gqlerror` — no new dependencies. Two new existence-check methods (`HasRepositories`, `HasCatalogResources`) added to the `Datastore` interface, implemented against existing indexed `RepositoryID`/`NamespaceID` fields already present on `Repository`/catalog entities; no schema migration on either `go-memdb` or ScyllaDB backends (041-namespace-repo-finalizers)
+- No datastore schema changes; no new `Status`/finalizer fields added to `Namespace` or `Repository` — this spec implements only the synchronous precondition-check half of ADR-0002/ADR-0003's deletion flow, not the async `Terminating`/`foregroundDeletion`-finalizer state machine (deferred; requires a `Status` field and a controller neither resource has today) (041-namespace-repo-finalizers)
 
 ## Commands
 
@@ -68,10 +70,10 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 041-namespace-repo-finalizers: Adds real `HasRepositories`/`HasCatalogResources` existence checks to the `Datastore` interface, replacing the `hasRepositories()` stub in `gitstore-api/internal/graph/resolver/service.go` that always returned `false`; enforces `deleteNamespace`/`deleteRepository` preconditions per ADR-0002/ADR-0003 steps 1-2 only (synchronous check-then-reject, not the async `Terminating`/finalizer state machine, which is out of scope pending a `Status` field and controller neither resource has yet); adds `gitstore-system` auto-provisioning to `createNamespace`
 - 039-category-taxonomy-reconciler: Added Go 1.25 (`gitstore-controller-manager`) + existing `internal/types.Reconciler`/`ReconcileResult` (spec 026), existing `internal/status.StatusClient`/`StatusPatch` (spec 026, extended by spec 040 with `Resolved json.RawMessage`), existing `internal/listwatch.ListWatcher[T]`/`Watcher[T]`/`Runner[T]` (spec 036), existing `internal/cache.Cache[T]`/`CacheAccessor[T]`; new GraphQL client for `POST /graphql` + `graphql-transport-ws` subscriptions
 - 040-controller-watch-status-api: Added Go 1.25 (`gitstore-api`, `gitstore-controller-manager`) + `github.com/99designs/gqlgen v0.17.90` (GraphQL server + subscription transport, already wired via `transport.Websocket` in `gitstore-api/internal/app/server.go`), existing `internal/auth.AuthZProvider`/rbac-local action-string model, existing `internal/listwatch.ListWatcher[T]`/`Watcher[T]`/`WatchEvent[T]` interfaces in `gitstore-controller-manager` (defined by spec 036, no concrete implementation yet), existing `internal/status.StatusClient` interface in `gitstore-controller-manager` (defined by spec 026, no concrete implementation yet)
 - 035-git-http-auth: Added Go 1.25 (gitstore-api) · Rust 1.x (gitstore-git-service) + `github.com/gin-gonic/gin`, `go-grpc-prometheus`, `prometheus/client_golang`, `gix 0.84.0`, `tonic 0.14`
-- 034-admission-path-cleanup: `changed_paths` populated in Rust admission handler via gix tree diff; legacy `OldCommitSha==""` fallback path removed from Go API; `operationForEntry` returns existing object to eliminate double DB lookup per resource
 
 
 <!-- MANUAL ADDITIONS START -->
@@ -102,7 +104,7 @@ Common bootstrap variables:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/039-category-taxonomy-reconciler/plan.md
+at specs/041-namespace-repo-finalizers/plan.md
 <!-- SPECKIT END -->
 
 ## graphify

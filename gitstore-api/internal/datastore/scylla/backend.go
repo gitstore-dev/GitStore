@@ -1126,6 +1126,39 @@ func (s *scyllaDatastore) DeleteNamespace(ctx context.Context, id string) error 
 	return nil
 }
 
+// catalogTablesByRepositoryID lists every table with a secondary index on
+// repository_id, checked in order by HasCatalogResources with short-circuit
+// on first match (migration 003_add_repository_id_indices.cql).
+var catalogTablesByRepositoryID = []string{
+	"products_by_namespace",
+	"product_variant_by_namespace",
+	"category_taxonomy",
+	"collection",
+}
+
+// HasCatalogResources reports whether at least one Product, ProductVariant,
+// CategoryTaxonomy, or Collection row currently has repository_id == repoID.
+func (s *scyllaDatastore) HasCatalogResources(_ context.Context, repoID string) (bool, error) {
+	for _, tableName := range catalogTablesByRepositoryID {
+		stmt, names := qb.Select(tableName).
+			Columns("repository_id").
+			Where(qb.Eq("repository_id")).
+			Limit(1).
+			ToCql()
+		var row struct {
+			RepositoryID string `db:"repository_id"`
+		}
+		err := s.session.Query(stmt, names).BindMap(qb.M{"repository_id": repoID}).GetRelease(&row)
+		if err == nil {
+			return true, nil
+		}
+		if !errors.Is(err, gocql.ErrNotFound) {
+			return false, fmt.Errorf("scylla: has catalog resources (%s): %w", tableName, err)
+		}
+	}
+	return false, nil
+}
+
 // ── row conversion helpers ────────────────────────────────────────────────────
 
 func toProductRow(p *datastore.Product) *productRow {
