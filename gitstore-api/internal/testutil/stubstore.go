@@ -18,6 +18,8 @@ type StubStore struct {
 	GetNamespaceByIdentifierFunc func(ctx context.Context, identifier string) (*datastore.Namespace, error)
 	LookupRepositoryFunc         func(ctx context.Context, namespaceID, name string) (*datastore.NamespaceMapping, error)
 	GetRepositoryFunc            func(ctx context.Context, id string) (*datastore.Repository, error)
+	HasRepositoriesFunc          func(ctx context.Context, namespaceID string) (bool, error)
+	HasCatalogResourcesFunc      func(ctx context.Context, repoID string) (bool, error)
 }
 
 func (s *StubStore) GetNamespaceByIdentifier(ctx context.Context, identifier string) (*datastore.Namespace, error) {
@@ -39,6 +41,20 @@ func (s *StubStore) GetRepository(ctx context.Context, id string) (*datastore.Re
 		return s.GetRepositoryFunc(ctx, id)
 	}
 	return nil, datastore.ErrNotFound
+}
+
+func (s *StubStore) HasRepositories(ctx context.Context, namespaceID string) (bool, error) {
+	if s.HasRepositoriesFunc != nil {
+		return s.HasRepositoriesFunc(ctx, namespaceID)
+	}
+	return false, nil
+}
+
+func (s *StubStore) HasCatalogResources(ctx context.Context, repoID string) (bool, error) {
+	if s.HasCatalogResourcesFunc != nil {
+		return s.HasCatalogResourcesFunc(ctx, repoID)
+	}
+	return false, nil
 }
 
 func (s *StubStore) CreateProduct(_ context.Context, _ *datastore.Product) error { return nil }

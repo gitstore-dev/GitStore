@@ -25,6 +25,11 @@ import (
 // identifierRegex matches valid namespace identifiers: DNS label, 1-63 chars.
 var identifierRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$|^[a-z0-9]$`)
 
+// SystemRepositoryName is the well-known repository auto-provisioned for
+// every namespace on creation (ADR-0002/ADR-0003). It is the authoring
+// target for git-backed management of the namespace's own resources.
+const SystemRepositoryName = "gitstore-system"
+
 // reservedIdentifiers is the set of identifiers that cannot be used as namespace names.
 var reservedIdentifiers = map[string]struct{}{
 	"admin": {}, "root": {}, "system": {}, "default": {}, "api": {}, "git": {},
@@ -259,6 +264,24 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 
 	if err := s.store.CreateNamespace(ctx, ns); err != nil {
 		if errors.Is(err, datastore.ErrAlreadyExists) {
+			existing, getErr := s.store.GetNamespaceByIdentifier(ctx, identifier)
+			if getErr == nil {
+				if _, lookupErr := s.store.LookupRepository(ctx, existing.ID, SystemRepositoryName); errors.Is(lookupErr, datastore.ErrNotFound) {
+					s.logger.Info("resuming system repository provisioning for existing namespace",
+						zap.String("namespace_id", existing.ID),
+						zap.String("identifier", identifier),
+					)
+					if provisionErr := s.ProvisionSystemRepository(ctx, existing.ID, callerUsername); provisionErr != nil {
+						s.logger.Error("failed to resume system repository provisioning",
+							zap.String("namespace_id", existing.ID),
+							zap.String("identifier", identifier),
+							zap.Error(provisionErr),
+						)
+						return nil, gqlerror.Errorf("failed to provision system repository")
+					}
+					return existing, nil
+				}
+			}
 			return nil, gqlerror.Errorf("namespace with identifier %q already exists", identifier)
 		}
 		s.logger.Error("failed to create namespace",
@@ -268,7 +291,53 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 		return nil, gqlerror.Errorf("failed to create namespace")
 	}
 
+	if err := s.ProvisionSystemRepository(ctx, ns.ID, callerUsername); err != nil {
+		s.logger.Error("failed to provision system repository",
+			zap.String("namespace_id", ns.ID),
+			zap.String("identifier", identifier),
+			zap.Error(err),
+		)
+		return nil, gqlerror.Errorf("failed to provision system repository")
+	}
+
 	return ns, nil
+}
+
+// ProvisionSystemRepository ensures the well-known SystemRepositoryName
+// repository exists for namespaceID, creating it if absent (FR-007). A
+// repository that already exists — including one created by a concurrent or
+// retried call — is treated as a successful idempotent outcome, never an
+// error (FR-008).
+func (s *Service) ProvisionSystemRepository(ctx context.Context, namespaceID, callerUsername string) error {
+	if _, err := s.store.LookupRepository(ctx, namespaceID, SystemRepositoryName); err == nil {
+		s.logger.Info("system repository already provisioned",
+			zap.String("namespace_id", namespaceID),
+			zap.String("name", SystemRepositoryName),
+		)
+		return nil
+	} else if !errors.Is(err, datastore.ErrNotFound) {
+		return err
+	}
+
+	if _, err := s.CreateRepository(ctx, namespaceID, SystemRepositoryName, "", "default", callerUsername); err != nil {
+		// A concurrent/retried provisioning attempt may have won the race
+		// between the lookup above and this create — re-check before
+		// surfacing the error.
+		if _, lookupErr := s.store.LookupRepository(ctx, namespaceID, SystemRepositoryName); lookupErr == nil {
+			s.logger.Info("system repository provisioned concurrently, treating as idempotent success",
+				zap.String("namespace_id", namespaceID),
+				zap.String("name", SystemRepositoryName),
+			)
+			return nil
+		}
+		return err
+	}
+
+	s.logger.Info("system repository provisioned",
+		zap.String("namespace_id", namespaceID),
+		zap.String("name", SystemRepositoryName),
+	)
+	return nil
 }
 
 // GetNamespaceByIdentifier retrieves a namespace by its identifier.
@@ -313,8 +382,18 @@ func (s *Service) DeleteNamespace(ctx context.Context, ns *datastore.Namespace) 
 		return gqlerror.Errorf("namespace deletion target is missing")
 	}
 
-	// TODO: enforce when repositories table exists
-	if hasRepositories(ns.ID) {
+	hasRepos, err := s.store.HasRepositories(ctx, ns.ID)
+	if err != nil {
+		s.logger.Error("failed to check for existing repositories",
+			zap.String("identifier", ns.Identifier),
+			zap.Error(err),
+		)
+		return gqlerror.Errorf("failed to delete namespace")
+	}
+	if hasRepos {
+		s.logger.Info("namespace deletion rejected: contains repositories",
+			zap.String("identifier", ns.Identifier),
+		)
 		return gqlerror.Errorf("namespace %q contains repositories and cannot be deleted", ns.Identifier)
 	}
 
@@ -330,14 +409,6 @@ func (s *Service) DeleteNamespace(ctx context.Context, ns *datastore.Namespace) 
 	}
 
 	return nil
-}
-
-// hasRepositories returns true when the namespace has at least one repository.
-func hasRepositories(namespaceID string) bool {
-	// Intentionally not implemented — DeleteNamespace validation deferred to a separate feature.
-	// Returning false here is safe for ALPHA since namespace deletion is restricted.
-	_ = namespaceID
-	return false
 }
 
 // Store returns the underlying Datastore. Used in tests to pre-populate fixtures.
@@ -577,6 +648,20 @@ func (s *Service) DeleteRepository(ctx context.Context, repoID, _ string) error 
 			return gqlerror.Errorf("repository not found")
 		}
 		return gqlerror.Errorf("failed to retrieve repository")
+	}
+	hasCatalogResources, err := s.store.HasCatalogResources(ctx, repoID)
+	if err != nil {
+		s.logger.Error("failed to check for existing catalog resources",
+			zap.String("repo_id", repoID),
+			zap.Error(err),
+		)
+		return gqlerror.Errorf("failed to delete repository")
+	}
+	if hasCatalogResources {
+		s.logger.Info("repository deletion rejected: contains catalog resources",
+			zap.String("repo_id", repoID),
+		)
+		return gqlerror.Errorf("repository %q contains catalog resources and cannot be deleted", repo.Name)
 	}
 	if s.gitWriter != nil {
 		if err := s.gitWriter.DeleteRepository(ctx, repoID); err != nil {
