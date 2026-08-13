@@ -3,7 +3,7 @@
 **Branch**: `033-auth-phase-4` | **Date**: 2026-06-26 | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `/specs/033-auth-phase-4/spec.md`
 **GH Issue**: #126
-**Design Doc**: `docs/implementation/pluggable_auth_architecture.md`
+**Design Doc**: `../../docs/implementation/020-pluggable_auth_architecture.md`
 
 ## Summary
 

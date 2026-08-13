@@ -1,7 +1,7 @@
 # GitStore Pluggable AuthN/AuthZ Architecture Design
 
 > Generated 2026-06-20 via deep-research workflow (110 agents, 27 sources, 20 verified claims).
-> This document supersedes the open decisions in `pluggable_auth_design.md`.
+> This document supersedes the open decisions in `019-pluggable_auth_design.md`.
 
 **Research-verified findings driving key decisions:**
 - `go-oidc/v3` is a required new dependency (golang-jwt/v5 already in go.mod cannot perform JWKS-backed RSA/EC verification)

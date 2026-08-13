@@ -163,7 +163,7 @@
 
 **Purpose**: Observability, docs, and validation across all stories.
 
-- [x] T054 [P] Update `docs/implementation/pluggable_auth_architecture.md` to document the Git smart-HTTP auth flow: middleware chain order, `PushContext` propagation, and hook context
+- [x] T054 [P] Update `../../docs/implementation/020-pluggable_auth_architecture.md` to document the Git smart-HTTP auth flow: middleware chain order, `PushContext` propagation, and hook context
 - [x] T055 [P] Run `make pr-ready` from repo root and fix any lint or test failures
 - [ ] T056 [P] Validate quickstart scenarios from `specs/035-git-http-auth/quickstart.md`: authenticated clone/push, unauthenticated 401, 403 on read-only principal, policy rejection, `/metrics` counter verification (requires running stack — validate manually)
 - [x] T057 Update `.github/workflows/ci-integration.yml` if any new test tags or services are needed for the Phase 5–6 Rust tests

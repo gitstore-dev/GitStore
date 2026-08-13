@@ -151,4 +151,4 @@ Subresources should use the same storage decision as the data they represent:
 - [ProductVariant Spec Reference](../products/product-variant-spec.md)
 - [CategoryTaxonomy Spec Reference](../categories/category-taxonomy-spec.md)
 - [Collection Spec Reference](../collections/collection-spec.md)
-- [Pluggable Identity and Access Design](../implementation/pluggable_auth_design.md)
+- [Pluggable Identity and Access Design](../implementation/019-pluggable_auth_design.md)

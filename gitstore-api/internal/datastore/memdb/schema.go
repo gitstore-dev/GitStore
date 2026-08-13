@@ -33,6 +33,12 @@ var schema = &memdb.DBSchema{
 					Unique:  false,
 					Indexer: &memdb.StringFieldIndex{Field: "Namespace"},
 				},
+				"repository_id": {
+					Name:         "repository_id",
+					Unique:       false,
+					AllowMissing: true,
+					Indexer:      &memdb.StringFieldIndex{Field: "RepositoryID"},
+				},
 			},
 		},
 		"category_taxonomy": {
@@ -69,6 +75,12 @@ var schema = &memdb.DBSchema{
 					Unique:       false,
 					AllowMissing: true,
 					Indexer:      &memdb.StringFieldIndex{Field: "AncestorPath"},
+				},
+				"repository_id": {
+					Name:         "repository_id",
+					Unique:       false,
+					AllowMissing: true,
+					Indexer:      &memdb.StringFieldIndex{Field: "RepositoryID"},
 				},
 			},
 		},
@@ -115,6 +127,12 @@ var schema = &memdb.DBSchema{
 						},
 					},
 				},
+				"repository_id": {
+					Name:         "repository_id",
+					Unique:       false,
+					AllowMissing: true,
+					Indexer:      &memdb.StringFieldIndex{Field: "RepositoryID"},
+				},
 			},
 		},
 		"collection": {
@@ -139,6 +157,12 @@ var schema = &memdb.DBSchema{
 					Name:    "namespace",
 					Unique:  false,
 					Indexer: &memdb.StringFieldIndex{Field: "Namespace"},
+				},
+				"repository_id": {
+					Name:         "repository_id",
+					Unique:       false,
+					AllowMissing: true,
+					Indexer:      &memdb.StringFieldIndex{Field: "RepositoryID"},
 				},
 			},
 		},

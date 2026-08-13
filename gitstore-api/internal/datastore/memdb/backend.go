@@ -683,6 +683,16 @@ func (m *memdbDatastore) DeleteNamespace(_ context.Context, id string) error {
 	return nil
 }
 
+func (m *memdbDatastore) HasRepositories(_ context.Context, namespaceID string) (bool, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("repository", "namespace_id", namespaceID)
+	if err != nil {
+		return false, fmt.Errorf("memdb: has repositories: %w", err)
+	}
+	return raw != nil, nil
+}
+
 // ── Repository ────────────────────────────────────────────────────────────────
 
 func (m *memdbDatastore) CreateRepository(_ context.Context, r *datastore.Repository) error {
@@ -752,6 +762,25 @@ func (m *memdbDatastore) DeleteRepository(_ context.Context, id string) error {
 	}
 	txn.Commit()
 	return nil
+}
+
+// catalogTablesWithRepositoryID lists every table indexed on RepositoryID,
+// checked in order by HasCatalogResources with short-circuit on first match.
+var catalogTablesWithRepositoryID = []string{"product", "product_variant", "category_taxonomy", "collection"}
+
+func (m *memdbDatastore) HasCatalogResources(_ context.Context, repoID string) (bool, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	for _, table := range catalogTablesWithRepositoryID {
+		raw, err := txn.First(table, "repository_id", repoID)
+		if err != nil {
+			return false, fmt.Errorf("memdb: has catalog resources (%s): %w", table, err)
+		}
+		if raw != nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // ── NamespaceMapping ──────────────────────────────────────────────────────────
