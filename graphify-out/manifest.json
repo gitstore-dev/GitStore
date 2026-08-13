@@ -1870,8 +1870,8 @@
     "semantic_hash": "4e200b90759d3baff1c4e5d229122f88"
   },
   "docs/implementation/033-phase-1-control-plane-implementation-plan.md": {
-    "mtime": 1786591381.4382617,
-    "ast_hash": "0986eed19dc320ab45baf35bc6497611",
+    "mtime": 1786594098.1958227,
+    "ast_hash": "91985d1acfe23b9df2497f839f13b362",
     "semantic_hash": ""
   },
   "docs/implementation/T152-PROPER-GIT-PROTOCOL.md": {
@@ -2960,8 +2960,8 @@
     "semantic_hash": "ec13676c6c5e630a1f5fb9da500e028c"
   },
   "specs/027-admission-contracts/tasks.md": {
-    "mtime": 1786587848.123862,
-    "ast_hash": "1ee82784377d2a8a7970707cbb3a62e2",
+    "mtime": 1786594098.41542,
+    "ast_hash": "603e70c3f62ca2e49eeeb3e9da8f7e3b",
     "semantic_hash": ""
   },
   "specs/028-branch-deletion-admission/checklists/requirements.md": {
@@ -3045,8 +3045,8 @@
     "semantic_hash": "b0a55ff24ffe073822cbf1741860b1e4"
   },
   "specs/030-remove-enterprise-namespace/tasks.md": {
-    "mtime": 1786587848.124652,
-    "ast_hash": "43f118a655830fae9fe65e9e26aa6ad4",
+    "mtime": 1786594098.6391559,
+    "ast_hash": "c787be043b2942f56e55a2dd7246d1b6",
     "semantic_hash": ""
   },
   "specs/031-pluggable-authn-authz/contracts/auth-interfaces.md": {
@@ -3725,13 +3725,8 @@
     "semantic_hash": ""
   },
   "docs/implementation/021-controller_service_account_auth.md": {
-    "mtime": 1786587848.1094065,
-    "ast_hash": "140c35601ce2f5d1bcdb450938c6b393",
-    "semantic_hash": ""
-  },
-  "docs/implementation/032-phased-implentation.md": {
-    "mtime": 1786587848.1096556,
-    "ast_hash": "e0eb90784493c1ed6ba7d59fc3651668",
+    "mtime": 1786594097.9817605,
+    "ast_hash": "0cf7a26a364ff197fb64dac2047f9edc",
     "semantic_hash": ""
   },
   "docs/implementation/034-file-media-lifecycle-architecture.md": {
@@ -3767,6 +3762,11 @@
   "docs/resource-storage/transient.md": {
     "mtime": 1786587848.111539,
     "ast_hash": "5074df5c6dd7aad7347de19cffb6f59f",
+    "semantic_hash": ""
+  },
+  "docs/implementation/032-phased-implementation.md": {
+    "mtime": 1786594105.1980944,
+    "ast_hash": "e0eb90784493c1ed6ba7d59fc3651668",
     "semantic_hash": ""
   }
 }

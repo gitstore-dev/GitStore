@@ -159,7 +159,7 @@ T013: go build ./... && go test ./...   # regression test must pass
 # All three documentation tasks are fully parallel:
 T014: Update docs/architecture.md
 T015: Update docs/api-reference.md
-T016: Update docs/resources/git-backed.md
+T016: Update docs/resource-storage/git-backed.md
 ```
 
 ---

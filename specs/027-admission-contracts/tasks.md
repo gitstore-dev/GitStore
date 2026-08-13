@@ -116,7 +116,7 @@
 
 **Purpose**: Final verification, documentation updates, and gate checks.
 
-- [x] T025 [P] Update `../../docs/implementation/032-phased-implentation.md` (or equivalent architecture doc) to reference the new `internal/admission/` package and its role in the resource lifecycle in `docs/`
+- [x] T025 [P] Update `../../docs/implementation/032-phased-implementation.md` (or equivalent architecture doc) to reference the new `internal/admission/` package and its role in the resource lifecycle in `docs/`
 - [x] T026 [P] Update `quickstart.md` with final verified file map and end-to-end push commands in `specs/027-admission-contracts/quickstart.md`
 - [x] T027 Run `make test` and confirm all packages pass — `go test ./...` across `gitstore-api`
 - [x] T028 Run `make pr-ready` and confirm lint + license-check + test gate is green
