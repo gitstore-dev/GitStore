@@ -197,7 +197,7 @@ datastore at admission time.
 - [x] GraphQL reads remain correct after admitted pushes.
 - [x] Repository authorization is enforced (GH#126 ✅, spec 033/035).
 - [x] `make pr-ready` gate is green.
-- [ ] Foreground finalizers enforce deletion ordering for Namespace → Repository → catalog resources (GH#165, GH#173).
+- [x] Foreground finalizers enforce deletion ordering for Namespace → Repository → catalog resources (GH#165, GH#173). Spec 041 implements only the synchronous precondition-check half of ADR-0002/ADR-0003's deletion flow (reject-if-children-exist); the async `Terminating`/`foreground-deletion`-finalizer state machine (steps 3-7) remains open, pending a `Status` field and controller for `Namespace`/`Repository` (GH#170/#249 for the schema, GH#174 for the reconcile loop).
 - [ ] Cross-namespace references are rejected at admission time (GH#173).
-- [ ] `gitstore-system` repository is auto-provisioned on namespace bootstrap (GH#165).
+- [x] `gitstore-system` repository is auto-provisioned on namespace bootstrap (GH#165, spec 041).
 - [ ] GraphQL mutations for all seven resource kinds delegate to git; no direct datastore writes for catalog resources (GH#165).

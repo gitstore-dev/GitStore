@@ -136,6 +136,31 @@ func (s *scyllaDatastore) UpdateRepository(_ context.Context, r *datastore.Repos
 	return nil
 }
 
+// HasRepositories reports whether at least one Repository row currently has
+// namespace_id == namespaceID, using the repositories_by_namespace secondary
+// index (migration 002_add_initial_indices.cql).
+func (s *scyllaDatastore) HasRepositories(_ context.Context, namespaceID string) (bool, error) {
+	nsUUID, err := gocql.ParseUUID(namespaceID)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid namespace_id", datastore.ErrInvalidArgument)
+	}
+	stmt, names := qb.Select("repositories").
+		Columns("id").
+		Where(qb.Eq("namespace_id")).
+		Limit(1).
+		ToCql()
+	var row struct {
+		ID gocql.UUID `db:"id"`
+	}
+	if err := s.session.Query(stmt, names).BindMap(qb.M{"namespace_id": nsUUID}).GetRelease(&row); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("scylla: has repositories: %w", err)
+	}
+	return true, nil
+}
+
 func (s *scyllaDatastore) DeleteRepository(ctx context.Context, id string) error {
 	repo, err := s.GetRepository(ctx, id)
 	if err != nil {
