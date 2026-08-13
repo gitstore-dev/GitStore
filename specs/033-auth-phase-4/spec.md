@@ -4,7 +4,7 @@
 **Created**: 2026-06-26
 **Status**: Closed
 **GH Issue**: #126
-**Design Doc**: `docs/implementation/pluggable_auth_architecture.md`
+**Design Doc**: `../../docs/implementation/020-pluggable_auth_architecture.md`
 **Input**: User description: "update memory dependency graph and implement auth phase 4"
 
 ## Overview

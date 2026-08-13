@@ -180,6 +180,11 @@ type Datastore interface {
 	GetNamespaceByIdentifier(ctx context.Context, identifier string) (*Namespace, error)
 	ListNamespaces(ctx context.Context, page PageParams) (*PageResult[Namespace], error)
 	DeleteNamespace(ctx context.Context, id string) error
+	// HasRepositories reports whether at least one Repository record
+	// currently has NamespaceID == namespaceID. Used by DeleteNamespace to
+	// enforce FR-001 (reject deletion while repositories remain). Must be
+	// an existence check (LIMIT 1 / equivalent), not a full count.
+	HasRepositories(ctx context.Context, namespaceID string) (bool, error)
 
 	// Repository operations
 	CreateRepository(ctx context.Context, r *Repository) error
@@ -187,6 +192,12 @@ type Datastore interface {
 	ListRepositoriesByNamespace(ctx context.Context, namespaceID string, page PageParams) (*PageResult[Repository], error)
 	UpdateRepository(ctx context.Context, r *Repository) error
 	DeleteRepository(ctx context.Context, id string) error
+	// HasCatalogResources reports whether at least one Product,
+	// ProductVariant, CategoryTaxonomy, or Collection record currently has
+	// RepositoryID == repoID. Used by DeleteRepository to enforce FR-004
+	// (reject deletion while catalog resources remain). Must be an
+	// existence check (LIMIT 1 / equivalent), not a full count.
+	HasCatalogResources(ctx context.Context, repoID string) (bool, error)
 
 	// NamespaceMapping operations (lookup contract)
 	CreateNamespaceMapping(ctx context.Context, m *NamespaceMapping) error

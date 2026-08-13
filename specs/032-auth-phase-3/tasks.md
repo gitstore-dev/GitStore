@@ -116,7 +116,7 @@ All paths are relative to the repo root. Source lives under `gitstore-api/`.
 **Purpose**: Observability, documentation, and final validation.
 
 - [x] T016 [P] Add structured `zap` log lines to `logout` (subject, jti, outcome), `refreshToken` (subject, outcome), and migrated `login` (subject, outcome) in `gitstore-api/internal/graph/resolver/auth.resolvers.go`
-- [x] T017 [P] Update `docs/implementation/pluggable_auth_architecture.md` to record Phase 3 completion and note the known blacklist-on-restart limitation
+- [x] T017 [P] Update `../../docs/implementation/020-pluggable_auth_architecture.md` to record Phase 3 completion and note the known blacklist-on-restart limitation
 - [x] T018 Run `make pr-ready` and confirm all unit and integration tests pass without any configuration changes; smoke-test the full session lifecycle via `quickstart.md` steps
 
 ---

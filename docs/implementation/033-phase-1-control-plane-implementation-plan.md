@@ -7,7 +7,7 @@
 **Audience**: GitStore engineering team.
 
 This document synthesises ADRs 0002–0008 into a concrete Phase 1 execution plan.
-Read it alongside `docs/implementation/phases.md` (Phase 1 alpha objectives) and the
+Read it alongside `032-phased-implementation.md` (Phase 1 alpha objectives) and the
 individual lifecycle ADRs it references.
 
 ## Executive summary
@@ -180,9 +180,9 @@ datastore at admission time.
 
 | Document                                    | Update needed                                                                                                                                                                        |
 |---------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `docs/resources/README.md`                  | Add lifecycle states table per resource type; update storage group table to reflect hybrid classification for Namespace/Repository.                                                  |
-| `docs/implementation/phases.md`             | Mark Wave 1–4 items complete as they land; update open issue links; add `gitstore-system` convention.                                                                                |
-| `docs/resources/git-backed.md`              | Add "Deletion semantics" section citing foreground finalizer protocol; update Namespace/Repository entries to note hybrid classification.                                            |
+| `../resource-storage/README.md`                  | Add lifecycle states table per resource type; update storage group table to reflect hybrid classification for Namespace/Repository.                                                  |
+| `032-phased-implementation.md`           | Mark Wave 1–4 items complete as they land; update open issue links; add `gitstore-system` convention.                                                                                |
+| `../resource-storage/git-backed.md`              | Add "Deletion semantics" section citing foreground finalizer protocol; update Namespace/Repository entries to note hybrid classification.                                            |
 | `docs/products/product-spec.md`             | Add lifecycle section on finalizer and deletion rejection rule.                                                                                                                      |
 | `docs/products/product-variant-spec.md`     | Add variant-first contract enforcement note; add `ProductResolved` condition docs.                                                                                                   |
 | `docs/categories/category-taxonomy-spec.md` | Add deletion rejection rules; add cycle detection section; resolve GH#244 deferral note once Phase 2 controller work is done.                                                        |
@@ -190,14 +190,14 @@ datastore at admission time.
 | `docs/ADRs/`                                | These ADRs (0002–0009) are the new additions; ensure they are listed in any ADR index.                                                                                               |
 | `docs/api-reference.md`                     | Add delegation model note: catalog mutations commit to git; document `gitstore-system` as the default repository for namespace-scoped mutations without an explicit repository name. |
 
-## Phase 1 exit criteria (from `docs/implementation/phases.md`)
+## Phase 1 exit criteria (from `032-phased-implementation.md`)
 
 - [x] Git push is admission-controlled end-to-end in local/dev environment (GH#123 ✅).
 - [ ] All core alpha resources have stable contracts — Product ✅, ProductVariant ✅, CategoryTaxonomy ✅, Collection ✅; **File (#79 open)**, **Namespace contract (#170 open)**, **Repository contract (#249 open)**.
 - [x] GraphQL reads remain correct after admitted pushes.
 - [x] Repository authorization is enforced (GH#126 ✅, spec 033/035).
 - [x] `make pr-ready` gate is green.
-- [ ] Foreground finalizers enforce deletion ordering for Namespace → Repository → catalog resources (GH#165, GH#173).
+- [x] Foreground finalizers enforce deletion ordering for Namespace → Repository → catalog resources (GH#165, GH#173). Spec 041 implements only the synchronous precondition-check half of ADR-0002/ADR-0003's deletion flow (reject-if-children-exist); the async `Terminating`/`foreground-deletion`-finalizer state machine (steps 3-7) remains open, pending a `Status` field and controller for `Namespace`/`Repository` (GH#170/#249 for the schema, GH#174 for the reconcile loop).
 - [ ] Cross-namespace references are rejected at admission time (GH#173).
-- [ ] `gitstore-system` repository is auto-provisioned on namespace bootstrap (GH#165).
+- [x] `gitstore-system` repository is auto-provisioned on namespace bootstrap (GH#165, spec 041).
 - [ ] GraphQL mutations for all seven resource kinds delegate to git; no direct datastore writes for catalog resources (GH#165).

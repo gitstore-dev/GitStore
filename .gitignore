@@ -73,10 +73,13 @@ catalogue-work/
 /gitstore-controller-manager/controller
 gitstore-controller-manager/coverage.txt
 /out/
-docs/resources/file.md
 .claude/
 
 # graphify local-machine state (not portable across clones)
+graphify-out/.graphify_labels.json
+graphify-out/.graphify_labels.json.sig
+graphify-out/GRAPH_REPORT.md
+graphify-out/graph.html
 graphify-out/.graphify_python
 graphify-out/.graphify_root
 graphify-out/cost.json

@@ -279,7 +279,7 @@ catalogs. Git LFS and object storage are the standard patterns for binary assets
 
 ### Merge File and MediaAsset into a single resource
 
-Rejected per `docs/resources/git-backed.md`: "Do not model `MediaAsset` as a wrapper
+Rejected per `../resource-storage/git-backed.md`: "Do not model `MediaAsset` as a wrapper
 around `File`; the two resources have different lifecycles and ownership." `File` owns
 the technical storage and checksum contract; `MediaAsset` owns the catalog-facing
 semantic layer. Merging them would couple byte-level storage decisions to

@@ -18,7 +18,7 @@ Namespace → Repository → Product / ProductVariant / CategoryTaxonomy / Colle
 Every other lifecycle ADR depends on namespace semantics being stable first.
 
 Two competing forces shape its storage model. Namespace lifecycle is reviewable
-desired state and belongs in Git by default — the `docs/resources/git-backed.md`
+desired state and belongs in Git by default — the `../resource-storage/git-backed.md`
 control-plane table already lists it there. But Namespace is also the container that
 holds the git repositories a client pushes to, creating a bootstrap problem: the first
 namespace and its repositories must exist before any git push is possible.
