@@ -5,6 +5,7 @@ package resolver_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -140,6 +141,25 @@ func TestCreateNamespace_retriedSystemRepositoryProvisioning_noDuplicate(t *test
 	result, err := svc.Store().ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 1)
+}
+
+func TestCreateNamespace_retryAfterSystemRepositoryProvisioningFailure_resumes(t *testing.T) {
+	writer := &mockGitWriter{createRepoErr: errors.New("provisioning failed")}
+	svc := newTestSvc(t, writer)
+	ctx := context.Background()
+	input := model.CreateNamespaceInput{Identifier: "retry-partial-namespace", Tier: model.NamespaceTierUser}
+
+	_, err := svc.CreateNamespace(ctx, input, "alice")
+	require.ErrorContains(t, err, "failed to provision system repository")
+
+	writer.createRepoErr = nil
+	ns, err := svc.CreateNamespace(ctx, input, "alice")
+	require.NoError(t, err)
+
+	result, err := svc.Store().ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{})
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+	assert.Equal(t, resolver.SystemRepositoryName, result.Items[0].Name)
 }
 
 // ── namespaces query ───────────────────────────────────────────────────────────

@@ -627,6 +627,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.False(t, has)
 
 		p := newProduct()
+		p.Namespace = ns.Identifier
 		p.RepositoryID = repo.ID
 		require.NoError(t, ds.CreateProduct(ctx, p))
 		has, err = ds.HasCatalogResources(ctx, repo.ID)
@@ -636,11 +637,13 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 
 		v := &datastore.ProductVariant{
 			UID:               newID(),
-			Namespace:         "test-ns",
+			Namespace:         ns.Identifier,
 			Name:              "variant-" + newID()[:8],
 			APIVersion:        "catalog.gitstore.dev/v1beta1",
 			Kind:              "ProductVariant",
 			CreationTimestamp: time.Now(),
+			SKU:               "sku-" + newID()[:8],
+			ProductRefName:    "product-" + newID()[:8],
 			RepositoryID:      repo.ID,
 		}
 		require.NoError(t, ds.CreateProductVariant(ctx, v))
@@ -650,6 +653,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.DeleteProductVariant(ctx, v.UID))
 
 		c := newCategoryTaxonomy()
+		c.Namespace = ns.Identifier
 		c.RepositoryID = repo.ID
 		require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
 		has, err = ds.HasCatalogResources(ctx, repo.ID)
@@ -658,6 +662,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.DeleteCategoryTaxonomy(ctx, c.UID))
 
 		coll := newCollection()
+		coll.Namespace = ns.Identifier
 		coll.RepositoryID = repo.ID
 		require.NoError(t, ds.CreateCollection(ctx, coll))
 		has, err = ds.HasCatalogResources(ctx, repo.ID)
