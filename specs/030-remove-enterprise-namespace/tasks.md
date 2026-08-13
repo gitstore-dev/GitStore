@@ -65,13 +65,13 @@
 
 **Goal**: Remove all `enterprise`/`ENTERPRISE` namespace type references from documentation and update `ORGANISATION` → `ORGANIZATION`. Add a note that enterprise-level modeling, if ever required, belongs outside the namespace type model.
 
-**Independent Test**: Open `docs/architecture.md`, `docs/api-reference.md`, and `docs/resources/git-backed.md` — confirm `ENTERPRISE`, `parentEnterpriseId`, and `parentEnterpriseIdentifier` do not appear in any namespace type context; confirm `ORGANIZATION` (American spelling) is used throughout.
+**Independent Test**: Open `docs/architecture.md`, `docs/api-reference.md`, and `../../docs/resource-storage/git-backed.md` — confirm `ENTERPRISE`, `parentEnterpriseId`, and `parentEnterpriseIdentifier` do not appear in any namespace type context; confirm `ORGANIZATION` (American spelling) is used throughout.
 
 ### Implementation for User Story 2
 
 - [x] T014 [P] [US2] Update `docs/architecture.md`: remove `ENTERPRISE` from the namespace tier table (lines ~509–513); remove the `isAdmin` admin-gate note for enterprise creation (line ~522); remove `parentEnterpriseId` from example GraphQL query snippets (lines ~552, ~560); rename any remaining `ORGANISATION` → `ORGANIZATION`
 - [x] T015 [P] [US2] Update `docs/api-reference.md`: remove `ENTERPRISE` from the tier enum value table (line ~609); remove the `parentEnterpriseIdentifier` input field row (line ~610); remove `parentEnterpriseId: ID` field entries (lines ~167, ~746); remove the ENTERPRISE admin-token requirement note (line ~580); rename any remaining `ORGANISATION` → `ORGANIZATION`; add a sentence noting that enterprise-level grouping, if ever needed, will be modeled outside the namespace path
-- [x] T016 [P] [US2] Update `docs/resources/git-backed.md`: remove `parentEnterpriseRef` from the namespace resource spec field list (line ~43); rename any remaining `ORGANISATION` → `ORGANIZATION`
+- [x] T016 [P] [US2] Update `../../docs/resource-storage/git-backed.md`: remove `parentEnterpriseRef` from the namespace resource spec field list (line ~43); rename any remaining `ORGANISATION` → `ORGANIZATION`
 
 **Checkpoint**: US2 complete — all documentation consistent with the two-type `USER`/`ORGANIZATION` model.
 

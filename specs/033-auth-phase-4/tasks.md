@@ -139,7 +139,7 @@
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [x] T041 [P] Update `docs/implementation/pluggable_auth_architecture.md` — mark Phase 4 milestone `auth-framework-git-v1` as complete in §7 Rollout Phases
+- [x] T041 [P] Update `../../docs/implementation/020-pluggable_auth_architecture.md` — mark Phase 4 milestone `auth-framework-git-v1` as complete in §7 Rollout Phases
 - [x] T042 [P] Update `CLAUDE.md` / `AGENTS.md` `## Recent Changes` section to record Phase 4 tech additions (no new deps; `cmd/gitctl` binary; `GITSTORE_AUTH__GRPC__HMAC_SECRET` config key)
 - [x] T043 Run `make pr-ready` and fix any lint, format, or license-header failures before opening the PR
 

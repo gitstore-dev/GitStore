@@ -3,7 +3,7 @@
 **Branch**: `031-pluggable-authn-authz` | **Date**: 2026-06-25 | **Spec**: [spec.md](spec.md)  
 **Input**: Feature specification from `/specs/031-pluggable-authn-authz/spec.md`  
 **GH Issue**: #225  
-**Design Doc**: `docs/implementation/pluggable_auth_architecture.md`
+**Design Doc**: `../../docs/implementation/020-pluggable_auth_architecture.md`
 
 ## Summary
 

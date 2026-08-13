@@ -1,6 +1,6 @@
 # Research: Pluggable AuthN/AuthZ Phase 1
 
-> All findings sourced from `docs/implementation/pluggable_auth_architecture.md`
+> All findings sourced from `../../docs/implementation/020-pluggable_auth_architecture.md`
 > (generated 2026-06-20 via deep-research, 110 agents, 27 sources, 20 verified claims).
 > No further unknowns require external resolution for Phase 1.
 
