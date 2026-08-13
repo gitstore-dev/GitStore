@@ -591,4 +591,87 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		_, errIdent := ds.GetNamespaceByIdentifier(ctx, ns.Identifier)
 		assert.ErrorIs(t, errIdent, datastore.ErrNotFound)
 	})
+
+	t.Run("Namespace/TestHasRepositories", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+
+		has, err := ds.HasRepositories(ctx, ns.ID)
+		require.NoError(t, err)
+		assert.False(t, has)
+
+		repo := newRepository(ns.ID)
+		require.NoError(t, ds.CreateRepository(ctx, repo))
+
+		has, err = ds.HasRepositories(ctx, ns.ID)
+		require.NoError(t, err)
+		assert.True(t, has)
+
+		require.NoError(t, ds.DeleteRepository(ctx, repo.ID))
+
+		has, err = ds.HasRepositories(ctx, ns.ID)
+		require.NoError(t, err)
+		assert.False(t, has)
+	})
+
+	// ── HasCatalogResources ───────────────────────────────────────────────────
+
+	t.Run("Repository/TestHasCatalogResources", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+		repo := newRepository(ns.ID)
+		require.NoError(t, ds.CreateRepository(ctx, repo))
+
+		has, err := ds.HasCatalogResources(ctx, repo.ID)
+		require.NoError(t, err)
+		assert.False(t, has)
+
+		p := newProduct()
+		p.Namespace = ns.Identifier
+		p.RepositoryID = repo.ID
+		require.NoError(t, ds.CreateProduct(ctx, p))
+		has, err = ds.HasCatalogResources(ctx, repo.ID)
+		require.NoError(t, err)
+		assert.True(t, has)
+		require.NoError(t, ds.DeleteProduct(ctx, p.UID))
+
+		v := &datastore.ProductVariant{
+			UID:               newID(),
+			Namespace:         ns.Identifier,
+			Name:              "variant-" + newID()[:8],
+			APIVersion:        "catalog.gitstore.dev/v1beta1",
+			Kind:              "ProductVariant",
+			CreationTimestamp: time.Now(),
+			SKU:               "sku-" + newID()[:8],
+			ProductRefName:    "product-" + newID()[:8],
+			RepositoryID:      repo.ID,
+		}
+		require.NoError(t, ds.CreateProductVariant(ctx, v))
+		has, err = ds.HasCatalogResources(ctx, repo.ID)
+		require.NoError(t, err)
+		assert.True(t, has)
+		require.NoError(t, ds.DeleteProductVariant(ctx, v.UID))
+
+		c := newCategoryTaxonomy()
+		c.Namespace = ns.Identifier
+		c.RepositoryID = repo.ID
+		require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
+		has, err = ds.HasCatalogResources(ctx, repo.ID)
+		require.NoError(t, err)
+		assert.True(t, has)
+		require.NoError(t, ds.DeleteCategoryTaxonomy(ctx, c.UID))
+
+		coll := newCollection()
+		coll.Namespace = ns.Identifier
+		coll.RepositoryID = repo.ID
+		require.NoError(t, ds.CreateCollection(ctx, coll))
+		has, err = ds.HasCatalogResources(ctx, repo.ID)
+		require.NoError(t, err)
+		assert.True(t, has)
+		require.NoError(t, ds.DeleteCollection(ctx, coll.UID))
+
+		has, err = ds.HasCatalogResources(ctx, repo.ID)
+		require.NoError(t, err)
+		assert.False(t, has)
+	})
 }

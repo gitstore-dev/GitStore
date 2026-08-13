@@ -6,6 +6,7 @@ package resolver_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
@@ -139,6 +140,74 @@ func TestDeleteRepository_callsGRPCAndRemovesMapping(t *testing.T) {
 
 	_, err = svcStore(t, svc).LookupRepository(ctx, testNsID1, "to-delete")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestDeleteRepository_withCatalogResource_rejected(t *testing.T) {
+	writer := &mockGitWriter{}
+	svc := newTestSvc(t, writer)
+	ctx := context.Background()
+
+	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
+		ID: testNsID1, Identifier: "ns-catalog-blocked", Tier: datastore.NamespaceTierUser, CreatedBy: "test", UpdatedBy: "test",
+	}))
+
+	repo, err := svc.CreateRepository(ctx, testNsID1, "has-catalog", "main", "default", "test-user")
+	require.NoError(t, err)
+
+	require.NoError(t, svcStore(t, svc).CreateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{
+		UID:               "01960000-0000-7000-8000-000000000099",
+		Namespace:         "ns-catalog-blocked",
+		Name:              "blocking-category",
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "CategoryTaxonomy",
+		Generation:        1,
+		ResourceVersion:   "1",
+		CreationTimestamp: time.Now(),
+		RepositoryID:      repo.ID,
+	}))
+
+	err = svc.DeleteRepository(ctx, repo.ID, "test-user")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "contains catalog resources and cannot be deleted")
+
+	_, err = svcStore(t, svc).GetRepository(ctx, repo.ID)
+	require.NoError(t, err)
+
+	_, err = svcStore(t, svc).GetCategoryTaxonomy(ctx, "01960000-0000-7000-8000-000000000099")
+	require.NoError(t, err)
+
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	assert.Empty(t, writer.deleteRepoCalls)
+}
+
+func TestDeleteRepository_afterCatalogResourcesRemoved_succeeds(t *testing.T) {
+	writer := &mockGitWriter{}
+	svc := newTestSvc(t, writer)
+	ctx := context.Background()
+
+	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
+		ID: testNsID1, Identifier: "ns-catalog-cleared", Tier: datastore.NamespaceTierUser, CreatedBy: "test", UpdatedBy: "test",
+	}))
+
+	repo, err := svc.CreateRepository(ctx, testNsID1, "catalog-cleared", "main", "default", "test-user")
+	require.NoError(t, err)
+
+	require.NoError(t, svcStore(t, svc).CreateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{
+		UID:               "01960000-0000-7000-8000-000000000098",
+		Namespace:         "ns-catalog-cleared",
+		Name:              "removable-category",
+		APIVersion:        "catalog.gitstore.dev/v1beta1",
+		Kind:              "CategoryTaxonomy",
+		Generation:        1,
+		ResourceVersion:   "1",
+		CreationTimestamp: time.Now(),
+		RepositoryID:      repo.ID,
+	}))
+	require.NoError(t, svcStore(t, svc).DeleteCategoryTaxonomy(ctx, "01960000-0000-7000-8000-000000000098"))
+
+	err = svc.DeleteRepository(ctx, repo.ID, "test-user")
+	require.NoError(t, err)
 }
 
 // ── LookupNamespaceByRepoID ───────────────────────────────────────────────────

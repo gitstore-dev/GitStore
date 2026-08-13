@@ -48,7 +48,8 @@ func TestServiceCreateNamespaceAndRepositoryUsesInjectedClockAndIDs(t *testing.T
 	ctx := context.Background()
 	now := time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)
 	namespaceID := "11111111-1111-4111-8111-111111111111"
-	repositoryID := "22222222-2222-7222-8222-222222222222"
+	systemRepositoryID := "22222222-2222-7222-8222-222222222222"
+	repositoryID := "33333333-3333-7333-8333-333333333333"
 	store, err := memdb.New()
 	require.NoError(t, err)
 	defer store.Close()
@@ -58,7 +59,7 @@ func TestServiceCreateNamespaceAndRepositoryUsesInjectedClockAndIDs(t *testing.T
 		GitWriter:   writer,
 		Logger:      zap.NewNop(),
 		Clock:       apiruntime.NewFixedClock(now),
-		IDGenerator: apiruntime.NewSequenceIDGenerator(namespaceID, repositoryID),
+		IDGenerator: apiruntime.NewSequenceIDGenerator(namespaceID, systemRepositoryID, repositoryID),
 	})
 	require.NoError(t, err)
 
@@ -76,5 +77,5 @@ func TestServiceCreateNamespaceAndRepositoryUsesInjectedClockAndIDs(t *testing.T
 	assert.Equal(t, repositoryID, repo.ID)
 	assert.Equal(t, now, repo.CreatedAt)
 	assert.Equal(t, now, repo.UpdatedAt)
-	assert.Equal(t, []string{repositoryID}, writer.createRepoCalls)
+	assert.Equal(t, []string{systemRepositoryID, repositoryID}, writer.createRepoCalls)
 }

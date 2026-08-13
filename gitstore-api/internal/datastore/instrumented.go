@@ -295,6 +295,13 @@ func (d *InstrumentedDatastore) DeleteNamespace(ctx context.Context, id string) 
 	return err
 }
 
+func (d *InstrumentedDatastore) HasRepositories(ctx context.Context, namespaceID string) (bool, error) {
+	start := time.Now()
+	v, err := d.next.HasRepositories(ctx, namespaceID)
+	d.observe("HasRepositories", start, err)
+	return v, err
+}
+
 // ── Repository ────────────────────────────────────────────────────────────
 
 func (d *InstrumentedDatastore) CreateRepository(ctx context.Context, r *Repository) error {
@@ -330,6 +337,13 @@ func (d *InstrumentedDatastore) DeleteRepository(ctx context.Context, id string)
 	err := d.next.DeleteRepository(ctx, id)
 	d.observe("DeleteRepository", start, err)
 	return err
+}
+
+func (d *InstrumentedDatastore) HasCatalogResources(ctx context.Context, repoID string) (bool, error) {
+	start := time.Now()
+	v, err := d.next.HasCatalogResources(ctx, repoID)
+	d.observe("HasCatalogResources", start, err)
+	return v, err
 }
 
 // ── NamespaceMapping ──────────────────────────────────────────────────────
