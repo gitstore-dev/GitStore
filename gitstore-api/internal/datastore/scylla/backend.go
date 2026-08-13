@@ -1126,9 +1126,8 @@ func (s *scyllaDatastore) DeleteNamespace(ctx context.Context, id string) error 
 	return nil
 }
 
-// catalogTablesByRepositoryID lists every table with a secondary index on
-// repository_id, checked in order by HasCatalogResources with short-circuit
-// on first match (migration 003_add_repository_id_indices.cql).
+// catalogTablesByRepositoryID lists every namespace-partitioned catalog table,
+// checked in order by HasCatalogResources with short-circuit on first match.
 var catalogTablesByRepositoryID = []string{
 	"products_by_namespace",
 	"product_variant_by_namespace",
@@ -1138,17 +1137,33 @@ var catalogTablesByRepositoryID = []string{
 
 // HasCatalogResources reports whether at least one Product, ProductVariant,
 // CategoryTaxonomy, or Collection row currently has repository_id == repoID.
-func (s *scyllaDatastore) HasCatalogResources(_ context.Context, repoID string) (bool, error) {
+func (s *scyllaDatastore) HasCatalogResources(ctx context.Context, repoID string) (bool, error) {
+	repo, err := s.GetRepository(ctx, repoID)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("scylla: has catalog resources: %w", err)
+	}
+	ns, err := s.GetNamespace(ctx, repo.NamespaceID)
+	if err != nil {
+		return false, fmt.Errorf("scylla: has catalog resources namespace: %w", err)
+	}
+
 	for _, tableName := range catalogTablesByRepositoryID {
 		stmt, names := qb.Select(tableName).
 			Columns("repository_id").
-			Where(qb.Eq("repository_id")).
+			Where(qb.Eq("namespace"), qb.Eq("repository_id")).
 			Limit(1).
+			AllowFiltering().
 			ToCql()
 		var row struct {
 			RepositoryID string `db:"repository_id"`
 		}
-		err := s.session.Query(stmt, names).BindMap(qb.M{"repository_id": repoID}).GetRelease(&row)
+		err := s.session.Query(stmt, names).BindMap(qb.M{
+			"namespace":     ns.Identifier,
+			"repository_id": repoID,
+		}).GetRelease(&row)
 		if err == nil {
 			return true, nil
 		}

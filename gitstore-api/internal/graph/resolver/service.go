@@ -264,6 +264,24 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 
 	if err := s.store.CreateNamespace(ctx, ns); err != nil {
 		if errors.Is(err, datastore.ErrAlreadyExists) {
+			existing, getErr := s.store.GetNamespaceByIdentifier(ctx, identifier)
+			if getErr == nil {
+				if _, lookupErr := s.store.LookupRepository(ctx, existing.ID, SystemRepositoryName); errors.Is(lookupErr, datastore.ErrNotFound) {
+					s.logger.Info("resuming system repository provisioning for existing namespace",
+						zap.String("namespace_id", existing.ID),
+						zap.String("identifier", identifier),
+					)
+					if provisionErr := s.ProvisionSystemRepository(ctx, existing.ID, callerUsername); provisionErr != nil {
+						s.logger.Error("failed to resume system repository provisioning",
+							zap.String("namespace_id", existing.ID),
+							zap.String("identifier", identifier),
+							zap.Error(provisionErr),
+						)
+						return nil, gqlerror.Errorf("failed to provision system repository")
+					}
+					return existing, nil
+				}
+			}
 			return nil, gqlerror.Errorf("namespace with identifier %q already exists", identifier)
 		}
 		s.logger.Error("failed to create namespace",

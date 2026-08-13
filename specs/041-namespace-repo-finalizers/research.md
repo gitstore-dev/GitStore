@@ -107,12 +107,14 @@ denormalized "resource count" field to `Namespace` or `Repository`.
 **Rationale**: Every catalog entity already stores `RepositoryID`
 (`gitstore-api/internal/datastore/entities.go` lines 62, 102, 139, and — confirmed by
 the same struct shape — `ProductVariant`), and `Repository` already stores
-`NamespaceID` (line 203). This means both checks are simple indexed
-existence/prefix-scan queries under both backends:
+`NamespaceID` (line 203). This means both checks can use bounded existence queries
+under both backends:
 - `go-memdb`: an indexed lookup on the existing `RepositoryID`/`NamespaceID` field,
   same style as existing indexed lookups in `memdb/backend.go`.
-- ScyllaDB: a query scoped by partition key (`RepositoryID`/`NamespaceID`) with
-  `LIMIT 1`, avoiding a full partition scan or a `COUNT(*)`.
+- ScyllaDB: repositories use the existing `NamespaceID` secondary index. Catalog
+  resources first resolve the repository's namespace, bind that existing namespace
+  partition, then filter by `RepositoryID` with `LIMIT 1`. This avoids a global table
+  scan and does not add a production schema migration.
 
 A denormalized counter would require incrementing/decrementing on every catalog
 resource create/delete across four resource kinds and would introduce a consistency
