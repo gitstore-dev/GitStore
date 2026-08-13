@@ -3725,8 +3725,8 @@
     "semantic_hash": ""
   },
   "docs/implementation/021-controller_service_account_auth.md": {
-    "mtime": 1786594097.9817605,
-    "ast_hash": "0cf7a26a364ff197fb64dac2047f9edc",
+    "mtime": 1786595553.36,
+    "ast_hash": "1d8d32e417c036e16b01f0f41b62d32e",
     "semantic_hash": ""
   },
   "docs/implementation/034-file-media-lifecycle-architecture.md": {
