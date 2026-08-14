@@ -848,6 +848,18 @@ type ProductVariantStatus struct {
 	Resolved *ResolvedProductVariantDefinition `json:"resolved,omitempty"`
 }
 
+// Product-specific watch event. Carries the same envelope as
+// CategoryWatchEvent but with a strongly-typed `product` field instead
+// of a JSON-boxed `object`, so core-kind consumers get full type safety.
+type ProductWatchEvent struct {
+	Type            WatchEventType `json:"type"`
+	Namespace       *string        `json:"namespace,omitempty"`
+	Name            string         `json:"name"`
+	ResourceVersion string         `json:"resourceVersion"`
+	// Full Product resource for ADDED/MODIFIED. Null for DELETED/BOOKMARK.
+	Product *Product `json:"product,omitempty"`
+}
+
 type PublishCatalogInput struct {
 	Version string `json:"version"`
 	Message string `json:"message"`

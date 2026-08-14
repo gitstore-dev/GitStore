@@ -57,6 +57,8 @@ func main() {
 		log.Fatal("failed to register CategoryTaxonomy reconciler", zap.Error(err))
 	}
 
+	registerProductWatch(ctx, mgr, checkpointStore, cfg, log)
+
 	addr := fmt.Sprintf(":%d", cfg.Controller.Port)
 	srv := &http.Server{
 		Addr:    addr,
@@ -163,4 +165,48 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 	}()
 
 	return nil
+}
+
+// registerProductWatch wires a Product list-then-watch loop into a
+// dedicated Runner[Product], without registering "Product" as a reconciled
+// kind — Product is observed only to drive CategoryTaxonomy enqueues
+// (research.md R1, spec 042). Its cache event handlers enqueue the
+// already-registered "CategoryTaxonomy" kind via mgr.Enqueue whenever a
+// Product's categoryRef appears, disappears, or changes.
+func registerProductWatch(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger) {
+	client := graphqlclient.New(cfg.Controller.ApiURI, cfg.Controller.ApiToken)
+	listWatcher := listwatch.NewProductListWatcher(client)
+
+	productCache := cache.New[categorytaxonomy.Product]()
+	enqueueCategory := func(namespace, categoryName string) {
+		_ = mgr.Enqueue(types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: namespace, Name: categoryName})
+	}
+	productCache.AddEventHandler(categorytaxonomy.NewProductCategoryEnqueueHandler(enqueueCategory))
+
+	runner := &listwatch.Runner[categorytaxonomy.Product]{
+		Kind:        "Product",
+		ListWatcher: listWatcher,
+		Cache:       productCache,
+		Store:       checkpointStore,
+		Enqueue: func(types.WorkItemKey) error {
+			// Product has no registered Reconciler/work queue of its own
+			// (research.md R1) — the Runner's own replay-dedup Enqueue hook
+			// is therefore a no-op; the real side effect is the cache event
+			// handler above, driven by Cache.Set/Delete, not by this hook.
+			return nil
+		},
+		KeyFunc: func(p categorytaxonomy.Product) types.WorkItemKey {
+			return types.WorkItemKey{Kind: "Product", Namespace: p.Namespace, Name: p.Name}
+		},
+		RevisionFunc:        func(p categorytaxonomy.Product) string { return p.ResourceVersion },
+		FlushIntervalEvents: cfg.Controller.CheckpointFlushIntervalEvents,
+		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
+		Log:                 log,
+	}
+
+	go func() {
+		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
+			log.Error("Product runner exited with error", zap.Error(err))
+		}
+	}()
 }

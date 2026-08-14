@@ -152,3 +152,46 @@ func categoryTaxonomyToJSONMap(c *datastore.CategoryTaxonomy) map[string]any {
 	}
 	return out
 }
+
+// productEventMatchesFilters reports whether ev satisfies the namespace
+// filter for a watchProducts subscription (spec 042, mirroring
+// categoryEventMatchesFilters). A nil/empty namespace means no filter.
+func productEventMatchesFilters(ev eventbus.Event, namespace *string) bool {
+	if namespace == nil || *namespace == "" {
+		return true
+	}
+	return ev.Namespace == *namespace
+}
+
+// productEventMatchesSelector reports whether ev's underlying Product's
+// labels satisfy selector, mirroring categoryEventMatchesSelector.
+func productEventMatchesSelector(ev eventbus.Event, selector *model.LabelSelectorInput) bool {
+	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
+		return true
+	}
+	p, ok := ev.Object.(*datastore.Product)
+	if !ok || p == nil {
+		return false
+	}
+	return matchesWatchSelector(selector, p.Labels)
+}
+
+// toProductWatchEvent maps an eventbus.Event to the strongly-typed
+// ProductWatchEvent, mirroring toCategoryWatchEvent.
+func toProductWatchEvent(ev eventbus.Event) *model.ProductWatchEvent {
+	out := &model.ProductWatchEvent{
+		Type:            toWatchEventType(ev.Type),
+		Name:            ev.Name,
+		ResourceVersion: ev.Cursor,
+	}
+	if ev.Namespace != "" {
+		ns := ev.Namespace
+		out.Namespace = &ns
+	}
+	if ev.Type != eventbus.Deleted {
+		if p, ok := ev.Object.(*datastore.Product); ok {
+			out.Product = DatastoreProductToGraphQL(p)
+		}
+	}
+	return out
+}

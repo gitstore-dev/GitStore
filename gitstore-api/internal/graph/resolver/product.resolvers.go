@@ -7,11 +7,14 @@ package resolver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
+	"go.uber.org/zap"
 )
 
 // Product is the resolver for the product field.
@@ -46,6 +49,58 @@ func (r *queryResolver) Products(ctx context.Context, namespace string, first *i
 		return nil, fmt.Errorf("failed to get products: %w", err)
 	}
 	return BuildProductConnection(result), nil
+}
+
+// WatchProducts is the resolver for the watchProducts field.
+func (r *subscriptionResolver) WatchProducts(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.ProductWatchEvent, error) {
+	if r.eventBus == nil {
+		return nil, gqlerror.Errorf("watch subscriptions are not available")
+	}
+	rv := ""
+	if resourceVersion != nil {
+		rv = *resourceVersion
+	}
+	events, unsubscribe, err := r.eventBus.Subscribe("Product", rv)
+	if err != nil {
+		if errors.Is(err, eventbus.ErrWatchExpired) {
+			r.logger.Warn("watch cursor expired; controller must re-list",
+				zap.String("kind", "Product"),
+				zap.String("resource_version", rv))
+			return nil, &gqlerror.Error{
+				Message:    "watch cursor expired; re-list and resume from a fresh cursor",
+				Extensions: map[string]any{"code": "WATCH_EXPIRED"},
+			}
+		}
+		return nil, gqlerror.Errorf("watch subscription failed: %v", err)
+	}
+	r.logger.Debug("watch subscription opened",
+		zap.String("kind", "Product"),
+		zap.Bool("resumed", rv != ""))
+
+	out := make(chan *model.ProductWatchEvent, 16)
+	go func() {
+		defer close(out)
+		defer unsubscribe()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				if !productEventMatchesFilters(ev, namespace) || !productEventMatchesSelector(ev, selector) {
+					continue
+				}
+				select {
+				case out <- toProductWatchEvent(ev):
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }
 
 // Product returns generated.ProductResolver implementation.
