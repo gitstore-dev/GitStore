@@ -1,7 +1,7 @@
 # CI Implementation Options for GitStore Actions
 
 **Date**: 2026-06-06
-**Status**: Exploration
+**Status**: 🟡 Exploration
 
 ## Goal
 

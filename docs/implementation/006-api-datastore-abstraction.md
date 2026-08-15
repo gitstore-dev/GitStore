@@ -1,4 +1,5 @@
 # Feature 006: API Datastore Abstraction
+**Status**: ✅ Shipped
 
 ## Overview
 
