@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	"go.uber.org/zap"
 )
 
@@ -32,6 +33,15 @@ func (d *DecisionLogger) Authorize(ctx context.Context, p *Principal, action str
 	decision, err := d.inner.Authorize(ctx, p, action, res)
 	latencyMs := time.Since(start).Milliseconds()
 
+	if decision.Provider == "" {
+		decision.Provider = d.inner.Name()
+	}
+	if decision.RequestID == "" && ctx != nil {
+		if requestID, ok := ctx.Value(middleware.RequestIDKey).(string); ok {
+			decision.RequestID = requestID
+		}
+	}
+
 	subject := "anon"
 	if p != nil {
 		subject = p.Subject
@@ -51,6 +61,7 @@ func (d *DecisionLogger) Authorize(ctx context.Context, p *Principal, action str
 		zap.String("action", action),
 		zap.String("resource_kind", res.Kind),
 		zap.String("resource_name", res.Name),
+		zap.String("request_id", decision.RequestID),
 		zap.String("outcome", outcomeStr),
 		zap.String("reason", decision.Reason),
 		zap.Int64("latency_ms", latencyMs),
