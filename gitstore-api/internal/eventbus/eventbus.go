@@ -127,6 +127,15 @@ func (b *Bus) Publish(ev Event) {
 // If resourceVersion is non-empty and not found in the retained window,
 // Subscribe returns ErrWatchExpired.
 func (b *Bus) Subscribe(kind string, resourceVersion string) (<-chan Event, func(), error) {
+	ch, unsubscribe, _, err := b.SubscribeWithCursor(kind, resourceVersion)
+	return ch, unsubscribe, err
+}
+
+// SubscribeWithCursor opens a subscription and returns the bus cursor at the
+// instant the subscriber is registered. Callers can use that cursor as the
+// lower bound for a subsequent snapshot, avoiding a gap between snapshot and
+// watch establishment.
+func (b *Bus) SubscribeWithCursor(kind string, resourceVersion string) (<-chan Event, func(), string, error) {
 	kb := b.bufferFor(kind)
 
 	kb.mu.Lock()
@@ -137,6 +146,15 @@ func (b *Bus) Subscribe(kind string, resourceVersion string) (<-chan Event, func
 	var replay []Event
 	if resourceVersion == "" {
 		// No replay -- only future events.
+	} else if resourceVersion == "0" {
+		// "0" is the cursor immediately before the first event. It is valid
+		// while the ring still retains the complete stream; once the ring has
+		// wrapped, the caller must relist instead.
+		if kb.nextCursor > uint64(len(kb.buf)) {
+			WatchExpiredTotal.WithLabelValues(kind).Inc()
+			return nil, nil, "", ErrWatchExpired
+		}
+		replay = retained
 	} else {
 		idx := -1
 		for i, e := range retained {
@@ -147,7 +165,7 @@ func (b *Bus) Subscribe(kind string, resourceVersion string) (<-chan Event, func
 		}
 		if idx == -1 {
 			WatchExpiredTotal.WithLabelValues(kind).Inc()
-			return nil, nil, ErrWatchExpired
+			return nil, nil, "", ErrWatchExpired
 		}
 		replay = retained[idx+1:]
 	}
@@ -174,7 +192,7 @@ func (b *Bus) Subscribe(kind string, resourceVersion string) (<-chan Event, func
 		}
 	}
 
-	return s.ch, unsubscribe, nil
+	return s.ch, unsubscribe, fmt.Sprintf("%d", kb.nextCursor), nil
 }
 
 func boolLabel(b bool) string {

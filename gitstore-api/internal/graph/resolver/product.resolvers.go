@@ -17,6 +17,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const productWatchBootstrapCursor = "__product_watch_bootstrap__"
+
 // Product is the resolver for the product field.
 func (r *queryResolver) Product(ctx context.Context, by model.ProductBy) (*model.Product, error) {
 	switch {
@@ -60,7 +62,14 @@ func (r *subscriptionResolver) WatchProducts(ctx context.Context, namespace *str
 	if resourceVersion != nil {
 		rv = *resourceVersion
 	}
-	events, unsubscribe, err := r.eventBus.Subscribe("Product", rv)
+	// The controller uses this private token to request a bookmark before its
+	// initial Product snapshot. Numeric cursors, including "0", remain real
+	// lower bounds for event-bus replay.
+	bootstrap := rv == productWatchBootstrapCursor
+	if bootstrap {
+		rv = ""
+	}
+	events, unsubscribe, startCursor, err := r.eventBus.SubscribeWithCursor("Product", rv)
 	if err != nil {
 		if errors.Is(err, eventbus.ErrWatchExpired) {
 			r.logger.Warn("watch cursor expired; controller must re-list",
@@ -81,6 +90,14 @@ func (r *subscriptionResolver) WatchProducts(ctx context.Context, namespace *str
 	go func() {
 		defer close(out)
 		defer unsubscribe()
+		if bootstrap {
+			bookmark := toProductWatchEvent(eventbus.Event{Kind: "Product", Cursor: startCursor})
+			select {
+			case out <- bookmark:
+			case <-ctx.Done():
+				return
+			}
+		}
 		for {
 			select {
 			case <-ctx.Done():

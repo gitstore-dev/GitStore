@@ -242,8 +242,11 @@ func TestIntegration_ProductCategoryCount_SurvivesRunnerRestart(t *testing.T) {
 
 	electronicsKey := types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: "acme", Name: "electronics"}
 
+	var activeRunner *listwatch.Runner[categorytaxonomy.Product]
 	enqueueCategory := func(namespace, categoryName string) {
-		_ = mgr.Enqueue(types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: namespace, Name: categoryName})
+		key := types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: namespace, Name: categoryName}
+		activeRunner.RememberRelatedReplay(key)
+		_ = mgr.Enqueue(key)
 	}
 	handler := categorytaxonomy.NewProductCategoryEnqueueHandler(enqueueCategory)
 
@@ -277,7 +280,10 @@ func TestIntegration_ProductCategoryCount_SurvivesRunnerRestart(t *testing.T) {
 		FlushIntervalEvents: 1, // flush the checkpoint after every event, so the restart below observes the pre-restart state
 		MaxBackoff:          time.Second,
 		Enqueue:             func(types.WorkItemKey) error { return nil },
+		ReplayEnqueue:       mgr.Enqueue,
+		DisableReplay:       true,
 	}
+	activeRunner = runner1
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	done1 := make(chan error, 1)
@@ -290,6 +296,16 @@ func TestIntegration_ProductCategoryCount_SurvivesRunnerRestart(t *testing.T) {
 
 	cancel1()
 	<-done1
+	rec1, err := store.Load(context.Background(), "Product")
+	if err != nil {
+		t.Fatalf("load product checkpoint: %v", err)
+	}
+	if len(rec1.ReplayKeys) != 0 {
+		t.Fatalf("product ReplayKeys = %+v, want no product work items", rec1.ReplayKeys)
+	}
+	if len(rec1.RelatedReplayKeys) != 1 || rec1.RelatedReplayKeys[0] != electronicsKey {
+		t.Fatalf("product RelatedReplayKeys = %+v, want electronics", rec1.RelatedReplayKeys)
+	}
 
 	// --- Simulated restart: a fresh Runner[Product]/cache against the same
 	// Store. The checkpoint's restored snapshot re-seeds the new cache with
@@ -314,17 +330,19 @@ func TestIntegration_ProductCategoryCount_SurvivesRunnerRestart(t *testing.T) {
 		FlushIntervalEvents: 1,
 		MaxBackoff:          time.Second,
 		Enqueue:             func(types.WorkItemKey) error { return nil },
+		ReplayEnqueue:       mgr.Enqueue,
+		DisableReplay:       true,
 	}
+	activeRunner = runner2
 
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
 	done2 := make(chan error, 1)
 	go func() { done2 <- runner2.Run(ctx2) }()
 
-	// On resume, restoring the checkpoint replays every ReplayKey through
-	// the cache's Set, which re-fires OnAdd/OnUpdate for the same product —
-	// re-enqueuing "electronics" is a correctness-safe no-op per research.md
-	// R6 (IsNoOp already suppresses a redundant status write), not data loss.
+	// On resume, restoring the checkpoint replays the durable related category
+	// key, while restoring the current Product snapshot re-fires OnAdd for the
+	// current category.
 	waitForCallCount(t, statusClient, electronicsKey, preRestartCalls+1)
 	if got := resolvedProductCount(t, statusClient, electronicsKey); got != 1 {
 		t.Errorf("after restart: electronics productCount = %d, want 1 (must still converge)", got)
@@ -333,4 +351,61 @@ func TestIntegration_ProductCategoryCount_SurvivesRunnerRestart(t *testing.T) {
 	cancel2()
 	<-done2
 	_ = catCache
+}
+
+func TestIntegration_ProductRunner_RestoresRelatedCategoryReplay(t *testing.T) {
+	store := checkpoint.NewMemoryStore()
+	current := categorytaxonomy.Product{
+		UID:             "p1",
+		Namespace:       "acme",
+		Name:            "widget",
+		ResourceVersion: "2",
+		CategoryRefName: "computers",
+	}
+	snapshot, err := json.Marshal([]categorytaxonomy.Product{current})
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	oldCategory := types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: "acme", Name: "electronics"}
+	if err := store.Save(context.Background(), checkpoint.Record{
+		Kind:              "Product",
+		ResourceVersion:   "7",
+		Snapshot:          snapshot,
+		RelatedReplayKeys: []types.WorkItemKey{oldCategory},
+	}); err != nil {
+		t.Fatalf("seed checkpoint: %v", err)
+	}
+
+	replayed := make(chan types.WorkItemKey, 1)
+	runner := &listwatch.Runner[categorytaxonomy.Product]{
+		Kind:        "Product",
+		ListWatcher: &stubListWatcher[categorytaxonomy.Product]{},
+		Cache:       cache.New[categorytaxonomy.Product](),
+		Store:       store,
+		ReplayEnqueue: func(key types.WorkItemKey) error {
+			replayed <- key
+			return nil
+		},
+		DisableReplay: true,
+		KeyFunc: func(p categorytaxonomy.Product) types.WorkItemKey {
+			return types.WorkItemKey{Kind: "Product", Namespace: p.Namespace, Name: p.Name}
+		},
+		RevisionFunc: func(p categorytaxonomy.Product) string { return p.ResourceVersion },
+		Enqueue:      func(types.WorkItemKey) error { return nil },
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+
+	select {
+	case got := <-replayed:
+		if got != oldCategory {
+			t.Fatalf("replayed key = %+v, want %+v", got, oldCategory)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for related replay key")
+	}
+	cancel()
+	<-done
 }

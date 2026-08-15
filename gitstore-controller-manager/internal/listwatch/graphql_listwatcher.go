@@ -185,6 +185,8 @@ func NewCategoryTaxonomyListWatcher(client *graphqlclient.Client) *CategoryTaxon
 // identically to "" (subscribe from the beginning).
 const noResourceVersionSentinel = "0"
 
+const productWatchBootstrapCursor = "__product_watch_bootstrap__"
+
 // List paginates the categories query to completion, returning every
 // CategoryTaxonomy and the highest observed resourceVersion as the list-time
 // cursor. When the namespace has zero categories, ResourceVersion is
@@ -478,18 +480,44 @@ func (lw *ProductListWatcher) listNamespaceIdentifiers(ctx context.Context) ([]s
 	return identifiers, nil
 }
 
-// List enumerates every namespace, then paginates the products query for
-// each to completion, returning every Product and the highest observed
-// resourceVersion across all namespaces as the list-time cursor. When
-// there are zero products, ResourceVersion is noResourceVersionSentinel.
+// List establishes an event-bus cursor before enumerating every namespace,
+// then paginates the products query for each to completion. Changes that race
+// with the snapshot are replayed by the subsequent Watch from that cursor.
+// When there are zero prior Product events, the cursor is
+// noResourceVersionSentinel.
 func (lw *ProductListWatcher) List(ctx context.Context) (ListResponse[categorytaxonomy.Product], error) {
+	watcher, err := lw.Watch(ctx, productWatchBootstrapCursor)
+	if err != nil {
+		return ListResponse[categorytaxonomy.Product]{}, fmt.Errorf("listwatch: establish product watch cursor: %w", err)
+	}
+	defer watcher.Stop()
+
+	var cursorEvent WatchEvent[categorytaxonomy.Product]
+	select {
+	case ev, ok := <-watcher.Events():
+		if !ok {
+			if err := watcher.Err(); err != nil {
+				return ListResponse[categorytaxonomy.Product]{}, fmt.Errorf("listwatch: establish product watch cursor: %w", err)
+			}
+			return ListResponse[categorytaxonomy.Product]{}, fmt.Errorf("listwatch: product watch closed before bookmark")
+		}
+		cursorEvent = ev
+	case <-ctx.Done():
+		return ListResponse[categorytaxonomy.Product]{}, ctx.Err()
+	}
+	if cursorEvent.Type != Bookmark || cursorEvent.ResourceVersion == "" {
+		return ListResponse[categorytaxonomy.Product]{}, fmt.Errorf("listwatch: product watch did not return a bootstrap bookmark")
+	}
+	// The bookmark captured the lower bound. Close this temporary stream while
+	// listing; the real Watch below will replay any events after that cursor.
+	watcher.Stop()
+
 	namespaces, err := lw.listNamespaceIdentifiers(ctx)
 	if err != nil {
 		return ListResponse[categorytaxonomy.Product]{}, err
 	}
 
 	var items []categorytaxonomy.Product
-	highestRV := ""
 	for _, ns := range namespaces {
 		var after *string
 		for {
@@ -504,9 +532,6 @@ func (lw *ProductListWatcher) List(ctx context.Context) (ListResponse[categoryta
 			for _, edge := range resp.Products.Edges {
 				p := edge.Node.toProduct()
 				items = append(items, p)
-				if p.ResourceVersion > highestRV {
-					highestRV = p.ResourceVersion
-				}
 			}
 			if !resp.Products.PageInfo.HasNextPage || resp.Products.PageInfo.EndCursor == nil {
 				break
@@ -515,18 +540,12 @@ func (lw *ProductListWatcher) List(ctx context.Context) (ListResponse[categoryta
 		}
 	}
 
-	if highestRV == "" {
-		highestRV = noResourceVersionSentinel
-	}
-	return ListResponse[categorytaxonomy.Product]{Items: items, ResourceVersion: highestRV}, nil
+	return ListResponse[categorytaxonomy.Product]{Items: items, ResourceVersion: cursorEvent.ResourceVersion}, nil
 }
 
 // Watch opens a watchProducts subscription (across all namespaces)
 // starting after resourceVersion.
 func (lw *ProductListWatcher) Watch(ctx context.Context, resourceVersion string) (Watcher[categorytaxonomy.Product], error) {
-	if resourceVersion == noResourceVersionSentinel {
-		resourceVersion = ""
-	}
 	vars := map[string]any{}
 	if resourceVersion != "" {
 		vars["resourceVersion"] = resourceVersion

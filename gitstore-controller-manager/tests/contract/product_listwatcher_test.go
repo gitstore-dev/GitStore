@@ -13,7 +13,41 @@ import (
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
+	"github.com/gorilla/websocket"
 )
+
+func serveProductBootstrapBookmark(t *testing.T, w http.ResponseWriter, r *http.Request, cursor string) bool {
+	t.Helper()
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		return false
+	}
+	upgrader := websocket.Upgrader{Subprotocols: []string{"graphql-transport-ws"}}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		t.Errorf("upgrade failed: %v", err)
+		return true
+	}
+	defer conn.Close()
+	var initMsg map[string]any
+	if err := conn.ReadJSON(&initMsg); err != nil {
+		t.Errorf("read connection_init failed: %v", err)
+		return true
+	}
+	_ = conn.WriteJSON(map[string]any{"type": "connection_ack"})
+	var subscribeMsg map[string]any
+	if err := conn.ReadJSON(&subscribeMsg); err != nil {
+		t.Errorf("read subscribe failed: %v", err)
+		return true
+	}
+	_ = conn.WriteJSON(map[string]any{
+		"id":   subscribeMsg["id"],
+		"type": "next",
+		"payload": map[string]any{"data": map[string]any{
+			"watchProducts": map[string]any{"type": "BOOKMARK", "resourceVersion": cursor},
+		}},
+	})
+	return true
+}
 
 // productNodeJSON builds a products-query node fixture matching
 // graphql_listwatcher.go's productNodeJSON shape.
@@ -35,11 +69,13 @@ func productNodeJSON(uid, name, namespace, rv, categoryRef string) map[string]an
 	}
 }
 
-// T008: ProductListWatcher.List enumerates namespaces, then paginates
-// products per namespace, returning every Product and the highest
-// observed resourceVersion across all namespaces.
+// T008: ProductListWatcher.List captures the event-bus cursor before it
+// enumerates namespaces and paginates products per namespace.
 func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveProductBootstrapBookmark(t, w, r, "42") {
+			return
+		}
 		var req struct {
 			Query     string         `json:"query"`
 			Variables map[string]any `json:"variables"`
@@ -87,13 +123,16 @@ func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
 	if resp.Items[0].Name != "widget" || resp.Items[0].CategoryRefName != "electronics" {
 		t.Errorf("unexpected item: %+v", resp.Items[0])
 	}
-	if resp.ResourceVersion != "5" {
-		t.Errorf("ResourceVersion = %q, want %q", resp.ResourceVersion, "5")
+	if resp.ResourceVersion != "42" {
+		t.Errorf("ResourceVersion = %q, want event-bus cursor %q", resp.ResourceVersion, "42")
 	}
 }
 
 func TestProductList_EmptyDatasetReturnsNonEmptySentinelResourceVersion(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveProductBootstrapBookmark(t, w, r, "0") {
+			return
+		}
 		var req struct {
 			Query string `json:"query"`
 		}
