@@ -1,6 +1,6 @@
 # File and Media Resource Lifecycle: Architecture Decision Document
 
-**Status**: Research / Proposed (pre-ADR)
+**Status**: 🟡️ Proposed (not yet implemented)
 **Date**: 2026-08-09
 **Audience**: GitStore API, controller-manager, and catalog authors.
 **Feeds**: ADR-0008 (finalize), GH#79, GH#127, GH#192, GH#194, GH#195, GH#244, GH#283, GH#304, GH#316.
@@ -266,33 +266,67 @@ Category/Collection.
 
 ### 7a. Manifest-first creation + out-of-band upload (Phase 1, matches ADR-0008 today)
 
-```
-Author → git push files/hero.md (kind: File, source.uri: s3://.../hero.jpg not yet present)
-       → pre-receive: envelope/contentType/source.type/source.uri non-empty ✓
-       → post-receive admission: AdmissionAccepted=True, ownerReferences→Repository
-       → File controller enqueued
-       → controller GETs source.uri → 404 (object not uploaded yet)
-       → SourceResolved=False, reason=SourceNotFound (transient retry class)
-Author → uploads binary out-of-band to s3://.../hero.jpg (existing credentials)
-       → controller's next retry (backoff) or a watch-triggered re-check succeeds
-       → checksum verified → SourceResolved=True
-       → processing pipeline runs (image variants) → ProcessingComplete=True
-       → Ready=True
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Author
+    participant Git as Git service
+    participant Admission as Admission pipeline
+    participant FileController as File controller
+    participant StatusAPI as File status API
+    participant Storage as Object storage
+    participant Processor as Processing pipeline
+
+    Author->>Git: Push files/hero.md<br/>(kind: File, source URI not present yet)
+    Git->>Admission: Run pre-receive validation
+    Admission->>Admission: Validate envelope, content type,<br/>source type, and non-empty source URI
+    Admission-->>Git: Accepted
+    Git->>Admission: Run post-receive admission
+    Admission->>Admission: Set AdmissionAccepted=True<br/>and owner reference to Repository
+    Admission->>FileController: Enqueue File
+    FileController->>Storage: GET s3://.../hero.jpg
+    Storage-->>FileController: 404 Not Found
+    FileController->>StatusAPI: Write SourceResolved=False<br/>reason=SourceNotFound (transient)
+
+    Author->>Storage: Upload binary out of band<br/>using existing credentials
+    Note over FileController,Storage: Next backoff retry or watch-triggered recheck
+    FileController->>Storage: GET s3://.../hero.jpg
+    Storage-->>FileController: Binary payload
+    FileController->>FileController: Verify checksum<br/>Set SourceResolved=True
+    FileController->>Processor: Generate image variants
+    Processor-->>FileController: Processing complete
+    FileController->>StatusAPI: Write SourceResolved=True,<br/>ProcessingComplete=True, and Ready=True
 ```
 
 ### 7b. Signed-URL upload (Phase 2, `requestFileUpload`/`completeFileUpload`)
 
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant API as gitstore-api
+    participant Storage as Object storage
+    participant Git as Git service
+    participant Admission as Admission pipeline
+
+    Client->>API: requestFileUpload(name, namespace,<br/>contentType, sizeHint)
+    API->>API: Authorize caller and validate namespace
+    API->>Storage: Create presigned PUT or multipart upload<br/>for one object key, short TTL, one action
+    Storage-->>API: Upload target and optional upload ID
+    API-->>Client: uploadURL, uploadId?, expiresAt
+
+    Client->>Storage: PUT binary or upload multipart sequence
+    Storage-->>Client: Upload accepted
+    Client->>API: completeFileUpload(name, namespace, uploadId?)
+    API->>Storage: Verify object exists and read payload metadata
+    Storage-->>API: Object metadata and checksum input
+    API->>API: Compute or verify checksum server-side
+    API->>Git: Auto-commit files/{name}.md
+    Git->>Admission: Run File admission
+    Admission-->>API: Continue from SourceResolved lifecycle in 7a
+    API-->>Client: File upload completed
 ```
-Client → mutation requestFileUpload(name, namespace, contentType, sizeHint)
-       → API validates auth/namespace, generates presigned PUT (or multipart
-         Create) scoped to ONE object key, short TTL, single action
-       ← {uploadURL, uploadId?, expiresAt}
-Client → PUT binary directly to object storage (or multipart PUT sequence)
-Client → mutation completeFileUpload(name, namespace, uploadId?)
-       → API verifies object exists + computes/verifies checksum server-side
-       → API commits files/<name>.md to git (auto-commit, per ADR-0008 Phase 2 note)
-       → admission proceeds as in 7a from SourceResolved onward
-```
+
 Multipart switch-over at ~100MB (AWS threshold, verified) — below that,
 single presigned PUT; above, presigned multipart (Create/UploadPart/Complete).
 `tus` is a viable alternative for **self-hosted, S3-independent** local dev

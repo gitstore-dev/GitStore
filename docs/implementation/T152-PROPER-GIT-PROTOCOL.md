@@ -1,7 +1,7 @@
 # T152: Implement Proper Git Protocol Solution (Production Architecture)
 
 **Date Updated**: 2026-05-09  
-**Status**: 🚫 SUPERSEDED by 004 (gRPC git service)  
+**Status**: 🚫 SUPERSEDED by [Spec 004 (gRPC git service)](../../specs/004-grpc-git-service)
 **Priority**: MEDIUM (not blocking MVP, but needed for production)  
 
 ---

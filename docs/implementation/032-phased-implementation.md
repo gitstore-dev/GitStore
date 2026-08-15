@@ -1,4 +1,5 @@
 # GitStore Implementation Roadmap
+**Status**: ⚠️ In Progress
 
 ## Executive summary
 

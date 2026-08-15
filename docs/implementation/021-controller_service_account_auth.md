@@ -1,7 +1,10 @@
 # Service-Account Authentication for GitStore Controllers
+**Status**: 🟡️ Proposed (not yet implemented)
 
 > Generated 2026-08-09 via deep-research workflow (102 agents, 20 sources, 21 verified claims) plus direct source inspection of `gitstore-api` and `gitstore-controller-manager`.
 > Extends `020-pluggable_auth_architecture.md` (Phases 1–6 shipped; this document specifies the deferred Phase 7 "OIDC JWT provider" slot as a **GitStore-issued service-account provider** instead, and supersedes spec 040 research.md's "controller = ordinary bearer-JWT admin principal" interim decision).
+> `022-opa-data-authorization.md` extends this document with authoritative read-path enforcement,
+> semantic Product/ProductVariant scopes, and OPA-backed service-account role resolution.
 
 ---
 
@@ -470,10 +473,12 @@ Enumerated from `categorytaxonomy.NewReconciler` wiring in `cmd/controller/main.
 |--------------------------------------------------------|--------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Initial list of CategoryTaxonomy                       | `category.list`                                              | **New** — today there is no distinct list/watch action; `rbac-local` only gates mutations via `GraphQLFieldAuthorizer`, so reads currently pass through ungated by any explicit action check. Adding this action is optional hardening, not a blocker — GraphQL read-path authorization is a separate, pre-existing gap this document does not attempt to close in scope, but the action string is reserved here so it composes cleanly if/when read-gating is added. |
 | Watch/subscribe to CategoryTaxonomy changes            | `category.watch`                                             | **New**, same rationale as above                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Supporting product reads (`NewProductCounter(client)`) | `product.list` (or `product.read`, matching existing naming) | **New**, same rationale                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Supporting product reads (`NewProductCounter(client)`) | `product.list`                                              | **New** — 022 makes this the canonical Product connection action and enforces it through GraphQL read middleware.                                                                                                                                                                                                                                                                                                                                                     |
 | Category status writes                                 | `category.status.write`                                      | **Existing** — already implemented and enforced today (`graphql.go:181-198`)                                                                                                                                                                                                                                                                                                                                                                                          |
 
-**Recommendation:** define `category.list` and `category.watch` now, even though nothing currently enforces them at the read path, so the controller role (below) is forward-compatible with the day read-gating ships, without another round of action-string churn.
+**Recommendation:** define `category.list` and `category.watch` now. This document reserves those
+actions; `022-opa-data-authorization.md` closes the Product/ProductVariant read-path gap and establishes
+the same server-owned SDL/middleware pattern for future Category list/watch enforcement.
 
 ### 10b. Controller role (`rbac-local` `policy.yaml` fragment)
 
@@ -484,6 +489,7 @@ roles:
       - category.list
       - category.watch
       - product.list
+      - product.read.unpublished
       - category.status.write
     deny: []   # least privilege: no admin, no namespace.*, no repository.*
 
@@ -492,9 +498,15 @@ role_bindings:
     - category-taxonomy-controller
 ```
 
+`product.read.unpublished` is required because the controller's product counter reconciles the
+complete admitted catalog, not the storefront/public projection. Under 022, `product.list` supplies
+the base read entitlement and `product.read.unpublished` upgrades that request to the `MANAGEMENT`
+visibility scope. The role receives no ProductVariant management access unless a future reconciler
+demonstrates a need for both `productVariant.list` and `productVariant.read.unpublished`.
+
 ### 10c. Namespacing and future controllers
 
-Service-account identity is **namespaced by convention** (`serviceaccount:<namespace>:<name>`), reusing the exact same `Principal.Subject` string format the codebase already treats as opaque everywhere (`role_bindings` keys, log fields, `OwnerSub` comparisons). GitStore does not need a first-class "namespace" resource for ServiceAccounts distinct from its existing `Namespace` datastore concept — a simple string convention (e.g. `controllers` as the namespace segment for all controller-manager instances, or one namespace per controller class) is sufficient at this scale and matches Kubernetes' own namespace-as-string-segment design without requiring GitStore to build a second namespacing system. Each future controller (e.g. a hypothetical `product-variant-controller`) gets its own `serviceaccount:<ns>:<name>` + its own `role_bindings` entry + its own disjoint role listing only the actions it needs — no code change to the AuthN provider or the `AuthZProvider` interface, only a `policy.yaml` and registry entry, identical in shape to onboarding a new human role today.
+Service-account identity is **namespaced by convention** (`serviceaccount:<namespace>:<name>`), reusing the exact same `Principal.Subject` string format the codebase already treats as opaque everywhere (`role_bindings` keys, log fields, `OwnerSub` comparisons). GitStore does not need a first-class "namespace" resource for ServiceAccounts distinct from its existing `Namespace` datastore concept — a simple string convention (e.g. `controllers` as the namespace segment for all controller-manager instances, or one namespace per controller class) is sufficient at this scale and matches Kubernetes' own namespace-as-string-segment design without requiring GitStore to build a second namespacing system. Each future controller (e.g. a hypothetical `product-variant-controller`) gets its own `serviceaccount:<ns>:<name>` plus a disjoint built-in controller role. In `rbac-local` that subject is connected through `role_bindings`; in the embedded OPA design it resolves through 022's built-in-role and namespace IAM projection. Neither path changes the AuthN provider or the `AuthZProvider` interface, and roles are not embedded in service-account tokens.
 
 ---
 
@@ -505,7 +517,11 @@ Service-account identity is **namespaced by convention** (`serviceaccount:<names
 3. **Phase 2 — installation-time enrollment, not token bootstrap.** Extend `gitctl` with an idempotent controller-identity enrollment command. It generates a private key locally (or accepts a secret-manager-backed signer), uses the administrator's existing installation context to create/update the ServiceAccount and register only the public key, and writes the private key with restrictive permissions or delegates storage to the deployment secret mechanism. Compose/Helm/native installation automation invokes this command as part of provisioning. It never writes a bearer access token to disk. This corresponds to an operator applying a Kubernetes ServiceAccount, RoleBinding, and workload manifest; runtime token delivery remains automatic.
 4. **Phase 3 — controller exchange, renewal, and WebSocket enforcement.** Add `CredentialSource`, signed assertion exchange, access-token caching, proactive renewal, `Websocket.InitFunc`, expiry deadlines, live-connection cancellation, and `resourceVersion` resume. A restart after the access token expires succeeds from the enrolled private key without administrator involvement.
 5. **Phase 4 — flip the default chain, deprecate the static fallback.** `GITSTORE_AUTH__AUTHN__CHAIN` default becomes `["static-admin","serviceaccount-assertion","serviceaccount-jwt","anonymous"]`. `GITSTORE_CONTROLLER__API_TOKEN` is marked deprecated in `docs/configuration.md` and is used only when no ServiceAccount signer is configured—an explicit dev/CI compatibility path, never the production default. Rollback trigger: any existing integration test relying on the static token path regresses.
-6. **Phase 5 — enforce read-path action strings (`category.list`/`.watch`, `product.list`).** Independent of this migration's critical path; can ship separately once the broader read-authorization gap (noted in §10a) is addressed for all resource kinds, not just CategoryTaxonomy.
+6. **Phase 5 — enforce read-path action strings.** Adopt 022's SDL/middleware contract for
+   `product.list` and its semantic visibility scope, then extend the same pattern to
+   `category.list`/`.watch`. The controller role includes `product.read.unpublished` only because its
+   reconciliation count needs the complete admitted Product set. ProductVariant management actions
+   remain absent until a controller requirement justifies them.
 
 At every phase, `static-admin` login and the existing `ChainedAuthN` short-circuit semantics (`registry.go:291-309`) remain intact. The two service-account providers use distinct token `typ` and audience contracts and return `OutcomeChallenge` for credentials they do not recognize. Installation may require an authorized administrative context to enroll identity, just as Kubernetes requires an operator or control plane to create/bind a ServiceAccount, but no administrator-issued bearer token participates in controller startup or renewal.
 
@@ -557,7 +573,11 @@ At every phase, `static-admin` login and the existing `ChainedAuthN` short-circu
 - **Controller private-key protection becomes deployment-critical.** The key is a durable proof-of-possession credential, though it is not a bearer token and never leaves the controller. Native/Compose installs require restrictive filesystem permissions or a secret manager; Kubernetes should use a Secret/CSI-backed mount until the optional cluster-issued-token provider exists. Key rotation must support overlapping `kid` values.
 - **Assertion replay protection is initially process-local.** A short assertion lifetime limits exposure in the single-instance profile. Multi-replica APIs require an atomic shared `jti` store before the feature is enabled across replicas.
 - **Immediate WebSocket revocation is replica-local without broadcast.** Persistent disable/delete state blocks new authentication everywhere, but each replica needs a datastore watch or pub/sub invalidation signal to cancel its existing sockets promptly.
-- **Read-path authorization gap** (§10a) is broader than this document's scope: today `GraphQLFieldAuthorizer` only gates specific mutation fields, not queries/subscriptions in general. Shipping `category.list`/`.watch` action strings without enforcing them anywhere is inert until that gap is closed — tracked as Phase 5 of §11, not blocking the primary migration. The assertion-only principal is nevertheless explicitly operation-restricted in Phase 1 and cannot use this gap.
+- **Read-path authorization migration** (§10a) spans more than controller authentication: today
+  `GraphQLFieldAuthorizer` gates selected mutations, not general queries/subscriptions. 022 defines
+  the Product/ProductVariant enforcement contract; Category list/watch enforcement still requires
+  its own schema annotations and tests. Until those phases ship, assertion-only principals remain
+  explicitly operation-restricted and cannot use the legacy read gap.
 - **Public-key enrollment is an administrative installation operation.** This is not runtime token bootstrap: the administrator never mints or copies a bearer token, and the controller can recover autonomously after enrollment. Automation must make the operation idempotent and auditable.
 
 **Unresolved decisions (deliberately deferred, not blocking)**
@@ -569,7 +589,9 @@ At every phase, `static-admin` login and the existing `ChainedAuthN` short-circu
 - This design does **not** adopt SPIFFE/SPIRE, mTLS, or an external OAuth2 authorization server as the primary mechanism (§5).
 - This design does **not** require Kubernetes for any GitStore deployment profile.
 - This design does **not** embed roles/scopes inside the JWT or ServiceAccount registry (§9) — authorization is resolved from `rbac-local`'s role definitions and subject bindings.
-- This design does **not** attempt to close the general GraphQL read-path authorization gap — only to reserve action-string names so that future work composes cleanly.
+- This design does **not itself implement** the general GraphQL read path. It reserves controller
+  actions and delegates the Product/ProductVariant authorization design to
+  `022-opa-data-authorization.md`; other resource kinds require follow-up specifications.
 
 ---
 
