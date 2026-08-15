@@ -1,6 +1,6 @@
 # Phase 1 Control-Plane Implementation Plan
 
-**Status**: Partially implemented — Wave 1 auth/admission closed; Wave 1 control-plane contracts open; Wave 2 partially closed
+**Status**: ⚠️Partially implemented — Wave 1 auth/admission closed; Wave 1 control-plane contracts open; Wave 2 partially closed
 
 **Date**: 2026-06-26
 

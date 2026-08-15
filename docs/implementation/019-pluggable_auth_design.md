@@ -1,11 +1,7 @@
 # Pluggable Identity and Access Design
+**Status**: 🚫 SUPERSEDED by [020 (pluggable auth architecture)](020-pluggable_auth_architecture.md)
 
 This document defines the target design for making authentication and authorisation pluggable in GitStore, while keeping user management independent.
-
-## Status
-
-- Proposed
-- No backwards compatibility required (alpha)
 
 ## Goals
 

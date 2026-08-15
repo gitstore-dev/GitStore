@@ -1,7 +1,10 @@
 # GitStore Pluggable AuthN/AuthZ Architecture Design
+**Status**: ⚠️ In Progress
 
 > Generated 2026-06-20 via deep-research workflow (110 agents, 27 sources, 20 verified claims).
 > This document supersedes the open decisions in `019-pluggable_auth_design.md`.
+> `022-opa-data-authorization.md` extends and supersedes this document's Phase 8 OPA
+> deployment/evaluation details, and defines GraphQL read scopes plus hybrid IAM data ownership.
 
 **Research-verified findings driving key decisions:**
 - `go-oidc/v3` is a required new dependency (golang-jwt/v5 already in go.mod cannot perform JWKS-backed RSA/EC verification)
@@ -1068,7 +1071,11 @@ fn default_http_auth_mode() -> String { "header".into() }
 
 **Trade-off weighed:** External gRPC/webhook providers (e.g., OPA sidecar, OpenFGA server) offer greater policy flexibility and are production-grade. However, they introduce a mandatory external service dependency that violates the `local-fast` profile constraint (must run with zero external services). Implementing the HTTP client wrappers and circuit-breaker logic for external providers before the interface contracts are stable adds risk to an already broad phase-1 scope.
 
-**Constraint on future providers:** Every external provider (OPA, OpenFGA, webhook) must implement the same `AuthZProvider` or `AuthNProvider` interface defined in §1a. The only addition is an `IsRemote() bool` method on the interface (for startup dependency health-checks) — this is additive and backward-compatible with in-process providers that return `false`.
+**Constraint on future providers:** Every provider (embedded OPA, external OpenFGA, webhook, or
+otherwise) must implement the same `AuthZProvider` or `AuthNProvider` interface defined in §1a.
+An external provider may expose remote-health metadata through a separate optional capability;
+the core interfaces do not require an `IsRemote()` method. The selected OPA design is embedded and
+therefore has no remote dependency. See `022-opa-data-authorization.md` §6 and §14.
 
 ### Decision 2: Policy decision logs — datastore or log stream only?
 
@@ -1084,7 +1091,14 @@ fn default_http_auth_mode() -> String { "header".into() }
 
 **Trade-off weighed:** OpenFGA is purpose-built for Relationship-Based Access Control (ReBAC) and excels at "does user X have permission Y on object Z via a chain of relationships?" — exactly the model needed if GitStore later implements org membership hierarchies, inherited repository permissions, or team-scoped access. OPA uses Rego, a general-purpose policy language, and its policy file model maps directly onto the `rbac-local` YAML schema used in phase 1, making the migration from `rbac-local` → OPA a matter of translating the YAML policy into Rego without changing the `AuthZProvider` interface or the action name vocabulary. OpenFGA requires a running relational store (PostgreSQL/MySQL) and a tuple-loading pipeline from GitStore's data — infrastructure that does not exist today.
 
-**Constraint on future providers:** The action name vocabulary (`namespace.delete.any`, `repository.write`, etc.) and `ResourceContext` struct are the contract between resolvers and the AuthZ provider. OPA Rego policies must receive these as structured input; the OPA provider must serialize `(principal, action, ResourceContext)` into the OPA input document before calling the policy engine. If OpenFGA is added in phase 4, its tuple schema must be derived from the same `ResourceContext` fields — no action name changes.
+**Constraint on future providers:** The action name vocabulary (`namespace.delete.any`,
+`repository.write`, etc.) and `ResourceContext` struct are the contract between GraphQL middleware
+and the AuthZ provider. OPA Rego receives a minimized, typed projection of `(principal, action,
+ResourceContext)` plus allowlisted GraphQL field metadata. The raw GraphQL operation, schema,
+credentials, claims map, and unrelated variables are not policy input. `AuthZProvider.Authorize`
+remains unchanged; `Decision` may carry additive, validated semantic scopes for data-aware reads.
+If OpenFGA is added later, its tuple schema must derive from the same action/resource fields—no
+action-name changes. See `022-opa-data-authorization.md` §5–§9.
 
 ---
 
@@ -1166,10 +1180,25 @@ BasicAuthenticator → RepoResolver → GitHttpAuthorizer → [PushContextInsert
 
 ### Phase 8 — OPA production AuthZ provider
 **Milestone:** `auth-framework-v3`
-**Deliverable:** `OPAProvider` calling the OPA sidecar HTTP API; production `.env` profile wires `GITSTORE_AUTH__AUTHZ__PROVIDER=opa`; Rego policy equivalent to `policy.yaml` bundled.
-**Affected packages:** `gitstore-api/internal/auth/provider/opa/`, production deployment config
-**Test strategy:** Integration test with OPA running as a Docker Compose sidecar; verify all existing action names resolve correctly; verify deny path on unknown action.
-**Rollback trigger:** Any authz decision returns unexpected outcome vs. rbac-local reference run.
+**Authoritative design:** `022-opa-data-authorization.md`.
+**Deliverable:** An opt-in embedded `OPAProvider` using
+`github.com/open-policy-agent/opa/v1/rego`, a cached prepared decision query, and
+`storage/inmem` for built-in plus namespace IAM projections. Add provider-neutral semantic Decision
+scopes, server-owned GraphQL `@authorize` metadata, and authorized Product/ProductVariant query
+types that select public or management datastore projections before pagination. The provider does
+not call an OPA sidecar and does not send the raw GraphQL query or schema per evaluation.
+**Affected packages:** `gitstore-api/internal/auth/`, `gitstore-api/internal/auth/provider/opa/`,
+GraphQL middleware/schema, IAM datastore implementations, catalog read services, and public
+Product/ProductVariant projections.
+**Test strategy:** Decision parity with `rbac-local` for existing actions; direct/custom-role/group
+IAM expansion; deny precedence and revision freshness; every Product/ProductVariant GraphQL path;
+public versus management Relay correctness on memdb and ScyllaDB; atomic reload, concurrency,
+timeouts, malformed results, and benchmarks proving preparation is not per request.
+**Rollout constraint:** `opa` remains opt-in until a later decision changes production defaults.
+Public ProductVariant reads remain fail closed until GH#314 materializes variant publication
+eligibility.
+**Rollback trigger:** Any existing action diverges unexpectedly from the reference provider, a
+stale/invalid decision does not fail closed, or scoped Relay results expose an ineligible resource.
 
 ---
 

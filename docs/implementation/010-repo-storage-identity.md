@@ -1,4 +1,5 @@
 # Repository Storage Identity and Path Strategy
+**Status**: ✅ Shipped
 
 ## Overview
 
