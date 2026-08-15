@@ -182,6 +182,23 @@ func (s *Server) publishCategoryTaxonomyEvent(evType eventbus.EventType, c *data
 	})
 }
 
+// publishProductEvent fans out a change notification for the EventBus
+// subscribers of the watchProducts GraphQL subscription (spec 042). No-op
+// when eventBus is nil (e.g. tests that construct Server directly).
+func (s *Server) publishProductEvent(evType eventbus.EventType, p *datastore.Product) {
+	if s.eventBus == nil || p == nil {
+		return
+	}
+	s.eventBus.Publish(eventbus.Event{
+		Type:            evType,
+		Kind:            "Product",
+		Namespace:       p.Namespace,
+		Name:            p.Name,
+		ResourceVersion: p.ResourceVersion,
+		Object:          p,
+	})
+}
+
 func (s *Server) newUID(kind, name string) (string, bool) {
 	uid, err := s.ids.NewV7ID()
 	if err != nil {
@@ -690,6 +707,9 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) {
 	if catTaxonomy, ok := existing.(*datastore.CategoryTaxonomy); ok {
 		s.publishCategoryTaxonomyEvent(eventbus.Deleted, catTaxonomy)
 	}
+	if product, ok := existing.(*datastore.Product); ok {
+		s.publishProductEvent(eventbus.Deleted, product)
+	}
 	s.log.Info("admit_resources: resource deleted",
 		zap.String("kind", id.Kind),
 		zap.String("namespace", id.Namespace),
@@ -737,6 +757,18 @@ func nextResourceVersion(current string) string {
 
 func specBodyChanged(existingSpec []byte, existingBody string, specJSON []byte, body []byte) bool {
 	return !bytes.Equal(existingSpec, specJSON) || existingBody != string(body)
+}
+
+// productCategoryRefName extracts spec.categoryRef.name from a marshaled
+// ProductSpec, returning "" for no categoryRef (or on any parse failure —
+// unmarshal-once-marshaled-by-us specJSON is never expected to fail, but a
+// zero value is the safe default either way).
+func productCategoryRefName(specJSON []byte) string {
+	var spec catalog.ProductSpec
+	if err := json.Unmarshal(specJSON, &spec); err != nil || spec.CategoryRef == nil {
+		return ""
+	}
+	return spec.CategoryRef.Name
 }
 
 func (s *Server) admitProduct(
@@ -827,6 +859,8 @@ func (s *Server) admitProduct(
 		if cerr := s.store.CreateProduct(ctx, p); cerr != nil {
 			s.log.Error("admit_resources: create product failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(cerr))
+		} else {
+			s.publishProductEvent(eventbus.Added, p)
 		}
 	} else {
 		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
@@ -839,6 +873,13 @@ func (s *Server) admitProduct(
 		if !changedSpecBody && !changedMetadata && !changedProvenance {
 			return
 		}
+		// Diff categoryRef before existing.Spec is overwritten below, so the
+		// watchProducts event only fires when the field CategoryTaxonomy
+		// reconciliation actually cares about changed (spec 042,
+		// contracts/product-watch-contract.md call site 2) — a spec change
+		// that is not a categoryRef change (e.g. price/description) still
+		// persists via the write below but must not publish an event.
+		categoryRefChanged := productCategoryRefName(existing.Spec) != productCategoryRefName(specJSON)
 		gen := existing.Generation
 		if changedSpecBody {
 			gen++
@@ -860,6 +901,8 @@ func (s *Server) admitProduct(
 		if uerr := s.store.UpdateProduct(ctx, existing); uerr != nil {
 			s.log.Error("admit_resources: update product failed",
 				zap.String("name", resource.Metadata.Name), zap.Error(uerr))
+		} else if categoryRefChanged {
+			s.publishProductEvent(eventbus.Modified, existing)
 		}
 	}
 }

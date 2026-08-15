@@ -486,6 +486,14 @@ type ComplexityRoot struct {
 		Resolved            func(childComplexity int) int
 	}
 
+	ProductWatchEvent struct {
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		Product         func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Type            func(childComplexity int) int
+	}
+
 	PublishCatalogPayload struct {
 		CatalogVersion func(childComplexity int) int
 	}
@@ -623,6 +631,7 @@ type ComplexityRoot struct {
 
 	Subscription struct {
 		WatchCategories func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchProducts   func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchResources  func(childComplexity int, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 	}
 
@@ -2640,6 +2649,41 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ProductVariantStatus.Resolved(childComplexity), true
 
+	case "ProductWatchEvent.name":
+		if e.ComplexityRoot.ProductWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductWatchEvent.Name(childComplexity), true
+
+	case "ProductWatchEvent.namespace":
+		if e.ComplexityRoot.ProductWatchEvent.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductWatchEvent.Namespace(childComplexity), true
+
+	case "ProductWatchEvent.product":
+		if e.ComplexityRoot.ProductWatchEvent.Product == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductWatchEvent.Product(childComplexity), true
+
+	case "ProductWatchEvent.resourceVersion":
+		if e.ComplexityRoot.ProductWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductWatchEvent.ResourceVersion(childComplexity), true
+
+	case "ProductWatchEvent.type":
+		if e.ComplexityRoot.ProductWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductWatchEvent.Type(childComplexity), true
+
 	case "PublishCatalogPayload.catalogVersion":
 		if e.ComplexityRoot.PublishCatalogPayload.CatalogVersion == nil {
 			break
@@ -3225,6 +3269,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.WatchCategories(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
+	case "Subscription.watchProducts":
+		if e.ComplexityRoot.Subscription.WatchProducts == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchProducts_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchProducts(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
 
 	case "Subscription.watchResources":
 		if e.ComplexityRoot.Subscription.WatchResources == nil {
@@ -4781,6 +4837,37 @@ extend type Query {
     last: Int
     before: String
   ): ProductConnection!
+}
+
+extend type Subscription {
+  """
+  Dedicated, compile-time-typed watch entry point for Product. Same
+  list-then-watch/resourceVersion/expiry semantics as watchCategories
+  (spec 040), scoped to this kind. Callers obtain the initial list via
+  the existing ` + "`" + `products` + "`" + ` query.
+  """
+  watchProducts(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): ProductWatchEvent!
+}
+
+"""
+Product-specific watch event. Carries the same envelope as
+CategoryWatchEvent but with a strongly-typed ` + "`" + `product` + "`" + ` field instead
+of a JSON-boxed ` + "`" + `object` + "`" + `, so core-kind consumers get full type safety.
+"""
+type ProductWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+
+  """
+  Full Product resource for ADDED/MODIFIED. Null for DELETED/BOOKMARK.
+  """
+  product: Product
 }
 
 """
@@ -6851,6 +6938,22 @@ func (ec *executionContext) childFields_ProductVariantStatus(ctx context.Context
 		return ec.fieldContext_ProductVariantStatus_resolved(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ProductVariantStatus", field.Name)
+}
+
+func (ec *executionContext) childFields_ProductWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_ProductWatchEvent_type(ctx, field)
+	case "namespace":
+		return ec.fieldContext_ProductWatchEvent_namespace(ctx, field)
+	case "name":
+		return ec.fieldContext_ProductWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_ProductWatchEvent_resourceVersion(ctx, field)
+	case "product":
+		return ec.fieldContext_ProductWatchEvent_product(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProductWatchEvent", field.Name)
 }
 
 func (ec *executionContext) childFields_PublishCatalogPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

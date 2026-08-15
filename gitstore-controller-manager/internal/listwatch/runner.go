@@ -51,13 +51,21 @@ const (
 // single dedicated goroutine — this is what satisfies "at most one active
 // list-or-watch loop per kind" without any additional locking.
 type Runner[T any] struct {
-	Kind         string
-	ListWatcher  ListWatcher[T]
-	Cache        *cache.Cache[T] // mutable — Runner is the sole writer (Set/Delete/MarkSynced)
-	Store        checkpoint.Store
-	Enqueue      func(types.WorkItemKey) error
-	KeyFunc      func(T) types.WorkItemKey
-	RevisionFunc func(T) string // extracts resourceVersion from an object, for expiry-recovery diffing
+	Kind        string
+	ListWatcher ListWatcher[T]
+	Cache       *cache.Cache[T] // mutable — Runner is the sole writer (Set/Delete/MarkSynced)
+	Store       checkpoint.Store
+	Enqueue     func(types.WorkItemKey) error
+	// ReplayEnqueue receives related replay keys restored from the checkpoint.
+	// It is used when this runner observes changes whose durable work belongs to
+	// another controller kind.
+	ReplayEnqueue func(types.WorkItemKey) error
+	KeyFunc       func(T) types.WorkItemKey
+	RevisionFunc  func(T) string // extracts resourceVersion from an object, for expiry-recovery diffing
+	// DisableReplay prevents this runner from tracking its own keys. This is
+	// useful for observer-only runners whose durable work is represented by
+	// RelatedReplayKeys instead.
+	DisableReplay bool
 
 	FlushIntervalEvents int           // events between checkpoint persists; default 100
 	MaxBackoff          time.Duration // cap on reconnect backoff; default 30s
@@ -75,6 +83,7 @@ type Runner[T any] struct {
 	checkpointDirty   bool
 	checkpointVersion uint64
 	replayKeys        map[types.WorkItemKey]struct{}
+	relatedReplayKeys map[types.WorkItemKey]struct{}
 }
 
 // Run blocks until ctx is cancelled or an unrecoverable error occurs.
@@ -140,19 +149,27 @@ func (r *Runner[T]) restoreCheckpoint(rec checkpoint.Record) error {
 	}
 
 	replayKeys := make(map[types.WorkItemKey]struct{}, len(rec.ReplayKeys))
+	relatedReplayKeys := make(map[types.WorkItemKey]struct{}, len(rec.RelatedReplayKeys))
+	r.replayMu.Lock()
+	r.replayKeys = replayKeys
+	r.relatedReplayKeys = relatedReplayKeys
+	r.replayMu.Unlock()
 	for _, item := range items {
 		r.Cache.Set(r.KeyFunc(item), item)
 	}
 	for _, key := range rec.ReplayKeys {
 		replayKeys[key] = struct{}{}
 	}
-	r.replayMu.Lock()
-	r.replayKeys = replayKeys
-	r.replayMu.Unlock()
+	for _, key := range rec.RelatedReplayKeys {
+		relatedReplayKeys[key] = struct{}{}
+	}
 	r.currentRV = rec.ResourceVersion
 	r.Cache.MarkSynced()
 	for _, key := range rec.ReplayKeys {
 		r.enqueue(key)
+	}
+	for _, key := range rec.RelatedReplayKeys {
+		r.enqueueRelated(key)
 	}
 	return nil
 }
@@ -171,7 +188,9 @@ func (r *Runner[T]) applyListSnapshot(listResp ListResponse[T]) map[types.WorkIt
 		key := r.KeyFunc(item)
 		r.Cache.Set(key, item)
 		pendingDedup[key] = r.RevisionFunc(item)
-		replayKeys[key] = struct{}{}
+		if !r.DisableReplay {
+			replayKeys[key] = struct{}{}
+		}
 	}
 	r.replayMu.Lock()
 	r.replayKeys = replayKeys
@@ -469,15 +488,19 @@ func (r *Runner[T]) checkpointRecord() (checkpoint.Record, uint64, error) {
 		replayKeys = append(replayKeys, key)
 	}
 	return checkpoint.Record{
-		Kind:            r.Kind,
-		ResourceVersion: r.currentRV,
-		Snapshot:        snapshot,
-		ReplayKeys:      replayKeys,
-		WrittenAt:       time.Now(),
+		Kind:              r.Kind,
+		ResourceVersion:   r.currentRV,
+		Snapshot:          snapshot,
+		ReplayKeys:        replayKeys,
+		RelatedReplayKeys: r.relatedReplayKeyListLocked(),
+		WrittenAt:         time.Now(),
 	}, version, nil
 }
 
 func (r *Runner[T]) rememberForReplay(key types.WorkItemKey) {
+	if r.DisableReplay {
+		return
+	}
 	r.replayMu.Lock()
 	defer r.replayMu.Unlock()
 	if r.replayKeys == nil {
@@ -486,6 +509,44 @@ func (r *Runner[T]) rememberForReplay(key types.WorkItemKey) {
 	r.replayKeys[key] = struct{}{}
 	r.checkpointDirty = true
 	r.checkpointVersion++
+}
+
+// RememberRelatedReplay records work owned by another controller kind. The
+// caller should invoke this before enqueueing the related key so a checkpoint
+// written for the observed event contains the dependent work as well.
+func (r *Runner[T]) RememberRelatedReplay(key types.WorkItemKey) {
+	r.replayMu.Lock()
+	defer r.replayMu.Unlock()
+	if r.relatedReplayKeys == nil {
+		r.relatedReplayKeys = make(map[types.WorkItemKey]struct{})
+	}
+	if _, exists := r.relatedReplayKeys[key]; exists {
+		return
+	}
+	r.relatedReplayKeys[key] = struct{}{}
+	r.checkpointDirty = true
+	r.checkpointVersion++
+}
+
+// MarkRelatedCompleted removes related work after its owning controller kind
+// has reconciled successfully.
+func (r *Runner[T]) MarkRelatedCompleted(key types.WorkItemKey) {
+	r.replayMu.Lock()
+	defer r.replayMu.Unlock()
+	if _, exists := r.relatedReplayKeys[key]; !exists {
+		return
+	}
+	delete(r.relatedReplayKeys, key)
+	r.checkpointDirty = true
+	r.checkpointVersion++
+}
+
+func (r *Runner[T]) relatedReplayKeyListLocked() []types.WorkItemKey {
+	keys := make([]types.WorkItemKey, 0, len(r.relatedReplayKeys))
+	for key := range r.relatedReplayKeys {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 // MarkCompleted removes a successfully reconciled key from the durable replay
@@ -526,6 +587,20 @@ func (r *Runner[T]) clearCheckpointDirty(version uint64) {
 func (r *Runner[T]) enqueue(key types.WorkItemKey) {
 	if err := r.Enqueue(key); err != nil {
 		r.log().Warn("enqueue failed",
+			zap.String("kind", key.Kind),
+			zap.String("namespace", key.Namespace),
+			zap.String("name", key.Name),
+			zap.Error(err),
+		)
+	}
+}
+
+func (r *Runner[T]) enqueueRelated(key types.WorkItemKey) {
+	if r.ReplayEnqueue == nil {
+		return
+	}
+	if err := r.ReplayEnqueue(key); err != nil {
+		r.log().Warn("related replay enqueue failed",
 			zap.String("kind", key.Kind),
 			zap.String("namespace", key.Namespace),
 			zap.String("name", key.Name),

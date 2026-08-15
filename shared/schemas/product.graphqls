@@ -17,6 +17,37 @@ extend type Query {
   ): ProductConnection!
 }
 
+extend type Subscription {
+  """
+  Dedicated, compile-time-typed watch entry point for Product. Same
+  list-then-watch/resourceVersion/expiry semantics as watchCategories
+  (spec 040), scoped to this kind. Callers obtain the initial list via
+  the existing `products` query.
+  """
+  watchProducts(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): ProductWatchEvent!
+}
+
+"""
+Product-specific watch event. Carries the same envelope as
+CategoryWatchEvent but with a strongly-typed `product` field instead
+of a JSON-boxed `object`, so core-kind consumers get full type safety.
+"""
+type ProductWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+
+  """
+  Full Product resource for ADDED/MODIFIED. Null for DELETED/BOOKMARK.
+  """
+  product: Product
+}
+
 """
 Kubernetes-style product resource. All fields are read from the datastore,
 which holds the fully hydrated view populated by the post-push ingest pipeline.

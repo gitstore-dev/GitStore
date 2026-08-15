@@ -7,12 +7,17 @@ package resolver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
+	"go.uber.org/zap"
 )
+
+const productWatchBootstrapCursor = "__product_watch_bootstrap__"
 
 // Product is the resolver for the product field.
 func (r *queryResolver) Product(ctx context.Context, by model.ProductBy) (*model.Product, error) {
@@ -46,6 +51,73 @@ func (r *queryResolver) Products(ctx context.Context, namespace string, first *i
 		return nil, fmt.Errorf("failed to get products: %w", err)
 	}
 	return BuildProductConnection(result), nil
+}
+
+// WatchProducts is the resolver for the watchProducts field.
+func (r *subscriptionResolver) WatchProducts(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.ProductWatchEvent, error) {
+	if r.eventBus == nil {
+		return nil, gqlerror.Errorf("watch subscriptions are not available")
+	}
+	rv := ""
+	if resourceVersion != nil {
+		rv = *resourceVersion
+	}
+	// The controller uses this private token to request a bookmark before its
+	// initial Product snapshot. Numeric cursors, including "0", remain real
+	// lower bounds for event-bus replay.
+	bootstrap := rv == productWatchBootstrapCursor
+	if bootstrap {
+		rv = ""
+	}
+	events, unsubscribe, startCursor, err := r.eventBus.SubscribeWithCursor("Product", rv)
+	if err != nil {
+		if errors.Is(err, eventbus.ErrWatchExpired) {
+			r.logger.Warn("watch cursor expired; controller must re-list",
+				zap.String("kind", "Product"),
+				zap.String("resource_version", rv))
+			return nil, &gqlerror.Error{
+				Message:    "watch cursor expired; re-list and resume from a fresh cursor",
+				Extensions: map[string]any{"code": "WATCH_EXPIRED"},
+			}
+		}
+		return nil, gqlerror.Errorf("watch subscription failed: %v", err)
+	}
+	r.logger.Debug("watch subscription opened",
+		zap.String("kind", "Product"),
+		zap.Bool("resumed", rv != ""))
+
+	out := make(chan *model.ProductWatchEvent, 16)
+	go func() {
+		defer close(out)
+		defer unsubscribe()
+		if bootstrap {
+			bookmark := toProductWatchEvent(eventbus.Event{Kind: "Product", Cursor: startCursor})
+			select {
+			case out <- bookmark:
+			case <-ctx.Done():
+				return
+			}
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				if !productEventMatchesFilters(ev, namespace) || !productEventMatchesSelector(ev, selector) {
+					continue
+				}
+				select {
+				case out <- toProductWatchEvent(ev):
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }
 
 // Product returns generated.ProductResolver implementation.

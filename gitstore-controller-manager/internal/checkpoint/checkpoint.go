@@ -22,7 +22,11 @@ type Record struct {
 	ResourceVersion string
 	Snapshot        json.RawMessage
 	ReplayKeys      []types.WorkItemKey
-	WrittenAt       time.Time
+	// RelatedReplayKeys preserves work triggered in another controller kind
+	// before that work has successfully reconciled. They are intentionally
+	// separate from ReplayKeys, whose keys must match Kind.
+	RelatedReplayKeys []types.WorkItemKey
+	WrittenAt         time.Time
 }
 
 // Store is the storage abstraction responsible for reading and writing

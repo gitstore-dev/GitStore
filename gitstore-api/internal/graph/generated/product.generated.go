@@ -1544,6 +1544,130 @@ func (ec *executionContext) fieldContext_ProductStatus_resolved(_ context.Contex
 	return fc, nil
 }
 
+func (ec *executionContext) _ProductWatchEvent_type(ctx context.Context, field graphql.CollectedField, obj *model.ProductWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProductWatchEvent_type(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Type, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.WatchEventType) graphql.Marshaler {
+			return ec.marshalNWatchEventType2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐWatchEventType(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProductWatchEvent_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProductWatchEvent", field, false, false, errors.New("field of type WatchEventType does not have child fields"))
+}
+
+func (ec *executionContext) _ProductWatchEvent_namespace(ctx context.Context, field graphql.CollectedField, obj *model.ProductWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProductWatchEvent_namespace(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Namespace, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ProductWatchEvent_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProductWatchEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProductWatchEvent_name(ctx context.Context, field graphql.CollectedField, obj *model.ProductWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProductWatchEvent_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProductWatchEvent_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProductWatchEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProductWatchEvent_resourceVersion(ctx context.Context, field graphql.CollectedField, obj *model.ProductWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProductWatchEvent_resourceVersion(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ResourceVersion, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProductWatchEvent_resourceVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProductWatchEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ProductWatchEvent_product(ctx context.Context, field graphql.CollectedField, obj *model.ProductWatchEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProductWatchEvent_product(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Product, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Product) graphql.Marshaler {
+			return ec.marshalOProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ProductWatchEvent_product(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ProductWatchEvent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Product(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ResolvedCategoryDefinition_name(ctx context.Context, field graphql.CollectedField, obj *model.ResolvedCategoryDefinition) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2632,6 +2756,59 @@ func (ec *executionContext) _ProductStatus(ctx context.Context, sel ast.Selectio
 	return out
 }
 
+var productWatchEventImplementors = []string{"ProductWatchEvent"}
+
+func (ec *executionContext) _ProductWatchEvent(ctx context.Context, sel ast.SelectionSet, obj *model.ProductWatchEvent) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, productWatchEventImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ProductWatchEvent")
+		case "type":
+			out.Values[i] = ec._ProductWatchEvent_type(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "namespace":
+			out.Values[i] = ec._ProductWatchEvent_namespace(ctx, field, obj)
+		case "name":
+			out.Values[i] = ec._ProductWatchEvent_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "resourceVersion":
+			out.Values[i] = ec._ProductWatchEvent_resourceVersion(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "product":
+			out.Values[i] = ec._ProductWatchEvent_product(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var resolvedCategoryDefinitionImplementors = []string{"ResolvedCategoryDefinition"}
 
 func (ec *executionContext) _ResolvedCategoryDefinition(ctx context.Context, sel ast.SelectionSet, obj *model.ResolvedCategoryDefinition) graphql.Marshaler {
@@ -3084,6 +3261,20 @@ func (ec *executionContext) marshalNProductSpec2ᚖgithubᚗcomᚋgitstoreᚑdev
 		return graphql.Null
 	}
 	return ec._ProductSpec(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNProductWatchEvent2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductWatchEvent(ctx context.Context, sel ast.SelectionSet, v model.ProductWatchEvent) graphql.Marshaler {
+	return ec._ProductWatchEvent(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNProductWatchEvent2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductWatchEvent(ctx context.Context, sel ast.SelectionSet, v *model.ProductWatchEvent) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ProductWatchEvent(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNResolvedFileDefinition2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResolvedFileDefinitionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ResolvedFileDefinition) graphql.Marshaler {
