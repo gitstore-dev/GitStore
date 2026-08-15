@@ -96,7 +96,7 @@ See §7 for the full side-by-side comparison; the summary judgment is that **B a
 | Query count / read amplification | Good — 1 query/page | Good — 1 query/page (once populated) | Fair — N+ queries, still materializes full intersection for multi-term/negative selectors | Fair — 1+ queries/round, multiple rounds under low authz density |
 | Partition/hotspot risk | Poor — unbounded partition per broad collection, no mitigation | Poor — same, `collection_uid` partition | Poor — value-partitioned, popular label values hot | Poor — same `collection_uid` partition, explicitly flagged unmitigated |
 | Pagination correctness | Good — standard keyset, no offset (see §11 for a bulk-rewrite caveat) | Good — keyset, but membership-not-current | Fair — intersection breaks true cursor semantics for multi-term | Good for membership; short-page risk under authz filtering |
-| Cursor stability | Good — reuses `EncodeKeysetCursor`/`DecodeKeysetCursor` unchanged | Good — same | Good | Good |
+| Cursor stability | Good — versioned cursor binds kind, scope, namespace, collection, and keyset position | Good — same | Fair — intersection still needs a bound cursor contract | Fair — same plus bounded over-read state |
 | Write amplification | Fair — bounded by collections/products per namespace | Fair — similar, but async so latency hidden from writer | Poor — 2K writes per product, diff-on-write required | Poor — same as A plus authz has no write cost but membership same |
 | Staleness behavior | Good — synchronous, single-request window (but see §13 for a backfill-window caveat) | Poor — queue/backoff-dependent, unbounded in principle | Fair — synchronous but no controller to host diffing, so inline too | Poor — controller-reconcile-dependent |
 | Rebuild/backfill complexity | Fair — derivable, needs one-shot job, no drift detection built in | Poor — no rebuild precedent, no drift detection | Fair — full scan re-derivation, same gap | Fair — `resource_version` per row aids diffing, but still needs new job |
@@ -113,13 +113,18 @@ See §7 for the full side-by-side comparison; the summary judgment is that **B a
 
 B and D are rejected outright: both require standing up controllers this codebase deliberately does not have. Spec 042 is direct precedent — it added a Product *cache* but explicitly declined to register a Product *reconciler* (`cmd/controller/main.go:191-196`), and a Collection controller has even less precedent (no `internal/collection` package exists at all, no many-to-many derived index has ever been built here). C is rejected because it does not eliminate full-namespace scans for negative-only selectors, which the schema explicitly permits, and its write cost (2K writes per product) with no controller to host the diff is strictly worse than A under the same "no controller" constraint.
 
-A wins because it needs zero new controller-manager work, reuses every existing convention (`(CreationTimestamp DESC, UID DESC)` clustering, `EncodeKeysetCursor`, `PageResult[T]`), and turns an O(namespace) scan-per-request into O(1) partition reads at the one-time cost of write-path hooks in code that already computes derived fields (spec 034's admission functions).
+A wins because it needs zero new controller-manager work, reuses the existing clustering and `PageResult[T]` conventions, and turns an O(namespace) scan-per-request into O(1) partition reads at the one-time cost of write-path hooks in code that already computes derived fields (spec 034's admission functions).
 
-This recommendation is adopted **with amendments** relative to the original Candidate A writeup, required by the three adversarial verification passes:
+This recommendation is adopted **with amendments** relative to the original Candidate A writeup, required by the adversarial verification and Codex review:
 
 - **§11** amends the bulk `ReplaceCollectionMembership` contract to fix a real cursor-instability bug found in verification.
 - **§12** amends `memberCount` and the migration-fallback path to close a real information-leak the auth-leak verifier constructed concretely.
 - **§13** amends the backfill/bootstrap story to name and bound (rather than silently absorb) the under-count window the staleness verifier found.
+- **§12** makes the validated, field-local OPA `DecisionScope` the source of visibility rather than deriving visibility from the principal.
+- **§9/§10/§16** define a complete Product read projection in membership rows, avoiding an N+1 hydration path.
+- **§13** replaces the mutable Collection status condition as the authoritative backfill gate with a durable projection-state record.
+- **§16** carries immutable Product creation timestamps through retry-safe removal operations.
+- **§11/§16** replace the generic cursor with a versioned cursor bound to resource kind, visibility, namespace, and collection.
 
 None of these amendments changes the overall recommendation; they close gaps in how it must be built.
 
@@ -132,7 +137,12 @@ CREATE TABLE IF NOT EXISTS collection_membership_by_collection (
     product_created_at   timestamp,   -- the PRODUCT's own immutable CreationTimestamp, NOT a rewrite/index timestamp
     product_uid           uuid,
     product_name          text,
-    resource_version       text,       -- product's resource_version at last evaluation, for staleness detection
+    repository_id         uuid,
+    product_metadata      text,       -- serialized Product fields required by the GraphQL node
+    product_spec          text,
+    product_status        text,
+    resource_version      text,       -- product's resource_version at last evaluation, for staleness detection
+    projection_version    text,
     PRIMARY KEY ((namespace, collection_uid), product_created_at, product_uid)
 ) WITH CLUSTERING ORDER BY (product_created_at DESC, product_uid DESC);
 
@@ -140,7 +150,19 @@ CREATE TABLE IF NOT EXISTS collection_membership_by_product (
     namespace       text,
     product_uid     uuid,
     collection_uid   uuid,
+    product_created_at timestamp,     -- retained so removal is possible after Product deletion
     PRIMARY KEY ((namespace, product_uid), collection_uid)
+);
+
+CREATE TABLE IF NOT EXISTS collection_membership_state (
+    namespace             text,
+    collection_uid        uuid,
+    collection_generation bigint,
+    state                 text,       -- UNINITIALIZED, BACKFILLING, READY, FAILED
+    projection_version    text,
+    completed_at           timestamp,
+    last_error             text,
+    PRIMARY KEY ((namespace), collection_uid)
 );
 ```
 
@@ -149,13 +171,17 @@ Design notes:
 - Partition key includes `namespace` on both tables (unlike the original candidate writeups' UID-only reverse-index shape), giving the same structural namespace isolation every other table in `001_initial_schema.cql` has, and giving `HasCollectionMembership` and any future public-scope variant a namespace-scoped partition to query.
 - `product_created_at` **must** be the product's own `CreationTimestamp`, never a write-time/rewrite timestamp — this is the fix for the pagination bug in §11. It is denormalized from the product row at every write (initial insert, incremental upsert, and bulk rewrite alike) rather than being generated fresh.
 - `resource_version` on the membership row is the product's `resource_version` at the time this membership row was last written — the basis for backfill-completeness / drift detection, not a version of the membership row itself.
-- A visibility-scoped twin table, `collection_membership_public_by_collection` (same shape, populated only for publicly visible products), is a **named, reserved-but-not-yet-built** part of this schema — see §12 for why it must exist before 022 ships, not after.
+- A visibility-scoped twin table, `collection_membership_public_by_collection`, has the same complete Product projection shape and is populated only for publicly visible products. Its reverse table is `collection_membership_public_by_product`. These tables must exist before 022 enforcement ships.
+- The membership state table is authoritative for read readiness. `Collection.status.conditions` may mirror the state for observability, but Collection admission must not be able to erase the durable gate.
+- The embedded Product fields are a rebuildable read projection, not a second Product authority. Product admission, update, and publication transitions must update them.
 
 ## 10. Example CQL queries
 
 Forward page (`first`/`after`):
 ```cql
-SELECT product_uid, product_name, product_created_at, resource_version
+SELECT product_uid, product_name, product_created_at, repository_id,
+       product_metadata, product_spec, product_status,
+       resource_version, projection_version
 FROM collection_membership_by_collection
 WHERE namespace = ? AND collection_uid = ?
   AND (product_created_at, product_uid) < (?, ?)
@@ -165,7 +191,9 @@ LIMIT 21;  -- first + 1, to compute hasNextPage
 
 Backward page (`last`/`before`), reversing the inequality and re-reversing the result in application code, per `buildPaginatedSelect`'s existing convention (`scylla/pagination.go:92-104`):
 ```cql
-SELECT product_uid, product_name, product_created_at, resource_version
+SELECT product_uid, product_name, product_created_at, repository_id,
+       product_metadata, product_spec, product_status,
+       resource_version, projection_version
 FROM collection_membership_by_collection
 WHERE namespace = ? AND collection_uid = ?
   AND (product_created_at, product_uid) > (?, ?)
@@ -189,11 +217,14 @@ WHERE namespace = ? AND product_uid = ?;
 Incremental write (single product, single collection, on label-driven match-state flip):
 ```cql
 INSERT INTO collection_membership_by_collection
-  (namespace, collection_uid, product_created_at, product_uid, product_name, resource_version)
-VALUES (?, ?, ?, ?, ?, ?);
+  (namespace, collection_uid, product_created_at, product_uid, product_name,
+   repository_id, product_metadata, product_spec, product_status,
+   resource_version, projection_version)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
-INSERT INTO collection_membership_by_product (namespace, product_uid, collection_uid)
-VALUES (?, ?, ?);
+INSERT INTO collection_membership_by_product
+  (namespace, product_uid, collection_uid, product_created_at)
+VALUES (?, ?, ?, ?);
 ```
 (and the corresponding `DELETE ... WHERE namespace = ? AND collection_uid = ? AND product_created_at = ? AND product_uid = ?` / reverse-table delete for products that no longer match.)
 
@@ -201,7 +232,9 @@ Bulk rewrite (Collection selector change) is deliberately **not** expressed as a
 
 ## 11. Pagination and cursor semantics
 
-Cursor format, ordering, and windowing are unchanged from every other Relay connection in this codebase: `EncodeKeysetCursor(product_created_at, product_uid)` / `DecodeKeysetCursor` (`keyset_cursor.go:23-51`), `(CreationTimestamp DESC, UID DESC)` ordering, `limit+1` read to compute `hasNextPage`, fed into the existing generic `PageResult[T]`-based connection builder (the one `Category`/`Namespace` already use) rather than `BuildProductConnectionFromSlice`, which is retired for this path.
+Ordering and windowing retain the repository convention `(CreationTimestamp DESC, UID DESC)`, with a `limit+1` read to compute `hasNextPage`, fed into the existing generic `PageResult[T]`-based connection builder. The cursor itself is a versioned, scope-bound payload rather than the current generic `EncodeKeysetCursor` format.
+
+The collection-product cursor payload contains `version`, resource kind (`Product`), visibility (`PUBLIC` or `MANAGEMENT`), namespace, collection UID, product creation timestamp, and product UID. The resolver validates every bound value against the current field-local `DecisionScope` and request before issuing the CQL query. Cursors from another scope, collection, namespace, or resource kind are rejected; legacy unbound cursors are rejected once scoped reads are enabled. Base64 is only transport encoding; the implementation must use the application cursor-signing mechanism, or explicitly document authenticated opaque-cursor validation, so callers cannot forge scope fields.
 
 ### 11.1 The bulk-rewrite cursor-instability bug (confirmed by adversarial review) and its fix
 
@@ -228,7 +261,13 @@ This closes the bug at the contract level; §16 reflects the corrected method si
 
 ### 12.1 Where authorization is enforced (query-time projection selection, never post-hoc)
 
-`ListCollectionMembers(ctx, namespace, collectionUID, visibility, page)` resolves `visibility` from `auth.PrincipalFromContext(ctx)` (`auth/context.go:18-21`) and selects between `collection_membership_by_collection` (management scope) and `collection_membership_public_by_collection` (public scope) **before** building the paginated CQL query — exactly 022 §12.1-12.2's mandate, and exactly what rules out post-fetch filtering or the over-read/fill approach evaluated (and rejected) as Candidate D.
+`ListCollectionMembers(ctx, scope, page)` receives the field-local, middleware-validated `auth.DecisionScope`; it never derives visibility from `auth.PrincipalFromContext`. The API validates that the scope matches Product, the namespace, collection UID, and current GraphQL field path, then passes only the validated `PUBLIC` or `MANAGEMENT` visibility to the datastore. The datastore selects between `collection_membership_by_collection` and `collection_membership_public_by_collection` **before** building the paginated CQL query. Missing, duplicate, stale, or mismatched scopes fail closed with `FORBIDDEN`. This is exactly 022 §12.1-12.2's mandate and rules out post-fetch filtering or the over-read/fill approach evaluated as Candidate D.
+
+### 12.1.1 Complete Product page projection
+
+Membership rows contain the complete Product read projection needed by `BuildProductConnection`, rather than only a Product UID. A page therefore requires one bounded partition query and no per-edge Product lookup. The management projection contains the fields allowed for management visibility; the public projection contains only the fields allowed for public visibility.
+
+Product admission, Product updates, Product deletion, and future publication-state transitions update the affected projection rows. Each row carries the Product `resource_version` and a membership `projection_version`. A missing or stale row is not removed by a read-time filter, because that would reintroduce short pages and count mismatches. Instead, the affected collection remains non-`READY` until the projection is rebuilt, or a repair/backfill operation restores the row.
 
 ### 12.2 Finding 1 (confirmed): unscoped `memberCount` is a label-predicate oracle — closed by design amendment
 
@@ -248,7 +287,7 @@ This is **not fully resolved by this design** — it is listed as an explicit un
 
 ### 12.5 Axes checked and found sound
 
-- **Cursor forgery/replay**: `DecodeKeysetCursor` validates only the `"keyset"` tag, timestamp parseability, and id — it does not check row existence, so a forged cursor for a real-but-hidden product's `(timestamp, uid)` is indistinguishable from one for a non-existent tuple; no observable leak beyond Findings 1/3 above. (The cursor format not being visibility-bound, per 022 §12.2's stricter requirement, is a spec-compliance gap worth closing defensively but was not turned into an independent exploit.)
+- **Cursor forgery/replay**: the collection-product cursor is versioned and binds resource kind, visibility, namespace, collection UID, timestamp, and product UID. The resolver rejects malformed, legacy, cross-scope, cross-collection, and cross-kind cursors before querying. Base64 is not treated as authentication; the cursor uses the application's signing mechanism or an equivalent authenticated opaque-cursor mechanism.
 - **`hasNextPage`/short pages on the primary connection**: safe, provided the twin scope-specific tables are implemented and kept in sync as required by §16/§12.4 — pagination runs entirely inside one consistent, correctly-scoped table with no post-hoc filtering.
 - **Error messages**: `ErrNotFound` is reused undifferentiated for missing collection/product, matching 022 §13's mandate; no new differentiation introduced.
 - **Ordering**: uniform `(CreationTimestamp DESC, UID DESC)` regardless of which table is queried; no additional leakage beyond the inherent, unavoidable property of any filtered keyset list.
@@ -257,24 +296,24 @@ This is **not fully resolved by this design** — it is listed as an explicit un
 
 ### 13.1 Authoritative vs. derived data
 
-`Product.Labels` and `Collection.Spec.Selector` remain authoritative — unchanged, still the source data. `collection_membership_by_collection`/`collection_membership_by_product` (and their future public-scoped twins) are a fully rebuildable derived index: any drift can be repaired by re-running `catalog.MatchesLabels` (`catalog/selector.go:8-46`) against the authoritative tables. `Collection.status.resolved.memberCount`'s doc comment — "a cached hint; collection.products is authoritative" — is preserved, except "authoritative" now means "authoritative derived index," not "recomputed live every request," and (per §12.2) is scope-specific rather than a single value.
+`Product.Labels` and `Collection.Spec.Selector` remain authoritative — unchanged, still the source data. `collection_membership_by_collection`/`collection_membership_by_product` and their public-scoped counterparts are fully rebuildable derived indexes: any drift can be repaired by re-running `catalog.MatchesLabels` (`catalog/selector.go:8-46`) against the authoritative tables. `Collection.status.resolved.memberCount`'s doc comment — "a cached hint; collection.products is authoritative" — is preserved, except "authoritative" now means "authoritative derived index," not "recomputed live every request," and (per §12.2) is scope-specific rather than a single value.
 
 ### 13.2 Steady-state consistency
 
 Writes are synchronous, inside the same request as the triggering `CreateProduct`/`UpdateProduct`/`DeleteProduct`/`CreateCollection`/`UpdateCollection` call. No cross-partition transaction exists between the forward and reverse tables (ScyllaDB gives no such primitive), so a crash mid-write can desync them; this is an accepted, bounded risk (repaired by the same rebuild mechanism as backfill, §13.4), not eliminated.
 
-### 13.3 The backfill/bootstrap gap (confirmed by adversarial review) — named and bounded, not hand-waved
+### 13.3 The backfill/bootstrap gap — durable readiness state
 
-Adversarial review traced a concrete, previously-unnamed failure mode. On the day this design ships, every Collection/Product row that existed **before** deploy has zero membership rows, because admission hooks only fire on new writes. `HasCollectionMembership(collectionUID)` returning `false` correctly triggers a fallback to the live `ListProductsByLabelSelector` scan — this holds and is correct on literal deploy day, before any backfill job runs.
+On the day this design ships, every Collection/Product row that existed **before** deploy has zero membership rows because admission hooks only fire on new writes. The resolver therefore starts in the live-scan fallback until the durable membership state reaches `READY` for the current Collection generation.
 
-The gap is in the backfill job's transition window, not its absence. Since ScyllaDB gives no cross-partition, arbitrary-size atomic transaction (confirmed: no materialized view, no aggregate column anywhere in `001_initial_schema.cql`), a backfill job populating a collection with, say, 500 members necessarily writes those rows incrementally. Mid-backfill, for a collection currently at 1-of-500 written rows: `HasCollectionMembership(X)` returns **true** (a `LIMIT 1` existence check needs only one row), so the resolver switches off the live-scan fallback and reads the partially-populated table directly — returning a fully-formed, error-free 1-edge connection with `hasNextPage: false`. This is a **silent under-count, structurally indistinguishable from a genuine 1-member collection**, and it reproduces — inside Candidate A's own migration mechanism, narrowed from "permanent" to "a race window" — exactly the failure mode this design's own decision matrix used to reject Candidate B ("empty-vs-unmaterialized ambiguity"). `HasCollectionMembership`/`HasRepositories`/`HasCatalogResources`'s `LIMIT 1` semantics (designed for spec 041's precondition-check use case) cannot express "fully populated" vs. "partially populated" — repurposing an existence check as a migration-completeness signal is a category error, not a minor gap.
+Since ScyllaDB gives no cross-partition, arbitrary-size atomic transaction, a backfill populating a large collection necessarily writes rows incrementally. A partial projection must never be served: `HasCollectionMembership` remains a `LIMIT 1` existence check only, while `collection_membership_state.state` is the sole readiness signal. This closes the silent under-count window without treating row existence as proof of completeness.
 
-**Design amendments, adopted, to bound this window instead of leaving it open-ended:**
+**Design amendments, adopted, to make readiness durable and generation-safe:**
 
-1. **A per-collection backfill-completion marker is required**, not just a job that "populates all existing collections." Concretely: reuse the existing `CollectionStatus.observedGeneration`/`conditions` fields already present on the schema (`shared/schemas/collection.graphqls:215-235`, same shape as `CategoryTaxonomyStatus`) to record a condition such as `MembershipBackfilled: true` written atomically as the *last* step of that collection's backfill (after all rows are written), analogous to how `categorytaxonomy.Reconciler` only reports `Resolved` once its computation is complete. `HasCollectionMembership` continues to answer "is there at least one row" for the cheap common case, but the resolver's decision to trust the materialized table for a *given* collection is gated on this condition being present, not merely on row existence.
-2. Until that condition is set for a collection, `ListCollectionMembers` **must** continue to use the live-scan fallback for that specific collection, even if `HasCollectionMembership` would return `true` — closing the exact race window traced above.
-3. The backfill job itself (new, does not exist today, and this document does not claim otherwise) is scoped as: for each Collection lacking `MembershipBackfilled`, diff-write its full membership set (using the same diff discipline as §11's bulk-rewrite fix, not a blind delete+reinsert), then set the condition. This gives an automatable, testable completion signal instead of relying on operator judgment to know when the fallback branch can be safely deleted.
-4. `Collection.status.resolved.memberCount` during the backfill window reports whatever the (possibly partial) materialized table currently holds **only if** the fallback-gating condition from (2) is respected — i.e., during backfill, `memberCount` is sourced from the live scan just like `products` is, so the two never visibly disagree mid-migration. This directly addresses the adversarial finding that the original design's `memberCount` would "corroborate rather than flag the wrong answer" during the race.
+1. The authoritative gate is the durable `collection_membership_state` record, not `HasCollectionMembership` and not mutable Collection status. It records Collection generation, projection version, `UNINITIALIZED`/`BACKFILLING`/`READY`/`FAILED` state, completion time, and last error.
+2. The backfill job performs a diff-based rewrite using immutable Product timestamps and complete Product projections, then writes `READY` only after forward, reverse, and Product projection rows for the current Collection generation are complete.
+3. Until the current generation is `READY`, both products and counts use the existing live selector scan. Partial rows are never exposed as a complete connection. A selector update transitions the state to `BACKFILLING`; an interrupted or failed rewrite leaves the fallback active.
+4. Collection status may mirror the state for observability, but normal Collection admission must preserve or invalidate the durable state rather than erase it. 022 enforcement, visibility-specific projections, publication-transition triggers, scoped cursors, and removal of the fallback are one rollout gate.
 
 ### 13.4 Rebuild and drift detection going forward
 
@@ -294,62 +333,90 @@ Both tables mirror straightforwardly onto `go-memdb`: `map[uuid.UUID][]membershi
 
 New `Datastore` interface methods (`gitstore-api/internal/datastore/datastore.go`), alongside existing Product/Collection methods:
 
-- `ListCollectionMembers(ctx context.Context, namespace string, collectionUID uuid.UUID, visibility Visibility, page PageParams) (PageResult[*Product], error)` — primary read; replaces `ListProductsByLabelSelector` as the `Collection.Products` data source. `visibility` selects between the management and public-scoped tables (§12.1); required from day one, not deferred.
-- `CollectionMemberCount(ctx context.Context, namespace string, collectionUID uuid.UUID, visibility Visibility) (int, error)` — **new relative to the original recommendation**, added directly in response to §12.2's Finding 1: a scope-aware count, so `memberCount` can never be sourced from an unscoped table.
-- `ReplaceCollectionMembership(ctx context.Context, namespace string, collectionUID uuid.UUID, products []ProductRef) error` — Collection-selector-change trigger. **Signature changed from the original `productUIDs []uuid.UUID`** to carry each product's real `CreationTimestamp` (`ProductRef{UID, CreationTimestamp}`) and is specified as a diff against current partition contents, not a blind delete+reinsert — the §11.1 fix.
-- `UpsertCollectionMembership` / `RemoveCollectionMembership(ctx, namespace, collectionUID, productUID uuid.UUID) error` — incremental, Product-label-change trigger, diffed against `collection_membership_by_product`.
-- `HasCollectionMembership(ctx context.Context, namespace string, collectionUID uuid.UUID) (bool, error)` — cheap existence check, same "LIMIT 1, not a count" convention as `HasRepositories`/`HasCatalogResources`. Per §13.3, this is **not** sufficient on its own to gate the fallback-to-live-scan decision; it must be combined with the `MembershipBackfilled` condition check.
+- `ListCollectionMembers(ctx context.Context, scope CollectionProductReadScope, page PageParams) (PageResult[*Product], error)` — primary read; replaces `ListProductsByLabelSelector` as the `Collection.Products` data source. The scope contains the validated field-local `auth.DecisionScope`, namespace, and collection UID; only its validated visibility selects the physical projection (§12.1).
+- `CollectionMemberCount(ctx context.Context, scope CollectionProductReadScope) (int, error)` — **new relative to the original recommendation**, added directly in response to §12.2's Finding 1: a scope-aware count, so `memberCount` can never be sourced from an unscoped table.
+- `ReplaceCollectionMembership(ctx context.Context, namespace string, collectionUID uuid.UUID, products []ProductRef) error` — Collection-selector-change trigger. The diff carries each Product's immutable `CreationTimestamp`, and updates the complete Product projection without rewriting unaffected clustering keys.
+- `UpsertCollectionMembership` / `RemoveCollectionMembership(ctx context.Context, namespace string, collectionUID uuid.UUID, product ProductRef) error` — incremental Product-label/publication trigger. The same `ProductRef` is used for forward and reverse cleanup, including retries after canonical Product deletion.
+- `GetCollectionMembershipState(ctx context.Context, namespace string, collectionUID uuid.UUID) (CollectionMembershipState, error)` / `SetCollectionMembershipState(...) error` — durable generation-aware readiness state. Row existence is not a readiness signal.
+- `HasCollectionMembership(ctx context.Context, namespace string, collectionUID uuid.UUID) (bool, error)` — cheap existence check only; it must not gate the fallback.
 
-**Types:** reuse existing `PageParams`/`PageResult[T]`, `EncodeKeysetCursor`/`DecodeKeysetCursor` unchanged — no new cursor format.
+**Types:** reuse existing `PageParams`/`PageResult[T]`; add `ProductRef`, `CollectionProductReadScope`, `CollectionMembershipState`, and a versioned scope-bound collection-product cursor. The generic cursor remains valid for unrelated connections, but is not used for this scoped path.
+
+```go
+type ProductRef struct {
+    UID               uuid.UUID
+    CreationTimestamp time.Time
+}
+
+type CollectionProductReadScope struct {
+    DecisionScope auth.DecisionScope
+    Namespace     string
+    CollectionUID uuid.UUID
+}
+
+type CollectionMembershipState struct {
+    CollectionGeneration int64
+    ProjectionVersion    string
+    State                string // UNINITIALIZED, BACKFILLING, READY, FAILED
+    CompletedAt          *time.Time
+    LastError            string
+}
+```
 
 **Ordering guarantee:** `(CreationTimestamp DESC, UID DESC)`, enforced by both backends, fixing memdb's currently-unenforced sort (§2.1, §14).
 
-**Error behavior:** `ErrNotFound` for missing collection/product, `ErrConflict` for optimistic-concurrency membership writes (mirroring `ApplyCategoryTaxonomyStatusPatch`'s `ResourceVersion` check pattern, `datastore.go:83-115`).
+**Error behavior:** `ErrNotFound` for missing collection/product, `ErrConflict` for optimistic-concurrency membership writes, and `FORBIDDEN` for missing or mismatched field-local authorization scope. Cursor validation errors are returned before any datastore query.
 
 **Resolver change:** `collectionResolver.Products` (`collection.resolvers.go:20-55`) drops the `spec.Selector`/`ListProductsByLabelSelector` call and calls `r.service.ListCollectionMembers`, feeding the returned `PageResult[*Product]` into the existing generic connection builder Category/Namespace already use, retiring `BuildProductConnectionFromSlice` for this path. `Collection.status.resolved.memberCount` resolves via `CollectionMemberCount`, scope-aware and backfill-window-aware per §13.3(4).
 
 ## 17. Migration and rollout plan
 
 1. Ship the two Scylla tables (`collection_membership_by_collection`, `collection_membership_by_product`) plus the memdb equivalents, and the admission-path write hooks (incremental first, since it's the lower-risk path — bulk rewrite ships with the §11.1 diff logic from the start, never as a naive delete+reinsert).
-2. Ship `ListCollectionMembers`/`CollectionMemberCount` behind the `HasCollectionMembership` + `MembershipBackfilled`-condition gate described in §13.3; until a given collection's condition is set, both continue to use today's live scan, so behavior is unchanged for every not-yet-backfilled collection.
-3. Build and run the backfill job (diff-based per-collection rewrite, condition set only on completion, per §13.3(3)) as a one-shot operational task; monitor `MembershipBackfilled` coverage across all namespaces before proceeding.
-4. Once all collections report `MembershipBackfilled`, delete the fallback branch from the resolver — do not keep it as a permanent dual-source-of-truth.
-5. **Do not enable 022 enforcement for this path** (i.e., do not wire the `visibility` parameter to a real authz decision, and do not populate the public-scoped twin tables) until both (a) 022 itself ships, and (b) the visibility-transition trigger required by §12.4 is implemented — these are sequenced, not independent, per §12.3.
+2. Ship the durable membership-state table, complete Product projections, versioned scope-bound cursors, and `ListCollectionMembers`/`CollectionMemberCount` behind the generation-aware `READY` gate described in §13.3. Until a Collection generation is `READY`, both products and counts continue to use today's live scan.
+3. Build and run the backfill job (diff-based per-collection rewrite, complete projection hydration, state set to `READY` only on completion); monitor state coverage and failures across all namespaces.
+4. Ensure Collection selector updates invalidate readiness and that Product label, deletion, and publication transitions update both the forward and reverse projections with retry-safe `ProductRef` values.
+5. **Do not enable 022 enforcement for this path** until scope-aware reads consume validated `DecisionScope`, visibility-specific projections are complete, publication-transition triggers are implemented, scoped cursors are deployed, and durable readiness is observable. Only then may the fallback branch be removed.
 
 ## 18. Test strategy
 
 - **Unit**: `catalog.MatchesLabels` is already covered (`selector_test.go:16-107`); extend coverage to the diff functions (label-change diff, selector-change diff) with property-style tests asserting that unaffected members' `CreationTimestamp` is never rewritten across a bulk `ReplaceCollectionMembership` call (direct regression test for §11.1).
 - **Pagination correctness**: a test that pages a collection, performs a membership-preserving Collection selector edit mid-pagination (adding a redundant matchExpression that changes nothing), and asserts the next page still returns all originally-untouched members — this is the exact regression the adversarial pagination-correctness finding demonstrated as broken under the original signature.
 - **Leak regression**: a test asserting `CollectionMemberCount` under PUBLIC scope never exceeds the count of edges a PUBLIC-scoped `products` query would return for the same collection and selector, across `matchLabels`/`In`/`NotIn`/`Exists`/`DoesNotExist` selector shapes — direct regression for §12.2's Finding 1.
-- **Backfill-window regression**: a test that starts a fake partial backfill (writes 1-of-N rows, does not set `MembershipBackfilled`), and asserts `ListCollectionMembers`/`CollectionMemberCount` still return the live-scan result, not the partial materialized result — direct regression for §13.3.
+- **Backfill-window regression**: a test that starts a fake partial backfill (writes 1-of-N rows, leaves state `BACKFILLING`), and asserts `ListCollectionMembers`/`CollectionMemberCount` still return the live-scan result, not the partial materialized result — direct regression for §13.3.
 - **Dual-backend parity**: run the full `Collection.products` connection test suite against both memdb and Scylla backends, asserting identical ordering, cursor behavior, and count semantics — extending the existing pattern implied by the dual-implementation maintenance burden noted throughout the investigation.
 - **Cross-table consistency**: a test/tool that walks `collection_membership_by_collection` and `collection_membership_by_product` for a namespace and asserts they agree (every forward row has a matching reverse row and vice versa) — a minimal drift detector, given none exists elsewhere in the repo to reuse (§13.4).
+- **Decision scope**: a test where OPA grants or denies namespace visibility differently from identity-derived assumptions, plus missing, duplicate, stale, wrong-kind, wrong-namespace, and wrong-field-path scopes; all fail closed.
+- **Projection hydration**: a page returns complete Product nodes from one bounded membership query with no per-edge lookup; Product resource-version/projection-version changes are reflected after an update and stale rows trigger rebuild rather than read-time filtering.
+- **Durable readiness**: Collection admission cannot erase the membership state; selector updates invalidate the generation; `BACKFILLING` and `FAILED` use the live fallback; only `READY` serves materialized rows.
+- **Retry-safe removal**: Product deletion after the canonical Product row is gone still removes forward and reverse rows using the persisted creation timestamp and is idempotent.
+- **Scoped cursors**: reject legacy, malformed, cross-visibility, cross-collection, cross-namespace, and cross-kind cursors, while accepting valid forward and backward cursors for the same scope.
 
 ## 19. Risks and unresolved questions
 
 1. **Wide-partition/hotspot risk is unmitigated.** A single collection with a very broad selector (e.g., `Exists` on a common label) accumulates an unbounded number of clustering rows in one `(namespace, collection_uid)` partition. No sharding/bucketing scheme is designed here; mitigating this would require a synthetic bucket suffix on the partition key, which complicates cursor encoding and is deferred as a follow-up if any collection is observed approaching Scylla's practical per-partition row-count guidance.
 2. **Cross-table atomicity is not guaranteed.** `collection_membership_by_collection` and `collection_membership_by_product` are updated in the same logical operation but not atomically (no Scylla multi-partition transaction); a crash mid-write can desync them, recoverable only via the (not-yet-built) drift-detection/repair job in §13.4.
 3. **Visibility-transition trigger is a named gap, not a closed one (§12.4).** This document specifies that a Product's visibility/publish-state change must become a third membership-write trigger before 022 enforcement is turned on, but the concrete field and mechanics depend on 022's own not-yet-finalized design. Shipping this design's write-time hooks without that third trigger, then later enabling 022 without adding it, will reproduce Finding 3's leak exactly as described.
-4. **The backfill job and its completion signal do not exist yet.** §13.3 specifies the shape they must take (diff-based rewrite, `MembershipBackfilled` condition gating) but this document does not claim they are built; rollout (§17) is explicitly sequenced to prevent the ambiguity window from being silently absorbed.
-5. **Cursor format is not visibility-bound**, contrary to 022 §12.2's stricter requirement that a cursor encode enough scope information to prevent replay-across-scope probing. This was checked by adversarial review and not turned into an independent exploit given the other mitigations in §12, but it remains a spec-compliance gap relative to 022's letter, not just its spirit, and should be revisited when 022's cursor requirements are finalized.
-6. **`resource_version`-based drift detection (§13.4) is specified but not implemented.** No automated job exists today to detect or repair post-backfill drift; this is accepted as follow-up work, not a blocking gap for initial rollout, but should not be indefinitely deferred given the cross-table atomicity risk in item 2.
-7. **Scope of `CollectionMemberCount` beyond PUBLIC/MANAGEMENT.** If 022 eventually introduces finer-grained scopes than a binary PUBLIC/MANAGEMENT split, the two-table (management + public) design in §9/§12.1 would need to generalize; this document does not attempt to anticipate that and treats it as an explicit non-goal for this iteration.
+4. **The backfill job and its completion signal do not exist yet.** §13.3 specifies a durable generation-aware state record, diff-based rewrite, complete Product hydration, and `READY` only after full completion; rollout (§17) must prevent partial projections from being served.
+5. **Product projection maintenance adds write amplification.** Complete Product fields are duplicated in membership projections to avoid N+1 hydration. Product updates and publication transitions must update every affected projection row; projection versions and repair/backfill tooling are required to recover from partial writes.
+6. **Scoped cursor signing and DecisionScope plumbing do not exist yet.** The implementation must add them before 022 enforcement; the generic cursor and principal-derived visibility path are not valid substitutes.
+7. **`resource_version`-based drift detection (§13.4) is specified but not implemented.** No automated job exists today to detect or repair post-backfill drift; this is accepted as follow-up work, not a blocking gap for initial rollout, but should not be indefinitely deferred given the cross-table atomicity risk in item 2.
+8. **Scope of `CollectionMemberCount` beyond PUBLIC/MANAGEMENT.** If 022 eventually introduces finer-grained scopes than a binary PUBLIC/MANAGEMENT split, the two-table (management + public) design in §9/§12.1 would need to generalize; this document does not attempt to anticipate that and treats it as an explicit non-goal for this iteration.
 
 ## 20. Phased implementation plan
 
 **Phase 1 — Datastore foundation (no behavior change).**
-Add the two Scylla tables and memdb equivalents; add `Datastore` interface methods (`ListCollectionMembers`, `CollectionMemberCount`, `ReplaceCollectionMembership` with the §11.1 diff contract, `UpsertCollectionMembership`, `RemoveCollectionMembership`, `HasCollectionMembership`); implement admission-path write hooks for both backends. `Collection.products` and `status.resolved.memberCount` continue to use today's live-scan path — nothing reads the new tables yet.
+Add the Scylla tables and memdb equivalents; add `Datastore` interface methods (`ListCollectionMembers`, `CollectionMemberCount`, `ReplaceCollectionMembership` with the §11.1 diff contract, `UpsertCollectionMembership`, `RemoveCollectionMembership`, `GetCollectionMembershipState`, `SetCollectionMembershipState`, and `HasCollectionMembership`); implement admission-path write hooks for both backends. `Collection.products` and `status.resolved.memberCount` continue to use today's live-scan path — nothing reads the new tables yet.
 
-**Phase 2 — Read path cutover, gated by backfill condition.**
-Change `collectionResolver.Products` to call `ListCollectionMembers` and `CollectionMemberCount`, both gated per collection on the `MembershipBackfilled` condition (§13.3). Add the fallback-branch test (§18) proving live-scan behavior is unchanged for any not-yet-gated collection. No visibility/authz parameter is wired to a real decision yet — `visibility` defaults to "management" (today's ungated behavior) for every caller, matching current production behavior exactly.
+**Phase 2 — Read path cutover, gated by durable readiness.**
+Change `collectionResolver.Products` to consume the middleware-validated field-local `DecisionScope`, validate the versioned scope-bound cursor, and call `ListCollectionMembers` and `CollectionMemberCount`. Gate both reads on the generation-aware `collection_membership_state`; non-`READY` collections use the existing live scan. Add the fallback, scope-mismatch, hydration, and cursor-binding tests from §18.
 
 **Phase 3 — Backfill.**
-Build and run the one-shot backfill job (diff-based per-collection rewrite, condition set only on full completion). Monitor coverage; do not delete the fallback branch until 100% of collections across all namespaces report `MembershipBackfilled`.
+Build and run the one-shot backfill job with complete Product projection hydration and diff-based writes. Set durable state to `READY` only after the current Collection generation is complete; monitor coverage and failures.
 
 **Phase 4 — Fallback removal.**
 Delete the live-scan fallback branch and `BuildProductConnectionFromSlice`'s usage for this path entirely. `ListCollectionMembers`/`CollectionMemberCount` become the sole source of truth for `Collection.products`/`memberCount`.
 
 **Phase 5 — 022 integration (sequenced with 022's own rollout, not before).**
-Implement the public-scoped twin tables (`collection_membership_public_by_collection`, `collection_membership_public_by_product`), wire the visibility-transition trigger (§12.4/item 3 in §19), wire `visibility` to a real authz decision derived from `auth.PrincipalFromContext`, and only then enable enforcement — per §12.3's explicit sequencing requirement that this phase must not ship ahead of both 022 itself and the visibility-transition trigger.
+Implement the public-scoped twin tables (`collection_membership_public_by_collection`, `collection_membership_public_by_product`), wire publication-state transitions, consume the validated `DecisionScope` rather than deriving visibility from `PrincipalFromContext`, deploy authenticated scope-bound cursors, and only then enable enforcement.
 
 Relevant files referenced throughout: `gitstore-api/internal/graph/resolver/collection.resolvers.go:20-55`, `gitstore-api/internal/graph/resolver/pagination.go:14-266`, `gitstore-api/internal/datastore/memdb/backend.go:18-33,114-127,592-607,686,771`, `gitstore-api/internal/datastore/scylla/backend.go:793-816,1140-1159`, `gitstore-api/internal/datastore/scylla/migrations/001_initial_schema.cql`, `gitstore-api/internal/datastore/scylla/pagination.go:72-121`, `gitstore-api/internal/catalog/collection.go:16-36`, `gitstore-api/internal/catalog/selector.go:8-46`, `gitstore-api/internal/catalog/selector_test.go:16-107`, `gitstore-api/internal/datastore/datastore.go:83-127,134-212`, `gitstore-api/internal/middleware/security/graphql.go:39-42,46-122`, `gitstore-api/internal/auth/provider/rbaclocal/provider.go:52-92`, `gitstore-api/internal/eventbus/eventbus.go`, `gitstore-controller-manager/internal/categorytaxonomy/reconciler.go:87-190`, `gitstore-controller-manager/internal/categorytaxonomy/products.go:44-116`, `gitstore-controller-manager/cmd/controller/main.go:130-139,170-212`, `gitstore-controller-manager/internal/status/patch.go`, `shared/schemas/collection.graphqls:156-256`, `shared/schemas/category.graphqls:161-224`, `docs/implementation/022-opa-data-authorization.md` (§2-3, §7, §12-13).
