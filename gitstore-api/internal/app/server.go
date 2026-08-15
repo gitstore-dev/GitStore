@@ -361,6 +361,9 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 	default:
 		return nil, nil, nil, fmt.Errorf("unknown authz provider %q", cfg.Auth.AuthZ.Provider)
 	}
+	// DecisionLogger is the required middleware that keeps every AuthZ decision
+	// consistent with the pluggable auth architecture audit contract.
+	authzProvider = auth.NewDecisionLogger(authzProvider, log)
 
 	// Build UserDir provider.
 	userdirProvider := userdirnone.New()
