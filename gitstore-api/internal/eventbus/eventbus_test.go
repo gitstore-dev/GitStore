@@ -146,6 +146,31 @@ func TestSubscribe_EmptyCursorSkipsReplay(t *testing.T) {
 	require.Equal(t, "4", e.ResourceVersion)
 }
 
+func TestSubscribeWithCursor_ReturnsCursorAtRegistration(t *testing.T) {
+	bus := eventbus.New(10)
+	bus.Publish(eventbus.Event{Type: eventbus.Added, Kind: "Product", Name: "widget"})
+
+	events, unsubscribe, cursor, err := bus.SubscribeWithCursor("Product", "")
+	require.NoError(t, err)
+	defer unsubscribe()
+	require.Equal(t, "1", cursor)
+
+	bus.Publish(eventbus.Event{Type: eventbus.Modified, Kind: "Product", Name: "widget"})
+	require.Equal(t, "2", mustReceive(t, events).Cursor)
+}
+
+func TestSubscribe_ZeroCursorReplaysFromBeginning(t *testing.T) {
+	bus := eventbus.New(10)
+	bus.Publish(eventbus.Event{Type: eventbus.Added, Kind: "Product", Name: "a"})
+	bus.Publish(eventbus.Event{Type: eventbus.Added, Kind: "Product", Name: "b"})
+
+	events, unsubscribe, err := bus.Subscribe("Product", "0")
+	require.NoError(t, err)
+	defer unsubscribe()
+	require.Equal(t, "1", mustReceive(t, events).Cursor)
+	require.Equal(t, "2", mustReceive(t, events).Cursor)
+}
+
 func TestSubscribe_ExpiredCursorReturnsErrWatchExpired(t *testing.T) {
 	bus := eventbus.New(2) // small ring buffer to force eviction
 

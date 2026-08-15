@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -53,9 +54,23 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := registerCategoryTaxonomy(ctx, mgr, checkpointStore, cfg, log); err != nil {
+	var productRunnerMu sync.RWMutex
+	var productRunner *listwatch.Runner[categorytaxonomy.Product]
+	_, err = registerCategoryTaxonomy(ctx, mgr, checkpointStore, cfg, log, func(key types.WorkItemKey) {
+		productRunnerMu.RLock()
+		runner := productRunner
+		productRunnerMu.RUnlock()
+		if runner != nil {
+			runner.MarkRelatedCompleted(key)
+		}
+	})
+	if err != nil {
 		log.Fatal("failed to register CategoryTaxonomy reconciler", zap.Error(err))
 	}
+
+	productRunnerMu.Lock()
+	productRunner = registerProductWatch(ctx, mgr, checkpointStore, cfg, log)
+	productRunnerMu.Unlock()
 
 	addr := fmt.Sprintf(":%d", cfg.Controller.Port)
 	srv := &http.Server{
@@ -97,7 +112,7 @@ func buildMux(mgr *manager.Manager) http.Handler {
 // list-then-watch adapters (spec 040's client side, deferred to spec 039),
 // and the CategoryTaxonomy reconciler into mgr, then starts its
 // listwatch.Runner on a background goroutine. Per specs/039-category-taxonomy-reconciler/quickstart.md.
-func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger) error {
+func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, onRelatedSuccess func(types.WorkItemKey)) (*listwatch.Runner[categorytaxonomy.CategoryTaxonomy], error) {
 	client := graphqlclient.New(cfg.Controller.ApiURI, cfg.Controller.ApiToken)
 	listWatcher := listwatch.NewCategoryTaxonomyListWatcher(client)
 	statusClient := status.NewGraphQLStatusClient(client)
@@ -126,14 +141,19 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 	}
 
 	if err := mgr.Register(manager.ReconcilerRegistration{
-		Kind:           "CategoryTaxonomy",
-		Reconciler:     reconciler,
-		Cache:          catCache,
-		OnSuccess:      runner.MarkCompleted,
+		Kind:       "CategoryTaxonomy",
+		Reconciler: reconciler,
+		Cache:      catCache,
+		OnSuccess: func(key types.WorkItemKey) {
+			runner.MarkCompleted(key)
+			if onRelatedSuccess != nil {
+				onRelatedSuccess(key)
+			}
+		},
 		MaxAttempts:    cfg.Controller.DefaultMaxAttempts,
 		StallThreshold: cfg.Controller.DefaultStallThreshold,
 	}); err != nil {
-		return fmt.Errorf("register CategoryTaxonomy: %w", err)
+		return nil, fmt.Errorf("register CategoryTaxonomy: %w", err)
 	}
 	// A child's membership contributes to its parent's ChildCount. Requeue both
 	// sides of a reparent operation, and the parent on add/delete, so counts do
@@ -162,5 +182,62 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 		}
 	}()
 
-	return nil
+	return runner, nil
+}
+
+// registerProductWatch wires a Product list-then-watch loop into a
+// dedicated Runner[Product], without registering "Product" as a reconciled
+// kind — Product is observed only to drive CategoryTaxonomy enqueues
+// (research.md R1, spec 042). Its cache event handlers enqueue the
+// already-registered "CategoryTaxonomy" kind via mgr.Enqueue whenever a
+// Product's categoryRef appears, disappears, or changes.
+func registerProductWatch(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger) *listwatch.Runner[categorytaxonomy.Product] {
+	client := graphqlclient.New(cfg.Controller.ApiURI, cfg.Controller.ApiToken)
+	listWatcher := listwatch.NewProductListWatcher(client)
+
+	productCache := cache.New[categorytaxonomy.Product]()
+	var runner *listwatch.Runner[categorytaxonomy.Product]
+	enqueueCategory := func(namespace, categoryName string) {
+		if categoryName == "" {
+			return
+		}
+		key := types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: namespace, Name: categoryName}
+		runner.RememberRelatedReplay(key)
+		_ = mgr.Enqueue(key)
+	}
+
+	runner = &listwatch.Runner[categorytaxonomy.Product]{
+		Kind:        "Product",
+		ListWatcher: listWatcher,
+		Cache:       productCache,
+		Store:       checkpointStore,
+		Enqueue: func(types.WorkItemKey) error {
+			// Product has no registered Reconciler/work queue of its own
+			// (research.md R1) — the Runner's own replay-dedup Enqueue hook
+			// is therefore a no-op; the real side effect is the cache event
+			// handler above, driven by Cache.Set/Delete, not by this hook.
+			return nil
+		},
+		ReplayEnqueue: func(key types.WorkItemKey) error {
+			return mgr.Enqueue(key)
+		},
+		DisableReplay: true,
+		KeyFunc: func(p categorytaxonomy.Product) types.WorkItemKey {
+			return types.WorkItemKey{Kind: "Product", Namespace: p.Namespace, Name: p.Name}
+		},
+		RevisionFunc: func(p categorytaxonomy.Product) string { return p.ResourceVersion },
+		// Persist each Product event before advancing the watch cursor so a
+		// crash cannot lose an affected CategoryTaxonomy key.
+		FlushIntervalEvents: 1,
+		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
+		Log:                 log,
+	}
+	productCache.AddEventHandler(categorytaxonomy.NewProductCategoryEnqueueHandler(enqueueCategory))
+
+	go func() {
+		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
+			log.Error("Product runner exited with error", zap.Error(err))
+		}
+	}()
+	return runner
 }

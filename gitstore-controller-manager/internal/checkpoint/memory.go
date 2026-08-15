@@ -51,5 +51,6 @@ func (s *MemoryStore) Save(_ context.Context, rec Record) error {
 func cloneRecord(rec Record) Record {
 	rec.Snapshot = append([]byte(nil), rec.Snapshot...)
 	rec.ReplayKeys = append([]types.WorkItemKey(nil), rec.ReplayKeys...)
+	rec.RelatedReplayKeys = append([]types.WorkItemKey(nil), rec.RelatedReplayKeys...)
 	return rec
 }

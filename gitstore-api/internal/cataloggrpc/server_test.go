@@ -18,6 +18,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -310,6 +311,158 @@ func TestAdmitResources_NewProduct_Created(t *testing.T) {
 	assert.Equal(t, catalog.ConditionAdmissionAccepted, status.Conditions[0].Type)
 	assert.Equal(t, catalog.ConditionTrue, status.Conditions[0].Status)
 	assert.Equal(t, now, status.Conditions[0].LastTransitionTime)
+}
+
+// makeProductWithCategoryRef builds a valid product blob for a given name
+// and categoryRef.
+func makeProductWithCategoryRef(name, categoryRef string) []byte {
+	return []byte("---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: " + name + "\n  namespace: gitstore\nspec:\n  title: " + name + "\n  categoryRef:\n    name: " + categoryRef + "\n---\n")
+}
+
+// T006 (spec 042): a product created with a categoryRef publishes an Added
+// eventbus.Event with Kind "Product" and the correct Namespace/Name.
+func TestAdmitResources_NewProductWithCategoryRef_PublishesAddedEvent(t *testing.T) {
+	memStore := newTestDatastore(t)
+	bus := eventbus.New(100)
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, _ string) ([]byte, error) {
+			return makeProductWithCategoryRef("widget", "electronics"), nil
+		},
+	}
+	srv := newCatalogServer(t, memStore, git, func(deps *cataloggrpc.ServerDeps) {
+		deps.EventBus = bus
+	})
+
+	events, unsubscribe, err := bus.Subscribe("Product", "")
+	require.NoError(t, err)
+	defer unsubscribe()
+
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	select {
+	case ev := <-events:
+		assert.Equal(t, eventbus.Added, ev.Type)
+		assert.Equal(t, "Product", ev.Kind)
+		assert.Equal(t, "gitstore", ev.Namespace)
+		assert.Equal(t, "widget", ev.Name)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Product Added event")
+	}
+}
+
+// T025 (spec 042, part a): an update that changes categoryRef publishes a
+// Modified eventbus.Event.
+func TestAdmitResources_UpdateProductCategoryRef_PublishesModifiedEvent(t *testing.T) {
+	memStore := newTestDatastore(t)
+	bus := eventbus.New(100)
+	ref := ""
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return makeProductWithCategoryRef("widget", ref), nil
+		},
+	}
+	srv := newCatalogServer(t, memStore, git, func(deps *cataloggrpc.ServerDeps) {
+		deps.EventBus = bus
+	})
+
+	events, unsubscribe, err := bus.Subscribe("Product", "")
+	require.NoError(t, err)
+	defer unsubscribe()
+
+	ref = "electronics"
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+	select {
+	case ev := <-events:
+		assert.Equal(t, eventbus.Added, ev.Type)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Added event")
+	}
+
+	ref = "computers"
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("b", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	select {
+	case ev := <-events:
+		assert.Equal(t, eventbus.Modified, ev.Type)
+		assert.Equal(t, "Product", ev.Kind)
+		assert.Equal(t, "widget", ev.Name)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Modified event after categoryRef change")
+	}
+}
+
+// T025 (spec 042, part b): an update that changes only price/description
+// (same categoryRef) does NOT publish an event.
+func TestAdmitResources_UpdateProductNonCategoryField_DoesNotPublishEvent(t *testing.T) {
+	memStore := newTestDatastore(t)
+	bus := eventbus.New(100)
+	title := "Widget"
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, _ string) ([]string, error) {
+			return []string{"products/widget.md"}, nil
+		},
+		readFileFunc: func(_ context.Context, _, _, _ string) ([]byte, error) {
+			return []byte("---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: widget\n  namespace: gitstore\nspec:\n  title: " + title + "\n  categoryRef:\n    name: electronics\n---\n"), nil
+		},
+	}
+	srv := newCatalogServer(t, memStore, git, func(deps *cataloggrpc.ServerDeps) {
+		deps.EventBus = bus
+	})
+
+	events, unsubscribe, err := bus.Subscribe("Product", "")
+	require.NoError(t, err)
+	defer unsubscribe()
+
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("a", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+	select {
+	case <-events:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Added event")
+	}
+
+	title = "Widget Deluxe"
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    strings.Repeat("b", 40),
+		RefName:      "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	select {
+	case ev := <-events:
+		t.Fatalf("expected no event for a non-categoryRef spec change, got %+v", ev)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	p, err := memStore.GetProductByName(context.Background(), "gitstore", "widget")
+	require.NoError(t, err)
+	assert.Contains(t, string(p.Spec), "Widget Deluxe", "the non-categoryRef change must still be persisted")
 }
 
 // T020b: product already exists → UpdateProduct called; uid and creationTimestamp preserved,
@@ -1440,6 +1593,53 @@ func TestAdmitResources_OperationAwareDeleteRemovesProductVariant(t *testing.T) 
 
 	_, err = store.GetProductVariantByName(context.Background(), "gitstore", "red")
 	assert.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+// T017 (spec 042): deleting a product with a categoryRef publishes a
+// Deleted eventbus.Event with Kind "Product", using the product's
+// last-known namespace/name (its categoryRef itself is only recoverable
+// downstream from the controller-manager's own cache, per research.md R2 —
+// this event's Namespace/Name is what the consumer needs).
+func TestAdmitResources_DeleteProductWithCategoryRef_PublishesDeletedEvent(t *testing.T) {
+	store := newTestDatastore(t)
+	bus := eventbus.New(100)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	current := a
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {"products/widget.md": makeProductWithCategoryRef("widget", "electronics")},
+		b: {},
+	})
+	srv := newCatalogServer(t, store, git, func(deps *cataloggrpc.ServerDeps) {
+		deps.EventBus = bus
+	})
+
+	events, unsubscribe, err := bus.Subscribe("Product", "")
+	require.NoError(t, err)
+	defer unsubscribe()
+
+	admitDelta(t, srv, zero, a)
+	// Drain the Added event from creation so it doesn't get mistaken for
+	// the Deleted event under test.
+	select {
+	case <-events:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Product Added event")
+	}
+
+	current = b
+	admitDelta(t, srv, a, b)
+
+	select {
+	case ev := <-events:
+		assert.Equal(t, eventbus.Deleted, ev.Type)
+		assert.Equal(t, "Product", ev.Kind)
+		assert.Equal(t, "gitstore", ev.Namespace)
+		assert.Equal(t, "widget", ev.Name)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Product Deleted event")
+	}
 }
 
 func TestAdmitResources_MovePreservesUIDAndGeneration(t *testing.T) {
