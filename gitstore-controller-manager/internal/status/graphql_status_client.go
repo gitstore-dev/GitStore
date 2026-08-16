@@ -99,6 +99,7 @@ func toUpdateCategoryStatusInput(key types.WorkItemKey, patch *StatusPatch) (map
 }
 
 func normalizeConditionStatus(status string) string {
+	status = strings.TrimSpace(status)
 	switch strings.ToUpper(status) {
 	case "TRUE":
 		return "TRUE"

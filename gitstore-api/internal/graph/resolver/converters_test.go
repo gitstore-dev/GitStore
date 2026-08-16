@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/stretchr/testify/assert"
@@ -109,6 +110,20 @@ func TestStatusFromJSON_ValidBlob_PopulatesFields(t *testing.T) {
 
 func TestStatusFromJSON_MalformedJSON_ReturnsNil(t *testing.T) {
 	assert.Nil(t, statusFromJSON(json.RawMessage(`{bad`)))
+}
+
+func TestToConditions_ConvertsGraphQLStatusEnumsToKubernetesStatus(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	conds := toConditions([]*model.ConditionInput{
+		{Type: "Ready", Status: model.ConditionStatusTrue, ObservedGeneration: 7, LastTransitionTime: now},
+		{Type: "OptionsAccepted", Status: model.ConditionStatusFalse, ObservedGeneration: 7, LastTransitionTime: now},
+		{Type: "VariantsResolved", Status: model.ConditionStatusUnknown, ObservedGeneration: 7, LastTransitionTime: now},
+	})
+
+	require.Len(t, conds, 3)
+	assert.Equal(t, catalog.ConditionTrue, conds[0].Status)
+	assert.Equal(t, catalog.ConditionFalse, conds[1].Status)
+	assert.Equal(t, catalog.ConditionUnknown, conds[2].Status)
 }
 
 // ── ownerRefsFromJSON ─────────────────────────────────────────────────────────

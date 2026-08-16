@@ -107,6 +107,7 @@ var k8sConditionStatusToGraphQL = map[string]model.ConditionStatus{
 }
 
 func conditionStatusFromString(status string) model.ConditionStatus {
+	status = strings.TrimSpace(status)
 	if condStatus, ok := k8sConditionStatusToGraphQL[status]; ok {
 		return condStatus
 	}
