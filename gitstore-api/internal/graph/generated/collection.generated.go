@@ -368,8 +368,8 @@ func (ec *executionContext) _Collection_metadata(ctx context.Context, field grap
 			return obj.Metadata, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.CollectionObjectMeta) graphql.Marshaler {
-			return ec.marshalNCollectionObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionObjectMeta(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ObjectMeta) graphql.Marshaler {
+			return ec.marshalNObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMeta(ctx, selections, v)
 		},
 		true,
 		true,
@@ -382,7 +382,7 @@ func (ec *executionContext) fieldContext_Collection_metadata(_ context.Context, 
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_CollectionObjectMeta(ctx, field)
+			return ec.childFields_ObjectMeta(ctx, field)
 		},
 	}
 	return fc, nil
@@ -517,121 +517,6 @@ func (ec *executionContext) fieldContext_Collection_products(ctx context.Context
 		return fc, err
 	}
 	return fc, nil
-}
-
-func (ec *executionContext) _CollectionCondition_type(ctx context.Context, field graphql.CollectedField, obj *model.CollectionCondition) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionCondition_type(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Type, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionCondition_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CollectionCondition", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _CollectionCondition_status(ctx context.Context, field graphql.CollectedField, obj *model.CollectionCondition) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionCondition_status(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Status, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionCondition_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CollectionCondition", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _CollectionCondition_observedGeneration(ctx context.Context, field graphql.CollectedField, obj *model.CollectionCondition) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionCondition_observedGeneration(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ObservedGeneration, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *int32) graphql.Marshaler {
-			return ec.marshalOInt2ᚖint32(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionCondition_observedGeneration(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CollectionCondition", field, false, false, errors.New("field of type Int does not have child fields"))
-}
-
-func (ec *executionContext) _CollectionCondition_reason(ctx context.Context, field graphql.CollectedField, obj *model.CollectionCondition) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionCondition_reason(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Reason, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionCondition_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CollectionCondition", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _CollectionCondition_message(ctx context.Context, field graphql.CollectedField, obj *model.CollectionCondition) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionCondition_message(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Message, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionCondition_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CollectionCondition", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _CollectionConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.CollectionConnection) (ret graphql.Marshaler) {
@@ -771,231 +656,6 @@ func (ec *executionContext) fieldContext_CollectionEdge_node(_ context.Context, 
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_Collection(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _CollectionObjectMeta_name(ctx context.Context, field graphql.CollectedField, obj *model.CollectionObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionObjectMeta_name(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Name, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionObjectMeta_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CollectionObjectMeta", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _CollectionObjectMeta_namespace(ctx context.Context, field graphql.CollectedField, obj *model.CollectionObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionObjectMeta_namespace(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Namespace, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionObjectMeta_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CollectionObjectMeta", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _CollectionObjectMeta_uid(ctx context.Context, field graphql.CollectedField, obj *model.CollectionObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionObjectMeta_uid(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.UID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNID2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionObjectMeta_uid(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CollectionObjectMeta", field, false, false, errors.New("field of type ID does not have child fields"))
-}
-
-func (ec *executionContext) _CollectionObjectMeta_resourceVersion(ctx context.Context, field graphql.CollectedField, obj *model.CollectionObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionObjectMeta_resourceVersion(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ResourceVersion, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionObjectMeta_resourceVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CollectionObjectMeta", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _CollectionObjectMeta_generation(ctx context.Context, field graphql.CollectedField, obj *model.CollectionObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionObjectMeta_generation(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Generation, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
-			return ec.marshalNInt2int32(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionObjectMeta_generation(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CollectionObjectMeta", field, false, false, errors.New("field of type Int does not have child fields"))
-}
-
-func (ec *executionContext) _CollectionObjectMeta_creationTimestamp(ctx context.Context, field graphql.CollectedField, obj *model.CollectionObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionObjectMeta_creationTimestamp(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.CreationTimestamp, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
-			return ec.marshalNDateTime2timeᚐTime(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionObjectMeta_creationTimestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CollectionObjectMeta", field, false, false, errors.New("field of type DateTime does not have child fields"))
-}
-
-func (ec *executionContext) _CollectionObjectMeta_revision(ctx context.Context, field graphql.CollectedField, obj *model.CollectionObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionObjectMeta_revision(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Revision, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionObjectMeta_revision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("CollectionObjectMeta", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _CollectionObjectMeta_labels(ctx context.Context, field graphql.CollectedField, obj *model.CollectionObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionObjectMeta_labels(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Labels, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*model.KeyValuePair) graphql.Marshaler {
-			return ec.marshalNKeyValuePair2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐKeyValuePairᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionObjectMeta_labels(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "CollectionObjectMeta",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_KeyValuePair(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _CollectionObjectMeta_annotations(ctx context.Context, field graphql.CollectedField, obj *model.CollectionObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CollectionObjectMeta_annotations(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Annotations, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*model.KeyValuePair) graphql.Marshaler {
-			return ec.marshalNKeyValuePair2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐKeyValuePairᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_CollectionObjectMeta_annotations(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "CollectionObjectMeta",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_KeyValuePair(ctx, field)
 		},
 	}
 	return fc, nil
@@ -1178,8 +838,8 @@ func (ec *executionContext) _CollectionStatus_conditions(ctx context.Context, fi
 			return obj.Conditions, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*model.CollectionCondition) graphql.Marshaler {
-			return ec.marshalNCollectionCondition2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionConditionᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.Condition) graphql.Marshaler {
+			return ec.marshalNCondition2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐConditionᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -1192,7 +852,7 @@ func (ec *executionContext) fieldContext_CollectionStatus_conditions(_ context.C
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_CollectionCondition(ctx, field)
+			return ec.childFields_Condition(ctx, field)
 		},
 	}
 	return fc, nil
@@ -1297,24 +957,15 @@ func (ec *executionContext) _LabelSelector_matchLabels(ctx context.Context, fiel
 			return obj.MatchLabels, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*model.KeyValuePair) graphql.Marshaler {
-			return ec.marshalNKeyValuePair2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐKeyValuePairᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v map[string]any) graphql.Marshaler {
+			return ec.marshalOJSON2map(ctx, selections, v)
 		},
 		true,
-		true,
+		false,
 	)
 }
 func (ec *executionContext) fieldContext_LabelSelector_matchLabels(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "LabelSelector",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_KeyValuePair(ctx, field)
-		},
-	}
-	return fc, nil
+	return graphql.NewScalarFieldContext("LabelSelector", field, false, false, errors.New("field of type JSON does not have child fields"))
 }
 
 func (ec *executionContext) _LabelSelector_matchExpressions(ctx context.Context, field graphql.CollectedField, obj *model.LabelSelector) (ret graphql.Marshaler) {
@@ -1879,56 +1530,6 @@ func (ec *executionContext) _Collection(ctx context.Context, sel ast.SelectionSe
 	return out
 }
 
-var collectionConditionImplementors = []string{"CollectionCondition"}
-
-func (ec *executionContext) _CollectionCondition(ctx context.Context, sel ast.SelectionSet, obj *model.CollectionCondition) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, collectionConditionImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("CollectionCondition")
-		case "type":
-			out.Values[i] = ec._CollectionCondition_type(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "status":
-			out.Values[i] = ec._CollectionCondition_status(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "observedGeneration":
-			out.Values[i] = ec._CollectionCondition_observedGeneration(ctx, field, obj)
-		case "reason":
-			out.Values[i] = ec._CollectionCondition_reason(ctx, field, obj)
-		case "message":
-			out.Values[i] = ec._CollectionCondition_message(ctx, field, obj)
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
 var collectionConnectionImplementors = []string{"CollectionConnection"}
 
 func (ec *executionContext) _CollectionConnection(ctx context.Context, sel ast.SelectionSet, obj *model.CollectionConnection) graphql.Marshaler {
@@ -1996,79 +1597,6 @@ func (ec *executionContext) _CollectionEdge(ctx context.Context, sel ast.Selecti
 			}
 		case "node":
 			out.Values[i] = ec._CollectionEdge_node(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var collectionObjectMetaImplementors = []string{"CollectionObjectMeta"}
-
-func (ec *executionContext) _CollectionObjectMeta(ctx context.Context, sel ast.SelectionSet, obj *model.CollectionObjectMeta) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, collectionObjectMetaImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("CollectionObjectMeta")
-		case "name":
-			out.Values[i] = ec._CollectionObjectMeta_name(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "namespace":
-			out.Values[i] = ec._CollectionObjectMeta_namespace(ctx, field, obj)
-		case "uid":
-			out.Values[i] = ec._CollectionObjectMeta_uid(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "resourceVersion":
-			out.Values[i] = ec._CollectionObjectMeta_resourceVersion(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "generation":
-			out.Values[i] = ec._CollectionObjectMeta_generation(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "creationTimestamp":
-			out.Values[i] = ec._CollectionObjectMeta_creationTimestamp(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "revision":
-			out.Values[i] = ec._CollectionObjectMeta_revision(ctx, field, obj)
-		case "labels":
-			out.Values[i] = ec._CollectionObjectMeta_labels(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "annotations":
-			out.Values[i] = ec._CollectionObjectMeta_annotations(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -2313,9 +1841,6 @@ func (ec *executionContext) _LabelSelector(ctx context.Context, sel ast.Selectio
 			out.Values[i] = graphql.MarshalString("LabelSelector")
 		case "matchLabels":
 			out.Values[i] = ec._LabelSelector_matchLabels(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "matchExpressions":
 			out.Values[i] = ec._LabelSelector_matchExpressions(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -2544,32 +2069,6 @@ func (ec *executionContext) marshalNCollection2ᚖgithubᚗcomᚋgitstoreᚑdev�
 	return ec._Collection(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNCollectionCondition2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionConditionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.CollectionCondition) graphql.Marshaler {
-	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 1000, false, func(ctx context.Context, i int) graphql.Marshaler {
-		fc := graphql.GetFieldContext(ctx)
-		fc.Result = &v[i]
-		return ec.marshalNCollectionCondition2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionCondition(ctx, sel, v[i])
-	})
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalNCollectionCondition2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionCondition(ctx context.Context, sel ast.SelectionSet, v *model.CollectionCondition) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._CollectionCondition(ctx, sel, v)
-}
-
 func (ec *executionContext) marshalNCollectionConnection2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionConnection(ctx context.Context, sel ast.SelectionSet, v model.CollectionConnection) graphql.Marshaler {
 	return ec._CollectionConnection(ctx, sel, &v)
 }
@@ -2608,16 +2107,6 @@ func (ec *executionContext) marshalNCollectionEdge2ᚖgithubᚗcomᚋgitstoreᚑ
 		return graphql.Null
 	}
 	return ec._CollectionEdge(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNCollectionObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionObjectMeta(ctx context.Context, sel ast.SelectionSet, v *model.CollectionObjectMeta) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._CollectionObjectMeta(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNCollectionSpec2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCollectionSpec(ctx context.Context, sel ast.SelectionSet, v *model.CollectionSpec) graphql.Marshaler {

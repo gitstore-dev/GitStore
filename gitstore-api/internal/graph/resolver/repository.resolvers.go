@@ -15,7 +15,7 @@ import (
 
 // CreateRepository is the resolver for the createRepository field.
 func (r *mutationResolver) CreateRepository(ctx context.Context, input model.CreateRepositoryInput) (*model.CreateRepositoryPayload, error) {
-	namespaceID, err := decodeNodeIDAs(nodeKindNamespace, input.NamespaceID)
+	ns, err := r.service.GetNamespaceByIdentifier(ctx, input.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -23,16 +23,12 @@ func (r *mutationResolver) CreateRepository(ctx context.Context, input model.Cre
 	if input.DefaultBranch != nil && *input.DefaultBranch != "" {
 		defaultBranch = *input.DefaultBranch
 	}
-	repo, err := r.service.CreateRepository(ctx, namespaceID, input.Name, defaultBranch, "default", callerUsernameOrAnon(ctx, r))
-	if err != nil {
-		return nil, err
-	}
-	ns, err := r.service.GetNamespaceByID(ctx, namespaceID)
+	repo, err := r.service.CreateRepository(ctx, ns.ID, input.Name, defaultBranch, "default", callerUsernameOrAnon(ctx, r))
 	if err != nil {
 		return nil, err
 	}
 	r.logger.Info("lookup repository",
-		zap.String("namespace_id", namespaceID),
+		zap.String("namespace", input.Namespace),
 		zap.String("name", input.Name),
 		zap.String("repo_id", repo.ID),
 	)
@@ -148,16 +144,13 @@ func (r *queryResolver) Repository(ctx context.Context, by model.RepositoryBy) (
 }
 
 // Repositories is the resolver for the repositories field.
-func (r *queryResolver) Repositories(ctx context.Context, namespaceID string, first *int32, after *string, last *int32, before *string) (*model.RepositoryConnection, error) {
-	rawNsID, err := decodeNodeIDAs(nodeKindNamespace, namespaceID)
+func (r *queryResolver) Repositories(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.RepositoryConnection, error) {
+	ns, err := r.service.GetNamespaceByIdentifier(ctx, namespace)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := r.service.GetNamespaceByID(ctx, rawNsID); err != nil {
-		return nil, err
-	}
 	params := toPageParams(first, after, last, before)
-	result, err := r.service.ListRepositoriesByNamespace(ctx, rawNsID, params)
+	result, err := r.service.ListRepositoriesByNamespace(ctx, ns.ID, params)
 	if err != nil {
 		return nil, err
 	}

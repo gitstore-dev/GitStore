@@ -118,10 +118,9 @@ func (r *queryResolver) Category(ctx context.Context, by model.CategoryBy) (*mod
 }
 
 // Categories returns categories as a Relay connection.
-func (r *queryResolver) Categories(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.CategoryConnection, error) {
-	ns := namespaceFromContext(ctx)
+func (r *queryResolver) Categories(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.CategoryConnection, error) {
 	params := toPageParams(first, after, last, before)
-	result, err := r.service.GetCategoryTaxonomies(ctx, ns, params)
+	result, err := r.service.GetCategoryTaxonomies(ctx, namespace, params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get categories: %w", err)
 	}

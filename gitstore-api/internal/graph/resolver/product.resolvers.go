@@ -17,8 +17,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const productWatchBootstrapCursor = "__product_watch_bootstrap__"
-
 // Product is the resolver for the product field.
 func (r *queryResolver) Product(ctx context.Context, by model.ProductBy) (*model.Product, error) {
 	switch {

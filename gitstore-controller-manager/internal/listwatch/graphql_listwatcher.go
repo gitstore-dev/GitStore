@@ -30,8 +30,8 @@ const categoryFields = `
 `
 
 const categoriesListQuery = `
-query($after: String) {
-  categories(first: 100, after: $after) {
+query($namespace: String!, $after: String) {
+  categories(namespace: $namespace, first: 100, after: $after) {
     edges {
       cursor
       node {
@@ -194,28 +194,34 @@ const productWatchBootstrapCursor = "__product_watch_bootstrap__"
 func (lw *CategoryTaxonomyListWatcher) List(ctx context.Context) (ListResponse[categorytaxonomy.CategoryTaxonomy], error) {
 	var items []categorytaxonomy.CategoryTaxonomy
 	highestRV := ""
-	var after *string
+	namespaces, err := listNamespaceIdentifiers(ctx, lw.client)
+	if err != nil {
+		return ListResponse[categorytaxonomy.CategoryTaxonomy]{}, err
+	}
 
-	for {
-		var resp categoriesListResponse
-		vars := map[string]any{}
-		if after != nil {
-			vars["after"] = *after
-		}
-		if err := lw.client.Query(ctx, categoriesListQuery, vars, &resp); err != nil {
-			return ListResponse[categorytaxonomy.CategoryTaxonomy]{}, fmt.Errorf("listwatch: list categories: %w", err)
-		}
-		for _, edge := range resp.Categories.Edges {
-			c := edge.Node.toCategoryTaxonomy()
-			items = append(items, c)
-			if c.ResourceVersion > highestRV {
-				highestRV = c.ResourceVersion
+	for _, ns := range namespaces {
+		var after *string
+		for {
+			var resp categoriesListResponse
+			vars := map[string]any{"namespace": ns}
+			if after != nil {
+				vars["after"] = *after
 			}
+			if err := lw.client.Query(ctx, categoriesListQuery, vars, &resp); err != nil {
+				return ListResponse[categorytaxonomy.CategoryTaxonomy]{}, fmt.Errorf("listwatch: list categories: %w", err)
+			}
+			for _, edge := range resp.Categories.Edges {
+				c := edge.Node.toCategoryTaxonomy()
+				items = append(items, c)
+				if c.ResourceVersion > highestRV {
+					highestRV = c.ResourceVersion
+				}
+			}
+			if !resp.Categories.PageInfo.HasNextPage || resp.Categories.PageInfo.EndCursor == nil {
+				break
+			}
+			after = resp.Categories.PageInfo.EndCursor
 		}
-		if !resp.Categories.PageInfo.HasNextPage || resp.Categories.PageInfo.EndCursor == nil {
-			break
-		}
-		after = resp.Categories.PageInfo.EndCursor
 	}
 
 	if highestRV == "" {
@@ -364,11 +370,9 @@ const productFields = `
   spec { categoryRef { name } }
 `
 
-// productsListQueryByNamespace paginates products within one namespace —
-// unlike categories(), products(namespace: String!, ...) requires a
-// namespace argument (data-model.md), so ProductListWatcher.List first
-// enumerates namespaces via namespacesListQuery, then paginates this query
-// once per namespace.
+// productsListQueryByNamespace paginates products within one namespace.
+// ProductListWatcher.List first enumerates namespaces via namespacesListQuery,
+// then paginates this query once per namespace.
 const productsListQueryByNamespace = `
 query($namespace: String!, $after: String) {
   products(namespace: $namespace, first: 100, after: $after) {
@@ -453,11 +457,10 @@ func NewProductListWatcher(client *graphqlclient.Client) *ProductListWatcher {
 	return &ProductListWatcher{client: client}
 }
 
-// listNamespaceIdentifiers paginates the namespaces query to completion,
-// returning every namespace identifier. Product has no namespace-agnostic
-// list query (unlike categories()), so List must enumerate namespaces
-// first (data-model.md).
-func (lw *ProductListWatcher) listNamespaceIdentifiers(ctx context.Context) ([]string, error) {
+// listNamespaceIdentifiers paginates namespaces to completion and returns each
+// namespace identifier. Category and Product listwatchers both use it to keep
+// cross-namespace listing behaviour while issuing namespace-scoped list queries.
+func listNamespaceIdentifiers(ctx context.Context, client *graphqlclient.Client) ([]string, error) {
 	var identifiers []string
 	var after *string
 	for {
@@ -466,7 +469,7 @@ func (lw *ProductListWatcher) listNamespaceIdentifiers(ctx context.Context) ([]s
 		if after != nil {
 			vars["after"] = *after
 		}
-		if err := lw.client.Query(ctx, namespacesListQuery, vars, &resp); err != nil {
+		if err := client.Query(ctx, namespacesListQuery, vars, &resp); err != nil {
 			return nil, fmt.Errorf("listwatch: list namespaces: %w", err)
 		}
 		for _, edge := range resp.Namespaces.Edges {
@@ -512,7 +515,7 @@ func (lw *ProductListWatcher) List(ctx context.Context) (ListResponse[categoryta
 	// listing; the real Watch below will replay any events after that cursor.
 	watcher.Stop()
 
-	namespaces, err := lw.listNamespaceIdentifiers(ctx)
+	namespaces, err := listNamespaceIdentifiers(ctx, lw.client)
 	if err != nil {
 		return ListResponse[categorytaxonomy.Product]{}, err
 	}

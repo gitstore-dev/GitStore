@@ -56,8 +56,7 @@ func TestCategoryResolver_CategoryByNamespacePath(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, mustEncodeNodeID(nodeKindCategory, c.UID), got.ID)
 	assert.Equal(t, c.Name, got.Metadata.Name)
-	require.NotNil(t, got.Metadata.Namespace)
-	assert.Equal(t, c.Namespace, *got.Metadata.Namespace)
+	assert.Equal(t, c.Namespace, got.Metadata.Namespace)
 }
 
 func TestCategoryResolver_CategoryByID(t *testing.T) {
@@ -115,7 +114,7 @@ func TestCategoryResolver_Categories_ForwardPagination(t *testing.T) {
 
 	first := int32(2)
 
-	page1, err := qr.Categories(context.Background(), &first, nil, nil, nil)
+	page1, err := qr.Categories(context.Background(), ns, &first, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, page1)
 	assert.Len(t, page1.Edges, 2)
@@ -124,7 +123,7 @@ func TestCategoryResolver_Categories_ForwardPagination(t *testing.T) {
 	require.NotNil(t, page1.PageInfo.EndCursor)
 
 	// Page 2 using the end cursor from page 1.
-	page2, err := qr.Categories(context.Background(), &first, page1.PageInfo.EndCursor, nil, nil)
+	page2, err := qr.Categories(context.Background(), ns, &first, page1.PageInfo.EndCursor, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, page2)
 	assert.Len(t, page2.Edges, 2)
@@ -133,7 +132,7 @@ func TestCategoryResolver_Categories_ForwardPagination(t *testing.T) {
 	require.NotNil(t, page2.PageInfo.EndCursor)
 
 	// Page 3 — last item.
-	page3, err := qr.Categories(context.Background(), &first, page2.PageInfo.EndCursor, nil, nil)
+	page3, err := qr.Categories(context.Background(), ns, &first, page2.PageInfo.EndCursor, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, page3)
 	assert.Len(t, page3.Edges, 1)
@@ -154,7 +153,7 @@ func TestCategoryResolver_Categories_BackwardPagination(t *testing.T) {
 
 	last := int32(2)
 
-	result, err := qr.Categories(context.Background(), nil, nil, &last, nil)
+	result, err := qr.Categories(context.Background(), ns, nil, nil, &last, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Len(t, result.Edges, 2)
@@ -175,14 +174,14 @@ func TestCategoryResolver_Categories_BackwardWithBefore(t *testing.T) {
 
 	// Get the first 3 items (newest first) to establish a mid-point cursor.
 	first := int32(3)
-	page1, err := qr.Categories(context.Background(), &first, nil, nil, nil)
+	page1, err := qr.Categories(context.Background(), ns, &first, nil, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, page1.Edges, 3)
 	require.NotNil(t, page1.PageInfo.EndCursor)
 
 	// Walk backward from the 3rd item.
 	last := int32(2)
-	backward, err := qr.Categories(context.Background(), nil, nil, &last, page1.PageInfo.EndCursor)
+	backward, err := qr.Categories(context.Background(), ns, nil, nil, &last, page1.PageInfo.EndCursor)
 	require.NoError(t, err)
 	require.NotNil(t, backward)
 	assert.Len(t, backward.Edges, 2)
@@ -198,7 +197,7 @@ func TestCategoryResolver_Categories_CursorFields(t *testing.T) {
 	seedCategory(t, store, ns, "beta", time.Now().UTC().Add(time.Second))
 
 	first := int32(2)
-	result, err := qr.Categories(context.Background(), &first, nil, nil, nil)
+	result, err := qr.Categories(context.Background(), ns, &first, nil, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, result.Edges, 2)
 
@@ -219,7 +218,7 @@ func TestCategoryResolver_Categories_Empty(t *testing.T) {
 	qr, _ := newCategoryResolverEnv(t)
 
 	first := int32(10)
-	result, err := qr.Categories(context.Background(), &first, nil, nil, nil)
+	result, err := qr.Categories(context.Background(), "test-ns", &first, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Empty(t, result.Edges)
@@ -239,7 +238,7 @@ func TestCategoryResolver_Categories_TotalCount(t *testing.T) {
 	}
 
 	first := int32(2)
-	result, err := qr.Categories(context.Background(), &first, nil, nil, nil)
+	result, err := qr.Categories(context.Background(), ns, &first, nil, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Len(t, result.Edges, 2)

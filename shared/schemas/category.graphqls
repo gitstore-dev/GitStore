@@ -10,6 +10,7 @@ extend type Query {
   List categories with Relay cursor-based pagination
   """
   categories(
+    namespace: String!
     first: Int
     after: String
     last: Int
@@ -92,7 +93,7 @@ type Category implements Node {
   """
   Resource metadata (name, labels, system-assigned fields).
   """
-  metadata: CategoryObjectMeta!
+  metadata: ObjectMeta!
 
   """
   Author-supplied specification (title, parentRef, media).
@@ -142,30 +143,6 @@ type Category implements Node {
 }
 
 """
-Metadata for a CategoryTaxonomy resource.
-Author-supplied fields (name, namespace, labels, annotations) originate from the git file.
-System-assigned fields (uid through ownerReferences) are written by the ingest pipeline.
-"""
-type CategoryObjectMeta {
-  name: String!
-  namespace: String
-
-  """
-  Kubernetes-style labels. Use KeyValuePair list (JSON type alignment with Product deferred).
-  """
-  labels: [KeyValuePair!]!
-  annotations: [KeyValuePair!]!
-
-  # System-assigned (read-only)
-  uid: ID!
-  resourceVersion: String!
-  generation: Int!
-  creationTimestamp: DateTime!
-  revision: String
-  ownerReferences: [OwnerReference!]!
-}
-
-"""
 Author-supplied specification for a CategoryTaxonomy resource.
 """
 type CategorySpec {
@@ -188,20 +165,8 @@ System-written status for a git-backed CategoryTaxonomy resource.
 type CategoryTaxonomyStatus {
   observedGeneration: Int!
   lastAppliedRevision: String!
-  conditions: [CategoryCondition!]!
+  conditions: [Condition!]!
   resolved: ResolvedCategoryTaxonomy
-}
-
-"""
-A named status condition following the Kubernetes condition convention.
-"""
-type CategoryCondition {
-  type: String!
-  status: String!
-  observedGeneration: Int!
-  lastTransitionTime: DateTime!
-  reason: String
-  message: String
 }
 
 """

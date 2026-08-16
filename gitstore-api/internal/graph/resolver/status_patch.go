@@ -39,7 +39,7 @@ func toConditions(in []*model.ConditionInput) []catalog.Condition {
 		}
 		cond := catalog.Condition{
 			Type:               c.Type,
-			Status:             c.Status,
+			Status:             string(c.Status),
 			ObservedGeneration: int64(c.ObservedGeneration),
 			LastTransitionTime: c.LastTransitionTime,
 		}

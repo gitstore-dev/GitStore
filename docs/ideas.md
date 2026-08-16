@@ -15,7 +15,7 @@ This document outlines GitStore's product strategy, architectural decisions, and
 ### Platform Shape (Core vs Optional)
 
 **Core GitStore Runtime** (required):
-- `git-server` and `api`
+- `git-server` `controller-manager` and `api`
 
 **Local-First Principles:**
 - Single bootstrap script runs GitStore locally with zero heavy infrastructure requirements
@@ -32,8 +32,8 @@ This document outlines GitStore's product strategy, architectural decisions, and
 | **Recommendation**    | Qdrant or Typesense                 | Vector database for product recommendations         |
 | **OIDC**              | Ory Hydra, Dex, or Keycloak         | Authentication and federation                       |
 | **User Management**   | Ory Kratos, ZITADEL, or SuperTokens | Identity and user lifecycle                         |
-| **Caching**           | Redis or Valkey                     | Distributed cache (in-memory fallback)              |
-| **Order Persistence** | ScyllaDB or Cassandra               | High-scale distributed storage (in-memory fallback) |
+| **Caching**           | Valkey                              | Distributed cache (in-memory fallback)              |
+| **Order Persistence** | ScyllaDB                            | High-scale distributed storage (in-memory fallback) |
 
 ### Identity & Authentication Architecture
 
@@ -65,8 +65,8 @@ Git-backed product catalogue with flexible configuration and data interchange fo
 
 **Catalogue Frontmatter:**
 - Adopt Kubernetes-style frontmatter (`apiVersion`, `kind`, `metadata`, `spec`)
-- Create control loops per object type (Product, Category, Collection)
-- Implement reconciliation pattern for desired vs. actual state
+- Create control loops per object type (Product, ProductVariant, CategoryTaxonomy, Collection)
+- Implement reconciliation pattern for desired vs. current state
 
 **Catalogue Features:**
 - References in catalogue files for flexible definitions
@@ -92,7 +92,7 @@ Essential e-commerce operations: shopping carts, transactions, order lifecycle, 
 - **Basket Management** — Add, remove, and update cart items
 - **Checkout Process** — Multiple payment gateway integration
 - **Order Tracking** — Real-time shipment status and delivery estimates
-- **User Profiles** — Personal info, order history, preferences (OIDC/user-service integrated)
+- **User Profiles** — Personal info, order history, preferences (OIDC / user-management integrated)
 
 ---
 
@@ -130,7 +130,7 @@ Platform ecosystem, AI-driven features, and deep customisation.
   - Override/enhance checkout, recommendations, asset management, etc.
   - Compare WASM vs OCI approaches
 
-ye- **Git Service** - Extend the hooks
+- **Git Service** - Extend the hooks
   - Current hooks are defined within the binary
     ```toml
     [hooks.git_receive_pack]
@@ -147,7 +147,7 @@ ye- **Git Service** - Extend the hooks
 
     [admission_control]
     phase = "post-receive"
-    branch_pattern = "refs/heads/main"
+    branch_pattern = "^refs/heads/main$"
     ```
   - Proposed git hooks via webhooks
     ```toml
@@ -185,7 +185,7 @@ ye- **Git Service** - Extend the hooks
 #### Automation & Organization
 
 - **CI/CD: GitStore Actions** — Workflow canvas for catalogue build/test/deploy
-- **Namespaces** — Multi-tenant org support (Kubernetes-style, Git-declared)
+- **Namespaces** — Define multiple stores for a single tenant (Kubernetes-style, Git-declared)
 - **Custom Workflows** — Event-driven automation with custom product lifecycles
 
 ---
@@ -196,15 +196,15 @@ Open questions and technologies under evaluation for future phases.
 
 ### Infrastructure & Storage
 
-| Technology               | Purpose             | Question                                       |
-|--------------------------|---------------------|------------------------------------------------|
-| **Xet**                  | Git LFS alternative | Should we use Xet for large file storage?      |
-| **Parquet**              | Columnar format     | Explore use cases and benefits                 |
-| **RocksDB / DuckDB**     | Local storage       | Do they add value beyond alternatives?         |
-| **Redis / Valkey**       | Distributed cache   | Best fit for GitStore with in-memory fallback? |
-| **Qdrant / Typesense**   | Vector search       | Recommendations and semantic search?           |
-| **ScyllaDB / Cassandra** | Distributed DB      | Best fit for GitStore with in-memory fallback? |
-| **mmap & io_uring**      | Performance         | High-performance file access patterns          |
+| Technology             | Purpose             | Question                                       |
+|------------------------|---------------------|------------------------------------------------|
+| **Xet**                | Git LFS alternative | Should we use Xet for large file storage?      |
+| **Parquet**            | Columnar format     | Explore use cases and benefits                 |
+| **RocksDB / DuckDB**   | Local storage       | Do they add value beyond alternatives?         |
+| **Redis / Valkey**     | Distributed cache   | Best fit for GitStore with in-memory fallback? |
+| **Qdrant / Typesense** | Vector search       | Recommendations and semantic search?           |
+| **ScyllaDB**           | Distributed DB      | Best fit for GitStore with in-memory fallback? |
+| **mmap & io_uring**    | Performance         | High-performance file access patterns          |
 
 ### Declarative Architecture Pattern
 
@@ -221,11 +221,11 @@ GitStore can adopt Kubernetes-like declarative patterns:
 - Category
 - Collection
 - Inventory
-- File (type: `gitstore.dev/media`)
+- File
 - [AccessControl](https://kubernetes.io/docs/reference/access-authn-authz/)
 - Role / ServiceAccount
 - Storage (PersistentVolume / CSI)
-- Namespace (type: `gitstore.dev/storefront`)
+- Namespace
 
 ### CLI-First Philosophy
 

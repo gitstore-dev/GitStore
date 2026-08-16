@@ -82,10 +82,7 @@ func specFromJSON(raw json.RawMessage) *model.ProductSpec {
 }
 
 // rawCondition mirrors catalog.Condition so we can unmarshal Kubernetes-style
-// enum strings ("Ready"/"True") before mapping them to GraphQL enum values
-// ("READY"/"TRUE"). The generated UnmarshalJSON on model enums rejects the
-// Kubernetes casing, which would cause valid system-written blobs to silently
-// return nil status for every ingested product.
+// values before mapping status to the GraphQL enum representation.
 type rawCondition struct {
 	Type               string    `json:"type"`
 	Status             string    `json:"status"`
@@ -102,17 +99,6 @@ type rawProductStatus struct {
 	Resolved            *model.ResolvedProductDefinition `json:"resolved,omitempty"`
 }
 
-// k8sConditionTypeToGraphQL maps Kubernetes TitleCase condition type strings to
-// the SCREAMING_SNAKE_CASE GraphQL enum values.
-var k8sConditionTypeToGraphQL = map[string]model.ProductConditionType{
-	"Published":         model.ProductConditionTypePublished,
-	"AdmissionAccepted": model.ProductConditionTypeAdmissionAccepted,
-	"CategoryResolved":  model.ProductConditionTypeCategoryResolved,
-	"OptionsAccepted":   model.ProductConditionTypeOptionsAccepted,
-	"VariantsResolved":  model.ProductConditionTypeVariantsResolved,
-	"Ready":             model.ProductConditionTypeReady,
-}
-
 // k8sConditionStatusToGraphQL maps "True"/"False"/"Unknown" to their GraphQL equivalents.
 var k8sConditionStatusToGraphQL = map[string]model.ConditionStatus{
 	"True":    model.ConditionStatusTrue,
@@ -120,9 +106,36 @@ var k8sConditionStatusToGraphQL = map[string]model.ConditionStatus{
 	"Unknown": model.ConditionStatusUnknown,
 }
 
+func conditionStatusFromString(status string) model.ConditionStatus {
+	if condStatus, ok := k8sConditionStatusToGraphQL[status]; ok {
+		return condStatus
+	}
+	return model.ConditionStatus(strings.ToUpper(status))
+}
+
+func conditionFromRaw(c rawCondition) *model.Condition {
+	condStatus := conditionStatusFromString(c.Status)
+	gen := c.ObservedGeneration
+	cond := &model.Condition{
+		Type:               c.Type,
+		Status:             condStatus,
+		ObservedGeneration: &gen,
+		LastTransitionTime: c.LastTransitionTime,
+	}
+	if c.Reason != "" {
+		r := c.Reason
+		cond.Reason = &r
+	}
+	if c.Message != "" {
+		m := c.Message
+		cond.Message = &m
+	}
+	return cond
+}
+
 // statusFromJSON deserialises a ProductStatus blob. A nil/empty blob returns
 // nil (FR-002). Unmarshal errors are logged at WARN and also return nil.
-// Condition enums are normalised from Kubernetes TitleCase to GraphQL UPPER_SNAKE_CASE.
+// Condition statuses are normalised from Kubernetes TitleCase to GraphQL UPPER_SNAKE_CASE.
 func statusFromJSON(raw json.RawMessage) *model.ProductStatus {
 	if len(raw) == 0 {
 		return nil
@@ -132,33 +145,9 @@ func statusFromJSON(raw json.RawMessage) *model.ProductStatus {
 		converterLogger.Warn("product blob unmarshal error", zap.String("field", "status"), zap.Error(err))
 		return nil
 	}
-	conditions := make([]*model.ProductCondition, 0, len(rs.Conditions))
+	conditions := make([]*model.Condition, 0, len(rs.Conditions))
 	for _, c := range rs.Conditions {
-		condType, ok := k8sConditionTypeToGraphQL[c.Type]
-		if !ok {
-			// Already a GraphQL value or unknown — pass through uppercased.
-			condType = model.ProductConditionType(strings.ToUpper(c.Type))
-		}
-		condStatus, ok := k8sConditionStatusToGraphQL[c.Status]
-		if !ok {
-			condStatus = model.ConditionStatus(strings.ToUpper(c.Status))
-		}
-		gen := c.ObservedGeneration
-		cond := &model.ProductCondition{
-			Type:               condType,
-			Status:             condStatus,
-			ObservedGeneration: &gen,
-			LastTransitionTime: c.LastTransitionTime,
-		}
-		if c.Reason != "" {
-			r := c.Reason
-			cond.Reason = &r
-		}
-		if c.Message != "" {
-			m := c.Message
-			cond.Message = &m
-		}
-		conditions = append(conditions, cond)
+		conditions = append(conditions, conditionFromRaw(c))
 	}
 	var lastApplied *string
 	if rs.LastAppliedRevision != "" {
@@ -197,9 +186,11 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 		return nil
 	}
 	gen := int32(p.Generation)
-	meta := &model.ProductObjectMeta{
+	meta := &model.ObjectMeta{
 		Name:              p.Name,
 		Namespace:         p.Namespace,
+		Labels:            stringMapToJSONMap(p.Labels),
+		Annotations:       stringMapToJSONMap(p.Annotations),
 		UID:               mustEncodeNodeID(nodeKindProduct, p.UID),
 		ResourceVersion:   p.ResourceVersion,
 		Generation:        gen,
@@ -208,20 +199,6 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 	}
 	if p.Revision != "" {
 		meta.Revision = &p.Revision
-	}
-	if len(p.Labels) > 0 {
-		labels := make(map[string]any, len(p.Labels))
-		for k, v := range p.Labels {
-			labels[k] = v
-		}
-		meta.Labels = labels
-	}
-	if len(p.Annotations) > 0 {
-		annotations := make(map[string]any, len(p.Annotations))
-		for k, v := range p.Annotations {
-			annotations[k] = v
-		}
-		meta.Annotations = annotations
 	}
 	return &model.Product{
 		ID:         mustEncodeNodeID(nodeKindProduct, p.UID),
@@ -256,10 +233,6 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 		Edges:    []*model.ProductEdge{},
 		PageInfo: &model.PageInfo{},
 	}
-
-	// Build labels and annotations as []*model.KeyValuePair.
-	labels := kvPairs(c.Labels)
-	annotations := kvPairs(c.Annotations)
 
 	// Extract title from spec JSON.
 	title := ""
@@ -315,19 +288,16 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 
 	gen := int32(c.Generation)
 	rv := c.ResourceVersion
-	meta := &model.CategoryObjectMeta{
+	meta := &model.ObjectMeta{
 		Name:              c.Name,
-		Labels:            labels,
-		Annotations:       annotations,
+		Namespace:         c.Namespace,
+		Labels:            stringMapToJSONMap(c.Labels),
+		Annotations:       stringMapToJSONMap(c.Annotations),
 		UID:               mustEncodeNodeID(nodeKindCategory, c.UID),
 		ResourceVersion:   rv,
 		Generation:        gen,
 		CreationTimestamp: c.CreationTimestamp,
 		OwnerReferences:   []*model.OwnerReference{},
-	}
-	if c.Namespace != "" {
-		ns := c.Namespace
-		meta.Namespace = &ns
 	}
 	if c.Revision != "" {
 		meta.Revision = &c.Revision
@@ -364,14 +334,16 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 	return cat
 }
 
-// kvPairs converts a string map to a []*model.KeyValuePair slice.
-func kvPairs(m map[string]string) []*model.KeyValuePair {
-	pairs := make([]*model.KeyValuePair, 0, len(m))
-	for k, v := range m {
-		kk, vv := k, v
-		pairs = append(pairs, &model.KeyValuePair{Key: kk, Value: vv})
+// stringMapToJSONMap converts string maps to GraphQL JSON-map metadata fields.
+func stringMapToJSONMap(m map[string]string) map[string]any {
+	if len(m) == 0 {
+		return nil
 	}
-	return pairs
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // categoryStatusFromJSON deserialises a CategoryTaxonomyStatus blob.
@@ -394,23 +366,9 @@ func categoryStatusFromJSON(raw json.RawMessage) *model.CategoryTaxonomyStatus {
 		converterLogger.Warn("category blob unmarshal error", zap.String("field", "status"), zap.Error(err))
 		return nil
 	}
-	conditions := make([]*model.CategoryCondition, 0, len(rs.Conditions))
+	conditions := make([]*model.Condition, 0, len(rs.Conditions))
 	for _, c := range rs.Conditions {
-		cond := &model.CategoryCondition{
-			Type:               c.Type,
-			Status:             c.Status,
-			ObservedGeneration: c.ObservedGeneration,
-			LastTransitionTime: c.LastTransitionTime,
-		}
-		if c.Reason != "" {
-			r := c.Reason
-			cond.Reason = &r
-		}
-		if c.Message != "" {
-			m := c.Message
-			cond.Message = &m
-		}
-		conditions = append(conditions, cond)
+		conditions = append(conditions, conditionFromRaw(c))
 	}
 	var resolved *model.ResolvedCategoryTaxonomy
 	if rs.Resolved != nil {
@@ -435,18 +393,16 @@ func DatastoreCollectionToGraphQL(c *datastore.Collection) *model.Collection {
 		return nil
 	}
 	gen := int32(c.Generation)
-	meta := &model.CollectionObjectMeta{
+	meta := &model.ObjectMeta{
 		Name:              c.Name,
+		Namespace:         c.Namespace,
+		Labels:            stringMapToJSONMap(c.Labels),
+		Annotations:       stringMapToJSONMap(c.Annotations),
 		UID:               mustEncodeNodeID(nodeKindCollection, c.UID),
 		ResourceVersion:   c.ResourceVersion,
 		Generation:        gen,
 		CreationTimestamp: c.CreationTimestamp,
-		Labels:            kvPairs(c.Labels),
-		Annotations:       kvPairs(c.Annotations),
-	}
-	if c.Namespace != "" {
-		ns := c.Namespace
-		meta.Namespace = &ns
+		OwnerReferences:   []*model.OwnerReference{},
 	}
 	if c.Revision != "" {
 		r := c.Revision
@@ -503,9 +459,9 @@ func collectionSpecFromJSON(raw json.RawMessage) *model.CollectionSpec {
 	}
 	spec := &model.CollectionSpec{Title: rs.Title, Media: []*model.MediaDefinition{}}
 	if rs.Selector != nil {
-		sel := &model.LabelSelector{}
+		sel := &model.LabelSelector{MatchLabels: map[string]any{}}
 		for k, v := range rs.Selector.MatchLabels {
-			sel.MatchLabels = append(sel.MatchLabels, &model.KeyValuePair{Key: k, Value: v})
+			sel.MatchLabels[k] = v
 		}
 		for _, e := range rs.Selector.MatchExpressions {
 			sel.MatchExpressions = append(sel.MatchExpressions, &model.LabelSelectorRequirement{
@@ -548,23 +504,9 @@ func collectionStatusFromJSON(raw json.RawMessage) *model.CollectionStatus {
 		converterLogger.Warn("collection blob unmarshal error", zap.String("field", "status"), zap.Error(err))
 		return nil
 	}
-	conditions := make([]*model.CollectionCondition, 0, len(rs.Conditions))
+	conditions := make([]*model.Condition, 0, len(rs.Conditions))
 	for _, c := range rs.Conditions {
-		cond := &model.CollectionCondition{
-			Type:   c.Type,
-			Status: c.Status,
-		}
-		gen := c.ObservedGeneration
-		cond.ObservedGeneration = &gen
-		if c.Reason != "" {
-			r := c.Reason
-			cond.Reason = &r
-		}
-		if c.Message != "" {
-			m := c.Message
-			cond.Message = &m
-		}
-		conditions = append(conditions, cond)
+		conditions = append(conditions, conditionFromRaw(c))
 	}
 	status := &model.CollectionStatus{
 		ObservedGeneration: rs.ObservedGeneration,
@@ -638,16 +580,16 @@ func DatastoreVariantToGraphQL(v *datastore.ProductVariant) *model.ProductVarian
 		return nil
 	}
 	gen := int32(v.Generation)
-	meta := &model.ProductVariantObjectMeta{
+	meta := &model.ObjectMeta{
 		Name:              v.Name,
 		Namespace:         v.Namespace,
+		Labels:            stringMapToJSONMap(v.Labels),
+		Annotations:       stringMapToJSONMap(v.Annotations),
 		UID:               mustEncodeNodeID(nodeKindProductVariant, v.UID),
 		ResourceVersion:   v.ResourceVersion,
 		Generation:        gen,
 		CreationTimestamp: v.CreationTimestamp,
-		Labels:            kvPairs(v.Labels),
-		Annotations:       kvPairs(v.Annotations),
-		OwnerReferences:   []*model.OwnerReference{},
+		OwnerReferences:   ownerRefsFromJSON(v.OwnerRefs),
 	}
 	if v.Revision != "" {
 		r := v.Revision
@@ -857,44 +799,9 @@ func variantStatusFromJSON(raw json.RawMessage) *model.ProductVariantStatus {
 		converterLogger.Warn("variant blob unmarshal error", zap.String("field", "status"), zap.Error(err))
 		return nil
 	}
-	conditions := make([]*model.ProductVariantCondition, 0, len(rs.Conditions))
+	conditions := make([]*model.Condition, 0, len(rs.Conditions))
 	for _, c := range rs.Conditions {
-		condType := model.ProductVariantConditionType(strings.ToUpper(
-			strings.ReplaceAll(c.Type, "Accepted", "_ACCEPTED"),
-		))
-		// Map from Kubernetes-style to SCREAMING_SNAKE_CASE enum values.
-		switch c.Type {
-		case "AdmissionAccepted":
-			condType = model.ProductVariantConditionTypeAdmissionAccepted
-		case "ProductResolved":
-			condType = model.ProductVariantConditionTypeProductResolved
-		case "OptionsAccepted":
-			condType = model.ProductVariantConditionTypeOptionsAccepted
-		case "PricingAccepted":
-			condType = model.ProductVariantConditionTypePricingAccepted
-		case "Ready":
-			condType = model.ProductVariantConditionTypeReady
-		}
-		condStatus, ok := k8sConditionStatusToGraphQL[c.Status]
-		if !ok {
-			condStatus = model.ConditionStatus(strings.ToUpper(c.Status))
-		}
-		cond := &model.ProductVariantCondition{
-			Type:               condType,
-			Status:             condStatus,
-			LastTransitionTime: c.LastTransitionTime,
-		}
-		gen := c.ObservedGeneration
-		cond.ObservedGeneration = &gen
-		if c.Reason != "" {
-			r := c.Reason
-			cond.Reason = &r
-		}
-		if c.Message != "" {
-			m := c.Message
-			cond.Message = &m
-		}
-		conditions = append(conditions, cond)
+		conditions = append(conditions, conditionFromRaw(c))
 	}
 	status := &model.ProductVariantStatus{
 		ObservedGeneration: rs.ObservedGeneration,

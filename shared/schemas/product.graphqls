@@ -56,29 +56,9 @@ type Product implements Node {
   id: ID!
   apiVersion: String!
   kind: String!
-  metadata: ProductObjectMeta!
+  metadata: ObjectMeta!
   spec: ProductSpec!
   status: ProductStatus
-}
-
-"""
-Metadata for a product resource. Author-supplied fields (name, namespace,
-labels, annotations) originate from the git file. System-assigned fields
-(uid, resourceVersion, etc.) are written by the ingest pipeline.
-"""
-type ProductObjectMeta {
-  name: String!
-  namespace: String!
-  labels: JSON
-  annotations: JSON
-
-  # System-assigned (read-only)
-  uid: ID!
-  resourceVersion: String!
-  generation: Int!
-  creationTimestamp: DateTime!
-  revision: String
-  ownerReferences: [OwnerReference!]!
 }
 
 type ProductSpec {
@@ -92,32 +72,8 @@ type ProductSpec {
 type ProductStatus {
   observedGeneration: Int!
   lastAppliedRevision: String
-  conditions: [ProductCondition!]!
+  conditions: [Condition!]!
   resolved: ResolvedProductDefinition
-}
-
-type ProductCondition {
-  type: ProductConditionType!
-  status: ConditionStatus!
-  observedGeneration: Int
-  lastTransitionTime: DateTime!
-  reason: String
-  message: String
-}
-
-enum ProductConditionType {
-  PUBLISHED
-  ADMISSION_ACCEPTED
-  CATEGORY_RESOLVED
-  OPTIONS_ACCEPTED
-  VARIANTS_RESOLVED
-  READY
-}
-
-enum ConditionStatus {
-  TRUE
-  FALSE
-  UNKNOWN
 }
 
 """A pointer to another catalogue resource."""

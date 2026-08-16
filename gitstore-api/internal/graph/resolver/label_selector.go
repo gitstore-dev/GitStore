@@ -4,6 +4,8 @@
 package resolver
 
 import (
+	"fmt"
+
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 )
@@ -29,11 +31,8 @@ func toCatalogLabelSelector(selector *model.LabelSelectorInput) *catalog.LabelSe
 		return nil
 	}
 	matchLabels := make(map[string]string, len(selector.MatchLabels))
-	for _, kv := range selector.MatchLabels {
-		if kv == nil {
-			continue
-		}
-		matchLabels[kv.Key] = kv.Value
+	for k, v := range selector.MatchLabels {
+		matchLabels[k] = fmt.Sprint(v)
 	}
 	matchExpressions := make([]catalog.LabelSelectorRequirement, 0, len(selector.MatchExpressions))
 	for _, req := range selector.MatchExpressions {
