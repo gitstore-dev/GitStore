@@ -98,6 +98,10 @@ type Namespace implements Node {
   updatedBy: String!
     @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
 
+  """
+  Markdown body content (namespace description).
+  """
+  body: String
 }
 
 """
@@ -218,7 +222,8 @@ Selector for looking up a namespace by exactly one unique key.
 """
 input NamespaceBy @oneOf {
   id: ID
-  identifier: String
+  identifier: String @deprecated(reason: "Use name; removal requires a future major GraphQL API release.")
+  name: String
 }
 
 """

@@ -2,7 +2,7 @@
 
 **Feature Branch**: `042-product-category-count`  
 **Created**: 2026-08-13  
-**Status**: Draft  
+**Status**: Closed  
 **Input**: User description: "Add Product watch transport for CategoryTaxonomy count reconciliation (GH#337). Context: PR #335 shipped a CategoryTaxonomy reconciler (spec 039) that only reacts to CategoryTaxonomy watch events. A Product create, delete, or categoryRef reassignment emits no category event today, so CategoryTaxonomyStatus.resolved.productCount can go stale with no self-healing path. This was deferred from PR #335 review comment. Scope: publish Product admission changes into the existing watch transport, add a Product watch/dependency-trigger path in the controller manager, enqueue every affected CategoryTaxonomy on Product add/delete/categoryRef change (both old and new category on reassignment), preserve existing list-then-watch/resume/authorization semantics, and add contract/integration coverage. Non-goals: replacing CategoryTaxonomy reconciliation itself; polling the full catalogue as a workaround."
 
 ## User Scenarios & Testing *(mandatory)*

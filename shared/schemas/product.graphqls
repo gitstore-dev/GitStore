@@ -59,6 +59,11 @@ type Product implements Node {
   metadata: ObjectMeta!
   spec: ProductSpec!
   status: ProductStatus
+
+  """
+  Markdown body content (product description).
+  """
+  body: String
 }
 
 type ProductSpec {

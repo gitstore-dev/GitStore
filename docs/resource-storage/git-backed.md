@@ -392,7 +392,7 @@ Example:
 
 ```markdown
 ---
-apiVersion: authz.gitstore.dev/v1beta1
+apiVersion: authorization.gitstore.dev/v1beta1
 kind: Role
 metadata:
   name: catalog-editor

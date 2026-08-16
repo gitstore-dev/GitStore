@@ -1,8 +1,8 @@
 # Feature Specification: Namespace Resource Contract: Declarative .spec/.status Schema
 
-**Feature Branch**: `044-namespace-spec-status-schema`
-**Created**: 2026-08-16
-**Status**: Draft
+**Feature Branch**: `044-namespace-spec-status-schema`  
+**Created**: 2026-08-16  
+**Status**: Closed  
 **Input**: User description: "Namespace Resource Contract: Declarative .spec/.status Schema (GH#171). Context: this is a sub-issue of GH#170 (Declarative Namespace Resource Contract), itself part of the Kubernetes-style Catalog Frontmatter initiative (GH#40). GH#171 is currently unblocked and blocks both GH#172 (Namespace API Semantics: spec writes, status updates, concurrency) and GH#173 (Namespace Validation and Admission Matrix), which in turn blocks GH#174 (Namespace Watch Contract). Define the declarative .spec/.status schema for the Namespace resource, following the same Kubernetes-style contract pattern already established for other catalog resources (CategoryTaxonomy, Collection, Product) in this repo, so that GH#172/#173/#174 can build on a stable schema."
 
 ## Clarifications

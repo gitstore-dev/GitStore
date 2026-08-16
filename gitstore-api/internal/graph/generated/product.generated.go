@@ -659,6 +659,29 @@ func (ec *executionContext) fieldContext_Product_status(_ context.Context, field
 	return fc, nil
 }
 
+func (ec *executionContext) _Product_body(ctx context.Context, field graphql.CollectedField, obj *model.Product) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Product_body(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Body, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Product_body(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Product", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _Product_productVariants(ctx context.Context, field graphql.CollectedField, obj *model.Product) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1949,6 +1972,8 @@ func (ec *executionContext) _Product(ctx context.Context, sel ast.SelectionSet, 
 			}
 		case "status":
 			out.Values[i] = ec._Product_status(ctx, field, obj)
+		case "body":
+			out.Values[i] = ec._Product_body(ctx, field, obj)
 		case "productVariants":
 			field := field
 
