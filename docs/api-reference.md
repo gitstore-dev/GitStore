@@ -83,13 +83,13 @@ mutation Logout {
 | `namespace(by: NamespaceBy!)` | Fetch one namespace |
 | `namespaces(...)` | List namespaces |
 | `repository(by: RepositoryBy!)` | Fetch one repository |
-| `repositories(namespaceId: ID!, ...)` | List repositories in a namespace |
+| `repositories(namespace: String!, ...)` | List repositories in a namespace |
 | `product(by: ProductBy!)` | Fetch one product resource |
 | `products(namespace: String!, ...)` | List products in a namespace |
 | `productVariant(by: ProductVariantBy!)` | Fetch one product variant resource |
 | `productVariants(namespace: String!, ...)` | List product variants in a namespace |
 | `category(by: CategoryBy!)` | Fetch one category resource |
-| `categories(...)` | List categories |
+| `categories(namespace: String!, ...)` | List categories in a namespace |
 | `collection(by: CollectionBy!)` | Fetch one collection resource |
 | `collections(namespace: String!, ...)` | List collections in a namespace |
 | `catalogVersion` | Legacy schema-continuity field for current catalogue version metadata |
@@ -241,8 +241,8 @@ query GetRepository {
 ### repositories
 
 ```graphql
-query ListRepositories($namespaceId: ID!) {
-  repositories(namespaceId: $namespaceId, first: 20) {
+query ListRepositories($namespace: String!) {
+  repositories(namespace: $namespace, first: 20) {
     edges {
       cursor
       node {
@@ -477,7 +477,7 @@ query GetCategory {
 
 ```graphql
 query ListCategories {
-  categories(first: 20) {
+  categories(namespace: "gitstore-test", first: 20) {
     edges {
       cursor
       node {
@@ -646,15 +646,15 @@ mutation DeleteNamespace {
 Creates a repository in a namespace.
 
 ```graphql
-mutation CreateRepository($namespaceId: ID!) {
+mutation CreateRepository($namespace: String!) {
   createRepository(
     input: {
-            namespaceId: $namespaceId
+      namespace: $namespace
       name: "catalog"
       defaultBranch: "main"
     }
   ) {
-        repository {
+    repository {
       id
       name
       defaultBranch
@@ -767,7 +767,7 @@ mutation UpdateResourceStatus($input: UpdateResourceStatusInput!) {
 
 ### watchCategories
 
-Subscription: an ordered stream of `CategoryTaxonomy` changes. Pass no `resourceVersion` to start receiving only future changes; pass a previously-observed `resourceVersion` to resume. A cursor that predates the server's retained event window terminates the subscription with a GraphQL error carrying `extensions.code == "WATCH_EXPIRED"` — the caller must re-list (via `categories`) and resume from a fresh cursor rather than assume it is caught up.
+Subscription: an ordered stream of `CategoryTaxonomy` changes. Pass no `resourceVersion` to start receiving only future changes; pass a previously-observed `resourceVersion` to resume. A cursor that predates the server's retained event window terminates the subscription with a GraphQL error carrying `extensions.code == "WATCH_EXPIRED"` — the caller must re-list (via `categories(namespace: ...)`) and resume from a fresh cursor rather than assume it is caught up.
 
 ```graphql
 subscription WatchCategories($namespace: String, $resourceVersion: String) {

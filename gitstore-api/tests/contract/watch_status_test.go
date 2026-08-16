@@ -172,7 +172,7 @@ func TestWatchCategories_LabelSelectorFiltersEvents(t *testing.T) {
 	defer cancel()
 
 	selector := &model.LabelSelectorInput{
-		MatchLabels: []*model.KeyValuePairInput{{Key: "tier", Value: "premium"}},
+		MatchLabels: map[string]any{"tier": "premium"},
 	}
 	events, err := r.Subscription().WatchCategories(ctx, nil, selector, nil)
 	require.NoError(t, err)

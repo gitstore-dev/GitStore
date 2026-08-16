@@ -154,12 +154,12 @@ enum WatchEventType {
 }
 
 """
-Input mirror of the existing (output-only) LabelSelector type, needed
-because GraphQL requires distinct input/output types for structured
-arguments.
+Input mirror of the existing LabelSelector type for watch/list filters.
+Exact-match labels are expressed as a JSON object map to match the
+resource metadata shape used elsewhere in the API.
 """
 input LabelSelectorInput {
-  matchLabels: [KeyValuePairInput!]
+  matchLabels: JSON
   matchExpressions: [LabelSelectorRequirementInput!]
 }
 
@@ -167,11 +167,6 @@ input LabelSelectorRequirementInput {
   key: String!
   operator: LabelSelectorOperator!
   values: [String!]
-}
-
-input KeyValuePairInput {
-  key: String!
-  value: String!
 }
 
 # ============================================================================
@@ -217,12 +212,12 @@ type UpdateResourceStatusPayload {
 }
 
 """
-A named status condition input, mirroring the Kubernetes condition
-convention used by CategoryCondition/ProductCondition et al.
+A named status condition input, mirroring the shared Condition
+convention used across core resources.
 """
 input ConditionInput {
   type: String!
-  status: String! # "True" | "False" | "Unknown"
+  status: ConditionStatus!
   observedGeneration: Int!
   lastTransitionTime: DateTime!
   reason: String
@@ -256,6 +251,40 @@ scalar DateTime
 JSON metadata object
 """
 scalar JSON
+
+"""
+System-managed metadata shared by core catalog resources.
+"""
+type ObjectMeta {
+  name: String!
+  namespace: String!
+  labels: JSON
+  annotations: JSON
+  uid: ID!
+  resourceVersion: String!
+  generation: Int!
+  creationTimestamp: DateTime!
+  revision: String
+  ownerReferences: [OwnerReference!]!
+}
+
+"""
+A named status condition shared by core catalog resources.
+"""
+type Condition {
+  type: String!
+  status: ConditionStatus!
+  observedGeneration: Int
+  lastTransitionTime: DateTime!
+  reason: String
+  message: String
+}
+
+enum ConditionStatus {
+  TRUE
+  FALSE
+  UNKNOWN
+}
 
 """
 Selector for a single product lookup. Exactly one field must be set.

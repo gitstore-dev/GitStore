@@ -66,6 +66,23 @@ func TestList_PaginatesToCompletionAndReturnsHighestResourceVersion(t *testing.T
 	call := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if strings.Contains(req.Query, "namespaces(") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": map[string]any{
+					"namespaces": map[string]any{
+						"edges": []any{
+							map[string]any{"cursor": "n1", "node": map[string]any{"identifier": "acme"}},
+						},
+						"pageInfo": map[string]any{"hasNextPage": false, "endCursor": "n1"},
+					},
+				},
+			})
+			return
+		}
 		body := pages[call]
 		if call < len(pages)-1 {
 			call++
@@ -98,6 +115,14 @@ func TestList_PaginatesToCompletionAndReturnsHighestResourceVersion(t *testing.T
 func TestList_EmptyDatasetReturnsNonEmptySentinelResourceVersion(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if strings.Contains(req.Query, "namespaces(") {
+			_, _ = w.Write([]byte(`{"data":{"namespaces":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"data":{"categories":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`))
 	}))
 	defer srv.Close()

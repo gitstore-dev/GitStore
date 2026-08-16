@@ -13,12 +13,6 @@ import (
 
 // Helper functions for GraphQL resolvers
 
-// namespaceFromContext extracts the namespace from the request context.
-// Falls back to an empty string (which lists across all namespaces in memdb).
-func namespaceFromContext(_ context.Context) string {
-	return ""
-}
-
 // callerUsernameOrAnon extracts the caller username from auth context, or returns "anon".
 func callerUsernameOrAnon(ctx context.Context, _ *mutationResolver) string {
 	if p := auth.PrincipalFromContext(ctx); p != nil {

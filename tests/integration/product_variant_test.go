@@ -253,7 +253,7 @@ func TestProductVariant_ValidPushAccepted(t *testing.T) {
 	if v.Status == nil {
 		t.Fatal("status is nil after admission")
 	}
-	admitted := findVariantCondition(v.Status.Conditions, "ADMISSION_ACCEPTED")
+	admitted := findVariantCondition(v.Status.Conditions, "AdmissionAccepted")
 	if admitted == nil {
 		t.Fatalf("ADMISSION_ACCEPTED condition not found: %+v", v.Status.Conditions)
 	}
@@ -328,7 +328,7 @@ func TestProductVariant_CoPushWithProductAccepted(t *testing.T) {
 	if v.Status == nil {
 		t.Fatal("status is nil after co-push admission")
 	}
-	admitted := findVariantCondition(v.Status.Conditions, "ADMISSION_ACCEPTED")
+	admitted := findVariantCondition(v.Status.Conditions, "AdmissionAccepted")
 	if admitted == nil || admitted.Status != "TRUE" {
 		t.Errorf("AdmissionAccepted: %+v", admitted)
 	}
@@ -418,11 +418,11 @@ func TestProductVariant_ProductRefNotFound(t *testing.T) {
 	if v.Status == nil {
 		t.Fatal("status is nil after admission")
 	}
-	admitted := findVariantCondition(v.Status.Conditions, "ADMISSION_ACCEPTED")
+	admitted := findVariantCondition(v.Status.Conditions, "AdmissionAccepted")
 	if admitted == nil || admitted.Status != "TRUE" {
 		t.Errorf("AdmissionAccepted: %+v", admitted)
 	}
-	pr := findVariantCondition(v.Status.Conditions, "PRODUCT_RESOLVED")
+	pr := findVariantCondition(v.Status.Conditions, "ProductResolved")
 	if pr == nil {
 		t.Fatal("ProductResolved condition not present")
 	}
@@ -454,7 +454,7 @@ func TestProductVariant_ProductRefNotFound(t *testing.T) {
 	if v2.Status == nil {
 		t.Fatal("status is nil after re-push")
 	}
-	pr2 := findVariantCondition(v2.Status.Conditions, "PRODUCT_RESOLVED")
+	pr2 := findVariantCondition(v2.Status.Conditions, "ProductResolved")
 	if pr2 == nil {
 		t.Fatal("ProductResolved condition not present after re-push")
 	}
@@ -507,7 +507,7 @@ func TestProductVariant_InvalidOptionName(t *testing.T) {
 	if v.Status == nil {
 		t.Fatal("status is nil after admission")
 	}
-	oa := findVariantCondition(v.Status.Conditions, "OPTIONS_ACCEPTED")
+	oa := findVariantCondition(v.Status.Conditions, "OptionsAccepted")
 	if oa == nil {
 		t.Fatal("OptionsAccepted condition not present")
 	}
@@ -549,14 +549,14 @@ func TestProductVariant_CoPushProductResolvedFalse(t *testing.T) {
 	if v.Status == nil {
 		t.Fatal("status is nil after co-push")
 	}
-	admitted := findVariantCondition(v.Status.Conditions, "ADMISSION_ACCEPTED")
+	admitted := findVariantCondition(v.Status.Conditions, "AdmissionAccepted")
 	if admitted == nil || admitted.Status != "TRUE" {
 		t.Errorf("AdmissionAccepted: %+v", admitted)
 	}
 	// Co-push: product and variant admitted in the same pass; the variant's
 	// productRef may resolve False or True depending on admit ordering.
 	// Both outcomes are valid — assert the condition is present.
-	pr := findVariantCondition(v.Status.Conditions, "PRODUCT_RESOLVED")
+	pr := findVariantCondition(v.Status.Conditions, "ProductResolved")
 	if pr == nil {
 		t.Error("ProductResolved condition must be present after co-push")
 	}
@@ -1142,11 +1142,11 @@ func TestProductVariant_InvalidCELAdmittedWithPricingFalse(t *testing.T) {
 	if v.Status == nil {
 		t.Fatal("status is nil after admission")
 	}
-	admitted := findVariantCondition(v.Status.Conditions, "ADMISSION_ACCEPTED")
+	admitted := findVariantCondition(v.Status.Conditions, "AdmissionAccepted")
 	if admitted == nil || admitted.Status != "TRUE" {
 		t.Errorf("AdmissionAccepted: %+v", admitted)
 	}
-	pa := findVariantCondition(v.Status.Conditions, "PRICING_ACCEPTED")
+	pa := findVariantCondition(v.Status.Conditions, "PricingAccepted")
 	if pa == nil {
 		t.Fatal("PricingAccepted condition not present")
 	}
@@ -1330,7 +1330,7 @@ func TestProductVariant_UpdateWithInvalidOptionLeavesSpecUnchanged(t *testing.T)
 	if v1.Status == nil {
 		t.Fatal("status nil after initial push")
 	}
-	oa1 := findVariantCondition(v1.Status.Conditions, "OPTIONS_ACCEPTED")
+	oa1 := findVariantCondition(v1.Status.Conditions, "OptionsAccepted")
 	if oa1 == nil || oa1.Status != "TRUE" {
 		t.Errorf("initial OptionsAccepted: %+v", oa1)
 	}
@@ -1352,7 +1352,7 @@ func TestProductVariant_UpdateWithInvalidOptionLeavesSpecUnchanged(t *testing.T)
 	for {
 		v2 = queryVariant(t, ns, variantName)
 		if v2 != nil && v2.Status != nil {
-			oa := findVariantCondition(v2.Status.Conditions, "OPTIONS_ACCEPTED")
+			oa := findVariantCondition(v2.Status.Conditions, "OptionsAccepted")
 			if oa != nil && oa.Status == "FALSE" && v2.Status.ObservedGeneration > v1.Status.ObservedGeneration {
 				break
 			}
@@ -1368,7 +1368,7 @@ func TestProductVariant_UpdateWithInvalidOptionLeavesSpecUnchanged(t *testing.T)
 	if v2.Status == nil {
 		t.Fatal("status nil after update push")
 	}
-	oa2 := findVariantCondition(v2.Status.Conditions, "OPTIONS_ACCEPTED")
+	oa2 := findVariantCondition(v2.Status.Conditions, "OptionsAccepted")
 	if oa2 == nil {
 		t.Fatal("OptionsAccepted condition missing after update")
 	}

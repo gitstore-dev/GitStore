@@ -42,7 +42,7 @@ func TestQuery_SendsPostWithBearerAndDecodesData(t *testing.T) {
 			TotalCount int `json:"totalCount"`
 		} `json:"categories"`
 	}
-	if err := c.Query(context.Background(), `query { categories { totalCount } }`, nil, &out); err != nil {
+	if err := c.Query(context.Background(), `query { categories(namespace: "acme") { totalCount } }`, nil, &out); err != nil {
 		t.Fatalf("Query failed: %v", err)
 	}
 	if out.Categories.TotalCount != 3 {
@@ -114,7 +114,7 @@ func TestQuery_HTTPErrorStatusReturnsError(t *testing.T) {
 
 	c := graphqlclient.New(srv.URL, "test-token")
 	var out struct{}
-	if err := c.Query(context.Background(), `query { categories { totalCount } }`, nil, &out); err == nil {
+	if err := c.Query(context.Background(), `query { categories(namespace: "acme") { totalCount } }`, nil, &out); err == nil {
 		t.Fatal("expected error for HTTP 500, got nil")
 	}
 }

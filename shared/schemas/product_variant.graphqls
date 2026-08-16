@@ -44,7 +44,7 @@ type ProductVariant implements Node {
   """
   System-managed identity and metadata.
   """
-  metadata: ProductVariantObjectMeta!
+  metadata: ObjectMeta!
 
   """
   Author-controlled specification: SKU, pricing, inventory, and options.
@@ -60,62 +60,6 @@ type ProductVariant implements Node {
   Variant-specific descriptive copy authored in the Markdown body.
   """
   body: String
-}
-
-"""
-System-managed identity fields for a ProductVariant resource.
-All fields are read-only; set and updated by the system.
-"""
-type ProductVariantObjectMeta {
-  """
-  DNS-label name, unique within the namespace.
-  """
-  name: String!
-
-  """
-  Namespace identifier the variant belongs to.
-  """
-  namespace: String!
-
-  """
-  Globally unique system-generated identifier.
-  """
-  uid: ID!
-
-  """
-  Opaque concurrency token. Changes on every spec update.
-  """
-  resourceVersion: String!
-
-  """
-  Monotonically increasing counter incremented on every spec change.
-  """
-  generation: Int!
-
-  """
-  Timestamp of first admission.
-  """
-  creationTimestamp: DateTime!
-
-  """
-  Git revision of the last successfully admitted push (e.g. main@sha1:abc123).
-  """
-  revision: String
-
-  """
-  Author-supplied key-value labels.
-  """
-  labels: [KeyValuePair!]!
-
-  """
-  Author-supplied annotations.
-  """
-  annotations: [KeyValuePair!]!
-
-  """
-  Owner references linking this variant to its parent Product resource.
-  """
-  ownerReferences: [OwnerReference!]!
 }
 
 """
@@ -371,44 +315,12 @@ type ProductVariantStatus {
   """
   Condition set written at admission and updated by the controller.
   """
-  conditions: [ProductVariantCondition!]!
+  conditions: [Condition!]!
 
   """
   Resolved aggregates computed at admission and kept current by the controller.
   """
   resolved: ResolvedProductVariantDefinition
-}
-
-"""
-A single status condition on a ProductVariant resource.
-"""
-type ProductVariantCondition {
-  type: ProductVariantConditionType!
-  status: ConditionStatus!
-  observedGeneration: Int
-  lastTransitionTime: DateTime!
-  reason: String
-  message: String
-}
-
-"""
-Named condition types for a ProductVariant resource.
-"""
-enum ProductVariantConditionType {
-  """Structural and semantic checks passed at admission."""
-  ADMISSION_ACCEPTED
-
-  """Parent Product resource has been located and linked."""
-  PRODUCT_RESOLVED
-
-  """selectedOptions combination is valid against the parent Product's option definitions."""
-  OPTIONS_ACCEPTED
-
-  """CEL expressions in pricing rules are syntactically valid."""
-  PRICING_ACCEPTED
-
-  """All blocking conditions are True; variant is fully operational."""
-  READY
 }
 
 """
