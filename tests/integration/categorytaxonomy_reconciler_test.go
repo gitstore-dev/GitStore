@@ -189,8 +189,8 @@ func TestCategoryTaxonomyReconciler_DepthThreeHierarchy(t *testing.T) {
 		t.Errorf("leaf childCount: got %d, want 0", leafStatus.Resolved.ChildCount)
 	}
 
-	if ready := conditionByType(leafStatus.Conditions, "Ready"); ready == nil || ready.Status != "True" {
-		t.Errorf("leaf Ready condition: got %+v, want status=True", ready)
+	if ready := conditionByType(leafStatus.Conditions, "Ready"); ready == nil || ready.Status != "TRUE" {
+		t.Errorf("leaf Ready condition: got %+v, want status=TRUE", ready)
 	}
 }
 
@@ -223,17 +223,17 @@ func TestCategoryTaxonomyReconciler_CycleDetection(t *testing.T) {
 
 	aStatus := waitForResolved(t, aName, 30*time.Second, func(s *categoryStatusResult) bool {
 		acyclic := conditionByType(s.Conditions, "Acyclic")
-		return acyclic != nil && acyclic.Status == "False"
+		return acyclic != nil && acyclic.Status == "FALSE"
 	})
 	bStatus := waitForResolved(t, bName, 30*time.Second, func(s *categoryStatusResult) bool {
 		acyclic := conditionByType(s.Conditions, "Acyclic")
-		return acyclic != nil && acyclic.Status == "False"
+		return acyclic != nil && acyclic.Status == "FALSE"
 	})
-	if ready := conditionByType(aStatus.Conditions, "Ready"); ready == nil || ready.Status != "False" {
-		t.Errorf("A Ready condition while cyclic: got %+v, want status=False", ready)
+	if ready := conditionByType(aStatus.Conditions, "Ready"); ready == nil || ready.Status != "FALSE" {
+		t.Errorf("A Ready condition while cyclic: got %+v, want status=FALSE", ready)
 	}
-	if ready := conditionByType(bStatus.Conditions, "Ready"); ready == nil || ready.Status != "False" {
-		t.Errorf("B Ready condition while cyclic: got %+v, want status=False", ready)
+	if ready := conditionByType(bStatus.Conditions, "Ready"); ready == nil || ready.Status != "FALSE" {
+		t.Errorf("B Ready condition while cyclic: got %+v, want status=FALSE", ready)
 	}
 
 	// Break the cycle: remove B's parentRef, making it a root again.
@@ -245,11 +245,11 @@ func TestCategoryTaxonomyReconciler_CycleDetection(t *testing.T) {
 
 	waitForResolved(t, bName, 30*time.Second, func(s *categoryStatusResult) bool {
 		acyclic := conditionByType(s.Conditions, "Acyclic")
-		return acyclic != nil && acyclic.Status == "True"
+		return acyclic != nil && acyclic.Status == "TRUE"
 	})
 	waitForResolved(t, aName, 30*time.Second, func(s *categoryStatusResult) bool {
 		acyclic := conditionByType(s.Conditions, "Acyclic")
-		return acyclic != nil && acyclic.Status == "True"
+		return acyclic != nil && acyclic.Status == "TRUE"
 	})
 }
 
@@ -271,8 +271,8 @@ func TestCategoryTaxonomyReconciler_RequiredFileReferenceCondition(t *testing.T)
 		return conditionByType(s.Conditions, "FileRefConfirmed") != nil
 	})
 	fileRefCond := conditionByType(requiredStatus.Conditions, "FileRefConfirmed")
-	if fileRefCond.Status != "Unknown" {
-		t.Errorf("optional:false FileRefConfirmed.Status: got %q, want Unknown", fileRefCond.Status)
+	if fileRefCond.Status != "UNKNOWN" {
+		t.Errorf("optional:false FileRefConfirmed.Status: got %q, want UNKNOWN", fileRefCond.Status)
 	}
 
 	optionalStatus := waitForResolved(t, optionalName, 30*time.Second, func(s *categoryStatusResult) bool {
@@ -281,7 +281,7 @@ func TestCategoryTaxonomyReconciler_RequiredFileReferenceCondition(t *testing.T)
 	if cond := conditionByType(optionalStatus.Conditions, "FileRefConfirmed"); cond != nil {
 		t.Errorf("optional:true media must not raise a FileRefConfirmed condition, got %+v", cond)
 	}
-	if ready := conditionByType(optionalStatus.Conditions, "Ready"); ready == nil || ready.Status != "True" {
-		t.Errorf("optional:true Ready condition: got %+v, want status=True (file-ref absence must not block Ready)", ready)
+	if ready := conditionByType(optionalStatus.Conditions, "Ready"); ready == nil || ready.Status != "TRUE" {
+		t.Errorf("optional:true Ready condition: got %+v, want status=TRUE (file-ref absence must not block Ready)", ready)
 	}
 }
