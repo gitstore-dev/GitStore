@@ -253,6 +253,11 @@ JSON metadata object
 scalar JSON
 
 """
+Signed 64-bit integer used for byte-size policy values.
+"""
+scalar Long
+
+"""
 System-managed metadata shared by core catalog resources.
 """
 type ObjectMeta {

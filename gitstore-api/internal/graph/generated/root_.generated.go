@@ -34,6 +34,11 @@ type DirectiveRoot struct {
 }
 
 type ComplexityRoot struct {
+	AdmissionControlDefaults struct {
+		BranchPattern func(childComplexity int) int
+		Phase         func(childComplexity int) int
+	}
+
 	CatalogObjectReference struct {
 		APIVersion      func(childComplexity int) int
 		FieldPath       func(childComplexity int) int
@@ -205,6 +210,10 @@ type ComplexityRoot struct {
 		Optional func(childComplexity int) int
 	}
 
+	HookToggle struct {
+		Enabled func(childComplexity int) int
+	}
+
 	InventoryDefinition struct {
 		Managed           func(childComplexity int) int
 		Policy            func(childComplexity int) int
@@ -262,11 +271,16 @@ type ComplexityRoot struct {
 	}
 
 	Namespace struct {
+		APIVersion  func(childComplexity int) int
 		CreatedAt   func(childComplexity int) int
 		CreatedBy   func(childComplexity int) int
 		DisplayName func(childComplexity int) int
 		ID          func(childComplexity int) int
 		Identifier  func(childComplexity int) int
+		Kind        func(childComplexity int) int
+		Metadata    func(childComplexity int) int
+		Spec        func(childComplexity int) int
+		Status      func(childComplexity int) int
 		Tier        func(childComplexity int) int
 		UpdatedAt   func(childComplexity int) int
 		UpdatedBy   func(childComplexity int) int
@@ -281,6 +295,45 @@ type ComplexityRoot struct {
 	NamespaceEdge struct {
 		Cursor func(childComplexity int) int
 		Node   func(childComplexity int) int
+	}
+
+	NamespaceMetadata struct {
+		Annotations       func(childComplexity int) int
+		CreationTimestamp func(childComplexity int) int
+		Finalizers        func(childComplexity int) int
+		Generation        func(childComplexity int) int
+		Labels            func(childComplexity int) int
+		Name              func(childComplexity int) int
+		OwnerReferences   func(childComplexity int) int
+		ResourceVersion   func(childComplexity int) int
+		Revision          func(childComplexity int) int
+		UID               func(childComplexity int) int
+	}
+
+	NamespacePushPolicyDefaults struct {
+		AdmissionControl func(childComplexity int) int
+		MaxFileSizeBytes func(childComplexity int) int
+		MaxPackSizeBytes func(childComplexity int) int
+		ReceivePackHooks func(childComplexity int) int
+		SchemaValidation func(childComplexity int) int
+	}
+
+	NamespaceRepositoryDefaults struct {
+		DefaultBranch func(childComplexity int) int
+		Visibility    func(childComplexity int) int
+	}
+
+	NamespaceSpec struct {
+		PushPolicyDefaults func(childComplexity int) int
+		RepositoryDefaults func(childComplexity int) int
+		Tier               func(childComplexity int) int
+		Title              func(childComplexity int) int
+	}
+
+	NamespaceStatus struct {
+		Conditions          func(childComplexity int) int
+		LastAppliedRevision func(childComplexity int) int
+		ObservedGeneration  func(childComplexity int) int
 	}
 
 	ObjectMeta struct {
@@ -457,6 +510,15 @@ type ComplexityRoot struct {
 		Repository      func(childComplexity int, by model.RepositoryBy) int
 	}
 
+	ReceivePackHookDefaults struct {
+		PostReceive          func(childComplexity int) int
+		PostUpdate           func(childComplexity int) int
+		PreReceive           func(childComplexity int) int
+		ProcReceive          func(childComplexity int) int
+		ReferenceTransaction func(childComplexity int) int
+		Update               func(childComplexity int) int
+	}
+
 	RefreshTokenPayload struct {
 		Token func(childComplexity int) int
 	}
@@ -552,6 +614,11 @@ type ComplexityRoot struct {
 		SelectedOptionsHash func(childComplexity int) int
 	}
 
+	SchemaValidationDefaults struct {
+		Phase          func(childComplexity int) int
+		TimeoutSeconds func(childComplexity int) int
+	}
+
 	SelectedOptionDefinition struct {
 		Name  func(childComplexity int) int
 		Value func(childComplexity int) int
@@ -638,6 +705,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 	ec := newExecutionContext(nil, e, nil)
 	_ = ec
 	switch typeName + "." + field {
+
+	case "AdmissionControlDefaults.branchPattern":
+		if e.ComplexityRoot.AdmissionControlDefaults.BranchPattern == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AdmissionControlDefaults.BranchPattern(childComplexity), true
+
+	case "AdmissionControlDefaults.phase":
+		if e.ComplexityRoot.AdmissionControlDefaults.Phase == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AdmissionControlDefaults.Phase(childComplexity), true
 
 	case "CatalogObjectReference.apiVersion":
 		if e.ComplexityRoot.CatalogObjectReference.APIVersion == nil {
@@ -1279,6 +1360,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.FileReference.Optional(childComplexity), true
 
+	case "HookToggle.enabled":
+		if e.ComplexityRoot.HookToggle.Enabled == nil {
+			break
+		}
+
+		return e.ComplexityRoot.HookToggle.Enabled(childComplexity), true
+
 	case "InventoryDefinition.managed":
 		if e.ComplexityRoot.InventoryDefinition.Managed == nil {
 			break
@@ -1593,6 +1681,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.UpdateResourceStatus(childComplexity, args["input"].(model.UpdateResourceStatusInput)), true
 
+	case "Namespace.apiVersion":
+		if e.ComplexityRoot.Namespace.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Namespace.APIVersion(childComplexity), true
+
 	case "Namespace.createdAt":
 		if e.ComplexityRoot.Namespace.CreatedAt == nil {
 			break
@@ -1627,6 +1722,34 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Namespace.Identifier(childComplexity), true
+
+	case "Namespace.kind":
+		if e.ComplexityRoot.Namespace.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Namespace.Kind(childComplexity), true
+
+	case "Namespace.metadata":
+		if e.ComplexityRoot.Namespace.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Namespace.Metadata(childComplexity), true
+
+	case "Namespace.spec":
+		if e.ComplexityRoot.Namespace.Spec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Namespace.Spec(childComplexity), true
+
+	case "Namespace.status":
+		if e.ComplexityRoot.Namespace.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Namespace.Status(childComplexity), true
 
 	case "Namespace.tier":
 		if e.ComplexityRoot.Namespace.Tier == nil {
@@ -1683,6 +1806,174 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.NamespaceEdge.Node(childComplexity), true
+
+	case "NamespaceMetadata.annotations":
+		if e.ComplexityRoot.NamespaceMetadata.Annotations == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceMetadata.Annotations(childComplexity), true
+
+	case "NamespaceMetadata.creationTimestamp":
+		if e.ComplexityRoot.NamespaceMetadata.CreationTimestamp == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceMetadata.CreationTimestamp(childComplexity), true
+
+	case "NamespaceMetadata.finalizers":
+		if e.ComplexityRoot.NamespaceMetadata.Finalizers == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceMetadata.Finalizers(childComplexity), true
+
+	case "NamespaceMetadata.generation":
+		if e.ComplexityRoot.NamespaceMetadata.Generation == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceMetadata.Generation(childComplexity), true
+
+	case "NamespaceMetadata.labels":
+		if e.ComplexityRoot.NamespaceMetadata.Labels == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceMetadata.Labels(childComplexity), true
+
+	case "NamespaceMetadata.name":
+		if e.ComplexityRoot.NamespaceMetadata.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceMetadata.Name(childComplexity), true
+
+	case "NamespaceMetadata.ownerReferences":
+		if e.ComplexityRoot.NamespaceMetadata.OwnerReferences == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceMetadata.OwnerReferences(childComplexity), true
+
+	case "NamespaceMetadata.resourceVersion":
+		if e.ComplexityRoot.NamespaceMetadata.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceMetadata.ResourceVersion(childComplexity), true
+
+	case "NamespaceMetadata.revision":
+		if e.ComplexityRoot.NamespaceMetadata.Revision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceMetadata.Revision(childComplexity), true
+
+	case "NamespaceMetadata.uid":
+		if e.ComplexityRoot.NamespaceMetadata.UID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceMetadata.UID(childComplexity), true
+
+	case "NamespacePushPolicyDefaults.admissionControl":
+		if e.ComplexityRoot.NamespacePushPolicyDefaults.AdmissionControl == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespacePushPolicyDefaults.AdmissionControl(childComplexity), true
+
+	case "NamespacePushPolicyDefaults.maxFileSizeBytes":
+		if e.ComplexityRoot.NamespacePushPolicyDefaults.MaxFileSizeBytes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespacePushPolicyDefaults.MaxFileSizeBytes(childComplexity), true
+
+	case "NamespacePushPolicyDefaults.maxPackSizeBytes":
+		if e.ComplexityRoot.NamespacePushPolicyDefaults.MaxPackSizeBytes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespacePushPolicyDefaults.MaxPackSizeBytes(childComplexity), true
+
+	case "NamespacePushPolicyDefaults.receivePackHooks":
+		if e.ComplexityRoot.NamespacePushPolicyDefaults.ReceivePackHooks == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespacePushPolicyDefaults.ReceivePackHooks(childComplexity), true
+
+	case "NamespacePushPolicyDefaults.schemaValidation":
+		if e.ComplexityRoot.NamespacePushPolicyDefaults.SchemaValidation == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespacePushPolicyDefaults.SchemaValidation(childComplexity), true
+
+	case "NamespaceRepositoryDefaults.defaultBranch":
+		if e.ComplexityRoot.NamespaceRepositoryDefaults.DefaultBranch == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceRepositoryDefaults.DefaultBranch(childComplexity), true
+
+	case "NamespaceRepositoryDefaults.visibility":
+		if e.ComplexityRoot.NamespaceRepositoryDefaults.Visibility == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceRepositoryDefaults.Visibility(childComplexity), true
+
+	case "NamespaceSpec.pushPolicyDefaults":
+		if e.ComplexityRoot.NamespaceSpec.PushPolicyDefaults == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceSpec.PushPolicyDefaults(childComplexity), true
+
+	case "NamespaceSpec.repositoryDefaults":
+		if e.ComplexityRoot.NamespaceSpec.RepositoryDefaults == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceSpec.RepositoryDefaults(childComplexity), true
+
+	case "NamespaceSpec.tier":
+		if e.ComplexityRoot.NamespaceSpec.Tier == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceSpec.Tier(childComplexity), true
+
+	case "NamespaceSpec.title":
+		if e.ComplexityRoot.NamespaceSpec.Title == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceSpec.Title(childComplexity), true
+
+	case "NamespaceStatus.conditions":
+		if e.ComplexityRoot.NamespaceStatus.Conditions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceStatus.Conditions(childComplexity), true
+
+	case "NamespaceStatus.lastAppliedRevision":
+		if e.ComplexityRoot.NamespaceStatus.LastAppliedRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceStatus.LastAppliedRevision(childComplexity), true
+
+	case "NamespaceStatus.observedGeneration":
+		if e.ComplexityRoot.NamespaceStatus.ObservedGeneration == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceStatus.ObservedGeneration(childComplexity), true
 
 	case "ObjectMeta.annotations":
 		if e.ComplexityRoot.ObjectMeta.Annotations == nil {
@@ -2494,6 +2785,48 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.Repository(childComplexity, args["by"].(model.RepositoryBy)), true
 
+	case "ReceivePackHookDefaults.postReceive":
+		if e.ComplexityRoot.ReceivePackHookDefaults.PostReceive == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ReceivePackHookDefaults.PostReceive(childComplexity), true
+
+	case "ReceivePackHookDefaults.postUpdate":
+		if e.ComplexityRoot.ReceivePackHookDefaults.PostUpdate == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ReceivePackHookDefaults.PostUpdate(childComplexity), true
+
+	case "ReceivePackHookDefaults.preReceive":
+		if e.ComplexityRoot.ReceivePackHookDefaults.PreReceive == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ReceivePackHookDefaults.PreReceive(childComplexity), true
+
+	case "ReceivePackHookDefaults.procReceive":
+		if e.ComplexityRoot.ReceivePackHookDefaults.ProcReceive == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ReceivePackHookDefaults.ProcReceive(childComplexity), true
+
+	case "ReceivePackHookDefaults.referenceTransaction":
+		if e.ComplexityRoot.ReceivePackHookDefaults.ReferenceTransaction == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ReceivePackHookDefaults.ReferenceTransaction(childComplexity), true
+
+	case "ReceivePackHookDefaults.update":
+		if e.ComplexityRoot.ReceivePackHookDefaults.Update == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ReceivePackHookDefaults.Update(childComplexity), true
+
 	case "RefreshTokenPayload.token":
 		if e.ComplexityRoot.RefreshTokenPayload.Token == nil {
 			break
@@ -2843,6 +3176,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ResolvedProductVariantDefinition.SelectedOptionsHash(childComplexity), true
+
+	case "SchemaValidationDefaults.phase":
+		if e.ComplexityRoot.SchemaValidationDefaults.Phase == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SchemaValidationDefaults.Phase(childComplexity), true
+
+	case "SchemaValidationDefaults.timeoutSeconds":
+		if e.ComplexityRoot.SchemaValidationDefaults.TimeoutSeconds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SchemaValidationDefaults.TimeoutSeconds(childComplexity), true
 
 	case "SelectedOptionDefinition.name":
 		if e.ComplexityRoot.SelectedOptionDefinition.Name == nil {
@@ -4161,9 +4508,34 @@ exist as both a user-space and an organization namespace.
 """
 type Namespace implements Node {
   """
-  Globally unique system-generated ID (UUID).
+  Relay transport identity.
   """
   id: ID!
+
+  """
+  Versioned Namespace API contract.
+  """
+  apiVersion: String!
+
+  """
+  Resource kind discriminator.
+  """
+  kind: String!
+
+  """
+  Namespace identity and system metadata.
+  """
+  metadata: NamespaceMetadata!
+
+  """
+  Author-controlled desired state.
+  """
+  spec: NamespaceSpec!
+
+  """
+  System-owned observed state.
+  """
+  status: NamespaceStatus!
 
   """
   Human-readable identifier, globally unique across all tiers.
@@ -4171,36 +4543,122 @@ type Namespace implements Node {
   Cannot begin or end with a hyphen.
   """
   identifier: String!
+    @deprecated(reason: "Use metadata.name; removal requires a future major GraphQL API release.")
 
   """
   Optional human-friendly display name.
   """
   displayName: String
+    @deprecated(reason: "Use spec.title; removal requires a future major GraphQL API release.")
 
   """
   The tier of this namespace.
   """
   tier: NamespaceTier!
+    @deprecated(reason: "Use spec.tier; removal requires a future major GraphQL API release.")
 
   """
   Timestamp when this namespace was created.
   """
   createdAt: DateTime!
+    @deprecated(reason: "Use metadata.creationTimestamp; removal requires a future major GraphQL API release.")
 
   """
   Username of the caller who created this namespace.
   """
   createdBy: String!
+    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
 
   """
   Timestamp when this namespace was last modified.
   """
   updatedAt: DateTime!
+    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
 
   """
   Username of the caller who last modified this namespace.
   """
   updatedBy: String!
+    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
+
+}
+
+"""
+Object metadata for the top-level Namespace kind.
+Unlike ObjectMeta, this type intentionally has no namespace field.
+"""
+type NamespaceMetadata {
+  name: String!
+  labels: JSON
+  annotations: JSON
+  uid: ID!
+  resourceVersion: String!
+  generation: Int!
+  creationTimestamp: DateTime!
+  revision: String
+  ownerReferences: [OwnerReference!]!
+  finalizers: [String!]!
+}
+
+"""
+Author-controlled desired state for a Namespace.
+"""
+type NamespaceSpec {
+  title: String
+  tier: NamespaceTier!
+  repositoryDefaults: NamespaceRepositoryDefaults
+  pushPolicyDefaults: NamespacePushPolicyDefaults
+}
+
+type NamespaceRepositoryDefaults {
+  visibility: RepositoryVisibility
+  defaultBranch: String
+}
+
+enum RepositoryVisibility {
+  PUBLIC
+  PRIVATE
+  INTERNAL
+}
+
+type NamespacePushPolicyDefaults {
+  maxPackSizeBytes: Long
+  maxFileSizeBytes: Long
+  receivePackHooks: ReceivePackHookDefaults
+  schemaValidation: SchemaValidationDefaults
+  admissionControl: AdmissionControlDefaults
+}
+
+type ReceivePackHookDefaults {
+  preReceive: HookToggle
+  update: HookToggle
+  postReceive: HookToggle
+  procReceive: HookToggle
+  postUpdate: HookToggle
+  referenceTransaction: HookToggle
+}
+
+type HookToggle {
+  enabled: Boolean!
+}
+
+type SchemaValidationDefaults {
+  phase: String
+  timeoutSeconds: Int
+}
+
+type AdmissionControlDefaults {
+  phase: String
+  branchPattern: String
+}
+
+"""
+System-owned observed state for a Namespace.
+"""
+type NamespaceStatus {
+  observedGeneration: Int!
+  lastAppliedRevision: String
+  conditions: [Condition!]!
 }
 
 """
@@ -5356,6 +5814,11 @@ JSON metadata object
 scalar JSON
 
 """
+Signed 64-bit integer used for byte-size policy values.
+"""
+scalar Long
+
+"""
 System-managed metadata shared by core catalog resources.
 """
 type ObjectMeta {
@@ -5492,6 +5955,16 @@ var parsedSchema = gqlparser.MustLoadSchema(sources...)
 // childFields_* functions provide shared child field context lookups.
 // Each function is generated once per unique object type, deduplicating the
 // switch statements that were previously inlined in every fieldContext_* function.
+
+func (ec *executionContext) childFields_AdmissionControlDefaults(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "phase":
+		return ec.fieldContext_AdmissionControlDefaults_phase(ctx, field)
+	case "branchPattern":
+		return ec.fieldContext_AdmissionControlDefaults_branchPattern(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type AdmissionControlDefaults", field.Name)
+}
 
 func (ec *executionContext) childFields_CatalogObjectReference(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
@@ -5835,6 +6308,14 @@ func (ec *executionContext) childFields_FileReference(ctx context.Context, field
 	return nil, fmt.Errorf("no field named %q was found under type FileReference", field.Name)
 }
 
+func (ec *executionContext) childFields_HookToggle(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "enabled":
+		return ec.fieldContext_HookToggle_enabled(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type HookToggle", field.Name)
+}
+
 func (ec *executionContext) childFields_InventoryDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "managed":
@@ -5897,6 +6378,16 @@ func (ec *executionContext) childFields_Namespace(ctx context.Context, field gra
 	switch field.Name {
 	case "id":
 		return ec.fieldContext_Namespace_id(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_Namespace_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_Namespace_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_Namespace_metadata(ctx, field)
+	case "spec":
+		return ec.fieldContext_Namespace_spec(ctx, field)
+	case "status":
+		return ec.fieldContext_Namespace_status(ctx, field)
 	case "identifier":
 		return ec.fieldContext_Namespace_identifier(ctx, field)
 	case "displayName":
@@ -5935,6 +6426,84 @@ func (ec *executionContext) childFields_NamespaceEdge(ctx context.Context, field
 		return ec.fieldContext_NamespaceEdge_node(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type NamespaceEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_NamespaceMetadata(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_NamespaceMetadata_name(ctx, field)
+	case "labels":
+		return ec.fieldContext_NamespaceMetadata_labels(ctx, field)
+	case "annotations":
+		return ec.fieldContext_NamespaceMetadata_annotations(ctx, field)
+	case "uid":
+		return ec.fieldContext_NamespaceMetadata_uid(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_NamespaceMetadata_resourceVersion(ctx, field)
+	case "generation":
+		return ec.fieldContext_NamespaceMetadata_generation(ctx, field)
+	case "creationTimestamp":
+		return ec.fieldContext_NamespaceMetadata_creationTimestamp(ctx, field)
+	case "revision":
+		return ec.fieldContext_NamespaceMetadata_revision(ctx, field)
+	case "ownerReferences":
+		return ec.fieldContext_NamespaceMetadata_ownerReferences(ctx, field)
+	case "finalizers":
+		return ec.fieldContext_NamespaceMetadata_finalizers(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type NamespaceMetadata", field.Name)
+}
+
+func (ec *executionContext) childFields_NamespacePushPolicyDefaults(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "maxPackSizeBytes":
+		return ec.fieldContext_NamespacePushPolicyDefaults_maxPackSizeBytes(ctx, field)
+	case "maxFileSizeBytes":
+		return ec.fieldContext_NamespacePushPolicyDefaults_maxFileSizeBytes(ctx, field)
+	case "receivePackHooks":
+		return ec.fieldContext_NamespacePushPolicyDefaults_receivePackHooks(ctx, field)
+	case "schemaValidation":
+		return ec.fieldContext_NamespacePushPolicyDefaults_schemaValidation(ctx, field)
+	case "admissionControl":
+		return ec.fieldContext_NamespacePushPolicyDefaults_admissionControl(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type NamespacePushPolicyDefaults", field.Name)
+}
+
+func (ec *executionContext) childFields_NamespaceRepositoryDefaults(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "visibility":
+		return ec.fieldContext_NamespaceRepositoryDefaults_visibility(ctx, field)
+	case "defaultBranch":
+		return ec.fieldContext_NamespaceRepositoryDefaults_defaultBranch(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type NamespaceRepositoryDefaults", field.Name)
+}
+
+func (ec *executionContext) childFields_NamespaceSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "title":
+		return ec.fieldContext_NamespaceSpec_title(ctx, field)
+	case "tier":
+		return ec.fieldContext_NamespaceSpec_tier(ctx, field)
+	case "repositoryDefaults":
+		return ec.fieldContext_NamespaceSpec_repositoryDefaults(ctx, field)
+	case "pushPolicyDefaults":
+		return ec.fieldContext_NamespaceSpec_pushPolicyDefaults(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type NamespaceSpec", field.Name)
+}
+
+func (ec *executionContext) childFields_NamespaceStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "observedGeneration":
+		return ec.fieldContext_NamespaceStatus_observedGeneration(ctx, field)
+	case "lastAppliedRevision":
+		return ec.fieldContext_NamespaceStatus_lastAppliedRevision(ctx, field)
+	case "conditions":
+		return ec.fieldContext_NamespaceStatus_conditions(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type NamespaceStatus", field.Name)
 }
 
 func (ec *executionContext) childFields_ObjectMeta(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -6249,6 +6818,24 @@ func (ec *executionContext) childFields_QuantityDefinition(ctx context.Context, 
 	return nil, fmt.Errorf("no field named %q was found under type QuantityDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_ReceivePackHookDefaults(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "preReceive":
+		return ec.fieldContext_ReceivePackHookDefaults_preReceive(ctx, field)
+	case "update":
+		return ec.fieldContext_ReceivePackHookDefaults_update(ctx, field)
+	case "postReceive":
+		return ec.fieldContext_ReceivePackHookDefaults_postReceive(ctx, field)
+	case "procReceive":
+		return ec.fieldContext_ReceivePackHookDefaults_procReceive(ctx, field)
+	case "postUpdate":
+		return ec.fieldContext_ReceivePackHookDefaults_postUpdate(ctx, field)
+	case "referenceTransaction":
+		return ec.fieldContext_ReceivePackHookDefaults_referenceTransaction(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ReceivePackHookDefaults", field.Name)
+}
+
 func (ec *executionContext) childFields_RefreshTokenPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "token":
@@ -6437,6 +7024,16 @@ func (ec *executionContext) childFields_ResolvedProductVariantDefinition(ctx con
 		return ec.fieldContext_ResolvedProductVariantDefinition_media(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ResolvedProductVariantDefinition", field.Name)
+}
+
+func (ec *executionContext) childFields_SchemaValidationDefaults(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "phase":
+		return ec.fieldContext_SchemaValidationDefaults_phase(ctx, field)
+	case "timeoutSeconds":
+		return ec.fieldContext_SchemaValidationDefaults_timeoutSeconds(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SchemaValidationDefaults", field.Name)
 }
 
 func (ec *executionContext) childFields_SelectedOptionDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
