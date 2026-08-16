@@ -611,8 +611,8 @@ func (ec *executionContext) _ProductVariant_metadata(ctx context.Context, field 
 			return obj.Metadata, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.ProductVariantObjectMeta) graphql.Marshaler {
-			return ec.marshalNProductVariantObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductVariantObjectMeta(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ObjectMeta) graphql.Marshaler {
+			return ec.marshalNObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐObjectMeta(ctx, selections, v)
 		},
 		true,
 		true,
@@ -625,7 +625,7 @@ func (ec *executionContext) fieldContext_ProductVariant_metadata(_ context.Conte
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_ProductVariantObjectMeta(ctx, field)
+			return ec.childFields_ObjectMeta(ctx, field)
 		},
 	}
 	return fc, nil
@@ -716,144 +716,6 @@ func (ec *executionContext) _ProductVariant_body(ctx context.Context, field grap
 }
 func (ec *executionContext) fieldContext_ProductVariant_body(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("ProductVariant", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ProductVariantCondition_type(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantCondition) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantCondition_type(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Type, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v model.ProductVariantConditionType) graphql.Marshaler {
-			return ec.marshalNProductVariantConditionType2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductVariantConditionType(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantCondition_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ProductVariantCondition", field, false, false, errors.New("field of type ProductVariantConditionType does not have child fields"))
-}
-
-func (ec *executionContext) _ProductVariantCondition_status(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantCondition) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantCondition_status(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Status, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v model.ConditionStatus) graphql.Marshaler {
-			return ec.marshalNConditionStatus2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐConditionStatus(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantCondition_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ProductVariantCondition", field, false, false, errors.New("field of type ConditionStatus does not have child fields"))
-}
-
-func (ec *executionContext) _ProductVariantCondition_observedGeneration(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantCondition) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantCondition_observedGeneration(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ObservedGeneration, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *int32) graphql.Marshaler {
-			return ec.marshalOInt2ᚖint32(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantCondition_observedGeneration(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ProductVariantCondition", field, false, false, errors.New("field of type Int does not have child fields"))
-}
-
-func (ec *executionContext) _ProductVariantCondition_lastTransitionTime(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantCondition) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantCondition_lastTransitionTime(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.LastTransitionTime, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
-			return ec.marshalNDateTime2timeᚐTime(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantCondition_lastTransitionTime(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ProductVariantCondition", field, false, false, errors.New("field of type DateTime does not have child fields"))
-}
-
-func (ec *executionContext) _ProductVariantCondition_reason(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantCondition) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantCondition_reason(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Reason, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantCondition_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ProductVariantCondition", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ProductVariantCondition_message(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantCondition) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantCondition_message(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Message, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantCondition_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ProductVariantCondition", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _ProductVariantConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantConnection) (ret graphql.Marshaler) {
@@ -993,263 +855,6 @@ func (ec *executionContext) fieldContext_ProductVariantEdge_node(_ context.Conte
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_ProductVariant(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ProductVariantObjectMeta_name(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantObjectMeta_name(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Name, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantObjectMeta_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ProductVariantObjectMeta", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ProductVariantObjectMeta_namespace(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantObjectMeta_namespace(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Namespace, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantObjectMeta_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ProductVariantObjectMeta", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ProductVariantObjectMeta_uid(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantObjectMeta_uid(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.UID, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNID2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantObjectMeta_uid(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ProductVariantObjectMeta", field, false, false, errors.New("field of type ID does not have child fields"))
-}
-
-func (ec *executionContext) _ProductVariantObjectMeta_resourceVersion(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantObjectMeta_resourceVersion(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.ResourceVersion, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantObjectMeta_resourceVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ProductVariantObjectMeta", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ProductVariantObjectMeta_generation(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantObjectMeta_generation(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Generation, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v int32) graphql.Marshaler {
-			return ec.marshalNInt2int32(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantObjectMeta_generation(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ProductVariantObjectMeta", field, false, false, errors.New("field of type Int does not have child fields"))
-}
-
-func (ec *executionContext) _ProductVariantObjectMeta_creationTimestamp(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantObjectMeta_creationTimestamp(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.CreationTimestamp, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v time.Time) graphql.Marshaler {
-			return ec.marshalNDateTime2timeᚐTime(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantObjectMeta_creationTimestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ProductVariantObjectMeta", field, false, false, errors.New("field of type DateTime does not have child fields"))
-}
-
-func (ec *executionContext) _ProductVariantObjectMeta_revision(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantObjectMeta_revision(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Revision, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantObjectMeta_revision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ProductVariantObjectMeta", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
-func (ec *executionContext) _ProductVariantObjectMeta_labels(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantObjectMeta_labels(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Labels, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*model.KeyValuePair) graphql.Marshaler {
-			return ec.marshalNKeyValuePair2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐKeyValuePairᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantObjectMeta_labels(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ProductVariantObjectMeta",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_KeyValuePair(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ProductVariantObjectMeta_annotations(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantObjectMeta_annotations(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Annotations, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*model.KeyValuePair) graphql.Marshaler {
-			return ec.marshalNKeyValuePair2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐKeyValuePairᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantObjectMeta_annotations(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ProductVariantObjectMeta",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_KeyValuePair(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ProductVariantObjectMeta_ownerReferences(ctx context.Context, field graphql.CollectedField, obj *model.ProductVariantObjectMeta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_ProductVariantObjectMeta_ownerReferences(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.OwnerReferences, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*model.OwnerReference) graphql.Marshaler {
-			return ec.marshalNOwnerReference2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐOwnerReferenceᚄ(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_ProductVariantObjectMeta_ownerReferences(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ProductVariantObjectMeta",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_OwnerReference(ctx, field)
 		},
 	}
 	return fc, nil
@@ -1519,8 +1124,8 @@ func (ec *executionContext) _ProductVariantStatus_conditions(ctx context.Context
 			return obj.Conditions, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*model.ProductVariantCondition) graphql.Marshaler {
-			return ec.marshalNProductVariantCondition2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductVariantConditionᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.Condition) graphql.Marshaler {
+			return ec.marshalNCondition2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐConditionᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -1533,7 +1138,7 @@ func (ec *executionContext) fieldContext_ProductVariantStatus_conditions(_ conte
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_ProductVariantCondition(ctx, field)
+			return ec.childFields_Condition(ctx, field)
 		},
 	}
 	return fc, nil
@@ -2443,61 +2048,6 @@ func (ec *executionContext) _ProductVariant(ctx context.Context, sel ast.Selecti
 	return out
 }
 
-var productVariantConditionImplementors = []string{"ProductVariantCondition"}
-
-func (ec *executionContext) _ProductVariantCondition(ctx context.Context, sel ast.SelectionSet, obj *model.ProductVariantCondition) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, productVariantConditionImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("ProductVariantCondition")
-		case "type":
-			out.Values[i] = ec._ProductVariantCondition_type(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "status":
-			out.Values[i] = ec._ProductVariantCondition_status(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "observedGeneration":
-			out.Values[i] = ec._ProductVariantCondition_observedGeneration(ctx, field, obj)
-		case "lastTransitionTime":
-			out.Values[i] = ec._ProductVariantCondition_lastTransitionTime(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "reason":
-			out.Values[i] = ec._ProductVariantCondition_reason(ctx, field, obj)
-		case "message":
-			out.Values[i] = ec._ProductVariantCondition_message(ctx, field, obj)
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
 var productVariantConnectionImplementors = []string{"ProductVariantConnection"}
 
 func (ec *executionContext) _ProductVariantConnection(ctx context.Context, sel ast.SelectionSet, obj *model.ProductVariantConnection) graphql.Marshaler {
@@ -2565,87 +2115,6 @@ func (ec *executionContext) _ProductVariantEdge(ctx context.Context, sel ast.Sel
 			}
 		case "node":
 			out.Values[i] = ec._ProductVariantEdge_node(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var productVariantObjectMetaImplementors = []string{"ProductVariantObjectMeta"}
-
-func (ec *executionContext) _ProductVariantObjectMeta(ctx context.Context, sel ast.SelectionSet, obj *model.ProductVariantObjectMeta) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, productVariantObjectMetaImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("ProductVariantObjectMeta")
-		case "name":
-			out.Values[i] = ec._ProductVariantObjectMeta_name(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "namespace":
-			out.Values[i] = ec._ProductVariantObjectMeta_namespace(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "uid":
-			out.Values[i] = ec._ProductVariantObjectMeta_uid(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "resourceVersion":
-			out.Values[i] = ec._ProductVariantObjectMeta_resourceVersion(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "generation":
-			out.Values[i] = ec._ProductVariantObjectMeta_generation(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "creationTimestamp":
-			out.Values[i] = ec._ProductVariantObjectMeta_creationTimestamp(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "revision":
-			out.Values[i] = ec._ProductVariantObjectMeta_revision(ctx, field, obj)
-		case "labels":
-			out.Values[i] = ec._ProductVariantObjectMeta_labels(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "annotations":
-			out.Values[i] = ec._ProductVariantObjectMeta_annotations(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "ownerReferences":
-			out.Values[i] = ec._ProductVariantObjectMeta_ownerReferences(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -3181,42 +2650,6 @@ func (ec *executionContext) marshalNProductVariant2ᚖgithubᚗcomᚋgitstoreᚑ
 	return ec._ProductVariant(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNProductVariantCondition2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductVariantConditionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ProductVariantCondition) graphql.Marshaler {
-	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 1000, false, func(ctx context.Context, i int) graphql.Marshaler {
-		fc := graphql.GetFieldContext(ctx)
-		fc.Result = &v[i]
-		return ec.marshalNProductVariantCondition2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductVariantCondition(ctx, sel, v[i])
-	})
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
-}
-
-func (ec *executionContext) marshalNProductVariantCondition2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductVariantCondition(ctx context.Context, sel ast.SelectionSet, v *model.ProductVariantCondition) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._ProductVariantCondition(ctx, sel, v)
-}
-
-func (ec *executionContext) unmarshalNProductVariantConditionType2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductVariantConditionType(ctx context.Context, v any) (model.ProductVariantConditionType, error) {
-	var res model.ProductVariantConditionType
-	err := res.UnmarshalGQL(v)
-	return res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalNProductVariantConditionType2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductVariantConditionType(ctx context.Context, sel ast.SelectionSet, v model.ProductVariantConditionType) graphql.Marshaler {
-	return v
-}
-
 func (ec *executionContext) marshalNProductVariantConnection2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductVariantConnection(ctx context.Context, sel ast.SelectionSet, v model.ProductVariantConnection) graphql.Marshaler {
 	return ec._ProductVariantConnection(ctx, sel, &v)
 }
@@ -3255,16 +2688,6 @@ func (ec *executionContext) marshalNProductVariantEdge2ᚖgithubᚗcomᚋgitstor
 		return graphql.Null
 	}
 	return ec._ProductVariantEdge(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalNProductVariantObjectMeta2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductVariantObjectMeta(ctx context.Context, sel ast.SelectionSet, v *model.ProductVariantObjectMeta) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._ProductVariantObjectMeta(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNProductVariantSpec2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductVariantSpec(ctx context.Context, sel ast.SelectionSet, v *model.ProductVariantSpec) graphql.Marshaler {

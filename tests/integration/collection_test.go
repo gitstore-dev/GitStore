@@ -150,8 +150,8 @@ type collectionQueryResult struct {
 		UID  string `json:"uid"`
 	} `json:"metadata"`
 	Spec struct {
-		Title    string      `json:"title"`
-		Selector any `json:"selector"`
+		Title    string `json:"title"`
+		Selector any    `json:"selector"`
 	} `json:"spec"`
 	Status *struct {
 		ObservedGeneration  int                   `json:"observedGeneration"`
@@ -256,8 +256,8 @@ func TestCollection_ValidPushAccepted(t *testing.T) {
 	if admitted == nil {
 		t.Fatalf("AdmissionAccepted condition not found in: %+v", coll.Status.Conditions)
 	}
-	if admitted.Status != "True" {
-		t.Errorf("AdmissionAccepted condition status: got %q, want %q", admitted.Status, "True")
+	if admitted.Status != "TRUE" {
+		t.Errorf("AdmissionAccepted condition status: got %q, want %q", admitted.Status, "TRUE")
 	}
 	// No selector → products connection must be empty.
 	if coll.Products != nil && len(coll.Products.Edges) != 0 {
@@ -298,7 +298,7 @@ func TestCollection_WithSelectorMatchesProducts(t *testing.T) {
 		t.Fatal("status is nil")
 	}
 	admitted := findCondition(coll.Status.Conditions, "AdmissionAccepted")
-	if admitted == nil || admitted.Status != "True" {
+	if admitted == nil || admitted.Status != "TRUE" {
 		t.Errorf("AdmissionAccepted condition: %+v", admitted)
 	}
 	// products connection is authoritative for live membership count.
@@ -347,7 +347,7 @@ Collection with optional media.
 	}
 	// Verify push succeeded; resolved.media is not yet in the schema.
 	admitted := findCondition(coll.Status.Conditions, "AdmissionAccepted")
-	if admitted == nil || admitted.Status != "True" {
+	if admitted == nil || admitted.Status != "TRUE" {
 		t.Errorf("AdmissionAccepted condition: %+v", admitted)
 	}
 }

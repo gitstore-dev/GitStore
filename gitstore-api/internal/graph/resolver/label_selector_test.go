@@ -21,7 +21,7 @@ func TestMatchesWatchSelector_EmptySelectorMatchesEverything(t *testing.T) {
 
 func TestMatchesWatchSelector_MatchLabels(t *testing.T) {
 	sel := &model.LabelSelectorInput{
-		MatchLabels: []*model.KeyValuePairInput{{Key: "tier", Value: "premium"}},
+		MatchLabels: map[string]any{"tier": "premium"},
 	}
 	assert.True(t, matchesWatchSelector(sel, map[string]string{"tier": "premium"}))
 	assert.False(t, matchesWatchSelector(sel, map[string]string{"tier": "standard"}))

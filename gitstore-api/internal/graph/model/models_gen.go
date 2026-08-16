@@ -57,7 +57,7 @@ type Category struct {
 	// Resource kind. Always "CategoryTaxonomy" for git-backed categories.
 	Kind *string `json:"kind,omitempty"`
 	// Resource metadata (name, labels, system-assigned fields).
-	Metadata *CategoryObjectMeta `json:"metadata"`
+	Metadata *ObjectMeta `json:"metadata"`
 	// Author-supplied specification (title, parentRef, media).
 	Spec *CategorySpec `json:"spec"`
 	// System-written status. Null until the first push is admitted.
@@ -90,16 +90,6 @@ type CategoryBy struct {
 	NamespacePath *CategoryNamespacePath `json:"namespacePath,omitempty"`
 }
 
-// A named status condition following the Kubernetes condition convention.
-type CategoryCondition struct {
-	Type               string    `json:"type"`
-	Status             string    `json:"status"`
-	ObservedGeneration int32     `json:"observedGeneration"`
-	LastTransitionTime time.Time `json:"lastTransitionTime"`
-	Reason             *string   `json:"reason,omitempty"`
-	Message            *string   `json:"message,omitempty"`
-}
-
 // Connection type for paginated categories (Relay pattern)
 type CategoryConnection struct {
 	// List of category edges
@@ -122,23 +112,6 @@ type CategoryEdge struct {
 type CategoryNamespacePath struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
-}
-
-// Metadata for a CategoryTaxonomy resource.
-// Author-supplied fields (name, namespace, labels, annotations) originate from the git file.
-// System-assigned fields (uid through ownerReferences) are written by the ingest pipeline.
-type CategoryObjectMeta struct {
-	Name      string  `json:"name"`
-	Namespace *string `json:"namespace,omitempty"`
-	// Kubernetes-style labels. Use KeyValuePair list (JSON type alignment with Product deferred).
-	Labels            []*KeyValuePair   `json:"labels"`
-	Annotations       []*KeyValuePair   `json:"annotations"`
-	UID               string            `json:"uid"`
-	ResourceVersion   string            `json:"resourceVersion"`
-	Generation        int32             `json:"generation"`
-	CreationTimestamp time.Time         `json:"creationTimestamp"`
-	Revision          *string           `json:"revision,omitempty"`
-	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
 }
 
 // Optimistic lock conflict for category
@@ -166,7 +139,7 @@ type CategorySpec struct {
 type CategoryTaxonomyStatus struct {
 	ObservedGeneration  int32                     `json:"observedGeneration"`
 	LastAppliedRevision string                    `json:"lastAppliedRevision"`
-	Conditions          []*CategoryCondition      `json:"conditions"`
+	Conditions          []*Condition              `json:"conditions"`
 	Resolved            *ResolvedCategoryTaxonomy `json:"resolved,omitempty"`
 }
 
@@ -193,7 +166,7 @@ type Collection struct {
 	// Resource kind. Always Collection.
 	Kind *string `json:"kind,omitempty"`
 	// System-managed identity and metadata.
-	Metadata *CollectionObjectMeta `json:"metadata"`
+	Metadata *ObjectMeta `json:"metadata"`
 	// Author-controlled specification: title, selector, and media.
 	Spec *CollectionSpec `json:"spec"`
 	// System-computed status: conditions and member count.
@@ -217,15 +190,6 @@ type CollectionBy struct {
 	NamespacePath *CollectionNamespacePath `json:"namespacePath,omitempty"`
 }
 
-// A single status condition on a Collection resource.
-type CollectionCondition struct {
-	Type               string  `json:"type"`
-	Status             string  `json:"status"`
-	ObservedGeneration *int32  `json:"observedGeneration,omitempty"`
-	Reason             *string `json:"reason,omitempty"`
-	Message            *string `json:"message,omitempty"`
-}
-
 // Paginated connection for collections (Relay pattern).
 type CollectionConnection struct {
 	Edges      []*CollectionEdge `json:"edges"`
@@ -243,29 +207,6 @@ type CollectionEdge struct {
 type CollectionNamespacePath struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
-}
-
-// System-managed identity fields for a Collection resource.
-// All fields are read-only; they are set and updated by the system.
-type CollectionObjectMeta struct {
-	// DNS-label name, unique within the namespace.
-	Name string `json:"name"`
-	// Namespace identifier the collection belongs to.
-	Namespace *string `json:"namespace,omitempty"`
-	// Globally unique system-generated identifier.
-	UID string `json:"uid"`
-	// Opaque concurrency token. Changes on every spec update.
-	ResourceVersion string `json:"resourceVersion"`
-	// Monotonically increasing counter incremented on every spec change.
-	Generation int32 `json:"generation"`
-	// Timestamp of first admission.
-	CreationTimestamp time.Time `json:"creationTimestamp"`
-	// Git revision of the last successful push (e.g. main@sha1:abc123).
-	Revision *string `json:"revision,omitempty"`
-	// Author-supplied key-value labels.
-	Labels []*KeyValuePair `json:"labels"`
-	// Author-supplied annotations.
-	Annotations []*KeyValuePair `json:"annotations"`
 }
 
 type CollectionOptimisticLockConflict struct {
@@ -290,20 +231,30 @@ type CollectionStatus struct {
 	// Git revision of the last successfully admitted push.
 	LastAppliedRevision *string `json:"lastAppliedRevision,omitempty"`
 	// Condition set written at admission time.
-	Conditions []*CollectionCondition `json:"conditions"`
+	Conditions []*Condition `json:"conditions"`
 	// Resolved membership snapshot (cached hint; collection.products is authoritative).
 	Resolved *ResolvedCollectionDefinition `json:"resolved,omitempty"`
 }
 
-// A named status condition input, mirroring the Kubernetes condition
-// convention used by CategoryCondition/ProductCondition et al.
+// A named status condition shared by core catalog resources.
+type Condition struct {
+	Type               string          `json:"type"`
+	Status             ConditionStatus `json:"status"`
+	ObservedGeneration *int32          `json:"observedGeneration,omitempty"`
+	LastTransitionTime time.Time       `json:"lastTransitionTime"`
+	Reason             *string         `json:"reason,omitempty"`
+	Message            *string         `json:"message,omitempty"`
+}
+
+// A named status condition input, mirroring the shared Condition
+// convention used across core resources.
 type ConditionInput struct {
-	Type               string    `json:"type"`
-	Status             string    `json:"status"`
-	ObservedGeneration int32     `json:"observedGeneration"`
-	LastTransitionTime time.Time `json:"lastTransitionTime"`
-	Reason             *string   `json:"reason,omitempty"`
-	Message            *string   `json:"message,omitempty"`
+	Type               string          `json:"type"`
+	Status             ConditionStatus `json:"status"`
+	ObservedGeneration int32           `json:"observedGeneration"`
+	LastTransitionTime time.Time       `json:"lastTransitionTime"`
+	Reason             *string         `json:"reason,omitempty"`
+	Message            *string         `json:"message,omitempty"`
 }
 
 // Input for creating a category
@@ -357,7 +308,7 @@ type CreateNamespacePayload struct {
 }
 
 type CreateRepositoryInput struct {
-	NamespaceID   string  `json:"namespaceId"`
+	Namespace     string  `json:"namespace"`
 	Name          string  `json:"name"`
 	DefaultBranch *string `json:"defaultBranch,omitempty"`
 }
@@ -444,26 +395,21 @@ type KeyValuePair struct {
 	Value string `json:"value"`
 }
 
-type KeyValuePairInput struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
-}
-
 // A label selector that matches products by their labels.
 // matchLabels and matchExpressions are combined with logical AND.
 // An empty selector (all fields absent) matches nothing.
 type LabelSelector struct {
 	// Exact key-value pairs that must all be present on a product's labels.
-	MatchLabels []*KeyValuePair `json:"matchLabels"`
+	MatchLabels map[string]any `json:"matchLabels,omitempty"`
 	// Set-based requirements. All entries must be satisfied.
 	MatchExpressions []*LabelSelectorRequirement `json:"matchExpressions"`
 }
 
-// Input mirror of the existing (output-only) LabelSelector type, needed
-// because GraphQL requires distinct input/output types for structured
-// arguments.
+// Input mirror of the existing LabelSelector type for watch/list filters.
+// Exact-match labels are expressed as a JSON object map to match the
+// resource metadata shape used elsewhere in the API.
 type LabelSelectorInput struct {
-	MatchLabels      []*KeyValuePairInput             `json:"matchLabels,omitempty"`
+	MatchLabels      map[string]any                   `json:"matchLabels,omitempty"`
 	MatchExpressions []*LabelSelectorRequirementInput `json:"matchExpressions,omitempty"`
 }
 
@@ -566,6 +512,20 @@ type NamespaceEdge struct {
 	Node *Namespace `json:"node"`
 }
 
+// System-managed metadata shared by core catalog resources.
+type ObjectMeta struct {
+	Name              string            `json:"name"`
+	Namespace         string            `json:"namespace"`
+	Labels            map[string]any    `json:"labels,omitempty"`
+	Annotations       map[string]any    `json:"annotations,omitempty"`
+	UID               string            `json:"uid"`
+	ResourceVersion   string            `json:"resourceVersion"`
+	Generation        int32             `json:"generation"`
+	CreationTimestamp time.Time         `json:"creationTimestamp"`
+	Revision          *string           `json:"revision,omitempty"`
+	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
+}
+
 type OwnerReference struct {
 	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`
@@ -642,12 +602,12 @@ type PricingDefinition struct {
 // Kubernetes-style product resource. All fields are read from the datastore,
 // which holds the fully hydrated view populated by the post-push ingest pipeline.
 type Product struct {
-	ID         string             `json:"id"`
-	APIVersion string             `json:"apiVersion"`
-	Kind       string             `json:"kind"`
-	Metadata   *ProductObjectMeta `json:"metadata"`
-	Spec       *ProductSpec       `json:"spec"`
-	Status     *ProductStatus     `json:"status,omitempty"`
+	ID         string         `json:"id"`
+	APIVersion string         `json:"apiVersion"`
+	Kind       string         `json:"kind"`
+	Metadata   *ObjectMeta    `json:"metadata"`
+	Spec       *ProductSpec   `json:"spec"`
+	Status     *ProductStatus `json:"status,omitempty"`
 	// Paginated list of ProductVariants belonging to this product.
 	ProductVariants *ProductVariantConnection `json:"productVariants"`
 }
@@ -663,15 +623,6 @@ type ProductBy struct {
 	ID *string `json:"id,omitempty"`
 	// Look up by namespace identifier + product name (Kubernetes-style metadata.name).
 	NamespacePath *ProductNamespacePath `json:"namespacePath,omitempty"`
-}
-
-type ProductCondition struct {
-	Type               ProductConditionType `json:"type"`
-	Status             ConditionStatus      `json:"status"`
-	ObservedGeneration *int32               `json:"observedGeneration,omitempty"`
-	LastTransitionTime time.Time            `json:"lastTransitionTime"`
-	Reason             *string              `json:"reason,omitempty"`
-	Message            *string              `json:"message,omitempty"`
 }
 
 // Connection type for paginated products (Relay pattern).
@@ -693,22 +644,6 @@ type ProductNamespacePath struct {
 	Name      string `json:"name"`
 }
 
-// Metadata for a product resource. Author-supplied fields (name, namespace,
-// labels, annotations) originate from the git file. System-assigned fields
-// (uid, resourceVersion, etc.) are written by the ingest pipeline.
-type ProductObjectMeta struct {
-	Name              string            `json:"name"`
-	Namespace         string            `json:"namespace"`
-	Labels            map[string]any    `json:"labels,omitempty"`
-	Annotations       map[string]any    `json:"annotations,omitempty"`
-	UID               string            `json:"uid"`
-	ResourceVersion   string            `json:"resourceVersion"`
-	Generation        int32             `json:"generation"`
-	CreationTimestamp time.Time         `json:"creationTimestamp"`
-	Revision          *string           `json:"revision,omitempty"`
-	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
-}
-
 type ProductOptionDefinition struct {
 	Name   string   `json:"name"`
 	Title  *string  `json:"title,omitempty"`
@@ -726,7 +661,7 @@ type ProductSpec struct {
 type ProductStatus struct {
 	ObservedGeneration  int32                      `json:"observedGeneration"`
 	LastAppliedRevision *string                    `json:"lastAppliedRevision,omitempty"`
-	Conditions          []*ProductCondition        `json:"conditions"`
+	Conditions          []*Condition               `json:"conditions"`
 	Resolved            *ResolvedProductDefinition `json:"resolved,omitempty"`
 }
 
@@ -741,7 +676,7 @@ type ProductVariant struct {
 	// Resource kind. Always ProductVariant.
 	Kind string `json:"kind"`
 	// System-managed identity and metadata.
-	Metadata *ProductVariantObjectMeta `json:"metadata"`
+	Metadata *ObjectMeta `json:"metadata"`
 	// Author-controlled specification: SKU, pricing, inventory, and options.
 	Spec *ProductVariantSpec `json:"spec"`
 	// System-computed status written at admission and updated by the controller.
@@ -763,16 +698,6 @@ type ProductVariantBy struct {
 	NamespacePath *ProductVariantNamespacePath `json:"namespacePath,omitempty"`
 }
 
-// A single status condition on a ProductVariant resource.
-type ProductVariantCondition struct {
-	Type               ProductVariantConditionType `json:"type"`
-	Status             ConditionStatus             `json:"status"`
-	ObservedGeneration *int32                      `json:"observedGeneration,omitempty"`
-	LastTransitionTime time.Time                   `json:"lastTransitionTime"`
-	Reason             *string                     `json:"reason,omitempty"`
-	Message            *string                     `json:"message,omitempty"`
-}
-
 // Paginated connection for ProductVariants (Relay pattern).
 type ProductVariantConnection struct {
 	Edges      []*ProductVariantEdge `json:"edges"`
@@ -790,31 +715,6 @@ type ProductVariantEdge struct {
 type ProductVariantNamespacePath struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
-}
-
-// System-managed identity fields for a ProductVariant resource.
-// All fields are read-only; set and updated by the system.
-type ProductVariantObjectMeta struct {
-	// DNS-label name, unique within the namespace.
-	Name string `json:"name"`
-	// Namespace identifier the variant belongs to.
-	Namespace string `json:"namespace"`
-	// Globally unique system-generated identifier.
-	UID string `json:"uid"`
-	// Opaque concurrency token. Changes on every spec update.
-	ResourceVersion string `json:"resourceVersion"`
-	// Monotonically increasing counter incremented on every spec change.
-	Generation int32 `json:"generation"`
-	// Timestamp of first admission.
-	CreationTimestamp time.Time `json:"creationTimestamp"`
-	// Git revision of the last successfully admitted push (e.g. main@sha1:abc123).
-	Revision *string `json:"revision,omitempty"`
-	// Author-supplied key-value labels.
-	Labels []*KeyValuePair `json:"labels"`
-	// Author-supplied annotations.
-	Annotations []*KeyValuePair `json:"annotations"`
-	// Owner references linking this variant to its parent Product resource.
-	OwnerReferences []*OwnerReference `json:"ownerReferences"`
 }
 
 // Author-controlled specification for a ProductVariant resource.
@@ -843,7 +743,7 @@ type ProductVariantStatus struct {
 	// Git revision of the last successfully admitted push.
 	LastAppliedRevision *string `json:"lastAppliedRevision,omitempty"`
 	// Condition set written at admission and updated by the controller.
-	Conditions []*ProductVariantCondition `json:"conditions"`
+	Conditions []*Condition `json:"conditions"`
 	// Resolved aggregates computed at admission and kept current by the controller.
 	Resolved *ResolvedProductVariantDefinition `json:"resolved,omitempty"`
 }
@@ -1581,136 +1481,6 @@ func (e *NamespaceTier) UnmarshalJSON(b []byte) error {
 }
 
 func (e NamespaceTier) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
-type ProductConditionType string
-
-const (
-	ProductConditionTypePublished         ProductConditionType = "PUBLISHED"
-	ProductConditionTypeAdmissionAccepted ProductConditionType = "ADMISSION_ACCEPTED"
-	ProductConditionTypeCategoryResolved  ProductConditionType = "CATEGORY_RESOLVED"
-	ProductConditionTypeOptionsAccepted   ProductConditionType = "OPTIONS_ACCEPTED"
-	ProductConditionTypeVariantsResolved  ProductConditionType = "VARIANTS_RESOLVED"
-	ProductConditionTypeReady             ProductConditionType = "READY"
-)
-
-var AllProductConditionType = []ProductConditionType{
-	ProductConditionTypePublished,
-	ProductConditionTypeAdmissionAccepted,
-	ProductConditionTypeCategoryResolved,
-	ProductConditionTypeOptionsAccepted,
-	ProductConditionTypeVariantsResolved,
-	ProductConditionTypeReady,
-}
-
-func (e ProductConditionType) IsValid() bool {
-	switch e {
-	case ProductConditionTypePublished, ProductConditionTypeAdmissionAccepted, ProductConditionTypeCategoryResolved, ProductConditionTypeOptionsAccepted, ProductConditionTypeVariantsResolved, ProductConditionTypeReady:
-		return true
-	}
-	return false
-}
-
-func (e ProductConditionType) String() string {
-	return string(e)
-}
-
-func (e *ProductConditionType) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = ProductConditionType(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid ProductConditionType", str)
-	}
-	return nil
-}
-
-func (e ProductConditionType) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *ProductConditionType) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e ProductConditionType) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
-// Named condition types for a ProductVariant resource.
-type ProductVariantConditionType string
-
-const (
-	// Structural and semantic checks passed at admission.
-	ProductVariantConditionTypeAdmissionAccepted ProductVariantConditionType = "ADMISSION_ACCEPTED"
-	// Parent Product resource has been located and linked.
-	ProductVariantConditionTypeProductResolved ProductVariantConditionType = "PRODUCT_RESOLVED"
-	// selectedOptions combination is valid against the parent Product's option definitions.
-	ProductVariantConditionTypeOptionsAccepted ProductVariantConditionType = "OPTIONS_ACCEPTED"
-	// CEL expressions in pricing rules are syntactically valid.
-	ProductVariantConditionTypePricingAccepted ProductVariantConditionType = "PRICING_ACCEPTED"
-	// All blocking conditions are True; variant is fully operational.
-	ProductVariantConditionTypeReady ProductVariantConditionType = "READY"
-)
-
-var AllProductVariantConditionType = []ProductVariantConditionType{
-	ProductVariantConditionTypeAdmissionAccepted,
-	ProductVariantConditionTypeProductResolved,
-	ProductVariantConditionTypeOptionsAccepted,
-	ProductVariantConditionTypePricingAccepted,
-	ProductVariantConditionTypeReady,
-}
-
-func (e ProductVariantConditionType) IsValid() bool {
-	switch e {
-	case ProductVariantConditionTypeAdmissionAccepted, ProductVariantConditionTypeProductResolved, ProductVariantConditionTypeOptionsAccepted, ProductVariantConditionTypePricingAccepted, ProductVariantConditionTypeReady:
-		return true
-	}
-	return false
-}
-
-func (e ProductVariantConditionType) String() string {
-	return string(e)
-}
-
-func (e *ProductVariantConditionType) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = ProductVariantConditionType(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid ProductVariantConditionType", str)
-	}
-	return nil
-}
-
-func (e ProductVariantConditionType) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *ProductVariantConditionType) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e ProductVariantConditionType) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

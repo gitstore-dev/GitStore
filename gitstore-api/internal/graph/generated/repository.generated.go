@@ -544,20 +544,20 @@ func (ec *executionContext) unmarshalInputCreateRepositoryInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"namespaceId", "name", "defaultBranch"}
+	fieldsInOrder := [...]string{"namespace", "name", "defaultBranch"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "namespaceId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespaceId"))
-			data, err := ec.unmarshalNID2string(ctx, v)
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.NamespaceID = data
+			it.Namespace = data
 		case "name":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
 			data, err := ec.unmarshalNString2string(ctx, v)

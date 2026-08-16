@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
@@ -22,10 +23,17 @@ func testKey() types.WorkItemKey {
 
 func testPatch() *status.StatusPatch {
 	gen := int64(2)
+	now := time.Now()
 	return &status.StatusPatch{
 		ResourceVersion:    "1",
 		ObservedGeneration: &gen,
-		Resolved:           json.RawMessage(`{"depth":0,"path":["electronics"],"childCount":0,"productCount":0}`),
+		Conditions: []*status.Condition{{
+			Type:               "Ready",
+			Status:             "True",
+			ObservedGeneration: gen,
+			LastTransitionTime: now,
+		}},
+		Resolved: json.RawMessage(`{"depth":0,"path":["electronics"],"childCount":0,"productCount":0}`),
 	}
 }
 
@@ -65,6 +73,21 @@ func TestApply_SendsUpdateCategoryStatusMutation(t *testing.T) {
 	}
 	if resolved["depth"] != float64(0) {
 		t.Errorf("resolved.depth = %v, want 0", resolved["depth"])
+	}
+
+	conds, ok := input["conditions"].([]any)
+	if !ok {
+		t.Fatalf("input missing 'conditions', got %+v", input)
+	}
+	if len(conds) != 1 {
+		t.Fatalf("conditions length = %d, want 1", len(conds))
+	}
+	cond, ok := conds[0].(map[string]any)
+	if !ok {
+		t.Fatalf("condition entry not an object: %+v", conds[0])
+	}
+	if cond["status"] != "TRUE" {
+		t.Errorf("condition status = %v, want %q", cond["status"], "TRUE")
 	}
 }
 

@@ -62,7 +62,7 @@ type Collection implements Node {
   """
   System-managed identity and metadata.
   """
-  metadata: CollectionObjectMeta!
+  metadata: ObjectMeta!
 
   """
   Author-controlled specification: title, selector, and media.
@@ -88,57 +88,6 @@ type Collection implements Node {
     last: Int
     before: String
   ): ProductConnection!
-}
-
-"""
-System-managed identity fields for a Collection resource.
-All fields are read-only; they are set and updated by the system.
-"""
-type CollectionObjectMeta {
-  """
-  DNS-label name, unique within the namespace.
-  """
-  name: String!
-
-  """
-  Namespace identifier the collection belongs to.
-  """
-  namespace: String
-
-  """
-  Globally unique system-generated identifier.
-  """
-  uid: ID!
-
-  """
-  Opaque concurrency token. Changes on every spec update.
-  """
-  resourceVersion: String!
-
-  """
-  Monotonically increasing counter incremented on every spec change.
-  """
-  generation: Int!
-
-  """
-  Timestamp of first admission.
-  """
-  creationTimestamp: DateTime!
-
-  """
-  Git revision of the last successful push (e.g. main@sha1:abc123).
-  """
-  revision: String
-
-  """
-  Author-supplied key-value labels.
-  """
-  labels: [KeyValuePair!]!
-
-  """
-  Author-supplied annotations.
-  """
-  annotations: [KeyValuePair!]!
 }
 
 """
@@ -171,7 +120,7 @@ type LabelSelector {
   """
   Exact key-value pairs that must all be present on a product's labels.
   """
-  matchLabels: [KeyValuePair!]!
+  matchLabels: JSON
 
   """
   Set-based requirements. All entries must be satisfied.
@@ -226,23 +175,12 @@ type CollectionStatus {
   """
   Condition set written at admission time.
   """
-  conditions: [CollectionCondition!]!
+  conditions: [Condition!]!
 
   """
   Resolved membership snapshot (cached hint; collection.products is authoritative).
   """
   resolved: ResolvedCollectionDefinition
-}
-
-"""
-A single status condition on a Collection resource.
-"""
-type CollectionCondition {
-  type: String!
-  status: String!
-  observedGeneration: Int
-  reason: String
-  message: String
 }
 
 """

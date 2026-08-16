@@ -4,6 +4,8 @@
 package resolver
 
 import (
+	"strings"
+
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -31,6 +33,19 @@ func toCategoryTaxonomyStatusPatch(input model.UpdateCategoryStatusInput) datast
 	return patch
 }
 
+func graphQLConditionStatusToCatalog(status model.ConditionStatus) catalog.ConditionStatus {
+	switch strings.ToUpper(string(status)) {
+	case "TRUE":
+		return catalog.ConditionTrue
+	case "FALSE":
+		return catalog.ConditionFalse
+	case "UNKNOWN":
+		return catalog.ConditionUnknown
+	default:
+		return catalog.ConditionStatus(strings.TrimSpace(string(status)))
+	}
+}
+
 func toConditions(in []*model.ConditionInput) []catalog.Condition {
 	out := make([]catalog.Condition, 0, len(in))
 	for _, c := range in {
@@ -39,7 +54,7 @@ func toConditions(in []*model.ConditionInput) []catalog.Condition {
 		}
 		cond := catalog.Condition{
 			Type:               c.Type,
-			Status:             c.Status,
+			Status:             graphQLConditionStatusToCatalog(c.Status),
 			ObservedGeneration: int64(c.ObservedGeneration),
 			LastTransitionTime: c.LastTransitionTime,
 		}

@@ -326,8 +326,8 @@ bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; n
 		echo "Namespace \"$${NAMESPACE}\" was not found. Run make bootstrap-namespace first."; \
 		exit 1; \
 	}; \
-	query='mutation CreateRepository($$namespaceId: ID!, $$name: String!, $$defaultBranch: String!) { createRepository(input: { namespaceId: $$namespaceId, name: $$name, defaultBranch: $$defaultBranch }) { repository { id name defaultBranch storagePath namespace { identifier } } } }'; \
-	payload=$$(jq -n --arg query "$$query" --arg namespaceId "$$namespace_id" --arg name "$${REPOSITORY}" --arg defaultBranch "$${DEFAULT_BRANCH}" '{query: $$query, variables: {namespaceId: $$namespaceId, name: $$name, defaultBranch: $$defaultBranch}}'); \
+	query='mutation CreateRepository($$namespace: String!, $$name: String!, $$defaultBranch: String!) { createRepository(input: { namespace: $$namespace, name: $$name, defaultBranch: $$defaultBranch }) { repository { id name defaultBranch storagePath namespace { identifier } } } }'; \
+	payload=$$(jq -n --arg query "$$query" --arg namespace "$${NAMESPACE}" --arg name "$${REPOSITORY}" --arg defaultBranch "$${DEFAULT_BRANCH}" '{query: $$query, variables: {namespace: $$namespace, name: $$name, defaultBranch: $$defaultBranch}}'); \
 	response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
 		echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
 		exit 1; \

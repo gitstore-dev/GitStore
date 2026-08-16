@@ -314,7 +314,7 @@ query GetVariant {
 
 ```graphql
 query ListCategories {
-  categories(first: 20) {
+  categories(namespace: "gitstore-test", first: 20) {
     edges {
       node {
         metadata {

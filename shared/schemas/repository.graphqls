@@ -74,7 +74,7 @@ extend type Query {
   List repositories within a namespace.
   """
   repositories(
-    namespaceId: ID!
+    namespace: String!
     first: Int
     after: String
     last: Int
@@ -140,7 +140,7 @@ extend type Mutation {
 }
 
 input CreateRepositoryInput {
-  namespaceId: ID!
+  namespace: String!
   name: String!
   defaultBranch: String
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
@@ -97,12 +98,26 @@ func toUpdateCategoryStatusInput(key types.WorkItemKey, patch *StatusPatch) (map
 	return input, nil
 }
 
+func normalizeConditionStatus(status string) string {
+	status = strings.TrimSpace(status)
+	switch strings.ToUpper(status) {
+	case "TRUE":
+		return "TRUE"
+	case "FALSE":
+		return "FALSE"
+	case "UNKNOWN":
+		return "UNKNOWN"
+	default:
+		return status
+	}
+}
+
 func toConditionInputs(conditions []*Condition) []map[string]any {
 	out := make([]map[string]any, 0, len(conditions))
 	for _, c := range conditions {
 		out = append(out, map[string]any{
 			"type":               c.Type,
-			"status":             c.Status,
+			"status":             normalizeConditionStatus(c.Status),
 			"observedGeneration": c.ObservedGeneration,
 			"lastTransitionTime": c.LastTransitionTime.Format(time.RFC3339Nano),
 			"reason":             c.Reason,

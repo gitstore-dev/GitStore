@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/stretchr/testify/assert"
@@ -101,7 +102,7 @@ func TestStatusFromJSON_ValidBlob_PopulatesFields(t *testing.T) {
 	require.NotNil(t, st.LastAppliedRevision)
 	assert.Equal(t, "main@sha1:abc123", *st.LastAppliedRevision)
 	require.Len(t, st.Conditions, 1)
-	assert.Equal(t, model.ProductConditionTypeReady, st.Conditions[0].Type)
+	assert.Equal(t, "READY", st.Conditions[0].Type)
 	assert.Equal(t, model.ConditionStatusTrue, st.Conditions[0].Status)
 	require.NotNil(t, st.Conditions[0].Reason)
 	assert.Equal(t, "AllChecksPass", *st.Conditions[0].Reason)
@@ -109,6 +110,20 @@ func TestStatusFromJSON_ValidBlob_PopulatesFields(t *testing.T) {
 
 func TestStatusFromJSON_MalformedJSON_ReturnsNil(t *testing.T) {
 	assert.Nil(t, statusFromJSON(json.RawMessage(`{bad`)))
+}
+
+func TestToConditions_ConvertsGraphQLStatusEnumsToKubernetesStatus(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	conds := toConditions([]*model.ConditionInput{
+		{Type: "Ready", Status: model.ConditionStatusTrue, ObservedGeneration: 7, LastTransitionTime: now},
+		{Type: "OptionsAccepted", Status: model.ConditionStatusFalse, ObservedGeneration: 7, LastTransitionTime: now},
+		{Type: "VariantsResolved", Status: model.ConditionStatusUnknown, ObservedGeneration: 7, LastTransitionTime: now},
+	})
+
+	require.Len(t, conds, 3)
+	assert.Equal(t, catalog.ConditionTrue, conds[0].Status)
+	assert.Equal(t, catalog.ConditionFalse, conds[1].Status)
+	assert.Equal(t, catalog.ConditionUnknown, conds[2].Status)
 }
 
 // ── ownerRefsFromJSON ─────────────────────────────────────────────────────────
@@ -184,7 +199,7 @@ func TestDatastoreProductToGraphQL_StatusHydration(t *testing.T) {
 	require.NotNil(t, got.Status)
 	assert.Equal(t, int32(1), got.Status.ObservedGeneration)
 	require.Len(t, got.Status.Conditions, 1)
-	assert.Equal(t, model.ProductConditionTypeReady, got.Status.Conditions[0].Type)
+	assert.Equal(t, "READY", got.Status.Conditions[0].Type)
 }
 
 func TestDatastoreProductToGraphQL_NilStatus_ReturnsNilStatus(t *testing.T) {
@@ -210,7 +225,7 @@ func TestDatastoreProductToGraphQL_NilProduct_ReturnsNil(t *testing.T) {
 	assert.Nil(t, DatastoreProductToGraphQL(nil))
 }
 
-// ── T024: All six K8s TitleCase condition types normalised (FR-012) ───────────
+// ── T024: All six K8s TitleCase condition types are preserved (FR-012) ─────────
 
 func TestStatusFromJSON_AllSixConditionTypes_Normalised(t *testing.T) {
 	raw := json.RawMessage(`{
@@ -227,18 +242,18 @@ func TestStatusFromJSON_AllSixConditionTypes_Normalised(t *testing.T) {
 	st := statusFromJSON(raw)
 	require.NotNil(t, st)
 	require.Len(t, st.Conditions, 6)
-	assert.Equal(t, model.ProductConditionTypePublished, st.Conditions[0].Type)
+	assert.Equal(t, "Published", st.Conditions[0].Type)
 	assert.Equal(t, model.ConditionStatusTrue, st.Conditions[0].Status)
-	assert.Equal(t, model.ProductConditionTypeAdmissionAccepted, st.Conditions[1].Type)
-	assert.Equal(t, model.ProductConditionTypeCategoryResolved, st.Conditions[2].Type)
-	assert.Equal(t, model.ProductConditionTypeOptionsAccepted, st.Conditions[3].Type)
+	assert.Equal(t, "AdmissionAccepted", st.Conditions[1].Type)
+	assert.Equal(t, "CategoryResolved", st.Conditions[2].Type)
+	assert.Equal(t, "OptionsAccepted", st.Conditions[3].Type)
 	assert.Equal(t, model.ConditionStatusFalse, st.Conditions[3].Status)
-	assert.Equal(t, model.ProductConditionTypeVariantsResolved, st.Conditions[4].Type)
+	assert.Equal(t, "VariantsResolved", st.Conditions[4].Type)
 	assert.Equal(t, model.ConditionStatusUnknown, st.Conditions[4].Status)
-	assert.Equal(t, model.ProductConditionTypeReady, st.Conditions[5].Type)
+	assert.Equal(t, "Ready", st.Conditions[5].Type)
 }
 
-// ── T025: Unknown condition type passed through uppercased (edge case) ────────
+// ── T025: Unknown condition type passed through unchanged (edge case) ──────────
 
 func TestStatusFromJSON_UnrecognisedConditionType_PassedThrough(t *testing.T) {
 	raw := json.RawMessage(`{
@@ -249,8 +264,7 @@ func TestStatusFromJSON_UnrecognisedConditionType_PassedThrough(t *testing.T) {
 	st := statusFromJSON(raw)
 	require.NotNil(t, st)
 	require.Len(t, st.Conditions, 1)
-	// Unknown type is uppercased and NOT dropped.
-	assert.Equal(t, model.ProductConditionType("CUSTOMCHECKPASSED"), st.Conditions[0].Type)
+	assert.Equal(t, "CustomCheckPassed", st.Conditions[0].Type)
 }
 
 // ── T026: JPY zero-decimal priceRange round-trip (FR-013, SC-005) ─────────────

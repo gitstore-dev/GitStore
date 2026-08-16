@@ -785,7 +785,7 @@ Compatibility guarantees:
 
 ## 18. Assumptions and Resolved Decisions
 
-- Namespace is the tenant/customer boundary for custom IAM.
+- Namespace is the storefront boundary for custom IAM. Each tenant can create many stores (namespaces)
 - Built-in roles and controller roles ship in the OPA bundle and are immutable at runtime.
 - External group membership is trusted only after AuthN/UserDir normalization.
 - Custom roles, subject grants, and group-role bindings are GitStore datastore state.
