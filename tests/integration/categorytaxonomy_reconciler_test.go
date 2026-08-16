@@ -221,13 +221,16 @@ func TestCategoryTaxonomyReconciler_CycleDetection(t *testing.T) {
 		t.Fatalf("push cycle failed:\n%s", out)
 	}
 
+	// Wait for the controller (not just admission) to have written Ready=FALSE,
+	// which guarantees both Acyclic=FALSE and Ready=FALSE are present in the
+	// same controller-written conditions slice.
 	aStatus := waitForResolved(t, aName, 30*time.Second, func(s *categoryStatusResult) bool {
-		acyclic := conditionByType(s.Conditions, "Acyclic")
-		return acyclic != nil && acyclic.Status == "FALSE"
+		ready := conditionByType(s.Conditions, "Ready")
+		return ready != nil && ready.Status == "FALSE"
 	})
 	bStatus := waitForResolved(t, bName, 30*time.Second, func(s *categoryStatusResult) bool {
-		acyclic := conditionByType(s.Conditions, "Acyclic")
-		return acyclic != nil && acyclic.Status == "FALSE"
+		ready := conditionByType(s.Conditions, "Ready")
+		return ready != nil && ready.Status == "FALSE"
 	})
 	if ready := conditionByType(aStatus.Conditions, "Ready"); ready == nil || ready.Status != "FALSE" {
 		t.Errorf("A Ready condition while cyclic: got %+v, want status=FALSE", ready)
@@ -244,12 +247,12 @@ func TestCategoryTaxonomyReconciler_CycleDetection(t *testing.T) {
 	}
 
 	waitForResolved(t, bName, 30*time.Second, func(s *categoryStatusResult) bool {
-		acyclic := conditionByType(s.Conditions, "Acyclic")
-		return acyclic != nil && acyclic.Status == "TRUE"
+		ready := conditionByType(s.Conditions, "Ready")
+		return ready != nil && ready.Status == "TRUE"
 	})
 	waitForResolved(t, aName, 30*time.Second, func(s *categoryStatusResult) bool {
-		acyclic := conditionByType(s.Conditions, "Acyclic")
-		return acyclic != nil && acyclic.Status == "TRUE"
+		ready := conditionByType(s.Conditions, "Ready")
+		return ready != nil && ready.Status == "TRUE"
 	})
 }
 
