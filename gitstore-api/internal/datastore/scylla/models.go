@@ -233,6 +233,8 @@ var (
 			"name",
 			"default_branch",
 			"storage_class",
+			"max_pack_size_bytes",
+			"max_file_size_bytes",
 			"generation",
 			"resource_version",
 			"status",

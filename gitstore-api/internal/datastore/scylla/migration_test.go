@@ -76,9 +76,11 @@ func TestRunMigrations_RepositoryResourceContractColumns(t *testing.T) {
 	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), log))
 
 	expectedColumns := map[string]string{
-		"generation":       "bigint",
-		"resource_version": "text",
-		"status":           "text",
+		"generation":          "bigint",
+		"resource_version":    "text",
+		"status":              "text",
+		"max_pack_size_bytes": "bigint",
+		"max_file_size_bytes": "bigint",
 	}
 	for column, expectedType := range expectedColumns {
 		t.Run(column, func(t *testing.T) {
