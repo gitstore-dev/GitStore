@@ -139,15 +139,15 @@ Secrets (`auth.admin.password_hash`, `auth.jwt.secret`) must remain in environme
 
 ### Core
 
-| Key                       | Env Var                             | Type   | Default                 | Required | Sensitive | Description                                       |
-|---------------------------|-------------------------------------|--------|-------------------------|----------|-----------|---------------------------------------------------|
-| `grpc.port`               | `GITSTORE_GRPC__PORT`               | u16    | `50051`                 | No       | No        | GitService gRPC server port                       |
-| `git.data_dir`            | `GITSTORE_GIT__DATA_DIR`            | string | `/data/repos`           | No       | No        | Bare repository storage directory                 |
-| `git.max_pack_size_bytes` | `GITSTORE_GIT__MAX_PACK_SIZE_BYTES` | u64    | `52428800`              | No       | No        | Max pack size in bytes                            |
-| `git.repo.max_file_size`  | `GITSTORE_GIT__REPO__MAX_FILE_SIZE` | u64    | `52428800`              | No       | No        | Max file size in bytes                            |
-| `catalog_service.uri`     | `GITSTORE_CATALOG_SERVICE__URI`     | string | `http://localhost:6000` | No       | No        | gitstore-api CatalogService gRPC endpoint         |
-| `log.level`               | `GITSTORE_LOG__LEVEL`               | string | `info`                  | No       | No        | `trace` \| `debug` \| `info` \| `warn` \| `error` |
-| `log.format`              | `GITSTORE_LOG__FORMAT`              | string | `json`                  | No       | No        | `json` \| `text`                                  |
+| Key                            | Env Var                                   | Type   | Default                 | Required | Sensitive | Description                                       |
+|--------------------------------|-------------------------------------------|--------|-------------------------|----------|-----------|---------------------------------------------------|
+| `grpc.port`                    | `GITSTORE_GRPC__PORT`                     | u16    | `50051`                 | No       | No        | GitService gRPC server port                       |
+| `git.data_dir`                 | `GITSTORE_GIT__DATA_DIR`                  | string | `/data/repos`           | No       | No        | Bare repository storage directory                 |
+| `git.repo.max_file_size`       | `GITSTORE_GIT__REPO__MAX_FILE_SIZE`       | u64    | `52428800`              | No       | No        | Max file size in bytes                            |
+| `git.repo.max_pack_size_bytes` | `GITSTORE_GIT__REPO__MAX_PACK_SIZE_BYTES` | u64    | `52428800`              | No       | No        | Max pack size in bytes                            |
+| `catalog_service.uri`          | `GITSTORE_CATALOG_SERVICE__URI`           | string | `http://localhost:6000` | No       | No        | gitstore-api CatalogService gRPC endpoint         |
+| `log.level`                    | `GITSTORE_LOG__LEVEL`                     | string | `info`                  | No       | No        | `trace` \| `debug` \| `info` \| `warn` \| `error` |
+| `log.format`                   | `GITSTORE_LOG__FORMAT`                    | string | `json`                  | No       | No        | `json` \| `text`                                  |
 
 ### Hook Phase Toggles
 
@@ -186,10 +186,10 @@ port = 50051
 
 [git]
 data_dir = "/data/repos"
-max_pack_size_bytes = 52428800
 
 [git.repo]
 max_file_size = 52428800
+max_pack_size_bytes = 52428800
 
 [log]
 level = "info"

@@ -289,16 +289,6 @@ func TestUpdateResourceStatus_GenericPathAppliesToCategoryTaxonomy(t *testing.T)
 	require.NotNil(t, payload.Object)
 }
 
-// T028: a caller without category.status.write authorization is rejected
-// with FORBIDDEN even when resourceVersion is correct. This is validated
-// at the middleware layer (internal/middleware/security/graphql_test.go),
-// not the resolver directly — the resolver itself has no authorization
-// logic (that's the point: authz happens in GraphQLFieldAuthorizer before
-// the resolver runs). Documented here as a cross-reference for FR-011.
-func TestUpdateCategoryStatus_AuthorizationIsEnforcedAtMiddlewareLayer(t *testing.T) {
-	t.Skip("see internal/middleware/security/graphql_test.go: TestGraphQLFieldAuthorizerUpdateCategoryStatus*")
-}
-
 func unmarshalStatus(raw []byte, out *catalog.CategoryTaxonomyStatus) error {
 	return json.Unmarshal(raw, out)
 }
