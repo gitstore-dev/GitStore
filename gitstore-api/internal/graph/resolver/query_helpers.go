@@ -40,7 +40,7 @@ func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (mo
 		if err != nil {
 			return nil, nil
 		}
-		return datastoreNamespaceToModel(namespace), nil
+		return DatastoreNamespaceToGraphQL(namespace), nil
 	case nodeKindRepository:
 		repo, err := r.service.GetRepository(ctx, rawID)
 		if err != nil {

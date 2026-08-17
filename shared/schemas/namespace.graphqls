@@ -25,9 +25,34 @@ exist as both a user-space and an organization namespace.
 """
 type Namespace implements Node {
   """
-  Globally unique system-generated ID (UUID).
+  Relay transport identity.
   """
   id: ID!
+
+  """
+  Versioned Namespace API contract.
+  """
+  apiVersion: String!
+
+  """
+  Resource kind discriminator.
+  """
+  kind: String!
+
+  """
+  Namespace identity and system metadata.
+  """
+  metadata: NamespaceMetadata!
+
+  """
+  Author-controlled desired state.
+  """
+  spec: NamespaceSpec!
+
+  """
+  System-owned observed state.
+  """
+  status: NamespaceStatus!
 
   """
   Human-readable identifier, globally unique across all tiers.
@@ -35,36 +60,126 @@ type Namespace implements Node {
   Cannot begin or end with a hyphen.
   """
   identifier: String!
+    @deprecated(reason: "Use metadata.name; removal requires a future major GraphQL API release.")
 
   """
   Optional human-friendly display name.
   """
   displayName: String
+    @deprecated(reason: "Use spec.title; removal requires a future major GraphQL API release.")
 
   """
   The tier of this namespace.
   """
   tier: NamespaceTier!
+    @deprecated(reason: "Use spec.tier; removal requires a future major GraphQL API release.")
 
   """
   Timestamp when this namespace was created.
   """
   createdAt: DateTime!
+    @deprecated(reason: "Use metadata.creationTimestamp; removal requires a future major GraphQL API release.")
 
   """
   Username of the caller who created this namespace.
   """
   createdBy: String!
+    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
 
   """
   Timestamp when this namespace was last modified.
   """
   updatedAt: DateTime!
+    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
 
   """
   Username of the caller who last modified this namespace.
   """
   updatedBy: String!
+    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
+
+  """
+  Markdown body content (namespace description).
+  """
+  body: String
+}
+
+"""
+Object metadata for the top-level Namespace kind.
+Unlike ObjectMeta, this type intentionally has no namespace field.
+"""
+type NamespaceMetadata {
+  name: String!
+  labels: JSON
+  annotations: JSON
+  uid: ID!
+  resourceVersion: String!
+  generation: Int!
+  creationTimestamp: DateTime!
+  revision: String
+  ownerReferences: [OwnerReference!]!
+  finalizers: [String!]!
+}
+
+"""
+Author-controlled desired state for a Namespace.
+"""
+type NamespaceSpec {
+  title: String
+  tier: NamespaceTier!
+  repositoryDefaults: NamespaceRepositoryDefaults
+  pushPolicyDefaults: NamespacePushPolicyDefaults
+}
+
+type NamespaceRepositoryDefaults {
+  visibility: RepositoryVisibility
+  defaultBranch: String
+}
+
+enum RepositoryVisibility {
+  PUBLIC
+  PRIVATE
+  INTERNAL
+}
+
+type NamespacePushPolicyDefaults {
+  maxPackSizeBytes: Long
+  maxFileSizeBytes: Long
+  receivePackHooks: ReceivePackHookDefaults
+  schemaValidation: SchemaValidationDefaults
+  admissionControl: AdmissionControlDefaults
+}
+
+type ReceivePackHookDefaults {
+  preReceive: HookToggle
+  update: HookToggle
+  postReceive: HookToggle
+  procReceive: HookToggle
+  postUpdate: HookToggle
+  referenceTransaction: HookToggle
+}
+
+type HookToggle {
+  enabled: Boolean!
+}
+
+type SchemaValidationDefaults {
+  phase: String
+  timeoutSeconds: Int
+}
+
+type AdmissionControlDefaults {
+  phase: String
+  branchPattern: String
+}
+
+"""
+System-owned observed state for a Namespace.
+"""
+type NamespaceStatus {
+  observedGeneration: Int!
+  lastAppliedRevision: String
+  conditions: [Condition!]!
 }
 
 """
@@ -107,7 +222,8 @@ Selector for looking up a namespace by exactly one unique key.
 """
 input NamespaceBy @oneOf {
   id: ID
-  identifier: String
+  identifier: String @deprecated(reason: "Use name; removal requires a future major GraphQL API release.")
+  name: String
 }
 
 """

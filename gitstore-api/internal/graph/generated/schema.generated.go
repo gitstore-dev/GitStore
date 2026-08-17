@@ -4916,6 +4916,24 @@ func (ec *executionContext) unmarshalOLabelSelectorRequirementInput2ᚕᚖgithub
 	return res, nil
 }
 
+func (ec *executionContext) unmarshalOLong2ᚖint64(ctx context.Context, v any) (*int64, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := scalar.UnmarshalLong(v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOLong2ᚖint64(ctx context.Context, sel ast.SelectionSet, v *int64) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	_ = sel
+	_ = ctx
+	res := scalar.MarshalLong(*v)
+	return res
+}
+
 func (ec *executionContext) marshalONode2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNode(ctx context.Context, sel ast.SelectionSet, v model.Node) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null

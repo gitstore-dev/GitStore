@@ -19,6 +19,11 @@ type Node interface {
 	GetID() string
 }
 
+type AdmissionControlDefaults struct {
+	Phase         *string `json:"phase,omitempty"`
+	BranchPattern *string `json:"branchPattern,omitempty"`
+}
+
 // A pointer to another catalogue resource.
 type CatalogObjectReference struct {
 	APIVersion      *string `json:"apiVersion,omitempty"`
@@ -376,6 +381,10 @@ type FileReference struct {
 	Optional bool   `json:"optional"`
 }
 
+type HookToggle struct {
+	Enabled bool `json:"enabled"`
+}
+
 // Inventory management configuration for a ProductVariant.
 type InventoryDefinition struct {
 	// Whether inventory levels are tracked. When false, the variant is always
@@ -463,8 +472,18 @@ type Mutation struct {
 // Namespaces are globally unique across all tiers — the same identifier cannot
 // exist as both a user-space and an organization namespace.
 type Namespace struct {
-	// Globally unique system-generated ID (UUID).
+	// Relay transport identity.
 	ID string `json:"id"`
+	// Versioned Namespace API contract.
+	APIVersion string `json:"apiVersion"`
+	// Resource kind discriminator.
+	Kind string `json:"kind"`
+	// Namespace identity and system metadata.
+	Metadata *NamespaceMetadata `json:"metadata"`
+	// Author-controlled desired state.
+	Spec *NamespaceSpec `json:"spec"`
+	// System-owned observed state.
+	Status *NamespaceStatus `json:"status"`
 	// Human-readable identifier, globally unique across all tiers.
 	// DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
 	// Cannot begin or end with a hyphen.
@@ -481,6 +500,8 @@ type Namespace struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Username of the caller who last modified this namespace.
 	UpdatedBy string `json:"updatedBy"`
+	// Markdown body content (namespace description).
+	Body *string `json:"body,omitempty"`
 }
 
 func (Namespace) IsNode() {}
@@ -492,6 +513,7 @@ func (this Namespace) GetID() string { return this.ID }
 type NamespaceBy struct {
 	ID         *string `json:"id,omitempty"`
 	Identifier *string `json:"identifier,omitempty"`
+	Name       *string `json:"name,omitempty"`
 }
 
 // Connection type for paginated namespaces (Relay pattern).
@@ -510,6 +532,49 @@ type NamespaceEdge struct {
 	Cursor string `json:"cursor"`
 	// The namespace node.
 	Node *Namespace `json:"node"`
+}
+
+// Object metadata for the top-level Namespace kind.
+// Unlike ObjectMeta, this type intentionally has no namespace field.
+type NamespaceMetadata struct {
+	Name              string            `json:"name"`
+	Labels            map[string]any    `json:"labels,omitempty"`
+	Annotations       map[string]any    `json:"annotations,omitempty"`
+	UID               string            `json:"uid"`
+	ResourceVersion   string            `json:"resourceVersion"`
+	Generation        int32             `json:"generation"`
+	CreationTimestamp time.Time         `json:"creationTimestamp"`
+	Revision          *string           `json:"revision,omitempty"`
+	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
+	Finalizers        []string          `json:"finalizers"`
+}
+
+type NamespacePushPolicyDefaults struct {
+	MaxPackSizeBytes *int64                    `json:"maxPackSizeBytes,omitempty"`
+	MaxFileSizeBytes *int64                    `json:"maxFileSizeBytes,omitempty"`
+	ReceivePackHooks *ReceivePackHookDefaults  `json:"receivePackHooks,omitempty"`
+	SchemaValidation *SchemaValidationDefaults `json:"schemaValidation,omitempty"`
+	AdmissionControl *AdmissionControlDefaults `json:"admissionControl,omitempty"`
+}
+
+type NamespaceRepositoryDefaults struct {
+	Visibility    *RepositoryVisibility `json:"visibility,omitempty"`
+	DefaultBranch *string               `json:"defaultBranch,omitempty"`
+}
+
+// Author-controlled desired state for a Namespace.
+type NamespaceSpec struct {
+	Title              *string                      `json:"title,omitempty"`
+	Tier               NamespaceTier                `json:"tier"`
+	RepositoryDefaults *NamespaceRepositoryDefaults `json:"repositoryDefaults,omitempty"`
+	PushPolicyDefaults *NamespacePushPolicyDefaults `json:"pushPolicyDefaults,omitempty"`
+}
+
+// System-owned observed state for a Namespace.
+type NamespaceStatus struct {
+	ObservedGeneration  int32        `json:"observedGeneration"`
+	LastAppliedRevision *string      `json:"lastAppliedRevision,omitempty"`
+	Conditions          []*Condition `json:"conditions"`
 }
 
 // System-managed metadata shared by core catalog resources.
@@ -608,6 +673,8 @@ type Product struct {
 	Metadata   *ObjectMeta    `json:"metadata"`
 	Spec       *ProductSpec   `json:"spec"`
 	Status     *ProductStatus `json:"status,omitempty"`
+	// Markdown body content (product description).
+	Body *string `json:"body,omitempty"`
 	// Paginated list of ProductVariants belonging to this product.
 	ProductVariants *ProductVariantConnection `json:"productVariants"`
 }
@@ -780,6 +847,15 @@ type QuantityDefinition struct {
 type Query struct {
 }
 
+type ReceivePackHookDefaults struct {
+	PreReceive           *HookToggle `json:"preReceive,omitempty"`
+	Update               *HookToggle `json:"update,omitempty"`
+	PostReceive          *HookToggle `json:"postReceive,omitempty"`
+	ProcReceive          *HookToggle `json:"procReceive,omitempty"`
+	PostUpdate           *HookToggle `json:"postUpdate,omitempty"`
+	ReferenceTransaction *HookToggle `json:"referenceTransaction,omitempty"`
+}
+
 // Refresh token mutation input (Relay pattern)
 type RefreshTokenInput struct {
 	// Refresh token used to issue a new access token.
@@ -845,6 +921,8 @@ type Repository struct {
 	CreatedBy   string    `json:"createdBy"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 	UpdatedBy   string    `json:"updatedBy"`
+	// Markdown body content (repository description).
+	Body *string `json:"body,omitempty"`
 }
 
 func (Repository) IsNode() {}
@@ -970,6 +1048,11 @@ type ResolvedProductVariantDefinition struct {
 	Inventory *ResolvedInventoryDefinition `json:"inventory,omitempty"`
 	// Resolved media files.
 	Media []*ResolvedFileDefinition `json:"media"`
+}
+
+type SchemaValidationDefaults struct {
+	Phase          *string `json:"phase,omitempty"`
+	TimeoutSeconds *int32  `json:"timeoutSeconds,omitempty"`
 }
 
 // A resolved name/value pair representing one product option selection.
@@ -1481,6 +1564,63 @@ func (e *NamespaceTier) UnmarshalJSON(b []byte) error {
 }
 
 func (e NamespaceTier) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type RepositoryVisibility string
+
+const (
+	RepositoryVisibilityPublic   RepositoryVisibility = "PUBLIC"
+	RepositoryVisibilityPrivate  RepositoryVisibility = "PRIVATE"
+	RepositoryVisibilityInternal RepositoryVisibility = "INTERNAL"
+)
+
+var AllRepositoryVisibility = []RepositoryVisibility{
+	RepositoryVisibilityPublic,
+	RepositoryVisibilityPrivate,
+	RepositoryVisibilityInternal,
+}
+
+func (e RepositoryVisibility) IsValid() bool {
+	switch e {
+	case RepositoryVisibilityPublic, RepositoryVisibilityPrivate, RepositoryVisibilityInternal:
+		return true
+	}
+	return false
+}
+
+func (e RepositoryVisibility) String() string {
+	return string(e)
+}
+
+func (e *RepositoryVisibility) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = RepositoryVisibility(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid RepositoryVisibility", str)
+	}
+	return nil
+}
+
+func (e RepositoryVisibility) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *RepositoryVisibility) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e RepositoryVisibility) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

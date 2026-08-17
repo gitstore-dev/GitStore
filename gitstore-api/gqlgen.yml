@@ -199,6 +199,8 @@ models:
     model: github.com/gitstore-dev/gitstore/api/internal/graph/scalar.Decimal
   JSON:
     model: github.com/gitstore-dev/gitstore/api/internal/graph/scalar.JSON
+  Long:
+    model: github.com/gitstore-dev/gitstore/api/internal/graph/scalar.Long
 
   Category:
     fields:

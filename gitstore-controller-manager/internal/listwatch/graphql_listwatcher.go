@@ -345,7 +345,7 @@ query($after: String) {
   namespaces(first: 100, after: $after) {
     edges {
       cursor
-      node { identifier }
+      node { metadata { name } }
     }
     pageInfo { hasNextPage endCursor }
   }
@@ -355,7 +355,9 @@ type namespacesListResponse struct {
 	Namespaces struct {
 		Edges []struct {
 			Node struct {
-				Identifier string `json:"identifier"`
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
 			} `json:"node"`
 		} `json:"edges"`
 		PageInfo struct {
@@ -473,7 +475,7 @@ func listNamespaceIdentifiers(ctx context.Context, client *graphqlclient.Client)
 			return nil, fmt.Errorf("listwatch: list namespaces: %w", err)
 		}
 		for _, edge := range resp.Namespaces.Edges {
-			identifiers = append(identifiers, edge.Node.Identifier)
+			identifiers = append(identifiers, edge.Node.Metadata.Name)
 		}
 		if !resp.Namespaces.PageInfo.HasNextPage || resp.Namespaces.PageInfo.EndCursor == nil {
 			break
