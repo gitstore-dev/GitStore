@@ -86,7 +86,7 @@ sequenceDiagram
     Pipe->>Val: validate(ResourceBlobs) [tokio::time::timeout, mod.rs L448-476]
     Val->>Cat: ValidateResources{repository_id, blobs}
     Cat-->>Val: accepted=false, errors=[...]
-    Val-->>Pipe: HookDecision::Reject("path: message; ...")
+    Val-->>Pipe: HookDecision Reject (aggregated path and message errors)
     Pipe-->>Pack: Reject (all-or-nothing, mod.rs L205-301)
     Pack-->>Client: push rejected, no refs updated
 ```
@@ -245,7 +245,7 @@ sequenceDiagram
         Adm->>Cat: tokio::spawn AdmitResources{ref=feature/x, changed_paths}
         Cat-->>Adm: response (or error, logged only, L107-113)
     end
-    Note over Client: Client already has its response; no correlation to these two independent, unordered, at-most-once calls
+    Note right of Client: Client already has its response and no correlation to the two independent and unordered at-most-once calls
 ```
 
 ### 11.1 Sequence: external extension timeout/outage (synchronous slot)

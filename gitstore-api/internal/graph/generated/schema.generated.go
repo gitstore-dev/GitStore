@@ -4737,6 +4737,22 @@ func (ec *executionContext) unmarshalNLabelSelectorRequirementInput2ᚖgithubᚗ
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
+func (ec *executionContext) unmarshalNLong2int64(ctx context.Context, v any) (int64, error) {
+	res, err := scalar.UnmarshalLong(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNLong2int64(ctx context.Context, sel ast.SelectionSet, v int64) graphql.Marshaler {
+	_ = sel
+	res := scalar.MarshalLong(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return res
+}
+
 func (ec *executionContext) marshalNNode2ᚕgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNode(ctx context.Context, sel ast.SelectionSet, v []model.Node) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 1000, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)

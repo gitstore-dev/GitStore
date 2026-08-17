@@ -209,6 +209,11 @@ type Repository struct {
 	UpdatedAt     time.Time
 	UpdatedBy     string
 
+	// Declarative resource versioning and system-owned status.
+	Generation      int64
+	ResourceVersion string
+	Status          json.RawMessage
+
 	// Push policy limits. Zero means no limit enforced (FR-015).
 	MaxPackSizeBytes int64
 	MaxFileSizeBytes int64

@@ -22,6 +22,8 @@ const (
 	namespaceKind                   = "Namespace"
 	namespaceInitialResourceVersion = "1"
 	namespaceInitialGeneration      = int32(1)
+	repositoryAPIVersion            = "gitstore.dev/v1beta1"
+	repositoryKind                  = "Repository"
 )
 
 // datastoreNamespaceToModel converts a datastore Namespace to a GraphQL model Namespace.
@@ -580,22 +582,11 @@ func specSelectorToCatalog(sel *struct {
 	return s
 }
 
-// DatastoreRepositoryToGraphQL converts a datastore Repository to the GraphQL model
-// without namespace (namespace is resolved separately via field resolver).
+// DatastoreRepositoryToGraphQL converts a datastore Repository without
+// namespace or storage-root context. Resolver paths should use
+// datastoreRepositoryToModel so all non-null fields are populated.
 func DatastoreRepositoryToGraphQL(r *datastore.Repository) *model.Repository {
-	if r == nil {
-		return nil
-	}
-	return &model.Repository{
-		ID:            mustEncodeNodeID(nodeKindRepository, r.ID),
-		Name:          r.Name,
-		DefaultBranch: r.DefaultBranch,
-		StorageClass:  r.StorageClass,
-		CreatedAt:     r.CreatedAt,
-		CreatedBy:     r.CreatedBy,
-		UpdatedAt:     r.UpdatedAt,
-		UpdatedBy:     r.UpdatedBy,
-	}
+	return datastoreRepositoryToModel(r, nil, "")
 }
 
 func datastoreNamespaceTierToModel(t datastore.NamespaceTier) model.NamespaceTier {
@@ -894,19 +885,84 @@ func datastoreRepositoryToModel(r *datastore.Repository, ns *datastore.Namespace
 	if r == nil {
 		return nil
 	}
-	repo := &model.Repository{
-		ID:            mustEncodeNodeID(nodeKindRepository, r.ID),
-		Name:          r.Name,
-		DefaultBranch: r.DefaultBranch,
-		StorageClass:  r.StorageClass,
-		StoragePath:   fanoutStoragePath(dataDir, r.ID),
-		CreatedAt:     r.CreatedAt,
-		CreatedBy:     r.CreatedBy,
-		UpdatedAt:     r.UpdatedAt,
-		UpdatedBy:     r.UpdatedBy,
-	}
+	repository := *r
+	repository.Status = append(json.RawMessage(nil), r.Status...)
+	datastore.NormalizeRepositoryContract(&repository)
+	nodeID := mustEncodeNodeID(nodeKindRepository, repository.ID)
+	namespace := ""
+	var legacyNamespace *model.Namespace
 	if ns != nil {
-		repo.Namespace = DatastoreNamespaceToGraphQL(ns)
+		namespace = ns.Identifier
+		legacyNamespace = DatastoreNamespaceToGraphQL(ns)
+	}
+	storagePath := fanoutStoragePath(dataDir, repository.ID)
+	repo := &model.Repository{
+		ID:         nodeID,
+		APIVersion: repositoryAPIVersion,
+		Kind:       repositoryKind,
+		Metadata: &model.ObjectMeta{
+			Name:              repository.Name,
+			Namespace:         namespace,
+			Labels:            map[string]any{},
+			Annotations:       map[string]any{},
+			UID:               nodeID,
+			ResourceVersion:   repository.ResourceVersion,
+			Generation:        int32(repository.Generation),
+			CreationTimestamp: repository.CreatedAt,
+			OwnerReferences:   []*model.OwnerReference{},
+		},
+		Spec: &model.RepositorySpec{
+			DefaultBranch: repository.DefaultBranch,
+			Visibility:    model.RepositoryVisibilityPrivate,
+			PushPolicy: &model.RepositoryPushPolicy{
+				MaxPackSizeBytes: repository.MaxPackSizeBytes,
+				MaxFileSizeBytes: repository.MaxFileSizeBytes,
+			},
+		},
+		Status:        repositoryStatusFromJSON(repository.Status, repository.ID, storagePath, repository.StorageClass),
+		Name:          repository.Name,
+		Namespace:     legacyNamespace,
+		DefaultBranch: repository.DefaultBranch,
+		StorageClass:  repository.StorageClass,
+		StoragePath:   storagePath,
+		CreatedAt:     repository.CreatedAt,
+		CreatedBy:     repository.CreatedBy,
+		UpdatedAt:     repository.UpdatedAt,
+		UpdatedBy:     repository.UpdatedBy,
 	}
 	return repo
+}
+
+func repositoryStatusFromJSON(raw json.RawMessage, repositoryID, storagePath, storageClass string) *model.RepositoryStatus {
+	var stored struct {
+		ObservedGeneration  int32          `json:"observedGeneration"`
+		LastAppliedRevision string         `json:"lastAppliedRevision"`
+		Conditions          []rawCondition `json:"conditions"`
+	}
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		converterLogger.Warn(
+			"repository blob unmarshal error",
+			zap.String("field", "status"),
+			zap.String("repository_id", repositoryID),
+			zap.Error(err),
+		)
+		stored.Conditions = []rawCondition{}
+	}
+	conditions := make([]*model.Condition, 0, len(stored.Conditions))
+	for _, condition := range stored.Conditions {
+		conditions = append(conditions, conditionFromRaw(condition))
+	}
+	status := &model.RepositoryStatus{
+		ObservedGeneration: stored.ObservedGeneration,
+		Conditions:         conditions,
+		Resolved: &model.ResolvedRepositoryDefinition{
+			StoragePath:  storagePath,
+			StorageClass: storageClass,
+		},
+	}
+	if stored.LastAppliedRevision != "" {
+		revision := stored.LastAppliedRevision
+		status.LastAppliedRevision = &revision
+	}
+	return status
 }

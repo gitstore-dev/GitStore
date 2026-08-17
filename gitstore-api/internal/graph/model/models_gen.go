@@ -899,28 +899,31 @@ type ReorderCategoriesPayload struct {
 	Categories []*Category `json:"categories,omitempty"`
 }
 
-// A git repository. Has a stable internal identity (id) that is independent of
-// its human-readable namespace path. Renaming or transferring a repository does
-// not change its id.
+// A namespace-scoped GitStore Repository resource.
 type Repository struct {
-	// Globally unique Relay ID.
+	// Relay transport identity.
 	ID string `json:"id"`
-	// Human-readable name within the namespace (e.g., "my-catalog").
-	// Mutable on rename.
-	Name string `json:"name"`
-	// The namespace that owns this repository.
-	Namespace *Namespace `json:"namespace"`
-	// Default branch name (e.g., "main").
-	DefaultBranch string `json:"defaultBranch"`
-	// Storage class tag. Reserved for future multi-storage-root use.
-	StorageClass string `json:"storageClass"`
-	// Absolute filesystem path derived from the internal repo_id using the fanout formula.
-	// Informational — for operator use. Example: /data/01/96/0196f3a2-4b1c-7e9d-a301-8b2c4d5e6f7a.git
-	StoragePath string    `json:"storagePath"`
-	CreatedAt   time.Time `json:"createdAt"`
-	CreatedBy   string    `json:"createdBy"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-	UpdatedBy   string    `json:"updatedBy"`
+	// Versioned Repository API contract.
+	APIVersion string `json:"apiVersion"`
+	// Resource kind discriminator. Always "Repository".
+	Kind string `json:"kind"`
+	// System-managed identity, namespace ownership, versioning, and creation metadata.
+	Metadata *ObjectMeta `json:"metadata"`
+	// Declarative Repository configuration. Fields without an existing write and
+	// persistence path project deterministic reserved defaults in this API version.
+	Spec *RepositorySpec `json:"spec"`
+	// System-derived Repository state. Present for every Repository, including
+	// resources created before this contract existed.
+	Status        *RepositoryStatus `json:"status"`
+	Name          string            `json:"name"`
+	Namespace     *Namespace        `json:"namespace"`
+	DefaultBranch string            `json:"defaultBranch"`
+	StorageClass  string            `json:"storageClass"`
+	StoragePath   string            `json:"storagePath"`
+	CreatedAt     time.Time         `json:"createdAt"`
+	CreatedBy     string            `json:"createdBy"`
+	UpdatedAt     time.Time         `json:"updatedAt"`
+	UpdatedBy     string            `json:"updatedBy"`
 	// Markdown body content (repository description).
 	Body *string `json:"body,omitempty"`
 }
@@ -956,6 +959,35 @@ type RepositoryNamespacePath struct {
 	Namespace string `json:"namespace"`
 	// Repository name (e.g., "my-catalog").
 	Name string `json:"name"`
+}
+
+// Repository-level push-policy projection. Maximum-size fields use existing
+// persisted values. Extended override groups are reserved and null until a future
+// feature defines their write and persistence semantics.
+type RepositoryPushPolicy struct {
+	MaxPackSizeBytes int64                     `json:"maxPackSizeBytes"`
+	MaxFileSizeBytes int64                     `json:"maxFileSizeBytes"`
+	ReceivePackHooks *ReceivePackHookDefaults  `json:"receivePackHooks,omitempty"`
+	SchemaValidation *SchemaValidationDefaults `json:"schemaValidation,omitempty"`
+	AdmissionControl *AdmissionControlDefaults `json:"admissionControl,omitempty"`
+}
+
+// Declarative desired-state projection for a Repository. In this feature,
+// visibility is reserved and projects PRIVATE until write semantics are added.
+type RepositorySpec struct {
+	DefaultBranch string                `json:"defaultBranch"`
+	Visibility    RepositoryVisibility  `json:"visibility"`
+	PushPolicy    *RepositoryPushPolicy `json:"pushPolicy"`
+}
+
+// System-owned observed state for a Repository.
+type RepositoryStatus struct {
+	ObservedGeneration  int32   `json:"observedGeneration"`
+	LastAppliedRevision *string `json:"lastAppliedRevision,omitempty"`
+	// Shared resource conditions. Empty in this feature because no Repository
+	// condition-producing writer or Repository-specific condition vocabulary exists.
+	Conditions []*Condition                  `json:"conditions"`
+	Resolved   *ResolvedRepositoryDefinition `json:"resolved"`
 }
 
 type ResolvedCategoryDefinition struct {
@@ -1048,6 +1080,12 @@ type ResolvedProductVariantDefinition struct {
 	Inventory *ResolvedInventoryDefinition `json:"inventory,omitempty"`
 	// Resolved media files.
 	Media []*ResolvedFileDefinition `json:"media"`
+}
+
+// System-computed Repository values that authors cannot set directly.
+type ResolvedRepositoryDefinition struct {
+	StoragePath  string `json:"storagePath"`
+	StorageClass string `json:"storageClass"`
 }
 
 type SchemaValidationDefaults struct {

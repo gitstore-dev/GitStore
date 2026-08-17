@@ -258,6 +258,7 @@ scalar JSON
 Signed 64-bit integer used for byte-size policy values.
 """
 scalar Long
+  @specifiedBy(url: "https://scalars.graphql.org/apollographql/long-v0.1.html")
 
 """
 System-managed metadata shared by core catalog resources.

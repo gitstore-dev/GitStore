@@ -250,13 +250,18 @@ func BuildNamespaceConnection(result *datastore.PageResult[datastore.Namespace])
 	}
 }
 
-// BuildRepositoryConnection converts a PageResult[Repository] into a GraphQL RepositoryConnection.
-func BuildRepositoryConnection(result *datastore.PageResult[datastore.Repository]) *model.RepositoryConnection {
+// BuildRepositoryConnection converts repositories using namespace context
+// resolved once by the list resolver.
+func BuildRepositoryConnection(
+	result *datastore.PageResult[datastore.Repository],
+	namespace *datastore.Namespace,
+	dataDir string,
+) *model.RepositoryConnection {
 	edges := make([]*model.RepositoryEdge, len(result.Items))
 	for i, r := range result.Items {
 		edges[i] = &model.RepositoryEdge{
 			Cursor: EncodeKeysetCursor(r.CreatedAt, r.ID),
-			Node:   DatastoreRepositoryToGraphQL(r),
+			Node:   datastoreRepositoryToModel(r, namespace, dataDir),
 		}
 	}
 	return &model.RepositoryConnection{
