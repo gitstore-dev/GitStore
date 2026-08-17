@@ -251,6 +251,22 @@ func TestDatastoreProductToGraphQL_SpecHydration(t *testing.T) {
 	assert.Equal(t, "size", got.Spec.Options[0].Name)
 }
 
+func TestDatastoreProductToGraphQL_BodyHydration(t *testing.T) {
+	p := newTestProduct()
+	p.Body = "## Widget\n\nA useful product."
+
+	got := DatastoreProductToGraphQL(p)
+	require.NotNil(t, got)
+	require.NotNil(t, got.Body)
+	assert.Equal(t, p.Body, *got.Body)
+}
+
+func TestDatastoreProductToGraphQL_EmptyBodyRemainsNull(t *testing.T) {
+	got := DatastoreProductToGraphQL(newTestProduct())
+	require.NotNil(t, got)
+	assert.Nil(t, got.Body)
+}
+
 func TestDatastoreProductToGraphQL_NilSpec_ReturnsEmptySpec(t *testing.T) {
 	p := newTestProduct()
 	p.Spec = nil
