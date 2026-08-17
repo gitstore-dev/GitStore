@@ -17,6 +17,12 @@ That shape does not imply Git storage. Some resources are Git-authored and
 hydrated into ScyllaDB or memDB. Others are datastore-only durable records or
 transient request/response objects.
 
+Namespace now exposes this envelope through GraphQL as an additive read
+contract. Existing flat datastore rows are hydrated into `metadata`, `spec`,
+and `status` without a datastore migration. Git-driven Namespace write
+delegation is tracked separately by GH#172; the current create/delete tooling
+continues to use the existing mutation path until that work lands.
+
 The resource list is anchored in the Kubernetes-style frontmatter initiative
 tracked by `gitstore-dev/GitStore#40`. That initiative currently covers
 `Product`, `ProductVariant`, `CategoryTaxonomy`, `Collection`, `Translation`,
@@ -76,6 +82,7 @@ System-managed fields that author files must not set:
 - `metadata.creationTimestamp`
 - `metadata.revision`
 - `metadata.ownerReferences`
+- `metadata.finalizers`
 - `status`
 
 For current Git-backed catalog resources, identity is `apiVersion`, `kind`, resolved namespace, and `metadata.name`. File path is source provenance, not identity. A path-only move preserves `metadata.uid` and `generation` while incrementing `resourceVersion`; a spec or Markdown body edit increments both `generation` and `resourceVersion`; deleting and later re-adding the same identity creates a new UID.
@@ -147,6 +154,7 @@ Subresources should use the same storage decision as the data they represent:
 
 ## Related Existing Resource Docs
 
+- [Namespace Resource Contract](../namespace/namespace-spec.md)
 - [Product Spec Reference](../products/product-spec.md)
 - [ProductVariant Spec Reference](../products/product-variant-spec.md)
 - [CategoryTaxonomy Spec Reference](../categories/category-taxonomy-spec.md)

@@ -85,8 +85,11 @@ func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
 
 		switch {
 		case strings.Contains(req.Query, "namespaces("):
+			if !strings.Contains(req.Query, "metadata { name }") {
+				t.Errorf("namespace query must select declarative metadata.name: %s", req.Query)
+			}
 			_, _ = w.Write([]byte(`{"data":{"namespaces":{"edges":[
-				{"cursor":"n1","node":{"identifier":"acme"}}
+				{"cursor":"n1","node":{"metadata":{"name":"acme"}}}
 			],"pageInfo":{"hasNextPage":false,"endCursor":"n1"}}}}`))
 		case strings.Contains(req.Query, "products("):
 			ns, _ := req.Variables["namespace"].(string)

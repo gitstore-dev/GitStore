@@ -15,6 +15,80 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDatastoreNamespaceToGraphQL_DeclarativeProjection(t *testing.T) {
+	ns := namespaceContractFixture("6a053cdd-1f95-47f2-b3bb-d950a52a6758", "acme")
+
+	got := datastoreNamespaceToModel(ns)
+	require.NotNil(t, got)
+	assert.Equal(t, namespaceAPIVersion, got.APIVersion)
+	assert.Equal(t, namespaceKind, got.Kind)
+
+	require.NotNil(t, got.Metadata)
+	assert.Equal(t, "acme", got.Metadata.Name)
+	assert.Equal(t, ns.ID, got.Metadata.UID)
+	assert.Equal(t, namespaceInitialResourceVersion, got.Metadata.ResourceVersion)
+	assert.Equal(t, namespaceInitialGeneration, got.Metadata.Generation)
+	assert.Equal(t, map[string]any{}, got.Metadata.Labels)
+	assert.Equal(t, map[string]any{}, got.Metadata.Annotations)
+	assert.Empty(t, got.Metadata.OwnerReferences)
+	assert.NotNil(t, got.Metadata.OwnerReferences)
+	assert.Empty(t, got.Metadata.Finalizers)
+	assert.NotNil(t, got.Metadata.Finalizers)
+	assert.Nil(t, got.Metadata.Revision)
+	assert.Equal(t, ns.CreatedAt, got.Metadata.CreationTimestamp)
+
+	require.NotNil(t, got.Spec)
+	require.NotNil(t, got.Spec.Title)
+	assert.Equal(t, ns.DisplayName, *got.Spec.Title)
+	assert.Equal(t, model.NamespaceTierUser, got.Spec.Tier)
+	assert.Nil(t, got.Spec.RepositoryDefaults)
+	assert.Nil(t, got.Spec.PushPolicyDefaults)
+
+	require.NotNil(t, got.Status)
+	assert.Equal(t, int32(0), got.Status.ObservedGeneration)
+	assert.Nil(t, got.Status.LastAppliedRevision)
+	assert.Empty(t, got.Status.Conditions)
+	assert.NotNil(t, got.Status.Conditions)
+}
+
+func TestDatastoreNamespaceToGraphQL_PreservesLegacyProjection(t *testing.T) {
+	ns := namespaceContractFixture("00000000-0000-0000-0000-000000000044", "legacy")
+
+	got := datastoreNamespaceToModel(ns)
+	require.NotNil(t, got)
+	assert.Equal(t, mustEncodeNodeID(nodeKindNamespace, ns.ID), got.ID)
+	assert.Equal(t, ns.Identifier, got.Identifier)
+	require.NotNil(t, got.DisplayName)
+	assert.Equal(t, ns.DisplayName, *got.DisplayName)
+	assert.Equal(t, model.NamespaceTierUser, got.Tier)
+	assert.Equal(t, ns.CreatedAt, got.CreatedAt)
+	assert.Equal(t, ns.CreatedBy, got.CreatedBy)
+	assert.Equal(t, ns.UpdatedAt, got.UpdatedAt)
+	assert.Equal(t, ns.UpdatedBy, got.UpdatedBy)
+}
+
+func TestDatastoreNamespaceToGraphQL_IdentityAndVersionDefaultsArePerResource(t *testing.T) {
+	first := namespaceContractFixture("00000000-0000-0000-0000-000000000101", "first")
+	second := namespaceContractFixture("00000000-0000-0000-0000-000000000202", "second")
+	second.CreatedAt = second.CreatedAt.Add(24 * time.Hour)
+
+	firstModel := datastoreNamespaceToModel(first)
+	secondModel := datastoreNamespaceToModel(second)
+
+	require.NotNil(t, firstModel.Metadata)
+	require.NotNil(t, secondModel.Metadata)
+	assert.NotEqual(t, firstModel.ID, secondModel.ID)
+	assert.Equal(t, first.ID, firstModel.Metadata.UID)
+	assert.Equal(t, second.ID, secondModel.Metadata.UID)
+	assert.NotEqual(t, firstModel.Metadata.UID, secondModel.Metadata.UID)
+	assert.Equal(t, "1", firstModel.Metadata.ResourceVersion)
+	assert.Equal(t, "1", secondModel.Metadata.ResourceVersion)
+	assert.Equal(t, int32(1), firstModel.Metadata.Generation)
+	assert.Equal(t, int32(1), secondModel.Metadata.Generation)
+	assert.Equal(t, first.CreatedAt, firstModel.Metadata.CreationTimestamp)
+	assert.Equal(t, second.CreatedAt, secondModel.Metadata.CreationTimestamp)
+}
+
 // ── specFromJSON ─────────────────────────────────────────────────────────────
 
 func TestSpecFromJSON_NilBlob_ReturnsEmptySpec(t *testing.T) {

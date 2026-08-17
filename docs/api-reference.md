@@ -165,7 +165,13 @@ query GetNodes($ids: [ID!]!) {
   nodes(ids: $ids) {
     id
     ... on Namespace {
-      identifier
+      metadata {
+        name
+      }
+      spec {
+        title
+        tier
+      }
     }
     ... on Repository {
       name
@@ -181,16 +187,43 @@ query GetNodes($ids: [ID!]!) {
 query GetNamespace {
   namespace(by: { identifier: "gitstore-test" }) {
     id
-    identifier
-    displayName
-    tier
-    createdAt
-    createdBy
-    updatedAt
-    updatedBy
+    apiVersion
+    kind
+    metadata {
+      name
+      uid
+      resourceVersion
+      generation
+      creationTimestamp
+      revision
+      finalizers
+    }
+    spec {
+      title
+      tier
+      repositoryDefaults {
+        visibility
+        defaultBranch
+      }
+      pushPolicyDefaults {
+        maxPackSizeBytes
+        maxFileSizeBytes
+      }
+    }
+    status {
+      observedGeneration
+      lastAppliedRevision
+      conditions {
+        type
+        status
+      }
+    }
   }
 }
 ```
+
+Existing flat fields remain available with deprecation reasons. New callers
+should use the declarative fields shown above.
 
 ### namespaces
 
@@ -201,8 +234,16 @@ query ListNamespaces {
       cursor
       node {
         id
-        identifier
-        tier
+        metadata {
+          name
+        }
+        spec {
+          title
+          tier
+        }
+        status {
+          observedGeneration
+        }
       }
     }
     pageInfo {
@@ -232,7 +273,13 @@ query GetRepository {
     storageClass
     storagePath
     namespace {
-      identifier
+      metadata {
+        name
+      }
+      spec {
+        title
+        tier
+      }
     }
   }
 }
@@ -607,11 +654,18 @@ mutation CreateNamespace {
       tier: USER
     }
   ) {
-        namespace {
+    namespace {
       id
-      identifier
-      displayName
-      tier
+      metadata {
+        name
+      }
+      spec {
+        title
+        tier
+      }
+      status {
+        observedGeneration
+      }
     }
   }
 }
@@ -660,7 +714,9 @@ mutation CreateRepository($namespace: String!) {
       defaultBranch
       storagePath
       namespace {
-        identifier
+        metadata {
+          name
+        }
       }
     }
   }
@@ -699,7 +755,9 @@ mutation TransferRepository($repositoryId: ID!, $targetNamespaceId: ID!) {
       id
       name
       namespace {
-        identifier
+        metadata {
+          name
+        }
       }
     }
   }
@@ -830,15 +888,28 @@ Post-receive admission is asynchronous and cannot reject an already accepted Git
 ```graphql
 type Namespace implements Node {
   id: ID!
-  identifier: String!
-  displayName: String
-  tier: NamespaceTier!
-  createdAt: DateTime!
-  createdBy: String!
-  updatedAt: DateTime!
-  updatedBy: String!
+  apiVersion: String!
+  kind: String!
+  metadata: NamespaceMetadata!
+  spec: NamespaceSpec!
+  status: NamespaceStatus!
+
+  # Deprecated compatibility fields remain until a future major API release.
+  identifier: String! @deprecated
+  displayName: String @deprecated
+  tier: NamespaceTier! @deprecated
+  createdAt: DateTime! @deprecated
+  createdBy: String! @deprecated
+  updatedAt: DateTime! @deprecated
+  updatedBy: String! @deprecated
 }
 ```
+
+`NamespaceMetadata` intentionally omits `namespace` because Namespace is a
+top-level resource. Existing datastore rows hydrate with
+`resourceVersion: "1"`, `generation: 1`, and an initial non-null status of
+`observedGeneration: 0`, `lastAppliedRevision: null`, and `conditions: []`.
+See [Namespace Resource Contract](namespace/namespace-spec.md).
 
 ### Repository
 
