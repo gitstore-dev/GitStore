@@ -18,12 +18,13 @@ import (
 
 func TestNamespaceConsumersAvoidDeprecatedOutputSelections(t *testing.T) {
 	root := repositoryRoot(t)
-	deprecatedSelection := regexp.MustCompile(`(?s)\bnamespace\s*(?:\([^{}]*\))?\s*\{[^{}]*\b(identifier|displayName|tier|createdAt|createdBy|updatedAt|updatedBy)\b`)
+	deprecatedSelection := regexp.MustCompile(`(?s)(?:\bnamespace\s*(?:\([^{}]*\))?\s*\{[^{}]*|\bnamespaces\b.*?\bnode\s*\{[^{}]*)\b(identifier|displayName|tier|createdAt|createdBy|updatedAt|updatedBy)\b`)
 	var offenders []string
 
 	for _, relativeRoot := range []string{
 		"gitstore-admin/src",
 		"gitstore-api/internal/graph/resolver",
+		"gitstore-controller-manager",
 		"tests/integration",
 	} {
 		err := filepath.WalkDir(filepath.Join(root, relativeRoot), func(path string, entry fs.DirEntry, err error) error {
@@ -55,6 +56,12 @@ func TestNamespaceConsumersAvoidDeprecatedOutputSelections(t *testing.T) {
 			return nil
 		})
 		require.NoError(t, err)
+	}
+
+	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
+	require.NoError(t, err)
+	if deprecatedSelection.Match(makefile) {
+		offenders = append(offenders, "Makefile")
 	}
 
 	assert.Empty(t, offenders, "Namespace operations must select metadata/spec/status instead of deprecated flat outputs")

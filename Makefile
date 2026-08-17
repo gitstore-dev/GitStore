@@ -274,7 +274,7 @@ bootstrap-namespace: bootstrap-tools ## Create only the bootstrap namespace.
 			exit 1; \
 		}; \
 	fi; \
-	query='mutation CreateNamespace($$identifier: String!, $$displayName: String, $$tier: NamespaceTier!) { createNamespace(input: { identifier: $$identifier, displayName: $$displayName, tier: $$tier }) { namespace { id identifier tier } } }'; \
+	query='mutation CreateNamespace($$identifier: String!, $$displayName: String, $$tier: NamespaceTier!) { createNamespace(input: { identifier: $$identifier, displayName: $$displayName, tier: $$tier }) { namespace { id metadata { name } spec { tier } } } }'; \
 	payload=$$(jq -n --arg query "$$query" --arg identifier "$${NAMESPACE}" --arg displayName "$${NAMESPACE_DISPLAY_NAME}" --arg tier "$${NAMESPACE_TIER}" '{query: $$query, variables: {identifier: $$identifier, displayName: $$displayName, tier: $$tier}}'); \
 	response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
 		echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
@@ -284,7 +284,7 @@ bootstrap-namespace: bootstrap-tools ## Create only the bootstrap namespace.
 		echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
 		exit 1; \
 	fi; \
-	echo "$$response" | jq -r '.data.createNamespace.namespace | "Created namespace \(.identifier) (\(.id))"'
+	echo "$$response" | jq -r '.data.createNamespace.namespace | "Created namespace \(.metadata.name) (\(.id))"'
 
 bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; namespace must already exist.
 	@set -u; \
@@ -312,7 +312,7 @@ bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; n
 			exit 1; \
 		}; \
 	fi; \
-	query='query Namespace($$identifier: String!) { namespace(by: { identifier: $$identifier }) { id identifier } }'; \
+	query='query Namespace($$identifier: String!) { namespace(by: { identifier: $$identifier }) { id metadata { name } } }'; \
 	payload=$$(jq -n --arg query "$$query" --arg identifier "$${NAMESPACE}" '{query: $$query, variables: {identifier: $$identifier}}'); \
 	response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
 		echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
@@ -326,7 +326,7 @@ bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; n
 		echo "Namespace \"$${NAMESPACE}\" was not found. Run make bootstrap-namespace first."; \
 		exit 1; \
 	}; \
-	query='mutation CreateRepository($$namespace: String!, $$name: String!, $$defaultBranch: String!) { createRepository(input: { namespace: $$namespace, name: $$name, defaultBranch: $$defaultBranch }) { repository { id name defaultBranch storagePath namespace { identifier } } } }'; \
+	query='mutation CreateRepository($$namespace: String!, $$name: String!, $$defaultBranch: String!) { createRepository(input: { namespace: $$namespace, name: $$name, defaultBranch: $$defaultBranch }) { repository { id name defaultBranch storagePath namespace { metadata { name } } } } }'; \
 	payload=$$(jq -n --arg query "$$query" --arg namespace "$${NAMESPACE}" --arg name "$${REPOSITORY}" --arg defaultBranch "$${DEFAULT_BRANCH}" '{query: $$query, variables: {namespace: $$namespace, name: $$name, defaultBranch: $$defaultBranch}}'); \
 	response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
 		echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
@@ -336,7 +336,7 @@ bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; n
 		echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
 		exit 1; \
 	fi; \
-	echo "$$response" | jq -r '.data.createRepository.repository | "Created repository \(.namespace.identifier)/\(.name) (\(.id))\nClone URL: http://localhost:5000/\(.namespace.identifier)/\(.name).git"'
+	echo "$$response" | jq -r '.data.createRepository.repository | "Created repository \(.namespace.metadata.name)/\(.name) (\(.id))\nClone URL: http://localhost:5000/\(.namespace.metadata.name)/\(.name).git"'
 
 git-clean-data: ## Remove native local git-service repository data; requires CONFIRM=1.
 	@if [ "$(CONFIRM)" != "1" ]; then \
