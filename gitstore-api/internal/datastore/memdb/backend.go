@@ -697,12 +697,13 @@ func (m *memdbDatastore) HasRepositories(_ context.Context, namespaceID string) 
 
 func (m *memdbDatastore) CreateRepository(_ context.Context, r *datastore.Repository) error {
 	datastore.NormalizeRepositoryContract(r)
+	stored := normalizedRepositoryCopy(r)
 	txn := m.db.Txn(true)
 	if raw, _ := txn.First("repository", "id", r.ID); raw != nil {
 		txn.Abort()
 		return fmt.Errorf("%w: repository id %s", datastore.ErrAlreadyExists, r.ID)
 	}
-	if err := txn.Insert("repository", r); err != nil {
+	if err := txn.Insert("repository", stored); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: insert repository: %w", err)
 	}
@@ -736,14 +737,20 @@ func (m *memdbDatastore) ListRepositoriesByNamespace(_ context.Context, namespac
 	}), nil
 }
 
-func (m *memdbDatastore) UpdateRepository(_ context.Context, r *datastore.Repository) error {
+func (m *memdbDatastore) UpdateRepository(_ context.Context, r *datastore.Repository, expectedResourceVersion string) error {
 	datastore.NormalizeRepositoryContract(r)
 	txn := m.db.Txn(true)
-	if raw, _ := txn.First("repository", "id", r.ID); raw == nil {
+	raw, _ := txn.First("repository", "id", r.ID)
+	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: repository id %s", datastore.ErrNotFound, r.ID)
 	}
-	if err := txn.Insert("repository", r); err != nil {
+	current := normalizedRepositoryCopy(raw.(*datastore.Repository))
+	if current.ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return datastore.ErrConflict
+	}
+	if err := txn.Insert("repository", normalizedRepositoryCopy(r)); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: update repository: %w", err)
 	}

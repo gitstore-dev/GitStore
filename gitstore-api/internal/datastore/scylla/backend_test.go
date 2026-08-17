@@ -311,7 +311,7 @@ func TestScylla_RepositoryResourceContractRoundTrip(t *testing.T) {
 		}]
 	}`)
 	setRepositoryContractFields(t, created, 6, "13", updatedStatus)
-	require.NoError(t, store.UpdateRepository(ctx, created))
+	require.NoError(t, store.UpdateRepository(ctx, created, "12"))
 
 	updated, err := store.GetRepository(ctx, repository.ID)
 	require.NoError(t, err)
@@ -342,8 +342,9 @@ func TestScylla_RepositoryVersionTransitionsPersist(t *testing.T) {
 	repository := newRepository()
 	require.NoError(t, store.CreateRepository(ctx, repository))
 
+	expectedResourceVersion := repository.ResourceVersion
 	datastore.AdvanceRepositorySpecVersion(repository)
-	require.NoError(t, store.UpdateRepository(ctx, repository))
+	require.NoError(t, store.UpdateRepository(ctx, repository, expectedResourceVersion))
 
 	afterSpec, err := store.GetRepository(ctx, repository.ID)
 	require.NoError(t, err)
@@ -361,14 +362,65 @@ func TestScylla_RepositoryVersionTransitionsPersist(t *testing.T) {
 			"lastTransitionTime": "2026-08-16T20:00:00Z"
 		}]
 	}`)
+	expectedResourceVersion = afterSpec.ResourceVersion
 	datastore.AdvanceRepositorySystemVersion(afterSpec)
-	require.NoError(t, store.UpdateRepository(ctx, afterSpec))
+	require.NoError(t, store.UpdateRepository(ctx, afterSpec, expectedResourceVersion))
 
 	afterSystem, err := store.GetRepository(ctx, repository.ID)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), afterSystem.Generation)
 	assert.Equal(t, "3", afterSystem.ResourceVersion)
 	assert.JSONEq(t, string(afterSpec.Status), string(afterSystem.Status))
+}
+
+func TestScylla_RepositoryPushPolicyRoundTrip(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	repository := newRepository()
+	repository.MaxPackSizeBytes = 64 * 1024 * 1024
+	repository.MaxFileSizeBytes = 8 * 1024 * 1024
+	require.NoError(t, store.CreateRepository(ctx, repository))
+
+	created, err := store.GetRepository(ctx, repository.ID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.MaxPackSizeBytes, created.MaxPackSizeBytes)
+	assert.Equal(t, repository.MaxFileSizeBytes, created.MaxFileSizeBytes)
+
+	expectedResourceVersion := created.ResourceVersion
+	created.MaxPackSizeBytes *= 2
+	created.MaxFileSizeBytes *= 2
+	datastore.AdvanceRepositorySpecVersion(created)
+	require.NoError(t, store.UpdateRepository(ctx, created, expectedResourceVersion))
+
+	updated, err := store.GetRepository(ctx, repository.ID)
+	require.NoError(t, err)
+	assert.Equal(t, created.MaxPackSizeBytes, updated.MaxPackSizeBytes)
+	assert.Equal(t, created.MaxFileSizeBytes, updated.MaxFileSizeBytes)
+}
+
+func TestScylla_UpdateRepositoryRejectsStaleResourceVersion(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	repository := newRepository()
+	require.NoError(t, store.CreateRepository(ctx, repository))
+
+	first, err := store.GetRepository(ctx, repository.ID)
+	require.NoError(t, err)
+	stale, err := store.GetRepository(ctx, repository.ID)
+	require.NoError(t, err)
+
+	first.Name = "first-writer"
+	datastore.AdvanceRepositorySpecVersion(first)
+	require.NoError(t, store.UpdateRepository(ctx, first, "1"))
+
+	stale.Name = "stale-writer"
+	datastore.AdvanceRepositorySpecVersion(stale)
+	require.ErrorIs(t, store.UpdateRepository(ctx, stale, "1"), datastore.ErrConflict)
+
+	got, err := store.GetRepository(ctx, repository.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "first-writer", got.Name)
+	assert.Equal(t, "2", got.ResourceVersion)
 }
 
 // ── Product ───────────────────────────────────────────────────────────────────

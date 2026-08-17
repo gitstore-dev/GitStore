@@ -585,8 +585,9 @@ func (s *Service) RenameRepository(ctx context.Context, repoID, newName, callerU
 	repo.Name = newName
 	repo.UpdatedAt = s.clock.Now().UTC()
 	repo.UpdatedBy = callerUsername
+	expectedResourceVersion := repo.ResourceVersion
 	datastore.AdvanceRepositorySpecVersion(repo)
-	if err := s.store.UpdateRepository(ctx, repo); err != nil {
+	if err := s.store.UpdateRepository(ctx, repo, expectedResourceVersion); err != nil {
 		s.logger.Error("failed to update repository record after rename",
 			zap.String("repo_id", repoID),
 			zap.Error(err),
@@ -623,8 +624,9 @@ func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespaceID,
 	repo.NamespaceID = toNamespaceID
 	repo.UpdatedAt = s.clock.Now().UTC()
 	repo.UpdatedBy = callerUsername
+	expectedResourceVersion := repo.ResourceVersion
 	datastore.AdvanceRepositorySystemVersion(repo)
-	if err := s.store.UpdateRepository(ctx, repo); err != nil {
+	if err := s.store.UpdateRepository(ctx, repo, expectedResourceVersion); err != nil {
 		s.logger.Error("failed to update repository record after transfer",
 			zap.String("repo_id", repoID),
 			zap.Error(err),

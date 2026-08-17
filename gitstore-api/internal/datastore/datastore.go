@@ -190,7 +190,10 @@ type Datastore interface {
 	CreateRepository(ctx context.Context, r *Repository) error
 	GetRepository(ctx context.Context, id string) (*Repository, error)
 	ListRepositoriesByNamespace(ctx context.Context, namespaceID string, page PageParams) (*PageResult[Repository], error)
-	UpdateRepository(ctx context.Context, r *Repository) error
+	// UpdateRepository replaces a repository only when its persisted
+	// resourceVersion matches expectedResourceVersion. It returns ErrConflict
+	// when another writer has advanced the record since it was read.
+	UpdateRepository(ctx context.Context, r *Repository, expectedResourceVersion string) error
 	DeleteRepository(ctx context.Context, id string) error
 	// HasCatalogResources reports whether at least one Product,
 	// ProductVariant, CategoryTaxonomy, or Collection record currently has

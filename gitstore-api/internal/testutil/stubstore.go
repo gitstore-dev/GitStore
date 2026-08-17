@@ -139,8 +139,10 @@ func (s *StubStore) CreateRepository(_ context.Context, _ *datastore.Repository)
 func (s *StubStore) ListRepositoriesByNamespace(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
 	return &datastore.PageResult[datastore.Repository]{}, nil
 }
-func (s *StubStore) UpdateRepository(_ context.Context, _ *datastore.Repository) error { return nil }
-func (s *StubStore) DeleteRepository(_ context.Context, _ string) error                { return nil }
+func (s *StubStore) UpdateRepository(_ context.Context, _ *datastore.Repository, _ string) error {
+	return nil
+}
+func (s *StubStore) DeleteRepository(_ context.Context, _ string) error { return nil }
 func (s *StubStore) CreateNamespaceMapping(_ context.Context, _ *datastore.NamespaceMapping) error {
 	return nil
 }

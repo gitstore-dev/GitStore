@@ -439,7 +439,7 @@ func TestMemdb_UpdateRepository(t *testing.T) {
 	require.NoError(t, ds.CreateRepository(ctx, r))
 
 	r.Name = "renamed"
-	require.NoError(t, ds.UpdateRepository(ctx, r))
+	require.NoError(t, ds.UpdateRepository(ctx, r, r.ResourceVersion))
 
 	got, err := ds.GetRepository(ctx, repoID1)
 	require.NoError(t, err)
@@ -463,9 +463,10 @@ func TestMemdb_RepositoryContractRoundTrip(t *testing.T) {
 	assert.JSONEq(t, string(r.Status), string(got.Status))
 
 	got.Generation = 4
+	expectedResourceVersion := got.ResourceVersion
 	got.ResourceVersion = "9"
 	got.Status = json.RawMessage(`{"observedGeneration":4,"conditions":[]}`)
-	require.NoError(t, ds.UpdateRepository(ctx, got))
+	require.NoError(t, ds.UpdateRepository(ctx, got, expectedResourceVersion))
 
 	updated, err := ds.GetRepository(ctx, repoID1)
 	require.NoError(t, err)
@@ -504,8 +505,9 @@ func TestMemdb_RepositoryVersionTransitionsPersist(t *testing.T) {
 	repo := repoFixture(repoID1, nsID1, "versioned")
 	require.NoError(t, ds.CreateRepository(ctx, repo))
 
+	expectedResourceVersion := repo.ResourceVersion
 	datastore.AdvanceRepositorySpecVersion(repo)
-	require.NoError(t, ds.UpdateRepository(ctx, repo))
+	require.NoError(t, ds.UpdateRepository(ctx, repo, expectedResourceVersion))
 
 	afterSpec, err := ds.GetRepository(ctx, repoID1)
 	require.NoError(t, err)
@@ -514,14 +516,40 @@ func TestMemdb_RepositoryVersionTransitionsPersist(t *testing.T) {
 	assert.JSONEq(t, `{"observedGeneration":0,"conditions":[]}`, string(afterSpec.Status))
 
 	afterSpec.Status = json.RawMessage(`{"observedGeneration":2,"lastAppliedRevision":"main@sha1:abc","conditions":[]}`)
+	expectedResourceVersion = afterSpec.ResourceVersion
 	datastore.AdvanceRepositorySystemVersion(afterSpec)
-	require.NoError(t, ds.UpdateRepository(ctx, afterSpec))
+	require.NoError(t, ds.UpdateRepository(ctx, afterSpec, expectedResourceVersion))
 
 	afterSystem, err := ds.GetRepository(ctx, repoID1)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), afterSystem.Generation)
 	assert.Equal(t, "3", afterSystem.ResourceVersion)
 	assert.JSONEq(t, string(afterSpec.Status), string(afterSystem.Status))
+}
+
+func TestMemdb_UpdateRepositoryRejectsStaleResourceVersion(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	repository := repoFixture(repoID1, nsID1, "versioned")
+	require.NoError(t, ds.CreateRepository(ctx, repository))
+
+	first, err := ds.GetRepository(ctx, repoID1)
+	require.NoError(t, err)
+	stale, err := ds.GetRepository(ctx, repoID1)
+	require.NoError(t, err)
+
+	first.Name = "first-writer"
+	datastore.AdvanceRepositorySpecVersion(first)
+	require.NoError(t, ds.UpdateRepository(ctx, first, "1"))
+
+	stale.Name = "stale-writer"
+	datastore.AdvanceRepositorySpecVersion(stale)
+	require.ErrorIs(t, ds.UpdateRepository(ctx, stale, "1"), datastore.ErrConflict)
+
+	got, err := ds.GetRepository(ctx, repoID1)
+	require.NoError(t, err)
+	assert.Equal(t, "first-writer", got.Name)
+	assert.Equal(t, "2", got.ResourceVersion)
 }
 
 func TestMemdb_DeleteRepository(t *testing.T) {
