@@ -9,11 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
+
+const graphQLDateTimeLayout = "2006-01-02T15:04:05.000Z07:00"
 
 const updateCategoryStatusMutation = `
 mutation($input: UpdateCategoryStatusInput!) {
@@ -119,7 +120,7 @@ func toConditionInputs(conditions []*Condition) []map[string]any {
 			"type":               c.Type,
 			"status":             normalizeConditionStatus(c.Status),
 			"observedGeneration": c.ObservedGeneration,
-			"lastTransitionTime": c.LastTransitionTime.Format(time.RFC3339Nano),
+			"lastTransitionTime": c.LastTransitionTime.Format(graphQLDateTimeLayout),
 			"reason":             c.Reason,
 			"message":            c.Message,
 		})
