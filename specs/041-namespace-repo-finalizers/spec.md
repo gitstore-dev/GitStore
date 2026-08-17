@@ -1,8 +1,8 @@
 # Feature Specification: Namespace/Repository Deletion Ordering and System Repository Bootstrap
 
-**Feature Branch**: `041-namespace-repo-finalizers`
-**Created**: 2026-08-10
-**Status**: Draft
+**Feature Branch**: `041-namespace-repo-finalizers`  
+**Created**: 2026-08-10  
+**Status**: Closed  
 **Input**: User description: "Implement foreground-finalizer deletion ordering and gitstore-system auto-provisioning for the Namespace/Repository control plane, closing GH#165 and GH#173 (Phase 1 exit criteria)."
 
 ## User Scenarios & Testing *(mandatory)*

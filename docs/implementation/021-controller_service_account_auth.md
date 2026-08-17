@@ -330,7 +330,7 @@ type Mutation {
 }
 
 input IssueServiceAccountTokenInput {
-  apiVersion: String! = "authn.gitstore.dev/v1beta1"
+  apiVersion: String! = "authentication.gitstore.dev/v1beta1"
   kind: String! = "TokenRequest"
   metadata: ObjectMetaInput! # contains namespace and name of the ServiceAccount to issue for
   spec: TokenRequestSpec!
@@ -354,7 +354,7 @@ type TokenRequestStatus {
 }
 
 input CreateServiceAccountInput {
-  apiVersion: String! = "authn.gitstore.dev/v1beta1"
+  apiVersion: String! = "authentication.gitstore.dev/v1beta1"
   kind: String! = "ServiceAccount"
   metadata: ObjectMetaInput! # contains namespace and name of the ServiceAccount to create
   publicKeys: [ServiceAccountPublicKeyInput!]!
@@ -381,7 +381,7 @@ type CreateServiceAccountPayload {
 }
 
 input DeleteServiceAccountInput {
-  apiVersion: String! = "authn.gitstore.dev/v1beta1"
+  apiVersion: String! = "authentication.gitstore.dev/v1beta1"
   kind: String! = "ServiceAccount"
   metadata: ObjectMetaInput! # contains namespace and name of the ServiceAccount to delete
 }

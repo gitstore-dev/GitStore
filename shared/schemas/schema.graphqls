@@ -241,11 +241,13 @@ type StatusConflict {
 Decimal type for prices (stored as string to preserve precision)
 """
 scalar Decimal
+  @specifiedBy(url: "https://scalars.graphql.org/chillicream/decimal.html")
 
 """
 DateTime in ISO 8601 format
 """
 scalar DateTime
+  @specifiedBy(url: "https://scalars.graphql.org/andimarek/date-time.html")
 
 """
 JSON metadata object

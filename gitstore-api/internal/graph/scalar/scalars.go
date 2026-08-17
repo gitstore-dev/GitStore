@@ -8,12 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/shopspring/decimal"
 )
+
+const dateTimeLayout = "2006-01-02T15:04:05.000Z07:00"
+
+var dateTimePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}\.\d{3}(?:[Zz]|[+-]\d{2}:\d{2})$`)
 
 // MarshalLong serializes a signed 64-bit integer as a GraphQL integer token.
 func MarshalLong(value int64) graphql.Marshaler {
@@ -78,16 +84,21 @@ func UnmarshalDecimal(v interface{}) (decimal.Decimal, error) {
 
 // MarshalDateTime serializes a time.Time value as a GraphQL DateTime scalar.
 func MarshalDateTime(t time.Time) graphql.Marshaler {
-	return graphql.MarshalTime(t)
+	return graphql.MarshalString(t.Format(dateTimeLayout))
 }
 
 // UnmarshalDateTime parses supported GraphQL DateTime input values.
 func UnmarshalDateTime(v interface{}) (time.Time, error) {
 	switch value := v.(type) {
-	case time.Time:
-		return value, nil
 	case string:
-		t, err := time.Parse(time.RFC3339Nano, value)
+		if !dateTimePattern.MatchString(value) || strings.HasSuffix(value, "-00:00") {
+			return time.Time{}, fmt.Errorf("invalid DateTime value %q: expected RFC 3339 with exactly three fractional digits and a known UTC offset", value)
+		}
+		normalized := value[:10] + "T" + value[11:]
+		if strings.HasSuffix(normalized, "z") {
+			normalized = normalized[:len(normalized)-1] + "Z"
+		}
+		t, err := time.Parse(dateTimeLayout, normalized)
 		if err != nil {
 			return time.Time{}, fmt.Errorf("invalid DateTime value %q: %w", value, err)
 		}

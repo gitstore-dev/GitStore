@@ -105,7 +105,7 @@ Common bootstrap variables:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/042-product-category-count/plan.md
+at specs/044-namespace-spec-status-schema/plan.md
 <!-- SPECKIT END -->
 
 ## graphify

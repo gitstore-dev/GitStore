@@ -46,6 +46,11 @@ type Repository implements Node {
   createdBy: String!
   updatedAt: DateTime!
   updatedBy: String!
+
+  """
+  Markdown body content (repository description).
+  """
+  body: String
 }
 
 type RepositoryEdge {
