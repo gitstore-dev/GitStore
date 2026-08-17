@@ -92,7 +92,6 @@ impl HttpPackServer {
         emit_span("receive-pack-advertise", &self.repo_path, start, "ok", 0);
         Ok(body)
     }
-
 }
 
 // ---------------------------------------------------------------------------

@@ -476,8 +476,7 @@ mod tests {
         // Both failures should appear in the single error string
         let s = err.to_string();
         assert!(
-            s.contains("grpc.port")
-                || s.contains("git.data_dir"),
+            s.contains("grpc.port") || s.contains("git.data_dir"),
             "got: {s}"
         );
         clear_env();
