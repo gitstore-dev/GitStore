@@ -229,7 +229,7 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 	if p.Revision != "" {
 		meta.Revision = &p.Revision
 	}
-	return &model.Product{
+	out := &model.Product{
 		ID:         mustEncodeNodeID(nodeKindProduct, p.UID),
 		APIVersion: p.APIVersion,
 		Kind:       p.Kind,
@@ -241,6 +241,10 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 			PageInfo: &model.PageInfo{},
 		},
 	}
+	if p.Body != "" {
+		out.Body = &p.Body
+	}
+	return out
 }
 
 // DatastoreCategoryTaxonomyToGraphQL converts a CategoryTaxonomy datastore entity

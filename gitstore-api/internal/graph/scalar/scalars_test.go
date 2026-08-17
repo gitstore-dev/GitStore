@@ -6,9 +6,11 @@ package scalar
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -67,6 +69,56 @@ func TestUnmarshalLongRejectsInvalidValues(t *testing.T) {
 			_, err := UnmarshalLong(tt.input)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "Long")
+		})
+	}
+}
+
+func TestMarshalDateTimeUsesSpecifiedMillisecondsFormat(t *testing.T) {
+	timestamp := time.Date(2026, time.August, 16, 19, 4, 5, 123456789, time.FixedZone("EDT", -4*60*60))
+	var output bytes.Buffer
+
+	MarshalDateTime(timestamp).MarshalGQL(&output)
+
+	assert.Equal(t, `"2026-08-16T19:04:05.123-04:00"`, output.String())
+}
+
+func TestMarshalDateTimeUsesZForUTC(t *testing.T) {
+	timestamp := time.Date(2026, time.August, 16, 23, 4, 5, 0, time.UTC)
+	var output bytes.Buffer
+
+	MarshalDateTime(timestamp).MarshalGQL(&output)
+
+	assert.Equal(t, `"2026-08-16T23:04:05.000Z"`, output.String())
+}
+
+func TestUnmarshalDateTimeAcceptsSpecifiedInputs(t *testing.T) {
+	for _, input := range []string{
+		"2011-08-30T13:22:53.108Z",
+		"2011-08-30T13:22:53.108+00:00",
+		"2011-08-30t13:22:53.108z",
+		"2011-08-30T13:22:53.108-03:00",
+	} {
+		t.Run(input, func(t *testing.T) {
+			_, err := UnmarshalDateTime(input)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestUnmarshalDateTimeRejectsValuesOutsideSpecifiedFormat(t *testing.T) {
+	for _, input := range []any{
+		"2011-08-30T13:22:53Z",
+		"2011-08-30T13:22:53.1Z",
+		"2011-08-30T13:22:53.108912Z",
+		"2011-08-30T13:22:53.108-00:00",
+		"2011-08-30T13:22:53.108",
+		"2010-02-30T21:22:53.108Z",
+		true,
+	} {
+		t.Run(fmt.Sprint(input), func(t *testing.T) {
+			_, err := UnmarshalDateTime(input)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "DateTime")
 		})
 	}
 }

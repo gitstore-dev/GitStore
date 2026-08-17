@@ -479,6 +479,29 @@ func (ec *executionContext) fieldContext_Namespace_updatedBy(_ context.Context, 
 	return graphql.NewScalarFieldContext("Namespace", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _Namespace_body(ctx context.Context, field graphql.CollectedField, obj *model.Namespace) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Namespace_body(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Body, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Namespace_body(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Namespace", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _NamespaceConnection_edges(ctx context.Context, field graphql.CollectedField, obj *model.NamespaceConnection) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1563,7 +1586,7 @@ func (ec *executionContext) unmarshalInputNamespaceBy(ctx context.Context, obj a
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"id", "identifier"}
+	fieldsInOrder := [...]string{"id", "identifier", "name"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -1584,6 +1607,13 @@ func (ec *executionContext) unmarshalInputNamespaceBy(ctx context.Context, obj a
 				return it, err
 			}
 			it.Identifier = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
 		}
 	}
 	return it, nil
@@ -1825,6 +1855,8 @@ func (ec *executionContext) _Namespace(ctx context.Context, sel ast.SelectionSet
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "body":
+			out.Values[i] = ec._Namespace_body(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

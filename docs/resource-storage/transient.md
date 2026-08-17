@@ -43,7 +43,7 @@ status:
 Example:
 
 ```yaml
-apiVersion: authz.gitstore.dev/v1beta1
+apiVersion: authorization.gitstore.dev/v1beta1
 kind: SubjectAccessReview
 spec:
   principal:

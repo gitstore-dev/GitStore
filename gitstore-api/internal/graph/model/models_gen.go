@@ -500,6 +500,8 @@ type Namespace struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Username of the caller who last modified this namespace.
 	UpdatedBy string `json:"updatedBy"`
+	// Markdown body content (namespace description).
+	Body *string `json:"body,omitempty"`
 }
 
 func (Namespace) IsNode() {}
@@ -511,6 +513,7 @@ func (this Namespace) GetID() string { return this.ID }
 type NamespaceBy struct {
 	ID         *string `json:"id,omitempty"`
 	Identifier *string `json:"identifier,omitempty"`
+	Name       *string `json:"name,omitempty"`
 }
 
 // Connection type for paginated namespaces (Relay pattern).
@@ -670,6 +673,8 @@ type Product struct {
 	Metadata   *ObjectMeta    `json:"metadata"`
 	Spec       *ProductSpec   `json:"spec"`
 	Status     *ProductStatus `json:"status,omitempty"`
+	// Markdown body content (product description).
+	Body *string `json:"body,omitempty"`
 	// Paginated list of ProductVariants belonging to this product.
 	ProductVariants *ProductVariantConnection `json:"productVariants"`
 }
@@ -916,6 +921,8 @@ type Repository struct {
 	CreatedBy   string    `json:"createdBy"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 	UpdatedBy   string    `json:"updatedBy"`
+	// Markdown body content (repository description).
+	Body *string `json:"body,omitempty"`
 }
 
 func (Repository) IsNode() {}

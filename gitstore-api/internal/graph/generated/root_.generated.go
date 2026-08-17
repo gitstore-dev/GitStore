@@ -272,6 +272,7 @@ type ComplexityRoot struct {
 
 	Namespace struct {
 		APIVersion  func(childComplexity int) int
+		Body        func(childComplexity int) int
 		CreatedAt   func(childComplexity int) int
 		CreatedBy   func(childComplexity int) int
 		DisplayName func(childComplexity int) int
@@ -397,6 +398,7 @@ type ComplexityRoot struct {
 
 	Product struct {
 		APIVersion      func(childComplexity int) int
+		Body            func(childComplexity int) int
 		ID              func(childComplexity int) int
 		Kind            func(childComplexity int) int
 		Metadata        func(childComplexity int) int
@@ -532,6 +534,7 @@ type ComplexityRoot struct {
 	}
 
 	Repository struct {
+		Body          func(childComplexity int) int
 		CreatedAt     func(childComplexity int) int
 		CreatedBy     func(childComplexity int) int
 		DefaultBranch func(childComplexity int) int
@@ -1688,6 +1691,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Namespace.APIVersion(childComplexity), true
 
+	case "Namespace.body":
+		if e.ComplexityRoot.Namespace.Body == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Namespace.Body(childComplexity), true
+
 	case "Namespace.createdAt":
 		if e.ComplexityRoot.Namespace.CreatedAt == nil {
 			break
@@ -2226,6 +2236,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Product.APIVersion(childComplexity), true
+
+	case "Product.body":
+		if e.ComplexityRoot.Product.Body == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Product.Body(childComplexity), true
 
 	case "Product.id":
 		if e.ComplexityRoot.Product.ID == nil {
@@ -2847,6 +2864,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ReorderCategoriesPayload.Categories(childComplexity), true
+
+	case "Repository.body":
+		if e.ComplexityRoot.Repository.Body == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Repository.Body(childComplexity), true
 
 	case "Repository.createdAt":
 		if e.ComplexityRoot.Repository.CreatedAt == nil {
@@ -4581,6 +4605,10 @@ type Namespace implements Node {
   updatedBy: String!
     @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
 
+  """
+  Markdown body content (namespace description).
+  """
+  body: String
 }
 
 """
@@ -4701,7 +4729,8 @@ Selector for looking up a namespace by exactly one unique key.
 """
 input NamespaceBy @oneOf {
   id: ID
-  identifier: String
+  identifier: String @deprecated(reason: "Use name; removal requires a future major GraphQL API release.")
+  name: String
 }
 
 """
@@ -4855,6 +4884,11 @@ type Product implements Node {
   metadata: ObjectMeta!
   spec: ProductSpec!
   status: ProductStatus
+
+  """
+  Markdown body content (product description).
+  """
+  body: String
 }
 
 type ProductSpec {
@@ -5421,6 +5455,11 @@ type Repository implements Node {
   createdBy: String!
   updatedAt: DateTime!
   updatedBy: String!
+
+  """
+  Markdown body content (repository description).
+  """
+  body: String
 }
 
 type RepositoryEdge {
@@ -5802,11 +5841,13 @@ type StatusConflict {
 Decimal type for prices (stored as string to preserve precision)
 """
 scalar Decimal
+  @specifiedBy(url: "https://scalars.graphql.org/chillicream/decimal.html")
 
 """
 DateTime in ISO 8601 format
 """
 scalar DateTime
+  @specifiedBy(url: "https://scalars.graphql.org/andimarek/date-time.html")
 
 """
 JSON metadata object
@@ -6402,6 +6443,8 @@ func (ec *executionContext) childFields_Namespace(ctx context.Context, field gra
 		return ec.fieldContext_Namespace_updatedAt(ctx, field)
 	case "updatedBy":
 		return ec.fieldContext_Namespace_updatedBy(ctx, field)
+	case "body":
+		return ec.fieldContext_Namespace_body(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Namespace", field.Name)
 }
@@ -6638,6 +6681,8 @@ func (ec *executionContext) childFields_Product(ctx context.Context, field graph
 		return ec.fieldContext_Product_spec(ctx, field)
 	case "status":
 		return ec.fieldContext_Product_status(ctx, field)
+	case "body":
+		return ec.fieldContext_Product_body(ctx, field)
 	case "productVariants":
 		return ec.fieldContext_Product_productVariants(ctx, field)
 	}
@@ -6882,6 +6927,8 @@ func (ec *executionContext) childFields_Repository(ctx context.Context, field gr
 		return ec.fieldContext_Repository_updatedAt(ctx, field)
 	case "updatedBy":
 		return ec.fieldContext_Repository_updatedBy(ctx, field)
+	case "body":
+		return ec.fieldContext_Repository_body(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type Repository", field.Name)
 }
