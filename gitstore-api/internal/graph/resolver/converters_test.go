@@ -13,6 +13,8 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestDatastoreNamespaceToGraphQL_DeclarativeProjection(t *testing.T) {
@@ -87,6 +89,124 @@ func TestDatastoreNamespaceToGraphQL_IdentityAndVersionDefaultsArePerResource(t 
 	assert.Equal(t, int32(1), secondModel.Metadata.Generation)
 	assert.Equal(t, first.CreatedAt, firstModel.Metadata.CreationTimestamp)
 	assert.Equal(t, second.CreatedAt, secondModel.Metadata.CreationTimestamp)
+}
+
+func repositoryContractFixture() (*datastore.Repository, *datastore.Namespace) {
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	return &datastore.Repository{
+			ID:               "01960000-0000-7000-8000-000000000045",
+			NamespaceID:      "01960000-0000-7000-8000-000000000046",
+			Name:             "catalog",
+			DefaultBranch:    "main",
+			StorageClass:     "default",
+			Generation:       3,
+			ResourceVersion:  "8",
+			Status:           json.RawMessage(`{"observedGeneration":2,"lastAppliedRevision":"main@sha1:abc","conditions":[]}`),
+			CreatedAt:        now,
+			CreatedBy:        "creator",
+			UpdatedAt:        now.Add(time.Hour),
+			UpdatedBy:        "updater",
+			MaxPackSizeBytes: 52428800,
+			MaxFileSizeBytes: 10485760,
+		}, &datastore.Namespace{
+			ID:         "01960000-0000-7000-8000-000000000046",
+			Identifier: "acme",
+		}
+}
+
+func TestDatastoreRepositoryToModel_DeclarativeProjection(t *testing.T) {
+	repo, ns := repositoryContractFixture()
+
+	got := datastoreRepositoryToModel(repo, ns, "/var/lib/gitstore")
+
+	require.NotNil(t, got)
+	assert.Equal(t, repositoryAPIVersion, got.APIVersion)
+	assert.Equal(t, repositoryKind, got.Kind)
+	assert.Equal(t, got.ID, got.Metadata.UID)
+	assert.Equal(t, repo.Name, got.Metadata.Name)
+	assert.Equal(t, ns.Identifier, got.Metadata.Namespace)
+	assert.Equal(t, repo.ResourceVersion, got.Metadata.ResourceVersion)
+	assert.Equal(t, int32(repo.Generation), got.Metadata.Generation)
+	assert.Equal(t, repo.CreatedAt, got.Metadata.CreationTimestamp)
+	assert.Equal(t, map[string]any{}, got.Metadata.Labels)
+	assert.Equal(t, map[string]any{}, got.Metadata.Annotations)
+	assert.NotNil(t, got.Metadata.OwnerReferences)
+	assert.Empty(t, got.Metadata.OwnerReferences)
+
+	require.NotNil(t, got.Spec)
+	assert.Equal(t, repo.DefaultBranch, got.Spec.DefaultBranch)
+	assert.Equal(t, model.RepositoryVisibilityPrivate, got.Spec.Visibility)
+	require.NotNil(t, got.Spec.PushPolicy)
+	assert.Equal(t, repo.MaxPackSizeBytes, got.Spec.PushPolicy.MaxPackSizeBytes)
+	assert.Equal(t, repo.MaxFileSizeBytes, got.Spec.PushPolicy.MaxFileSizeBytes)
+	assert.Nil(t, got.Spec.PushPolicy.ReceivePackHooks)
+	assert.Nil(t, got.Spec.PushPolicy.SchemaValidation)
+	assert.Nil(t, got.Spec.PushPolicy.AdmissionControl)
+
+	require.NotNil(t, got.Status)
+	assert.Equal(t, int32(2), got.Status.ObservedGeneration)
+	require.NotNil(t, got.Status.LastAppliedRevision)
+	assert.Equal(t, "main@sha1:abc", *got.Status.LastAppliedRevision)
+	assert.NotNil(t, got.Status.Conditions)
+	assert.Empty(t, got.Status.Conditions)
+	require.NotNil(t, got.Status.Resolved)
+	assert.Equal(t, fanoutStoragePath("/var/lib/gitstore", repo.ID), got.Status.Resolved.StoragePath)
+	assert.Equal(t, repo.StorageClass, got.Status.Resolved.StorageClass)
+}
+
+func TestDatastoreRepositoryToModel_PreservesLegacyProjection(t *testing.T) {
+	repo, ns := repositoryContractFixture()
+
+	got := datastoreRepositoryToModel(repo, ns, "/var/lib/gitstore")
+
+	assert.Equal(t, repo.Name, got.Name)
+	require.NotNil(t, got.Namespace)
+	assert.Equal(t, ns.Identifier, got.Namespace.Identifier)
+	assert.Equal(t, repo.DefaultBranch, got.DefaultBranch)
+	assert.Equal(t, repo.StorageClass, got.StorageClass)
+	assert.Equal(t, fanoutStoragePath("/var/lib/gitstore", repo.ID), got.StoragePath)
+	assert.Equal(t, repo.CreatedAt, got.CreatedAt)
+	assert.Equal(t, repo.CreatedBy, got.CreatedBy)
+	assert.Equal(t, repo.UpdatedAt, got.UpdatedAt)
+	assert.Equal(t, repo.UpdatedBy, got.UpdatedBy)
+}
+
+func TestDatastoreRepositoryToModel_LegacyDefaultsAndEmptyConditionVocabulary(t *testing.T) {
+	repo, ns := repositoryContractFixture()
+	repo.Generation = 0
+	repo.ResourceVersion = ""
+	repo.Status = nil
+
+	got := datastoreRepositoryToModel(repo, ns, "/var/lib/gitstore")
+
+	assert.Equal(t, int32(1), got.Metadata.Generation)
+	assert.Equal(t, "1", got.Metadata.ResourceVersion)
+	assert.Equal(t, model.RepositoryVisibilityPrivate, got.Spec.Visibility)
+	require.NotNil(t, got.Status)
+	assert.Zero(t, got.Status.ObservedGeneration)
+	assert.Nil(t, got.Status.LastAppliedRevision)
+	assert.NotNil(t, got.Status.Conditions)
+	assert.Empty(t, got.Status.Conditions)
+	require.NotNil(t, got.Status.Resolved)
+}
+
+func TestDatastoreRepositoryToModel_MalformedStatusLogsAndFallsBack(t *testing.T) {
+	repo, ns := repositoryContractFixture()
+	repo.Status = json.RawMessage(`{bad`)
+	core, logs := observer.New(zap.WarnLevel)
+	SetConverterLogger(zap.New(core))
+	t.Cleanup(func() { SetConverterLogger(zap.NewNop()) })
+
+	got := datastoreRepositoryToModel(repo, ns, "/var/lib/gitstore")
+
+	require.NotNil(t, got.Status)
+	assert.Zero(t, got.Status.ObservedGeneration)
+	assert.NotNil(t, got.Status.Conditions)
+	assert.Empty(t, got.Status.Conditions)
+	require.Len(t, logs.All(), 1)
+	assert.Equal(t, "repository blob unmarshal error", logs.All()[0].Message)
+	assert.Equal(t, "status", logs.All()[0].ContextMap()["field"])
+	assert.Equal(t, repo.ID, logs.All()[0].ContextMap()["repository_id"])
 }
 
 // ── specFromJSON ─────────────────────────────────────────────────────────────

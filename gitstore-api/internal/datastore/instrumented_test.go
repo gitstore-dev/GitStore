@@ -134,7 +134,7 @@ func (s *stubDatastore) GetRepository(_ context.Context, _ string) (*datastore.R
 func (s *stubDatastore) ListRepositoriesByNamespace(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) UpdateRepository(_ context.Context, _ *datastore.Repository) error {
+func (s *stubDatastore) UpdateRepository(_ context.Context, _ *datastore.Repository, _ string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) DeleteRepository(_ context.Context, _ string) error {

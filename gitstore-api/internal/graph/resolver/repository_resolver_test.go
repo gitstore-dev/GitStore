@@ -49,11 +49,49 @@ func TestCreateRepository_assignsUUIDv7AndCallsGRPC(t *testing.T) {
 	assert.Equal(t, testNsID1, repo.NamespaceID)
 	assert.Equal(t, "main", repo.DefaultBranch)
 	assert.Equal(t, "default", repo.StorageClass)
+	assert.Equal(t, int64(1), repo.Generation)
+	assert.Equal(t, "1", repo.ResourceVersion)
+	assert.JSONEq(t, `{"observedGeneration":0,"conditions":[]}`, string(repo.Status))
 
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
 	require.Len(t, writer.createRepoCalls, 1, "gRPC CreateRepository must be called once")
 	assert.Equal(t, repo.ID, writer.createRepoCalls[0], "gRPC must receive the repo_id UUID")
+}
+
+func TestRepositoryMutations_preserveExistingErrors(t *testing.T) {
+	writer := &mockGitWriter{}
+	svc := newTestSvc(t, writer)
+	ctx := context.Background()
+	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
+		ID: testNsID1, Identifier: "mutation-errors", Tier: datastore.NamespaceTierUser, CreatedBy: "test", UpdatedBy: "test",
+	}))
+
+	_, err := svc.CreateRepository(ctx, testNsID1, "duplicate", "main", "default", "test-user")
+	require.NoError(t, err)
+	_, err = svc.CreateRepository(ctx, testNsID1, "duplicate", "main", "default", "test-user")
+	require.Error(t, err)
+	assert.Equal(t, "input: repository already exists", err.Error())
+
+	for operation, call := range map[string]func() error{
+		"rename": func() error {
+			_, renameErr := svc.RenameRepository(ctx, "01960000-0000-7000-8000-000000000099", "new-name", "test-user")
+			return renameErr
+		},
+		"transfer": func() error {
+			_, transferErr := svc.TransferRepository(ctx, "01960000-0000-7000-8000-000000000099", testNsID1, "test-user")
+			return transferErr
+		},
+		"delete": func() error {
+			return svc.DeleteRepository(ctx, "01960000-0000-7000-8000-000000000099", "test-user")
+		},
+	} {
+		t.Run(operation, func(t *testing.T) {
+			err := call()
+			require.Error(t, err)
+			assert.Equal(t, "input: repository not found", err.Error())
+		})
+	}
 }
 
 // ── renameRepository ──────────────────────────────────────────────────────────
@@ -76,6 +114,9 @@ func TestRenameRepository_oldNameNotFoundNewNameReturnsSameRepoID(t *testing.T) 
 	require.NotNil(t, renamed)
 	assert.Equal(t, originalID, renamed.ID, "repo_id must be unchanged after rename")
 	assert.Equal(t, "new-name", renamed.Name)
+	assert.Equal(t, int64(2), renamed.Generation)
+	assert.Equal(t, "2", renamed.ResourceVersion)
+	assert.JSONEq(t, `{"observedGeneration":0,"conditions":[]}`, string(renamed.Status))
 
 	_, err = svcStore(t, svc).LookupRepository(ctx, testNsID1, "old-name")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
@@ -107,6 +148,9 @@ func TestTransferRepository_oldNSInvalidatedNewNSReturnsSameRepoID(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, originalID, transferred.ID)
 	assert.Equal(t, testNsID2, transferred.NamespaceID)
+	assert.Equal(t, int64(1), transferred.Generation)
+	assert.Equal(t, "2", transferred.ResourceVersion)
+	assert.JSONEq(t, `{"observedGeneration":0,"conditions":[]}`, string(transferred.Status))
 
 	_, err = svcStore(t, svc).LookupRepository(ctx, testNsID1, "app")
 	require.ErrorIs(t, err, datastore.ErrNotFound)

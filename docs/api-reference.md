@@ -916,17 +916,58 @@ See [Namespace Resource Contract](namespace/namespace-spec.md).
 ```graphql
 type Repository implements Node {
   id: ID!
-  name: String!
-  namespace: Namespace!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: RepositorySpec!
+  status: RepositoryStatus!
+
+  # Deprecated compatibility fields remain until a future major API release.
+  name: String! @deprecated
+  namespace: Namespace! @deprecated
+  defaultBranch: String! @deprecated
+  storageClass: String! @deprecated
+  storagePath: String! @deprecated
+  createdAt: DateTime! @deprecated
+  createdBy: String! @deprecated
+  updatedAt: DateTime! @deprecated
+  updatedBy: String! @deprecated
+}
+
+type RepositorySpec {
   defaultBranch: String!
-  storageClass: String!
+  visibility: RepositoryVisibility!
+  pushPolicy: RepositoryPushPolicy!
+}
+
+type RepositoryPushPolicy {
+  maxPackSizeBytes: Long!
+  maxFileSizeBytes: Long!
+  receivePackHooks: ReceivePackHookDefaults
+  schemaValidation: SchemaValidationDefaults
+  admissionControl: AdmissionControlDefaults
+}
+
+type RepositoryStatus {
+  observedGeneration: Int!
+  lastAppliedRevision: String
+  conditions: [Condition!]!
+  resolved: ResolvedRepositoryDefinition!
+}
+
+type ResolvedRepositoryDefinition {
   storagePath: String!
-  createdAt: DateTime!
-  createdBy: String!
-  updatedAt: DateTime!
-  updatedBy: String!
+  storageClass: String!
 }
 ```
+
+`apiVersion` is always `gitstore.dev/v1beta1`; `kind` is always `Repository`.
+Legacy rows normalize to generation/resourceVersion `1` and an initial non-null
+status. `spec.visibility` currently projects `PRIVATE`; extended push-policy
+groups project null until Repository write/persistence semantics are added.
+Existing maximum-size fields, including explicit zero values, project through
+`spec.pushPolicy`. See
+[Repository Resource Contract](repository/repository-spec.md).
 
 ### Product
 

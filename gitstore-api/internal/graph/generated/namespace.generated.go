@@ -2442,6 +2442,16 @@ func (ec *executionContext) marshalNNamespaceTier2githubᚗcomᚋgitstoreᚑdev�
 	return v
 }
 
+func (ec *executionContext) unmarshalNRepositoryVisibility2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositoryVisibility(ctx context.Context, v any) (model.RepositoryVisibility, error) {
+	var res model.RepositoryVisibility
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNRepositoryVisibility2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositoryVisibility(ctx context.Context, sel ast.SelectionSet, v model.RepositoryVisibility) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) marshalOAdmissionControlDefaults2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐAdmissionControlDefaults(ctx context.Context, sel ast.SelectionSet, v *model.AdmissionControlDefaults) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null

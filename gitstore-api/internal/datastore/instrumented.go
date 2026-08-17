@@ -325,9 +325,9 @@ func (d *InstrumentedDatastore) ListRepositoriesByNamespace(ctx context.Context,
 	return v, err
 }
 
-func (d *InstrumentedDatastore) UpdateRepository(ctx context.Context, r *Repository) error {
+func (d *InstrumentedDatastore) UpdateRepository(ctx context.Context, r *Repository, expectedResourceVersion string) error {
 	start := time.Now()
-	err := d.next.UpdateRepository(ctx, r)
+	err := d.next.UpdateRepository(ctx, r, expectedResourceVersion)
 	d.observe("UpdateRepository", start, err)
 	return err
 }

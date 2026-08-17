@@ -534,13 +534,18 @@ type ComplexityRoot struct {
 	}
 
 	Repository struct {
+		APIVersion    func(childComplexity int) int
 		Body          func(childComplexity int) int
 		CreatedAt     func(childComplexity int) int
 		CreatedBy     func(childComplexity int) int
 		DefaultBranch func(childComplexity int) int
 		ID            func(childComplexity int) int
+		Kind          func(childComplexity int) int
+		Metadata      func(childComplexity int) int
 		Name          func(childComplexity int) int
 		Namespace     func(childComplexity int) int
+		Spec          func(childComplexity int) int
+		Status        func(childComplexity int) int
 		StorageClass  func(childComplexity int) int
 		StoragePath   func(childComplexity int) int
 		UpdatedAt     func(childComplexity int) int
@@ -556,6 +561,27 @@ type ComplexityRoot struct {
 	RepositoryEdge struct {
 		Cursor func(childComplexity int) int
 		Node   func(childComplexity int) int
+	}
+
+	RepositoryPushPolicy struct {
+		AdmissionControl func(childComplexity int) int
+		MaxFileSizeBytes func(childComplexity int) int
+		MaxPackSizeBytes func(childComplexity int) int
+		ReceivePackHooks func(childComplexity int) int
+		SchemaValidation func(childComplexity int) int
+	}
+
+	RepositorySpec struct {
+		DefaultBranch func(childComplexity int) int
+		PushPolicy    func(childComplexity int) int
+		Visibility    func(childComplexity int) int
+	}
+
+	RepositoryStatus struct {
+		Conditions          func(childComplexity int) int
+		LastAppliedRevision func(childComplexity int) int
+		ObservedGeneration  func(childComplexity int) int
+		Resolved            func(childComplexity int) int
 	}
 
 	ResolvedCategoryDefinition struct {
@@ -615,6 +641,11 @@ type ComplexityRoot struct {
 		PriceSet            func(childComplexity int) int
 		Product             func(childComplexity int) int
 		SelectedOptionsHash func(childComplexity int) int
+	}
+
+	ResolvedRepositoryDefinition struct {
+		StorageClass func(childComplexity int) int
+		StoragePath  func(childComplexity int) int
 	}
 
 	SchemaValidationDefaults struct {
@@ -2865,6 +2896,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ReorderCategoriesPayload.Categories(childComplexity), true
 
+	case "Repository.apiVersion":
+		if e.ComplexityRoot.Repository.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Repository.APIVersion(childComplexity), true
+
 	case "Repository.body":
 		if e.ComplexityRoot.Repository.Body == nil {
 			break
@@ -2900,6 +2938,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Repository.ID(childComplexity), true
 
+	case "Repository.kind":
+		if e.ComplexityRoot.Repository.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Repository.Kind(childComplexity), true
+
+	case "Repository.metadata":
+		if e.ComplexityRoot.Repository.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Repository.Metadata(childComplexity), true
+
 	case "Repository.name":
 		if e.ComplexityRoot.Repository.Name == nil {
 			break
@@ -2913,6 +2965,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Repository.Namespace(childComplexity), true
+
+	case "Repository.spec":
+		if e.ComplexityRoot.Repository.Spec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Repository.Spec(childComplexity), true
+
+	case "Repository.status":
+		if e.ComplexityRoot.Repository.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Repository.Status(childComplexity), true
 
 	case "Repository.storageClass":
 		if e.ComplexityRoot.Repository.StorageClass == nil {
@@ -2976,6 +3042,90 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.RepositoryEdge.Node(childComplexity), true
+
+	case "RepositoryPushPolicy.admissionControl":
+		if e.ComplexityRoot.RepositoryPushPolicy.AdmissionControl == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryPushPolicy.AdmissionControl(childComplexity), true
+
+	case "RepositoryPushPolicy.maxFileSizeBytes":
+		if e.ComplexityRoot.RepositoryPushPolicy.MaxFileSizeBytes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryPushPolicy.MaxFileSizeBytes(childComplexity), true
+
+	case "RepositoryPushPolicy.maxPackSizeBytes":
+		if e.ComplexityRoot.RepositoryPushPolicy.MaxPackSizeBytes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryPushPolicy.MaxPackSizeBytes(childComplexity), true
+
+	case "RepositoryPushPolicy.receivePackHooks":
+		if e.ComplexityRoot.RepositoryPushPolicy.ReceivePackHooks == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryPushPolicy.ReceivePackHooks(childComplexity), true
+
+	case "RepositoryPushPolicy.schemaValidation":
+		if e.ComplexityRoot.RepositoryPushPolicy.SchemaValidation == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryPushPolicy.SchemaValidation(childComplexity), true
+
+	case "RepositorySpec.defaultBranch":
+		if e.ComplexityRoot.RepositorySpec.DefaultBranch == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositorySpec.DefaultBranch(childComplexity), true
+
+	case "RepositorySpec.pushPolicy":
+		if e.ComplexityRoot.RepositorySpec.PushPolicy == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositorySpec.PushPolicy(childComplexity), true
+
+	case "RepositorySpec.visibility":
+		if e.ComplexityRoot.RepositorySpec.Visibility == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositorySpec.Visibility(childComplexity), true
+
+	case "RepositoryStatus.conditions":
+		if e.ComplexityRoot.RepositoryStatus.Conditions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryStatus.Conditions(childComplexity), true
+
+	case "RepositoryStatus.lastAppliedRevision":
+		if e.ComplexityRoot.RepositoryStatus.LastAppliedRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryStatus.LastAppliedRevision(childComplexity), true
+
+	case "RepositoryStatus.observedGeneration":
+		if e.ComplexityRoot.RepositoryStatus.ObservedGeneration == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryStatus.ObservedGeneration(childComplexity), true
+
+	case "RepositoryStatus.resolved":
+		if e.ComplexityRoot.RepositoryStatus.Resolved == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryStatus.Resolved(childComplexity), true
 
 	case "ResolvedCategoryDefinition.name":
 		if e.ComplexityRoot.ResolvedCategoryDefinition.Name == nil {
@@ -3200,6 +3350,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ResolvedProductVariantDefinition.SelectedOptionsHash(childComplexity), true
+
+	case "ResolvedRepositoryDefinition.storageClass":
+		if e.ComplexityRoot.ResolvedRepositoryDefinition.StorageClass == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedRepositoryDefinition.StorageClass(childComplexity), true
+
+	case "ResolvedRepositoryDefinition.storagePath":
+		if e.ComplexityRoot.ResolvedRepositoryDefinition.StoragePath == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedRepositoryDefinition.StoragePath(childComplexity), true
 
 	case "SchemaValidationDefaults.phase":
 		if e.ComplexityRoot.SchemaValidationDefaults.Phase == nil {
@@ -5414,52 +5578,109 @@ extend type Product {
 # Feature: 010-repo-storage-identity
 
 """
-A git repository. Has a stable internal identity (id) that is independent of
-its human-readable namespace path. Renaming or transferring a repository does
-not change its id.
+A namespace-scoped GitStore Repository resource.
 """
 type Repository implements Node {
   """
-  Globally unique Relay ID.
+  Relay transport identity.
   """
   id: ID!
 
   """
-  Human-readable name within the namespace (e.g., "my-catalog").
-  Mutable on rename.
+  Versioned Repository API contract.
   """
+  apiVersion: String!
+
+  """
+  Resource kind discriminator. Always "Repository".
+  """
+  kind: String!
+
+  """
+  System-managed identity, namespace ownership, versioning, and creation metadata.
+  """
+  metadata: ObjectMeta!
+
+  """
+  Declarative Repository configuration. Fields without an existing write and
+  persistence path project deterministic reserved defaults in this API version.
+  """
+  spec: RepositorySpec!
+
+  """
+  System-derived Repository state. Present for every Repository, including
+  resources created before this contract existed.
+  """
+  status: RepositoryStatus!
+
   name: String!
-
-  """
-  The namespace that owns this repository.
-  """
+    @deprecated(reason: "Use metadata.name; removal requires a future major GraphQL API release.")
   namespace: Namespace!
-
-  """
-  Default branch name (e.g., "main").
-  """
+    @deprecated(reason: "Use metadata.namespace; removal requires a future major GraphQL API release.")
   defaultBranch: String!
-
-  """
-  Storage class tag. Reserved for future multi-storage-root use.
-  """
+    @deprecated(reason: "Use spec.defaultBranch; removal requires a future major GraphQL API release.")
   storageClass: String!
-
-  """
-  Absolute filesystem path derived from the internal repo_id using the fanout formula.
-  Informational — for operator use. Example: /data/01/96/0196f3a2-4b1c-7e9d-a301-8b2c4d5e6f7a.git
-  """
+    @deprecated(reason: "Use status.resolved.storageClass; removal requires a future major GraphQL API release.")
   storagePath: String!
-
+    @deprecated(reason: "Use status.resolved.storagePath; removal requires a future major GraphQL API release.")
   createdAt: DateTime!
+    @deprecated(reason: "Use metadata.creationTimestamp; removal requires a future major GraphQL API release.")
   createdBy: String!
+    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
   updatedAt: DateTime!
+    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
   updatedBy: String!
+    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
 
   """
   Markdown body content (repository description).
   """
   body: String
+}
+
+"""
+Declarative desired-state projection for a Repository. In this feature,
+visibility is reserved and projects PRIVATE until write semantics are added.
+"""
+type RepositorySpec {
+  defaultBranch: String!
+  visibility: RepositoryVisibility!
+  pushPolicy: RepositoryPushPolicy!
+}
+
+"""
+Repository-level push-policy projection. Maximum-size fields use existing
+persisted values. Extended override groups are reserved and null until a future
+feature defines their write and persistence semantics.
+"""
+type RepositoryPushPolicy {
+  maxPackSizeBytes: Long!
+  maxFileSizeBytes: Long!
+  receivePackHooks: ReceivePackHookDefaults
+  schemaValidation: SchemaValidationDefaults
+  admissionControl: AdmissionControlDefaults
+}
+
+"""
+System-owned observed state for a Repository.
+"""
+type RepositoryStatus {
+  observedGeneration: Int!
+  lastAppliedRevision: String
+  """
+  Shared resource conditions. Empty in this feature because no Repository
+  condition-producing writer or Repository-specific condition vocabulary exists.
+  """
+  conditions: [Condition!]!
+  resolved: ResolvedRepositoryDefinition!
+}
+
+"""
+System-computed Repository values that authors cannot set directly.
+"""
+type ResolvedRepositoryDefinition {
+  storagePath: String!
+  storageClass: String!
 }
 
 type RepositoryEdge {
@@ -5858,6 +6079,7 @@ scalar JSON
 Signed 64-bit integer used for byte-size policy values.
 """
 scalar Long
+  @specifiedBy(url: "https://scalars.graphql.org/apollographql/long-v0.1.html")
 
 """
 System-managed metadata shared by core catalog resources.
@@ -6909,6 +7131,16 @@ func (ec *executionContext) childFields_Repository(ctx context.Context, field gr
 	switch field.Name {
 	case "id":
 		return ec.fieldContext_Repository_id(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_Repository_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_Repository_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_Repository_metadata(ctx, field)
+	case "spec":
+		return ec.fieldContext_Repository_spec(ctx, field)
+	case "status":
+		return ec.fieldContext_Repository_status(ctx, field)
 	case "name":
 		return ec.fieldContext_Repository_name(ctx, field)
 	case "namespace":
@@ -6953,6 +7185,48 @@ func (ec *executionContext) childFields_RepositoryEdge(ctx context.Context, fiel
 		return ec.fieldContext_RepositoryEdge_node(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type RepositoryEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_RepositoryPushPolicy(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "maxPackSizeBytes":
+		return ec.fieldContext_RepositoryPushPolicy_maxPackSizeBytes(ctx, field)
+	case "maxFileSizeBytes":
+		return ec.fieldContext_RepositoryPushPolicy_maxFileSizeBytes(ctx, field)
+	case "receivePackHooks":
+		return ec.fieldContext_RepositoryPushPolicy_receivePackHooks(ctx, field)
+	case "schemaValidation":
+		return ec.fieldContext_RepositoryPushPolicy_schemaValidation(ctx, field)
+	case "admissionControl":
+		return ec.fieldContext_RepositoryPushPolicy_admissionControl(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RepositoryPushPolicy", field.Name)
+}
+
+func (ec *executionContext) childFields_RepositorySpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "defaultBranch":
+		return ec.fieldContext_RepositorySpec_defaultBranch(ctx, field)
+	case "visibility":
+		return ec.fieldContext_RepositorySpec_visibility(ctx, field)
+	case "pushPolicy":
+		return ec.fieldContext_RepositorySpec_pushPolicy(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RepositorySpec", field.Name)
+}
+
+func (ec *executionContext) childFields_RepositoryStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "observedGeneration":
+		return ec.fieldContext_RepositoryStatus_observedGeneration(ctx, field)
+	case "lastAppliedRevision":
+		return ec.fieldContext_RepositoryStatus_lastAppliedRevision(ctx, field)
+	case "conditions":
+		return ec.fieldContext_RepositoryStatus_conditions(ctx, field)
+	case "resolved":
+		return ec.fieldContext_RepositoryStatus_resolved(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RepositoryStatus", field.Name)
 }
 
 func (ec *executionContext) childFields_ResolvedCategoryDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7071,6 +7345,16 @@ func (ec *executionContext) childFields_ResolvedProductVariantDefinition(ctx con
 		return ec.fieldContext_ResolvedProductVariantDefinition_media(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ResolvedProductVariantDefinition", field.Name)
+}
+
+func (ec *executionContext) childFields_ResolvedRepositoryDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "storagePath":
+		return ec.fieldContext_ResolvedRepositoryDefinition_storagePath(ctx, field)
+	case "storageClass":
+		return ec.fieldContext_ResolvedRepositoryDefinition_storageClass(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ResolvedRepositoryDefinition", field.Name)
 }
 
 func (ec *executionContext) childFields_SchemaValidationDefaults(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

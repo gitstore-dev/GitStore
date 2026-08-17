@@ -154,5 +154,5 @@ func (r *queryResolver) Repositories(ctx context.Context, namespace string, firs
 	if err != nil {
 		return nil, err
 	}
-	return BuildRepositoryConnection(result), nil
+	return BuildRepositoryConnection(result, ns, r.storageDataDir), nil
 }

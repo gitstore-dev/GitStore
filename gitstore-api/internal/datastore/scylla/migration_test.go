@@ -69,6 +69,34 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 	}
 }
 
+func TestRunMigrations_RepositoryResourceContractColumns(t *testing.T) {
+	session := newRawSession(t)
+	log := zap.NewNop()
+
+	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), log))
+
+	expectedColumns := map[string]string{
+		"generation":          "bigint",
+		"resource_version":    "text",
+		"status":              "text",
+		"max_pack_size_bytes": "bigint",
+		"max_file_size_bytes": "bigint",
+	}
+	for column, expectedType := range expectedColumns {
+		t.Run(column, func(t *testing.T) {
+			var columnName, columnType string
+			err := session.Query(
+				`SELECT column_name, type FROM system_schema.columns
+				 WHERE keyspace_name = ? AND table_name = 'repositories' AND column_name = ?`,
+				scyllaKeyspace, column,
+			).Scan(&columnName, &columnType)
+			require.NoError(t, err, "expected repositories.%s to exist", column)
+			assert.Equal(t, column, columnName)
+			assert.Equal(t, expectedType, columnType)
+		})
+	}
+}
+
 func TestRunMigrations_Idempotent(t *testing.T) {
 	session := newRawSession(t)
 	log := zap.NewNop()

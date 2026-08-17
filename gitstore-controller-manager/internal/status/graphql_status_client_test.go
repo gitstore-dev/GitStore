@@ -48,8 +48,9 @@ func TestApply_SendsUpdateCategoryStatusMutation(t *testing.T) {
 
 	client := graphqlclient.New(srv.URL, "test-token")
 	sc := status.NewGraphQLStatusClient(client)
+	patch := testPatch()
 
-	if err := sc.Apply(context.Background(), testKey(), testPatch()); err != nil {
+	if err := sc.Apply(context.Background(), testKey(), patch); err != nil {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
@@ -88,6 +89,10 @@ func TestApply_SendsUpdateCategoryStatusMutation(t *testing.T) {
 	}
 	if cond["status"] != "TRUE" {
 		t.Errorf("condition status = %v, want %q", cond["status"], "TRUE")
+	}
+	wantTransitionTime := patch.Conditions[0].LastTransitionTime.Format("2006-01-02T15:04:05.000Z07:00")
+	if cond["lastTransitionTime"] != wantTransitionTime {
+		t.Errorf("condition lastTransitionTime = %v, want %q", cond["lastTransitionTime"], wantTransitionTime)
 	}
 }
 
