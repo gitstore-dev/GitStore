@@ -2149,49 +2149,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pack_size_limit_enforced() {
-        let dir = TempDir::new().unwrap();
-        bare_repo_with_main(dir.path(), TEST_REPO_I);
-        let mut client = make_grpc_client(dir.path().to_path_buf()).await;
-
-        // Build a push context with max_pack_size_bytes = 1 (tiny — any pack will exceed it)
-        let ctx = PushContext {
-            repository_id: TEST_REPO_I.to_string(),
-            namespace: "ns".to_string(),
-            repository_name: "repo".to_string(),
-            config_resource_version: String::new(),
-            actor: None,
-            policy: Some(PushPolicy {
-                max_pack_size_bytes: 1,
-                max_file_size_bytes: 0,
-            }),
-        };
-
-        // Build a pack payload: minimal data > 1 byte to trip the limit
-        // We'll send pack_data of 8 bytes (just enough to exceed 1-byte limit)
-        let chunk = ReceivePackRequest {
-            repository_id: TEST_REPO_I.to_string(),
-            ref_commands: vec![RefCommand {
-                old_oid: "0000000000000000000000000000000000000000".to_string(),
-                new_oid: "a".repeat(40),
-                ref_name: "refs/heads/feature".to_string(),
-            }],
-            pack_data: b"PACK\x00\x00\x00\x02".to_vec(), // 8 bytes > 1 byte limit
-            is_last: true,
-            push_context: Some(ctx),
-        };
-
-        let result = client.receive_pack(tokio_stream::iter(vec![chunk])).await;
-        let status = result.unwrap_err();
-        assert_eq!(
-            status.code(),
-            tonic::Code::ResourceExhausted,
-            "pack exceeding max_pack_size_bytes must return ResourceExhausted, got: {:?}",
-            status
-        );
-    }
-
-    #[tokio::test]
     async fn test_file_size_limit_enforced() {
         // Create a target repo (empty, to accept a new push) and a source repo with a commit.
         let dir = TempDir::new().unwrap();

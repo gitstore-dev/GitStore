@@ -390,9 +390,8 @@ spec:
 // to remove catalog resources admitted on that branch while leaving resources
 // on other branches untouched.
 //
-// This test requires the branch pattern config to admit the test feature branch.
-// If pushing to or deleting the feature branch is rejected by the remote it is
-// skipped gracefully.
+// This test requires the branch pattern config to admit the generated feature
+// branch name and allow deleting that branch from the remote.
 func TestAdmission_BranchDeletion(t *testing.T) {
 	ns := getEnv("NAMESPACE", "gitstore-test")
 	ts := time.Now().UnixNano()
@@ -414,14 +413,14 @@ func TestAdmission_BranchDeletion(t *testing.T) {
 	run(t, h.workDir, "git", "checkout", "-b", featureBranch)
 	h.commitProduct(featureName+".md", validProductFixture(featureName, ns))
 	if out, err := h.pushRef(featureBranch + ":" + featureBranch); err != nil {
-		t.Skipf("feature branch push rejected (branch pattern may exclude it): %v\n%s", err, out)
+		t.Fatalf("feature branch push rejected; test prerequisite failed (branch pattern must allow %q): %v\n%s", featureBranch, err, out)
 	}
 
 	// Return to main before deleting the feature branch.
 	run(t, h.workDir, "git", "checkout", "main")
 
 	if out, err := h.deleteRemoteBranch(featureBranch); err != nil {
-		t.Skipf("branch deletion rejected by remote: %v\n%s", err, out)
+		t.Fatalf("feature branch deletion rejected; test prerequisite failed (remote must allow deleting %q): %v\n%s", featureBranch, err, out)
 	}
 
 	// The main product must still be present.

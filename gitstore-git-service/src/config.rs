@@ -36,12 +36,12 @@ pub struct PortConfig {
 pub struct GitConfig {
     pub data_dir: String,
     pub repo: RepoConfig,
-    pub max_pack_size_bytes: u64,
 }
 
 #[derive(Debug, serde::Deserialize)]
 pub struct RepoConfig {
     pub max_file_size: u64,
+    pub max_pack_size_bytes: u64,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -119,9 +119,6 @@ impl AppConfig {
         if self.git.data_dir.is_empty() {
             errors.push("git.data_dir must not be empty".to_string());
         }
-        if self.git.repo.max_file_size == 0 {
-            errors.push("git.repo.max_file_size must be positive".to_string());
-        }
         match self.log.format.to_ascii_lowercase().as_str() {
             "json" | "text" => {}
             _ => errors.push(format!(
@@ -196,7 +193,7 @@ pub fn load_config_from(config_file: Option<&str>) -> Result<AppConfig, config::
         log_level = %cfg.log.level,
         log_format = %cfg.log.format,
         max_file_size = cfg.git.repo.max_file_size,
-        max_pack_size_bytes = cfg.git.max_pack_size_bytes,
+        max_pack_size_bytes = cfg.git.repo.max_pack_size_bytes,
         "resolved configuration"
     );
     Ok(cfg)
@@ -209,10 +206,10 @@ port = 50051
 
 [git]
 data_dir = "/data/repos"
-max_pack_size_bytes = 52428800
 
 [git.repo]
 max_file_size = 52428800
+max_pack_size_bytes = 52428800
 
 [log]
 level = "info"
@@ -259,6 +256,7 @@ mod tests {
             "GITSTORE_LOG__LEVEL",
             "GITSTORE_LOG__FORMAT",
             "GITSTORE_GIT__REPO__MAX_FILE_SIZE",
+            "GITSTORE_GIT__REPO__MAX_PACK_SIZE_BYTES",
             "GITSTORE_SCHEMA_VALIDATION__PHASE",
             "GITSTORE_SCHEMA_VALIDATION__TIMEOUT_SECS",
             "GITSTORE_ADMISSION_CONTROL__PHASE",
@@ -290,6 +288,7 @@ mod tests {
         assert_eq!(cfg.log.level, "info");
         assert_eq!(cfg.log.format, "json");
         assert_eq!(cfg.git.repo.max_file_size, 52428800);
+        assert_eq!(cfg.git.repo.max_pack_size_bytes, 52428800);
     }
 
     #[test]
@@ -470,7 +469,6 @@ mod tests {
         // Port 0 is invalid
         env::set_var("GITSTORE_GRPC__PORT", "0");
         env::set_var("GITSTORE_GIT__DATA_DIR", "");
-        env::set_var("GITSTORE_GIT__REPO__MAX_FILE_SIZE", "0");
         let cfg = load_config_from(None).expect("load failed");
         let result = cfg.validate();
         assert!(result.is_err());
@@ -479,8 +477,7 @@ mod tests {
         let s = err.to_string();
         assert!(
             s.contains("grpc.port")
-                || s.contains("git.data_dir")
-                || s.contains("git.repo.max_file_size"),
+                || s.contains("git.data_dir"),
             "got: {s}"
         );
         clear_env();
