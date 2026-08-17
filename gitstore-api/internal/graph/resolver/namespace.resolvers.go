@@ -21,7 +21,7 @@ func (r *mutationResolver) CreateNamespace(ctx context.Context, input model.Crea
 	}
 
 	return &model.CreateNamespacePayload{
-		Namespace: datastoreNamespaceToModel(ns),
+		Namespace: DatastoreNamespaceToGraphQL(ns),
 	}, nil
 }
 
@@ -51,14 +51,14 @@ func (r *queryResolver) Namespace(ctx context.Context, by model.NamespaceBy) (*m
 		if err != nil {
 			return nil, err
 		}
-		return datastoreNamespaceToModel(ns), nil
+		return DatastoreNamespaceToGraphQL(ns), nil
 	}
 
 	ns, err := r.service.GetNamespaceByIdentifier(ctx, *by.Identifier)
 	if err != nil {
 		return nil, err
 	}
-	return datastoreNamespaceToModel(ns), nil
+	return DatastoreNamespaceToGraphQL(ns), nil
 }
 
 // Namespaces is the resolver for the namespaces field.

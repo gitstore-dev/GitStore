@@ -97,6 +97,11 @@ func TestLookupQueriesAcceptGlobalIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, namespace)
 	assert.Equal(t, mustEncodeNodeID(nodeKindNamespace, globalIDTestNamespaceID), namespace.ID)
+	require.NotNil(t, namespace.Metadata)
+	assert.Equal(t, globalIDTestNamespaceID, namespace.Metadata.UID)
+	assert.Equal(t, "1", namespace.Metadata.ResourceVersion)
+	assert.Equal(t, int32(1), namespace.Metadata.Generation)
+	assert.Equal(t, "namespace-1", namespace.Metadata.Name)
 }
 
 func TestLookupProductByName(t *testing.T) {

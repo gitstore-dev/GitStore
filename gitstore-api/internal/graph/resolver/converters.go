@@ -17,6 +17,13 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	namespaceAPIVersion             = "gitstore.dev/v1beta1"
+	namespaceKind                   = "Namespace"
+	namespaceInitialResourceVersion = "1"
+	namespaceInitialGeneration      = int32(1)
+)
+
 // datastoreNamespaceToModel converts a datastore Namespace to a GraphQL model Namespace.
 func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 	if ns == nil {
@@ -28,7 +35,28 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 		displayName = &dn
 	}
 	return &model.Namespace{
-		ID:          mustEncodeNodeID(nodeKindNamespace, ns.ID),
+		ID:         mustEncodeNodeID(nodeKindNamespace, ns.ID),
+		APIVersion: namespaceAPIVersion,
+		Kind:       namespaceKind,
+		Metadata: &model.NamespaceMetadata{
+			Name:              ns.Identifier,
+			Labels:            map[string]any{},
+			Annotations:       map[string]any{},
+			UID:               ns.ID,
+			ResourceVersion:   namespaceInitialResourceVersion,
+			Generation:        namespaceInitialGeneration,
+			CreationTimestamp: ns.CreatedAt,
+			OwnerReferences:   []*model.OwnerReference{},
+			Finalizers:        []string{},
+		},
+		Spec: &model.NamespaceSpec{
+			Title: displayName,
+			Tier:  datastoreNamespaceTierToModel(ns.Tier),
+		},
+		Status: &model.NamespaceStatus{
+			ObservedGeneration: 0,
+			Conditions:         []*model.Condition{},
+		},
 		Identifier:  ns.Identifier,
 		DisplayName: displayName,
 		Tier:        datastoreNamespaceTierToModel(ns.Tier),
@@ -874,7 +902,7 @@ func datastoreRepositoryToModel(r *datastore.Repository, ns *datastore.Namespace
 		UpdatedBy:     r.UpdatedBy,
 	}
 	if ns != nil {
-		repo.Namespace = datastoreNamespaceToModel(ns)
+		repo.Namespace = DatastoreNamespaceToGraphQL(ns)
 	}
 	return repo
 }

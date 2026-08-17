@@ -8,11 +8,38 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/shopspring/decimal"
 )
+
+// MarshalLong serializes a signed 64-bit integer as a GraphQL integer token.
+func MarshalLong(value int64) graphql.Marshaler {
+	return graphql.WriterFunc(func(w io.Writer) {
+		_, _ = io.WriteString(w, strconv.FormatInt(value, 10))
+	})
+}
+
+// UnmarshalLong parses a GraphQL integer without accepting coercion from
+// floating-point or string values.
+func UnmarshalLong(value interface{}) (int64, error) {
+	switch value := value.(type) {
+	case int:
+		return int64(value), nil
+	case int64:
+		return value, nil
+	case json.Number:
+		parsed, err := strconv.ParseInt(value.String(), 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid Long value %q: %w", value, err)
+		}
+		return parsed, nil
+	default:
+		return 0, fmt.Errorf("invalid type for Long: %T", value)
+	}
+}
 
 // MarshalDecimal serializes a Decimal value as a quoted string GraphQL scalar.
 func MarshalDecimal(d decimal.Decimal) graphql.Marshaler {
