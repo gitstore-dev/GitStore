@@ -22,6 +22,7 @@ const (
 	globalIDTestProductUID   = "00000000-0000-0000-0000-000000000003"
 	globalIDTestNamespaceID  = "00000000-0000-0000-0000-000000000004"
 	globalIDTestVariantUID   = "00000000-0000-0000-0000-000000000005"
+	globalIDTestRepositoryID = "00000000-0000-0000-0000-000000000006"
 )
 
 func TestQueryNodeResolvesByGlobalID(t *testing.T) {
@@ -126,6 +127,23 @@ func TestLookupProduct_NotFound(t *testing.T) {
 	assert.NoError(t, err) // not found returns nil, nil per resolver convention
 }
 
+func TestRepositoryNodeIdentityUsesStableRelayIDAndMetadataUID(t *testing.T) {
+	ctx := context.Background()
+	store, resolver := newGlobalIDTestResolver(t)
+	seedGlobalIDTestData(t, ctx, store)
+	query := &queryResolver{Resolver: resolver}
+
+	node, err := query.Node(ctx, mustEncodeNodeID(nodeKindRepository, globalIDTestRepositoryID))
+	require.NoError(t, err)
+	repository, ok := node.(*model.Repository)
+	require.True(t, ok)
+	assert.Equal(t, mustEncodeNodeID(nodeKindRepository, globalIDTestRepositoryID), repository.ID)
+	require.NotNil(t, repository.Metadata)
+	assert.Equal(t, repository.ID, repository.Metadata.UID)
+	assert.Equal(t, "1", repository.Metadata.ResourceVersion)
+	assert.Equal(t, int32(1), repository.Metadata.Generation)
+}
+
 func newGlobalIDTestResolver(t *testing.T) (datastore.Datastore, *Resolver) {
 	t.Helper()
 	store, err := memdb.New()
@@ -182,5 +200,16 @@ func seedGlobalIDTestData(t *testing.T, ctx context.Context, store datastore.Dat
 		CreationTimestamp: now,
 		SKU:               "sku-1",
 		ProductRefName:    "product-1",
+	}))
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{
+		ID:            globalIDTestRepositoryID,
+		NamespaceID:   globalIDTestNamespaceID,
+		Name:          "repository-1",
+		DefaultBranch: "main",
+		StorageClass:  "default",
+		CreatedAt:     now,
+		CreatedBy:     "tester",
+		UpdatedAt:     now,
+		UpdatedBy:     "tester",
 	}))
 }

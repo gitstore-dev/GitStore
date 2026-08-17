@@ -16,45 +16,57 @@ import (
 )
 
 type repositoryRow struct {
-	Bucket        string     `db:"bucket"`
-	CreatedAt     time.Time  `db:"created_at"`
-	ID            gocql.UUID `db:"id"`
-	NamespaceID   gocql.UUID `db:"namespace_id"`
-	Name          string     `db:"name"`
-	DefaultBranch string     `db:"default_branch"`
-	StorageClass  string     `db:"storage_class"`
-	CreatedBy     string     `db:"created_by"`
-	UpdatedAt     time.Time  `db:"updated_at"`
-	UpdatedBy     string     `db:"updated_by"`
+	Bucket          string     `db:"bucket"`
+	CreatedAt       time.Time  `db:"created_at"`
+	ID              gocql.UUID `db:"id"`
+	NamespaceID     gocql.UUID `db:"namespace_id"`
+	Name            string     `db:"name"`
+	DefaultBranch   string     `db:"default_branch"`
+	StorageClass    string     `db:"storage_class"`
+	Generation      int64      `db:"generation"`
+	ResourceVersion string     `db:"resource_version"`
+	Status          string     `db:"status"`
+	CreatedBy       string     `db:"created_by"`
+	UpdatedAt       time.Time  `db:"updated_at"`
+	UpdatedBy       string     `db:"updated_by"`
 }
 
 func toRepositoryRow(r *datastore.Repository) *repositoryRow {
+	datastore.NormalizeRepositoryContract(r)
 	return &repositoryRow{
-		Bucket:        BucketAll,
-		CreatedAt:     r.CreatedAt,
-		ID:            mustParseUUID(r.ID),
-		NamespaceID:   mustParseUUID(r.NamespaceID),
-		Name:          r.Name,
-		DefaultBranch: r.DefaultBranch,
-		StorageClass:  r.StorageClass,
-		CreatedBy:     r.CreatedBy,
-		UpdatedAt:     r.UpdatedAt,
-		UpdatedBy:     r.UpdatedBy,
+		Bucket:          BucketAll,
+		CreatedAt:       r.CreatedAt,
+		ID:              mustParseUUID(r.ID),
+		NamespaceID:     mustParseUUID(r.NamespaceID),
+		Name:            r.Name,
+		DefaultBranch:   r.DefaultBranch,
+		StorageClass:    r.StorageClass,
+		Generation:      r.Generation,
+		ResourceVersion: r.ResourceVersion,
+		Status:          string(r.Status),
+		CreatedBy:       r.CreatedBy,
+		UpdatedAt:       r.UpdatedAt,
+		UpdatedBy:       r.UpdatedBy,
 	}
 }
 
 func fromRepositoryRow(r *repositoryRow) *datastore.Repository {
-	return &datastore.Repository{
-		ID:            r.ID.String(),
-		NamespaceID:   r.NamespaceID.String(),
-		Name:          r.Name,
-		DefaultBranch: r.DefaultBranch,
-		StorageClass:  r.StorageClass,
-		CreatedAt:     r.CreatedAt,
-		CreatedBy:     r.CreatedBy,
-		UpdatedAt:     r.UpdatedAt,
-		UpdatedBy:     r.UpdatedBy,
+	repository := &datastore.Repository{
+		ID:              r.ID.String(),
+		NamespaceID:     r.NamespaceID.String(),
+		Name:            r.Name,
+		DefaultBranch:   r.DefaultBranch,
+		StorageClass:    r.StorageClass,
+		Generation:      r.Generation,
+		ResourceVersion: r.ResourceVersion,
+		Status:          []byte(r.Status),
+		CreatedAt:       r.CreatedAt,
+		CreatedBy:       r.CreatedBy,
+		UpdatedAt:       r.UpdatedAt,
+		UpdatedBy:       r.UpdatedBy,
 	}
+	datastore.NormalizeRepositoryContract(repository)
+	return repository
 }
 
 func (s *scyllaDatastore) CreateRepository(ctx context.Context, r *datastore.Repository) error {
@@ -128,6 +140,7 @@ func (s *scyllaDatastore) UpdateRepository(_ context.Context, r *datastore.Repos
 	row := toRepositoryRow(r)
 	stmt, names := s.repositoryTable.Update(
 		"namespace_id", "name", "default_branch", "storage_class",
+		"generation", "resource_version", "status",
 		"created_by", "updated_at", "updated_by",
 	)
 	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {

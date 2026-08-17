@@ -1,8 +1,5 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
-# Copyright (c) 2026 GitStore contributors
-
-# Repository and NamespaceMapping GraphQL schema additions
-# Feature: 010-repo-storage-identity
+# Additive Repository declarative resource contract.
+# Existing mutation inputs and payloads remain unchanged.
 
 """
 A namespace-scoped GitStore Repository resource.
@@ -58,11 +55,6 @@ type Repository implements Node {
     @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
   updatedBy: String!
     @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-
-  """
-  Markdown body content (repository description).
-  """
-  body: String
 }
 
 """
@@ -108,140 +100,4 @@ System-computed Repository values that authors cannot set directly.
 type ResolvedRepositoryDefinition {
   storagePath: String!
   storageClass: String!
-}
-
-type RepositoryEdge {
-  cursor: String!
-  node: Repository!
-}
-
-type RepositoryConnection {
-  edges: [RepositoryEdge!]!
-  pageInfo: PageInfo!
-  totalCount: Int!
-}
-
-# ============================================================================
-# Query additions
-# ============================================================================
-
-extend type Query {
-  """
-  Look up a repository by its namespace identifier and name.
-  Returns null if not found.
-  """
-  repository(by: RepositoryBy!): Repository
-
-  """
-  List repositories within a namespace.
-  """
-  repositories(
-    namespace: String!
-    first: Int
-    after: String
-    last: Int
-    before: String
-  ): RepositoryConnection!
-}
-
-"""
-Selector for a single repository lookup.
-Exactly one field must be set.
-"""
-input RepositoryBy @oneOf {
-  """
-  Look up by globally unique Relay ID.
-  """
-  id: ID
-
-  """
-  Look up by namespace identifier + repository name.
-  """
-  namespacePath: RepositoryNamespacePath
-}
-
-"""
-Composite selector: namespace identifier (human-readable slug) + repository name.
-"""
-input RepositoryNamespacePath {
-  """
-  Namespace identifier slug (e.g., "acme").
-  """
-  namespace: String!
-
-  """
-  Repository name (e.g., "my-catalog").
-  """
-  name: String!
-}
-
-# ============================================================================
-# Mutation additions
-# ============================================================================
-
-extend type Mutation {
-  """
-  Create a new repository within a namespace.
-  """
-  createRepository(input: CreateRepositoryInput!): CreateRepositoryPayload!
-
-  """
-  Rename a repository within its namespace. Does not move storage.
-  """
-  renameRepository(input: RenameRepositoryInput!): RenameRepositoryPayload!
-
-  """
-  Transfer a repository to a different namespace. Does not move storage.
-  """
-  transferRepository(input: TransferRepositoryInput!): TransferRepositoryPayload!
-
-  """
-  Delete a repository and its storage. Deletion is blocked when the repository contains catalog resources.
-  """
-  deleteRepository(input: DeleteRepositoryInput!): DeleteRepositoryPayload!
-}
-
-input CreateRepositoryInput {
-  namespace: String!
-  name: String!
-  defaultBranch: String
-}
-
-type CreateRepositoryPayload {
-  repository: Repository!
-}
-
-input RenameRepositoryInput {
-  """
-  Relay ID of the repository to rename.
-  """
-  repositoryId: ID!
-  newName: String!
-}
-
-type RenameRepositoryPayload {
-  repository: Repository!
-}
-
-input TransferRepositoryInput {
-  """
-  Relay ID of the repository to transfer.
-  """
-  repositoryId: ID!
-  """
-  Relay ID of the destination namespace.
-  """
-  targetNamespaceId: ID!
-}
-
-type TransferRepositoryPayload {
-  repository: Repository!
-}
-
-input DeleteRepositoryInput {
-  repositoryId: ID!
-}
-
-type DeleteRepositoryPayload {
-  deletedRepositoryId: ID!
 }

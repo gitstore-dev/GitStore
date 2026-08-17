@@ -7,9 +7,11 @@ package scylla_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -193,6 +195,180 @@ func newProductVariant(namespace, name, sku, productRefName string) *datastore.P
 		SKU:               sku,
 		ProductRefName:    productRefName,
 	}
+}
+
+func newRepository() *datastore.Repository {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	return &datastore.Repository{
+		ID:            newID(),
+		NamespaceID:   newID(),
+		Name:          "repo-" + newID()[:8],
+		DefaultBranch: "main",
+		StorageClass:  "default",
+		CreatedAt:     now,
+		CreatedBy:     "test",
+		UpdatedAt:     now,
+		UpdatedBy:     "test",
+	}
+}
+
+func setRepositoryContractFields(
+	t *testing.T,
+	repository *datastore.Repository,
+	generation int64,
+	resourceVersion string,
+	status json.RawMessage,
+) {
+	t.Helper()
+	value := reflect.ValueOf(repository).Elem()
+
+	generationField := value.FieldByName("Generation")
+	if !generationField.IsValid() {
+		t.Fatal("datastore.Repository is missing Generation")
+	}
+	require.Equal(t, reflect.Int64, generationField.Kind())
+	generationField.SetInt(generation)
+
+	resourceVersionField := value.FieldByName("ResourceVersion")
+	if !resourceVersionField.IsValid() {
+		t.Fatal("datastore.Repository is missing ResourceVersion")
+	}
+	require.Equal(t, reflect.String, resourceVersionField.Kind())
+	resourceVersionField.SetString(resourceVersion)
+
+	statusField := value.FieldByName("Status")
+	if !statusField.IsValid() {
+		t.Fatal("datastore.Repository is missing Status")
+	}
+	require.Equal(t, reflect.TypeOf(json.RawMessage{}), statusField.Type())
+	statusField.Set(reflect.ValueOf(status))
+}
+
+func repositoryContractFields(t *testing.T, repository *datastore.Repository) (int64, string, json.RawMessage) {
+	t.Helper()
+	value := reflect.ValueOf(repository).Elem()
+
+	generationField := value.FieldByName("Generation")
+	if !generationField.IsValid() {
+		t.Fatal("datastore.Repository is missing Generation")
+	}
+	require.Equal(t, reflect.Int64, generationField.Kind())
+
+	resourceVersionField := value.FieldByName("ResourceVersion")
+	if !resourceVersionField.IsValid() {
+		t.Fatal("datastore.Repository is missing ResourceVersion")
+	}
+	require.Equal(t, reflect.String, resourceVersionField.Kind())
+
+	statusField := value.FieldByName("Status")
+	if !statusField.IsValid() {
+		t.Fatal("datastore.Repository is missing Status")
+	}
+	require.Equal(t, reflect.TypeOf(json.RawMessage{}), statusField.Type())
+
+	return generationField.Int(), resourceVersionField.String(), statusField.Interface().(json.RawMessage)
+}
+
+// ── Repository ───────────────────────────────────────────────────────────────
+
+func TestScylla_RepositoryResourceContractRoundTrip(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	repository := newRepository()
+	initialStatus := json.RawMessage(`{
+		"observedGeneration": 4,
+		"lastAppliedRevision": "abc123",
+		"conditions": [{
+			"type": "Ready",
+			"status": "True",
+			"reason": "Reconciled",
+			"message": "repository is ready",
+			"lastTransitionTime": "2026-08-16T20:00:00Z",
+			"observedGeneration": 4
+		}]
+	}`)
+	setRepositoryContractFields(t, repository, 5, "12", initialStatus)
+
+	require.NoError(t, store.CreateRepository(ctx, repository))
+
+	created, err := store.GetRepository(ctx, repository.ID)
+	require.NoError(t, err)
+	generation, resourceVersion, status := repositoryContractFields(t, created)
+	assert.Equal(t, int64(5), generation)
+	assert.Equal(t, "12", resourceVersion)
+	assert.JSONEq(t, string(initialStatus), string(status))
+
+	updatedStatus := json.RawMessage(`{
+		"observedGeneration": 6,
+		"lastAppliedRevision": "def456",
+		"conditions": [{
+			"type": "Ready",
+			"status": "False",
+			"reason": "Reconciling",
+			"message": "repository update is pending",
+			"lastTransitionTime": "2026-08-16T20:30:00Z",
+			"observedGeneration": 6
+		}]
+	}`)
+	setRepositoryContractFields(t, created, 6, "13", updatedStatus)
+	require.NoError(t, store.UpdateRepository(ctx, created))
+
+	updated, err := store.GetRepository(ctx, repository.ID)
+	require.NoError(t, err)
+	generation, resourceVersion, status = repositoryContractFields(t, updated)
+	assert.Equal(t, int64(6), generation)
+	assert.Equal(t, "13", resourceVersion)
+	assert.JSONEq(t, string(updatedStatus), string(status))
+}
+
+func TestScylla_RepositoryResourceContractLegacyNormalization(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	legacyRepository := newRepository()
+
+	require.NoError(t, store.CreateRepository(ctx, legacyRepository))
+
+	got, err := store.GetRepository(ctx, legacyRepository.ID)
+	require.NoError(t, err)
+	generation, resourceVersion, status := repositoryContractFields(t, got)
+	assert.Equal(t, int64(1), generation)
+	assert.Equal(t, "1", resourceVersion)
+	assert.JSONEq(t, `{"observedGeneration":0,"conditions":[]}`, string(status))
+}
+
+func TestScylla_RepositoryVersionTransitionsPersist(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	repository := newRepository()
+	require.NoError(t, store.CreateRepository(ctx, repository))
+
+	datastore.AdvanceRepositorySpecVersion(repository)
+	require.NoError(t, store.UpdateRepository(ctx, repository))
+
+	afterSpec, err := store.GetRepository(ctx, repository.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), afterSpec.Generation)
+	assert.Equal(t, "2", afterSpec.ResourceVersion)
+	assert.JSONEq(t, `{"observedGeneration":0,"conditions":[]}`, string(afterSpec.Status))
+
+	afterSpec.Status = json.RawMessage(`{
+		"observedGeneration": 2,
+		"lastAppliedRevision": "main@sha1:abc",
+		"conditions": [{
+			"type": "Ready",
+			"status": "True",
+			"observedGeneration": 2,
+			"lastTransitionTime": "2026-08-16T20:00:00Z"
+		}]
+	}`)
+	datastore.AdvanceRepositorySystemVersion(afterSpec)
+	require.NoError(t, store.UpdateRepository(ctx, afterSpec))
+
+	afterSystem, err := store.GetRepository(ctx, repository.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), afterSystem.Generation)
+	assert.Equal(t, "3", afterSystem.ResourceVersion)
+	assert.JSONEq(t, string(afterSpec.Status), string(afterSystem.Status))
 }
 
 // ── Product ───────────────────────────────────────────────────────────────────
