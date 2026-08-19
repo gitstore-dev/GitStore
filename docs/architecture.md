@@ -8,6 +8,9 @@ This document describes the architecture of the AI-native commerce engine: the s
 - Allow AI agents to perform safe, structured mutations.
 - Serve storefront reads from low-latency indexed data.
 - Decouple write acceptance from heavy validation and indexing work.
+- Run the API, controller manager, and Git service as independently autoscaled replicas.
+- Support concurrent users and agents through pluggable authentication and authorization.
+- Sustain catalogues with millions of products and prolonged peak Git push workloads.
 
 ## Roadmap Alignment (Current Direction)
 
@@ -37,10 +40,26 @@ All proposals share the same core building blocks, arranged with different contr
 
 - `gitstore-api/`: Go API gateway, GraphQL surface, and gRPC client/server boundaries.
 - `gitstore-git-service/`: Rust Git engine, receive hooks, and repository access logic.
+- `gitstore-controller-manager/`: Go watch, queue, reconciliation, status, retry, and operational runtime.
 - `shared/schemas/`: GraphQL schema contracts consumed by the API layer.
 - `shared/proto/gitstore/git/v1/`: Canonical `.proto` definition for the gRPC Git service contract.
 
 > **Admin**: For the optional web interface, see [`docs/admin/architecture.md`](admin/architecture.md).
+
+### Production Deployment Model
+
+The API, controller manager, and Git service are the core services. Each must
+support multiple replicas and autoscaling without depending on process affinity.
+
+- API correctness state, authentication, authorization, sessions, revocation,
+  and idempotency must remain consistent across replicas.
+- Controller reconciliation must be idempotent and use an explicit
+  coordination, partitioning, or duplicate-safe work model.
+- Git-service deployment must define repository placement, reference-update
+  serialization, durable storage, routing, and failover without divergent refs.
+- Routine catalogue paths must remain bounded at 5,000,000 or more products.
+- Git push validation, admission, projection, and reconciliation must use
+  bounded concurrency and backpressure and must pass sustained-load testing.
 
 ### Service Boundary
 

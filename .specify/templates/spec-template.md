@@ -95,6 +95,14 @@
 - **FR-006**: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]
 - **FR-007**: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
 
+### Production Requirements *(mandatory for core-service or load-bearing changes)*
+
+- **PR-001 Replica Safety**: [Define behavior with at least two replicas, process replacement, and rolling upgrades]
+- **PR-002 Multi-User Security**: [Define authentication, authorization, isolation, and audit behavior]
+- **PR-003 Capacity**: [Define dataset size, peak/sustained concurrency, payload shape, latency, and error objectives]
+- **PR-004 Backpressure**: [Define queue, worker, retry, timeout, and overload behavior]
+- **PR-005 Recovery**: [Define convergence and data-integrity behavior after partial failure]
+
 ### Key Entities *(include if feature involves data)*
 
 - **[Entity 1]**: [What it represents, key attributes without implementation]
@@ -113,3 +121,7 @@
 - **SC-002**: [Measurable metric, e.g., "System handles 1000 concurrent users without degradation"]
 - **SC-003**: [User satisfaction metric, e.g., "90% of users successfully complete primary task on first attempt"]
 - **SC-004**: [Business metric, e.g., "Reduce support tickets related to [X] by 50%"]
+
+For core-service or load-bearing changes, success criteria MUST also measure
+multi-replica correctness, authorization isolation, sustained-load behavior,
+backpressure, and recovery against the declared production dataset.

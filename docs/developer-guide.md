@@ -41,6 +41,22 @@ graph TD
 | `gitstore-controller-manager` |  `5001` | `/health`, `/metrics`, poison-item API                 |
 | `gitstore-admin`              |  `3000` | Optional browser UI                                    |
 
+## Production Design Constraints
+
+`gitstore-api`, `gitstore-controller-manager`, and
+`gitstore-git-service` are the three core services. Features affecting them
+must define behavior with multiple replicas, process replacement, rolling
+upgrades, and autoscaling.
+
+Production paths must also define:
+
+- pluggable authentication and authorization for human, service, and agent identities;
+- namespace and repository isolation at the owning service boundary;
+- bounded queries, queues, workers, retries, timeouts, and payloads;
+- capacity at a minimum catalogue size of 5,000,000 products;
+- sustained Git push load and downstream backpressure behavior;
+- repeatable replica, failover, load, soak, and recovery validation.
+
 ## Local Development
 
 Start the Docker stack:

@@ -25,13 +25,25 @@
 **Project Type**: [e.g., library/cli/web-service/mobile-app/compiler/desktop-app or NEEDS CLARIFICATION]  
 **Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]  
 **Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]  
-**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens or NEEDS CLARIFICATION]
+**Scale/Scope**: [dataset, users, repositories, and sustained workload or NEEDS CLARIFICATION]
+**Replica/Scaling Model**: [affected core services, state ownership, coordination, failover, and autoscaling behavior or N/A]
+**Authentication/Authorization**: [user/service identities, policy enforcement points, and isolation impact or N/A]
+**Load/Backpressure Model**: [peak and sustained workload, queue/concurrency bounds, timeouts, retries, and soak target or N/A]
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-[Gates determined based on constitution file]
+- **Test-First**: Contracts and failing tests are identified before implementation.
+- **API/Contract-First**: GraphQL, gRPC, datastore, event, and error semantics are defined first.
+- **Core-Service Boundary**: Impact on API, controller manager, and Git service is explicit.
+- **Replica Safety**: Core-service changes remain correct with at least two replicas and rolling upgrades.
+- **Multi-User Security**: AuthN/AuthZ enforcement and namespace/repository isolation are explicit.
+- **Production Capacity**: Plans address 5,000,000-product scale and sustained Git push load where applicable.
+- **Bounded Work**: Queries, queues, workers, retries, payloads, and partitions have explicit bounds.
+- **Observability**: Logs, metrics, readiness, saturation, and recovery signals are designed.
+- **Incremental Delivery**: Slices can deploy independently across mixed-version replicas.
+- **Simplicity**: Added complexity is justified by measured or contractual production needs.
 
 ## Project Structure
 
