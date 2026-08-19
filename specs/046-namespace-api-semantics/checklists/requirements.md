@@ -32,4 +32,4 @@
 ## Notes
 
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`
-- Two open design forks (tier mutability, whether a public status-update mutation is introduced) were resolved via documented defaults in Assumptions rather than [NEEDS CLARIFICATION] markers: both defaults are the lower-risk, more conservative choice and are consistent with GH#171's own assumptions and this codebase's existing immutability conventions.
+- This spec was substantially rewritten mid-session after discovering `docs/ADRs/0002-namespace-lifecycle.md` (Status: Proposed), which the recorded Clarification on spec 044 makes binding. The rewrite adopts ADR-0002 in full (bootstrap namespaces, git-delegated mutations, admission, controller reconciliation, finalizer/Terminating deletion) rather than the direct-datastore-write model originally drafted. Spec 047 (GH#173) was updated in the same round to stay consistent — see its own Notes.

@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 GitStore contributors
+
+# This file documents that GH#172 introduces NO breaking change to the public
+# Namespace mutation SDL already shipped by GH#171 (shared/schemas/namespace.graphqls).
+# createNamespace, updateNamespace (new resolver behavior, same input/output
+# shape as drafted for this spec), and deleteNamespace all keep their existing
+# signatures. Only the internal write path changes:
+#
+#   createNamespace(input: CreateNamespaceInput!): CreateNamespacePayload!
+#   deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
+#
+# updateNamespace is added by this spec with the same shape any other
+# spec-writable resource in this codebase uses for a partial update -- it
+# does NOT take a caller-supplied resourceVersion precondition, because the
+# caller is not writing the datastore directly; Git commit + admission is the
+# concurrency boundary (see research.md Decision 5 for why the
+# datastore-internal UpdateNamespace precondition is not part of the public
+# contract).
+
+input UpdateNamespaceInput {
+  """
+  metadata.name of the namespace to update. Must not target a bootstrap
+  namespace (gitstore-system, default).
+  """
+  name: String!
+
+  """Null = leave unchanged. Non-null = new value."""
+  title: String
+
+  """
+  Null = leave unchanged. Non-null = replace in full. Tier demotion is
+  rejected at admission (FR-006), independent of this field's presence.
+  """
+  repositoryDefaults: NamespaceRepositoryDefaultsInput
+
+  """Null = leave unchanged. Non-null = replace in full."""
+  pushPolicyDefaults: NamespacePushPolicyDefaultsInput
+}
+
+type UpdateNamespacePayload {
+  """Null when the write failed (validation or admission rejection)."""
+  namespace: Namespace
+}
+
+extend type Mutation {
+  """
+  Update an existing non-bootstrap namespace's spec. Commits an updated
+  manifest to gitstore-system/gitstore-system on the caller's behalf and
+  waits for admission before returning.
+  """
+  updateNamespace(input: UpdateNamespaceInput!): UpdateNamespacePayload!
+}
+
+# NamespaceRepositoryDefaultsInput / NamespacePushPolicyDefaultsInput mirror
+# the existing NamespaceRepositoryDefaults / NamespacePushPolicyDefaults
+# output types field-for-field (input variants), following the same
+# input/output type pairing convention already used elsewhere in this schema.
