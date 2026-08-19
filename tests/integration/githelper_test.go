@@ -11,7 +11,6 @@ import (
 	"testing"
 )
 
-
 // uniqueValidProduct returns a Kubernetes-style product fixture with a
 // timestamp-unique name so repeated test runs never collide on name in the catalog.
 func uniqueValidProduct(ts int64) string {
@@ -32,8 +31,8 @@ Integration test product for core-stack contract verification.
 
 // pushHelper holds state for a single test push scenario.
 type pushHelper struct {
-	t       *testing.T
-	workDir string
+	t         *testing.T
+	workDir   string
 	remoteURL string
 }
 
@@ -42,9 +41,15 @@ type pushHelper struct {
 func newPushHelper(t *testing.T) *pushHelper {
 	t.Helper()
 
-	workDir := t.TempDir()
 	namespace := getEnv("NAMESPACE", "gitstore-test")
 	repository := getEnv("REPOSITORY", "catalog")
+	return newPushHelperForRepo(t, namespace, repository)
+}
+
+func newPushHelperForRepo(t *testing.T, namespace, repository string) *pushHelper {
+	t.Helper()
+
+	workDir := t.TempDir()
 	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitURL, namespace, repository)
 
 	// Try a lightweight reachability check before cloning.
@@ -96,6 +101,20 @@ func (h *pushHelper) commitCollection(filename, content string) {
 	}
 	run(h.t, h.workDir, "git", "add", path)
 	run(h.t, h.workDir, "git", "commit", "-m", fmt.Sprintf("add %s", filename))
+}
+
+func (h *pushHelper) commitNamespace(filename, content string) {
+	h.t.Helper()
+	dir := filepath.Join(h.workDir, "namespaces")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		h.t.Fatalf("mkdir namespaces: %v", err)
+	}
+	path := filepath.Join(dir, filename)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		h.t.Fatalf("write namespace file: %v", err)
+	}
+	run(h.t, h.workDir, "git", "add", path)
+	run(h.t, h.workDir, "git", "commit", "-m", fmt.Sprintf("update %s", filename))
 }
 
 // push executes git push and returns (stdout+stderr, error).

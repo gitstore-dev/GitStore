@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -31,6 +32,7 @@ import (
 // testRepoID is a fixed UUID used as the repository ID in AdmitResources tests.
 // The memdb UUIDFieldIndex requires exactly 36 characters.
 const testRepoID = "00000000-0000-0000-0000-000000000001"
+const wrongNamespaceRepoID = "00000000-0000-0000-0000-000000000002"
 
 func newCatalogServer(t *testing.T, store datastore.Datastore, git cataloggrpc.GitReader, opts ...func(*cataloggrpc.ServerDeps)) *cataloggrpc.Server {
 	t.Helper()
@@ -100,6 +102,157 @@ spec:
 
 A test product.
 `
+
+func namespaceManifest(name, title, tier string) []byte {
+	return []byte(fmt.Sprintf(`---
+apiVersion: gitstore.dev/v1beta1
+kind: Namespace
+metadata:
+  name: %s
+spec:
+  title: %s
+  tier: %s
+---
+`, name, title, tier))
+}
+
+func TestValidateResources_NamespaceRepositoryPolicy(t *testing.T) {
+	store := newNamespacePolicyDatastore(t)
+	srv := newCatalogServer(t, store, nil)
+
+	t.Run("accepts system repository path", func(t *testing.T) {
+		resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+			RepositoryId: testRepoID,
+			Blobs: []*catalogv1.ResourceBlob{{
+				Path:    "namespaces/acme-store.md",
+				Content: namespaceManifest("acme-store", "Acme Store", "USER"),
+			}},
+		})
+		require.NoError(t, err)
+		assert.True(t, resp.Accepted)
+	})
+
+	t.Run("rejects other repository", func(t *testing.T) {
+		resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+			RepositoryId: wrongNamespaceRepoID,
+			Blobs: []*catalogv1.ResourceBlob{{
+				Path:    "namespaces/acme-store.md",
+				Content: namespaceManifest("acme-store", "Acme Store", "USER"),
+			}},
+		})
+		require.NoError(t, err)
+		assert.False(t, resp.Accepted)
+		require.NotEmpty(t, resp.Errors)
+		assert.Contains(t, resp.Errors[0].Message, "gitstore-system/gitstore-system")
+	})
+
+	t.Run("rejects wrong path", func(t *testing.T) {
+		resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+			RepositoryId: testRepoID,
+			Blobs: []*catalogv1.ResourceBlob{{
+				Path:    "catalog/acme-store.md",
+				Content: namespaceManifest("acme-store", "Acme Store", "USER"),
+			}},
+		})
+		require.NoError(t, err)
+		assert.False(t, resp.Accepted)
+		require.NotEmpty(t, resp.Errors)
+		assert.Contains(t, resp.Errors[0].Message, "namespaces/acme-store.md")
+	})
+}
+
+func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
+	store := newNamespacePolicyDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	c := strings.Repeat("c", 40)
+	current := a
+	path := "namespaces/acme-store.md"
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {path: namespaceManifest("acme-store", "Acme Store", "USER")},
+		b: {path: namespaceManifest("acme-store", "Acme Store Updated", "ORGANIZATION")},
+		c: {path: namespaceManifest("acme-store", "Demoted", "USER")},
+	})
+	srv := newCatalogServer(t, store, git)
+
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: zero,
+		NewCommitSha: a,
+		CommitSha:    a,
+		RefName:      "refs/heads/main",
+		ChangedPaths: []string{path},
+	})
+	require.NoError(t, err)
+	created, err := store.GetNamespaceByName(context.Background(), "acme-store")
+	require.NoError(t, err)
+	assert.Equal(t, "Acme Store", created.Title)
+	assert.Equal(t, datastore.NamespaceTierUser, created.Tier)
+	assert.Equal(t, int64(1), created.Generation)
+	assert.Equal(t, "1", created.ResourceVersion)
+	assert.Contains(t, string(created.Status), "AdmissionAccepted")
+
+	current = b
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: a,
+		NewCommitSha: b,
+		CommitSha:    b,
+		RefName:      "refs/heads/main",
+		ChangedPaths: []string{path},
+	})
+	require.NoError(t, err)
+	updated, err := store.GetNamespaceByName(context.Background(), "acme-store")
+	require.NoError(t, err)
+	assert.Equal(t, "Acme Store Updated", updated.Title)
+	assert.Equal(t, datastore.NamespaceTierOrganization, updated.Tier)
+	assert.Equal(t, int64(2), updated.Generation)
+	assert.Equal(t, "2", updated.ResourceVersion)
+
+	current = c
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: b,
+		NewCommitSha: c,
+		CommitSha:    c,
+		RefName:      "refs/heads/main",
+		ChangedPaths: []string{path},
+	})
+	require.NoError(t, err)
+	notDemoted, err := store.GetNamespaceByName(context.Background(), "acme-store")
+	require.NoError(t, err)
+	assert.Equal(t, "Acme Store Updated", notDemoted.Title)
+	assert.Equal(t, datastore.NamespaceTierOrganization, notDemoted.Tier)
+	assert.Equal(t, int64(2), notDemoted.Generation)
+}
+
+func TestAdmitResources_NamespaceBootstrapNameRejected(t *testing.T) {
+	store := newNamespacePolicyDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	current := a
+	path := "namespaces/default.md"
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {path: namespaceManifest("default", "Changed Default", "ORGANIZATION")},
+	})
+	srv := newCatalogServer(t, store, git)
+
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: zero,
+		NewCommitSha: a,
+		CommitSha:    a,
+		RefName:      "refs/heads/main",
+		ChangedPaths: []string{path},
+	})
+	require.NoError(t, err)
+
+	bootstrap, err := store.GetNamespaceByName(context.Background(), "default")
+	require.NoError(t, err)
+	assert.NotEqual(t, "Changed Default", bootstrap.Title)
+	assert.Equal(t, datastore.NamespaceTierUser, bootstrap.Tier)
+}
 
 // T011a: blob with valid frontmatter → accepted=true, empty errors
 func TestValidateResources_ValidBlob_Accepted(t *testing.T) {
@@ -1478,29 +1631,99 @@ func newTestDatastore(t *testing.T) datastore.Datastore {
 	ctx := context.Background()
 	now := time.Now()
 	ns := &datastore.Namespace{
-		ID:          uuid.New().String(),
-		Identifier:  "gitstore",
-		DisplayName: "GitStore Test",
-		Tier:        datastore.NamespaceTierUser,
-		CreatedAt:   now,
-		CreatedBy:   "test",
-		UpdatedAt:   now,
-		UpdatedBy:   "test",
+		ID:                uuid.New().String(),
+		Name:              "gitstore",
+		Title:             "GitStore Test",
+		Tier:              datastore.NamespaceTierUser,
+		CreationTimestamp: now,
+		CreationActor:     "test",
+		UpdateTimestamp:   now,
+		UpdateActor:       "test",
 	}
 	require.NoError(t, store.CreateNamespace(ctx, ns))
 
 	repo := &datastore.Repository{
-		ID:            testRepoID,
-		NamespaceID:   ns.ID,
-		Name:          "catalog",
-		DefaultBranch: "main",
-		StorageClass:  "local",
-		CreatedAt:     now,
-		CreatedBy:     "test",
-		UpdatedAt:     now,
-		UpdatedBy:     "test",
+		ID:                testRepoID,
+		NamespaceID:       ns.ID,
+		Name:              "catalog",
+		DefaultBranch:     "main",
+		StorageClass:      "local",
+		CreationTimestamp: now,
+		CreationActor:     "test",
+		UpdateTimestamp:   now,
+		UpdateActor:       "test",
 	}
 	require.NoError(t, store.CreateRepository(ctx, repo))
+	return store
+}
+
+func newNamespacePolicyDatastore(t *testing.T) datastore.Datastore {
+	t.Helper()
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	systemNamespace := &datastore.Namespace{
+		ID:                uuid.New().String(),
+		Name:              "gitstore-system",
+		Title:             "GitStore System",
+		Tier:              datastore.NamespaceTierOrganization,
+		CreationTimestamp: now,
+		CreationActor:     "system",
+		UpdateTimestamp:   now,
+		UpdateActor:       "system",
+	}
+	defaultNamespace := &datastore.Namespace{
+		ID:                uuid.New().String(),
+		Name:              "default",
+		Title:             "Default",
+		Tier:              datastore.NamespaceTierUser,
+		CreationTimestamp: now,
+		CreationActor:     "system",
+		UpdateTimestamp:   now,
+		UpdateActor:       "system",
+	}
+	otherNamespace := &datastore.Namespace{
+		ID:                uuid.New().String(),
+		Name:              "other",
+		Title:             "Other",
+		Tier:              datastore.NamespaceTierUser,
+		CreationTimestamp: now,
+		CreationActor:     "test",
+		UpdateTimestamp:   now,
+		UpdateActor:       "test",
+	}
+	for _, namespace := range []*datastore.Namespace{systemNamespace, defaultNamespace, otherNamespace} {
+		require.NoError(t, store.CreateNamespace(ctx, namespace))
+	}
+	for _, repository := range []*datastore.Repository{
+		{
+			ID:                testRepoID,
+			NamespaceID:       systemNamespace.ID,
+			Name:              "gitstore-system",
+			DefaultBranch:     "main",
+			StorageClass:      "local",
+			CreationTimestamp: now,
+			CreationActor:     "system",
+			UpdateTimestamp:   now,
+			UpdateActor:       "system",
+		},
+		{
+			ID:                wrongNamespaceRepoID,
+			NamespaceID:       otherNamespace.ID,
+			Name:              "catalog",
+			DefaultBranch:     "main",
+			StorageClass:      "local",
+			CreationTimestamp: now,
+			CreationActor:     "test",
+			UpdateTimestamp:   now,
+			UpdateActor:       "test",
+		},
+	} {
+		require.NoError(t, store.CreateRepository(ctx, repository))
+	}
 	return store
 }
 

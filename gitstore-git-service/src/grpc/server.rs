@@ -39,6 +39,7 @@ impl From<&PushContext> for HookContext {
     fn from(ctx: &PushContext) -> Self {
         let actor = ctx.actor.as_ref();
         HookContext {
+            repository_id: ctx.repository_id.clone(),
             actor_subject: actor.map(|a| a.subject.clone()).unwrap_or_default(),
             actor_auth_method: actor.map(|a| a.auth_method.clone()).unwrap_or_default(),
             max_pack_size_bytes: ctx

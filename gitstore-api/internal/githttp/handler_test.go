@@ -417,8 +417,8 @@ func TestRepoResolverNotFound(t *testing.T) {
 func TestRepoResolverSetsContext(t *testing.T) {
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
 	store := &testutil.StubStore{
-		GetNamespaceByIdentifierFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
-			return &datastore.Namespace{ID: "ns-id-1", Identifier: id}, nil
+		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
+			return &datastore.Namespace{ID: "ns-id-1", Name: id}, nil
 		},
 		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
 			return &datastore.NamespaceMapping{RepoID: wantRepoID}, nil
@@ -468,8 +468,8 @@ func TestGitHttpAuthorizerReadOnly(t *testing.T) {
 
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
 	store := &testutil.StubStore{
-		GetNamespaceByIdentifierFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
-			return &datastore.Namespace{ID: "ns-id-1", Identifier: id}, nil
+		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
+			return &datastore.Namespace{ID: "ns-id-1", Name: id}, nil
 		},
 		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
 			return &datastore.NamespaceMapping{RepoID: wantRepoID}, nil
@@ -509,8 +509,8 @@ func TestGitHttpAuthorizerWriteAllowed(t *testing.T) {
 
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
 	store := &testutil.StubStore{
-		GetNamespaceByIdentifierFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
-			return &datastore.Namespace{ID: "ns-id-1", Identifier: id}, nil
+		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
+			return &datastore.Namespace{ID: "ns-id-1", Name: id}, nil
 		},
 		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
 			return &datastore.NamespaceMapping{RepoID: wantRepoID}, nil
@@ -596,8 +596,8 @@ func TestReceivePackAttachesPushContext(t *testing.T) {
 	const nsID = "ns-id-1"
 
 	store := &testutil.StubStore{
-		GetNamespaceByIdentifierFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
-			return &datastore.Namespace{ID: nsID, Identifier: id}, nil
+		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
+			return &datastore.Namespace{ID: nsID, Name: id}, nil
 		},
 		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
 			return &datastore.NamespaceMapping{RepoID: repoID}, nil

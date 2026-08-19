@@ -241,6 +241,17 @@ type CollectionStatus struct {
 	Resolved *ResolvedCollectionDefinition `json:"resolved,omitempty"`
 }
 
+// Controller-only finalizer completion for a terminating namespace.
+type CompleteNamespaceDeletionInput struct {
+	Identifier      string `json:"identifier"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type CompleteNamespaceDeletionPayload struct {
+	DeletedIdentifier *string         `json:"deletedIdentifier,omitempty"`
+	Conflict          *StatusConflict `json:"conflict,omitempty"`
+}
+
 // A named status condition shared by core catalog resources.
 type Condition struct {
 	Type               string          `json:"type"`
@@ -290,20 +301,12 @@ type CreateCollectionPayload struct {
 	Collection *Collection `json:"collection,omitempty"`
 }
 
-// Input for creating a new namespace.
+// Declarative resource envelope for creating a namespace.
 type CreateNamespaceInput struct {
-	// The human-readable identifier for the namespace.
-	// Must be globally unique across all tiers.
-	// DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
-	// Cannot begin or end with a hyphen. Cannot be a reserved name.
-	Identifier string `json:"identifier"`
-	// Optional human-friendly display name.
-	DisplayName *string `json:"displayName,omitempty"`
-	// The tier of the namespace being created.
-	// USER and ORGANIZATION tiers may be created by any authenticated user.
-	// Enterprise-level grouping, if needed in future, will be modeled outside
-	// the namespace type.
-	Tier NamespaceTier `json:"tier"`
+	APIVersion string                  `json:"apiVersion"`
+	Kind       string                  `json:"kind"`
+	Metadata   *NamespaceMetadataInput `json:"metadata"`
+	Spec       *NamespaceSpecInput     `json:"spec"`
 }
 
 // Payload returned after successfully creating a namespace.
@@ -549,6 +552,13 @@ type NamespaceMetadata struct {
 	Finalizers        []string          `json:"finalizers"`
 }
 
+// Author-controlled metadata for Namespace mutations.
+type NamespaceMetadataInput struct {
+	Name        string         `json:"name"`
+	Labels      map[string]any `json:"labels,omitempty"`
+	Annotations map[string]any `json:"annotations,omitempty"`
+}
+
 type NamespacePushPolicyDefaults struct {
 	MaxPackSizeBytes *int64                    `json:"maxPackSizeBytes,omitempty"`
 	MaxFileSizeBytes *int64                    `json:"maxFileSizeBytes,omitempty"`
@@ -557,7 +567,17 @@ type NamespacePushPolicyDefaults struct {
 	AdmissionControl *AdmissionControlDefaults `json:"admissionControl,omitempty"`
 }
 
+type NamespacePushPolicyDefaultsInput struct {
+	MaxPackSizeBytes *int64 `json:"maxPackSizeBytes,omitempty"`
+	MaxFileSizeBytes *int64 `json:"maxFileSizeBytes,omitempty"`
+}
+
 type NamespaceRepositoryDefaults struct {
+	Visibility    *RepositoryVisibility `json:"visibility,omitempty"`
+	DefaultBranch *string               `json:"defaultBranch,omitempty"`
+}
+
+type NamespaceRepositoryDefaultsInput struct {
 	Visibility    *RepositoryVisibility `json:"visibility,omitempty"`
 	DefaultBranch *string               `json:"defaultBranch,omitempty"`
 }
@@ -568,6 +588,13 @@ type NamespaceSpec struct {
 	Tier               NamespaceTier                `json:"tier"`
 	RepositoryDefaults *NamespaceRepositoryDefaults `json:"repositoryDefaults,omitempty"`
 	PushPolicyDefaults *NamespacePushPolicyDefaults `json:"pushPolicyDefaults,omitempty"`
+}
+
+type NamespaceSpecInput struct {
+	Title              *string                           `json:"title,omitempty"`
+	Tier               NamespaceTier                     `json:"tier"`
+	RepositoryDefaults *NamespaceRepositoryDefaultsInput `json:"repositoryDefaults,omitempty"`
+	PushPolicyDefaults *NamespacePushPolicyDefaultsInput `json:"pushPolicyDefaults,omitempty"`
 }
 
 // System-owned observed state for a Namespace.
@@ -1204,6 +1231,18 @@ type UpdateCollectionInput struct {
 type UpdateCollectionPayload struct {
 	Collection *Collection                       `json:"collection,omitempty"`
 	Conflict   *CollectionOptimisticLockConflict `json:"conflict,omitempty"`
+}
+
+// Declarative resource envelope for updating a namespace.
+type UpdateNamespaceInput struct {
+	APIVersion string                  `json:"apiVersion"`
+	Kind       string                  `json:"kind"`
+	Metadata   *NamespaceMetadataInput `json:"metadata"`
+	Spec       *NamespaceSpecInput     `json:"spec"`
+}
+
+type UpdateNamespacePayload struct {
+	Namespace *Namespace `json:"namespace,omitempty"`
 }
 
 type UpdateResourceStatusInput struct {

@@ -157,6 +157,11 @@ type ComplexityRoot struct {
 		Resolved            func(childComplexity int) int
 	}
 
+	CompleteNamespaceDeletionPayload struct {
+		Conflict          func(childComplexity int) int
+		DeletedIdentifier func(childComplexity int) int
+	}
+
 	Condition struct {
 		LastTransitionTime func(childComplexity int) int
 		Message            func(childComplexity int) int
@@ -249,25 +254,27 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
-		CreateCategory       func(childComplexity int, input model.CreateCategoryInput) int
-		CreateCollection     func(childComplexity int, input model.CreateCollectionInput) int
-		CreateNamespace      func(childComplexity int, input model.CreateNamespaceInput) int
-		CreateRepository     func(childComplexity int, input model.CreateRepositoryInput) int
-		DeleteCategory       func(childComplexity int, input model.DeleteCategoryInput) int
-		DeleteCollection     func(childComplexity int, input model.DeleteCollectionInput) int
-		DeleteNamespace      func(childComplexity int, input model.DeleteNamespaceInput) int
-		DeleteRepository     func(childComplexity int, input model.DeleteRepositoryInput) int
-		Login                func(childComplexity int, input model.LoginInput) int
-		Logout               func(childComplexity int) int
-		PublishCatalog       func(childComplexity int, input model.PublishCatalogInput) int
-		RefreshToken         func(childComplexity int, input model.RefreshTokenInput) int
-		RenameRepository     func(childComplexity int, input model.RenameRepositoryInput) int
-		ReorderCategories    func(childComplexity int, input model.ReorderCategoriesInput) int
-		TransferRepository   func(childComplexity int, input model.TransferRepositoryInput) int
-		UpdateCategory       func(childComplexity int, input model.UpdateCategoryInput) int
-		UpdateCategoryStatus func(childComplexity int, input model.UpdateCategoryStatusInput) int
-		UpdateCollection     func(childComplexity int, input model.UpdateCollectionInput) int
-		UpdateResourceStatus func(childComplexity int, input model.UpdateResourceStatusInput) int
+		CompleteNamespaceDeletion func(childComplexity int, input model.CompleteNamespaceDeletionInput) int
+		CreateCategory            func(childComplexity int, input model.CreateCategoryInput) int
+		CreateCollection          func(childComplexity int, input model.CreateCollectionInput) int
+		CreateNamespace           func(childComplexity int, input model.CreateNamespaceInput) int
+		CreateRepository          func(childComplexity int, input model.CreateRepositoryInput) int
+		DeleteCategory            func(childComplexity int, input model.DeleteCategoryInput) int
+		DeleteCollection          func(childComplexity int, input model.DeleteCollectionInput) int
+		DeleteNamespace           func(childComplexity int, input model.DeleteNamespaceInput) int
+		DeleteRepository          func(childComplexity int, input model.DeleteRepositoryInput) int
+		Login                     func(childComplexity int, input model.LoginInput) int
+		Logout                    func(childComplexity int) int
+		PublishCatalog            func(childComplexity int, input model.PublishCatalogInput) int
+		RefreshToken              func(childComplexity int, input model.RefreshTokenInput) int
+		RenameRepository          func(childComplexity int, input model.RenameRepositoryInput) int
+		ReorderCategories         func(childComplexity int, input model.ReorderCategoriesInput) int
+		TransferRepository        func(childComplexity int, input model.TransferRepositoryInput) int
+		UpdateCategory            func(childComplexity int, input model.UpdateCategoryInput) int
+		UpdateCategoryStatus      func(childComplexity int, input model.UpdateCategoryStatusInput) int
+		UpdateCollection          func(childComplexity int, input model.UpdateCollectionInput) int
+		UpdateNamespace           func(childComplexity int, input model.UpdateNamespaceInput) int
+		UpdateResourceStatus      func(childComplexity int, input model.UpdateResourceStatusInput) int
 	}
 
 	Namespace struct {
@@ -698,6 +705,10 @@ type ComplexityRoot struct {
 	UpdateCollectionPayload struct {
 		Collection func(childComplexity int) int
 		Conflict   func(childComplexity int) int
+	}
+
+	UpdateNamespacePayload struct {
+		Namespace func(childComplexity int) int
 	}
 
 	UpdateResourceStatusPayload struct {
@@ -1254,6 +1265,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CollectionStatus.Resolved(childComplexity), true
 
+	case "CompleteNamespaceDeletionPayload.conflict":
+		if e.ComplexityRoot.CompleteNamespaceDeletionPayload.Conflict == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CompleteNamespaceDeletionPayload.Conflict(childComplexity), true
+
+	case "CompleteNamespaceDeletionPayload.deletedIdentifier":
+		if e.ComplexityRoot.CompleteNamespaceDeletionPayload.DeletedIdentifier == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CompleteNamespaceDeletionPayload.DeletedIdentifier(childComplexity), true
+
 	case "Condition.lastTransitionTime":
 		if e.ComplexityRoot.Condition.LastTransitionTime == nil {
 			break
@@ -1492,6 +1517,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.MediaDefinition.FileRef(childComplexity), true
 
+	case "Mutation.completeNamespaceDeletion":
+		if e.ComplexityRoot.Mutation.CompleteNamespaceDeletion == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_completeNamespaceDeletion_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CompleteNamespaceDeletion(childComplexity, args["input"].(model.CompleteNamespaceDeletionInput)), true
+
 	case "Mutation.createCategory":
 		if e.ComplexityRoot.Mutation.CreateCategory == nil {
 			break
@@ -1702,6 +1739,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.UpdateCollection(childComplexity, args["input"].(model.UpdateCollectionInput)), true
+
+	case "Mutation.updateNamespace":
+		if e.ComplexityRoot.Mutation.UpdateNamespace == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateNamespace_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateNamespace(childComplexity, args["input"].(model.UpdateNamespaceInput)), true
 
 	case "Mutation.updateResourceStatus":
 		if e.ComplexityRoot.Mutation.UpdateResourceStatus == nil {
@@ -3534,6 +3583,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateCollectionPayload.Conflict(childComplexity), true
 
+	case "UpdateNamespacePayload.namespace":
+		if e.ComplexityRoot.UpdateNamespacePayload.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateNamespacePayload.Namespace(childComplexity), true
+
 	case "UpdateResourceStatusPayload.conflict":
 		if e.ComplexityRoot.UpdateResourceStatusPayload.Conflict == nil {
 			break
@@ -3637,6 +3693,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCategoryNamespacePath,
 		ec.unmarshalInputCollectionBy,
 		ec.unmarshalInputCollectionNamespacePath,
+		ec.unmarshalInputCompleteNamespaceDeletionInput,
 		ec.unmarshalInputConditionInput,
 		ec.unmarshalInputCreateCategoryInput,
 		ec.unmarshalInputCreateCollectionInput,
@@ -3650,6 +3707,10 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputLabelSelectorRequirementInput,
 		ec.unmarshalInputLoginInput,
 		ec.unmarshalInputNamespaceBy,
+		ec.unmarshalInputNamespaceMetadataInput,
+		ec.unmarshalInputNamespacePushPolicyDefaultsInput,
+		ec.unmarshalInputNamespaceRepositoryDefaultsInput,
+		ec.unmarshalInputNamespaceSpecInput,
 		ec.unmarshalInputProductBy,
 		ec.unmarshalInputProductNamespacePath,
 		ec.unmarshalInputProductVariantBy,
@@ -3665,6 +3726,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputUpdateCategoryInput,
 		ec.unmarshalInputUpdateCategoryStatusInput,
 		ec.unmarshalInputUpdateCollectionInput,
+		ec.unmarshalInputUpdateNamespaceInput,
 		ec.unmarshalInputUpdateResourceStatusInput,
 	)
 	first := true
@@ -4898,29 +4960,49 @@ input NamespaceBy @oneOf {
 }
 
 """
-Input for creating a new namespace.
+Author-controlled metadata for Namespace mutations.
+"""
+input NamespaceMetadataInput {
+  name: String!
+  labels: JSON
+  annotations: JSON
+}
+
+input NamespaceRepositoryDefaultsInput {
+  visibility: RepositoryVisibility
+  defaultBranch: String
+}
+
+input NamespacePushPolicyDefaultsInput {
+  maxPackSizeBytes: Long
+  maxFileSizeBytes: Long
+}
+
+input NamespaceSpecInput {
+  title: String
+  tier: NamespaceTier!
+  repositoryDefaults: NamespaceRepositoryDefaultsInput
+  pushPolicyDefaults: NamespacePushPolicyDefaultsInput
+}
+
+"""
+Declarative resource envelope for creating a namespace.
 """
 input CreateNamespaceInput {
-  """
-  The human-readable identifier for the namespace.
-  Must be globally unique across all tiers.
-  DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
-  Cannot begin or end with a hyphen. Cannot be a reserved name.
-  """
-  identifier: String!
+  apiVersion: String!
+  kind: String!
+  metadata: NamespaceMetadataInput!
+  spec: NamespaceSpecInput!
+}
 
-  """
-  Optional human-friendly display name.
-  """
-  displayName: String
-
-  """
-  The tier of the namespace being created.
-  USER and ORGANIZATION tiers may be created by any authenticated user.
-  Enterprise-level grouping, if needed in future, will be modeled outside
-  the namespace type.
-  """
-  tier: NamespaceTier!
+"""
+Declarative resource envelope for updating a namespace.
+"""
+input UpdateNamespaceInput {
+  apiVersion: String!
+  kind: String!
+  metadata: NamespaceMetadataInput!
+  spec: NamespaceSpecInput!
 }
 
 """
@@ -4936,6 +5018,14 @@ input DeleteNamespaceInput {
 }
 
 """
+Controller-only finalizer completion for a terminating namespace.
+"""
+input CompleteNamespaceDeletionInput {
+  identifier: String!
+  resourceVersion: String!
+}
+
+"""
 Payload returned after successfully creating a namespace.
 """
 type CreateNamespacePayload {
@@ -4943,6 +5033,10 @@ type CreateNamespacePayload {
   The newly created namespace.
   """
   namespace: Namespace!
+}
+
+type UpdateNamespacePayload {
+  namespace: Namespace
 }
 
 """
@@ -4953,6 +5047,11 @@ type DeleteNamespacePayload {
   The identifier of the deleted namespace.
   """
   deletedIdentifier: String!
+}
+
+type CompleteNamespaceDeletionPayload {
+  deletedIdentifier: String
+  conflict: StatusConflict
 }
 
 extend type Query {
@@ -4980,11 +5079,21 @@ extend type Mutation {
   createNamespace(input: CreateNamespaceInput!): CreateNamespacePayload!
 
   """
+  Update a non-bootstrap namespace by committing and admitting its manifest.
+  """
+  updateNamespace(input: UpdateNamespaceInput!): UpdateNamespacePayload!
+
+  """
   Delete a namespace.
   Requires authentication. Caller must be the namespace owner or isAdmin.
   Deletion is blocked when the namespace contains repositories.
   """
   deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
+
+  """
+  Permanently delete a terminating namespace after its repositories are gone.
+  """
+  completeNamespaceDeletion(input: CompleteNamespaceDeletionInput!): CompleteNamespaceDeletionPayload!
 }
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/product.graphqls", Input: `# Product Resource — Kubernetes-style GraphQL Schema
@@ -6465,6 +6574,16 @@ func (ec *executionContext) childFields_CollectionStatus(ctx context.Context, fi
 	return nil, fmt.Errorf("no field named %q was found under type CollectionStatus", field.Name)
 }
 
+func (ec *executionContext) childFields_CompleteNamespaceDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "deletedIdentifier":
+		return ec.fieldContext_CompleteNamespaceDeletionPayload_deletedIdentifier(ctx, field)
+	case "conflict":
+		return ec.fieldContext_CompleteNamespaceDeletionPayload_conflict(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CompleteNamespaceDeletionPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_Condition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "type":
@@ -7447,6 +7566,14 @@ func (ec *executionContext) childFields_UpdateCollectionPayload(ctx context.Cont
 		return ec.fieldContext_UpdateCollectionPayload_conflict(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateCollectionPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "namespace":
+		return ec.fieldContext_UpdateNamespacePayload_namespace(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateNamespacePayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateResourceStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

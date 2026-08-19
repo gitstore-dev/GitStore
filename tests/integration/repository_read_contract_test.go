@@ -80,7 +80,7 @@ type repositoryReadContractNamespace struct {
 func TestRepositoryReadContract_LegacyAndCreatedRepositoriesAcrossReadPaths(t *testing.T) {
 	h := newNamespaceContractHarness(t)
 	namespace := uniqueName("repository-read-contract")
-	h.createNamespaceLegacy(namespace, "Repository Read Contract")
+	h.createNamespace(namespace, "Repository Read Contract")
 	t.Cleanup(func() {
 		h.cleanupNamespace(namespace)
 	})

@@ -31,7 +31,7 @@ By contrast, `Category.products` (`category.resolvers.go:22-34`) and `Namespace.
 
 ### 2.4 ScyllaDB schema conventions
 
-`products_by_namespace`, `collection`, and `category_taxonomy` all share `PRIMARY KEY ((namespace), creation_timestamp, uid)` with `CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC)` (`001_initial_schema.cql` lines 1, 39, 112), plus `_by_name`/`_by_uid` lookup tables. No table has a count/aggregate column; no materialized view exists anywhere in the migrations. No secondary index exists for Product/Collection/CategoryTaxonomy (`002_add_initial_indices.cql:1-7` covers only namespaces/repositories/namespace_mappings). All list queries use pure keyset pagination — no `PageState`/`PagingState` usage anywhere in `gitstore-api/internal/` — via `buildPaginatedSelect`'s tuple-inequality WHERE clauses (`scylla/pagination.go:72-121`).
+`products_by_namespace`, `collection`, and `category_taxonomy` all share `PRIMARY KEY ((namespace), creation_timestamp, uid)` with `CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC)` (`001_initial_schema.cql`), plus `_by_name`/`_by_uid` lookup tables. No table has a count/aggregate column; no materialized view exists anywhere in the migrations. No secondary index exists for Product/Collection/CategoryTaxonomy (`002_secondary_indexes.cql` covers only repositories and namespace mappings). All list queries use pure keyset pagination — no `PageState`/`PagingState` usage anywhere in `gitstore-api/internal/` — via `buildPaginatedSelect`'s tuple-inequality WHERE clauses (`scylla/pagination.go:72-121`).
 
 ### 2.5 Existing status/resolved precedent
 

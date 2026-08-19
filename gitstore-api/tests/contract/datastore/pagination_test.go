@@ -235,14 +235,14 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		nss := make([]*datastore.Namespace, 4)
 		for i := range 4 {
 			nss[i] = newNamespace(datastore.NamespaceTierUser)
-			nss[i].CreatedAt = base.Add(time.Duration(i) * time.Second)
+			nss[i].CreationTimestamp = base.Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateNamespace(ctx, nss[i]))
 		}
 
 		// Cursor at nss[2] (third-newest): verify nss[1] and nss[0] appear in the page.
 		// Global-table tests share state across -count runs, so we check membership by ID
 		// rather than exact length to avoid counting pre-existing rows from earlier runs.
-		cursor := encodeCursor(nss[2].CreatedAt, nss[2].ID)
+		cursor := encodeCursor(nss[2].CreationTimestamp, nss[2].ID)
 		page2, err := ds.ListNamespaces(ctx, datastore.PageParams{First: 10, After: cursor})
 		require.NoError(t, err)
 		assert.True(t, page2.HasPrevious)
@@ -259,7 +259,7 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 
 		for i := range 4 {
 			ns := newNamespace(datastore.NamespaceTierUser)
-			ns.CreatedAt = time.Now().Add(time.Duration(i) * time.Second)
+			ns.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateNamespace(ctx, ns))
 		}
 
@@ -270,6 +270,42 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		assert.True(t, result.HasPrevious)
 	})
 
+	t.Run("Namespaces/CrossBucketPagination", func(t *testing.T) {
+		ctx := context.Background()
+		nss := []*datastore.Namespace{
+			newNamespace(datastore.NamespaceTierUser),
+			newNamespace(datastore.NamespaceTierUser),
+			newNamespace(datastore.NamespaceTierUser),
+		}
+		nss[0].CreationTimestamp = time.Date(2026, time.January, 15, 12, 0, 0, 0, time.UTC)
+		nss[1].CreationTimestamp = time.Date(2026, time.February, 15, 12, 0, 0, 0, time.UTC)
+		nss[2].CreationTimestamp = time.Date(2026, time.March, 15, 12, 0, 0, 0, time.UTC)
+		for _, namespace := range nss {
+			namespace.UpdateTimestamp = namespace.CreationTimestamp
+			require.NoError(t, ds.CreateNamespace(ctx, namespace))
+		}
+
+		afterMarch := encodeCursor(nss[2].CreationTimestamp, nss[2].ID)
+		forward, err := ds.ListNamespaces(ctx, datastore.PageParams{First: 100, After: afterMarch})
+		require.NoError(t, err)
+		forwardIDs := make(map[string]bool, len(forward.Items))
+		for _, namespace := range forward.Items {
+			forwardIDs[namespace.ID] = true
+		}
+		assert.True(t, forwardIDs[nss[1].ID], "expected February namespace after March cursor")
+		assert.True(t, forwardIDs[nss[0].ID], "expected January namespace after March cursor")
+
+		beforeJanuary := encodeCursor(nss[0].CreationTimestamp, nss[0].ID)
+		backward, err := ds.ListNamespaces(ctx, datastore.PageParams{Last: 100, Before: beforeJanuary})
+		require.NoError(t, err)
+		backwardIDs := make(map[string]bool, len(backward.Items))
+		for _, namespace := range backward.Items {
+			backwardIDs[namespace.ID] = true
+		}
+		assert.True(t, backwardIDs[nss[1].ID], "expected February namespace before January cursor")
+		assert.True(t, backwardIDs[nss[2].ID], "expected March namespace before January cursor")
+	})
+
 	t.Run("Repositories/ForwardPagination", func(t *testing.T) {
 		ctx := context.Background()
 
@@ -278,7 +314,7 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 
 		for i := range 5 {
 			r := newRepository(ns.ID)
-			r.CreatedAt = time.Now().Add(time.Duration(i) * time.Second)
+			r.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateRepository(ctx, r))
 		}
 
@@ -289,17 +325,17 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		assert.False(t, page1.HasPrevious)
 
 		// Results should be newest first
-		assert.True(t, page1.Items[0].CreatedAt.After(page1.Items[1].CreatedAt) ||
-			page1.Items[0].CreatedAt.Equal(page1.Items[1].CreatedAt))
+		assert.True(t, page1.Items[0].CreationTimestamp.After(page1.Items[1].CreationTimestamp) ||
+			page1.Items[0].CreationTimestamp.Equal(page1.Items[1].CreationTimestamp))
 
-		cursor := encodeCursor(page1.Items[1].CreatedAt, page1.Items[1].ID)
+		cursor := encodeCursor(page1.Items[1].CreationTimestamp, page1.Items[1].ID)
 		page2, err := ds.ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{First: 2, After: cursor})
 		require.NoError(t, err)
 		assert.Len(t, page2.Items, 2)
 		assert.True(t, page2.HasNext)
 		assert.True(t, page2.HasPrevious)
 
-		cursor2 := encodeCursor(page2.Items[1].CreatedAt, page2.Items[1].ID)
+		cursor2 := encodeCursor(page2.Items[1].CreationTimestamp, page2.Items[1].ID)
 		page3, err := ds.ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{First: 2, After: cursor2})
 		require.NoError(t, err)
 		assert.Len(t, page3.Items, 1)
@@ -315,7 +351,7 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 
 		for i := range 5 {
 			r := newRepository(ns.ID)
-			r.CreatedAt = time.Now().Add(time.Duration(i) * time.Second)
+			r.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateRepository(ctx, r))
 		}
 
@@ -336,7 +372,7 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		repos := make([]*datastore.Repository, 5)
 		for i := range 5 {
 			repos[i] = newRepository(ns.ID)
-			repos[i].CreatedAt = time.Now().Add(time.Duration(i) * time.Second)
+			repos[i].CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateRepository(ctx, repos[i]))
 		}
 
@@ -346,7 +382,7 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		require.Len(t, page1.Items, 3)
 
 		// Go backward from the 3rd item
-		beforeCursor := encodeCursor(page1.Items[2].CreatedAt, page1.Items[2].ID)
+		beforeCursor := encodeCursor(page1.Items[2].CreationTimestamp, page1.Items[2].ID)
 		backward, err := ds.ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{Last: 2, Before: beforeCursor})
 		require.NoError(t, err)
 		assert.Len(t, backward.Items, 2)
@@ -469,14 +505,14 @@ func newCategoryTaxonomyInNS(ns string) *datastore.CategoryTaxonomy {
 func newRepository(namespaceID string) *datastore.Repository {
 	now := time.Now()
 	return &datastore.Repository{
-		ID:            newID(),
-		NamespaceID:   namespaceID,
-		Name:          "repo-" + newID()[:8],
-		DefaultBranch: "main",
-		StorageClass:  "local",
-		CreatedAt:     now,
-		CreatedBy:     "test-user",
-		UpdatedAt:     now,
-		UpdatedBy:     "test-user",
+		ID:                newID(),
+		NamespaceID:       namespaceID,
+		Name:              "repo-" + newID()[:8],
+		DefaultBranch:     "main",
+		StorageClass:      "local",
+		CreationTimestamp: now,
+		CreationActor:     "test-user",
+		UpdateTimestamp:   now,
+		UpdateActor:       "test-user",
 	}
 }

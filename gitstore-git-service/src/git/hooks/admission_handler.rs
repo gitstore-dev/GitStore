@@ -227,6 +227,7 @@ mod tests {
 
     fn make_hook_context(actor_subject: &str) -> HookContext {
         HookContext {
+            repository_id: "repo-1".to_string(),
             actor_subject: actor_subject.to_string(),
             actor_auth_method: "basic".to_string(),
             max_pack_size_bytes: 0,

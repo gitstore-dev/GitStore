@@ -44,6 +44,8 @@ func (r *mutationResolver) UpdateResourceStatus(ctx context.Context, input model
 	switch input.Kind {
 	case "CategoryTaxonomy":
 		return r.updateCategoryTaxonomyStatusGeneric(ctx, input)
+	case "Namespace":
+		return r.updateNamespaceStatusGeneric(ctx, input)
 	default:
 		// No generic CRD-kind datastore backend exists yet (research.md
 		// R7 scopes CRD-shape genericity at the datastore layer out of

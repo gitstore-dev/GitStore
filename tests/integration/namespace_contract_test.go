@@ -157,6 +157,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/app"
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
@@ -164,6 +165,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
@@ -176,6 +178,10 @@ type mockGitWriter struct {
 }
 
 func (m *mockGitWriter) CommitFile(_ context.Context, _ gitclient.CommitFileParams) (string, error) {
+	return "deadbeef", nil
+}
+
+func (m *mockGitWriter) CommitFileForRepo(_ context.Context, _ string, _ gitclient.CommitFileParams) (string, error) {
 	return "deadbeef", nil
 }
 
@@ -226,12 +232,48 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	ids := apiruntime.NewSequenceIDGenerator()
+	now := time.Now().UTC()
+	systemNamespace := &datastore.Namespace{
+		ID:                ids.NewID(),
+		Name:              "gitstore-system",
+		Title:             "GitStore System",
+		Tier:              datastore.NamespaceTierOrganization,
+		CreationTimestamp: now,
+		CreationActor:     "system",
+		UpdateTimestamp:   now,
+		UpdateActor:       "system",
+	}
+	if err := store.CreateNamespace(context.Background(), systemNamespace); err != nil {
+		panic(err)
+	}
+	systemRepository := &datastore.Repository{
+		ID:                ids.NewID(),
+		NamespaceID:       systemNamespace.ID,
+		Name:              "gitstore-system",
+		DefaultBranch:     "main",
+		StorageClass:      "system",
+		CreationTimestamp: now,
+		CreationActor:     "system",
+		UpdateTimestamp:   now,
+		UpdateActor:       "system",
+	}
+	if err := store.CreateRepository(context.Background(), systemRepository); err != nil {
+		panic(err)
+	}
+	if err := store.CreateNamespaceMapping(context.Background(), &datastore.NamespaceMapping{
+		NamespaceID: systemNamespace.ID,
+		Name:        systemRepository.Name,
+		RepoID:      systemRepository.ID,
+	}); err != nil {
+		panic(err)
+	}
 	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{
 		Store:     store,
 		GitWriter: &mockGitWriter{},
 		Logger:    zap.NewNop(),
 		Registry:  registry,
-		IDs:       apiruntime.NewSequenceIDGenerator(),
+		IDs:       ids,
 	})
 	if err != nil {
 		panic(err)
@@ -445,14 +487,16 @@ func assertNamespaceContractShape(t *testing.T, got *namespaceContractNamespace,
 	if got.Status == nil {
 		t.Fatal("status is nil")
 	}
-	if got.Status.ObservedGeneration != 0 {
-		t.Fatalf("status.observedGeneration = %d, want %d", got.Status.ObservedGeneration, 0)
+	if got.Status.ObservedGeneration != 1 {
+		t.Fatalf("status.observedGeneration = %d, want %d", got.Status.ObservedGeneration, 1)
 	}
-	if got.Status.LastAppliedRevision != nil {
-		t.Fatalf("status.lastAppliedRevision = %v, want nil", got.Status.LastAppliedRevision)
+	if got.Status.LastAppliedRevision == nil || *got.Status.LastAppliedRevision != "main@sha1:deadbeef" {
+		t.Fatalf("status.lastAppliedRevision = %v, want %q", got.Status.LastAppliedRevision, "main@sha1:deadbeef")
 	}
-	if len(got.Status.Conditions) != 0 {
-		t.Fatalf("status.conditions = %+v, want empty", got.Status.Conditions)
+	if len(got.Status.Conditions) != 1 ||
+		got.Status.Conditions[0].Type != "AdmissionAccepted" ||
+		got.Status.Conditions[0].Status != "TRUE" {
+		t.Fatalf("status.conditions = %+v, want AdmissionAccepted=TRUE", got.Status.Conditions)
 	}
 	if got.Identifier != identifier {
 		t.Fatalf("identifier = %q, want %q", got.Identifier, identifier)
@@ -568,7 +612,7 @@ func (h *namespaceContractHarness) requireDeleteSystemRepository(namespace strin
 	}
 }
 
-func (h *namespaceContractHarness) createNamespaceLegacy(identifier, displayName string) {
+func (h *namespaceContractHarness) createNamespace(identifier, title string) {
 	h.t.Helper()
 	resp := h.gql(`
 		mutation($input: CreateNamespaceInput!) {
@@ -581,9 +625,10 @@ func (h *namespaceContractHarness) createNamespaceLegacy(identifier, displayName
 			}
 		}
 	`, map[string]any{"input": map[string]any{
-		"identifier":  identifier,
-		"displayName": displayName,
-		"tier":        "USER",
+		"apiVersion": "gitstore.dev/v1beta1",
+		"kind":       "Namespace",
+		"metadata":   map[string]any{"name": identifier},
+		"spec":       map[string]any{"title": title, "tier": "USER"},
 	}})
 	if len(resp.Errors) > 0 {
 		h.t.Fatalf("graphql errors creating namespace %q: %s", identifier, namespaceContractErrors(resp.Errors))
@@ -604,13 +649,28 @@ func (h *namespaceContractHarness) createNamespaceLegacy(identifier, displayName
 	if data.CreateNamespace == nil || data.CreateNamespace.Namespace == nil || data.CreateNamespace.Namespace.Metadata.Name != identifier {
 		h.t.Fatalf("createNamespace returned %+v, want metadata.name %q", data.CreateNamespace, identifier)
 	}
+
+	resp = h.gql(`
+		mutation($namespace: String!, $name: String!, $defaultBranch: String!) {
+			createRepository(input: {namespace: $namespace, name: $name, defaultBranch: $defaultBranch}) {
+				repository { id }
+			}
+		}
+	`, map[string]any{
+		"namespace":     identifier,
+		"name":          namespaceContractSystemRepository,
+		"defaultBranch": "main",
+	})
+	if len(resp.Errors) > 0 {
+		h.t.Fatalf("graphql errors provisioning system repository for %q: %s", identifier, namespaceContractErrors(resp.Errors))
+	}
 }
 
 func TestNamespaceContract_QueryNamespaceProjectsDeclarativeFields(t *testing.T) {
 	h := newNamespaceContractHarness(t)
 	identifier := uniqueName("namespace-contract-query")
 	title := namespaceContractStringPtr("Namespace Contract Query")
-	h.createNamespaceLegacy(identifier, *title)
+	h.createNamespace(identifier, *title)
 
 	resp := h.gqlAnonymous(`
 		query($identifier: String!) {
@@ -674,7 +734,7 @@ func TestNamespaceContract_NamespacesConnectionProjectsDeclarativeFields(t *test
 	h := newNamespaceContractHarness(t)
 	identifier := uniqueName("namespace-contract-list")
 	title := namespaceContractStringPtr("Namespace Contract List")
-	h.createNamespaceLegacy(identifier, *title)
+	h.createNamespace(identifier, *title)
 
 	resp := h.gqlAnonymous(`
 		query {
@@ -819,9 +879,10 @@ func TestNamespaceContract_CreateNamespaceReturnsAdditiveContract(t *testing.T) 
 			}
 		}
 	`, map[string]any{"input": map[string]any{
-		"identifier":  identifier,
-		"displayName": title,
-		"tier":        "USER",
+		"apiVersion": "gitstore.dev/v1beta1",
+		"kind":       "Namespace",
+		"metadata":   map[string]any{"name": identifier},
+		"spec":       map[string]any{"title": title, "tier": "USER"},
 	}})
 	if len(resp.Errors) > 0 {
 		t.Fatalf("graphql errors creating namespace additive contract: %s", namespaceContractErrors(resp.Errors))
@@ -853,7 +914,7 @@ func TestNamespaceContract_DeleteNamespaceBehaviorUnchanged(t *testing.T) {
 		}
 	})
 
-	h.createNamespaceLegacy(identifier, displayName)
+	h.createNamespace(identifier, displayName)
 	created = true
 	h.requireDeleteSystemRepository(identifier)
 

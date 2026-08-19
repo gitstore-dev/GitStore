@@ -35,7 +35,7 @@
 **Rationale**: Spec 044 deliberately left `Namespace`'s `resourceVersion`/`generation` as read-time-fabricated constants ("1"/1) because GH#171 was schema-only. Spec 045 already established the concrete pattern for adding *real* persisted versioning/status to a previously-flat, non-git-backed entity (`Repository`). Reusing that exact pattern for `Namespace` is the smallest, most consistent change; inventing a different persistence shape for the same concept would be needless divergence (Principle VII).
 
 **Alternatives considered**:
-- *Derive resourceVersion from `UpdatedAt`*. Rejected — `UpdatedAt` is a timestamp, not an opaque monotonic counter; it cannot support the `IF resource_version=?` LWT precondition pattern already proven for `Repository` in Scylla.
+- *Derive resourceVersion from `UpdateTimestamp`*. Rejected — `UpdateTimestamp` is a timestamp, not an opaque monotonic counter; it cannot support the `IF resource_version=?` LWT precondition pattern already proven for `Repository` in Scylla.
 
 ## 5. Optimistic concurrency at the datastore layer
 

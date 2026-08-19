@@ -37,7 +37,7 @@ type Authorize struct {
 // datastoreGetter is the minimal datastore interface needed by the security middleware.
 type datastoreGetter interface {
 	GetRepository(ctx context.Context, id string) (*datastore.Repository, error)
-	GetNamespaceByIdentifier(ctx context.Context, identifier string) (*datastore.Namespace, error)
+	GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error)
 }
 
 type RateLimit struct {
@@ -329,7 +329,7 @@ func (a *Authorize) PushContextInserter(c *gin.Context) {
 		RepositoryId:          repoID,
 		Namespace:             strings.TrimSuffix(c.Param("namespace"), ".git"),
 		RepositoryName:        repo.Name,
-		ConfigResourceVersion: repo.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		ConfigResourceVersion: repo.UpdateTimestamp.UTC().Format(time.RFC3339Nano),
 		Actor: &gitv1.AuthContext{
 			Subject:    principal.Subject,
 			Issuer:     principal.Issuer,

@@ -37,11 +37,11 @@ func TestDatastoreNamespaceToGraphQL_DeclarativeProjection(t *testing.T) {
 	assert.Empty(t, got.Metadata.Finalizers)
 	assert.NotNil(t, got.Metadata.Finalizers)
 	assert.Nil(t, got.Metadata.Revision)
-	assert.Equal(t, ns.CreatedAt, got.Metadata.CreationTimestamp)
+	assert.Equal(t, ns.CreationTimestamp, got.Metadata.CreationTimestamp)
 
 	require.NotNil(t, got.Spec)
 	require.NotNil(t, got.Spec.Title)
-	assert.Equal(t, ns.DisplayName, *got.Spec.Title)
+	assert.Equal(t, ns.Title, *got.Spec.Title)
 	assert.Equal(t, model.NamespaceTierUser, got.Spec.Tier)
 	assert.Nil(t, got.Spec.RepositoryDefaults)
 	assert.Nil(t, got.Spec.PushPolicyDefaults)
@@ -59,20 +59,20 @@ func TestDatastoreNamespaceToGraphQL_PreservesLegacyProjection(t *testing.T) {
 	got := datastoreNamespaceToModel(ns)
 	require.NotNil(t, got)
 	assert.Equal(t, mustEncodeNodeID(nodeKindNamespace, ns.ID), got.ID)
-	assert.Equal(t, ns.Identifier, got.Identifier)
+	assert.Equal(t, ns.Name, got.Identifier)
 	require.NotNil(t, got.DisplayName)
-	assert.Equal(t, ns.DisplayName, *got.DisplayName)
+	assert.Equal(t, ns.Title, *got.DisplayName)
 	assert.Equal(t, model.NamespaceTierUser, got.Tier)
-	assert.Equal(t, ns.CreatedAt, got.CreatedAt)
-	assert.Equal(t, ns.CreatedBy, got.CreatedBy)
-	assert.Equal(t, ns.UpdatedAt, got.UpdatedAt)
-	assert.Equal(t, ns.UpdatedBy, got.UpdatedBy)
+	assert.Equal(t, ns.CreationTimestamp, got.CreatedAt)
+	assert.Equal(t, ns.CreationActor, got.CreatedBy)
+	assert.Equal(t, ns.UpdateTimestamp, got.UpdatedAt)
+	assert.Equal(t, ns.UpdateActor, got.UpdatedBy)
 }
 
 func TestDatastoreNamespaceToGraphQL_IdentityAndVersionDefaultsArePerResource(t *testing.T) {
 	first := namespaceContractFixture("00000000-0000-0000-0000-000000000101", "first")
 	second := namespaceContractFixture("00000000-0000-0000-0000-000000000202", "second")
-	second.CreatedAt = second.CreatedAt.Add(24 * time.Hour)
+	second.CreationTimestamp = second.CreationTimestamp.Add(24 * time.Hour)
 
 	firstModel := datastoreNamespaceToModel(first)
 	secondModel := datastoreNamespaceToModel(second)
@@ -87,30 +87,30 @@ func TestDatastoreNamespaceToGraphQL_IdentityAndVersionDefaultsArePerResource(t 
 	assert.Equal(t, "1", secondModel.Metadata.ResourceVersion)
 	assert.Equal(t, int32(1), firstModel.Metadata.Generation)
 	assert.Equal(t, int32(1), secondModel.Metadata.Generation)
-	assert.Equal(t, first.CreatedAt, firstModel.Metadata.CreationTimestamp)
-	assert.Equal(t, second.CreatedAt, secondModel.Metadata.CreationTimestamp)
+	assert.Equal(t, first.CreationTimestamp, firstModel.Metadata.CreationTimestamp)
+	assert.Equal(t, second.CreationTimestamp, secondModel.Metadata.CreationTimestamp)
 }
 
 func repositoryContractFixture() (*datastore.Repository, *datastore.Namespace) {
 	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	return &datastore.Repository{
-			ID:               "01960000-0000-7000-8000-000000000045",
-			NamespaceID:      "01960000-0000-7000-8000-000000000046",
-			Name:             "catalog",
-			DefaultBranch:    "main",
-			StorageClass:     "default",
-			Generation:       3,
-			ResourceVersion:  "8",
-			Status:           json.RawMessage(`{"observedGeneration":2,"lastAppliedRevision":"main@sha1:abc","conditions":[]}`),
-			CreatedAt:        now,
-			CreatedBy:        "creator",
-			UpdatedAt:        now.Add(time.Hour),
-			UpdatedBy:        "updater",
-			MaxPackSizeBytes: 52428800,
-			MaxFileSizeBytes: 10485760,
+			ID:                "01960000-0000-7000-8000-000000000045",
+			NamespaceID:       "01960000-0000-7000-8000-000000000046",
+			Name:              "catalog",
+			DefaultBranch:     "main",
+			StorageClass:      "default",
+			Generation:        3,
+			ResourceVersion:   "8",
+			Status:            json.RawMessage(`{"observedGeneration":2,"lastAppliedRevision":"main@sha1:abc","conditions":[]}`),
+			CreationTimestamp: now,
+			CreationActor:     "creator",
+			UpdateTimestamp:   now.Add(time.Hour),
+			UpdateActor:       "updater",
+			MaxPackSizeBytes:  52428800,
+			MaxFileSizeBytes:  10485760,
 		}, &datastore.Namespace{
-			ID:         "01960000-0000-7000-8000-000000000046",
-			Identifier: "acme",
+			ID:   "01960000-0000-7000-8000-000000000046",
+			Name: "acme",
 		}
 }
 
@@ -124,10 +124,10 @@ func TestDatastoreRepositoryToModel_DeclarativeProjection(t *testing.T) {
 	assert.Equal(t, repositoryKind, got.Kind)
 	assert.Equal(t, got.ID, got.Metadata.UID)
 	assert.Equal(t, repo.Name, got.Metadata.Name)
-	assert.Equal(t, ns.Identifier, got.Metadata.Namespace)
+	assert.Equal(t, ns.Name, got.Metadata.Namespace)
 	assert.Equal(t, repo.ResourceVersion, got.Metadata.ResourceVersion)
 	assert.Equal(t, int32(repo.Generation), got.Metadata.Generation)
-	assert.Equal(t, repo.CreatedAt, got.Metadata.CreationTimestamp)
+	assert.Equal(t, repo.CreationTimestamp, got.Metadata.CreationTimestamp)
 	assert.Equal(t, map[string]any{}, got.Metadata.Labels)
 	assert.Equal(t, map[string]any{}, got.Metadata.Annotations)
 	assert.NotNil(t, got.Metadata.OwnerReferences)
@@ -161,14 +161,14 @@ func TestDatastoreRepositoryToModel_PreservesLegacyProjection(t *testing.T) {
 
 	assert.Equal(t, repo.Name, got.Name)
 	require.NotNil(t, got.Namespace)
-	assert.Equal(t, ns.Identifier, got.Namespace.Identifier)
+	assert.Equal(t, ns.Name, got.Namespace.Identifier)
 	assert.Equal(t, repo.DefaultBranch, got.DefaultBranch)
 	assert.Equal(t, repo.StorageClass, got.StorageClass)
 	assert.Equal(t, fanoutStoragePath("/var/lib/gitstore", repo.ID), got.StoragePath)
-	assert.Equal(t, repo.CreatedAt, got.CreatedAt)
-	assert.Equal(t, repo.CreatedBy, got.CreatedBy)
-	assert.Equal(t, repo.UpdatedAt, got.UpdatedAt)
-	assert.Equal(t, repo.UpdatedBy, got.UpdatedBy)
+	assert.Equal(t, repo.CreationTimestamp, got.CreatedAt)
+	assert.Equal(t, repo.CreationActor, got.CreatedBy)
+	assert.Equal(t, repo.UpdateTimestamp, got.UpdatedAt)
+	assert.Equal(t, repo.UpdateActor, got.UpdatedBy)
 }
 
 func TestDatastoreRepositoryToModel_LegacyDefaultsAndEmptyConditionVocabulary(t *testing.T) {

@@ -22,14 +22,14 @@ func namespaceContractSchema(t *testing.T) *ast.Schema {
 func namespaceContractFixture(id, name string) *datastore.Namespace {
 	now := time.Date(2026, 8, 16, 1, 0, 0, 0, time.UTC)
 	return &datastore.Namespace{
-		ID:          id,
-		Identifier:  name,
-		DisplayName: "Acme Store",
-		Tier:        datastore.NamespaceTierUser,
-		CreatedAt:   now,
-		CreatedBy:   "creator",
-		UpdatedAt:   now.Add(time.Hour),
-		UpdatedBy:   "updater",
+		ID:                id,
+		Name:              name,
+		Title:             "Acme Store",
+		Tier:              datastore.NamespaceTierUser,
+		CreationTimestamp: now,
+		CreationActor:     "creator",
+		UpdateTimestamp:   now.Add(time.Hour),
+		UpdateActor:       "updater",
 	}
 }
 
@@ -101,6 +101,23 @@ func TestNamespaceDeclarativeSchemaContract(t *testing.T) {
 
 	require.NotNil(t, schema.Types["Long"])
 	assert.Equal(t, ast.Scalar, schema.Types["Long"].Kind)
+
+	for _, inputName := range []string{"CreateNamespaceInput", "UpdateNamespaceInput"} {
+		for field, fieldType := range map[string]string{
+			"apiVersion": "String!",
+			"kind":       "String!",
+			"metadata":   "NamespaceMetadataInput!",
+			"spec":       "NamespaceSpecInput!",
+		} {
+			requireGraphQLField(t, schema, inputName, field, fieldType)
+		}
+	}
+	requireGraphQLField(t, schema, "NamespaceMetadataInput", "name", "String!")
+	requireGraphQLField(t, schema, "NamespaceMetadataInput", "labels", "JSON")
+	requireGraphQLField(t, schema, "NamespaceMetadataInput", "annotations", "JSON")
+	requireGraphQLField(t, schema, "NamespaceSpecInput", "title", "String")
+	requireGraphQLField(t, schema, "NamespaceSpecInput", "tier", "NamespaceTier!")
+	requireGraphQLField(t, schema, "Mutation", "updateNamespace", "UpdateNamespacePayload!")
 }
 
 func TestNamespaceMetadataUsesSharedIdentityAndVersionTypes(t *testing.T) {

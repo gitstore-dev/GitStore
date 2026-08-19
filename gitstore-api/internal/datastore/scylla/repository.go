@@ -16,60 +16,60 @@ import (
 )
 
 type repositoryRow struct {
-	Bucket           string     `db:"bucket"`
-	CreatedAt        time.Time  `db:"created_at"`
-	ID               gocql.UUID `db:"id"`
-	NamespaceID      gocql.UUID `db:"namespace_id"`
-	Name             string     `db:"name"`
-	DefaultBranch    string     `db:"default_branch"`
-	StorageClass     string     `db:"storage_class"`
-	MaxPackSizeBytes int64      `db:"max_pack_size_bytes"`
-	MaxFileSizeBytes int64      `db:"max_file_size_bytes"`
-	Generation       int64      `db:"generation"`
-	ResourceVersion  string     `db:"resource_version"`
-	Status           string     `db:"status"`
-	CreatedBy        string     `db:"created_by"`
-	UpdatedAt        time.Time  `db:"updated_at"`
-	UpdatedBy        string     `db:"updated_by"`
+	Bucket            string     `db:"bucket"`
+	CreationTimestamp time.Time  `db:"creation_timestamp"`
+	ID                gocql.UUID `db:"id"`
+	NamespaceID       gocql.UUID `db:"namespace_id"`
+	Name              string     `db:"name"`
+	DefaultBranch     string     `db:"default_branch"`
+	StorageClass      string     `db:"storage_class"`
+	MaxPackSizeBytes  int64      `db:"max_pack_size_bytes"`
+	MaxFileSizeBytes  int64      `db:"max_file_size_bytes"`
+	Generation        int64      `db:"generation"`
+	ResourceVersion   string     `db:"resource_version"`
+	Status            string     `db:"status"`
+	CreationActor     string     `db:"creation_actor"`
+	UpdateTimestamp   time.Time  `db:"update_timestamp"`
+	UpdateActor       string     `db:"update_actor"`
 }
 
 func toRepositoryRow(r *datastore.Repository) *repositoryRow {
 	datastore.NormalizeRepositoryContract(r)
 	return &repositoryRow{
-		Bucket:           BucketAll,
-		CreatedAt:        r.CreatedAt,
-		ID:               mustParseUUID(r.ID),
-		NamespaceID:      mustParseUUID(r.NamespaceID),
-		Name:             r.Name,
-		DefaultBranch:    r.DefaultBranch,
-		StorageClass:     r.StorageClass,
-		MaxPackSizeBytes: r.MaxPackSizeBytes,
-		MaxFileSizeBytes: r.MaxFileSizeBytes,
-		Generation:       r.Generation,
-		ResourceVersion:  r.ResourceVersion,
-		Status:           string(r.Status),
-		CreatedBy:        r.CreatedBy,
-		UpdatedAt:        r.UpdatedAt,
-		UpdatedBy:        r.UpdatedBy,
+		Bucket:            BucketAll,
+		CreationTimestamp: r.CreationTimestamp,
+		ID:                mustParseUUID(r.ID),
+		NamespaceID:       mustParseUUID(r.NamespaceID),
+		Name:              r.Name,
+		DefaultBranch:     r.DefaultBranch,
+		StorageClass:      r.StorageClass,
+		MaxPackSizeBytes:  r.MaxPackSizeBytes,
+		MaxFileSizeBytes:  r.MaxFileSizeBytes,
+		Generation:        r.Generation,
+		ResourceVersion:   r.ResourceVersion,
+		Status:            string(r.Status),
+		CreationActor:     r.CreationActor,
+		UpdateTimestamp:   r.UpdateTimestamp,
+		UpdateActor:       r.UpdateActor,
 	}
 }
 
 func fromRepositoryRow(r *repositoryRow) *datastore.Repository {
 	repository := &datastore.Repository{
-		ID:               r.ID.String(),
-		NamespaceID:      r.NamespaceID.String(),
-		Name:             r.Name,
-		DefaultBranch:    r.DefaultBranch,
-		StorageClass:     r.StorageClass,
-		MaxPackSizeBytes: r.MaxPackSizeBytes,
-		MaxFileSizeBytes: r.MaxFileSizeBytes,
-		Generation:       r.Generation,
-		ResourceVersion:  r.ResourceVersion,
-		Status:           []byte(r.Status),
-		CreatedAt:        r.CreatedAt,
-		CreatedBy:        r.CreatedBy,
-		UpdatedAt:        r.UpdatedAt,
-		UpdatedBy:        r.UpdatedBy,
+		ID:                r.ID.String(),
+		NamespaceID:       r.NamespaceID.String(),
+		Name:              r.Name,
+		DefaultBranch:     r.DefaultBranch,
+		StorageClass:      r.StorageClass,
+		MaxPackSizeBytes:  r.MaxPackSizeBytes,
+		MaxFileSizeBytes:  r.MaxFileSizeBytes,
+		Generation:        r.Generation,
+		ResourceVersion:   r.ResourceVersion,
+		Status:            []byte(r.Status),
+		CreationTimestamp: r.CreationTimestamp,
+		CreationActor:     r.CreationActor,
+		UpdateTimestamp:   r.UpdateTimestamp,
+		UpdateActor:       r.UpdateActor,
 	}
 	datastore.NormalizeRepositoryContract(repository)
 	return repository
@@ -126,12 +126,12 @@ func (s *scyllaDatastore) ListRepositoriesByNamespace(_ context.Context, namespa
 		return nil, fmt.Errorf("scylla: list repositories by namespace: %w", err)
 	}
 
-	// Sort descending by (created_at, id) — matching partition table ordering
+	// Sort descending by (creation_timestamp, id) — matching partition table ordering.
 	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].CreatedAt.Equal(rows[j].CreatedAt) {
+		if rows[i].CreationTimestamp.Equal(rows[j].CreationTimestamp) {
 			return rows[i].ID.String() > rows[j].ID.String()
 		}
-		return rows[i].CreatedAt.After(rows[j].CreatedAt)
+		return rows[i].CreationTimestamp.After(rows[j].CreationTimestamp)
 	})
 
 	repos := make([]*datastore.Repository, len(rows))
@@ -146,13 +146,13 @@ func (s *scyllaDatastore) UpdateRepository(ctx context.Context, r *datastore.Rep
 	row := toRepositoryRow(r)
 	const statement = "UPDATE repositories SET namespace_id=?, name=?, default_branch=?, storage_class=?, " +
 		"max_pack_size_bytes=?, max_file_size_bytes=?, generation=?, resource_version=?, status=?, " +
-		"created_by=?, updated_at=?, updated_by=? WHERE bucket=? AND created_at=? AND id=? " +
+		"creation_actor=?, update_timestamp=?, update_actor=? WHERE bucket=? AND creation_timestamp=? AND id=? " +
 		"IF resource_version=?"
 	applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(
 		row.NamespaceID, row.Name, row.DefaultBranch, row.StorageClass,
 		row.MaxPackSizeBytes, row.MaxFileSizeBytes, row.Generation, row.ResourceVersion, row.Status,
-		row.CreatedBy, row.UpdatedAt, row.UpdatedBy,
-		row.Bucket, row.CreatedAt, row.ID, expectedResourceVersion,
+		row.CreationActor, row.UpdateTimestamp, row.UpdateActor,
+		row.Bucket, row.CreationTimestamp, row.ID, expectedResourceVersion,
 	).ExecCASRelease()
 	if err != nil {
 		return fmt.Errorf("scylla: update repository: %w", err)
@@ -165,7 +165,7 @@ func (s *scyllaDatastore) UpdateRepository(ctx context.Context, r *datastore.Rep
 
 // HasRepositories reports whether at least one Repository row currently has
 // namespace_id == namespaceID, using the repositories_by_namespace secondary
-// index (migration 002_add_initial_indices.cql).
+// index (migration 002_secondary_indexes.cql).
 func (s *scyllaDatastore) HasRepositories(_ context.Context, namespaceID string) (bool, error) {
 	nsUUID, err := gocql.ParseUUID(namespaceID)
 	if err != nil {
@@ -195,9 +195,9 @@ func (s *scyllaDatastore) DeleteRepository(ctx context.Context, id string) error
 	}
 	stmt, names := s.repositoryTable.Delete()
 	if err := s.session.Query(stmt, names).BindMap(qb.M{
-		"bucket":     BucketAll,
-		"created_at": repo.CreatedAt,
-		"id":         mustParseUUID(id),
+		"bucket":             BucketAll,
+		"creation_timestamp": repo.CreationTimestamp,
+		"id":                 mustParseUUID(id),
 	}).ExecRelease(); err != nil {
 		return fmt.Errorf("scylla: delete repository: %w", err)
 	}

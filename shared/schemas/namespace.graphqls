@@ -227,29 +227,49 @@ input NamespaceBy @oneOf {
 }
 
 """
-Input for creating a new namespace.
+Author-controlled metadata for Namespace mutations.
+"""
+input NamespaceMetadataInput {
+  name: String!
+  labels: JSON
+  annotations: JSON
+}
+
+input NamespaceRepositoryDefaultsInput {
+  visibility: RepositoryVisibility
+  defaultBranch: String
+}
+
+input NamespacePushPolicyDefaultsInput {
+  maxPackSizeBytes: Long
+  maxFileSizeBytes: Long
+}
+
+input NamespaceSpecInput {
+  title: String
+  tier: NamespaceTier!
+  repositoryDefaults: NamespaceRepositoryDefaultsInput
+  pushPolicyDefaults: NamespacePushPolicyDefaultsInput
+}
+
+"""
+Declarative resource envelope for creating a namespace.
 """
 input CreateNamespaceInput {
-  """
-  The human-readable identifier for the namespace.
-  Must be globally unique across all tiers.
-  DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
-  Cannot begin or end with a hyphen. Cannot be a reserved name.
-  """
-  identifier: String!
+  apiVersion: String!
+  kind: String!
+  metadata: NamespaceMetadataInput!
+  spec: NamespaceSpecInput!
+}
 
-  """
-  Optional human-friendly display name.
-  """
-  displayName: String
-
-  """
-  The tier of the namespace being created.
-  USER and ORGANIZATION tiers may be created by any authenticated user.
-  Enterprise-level grouping, if needed in future, will be modeled outside
-  the namespace type.
-  """
-  tier: NamespaceTier!
+"""
+Declarative resource envelope for updating a namespace.
+"""
+input UpdateNamespaceInput {
+  apiVersion: String!
+  kind: String!
+  metadata: NamespaceMetadataInput!
+  spec: NamespaceSpecInput!
 }
 
 """
@@ -265,6 +285,14 @@ input DeleteNamespaceInput {
 }
 
 """
+Controller-only finalizer completion for a terminating namespace.
+"""
+input CompleteNamespaceDeletionInput {
+  identifier: String!
+  resourceVersion: String!
+}
+
+"""
 Payload returned after successfully creating a namespace.
 """
 type CreateNamespacePayload {
@@ -272,6 +300,10 @@ type CreateNamespacePayload {
   The newly created namespace.
   """
   namespace: Namespace!
+}
+
+type UpdateNamespacePayload {
+  namespace: Namespace
 }
 
 """
@@ -282,6 +314,11 @@ type DeleteNamespacePayload {
   The identifier of the deleted namespace.
   """
   deletedIdentifier: String!
+}
+
+type CompleteNamespaceDeletionPayload {
+  deletedIdentifier: String
+  conflict: StatusConflict
 }
 
 extend type Query {
@@ -309,9 +346,19 @@ extend type Mutation {
   createNamespace(input: CreateNamespaceInput!): CreateNamespacePayload!
 
   """
+  Update a non-bootstrap namespace by committing and admitting its manifest.
+  """
+  updateNamespace(input: UpdateNamespaceInput!): UpdateNamespacePayload!
+
+  """
   Delete a namespace.
   Requires authentication. Caller must be the namespace owner or isAdmin.
   Deletion is blocked when the namespace contains repositories.
   """
   deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
+
+  """
+  Permanently delete a terminating namespace after its repositories are gone.
+  """
+  completeNamespaceDeletion(input: CompleteNamespaceDeletionInput!): CompleteNamespaceDeletionPayload!
 }

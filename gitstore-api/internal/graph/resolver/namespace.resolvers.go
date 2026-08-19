@@ -7,7 +7,9 @@ package resolver
 
 import (
 	"context"
+	"errors"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -25,19 +27,49 @@ func (r *mutationResolver) CreateNamespace(ctx context.Context, input model.Crea
 	}, nil
 }
 
+// UpdateNamespace is the resolver for the updateNamespace field.
+func (r *mutationResolver) UpdateNamespace(ctx context.Context, input model.UpdateNamespaceInput) (*model.UpdateNamespacePayload, error) {
+	ns, err := r.service.UpdateNamespace(ctx, input, callerUsernameOrAnon(ctx, r))
+	if err != nil {
+		return nil, err
+	}
+	return &model.UpdateNamespacePayload{Namespace: DatastoreNamespaceToGraphQL(ns)}, nil
+}
+
 // DeleteNamespace is the resolver for the deleteNamespace field.
 func (r *mutationResolver) DeleteNamespace(ctx context.Context, input model.DeleteNamespaceInput) (*model.DeleteNamespacePayload, error) {
 	ns, ok := security.AuthorizedNamespaceForDeletion(ctx)
-	if !ok || ns.Identifier != input.Identifier {
+	if !ok || ns.Name != input.Identifier {
 		return nil, gqlerror.Errorf("namespace deletion authorization context is missing")
 	}
 	if err := r.service.DeleteNamespace(ctx, ns); err != nil {
 		return nil, err
 	}
+	terminating, err := r.service.GetNamespaceByName(ctx, input.Identifier)
+	if err == nil {
+		r.publishNamespaceStatusEvent(terminating)
+	}
 
 	return &model.DeleteNamespacePayload{
 		DeletedIdentifier: input.Identifier,
 	}, nil
+}
+
+// CompleteNamespaceDeletion is the resolver for the completeNamespaceDeletion field.
+func (r *mutationResolver) CompleteNamespaceDeletion(ctx context.Context, input model.CompleteNamespaceDeletionInput) (*model.CompleteNamespaceDeletionPayload, error) {
+	deleted, err := r.service.CompleteNamespaceDeletion(ctx, input.Identifier, input.ResourceVersion)
+	if errors.Is(err, datastore.ErrConflict) {
+		return &model.CompleteNamespaceDeletionPayload{
+			Conflict: &model.StatusConflict{CurrentResourceVersion: deleted.ResourceVersion},
+		}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if deleted != nil {
+		r.publishNamespaceDeletedEvent(deleted)
+	}
+	return &model.CompleteNamespaceDeletionPayload{DeletedIdentifier: &input.Identifier}, nil
 }
 
 // Namespace is the resolver for the namespace field.
@@ -58,7 +90,7 @@ func (r *queryResolver) Namespace(ctx context.Context, by model.NamespaceBy) (*m
 	if name == nil {
 		name = by.Identifier
 	}
-	ns, err := r.service.GetNamespaceByIdentifier(ctx, *name)
+	ns, err := r.service.GetNamespaceByName(ctx, *name)
 	if err != nil {
 		return nil, err
 	}

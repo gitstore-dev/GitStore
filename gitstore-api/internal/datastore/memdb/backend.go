@@ -615,16 +615,18 @@ func (m *memdbDatastore) CreateNamespace(_ context.Context, ns *datastore.Namesp
 	if ns.ID == "" {
 		return fmt.Errorf("%w: namespace id is empty", datastore.ErrInvalidArgument)
 	}
+	datastore.NormalizeNamespaceContract(ns)
+	stored := normalizedNamespaceCopy(ns)
 	txn := m.db.Txn(true)
 	if raw, _ := txn.First("namespaces", "id", ns.ID); raw != nil {
 		txn.Abort()
 		return fmt.Errorf("%w: namespace id %s", datastore.ErrAlreadyExists, ns.ID)
 	}
-	if raw, _ := txn.First("namespaces", "identifier", ns.Identifier); raw != nil {
+	if raw, _ := txn.First("namespaces", "name", ns.Name); raw != nil {
 		txn.Abort()
-		return fmt.Errorf("%w: namespace identifier %s", datastore.ErrAlreadyExists, ns.Identifier)
+		return fmt.Errorf("%w: namespace name %s", datastore.ErrAlreadyExists, ns.Name)
 	}
-	if err := txn.Insert("namespaces", ns); err != nil {
+	if err := txn.Insert("namespaces", stored); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: insert namespace: %w", err)
 	}
@@ -639,17 +641,17 @@ func (m *memdbDatastore) GetNamespace(_ context.Context, id string) (*datastore.
 	if err != nil || raw == nil {
 		return nil, notFoundOrErr(err)
 	}
-	return raw.(*datastore.Namespace), nil
+	return normalizedNamespaceCopy(raw.(*datastore.Namespace)), nil
 }
 
-func (m *memdbDatastore) GetNamespaceByIdentifier(_ context.Context, identifier string) (*datastore.Namespace, error) {
+func (m *memdbDatastore) GetNamespaceByName(_ context.Context, name string) (*datastore.Namespace, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
-	raw, err := txn.First("namespaces", "identifier", identifier)
+	raw, err := txn.First("namespaces", "name", name)
 	if err != nil || raw == nil {
 		return nil, notFoundOrErr(err)
 	}
-	return raw.(*datastore.Namespace), nil
+	return normalizedNamespaceCopy(raw.(*datastore.Namespace)), nil
 }
 
 func (m *memdbDatastore) ListNamespaces(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {
@@ -661,11 +663,32 @@ func (m *memdbDatastore) ListNamespaces(_ context.Context, page datastore.PagePa
 	}
 	var all []*datastore.Namespace
 	for obj := it.Next(); obj != nil; obj = it.Next() {
-		all = append(all, obj.(*datastore.Namespace))
+		all = append(all, normalizedNamespaceCopy(obj.(*datastore.Namespace)))
 	}
 	return paginateSlice(all, page, func(ns *datastore.Namespace) (time.Time, string) {
-		return ns.CreatedAt, ns.ID
+		return ns.CreationTimestamp, ns.ID
 	}), nil
+}
+
+func (m *memdbDatastore) UpdateNamespace(_ context.Context, ns *datastore.Namespace, expectedResourceVersion string) error {
+	datastore.NormalizeNamespaceContract(ns)
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("namespaces", "id", ns.ID)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: namespace id %s", datastore.ErrNotFound, ns.ID)
+	}
+	current := normalizedNamespaceCopy(raw.(*datastore.Namespace))
+	if current.ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return datastore.ErrConflict
+	}
+	if err := txn.Insert("namespaces", normalizedNamespaceCopy(ns)); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: update namespace: %w", err)
+	}
+	txn.Commit()
+	return nil
 }
 
 func (m *memdbDatastore) DeleteNamespace(_ context.Context, id string) error {
@@ -683,6 +706,26 @@ func (m *memdbDatastore) DeleteNamespace(_ context.Context, id string) error {
 	return nil
 }
 
+func (m *memdbDatastore) DeleteNamespaceWithResourceVersion(_ context.Context, id, expectedResourceVersion string) error {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("namespaces", "id", id)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: namespace id %s", datastore.ErrNotFound, id)
+	}
+	current := raw.(*datastore.Namespace)
+	if current.ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return datastore.ErrConflict
+	}
+	if err := txn.Delete("namespaces", raw); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: delete namespace with resource version: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
 func (m *memdbDatastore) HasRepositories(_ context.Context, namespaceID string) (bool, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
@@ -691,6 +734,21 @@ func (m *memdbDatastore) HasRepositories(_ context.Context, namespaceID string) 
 		return false, fmt.Errorf("memdb: has repositories: %w", err)
 	}
 	return raw != nil, nil
+}
+
+func normalizedNamespaceCopy(namespace *datastore.Namespace) *datastore.Namespace {
+	if namespace == nil {
+		return nil
+	}
+	clone := *namespace
+	clone.Status = append([]byte(nil), namespace.Status...)
+	clone.Finalizers = append([]string(nil), namespace.Finalizers...)
+	if namespace.DeletionTimestamp != nil {
+		deletionTimestamp := *namespace.DeletionTimestamp
+		clone.DeletionTimestamp = &deletionTimestamp
+	}
+	datastore.NormalizeNamespaceContract(&clone)
+	return &clone
 }
 
 // ── Repository ────────────────────────────────────────────────────────────────
@@ -733,7 +791,7 @@ func (m *memdbDatastore) ListRepositoriesByNamespace(_ context.Context, namespac
 		all = append(all, normalizedRepositoryCopy(obj.(*datastore.Repository)))
 	}
 	return paginateSlice(all, page, func(r *datastore.Repository) (time.Time, string) {
-		return r.CreatedAt, r.ID
+		return r.CreationTimestamp, r.ID
 	}), nil
 }
 

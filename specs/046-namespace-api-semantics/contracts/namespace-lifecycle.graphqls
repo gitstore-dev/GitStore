@@ -1,41 +1,116 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (c) 2026 GitStore contributors
 
-# This file documents that GH#172 introduces NO breaking change to the public
-# Namespace mutation SDL already shipped by GH#171 (shared/schemas/namespace.graphqls).
-# createNamespace, updateNamespace (new resolver behavior, same input/output
-# shape as drafted for this spec), and deleteNamespace all keep their existing
-# signatures. Only the internal write path changes:
+# This file documents the authoritative Namespace mutation envelope for GH#172.
+# createNamespace and updateNamespace accept a declarative resource shape that
+# matches the existing `apiVersion` / `kind` / `metadata` / `spec` envelope used
+# for Git-backed namespace manifests, rather than the legacy flat identifier/tier
+# input fields. The required request keys are explicit:
+#   - apiVersion: String!
+#   - kind: String!  (must be "Namespace")
+#   - metadata: { name: String! ... }
+#   - spec: NamespaceSpecInput!
 #
-#   createNamespace(input: CreateNamespaceInput!): CreateNamespacePayload!
-#   deleteNamespace(input: DeleteNamespaceInput!): DeleteNamespacePayload!
+# The public contract is intentionally resource-shaped so callers can mirror a
+# manifest they would otherwise author in Git. The mutation names and payload
+# return types remain unchanged; only the accepted request envelope changes.
 #
-# updateNamespace is added by this spec with the same shape any other
-# spec-writable resource in this codebase uses for a partial update -- it
-# does NOT take a caller-supplied resourceVersion precondition, because the
-# caller is not writing the datastore directly; Git commit + admission is the
-# concurrency boundary (see research.md Decision 5 for why the
-# datastore-internal UpdateNamespace precondition is not part of the public
-# contract).
+# deleteNamespace remains a separate, narrow delete mutation and does not use
+# the resource envelope input shape.
+
+input NamespaceMetadataInput {
+  name: String!
+  labels: JSON
+  annotations: JSON
+}
+
+input NamespaceRepositoryDefaultsInput {
+  visibility: RepositoryVisibility
+  defaultBranch: String
+}
+
+input NamespacePushPolicyDefaultsInput {
+  maxPackSizeBytes: Long
+  maxFileSizeBytes: Long
+  receivePackHooks: ReceivePackHookDefaultsInput
+  schemaValidation: SchemaValidationDefaultsInput
+  admissionControl: AdmissionControlDefaultsInput
+}
+
+input ReceivePackHookDefaultsInput {
+  preReceive: HookToggleInput
+  update: HookToggleInput
+  postReceive: HookToggleInput
+  procReceive: HookToggleInput
+  postUpdate: HookToggleInput
+  referenceTransaction: HookToggleInput
+}
+
+input HookToggleInput {
+  enabled: Boolean!
+}
+
+input SchemaValidationDefaultsInput {
+  phase: String
+  timeoutSeconds: Int
+}
+
+input AdmissionControlDefaultsInput {
+  phase: String
+  branchPattern: String
+}
+
+input NamespaceSpecInput {
+  title: String
+  tier: NamespaceTier!
+  repositoryDefaults: NamespaceRepositoryDefaultsInput
+  pushPolicyDefaults: NamespacePushPolicyDefaultsInput
+}
+
+input CreateNamespaceInput {
+  """
+  API version of the Namespace resource contract.
+  """
+  apiVersion: String!
+
+  """
+  Resource kind discriminator. Must be `Namespace`.
+  """
+  kind: String!
+
+  """
+  Namespace identity metadata. The metadata.name is the namespace identifier.
+  """
+  metadata: NamespaceMetadataInput!
+
+  """
+  Author-controlled desired state.
+  """
+  spec: NamespaceSpecInput!
+}
 
 input UpdateNamespaceInput {
   """
-  metadata.name of the namespace to update. Must not target a bootstrap
-  namespace (gitstore-system, default).
+  API version of the Namespace resource contract.
   """
-  name: String!
-
-  """Null = leave unchanged. Non-null = new value."""
-  title: String
+  apiVersion: String!
 
   """
-  Null = leave unchanged. Non-null = replace in full. Tier demotion is
-  rejected at admission (FR-006), independent of this field's presence.
+  Resource kind discriminator. Must be `Namespace`.
   """
-  repositoryDefaults: NamespaceRepositoryDefaultsInput
+  kind: String!
 
-  """Null = leave unchanged. Non-null = replace in full."""
-  pushPolicyDefaults: NamespacePushPolicyDefaultsInput
+  """
+  Namespace identity metadata. The metadata.name is the namespace to update.
+  Must not target a bootstrap namespace (gitstore-system, default).
+  """
+  metadata: NamespaceMetadataInput!
+
+  """
+  Author-controlled desired state. Null fields are left unchanged; the full
+  spec is replaced when a concrete value is provided.
+  """
+  spec: NamespaceSpecInput!
 }
 
 type UpdateNamespacePayload {
@@ -45,9 +120,16 @@ type UpdateNamespacePayload {
 
 extend type Mutation {
   """
-  Update an existing non-bootstrap namespace's spec. Commits an updated
+  Create a new non-bootstrap namespace by committing the equivalent manifest to
+  gitstore-system/gitstore-system on the caller's behalf and awaiting
+  admission before returning.
+  """
+  createNamespace(input: CreateNamespaceInput!): CreateNamespacePayload!
+
+  """
+  Update an existing non-bootstrap namespace's spec by committing the updated
   manifest to gitstore-system/gitstore-system on the caller's behalf and
-  waits for admission before returning.
+  awaiting admission before returning.
   """
   updateNamespace(input: UpdateNamespaceInput!): UpdateNamespacePayload!
 }

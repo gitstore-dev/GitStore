@@ -274,10 +274,10 @@ func (d *InstrumentedDatastore) GetNamespace(ctx context.Context, id string) (*N
 	return v, err
 }
 
-func (d *InstrumentedDatastore) GetNamespaceByIdentifier(ctx context.Context, identifier string) (*Namespace, error) {
+func (d *InstrumentedDatastore) GetNamespaceByName(ctx context.Context, name string) (*Namespace, error) {
 	start := time.Now()
-	v, err := d.next.GetNamespaceByIdentifier(ctx, identifier)
-	d.observe("GetNamespaceByIdentifier", start, err)
+	v, err := d.next.GetNamespaceByName(ctx, name)
+	d.observe("GetNamespaceByName", start, err)
 	return v, err
 }
 
@@ -288,10 +288,24 @@ func (d *InstrumentedDatastore) ListNamespaces(ctx context.Context, params PageP
 	return v, err
 }
 
+func (d *InstrumentedDatastore) UpdateNamespace(ctx context.Context, ns *Namespace, expectedResourceVersion string) error {
+	start := time.Now()
+	err := d.next.UpdateNamespace(ctx, ns, expectedResourceVersion)
+	d.observe("UpdateNamespace", start, err)
+	return err
+}
+
 func (d *InstrumentedDatastore) DeleteNamespace(ctx context.Context, id string) error {
 	start := time.Now()
 	err := d.next.DeleteNamespace(ctx, id)
 	d.observe("DeleteNamespace", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) DeleteNamespaceWithResourceVersion(ctx context.Context, id, expectedResourceVersion string) error {
+	start := time.Now()
+	err := d.next.DeleteNamespaceWithResourceVersion(ctx, id, expectedResourceVersion)
+	d.observe("DeleteNamespaceWithResourceVersion", start, err)
 	return err
 }
 

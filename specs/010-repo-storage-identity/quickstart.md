@@ -24,7 +24,7 @@ Two new first-class entities (`Repository` and `NamespaceMapping`) plus a fanout
 | `internal/datastore/scylla/models.go`                              | Add Scylla table models for both new tables                                                                              |
 | `internal/datastore/scylla/*.go`                                   | Implement new interface methods                                                                                          |
 | `internal/datastore/scylla/migrations/001_initial_schema.cql`      | Add `repositories` and `namespace_mappings` tables (in-place update)                                                     |
-| `internal/datastore/scylla/migrations/002_add_initial_indices.cql` | Add indices for new tables (in-place update)                                                                             |
+| `internal/datastore/scylla/migrations/002_secondary_indexes.cql` | Add indices for new tables (in-place update)                                                                             |
 | `graph/schema.graphqls` (or `shared/schemas/`)                     | Merge `graphql.repository.graphqls` contract                                                                             |
 | `graph/resolver*.go`                                               | Implement `createRepository`, `renameRepository`, `transferRepository`, `deleteRepository`, `repository`, `repositories` |
 

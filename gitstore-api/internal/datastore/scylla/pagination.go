@@ -49,16 +49,74 @@ type paginatedQuery struct {
 }
 
 // clusterKeys names the two clustering columns used for keyset pagination.
-// The default is ("created_at", "id") which matches categories/collections/namespaces/repositories.
-// Products use ("creation_timestamp", "uid").
 type clusterKeys struct {
 	TimestampCol string
 	IDCol        string
 }
 
-var defaultClusterKeys = clusterKeys{TimestampCol: "created_at", IDCol: "id"}
+var namespaceClusterKeys = clusterKeys{TimestampCol: "creation_timestamp", IDCol: "id"}
 var productClusterKeys = clusterKeys{TimestampCol: "creation_timestamp", IDCol: "uid"}
 var collectionClusterKeys = clusterKeys{TimestampCol: "creation_timestamp", IDCol: "uid"}
+
+const namespaceBucketLayout = "2006-01"
+
+var namespaceListingEpoch = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+func namespaceBucket(timestamp time.Time) string {
+	return timestamp.UTC().Format(namespaceBucketLayout)
+}
+
+func cursorInNamespaceBucket(cursor, bucket string) bool {
+	parsed, err := parsePageCursor(cursor)
+	return err == nil && namespaceBucket(parsed.CreatedAt) == bucket
+}
+
+func namespaceBucketsForPage(page datastore.PageParams, now time.Time) []string {
+	current := monthStart(now)
+	epoch := monthStart(namespaceListingEpoch)
+	backward := page.Last > 0
+
+	if backward {
+		start := epoch
+		if page.Before != "" {
+			if cursor, err := parsePageCursor(page.Before); err == nil {
+				start = monthStart(cursor.CreatedAt)
+			}
+		}
+		if start.After(current) {
+			return nil
+		}
+		buckets := make([]string, 0, monthsBetween(start, current)+1)
+		for month := start; !month.After(current); month = month.AddDate(0, 1, 0) {
+			buckets = append(buckets, namespaceBucket(month))
+		}
+		return buckets
+	}
+
+	start := current
+	if page.After != "" {
+		if cursor, err := parsePageCursor(page.After); err == nil {
+			start = monthStart(cursor.CreatedAt)
+		}
+	}
+	if start.Before(epoch) {
+		return nil
+	}
+	buckets := make([]string, 0, monthsBetween(epoch, start)+1)
+	for month := start; !month.Before(epoch); month = month.AddDate(0, -1, 0) {
+		buckets = append(buckets, namespaceBucket(month))
+	}
+	return buckets
+}
+
+func monthStart(timestamp time.Time) time.Time {
+	utc := timestamp.UTC()
+	return time.Date(utc.Year(), utc.Month(), 1, 0, 0, 0, 0, time.UTC)
+}
+
+func monthsBetween(start, end time.Time) int {
+	return (end.Year()-start.Year())*12 + int(end.Month()-start.Month())
+}
 
 // buildPaginatedSelect constructs a CQL SELECT with keyset pagination.
 // It uses tuple inequality comparisons on the two clustering columns for forward
@@ -151,7 +209,7 @@ func buildPageResult[T any](items []*T, limit int, page datastore.PageParams) *d
 }
 
 // paginateInMemory applies cursor-based keyset pagination to a pre-sorted slice
-// (sorted by created_at DESC, id DESC). Used when ORDER BY is not supported in CQL
+// (sorted by creation timestamp DESC, id DESC). Used when ORDER BY is not supported in CQL
 // (e.g., secondary index queries).
 func paginateInMemory(items []*datastore.Repository, page datastore.PageParams) *datastore.PageResult[datastore.Repository] {
 	total := len(items)
@@ -163,7 +221,7 @@ func paginateInMemory(items []*datastore.Repository, page datastore.PageParams) 
 		if err == nil {
 			idx := -1
 			for i, item := range items {
-				if item.CreatedAt.Equal(cursor.CreatedAt) && item.ID == cursor.ID {
+				if item.CreationTimestamp.Equal(cursor.CreatedAt) && item.ID == cursor.ID {
 					idx = i
 					break
 				}
@@ -177,7 +235,7 @@ func paginateInMemory(items []*datastore.Repository, page datastore.PageParams) 
 		if err == nil {
 			idx := -1
 			for i, item := range items {
-				if item.CreatedAt.Equal(cursor.CreatedAt) && item.ID == cursor.ID {
+				if item.CreationTimestamp.Equal(cursor.CreatedAt) && item.ID == cursor.ID {
 					idx = i
 					break
 				}

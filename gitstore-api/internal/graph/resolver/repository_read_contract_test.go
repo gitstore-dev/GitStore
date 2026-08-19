@@ -29,9 +29,9 @@ const (
 type repositoryReadCountingStore struct {
 	datastore.Datastore
 
-	mu                       sync.Mutex
-	getNamespaceCalls        int
-	getNamespaceByIdentCalls int
+	mu                      sync.Mutex
+	getNamespaceCalls       int
+	getNamespaceByNameCalls int
 }
 
 func (s *repositoryReadCountingStore) GetNamespace(ctx context.Context, id string) (*datastore.Namespace, error) {
@@ -41,24 +41,24 @@ func (s *repositoryReadCountingStore) GetNamespace(ctx context.Context, id strin
 	return s.Datastore.GetNamespace(ctx, id)
 }
 
-func (s *repositoryReadCountingStore) GetNamespaceByIdentifier(ctx context.Context, identifier string) (*datastore.Namespace, error) {
+func (s *repositoryReadCountingStore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
 	s.mu.Lock()
-	s.getNamespaceByIdentCalls++
+	s.getNamespaceByNameCalls++
 	s.mu.Unlock()
-	return s.Datastore.GetNamespaceByIdentifier(ctx, identifier)
+	return s.Datastore.GetNamespaceByName(ctx, name)
 }
 
 func (s *repositoryReadCountingStore) resetNamespaceCalls() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.getNamespaceCalls = 0
-	s.getNamespaceByIdentCalls = 0
+	s.getNamespaceByNameCalls = 0
 }
 
 func (s *repositoryReadCountingStore) namespaceCalls() (byID, byIdentifier int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.getNamespaceCalls, s.getNamespaceByIdentCalls
+	return s.getNamespaceCalls, s.getNamespaceByNameCalls
 }
 
 type repositoryReadHarness struct {
@@ -82,49 +82,49 @@ func newRepositoryReadHarness(t *testing.T) *repositoryReadHarness {
 	root.WithStorageDataDir(repositoryReadDataDir)
 
 	namespace := &datastore.Namespace{
-		ID:          repositoryReadNamespaceID,
-		Identifier:  "repository-read-contract",
-		DisplayName: "Repository Read Contract",
-		Tier:        datastore.NamespaceTierUser,
-		CreatedAt:   time.Date(2026, time.August, 16, 18, 0, 0, 0, time.UTC),
-		CreatedBy:   "fixture",
-		UpdatedAt:   time.Date(2026, time.August, 16, 18, 0, 0, 0, time.UTC),
-		UpdatedBy:   "fixture",
+		ID:                repositoryReadNamespaceID,
+		Name:              "repository-read-contract",
+		Title:             "Repository Read Contract",
+		Tier:              datastore.NamespaceTierUser,
+		CreationTimestamp: time.Date(2026, time.August, 16, 18, 0, 0, 0, time.UTC),
+		CreationActor:     "fixture",
+		UpdateTimestamp:   time.Date(2026, time.August, 16, 18, 0, 0, 0, time.UTC),
+		UpdateActor:       "fixture",
 	}
 	require.NoError(t, baseStore.CreateNamespace(ctx, namespace))
 
 	repos := []*datastore.Repository{
 		{
-			ID:               "01960000-0000-7000-8000-000000000121",
-			NamespaceID:      namespace.ID,
-			Name:             "catalog",
-			DefaultBranch:    "main",
-			StorageClass:     "fast",
-			CreatedAt:        time.Date(2026, time.August, 16, 18, 1, 0, 0, time.UTC),
-			CreatedBy:        "alice",
-			UpdatedAt:        time.Date(2026, time.August, 16, 18, 2, 0, 0, time.UTC),
-			UpdatedBy:        "bob",
-			Generation:       3,
-			ResourceVersion:  "7",
-			Status:           json.RawMessage(`{"observedGeneration":3,"lastAppliedRevision":"main@sha1:abc123","conditions":[]}`),
-			MaxPackSizeBytes: 1048576,
-			MaxFileSizeBytes: 262144,
+			ID:                "01960000-0000-7000-8000-000000000121",
+			NamespaceID:       namespace.ID,
+			Name:              "catalog",
+			DefaultBranch:     "main",
+			StorageClass:      "fast",
+			CreationTimestamp: time.Date(2026, time.August, 16, 18, 1, 0, 0, time.UTC),
+			CreationActor:     "alice",
+			UpdateTimestamp:   time.Date(2026, time.August, 16, 18, 2, 0, 0, time.UTC),
+			UpdateActor:       "bob",
+			Generation:        3,
+			ResourceVersion:   "7",
+			Status:            json.RawMessage(`{"observedGeneration":3,"lastAppliedRevision":"main@sha1:abc123","conditions":[]}`),
+			MaxPackSizeBytes:  1048576,
+			MaxFileSizeBytes:  262144,
 		},
 		{
-			ID:               "01960000-0000-7000-8000-000000000122",
-			NamespaceID:      namespace.ID,
-			Name:             "assets",
-			DefaultBranch:    "trunk",
-			StorageClass:     "archive",
-			CreatedAt:        time.Date(2026, time.August, 16, 18, 3, 0, 0, time.UTC),
-			CreatedBy:        "carol",
-			UpdatedAt:        time.Date(2026, time.August, 16, 18, 4, 0, 0, time.UTC),
-			UpdatedBy:        "dave",
-			Generation:       2,
-			ResourceVersion:  "4",
-			Status:           json.RawMessage(`{"observedGeneration":1,"conditions":[]}`),
-			MaxPackSizeBytes: 0,
-			MaxFileSizeBytes: 0,
+			ID:                "01960000-0000-7000-8000-000000000122",
+			NamespaceID:       namespace.ID,
+			Name:              "assets",
+			DefaultBranch:     "trunk",
+			StorageClass:      "archive",
+			CreationTimestamp: time.Date(2026, time.August, 16, 18, 3, 0, 0, time.UTC),
+			CreationActor:     "carol",
+			UpdateTimestamp:   time.Date(2026, time.August, 16, 18, 4, 0, 0, time.UTC),
+			UpdateActor:       "dave",
+			Generation:        2,
+			ResourceVersion:   "4",
+			Status:            json.RawMessage(`{"observedGeneration":1,"conditions":[]}`),
+			MaxPackSizeBytes:  0,
+			MaxFileSizeBytes:  0,
 		},
 	}
 	for _, repo := range repos {
@@ -153,7 +153,7 @@ func TestRepositoryReadContract_SingleAndNodeUseCompleteSharedProjection(t *test
 
 	byPath, err := query.Repository(ctx, model.RepositoryBy{
 		NamespacePath: &model.RepositoryNamespacePath{
-			Namespace: h.namespace.Identifier,
+			Namespace: h.namespace.Name,
 			Name:      expected.Name,
 		},
 	})
@@ -190,7 +190,7 @@ func TestRepositoryReadContract_ListUsesResolvedNamespaceWithoutPerRowLookups(t 
 
 	connection, err := h.root.Query().Repositories(
 		context.Background(),
-		h.namespace.Identifier,
+		h.namespace.Name,
 		&first,
 		nil,
 		nil,
@@ -234,11 +234,11 @@ func assertRepositoryReadContract(
 	assert.Equal(t, "gitstore.dev/v1beta1", got.APIVersion)
 	assert.Equal(t, "Repository", got.Kind)
 	assert.Equal(t, expected.Name, got.Metadata.Name)
-	assert.Equal(t, namespace.Identifier, got.Metadata.Namespace)
+	assert.Equal(t, namespace.Name, got.Metadata.Namespace)
 	assert.Equal(t, got.ID, got.Metadata.UID)
 	assert.Equal(t, expected.ResourceVersion, got.Metadata.ResourceVersion)
 	assert.Equal(t, int32(expected.Generation), got.Metadata.Generation)
-	assert.Equal(t, expected.CreatedAt, got.Metadata.CreationTimestamp)
+	assert.Equal(t, expected.CreationTimestamp, got.Metadata.CreationTimestamp)
 	assert.Empty(t, got.Metadata.Labels)
 	assert.Empty(t, got.Metadata.Annotations)
 	assert.Empty(t, got.Metadata.OwnerReferences)
@@ -257,14 +257,14 @@ func assertRepositoryReadContract(
 
 	assert.Equal(t, expected.Name, got.Name)
 	require.NotNil(t, got.Namespace)
-	assert.Equal(t, namespace.Identifier, got.Namespace.Identifier)
+	assert.Equal(t, namespace.Name, got.Namespace.Identifier)
 	assert.Equal(t, expected.DefaultBranch, got.DefaultBranch)
 	assert.Equal(t, expected.StorageClass, got.StorageClass)
 	assert.Equal(t, got.Status.Resolved.StoragePath, got.StoragePath)
-	assert.Equal(t, expected.CreatedAt, got.CreatedAt)
-	assert.Equal(t, expected.CreatedBy, got.CreatedBy)
-	assert.Equal(t, expected.UpdatedAt, got.UpdatedAt)
-	assert.Equal(t, expected.UpdatedBy, got.UpdatedBy)
+	assert.Equal(t, expected.CreationTimestamp, got.CreatedAt)
+	assert.Equal(t, expected.CreationActor, got.CreatedBy)
+	assert.Equal(t, expected.UpdateTimestamp, got.UpdatedAt)
+	assert.Equal(t, expected.UpdateActor, got.UpdatedBy)
 }
 
 func repositoryReadStoragePath(dataDir, repositoryID string) string {

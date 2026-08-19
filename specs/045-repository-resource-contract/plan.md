@@ -82,7 +82,8 @@ gitstore-api/
 │   │   └── backend_test.go
 │   └── scylla/
 │       ├── migrations/
-│       │   └── 003_repository_resource_contract.cql
+│       │   ├── 001_initial_schema.cql
+│       │   └── 002_secondary_indexes.cql
 │       ├── models.go
 │       ├── repository.go
 │       └── backend_test.go

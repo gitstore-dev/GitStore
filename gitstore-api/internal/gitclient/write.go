@@ -59,8 +59,13 @@ func (c *Client) DeleteRepository(ctx context.Context, repositoryID string) erro
 // CommitFile writes a single file and commits it to the default branch.
 // Returns the new commit SHA on success.
 func (c *Client) CommitFile(ctx context.Context, p CommitFileParams) (string, error) {
+	return c.CommitFileForRepo(ctx, c.RepositoryID, p)
+}
+
+// CommitFileForRepo writes a single file to an explicitly selected repository.
+func (c *Client) CommitFileForRepo(ctx context.Context, repositoryID string, p CommitFileParams) (string, error) {
 	resp, err := c.Git.CommitFile(ctx, &gitv1.CommitFileRequest{
-		RepositoryId:  c.RepositoryID,
+		RepositoryId:  repositoryID,
 		Path:          p.Path,
 		Content:       p.Content,
 		CommitMessage: p.CommitMessage,

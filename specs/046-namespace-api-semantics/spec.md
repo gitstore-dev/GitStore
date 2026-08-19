@@ -117,6 +117,45 @@ A namespace's system-computed status — its conditions, observed generation, an
 - **In-progress deletion (Terminating)**: The state a namespace enters once an eligible deletion request has been accepted and a foreground-deletion finalizer attached, prior to its record being finally removed. Distinguishable from a normal, active namespace when read.
 - **Namespace status conditions**: System-computed observations about a namespace's admission and operational state (at minimum: admission acceptance, system-repository readiness, overall readiness, and in-progress-deletion state), never settable by an authored manifest or mutation input.
 
+### Explicit mutation envelope contract
+
+`createNamespace` and `updateNamespace` use the declarative resource envelope already used for Git-manifest authoring and NOT the legacy flat input shape. The authoritative request object is:
+
+```graphql
+input CreateNamespaceInput {
+  apiVersion: String!
+  kind: String!
+  metadata: NamespaceMetadataInput!
+  spec: NamespaceSpecInput!
+}
+
+input UpdateNamespaceInput {
+  apiVersion: String!
+  kind: String!
+  metadata: NamespaceMetadataInput!
+  spec: NamespaceSpecInput!
+}
+```
+
+The required fields are intentionally aligned to the manifest schema:
+- `apiVersion`: resource contract version for the Namespace kind
+- `kind`: must be `Namespace`
+- `metadata.name`: namespace identifier; bootstrap names are rejected
+- `spec`: author-controlled desired state (`title`, `tier`, and defaults)
+
+The public GraphQL signature remains unchanged from the existing API surface; the change is in the accepted request envelope and the internal delegation to `gitstore-system/gitstore-system`, not in the mutation names or response types.
+
+### Status condition matrix
+
+| Condition           | Source of truth                                   | Set by                | Read semantics                                                                        |
+|---------------------|---------------------------------------------------|-----------------------|---------------------------------------------------------------------------------------|
+| `AdmissionAccepted` | datastore `Status.conditions` / admission output  | admission pipeline    | `true` only after the namespace's current spec was successfully admitted              |
+| `SystemRepoReady`   | datastore `Status.conditions` / controller output | controller reconciler | `true` when the namespace's per-namespace `gitstore-system` repo exists and is usable |
+| `Ready`             | datastore `Status.conditions` / controller output | controller reconciler | aggregate operational readiness; `AdmissionAccepted && SystemRepoReady`               |
+| `Terminating`       | `DeletionTimestamp` + `Finalizers`                | system deletion flow  | derived for reads while a namespace is undergoing foreground deletion                 |
+
+Author-submitted manifests may include a `status` block, but it is ignored. The system owns the values for `status`, `observedGeneration`, and `resourceVersion` after admission.
+
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes

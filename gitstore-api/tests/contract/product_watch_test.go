@@ -76,28 +76,28 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	ns := &datastore.Namespace{
-		ID:          uuid.New().String(),
-		Identifier:  "gitstore",
-		DisplayName: "GitStore Test",
-		Tier:        datastore.NamespaceTierUser,
-		CreatedAt:   now,
-		CreatedBy:   "test",
-		UpdatedAt:   now,
-		UpdatedBy:   "test",
+		ID:                uuid.New().String(),
+		Name:              "gitstore",
+		Title:             "GitStore Test",
+		Tier:              datastore.NamespaceTierUser,
+		CreationTimestamp: now,
+		CreationActor:     "test",
+		UpdateTimestamp:   now,
+		UpdateActor:       "test",
 	}
 	require.NoError(t, store.CreateNamespace(ctx, ns))
 
 	const repoID = "00000000-0000-0000-0000-000000000001"
 	repo := &datastore.Repository{
-		ID:            repoID,
-		NamespaceID:   ns.ID,
-		Name:          "catalog",
-		DefaultBranch: "main",
-		StorageClass:  "local",
-		CreatedAt:     now,
-		CreatedBy:     "test",
-		UpdatedAt:     now,
-		UpdatedBy:     "test",
+		ID:                repoID,
+		NamespaceID:       ns.ID,
+		Name:              "catalog",
+		DefaultBranch:     "main",
+		StorageClass:      "local",
+		CreationTimestamp: now,
+		CreationActor:     "test",
+		UpdateTimestamp:   now,
+		UpdateActor:       "test",
 	}
 	require.NoError(t, store.CreateRepository(ctx, repo))
 
@@ -159,28 +159,28 @@ func TestWatchProducts_ProductDeletion_DeliversDeletedEvent(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	ns := &datastore.Namespace{
-		ID:          uuid.New().String(),
-		Identifier:  "gitstore",
-		DisplayName: "GitStore Test",
-		Tier:        datastore.NamespaceTierUser,
-		CreatedAt:   now,
-		CreatedBy:   "test",
-		UpdatedAt:   now,
-		UpdatedBy:   "test",
+		ID:                uuid.New().String(),
+		Name:              "gitstore",
+		Title:             "GitStore Test",
+		Tier:              datastore.NamespaceTierUser,
+		CreationTimestamp: now,
+		CreationActor:     "test",
+		UpdateTimestamp:   now,
+		UpdateActor:       "test",
 	}
 	require.NoError(t, store.CreateNamespace(ctx, ns))
 
 	const repoID = "00000000-0000-0000-0000-000000000002"
 	repo := &datastore.Repository{
-		ID:            repoID,
-		NamespaceID:   ns.ID,
-		Name:          "catalog",
-		DefaultBranch: "main",
-		StorageClass:  "local",
-		CreatedAt:     now,
-		CreatedBy:     "test",
-		UpdatedAt:     now,
-		UpdatedBy:     "test",
+		ID:                repoID,
+		NamespaceID:       ns.ID,
+		Name:              "catalog",
+		DefaultBranch:     "main",
+		StorageClass:      "local",
+		CreationTimestamp: now,
+		CreationActor:     "test",
+		UpdateTimestamp:   now,
+		UpdateActor:       "test",
 	}
 	require.NoError(t, store.CreateRepository(ctx, repo))
 

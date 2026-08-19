@@ -11,12 +11,12 @@ Adopt `docs/ADRs/0002-namespace-lifecycle.md` in full: make Git the canonical wr
 
 **Language/Version**: Rust 1.x (`gitstore-git-service`); Go 1.25 (`gitstore-api`, `gitstore-controller-manager`)
 **Primary Dependencies**: Existing `CatalogService.ValidateResources`/`AdmitResources` gRPC contract; existing `gitclient.Client.CommitFile` (already wired, currently unused by any resolver); `gix 0.84.0`; `github.com/99designs/gqlgen v0.17.90`; `go-memdb v1.3.5` / `gocqlx/v3 v3.0.4` + `gocql`; existing `internal/types.Reconciler`, `internal/status.StatusClient`, `internal/listwatch.ListWatcher[T]`/`Runner[T]`, `internal/cache.Cache[T]` (all from spec 026/036/039, reused unchanged); `go.uber.org/zap`. No new external dependency in either service.
-**Storage**: New persisted columns on the `Namespace` entity — `Generation int64`, `ResourceVersion string`, `Status json.RawMessage`, `DeletionTimestamp *time.Time`, `Finalizers []string` — mirroring the additions spec 045 already made to `Repository` (`gitstore-api/internal/datastore/repository_contract.go`). Requires a memdb schema addition and a new Scylla migration (`004_namespace_resource_contract.cql`), following the `003_repository_resource_contract.cql` precedent.
+**Storage**: The persisted `Namespace` entity uses canonical `Name`/`Title` fields matching `metadata.name`/`spec.title`, plus `Generation int64`, `ResourceVersion string`, `Status json.RawMessage`, `DeletionTimestamp *time.Time`, and `Finalizers []string`. The alpha Scylla baseline in `001_initial_schema.cql` defines query-first projections: authoritative `namespaces_by_id`, narrow `namespaces_by_name`, and month-bounded `namespaces_by_bucket` listing partitions. Namespace and Repository persistence use the established `creation_timestamp` column convention; `002_secondary_indexes.cql` contains only the remaining secondary indexes.
 **Testing**: Go contract/unit/integration tests (mirroring `namespace_contract_test.go`, `repository_read_contract_test.go`); Rust unit/integration tests for the new pre-receive repository-restriction rule (mirroring `admission_handler.rs`'s existing per-kind tests); controller reconciler tests (mirroring `categorytaxonomy/reconciler_test.go`); root `make test`/`make build`/`make pr-ready`.
 **Target Platform**: Linux server and Darwin development hosts already supported by all three services.
 **Project Type**: Multi-service feature spanning all three GitStore services (git validation, GraphQL API + admission, controller reconciliation).
 **Performance Goals**: No new feature-specific target; namespace admission and reconciliation reuse the existing per-push and per-reconcile-tick budgets already covered by constitution performance targets (git push validation < 5ms/500 files; controller reconciliation is not on the storefront read path).
-**Constraints**: API-first and test-first; generated gqlgen/gRPC files are never hand-edited; the two bootstrap namespaces are the only permitted datastore-only, non-Git-backed namespace records; `gitstore-system/gitstore-system` is the sole valid `Namespace` manifest authoring target; existing `createNamespace`/`updateNamespace`/`deleteNamespace` GraphQL signatures are preserved (no breaking schema change) even though their internal write path changes completely.
+**Constraints**: API-first and test-first; generated gqlgen/gRPC files are never hand-edited; the two bootstrap namespaces are the only permitted datastore-only, non-Git-backed namespace records; `gitstore-system/gitstore-system` is the sole valid `Namespace` manifest authoring target. Backward compatibility with the unshipped legacy Namespace Scylla table and mutation input shape is explicitly not required.
 **Scale/Scope**: All existing and future non-bootstrap namespaces; namespace count is small relative to the product catalogue (constitution scale targets are catalogue-sized, not namespace-count-sized), so no new scale ceiling is introduced.
 
 ## Constitution Check
@@ -83,7 +83,9 @@ gitstore-api/
     │   ├── memdb/backend.go            # UpdateNamespace, optimistic-concurrency check-then-insert (mirrors UpdateRepository)
     │   ├── scylla/
     │   │   ├── namespace.go            # UpdateNamespace via `IF resource_version=?` LWT (mirrors scylla/repository.go)
-    │   │   └── migrations/004_namespace_resource_contract.cql
+    │   │   └── migrations/
+    │   │       ├── 001_initial_schema.cql
+    │   │       └── 002_secondary_indexes.cql
     │   └── entities_test.go
     └── graph/resolver/
         ├── service.go                 # CreateNamespace/UpdateNamespace/DeleteNamespace rewritten to commit-and-wait-for-admission; bootstrap-namespace rejection

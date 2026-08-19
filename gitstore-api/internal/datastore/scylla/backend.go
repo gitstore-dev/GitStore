@@ -41,7 +41,9 @@ type scyllaDatastore struct {
 	productVariantByUIDTable        *table.Table
 	productVariantBySKUTable        *table.Table
 	productVariantByProductRefTable *table.Table
-	namespaceTable                  *table.Table
+	namespaceByIDTable              *table.Table
+	namespaceByNameTable            *table.Table
+	namespaceByBucketTable          *table.Table
 	repositoryTable                 *table.Table
 	namespaceMappingTable           *table.Table
 }
@@ -210,15 +212,30 @@ type productVariantProductRefRow struct {
 }
 
 type namespaceRow struct {
-	Bucket      string     `db:"bucket"`
-	CreatedAt   time.Time  `db:"created_at"`
-	ID          gocql.UUID `db:"id"`
-	Identifier  string     `db:"identifier"`
-	DisplayName string     `db:"display_name"`
-	Tier        string     `db:"tier"`
-	CreatedBy   string     `db:"created_by"`
-	UpdatedAt   time.Time  `db:"updated_at"`
-	UpdatedBy   string     `db:"updated_by"`
+	ID                gocql.UUID `db:"id"`
+	Name              string     `db:"name"`
+	Title             string     `db:"title"`
+	Tier              string     `db:"tier"`
+	Generation        int64      `db:"generation"`
+	ResourceVersion   string     `db:"resource_version"`
+	Status            string     `db:"status"`
+	DeletionTimestamp *time.Time `db:"deletion_timestamp"`
+	Finalizers        []string   `db:"finalizers"`
+	CreationTimestamp time.Time  `db:"creation_timestamp"`
+	CreationActor     string     `db:"creation_actor"`
+	UpdateTimestamp   time.Time  `db:"update_timestamp"`
+	UpdateActor       string     `db:"update_actor"`
+}
+
+type namespaceNameRow struct {
+	Name string     `db:"name"`
+	ID   gocql.UUID `db:"id"`
+}
+
+type namespaceIndexRow struct {
+	Bucket            string     `db:"bucket"`
+	CreationTimestamp time.Time  `db:"creation_timestamp"`
+	ID                gocql.UUID `db:"id"`
 }
 
 // New opens a ScyllaDB connection, runs pending migrations, and returns a Datastore.
@@ -271,7 +288,9 @@ func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) 
 		productVariantByUIDTable:        ProductVariantByUID,
 		productVariantBySKUTable:        ProductVariantBySKU,
 		productVariantByProductRefTable: ProductVariantByProductRef,
-		namespaceTable:                  Namespace,
+		namespaceByIDTable:              NamespaceByID,
+		namespaceByNameTable:            NamespaceByName,
+		namespaceByBucketTable:          NamespaceByBucket,
 		repositoryTable:                 Repository,
 		namespaceMappingTable:           NamespaceMapping,
 	}, nil
@@ -1040,32 +1059,55 @@ func (s *scyllaDatastore) CreateNamespace(ctx context.Context, ns *datastore.Nam
 	if ns.ID == "" {
 		return fmt.Errorf("%w: namespace id is empty", datastore.ErrInvalidArgument)
 	}
-	if _, err := s.GetNamespace(ctx, ns.ID); err == nil {
+	if _, err := gocql.ParseUUID(ns.ID); err != nil {
+		return fmt.Errorf("%w: invalid namespace id %s", datastore.ErrInvalidArgument, ns.ID)
+	}
+	datastore.NormalizeNamespaceContract(ns)
+	row := toNamespaceRow(ns)
+
+	const reserveName = "INSERT INTO namespaces_by_name (name, id) VALUES (?, ?) IF NOT EXISTS"
+	applied, err := s.session.Query(reserveName, nil).WithContext(ctx).
+		Bind(row.Name, row.ID).ExecCASRelease()
+	if err != nil {
+		return fmt.Errorf("scylla: reserve namespace name: %w", err)
+	}
+	if !applied {
+		return fmt.Errorf("%w: namespace name %s", datastore.ErrAlreadyExists, ns.Name)
+	}
+
+	const insertByID = "INSERT INTO namespaces_by_id " +
+		"(id, name, title, tier, generation, resource_version, status, deletion_timestamp, finalizers, creation_timestamp, creation_actor, update_timestamp, update_actor) " +
+		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS"
+	applied, err = s.session.Query(insertByID, nil).WithContext(ctx).Bind(
+		row.ID, row.Name, row.Title, row.Tier, row.Generation, row.ResourceVersion,
+		row.Status, row.DeletionTimestamp, row.Finalizers, row.CreationTimestamp, row.CreationActor, row.UpdateTimestamp, row.UpdateActor,
+	).ExecCASRelease()
+	if err != nil || !applied {
+		s.releaseNamespaceName(ctx, row.Name, row.ID)
+		if err != nil {
+			return fmt.Errorf("scylla: create namespace by id: %w", err)
+		}
 		return fmt.Errorf("%w: namespace id %s", datastore.ErrAlreadyExists, ns.ID)
 	}
-	if existing, err := s.GetNamespaceByIdentifier(ctx, ns.Identifier); err == nil && existing.ID != ns.ID {
-		return fmt.Errorf("%w: namespace identifier %s", datastore.ErrAlreadyExists, ns.Identifier)
-	}
-	row := toNamespaceRow(ns)
-	stmt, names := s.namespaceTable.Insert()
-	if err := s.session.Query(stmt, names).BindStruct(row).ExecRelease(); err != nil {
-		return fmt.Errorf("scylla: create namespace: %w", err)
+
+	const insertIndex = "INSERT INTO namespaces_by_bucket (bucket, creation_timestamp, id) VALUES (?, ?, ?)"
+	if err := s.session.Query(insertIndex, nil).WithContext(ctx).
+		Bind(namespaceBucket(row.CreationTimestamp), row.CreationTimestamp, row.ID).ExecRelease(); err != nil {
+		_ = s.session.Query("DELETE FROM namespaces_by_id WHERE id=?", nil).WithContext(ctx).Bind(row.ID).ExecRelease()
+		s.releaseNamespaceName(ctx, row.Name, row.ID)
+		return fmt.Errorf("scylla: create namespace listing index: %w", err)
 	}
 	return nil
 }
 
-func (s *scyllaDatastore) GetNamespace(_ context.Context, id string) (*datastore.Namespace, error) {
+func (s *scyllaDatastore) GetNamespace(ctx context.Context, id string) (*datastore.Namespace, error) {
 	uid, err := gocql.ParseUUID(id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid namespace id %s", datastore.ErrNotFound, id)
 	}
-	stmt, names := qb.Select("namespaces").
-		Columns(s.namespaceTable.Metadata().Columns...).
-		Where(qb.Eq("id")).
-		Limit(1).
-		ToCql()
+	stmt, names := s.namespaceByIDTable.Get()
 	var row namespaceRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"id": uid}).GetRelease(&row); err != nil {
+	if err := s.session.Query(stmt, names).WithContext(ctx).BindMap(qb.M{"id": uid}).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: namespace id %s", datastore.ErrNotFound, id)
 		}
@@ -1074,40 +1116,82 @@ func (s *scyllaDatastore) GetNamespace(_ context.Context, id string) (*datastore
 	return fromNamespaceRow(&row), nil
 }
 
-func (s *scyllaDatastore) GetNamespaceByIdentifier(_ context.Context, identifier string) (*datastore.Namespace, error) {
-	stmt, names := qb.Select("namespaces").
-		Columns(s.namespaceTable.Metadata().Columns...).
-		Where(qb.Eq("identifier")).
-		ToCql()
-	var row namespaceRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"identifier": identifier}).GetRelease(&row); err != nil {
+func (s *scyllaDatastore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
+	stmt, names := s.namespaceByNameTable.Get()
+	var row namespaceNameRow
+	if err := s.session.Query(stmt, names).WithContext(ctx).
+		BindMap(qb.M{"name": name}).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, fmt.Errorf("%w: namespace identifier %s", datastore.ErrNotFound, identifier)
+			return nil, fmt.Errorf("%w: namespace name %s", datastore.ErrNotFound, name)
 		}
-		return nil, fmt.Errorf("scylla: get namespace by identifier: %w", err)
+		return nil, fmt.Errorf("scylla: get namespace by name: %w", err)
 	}
-	return fromNamespaceRow(&row), nil
+	namespace, err := s.GetNamespace(ctx, row.ID.String())
+	if errors.Is(err, datastore.ErrNotFound) {
+		return nil, fmt.Errorf("%w: namespace name %s", datastore.ErrNotFound, name)
+	}
+	return namespace, err
 }
 
-func (s *scyllaDatastore) ListNamespaces(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {
+func (s *scyllaDatastore) ListNamespaces(ctx context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {
 	limit := page.Limit()
-	pq := buildPaginatedSelect(s.namespaceTable, page, "bucket", BucketAll, defaultClusterKeys, nil, nil)
-
-	var rows []namespaceRow
-	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
-		return nil, fmt.Errorf("scylla: list namespaces: %w", err)
+	backward := page.Last > 0
+	rows := make([]namespaceIndexRow, 0, limit+1)
+	for _, bucket := range namespaceBucketsForPage(page, time.Now().UTC()) {
+		bucketPage := page
+		if page.After != "" && !cursorInNamespaceBucket(page.After, bucket) {
+			bucketPage.After = ""
+		}
+		if page.Before != "" && !cursorInNamespaceBucket(page.Before, bucket) {
+			bucketPage.Before = ""
+		}
+		pq := buildPaginatedSelect(s.namespaceByBucketTable, bucketPage, "bucket", bucket, namespaceClusterKeys, nil, nil)
+		var bucketRows []namespaceIndexRow
+		if err := s.session.Query(pq.Stmt, nil).WithContext(ctx).Bind(pq.Args...).SelectRelease(&bucketRows); err != nil {
+			return nil, fmt.Errorf("scylla: list namespaces bucket %s: %w", bucket, err)
+		}
+		rows = append(rows, bucketRows...)
+		if len(rows) >= limit+1 {
+			rows = rows[:limit+1]
+			break
+		}
 	}
-
-	if page.Last > 0 {
+	if backward {
 		reverseRows(rows)
 	}
 
-	nss := make([]*datastore.Namespace, len(rows))
-	for i := range rows {
-		nss[i] = fromNamespaceRow(&rows[i])
+	namespaces := make([]*datastore.Namespace, 0, len(rows))
+	for _, row := range rows {
+		namespace, err := s.GetNamespace(ctx, row.ID.String())
+		if errors.Is(err, datastore.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("scylla: hydrate listed namespace: %w", err)
+		}
+		namespaces = append(namespaces, namespace)
 	}
 
-	return buildPageResult(nss, limit, page), nil
+	return buildPageResult(namespaces, limit, page), nil
+}
+
+func (s *scyllaDatastore) UpdateNamespace(ctx context.Context, ns *datastore.Namespace, expectedResourceVersion string) error {
+	row := toNamespaceRow(ns)
+	const statement = "UPDATE namespaces_by_id SET name=?, title=?, tier=?, generation=?, resource_version=?, " +
+		"status=?, deletion_timestamp=?, finalizers=?, creation_timestamp=?, creation_actor=?, update_timestamp=?, update_actor=? " +
+		"WHERE id=? IF resource_version=?"
+	applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(
+		row.Name, row.Title, row.Tier, row.Generation, row.ResourceVersion,
+		row.Status, row.DeletionTimestamp, row.Finalizers, row.CreationTimestamp, row.CreationActor, row.UpdateTimestamp, row.UpdateActor,
+		row.ID, expectedResourceVersion,
+	).ExecCASRelease()
+	if err != nil {
+		return fmt.Errorf("scylla: update namespace: %w", err)
+	}
+	if !applied {
+		return datastore.ErrConflict
+	}
+	return nil
 }
 
 func (s *scyllaDatastore) DeleteNamespace(ctx context.Context, id string) error {
@@ -1115,15 +1199,55 @@ func (s *scyllaDatastore) DeleteNamespace(ctx context.Context, id string) error 
 	if err != nil {
 		return err
 	}
-	stmt, names := s.namespaceTable.Delete()
-	if err := s.session.Query(stmt, names).BindMap(qb.M{
-		"bucket":     BucketAll,
-		"created_at": ns.CreatedAt,
-		"id":         mustParseUUID(id),
-	}).ExecRelease(); err != nil {
+	uid := mustParseUUID(id)
+	if err := s.session.Query("DELETE FROM namespaces_by_id WHERE id=?", nil).WithContext(ctx).
+		Bind(uid).ExecRelease(); err != nil {
 		return fmt.Errorf("scylla: delete namespace: %w", err)
 	}
+	return s.deleteNamespaceIndexes(ctx, ns)
+}
+
+func (s *scyllaDatastore) DeleteNamespaceWithResourceVersion(ctx context.Context, id, expectedResourceVersion string) error {
+	ns, err := s.GetNamespace(ctx, id)
+	if err != nil {
+		return err
+	}
+	const statement = "DELETE FROM namespaces_by_id WHERE id=? IF resource_version=?"
+	applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(
+		mustParseUUID(id), expectedResourceVersion,
+	).ExecCASRelease()
+	if err != nil {
+		return fmt.Errorf("scylla: delete namespace with resource version: %w", err)
+	}
+	if !applied {
+		return datastore.ErrConflict
+	}
+	return s.deleteNamespaceIndexes(ctx, ns)
+}
+
+func (s *scyllaDatastore) deleteNamespaceIndexes(ctx context.Context, ns *datastore.Namespace) error {
+	uid := mustParseUUID(ns.ID)
+	var cleanupErr error
+	if err := s.session.Query(
+		"DELETE FROM namespaces_by_bucket WHERE bucket=? AND creation_timestamp=? AND id=?",
+		nil,
+	).WithContext(ctx).Bind(namespaceBucket(ns.CreationTimestamp), ns.CreationTimestamp, uid).ExecRelease(); err != nil {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete namespace listing index: %w", err))
+	}
+	const releaseName = "DELETE FROM namespaces_by_name WHERE name=? IF id=?"
+	if _, err := s.session.Query(releaseName, nil).WithContext(ctx).
+		Bind(ns.Name, uid).ExecCASRelease(); err != nil {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete namespace name index: %w", err))
+	}
+	if cleanupErr != nil {
+		return fmt.Errorf("scylla: delete namespace indexes: %w", cleanupErr)
+	}
 	return nil
+}
+
+func (s *scyllaDatastore) releaseNamespaceName(ctx context.Context, name string, id gocql.UUID) {
+	const statement = "DELETE FROM namespaces_by_name WHERE name=? IF id=?"
+	_, _ = s.session.Query(statement, nil).WithContext(ctx).Bind(name, id).ExecCASRelease()
 }
 
 // catalogTablesByRepositoryID lists every namespace-partitioned catalog table,
@@ -1161,7 +1285,7 @@ func (s *scyllaDatastore) HasCatalogResources(ctx context.Context, repoID string
 			RepositoryID string `db:"repository_id"`
 		}
 		err := s.session.Query(stmt, names).BindMap(qb.M{
-			"namespace":     ns.Identifier,
+			"namespace":     ns.Name,
 			"repository_id": repoID,
 		}).GetRelease(&row)
 		if err == nil {
@@ -1408,28 +1532,40 @@ func mustParseUUID(s string) gocql.UUID {
 }
 
 func toNamespaceRow(ns *datastore.Namespace) *namespaceRow {
+	datastore.NormalizeNamespaceContract(ns)
 	return &namespaceRow{
-		Bucket:      BucketAll,
-		CreatedAt:   ns.CreatedAt,
-		ID:          mustParseUUID(ns.ID),
-		Identifier:  ns.Identifier,
-		DisplayName: ns.DisplayName,
-		Tier:        string(ns.Tier),
-		CreatedBy:   ns.CreatedBy,
-		UpdatedAt:   ns.UpdatedAt,
-		UpdatedBy:   ns.UpdatedBy,
+		CreationTimestamp: ns.CreationTimestamp,
+		ID:                mustParseUUID(ns.ID),
+		Name:              ns.Name,
+		Title:             ns.Title,
+		Tier:              string(ns.Tier),
+		Generation:        ns.Generation,
+		ResourceVersion:   ns.ResourceVersion,
+		Status:            string(ns.Status),
+		DeletionTimestamp: ns.DeletionTimestamp,
+		Finalizers:        append([]string(nil), ns.Finalizers...),
+		CreationActor:     ns.CreationActor,
+		UpdateTimestamp:   ns.UpdateTimestamp,
+		UpdateActor:       ns.UpdateActor,
 	}
 }
 
 func fromNamespaceRow(r *namespaceRow) *datastore.Namespace {
-	return &datastore.Namespace{
-		ID:          r.ID.String(),
-		Identifier:  r.Identifier,
-		DisplayName: r.DisplayName,
-		Tier:        datastore.NamespaceTier(r.Tier),
-		CreatedAt:   r.CreatedAt,
-		CreatedBy:   r.CreatedBy,
-		UpdatedAt:   r.UpdatedAt,
-		UpdatedBy:   r.UpdatedBy,
+	namespace := &datastore.Namespace{
+		ID:                r.ID.String(),
+		Name:              r.Name,
+		Title:             r.Title,
+		Tier:              datastore.NamespaceTier(r.Tier),
+		Generation:        r.Generation,
+		ResourceVersion:   r.ResourceVersion,
+		Status:            []byte(r.Status),
+		DeletionTimestamp: r.DeletionTimestamp,
+		Finalizers:        append([]string(nil), r.Finalizers...),
+		CreationTimestamp: r.CreationTimestamp,
+		CreationActor:     r.CreationActor,
+		UpdateTimestamp:   r.UpdateTimestamp,
+		UpdateActor:       r.UpdateActor,
 	}
+	datastore.NormalizeNamespaceContract(namespace)
+	return namespace
 }

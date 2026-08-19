@@ -63,15 +63,15 @@ func newCollection() *datastore.Collection {
 func newNamespace(tier datastore.NamespaceTier) *datastore.Namespace {
 	now := time.Now()
 	id := newID()
-	identifier := "ns-" + newID()[:8]
+	name := "ns-" + newID()[:8]
 	return &datastore.Namespace{
-		ID:         id,
-		Identifier: identifier,
-		Tier:       tier,
-		CreatedAt:  now,
-		CreatedBy:  "test-user",
-		UpdatedAt:  now,
-		UpdatedBy:  "test-user",
+		ID:                id,
+		Name:              name,
+		Tier:              tier,
+		CreationTimestamp: now,
+		CreationActor:     "test-user",
+		UpdateTimestamp:   now,
+		UpdateActor:       "test-user",
 	}
 }
 
@@ -495,9 +495,9 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		got, err := ds.GetNamespace(ctx, ns.ID)
 		require.NoError(t, err)
 		assert.Equal(t, ns.ID, got.ID)
-		assert.Equal(t, ns.Identifier, got.Identifier)
+		assert.Equal(t, ns.Name, got.Name)
 		assert.Equal(t, ns.Tier, got.Tier)
-		assert.Equal(t, ns.CreatedBy, got.CreatedBy)
+		assert.Equal(t, ns.CreationActor, got.CreationActor)
 	})
 
 	t.Run("Namespace/TestCreateNamespace_duplicateIdentifier", func(t *testing.T) {
@@ -505,7 +505,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.CreateNamespace(ctx, ns))
 
 		ns2 := newNamespace(datastore.NamespaceTierUser)
-		ns2.Identifier = ns.Identifier // same identifier
+		ns2.Name = ns.Name // same name
 		err := ds.CreateNamespace(ctx, ns2)
 		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
 	})
@@ -514,15 +514,15 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		ns := newNamespace(datastore.NamespaceTierUser)
 		require.NoError(t, ds.CreateNamespace(ctx, ns))
 
-		// same identifier, different tier — must still conflict
+		// same name, different tier — must still conflict
 		nsOrg := newNamespace(datastore.NamespaceTierOrganization)
-		nsOrg.Identifier = ns.Identifier
+		nsOrg.Name = ns.Name
 		err := ds.CreateNamespace(ctx, nsOrg)
 		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
 	})
 
-	t.Run("Namespace/TestGetNamespaceByIdentifier_notFound", func(t *testing.T) {
-		_, err := ds.GetNamespaceByIdentifier(ctx, "does-not-exist-"+newID()[:8])
+	t.Run("Namespace/TestGetNamespaceByName_notFound", func(t *testing.T) {
+		_, err := ds.GetNamespaceByName(ctx, "does-not-exist-"+newID()[:8])
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
@@ -556,14 +556,65 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.Equal(t, ns.ID, got.ID)
 	})
 
-	t.Run("Namespace/TestGetNamespaceByIdentifier_success", func(t *testing.T) {
+	t.Run("Namespace/TestGetNamespaceByName_success", func(t *testing.T) {
 		ns := newNamespace(datastore.NamespaceTierUser)
 		require.NoError(t, ds.CreateNamespace(ctx, ns))
 
-		got, err := ds.GetNamespaceByIdentifier(ctx, ns.Identifier)
+		got, err := ds.GetNamespaceByName(ctx, ns.Name)
 		require.NoError(t, err)
 		assert.Equal(t, ns.ID, got.ID)
-		assert.Equal(t, ns.Identifier, got.Identifier)
+		assert.Equal(t, ns.Name, got.Name)
+	})
+
+	t.Run("Namespace/TestResourceContractRoundTrip", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierOrganization)
+		deletionTimestamp := time.Now().UTC().Truncate(time.Millisecond)
+		ns.Generation = 7
+		ns.ResourceVersion = "11"
+		ns.Status = []byte(`{"observedGeneration":7,"conditions":[{"type":"Ready","status":"True"}]}`)
+		ns.DeletionTimestamp = &deletionTimestamp
+		ns.Finalizers = []string{datastore.NamespaceForegroundDeletionFinalizer}
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+
+		got, err := ds.GetNamespace(ctx, ns.ID)
+		require.NoError(t, err)
+		assert.Equal(t, ns.Generation, got.Generation)
+		assert.Equal(t, ns.ResourceVersion, got.ResourceVersion)
+		assert.JSONEq(t, string(ns.Status), string(got.Status))
+		assert.Equal(t, ns.DeletionTimestamp, got.DeletionTimestamp)
+		assert.Equal(t, ns.Finalizers, got.Finalizers)
+	})
+
+	t.Run("Namespace/TestOptimisticUpdate", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+		stale := *ns
+		expectedVersion := ns.ResourceVersion
+
+		ns.Title = "updated"
+		datastore.AdvanceNamespaceSystemVersion(ns)
+		require.NoError(t, ds.UpdateNamespace(ctx, ns, expectedVersion))
+
+		stale.Title = "stale"
+		datastore.AdvanceNamespaceSystemVersion(&stale)
+		assert.ErrorIs(t, ds.UpdateNamespace(ctx, &stale, expectedVersion), datastore.ErrConflict)
+
+		got, err := ds.GetNamespace(ctx, ns.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "updated", got.Title)
+		assert.Equal(t, ns.ResourceVersion, got.ResourceVersion)
+	})
+
+	t.Run("Namespace/TestDeleteWithResourceVersion", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+		assert.ErrorIs(t, ds.DeleteNamespaceWithResourceVersion(ctx, ns.ID, "stale"), datastore.ErrConflict)
+		require.NoError(t, ds.DeleteNamespaceWithResourceVersion(ctx, ns.ID, ns.ResourceVersion))
+
+		_, err := ds.GetNamespace(ctx, ns.ID)
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+		_, err = ds.GetNamespaceByName(ctx, ns.Name)
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
 	t.Run("Namespace/TestDeleteNamespace_success", func(t *testing.T) {
@@ -588,7 +639,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		_, errID := ds.GetNamespace(ctx, ns.ID)
 		assert.ErrorIs(t, errID, datastore.ErrNotFound)
 
-		_, errIdent := ds.GetNamespaceByIdentifier(ctx, ns.Identifier)
+		_, errIdent := ds.GetNamespaceByName(ctx, ns.Name)
 		assert.ErrorIs(t, errIdent, datastore.ErrNotFound)
 	})
 
@@ -627,7 +678,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.False(t, has)
 
 		p := newProduct()
-		p.Namespace = ns.Identifier
+		p.Namespace = ns.Name
 		p.RepositoryID = repo.ID
 		require.NoError(t, ds.CreateProduct(ctx, p))
 		has, err = ds.HasCatalogResources(ctx, repo.ID)
@@ -637,7 +688,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 
 		v := &datastore.ProductVariant{
 			UID:               newID(),
-			Namespace:         ns.Identifier,
+			Namespace:         ns.Name,
 			Name:              "variant-" + newID()[:8],
 			APIVersion:        "catalog.gitstore.dev/v1beta1",
 			Kind:              "ProductVariant",
@@ -653,7 +704,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.DeleteProductVariant(ctx, v.UID))
 
 		c := newCategoryTaxonomy()
-		c.Namespace = ns.Identifier
+		c.Namespace = ns.Name
 		c.RepositoryID = repo.ID
 		require.NoError(t, ds.CreateCategoryTaxonomy(ctx, c))
 		has, err = ds.HasCatalogResources(ctx, repo.ID)
@@ -662,7 +713,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.DeleteCategoryTaxonomy(ctx, c.UID))
 
 		coll := newCollection()
-		coll.Namespace = ns.Identifier
+		coll.Namespace = ns.Name
 		coll.RepositoryID = repo.ID
 		require.NoError(t, ds.CreateCollection(ctx, coll))
 		has, err = ds.HasCatalogResources(ctx, repo.ID)

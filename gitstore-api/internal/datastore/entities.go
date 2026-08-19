@@ -18,14 +18,20 @@ const (
 
 // Namespace is the primary isolation boundary for repositories.
 type Namespace struct {
-	ID          string
-	Identifier  string
-	DisplayName string
-	Tier        NamespaceTier
-	CreatedAt   time.Time
-	CreatedBy   string
-	UpdatedAt   time.Time
-	UpdatedBy   string
+	ID                string
+	Name              string
+	Title             string
+	Tier              NamespaceTier
+	CreationTimestamp time.Time
+	CreationActor     string
+	UpdateTimestamp   time.Time
+	UpdateActor       string
+
+	Generation        int64
+	ResourceVersion   string
+	Status            json.RawMessage
+	DeletionTimestamp *time.Time
+	Finalizers        []string
 }
 
 // Product is the fully hydrated catalogue product record stored in the
@@ -199,15 +205,15 @@ type ProductVariant struct {
 // Repository represents a git repository with a stable internal identity.
 // The physical storage path is derived from ID using the fanout formula and is never stored.
 type Repository struct {
-	ID            string // UUIDv7 stable identifier (repo_id)
-	NamespaceID   string // UUIDv7 of the owning namespace
-	Name          string // Human-readable name within the namespace (mutable on rename)
-	DefaultBranch string // e.g. "main"
-	StorageClass  string // Storage tier tag; default "default"
-	CreatedAt     time.Time
-	CreatedBy     string
-	UpdatedAt     time.Time
-	UpdatedBy     string
+	ID                string // UUIDv7 stable identifier (repo_id)
+	NamespaceID       string // UUIDv7 of the owning namespace
+	Name              string // Human-readable name within the namespace (mutable on rename)
+	DefaultBranch     string // e.g. "main"
+	StorageClass      string // Storage tier tag; default "default"
+	CreationTimestamp time.Time
+	CreationActor     string
+	UpdateTimestamp   time.Time
+	UpdateActor       string
 
 	// Declarative resource versioning and system-owned status.
 	Generation      int64

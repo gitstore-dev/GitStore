@@ -31,6 +31,32 @@ func (r *Resolver) publishCategoryTaxonomyStatusEvent(c *datastore.CategoryTaxon
 	})
 }
 
+func (r *Resolver) publishNamespaceStatusEvent(namespace *datastore.Namespace) {
+	if r.eventBus == nil || namespace == nil {
+		return
+	}
+	r.eventBus.Publish(eventbus.Event{
+		Type:            eventbus.Modified,
+		Kind:            "Namespace",
+		Name:            namespace.Name,
+		ResourceVersion: namespace.ResourceVersion,
+		Object:          namespace,
+	})
+}
+
+func (r *Resolver) publishNamespaceDeletedEvent(namespace *datastore.Namespace) {
+	if r.eventBus == nil || namespace == nil {
+		return
+	}
+	r.eventBus.Publish(eventbus.Event{
+		Type:            eventbus.Deleted,
+		Kind:            "Namespace",
+		Name:            namespace.Name,
+		ResourceVersion: namespace.ResourceVersion,
+		Object:          namespace,
+	})
+}
+
 func toWatchEventType(t eventbus.EventType) model.WatchEventType {
 	switch t {
 	case eventbus.Added:
@@ -108,7 +134,21 @@ func toGenericWatchEvent(kind string, ev eventbus.Event) *model.WatchEvent {
 	if ev.Type != eventbus.Deleted {
 		if c, ok := ev.Object.(*datastore.CategoryTaxonomy); ok {
 			out.Object = categoryTaxonomyToJSONMap(c)
+		} else if namespace, ok := ev.Object.(*datastore.Namespace); ok {
+			out.Object = namespaceToJSONMap(namespace)
 		}
+	}
+	return out
+}
+
+func namespaceToJSONMap(namespace *datastore.Namespace) map[string]any {
+	data, err := json.Marshal(DatastoreNamespaceToGraphQL(namespace))
+	if err != nil {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil
 	}
 	return out
 }

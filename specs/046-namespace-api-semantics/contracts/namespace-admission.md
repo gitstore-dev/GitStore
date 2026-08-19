@@ -36,7 +36,22 @@ All other pre-receive structural rules (envelope validity, `metadata.name` forma
 
 ## Mutation delegation contract
 
-`createNamespace`/`updateNamespace` (for any non-bootstrap namespace):
+`createNamespace`/`updateNamespace` (for any non-bootstrap namespace) accept the declarative resource envelope, e.g.:
+
+```graphql
+mutation {
+  createNamespace(input: {
+    apiVersion: "gitstore.dev/v1beta1"
+    kind: "Namespace"
+    metadata: { name: "acme-store" }
+    spec: { title: "Acme Store", tier: USER }
+  }) {
+    namespace { metadata { name } }
+  }
+}
+```
+
+The resolver then:
 
 1. Resolve/construct the equivalent `Namespace` manifest from the mutation input.
 2. Call `GitWriter.CommitFile` against `gitstore-system/gitstore-system` at `namespaces/<name>.md`.

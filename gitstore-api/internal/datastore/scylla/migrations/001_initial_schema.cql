@@ -73,18 +73,33 @@ CREATE TABLE IF NOT EXISTS collection_by_uid (
     PRIMARY KEY (uid)
 );
 
-CREATE TABLE IF NOT EXISTS namespaces (
-    bucket               text,
-    created_at           timestamp,
-    id                   uuid,
-    identifier           text,
-    display_name         text,
+CREATE TABLE IF NOT EXISTS namespaces_by_id (
+    id                   uuid PRIMARY KEY,
+    name                 text,
+    title                text,
     tier                 text,
-    created_by           text,
-    updated_at           timestamp,
-    updated_by           text,
-    PRIMARY KEY (bucket, created_at, id)
-) WITH CLUSTERING ORDER BY (created_at DESC, id DESC);
+    generation           bigint,
+    resource_version     text,
+    status               text,
+    deletion_timestamp   timestamp,
+    finalizers           list<text>,
+    creation_timestamp   timestamp,
+    creation_actor       text,
+    update_timestamp     timestamp,
+    update_actor         text
+);
+
+CREATE TABLE IF NOT EXISTS namespaces_by_name (
+    name text PRIMARY KEY,
+    id   uuid
+);
+
+CREATE TABLE IF NOT EXISTS namespaces_by_bucket (
+    bucket               text,
+    creation_timestamp   timestamp,
+    id                   uuid,
+    PRIMARY KEY ((bucket), creation_timestamp, id)
+) WITH CLUSTERING ORDER BY (creation_timestamp DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS namespace_mappings (
     namespace_id uuid,
@@ -95,19 +110,22 @@ CREATE TABLE IF NOT EXISTS namespace_mappings (
 
 CREATE TABLE IF NOT EXISTS repositories (
     bucket              text,
-    created_at          timestamp,
+    creation_timestamp  timestamp,
     id                  uuid,
     namespace_id        uuid,
     name                text,
     default_branch      text,
     storage_class       text,
-    created_by          text,
+    generation          bigint,
+    resource_version    text,
+    status              text,
+    creation_actor      text,
     max_pack_size_bytes bigint,
     max_file_size_bytes bigint,
-    updated_at          timestamp,
-    updated_by          text,
-    PRIMARY KEY (bucket, created_at, id)
-) WITH CLUSTERING ORDER BY (created_at DESC, id DESC);
+    update_timestamp    timestamp,
+    update_actor        text,
+    PRIMARY KEY ((bucket), creation_timestamp, id)
+) WITH CLUSTERING ORDER BY (creation_timestamp DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS category_taxonomy (
     namespace          text,

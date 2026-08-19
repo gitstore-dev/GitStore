@@ -369,15 +369,15 @@ const (
 
 func repoFixture(id, nsID, name string) *datastore.Repository {
 	return &datastore.Repository{
-		ID:            id,
-		NamespaceID:   nsID,
-		Name:          name,
-		DefaultBranch: "main",
-		StorageClass:  "default",
-		CreatedAt:     time.Now(),
-		CreatedBy:     "test",
-		UpdatedAt:     time.Now(),
-		UpdatedBy:     "test",
+		ID:                id,
+		NamespaceID:       nsID,
+		Name:              name,
+		DefaultBranch:     "main",
+		StorageClass:      "default",
+		CreationTimestamp: time.Now(),
+		CreationActor:     "test",
+		UpdateTimestamp:   time.Now(),
+		UpdateActor:       "test",
 	}
 }
 

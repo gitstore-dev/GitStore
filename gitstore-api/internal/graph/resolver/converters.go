@@ -31,43 +31,104 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 	if ns == nil {
 		return nil
 	}
+	normalized := *ns
+	normalized.Status = append([]byte(nil), ns.Status...)
+	normalized.Finalizers = append([]string(nil), ns.Finalizers...)
+	datastore.NormalizeNamespaceContract(&normalized)
+	ns = &normalized
 	var displayName *string
-	if ns.DisplayName != "" {
-		dn := ns.DisplayName
+	if ns.Title != "" {
+		dn := ns.Title
 		displayName = &dn
+	}
+	status := namespaceStatusFromJSON(ns.Status)
+	if ns.DeletionTimestamp != nil {
+		status.Conditions = upsertTerminatingCondition(status.Conditions, ns.Generation, *ns.DeletionTimestamp)
+	}
+	var revision *string
+	if status.LastAppliedRevision != nil {
+		value := *status.LastAppliedRevision
+		revision = &value
 	}
 	return &model.Namespace{
 		ID:         mustEncodeNodeID(nodeKindNamespace, ns.ID),
 		APIVersion: namespaceAPIVersion,
 		Kind:       namespaceKind,
 		Metadata: &model.NamespaceMetadata{
-			Name:              ns.Identifier,
+			Name:              ns.Name,
 			Labels:            map[string]any{},
 			Annotations:       map[string]any{},
 			UID:               ns.ID,
-			ResourceVersion:   namespaceInitialResourceVersion,
-			Generation:        namespaceInitialGeneration,
-			CreationTimestamp: ns.CreatedAt,
+			ResourceVersion:   ns.ResourceVersion,
+			Generation:        int32(ns.Generation),
+			CreationTimestamp: ns.CreationTimestamp,
+			Revision:          revision,
 			OwnerReferences:   []*model.OwnerReference{},
-			Finalizers:        []string{},
+			Finalizers:        append([]string{}, ns.Finalizers...),
 		},
 		Spec: &model.NamespaceSpec{
 			Title: displayName,
 			Tier:  datastoreNamespaceTierToModel(ns.Tier),
 		},
-		Status: &model.NamespaceStatus{
-			ObservedGeneration: 0,
-			Conditions:         []*model.Condition{},
-		},
-		Identifier:  ns.Identifier,
+		Status:      status,
+		Identifier:  ns.Name,
 		DisplayName: displayName,
 		Tier:        datastoreNamespaceTierToModel(ns.Tier),
-		CreatedAt:   ns.CreatedAt,
-		CreatedBy:   ns.CreatedBy,
-		UpdatedAt:   ns.UpdatedAt,
-		UpdatedBy:   ns.UpdatedBy,
+		CreatedAt:   ns.CreationTimestamp,
+		CreatedBy:   ns.CreationActor,
+		UpdatedAt:   ns.UpdateTimestamp,
+		UpdatedBy:   ns.UpdateActor,
 	}
 }
+
+type rawNamespaceStatus struct {
+	ObservedGeneration  int32          `json:"observedGeneration"`
+	LastAppliedRevision string         `json:"lastAppliedRevision"`
+	Conditions          []rawCondition `json:"conditions"`
+}
+
+func namespaceStatusFromJSON(raw json.RawMessage) *model.NamespaceStatus {
+	status := &model.NamespaceStatus{Conditions: []*model.Condition{}}
+	if len(raw) == 0 {
+		return status
+	}
+	var stored rawNamespaceStatus
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		converterLogger.Warn("failed to decode Namespace status", zap.Error(err))
+		return status
+	}
+	status.ObservedGeneration = stored.ObservedGeneration
+	if stored.LastAppliedRevision != "" {
+		revision := stored.LastAppliedRevision
+		status.LastAppliedRevision = &revision
+	}
+	for _, condition := range stored.Conditions {
+		status.Conditions = append(status.Conditions, conditionFromRaw(condition))
+	}
+	return status
+}
+
+func upsertTerminatingCondition(conditions []*model.Condition, generation int64, since time.Time) []*model.Condition {
+	out := make([]*model.Condition, 0, len(conditions)+1)
+	for _, condition := range conditions {
+		if condition != nil && condition.Type == catalog.ConditionTerminating {
+			continue
+		}
+		out = append(out, condition)
+	}
+	out = append(out, &model.Condition{
+		Type:               catalog.ConditionTerminating,
+		Status:             model.ConditionStatusTrue,
+		ObservedGeneration: int32Pointer(int32(generation)),
+		LastTransitionTime: since,
+		Reason:             stringPointer("DeletionRequested"),
+		Message:            stringPointer("Namespace is awaiting foreground deletion completion."),
+	})
+	return out
+}
+
+func stringPointer(value string) *string { return &value }
+func int32Pointer(value int32) *int32    { return &value }
 
 // DatastoreNamespaceToGraphQL is the exported version of datastoreNamespaceToModel.
 func DatastoreNamespaceToGraphQL(ns *datastore.Namespace) *model.Namespace {
@@ -892,7 +953,7 @@ func datastoreRepositoryToModel(r *datastore.Repository, ns *datastore.Namespace
 	namespace := ""
 	var legacyNamespace *model.Namespace
 	if ns != nil {
-		namespace = ns.Identifier
+		namespace = ns.Name
 		legacyNamespace = DatastoreNamespaceToGraphQL(ns)
 	}
 	storagePath := fanoutStoragePath(dataDir, repository.ID)
@@ -908,7 +969,7 @@ func datastoreRepositoryToModel(r *datastore.Repository, ns *datastore.Namespace
 			UID:               nodeID,
 			ResourceVersion:   repository.ResourceVersion,
 			Generation:        int32(repository.Generation),
-			CreationTimestamp: repository.CreatedAt,
+			CreationTimestamp: repository.CreationTimestamp,
 			OwnerReferences:   []*model.OwnerReference{},
 		},
 		Spec: &model.RepositorySpec{
@@ -925,10 +986,10 @@ func datastoreRepositoryToModel(r *datastore.Repository, ns *datastore.Namespace
 		DefaultBranch: repository.DefaultBranch,
 		StorageClass:  repository.StorageClass,
 		StoragePath:   storagePath,
-		CreatedAt:     repository.CreatedAt,
-		CreatedBy:     repository.CreatedBy,
-		UpdatedAt:     repository.UpdatedAt,
-		UpdatedBy:     repository.UpdatedBy,
+		CreatedAt:     repository.CreationTimestamp,
+		CreatedBy:     repository.CreationActor,
+		UpdatedAt:     repository.UpdateTimestamp,
+		UpdatedBy:     repository.UpdateActor,
 	}
 	return repo
 }

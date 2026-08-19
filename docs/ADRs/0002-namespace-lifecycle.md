@@ -63,7 +63,7 @@ When a namespace is bootstrapped the API automatically creates a repository name
 
 1. API checks for the existence of bootstrap namespaces.
 2. API creates bootstrap namespaces if it does not exist.
-3. API validates name uniqueness, display-name length, tier, limits, and defaults.
+3. API validates name uniqueness, title length, tier, limits, and defaults.
 4. API writes the namespace record to the datastore.
 5. API provisions `gitstore-system` repository inside each bootstrap namespace.
 6. No git commit is created for the namespace record itself.
@@ -85,7 +85,7 @@ When a namespace is bootstrapped the API automatically creates a repository name
 3. Enforced immutable fields: `metadata.name`, `spec.tier` (demotion not allowed in
    Phase 1).
 
-For bootstrap namespaces, `updateNamespace` mutation delegates to the git edit API on the platform operator's system repository.
+Bootstrap namespaces are system-managed and reject `updateNamespace`.
 
 #### Delete
 
@@ -119,12 +119,12 @@ namespaces/<name>.md
 
 ```markdown
 ---
-apiVersion: core.gitstore.dev/v1beta1
+apiVersion: gitstore.dev/v1beta1
 kind: Namespace
 metadata:
   name: acme-store
 spec:
-  displayName: Acme Store
+  title: Acme Store
   tier: ORGANIZATION
   repositoryDefaults:
     defaultBranch: main
@@ -142,7 +142,7 @@ not a repository inside the new namespace.
 
 | Mutation          | Phase 1 behaviour                                                                                                        |
 |-------------------|--------------------------------------------------------------------------------------------------------------------------|
-| `createNamespace` | Bootstrap: Not applicable. Non-bootstrap: commits manifests to `gitsore-system/gitstore-system` and waits for admission. |
+| `createNamespace` | Bootstrap: rejected as system-managed. Non-bootstrap: commits manifests to `gitstore-system/gitstore-system` and waits for admission. |
 | `updateNamespace` | Commits an updated manifest to `gitstore-system/gitstore-system`; returns the resource version after admission.          |
 | `deleteNamespace` | Validates no repositories exist, then adds `foregroundDeletion` finalizer and sets `Terminating`.                        |
 | `listNamespaces`  | Read-only datastore query. No git delegation.                                                                            |
@@ -168,7 +168,10 @@ and for operator-level administrative operations explicitly marked with `source:
 | `Ready`             | Namespace is fully operational.                                      |
 | `Terminating`       | `foregroundDeletion` finalizer present; repositories must drain.     |
 
-`observedGeneration` is set after each successful reconcile pass. The controller re-queues if `SystemRepoReady=False`.
+Admission sets `observedGeneration` to the admitted generation and
+`lastAppliedRevision` to the admitted Git revision. Controller status writes
+preserve `lastAppliedRevision`, do not advance `generation`, and advance only
+`resourceVersion`. The controller re-queues if `SystemRepoReady=False`.
 
 ## Consequences
 
