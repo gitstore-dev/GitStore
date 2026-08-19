@@ -66,7 +66,7 @@ A developer setting up the project for the first time reads the documentation an
 **Acceptance Scenarios**:
 
 1. **Given** the updated repository, **When** a developer searches the codebase for `init-demo-catalog`, **Then** no matches are found in any file.
-2. **Given** the updated documentation, **When** a developer reads `docs/developer-guide.md`, `docs/user-guide.md`, and `docs/docker-troubleshooting.md`, **Then** there are no instructions referencing the removed script.
+2. **Given** the updated documentation, **When** a developer reads `docs/developer-guide.md`, `docs/user-guide.md`, and `docs/runbooks/docker-troubleshooting.md`, **Then** there are no instructions referencing the removed script.
 3. **Given** the updated repository, **When** a developer lists the `scripts/` directory, **Then** `init-demo-catalog.sh` is not present.
 
 ---
@@ -122,7 +122,7 @@ A developer setting up the project for the first time reads the documentation an
 
 - The existing `gix` (gitoxide) library already provides sufficient in-process primitives to replace all four shell-out call sites identified in `gitstore-git-service/src/http_git_server.rs`.
 - The demo catalog scenario served by `scripts/init-demo-catalog.sh` is either no longer needed or will be replaced by a different onboarding mechanism in a future feature; this spec only covers removal.
-- The documentation sections that reference `init-demo-catalog.sh` (`docs/developer-guide.md`, `docs/user-guide.md`, `docs/docker-troubleshooting.md`) will be updated to remove those references without necessarily providing a replacement workflow in this feature.
+- The documentation sections that reference `init-demo-catalog.sh` (`docs/developer-guide.md`, `docs/user-guide.md`, `docs/runbooks/docker-troubleshooting.md`) will be updated to remove those references without necessarily providing a replacement workflow in this feature.
 - Depends on Feature 007 (migrate gitoxide) being merged — gitoxide must be in place before the shell-outs can be replaced with in-process calls.
 
 ## Dependencies

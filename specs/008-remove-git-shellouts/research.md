@@ -53,7 +53,7 @@
 
 ## Decision 5: init-demo-catalog.sh Removal Strategy
 
-**Decision**: Delete `scripts/init-demo-catalog.sh` and remove all four doc references (2 in `docs/docker-troubleshooting.md`, 1 in `docs/developer-guide.md`, 1 in `docs/user-guide.md`). No replacement workflow is introduced in this feature.
+**Decision**: Delete `scripts/init-demo-catalog.sh` and remove all four doc references (2 in `docs/runbooks/docker-troubleshooting.md`, 1 in `docs/developer-guide.md`, 1 in `docs/user-guide.md`). No replacement workflow is introduced in this feature.
 
 **Rationale**: The init script shells out to `git` (6 times: `git init`, `git config`, `git add`, `git commit`, `git clone --bare`). With the `git` binary absent from the runtime image, the script is non-functional. The spec explicitly scopes replacement onboarding to a future feature. The doc sections can be simplified to a note that demo data seeding is not yet provided.
 

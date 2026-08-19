@@ -516,4 +516,4 @@ Catalogue manifests reference media; they do not make GitStore an image CDN. Hos
 - [API Reference](api-reference.md)
 - [Developer Guide](developer-guide.md)
 - [Configuration](configuration.md)
-- [Docker Troubleshooting](docker-troubleshooting.md)
+- [Docker Troubleshooting](runbooks/docker-troubleshooting.md)

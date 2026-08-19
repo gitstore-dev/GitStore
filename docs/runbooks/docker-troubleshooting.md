@@ -174,7 +174,7 @@ The compose default is:
 GITSTORE_GRAPHQL_URL=http://api:4000/graphql
 ```
 
-For more admin-specific checks, see [docs/admin/quickstart.md](admin/quickstart.md).
+For more admin-specific checks, see [docs/admin/quickstart.md](../admin/quickstart.md).
 
 ## Log Commands
 
