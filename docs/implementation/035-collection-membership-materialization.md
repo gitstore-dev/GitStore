@@ -1,6 +1,31 @@
 # Collection Membership Materialization for Paginated Product Access
 
-**Status**: 🟡 Proposed
+**Status**: ⏸ Deferred — issue #359
+
+## 0. Feature 048 decision update
+
+Feature 048 does **not** accept or implement a Product label-selector storage design. It introduces no selector projection, materialized view, secondary index, inverted-label table, external search integration, or controller ownership change. The existing query-time selector behavior remains unchanged. The remainder of this document is candidate analysis that may inform a future decision; its earlier recommendation and phased implementation plan are not approved work.
+
+Issue #359 may be reopened only after Product and Collection controllers exist and the following evidence is recorded from representative production-like workloads.
+
+| Evidence gate                                    | Required measurements                                                                                                                                                                                                                                                                                   |
+|--------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Controller ownership                             | Identify the single owner for membership derivation, the Product and Collection event sources it consumes, reconciliation and retry semantics, backfill/readiness behavior, drift detection, and repair ownership. A design with API admission and controllers as concurrent writers is not acceptable. |
+| Selector and cardinality distribution            | Record Products and Collections per namespace; labels per Product; selector terms and operator mix (`matchLabels`, `In`, `NotIn`, `Exists`, `DoesNotExist`); matches per Collection at p50/p95/p99/max; hot label keys/values; and page/count query frequency.                                          |
+| Product label update frequency                   | Measure steady-state and burst label mutations, deletes, publication/visibility transitions, Collections affected per Product mutation, and resulting reconciliation fan-out.                                                                                                                           |
+| Target latency and SLO                           | Define page-size limits, p50/p95/p99 latency targets for forward/backward pages and counts, acceptable freshness/staleness, availability/error budget, and the maximum namespace/cardinality at which those objectives must hold.                                                                       |
+| Write amplification, storage, and tombstone cost | Estimate and benchmark projection/index rows and bytes per Product and Collection, writes per create/update/delete/selector change, partition sizes, tombstones, compaction pressure, repair/backfill duration, and operational cost at p95 and worst-case fan-out.                                     |
+
+The future decision must benchmark the same dataset and SLO against all of these alternatives without presupposing a winner:
+
+| Alternative                        | Evidence required before selection                                                                                                                                                                                                           |
+|------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Query-time CEL/selector scan       | Establish the baseline scan cost, pagination correctness, negative-selector behavior, memory use, and the namespace/cardinality point at which the current approach misses the SLO.                                                          |
+| Secondary or inverted label index  | Demonstrate supported selector operators, especially negative predicates; intersection and cursor behavior; hot-key distribution; index consistency; write/tombstone amplification; and Scylla operational limits without `ALLOW FILTERING`. |
+| Materialized membership projection | Compare API-owned and controller-owned variants; define one writer, readiness/fallback and repair; measure fan-out, staleness, partition growth, duplicated Product storage, and authorization-scoped projection cost.                       |
+| External search/index service      | Measure selector expressiveness, cursor/count consistency, ingestion lag, outage behavior, authorization isolation, rebuild cost, and the operational burden of adding another stateful service.                                             |
+
+The decision gate passes only when the evidence above is attached to #359, each alternative has comparable benchmark results, and the selected owner can meet the declared latency/freshness SLO within the measured write, storage, tombstone, and repair budget. Feature 048's migration guard, `TestRunMigrations_DoesNotMaterializeProductLabelSelectors`, protects this deferral.
 
 ## 1. Problem statement
 
@@ -91,31 +116,31 @@ See §7 for the full side-by-side comparison; the summary judgment is that **B a
 
 ## 7. Decision matrix
 
-| Criterion | A: Materialized (write-time) | B: Controller-derived (async) | C: Inverted label index | D: Hybrid materialized + runtime authz |
-|---|---|---|---|---|
-| Query count / read amplification | Good — 1 query/page | Good — 1 query/page (once populated) | Fair — N+ queries, still materializes full intersection for multi-term/negative selectors | Fair — 1+ queries/round, multiple rounds under low authz density |
-| Partition/hotspot risk | Poor — unbounded partition per broad collection, no mitigation | Poor — same, `collection_uid` partition | Poor — value-partitioned, popular label values hot | Poor — same `collection_uid` partition, explicitly flagged unmitigated |
-| Pagination correctness | Good — standard keyset, no offset (see §11 for a bulk-rewrite caveat) | Good — keyset, but membership-not-current | Fair — intersection breaks true cursor semantics for multi-term | Good for membership; short-page risk under authz filtering |
-| Cursor stability | Good — versioned cursor binds kind, scope, namespace, collection, and keyset position | Good — same | Fair — intersection still needs a bound cursor contract | Fair — same plus bounded over-read state |
-| Write amplification | Fair — bounded by collections/products per namespace | Fair — similar, but async so latency hidden from writer | Poor — 2K writes per product, diff-on-write required | Poor — same as A plus authz has no write cost but membership same |
-| Staleness behavior | Good — synchronous, single-request window (but see §13 for a backfill-window caveat) | Poor — queue/backoff-dependent, unbounded in principle | Fair — synchronous but no controller to host diffing, so inline too | Poor — controller-reconcile-dependent |
-| Rebuild/backfill complexity | Fair — derivable, needs one-shot job, no drift detection built in | Poor — no rebuild precedent, no drift detection | Fair — full scan re-derivation, same gap | Fair — `resource_version` per row aids diffing, but still needs new job |
-| Authorization correctness/leak risk | Fair — needs a second visibility-scoped table to satisfy 022; see §12 for gaps in even that plan | Poor — violates 022's "no post-hoc filter" outright as designed | Poor — same duplication problem, worse (index itself leaks) | Fair — explicitly documents it deviates from 022's "never short pages" guarantee |
-| Namespace isolation | Good — partition includes namespace | Fair — keyed by UID only, no partition-level guard | Good — partition includes namespace | Fair — UID-partitioned, namespace is a defense-in-depth column only |
-| memdb compatibility | Good — straightforward map mirror | Good | Fair — doubles index maintenance code paths | Good |
-| Controller-manager fit | Good — zero controller involvement | Poor — needs 2 new reconcilers, contradicts spec 042's Product-has-no-reconciler precedent | Good — zero controller involvement | Poor — needs a new Collection controller |
-| Behavior before any controller/backfill exists | Fair — universal fallback holds on deploy day, but the backfill *transition itself* has a silent under-count window (§13) | Poor — table is empty/absent, ambiguous empty-vs-unmaterialized | Good — doesn't depend on one | Poor — cannot ship without the missing controller |
-| Migration complexity | Fair — 2 tables, admission hook, backfill | Poor — 2 tables, 2 controllers, dual-path fallback, visibility duplication | Poor — 2 tables, mutation-path diffing, backfill, visibility duplication | Poor — most moving parts of all four |
+| Criterion                                      | A: Materialized (write-time)                                                                                              | B: Controller-derived (async)                                                              | C: Inverted label index                                                                   | D: Hybrid materialized + runtime authz                                           |
+|------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------|
+| Query count / read amplification               | Good — 1 query/page                                                                                                       | Good — 1 query/page (once populated)                                                       | Fair — N+ queries, still materializes full intersection for multi-term/negative selectors | Fair — 1+ queries/round, multiple rounds under low authz density                 |
+| Partition/hotspot risk                         | Poor — unbounded partition per broad collection, no mitigation                                                            | Poor — same, `collection_uid` partition                                                    | Poor — value-partitioned, popular label values hot                                        | Poor — same `collection_uid` partition, explicitly flagged unmitigated           |
+| Pagination correctness                         | Good — standard keyset, no offset (see §11 for a bulk-rewrite caveat)                                                     | Good — keyset, but membership-not-current                                                  | Fair — intersection breaks true cursor semantics for multi-term                           | Good for membership; short-page risk under authz filtering                       |
+| Cursor stability                               | Good — versioned cursor binds kind, scope, namespace, collection, and keyset position                                     | Good — same                                                                                | Fair — intersection still needs a bound cursor contract                                   | Fair — same plus bounded over-read state                                         |
+| Write amplification                            | Fair — bounded by collections/products per namespace                                                                      | Fair — similar, but async so latency hidden from writer                                    | Poor — 2K writes per product, diff-on-write required                                      | Poor — same as A plus authz has no write cost but membership same                |
+| Staleness behavior                             | Good — synchronous, single-request window (but see §13 for a backfill-window caveat)                                      | Poor — queue/backoff-dependent, unbounded in principle                                     | Fair — synchronous but no controller to host diffing, so inline too                       | Poor — controller-reconcile-dependent                                            |
+| Rebuild/backfill complexity                    | Fair — derivable, needs one-shot job, no drift detection built in                                                         | Poor — no rebuild precedent, no drift detection                                            | Fair — full scan re-derivation, same gap                                                  | Fair — `resource_version` per row aids diffing, but still needs new job          |
+| Authorization correctness/leak risk            | Fair — needs a second visibility-scoped table to satisfy 022; see §12 for gaps in even that plan                          | Poor — violates 022's "no post-hoc filter" outright as designed                            | Poor — same duplication problem, worse (index itself leaks)                               | Fair — explicitly documents it deviates from 022's "never short pages" guarantee |
+| Namespace isolation                            | Good — partition includes namespace                                                                                       | Fair — keyed by UID only, no partition-level guard                                         | Good — partition includes namespace                                                       | Fair — UID-partitioned, namespace is a defense-in-depth column only              |
+| memdb compatibility                            | Good — straightforward map mirror                                                                                         | Good                                                                                       | Fair — doubles index maintenance code paths                                               | Good                                                                             |
+| Controller-manager fit                         | Good — zero controller involvement                                                                                        | Poor — needs 2 new reconcilers, contradicts spec 042's Product-has-no-reconciler precedent | Good — zero controller involvement                                                        | Poor — needs a new Collection controller                                         |
+| Behavior before any controller/backfill exists | Fair — universal fallback holds on deploy day, but the backfill *transition itself* has a silent under-count window (§13) | Poor — table is empty/absent, ambiguous empty-vs-unmaterialized                            | Good — doesn't depend on one                                                              | Poor — cannot ship without the missing controller                                |
+| Migration complexity                           | Fair — 2 tables, admission hook, backfill                                                                                 | Poor — 2 tables, 2 controllers, dual-path fallback, visibility duplication                 | Poor — 2 tables, mutation-path diffing, backfill, visibility duplication                  | Poor — most moving parts of all four                                             |
 
-## 8. Recommended architecture
+## 8. Candidate recommendation (not accepted; deferred)
 
-**Adopt Candidate A — a `collection_membership` table pair, populated synchronously in `gitstore-api`'s existing admission/mutation path — as the permanent design, not an interim stopgap.**
+The document's earlier recommendation was Candidate A: a `collection_membership` table pair populated synchronously in `gitstore-api`'s admission/mutation path. Feature 048 does not accept or implement that recommendation. It remains one alternative to re-evaluate through the evidence gate in §0.
 
 B and D are rejected outright: both require standing up controllers this codebase deliberately does not have. Spec 042 is direct precedent — it added a Product *cache* but explicitly declined to register a Product *reconciler* (`cmd/controller/main.go:191-196`), and a Collection controller has even less precedent (no `internal/collection` package exists at all, no many-to-many derived index has ever been built here). C is rejected because it does not eliminate full-namespace scans for negative-only selectors, which the schema explicitly permits, and its write cost (2K writes per product) with no controller to host the diff is strictly worse than A under the same "no controller" constraint.
 
 A wins because it needs zero new controller-manager work, reuses the existing clustering and `PageResult[T]` conventions, and turns an O(namespace) scan-per-request into O(1) partition reads at the one-time cost of write-path hooks in code that already computes derived fields (spec 034's admission functions).
 
-This recommendation is adopted **with amendments** relative to the original Candidate A writeup, required by the adversarial verification and Codex review:
+The prior candidate recommendation was refined **with amendments** after adversarial verification and review:
 
 - **§11** amends the bulk `ReplaceCollectionMembership` contract to fix a real cursor-instability bug found in verification.
 - **§12** amends `memberCount` and the migration-fallback path to close a real information-leak the auth-leak verifier constructed concretely.
@@ -126,7 +151,7 @@ This recommendation is adopted **with amendments** relative to the original Cand
 - **§16** carries immutable Product creation timestamps through retry-safe removal operations.
 - **§11/§16** replace the generic cursor with a versioned cursor bound to resource kind, visibility, namespace, and collection.
 
-None of these amendments changes the overall recommendation; they close gaps in how it must be built.
+These amendments refine Candidate A for future comparison; they do not override the §0 deferral or authorize implementation.
 
 ## 9. ScyllaDB data model
 
@@ -327,7 +352,7 @@ Both tables mirror straightforwardly onto `go-memdb`: `map[uuid.UUID][]membershi
 
 **Zero Product/Collection controllers are introduced by this design.** Everything — admission-time writes, reads, backfill — lives inside `gitstore-api`. `gitstore-controller-manager` is untouched: no new `Reconciler`, no new `ListWatcher`, no new eventbus consumer, no interaction with the Product-cache-without-a-reconciler pattern from spec 042 (`categorytaxonomy/products.go:44-116`).
 
-**Ownership going forward:** `collection_membership_by_collection`/`collection_membership_by_product` (and their public-scope twins) are owned permanently by `gitstore-api`'s datastore layer, by design, to preserve single-request write consistency (§13.2). If a future Collection or Product controller is justified for unrelated reasons (e.g., enriching `status.resolved` with additional computed fields the way `CategoryTaxonomy`'s controller does for `Depth`/`Path`/`ChildCount`), it may **read** the membership table, but must never become a second writer to it — a second writer would reintroduce exactly the eventual-consistency/staleness profile this design exists to avoid (§8's rejection of Candidates B and D). This constraint should be written into any future controller's design doc as a hard dependency on this one.
+**Proposed ownership if this candidate is selected:** `collection_membership_by_collection`/`collection_membership_by_product` (and their public-scope twins) would be owned by one writer. Candidate A assigns that ownership to `gitstore-api`'s datastore layer to preserve single-request write consistency (§13.2); a future decision may instead choose controller ownership only if the §0 evidence supports it. API admission and controllers must not write the same projection concurrently.
 
 ## 16. API and datastore contract changes
 
@@ -369,7 +394,9 @@ type CollectionMembershipState struct {
 
 **Resolver change:** `collectionResolver.Products` (`collection.resolvers.go:20-55`) drops the `spec.Selector`/`ListProductsByLabelSelector` call and calls `r.service.ListCollectionMembers`, feeding the returned `PageResult[*Product]` into the existing generic connection builder Category/Namespace already use, retiring `BuildProductConnectionFromSlice` for this path. `Collection.status.resolved.memberCount` resolves via `CollectionMemberCount`, scope-aware and backfill-window-aware per §13.3(4).
 
-## 17. Migration and rollout plan
+## 17. Candidate migration and rollout plan (deferred)
+
+The following sequence applies only if a future #359 decision selects Candidate A after satisfying §0.
 
 1. Ship the two Scylla tables (`collection_membership_by_collection`, `collection_membership_by_product`) plus the memdb equivalents, and the admission-path write hooks (incremental first, since it's the lower-risk path — bulk rewrite ships with the §11.1 diff logic from the start, never as a naive delete+reinsert).
 2. Ship the durable membership-state table, complete Product projections, versioned scope-bound cursors, and `ListCollectionMembers`/`CollectionMemberCount` behind the generation-aware `READY` gate described in §13.3. Until a Collection generation is `READY`, both products and counts continue to use today's live scan.
@@ -403,6 +430,8 @@ type CollectionMembershipState struct {
 8. **Scope of `CollectionMemberCount` beyond PUBLIC/MANAGEMENT.** If 022 eventually introduces finer-grained scopes than a binary PUBLIC/MANAGEMENT split, the two-table (management + public) design in §9/§12.1 would need to generalize; this document does not attempt to anticipate that and treats it as an explicit non-goal for this iteration.
 
 ## 20. Phased implementation plan
+
+This plan is deferred with #359 and must not be executed unless a future evidence-based decision supersedes §0.
 
 **Phase 1 — Datastore foundation (no behavior change).**
 Add the Scylla tables and memdb equivalents; add `Datastore` interface methods (`ListCollectionMembers`, `CollectionMemberCount`, `ReplaceCollectionMembership` with the §11.1 diff contract, `UpsertCollectionMembership`, `RemoveCollectionMembership`, `GetCollectionMembershipState`, `SetCollectionMembershipState`, and `HasCollectionMembership`); implement admission-path write hooks for both backends. `Collection.products` and `status.resolved.memberCount` continue to use today's live-scan path — nothing reads the new tables yet.

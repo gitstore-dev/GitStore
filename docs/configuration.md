@@ -97,6 +97,46 @@ For config files, admin auth keys are nested under `[auth.admin]` (for example, 
 | `datastore.scylla.tls`                      | `GITSTORE_DATASTORE__SCYLLA__TLS`                         | boolean         | `false`          | No       | No        | Enable TLS for Scylla connections              |
 | `datastore.scylla.disable_shard_aware_port` | `GITSTORE_DATASTORE__SCYLLA__DISABLE_SHARD_AWARE_PORT`    | boolean         | `false`          | No       | No        | Disable shard-aware Scylla port discovery      |
 
+### Scylla projection operations
+
+`gitctl` reads the same Scylla environment variables for offline projection
+audit and repair. The password is read only from
+`GITSTORE_DATASTORE__SCYLLA__PASSWORD`; do not pass it as a CLI argument.
+
+```bash
+cd gitstore-api
+go run ./cmd/gitctl scylla-projection-audit
+go run ./cmd/gitctl scylla-projection-repair --dry-run
+go run ./cmd/gitctl scylla-projection-repair --confirm
+```
+
+Optional command flags override non-secret connection settings:
+`--hosts`, `--keyspace`, `--username`, `--tls`, and
+`--disable-shard-aware-port`. Repair requires either `--dry-run` or explicit
+`--confirm`; conditional misses and post-repair findings return an error.
+
+Operational invariants:
+
+- partition hard ceiling: 100 MiB;
+- hot-partition target: 10 MiB;
+- `gc_grace_seconds`: 10 days;
+- completed anti-entropy repair interval: at most 7 days;
+- no TWCS on tables with updates or explicit deletes.
+
+Datastore metrics use bounded labels only:
+
+- `gitstore_datastore_projection_write_failures_total`
+  (`operation`, `backend`, `resource_kind`, `projection`);
+- `gitstore_datastore_compensation_attempts_total` and
+  `gitstore_datastore_compensation_failures_total` (same bounded labels);
+- `gitstore_datastore_projection_findings_total` (adds `finding_type`);
+- `gitstore_datastore_operation_duration_seconds` (`operation`, `backend`).
+
+Alert on every compensation failure, any partition above 100 MiB, repair older
+than seven days, and sustained growth in projection findings or repair backlog.
+Resource UIDs and names belong in structured logs, never metric labels. See
+[`scylla-projection-repair.md`](runbooks/scylla-projection-repair.md).
+
 ### Example `config.toml`
 
 ```toml

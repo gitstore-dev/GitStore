@@ -17,11 +17,38 @@ That shape does not imply Git storage. Some resources are Git-authored and
 hydrated into ScyllaDB or memDB. Others are datastore-only durable records or
 transient request/response objects.
 
-Namespace now exposes this envelope through GraphQL as an additive read
-contract. Existing flat datastore rows are hydrated into `metadata`, `spec`,
-and `status` without a datastore migration. Git-driven Namespace write
-delegation is tracked separately by GH#172; the current create/delete tooling
-continues to use the existing mutation path until that work lands.
+Namespace and Repository expose the same canonical envelope through GraphQL.
+Their authoritative UID rows persist the complete author/system state,
+including raw Markdown body content. GraphQL Relay `id` values remain encoded
+API-boundary identifiers; datastore identity is always the resource `uid`.
+
+## Authoritative Rows and Query Projections
+
+Complete resources are owned by authoritative UID rows. Namespace name
+lookups, Repository path mappings, and monthly listing buckets are narrow query
+projections: they contain only the keys needed for the access pattern and must
+hydrate the authoritative row before returning a GraphQL resource. Projection
+repair restores data from the authoritative row and never overwrites its
+manifest body, desired state, audit fields, or status.
+
+Canonical datastore naming is consistent across resource kinds:
+
+- `uid` is the stable identity owned by a resource;
+- `repository_id` is a foreign reference to a Repository UID;
+- `namespace` is the immutable Namespace name, never its UUID;
+- `owner_references` contains canonical JSON.
+
+Namespace omits only parent `namespace` and `repository_id`. Repository and all
+catalogue resources use the complete applicable envelope. Namespace and
+Repository bodies store the raw Markdown after frontmatter; direct lookups and
+connection reads return the same body unchanged. Author metadata, spec, or body
+changes advance `generation`; status-only changes do not.
+
+Repository and Namespace connections use bounded keyset pagination over monthly
+projections and hydrate only the requested page. `totalCount` is `-1` when an
+exact value would require scanning unbounded historical buckets; consumers must
+treat that value as unknown rather than as an empty result. Fetch-all-then-sort
+is not an accepted pagination implementation.
 
 The resource list is anchored in the Kubernetes-style frontmatter initiative
 tracked by `gitstore-dev/GitStore#40`. That initiative currently covers
