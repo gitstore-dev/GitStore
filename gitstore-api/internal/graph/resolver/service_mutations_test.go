@@ -108,8 +108,8 @@ func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
 	}
 	require.NoError(t, store.CreateNamespace(context.Background(), systemNamespace))
 	systemRepository := &datastore.Repository{
-		ID:                uuid.New().String(),
-		NamespaceID:       systemNamespace.ID,
+		UID:               uuid.New().String(),
+		Namespace:         systemNamespace.Name,
 		Name:              resolver.SystemRepositoryName,
 		DefaultBranch:     "main",
 		StorageClass:      "default",
@@ -118,11 +118,12 @@ func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
 		UpdateTimestamp:   now,
 		UpdateActor:       "system",
 	}
+	systemRepository.RepositoryID = systemRepository.UID
 	require.NoError(t, store.CreateRepository(context.Background(), systemRepository))
 	require.NoError(t, store.CreateNamespaceMapping(context.Background(), &datastore.NamespaceMapping{
-		NamespaceID: systemNamespace.ID,
-		Name:        resolver.SystemRepositoryName,
-		RepoID:      systemRepository.ID,
+		Namespace:    systemNamespace.Name,
+		Name:         resolver.SystemRepositoryName,
+		RepositoryID: systemRepository.UID,
 	}))
 	svc, err := resolver.NewService(resolver.ServiceDeps{
 		Store:     store,

@@ -695,6 +695,10 @@ func (s *scyllaDatastore) commitRepositorySaga(
 	updated := *repository
 	updated.Namespace = target.namespace
 	updated.Name = target.name
+	if audit, ok := datastore.MutationAuditFromContext(ctx); ok {
+		updated.UpdateActor = audit.Actor
+		updated.UpdateTimestamp = audit.Timestamp
+	}
 	if version == repositorySagaSystemVersion {
 		datastore.AdvanceRepositorySystemVersion(&updated)
 	} else {

@@ -76,7 +76,7 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	ns := &datastore.Namespace{
-		ID:                uuid.New().String(),
+		UID:               uuid.New().String(),
 		Name:              "gitstore",
 		Title:             "GitStore Test",
 		Tier:              datastore.NamespaceTierUser,
@@ -89,8 +89,8 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 
 	const repoID = "00000000-0000-0000-0000-000000000001"
 	repo := &datastore.Repository{
-		ID:                repoID,
-		NamespaceID:       ns.ID,
+		UID:               repoID,
+		Namespace:         ns.Name,
 		Name:              "catalog",
 		DefaultBranch:     "main",
 		StorageClass:      "local",
@@ -159,7 +159,7 @@ func TestWatchProducts_ProductDeletion_DeliversDeletedEvent(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	ns := &datastore.Namespace{
-		ID:                uuid.New().String(),
+		UID:               uuid.New().String(),
 		Name:              "gitstore",
 		Title:             "GitStore Test",
 		Tier:              datastore.NamespaceTierUser,
@@ -172,8 +172,8 @@ func TestWatchProducts_ProductDeletion_DeliversDeletedEvent(t *testing.T) {
 
 	const repoID = "00000000-0000-0000-0000-000000000002"
 	repo := &datastore.Repository{
-		ID:                repoID,
-		NamespaceID:       ns.ID,
+		UID:               repoID,
+		Namespace:         ns.Name,
 		Name:              "catalog",
 		DefaultBranch:     "main",
 		StorageClass:      "local",

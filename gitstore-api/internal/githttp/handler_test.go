@@ -416,12 +416,14 @@ func TestRepoResolverNotFound(t *testing.T) {
 // T022: RepoResolver stores repoID in gin context for known repo.
 func TestRepoResolverSetsContext(t *testing.T) {
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
+	var capturedNamespace string
 	store := &testutil.StubStore{
 		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
-			return &datastore.Namespace{ID: "ns-id-1", Name: id}, nil
+			return &datastore.Namespace{UID: "ns-id-1", Name: id}, nil
 		},
-		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
-			return &datastore.NamespaceMapping{RepoID: wantRepoID}, nil
+		LookupRepositoryFunc: func(_ context.Context, namespace, _ string) (*datastore.NamespaceMapping, error) {
+			capturedNamespace = namespace
+			return &datastore.NamespaceMapping{RepositoryID: wantRepoID}, nil
 		},
 	}
 
@@ -452,6 +454,9 @@ func TestRepoResolverSetsContext(t *testing.T) {
 	if capturedRepoID != wantRepoID {
 		t.Errorf("expected repoID %q propagated to git client, got %q", wantRepoID, capturedRepoID)
 	}
+	if capturedNamespace != "gitstore" {
+		t.Errorf("expected immutable namespace name %q, got %q", "gitstore", capturedNamespace)
+	}
 }
 
 // T023: read-only principal attempting receive-pack is denied 403.
@@ -469,10 +474,10 @@ func TestGitHttpAuthorizerReadOnly(t *testing.T) {
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
 	store := &testutil.StubStore{
 		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
-			return &datastore.Namespace{ID: "ns-id-1", Name: id}, nil
+			return &datastore.Namespace{UID: "ns-id-1", Name: id}, nil
 		},
 		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
-			return &datastore.NamespaceMapping{RepoID: wantRepoID}, nil
+			return &datastore.NamespaceMapping{RepositoryID: wantRepoID}, nil
 		},
 	}
 
@@ -510,10 +515,10 @@ func TestGitHttpAuthorizerWriteAllowed(t *testing.T) {
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
 	store := &testutil.StubStore{
 		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
-			return &datastore.Namespace{ID: "ns-id-1", Name: id}, nil
+			return &datastore.Namespace{UID: "ns-id-1", Name: id}, nil
 		},
 		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
-			return &datastore.NamespaceMapping{RepoID: wantRepoID}, nil
+			return &datastore.NamespaceMapping{RepositoryID: wantRepoID}, nil
 		},
 	}
 
@@ -597,15 +602,15 @@ func TestReceivePackAttachesPushContext(t *testing.T) {
 
 	store := &testutil.StubStore{
 		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
-			return &datastore.Namespace{ID: nsID, Name: id}, nil
+			return &datastore.Namespace{UID: nsID, Name: id}, nil
 		},
 		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
-			return &datastore.NamespaceMapping{RepoID: repoID}, nil
+			return &datastore.NamespaceMapping{RepositoryID: repoID}, nil
 		},
 		GetRepositoryFunc: func(_ context.Context, _ string) (*datastore.Repository, error) {
 			return &datastore.Repository{
-				ID:               repoID,
-				NamespaceID:      nsID,
+				UID:              repoID,
+				Namespace:        nsID,
 				Name:             "catalog",
 				MaxPackSizeBytes: 52428800,
 				MaxFileSizeBytes: 10485760,

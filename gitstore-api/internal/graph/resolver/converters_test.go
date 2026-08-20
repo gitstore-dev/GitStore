@@ -13,12 +13,18 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestDatastoreNamespaceToGraphQL_DeclarativeProjection(t *testing.T) {
 	ns := namespaceContractFixture("6a053cdd-1f95-47f2-b3bb-d950a52a6758", "acme")
+	ns.APIVersion = namespaceAPIVersion
+	ns.Kind = namespaceKind
+	ns.Revision = "main@sha1:abc"
+	ns.Labels = map[string]string{"team": "catalog"}
+	ns.Annotations = map[string]string{"owner": "platform"}
+	ns.OwnerReferences = json.RawMessage(`[{"apiVersion":"gitstore.dev/v1beta1","kind":"Namespace","name":"root","uid":"00000000-0000-0000-0000-000000000001"}]`)
+	ns.Spec = json.RawMessage(`{"title":"Acme Store","tier":"USER","repositoryDefaults":{"visibility":"PRIVATE","defaultBranch":"trunk"},"pushPolicyDefaults":{"maxPackSizeBytes":1024,"maxFileSizeBytes":256}}`)
+	ns.Body = "Namespace body."
 
 	got := datastoreNamespaceToModel(ns)
 	require.NotNil(t, got)
@@ -30,27 +36,37 @@ func TestDatastoreNamespaceToGraphQL_DeclarativeProjection(t *testing.T) {
 	assert.Equal(t, ns.ID, got.Metadata.UID)
 	assert.Equal(t, namespaceInitialResourceVersion, got.Metadata.ResourceVersion)
 	assert.Equal(t, namespaceInitialGeneration, got.Metadata.Generation)
-	assert.Equal(t, map[string]any{}, got.Metadata.Labels)
-	assert.Equal(t, map[string]any{}, got.Metadata.Annotations)
-	assert.Empty(t, got.Metadata.OwnerReferences)
+	assert.Equal(t, map[string]any{"team": "catalog"}, got.Metadata.Labels)
+	assert.Equal(t, map[string]any{"owner": "platform"}, got.Metadata.Annotations)
+	require.NotNil(t, got.Metadata.Revision)
+	assert.Equal(t, ns.Revision, *got.Metadata.Revision)
+	require.Len(t, got.Metadata.OwnerReferences, 1)
+	assert.Equal(t, "root", got.Metadata.OwnerReferences[0].Name)
 	assert.NotNil(t, got.Metadata.OwnerReferences)
 	assert.Empty(t, got.Metadata.Finalizers)
 	assert.NotNil(t, got.Metadata.Finalizers)
-	assert.Nil(t, got.Metadata.Revision)
 	assert.Equal(t, ns.CreationTimestamp, got.Metadata.CreationTimestamp)
 
 	require.NotNil(t, got.Spec)
 	require.NotNil(t, got.Spec.Title)
 	assert.Equal(t, ns.Title, *got.Spec.Title)
 	assert.Equal(t, model.NamespaceTierUser, got.Spec.Tier)
-	assert.Nil(t, got.Spec.RepositoryDefaults)
-	assert.Nil(t, got.Spec.PushPolicyDefaults)
+	require.NotNil(t, got.Spec.RepositoryDefaults)
+	require.NotNil(t, got.Spec.RepositoryDefaults.Visibility)
+	assert.Equal(t, model.RepositoryVisibilityPrivate, *got.Spec.RepositoryDefaults.Visibility)
+	require.NotNil(t, got.Spec.RepositoryDefaults.DefaultBranch)
+	assert.Equal(t, "trunk", *got.Spec.RepositoryDefaults.DefaultBranch)
+	require.NotNil(t, got.Spec.PushPolicyDefaults)
+	require.NotNil(t, got.Spec.PushPolicyDefaults.MaxPackSizeBytes)
+	assert.Equal(t, int64(1024), *got.Spec.PushPolicyDefaults.MaxPackSizeBytes)
 
 	require.NotNil(t, got.Status)
 	assert.Equal(t, int32(0), got.Status.ObservedGeneration)
 	assert.Nil(t, got.Status.LastAppliedRevision)
 	assert.Empty(t, got.Status.Conditions)
 	assert.NotNil(t, got.Status.Conditions)
+	require.NotNil(t, got.Body)
+	assert.Equal(t, ns.Body, *got.Body)
 }
 
 func TestDatastoreNamespaceToGraphQL_PreservesLegacyProjection(t *testing.T) {
@@ -94,9 +110,17 @@ func TestDatastoreNamespaceToGraphQL_IdentityAndVersionDefaultsArePerResource(t 
 func repositoryContractFixture() (*datastore.Repository, *datastore.Namespace) {
 	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	return &datastore.Repository{
-			ID:                "01960000-0000-7000-8000-000000000045",
-			NamespaceID:       "01960000-0000-7000-8000-000000000046",
+			APIVersion:        repositoryAPIVersion,
+			Kind:              repositoryKind,
+			UID:               "01960000-0000-7000-8000-000000000045",
+			Namespace:         "acme",
 			Name:              "catalog",
+			RepositoryID:      "01960000-0000-7000-8000-000000000045",
+			Revision:          "main@sha1:def",
+			Labels:            map[string]string{"team": "catalog"},
+			Annotations:       map[string]string{"owner": "platform"},
+			OwnerReferences:   json.RawMessage(`[{"apiVersion":"gitstore.dev/v1beta1","kind":"Namespace","name":"acme","uid":"01960000-0000-7000-8000-000000000046"}]`),
+			Body:              "Repository body.",
 			DefaultBranch:     "main",
 			StorageClass:      "default",
 			Generation:        3,
@@ -128,10 +152,13 @@ func TestDatastoreRepositoryToModel_DeclarativeProjection(t *testing.T) {
 	assert.Equal(t, repo.ResourceVersion, got.Metadata.ResourceVersion)
 	assert.Equal(t, int32(repo.Generation), got.Metadata.Generation)
 	assert.Equal(t, repo.CreationTimestamp, got.Metadata.CreationTimestamp)
-	assert.Equal(t, map[string]any{}, got.Metadata.Labels)
-	assert.Equal(t, map[string]any{}, got.Metadata.Annotations)
+	assert.Equal(t, map[string]any{"team": "catalog"}, got.Metadata.Labels)
+	assert.Equal(t, map[string]any{"owner": "platform"}, got.Metadata.Annotations)
+	require.NotNil(t, got.Metadata.Revision)
+	assert.Equal(t, repo.Revision, *got.Metadata.Revision)
 	assert.NotNil(t, got.Metadata.OwnerReferences)
-	assert.Empty(t, got.Metadata.OwnerReferences)
+	require.Len(t, got.Metadata.OwnerReferences, 1)
+	assert.Equal(t, "acme", got.Metadata.OwnerReferences[0].Name)
 
 	require.NotNil(t, got.Spec)
 	assert.Equal(t, repo.DefaultBranch, got.Spec.DefaultBranch)
@@ -150,8 +177,10 @@ func TestDatastoreRepositoryToModel_DeclarativeProjection(t *testing.T) {
 	assert.NotNil(t, got.Status.Conditions)
 	assert.Empty(t, got.Status.Conditions)
 	require.NotNil(t, got.Status.Resolved)
-	assert.Equal(t, fanoutStoragePath("/var/lib/gitstore", repo.ID), got.Status.Resolved.StoragePath)
+	assert.Equal(t, fanoutStoragePath("/var/lib/gitstore", repo.UID), got.Status.Resolved.StoragePath)
 	assert.Equal(t, repo.StorageClass, got.Status.Resolved.StorageClass)
+	require.NotNil(t, got.Body)
+	assert.Equal(t, repo.Body, *got.Body)
 }
 
 func TestDatastoreRepositoryToModel_PreservesLegacyProjection(t *testing.T) {
@@ -164,7 +193,7 @@ func TestDatastoreRepositoryToModel_PreservesLegacyProjection(t *testing.T) {
 	assert.Equal(t, ns.Name, got.Namespace.Identifier)
 	assert.Equal(t, repo.DefaultBranch, got.DefaultBranch)
 	assert.Equal(t, repo.StorageClass, got.StorageClass)
-	assert.Equal(t, fanoutStoragePath("/var/lib/gitstore", repo.ID), got.StoragePath)
+	assert.Equal(t, fanoutStoragePath("/var/lib/gitstore", repo.UID), got.StoragePath)
 	assert.Equal(t, repo.CreationTimestamp, got.CreatedAt)
 	assert.Equal(t, repo.CreationActor, got.CreatedBy)
 	assert.Equal(t, repo.UpdateTimestamp, got.UpdatedAt)
@@ -175,6 +204,7 @@ func TestDatastoreRepositoryToModel_LegacyDefaultsAndEmptyConditionVocabulary(t 
 	repo, ns := repositoryContractFixture()
 	repo.Generation = 0
 	repo.ResourceVersion = ""
+	repo.Spec = json.RawMessage(`{}`)
 	repo.Status = nil
 
 	got := datastoreRepositoryToModel(repo, ns, "/var/lib/gitstore")
@@ -190,23 +220,15 @@ func TestDatastoreRepositoryToModel_LegacyDefaultsAndEmptyConditionVocabulary(t 
 	require.NotNil(t, got.Status.Resolved)
 }
 
-func TestDatastoreRepositoryToModel_MalformedStatusLogsAndFallsBack(t *testing.T) {
+func TestDatastoreRepositoryToModel_MalformedStatusReturnsExplicitError(t *testing.T) {
 	repo, ns := repositoryContractFixture()
 	repo.Status = json.RawMessage(`{bad`)
-	core, logs := observer.New(zap.WarnLevel)
-	SetConverterLogger(zap.New(core))
-	t.Cleanup(func() { SetConverterLogger(zap.NewNop()) })
 
-	got := datastoreRepositoryToModel(repo, ns, "/var/lib/gitstore")
+	got, err := datastoreRepositoryToModelStrict(repo, ns, "/var/lib/gitstore")
 
-	require.NotNil(t, got.Status)
-	assert.Zero(t, got.Status.ObservedGeneration)
-	assert.NotNil(t, got.Status.Conditions)
-	assert.Empty(t, got.Status.Conditions)
-	require.Len(t, logs.All(), 1)
-	assert.Equal(t, "repository blob unmarshal error", logs.All()[0].Message)
-	assert.Equal(t, "status", logs.All()[0].ContextMap()["field"])
-	assert.Equal(t, repo.ID, logs.All()[0].ContextMap()["repository_id"])
+	assert.Nil(t, got)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal status")
 }
 
 // ── specFromJSON ─────────────────────────────────────────────────────────────

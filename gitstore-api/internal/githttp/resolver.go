@@ -34,7 +34,7 @@ func RepoResolver(store datastore.Datastore, log *zap.Logger) gin.HandlerFunc {
 			return
 		}
 
-		mapping, err := store.LookupRepository(c.Request.Context(), ns.ID, repo)
+		mapping, err := store.LookupRepository(c.Request.Context(), ns.Name, repo)
 		if err != nil || mapping == nil {
 			if _, werr := gitPktLineErrorRaw(c.Writer, http.StatusNotFound, "repository not found"); werr != nil {
 				log.Error("failed to write pkt-line error response", zap.Error(werr))
@@ -43,8 +43,8 @@ func RepoResolver(store datastore.Datastore, log *zap.Logger) gin.HandlerFunc {
 			return
 		}
 
-		log.Debug("repo resolved", zap.String("namespace", namespace), zap.String("repo", repo), zap.String("repo_id", mapping.RepoID))
-		c.Set(repoIDKey, mapping.RepoID)
+		log.Debug("repo resolved", zap.String("namespace", namespace), zap.String("repo", repo), zap.String("repo_id", mapping.RepositoryID))
+		c.Set(repoIDKey, mapping.RepositoryID)
 		c.Next()
 	}
 }

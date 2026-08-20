@@ -84,7 +84,7 @@ func seedNamespaceAuthoringRepository(t *testing.T, store datastore.Datastore) {
 	t.Helper()
 	now := time.Now().UTC()
 	namespace := &datastore.Namespace{
-		ID:                "00000000-0000-7000-8000-000000000001",
+		UID:               "00000000-0000-7000-8000-000000000001",
 		Name:              "gitstore-system",
 		Title:             "GitStore System",
 		Tier:              datastore.NamespaceTierOrganization,
@@ -96,8 +96,8 @@ func seedNamespaceAuthoringRepository(t *testing.T, store datastore.Datastore) {
 	datastore.NormalizeNamespaceContract(namespace)
 	require.NoError(t, store.CreateNamespace(context.Background(), namespace))
 	repository := &datastore.Repository{
-		ID:                "00000000-0000-7000-8000-000000000002",
-		NamespaceID:       namespace.ID,
+		UID:               "00000000-0000-7000-8000-000000000002",
+		Namespace:         namespace.Name,
 		Name:              "gitstore-system",
 		DefaultBranch:     "main",
 		StorageClass:      "default",
@@ -109,9 +109,9 @@ func seedNamespaceAuthoringRepository(t *testing.T, store datastore.Datastore) {
 	datastore.NormalizeRepositoryContract(repository)
 	require.NoError(t, store.CreateRepository(context.Background(), repository))
 	require.NoError(t, store.CreateNamespaceMapping(context.Background(), &datastore.NamespaceMapping{
-		NamespaceID: namespace.ID,
-		Name:        repository.Name,
-		RepoID:      repository.ID,
+		Namespace:    namespace.Name,
+		Name:         repository.Name,
+		RepositoryID: repository.UID,
 	}))
 }
 

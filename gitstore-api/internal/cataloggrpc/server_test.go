@@ -191,6 +191,15 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 	assert.Equal(t, datastore.NamespaceTierUser, created.Tier)
 	assert.Equal(t, int64(1), created.Generation)
 	assert.Equal(t, "1", created.ResourceVersion)
+	assert.Equal(t, "gitstore.dev/v1beta1", created.APIVersion)
+	assert.Equal(t, "Namespace", created.Kind)
+	assert.NotEmpty(t, created.UID)
+	assert.Equal(t, "main@sha1:"+a, created.Revision)
+	assert.Equal(t, path, created.SourcePath)
+	assert.Equal(t, a, created.GitCommitSHA)
+	assert.Equal(t, "refs/heads/main", created.GitRef)
+	assert.JSONEq(t, `{"title":"Acme Store","tier":"USER"}`, string(created.Spec))
+	assert.Equal(t, "", created.Body)
 	assert.Contains(t, string(created.Status), "AdmissionAccepted")
 
 	current = b
@@ -209,6 +218,8 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 	assert.Equal(t, datastore.NamespaceTierOrganization, updated.Tier)
 	assert.Equal(t, int64(2), updated.Generation)
 	assert.Equal(t, "2", updated.ResourceVersion)
+	assert.Equal(t, "main@sha1:"+b, updated.Revision)
+	assert.Equal(t, b, updated.GitCommitSHA)
 
 	current = c
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
@@ -225,6 +236,70 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 	assert.Equal(t, "Acme Store Updated", notDemoted.Title)
 	assert.Equal(t, datastore.NamespaceTierOrganization, notDemoted.Tier)
 	assert.Equal(t, int64(2), notDemoted.Generation)
+}
+
+func TestAdmitResources_NamespaceMetadataAndBodyAdvanceGeneration(t *testing.T) {
+	store := newNamespacePolicyDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	current := a
+	path := "namespaces/body-store.md"
+	manifest := func(label, body string) []byte {
+		return []byte(fmt.Sprintf(`---
+apiVersion: gitstore.dev/v1beta1
+kind: Namespace
+metadata:
+  name: body-store
+  labels:
+    channel: %s
+  annotations:
+    owner: platform
+spec:
+  title: Body Store
+  tier: USER
+---
+%s`, label, body))
+	}
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {path: manifest("stable", "Initial namespace body.\n")},
+		b: {path: manifest("preview", "Updated namespace body.\n")},
+	})
+	srv := newCatalogServer(t, store, git)
+
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: zero,
+		NewCommitSha: a,
+		CommitSha:    a,
+		RefName:      "refs/heads/main",
+		ChangedPaths: []string{path},
+	})
+	require.NoError(t, err)
+	created, err := store.GetNamespaceByName(context.Background(), "body-store")
+	require.NoError(t, err)
+	assert.Equal(t, "Initial namespace body.\n", created.Body)
+	assert.Equal(t, map[string]string{"channel": "stable"}, created.Labels)
+	assert.Equal(t, map[string]string{"owner": "platform"}, created.Annotations)
+	assert.Equal(t, int64(1), created.Generation)
+
+	current = b
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: a,
+		NewCommitSha: b,
+		CommitSha:    b,
+		RefName:      "refs/heads/main",
+		ChangedPaths: []string{path},
+	})
+	require.NoError(t, err)
+	updated, err := store.GetNamespaceByName(context.Background(), "body-store")
+	require.NoError(t, err)
+	assert.Equal(t, "Updated namespace body.\n", updated.Body)
+	assert.Equal(t, map[string]string{"channel": "preview"}, updated.Labels)
+	assert.Equal(t, int64(2), updated.Generation)
+	assert.Equal(t, "2", updated.ResourceVersion)
+	assert.Equal(t, created.UID, updated.UID)
 }
 
 func TestAdmitResources_NamespaceBootstrapNameRejected(t *testing.T) {
@@ -1643,8 +1718,8 @@ func newTestDatastore(t *testing.T) datastore.Datastore {
 	require.NoError(t, store.CreateNamespace(ctx, ns))
 
 	repo := &datastore.Repository{
-		ID:                testRepoID,
-		NamespaceID:       ns.ID,
+		UID:               testRepoID,
+		Namespace:         ns.Name,
 		Name:              "catalog",
 		DefaultBranch:     "main",
 		StorageClass:      "local",
@@ -1700,8 +1775,8 @@ func newNamespacePolicyDatastore(t *testing.T) datastore.Datastore {
 	}
 	for _, repository := range []*datastore.Repository{
 		{
-			ID:                testRepoID,
-			NamespaceID:       systemNamespace.ID,
+			UID:               testRepoID,
+			Namespace:         systemNamespace.Name,
 			Name:              "gitstore-system",
 			DefaultBranch:     "main",
 			StorageClass:      "local",
@@ -1711,8 +1786,8 @@ func newNamespacePolicyDatastore(t *testing.T) datastore.Datastore {
 			UpdateActor:       "system",
 		},
 		{
-			ID:                wrongNamespaceRepoID,
-			NamespaceID:       otherNamespace.ID,
+			UID:               wrongNamespaceRepoID,
+			Namespace:         otherNamespace.Name,
 			Name:              "catalog",
 			DefaultBranch:     "main",
 			StorageClass:      "local",

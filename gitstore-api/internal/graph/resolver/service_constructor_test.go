@@ -65,8 +65,9 @@ func TestServiceCreateNamespaceAndRepositoryUsesInjectedClockAndIDs(t *testing.T
 	}
 	require.NoError(t, store.CreateNamespace(ctx, systemNamespace))
 	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{
-		ID:                systemRepositoryID,
-		NamespaceID:       systemNamespace.ID,
+		UID:               systemRepositoryID,
+		Namespace:         systemNamespace.Name,
+		RepositoryID:      systemRepositoryID,
 		Name:              resolver.SystemRepositoryName,
 		DefaultBranch:     "main",
 		StorageClass:      "default",
@@ -76,9 +77,9 @@ func TestServiceCreateNamespaceAndRepositoryUsesInjectedClockAndIDs(t *testing.T
 		UpdateActor:       "system",
 	}))
 	require.NoError(t, store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
-		NamespaceID: systemNamespace.ID,
-		Name:        resolver.SystemRepositoryName,
-		RepoID:      systemRepositoryID,
+		Namespace:    systemNamespace.Name,
+		Name:         resolver.SystemRepositoryName,
+		RepositoryID: systemRepositoryID,
 	}))
 	writer := &mockGitWriter{}
 	svc, err := resolver.NewService(resolver.ServiceDeps{

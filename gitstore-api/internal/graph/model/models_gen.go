@@ -616,6 +616,7 @@ type ObjectMeta struct {
 	CreationTimestamp time.Time         `json:"creationTimestamp"`
 	Revision          *string           `json:"revision,omitempty"`
 	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
+	Finalizers        []string          `json:"finalizers"`
 }
 
 type OwnerReference struct {

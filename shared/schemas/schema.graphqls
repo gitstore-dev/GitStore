@@ -274,6 +274,7 @@ type ObjectMeta {
   creationTimestamp: DateTime!
   revision: String
   ownerReferences: [OwnerReference!]!
+  finalizers: [String!]!
 }
 
 """

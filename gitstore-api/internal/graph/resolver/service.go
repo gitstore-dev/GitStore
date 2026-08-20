@@ -9,6 +9,7 @@ package resolver
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -21,6 +22,7 @@ import (
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
+	"github.com/google/uuid"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
@@ -274,10 +276,17 @@ func (s *Service) commitAndAdmitNamespace(ctx context.Context, resource *catalog
 	if err != nil {
 		return nil, gqlerror.Errorf("bootstrap namespace gitstore-system is unavailable")
 	}
-	mapping, err := s.store.LookupRepository(ctx, systemNamespace.ID, SystemRepositoryName)
+	mapping, err := s.store.LookupRepository(ctx, systemNamespace.Name, SystemRepositoryName)
 	if err != nil {
+		s.logger.Error(
+			"bootstrap repository lookup failed",
+			zap.String("namespace", systemNamespace.Name),
+			zap.String("repository", SystemRepositoryName),
+			zap.Error(err),
+		)
 		return nil, gqlerror.Errorf("bootstrap repository gitstore-system/gitstore-system is unavailable")
 	}
+	datastore.NormalizeNamespaceMappingContract(mapping)
 
 	yamlBody, err := yaml.Marshal(resource)
 	if err != nil {
@@ -292,7 +301,7 @@ func (s *Service) commitAndAdmitNamespace(ctx context.Context, resource *catalog
 	if create {
 		verb = "Create"
 	}
-	sha, err := s.gitWriter.CommitFileForRepo(ctx, mapping.RepoID, gitclient.CommitFileParams{
+	sha, err := s.gitWriter.CommitFileForRepo(ctx, mapping.RepositoryID, gitclient.CommitFileParams{
 		Path:          fmt.Sprintf("namespaces/%s.md", resource.Metadata.Name),
 		Content:       content,
 		CommitMessage: fmt.Sprintf("%s Namespace %s", verb, resource.Metadata.Name),
@@ -301,7 +310,7 @@ func (s *Service) commitAndAdmitNamespace(ctx context.Context, resource *catalog
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to commit Namespace manifest: %v", err)
 	}
-	currentHead, err := s.gitWriter.ResolveRefForRepo(ctx, mapping.RepoID, "refs/heads/main")
+	currentHead, err := s.gitWriter.ResolveRefForRepo(ctx, mapping.RepositoryID, "refs/heads/main")
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to verify Namespace commit: %v", err)
 	}
@@ -435,14 +444,18 @@ func stringMap(input map[string]any) (map[string]string, error) {
 }
 
 // ProvisionSystemRepository ensures the well-known SystemRepositoryName
-// repository exists for namespaceID, creating it if absent (FR-007). A
+// repository exists for namespace, creating it if absent (FR-007). A
 // repository that already exists — including one created by a concurrent or
 // retried call — is treated as a successful idempotent outcome, never an
 // error (FR-008).
-func (s *Service) ProvisionSystemRepository(ctx context.Context, namespaceID, callerUsername string) error {
-	if _, err := s.store.LookupRepository(ctx, namespaceID, SystemRepositoryName); err == nil {
+func (s *Service) ProvisionSystemRepository(ctx context.Context, namespace, callerUsername string) error {
+	namespaceName, err := s.canonicalNamespaceName(ctx, namespace)
+	if err != nil {
+		return err
+	}
+	if _, err := s.store.LookupRepository(ctx, namespaceName, SystemRepositoryName); err == nil {
 		s.logger.Info("system repository already provisioned",
-			zap.String("namespace_id", namespaceID),
+			zap.String("namespace", namespaceName),
 			zap.String("name", SystemRepositoryName),
 		)
 		return nil
@@ -450,13 +463,13 @@ func (s *Service) ProvisionSystemRepository(ctx context.Context, namespaceID, ca
 		return err
 	}
 
-	if _, err := s.CreateRepository(ctx, namespaceID, SystemRepositoryName, "", "default", callerUsername); err != nil {
+	if _, err := s.CreateRepository(ctx, namespaceName, SystemRepositoryName, "", "default", callerUsername); err != nil {
 		// A concurrent/retried provisioning attempt may have won the race
 		// between the lookup above and this create — re-check before
 		// surfacing the error.
-		if _, lookupErr := s.store.LookupRepository(ctx, namespaceID, SystemRepositoryName); lookupErr == nil {
+		if _, lookupErr := s.store.LookupRepository(ctx, namespaceName, SystemRepositoryName); lookupErr == nil {
 			s.logger.Info("system repository provisioned concurrently, treating as idempotent success",
-				zap.String("namespace_id", namespaceID),
+				zap.String("namespace", namespaceName),
 				zap.String("name", SystemRepositoryName),
 			)
 			return nil
@@ -465,10 +478,29 @@ func (s *Service) ProvisionSystemRepository(ctx context.Context, namespaceID, ca
 	}
 
 	s.logger.Info("system repository provisioned",
-		zap.String("namespace_id", namespaceID),
+		zap.String("namespace", namespaceName),
 		zap.String("name", SystemRepositoryName),
 	)
 	return nil
+}
+
+func (s *Service) canonicalNamespaceName(ctx context.Context, namespace string) (string, error) {
+	if namespace == "" {
+		return "", gqlerror.Errorf("namespace is required")
+	}
+	if current, err := s.store.GetNamespaceByName(ctx, namespace); err == nil {
+		return current.Name, nil
+	} else if !errors.Is(err, datastore.ErrNotFound) {
+		return "", gqlerror.Errorf("failed to retrieve namespace")
+	}
+	current, err := s.store.GetNamespace(ctx, namespace)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return "", gqlerror.Errorf("namespace %q not found", namespace)
+		}
+		return "", gqlerror.Errorf("failed to retrieve namespace")
+	}
+	return current.Name, nil
 }
 
 // GetNamespaceByName retrieves a namespace by its canonical name.
@@ -486,7 +518,15 @@ func (s *Service) GetNamespaceByName(ctx context.Context, name string) (*datasto
 
 // GetNamespaceByID retrieves a namespace by its system ID.
 func (s *Service) GetNamespaceByID(ctx context.Context, id string) (*datastore.Namespace, error) {
-	ns, err := s.store.GetNamespace(ctx, id)
+	var (
+		ns  *datastore.Namespace
+		err error
+	)
+	if _, parseErr := uuid.Parse(id); parseErr == nil {
+		ns, err = s.store.GetNamespace(ctx, id)
+	} else {
+		ns, err = s.store.GetNamespaceByName(ctx, id)
+	}
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
 			s.logger.Debug("namespace not found", zap.String("id", id))
@@ -530,7 +570,7 @@ func (s *Service) DeleteNamespace(ctx context.Context, ns *datastore.Namespace) 
 		return nil
 	}
 
-	hasRepos, err := s.store.HasRepositories(ctx, current.ID)
+	hasRepos, err := s.store.HasRepositories(ctx, current.Name)
 	if err != nil {
 		s.logger.Error("failed to check for existing repositories",
 			zap.String("name", current.Name),
@@ -584,7 +624,7 @@ func (s *Service) CompleteNamespaceDeletion(ctx context.Context, name, expectedR
 		!containsString(current.Finalizers, datastore.NamespaceForegroundDeletionFinalizer) {
 		return nil, gqlerror.Errorf("namespace %q is not awaiting foreground deletion", name)
 	}
-	hasRepos, err := s.store.HasRepositories(ctx, current.ID)
+	hasRepos, err := s.store.HasRepositories(ctx, current.Name)
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to complete namespace deletion")
 	}
@@ -635,7 +675,11 @@ func fanoutStoragePath(dataDir, repoID string) string {
 
 // CreateRepository creates a new repository and its namespace mapping, then provisions
 // storage via gRPC. Returns the created Repository entity.
-func (s *Service) CreateRepository(ctx context.Context, namespaceID, name, defaultBranch, storageClass, callerUsername string) (*datastore.Repository, error) {
+func (s *Service) CreateRepository(ctx context.Context, namespace, name, defaultBranch, storageClass, callerUsername string) (*datastore.Repository, error) {
+	namespaceName, err := s.canonicalNamespaceName(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
 	if defaultBranch == "" {
 		defaultBranch = "main"
 	}
@@ -647,10 +691,30 @@ func (s *Service) CreateRepository(ctx context.Context, namespaceID, name, defau
 		return nil, gqlerror.Errorf("failed to generate repository ID")
 	}
 	now := s.clock.Now().UTC()
+	spec, err := json.Marshal(&model.RepositorySpec{
+		DefaultBranch: defaultBranch,
+		Visibility:    model.RepositoryVisibilityPrivate,
+		PushPolicy: &model.RepositoryPushPolicy{
+			MaxPackSizeBytes: 0,
+			MaxFileSizeBytes: 0,
+		},
+	})
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to encode repository spec")
+	}
 	repo := &datastore.Repository{
-		ID:                repoID,
-		NamespaceID:       namespaceID,
+		APIVersion:        repositoryAPIVersion,
+		Kind:              repositoryKind,
+		UID:               repoID,
+		Namespace:         namespaceName,
 		Name:              name,
+		RepositoryID:      repoID,
+		Labels:            map[string]string{},
+		Annotations:       map[string]string{},
+		OwnerReferences:   json.RawMessage(`[]`),
+		Finalizers:        []string{},
+		Spec:              spec,
+		Body:              "",
 		DefaultBranch:     defaultBranch,
 		StorageClass:      storageClass,
 		CreationTimestamp: now,
@@ -663,51 +727,51 @@ func (s *Service) CreateRepository(ctx context.Context, namespaceID, name, defau
 		if errors.Is(err, datastore.ErrAlreadyExists) {
 			return nil, gqlerror.Errorf("repository already exists")
 		}
-		s.logger.Error("failed to create repository", zap.String("repo_id", repo.ID), zap.Error(err))
+		s.logger.Error("failed to create repository", zap.String("repo_id", repo.UID), zap.Error(err))
 		return nil, gqlerror.Errorf("failed to create repository")
 	}
 	if err := s.store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
-		NamespaceID: namespaceID,
-		Name:        name,
-		RepoID:      repo.ID,
+		Namespace:    namespaceName,
+		Name:         name,
+		RepositoryID: repo.UID,
 	}); err != nil {
 		// Roll back the repository row so it does not orphan a name slot.
-		if delErr := s.store.DeleteRepository(ctx, repo.ID); delErr != nil {
+		if delErr := s.store.DeleteRepository(ctx, repo.UID); delErr != nil {
 			s.logger.Error("rollback DeleteRepository failed after mapping create failure",
-				zap.String("repo_id", repo.ID), zap.Error(delErr))
+				zap.String("repo_id", repo.UID), zap.Error(delErr))
 		}
 		if errors.Is(err, datastore.ErrAlreadyExists) {
 			return nil, gqlerror.Errorf("repository already exists")
 		}
-		s.logger.Error("failed to create namespace mapping", zap.String("repo_id", repo.ID), zap.Error(err))
+		s.logger.Error("failed to create namespace mapping", zap.String("repo_id", repo.UID), zap.Error(err))
 		return nil, gqlerror.Errorf("failed to create namespace mapping")
 	}
 	s.logger.Info("lookup repository",
-		zap.String("namespace_id", namespaceID),
+		zap.String("namespace", namespaceName),
 		zap.String("name", name),
-		zap.String("repo_id", repo.ID),
+		zap.String("repo_id", repo.UID),
 	)
 	if s.gitWriter != nil {
-		if _, err := s.gitWriter.CreateRepository(ctx, repo.ID, storageClass); err != nil {
+		if _, err := s.gitWriter.CreateRepository(ctx, repo.UID, storageClass); err != nil {
 			s.logger.Error("gRPC CreateRepository failed",
-				zap.String("repo_id", repo.ID),
+				zap.String("repo_id", repo.UID),
 				zap.String("rpc", "CreateRepository"),
 				zap.Error(err),
 			)
 			// Compensate: drop both metadata rows so a retry can re-create
 			// cleanly instead of resolving a name with no backing storage.
-			if delErr := s.store.DeleteNamespaceMapping(ctx, namespaceID, name); delErr != nil {
+			if delErr := s.store.DeleteNamespaceMapping(ctx, namespaceName, name); delErr != nil {
 				s.logger.Error("rollback DeleteNamespaceMapping failed after storage provision failure",
-					zap.String("repo_id", repo.ID), zap.Error(delErr))
+					zap.String("repo_id", repo.UID), zap.Error(delErr))
 			}
-			if delErr := s.store.DeleteRepository(ctx, repo.ID); delErr != nil {
+			if delErr := s.store.DeleteRepository(ctx, repo.UID); delErr != nil {
 				s.logger.Error("rollback DeleteRepository failed after storage provision failure",
-					zap.String("repo_id", repo.ID), zap.Error(delErr))
+					zap.String("repo_id", repo.UID), zap.Error(delErr))
 			}
 			return nil, gqlerror.Errorf("failed to provision repository storage")
 		}
 		s.logger.Info("gRPC CreateRepository succeeded",
-			zap.String("repo_id", repo.ID),
+			zap.String("repo_id", repo.UID),
 			zap.String("rpc", "CreateRepository"),
 		)
 	}
@@ -723,26 +787,28 @@ func (s *Service) GetRepository(ctx context.Context, id string) (*datastore.Repo
 		}
 		return nil, gqlerror.Errorf("failed to retrieve repository")
 	}
+	datastore.NormalizeRepositoryContract(r)
 	return r, nil
 }
 
-// LookupRepository resolves (namespaceID, name) → NamespaceMapping.
-func (s *Service) LookupRepository(ctx context.Context, namespaceID, name string) (*datastore.NamespaceMapping, error) {
-	m, err := s.store.LookupRepository(ctx, namespaceID, name)
+// LookupRepository resolves (namespace, name) → NamespaceMapping.
+func (s *Service) LookupRepository(ctx context.Context, namespace, name string) (*datastore.NamespaceMapping, error) {
+	m, err := s.store.LookupRepository(ctx, namespace, name)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
 			s.logger.Info("lookup repository not found",
-				zap.String("namespace_id", namespaceID),
+				zap.String("namespace", namespace),
 				zap.String("name", name),
 			)
 			return nil, datastore.ErrNotFound
 		}
 		return nil, gqlerror.Errorf("failed to lookup repository")
 	}
+	datastore.NormalizeNamespaceMappingContract(m)
 	s.logger.Info("lookup repository",
-		zap.String("namespace_id", namespaceID),
+		zap.String("namespace", namespace),
 		zap.String("name", name),
-		zap.String("repo_id", m.RepoID),
+		zap.String("repo_id", m.RepositoryID),
 	)
 	return m, nil
 }
@@ -756,12 +822,27 @@ func (s *Service) LookupNamespaceByRepoID(ctx context.Context, repoID string) (*
 		}
 		return nil, gqlerror.Errorf("failed to reverse-lookup namespace by repo_id")
 	}
+	datastore.NormalizeNamespaceMappingContract(m)
 	return m, nil
 }
 
 // ListRepositoriesByNamespace lists paginated repositories in a namespace.
-func (s *Service) ListRepositoriesByNamespace(ctx context.Context, namespaceID string, params datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
-	result, err := s.store.ListRepositoriesByNamespace(ctx, namespaceID, params)
+func (s *Service) ListRepositoriesByNamespace(ctx context.Context, namespace string, params datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
+	result, err := s.store.ListRepositoriesByNamespace(ctx, namespace, params)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to list repositories")
+	}
+	return result, nil
+}
+
+// ListRepositories lists repositories globally when the datastore implements
+// the bounded global Repository access pattern.
+func (s *Service) ListRepositories(ctx context.Context, params datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
+	lister, ok := s.store.(datastore.GlobalRepositoryLister)
+	if !ok {
+		return nil, gqlerror.Errorf("global repository listing is not supported")
+	}
+	result, err := lister.ListRepositories(ctx, params)
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to list repositories")
 	}
@@ -777,8 +858,13 @@ func (s *Service) RenameRepository(ctx context.Context, repoID, newName, callerU
 		}
 		return nil, gqlerror.Errorf("failed to retrieve repository")
 	}
+	datastore.NormalizeRepositoryContract(repo)
 	oldName := repo.Name
-	if err := s.store.RenameRepository(ctx, repo.NamespaceID, oldName, newName); err != nil {
+	if oldName == newName {
+		return repo, nil
+	}
+	mutationCtx := datastore.WithMutationAudit(ctx, callerUsername, s.clock.Now().UTC())
+	if err := s.store.RenameRepository(mutationCtx, repo.Namespace, oldName, newName); err != nil {
 		s.logger.Error("failed to rename repository",
 			zap.String("repo_id", repoID),
 			zap.String("old_name", oldName),
@@ -786,6 +872,14 @@ func (s *Service) RenameRepository(ctx context.Context, repoID, newName, callerU
 			zap.Error(err),
 		)
 		return nil, gqlerror.Errorf("failed to rename repository")
+	}
+	persisted, err := s.store.GetRepository(ctx, repoID)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to retrieve renamed repository")
+	}
+	datastore.NormalizeRepositoryContract(persisted)
+	if persisted.Name == newName {
+		return persisted, nil
 	}
 	repo.Name = newName
 	repo.UpdateTimestamp = s.clock.Now().UTC()
@@ -808,7 +902,11 @@ func (s *Service) RenameRepository(ctx context.Context, repoID, newName, callerU
 }
 
 // TransferRepository transfers a repository to a different namespace. Storage is not moved.
-func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespaceID, callerUsername string) (*datastore.Repository, error) {
+func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespace, callerUsername string) (*datastore.Repository, error) {
+	toNamespaceName, err := s.canonicalNamespaceName(ctx, toNamespace)
+	if err != nil {
+		return nil, err
+	}
 	repo, err := s.store.GetRepository(ctx, repoID)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
@@ -816,18 +914,31 @@ func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespaceID,
 		}
 		return nil, gqlerror.Errorf("failed to retrieve repository")
 	}
-	fromNamespaceID := repo.NamespaceID
-	if err := s.store.TransferRepository(ctx, repoID, fromNamespaceID, toNamespaceID); err != nil {
+	datastore.NormalizeRepositoryContract(repo)
+	fromNamespace := repo.Namespace
+	if fromNamespace == toNamespaceName {
+		return repo, nil
+	}
+	mutationCtx := datastore.WithMutationAudit(ctx, callerUsername, s.clock.Now().UTC())
+	if err := s.store.TransferRepository(mutationCtx, repoID, fromNamespace, toNamespaceName); err != nil {
 		s.logger.Error("failed to transfer repository",
 			zap.String("repo_id", repoID),
-			zap.String("from_namespace_id", fromNamespaceID),
-			zap.String("to_namespace_id", toNamespaceID),
+			zap.String("from_namespace", fromNamespace),
+			zap.String("to_namespace", toNamespaceName),
 			zap.Error(err),
 		)
 		return nil, gqlerror.Errorf("failed to transfer repository")
 	}
-	repo.NamespaceID = toNamespaceID
-	repo.Namespace = toNamespaceID
+	persisted, err := s.store.GetRepository(ctx, repoID)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to retrieve transferred repository")
+	}
+	datastore.NormalizeRepositoryContract(persisted)
+	if persisted.Namespace == toNamespaceName {
+		return persisted, nil
+	}
+	repo.Namespace = toNamespaceName
+	repo.NamespaceID = toNamespaceName
 	repo.UpdateTimestamp = s.clock.Now().UTC()
 	repo.UpdateActor = callerUsername
 	expectedResourceVersion := repo.ResourceVersion
@@ -841,8 +952,8 @@ func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespaceID,
 	}
 	s.logger.Info("transfer repository",
 		zap.String("repo_id", repoID),
-		zap.String("from_namespace_id", fromNamespaceID),
-		zap.String("to_namespace_id", toNamespaceID),
+		zap.String("from_namespace", fromNamespace),
+		zap.String("to_namespace", toNamespaceName),
 	)
 	return repo, nil
 }
@@ -888,7 +999,8 @@ func (s *Service) DeleteRepository(ctx context.Context, repoID, _ string) error 
 			zap.String("rpc", "DeleteRepository"),
 		)
 	}
-	if err := s.store.DeleteNamespaceMapping(ctx, repo.NamespaceID, repo.Name); err != nil && !errors.Is(err, datastore.ErrNotFound) {
+	datastore.NormalizeRepositoryContract(repo)
+	if err := s.store.DeleteNamespaceMapping(ctx, repo.Namespace, repo.Name); err != nil && !errors.Is(err, datastore.ErrNotFound) {
 		s.logger.Error("failed to delete namespace mapping", zap.String("repo_id", repoID), zap.Error(err))
 		return gqlerror.Errorf("failed to delete namespace mapping")
 	}

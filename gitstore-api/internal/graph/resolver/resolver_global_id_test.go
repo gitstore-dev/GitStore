@@ -202,8 +202,9 @@ func seedGlobalIDTestData(t *testing.T, ctx context.Context, store datastore.Dat
 		ProductRefName:    "product-1",
 	}))
 	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{
-		ID:                globalIDTestRepositoryID,
-		NamespaceID:       globalIDTestNamespaceID,
+		UID:               globalIDTestRepositoryID,
+		Namespace:         "namespace-1",
+		RepositoryID:      globalIDTestRepositoryID,
 		Name:              "repository-1",
 		DefaultBranch:     "main",
 		StorageClass:      "default",

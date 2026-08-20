@@ -23,7 +23,7 @@ func (r *mutationResolver) CreateRepository(ctx context.Context, input model.Cre
 	if input.DefaultBranch != nil && *input.DefaultBranch != "" {
 		defaultBranch = *input.DefaultBranch
 	}
-	repo, err := r.service.CreateRepository(ctx, ns.ID, input.Name, defaultBranch, "default", callerUsernameOrAnon(ctx, r))
+	repo, err := r.service.CreateRepository(ctx, ns.Name, input.Name, defaultBranch, "default", callerUsernameOrAnon(ctx, r))
 	if err != nil {
 		return nil, err
 	}
@@ -32,8 +32,12 @@ func (r *mutationResolver) CreateRepository(ctx context.Context, input model.Cre
 		zap.String("name", input.Name),
 		zap.String("repo_id", repo.ID),
 	)
+	result, err := datastoreRepositoryToModelStrict(repo, ns, r.storageDataDir)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to hydrate repository: %v", err)
+	}
 	return &model.CreateRepositoryPayload{
-		Repository: datastoreRepositoryToModel(repo, ns, r.storageDataDir),
+		Repository: result,
 	}, nil
 }
 
@@ -47,7 +51,7 @@ func (r *mutationResolver) RenameRepository(ctx context.Context, input model.Ren
 	if err != nil {
 		return nil, err
 	}
-	ns, err := r.service.GetNamespaceByID(ctx, repo.NamespaceID)
+	ns, err := r.service.GetNamespaceByName(ctx, repo.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -55,8 +59,12 @@ func (r *mutationResolver) RenameRepository(ctx context.Context, input model.Ren
 		zap.String("repo_id", repoID),
 		zap.String("new_name", input.NewName),
 	)
+	result, err := datastoreRepositoryToModelStrict(repo, ns, r.storageDataDir)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to hydrate repository: %v", err)
+	}
 	return &model.RenameRepositoryPayload{
-		Repository: datastoreRepositoryToModel(repo, ns, r.storageDataDir),
+		Repository: result,
 	}, nil
 }
 
@@ -70,11 +78,11 @@ func (r *mutationResolver) TransferRepository(ctx context.Context, input model.T
 	if err != nil {
 		return nil, err
 	}
-	repo, err := r.service.TransferRepository(ctx, repoID, targetNsID, callerUsernameOrAnon(ctx, r))
+	ns, err := r.service.GetNamespaceByID(ctx, targetNsID)
 	if err != nil {
 		return nil, err
 	}
-	ns, err := r.service.GetNamespaceByID(ctx, targetNsID)
+	repo, err := r.service.TransferRepository(ctx, repoID, ns.Name, callerUsernameOrAnon(ctx, r))
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +90,12 @@ func (r *mutationResolver) TransferRepository(ctx context.Context, input model.T
 		zap.String("repo_id", repoID),
 		zap.String("to_namespace_id", targetNsID),
 	)
+	result, err := datastoreRepositoryToModelStrict(repo, ns, r.storageDataDir)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to hydrate repository: %v", err)
+	}
 	return &model.TransferRepositoryPayload{
-		Repository: datastoreRepositoryToModel(repo, ns, r.storageDataDir),
+		Repository: result,
 	}, nil
 }
 
@@ -113,32 +125,40 @@ func (r *queryResolver) Repository(ctx context.Context, by model.RepositoryBy) (
 		if err != nil {
 			return nil, err
 		}
-		ns, err := r.service.GetNamespaceByID(ctx, repo.NamespaceID)
+		ns, err := r.service.GetNamespaceByName(ctx, repo.Namespace)
 		if err != nil {
 			return nil, err
 		}
 		r.logger.Info("lookup repository", zap.String("repo_id", repoID))
-		return datastoreRepositoryToModel(repo, ns, r.storageDataDir), nil
+		result, err := datastoreRepositoryToModelStrict(repo, ns, r.storageDataDir)
+		if err != nil {
+			return nil, gqlerror.Errorf("failed to hydrate repository: %v", err)
+		}
+		return result, nil
 	}
 	if by.NamespacePath != nil {
 		ns, err := r.service.GetNamespaceByName(ctx, by.NamespacePath.Namespace)
 		if err != nil {
 			return nil, err
 		}
-		mapping, err := r.service.LookupRepository(ctx, ns.ID, by.NamespacePath.Name)
+		mapping, err := r.service.LookupRepository(ctx, ns.Name, by.NamespacePath.Name)
 		if err != nil {
 			return nil, gqlerror.Errorf("repository not found")
 		}
-		repo, err := r.service.GetRepository(ctx, mapping.RepoID)
+		repo, err := r.service.GetRepository(ctx, mapping.RepositoryID)
 		if err != nil {
 			return nil, err
 		}
 		r.logger.Info("lookup repository",
-			zap.String("namespace_id", ns.ID),
+			zap.String("namespace", ns.Name),
 			zap.String("name", by.NamespacePath.Name),
-			zap.String("repo_id", mapping.RepoID),
+			zap.String("repo_id", mapping.RepositoryID),
 		)
-		return datastoreRepositoryToModel(repo, ns, r.storageDataDir), nil
+		result, err := datastoreRepositoryToModelStrict(repo, ns, r.storageDataDir)
+		if err != nil {
+			return nil, gqlerror.Errorf("failed to hydrate repository: %v", err)
+		}
+		return result, nil
 	}
 	return nil, gqlerror.Errorf("repository: exactly one of id or namespacePath must be provided")
 }
@@ -150,9 +170,9 @@ func (r *queryResolver) Repositories(ctx context.Context, namespace string, firs
 		return nil, err
 	}
 	params := toPageParams(first, after, last, before)
-	result, err := r.service.ListRepositoriesByNamespace(ctx, ns.ID, params)
+	result, err := r.service.ListRepositoriesByNamespace(ctx, ns.Name, params)
 	if err != nil {
 		return nil, err
 	}
-	return BuildRepositoryConnection(result, ns, r.storageDataDir), nil
+	return BuildRepositoryConnection(result, ns, r.storageDataDir)
 }
