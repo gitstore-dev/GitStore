@@ -139,8 +139,7 @@ func TestRepositoryNodeIdentityUsesStableRelayIDAndMetadataUID(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, mustEncodeNodeID(nodeKindRepository, globalIDTestRepositoryID), repository.ID)
 	require.NotNil(t, repository.Metadata)
-	assert.Equal(t, globalIDTestRepositoryID, repository.Metadata.UID)
-	assert.NotEqual(t, repository.ID, repository.Metadata.UID)
+	assert.Equal(t, repository.ID, repository.Metadata.UID)
 	assert.Equal(t, "1", repository.Metadata.ResourceVersion)
 	assert.Equal(t, int32(1), repository.Metadata.Generation)
 }

@@ -130,7 +130,7 @@ func createRepositoryAsUser(
 	repository := data.CreateRepository.Repository
 	assert.Equal(t, namespace, repository.Metadata.Namespace)
 	assert.NotEmpty(t, repository.Metadata.UID)
-	assert.NotEqual(t, repository.ID, repository.Metadata.UID)
+	assert.Equal(t, repository.ID, repository.Metadata.UID)
 	assert.Equal(t, token[len("test-user:"):], repository.CreatedBy)
 	return repository.ID
 }
@@ -190,7 +190,7 @@ func assertRepositoryNamespaceIsolation(
 		assert.Equal(t, namespace, repository.Metadata.Namespace)
 		assert.NotEqual(t, forbiddenName, repository.Metadata.Name)
 		assert.NotEmpty(t, repository.Metadata.UID)
-		assert.NotEqual(t, repository.ID, repository.Metadata.UID)
+		assert.Equal(t, repository.ID, repository.Metadata.UID)
 		if repository.Metadata.Name == expectedName {
 			found = true
 			assert.Equal(t, expectedActor, repository.CreatedBy)

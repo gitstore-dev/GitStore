@@ -1089,7 +1089,7 @@ func datastoreRepositoryToModelStrict(r *datastore.Repository, ns *datastore.Nam
 			Namespace:         namespace,
 			Labels:            stringMapToJSONMap(repository.Labels),
 			Annotations:       stringMapToJSONMap(repository.Annotations),
-			UID:               repository.UID,
+			UID:               nodeID,
 			ResourceVersion:   repository.ResourceVersion,
 			Generation:        int32(repository.Generation),
 			CreationTimestamp: repository.CreationTimestamp,

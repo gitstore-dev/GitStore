@@ -51,7 +51,7 @@ func TestRepositoryVersionContract_CreateRenameTransfer(t *testing.T) {
 	})
 
 	assert.NotEmpty(t, created.Metadata.UID)
-	assert.NotEqual(t, created.ID, created.Metadata.UID)
+	assert.Equal(t, created.ID, created.Metadata.UID)
 	assert.Equal(t, "1", created.Metadata.ResourceVersion)
 	assert.Equal(t, 1, created.Metadata.Generation)
 	assert.Equal(t, from, created.Metadata.Namespace)
