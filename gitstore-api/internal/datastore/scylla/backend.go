@@ -347,7 +347,7 @@ func (s *scyllaDatastore) CreateProduct(ctx context.Context, p *datastore.Produc
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(insNS, row.Namespace, row.CreationTimestamp, row.UID, row.Name, row.APIVersion, row.Kind,
 		row.Generation, row.ResourceVersion, row.Revision, row.Labels, row.Annotations,
-		row.OwnerRefs, row.RepositoryID, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
+		row.OwnerReferences, row.RepositoryID, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
 	b.Query(insName, row.Namespace, row.Name, row.UID, row.CreationTimestamp)
 	b.Query(insUID, row.UID, row.Namespace, row.CreationTimestamp)
 	if err := s.session.ExecuteBatch(b); err != nil {
@@ -439,13 +439,13 @@ func (s *scyllaDatastore) UpdateProduct(ctx context.Context, p *datastore.Produc
 	existingUID := mustParseUUID(existing.UID)
 
 	const updNS = "UPDATE products_by_namespace SET api_version=?, kind=?, generation=?, resource_version=?, " +
-		"revision=?, labels=?, annotations=?, owner_refs=?, repository_id=?, source_path=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
+		"revision=?, labels=?, annotations=?, owner_references=?, repository_id=?, source_path=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
 		"WHERE namespace=? AND creation_timestamp=? AND uid=?"
 
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(updNS,
 		row.APIVersion, row.Kind, row.Generation, row.ResourceVersion,
-		row.Revision, row.Labels, row.Annotations, row.OwnerRefs,
+		row.Revision, row.Labels, row.Annotations, row.OwnerReferences,
 		row.RepositoryID, row.SourcePath,
 		row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
 		row.Namespace, row.CreationTimestamp, existingUID,
@@ -861,7 +861,7 @@ func (s *scyllaDatastore) CreateProductVariant(ctx context.Context, v *datastore
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(insNS, row.Namespace, row.CreationTimestamp, row.UID, row.Name, row.APIVersion, row.Kind,
 		row.Generation, row.ResourceVersion, row.Revision, row.Labels, row.Annotations,
-		row.OwnerRefs, row.SKU, row.ProductRefName, row.RepositoryID, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
+		row.OwnerReferences, row.SKU, row.ProductRefName, row.RepositoryID, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status)
 	b.Query(insName, row.Namespace, row.Name, row.UID, row.CreationTimestamp)
 	b.Query(insUID, row.UID, row.Namespace, row.CreationTimestamp)
 	b.Query(insSKU, row.Namespace, row.SKU, row.UID, row.CreationTimestamp)
@@ -981,13 +981,13 @@ func (s *scyllaDatastore) UpdateProductVariant(ctx context.Context, v *datastore
 	existingUID := mustParseUUID(existing.UID)
 
 	const updNS = "UPDATE product_variant_by_namespace SET api_version=?, kind=?, generation=?, resource_version=?, " +
-		"revision=?, labels=?, annotations=?, owner_refs=?, sku=?, product_ref_name=?, repository_id=?, source_path=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
+		"revision=?, labels=?, annotations=?, owner_references=?, sku=?, product_ref_name=?, repository_id=?, source_path=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
 		"WHERE namespace=? AND creation_timestamp=? AND uid=?"
 
 	b := s.session.Batch(gocql.LoggedBatch).WithContext(ctx)
 	b.Query(updNS,
 		row.APIVersion, row.Kind, row.Generation, row.ResourceVersion,
-		row.Revision, row.Labels, row.Annotations, row.OwnerRefs,
+		row.Revision, row.Labels, row.Annotations, row.OwnerReferences,
 		row.SKU, row.ProductRefName, row.RepositoryID, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
 		row.Namespace, row.CreationTimestamp, existingUID,
 	)
@@ -1302,9 +1302,9 @@ func (s *scyllaDatastore) HasCatalogResources(ctx context.Context, repoID string
 // ── row conversion helpers ────────────────────────────────────────────────────
 
 func toProductRow(p *datastore.Product) *productRow {
-	ownerRefs := ""
-	if len(p.OwnerRefs) > 0 {
-		ownerRefs = string(p.OwnerRefs)
+	ownerReferences := ""
+	if len(p.OwnerReferences) > 0 {
+		ownerReferences = string(p.OwnerReferences)
 	}
 	spec := ""
 	if len(p.Spec) > 0 {
@@ -1326,7 +1326,7 @@ func toProductRow(p *datastore.Product) *productRow {
 		Revision:          p.Revision,
 		Labels:            p.Labels,
 		Annotations:       p.Annotations,
-		OwnerRefs:         ownerRefs,
+		OwnerRefs:         ownerReferences,
 		RepositoryID:      p.RepositoryID,
 		SourcePath:        p.SourcePath,
 		GitCommitSHA:      p.GitCommitSHA,
@@ -1350,7 +1350,7 @@ func fromProductRow(r *productRow) *datastore.Product {
 		Revision:          r.Revision,
 		Labels:            r.Labels,
 		Annotations:       r.Annotations,
-		OwnerRefs:         jsonOrNil(r.OwnerRefs),
+		OwnerReferences:   jsonOrNil(r.OwnerRefs),
 		RepositoryID:      r.RepositoryID,
 		SourcePath:        r.SourcePath,
 		GitCommitSHA:      r.GitCommitSHA,
@@ -1485,7 +1485,7 @@ func toProductVariantRow(v *datastore.ProductVariant) *productVariantRow {
 		Revision:          v.Revision,
 		Labels:            v.Labels,
 		Annotations:       v.Annotations,
-		OwnerRefs:         string(v.OwnerRefs),
+		OwnerRefs:         string(v.OwnerReferences),
 		SKU:               v.SKU,
 		ProductRefName:    v.ProductRefName,
 		RepositoryID:      v.RepositoryID,
@@ -1511,7 +1511,7 @@ func fromProductVariantRow(r *productVariantRow) *datastore.ProductVariant {
 		Revision:          r.Revision,
 		Labels:            r.Labels,
 		Annotations:       r.Annotations,
-		OwnerRefs:         jsonOrNil(r.OwnerRefs),
+		OwnerReferences:   jsonOrNil(r.OwnerRefs),
 		SKU:               r.SKU,
 		ProductRefName:    r.ProductRefName,
 		RepositoryID:      r.RepositoryID,
