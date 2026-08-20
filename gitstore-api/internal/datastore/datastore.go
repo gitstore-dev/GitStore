@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
@@ -59,6 +58,19 @@ type PageResult[T any] struct {
 	HasNext     bool
 	HasPrevious bool
 	TotalCount  int32 // -1 if unknown/expensive to compute
+}
+
+// GlobalRepositoryLister is the optional contract for backends that provide a
+// globally ordered Repository connection. Backends whose exact count requires
+// scanning historical partitions return TotalCount = -1.
+type GlobalRepositoryLister interface {
+	ListRepositories(ctx context.Context, page PageParams) (*PageResult[Repository], error)
+}
+
+// RepositoryNamespaceLookup is the canonical reverse Repository mapping
+// contract. LookupNamespaceByRepoID remains on Datastore during migration.
+type RepositoryNamespaceLookup interface {
+	LookupNamespaceByRepositoryID(ctx context.Context, repositoryID string) (*NamespaceMapping, error)
 }
 
 // CategoryTaxonomyStatusPatch is a partial-merge update to a
@@ -149,18 +161,6 @@ func ApplyCategoryTaxonomyStatusPatch(c *CategoryTaxonomy, patch CategoryTaxonom
 	return nil
 }
 
-// nextResourceVersion advances an opaque numeric-string resourceVersion.
-// Mirrors gitstore-api/internal/cataloggrpc/server.go's identically-named
-// admission-time helper (kept separate to avoid an import cycle between
-// datastore and cataloggrpc).
-func nextResourceVersion(current string) string {
-	n, err := strconv.ParseInt(current, 10, 64)
-	if err != nil || n < 1 {
-		return "1"
-	}
-	return strconv.FormatInt(n+1, 10)
-}
-
 // Datastore is the persistence contract for all backends.
 //
 // All implementations must be safe for concurrent use.
@@ -211,41 +211,41 @@ type Datastore interface {
 
 	// Namespace operations
 	CreateNamespace(ctx context.Context, ns *Namespace) error
-	GetNamespace(ctx context.Context, id string) (*Namespace, error)
+	GetNamespace(ctx context.Context, uid string) (*Namespace, error)
 	GetNamespaceByName(ctx context.Context, name string) (*Namespace, error)
 	ListNamespaces(ctx context.Context, page PageParams) (*PageResult[Namespace], error)
 	UpdateNamespace(ctx context.Context, ns *Namespace, expectedResourceVersion string) error
-	DeleteNamespace(ctx context.Context, id string) error
-	DeleteNamespaceWithResourceVersion(ctx context.Context, id, expectedResourceVersion string) error
+	DeleteNamespace(ctx context.Context, uid string) error
+	DeleteNamespaceWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 	// HasRepositories reports whether at least one Repository record
-	// currently has NamespaceID == namespaceID. Used by DeleteNamespace to
+	// currently belongs to namespace. Used by DeleteNamespace to
 	// enforce FR-001 (reject deletion while repositories remain). Must be
 	// an existence check (LIMIT 1 / equivalent), not a full count.
-	HasRepositories(ctx context.Context, namespaceID string) (bool, error)
+	HasRepositories(ctx context.Context, namespace string) (bool, error)
 
 	// Repository operations
 	CreateRepository(ctx context.Context, r *Repository) error
-	GetRepository(ctx context.Context, id string) (*Repository, error)
-	ListRepositoriesByNamespace(ctx context.Context, namespaceID string, page PageParams) (*PageResult[Repository], error)
+	GetRepository(ctx context.Context, uid string) (*Repository, error)
+	ListRepositoriesByNamespace(ctx context.Context, namespace string, page PageParams) (*PageResult[Repository], error)
 	// UpdateRepository replaces a repository only when its persisted
 	// resourceVersion matches expectedResourceVersion. It returns ErrConflict
 	// when another writer has advanced the record since it was read.
 	UpdateRepository(ctx context.Context, r *Repository, expectedResourceVersion string) error
-	DeleteRepository(ctx context.Context, id string) error
+	DeleteRepository(ctx context.Context, uid string) error
 	// HasCatalogResources reports whether at least one Product,
 	// ProductVariant, CategoryTaxonomy, or Collection record currently has
-	// RepositoryID == repoID. Used by DeleteRepository to enforce FR-004
+	// RepositoryID == repositoryID. Used by DeleteRepository to enforce FR-004
 	// (reject deletion while catalog resources remain). Must be an
 	// existence check (LIMIT 1 / equivalent), not a full count.
-	HasCatalogResources(ctx context.Context, repoID string) (bool, error)
+	HasCatalogResources(ctx context.Context, repositoryID string) (bool, error)
 
 	// NamespaceMapping operations (lookup contract)
 	CreateNamespaceMapping(ctx context.Context, m *NamespaceMapping) error
-	LookupRepository(ctx context.Context, namespaceID, name string) (*NamespaceMapping, error)
-	LookupNamespaceByRepoID(ctx context.Context, repoID string) (*NamespaceMapping, error)
-	RenameRepository(ctx context.Context, namespaceID, oldName, newName string) error
-	TransferRepository(ctx context.Context, repoID, fromNamespaceID, toNamespaceID string) error
-	DeleteNamespaceMapping(ctx context.Context, namespaceID, name string) error
+	LookupRepository(ctx context.Context, namespace, name string) (*NamespaceMapping, error)
+	LookupNamespaceByRepoID(ctx context.Context, repositoryID string) (*NamespaceMapping, error)
+	RenameRepository(ctx context.Context, namespace, oldName, newName string) error
+	TransferRepository(ctx context.Context, repositoryID, fromNamespace, toNamespace string) error
+	DeleteNamespaceMapping(ctx context.Context, namespace, name string) error
 
 	// Close lifecycle function
 	Close() error

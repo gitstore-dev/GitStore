@@ -16,23 +16,42 @@ const (
 	NamespaceTierOrganization NamespaceTier = "organisation"
 )
 
-// Namespace is the primary isolation boundary for repositories.
+// Namespace is the cluster-scoped isolation boundary for repositories.
 type Namespace struct {
-	ID                string
-	Name              string
-	Title             string
-	Tier              NamespaceTier
-	Spec              json.RawMessage
+	APIVersion string
+	Kind       string
+	UID        string
+	Name       string
+
+	Generation      int64
+	ResourceVersion string
+	Revision        string
+
 	CreationTimestamp time.Time
 	CreationActor     string
 	UpdateTimestamp   time.Time
 	UpdateActor       string
 
-	Generation        int64
-	ResourceVersion   string
-	Status            json.RawMessage
+	Labels          map[string]string
+	Annotations     map[string]string
+	OwnerReferences json.RawMessage
+	Finalizers      []string
+
 	DeletionTimestamp *time.Time
-	Finalizers        []string
+
+	SourcePath   string
+	GitCommitSHA string
+	GitRef       string
+
+	Spec   json.RawMessage
+	Body   string
+	Status json.RawMessage
+
+	Title string
+	Tier  NamespaceTier
+
+	// ID is retained during the datastore naming migration. New code uses UID.
+	ID string
 }
 
 // Product is the fully hydrated catalogue product record stored in the
@@ -56,14 +75,19 @@ type Product struct {
 	Generation        int64
 	ResourceVersion   string
 	CreationTimestamp time.Time
+	CreationActor     string
+	UpdateTimestamp   time.Time
+	UpdateActor       string
 	Revision          string // e.g. "main@sha1:abc123"
 
 	// Author-supplied classification
 	Labels      map[string]string
 	Annotations map[string]string
 
-	// Ownership (JSON-encoded []OwnerReference)
-	OwnerRefs json.RawMessage
+	// Ownership and lifecycle
+	OwnerReferences   json.RawMessage
+	Finalizers        []string
+	DeletionTimestamp *time.Time
 
 	// Git provenance
 	RepositoryID string
@@ -95,11 +119,19 @@ type CategoryTaxonomy struct {
 	Generation        int64
 	ResourceVersion   string
 	CreationTimestamp time.Time
+	CreationActor     string
+	UpdateTimestamp   time.Time
+	UpdateActor       string
 	Revision          string // e.g. "main@sha1:abc123"
 
 	// Author-supplied classification
 	Labels      map[string]string
 	Annotations map[string]string
+
+	// Ownership and lifecycle
+	OwnerReferences   json.RawMessage
+	Finalizers        []string
+	DeletionTimestamp *time.Time
 
 	// Hierarchy — adjacency pointer + materialized path
 	ParentName   string // spec.parentRef.name; empty string for root categories
@@ -136,11 +168,19 @@ type Collection struct {
 	Generation        int64
 	ResourceVersion   string
 	CreationTimestamp time.Time
+	CreationActor     string
+	UpdateTimestamp   time.Time
+	UpdateActor       string
 	Revision          string // e.g. "main@sha1:abc123"
 
 	// Author-supplied classification
 	Labels      map[string]string
 	Annotations map[string]string
+
+	// Ownership and lifecycle
+	OwnerReferences   json.RawMessage
+	Finalizers        []string
+	DeletionTimestamp *time.Time
 
 	// Git provenance
 	RepositoryID string
@@ -176,14 +216,19 @@ type ProductVariant struct {
 	Generation        int64
 	ResourceVersion   string
 	CreationTimestamp time.Time
+	CreationActor     string
+	UpdateTimestamp   time.Time
+	UpdateActor       string
 	Revision          string // e.g. "main@sha1:abc123"
 
 	// Author-supplied classification
 	Labels      map[string]string
 	Annotations map[string]string
 
-	// Ownership (JSON-encoded []OwnerReference)
-	OwnerRefs json.RawMessage
+	// Ownership and lifecycle
+	OwnerReferences   json.RawMessage
+	Finalizers        []string
+	DeletionTimestamp *time.Time
 
 	// Denormalised index fields (always kept in sync with Spec)
 	SKU            string // spec.sku
@@ -204,33 +249,59 @@ type ProductVariant struct {
 }
 
 // Repository represents a git repository with a stable internal identity.
-// The physical storage path is derived from ID using the fanout formula and is never stored.
+// The physical storage path is derived from UID using the fanout formula and is never stored.
 type Repository struct {
-	ID                string // UUIDv7 stable identifier (repo_id)
-	NamespaceID       string // UUIDv7 of the owning namespace
-	Name              string // Human-readable name within the namespace (mutable on rename)
-	DefaultBranch     string // e.g. "main"
-	StorageClass      string // Storage tier tag; default "default"
+	APIVersion string
+	Kind       string
+	UID        string
+	Namespace  string
+	Name       string
+
+	Generation      int64
+	ResourceVersion string
+	Revision        string
+
 	CreationTimestamp time.Time
 	CreationActor     string
 	UpdateTimestamp   time.Time
 	UpdateActor       string
 
-	// Declarative resource versioning and system-owned status.
-	Generation      int64
-	ResourceVersion string
-	Status          json.RawMessage
+	Labels          map[string]string
+	Annotations     map[string]string
+	OwnerReferences json.RawMessage
+	Finalizers      []string
+
+	DeletionTimestamp *time.Time
+
+	RepositoryID string
+	SourcePath   string
+	GitCommitSHA string
+	GitRef       string
+
+	Spec   json.RawMessage
+	Body   string
+	Status json.RawMessage
+
+	DefaultBranch string
+	StorageClass  string
 
 	// Push policy limits. Zero means no limit enforced (FR-015).
 	MaxPackSizeBytes int64
 	MaxFileSizeBytes int64
+
+	// ID and NamespaceID are retained during the datastore naming migration.
+	// New code uses UID and Namespace.
+	ID          string
+	NamespaceID string
 }
 
-// NamespaceMapping is the join record binding (NamespaceID, Name) → RepoID.
-// Primary lookup: (NamespaceID, Name) → RepoID.
-// Secondary lookup: RepoID → (NamespaceID, Name) for reverse resolution.
+// NamespaceMapping is the join record binding (Namespace, Name) → RepositoryID.
 type NamespaceMapping struct {
-	NamespaceID string // UUIDv7 of the owning namespace (partition key)
-	Name        string // Repository name within the namespace (clustering key)
-	RepoID      string // Target repo_id (UUIDv7)
+	Namespace    string
+	Name         string
+	RepositoryID string
+
+	// NamespaceID and RepoID are retained during the datastore naming migration.
+	NamespaceID string
+	RepoID      string
 }
