@@ -27,12 +27,16 @@ NAMESPACE_DISPLAY_NAME ?= GitStore Test
 NAMESPACE_TIER ?= USER
 REPOSITORY ?= catalog
 DEFAULT_BRANCH ?= main
+SCYLLA_TEST_ADDR ?= 127.0.0.1:9042
+SCYLLA_CAPACITY_PRODUCTS ?= 5000000
+SCYLLA_CAPACITY_CONCURRENCY ?= 32
+SCYLLA_CAPACITY_DURATION ?= 10m
 
 export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CACHE
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
 .PHONY: help git api controller dev compose scylla compose-scylla ps logs stop down
-.PHONY: build test lint license-check pr-ready
+.PHONY: build test lint license-check pr-ready test-scylla-hardening test-scylla-integration test-scylla-capacity
 .PHONY: bootstrap bootstrap-token bootstrap-namespace bootstrap-repository git-clean-data
 .PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools gen-admin-password gen-jwt-secret gen-hmac-secret
 
@@ -46,6 +50,10 @@ help: ## Show available targets and common variables.
 	@printf "  API_URL=%s\n" "$(API_URL)"
 	@printf "  ADMIN_USERNAME=%s\n" "$(ADMIN_USERNAME)"
 	@printf "  ADMIN_PASSWORD=<password> Required for login unless BOOTSTRAP_TOKEN or cached token is available\n"
+	@printf "  SCYLLA_TEST_ADDR=%s\n" "$(SCYLLA_TEST_ADDR)"
+	@printf "  SCYLLA_CAPACITY_PRODUCTS=%s\n" "$(SCYLLA_CAPACITY_PRODUCTS)"
+	@printf "  SCYLLA_CAPACITY_CONCURRENCY=%s\n" "$(SCYLLA_CAPACITY_CONCURRENCY)"
+	@printf "  SCYLLA_CAPACITY_DURATION=%s\n" "$(SCYLLA_CAPACITY_DURATION)"
 	@printf "  BOOTSTRAP_TOKEN=<token>   Use an existing bearer token for bootstrap\n"
 	@printf "  NAMESPACE=%s REPOSITORY=%s DEFAULT_BRANCH=%s\n" "$(NAMESPACE)" "$(REPOSITORY)" "$(DEFAULT_BRANCH)"
 
@@ -144,6 +152,21 @@ test: ## Run Rust and Go test suites.
 	@cd "$(GIT_SERVICE_DIR)" && cargo test --verbose
 	@cd "$(API_DIR)" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 	@cd "$(CONTROLLER_MANAGER_DIR)" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+test-scylla-hardening: ## Run focused datastore hardening tests without an external Scylla instance.
+	@cd "$(API_DIR)" && go test -count=1 ./internal/datastore/... ./tests/contract/datastore/...
+
+test-scylla-integration: ## Run tagged datastore hardening tests against Scylla.
+	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
+		go test -tags scylla -count=1 -timeout 180s ./internal/datastore/scylla/... ./tests/contract/datastore/...
+
+test-scylla-capacity: ## Run the opt-in Scylla capacity and soak test.
+	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
+		GITSTORE_SCYLLA_CAPACITY_PRODUCTS="$(SCYLLA_CAPACITY_PRODUCTS)" \
+		GITSTORE_SCYLLA_CAPACITY_CONCURRENCY="$(SCYLLA_CAPACITY_CONCURRENCY)" \
+		GITSTORE_SCYLLA_CAPACITY_DURATION="$(SCYLLA_CAPACITY_DURATION)" \
+		GITSTORE_SCYLLA_CAPACITY_RUN=1 \
+		go test -tags scylla -count=1 -timeout 0 -run TestScyllaCapacity ./internal/datastore/scylla/...
 
 lint: ## Run Rust formatting/clippy and Go formatting/vet/staticcheck.
 	@cd "$(GIT_SERVICE_DIR)" && cargo fmt --all -- --check

@@ -4,6 +4,7 @@
 package scylla
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -14,12 +15,63 @@ import (
 )
 
 func TestNamespaceTablesMatchQueryAccessPatterns(t *testing.T) {
-	assert.Equal(t, []string{"id"}, NamespaceByID.Metadata().PartKey)
-	assert.Empty(t, NamespaceByID.Metadata().SortKey)
+	assert.Equal(t, []string{"uid"}, NamespaceByUID.Metadata().PartKey)
+	assert.Empty(t, NamespaceByUID.Metadata().SortKey)
 	assert.Equal(t, []string{"name"}, NamespaceByName.Metadata().PartKey)
 	assert.Equal(t, []string{"bucket"}, NamespaceByBucket.Metadata().PartKey)
-	assert.Equal(t, []string{"creation_timestamp", "id"}, NamespaceByBucket.Metadata().SortKey)
-	assert.Equal(t, []string{"creation_timestamp", "id"}, Repository.Metadata().SortKey)
+	assert.Equal(t, []string{"creation_timestamp", "uid"}, NamespaceByBucket.Metadata().SortKey)
+	assert.Equal(t, []string{"uid"}, RepositoryByUID.Metadata().PartKey)
+	assert.Equal(t, []string{"namespace", "bucket"}, RepositoryByNamespace.Metadata().PartKey)
+	assert.Equal(t, []string{"creation_timestamp", "uid"}, RepositoryByNamespace.Metadata().SortKey)
+	assert.Equal(t, []string{"bucket"}, RepositoryByBucket.Metadata().PartKey)
+	assert.Equal(t, []string{"creation_timestamp", "uid"}, RepositoryByBucket.Metadata().SortKey)
+}
+
+func TestAuthoritativeTablesUseCanonicalResourceEnvelope(t *testing.T) {
+	required := []string{
+		"api_version",
+		"kind",
+		"uid",
+		"name",
+		"generation",
+		"resource_version",
+		"revision",
+		"creation_timestamp",
+		"creation_actor",
+		"update_timestamp",
+		"update_actor",
+		"labels",
+		"annotations",
+		"owner_references",
+		"finalizers",
+		"deletion_timestamp",
+		"source_path",
+		"git_commit_sha",
+		"git_ref",
+		"spec",
+		"body",
+		"status",
+	}
+
+	for name, metadata := range map[string][]string{
+		"Namespace":        NamespaceByUID.Metadata().Columns,
+		"Repository":       RepositoryByUID.Metadata().Columns,
+		"Product":          ProductByNamespace.Metadata().Columns,
+		"ProductVariant":   ProductVariantByNamespace.Metadata().Columns,
+		"Collection":       Collection.Metadata().Columns,
+		"CategoryTaxonomy": CategoryTaxonomy.Metadata().Columns,
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Subset(t, metadata, required)
+			if name != "Namespace" {
+				assert.Contains(t, metadata, "namespace")
+				assert.Contains(t, metadata, "repository_id")
+			} else {
+				assert.NotContains(t, metadata, "namespace")
+				assert.NotContains(t, metadata, "repository_id")
+			}
+		})
+	}
 }
 
 func TestNamespaceBucketsForPage(t *testing.T) {
@@ -42,17 +94,24 @@ func TestInitialSchemaUsesQueryFirstNamespaceTables(t *testing.T) {
 	require.NoError(t, err)
 	schema := string(content)
 
-	assert.Contains(t, schema, "CREATE TABLE IF NOT EXISTS namespaces_by_id")
+	assert.Contains(t, schema, "CREATE TABLE IF NOT EXISTS namespaces_by_uid")
 	assert.Contains(t, schema, "CREATE TABLE IF NOT EXISTS namespaces_by_name")
 	assert.Contains(t, schema, "CREATE TABLE IF NOT EXISTS namespaces_by_bucket")
-	assert.Contains(t, schema, "creation_actor      text")
-	assert.Contains(t, schema, "update_timestamp    timestamp")
-	assert.Contains(t, schema, "update_actor        text")
-	assert.Contains(t, schema, "PRIMARY KEY ((bucket), creation_timestamp, id)")
+	assert.Contains(t, schema, "api_version          text")
+	assert.Contains(t, schema, "owner_references     text")
+	assert.Contains(t, schema, "body                 text")
+	assert.Contains(t, schema, "creation_actor       text")
+	assert.Contains(t, schema, "update_timestamp     timestamp")
+	assert.Contains(t, schema, "update_actor         text")
+	assert.Contains(t, schema, "PRIMARY KEY ((bucket), creation_timestamp, uid)")
 	assert.NotContains(t, schema, "CREATE TABLE IF NOT EXISTS namespaces (")
+	assert.NotContains(t, schema, "namespaces_by_id")
 	assert.NotContains(t, schema, "ALTER TABLE")
 	assert.NotContains(t, schema, "identifier")
 	assert.NotContains(t, schema, "display_name")
+	assert.NotContains(t, schema, "'all'")
+	assert.Equal(t, strings.Count(schema, "CREATE TABLE IF NOT EXISTS"), strings.Count(schema, "gc_grace_seconds = 864000"))
+	assert.NotContains(t, schema, "TimeWindowCompactionStrategy")
 }
 
 func TestScyllaSchemaUsesTwoAlphaBaselineMigrations(t *testing.T) {
@@ -70,4 +129,14 @@ func TestScyllaSchemaUsesTwoAlphaBaselineMigrations(t *testing.T) {
 		"001_initial_schema.cql",
 		"002_secondary_indexes.cql",
 	}, names)
+}
+
+func TestSecondaryIndexMigrationIsIntentionallyEmpty(t *testing.T) {
+	content, err := migrations.Files.ReadFile("002_secondary_indexes.cql")
+	require.NoError(t, err)
+	schema := string(content)
+
+	assert.NotContains(t, schema, "CREATE INDEX")
+	assert.NotContains(t, schema, "CREATE CUSTOM INDEX")
+	assert.Contains(t, schema, "Query-first tables")
 }
