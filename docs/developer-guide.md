@@ -127,6 +127,43 @@ GITSTORE_TEST_SCYLLA_ADDR=127.0.0.1:9042 \
   go test -tags scylla -v -timeout 10m ./tests/contract/datastore/... ./internal/datastore/scylla/...
 ```
 
+### Projection audit, repair, and capacity validation
+
+The operational CLI compares authoritative Namespace, Repository, Product,
+CategoryTaxonomy, Collection, and ProductVariant rows with their query
+projections:
+
+```bash
+cd gitstore-api
+GITSTORE_DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
+  go run ./cmd/gitctl scylla-projection-audit
+GITSTORE_DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
+  go run ./cmd/gitctl scylla-projection-repair --dry-run
+GITSTORE_DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
+  go run ./cmd/gitctl scylla-projection-repair --confirm
+```
+
+Plans are stable JSON. Apply checks authoritative identity/resource version,
+uses conditional projection mutations, and performs a post-repair audit. Never
+reuse an old plan after a concurrent-writer error; audit again. Full operator
+procedure: [`runbooks/scylla-projection-repair.md`](runbooks/scylla-projection-repair.md).
+
+The capacity test is intentionally opt-in and requires a dedicated preloaded
+Scylla environment:
+
+```bash
+cd gitstore-api
+SCYLLA_TEST_ADDR=127.0.0.1:9042 \
+GITSTORE_SCYLLA_CAPACITY_RUN=1 \
+GITSTORE_SCYLLA_CAPACITY_PRODUCTS=5000000 \
+go test -tags scylla -run 'TestScyllaCapacity' -count=1 -timeout 30m \
+  ./internal/datastore/scylla
+```
+
+It asserts the 100 MiB partition ceiling, 10 MiB hot target, bounded page
+limits, sustained projection mutation, and two independent clients. Add
+`GITSTORE_SCYLLA_CAPACITY_SOAK_DURATION=2h` only for a scheduled soak.
+
 ## Git And Admission Flow
 
 The API is the Git Smart HTTP front door. The Rust Git service is gRPC-only storage and transport.

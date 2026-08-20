@@ -56,6 +56,9 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `make bootstrap-namespace` / `make bootstrap-repository` — create only one bootstrap resource. `bootstrap-repository` requires the namespace to exist.
 - `make git-clean-data CONFIRM=1` — remove the native local git-service repository data directory only; does not remove Docker volumes.
 - `make build`, `make test`, `make lint`, `make license-check`, `make pr-ready` — aggregate development and PR readiness checks.
+- `make test-scylla-hardening` — run focused datastore contracts without an external Scylla instance.
+- `make test-scylla-integration SCYLLA_TEST_ADDR=<host:port>` — run tagged Scylla datastore contracts.
+- `make test-scylla-capacity` — run the opt-in capacity/soak test; configure `SCYLLA_CAPACITY_PRODUCTS`, `SCYLLA_CAPACITY_CONCURRENCY`, and `SCYLLA_CAPACITY_DURATION`.
 - `make admin-compose`, `make admin-stop`, `make admin-down`, `make admin-logs` — optional admin compose wrappers.
 
 Common bootstrap variables:

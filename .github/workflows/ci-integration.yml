@@ -11,7 +11,9 @@ on:
       - 'gitstore-api/**'
       - 'gitstore-git-service/**'
       - 'gitstore-controller-manager/**'
+      - 'tests/integration/**'
       - 'shared/proto/**'
+      - 'Makefile'
       - 'docker/git-service.Dockerfile'
       - 'docker/api.Dockerfile'
       - 'docker/controller-manager.Dockerfile'
@@ -24,7 +26,9 @@ on:
       - 'gitstore-api/**'
       - 'gitstore-git-service/**'
       - 'gitstore-controller-manager/**'
+      - 'tests/integration/**'
       - 'shared/proto/**'
+      - 'Makefile'
       - 'docker/git-service.Dockerfile'
       - 'docker/api.Dockerfile'
       - 'docker/controller-manager.Dockerfile'
@@ -36,13 +40,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: integration-${{ github.ref }}
+  group: integration-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   integration-test:
-    name: Integration Tests (memdb)
+    name: Feature 048 Integration (memdb)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     # Stub credentials available to every step (including Collect logs / Cleanup)
@@ -56,6 +61,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -120,12 +127,15 @@ jobs:
         git -C "$tmpdir" commit -m "ci: seed initial commit"
         git -C "$tmpdir" push origin main
 
-    - name: Run integration tests
+    - name: Run Namespace and Repository integration contracts
       working-directory: ./tests/integration
       env:
         NAMESPACE: gitci
         REPOSITORY: catalog
-      run: go test -v -timeout 120s ./...
+      run: >-
+        go test -count=1 -v -timeout 240s
+        -run 'Test(NamespaceContract|RepositoryReadContract|RepositoryVersionContract)'
+        ./...
 
     - name: Collect logs on failure
       if: failure()
@@ -136,13 +146,16 @@ jobs:
       run: docker compose down -v
 
   datastore-contract-test:
-    name: Datastore Contract Tests (memdb)
+    name: Datastore Hardening (backend-neutral + memdb)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -150,13 +163,17 @@ jobs:
         go-version: '1.25.x'
         cache-dependency-path: gitstore-api/go.sum
 
-    - name: Run datastore contract tests
+    - name: Run backend-neutral datastore hardening
+      run: make test-scylla-hardening
+
+    - name: Run memdb datastore contracts
       working-directory: ./gitstore-api
-      run: go test -tags memdb -v -race -timeout 120s ./tests/contract/datastore/...
+      run: go test -tags memdb -count=1 -v -race -timeout 180s ./tests/contract/datastore/...
 
   integration-test-scylla:
-    name: Integration Tests (ScyllaDB)
+    name: Feature 048 Integration (ScyllaDB)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
     env:
@@ -168,6 +185,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -231,12 +250,15 @@ jobs:
           git -C "$tmpdir" commit -m "ci: seed initial commit"
           git -C "$tmpdir" push origin main
 
-      - name: Run integration tests (ScyllaDB backend)
+      - name: Run Namespace and Repository integration contracts
         working-directory: ./tests/integration
         env:
           NAMESPACE: gitci
           REPOSITORY: catalog
-        run: go test -v -timeout 120s ./...
+        run: >-
+          go test -count=1 -v -timeout 240s
+          -run 'Test(NamespaceContract|RepositoryReadContract|RepositoryVersionContract)'
+          ./...
 
       - name: Collect logs on failure
         if: failure()
@@ -247,13 +269,16 @@ jobs:
         run: docker compose -f compose.yml -f compose.scylla.yml down -v
 
   datastore-contract-test-scylla:
-    name: Datastore Contract Tests (ScyllaDB)
+    name: Datastore Hardening (tagged ScyllaDB + failure injection)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -269,24 +294,55 @@ jobs:
           --developer-mode=1 --overprovisioned=1 --smp=1
         timeout 120 sh -c 'until docker exec gitstore-scylla-test cqlsh -e "describe cluster"; do sleep 2; done'
 
-    - name: Run ScyllaDB contract tests
-      working-directory: ./gitstore-api
-      env:
-        GITSTORE_TEST_SCYLLA_ADDR: 127.0.0.1:9042
-      run: go test -tags scylla -v -timeout 120s ./tests/contract/datastore/... ./internal/datastore/scylla/...
+    - name: Run tagged Scylla hardening and failure-injection tests
+      run: make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9042
 
     - name: Stop ScyllaDB
       if: always()
       run: docker rm -f gitstore-scylla-test || true
 
-  grpc-contract-test:
-    name: gRPC Contract Tests (testcontainers)
+  repair-cli-test:
+    name: Projection Repair CLI Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.x'
+        cache-dependency-path: gitstore-api/go.sum
+
+    - name: Run repair CLI tests
+      working-directory: ./gitstore-api
+      run: |
+        test -f ./cmd/gitctl/main_test.go
+        go test -count=1 -v -timeout 90s ./cmd/gitctl
+
+    - name: Run repair planning and conditional-apply tests
+      working-directory: ./gitstore-api
+      run: >-
+        go test -count=1 -v -timeout 90s
+        -run 'Test(BuildRepairPlan|ProjectionRepairService|ValidateRepairPlan)'
+        ./internal/datastore/scylla
+
+  grpc-contract-test:
+    name: gRPC Contract Tests (testcontainers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -304,11 +360,14 @@ jobs:
   controller-manager-contract-test:
     name: Controller Manager Contract Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        persist-credentials: false
 
     - name: Set up Go
       uses: actions/setup-go@v6

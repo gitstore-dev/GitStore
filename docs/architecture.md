@@ -538,7 +538,33 @@ Namespace names are globally unique across all tiers. The same name cannot exist
 
 ### ScyllaDB Access Patterns
 
-Namespace persistence avoids both secondary-index point reads and a single global partition. `namespaces_by_id` is the authoritative direct UUID lookup and LWT target, `namespaces_by_name` resolves globally unique names, and `namespaces_by_bucket` bounds ordered listing partitions by creation month. The authoritative row uses `name`, `title`, and `creation_timestamp`, matching the GraphQL `metadata.name`/`spec.title` contract and the timestamp convention used by other resources. List queries walk the required `YYYY-MM` buckets using `(creation_timestamp, id)` keysets and hydrate authoritative rows by ID. Repository storage uses the same `creation_timestamp` convention.
+Namespace and Repository persistence avoid secondary-index primary reads and
+single unbounded global partitions. `namespaces_by_uid` and
+`repositories_by_uid` are authoritative: each stores the canonical resource
+envelope, including audit/lifecycle metadata, JSON `spec` and `status`, and the
+raw Markdown `body`. Namespace omits parent `namespace` and `repository_id`;
+Repository uses the immutable Namespace name in `namespace`.
+
+Name, path, reverse-path, and monthly ordering tables are narrow projections.
+They never own complete resource state. Name/path lookups resolve a UID and
+ordered pages read bounded `YYYY-MM` partitions, then hydrate each returned UID
+from its authoritative row. Projection repair is therefore a roll-forward from
+authoritative data, not a source for reconstructing or overwriting it.
+
+Namespace and Repository ordering uses
+`(creation_timestamp DESC, uid DESC)` keysets. Repository pages may report
+`totalCount = -1` when an exact count would require scanning historical
+partitions; `-1` means unknown. Global Repository listing is available only
+through the datastore's bounded monthly listing capability—resolvers must not
+fetch every row and sort in memory.
+
+Canonical names are semantic boundaries: `uid` is resource identity,
+`repository_id` references a Repository UID, `owner_references` is canonical
+JSON, and `namespace` always contains the immutable Namespace name. Relay
+GraphQL `id` values remain encoded only at the API boundary. Direct and
+connection reads hydrate the same Namespace/Repository envelope and body.
+Author metadata, spec, and body edits advance `generation`; status-only writes
+preserve it.
 
 ### Authorization Model
 
