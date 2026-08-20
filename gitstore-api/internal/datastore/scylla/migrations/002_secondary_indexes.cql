@@ -1,4 +1,2 @@
-CREATE INDEX IF NOT EXISTS repositories_by_id         ON repositories       (id);
-CREATE INDEX IF NOT EXISTS repositories_by_namespace  ON repositories       (namespace_id);
-
-CREATE INDEX IF NOT EXISTS mappings_by_repo_id        ON namespace_mappings (repo_id);
+-- Query-first tables in 001_initial_schema.cql cover every supported access
+-- pattern. Secondary indexes are intentionally absent from the alpha baseline.

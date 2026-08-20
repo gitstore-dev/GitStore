@@ -11,6 +11,7 @@ import (
 	"context"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
@@ -58,7 +59,17 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 	assert.Equal(t, scyllaKeyspace, ksName)
 
 	// Verify representative lookup tables exist.
-	for _, expectedTable := range []string{"products_by_namespace", "products_by_name", "products_by_uid", "category_taxonomy_by_uid"} {
+	for _, expectedTable := range []string{
+		"products_by_namespace",
+		"products_by_name",
+		"products_by_uid",
+		"category_taxonomy_by_uid",
+		"namespaces_by_uid",
+		"repositories_by_uid",
+		"repositories_by_namespace",
+		"repositories_by_bucket",
+		"namespace_mappings_by_repository",
+	} {
 		var tblName string
 		err = session.Query(
 			`SELECT table_name FROM system_schema.tables WHERE keyspace_name = ? AND table_name = ?`,
@@ -76,10 +87,27 @@ func TestRunMigrations_RepositoryResourceContractColumns(t *testing.T) {
 	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), log))
 
 	expectedColumns := map[string]string{
+		"api_version":         "text",
+		"kind":                "text",
+		"namespace":           "text",
+		"uid":                 "uuid",
+		"name":                "text",
 		"creation_timestamp":  "timestamp",
 		"creation_actor":      "text",
 		"generation":          "bigint",
 		"resource_version":    "text",
+		"revision":            "text",
+		"labels":              "map<text, text>",
+		"annotations":         "map<text, text>",
+		"owner_references":    "text",
+		"finalizers":          "list<text>",
+		"deletion_timestamp":  "timestamp",
+		"repository_id":       "uuid",
+		"source_path":         "text",
+		"git_commit_sha":      "text",
+		"git_ref":             "text",
+		"spec":                "text",
+		"body":                "text",
 		"status":              "text",
 		"update_timestamp":    "timestamp",
 		"update_actor":        "text",
@@ -91,14 +119,110 @@ func TestRunMigrations_RepositoryResourceContractColumns(t *testing.T) {
 			var columnName, columnType string
 			err := session.Query(
 				`SELECT column_name, type FROM system_schema.columns
-				 WHERE keyspace_name = ? AND table_name = 'repositories' AND column_name = ?`,
+				 WHERE keyspace_name = ? AND table_name = 'repositories_by_uid' AND column_name = ?`,
 				scyllaKeyspace, column,
 			).Scan(&columnName, &columnType)
-			require.NoError(t, err, "expected repositories.%s to exist", column)
+			require.NoError(t, err, "expected repositories_by_uid.%s to exist", column)
 			assert.Equal(t, column, columnName)
 			assert.Equal(t, expectedType, columnType)
 		})
 	}
+}
+
+func TestRunMigrations_CanonicalEnvelopeColumnsMatch(t *testing.T) {
+	session := newRawSession(t)
+	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), zap.NewNop()))
+
+	tables := []string{
+		"products_by_namespace",
+		"product_variant_by_namespace",
+		"collection",
+		"category_taxonomy",
+		"repositories_by_uid",
+	}
+	columns := []string{
+		"api_version", "kind", "namespace", "uid", "name", "generation",
+		"resource_version", "revision", "creation_timestamp", "creation_actor",
+		"update_timestamp", "update_actor", "labels", "annotations",
+		"owner_references", "finalizers", "deletion_timestamp", "repository_id",
+		"source_path", "git_commit_sha", "git_ref", "spec", "body", "status",
+	}
+	for _, tableName := range tables {
+		for _, column := range columns {
+			t.Run(tableName+"/"+column, func(t *testing.T) {
+				var got string
+				err := session.Query(
+					`SELECT column_name FROM system_schema.columns
+					 WHERE keyspace_name = ? AND table_name = ? AND column_name = ?`,
+					scyllaKeyspace, tableName, column,
+				).Scan(&got)
+				require.NoError(t, err)
+				assert.Equal(t, column, got)
+			})
+		}
+	}
+}
+
+func TestRunMigrations_HasNoRepositorySecondaryIndexes(t *testing.T) {
+	session := newRawSession(t)
+	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), zap.NewNop()))
+
+	iter := session.Query(
+		`SELECT index_name FROM system_schema.indexes WHERE keyspace_name = ?`,
+		scyllaKeyspace,
+	).Iter()
+	var index string
+	for iter.Scan(&index) {
+		assert.NotContains(t, index, "repositories")
+		assert.NotContains(t, index, "mappings")
+	}
+	require.NoError(t, iter.Close())
+}
+
+func TestRunMigrations_DoesNotMaterializeProductLabelSelectors(t *testing.T) {
+	session := newRawSession(t)
+	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), zap.NewNop()))
+
+	iter := session.Query(
+		`SELECT table_name FROM system_schema.tables WHERE keyspace_name = ?`,
+		scyllaKeyspace,
+	).Iter()
+	var tableName string
+	for iter.Scan(&tableName) {
+		assert.NotContains(t, tableName, "product_label")
+		assert.NotContains(t, tableName, "product_selector")
+	}
+	require.NoError(t, iter.Close())
+
+	iter = session.Query(
+		`SELECT index_name FROM system_schema.indexes WHERE keyspace_name = ?`,
+		scyllaKeyspace,
+	).Iter()
+	var indexName string
+	for iter.Scan(&indexName) {
+		assert.NotContains(t, indexName, "product_label")
+		assert.NotContains(t, indexName, "product_selector")
+	}
+	require.NoError(t, iter.Close())
+}
+
+func TestRunMigrations_UsesTenDayGCGrace(t *testing.T) {
+	session := newRawSession(t)
+	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), zap.NewNop()))
+
+	iter := session.Query(
+		`SELECT table_name, gc_grace_seconds FROM system_schema.tables WHERE keyspace_name = ?`,
+		scyllaKeyspace,
+	).Iter()
+	var tableName string
+	var gcGraceSeconds int
+	for iter.Scan(&tableName, &gcGraceSeconds) {
+		if strings.HasSuffix(tableName, "$paxos") || strings.HasPrefix(tableName, "schema_migrations") {
+			continue
+		}
+		assert.Equalf(t, 864000, gcGraceSeconds, "table %s", tableName)
+	}
+	require.NoError(t, iter.Close())
 }
 
 func TestRunMigrations_Idempotent(t *testing.T) {

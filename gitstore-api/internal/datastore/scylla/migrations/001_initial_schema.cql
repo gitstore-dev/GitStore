@@ -1,25 +1,31 @@
 CREATE TABLE IF NOT EXISTS products_by_namespace (
-    namespace          text,
-    creation_timestamp timestamp,
-    uid                uuid,
-    name               text,
-    api_version        text,
-    kind               text,
-    generation         bigint,
-    resource_version   text,
-    revision           text,
-    labels             map<text, text>,
-    annotations        map<text, text>,
-    owner_references   text,
-    git_commit_sha     text,
-    git_ref            text,
-    spec               text,
-    body               text,
-    status             text,
-    repository_id      text,
-    source_path        text,
+    namespace            text,
+    creation_timestamp   timestamp,
+    uid                  uuid,
+    name                 text,
+    api_version          text,
+    kind                 text,
+    generation           bigint,
+    resource_version     text,
+    revision             text,
+    creation_actor       text,
+    update_timestamp     timestamp,
+    update_actor         text,
+    labels               map<text, text>,
+    annotations          map<text, text>,
+    owner_references     text,
+    finalizers           list<text>,
+    deletion_timestamp   timestamp,
+    repository_id        uuid,
+    source_path          text,
+    git_commit_sha       text,
+    git_ref              text,
+    spec                 text,
+    body                 text,
+    status               text,
     PRIMARY KEY ((namespace), creation_timestamp, uid)
-) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC);
+) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC)
+  AND gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS products_by_name (
     namespace          text,
@@ -27,36 +33,43 @@ CREATE TABLE IF NOT EXISTS products_by_name (
     uid                uuid,
     creation_timestamp timestamp,
     PRIMARY KEY ((namespace), name)
-);
+) WITH gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS products_by_uid (
     uid                uuid,
     namespace          text,
     creation_timestamp timestamp,
     PRIMARY KEY (uid)
-);
+) WITH gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS collection (
-    namespace          text,
-    creation_timestamp timestamp,
-    uid                uuid,
-    name               text,
-    api_version        text,
-    kind               text,
-    generation         bigint,
-    resource_version   text,
-    revision           text,
-    labels             map<text, text>,
-    annotations        map<text, text>,
-    git_commit_sha     text,
-    git_ref            text,
-    spec               text,
-    body               text,
-    status             text,
-    repository_id      text,
-    source_path        text,
+    namespace            text,
+    creation_timestamp   timestamp,
+    uid                  uuid,
+    name                 text,
+    api_version          text,
+    kind                 text,
+    generation           bigint,
+    resource_version     text,
+    revision             text,
+    creation_actor       text,
+    update_timestamp     timestamp,
+    update_actor         text,
+    labels               map<text, text>,
+    annotations          map<text, text>,
+    owner_references     text,
+    finalizers           list<text>,
+    deletion_timestamp   timestamp,
+    repository_id        uuid,
+    source_path          text,
+    git_commit_sha       text,
+    git_ref              text,
+    spec                 text,
+    body                 text,
+    status               text,
     PRIMARY KEY ((namespace), creation_timestamp, uid)
-) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC);
+) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC)
+  AND gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS collection_by_name (
     namespace          text,
@@ -64,93 +77,146 @@ CREATE TABLE IF NOT EXISTS collection_by_name (
     uid                uuid,
     creation_timestamp timestamp,
     PRIMARY KEY ((namespace), name)
-);
+) WITH gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS collection_by_uid (
     uid                uuid,
     namespace          text,
     creation_timestamp timestamp,
     PRIMARY KEY (uid)
-);
+) WITH gc_grace_seconds = 864000;
 
-CREATE TABLE IF NOT EXISTS namespaces_by_id (
-    id                   uuid PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS namespaces_by_uid (
+    uid                  uuid PRIMARY KEY,
     name                 text,
-    title                text,
-    tier                 text,
-    spec                 text,
+    api_version          text,
+    kind                 text,
     generation           bigint,
     resource_version     text,
-    status               text,
-    deletion_timestamp   timestamp,
-    finalizers           list<text>,
+    revision             text,
     creation_timestamp   timestamp,
     creation_actor       text,
     update_timestamp     timestamp,
-    update_actor         text
-);
+    update_actor         text,
+    labels               map<text, text>,
+    annotations          map<text, text>,
+    owner_references     text,
+    finalizers           list<text>,
+    deletion_timestamp   timestamp,
+    source_path          text,
+    git_commit_sha       text,
+    git_ref              text,
+    spec                 text,
+    body                 text,
+    status               text,
+    title                text,
+    tier                 text
+) WITH gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS namespaces_by_name (
     name text PRIMARY KEY,
-    id   uuid
-);
+    uid  uuid
+) WITH gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS namespaces_by_bucket (
     bucket               text,
     creation_timestamp   timestamp,
-    id                   uuid,
-    PRIMARY KEY ((bucket), creation_timestamp, id)
-) WITH CLUSTERING ORDER BY (creation_timestamp DESC, id DESC);
+    uid                  uuid,
+    PRIMARY KEY ((bucket), creation_timestamp, uid)
+) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC)
+  AND gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS namespace_mappings (
-    namespace_id uuid,
-    name         text,
-    repo_id      uuid,
-    PRIMARY KEY  (namespace_id, name)
-);
+    namespace      text,
+    name           text,
+    repository_id  uuid,
+    PRIMARY KEY ((namespace), name)
+) WITH gc_grace_seconds = 864000;
 
-CREATE TABLE IF NOT EXISTS repositories (
-    bucket              text,
-    creation_timestamp  timestamp,
-    id                  uuid,
-    namespace_id        uuid,
-    name                text,
-    default_branch      text,
-    storage_class       text,
-    generation          bigint,
-    resource_version    text,
-    status              text,
-    creation_actor      text,
-    max_pack_size_bytes bigint,
-    max_file_size_bytes bigint,
-    update_timestamp    timestamp,
-    update_actor        text,
-    PRIMARY KEY ((bucket), creation_timestamp, id)
-) WITH CLUSTERING ORDER BY (creation_timestamp DESC, id DESC);
+CREATE TABLE IF NOT EXISTS namespace_mappings_by_repository (
+    repository_id uuid PRIMARY KEY,
+    namespace     text,
+    name          text
+) WITH gc_grace_seconds = 864000;
 
-CREATE TABLE IF NOT EXISTS category_taxonomy (
+CREATE TABLE IF NOT EXISTS repositories_by_uid (
+    uid                  uuid PRIMARY KEY,
+    namespace            text,
+    name                 text,
+    api_version          text,
+    kind                 text,
+    generation           bigint,
+    resource_version     text,
+    revision             text,
+    creation_timestamp   timestamp,
+    creation_actor       text,
+    update_timestamp     timestamp,
+    update_actor         text,
+    labels               map<text, text>,
+    annotations          map<text, text>,
+    owner_references     text,
+    finalizers           list<text>,
+    deletion_timestamp   timestamp,
+    repository_id        uuid,
+    source_path          text,
+    git_commit_sha       text,
+    git_ref              text,
+    spec                 text,
+    body                 text,
+    status               text,
+    default_branch       text,
+    storage_class        text,
+    max_pack_size_bytes  bigint,
+    max_file_size_bytes  bigint
+) WITH gc_grace_seconds = 864000;
+
+CREATE TABLE IF NOT EXISTS repositories_by_namespace (
     namespace          text,
+    bucket             text,
     creation_timestamp timestamp,
     uid                uuid,
-    name               text,
-    api_version        text,
-    kind               text,
-    generation         bigint,
-    resource_version   text,
-    revision           text,
-    labels             map<text, text>,
-    annotations        map<text, text>,
-    parent_name        text,
-    ancestor_path      text,
-    git_commit_sha     text,
-    git_ref            text,
-    spec               text,
-    body               text,
-    status             text,
-    repository_id      text,
-    source_path        text,
+    PRIMARY KEY ((namespace, bucket), creation_timestamp, uid)
+) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC)
+  AND gc_grace_seconds = 864000;
+
+CREATE TABLE IF NOT EXISTS repositories_by_bucket (
+    bucket             text,
+    creation_timestamp timestamp,
+    uid                uuid,
+    PRIMARY KEY ((bucket), creation_timestamp, uid)
+) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC)
+  AND gc_grace_seconds = 864000;
+
+CREATE TABLE IF NOT EXISTS category_taxonomy (
+    namespace            text,
+    creation_timestamp   timestamp,
+    uid                  uuid,
+    name                 text,
+    api_version          text,
+    kind                 text,
+    generation           bigint,
+    resource_version     text,
+    revision             text,
+    creation_actor       text,
+    update_timestamp     timestamp,
+    update_actor         text,
+    labels               map<text, text>,
+    annotations          map<text, text>,
+    owner_references     text,
+    finalizers           list<text>,
+    deletion_timestamp   timestamp,
+    repository_id        uuid,
+    source_path          text,
+    git_commit_sha       text,
+    git_ref              text,
+    spec                 text,
+    body                 text,
+    status               text,
+    parent_name          text,
+    ancestor_path        text,
     PRIMARY KEY ((namespace), creation_timestamp, uid)
-) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC);
+) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC)
+  AND gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS category_taxonomy_by_name (
     namespace          text,
@@ -158,39 +224,45 @@ CREATE TABLE IF NOT EXISTS category_taxonomy_by_name (
     uid                uuid,
     creation_timestamp timestamp,
     PRIMARY KEY ((namespace), name)
-);
+) WITH gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS category_taxonomy_by_uid (
     uid                uuid,
     namespace          text,
     creation_timestamp timestamp,
     PRIMARY KEY (uid)
-);
+) WITH gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS product_variant_by_namespace (
-    namespace          text,
-    creation_timestamp timestamp,
-    uid                uuid,
-    name               text,
-    api_version        text,
-    kind               text,
-    generation         bigint,
-    resource_version   text,
-    revision           text,
-    labels             map<text, text>,
-    annotations        map<text, text>,
-    owner_references   text,
-    sku                text,
-    product_ref_name   text,
-    git_commit_sha     text,
-    git_ref            text,
-    spec               text,
-    body               text,
-    status             text,
-    repository_id      text,
-    source_path        text,
+    namespace            text,
+    creation_timestamp   timestamp,
+    uid                  uuid,
+    name                 text,
+    api_version          text,
+    kind                 text,
+    generation           bigint,
+    resource_version     text,
+    revision             text,
+    creation_actor       text,
+    update_timestamp     timestamp,
+    update_actor         text,
+    labels               map<text, text>,
+    annotations          map<text, text>,
+    owner_references     text,
+    finalizers           list<text>,
+    deletion_timestamp   timestamp,
+    repository_id        uuid,
+    source_path          text,
+    git_commit_sha       text,
+    git_ref              text,
+    spec                 text,
+    body                 text,
+    status               text,
+    sku                  text,
+    product_ref_name     text,
     PRIMARY KEY ((namespace), creation_timestamp, uid)
-) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC);
+) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC)
+  AND gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS product_variant_by_name (
     namespace          text,
@@ -198,14 +270,14 @@ CREATE TABLE IF NOT EXISTS product_variant_by_name (
     uid                uuid,
     creation_timestamp timestamp,
     PRIMARY KEY ((namespace), name)
-);
+) WITH gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS product_variant_by_uid (
     uid                uuid,
     namespace          text,
     creation_timestamp timestamp,
     PRIMARY KEY (uid)
-);
+) WITH gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS product_variant_by_sku (
     namespace          text,
@@ -213,7 +285,7 @@ CREATE TABLE IF NOT EXISTS product_variant_by_sku (
     uid                uuid,
     creation_timestamp timestamp,
     PRIMARY KEY ((namespace), sku)
-);
+) WITH gc_grace_seconds = 864000;
 
 CREATE TABLE IF NOT EXISTS product_variant_by_product_ref (
     namespace          text,
@@ -221,4 +293,5 @@ CREATE TABLE IF NOT EXISTS product_variant_by_product_ref (
     uid                uuid,
     creation_timestamp timestamp,
     PRIMARY KEY ((namespace, product_ref_name), creation_timestamp, uid)
-) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC);
+) WITH CLUSTERING ORDER BY (creation_timestamp DESC, uid DESC)
+  AND gc_grace_seconds = 864000;

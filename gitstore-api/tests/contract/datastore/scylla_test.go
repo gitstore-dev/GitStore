@@ -152,6 +152,11 @@ func newScyllaDatastore(t *testing.T) datastore.Datastore {
 	return store
 }
 
+func newScyllaDatastores(t *testing.T) (datastore.Datastore, datastore.Datastore) {
+	t.Helper()
+	return newScyllaDatastore(t), newScyllaDatastore(t)
+}
+
 func TestContractScylla(t *testing.T) {
 	RunContractSuite(t, newScyllaDatastore(t))
 }

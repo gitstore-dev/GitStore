@@ -19,14 +19,18 @@ import (
 
 // stubDatastore is a minimal Datastore stub for decorator tests.
 type stubDatastore struct {
-	getProductErr error
-	getProductVal *datastore.Product
+	getProductErr     error
+	getProductVal     *datastore.Product
+	getProductFinding *datastore.ProjectionFinding
 }
 
 func (s *stubDatastore) CreateProduct(_ context.Context, _ *datastore.Product) error {
 	return s.getProductErr
 }
-func (s *stubDatastore) GetProduct(_ context.Context, _ string) (*datastore.Product, error) {
+func (s *stubDatastore) GetProduct(ctx context.Context, _ string) (*datastore.Product, error) {
+	if s.getProductFinding != nil {
+		datastore.ReportProjectionFinding(ctx, *s.getProductFinding)
+	}
 	return s.getProductVal, s.getProductErr
 }
 func (s *stubDatastore) GetProductByName(_ context.Context, _, _ string) (*datastore.Product, error) {
@@ -173,7 +177,7 @@ func (s *stubDatastore) Close() error { return nil }
 // and a fresh Prometheus registry so tests don't collide with global metrics.
 func newTestInstrumented(t *testing.T, stub datastore.Datastore) (datastore.Datastore, *observer.ObservedLogs, *prometheus.Registry) {
 	t.Helper()
-	core, logs := observer.New(zap.ErrorLevel)
+	core, logs := observer.New(zap.DebugLevel)
 	log := zap.New(core)
 	reg := prometheus.NewRegistry()
 	return datastore.NewInstrumentedDatastoreWithRegistry(stub, "test-backend", log, reg), logs, reg
@@ -223,6 +227,37 @@ func histogramObservationCount(t *testing.T, reg *prometheus.Registry, op, backe
 				if opLabel == op && beLabel == backend {
 					return m.GetHistogram().GetSampleCount()
 				}
+			}
+		}
+	}
+	return 0
+}
+
+func labeledCounterValue(t *testing.T, reg *prometheus.Registry, metric string, labels map[string]string) float64 {
+	t.Helper()
+	mfs, err := reg.Gather()
+	require.NoError(t, err)
+	for _, mf := range mfs {
+		if mf.GetName() != metric {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			matches := true
+			for key, want := range labels {
+				found := false
+				for _, lp := range m.GetLabel() {
+					if lp.GetName() == key && lp.GetValue() == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					matches = false
+					break
+				}
+			}
+			if matches {
+				return m.GetCounter().GetValue()
 			}
 		}
 	}
@@ -310,4 +345,65 @@ func TestInstrumentedDatastore_NoLogOnSuccess(t *testing.T) {
 	inst.GetProduct(context.Background(), "p1") //nolint:errcheck
 
 	assert.Equal(t, 0, logs.Len())
+}
+
+func TestInstrumentedDatastore_RepairRequiredMetricsUseBoundedLabels(t *testing.T) {
+	stub := &stubDatastore{getProductErr: datastore.NewRepairRequiredError(
+		datastore.MutationStep{
+			Operation:    "create",
+			ResourceKind: "Product",
+			Projection:   "products_by_name",
+			Action:       "reserve",
+		},
+		errors.New("primary"),
+		errors.New("compensation"),
+	)}
+	inst, logs, reg := newTestInstrumented(t, stub)
+
+	inst.GetProduct(context.Background(), "sensitive-resource-id") //nolint:errcheck
+
+	assert.Equal(t, float64(1), labeledCounterValue(t, reg,
+		"gitstore_datastore_projection_write_failures_total",
+		map[string]string{"operation": "create", "backend": "test-backend", "projection": "products_by_name"}))
+	assert.Equal(t, float64(1), labeledCounterValue(t, reg,
+		"gitstore_datastore_compensation_failures_total",
+		map[string]string{"operation": "create", "backend": "test-backend", "projection": "products_by_name"}))
+	require.Equal(t, 1, logs.Len())
+	assert.NotContains(t, logs.All()[0].ContextMap(), "resource_uid")
+}
+
+func TestInstrumentedDatastore_ProjectionFindingIsObserved(t *testing.T) {
+	finding := datastore.ProjectionFinding{
+		Operation:    "lookup",
+		ResourceKind: "Product",
+		ResourceUID:  "sensitive-resource-id",
+		Projection:   "products_by_name",
+		LookupKey:    "tenant/widget",
+		Type:         datastore.FindingDangling,
+	}
+	stub := &stubDatastore{
+		getProductVal:     &datastore.Product{UID: "p1"},
+		getProductFinding: &finding,
+	}
+	inst, logs, reg := newTestInstrumented(t, stub)
+	var callerObserved datastore.ProjectionFinding
+	ctx := datastore.WithProjectionFindingObserver(context.Background(), func(observed datastore.ProjectionFinding) {
+		callerObserved = observed
+	})
+
+	_, err := inst.GetProduct(ctx, "p1")
+	require.NoError(t, err)
+
+	assert.Equal(t, finding, callerObserved)
+	assert.Equal(t, float64(1), labeledCounterValue(t, reg,
+		"gitstore_datastore_projection_findings_total",
+		map[string]string{
+			"operation":     "lookup",
+			"backend":       "test-backend",
+			"resource_kind": "Product",
+			"projection":    "products_by_name",
+			"finding_type":  "dangling",
+		}))
+	require.Equal(t, 1, logs.Len())
+	assert.Equal(t, "datastore projection inconsistency", logs.All()[0].Message)
 }

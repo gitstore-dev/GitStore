@@ -5,319 +5,163 @@ package scylla
 
 import "github.com/scylladb/gocqlx/v3/table"
 
-// BucketAll is the sentinel partition key for global listing tables.
-const BucketAll = "all"
+func resourceColumns(includeNamespace, includeRepository bool) []string {
+	columns := []string{"api_version", "kind"}
+	if includeNamespace {
+		columns = append(columns, "namespace")
+	}
+	columns = append(columns,
+		"uid",
+		"name",
+		"generation",
+		"resource_version",
+		"revision",
+		"creation_timestamp",
+		"creation_actor",
+		"update_timestamp",
+		"update_actor",
+		"labels",
+		"annotations",
+		"owner_references",
+		"finalizers",
+		"deletion_timestamp",
+	)
+	if includeRepository {
+		columns = append(columns, "repository_id")
+	}
+	return append(columns,
+		"source_path",
+		"git_commit_sha",
+		"git_ref",
+		"spec",
+		"body",
+		"status",
+	)
+}
 
-// Table models
+func authoritativeColumns(includeNamespace, includeRepository bool, specific ...string) []string {
+	columns := resourceColumns(includeNamespace, includeRepository)
+	return append(columns, specific...)
+}
+
 var (
-	// ProductByNamespace is the primary paginated read table (newest-first per namespace).
 	ProductByNamespace = table.New(table.Metadata{
-		Name: "products_by_namespace",
-		Columns: []string{
-			"namespace",
-			"creation_timestamp",
-			"uid",
-			"name",
-			"api_version",
-			"kind",
-			"generation",
-			"resource_version",
-			"revision",
-			"labels",
-			"annotations",
-			"owner_references",
-			"repository_id",
-			"source_path",
-			"git_commit_sha",
-			"git_ref",
-			"spec",
-			"body",
-			"status",
-		},
-		PartKey: []string{
-			"namespace",
-		},
-		SortKey: []string{
-			"creation_timestamp",
-			"uid",
-		},
+		Name:    "products_by_namespace",
+		Columns: authoritativeColumns(true, true),
+		PartKey: []string{"namespace"},
+		SortKey: []string{"creation_timestamp", "uid"},
 	})
-
-	// ProductByName is the lookup table for GetProductByName(namespace, name).
 	ProductByName = table.New(table.Metadata{
-		Name: "products_by_name",
-		Columns: []string{
-			"namespace",
-			"name",
-			"uid",
-			"creation_timestamp",
-		},
-		PartKey: []string{
-			"namespace",
-		},
-		SortKey: []string{
-			"name",
-		},
+		Name:    "products_by_name",
+		Columns: []string{"namespace", "name", "uid", "creation_timestamp"},
+		PartKey: []string{"namespace"},
+		SortKey: []string{"name"},
 	})
-
-	// ProductByUID is the lookup table for GetProduct(uid).
 	ProductByUID = table.New(table.Metadata{
-		Name: "products_by_uid",
-		Columns: []string{
-			"uid",
-			"namespace",
-			"creation_timestamp",
-		},
-		PartKey: []string{
-			"uid",
-		},
-		SortKey: []string{},
+		Name:    "products_by_uid",
+		Columns: []string{"uid", "namespace", "creation_timestamp"},
+		PartKey: []string{"uid"},
 	})
 
 	CategoryTaxonomy = table.New(table.Metadata{
-		Name: "category_taxonomy",
-		Columns: []string{
-			"namespace",
-			"creation_timestamp",
-			"uid",
-			"name",
-			"api_version",
-			"kind",
-			"generation",
-			"resource_version",
-			"revision",
-			"labels",
-			"annotations",
-			"parent_name",
-			"ancestor_path",
-			"repository_id",
-			"source_path",
-			"git_commit_sha",
-			"git_ref",
-			"spec",
-			"body",
-			"status",
-		},
-		PartKey: []string{
-			"namespace",
-		},
-		SortKey: []string{
-			"creation_timestamp",
-			"uid",
-		},
+		Name:    "category_taxonomy",
+		Columns: authoritativeColumns(true, true, "parent_name", "ancestor_path"),
+		PartKey: []string{"namespace"},
+		SortKey: []string{"creation_timestamp", "uid"},
 	})
-
-	// CategoryTaxonomyByName is the lookup table for GetCategoryTaxonomyByName(namespace, name).
 	CategoryTaxonomyByName = table.New(table.Metadata{
-		Name: "category_taxonomy_by_name",
-		Columns: []string{
-			"namespace",
-			"name",
-			"uid",
-			"creation_timestamp",
-		},
-		PartKey: []string{
-			"namespace",
-		},
-		SortKey: []string{
-			"name",
-		},
+		Name:    "category_taxonomy_by_name",
+		Columns: []string{"namespace", "name", "uid", "creation_timestamp"},
+		PartKey: []string{"namespace"},
+		SortKey: []string{"name"},
 	})
-
-	// CategoryTaxonomyByUID is the lookup table for GetCategoryTaxonomy(uid).
 	CategoryTaxonomyByUID = table.New(table.Metadata{
-		Name: "category_taxonomy_by_uid",
-		Columns: []string{
-			"uid",
-			"namespace",
-			"creation_timestamp",
-		},
-		PartKey: []string{
-			"uid",
-		},
-		SortKey: []string{},
+		Name:    "category_taxonomy_by_uid",
+		Columns: []string{"uid", "namespace", "creation_timestamp"},
+		PartKey: []string{"uid"},
 	})
 
-	// Collection is the primary paginated read table (newest-first per namespace).
 	Collection = table.New(table.Metadata{
-		Name: "collection",
-		Columns: []string{
-			"namespace",
-			"creation_timestamp",
-			"uid",
-			"name",
-			"api_version",
-			"kind",
-			"generation",
-			"resource_version",
-			"revision",
-			"labels",
-			"annotations",
-			"repository_id",
-			"source_path",
-			"git_commit_sha",
-			"git_ref",
-			"spec",
-			"body",
-			"status",
-		},
-		PartKey: []string{
-			"namespace",
-		},
-		SortKey: []string{
-			"creation_timestamp",
-			"uid",
-		},
+		Name:    "collection",
+		Columns: authoritativeColumns(true, true),
+		PartKey: []string{"namespace"},
+		SortKey: []string{"creation_timestamp", "uid"},
 	})
-
-	// CollectionByName is the lookup table for GetCollectionByName(namespace, name).
 	CollectionByName = table.New(table.Metadata{
-		Name: "collection_by_name",
-		Columns: []string{
-			"namespace",
-			"name",
-			"uid",
-			"creation_timestamp",
-		},
-		PartKey: []string{
-			"namespace",
-		},
-		SortKey: []string{
-			"name",
-		},
+		Name:    "collection_by_name",
+		Columns: []string{"namespace", "name", "uid", "creation_timestamp"},
+		PartKey: []string{"namespace"},
+		SortKey: []string{"name"},
 	})
-
-	// CollectionByUID is the lookup table for GetCollection(uid).
 	CollectionByUID = table.New(table.Metadata{
-		Name: "collection_by_uid",
-		Columns: []string{
-			"uid",
-			"namespace",
-			"creation_timestamp",
-		},
-		PartKey: []string{
-			"uid",
-		},
-		SortKey: []string{},
+		Name:    "collection_by_uid",
+		Columns: []string{"uid", "namespace", "creation_timestamp"},
+		PartKey: []string{"uid"},
 	})
 
-	NamespaceByID = table.New(table.Metadata{
-		Name: "namespaces_by_id",
-		Columns: []string{
-			"id",
-			"name",
-			"title",
-			"tier",
-			"spec",
-			"generation",
-			"resource_version",
-			"status",
-			"deletion_timestamp",
-			"finalizers",
-			"creation_timestamp",
-			"creation_actor",
-			"update_timestamp",
-			"update_actor",
-		},
-		PartKey: []string{
-			"id",
-		},
-		SortKey: []string{},
+	NamespaceByUID = table.New(table.Metadata{
+		Name:    "namespaces_by_uid",
+		Columns: authoritativeColumns(false, false, "title", "tier"),
+		PartKey: []string{"uid"},
 	})
-
 	NamespaceByName = table.New(table.Metadata{
 		Name:    "namespaces_by_name",
-		Columns: []string{"name", "id"},
+		Columns: []string{"name", "uid"},
 		PartKey: []string{"name"},
-		SortKey: []string{},
 	})
-
 	NamespaceByBucket = table.New(table.Metadata{
 		Name:    "namespaces_by_bucket",
-		Columns: []string{"bucket", "creation_timestamp", "id"},
+		Columns: []string{"bucket", "creation_timestamp", "uid"},
 		PartKey: []string{"bucket"},
-		SortKey: []string{"creation_timestamp", "id"},
+		SortKey: []string{"creation_timestamp", "uid"},
 	})
 
-	Repository = table.New(table.Metadata{
-		Name: "repositories",
-		Columns: []string{
-			"bucket",
-			"creation_timestamp",
-			"id",
-			"namespace_id",
-			"name",
+	RepositoryByUID = table.New(table.Metadata{
+		Name: "repositories_by_uid",
+		Columns: authoritativeColumns(true, true,
 			"default_branch",
 			"storage_class",
 			"max_pack_size_bytes",
 			"max_file_size_bytes",
-			"generation",
-			"resource_version",
-			"status",
-			"creation_actor",
-			"update_timestamp",
-			"update_actor",
-		},
-		PartKey: []string{
-			"bucket",
-		},
-		SortKey: []string{
-			"creation_timestamp",
-			"id",
-		},
+		),
+		PartKey: []string{"uid"},
 	})
-
-	ProductVariantByNamespace = table.New(table.Metadata{
-		Name: "product_variant_by_namespace",
-		Columns: []string{
-			"namespace",
-			"creation_timestamp",
-			"uid",
-			"name",
-			"api_version",
-			"kind",
-			"generation",
-			"resource_version",
-			"revision",
-			"labels",
-			"annotations",
-			"owner_references",
-			"sku",
-			"product_ref_name",
-			"repository_id",
-			"source_path",
-			"git_commit_sha",
-			"git_ref",
-			"spec",
-			"body",
-			"status",
-		},
-		PartKey: []string{"namespace"},
+	RepositoryByNamespace = table.New(table.Metadata{
+		Name:    "repositories_by_namespace",
+		Columns: []string{"namespace", "bucket", "creation_timestamp", "uid"},
+		PartKey: []string{"namespace", "bucket"},
+		SortKey: []string{"creation_timestamp", "uid"},
+	})
+	RepositoryByBucket = table.New(table.Metadata{
+		Name:    "repositories_by_bucket",
+		Columns: []string{"bucket", "creation_timestamp", "uid"},
+		PartKey: []string{"bucket"},
 		SortKey: []string{"creation_timestamp", "uid"},
 	})
 
+	ProductVariantByNamespace = table.New(table.Metadata{
+		Name:    "product_variant_by_namespace",
+		Columns: authoritativeColumns(true, true, "sku", "product_ref_name"),
+		PartKey: []string{"namespace"},
+		SortKey: []string{"creation_timestamp", "uid"},
+	})
 	ProductVariantByName = table.New(table.Metadata{
 		Name:    "product_variant_by_name",
 		Columns: []string{"namespace", "name", "uid", "creation_timestamp"},
 		PartKey: []string{"namespace"},
 		SortKey: []string{"name"},
 	})
-
 	ProductVariantByUID = table.New(table.Metadata{
 		Name:    "product_variant_by_uid",
 		Columns: []string{"uid", "namespace", "creation_timestamp"},
 		PartKey: []string{"uid"},
-		SortKey: []string{},
 	})
-
 	ProductVariantBySKU = table.New(table.Metadata{
 		Name:    "product_variant_by_sku",
 		Columns: []string{"namespace", "sku", "uid", "creation_timestamp"},
 		PartKey: []string{"namespace"},
 		SortKey: []string{"sku"},
 	})
-
-	// ProductVariantByProductRef is the lookup table for ListProductVariantsByProductRef(namespace, productRefName).
 	ProductVariantByProductRef = table.New(table.Metadata{
 		Name:    "product_variant_by_product_ref",
 		Columns: []string{"namespace", "product_ref_name", "uid", "creation_timestamp"},
@@ -326,17 +170,14 @@ var (
 	})
 
 	NamespaceMapping = table.New(table.Metadata{
-		Name: "namespace_mappings",
-		Columns: []string{
-			"namespace_id",
-			"name",
-			"repo_id",
-		},
-		PartKey: []string{
-			"namespace_id",
-		},
-		SortKey: []string{
-			"name",
-		},
+		Name:    "namespace_mappings",
+		Columns: []string{"namespace", "name", "repository_id"},
+		PartKey: []string{"namespace"},
+		SortKey: []string{"name"},
+	})
+	NamespaceMappingByRepository = table.New(table.Metadata{
+		Name:    "namespace_mappings_by_repository",
+		Columns: []string{"repository_id", "namespace", "name"},
+		PartKey: []string{"repository_id"},
 	})
 )

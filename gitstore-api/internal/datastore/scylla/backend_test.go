@@ -13,6 +13,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
 	"github.com/gocql/gocql"
 	"github.com/google/uuid"
+	"github.com/scylladb/gocqlx/v3/table"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -160,6 +162,11 @@ func newTestStore(t *testing.T) datastore.Datastore {
 	return store
 }
 
+func newTestStores(t *testing.T) (datastore.Datastore, datastore.Datastore) {
+	t.Helper()
+	return newTestStore(t), newTestStore(t)
+}
+
 func newID() string { return uuid.New().String() }
 
 func newProduct(namespace, name string) *datastore.Product {
@@ -199,9 +206,13 @@ func newProductVariant(namespace, name, sku, productRefName string) *datastore.P
 
 func newRepository() *datastore.Repository {
 	now := time.Now().UTC().Truncate(time.Millisecond)
+	uid := newID()
+	namespace := "namespace-" + newID()[:8]
 	return &datastore.Repository{
-		ID:                newID(),
-		NamespaceID:       newID(),
+		UID:               uid,
+		ID:                uid,
+		Namespace:         namespace,
+		NamespaceID:       namespace,
 		Name:              "repo-" + newID()[:8],
 		DefaultBranch:     "main",
 		StorageClass:      "default",
@@ -992,4 +1003,168 @@ func TestScylla_ListProducts_AfterLastCursor_ReturnsEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, r2.Items)
 	assert.False(t, r2.HasNext)
+}
+
+func TestScylla_NamespaceDirectUID_FullEnvelopeAndBodyRoundTrip(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	deletedAt := now.Add(time.Hour)
+	uid := newID()
+	namespace := &datastore.Namespace{
+		APIVersion:        "gitstore.dev/v1beta1",
+		Kind:              "Namespace",
+		UID:               uid,
+		ID:                uid,
+		Name:              "namespace-envelope-" + newID()[:8],
+		Generation:        7,
+		ResourceVersion:   "11",
+		Revision:          "main@sha1:namespace",
+		CreationTimestamp: now,
+		CreationActor:     "alice",
+		UpdateTimestamp:   now.Add(time.Minute),
+		UpdateActor:       "bob",
+		Labels:            map[string]string{"team": "catalog"},
+		Annotations:       map[string]string{"gitstore.dev/note": "namespace"},
+		OwnerReferences:   json.RawMessage(`[{"apiVersion":"gitstore.dev/v1beta1","kind":"Namespace","name":"owner","uid":"00000000-0000-0000-0000-000000000001"}]`),
+		Finalizers:        []string{"gitstore.dev/test"},
+		DeletionTimestamp: &deletedAt,
+		SourcePath:        "namespaces/example.md",
+		GitCommitSHA:      "namespace-sha",
+		GitRef:            "refs/heads/main",
+		Spec:              json.RawMessage(`{"title":"Canonical namespace","tier":"USER"}`),
+		Body:              "# Namespace\n\nRaw **Markdown** body.\n",
+		Status:            json.RawMessage(`{"observedGeneration":7,"conditions":[]}`),
+		Title:             "Canonical namespace",
+		Tier:              datastore.NamespaceTierUser,
+	}
+
+	require.NoError(t, store.CreateNamespace(ctx, namespace))
+
+	got, err := store.GetNamespace(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, namespace, got)
+
+	byName, err := store.GetNamespaceByName(ctx, namespace.Name)
+	require.NoError(t, err)
+	assert.Equal(t, namespace, byName)
+	assert.Equal(t, uid, got.UID)
+	assert.Equal(t, namespace.Body, got.Body)
+	assert.JSONEq(t, string(namespace.OwnerReferences), string(got.OwnerReferences))
+}
+
+func TestScylla_RepositoryDirectUIDPathReversePath_FullEnvelopeAndBodyRoundTrip(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	deletedAt := now.Add(time.Hour)
+	uid := newID()
+	namespace := "repository-envelope-" + newID()[:8]
+	repository := &datastore.Repository{
+		APIVersion:        "gitstore.dev/v1beta1",
+		Kind:              "Repository",
+		UID:               uid,
+		ID:                uid,
+		Namespace:         namespace,
+		NamespaceID:       namespace,
+		Name:              "canonical-" + newID()[:8],
+		Generation:        9,
+		ResourceVersion:   "13",
+		Revision:          "main@sha1:repository",
+		CreationTimestamp: now,
+		CreationActor:     "alice",
+		UpdateTimestamp:   now.Add(time.Minute),
+		UpdateActor:       "bob",
+		Labels:            map[string]string{"team": "catalog"},
+		Annotations:       map[string]string{"gitstore.dev/note": "repository"},
+		OwnerReferences:   json.RawMessage(`[{"apiVersion":"gitstore.dev/v1beta1","kind":"Namespace","name":"owner","uid":"00000000-0000-0000-0000-000000000001"}]`),
+		Finalizers:        []string{"gitstore.dev/test"},
+		DeletionTimestamp: &deletedAt,
+		RepositoryID:      uid,
+		SourcePath:        "repositories/canonical.md",
+		GitCommitSHA:      "repository-sha",
+		GitRef:            "refs/heads/main",
+		Spec:              json.RawMessage(`{"defaultBranch":"main","visibility":"PRIVATE"}`),
+		Body:              "# Repository\n\nRaw **Markdown** body.\n",
+		Status:            json.RawMessage(`{"observedGeneration":9,"conditions":[]}`),
+		DefaultBranch:     "main",
+		StorageClass:      "default",
+		MaxPackSizeBytes:  64 * 1024 * 1024,
+		MaxFileSizeBytes:  8 * 1024 * 1024,
+	}
+	mapping := &datastore.NamespaceMapping{
+		Namespace:    namespace,
+		NamespaceID:  namespace,
+		Name:         repository.Name,
+		RepositoryID: uid,
+		RepoID:       uid,
+	}
+
+	require.NoError(t, store.CreateRepository(ctx, repository))
+	require.NoError(t, store.CreateNamespaceMapping(ctx, mapping))
+
+	got, err := store.GetRepository(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, repository, got)
+	assert.Equal(t, uid, got.UID)
+	assert.Equal(t, namespace, got.Namespace)
+	assert.Equal(t, uid, got.RepositoryID)
+	assert.Equal(t, repository.Body, got.Body)
+	assert.JSONEq(t, string(repository.OwnerReferences), string(got.OwnerReferences))
+
+	byPath, err := store.LookupRepository(ctx, namespace, repository.Name)
+	require.NoError(t, err)
+	assert.Equal(t, mapping, byPath)
+
+	reverse, err := store.LookupNamespaceByRepoID(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, mapping, reverse)
+}
+
+func TestScylla_NamespaceRepositoryQueryShapeMetadata(t *testing.T) {
+	tests := []struct {
+		name  string
+		table interface {
+			Metadata() table.Metadata
+			Get(...string) (string, []string)
+		}
+		partKey  []string
+		sortKey  []string
+		whereKey string
+	}{
+		{"namespace UID", scylla.NamespaceByUID, []string{"uid"}, nil, "uid"},
+		{"namespace name", scylla.NamespaceByName, []string{"name"}, nil, "name"},
+		{"repository UID", scylla.RepositoryByUID, []string{"uid"}, nil, "uid"},
+		{"repository path", scylla.NamespaceMapping, []string{"namespace"}, []string{"name"}, "namespace"},
+		{"repository reverse path", scylla.NamespaceMappingByRepository, []string{"repository_id"}, nil, "repository_id"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metadata := tt.table.Metadata()
+			assert.Equal(t, tt.partKey, metadata.PartKey)
+			assert.Equal(t, tt.sortKey, metadata.SortKey)
+
+			statement, _ := tt.table.Get()
+			lower := strings.ToLower(statement)
+			assert.Contains(t, lower, "where "+tt.whereKey+"=")
+			assert.NotContains(t, lower, "allow filtering")
+			assert.NotContains(t, lower, " index ")
+		})
+	}
+
+	store := newTestStore(t)
+	require.NotNil(t, store)
+	session := newRawSession(t)
+	iter := session.Query(
+		`SELECT index_name FROM system_schema.indexes WHERE keyspace_name = ?`,
+		scyllaKeyspace,
+	).Iter()
+	var indexName string
+	for iter.Scan(&indexName) {
+		lower := strings.ToLower(indexName)
+		assert.NotContains(t, lower, "repository")
+		assert.NotContains(t, lower, "namespace_mapping")
+	}
+	require.NoError(t, iter.Close())
 }

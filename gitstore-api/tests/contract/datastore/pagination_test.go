@@ -11,6 +11,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -242,16 +244,16 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		// Cursor at nss[2] (third-newest): verify nss[1] and nss[0] appear in the page.
 		// Global-table tests share state across -count runs, so we check membership by ID
 		// rather than exact length to avoid counting pre-existing rows from earlier runs.
-		cursor := encodeCursor(nss[2].CreationTimestamp, nss[2].ID)
+		cursor := encodeCursor(nss[2].CreationTimestamp, nss[2].UID)
 		page2, err := ds.ListNamespaces(ctx, datastore.PageParams{First: 10, After: cursor})
 		require.NoError(t, err)
 		assert.True(t, page2.HasPrevious)
 		ids := make(map[string]bool, len(page2.Items))
 		for _, ns := range page2.Items {
-			ids[ns.ID] = true
+			ids[ns.UID] = true
 		}
-		assert.True(t, ids[nss[1].ID], "expected nss[1] in page")
-		assert.True(t, ids[nss[0].ID], "expected nss[0] in page")
+		assert.True(t, ids[nss[1].UID], "expected nss[1] in page")
+		assert.True(t, ids[nss[0].UID], "expected nss[0] in page")
 	})
 
 	t.Run("Namespaces/BackwardPagination", func(t *testing.T) {
@@ -285,25 +287,55 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 			require.NoError(t, ds.CreateNamespace(ctx, namespace))
 		}
 
-		afterMarch := encodeCursor(nss[2].CreationTimestamp, nss[2].ID)
+		afterMarch := encodeCursor(nss[2].CreationTimestamp, nss[2].UID)
 		forward, err := ds.ListNamespaces(ctx, datastore.PageParams{First: 100, After: afterMarch})
 		require.NoError(t, err)
 		forwardIDs := make(map[string]bool, len(forward.Items))
 		for _, namespace := range forward.Items {
-			forwardIDs[namespace.ID] = true
+			forwardIDs[namespace.UID] = true
 		}
-		assert.True(t, forwardIDs[nss[1].ID], "expected February namespace after March cursor")
-		assert.True(t, forwardIDs[nss[0].ID], "expected January namespace after March cursor")
+		assert.True(t, forwardIDs[nss[1].UID], "expected February namespace after March cursor")
+		assert.True(t, forwardIDs[nss[0].UID], "expected January namespace after March cursor")
 
-		beforeJanuary := encodeCursor(nss[0].CreationTimestamp, nss[0].ID)
+		beforeJanuary := encodeCursor(nss[0].CreationTimestamp, nss[0].UID)
 		backward, err := ds.ListNamespaces(ctx, datastore.PageParams{Last: 100, Before: beforeJanuary})
 		require.NoError(t, err)
 		backwardIDs := make(map[string]bool, len(backward.Items))
 		for _, namespace := range backward.Items {
-			backwardIDs[namespace.ID] = true
+			backwardIDs[namespace.UID] = true
 		}
-		assert.True(t, backwardIDs[nss[1].ID], "expected February namespace before January cursor")
-		assert.True(t, backwardIDs[nss[2].ID], "expected March namespace before January cursor")
+		assert.True(t, backwardIDs[nss[1].UID], "expected February namespace before January cursor")
+		assert.True(t, backwardIDs[nss[2].UID], "expected March namespace before January cursor")
+	})
+
+	t.Run("Namespaces/ThreeMonthForwardBackwardWithEmptyBucket", func(t *testing.T) {
+		ctx := context.Background()
+		timestamps := threeMonthPaginationTimestamps()
+		namespaces := make([]*datastore.Namespace, len(timestamps))
+		for i, timestamp := range timestamps {
+			namespaces[i] = newNamespace(datastore.NamespaceTierUser)
+			namespaces[i].CreationTimestamp = timestamp
+			namespaces[i].UpdateTimestamp = timestamp
+			require.NoError(t, ds.CreateNamespace(ctx, namespaces[i]))
+		}
+		expected := sortedNamespaceIDs(namespaces)
+
+		forward, err := ds.ListNamespaces(ctx, datastore.PageParams{
+			First: 100,
+			After: encodeCursor(namespaces[0].CreationTimestamp, namespaces[0].UID),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, expected[1:], namespaceTargetIDs(forward.Items, expected))
+		assertPaginationTotalCount(t, ds, forward.TotalCount, int32(len(namespaces)))
+
+		oldest := namespaces[len(namespaces)-1]
+		backward, err := ds.ListNamespaces(ctx, datastore.PageParams{
+			Last:   100,
+			Before: encodeCursor(oldest.CreationTimestamp, oldest.UID),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, expected[:len(expected)-1], namespaceTargetIDs(backward.Items, expected))
+		assertPaginationTotalCount(t, ds, backward.TotalCount, int32(len(namespaces)))
 	})
 
 	t.Run("Repositories/ForwardPagination", func(t *testing.T) {
@@ -313,12 +345,12 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.CreateNamespace(ctx, ns))
 
 		for i := range 5 {
-			r := newRepository(ns.ID)
+			r := newRepository(ns.Name)
 			r.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateRepository(ctx, r))
 		}
 
-		page1, err := ds.ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{First: 2})
+		page1, err := ds.ListRepositoriesByNamespace(ctx, ns.Name, datastore.PageParams{First: 2})
 		require.NoError(t, err)
 		assert.Len(t, page1.Items, 2)
 		assert.True(t, page1.HasNext)
@@ -328,15 +360,15 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		assert.True(t, page1.Items[0].CreationTimestamp.After(page1.Items[1].CreationTimestamp) ||
 			page1.Items[0].CreationTimestamp.Equal(page1.Items[1].CreationTimestamp))
 
-		cursor := encodeCursor(page1.Items[1].CreationTimestamp, page1.Items[1].ID)
-		page2, err := ds.ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{First: 2, After: cursor})
+		cursor := encodeCursor(page1.Items[1].CreationTimestamp, page1.Items[1].UID)
+		page2, err := ds.ListRepositoriesByNamespace(ctx, ns.Name, datastore.PageParams{First: 2, After: cursor})
 		require.NoError(t, err)
 		assert.Len(t, page2.Items, 2)
 		assert.True(t, page2.HasNext)
 		assert.True(t, page2.HasPrevious)
 
-		cursor2 := encodeCursor(page2.Items[1].CreationTimestamp, page2.Items[1].ID)
-		page3, err := ds.ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{First: 2, After: cursor2})
+		cursor2 := encodeCursor(page2.Items[1].CreationTimestamp, page2.Items[1].UID)
+		page3, err := ds.ListRepositoriesByNamespace(ctx, ns.Name, datastore.PageParams{First: 2, After: cursor2})
 		require.NoError(t, err)
 		assert.Len(t, page3.Items, 1)
 		assert.False(t, page3.HasNext)
@@ -350,13 +382,13 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		require.NoError(t, ds.CreateNamespace(ctx, ns))
 
 		for i := range 5 {
-			r := newRepository(ns.ID)
+			r := newRepository(ns.Name)
 			r.CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateRepository(ctx, r))
 		}
 
 		// last:2 without before — oldest 2
-		result, err := ds.ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{Last: 2})
+		result, err := ds.ListRepositoriesByNamespace(ctx, ns.Name, datastore.PageParams{Last: 2})
 		require.NoError(t, err)
 		assert.Len(t, result.Items, 2)
 		assert.False(t, result.HasNext)
@@ -371,19 +403,19 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 
 		repos := make([]*datastore.Repository, 5)
 		for i := range 5 {
-			repos[i] = newRepository(ns.ID)
+			repos[i] = newRepository(ns.Name)
 			repos[i].CreationTimestamp = time.Now().Add(time.Duration(i) * time.Second)
 			require.NoError(t, ds.CreateRepository(ctx, repos[i]))
 		}
 
 		// Get page to find a mid-point cursor
-		page1, err := ds.ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{First: 3})
+		page1, err := ds.ListRepositoriesByNamespace(ctx, ns.Name, datastore.PageParams{First: 3})
 		require.NoError(t, err)
 		require.Len(t, page1.Items, 3)
 
 		// Go backward from the 3rd item
-		beforeCursor := encodeCursor(page1.Items[2].CreationTimestamp, page1.Items[2].ID)
-		backward, err := ds.ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{Last: 2, Before: beforeCursor})
+		beforeCursor := encodeCursor(page1.Items[2].CreationTimestamp, page1.Items[2].UID)
+		backward, err := ds.ListRepositoriesByNamespace(ctx, ns.Name, datastore.PageParams{Last: 2, Before: beforeCursor})
 		require.NoError(t, err)
 		assert.Len(t, backward.Items, 2)
 		assert.True(t, backward.HasNext) // items exist after the before cursor
@@ -399,19 +431,87 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 
 		// 3 repos in ns1, 2 in ns2
 		for range 3 {
-			require.NoError(t, ds.CreateRepository(ctx, newRepository(ns1.ID)))
+			require.NoError(t, ds.CreateRepository(ctx, newRepository(ns1.Name)))
 		}
 		for range 2 {
-			require.NoError(t, ds.CreateRepository(ctx, newRepository(ns2.ID)))
+			require.NoError(t, ds.CreateRepository(ctx, newRepository(ns2.Name)))
 		}
 
-		r1, err := ds.ListRepositoriesByNamespace(ctx, ns1.ID, datastore.PageParams{})
+		r1, err := ds.ListRepositoriesByNamespace(ctx, ns1.Name, datastore.PageParams{})
 		require.NoError(t, err)
 		assert.Len(t, r1.Items, 3)
 
-		r2, err := ds.ListRepositoriesByNamespace(ctx, ns2.ID, datastore.PageParams{})
+		r2, err := ds.ListRepositoriesByNamespace(ctx, ns2.Name, datastore.PageParams{})
 		require.NoError(t, err)
 		assert.Len(t, r2.Items, 2)
+	})
+
+	t.Run("Repositories/ThreeMonthNamespaceScopedForwardBackwardWithEmptyBucket", func(t *testing.T) {
+		ctx := context.Background()
+		namespace := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, namespace))
+
+		timestamps := threeMonthPaginationTimestamps()
+		repositories := make([]*datastore.Repository, len(timestamps))
+		for i, timestamp := range timestamps {
+			repositories[i] = newRepository(namespace.Name)
+			repositories[i].CreationTimestamp = timestamp
+			repositories[i].UpdateTimestamp = timestamp
+			require.NoError(t, ds.CreateRepository(ctx, repositories[i]))
+		}
+		expected := sortedRepositoryIDs(repositories)
+
+		forward, err := ds.ListRepositoriesByNamespace(ctx, namespace.Name, datastore.PageParams{
+			First: 100,
+			After: encodeCursor(repositories[0].CreationTimestamp, repositories[0].UID),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, expected[1:], repositoryTargetIDs(forward.Items, expected))
+		assertPaginationTotalCount(t, ds, forward.TotalCount, int32(len(repositories)))
+
+		oldest := repositories[len(repositories)-1]
+		backward, err := ds.ListRepositoriesByNamespace(ctx, namespace.Name, datastore.PageParams{
+			Last:   100,
+			Before: encodeCursor(oldest.CreationTimestamp, oldest.UID),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, expected[:len(expected)-1], repositoryTargetIDs(backward.Items, expected))
+		assertPaginationTotalCount(t, ds, backward.TotalCount, int32(len(repositories)))
+	})
+
+	t.Run("Repositories/ThreeMonthGlobalForwardBackwardWithEmptyBucket", func(t *testing.T) {
+		ctx := context.Background()
+		global, ok := ds.(datastore.GlobalRepositoryLister)
+		require.True(t, ok, "%T must implement datastore.GlobalRepositoryLister", ds)
+
+		namespace := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, namespace))
+		timestamps := threeMonthPaginationTimestamps()
+		repositories := make([]*datastore.Repository, len(timestamps))
+		for i, timestamp := range timestamps {
+			repositories[i] = newRepository(namespace.Name)
+			repositories[i].CreationTimestamp = timestamp
+			repositories[i].UpdateTimestamp = timestamp
+			require.NoError(t, ds.CreateRepository(ctx, repositories[i]))
+		}
+		expected := sortedRepositoryIDs(repositories)
+
+		forward, err := global.ListRepositories(ctx, datastore.PageParams{
+			First: 100,
+			After: encodeCursor(repositories[0].CreationTimestamp, repositories[0].UID),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, expected[1:], repositoryTargetIDs(forward.Items, expected))
+		assertPaginationTotalCount(t, ds, forward.TotalCount, int32(len(repositories)))
+
+		oldest := repositories[len(repositories)-1]
+		backward, err := global.ListRepositories(ctx, datastore.PageParams{
+			Last:   100,
+			Before: encodeCursor(oldest.CreationTimestamp, oldest.UID),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, expected[:len(expected)-1], repositoryTargetIDs(backward.Items, expected))
+		assertPaginationTotalCount(t, ds, backward.TotalCount, int32(len(repositories)))
 	})
 
 	t.Run("EmptyResult/Products", func(t *testing.T) {
@@ -428,7 +528,7 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 		ns := newNamespace(datastore.NamespaceTierUser)
 		require.NoError(t, ds.CreateNamespace(ctx, ns))
 
-		result, err := ds.ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{First: 10})
+		result, err := ds.ListRepositoriesByNamespace(ctx, ns.Name, datastore.PageParams{First: 10})
 		require.NoError(t, err)
 		assert.Empty(t, result.Items)
 		assert.False(t, result.HasNext)
@@ -502,11 +602,11 @@ func newCategoryTaxonomyInNS(ns string) *datastore.CategoryTaxonomy {
 	}
 }
 
-func newRepository(namespaceID string) *datastore.Repository {
+func newRepository(namespace string) *datastore.Repository {
 	now := time.Now()
 	return &datastore.Repository{
-		ID:                newID(),
-		NamespaceID:       namespaceID,
+		UID:               newID(),
+		Namespace:         namespace,
 		Name:              "repo-" + newID()[:8],
 		DefaultBranch:     "main",
 		StorageClass:      "local",
@@ -515,4 +615,84 @@ func newRepository(namespaceID string) *datastore.Repository {
 		UpdateTimestamp:   now,
 		UpdateActor:       "test-user",
 	}
+}
+
+func threeMonthPaginationTimestamps() []time.Time {
+	now := time.Now().UTC()
+	currentMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	middleMonth := currentMonth.AddDate(0, -2, 0)
+	oldestMonth := currentMonth.AddDate(0, -3, 0)
+	return []time.Time{
+		currentMonth.AddDate(0, 1, 0).Add(-time.Millisecond),
+		middleMonth.AddDate(0, 0, 15),
+		middleMonth.AddDate(0, 0, 15),
+		oldestMonth.AddDate(0, 0, 10),
+	}
+}
+
+func sortedNamespaceIDs(items []*datastore.Namespace) []string {
+	sorted := append([]*datastore.Namespace(nil), items...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].CreationTimestamp.Equal(sorted[j].CreationTimestamp) {
+			return sorted[i].UID > sorted[j].UID
+		}
+		return sorted[i].CreationTimestamp.After(sorted[j].CreationTimestamp)
+	})
+	ids := make([]string, len(sorted))
+	for i, item := range sorted {
+		ids[i] = item.UID
+	}
+	return ids
+}
+
+func sortedRepositoryIDs(items []*datastore.Repository) []string {
+	sorted := append([]*datastore.Repository(nil), items...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].CreationTimestamp.Equal(sorted[j].CreationTimestamp) {
+			return sorted[i].UID > sorted[j].UID
+		}
+		return sorted[i].CreationTimestamp.After(sorted[j].CreationTimestamp)
+	})
+	ids := make([]string, len(sorted))
+	for i, item := range sorted {
+		ids[i] = item.UID
+	}
+	return ids
+}
+
+func namespaceTargetIDs(items []*datastore.Namespace, targetIDs []string) []string {
+	targets := make(map[string]struct{}, len(targetIDs))
+	for _, id := range targetIDs {
+		targets[id] = struct{}{}
+	}
+	var ids []string
+	for _, item := range items {
+		if _, ok := targets[item.UID]; ok {
+			ids = append(ids, item.UID)
+		}
+	}
+	return ids
+}
+
+func repositoryTargetIDs(items []*datastore.Repository, targetIDs []string) []string {
+	targets := make(map[string]struct{}, len(targetIDs))
+	for _, id := range targetIDs {
+		targets[id] = struct{}{}
+	}
+	var ids []string
+	for _, item := range items {
+		if _, ok := targets[item.UID]; ok {
+			ids = append(ids, item.UID)
+		}
+	}
+	return ids
+}
+
+func assertPaginationTotalCount(t *testing.T, ds datastore.Datastore, got, minimum int32) {
+	t.Helper()
+	if strings.Contains(fmt.Sprintf("%T", ds), "scylla.") {
+		assert.Equal(t, int32(-1), got, "Scylla must not scan historical buckets for an exact count")
+		return
+	}
+	assert.GreaterOrEqual(t, got, minimum, "backend-neutral stores may provide an exact count")
 }
