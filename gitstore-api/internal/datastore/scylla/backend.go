@@ -63,7 +63,7 @@ type productRow struct {
 	Revision          string            `db:"revision"`
 	Labels            map[string]string `db:"labels"`
 	Annotations       map[string]string `db:"annotations"`
-	OwnerRefs         string            `db:"owner_refs"`
+	OwnerReferences   string            `db:"owner_references"`
 	RepositoryID      string            `db:"repository_id"`
 	SourcePath        string            `db:"source_path"`
 	GitCommitSHA      string            `db:"git_commit_sha"`
@@ -172,7 +172,7 @@ type productVariantRow struct {
 	Revision          string            `db:"revision"`
 	Labels            map[string]string `db:"labels"`
 	Annotations       map[string]string `db:"annotations"`
-	OwnerRefs         string            `db:"owner_refs"`
+	OwnerReferences   string            `db:"owner_references"`
 	SKU               string            `db:"sku"`
 	ProductRefName    string            `db:"product_ref_name"`
 	RepositoryID      string            `db:"repository_id"`
@@ -1326,7 +1326,7 @@ func toProductRow(p *datastore.Product) *productRow {
 		Revision:          p.Revision,
 		Labels:            p.Labels,
 		Annotations:       p.Annotations,
-		OwnerRefs:         ownerReferences,
+		OwnerReferences:   ownerReferences,
 		RepositoryID:      p.RepositoryID,
 		SourcePath:        p.SourcePath,
 		GitCommitSHA:      p.GitCommitSHA,
@@ -1350,7 +1350,7 @@ func fromProductRow(r *productRow) *datastore.Product {
 		Revision:          r.Revision,
 		Labels:            r.Labels,
 		Annotations:       r.Annotations,
-		OwnerReferences:   jsonOrNil(r.OwnerRefs),
+		OwnerReferences:   jsonOrNil(r.OwnerReferences),
 		RepositoryID:      r.RepositoryID,
 		SourcePath:        r.SourcePath,
 		GitCommitSHA:      r.GitCommitSHA,
@@ -1485,7 +1485,7 @@ func toProductVariantRow(v *datastore.ProductVariant) *productVariantRow {
 		Revision:          v.Revision,
 		Labels:            v.Labels,
 		Annotations:       v.Annotations,
-		OwnerRefs:         string(v.OwnerReferences),
+		OwnerReferences:   string(v.OwnerReferences),
 		SKU:               v.SKU,
 		ProductRefName:    v.ProductRefName,
 		RepositoryID:      v.RepositoryID,
@@ -1511,7 +1511,7 @@ func fromProductVariantRow(r *productVariantRow) *datastore.ProductVariant {
 		Revision:          r.Revision,
 		Labels:            r.Labels,
 		Annotations:       r.Annotations,
-		OwnerReferences:   jsonOrNil(r.OwnerRefs),
+		OwnerReferences:   jsonOrNil(r.OwnerReferences),
 		SKU:               r.SKU,
 		ProductRefName:    r.ProductRefName,
 		RepositoryID:      r.RepositoryID,

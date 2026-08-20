@@ -423,7 +423,7 @@ func TestDatastoreProductToGraphQL_NilStatus_ReturnsNilStatus(t *testing.T) {
 
 func TestDatastoreProductToGraphQL_OwnerRefsHydration(t *testing.T) {
 	p := newTestProduct()
-	p.OwnerRefs = json.RawMessage(`[{"apiVersion":"v1","kind":"Collection","name":"sale","uid":"00000000-0000-0000-0000-000000000099"}]`)
+	p.OwnerReferences = json.RawMessage(`[{"apiVersion":"v1","kind":"Collection","name":"sale","uid":"00000000-0000-0000-0000-000000000099"}]`)
 
 	got := DatastoreProductToGraphQL(p)
 	require.NotNil(t, got)

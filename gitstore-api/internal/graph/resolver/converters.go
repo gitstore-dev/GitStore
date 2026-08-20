@@ -294,7 +294,7 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 		ResourceVersion:   p.ResourceVersion,
 		Generation:        gen,
 		CreationTimestamp: p.CreationTimestamp,
-		OwnerReferences:   ownerRefsFromJSON(p.OwnerRefs),
+		OwnerReferences:   ownerRefsFromJSON(p.OwnerReferences),
 	}
 	if p.Revision != "" {
 		meta.Revision = &p.Revision
@@ -681,7 +681,7 @@ func DatastoreVariantToGraphQL(v *datastore.ProductVariant) *model.ProductVarian
 		ResourceVersion:   v.ResourceVersion,
 		Generation:        gen,
 		CreationTimestamp: v.CreationTimestamp,
-		OwnerReferences:   ownerRefsFromJSON(v.OwnerRefs),
+		OwnerReferences:   ownerRefsFromJSON(v.OwnerReferences),
 	}
 	if v.Revision != "" {
 		r := v.Revision
