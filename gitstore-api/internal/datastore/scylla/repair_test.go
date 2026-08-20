@@ -133,6 +133,33 @@ func TestBuildRepairPlanDoesNotOverwriteValidCompetingOwner(t *testing.T) {
 	}
 }
 
+func TestBuildRepairPlanDoesNotDeleteWriteReservation(t *testing.T) {
+	t.Parallel()
+	reservation := ProjectionRecord{
+		Table:             "products_by_name",
+		UID:               "99999999-9999-9999-9999-999999999999",
+		Namespace:         "shop",
+		Name:              "pending-product",
+		CreationTimestamp: time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC),
+	}
+
+	plan, err := BuildRepairPlan(ProjectionSnapshot{
+		Projections: []ProjectionRecord{reservation},
+	})
+	if err != nil {
+		t.Fatalf("BuildRepairPlan() error = %v", err)
+	}
+	if len(plan.Findings) != 1 {
+		t.Fatalf("findings = %#v, want one", plan.Findings)
+	}
+	if plan.Findings[0].Repairable {
+		t.Fatalf("reservation finding unexpectedly repairable: %#v", plan.Findings[0])
+	}
+	if len(plan.Actions) != 0 {
+		t.Fatalf("actions = %#v, want none", plan.Actions)
+	}
+}
+
 func TestValidateRepairPlanRejectsUnsafeAction(t *testing.T) {
 	t.Parallel()
 	err := ValidateRepairPlan(RepairPlan{Actions: []RepairAction{{

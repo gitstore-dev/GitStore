@@ -273,10 +273,12 @@ func BuildRepairPlan(snapshot ProjectionSnapshot) (RepairPlan, error) {
 					}
 				}
 			}
-			repairable := !competingClaimsKey
+			repairable := !competingClaimsKey && projectionDeleteRepairable(actual.Table)
 			reason := "projection key points to a different resource"
 			if competingClaimsKey {
 				reason = "a valid competing authoritative resource claims this unique key"
+			} else if !projectionDeleteRepairable(actual.Table) {
+				reason = "projection participates in write reservation and cannot be deleted safely online"
 			}
 			plan.Findings = append(plan.Findings, finding(FindingStale, resource.Kind, expected.UID, expected, actual, repairable, reason))
 			if repairable {
@@ -300,8 +302,15 @@ func BuildRepairPlan(snapshot ProjectionSnapshot) (RepairPlan, error) {
 		kind := projectionKind(actual.Table)
 		resource, exists := resources[resourceKey(kind, actual.UID)]
 		if !exists {
-			plan.Findings = append(plan.Findings, finding(FindingDangling, kind, actual.UID, ProjectionRecord{}, actual, true, "projection owner has no authoritative row"))
-			plan.Actions = append(plan.Actions, deleteAction(AuthoritativeResource{Kind: kind, UID: actual.UID}, false, actual))
+			repairable := projectionDeleteRepairable(actual.Table)
+			reason := "projection owner has no authoritative row"
+			if !repairable {
+				reason = "projection may be an in-flight write reservation and cannot be deleted safely online"
+			}
+			plan.Findings = append(plan.Findings, finding(FindingDangling, kind, actual.UID, ProjectionRecord{}, actual, repairable, reason))
+			if repairable {
+				plan.Actions = append(plan.Actions, deleteAction(AuthoritativeResource{Kind: kind, UID: actual.UID}, false, actual))
+			}
 			continue
 		}
 		owned := expectedByOwner[projectionOwnerKey(kind, actual.Table, actual.UID)]
@@ -314,8 +323,14 @@ func BuildRepairPlan(snapshot ProjectionSnapshot) (RepairPlan, error) {
 				break
 			}
 		}
-		plan.Findings = append(plan.Findings, finding(findingType, kind, actual.UID, firstProjection(owned), actual, true, reason))
-		plan.Actions = append(plan.Actions, deleteAction(resource, true, actual))
+		repairable := projectionDeleteRepairable(actual.Table)
+		if !repairable {
+			reason = "projection participates in write reservation and cannot be deleted safely online"
+		}
+		plan.Findings = append(plan.Findings, finding(findingType, kind, actual.UID, firstProjection(owned), actual, repairable, reason))
+		if repairable {
+			plan.Actions = append(plan.Actions, deleteAction(resource, true, actual))
+		}
 	}
 
 	sort.Slice(plan.Findings, func(i, j int) bool {
@@ -672,6 +687,26 @@ func actionKey(action RepairAction) string {
 	return ""
 }
 
+func projectionDeleteRepairable(table string) bool {
+	switch table {
+	case "namespaces_by_name",
+		"namespace_mappings",
+		"namespace_mappings_by_repository",
+		"products_by_name",
+		"products_by_uid",
+		"category_taxonomy_by_name",
+		"category_taxonomy_by_uid",
+		"collection_by_name",
+		"collection_by_uid",
+		"product_variant_by_name",
+		"product_variant_by_uid",
+		"product_variant_by_sku":
+		return false
+	default:
+		return true
+	}
+}
+
 type scyllaProjectionRepairStore struct {
 	session gocqlx.Session
 	raw     *gocql.Session
@@ -708,12 +743,12 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		{"ProductVariant", "product_variant_by_namespace", "namespace,sku,product_ref_name,"},
 	}
 	for _, source := range authoritative {
-		var rows []auditRow
 		statement := fmt.Sprintf(
 			"SELECT %s uid,name,resource_version,creation_timestamp FROM %s",
 			source.extraCols, source.table,
 		)
-		if err := s.session.Query(statement, nil).WithContext(ctx).SelectRelease(&rows); err != nil {
+		rows, err := s.scanAuditRows(ctx, statement)
+		if err != nil {
 			return ProjectionSnapshot{}, fmt.Errorf("audit authoritative table %s: %w", source.table, err)
 		}
 		for _, row := range rows {
@@ -748,9 +783,8 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		{"product_variant_by_product_ref", "namespace,product_ref_name,creation_timestamp,uid", rowUID},
 	}
 	for _, source := range projections {
-		var rows []auditRow
-		if err := s.session.Query("SELECT "+source.columns+" FROM "+source.table, nil).
-			WithContext(ctx).SelectRelease(&rows); err != nil {
+		rows, err := s.scanAuditRows(ctx, "SELECT "+source.columns+" FROM "+source.table)
+		if err != nil {
 			return ProjectionSnapshot{}, fmt.Errorf("audit projection table %s: %w", source.table, err)
 		}
 		for _, row := range rows {
@@ -763,6 +797,20 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		}
 	}
 	return snapshot, nil
+}
+
+func (s *scyllaProjectionRepairStore) scanAuditRows(ctx context.Context, statement string) ([]auditRow, error) {
+	iter := s.session.Query(statement, nil).WithContext(ctx).PageSize(1000).Iter()
+	rows := make([]auditRow, 0, 1000)
+	var row auditRow
+	for iter.StructScan(&row) {
+		rows = append(rows, row)
+		row = auditRow{}
+	}
+	if err := iter.Close(); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func rowUID(row auditRow) gocql.UUID {
@@ -850,6 +898,13 @@ func (s *scyllaProjectionRepairStore) ApplyAction(ctx context.Context, action Re
 	case RepairUpdate:
 		return s.updateProjection(ctx, *action.Before, *action.After)
 	case RepairDelete:
+		resource, err := s.LookupResource(ctx, action)
+		if err != nil {
+			return false, err
+		}
+		if resource != nil {
+			return false, nil
+		}
 		return s.deleteProjection(ctx, *action.Before)
 	default:
 		return false, fmt.Errorf("unsupported repair action %q", action.Type)

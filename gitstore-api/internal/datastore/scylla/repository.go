@@ -196,8 +196,46 @@ func (s *scyllaDatastore) ListRepositories(ctx context.Context, page datastore.P
 
 func (s *scyllaDatastore) listRepositories(ctx context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
 	limit := page.Limit()
-	rows := make([]repositoryIndexRow, 0, limit+1)
-	for _, bucket := range repositoryBucketsForPage(page, time.Now().UTC()) {
+	items, err := collectRepositoryPage(
+		ctx,
+		repositoryBucketsForPage(page, time.Now().UTC()),
+		page,
+		func(ctx context.Context, bucket string, bucketPage datastore.PageParams) ([]repositoryIndexRow, error) {
+			statement, args, err := repositoryIndexSelect(namespace, bucket, bucketPage)
+			if err != nil {
+				return nil, err
+			}
+			var rows []repositoryIndexRow
+			if err := s.session.Query(statement, nil).WithContext(ctx).Bind(args...).SelectRelease(&rows); err != nil {
+				return nil, fmt.Errorf("scylla: list repositories bucket %s: %w", bucket, err)
+			}
+			return rows, nil
+		},
+		func(ctx context.Context, uid string) (*datastore.Repository, error) {
+			return s.GetRepository(ctx, uid)
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	result := buildPageResult(items, limit, page)
+	result.TotalCount = -1
+	return result, nil
+}
+
+type repositoryIndexFetcher func(context.Context, string, datastore.PageParams) ([]repositoryIndexRow, error)
+type repositoryHydrator func(context.Context, string) (*datastore.Repository, error)
+
+func collectRepositoryPage(
+	ctx context.Context,
+	buckets []string,
+	page datastore.PageParams,
+	fetch repositoryIndexFetcher,
+	hydrate repositoryHydrator,
+) ([]*datastore.Repository, error) {
+	limit := page.Limit()
+	items := make([]*datastore.Repository, 0, limit+1)
+	for _, bucket := range buckets {
 		bucketPage := page
 		if page.After != "" && !cursorInNamespaceBucket(page.After, bucket) {
 			bucketPage.After = ""
@@ -205,38 +243,52 @@ func (s *scyllaDatastore) listRepositories(ctx context.Context, namespace string
 		if page.Before != "" && !cursorInNamespaceBucket(page.Before, bucket) {
 			bucketPage.Before = ""
 		}
-		statement, args, err := repositoryIndexSelect(namespace, bucket, bucketPage)
-		if err != nil {
-			return nil, err
+
+		for len(items) < limit+1 {
+			rows, err := fetch(ctx, bucket, bucketPage)
+			if err != nil {
+				return nil, err
+			}
+			if len(rows) == 0 {
+				break
+			}
+			for _, index := range rows {
+				repository, err := hydrate(ctx, index.UID.String())
+				if errors.Is(err, datastore.ErrNotFound) {
+					continue
+				}
+				if err != nil {
+					return nil, fmt.Errorf("scylla: hydrate listed repository: %w", err)
+				}
+				items = append(items, repository)
+				if len(items) >= limit+1 {
+					break
+				}
+			}
+			if len(items) >= limit+1 || len(rows) < limit+1 {
+				break
+			}
+
+			last := rows[len(rows)-1]
+			cursor := encodeKeysetCursor(last.CreationTimestamp, last.UID.String())
+			if page.Last > 0 {
+				bucketPage.Before = cursor
+				bucketPage.After = ""
+			} else {
+				bucketPage.After = cursor
+				bucketPage.Before = ""
+			}
 		}
-		var bucketRows []repositoryIndexRow
-		if err := s.session.Query(statement, nil).WithContext(ctx).Bind(args...).SelectRelease(&bucketRows); err != nil {
-			return nil, fmt.Errorf("scylla: list repositories bucket %s: %w", bucket, err)
-		}
-		rows = append(rows, bucketRows...)
-		if len(rows) >= limit+1 {
-			rows = rows[:limit+1]
+		if len(items) >= limit+1 {
 			break
 		}
 	}
 	if page.Last > 0 {
-		reverseRows(rows)
-	}
-
-	items := make([]*datastore.Repository, 0, len(rows))
-	for _, index := range rows {
-		repository, err := s.GetRepository(ctx, index.UID.String())
-		if errors.Is(err, datastore.ErrNotFound) {
-			continue
+		for left, right := 0, len(items)-1; left < right; left, right = left+1, right-1 {
+			items[left], items[right] = items[right], items[left]
 		}
-		if err != nil {
-			return nil, fmt.Errorf("scylla: hydrate listed repository: %w", err)
-		}
-		items = append(items, repository)
 	}
-	result := buildPageResult(items, limit, page)
-	result.TotalCount = -1
-	return result, nil
+	return items, nil
 }
 
 func repositoryBucketsForPage(page datastore.PageParams, now time.Time) []string {

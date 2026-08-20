@@ -427,3 +427,53 @@ func TestRepositoryBucketsForPageIncludesAdjacentFutureBucket(t *testing.T) {
 
 	assert.Equal(t, []string{"2026-05", "2026-06", "2026-07", "2026-08", "2026-09"}, buckets)
 }
+
+func TestCollectRepositoryPageContinuesPastDanglingRows(t *testing.T) {
+	created := time.Date(2026, time.August, 19, 20, 0, 0, 0, time.UTC)
+	danglingOne := "11111111-1111-1111-1111-111111111111"
+	danglingTwo := "22222222-2222-2222-2222-222222222222"
+	liveOne := "33333333-3333-3333-3333-333333333333"
+	liveTwo := "44444444-4444-4444-4444-444444444444"
+	calls := 0
+
+	items, err := collectRepositoryPage(
+		context.Background(),
+		[]string{"2026-08"},
+		datastore.PageParams{First: 1},
+		func(_ context.Context, bucket string, page datastore.PageParams) ([]repositoryIndexRow, error) {
+			assert.Equal(t, "2026-08", bucket)
+			calls++
+			switch calls {
+			case 1:
+				assert.Empty(t, page.After)
+				return []repositoryIndexRow{
+					{Bucket: bucket, CreationTimestamp: created, UID: mustParseUUID(danglingOne)},
+					{Bucket: bucket, CreationTimestamp: created.Add(-time.Second), UID: mustParseUUID(danglingTwo)},
+				}, nil
+			case 2:
+				assert.NotEmpty(t, page.After)
+				return []repositoryIndexRow{
+					{Bucket: bucket, CreationTimestamp: created.Add(-2 * time.Second), UID: mustParseUUID(liveOne)},
+					{Bucket: bucket, CreationTimestamp: created.Add(-3 * time.Second), UID: mustParseUUID(liveTwo)},
+				}, nil
+			default:
+				t.Fatalf("unexpected fetch call %d", calls)
+				return nil, nil
+			}
+		},
+		func(_ context.Context, uid string) (*datastore.Repository, error) {
+			switch uid {
+			case danglingOne, danglingTwo:
+				return nil, datastore.ErrNotFound
+			default:
+				return &datastore.Repository{UID: uid}, nil
+			}
+		},
+	)
+
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, liveOne, items[0].UID)
+	assert.Equal(t, liveTwo, items[1].UID)
+	assert.Equal(t, 2, calls)
+}
