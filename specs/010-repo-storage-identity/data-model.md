@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS namespace_mappings (
 );
 ```
 
-### Update `002_add_initial_indices.cql`
+### Update `002_secondary_indexes.cql`
 
 Add indices for new tables.
 

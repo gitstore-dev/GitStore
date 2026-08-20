@@ -73,6 +73,41 @@ type CategoryTaxonomyStatusPatch struct {
 	Resolved            *catalog.ResolvedCategoryTaxonomy
 }
 
+type NamespaceStatusPatch struct {
+	ResourceVersion     string
+	ObservedGeneration  *int64
+	LastAppliedRevision *string
+	Conditions          []catalog.Condition
+}
+
+func ApplyNamespaceStatusPatch(namespace *Namespace, patch NamespaceStatusPatch) error {
+	if patch.ResourceVersion != namespace.ResourceVersion {
+		return ErrConflict
+	}
+	var status catalog.NamespaceStatus
+	if len(namespace.Status) > 0 {
+		if err := json.Unmarshal(namespace.Status, &status); err != nil {
+			return fmt.Errorf("datastore: unmarshal existing Namespace status: %w", err)
+		}
+	}
+	if patch.ObservedGeneration != nil {
+		status.ObservedGeneration = *patch.ObservedGeneration
+	}
+	if patch.LastAppliedRevision != nil {
+		status.LastAppliedRevision = *patch.LastAppliedRevision
+	}
+	if patch.Conditions != nil {
+		status.Conditions = patch.Conditions
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		return fmt.Errorf("datastore: marshal updated Namespace status: %w", err)
+	}
+	namespace.Status = data
+	AdvanceNamespaceSystemVersion(namespace)
+	return nil
+}
+
 // ApplyCategoryTaxonomyStatusPatch merges patch into c's status field
 // in place: it checks the resourceVersion precondition (returning
 // ErrConflict on mismatch), applies only non-nil patch fields to the
@@ -177,9 +212,11 @@ type Datastore interface {
 	// Namespace operations
 	CreateNamespace(ctx context.Context, ns *Namespace) error
 	GetNamespace(ctx context.Context, id string) (*Namespace, error)
-	GetNamespaceByIdentifier(ctx context.Context, identifier string) (*Namespace, error)
+	GetNamespaceByName(ctx context.Context, name string) (*Namespace, error)
 	ListNamespaces(ctx context.Context, page PageParams) (*PageResult[Namespace], error)
+	UpdateNamespace(ctx context.Context, ns *Namespace, expectedResourceVersion string) error
 	DeleteNamespace(ctx context.Context, id string) error
+	DeleteNamespaceWithResourceVersion(ctx context.Context, id, expectedResourceVersion string) error
 	// HasRepositories reports whether at least one Repository record
 	// currently has NamespaceID == namespaceID. Used by DeleteNamespace to
 	// enforce FR-001 (reject deletion while repositories remain). Must be

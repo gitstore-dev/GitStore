@@ -25,7 +25,7 @@ func RepoResolver(store datastore.Datastore, log *zap.Logger) gin.HandlerFunc {
 		namespace := c.Param("namespace")
 		repo := strings.TrimSuffix(c.Param("repo"), ".git")
 
-		ns, err := store.GetNamespaceByIdentifier(c.Request.Context(), namespace)
+		ns, err := store.GetNamespaceByName(c.Request.Context(), namespace)
 		if err != nil || ns == nil {
 			if _, werr := gitPktLineErrorRaw(c.Writer, http.StatusNotFound, "repository not found"); werr != nil {
 				log.Error("failed to write pkt-line error response", zap.Error(werr))

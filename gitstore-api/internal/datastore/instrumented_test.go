@@ -113,13 +113,19 @@ func (s *stubDatastore) CreateNamespace(_ context.Context, _ *datastore.Namespac
 func (s *stubDatastore) GetNamespace(_ context.Context, _ string) (*datastore.Namespace, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) GetNamespaceByIdentifier(_ context.Context, _ string) (*datastore.Namespace, error) {
+func (s *stubDatastore) GetNamespaceByName(_ context.Context, _ string) (*datastore.Namespace, error) {
 	return nil, s.getProductErr
 }
 func (s *stubDatastore) ListNamespaces(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {
 	return nil, s.getProductErr
 }
+func (s *stubDatastore) UpdateNamespace(_ context.Context, _ *datastore.Namespace, _ string) error {
+	return s.getProductErr
+}
 func (s *stubDatastore) DeleteNamespace(_ context.Context, _ string) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) DeleteNamespaceWithResourceVersion(_ context.Context, _, _ string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) HasRepositories(_ context.Context, _ string) (bool, error) {

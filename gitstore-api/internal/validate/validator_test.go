@@ -87,6 +87,68 @@ body
 	assert.Equal(t, "catalog-team", res.Metadata.Annotations["owner"])
 }
 
+func TestParse_ValidNamespaceAccepted(t *testing.T) {
+	doc := `---
+apiVersion: gitstore.dev/v1beta1
+kind: Namespace
+metadata:
+  name: acme-store
+spec:
+  title: Acme Store
+  tier: USER
+---
+`
+
+	parsed, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, parsed)
+	require.NotNil(t, parsed.Namespace)
+	assert.Equal(t, "acme-store", parsed.Namespace.Metadata.Name)
+	assert.Equal(t, "Acme Store", parsed.Namespace.Spec.Title)
+	assert.Equal(t, "USER", parsed.Namespace.Spec.Tier)
+}
+
+func TestParse_NamespaceAuthoredStatusIgnored(t *testing.T) {
+	doc := `---
+apiVersion: gitstore.dev/v1beta1
+kind: Namespace
+metadata:
+  name: status-ignored
+spec:
+  title: Status Ignored
+  tier: USER
+status:
+  observedGeneration: 999
+  lastAppliedRevision: forged
+  conditions:
+  - type: Ready
+    status: "True"
+---
+`
+
+	parsed, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, parsed)
+	require.NotNil(t, parsed.Namespace)
+	assert.Equal(t, "status-ignored", parsed.Namespace.Metadata.Name)
+}
+
+func TestParse_NamespaceInvalidTierRejected(t *testing.T) {
+	doc := `---
+apiVersion: gitstore.dev/v1beta1
+kind: Namespace
+metadata:
+  name: acme-store
+spec:
+  tier: ENTERPRISE
+---
+`
+
+	_, _, err := validate.NewParser().ParseResource(strings.NewReader(doc))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "spec.tier")
+}
+
 // ── US2: Kind validation ──────────────────────────────────────────────────────
 
 func TestParse_WrongKindRejected(t *testing.T) {

@@ -107,7 +107,7 @@
 - [x] T018 [P] [US4] Delete `scripts/init-demo-catalog.sh` from the repository
 - [x] T019 [P] [US4] Remove the `./scripts/init-demo-catalog.sh` code block and all surrounding instructions from `docs/developer-guide.md`; replace with a one-line note: "Demo data seeding will be provided in a future feature."
 - [x] T020 [P] [US4] Remove the `./scripts/init-demo-catalog.sh` instruction and surrounding context from `docs/user-guide.md` (line 40 area); replace with equivalent one-line note
-- [x] T021 [P] [US4] Remove both occurrences of `./scripts/init-demo-catalog.sh` and their surrounding context from `docs/docker-troubleshooting.md` (lines 9 and 129 area); replace with equivalent one-line note per location
+- [x] T021 [P] [US4] Remove both occurrences of `./scripts/init-demo-catalog.sh` and their surrounding context from `../../docs/runbooks/docker-troubleshooting.md` (lines 9 and 129 area); replace with equivalent one-line note per location
 
 **Checkpoint**: `grep -rn 'init-demo-catalog' .` from repo root returns zero matches (SC-006).
 

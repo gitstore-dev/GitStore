@@ -200,15 +200,15 @@ func newProductVariant(namespace, name, sku, productRefName string) *datastore.P
 func newRepository() *datastore.Repository {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	return &datastore.Repository{
-		ID:            newID(),
-		NamespaceID:   newID(),
-		Name:          "repo-" + newID()[:8],
-		DefaultBranch: "main",
-		StorageClass:  "default",
-		CreatedAt:     now,
-		CreatedBy:     "test",
-		UpdatedAt:     now,
-		UpdatedBy:     "test",
+		ID:                newID(),
+		NamespaceID:       newID(),
+		Name:              "repo-" + newID()[:8],
+		DefaultBranch:     "main",
+		StorageClass:      "default",
+		CreationTimestamp: now,
+		CreationActor:     "test",
+		UpdateTimestamp:   now,
+		UpdateActor:       "test",
 	}
 }
 

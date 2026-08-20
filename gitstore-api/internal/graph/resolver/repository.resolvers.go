@@ -15,7 +15,7 @@ import (
 
 // CreateRepository is the resolver for the createRepository field.
 func (r *mutationResolver) CreateRepository(ctx context.Context, input model.CreateRepositoryInput) (*model.CreateRepositoryPayload, error) {
-	ns, err := r.service.GetNamespaceByIdentifier(ctx, input.Namespace)
+	ns, err := r.service.GetNamespaceByName(ctx, input.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func (r *queryResolver) Repository(ctx context.Context, by model.RepositoryBy) (
 		return datastoreRepositoryToModel(repo, ns, r.storageDataDir), nil
 	}
 	if by.NamespacePath != nil {
-		ns, err := r.service.GetNamespaceByIdentifier(ctx, by.NamespacePath.Namespace)
+		ns, err := r.service.GetNamespaceByName(ctx, by.NamespacePath.Namespace)
 		if err != nil {
 			return nil, err
 		}
@@ -145,7 +145,7 @@ func (r *queryResolver) Repository(ctx context.Context, by model.RepositoryBy) (
 
 // Repositories is the resolver for the repositories field.
 func (r *queryResolver) Repositories(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.RepositoryConnection, error) {
-	ns, err := r.service.GetNamespaceByIdentifier(ctx, namespace)
+	ns, err := r.service.GetNamespaceByName(ctx, namespace)
 	if err != nil {
 		return nil, err
 	}

@@ -76,9 +76,13 @@ func TestRunMigrations_RepositoryResourceContractColumns(t *testing.T) {
 	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), log))
 
 	expectedColumns := map[string]string{
+		"creation_timestamp":  "timestamp",
+		"creation_actor":      "text",
 		"generation":          "bigint",
 		"resource_version":    "text",
 		"status":              "text",
+		"update_timestamp":    "timestamp",
+		"update_actor":        "text",
 		"max_pack_size_bytes": "bigint",
 		"max_file_size_bytes": "bigint",
 	}

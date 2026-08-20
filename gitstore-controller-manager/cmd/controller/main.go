@@ -22,6 +22,7 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
+	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"go.uber.org/zap"
@@ -53,6 +54,10 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if _, err = registerNamespace(ctx, mgr, checkpointStore, cfg, log); err != nil {
+		log.Fatal("failed to register Namespace reconciler", zap.Error(err))
+	}
 
 	var productRunnerMu sync.RWMutex
 	var productRunner *listwatch.Runner[categorytaxonomy.Product]
@@ -96,6 +101,53 @@ func main() {
 		log.Warn("HTTP server shutdown error", zap.Error(err))
 	}
 	log.Info("controller-manager stopped")
+}
+
+// registerNamespace wires Namespace list/watch, repository provisioning,
+// status writeback, and foreground-deletion reconciliation into mgr.
+func registerNamespace(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger) (*listwatch.Runner[namespacecontroller.Namespace], error) {
+	client := graphqlclient.New(cfg.Controller.ApiURI, cfg.Controller.ApiToken)
+	namespaceCache := cache.New[namespacecontroller.Namespace]()
+	runner := &listwatch.Runner[namespacecontroller.Namespace]{
+		Kind:        "Namespace",
+		ListWatcher: listwatch.NewNamespaceListWatcher(client),
+		Cache:       namespaceCache,
+		Store:       checkpointStore,
+		Enqueue:     mgr.Enqueue,
+		KeyFunc: func(item namespacecontroller.Namespace) types.WorkItemKey {
+			return types.WorkItemKey{Kind: "Namespace", Name: item.Name}
+		},
+		RevisionFunc: func(item namespacecontroller.Namespace) string {
+			return item.ResourceVersion
+		},
+		FlushIntervalEvents: cfg.Controller.CheckpointFlushIntervalEvents,
+		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
+		Log:                 log,
+	}
+	reconciler := namespacecontroller.NewReconciler(
+		cache.AsReadOnly(namespaceCache),
+		status.NewGraphQLResourceStatusClient(client),
+		namespacecontroller.NewGraphQLRepositoryClient(client),
+		namespacecontroller.NewGraphQLDeletionClient(client),
+	)
+
+	if err := mgr.Register(manager.ReconcilerRegistration{
+		Kind:           "Namespace",
+		Reconciler:     reconciler,
+		Cache:          namespaceCache,
+		OnSuccess:      runner.MarkCompleted,
+		MaxAttempts:    cfg.Controller.DefaultMaxAttempts,
+		StallThreshold: cfg.Controller.DefaultStallThreshold,
+	}); err != nil {
+		return nil, fmt.Errorf("register Namespace: %w", err)
+	}
+
+	go func() {
+		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
+			log.Error("Namespace runner exited with error", zap.Error(err))
+		}
+	}()
+	return runner, nil
 }
 
 // buildMux returns the HTTP handler for the health/metrics and management surface.

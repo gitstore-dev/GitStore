@@ -1,9 +1,8 @@
 # Namespace Resource Contract
 
 Namespace is a top-level GitStore resource represented by the
-`gitstore.dev/v1beta1` declarative contract. Authors manage desired state in
-Git; the API hydrates system metadata and status when reading the resource.
-Git-backed mutation delegation is tracked by GH#172.
+`gitstore.dev/v1beta1` declarative contract. Authors manage desired state in Git; the API hydrates system metadata and
+status when reading the resource.
 
 ## Create manifest
 
@@ -70,10 +69,10 @@ spec:
 ---
 ```
 
-Omitted nested defaults mean that the Namespace supplies no override. Authors
-must omit `metadata.uid`, `metadata.resourceVersion`, `metadata.generation`,
+Omitted nested defaults mean that the Namespace supplies no override. Authors must omit `metadata.uid`, `metadata.resourceVersion`, `metadata.generation`,
 `metadata.creationTimestamp`, `metadata.revision`,
-`metadata.ownerReferences`, `metadata.finalizers`, and `status`.
+`metadata.ownerReferences`, and `metadata.finalizers`. An authored top-level
+`status` block is ignored for Namespace manifests and never persisted.
 
 ## Ownership and mutability
 
@@ -117,9 +116,15 @@ spec:
     defaultBranch: main
   pushPolicyDefaults: null
 status:
-  observedGeneration: 0
-  lastAppliedRevision: null
-  conditions: []
+  observedGeneration: 1
+  lastAppliedRevision: main@sha1:abc123
+  conditions:
+  - type: AdmissionAccepted
+    status: "True"
+    observedGeneration: 1
+    lastTransitionTime: 2026-08-16T01:00:01Z
+    reason: AdmittedByHookPipeline
+    message: Namespace manifest admitted successfully.
 ```
 
 Existing flat Namespace GraphQL fields remain available with deprecation
@@ -134,7 +139,11 @@ initial documented vocabulary is:
 
 - `Ready`
 - `AdmissionAccepted`
-- `DeletionBlocked`
+- `SystemRepoReady`
+- `Terminating`
 
-No condition is required before a status-writing process has observed the
-resource.
+Admission writes `AdmissionAccepted=True`, sets `observedGeneration` to the
+admitted generation, and records the admitted Git revision in
+`lastAppliedRevision`. Reconciliation preserves that revision, advances only
+`resourceVersion`, and sets `SystemRepoReady` and `Ready`. Accepted deletion
+sets the deletion timestamp/finalizer and exposes `Terminating`.

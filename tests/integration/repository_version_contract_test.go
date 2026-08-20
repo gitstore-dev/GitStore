@@ -33,8 +33,8 @@ func TestRepositoryVersionContract_CreateRenameTransfer(t *testing.T) {
 	suffix := time.Now().UnixNano()
 	from := fmt.Sprintf("repo-version-from-%d", suffix)
 	to := fmt.Sprintf("repo-version-to-%d", suffix)
-	h.createNamespaceLegacy(from, "Repository Version From")
-	h.createNamespaceLegacy(to, "Repository Version To")
+	h.createNamespace(from, "Repository Version From")
+	h.createNamespace(to, "Repository Version To")
 	t.Cleanup(func() {
 		h.cleanupNamespace(from)
 		h.cleanupNamespace(to)

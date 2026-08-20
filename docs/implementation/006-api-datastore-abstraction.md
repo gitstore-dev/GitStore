@@ -54,7 +54,7 @@ Migration files live in `internal/datastore/scylla/migrations/`:
 | File                          | Purpose                                                                                           |
 |-------------------------------|---------------------------------------------------------------------------------------------------|
 | `001_initial_schema.cql`      | Creates product, category, collection, namespace, repository, and namespace mapping tables        |
-| `002_add_initial_indices.cql` | Secondary indexes for SKU, category, slug, namespace identifier, and repository mapping lookups   |
+| `002_secondary_indexes.cql` | Secondary indexes for repository and namespace-mapping lookups |
 
 ---
 

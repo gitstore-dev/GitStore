@@ -34,14 +34,15 @@ func (p *Parser) validator() *validator.Validate {
 	return p.structValidator
 }
 
-// ParsedResource is the result of ParseResource; exactly one of Product,
-// CategoryTaxonomy, Collection, or ProductVariant is set, matching the Kind field.
+// ParsedResource is the result of ParseResource; exactly one resource pointer
+// is set, matching the Kind field.
 type ParsedResource struct {
 	Kind             string
 	Product          *catalog.ProductResource
 	CategoryTaxonomy *catalog.CategoryTaxonomyResource
 	Collection       *catalog.CollectionResource
 	ProductVariant   *catalog.ProductVariantResource
+	Namespace        *catalog.NamespaceResource
 }
 
 // ParseResource reads a Markdown document, extracts YAML frontmatter,
@@ -163,6 +164,27 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		}
 		return &ParsedResource{Kind: "ProductVariant", ProductVariant: &res}, body, nil
 
+	case "Namespace":
+		var res catalog.NamespaceResource
+		body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
+		}
+		var errs []error
+		if err := p.validator().Struct(res); err != nil {
+			errs = append(errs, toFriendlyError(err))
+		}
+		if res.Metadata.Namespace != "" {
+			errs = append(errs, fmt.Errorf("validate: metadata.namespace must not be set for Namespace resources"))
+		}
+		if err := validateLabels(res.Metadata.Labels); err != nil {
+			errs = append(errs, err)
+		}
+		if len(errs) > 0 {
+			return nil, nil, errors.Join(errs...)
+		}
+		return &ParsedResource{Kind: "Namespace", Namespace: &res}, body, nil
+
 	default:
 		return nil, nil, fmt.Errorf("validate: kind %q is not a recognized catalog resource type", kindProbe.Kind)
 	}
@@ -263,8 +285,9 @@ func preParseChecks(fmRaw []byte) error {
 		return fmt.Errorf("validate: spec is required")
 	}
 
-	// Forbidden top-level key: status.
-	if _, ok := raw["status"]; ok {
+	// Status is ignored for Namespace to preserve system ownership while
+	// allowing declarative clients to round-trip a full resource envelope.
+	if _, ok := raw["status"]; ok && raw["kind"] != "Namespace" {
 		return fmt.Errorf("validate: status is system-managed and must not be set by authors")
 	}
 

@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 GitStore contributors
+
+# This file documents the authoritative Namespace mutation envelope for GH#172.
+# createNamespace and updateNamespace accept a declarative resource shape that
+# matches the existing `apiVersion` / `kind` / `metadata` / `spec` envelope used
+# for Git-backed namespace manifests, rather than the legacy flat identifier/tier
+# input fields. The required request keys are explicit:
+#   - apiVersion: String!
+#   - kind: String!  (must be "Namespace")
+#   - metadata: { name: String! ... }
+#   - spec: NamespaceSpecInput!
+#
+# The public contract is intentionally resource-shaped so callers can mirror a
+# manifest they would otherwise author in Git. The mutation names and payload
+# return types remain unchanged; only the accepted request envelope changes.
+#
+# deleteNamespace remains a separate, narrow delete mutation and does not use
+# the resource envelope input shape.
+
+input NamespaceMetadataInput {
+  name: String!
+  labels: JSON
+  annotations: JSON
+}
+
+input NamespaceRepositoryDefaultsInput {
+  visibility: RepositoryVisibility
+  defaultBranch: String
+}
+
+input NamespacePushPolicyDefaultsInput {
+  maxPackSizeBytes: Long
+  maxFileSizeBytes: Long
+  receivePackHooks: ReceivePackHookDefaultsInput
+  schemaValidation: SchemaValidationDefaultsInput
+  admissionControl: AdmissionControlDefaultsInput
+}
+
+input ReceivePackHookDefaultsInput {
+  preReceive: HookToggleInput
+  update: HookToggleInput
+  postReceive: HookToggleInput
+  procReceive: HookToggleInput
+  postUpdate: HookToggleInput
+  referenceTransaction: HookToggleInput
+}
+
+input HookToggleInput {
+  enabled: Boolean!
+}
+
+input SchemaValidationDefaultsInput {
+  phase: String
+  timeoutSeconds: Int
+}
+
+input AdmissionControlDefaultsInput {
+  phase: String
+  branchPattern: String
+}
+
+input NamespaceSpecInput {
+  title: String
+  tier: NamespaceTier!
+  repositoryDefaults: NamespaceRepositoryDefaultsInput
+  pushPolicyDefaults: NamespacePushPolicyDefaultsInput
+}
+
+input CreateNamespaceInput {
+  """
+  API version of the Namespace resource contract.
+  """
+  apiVersion: String!
+
+  """
+  Resource kind discriminator. Must be `Namespace`.
+  """
+  kind: String!
+
+  """
+  Namespace identity metadata. The metadata.name is the namespace identifier.
+  """
+  metadata: NamespaceMetadataInput!
+
+  """
+  Author-controlled desired state.
+  """
+  spec: NamespaceSpecInput!
+}
+
+input UpdateNamespaceInput {
+  """
+  API version of the Namespace resource contract.
+  """
+  apiVersion: String!
+
+  """
+  Resource kind discriminator. Must be `Namespace`.
+  """
+  kind: String!
+
+  """
+  Namespace identity metadata. The metadata.name is the namespace to update.
+  Must not target a bootstrap namespace (gitstore-system, default).
+  """
+  metadata: NamespaceMetadataInput!
+
+  """
+  Author-controlled desired state. Null fields are left unchanged; the full
+  spec is replaced when a concrete value is provided.
+  """
+  spec: NamespaceSpecInput!
+}
+
+type UpdateNamespacePayload {
+  """Null when the write failed (validation or admission rejection)."""
+  namespace: Namespace
+}
+
+extend type Mutation {
+  """
+  Create a new non-bootstrap namespace by committing the equivalent manifest to
+  gitstore-system/gitstore-system on the caller's behalf and awaiting
+  admission before returning.
+  """
+  createNamespace(input: CreateNamespaceInput!): CreateNamespacePayload!
+
+  """
+  Update an existing non-bootstrap namespace's spec by committing the updated
+  manifest to gitstore-system/gitstore-system on the caller's behalf and
+  awaiting admission before returning.
+  """
+  updateNamespace(input: UpdateNamespaceInput!): UpdateNamespacePayload!
+}
+
+# NamespaceRepositoryDefaultsInput / NamespacePushPolicyDefaultsInput mirror
+# the existing NamespaceRepositoryDefaults / NamespacePushPolicyDefaults
+# output types field-for-field (input variants), following the same
+# input/output type pairing convention already used elsewhere in this schema.

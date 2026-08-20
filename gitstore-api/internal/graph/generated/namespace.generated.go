@@ -75,6 +75,61 @@ func (ec *executionContext) fieldContext_AdmissionControlDefaults_branchPattern(
 	return graphql.NewScalarFieldContext("AdmissionControlDefaults", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _CompleteNamespaceDeletionPayload_deletedIdentifier(ctx context.Context, field graphql.CollectedField, obj *model.CompleteNamespaceDeletionPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CompleteNamespaceDeletionPayload_deletedIdentifier(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.DeletedIdentifier, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_CompleteNamespaceDeletionPayload_deletedIdentifier(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CompleteNamespaceDeletionPayload", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _CompleteNamespaceDeletionPayload_conflict(ctx context.Context, field graphql.CollectedField, obj *model.CompleteNamespaceDeletionPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CompleteNamespaceDeletionPayload_conflict(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Conflict, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.StatusConflict) graphql.Marshaler {
+			return ec.marshalOStatusConflict2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐStatusConflict(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_CompleteNamespaceDeletionPayload_conflict(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CompleteNamespaceDeletionPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_StatusConflict(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _CreateNamespacePayload_namespace(ctx context.Context, field graphql.CollectedField, obj *model.CreateNamespacePayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1497,12 +1552,44 @@ func (ec *executionContext) fieldContext_SchemaValidationDefaults_timeoutSeconds
 	return graphql.NewScalarFieldContext("SchemaValidationDefaults", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
+func (ec *executionContext) _UpdateNamespacePayload_namespace(ctx context.Context, field graphql.CollectedField, obj *model.UpdateNamespacePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UpdateNamespacePayload_namespace(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Namespace, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Namespace) graphql.Marshaler {
+			return ec.marshalONamespace2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespace(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UpdateNamespacePayload_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UpdateNamespacePayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Namespace(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 // endregion **************************** field.gotpl *****************************
 
 // region    **************************** input.gotpl *****************************
 
-func (ec *executionContext) unmarshalInputCreateNamespaceInput(ctx context.Context, obj any) (model.CreateNamespaceInput, error) {
-	var it model.CreateNamespaceInput
+func (ec *executionContext) unmarshalInputCompleteNamespaceDeletionInput(ctx context.Context, obj any) (model.CompleteNamespaceDeletionInput, error) {
+	var it model.CompleteNamespaceDeletionInput
 	if obj == nil {
 		return it, nil
 	}
@@ -1512,7 +1599,7 @@ func (ec *executionContext) unmarshalInputCreateNamespaceInput(ctx context.Conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"identifier", "displayName", "tier"}
+	fieldsInOrder := [...]string{"identifier", "resourceVersion"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -1526,20 +1613,64 @@ func (ec *executionContext) unmarshalInputCreateNamespaceInput(ctx context.Conte
 				return it, err
 			}
 			it.Identifier = data
-		case "displayName":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("displayName"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+		case "resourceVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resourceVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.DisplayName = data
-		case "tier":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("tier"))
-			data, err := ec.unmarshalNNamespaceTier2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceTier(ctx, v)
+			it.ResourceVersion = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputCreateNamespaceInput(ctx context.Context, obj any) (model.CreateNamespaceInput, error) {
+	var it model.CreateNamespaceInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata", "spec"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "apiVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("apiVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.Tier = data
+			it.APIVersion = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "metadata":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
+			data, err := ec.unmarshalNNamespaceMetadataInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceMetadataInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Metadata = data
+		case "spec":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("spec"))
+			data, err := ec.unmarshalNNamespaceSpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceSpecInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Spec = data
 		}
 	}
 	return it, nil
@@ -1619,6 +1750,226 @@ func (ec *executionContext) unmarshalInputNamespaceBy(ctx context.Context, obj a
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputNamespaceMetadataInput(ctx context.Context, obj any) (model.NamespaceMetadataInput, error) {
+	var it model.NamespaceMetadataInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"name", "labels", "annotations"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "labels":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("labels"))
+			data, err := ec.unmarshalOJSON2map(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Labels = data
+		case "annotations":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("annotations"))
+			data, err := ec.unmarshalOJSON2map(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Annotations = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputNamespacePushPolicyDefaultsInput(ctx context.Context, obj any) (model.NamespacePushPolicyDefaultsInput, error) {
+	var it model.NamespacePushPolicyDefaultsInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"maxPackSizeBytes", "maxFileSizeBytes"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "maxPackSizeBytes":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("maxPackSizeBytes"))
+			data, err := ec.unmarshalOLong2ᚖint64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxPackSizeBytes = data
+		case "maxFileSizeBytes":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("maxFileSizeBytes"))
+			data, err := ec.unmarshalOLong2ᚖint64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxFileSizeBytes = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputNamespaceRepositoryDefaultsInput(ctx context.Context, obj any) (model.NamespaceRepositoryDefaultsInput, error) {
+	var it model.NamespaceRepositoryDefaultsInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"visibility", "defaultBranch"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "visibility":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("visibility"))
+			data, err := ec.unmarshalORepositoryVisibility2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepositoryVisibility(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Visibility = data
+		case "defaultBranch":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("defaultBranch"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DefaultBranch = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputNamespaceSpecInput(ctx context.Context, obj any) (model.NamespaceSpecInput, error) {
+	var it model.NamespaceSpecInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"title", "tier", "repositoryDefaults", "pushPolicyDefaults"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "title":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("title"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Title = data
+		case "tier":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("tier"))
+			data, err := ec.unmarshalNNamespaceTier2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceTier(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Tier = data
+		case "repositoryDefaults":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repositoryDefaults"))
+			data, err := ec.unmarshalONamespaceRepositoryDefaultsInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceRepositoryDefaultsInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RepositoryDefaults = data
+		case "pushPolicyDefaults":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("pushPolicyDefaults"))
+			data, err := ec.unmarshalONamespacePushPolicyDefaultsInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespacePushPolicyDefaultsInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.PushPolicyDefaults = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputUpdateNamespaceInput(ctx context.Context, obj any) (model.UpdateNamespaceInput, error) {
+	var it model.UpdateNamespaceInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata", "spec"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "apiVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("apiVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.APIVersion = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "metadata":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
+			data, err := ec.unmarshalNNamespaceMetadataInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceMetadataInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Metadata = data
+		case "spec":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("spec"))
+			data, err := ec.unmarshalNNamespaceSpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceSpecInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Spec = data
+		}
+	}
+	return it, nil
+}
+
 // endregion **************************** input.gotpl *****************************
 
 // region    ************************** interface.gotpl ***************************
@@ -1642,6 +1993,44 @@ func (ec *executionContext) _AdmissionControlDefaults(ctx context.Context, sel a
 			out.Values[i] = ec._AdmissionControlDefaults_phase(ctx, field, obj)
 		case "branchPattern":
 			out.Values[i] = ec._AdmissionControlDefaults_branchPattern(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var completeNamespaceDeletionPayloadImplementors = []string{"CompleteNamespaceDeletionPayload"}
+
+func (ec *executionContext) _CompleteNamespaceDeletionPayload(ctx context.Context, sel ast.SelectionSet, obj *model.CompleteNamespaceDeletionPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, completeNamespaceDeletionPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CompleteNamespaceDeletionPayload")
+		case "deletedIdentifier":
+			out.Values[i] = ec._CompleteNamespaceDeletionPayload_deletedIdentifier(ctx, field, obj)
+		case "conflict":
+			out.Values[i] = ec._CompleteNamespaceDeletionPayload_conflict(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -2305,9 +2694,64 @@ func (ec *executionContext) _SchemaValidationDefaults(ctx context.Context, sel a
 	return out
 }
 
+var updateNamespacePayloadImplementors = []string{"UpdateNamespacePayload"}
+
+func (ec *executionContext) _UpdateNamespacePayload(ctx context.Context, sel ast.SelectionSet, obj *model.UpdateNamespacePayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, updateNamespacePayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UpdateNamespacePayload")
+		case "namespace":
+			out.Values[i] = ec._UpdateNamespacePayload_namespace(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 // endregion **************************** object.gotpl ****************************
 
 // region    ***************************** type.gotpl *****************************
+
+func (ec *executionContext) unmarshalNCompleteNamespaceDeletionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteNamespaceDeletionInput(ctx context.Context, v any) (model.CompleteNamespaceDeletionInput, error) {
+	res, err := ec.unmarshalInputCompleteNamespaceDeletionInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNCompleteNamespaceDeletionPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteNamespaceDeletionPayload(ctx context.Context, sel ast.SelectionSet, v model.CompleteNamespaceDeletionPayload) graphql.Marshaler {
+	return ec._CompleteNamespaceDeletionPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNCompleteNamespaceDeletionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteNamespaceDeletionPayload(ctx context.Context, sel ast.SelectionSet, v *model.CompleteNamespaceDeletionPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CompleteNamespaceDeletionPayload(ctx, sel, v)
+}
 
 func (ec *executionContext) unmarshalNCreateNamespaceInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateNamespaceInput(ctx context.Context, v any) (model.CreateNamespaceInput, error) {
 	res, err := ec.unmarshalInputCreateNamespaceInput(ctx, v)
@@ -2412,6 +2856,11 @@ func (ec *executionContext) marshalNNamespaceMetadata2ᚖgithubᚗcomᚋgitstore
 	return ec._NamespaceMetadata(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNNamespaceMetadataInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceMetadataInput(ctx context.Context, v any) (*model.NamespaceMetadataInput, error) {
+	res, err := ec.unmarshalInputNamespaceMetadataInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalNNamespaceSpec2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceSpec(ctx context.Context, sel ast.SelectionSet, v *model.NamespaceSpec) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -2420,6 +2869,11 @@ func (ec *executionContext) marshalNNamespaceSpec2ᚖgithubᚗcomᚋgitstoreᚑd
 		return graphql.Null
 	}
 	return ec._NamespaceSpec(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNNamespaceSpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceSpecInput(ctx context.Context, v any) (*model.NamespaceSpecInput, error) {
+	res, err := ec.unmarshalInputNamespaceSpecInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalNNamespaceStatus2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceStatus(ctx context.Context, sel ast.SelectionSet, v *model.NamespaceStatus) graphql.Marshaler {
@@ -2452,6 +2906,25 @@ func (ec *executionContext) marshalNRepositoryVisibility2githubᚗcomᚋgitstore
 	return v
 }
 
+func (ec *executionContext) unmarshalNUpdateNamespaceInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateNamespaceInput(ctx context.Context, v any) (model.UpdateNamespaceInput, error) {
+	res, err := ec.unmarshalInputUpdateNamespaceInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNUpdateNamespacePayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateNamespacePayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateNamespacePayload) graphql.Marshaler {
+	return ec._UpdateNamespacePayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNUpdateNamespacePayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateNamespacePayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateNamespacePayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UpdateNamespacePayload(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalOAdmissionControlDefaults2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐAdmissionControlDefaults(ctx context.Context, sel ast.SelectionSet, v *model.AdmissionControlDefaults) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -2480,11 +2953,27 @@ func (ec *executionContext) marshalONamespacePushPolicyDefaults2ᚖgithubᚗcom�
 	return ec._NamespacePushPolicyDefaults(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalONamespacePushPolicyDefaultsInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespacePushPolicyDefaultsInput(ctx context.Context, v any) (*model.NamespacePushPolicyDefaultsInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputNamespacePushPolicyDefaultsInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalONamespaceRepositoryDefaults2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceRepositoryDefaults(ctx context.Context, sel ast.SelectionSet, v *model.NamespaceRepositoryDefaults) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._NamespaceRepositoryDefaults(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalONamespaceRepositoryDefaultsInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceRepositoryDefaultsInput(ctx context.Context, v any) (*model.NamespaceRepositoryDefaultsInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputNamespaceRepositoryDefaultsInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalOReceivePackHookDefaults2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐReceivePackHookDefaults(ctx context.Context, sel ast.SelectionSet, v *model.ReceivePackHookDefaults) graphql.Marshaler {

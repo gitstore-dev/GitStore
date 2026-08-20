@@ -7,11 +7,14 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -21,6 +24,7 @@ import (
 type mockGitWriter struct {
 	mu             sync.Mutex
 	commitCalls    []gitclient.CommitFileParams
+	commitRepoIDs  []string
 	deleteCalls    []gitclient.DeleteFileParams
 	createTagCalls []gitclient.CreateTagParams
 
@@ -51,12 +55,21 @@ func (m *mockGitWriter) DeleteRepository(_ context.Context, repositoryID string)
 }
 
 func (m *mockGitWriter) CommitFile(_ context.Context, p gitclient.CommitFileParams) (string, error) {
+	return m.CommitFileForRepo(context.Background(), "", p)
+}
+
+func (m *mockGitWriter) CommitFileForRepo(_ context.Context, repositoryID string, p gitclient.CommitFileParams) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.commitCalls = append(m.commitCalls, p)
+	m.commitRepoIDs = append(m.commitRepoIDs, repositoryID)
 	if m.commitErr != nil {
 		return "", m.commitErr
 	}
+	return "deadbeef", nil
+}
+
+func (m *mockGitWriter) ResolveRefForRepo(_ context.Context, _ string, _ string) (string, error) {
 	return "deadbeef", nil
 }
 
@@ -82,6 +95,35 @@ func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
+	now := time.Now().UTC()
+	systemNamespace := &datastore.Namespace{
+		ID:                uuid.New().String(),
+		Name:              "gitstore-system",
+		Title:             "GitStore System",
+		Tier:              datastore.NamespaceTierOrganization,
+		CreationTimestamp: now,
+		CreationActor:     "system",
+		UpdateTimestamp:   now,
+		UpdateActor:       "system",
+	}
+	require.NoError(t, store.CreateNamespace(context.Background(), systemNamespace))
+	systemRepository := &datastore.Repository{
+		ID:                uuid.New().String(),
+		NamespaceID:       systemNamespace.ID,
+		Name:              resolver.SystemRepositoryName,
+		DefaultBranch:     "main",
+		StorageClass:      "default",
+		CreationTimestamp: now,
+		CreationActor:     "system",
+		UpdateTimestamp:   now,
+		UpdateActor:       "system",
+	}
+	require.NoError(t, store.CreateRepository(context.Background(), systemRepository))
+	require.NoError(t, store.CreateNamespaceMapping(context.Background(), &datastore.NamespaceMapping{
+		NamespaceID: systemNamespace.ID,
+		Name:        resolver.SystemRepositoryName,
+		RepoID:      systemRepository.ID,
+	}))
 	svc, err := resolver.NewService(resolver.ServiceDeps{
 		Store:     store,
 		GitWriter: writer,
@@ -89,6 +131,24 @@ func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
 	})
 	require.NoError(t, err)
 	return svc
+}
+
+func createNamespaceInput(name string, tier model.NamespaceTier) model.CreateNamespaceInput {
+	return model.CreateNamespaceInput{
+		APIVersion: "gitstore.dev/v1beta1",
+		Kind:       "Namespace",
+		Metadata:   &model.NamespaceMetadataInput{Name: name},
+		Spec:       &model.NamespaceSpecInput{Tier: tier},
+	}
+}
+
+func updateNamespaceInput(name string, tier model.NamespaceTier) model.UpdateNamespaceInput {
+	return model.UpdateNamespaceInput{
+		APIVersion: "gitstore.dev/v1beta1",
+		Kind:       "Namespace",
+		Metadata:   &model.NamespaceMetadataInput{Name: name},
+		Spec:       &model.NamespaceSpecInput{Tier: tier},
+	}
 }
 
 func TestServiceDeleteProductRemovesFromDatastore(t *testing.T) {

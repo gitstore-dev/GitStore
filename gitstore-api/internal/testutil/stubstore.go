@@ -15,16 +15,16 @@ import (
 // githttp and security middleware tests have override hooks; all other methods
 // are no-ops that satisfy the full datastore.Datastore interface.
 type StubStore struct {
-	GetNamespaceByIdentifierFunc func(ctx context.Context, identifier string) (*datastore.Namespace, error)
-	LookupRepositoryFunc         func(ctx context.Context, namespaceID, name string) (*datastore.NamespaceMapping, error)
-	GetRepositoryFunc            func(ctx context.Context, id string) (*datastore.Repository, error)
-	HasRepositoriesFunc          func(ctx context.Context, namespaceID string) (bool, error)
-	HasCatalogResourcesFunc      func(ctx context.Context, repoID string) (bool, error)
+	GetNamespaceByNameFunc  func(ctx context.Context, name string) (*datastore.Namespace, error)
+	LookupRepositoryFunc    func(ctx context.Context, namespaceID, name string) (*datastore.NamespaceMapping, error)
+	GetRepositoryFunc       func(ctx context.Context, id string) (*datastore.Repository, error)
+	HasRepositoriesFunc     func(ctx context.Context, namespaceID string) (bool, error)
+	HasCatalogResourcesFunc func(ctx context.Context, repoID string) (bool, error)
 }
 
-func (s *StubStore) GetNamespaceByIdentifier(ctx context.Context, identifier string) (*datastore.Namespace, error) {
-	if s.GetNamespaceByIdentifierFunc != nil {
-		return s.GetNamespaceByIdentifierFunc(ctx, identifier)
+func (s *StubStore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
+	if s.GetNamespaceByNameFunc != nil {
+		return s.GetNamespaceByNameFunc(ctx, name)
 	}
 	return nil, datastore.ErrNotFound
 }
@@ -134,7 +134,13 @@ func (s *StubStore) GetNamespace(_ context.Context, _ string) (*datastore.Namesp
 func (s *StubStore) ListNamespaces(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {
 	return &datastore.PageResult[datastore.Namespace]{}, nil
 }
-func (s *StubStore) DeleteNamespace(_ context.Context, _ string) error                 { return nil }
+func (s *StubStore) UpdateNamespace(_ context.Context, _ *datastore.Namespace, _ string) error {
+	return nil
+}
+func (s *StubStore) DeleteNamespace(_ context.Context, _ string) error { return nil }
+func (s *StubStore) DeleteNamespaceWithResourceVersion(_ context.Context, _, _ string) error {
+	return nil
+}
 func (s *StubStore) CreateRepository(_ context.Context, _ *datastore.Repository) error { return nil }
 func (s *StubStore) ListRepositoriesByNamespace(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
 	return &datastore.PageResult[datastore.Repository]{}, nil

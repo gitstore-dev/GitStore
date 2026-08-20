@@ -26,6 +26,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/google/cel-go/cel"
@@ -199,6 +200,19 @@ func (s *Server) publishProductEvent(evType eventbus.EventType, p *datastore.Pro
 	})
 }
 
+func (s *Server) publishNamespaceEvent(evType eventbus.EventType, namespace *datastore.Namespace) {
+	if s.eventBus == nil || namespace == nil {
+		return
+	}
+	s.eventBus.Publish(eventbus.Event{
+		Type:            evType,
+		Kind:            "Namespace",
+		Name:            namespace.Name,
+		ResourceVersion: namespace.ResourceVersion,
+		Object:          namespace,
+	})
+}
+
 func (s *Server) newUID(kind, name string) (string, bool) {
 	uid, err := s.ids.NewV7ID()
 	if err != nil {
@@ -214,7 +228,7 @@ func (s *Server) newUID(kind, name string) (string, bool) {
 // ValidateResources validates resource blobs extracted from an incoming push commit.
 // Called blocking in the pre-receive phase. Returns all violations across all blobs.
 func (s *Server) ValidateResources(
-	_ context.Context,
+	ctx context.Context,
 	req *catalogv1.ValidateResourcesRequest,
 ) (*catalogv1.ValidateResourcesResponse, error) {
 	var allErrors []*catalogv1.ValidationError
@@ -226,7 +240,10 @@ func (s *Server) ValidateResources(
 			continue
 		}
 
-		_, _, err := s.parser.ParseResource(bytes.NewReader(blob.Content))
+		parsed, _, err := s.parser.ParseResource(bytes.NewReader(blob.Content))
+		if err == nil && parsed != nil && parsed.Namespace != nil {
+			err = s.validateNamespaceAuthoringTarget(ctx, req.RepositoryId, blob.Path, parsed.Namespace.Metadata.Name)
+		}
 		if err == nil {
 			continue
 		}
@@ -251,6 +268,25 @@ func (s *Server) ValidateResources(
 		Accepted: false,
 		Errors:   allErrors,
 	}, nil
+}
+
+func (s *Server) validateNamespaceAuthoringTarget(ctx context.Context, repositoryID, sourcePath, name string) error {
+	repository, err := s.store.GetRepository(ctx, repositoryID)
+	if err != nil {
+		return fmt.Errorf("validate: Namespace manifests require repository gitstore-system/gitstore-system: %w", err)
+	}
+	namespace, err := s.store.GetNamespace(ctx, repository.NamespaceID)
+	if err != nil {
+		return fmt.Errorf("validate: Namespace manifests require repository gitstore-system/gitstore-system: %w", err)
+	}
+	if namespace.Name != "gitstore-system" || repository.Name != "gitstore-system" {
+		return fmt.Errorf("validate: Namespace manifests are accepted only in gitstore-system/gitstore-system")
+	}
+	expectedPath := fmt.Sprintf("namespaces/%s.md", name)
+	if sourcePath != expectedPath {
+		return fmt.Errorf("validate: Namespace %q must be stored at %s", name, expectedPath)
+	}
+	return nil
 }
 
 // splitValidationErrors splits the joined error string from validate.Parse into
@@ -321,7 +357,7 @@ func (s *Server) resolveNamespaceIdentifier(ctx context.Context, repositoryID st
 	if err != nil || ns == nil {
 		return "", fmt.Errorf("admit_resources: namespace %s not found for repository %s: %w", repo.NamespaceID, repositoryID, err)
 	}
-	return ns.Identifier, nil
+	return ns.Name, nil
 }
 
 // AdmitResources fetches, parses, and stores catalog resources from an accepted push commit.
@@ -611,6 +647,8 @@ func (s *Server) admitParsedEntries(
 			s.admitCollection(ctx, e.parsed.Collection, e.body, admCtx, e.path, op, existing)
 		case "ProductVariant":
 			s.admitProductVariant(ctx, e.parsed.ProductVariant, e.body, admCtx, e.path, op, existing)
+		case "Namespace":
+			s.admitNamespace(ctx, e.parsed.Namespace, admCtx, op, existing)
 		}
 	}
 	return nil
@@ -654,6 +692,8 @@ func (s *Server) lookupResourceByIdentity(ctx context.Context, id resourceIdenti
 		return s.store.GetCollectionByName(ctx, id.Namespace, id.Name)
 	case "ProductVariant":
 		return s.store.GetProductVariantByName(ctx, id.Namespace, id.Name)
+	case "Namespace":
+		return s.store.GetNamespaceByName(ctx, id.Name)
 	default:
 		return nil, datastore.ErrNotFound
 	}
@@ -692,6 +732,10 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) {
 	case *datastore.ProductVariant:
 		uid = r.UID
 		deleteErr = s.store.DeleteProductVariant(ctx, r.UID)
+	case *datastore.Namespace:
+		s.log.Info("admit_resources: Namespace manifest deletion ignored; use deleteNamespace",
+			zap.String("name", r.Name))
+		return
 	default:
 		deleteErr = datastore.ErrNotFound
 	}
@@ -769,6 +813,39 @@ func productCategoryRefName(specJSON []byte) string {
 		return ""
 	}
 	return spec.CategoryRef.Name
+}
+
+func (s *Server) admitNamespace(
+	ctx context.Context,
+	resource *catalog.NamespaceResource,
+	admCtx AdmissionContext,
+	op admission.Operation,
+	rawExisting any,
+) {
+	name := resource.Metadata.Name
+	existing, _ := rawExisting.(*datastore.Namespace)
+	namespace, created, err := namespaceadmission.ApplyManifest(
+		ctx,
+		s.store,
+		s.ids,
+		resource,
+		admCtx.Now,
+		admCtx.Revision,
+		"admission",
+	)
+	if err != nil {
+		s.log.Warn("admit_resources: Namespace rejected",
+			zap.String("name", name),
+			zap.String("operation", string(op)),
+			zap.Bool("existing", existing != nil),
+			zap.Error(err))
+		return
+	}
+	eventType := eventbus.Modified
+	if created {
+		eventType = eventbus.Added
+	}
+	s.publishNamespaceEvent(eventType, namespace)
 }
 
 func (s *Server) admitProduct(

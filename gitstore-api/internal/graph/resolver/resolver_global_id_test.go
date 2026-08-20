@@ -183,13 +183,13 @@ func seedGlobalIDTestData(t *testing.T, ctx context.Context, store datastore.Dat
 		CreationTimestamp: now,
 	}))
 	require.NoError(t, store.CreateNamespace(ctx, &datastore.Namespace{
-		ID:         globalIDTestNamespaceID,
-		Identifier: "namespace-1",
-		Tier:       datastore.NamespaceTierUser,
-		CreatedAt:  now,
-		CreatedBy:  "tester",
-		UpdatedAt:  now,
-		UpdatedBy:  "tester",
+		ID:                globalIDTestNamespaceID,
+		Name:              "namespace-1",
+		Tier:              datastore.NamespaceTierUser,
+		CreationTimestamp: now,
+		CreationActor:     "tester",
+		UpdateTimestamp:   now,
+		UpdateActor:       "tester",
 	}))
 	require.NoError(t, store.CreateProductVariant(ctx, &datastore.ProductVariant{
 		UID:               globalIDTestVariantUID,
@@ -202,14 +202,14 @@ func seedGlobalIDTestData(t *testing.T, ctx context.Context, store datastore.Dat
 		ProductRefName:    "product-1",
 	}))
 	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{
-		ID:            globalIDTestRepositoryID,
-		NamespaceID:   globalIDTestNamespaceID,
-		Name:          "repository-1",
-		DefaultBranch: "main",
-		StorageClass:  "default",
-		CreatedAt:     now,
-		CreatedBy:     "tester",
-		UpdatedAt:     now,
-		UpdatedBy:     "tester",
+		ID:                globalIDTestRepositoryID,
+		NamespaceID:       globalIDTestNamespaceID,
+		Name:              "repository-1",
+		DefaultBranch:     "main",
+		StorageClass:      "default",
+		CreationTimestamp: now,
+		CreationActor:     "tester",
+		UpdateTimestamp:   now,
+		UpdateActor:       "tester",
 	}))
 }

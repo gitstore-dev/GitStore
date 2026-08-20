@@ -80,7 +80,7 @@ Writes (`CreateProduct`, `UpdateProduct`, `DeleteProduct`) fan out to all three 
 Per user directive, this is alpha software with no consumers; the schema change is made **inline** rather than as a new migration file:
 
 1. Edit `migrations/001_initial_schema.cql` in place: replace the `products` table definition with `products_by_namespace`, `products_by_name`, `products_by_uid`. Drop the legacy `products_by_uid` *secondary index* line (the new `products_by_uid` *table* supersedes it).
-2. Edit `migrations/002_add_initial_indices.cql` in place: remove any `products`-table index definitions if present (none currently — products had its index inline in 001, which is also being removed).
+2. Edit `migrations/002_secondary_indexes.cql` in place: remove any `products`-table index definitions if present (none currently — products had its index inline in 001, which is also being removed).
 3. Local/dev environments: drop the keyspace and re-run migrations (`make scylla` after a `docker compose down -v` for the Scylla volume). Bootstrap data is re-ingested via `make bootstrap`.
 4. The migration runner's checksum guard (`migration.go`) will reject the modified `001` against an already-migrated environment — this is correct behaviour for alpha; operators wipe and re-migrate.
 5. The `scyllaDatastore` is rewritten to read/write the three new tables. `paginateProductsInMemory` is **not** introduced; `buildPaginatedSelect` is reused unchanged.

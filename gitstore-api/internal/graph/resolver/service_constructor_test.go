@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
@@ -53,29 +54,52 @@ func TestServiceCreateNamespaceAndRepositoryUsesInjectedClockAndIDs(t *testing.T
 	store, err := memdb.New()
 	require.NoError(t, err)
 	defer store.Close()
+	systemNamespace := &datastore.Namespace{
+		ID:                "44444444-4444-4444-8444-444444444444",
+		Name:              "gitstore-system",
+		Tier:              datastore.NamespaceTierOrganization,
+		CreationTimestamp: now,
+		CreationActor:     "system",
+		UpdateTimestamp:   now,
+		UpdateActor:       "system",
+	}
+	require.NoError(t, store.CreateNamespace(ctx, systemNamespace))
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{
+		ID:                systemRepositoryID,
+		NamespaceID:       systemNamespace.ID,
+		Name:              resolver.SystemRepositoryName,
+		DefaultBranch:     "main",
+		StorageClass:      "default",
+		CreationTimestamp: now,
+		CreationActor:     "system",
+		UpdateTimestamp:   now,
+		UpdateActor:       "system",
+	}))
+	require.NoError(t, store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
+		NamespaceID: systemNamespace.ID,
+		Name:        resolver.SystemRepositoryName,
+		RepoID:      systemRepositoryID,
+	}))
 	writer := &mockGitWriter{}
 	svc, err := resolver.NewService(resolver.ServiceDeps{
 		Store:       store,
 		GitWriter:   writer,
 		Logger:      zap.NewNop(),
 		Clock:       apiruntime.NewFixedClock(now),
-		IDGenerator: apiruntime.NewSequenceIDGenerator(namespaceID, systemRepositoryID, repositoryID),
+		IDGenerator: apiruntime.NewSequenceIDGenerator(namespaceID, repositoryID),
 	})
 	require.NoError(t, err)
 
-	ns, err := svc.CreateNamespace(ctx, model.CreateNamespaceInput{
-		Identifier: "acme",
-		Tier:       model.NamespaceTierUser,
-	}, "admin")
+	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("acme", model.NamespaceTierUser), "admin")
 	require.NoError(t, err)
 	assert.Equal(t, namespaceID, ns.ID)
-	assert.Equal(t, now, ns.CreatedAt)
-	assert.Equal(t, now, ns.UpdatedAt)
+	assert.Equal(t, now, ns.CreationTimestamp)
+	assert.Equal(t, now, ns.UpdateTimestamp)
 
 	repo, err := svc.CreateRepository(ctx, ns.ID, "catalog", "", "", "admin")
 	require.NoError(t, err)
 	assert.Equal(t, repositoryID, repo.ID)
-	assert.Equal(t, now, repo.CreatedAt)
-	assert.Equal(t, now, repo.UpdatedAt)
-	assert.Equal(t, []string{systemRepositoryID, repositoryID}, writer.createRepoCalls)
+	assert.Equal(t, now, repo.CreationTimestamp)
+	assert.Equal(t, now, repo.UpdateTimestamp)
+	assert.Equal(t, []string{repositoryID}, writer.createRepoCalls)
 }

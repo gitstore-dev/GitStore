@@ -59,7 +59,7 @@ impl ValidationHandler for SchemaValidationHandler {
     async fn validate(
         &self,
         blobs: &[ResourceBlob],
-        _hook_ctx: &HookContext,
+        hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
         let start = std::time::Instant::now();
         let file_count = blobs.len();
@@ -74,7 +74,11 @@ impl ValidationHandler for SchemaValidationHandler {
             .collect();
 
         let req = ValidateResourcesRequest {
-            repository_id: self.repository_id.clone(),
+            repository_id: if hook_ctx.repository_id.is_empty() {
+                self.repository_id.clone()
+            } else {
+                hook_ctx.repository_id.clone()
+            },
             blobs: proto_blobs,
         };
 
@@ -230,7 +234,8 @@ mod tests {
     // T010a: mock server returning accepted=true → Accept
     #[tokio::test]
     async fn test_accepted_response_returns_accept() {
-        let addr = start_mock_server(|_req| {
+        let addr = start_mock_server(|req| {
+            assert_eq!(req.repository_id, "repo-from-push");
             Ok(ValidateResourcesResponse {
                 accepted: true,
                 errors: vec![],
@@ -244,10 +249,11 @@ mod tests {
                 .unwrap();
 
         let blobs = vec![make_blob("products/p.md", b"---\nkind: Product\n---")];
-        let result = handler
-            .validate(&blobs, &HookContext::default())
-            .await
-            .unwrap();
+        let hook_ctx = HookContext {
+            repository_id: "repo-from-push".into(),
+            ..HookContext::default()
+        };
+        let result = handler.validate(&blobs, &hook_ctx).await.unwrap();
         assert!(matches!(result, AdmissionDecision::Accept));
     }
 
@@ -424,6 +430,7 @@ mod tests {
         .unwrap();
 
         let hook_ctx = HookContext {
+            repository_id: "repo-1".to_string(),
             actor_subject: "test-user".to_string(),
             actor_auth_method: "basic".to_string(),
             max_pack_size_bytes: 0,

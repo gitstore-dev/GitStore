@@ -23,7 +23,7 @@ func TestNamespaceDocumentationManifestContract(t *testing.T) {
 	require.NoError(t, err)
 
 	text := string(content)
-	for _, conditionType := range []string{"Ready", "AdmissionAccepted", "DeletionBlocked"} {
+	for _, conditionType := range []string{"Ready", "AdmissionAccepted", "SystemRepoReady", "Terminating"} {
 		assert.Contains(t, text, "`"+conditionType+"`")
 	}
 

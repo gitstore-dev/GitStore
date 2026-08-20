@@ -176,7 +176,7 @@ Test cases (written first — red before green):
 
 - `docs/developer-guide.md`: remove the `./scripts/init-demo-catalog.sh` code block and surrounding instructions; replace with a one-line note that demo data seeding is provided via a future feature
 - `docs/user-guide.md`: same treatment for the single reference at line 40
-- `docs/docker-troubleshooting.md`: remove both references (lines 9 and 129) and any surrounding context that only makes sense with the script present
+- `docs/runbooks/docker-troubleshooting.md`: remove both references (lines 9 and 129) and any surrounding context that only makes sense with the script present
 - `scripts/init-demo-catalog.sh`: deleted
 
 ### CI Gate

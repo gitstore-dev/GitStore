@@ -502,7 +502,7 @@ graph TD
 
 ## Namespace Lifecycle Management (feature 009-api-namespaces)
 
-Namespaces are the primary isolation boundary for repositories in GitStore. They are managed exclusively through the GraphQL API in `gitstore-api`; `gitstore-git-service` is unchanged (FR-011).
+Namespaces are the primary isolation boundary for repositories in GitStore. Git is canonical for every non-bootstrap Namespace; GraphQL create/update mutations commit the equivalent manifest to `gitstore-system/gitstore-system` and wait for API admission. The Git service remains a policy-enforcement and repository-storage layer and requires no Namespace-specific behavior.
 
 ### Two Tiers
 
@@ -513,9 +513,13 @@ Namespaces are the primary isolation boundary for repositories in GitStore. They
 
 Enterprise-level grouping, if needed in future, will be modeled as a separate top-level resource outside the namespace type (consistent with the GitHub model at `/enterprises/{name}`).
 
-### Global Identifier Uniqueness
+### Global Name Uniqueness
 
-Namespace identifiers are globally unique across all tiers. The same identifier cannot exist as both a user-space and an organization namespace. Identifiers follow DNS label rules: lowercase alphanumeric + hyphens, 1–63 characters, no leading or trailing hyphen.
+Namespace names are globally unique across all tiers. The same name cannot exist as both a user-space and an organization namespace. Names follow DNS label rules: lowercase alphanumeric + hyphens, 1–63 characters, no leading or trailing hyphen.
+
+### ScyllaDB Access Patterns
+
+Namespace persistence avoids both secondary-index point reads and a single global partition. `namespaces_by_id` is the authoritative direct UUID lookup and LWT target, `namespaces_by_name` resolves globally unique names, and `namespaces_by_bucket` bounds ordered listing partitions by creation month. The authoritative row uses `name`, `title`, and `creation_timestamp`, matching the GraphQL `metadata.name`/`spec.title` contract and the timestamp convention used by other resources. List queries walk the required `YYYY-MM` buckets using `(creation_timestamp, id)` keysets and hydrate authoritative rows by ID. Repository storage uses the same `creation_timestamp` convention.
 
 ### Authorization Model
 

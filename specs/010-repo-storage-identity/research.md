@@ -38,7 +38,7 @@ Example: UUID `0196f3a2-4b1c-7e9d-a301-8b2c4d5e6f7a` → `{data_dir}/01/96/0196f
 
 ### D-003: Migration consolidation
 
-**Decision**: Update `001_initial_schema.cql` and `002_add_initial_indices.cql` in place. Do not create new migration files.
+**Decision**: Update `001_initial_schema.cql` and `002_secondary_indexes.cql` in place. Do not create new migration files.
 
 **Rationale**: The application is early ALPHA with no production data. There is no constraint requiring additive-only migrations. Updating the existing files keeps the schema definition minimal and avoids migration-version machinery overhead for a state that will never be rolled back from. The user explicitly confirmed this approach.
 

@@ -131,7 +131,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 
 	switch fc.Field.Name {
 	case "createNamespace":
-		tier, ok := nestedStringArg(fc.Args, "input", "tier")
+		tier, ok := nestedStringPath(fc.Args, "input", "spec", "tier")
 		if !ok || tier != "ORGANIZATION" {
 			return next(ctx)
 		}
@@ -169,7 +169,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		decision, err := authz.Authorize(ctx, principal, action, auth.ResourceContext{
 			Kind:     "namespace",
 			Name:     identifier,
-			OwnerSub: ns.CreatedBy,
+			OwnerSub: ns.CreationActor,
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
@@ -178,6 +178,24 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
 		}
 		ctx = context.WithValue(ctx, authorizedNamespaceDeleteContextKey{}, ns)
+	case "completeNamespaceDeletion":
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
+		}
+		identifier, _ := nestedStringArg(fc.Args, "input", "identifier")
+		decision, err := authz.Authorize(ctx, principal, "namespace.status.write", auth.ResourceContext{
+			Kind: "namespace",
+			Name: identifier,
+		})
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return nil, &gqlerror.Error{
+				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
+				Extensions: map[string]any{"code": "FORBIDDEN"},
+			}
+		}
 	case "updateCategoryStatus":
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
@@ -234,15 +252,15 @@ func lowerCamelFirst(s string) string {
 	return string(r)
 }
 
-func (a *Authorize) namespaceDeleteAction(ctx context.Context, identifier string, principal *auth.Principal) (ns *datastore.Namespace, action string, err error) {
+func (a *Authorize) namespaceDeleteAction(ctx context.Context, name string, principal *auth.Principal) (ns *datastore.Namespace, action string, err error) {
 	if a.store == nil {
 		return nil, "", fmt.Errorf("authorization store is not configured")
 	}
-	ns, err = a.store.GetNamespaceByIdentifier(ctx, identifier)
+	ns, err = a.store.GetNamespaceByName(ctx, name)
 	if err != nil {
 		return nil, "", err
 	}
-	if ns.CreatedBy == principal.Subject {
+	if ns.CreationActor == principal.Subject {
 		return ns, "namespace.delete.own", nil
 	}
 	return ns, "namespace.delete.any", nil
@@ -253,34 +271,43 @@ func (a *Authorize) namespaceDeleteAction(ctx context.Context, identifier string
 // into their generated struct type before FieldContext.Args is populated, so
 // only the struct-based representation is handled here.
 func nestedStringArg(args map[string]any, parent, key string) (string, bool) {
-	parentVal, ok := args[parent]
-	if !ok || parentVal == nil {
+	return nestedStringPath(args, parent, key)
+}
+
+func nestedStringPath(args map[string]any, path ...string) (string, bool) {
+	if len(path) == 0 {
 		return "", false
 	}
-	rv := reflect.ValueOf(parentVal)
-	if rv.Kind() == reflect.Pointer {
+	current, ok := args[path[0]]
+	if !ok || current == nil {
+		return "", false
+	}
+	rv := reflect.ValueOf(current)
+	for _, key := range path[1:] {
+		for rv.Kind() == reflect.Pointer {
+			if rv.IsNil() {
+				return "", false
+			}
+			rv = rv.Elem()
+		}
+		if rv.Kind() != reflect.Struct {
+			return "", false
+		}
+		rv = rv.FieldByNameFunc(func(name string) bool { return strings.EqualFold(name, key) })
+		if !rv.IsValid() {
+			return "", false
+		}
+	}
+	for rv.Kind() == reflect.Pointer {
 		if rv.IsNil() {
 			return "", false
 		}
 		rv = rv.Elem()
 	}
-	if rv.Kind() != reflect.Struct {
+	if rv.Kind() != reflect.String {
 		return "", false
 	}
-	field := rv.FieldByNameFunc(func(name string) bool { return strings.EqualFold(name, key) })
-	if !field.IsValid() {
-		return "", false
-	}
-	for field.Kind() == reflect.Pointer {
-		if field.IsNil() {
-			return "", false
-		}
-		field = field.Elem()
-	}
-	if field.Kind() != reflect.String {
-		return "", false
-	}
-	return field.String(), true
+	return rv.String(), true
 }
 
 // requiresAuthenticatedPrincipal reports whether the operation executes any

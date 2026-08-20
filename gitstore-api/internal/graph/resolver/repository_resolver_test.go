@@ -33,11 +33,11 @@ func TestCreateRepository_assignsUUIDv7AndCallsGRPC(t *testing.T) {
 
 	// Pre-create the namespace in the datastore so lookups work
 	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
-		ID:         testNsID1,
-		Identifier: "acme",
-		Tier:       datastore.NamespaceTierUser,
-		CreatedBy:  "test",
-		UpdatedBy:  "test",
+		ID:            testNsID1,
+		Name:          "acme",
+		Tier:          datastore.NamespaceTierUser,
+		CreationActor: "test",
+		UpdateActor:   "test",
 	}))
 
 	repo, err := svc.CreateRepository(ctx, testNsID1, "my-catalog", "main", "default", "test-user")
@@ -64,7 +64,7 @@ func TestRepositoryMutations_preserveExistingErrors(t *testing.T) {
 	svc := newTestSvc(t, writer)
 	ctx := context.Background()
 	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
-		ID: testNsID1, Identifier: "mutation-errors", Tier: datastore.NamespaceTierUser, CreatedBy: "test", UpdatedBy: "test",
+		ID: testNsID1, Name: "mutation-errors", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
 	}))
 
 	_, err := svc.CreateRepository(ctx, testNsID1, "duplicate", "main", "default", "test-user")
@@ -102,7 +102,7 @@ func TestRenameRepository_oldNameNotFoundNewNameReturnsSameRepoID(t *testing.T) 
 	ctx := context.Background()
 
 	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
-		ID: testNsID1, Identifier: "acme-rename", Tier: datastore.NamespaceTierUser, CreatedBy: "test", UpdatedBy: "test",
+		ID: testNsID1, Name: "acme-rename", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
 	}))
 
 	repo, err := svc.CreateRepository(ctx, testNsID1, "old-name", "main", "default", "test-user")
@@ -134,10 +134,10 @@ func TestTransferRepository_oldNSInvalidatedNewNSReturnsSameRepoID(t *testing.T)
 	ctx := context.Background()
 
 	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
-		ID: testNsID1, Identifier: "ns-from", Tier: datastore.NamespaceTierUser, CreatedBy: "test", UpdatedBy: "test",
+		ID: testNsID1, Name: "ns-from", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
 	}))
 	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
-		ID: testNsID2, Identifier: "ns-to", Tier: datastore.NamespaceTierUser, CreatedBy: "test", UpdatedBy: "test",
+		ID: testNsID2, Name: "ns-to", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
 	}))
 
 	repo, err := svc.CreateRepository(ctx, testNsID1, "app", "main", "default", "test-user")
@@ -168,7 +168,7 @@ func TestDeleteRepository_callsGRPCAndRemovesMapping(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
-		ID: testNsID1, Identifier: "ns-del", Tier: datastore.NamespaceTierUser, CreatedBy: "test", UpdatedBy: "test",
+		ID: testNsID1, Name: "ns-del", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
 	}))
 
 	repo, err := svc.CreateRepository(ctx, testNsID1, "to-delete", "main", "default", "test-user")
@@ -192,7 +192,7 @@ func TestDeleteRepository_withCatalogResource_rejected(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
-		ID: testNsID1, Identifier: "ns-catalog-blocked", Tier: datastore.NamespaceTierUser, CreatedBy: "test", UpdatedBy: "test",
+		ID: testNsID1, Name: "ns-catalog-blocked", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
 	}))
 
 	repo, err := svc.CreateRepository(ctx, testNsID1, "has-catalog", "main", "default", "test-user")
@@ -231,7 +231,7 @@ func TestDeleteRepository_afterCatalogResourcesRemoved_succeeds(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
-		ID: testNsID1, Identifier: "ns-catalog-cleared", Tier: datastore.NamespaceTierUser, CreatedBy: "test", UpdatedBy: "test",
+		ID: testNsID1, Name: "ns-catalog-cleared", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
 	}))
 
 	repo, err := svc.CreateRepository(ctx, testNsID1, "catalog-cleared", "main", "default", "test-user")
@@ -262,7 +262,7 @@ func TestLookupNamespaceByRepoID_returnsMapping(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
-		ID: testNsID1, Identifier: "ns-reverse", Tier: datastore.NamespaceTierUser, CreatedBy: "test", UpdatedBy: "test",
+		ID: testNsID1, Name: "ns-reverse", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
 	}))
 
 	repo, err := svc.CreateRepository(ctx, testNsID1, "configs", "main", "default", "test-user")

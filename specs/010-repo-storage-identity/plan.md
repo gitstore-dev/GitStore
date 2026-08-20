@@ -65,7 +65,7 @@ gitstore-api/
 │           ├── namespace_mapping.go        ← new: Scylla mapping operations
 │           └── migrations/
 │               ├── 001_initial_schema.cql  ← add repositories + namespace_mappings tables
-│               └── 002_add_initial_indices.cql ← add new indices
+│               └── 002_secondary_indexes.cql ← add new indices
 └── graph/
     ├── schema.graphqls                     ← merge graphql.repository.graphqls
     └── resolver_repository.go              ← new: repository resolvers
@@ -93,7 +93,7 @@ shared/
 
 1. Update `shared/proto/gitstore/git/v1/git_service.proto` from contract file.
 2. Merge `graphql.repository.graphqls` into `graph/schema.graphqls` (or `shared/schemas/`).
-3. Update `001_initial_schema.cql` and `002_add_initial_indices.cql` in place (no new files; see research D-003).
+3. Update `001_initial_schema.cql` and `002_secondary_indexes.cql` in place (no new files; see research D-003).
 4. Regenerate gRPC Go bindings (`protoc`).
 5. Regenerate gqlgen model/resolver stubs.
 

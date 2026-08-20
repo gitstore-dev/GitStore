@@ -24,6 +24,8 @@ const (
 	ConditionReady             ConditionType = "Ready"
 	ConditionParentResolved    ConditionType = "ParentResolved"
 	ConditionAcyclic           ConditionType = "Acyclic"
+	ConditionSystemRepoReady   ConditionType = "SystemRepoReady"
+	ConditionTerminating       ConditionType = "Terminating"
 
 	// ProductVariant-specific condition types.
 	ConditionProductResolved ConditionType = "ProductResolved"
@@ -115,6 +117,13 @@ type CategoryTaxonomyStatus struct {
 	LastAppliedRevision string                    `json:"lastAppliedRevision"`
 	Conditions          []Condition               `json:"conditions"`
 	Resolved            *ResolvedCategoryTaxonomy `json:"resolved,omitempty"`
+}
+
+// NamespaceStatus is the system-written state for a Namespace. Never stored in git.
+type NamespaceStatus struct {
+	ObservedGeneration  int64       `json:"observedGeneration"`
+	LastAppliedRevision string      `json:"lastAppliedRevision"`
+	Conditions          []Condition `json:"conditions"`
 }
 
 // ResolvedCategoryTaxonomy holds system-computed hierarchy aggregates for a category.

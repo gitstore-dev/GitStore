@@ -201,33 +201,49 @@ var (
 		SortKey: []string{},
 	})
 
-	Namespace = table.New(table.Metadata{
-		Name: "namespaces",
+	NamespaceByID = table.New(table.Metadata{
+		Name: "namespaces_by_id",
 		Columns: []string{
-			"bucket",
-			"created_at",
 			"id",
-			"identifier",
-			"display_name",
+			"name",
+			"title",
 			"tier",
-			"created_by",
-			"updated_at",
-			"updated_by",
+			"spec",
+			"generation",
+			"resource_version",
+			"status",
+			"deletion_timestamp",
+			"finalizers",
+			"creation_timestamp",
+			"creation_actor",
+			"update_timestamp",
+			"update_actor",
 		},
 		PartKey: []string{
-			"bucket",
-		},
-		SortKey: []string{
-			"created_at",
 			"id",
 		},
+		SortKey: []string{},
+	})
+
+	NamespaceByName = table.New(table.Metadata{
+		Name:    "namespaces_by_name",
+		Columns: []string{"name", "id"},
+		PartKey: []string{"name"},
+		SortKey: []string{},
+	})
+
+	NamespaceByBucket = table.New(table.Metadata{
+		Name:    "namespaces_by_bucket",
+		Columns: []string{"bucket", "creation_timestamp", "id"},
+		PartKey: []string{"bucket"},
+		SortKey: []string{"creation_timestamp", "id"},
 	})
 
 	Repository = table.New(table.Metadata{
 		Name: "repositories",
 		Columns: []string{
 			"bucket",
-			"created_at",
+			"creation_timestamp",
 			"id",
 			"namespace_id",
 			"name",
@@ -238,15 +254,15 @@ var (
 			"generation",
 			"resource_version",
 			"status",
-			"created_by",
-			"updated_at",
-			"updated_by",
+			"creation_actor",
+			"update_timestamp",
+			"update_actor",
 		},
 		PartKey: []string{
 			"bucket",
 		},
 		SortKey: []string{
-			"created_at",
+			"creation_timestamp",
 			"id",
 		},
 	})

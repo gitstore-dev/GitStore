@@ -400,8 +400,10 @@ func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationUsesPolicy(t *testing.
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "createNamespace"}},
 		Args: map[string]any{
 			"input": model.CreateNamespaceInput{
-				Identifier: "acme",
-				Tier:       model.NamespaceTierOrganization,
+				APIVersion: "gitstore.dev/v1beta1",
+				Kind:       "Namespace",
+				Metadata:   &model.NamespaceMetadataInput{Name: "acme"},
+				Spec:       &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization},
 			},
 		},
 	})
@@ -425,8 +427,10 @@ func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationFailsWithoutAuthZ(t *t
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "createNamespace"}},
 		Args: map[string]any{
 			"input": model.CreateNamespaceInput{
-				Identifier: "acme",
-				Tier:       model.NamespaceTierOrganization,
+				APIVersion: "gitstore.dev/v1beta1",
+				Kind:       "Namespace",
+				Metadata:   &model.NamespaceMetadataInput{Name: "acme"},
+				Spec:       &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization},
 			},
 		},
 	})
@@ -445,8 +449,8 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {
 	authz := &stubAuthZProvider{decision: auth.Deny("stub-authz", "no access")}
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 	store := &testutil.StubStore{
-		GetNamespaceByIdentifierFunc: func(_ context.Context, identifier string) (*datastore.Namespace, error) {
-			return &datastore.Namespace{Identifier: identifier, CreatedBy: "alice"}, nil
+		GetNamespaceByNameFunc: func(_ context.Context, name string) (*datastore.Namespace, error) {
+			return &datastore.Namespace{Name: name, CreationActor: "alice"}, nil
 		},
 	}
 	mw := NewAuthorizeWithStore(registry, store, zap.NewNop())
@@ -473,9 +477,9 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {
 func TestGraphQLFieldAuthorizerDeleteNamespacePassesAuthorizedRecord(t *testing.T) {
 	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
 	registry := auth.NewProviderRegistry(nil, authz, nil)
-	authorized := &datastore.Namespace{ID: "namespace-id", Identifier: "acme", CreatedBy: "alice"}
+	authorized := &datastore.Namespace{ID: "namespace-id", Name: "acme", CreationActor: "alice"}
 	store := &testutil.StubStore{
-		GetNamespaceByIdentifierFunc: func(_ context.Context, _ string) (*datastore.Namespace, error) {
+		GetNamespaceByNameFunc: func(_ context.Context, _ string) (*datastore.Namespace, error) {
 			return authorized, nil
 		},
 	}

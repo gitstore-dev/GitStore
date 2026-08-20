@@ -31,6 +31,8 @@ pub struct RefUpdate {
 /// the lifetime of the push. Every pipeline stage receives a reference to this.
 #[derive(Clone, Debug, Default)]
 pub struct HookContext {
+    /// Stable repository UUID from the API-supplied PushContext.
+    pub repository_id: String,
     /// Principal identifier (e.g. "admin", OIDC sub claim).
     pub actor_subject: String,
     /// Auth mechanism (e.g. "basic", "bearer").

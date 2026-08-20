@@ -106,6 +106,11 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("connect git-service: %w", err)
 	}
+	if err := ensureBootstrapResources(context.Background(), store, gitClient, clock, ids, log); err != nil {
+		_ = gitClient.Close()
+		_ = store.Close()
+		return nil, fmt.Errorf("bootstrap resources: %w", err)
+	}
 	registry, rbacReloader, providerShutdowns, err := buildProviderRegistry(cfg, log)
 	if err != nil {
 		_ = gitClient.Close()

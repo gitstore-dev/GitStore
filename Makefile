@@ -274,8 +274,8 @@ bootstrap-namespace: bootstrap-tools ## Create only the bootstrap namespace.
 			exit 1; \
 		}; \
 	fi; \
-	query='mutation CreateNamespace($$identifier: String!, $$displayName: String, $$tier: NamespaceTier!) { createNamespace(input: { identifier: $$identifier, displayName: $$displayName, tier: $$tier }) { namespace { id metadata { name } spec { tier } } } }'; \
-	payload=$$(jq -n --arg query "$$query" --arg identifier "$${NAMESPACE}" --arg displayName "$${NAMESPACE_DISPLAY_NAME}" --arg tier "$${NAMESPACE_TIER}" '{query: $$query, variables: {identifier: $$identifier, displayName: $$displayName, tier: $$tier}}'); \
+	query='mutation CreateNamespace($$input: CreateNamespaceInput!) { createNamespace(input: $$input) { namespace { id metadata { name } spec { tier } } } }'; \
+	payload=$$(jq -n --arg query "$$query" --arg name "$${NAMESPACE}" --arg title "$${NAMESPACE_DISPLAY_NAME}" --arg tier "$${NAMESPACE_TIER}" '{query: $$query, variables: {input: {apiVersion: "gitstore.dev/v1beta1", kind: "Namespace", metadata: {name: $$name}, spec: {title: $$title, tier: $$tier}}}}'); \
 	response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
 		echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
 		exit 1; \
