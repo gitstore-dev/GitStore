@@ -43,6 +43,8 @@ type GitReader interface {
 	ResolveRef(ctx context.Context, repositoryID, ref string) (string, error)
 }
 
+const namespaceAdmissionWriteAttempts = 4
+
 // ResourceParser is the parser behavior required by the CatalogService server.
 type ResourceParser interface {
 	ParseResource(r io.Reader) (*validate.ParsedResource, []byte, error)
@@ -455,6 +457,53 @@ func (s *Server) resolveNamespaceIdentifier(ctx context.Context, repositoryID st
 	return ns.Name, nil
 }
 
+func (s *Server) isAdmissionCommitCurrent(ctx context.Context, repositoryID, refName, commitSHA string) bool {
+	if refName == "" {
+		return true
+	}
+
+	current, err := s.git.ResolveRef(ctx, repositoryID, refName)
+	if err != nil {
+		if isRefNotFound(err) {
+			if !isZeroOID(commitSHA) {
+				s.log.Info("admit_resources: ref no longer exists; stale admission skipped",
+					zap.String("repository_id", repositoryID),
+					zap.String("ref_name", refName),
+					zap.String("new_commit_sha", commitSHA))
+				return false
+			}
+			return true
+		}
+		s.log.Error("admit_resources: resolve ref failed",
+			zap.String("repository_id", repositoryID),
+			zap.String("ref_name", refName),
+			zap.String("new_commit_sha", commitSHA),
+			zap.Error(err))
+		return false
+	}
+
+	if isZeroOID(commitSHA) {
+		if current != "" {
+			s.log.Info("admit_resources: branch delete is stale; ref was recreated — skipping",
+				zap.String("repository_id", repositoryID),
+				zap.String("ref_name", refName),
+				zap.String("current_commit_sha", current))
+			return false
+		}
+		return true
+	}
+
+	if current != "" && current != commitSHA {
+		s.log.Info("admit_resources: stale admission skipped",
+			zap.String("repository_id", repositoryID),
+			zap.String("ref_name", refName),
+			zap.String("admitted_commit_sha", commitSHA),
+			zap.String("current_commit_sha", current))
+		return false
+	}
+	return true
+}
+
 // AdmitResources fetches, parses, and stores catalog resources from an accepted push commit.
 // Called fire-and-forget from the post-receive hook. Each product is processed independently;
 // failures are logged and do not block remaining products (FR-011).
@@ -477,50 +526,8 @@ func (s *Server) AdmitResources(
 		return &catalogv1.AdmitResourcesResponse{}, nil
 	}
 
-	if req.RefName != "" {
-		current, err := s.git.ResolveRef(ctx, req.RepositoryId, req.RefName)
-		if err != nil {
-			if isRefNotFound(err) {
-				if !isZeroOID(newCommit) {
-					// Ref gone but we were not a delete push — skip.
-					s.log.Info("admit_resources: ref no longer exists; stale admission skipped",
-						zap.String("repository_id", req.RepositoryId),
-						zap.String("ref_name", req.RefName),
-						zap.String("new_commit_sha", newCommit))
-					return &catalogv1.AdmitResourcesResponse{}, nil
-				}
-				// Zero-OID delete and ref is truly gone — proceed.
-			} else {
-				s.log.Error("admit_resources: resolve ref failed",
-					zap.String("repository_id", req.RepositoryId),
-					zap.String("ref_name", req.RefName),
-					zap.String("new_commit_sha", newCommit),
-					zap.Error(err))
-				return &catalogv1.AdmitResourcesResponse{}, nil
-			}
-		} else if isZeroOID(newCommit) {
-			// Delete push but the ref still exists (branch was recreated) — skip.
-			// Only act when current is non-empty: an empty SHA means the git service
-			// does not support ResolveRef and we cannot determine staleness.
-			if current != "" {
-				s.log.Info("admit_resources: branch delete is stale; ref was recreated — skipping",
-					zap.String("repository_id", req.RepositoryId),
-					zap.String("ref_name", req.RefName),
-					zap.String("current_commit_sha", current))
-				return &catalogv1.AdmitResourcesResponse{}, nil
-			}
-		} else if current != "" && current != newCommit {
-			// current == "" means the git service returned no SHA — skip the staleness
-			// check rather than silently admitting. A properly implemented service always
-			// returns a non-empty SHA (see ResolveRefForRepo), so an empty value here
-			// indicates an unimplemented or degraded backend.
-			s.log.Info("admit_resources: stale admission skipped",
-				zap.String("repository_id", req.RepositoryId),
-				zap.String("ref_name", req.RefName),
-				zap.String("admitted_commit_sha", newCommit),
-				zap.String("current_commit_sha", current))
-			return &catalogv1.AdmitResourcesResponse{}, nil
-		}
+	if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, newCommit) {
+		return &catalogv1.AdmitResourcesResponse{}, nil
 	}
 
 	// Resolve the namespace identifier (e.g. "gitci") from the repository UUID.
@@ -1028,87 +1035,108 @@ func (s *Server) admitNamespace(
 		}
 	}
 
-	created := existing == nil
-	namespace := existing
-	if created {
-		namespace = &datastore.Namespace{
-			APIVersion:        resource.APIVersion,
-			Kind:              resource.Kind,
-			UID:               s.ids.NewID(),
-			Name:              name,
-			Generation:        datastore.NamespaceInitialGeneration,
-			ResourceVersion:   datastore.NamespaceInitialResourceVersion,
-			Revision:          admCtx.Revision,
-			CreationTimestamp: admCtx.Now,
-			CreationActor:     "admission",
-			UpdateTimestamp:   admCtx.Now,
-			UpdateActor:       "admission",
-			Labels:            cloneStringMap(resource.Metadata.Labels),
-			Annotations:       cloneStringMap(resource.Metadata.Annotations),
-			OwnerReferences:   ownerReferences,
-			Finalizers:        append([]string(nil), resource.Metadata.Finalizers...),
-			SourcePath:        sourcePath,
-			GitCommitSHA:      admCtx.CommitSHA,
-			GitRef:            admCtx.RefName,
-			Spec:              specJSON,
-			Body:              string(body),
-			Title:             resource.Spec.Title,
-			Tier:              tier,
-		}
-		datastore.NormalizeNamespaceContract(namespace)
-		namespace.Status = namespaceadmission.AdmissionStatus(namespace.Generation, admCtx.Revision, admCtx.Now)
-		err = s.store.CreateNamespace(ctx, namespace)
-	} else if namespaceadmission.TierRank(tier) < namespaceadmission.TierRank(existing.Tier) {
-		err = namespaceadmission.ErrTierDemotion
-	} else {
-		authorChanged := existing.APIVersion != resource.APIVersion ||
-			existing.Kind != resource.Kind ||
-			!reflect.DeepEqual(existing.Labels, resource.Metadata.Labels) ||
-			!reflect.DeepEqual(existing.Annotations, resource.Metadata.Annotations) ||
-			specBodyChanged(existing.Spec, existing.Body, specJSON, body)
-		systemChanged := existing.Revision != admCtx.Revision ||
-			existing.SourcePath != sourcePath ||
-			existing.GitCommitSHA != admCtx.CommitSHA ||
-			existing.GitRef != admCtx.RefName
-		if !authorChanged && !systemChanged {
+	for attempt := 0; attempt < namespaceAdmissionWriteAttempts; attempt++ {
+		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
 			return
 		}
-		expectedResourceVersion := existing.ResourceVersion
-		existing.APIVersion = resource.APIVersion
-		existing.Kind = resource.Kind
-		existing.Revision = admCtx.Revision
-		existing.UpdateTimestamp = admCtx.Now
-		existing.UpdateActor = "admission"
-		existing.Labels = cloneStringMap(resource.Metadata.Labels)
-		existing.Annotations = cloneStringMap(resource.Metadata.Annotations)
-		existing.SourcePath = sourcePath
-		existing.GitCommitSHA = admCtx.CommitSHA
-		existing.GitRef = admCtx.RefName
-		existing.Spec = specJSON
-		existing.Body = string(body)
-		existing.Title = resource.Spec.Title
-		existing.Tier = tier
-		if authorChanged {
-			datastore.AdvanceNamespaceSpecVersion(existing)
+
+		created := existing == nil
+		namespace := existing
+		if created {
+			namespace = &datastore.Namespace{
+				APIVersion:        resource.APIVersion,
+				Kind:              resource.Kind,
+				UID:               s.ids.NewID(),
+				Name:              name,
+				Generation:        datastore.NamespaceInitialGeneration,
+				ResourceVersion:   datastore.NamespaceInitialResourceVersion,
+				Revision:          admCtx.Revision,
+				CreationTimestamp: admCtx.Now,
+				CreationActor:     "admission",
+				UpdateTimestamp:   admCtx.Now,
+				UpdateActor:       "admission",
+				Labels:            cloneStringMap(resource.Metadata.Labels),
+				Annotations:       cloneStringMap(resource.Metadata.Annotations),
+				OwnerReferences:   ownerReferences,
+				Finalizers:        append([]string(nil), resource.Metadata.Finalizers...),
+				SourcePath:        sourcePath,
+				GitCommitSHA:      admCtx.CommitSHA,
+				GitRef:            admCtx.RefName,
+				Spec:              specJSON,
+				Body:              string(body),
+				Title:             resource.Spec.Title,
+				Tier:              tier,
+			}
+			datastore.NormalizeNamespaceContract(namespace)
+			namespace.Status = namespaceadmission.AdmissionStatus(namespace.Generation, admCtx.Revision, admCtx.Now)
+			err = s.store.CreateNamespace(ctx, namespace)
+		} else if namespaceadmission.TierRank(tier) < namespaceadmission.TierRank(existing.Tier) {
+			err = namespaceadmission.ErrTierDemotion
 		} else {
-			datastore.AdvanceNamespaceSystemVersion(existing)
+			authorChanged := existing.APIVersion != resource.APIVersion ||
+				existing.Kind != resource.Kind ||
+				!reflect.DeepEqual(existing.Labels, resource.Metadata.Labels) ||
+				!reflect.DeepEqual(existing.Annotations, resource.Metadata.Annotations) ||
+				specBodyChanged(existing.Spec, existing.Body, specJSON, body)
+			systemChanged := existing.Revision != admCtx.Revision ||
+				existing.SourcePath != sourcePath ||
+				existing.GitCommitSHA != admCtx.CommitSHA ||
+				existing.GitRef != admCtx.RefName
+			if !authorChanged && !systemChanged {
+				return
+			}
+			expectedResourceVersion := existing.ResourceVersion
+			existing.APIVersion = resource.APIVersion
+			existing.Kind = resource.Kind
+			existing.Revision = admCtx.Revision
+			existing.UpdateTimestamp = admCtx.Now
+			existing.UpdateActor = "admission"
+			existing.Labels = cloneStringMap(resource.Metadata.Labels)
+			existing.Annotations = cloneStringMap(resource.Metadata.Annotations)
+			existing.SourcePath = sourcePath
+			existing.GitCommitSHA = admCtx.CommitSHA
+			existing.GitRef = admCtx.RefName
+			existing.Spec = specJSON
+			existing.Body = string(body)
+			existing.Title = resource.Spec.Title
+			existing.Tier = tier
+			if authorChanged {
+				datastore.AdvanceNamespaceSpecVersion(existing)
+			} else {
+				datastore.AdvanceNamespaceSystemVersion(existing)
+			}
+			existing.Status = namespaceadmission.AdmissionStatus(existing.Generation, admCtx.Revision, admCtx.Now)
+			err = s.store.UpdateNamespace(ctx, existing, expectedResourceVersion)
 		}
-		existing.Status = namespaceadmission.AdmissionStatus(existing.Generation, admCtx.Revision, admCtx.Now)
-		err = s.store.UpdateNamespace(ctx, existing, expectedResourceVersion)
-	}
-	if err != nil {
-		s.log.Warn("admit_resources: Namespace rejected",
-			zap.String("name", name),
-			zap.String("operation", string(op)),
-			zap.Bool("existing", existing != nil),
-			zap.Error(err))
+		if errors.Is(err, datastore.ErrConflict) || errors.Is(err, datastore.ErrAlreadyExists) {
+			existing, err = s.store.GetNamespaceByName(ctx, name)
+			if err == nil {
+				continue
+			}
+			if errors.Is(err, datastore.ErrNotFound) {
+				existing = nil
+				continue
+			}
+		}
+		if err != nil {
+			s.log.Warn("admit_resources: Namespace rejected",
+				zap.String("name", name),
+				zap.String("operation", string(op)),
+				zap.Bool("existing", existing != nil),
+				zap.Error(err))
+			return
+		}
+		eventType := eventbus.Modified
+		if created {
+			eventType = eventbus.Added
+		}
+		s.publishNamespaceEvent(eventType, namespace)
 		return
 	}
-	eventType := eventbus.Modified
-	if created {
-		eventType = eventbus.Added
-	}
-	s.publishNamespaceEvent(eventType, namespace)
+	s.log.Warn("admit_resources: Namespace rejected after repeated concurrent updates",
+		zap.String("name", name),
+		zap.String("operation", string(op)),
+		zap.Int("attempts", namespaceAdmissionWriteAttempts))
 }
 
 func cloneStringMap(input map[string]string) map[string]string {

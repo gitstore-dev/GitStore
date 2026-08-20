@@ -116,6 +116,52 @@ func TestProjectionRepairServiceProtectsConcurrentWriter(t *testing.T) {
 	}
 }
 
+func TestProjectionRepairServiceDeletesStaleProjectionForLiveResource(t *testing.T) {
+	t.Parallel()
+	store := newFakeRepairStore(staleNamespaceBucketSnapshot())
+	service := &ProjectionRepairService{store: store}
+	plan, err := service.Audit(context.Background())
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	if len(plan.Actions) != 1 || plan.Actions[0].Type != RepairDelete {
+		t.Fatalf("Audit() actions = %#v, want one delete", plan.Actions)
+	}
+
+	result, err := service.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if result.AppliedActions != 1 {
+		t.Fatalf("AppliedActions = %d, want 1", result.AppliedActions)
+	}
+	if len(result.Verification.Findings) != 0 {
+		t.Fatalf("verification findings = %#v, want none", result.Verification.Findings)
+	}
+}
+
+func TestProjectionRepairServiceRejectsDeleteAfterResourceVersionAdvance(t *testing.T) {
+	t.Parallel()
+	store := newFakeRepairStore(staleNamespaceBucketSnapshot())
+	service := &ProjectionRepairService{store: store}
+	plan, err := service.Audit(context.Background())
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	store.versionsByLookup = []string{"7", "8"}
+
+	_, err = service.Apply(context.Background(), plan)
+	if err == nil || !strings.Contains(err.Error(), "conditional mutation was not applied") {
+		t.Fatalf("Apply() error = %v, want conditional mutation rejection", err)
+	}
+	if store.applyCalls != 1 {
+		t.Fatalf("Apply() calls = %d, want 1", store.applyCalls)
+	}
+	if len(store.snapshot.Projections) != 3 {
+		t.Fatalf("projections = %#v, want stale projection retained", store.snapshot.Projections)
+	}
+}
+
 func TestBuildRepairPlanDoesNotOverwriteValidCompetingOwner(t *testing.T) {
 	t.Parallel()
 	created := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -160,6 +206,22 @@ func TestBuildRepairPlanDoesNotDeleteWriteReservation(t *testing.T) {
 	}
 }
 
+func TestValidateRepairPlanRejectsReservationProjectionDelete(t *testing.T) {
+	t.Parallel()
+	err := ValidateRepairPlan(RepairPlan{Actions: []RepairAction{{
+		Type:                  RepairDelete,
+		Kind:                  "Product",
+		UID:                   "11111111-1111-1111-1111-111111111111",
+		RequireAbsentResource: true,
+		Before: &ProjectionRecord{
+			Table: "products_by_name", UID: "11111111-1111-1111-1111-111111111111", Namespace: "shop", Name: "name",
+		},
+	}}})
+	if err == nil || !strings.Contains(err.Error(), "reservation projection") {
+		t.Fatalf("ValidateRepairPlan() error = %v, want reservation rejection", err)
+	}
+}
+
 func TestValidateRepairPlanRejectsUnsafeAction(t *testing.T) {
 	t.Parallel()
 	err := ValidateRepairPlan(RepairPlan{Actions: []RepairAction{{
@@ -183,6 +245,14 @@ func missingNamespaceBucketSnapshot() ProjectionSnapshot {
 		Authoritative: []AuthoritativeResource{resource},
 		Projections:   []ProjectionRecord{expectedProjections(resource)[0]},
 	}
+}
+
+func staleNamespaceBucketSnapshot() ProjectionSnapshot {
+	snapshot := missingNamespaceBucketSnapshot()
+	stale := expectedProjections(snapshot.Authoritative[0])[1]
+	stale.Bucket = "2026-07"
+	snapshot.Projections = append(snapshot.Projections, stale, expectedProjections(snapshot.Authoritative[0])[1])
+	return snapshot
 }
 
 func containsFindingType(findings []FindingType, want FindingType) bool {
@@ -219,6 +289,8 @@ type fakeRepairStore struct {
 	snapshot          ProjectionSnapshot
 	applyCalls        int
 	concurrentVersion string
+	versionsByLookup  []string
+	lookupCalls       int
 }
 
 func newFakeRepairStore(snapshot ProjectionSnapshot) *fakeRepairStore {
@@ -230,10 +302,13 @@ func (f *fakeRepairStore) Snapshot(context.Context) (ProjectionSnapshot, error) 
 }
 
 func (f *fakeRepairStore) LookupResource(_ context.Context, action RepairAction) (*AuthoritativeResource, error) {
+	defer func() { f.lookupCalls++ }()
 	for i := range f.snapshot.Authoritative {
 		resource := f.snapshot.Authoritative[i]
 		if resource.Kind == action.Kind && resource.UID == action.UID {
-			if f.concurrentVersion != "" {
+			if f.lookupCalls < len(f.versionsByLookup) {
+				resource.ResourceVersion = f.versionsByLookup[f.lookupCalls]
+			} else if f.concurrentVersion != "" {
 				resource.ResourceVersion = f.concurrentVersion
 			}
 			return &resource, nil
@@ -242,7 +317,7 @@ func (f *fakeRepairStore) LookupResource(_ context.Context, action RepairAction)
 	return nil, nil
 }
 
-func (f *fakeRepairStore) ApplyAction(_ context.Context, action RepairAction) (bool, error) {
+func (f *fakeRepairStore) ApplyAction(ctx context.Context, action RepairAction) (bool, error) {
 	f.applyCalls++
 	switch action.Type {
 	case RepairInsert:
@@ -256,6 +331,13 @@ func (f *fakeRepairStore) ApplyAction(_ context.Context, action RepairAction) (b
 		}
 		return false, nil
 	case RepairDelete:
+		resource, err := f.LookupResource(ctx, action)
+		if err != nil {
+			return false, err
+		}
+		if !repairDeleteResourceMatches(action, resource) {
+			return false, nil
+		}
 		for i := range f.snapshot.Projections {
 			if f.snapshot.Projections[i].Equal(*action.Before) {
 				f.snapshot.Projections = append(f.snapshot.Projections[:i], f.snapshot.Projections[i+1:]...)

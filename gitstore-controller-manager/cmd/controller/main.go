@@ -188,6 +188,8 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 			return types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: c.Namespace, Name: c.Name}
 		},
 		RevisionFunc:        func(c categorytaxonomy.CategoryTaxonomy) string { return c.ResourceVersion },
+		AcceptUpdate:        categorytaxonomy.AcceptWatchUpdate,
+		ShouldEnqueueUpdate: categorytaxonomy.ShouldEnqueueWatchUpdate,
 		FlushIntervalEvents: cfg.Controller.CheckpointFlushIntervalEvents,
 		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
 		Log:                 log,
@@ -221,6 +223,9 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 			enqueueParent(c.Namespace, c.ParentRefName)
 		},
 		OnUpdate: func(_ types.WorkItemKey, old, current categorytaxonomy.CategoryTaxonomy) {
+			if old.ParentRefName == current.ParentRefName {
+				return
+			}
 			enqueueParent(old.Namespace, old.ParentRefName)
 			enqueueParent(current.Namespace, current.ParentRefName)
 		},

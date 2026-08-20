@@ -553,8 +553,11 @@ roles:
       - namespace.delete.own  # only own namespaces
       - repository.read
       - repository.write
-      - repository.create
+      - repository.create.own
+      - repository.rename.own
+      - repository.transfer.own
       - repository.delete.own
+      - repository.read.own
     deny:
       - namespace.delete.any  # cannot delete other owners' namespaces
 
@@ -563,12 +566,14 @@ roles:
       - namespace.read
       - repository.read
       - repository.write
+      - repository.read.any
     deny: []
 
   anonymous:
     allow:
       - namespace.read
       - repository.read
+      - repository.read.any
     deny:
       - repository.write
       - namespace.create
@@ -582,6 +587,11 @@ role_bindings:
   "admin":
     - admin
 ```
+
+Repository GraphQL control-plane operations use
+`repository.<operation>.own` when the caller owns every affected namespace and
+`repository.<operation>.any` for cross-tenant access. `repository.read` and
+`repository.write` remain the Git smart-HTTP actions.
 
 ### 2e. anonymous (AuthN)
 
