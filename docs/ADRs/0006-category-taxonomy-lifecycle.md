@@ -19,9 +19,19 @@ Key invariants:
 - `ancestorPath` is controller-managed, not author-written.
 - Deletion of a category with children is rejected (children must be deleted or
   re-parented first).
+- Deletion of a category with assigned products is **not** rejected: products are
+  decoupled asynchronously instead (see "Delete" below and GH#243/spec 052).
 
 Phase 1 open work from GH#82 includes deletion semantics and controller reconciliation.
 This ADR closes those gaps.
+
+**Amendment (GH#243 / spec 052, 2026-08-20)**: the original decision below rejected
+deletion for *both* dependent types (children and assigned products). Design review
+revised this to a hybrid: children still block deletion (no safe default exists for an
+orphaned child — see "Delete" below), but assigned products no longer do. A product
+without a category is already a normal, first-class state in this catalog, so a deleted
+category's products are decoupled asynchronously (their `CategoryResolved` condition
+moves to `False`/`CategoryDeleted`) rather than blocking the category's removal.
 
 ## Decision
 
@@ -94,16 +104,29 @@ Controller-managed fields (not author-writable): `metadata.uid`,
 #### Delete
 
 1. Author deletes the category file and pushes, or issues `deleteCategoryTaxonomy`.
-2. Before any record is removed, admission checks whether:
-   a. Any other `CategoryTaxonomy` records have `spec.parentRef.name` pointing at
-      this category (children exist). If so, **rejected** with
-      `FailedPrecondition: child categories present`.
-   b. Any `Product` records have `spec.categoryRef.name` pointing at this category
-      (products assigned). If so, **rejected** with
-      `FailedPrecondition: products assigned`.
-3. If both checks pass, the API adds the `gitstore.dev/foreground-deletion` finalizer and sets `metadata.deletionTimestamp`.
-4. Controller drains media backlinks (if tracked) and removes the finalizer.
-5. Datastore record is hard-deleted.
+2. Before any record is removed, admission checks whether any other `CategoryTaxonomy`
+   records have `spec.parentRef.name` pointing at this category (children exist). If so,
+   **rejected** with `FailedPrecondition: child categories present`. Assigned products
+   are **not** checked here and never block this step — see step 5.
+3. If the child check passes, the API adds the `gitstore.dev/foreground-deletion`
+   finalizer and sets `metadata.deletionTimestamp`, regardless of how many `Product`
+   records currently have `spec.categoryRef.name` pointing at this category.
+4. The controller re-checks the child count on every reconcile of the terminating
+   category; a child created after step 2 still withholds final removal (step 6).
+5. Concurrently, for every `Product` whose `spec.categoryRef.name` points at the
+   terminating category, the controller sets that product's `CategoryResolved`
+   condition to `False` with reason `CategoryDeleted` — the same unresolved-reference
+   pattern already used for a category's own unresolved `spec.parentRef`
+   (`ParentResolved=False`/`ParentNotFound`) — without modifying the product's
+   git-authored `spec.categoryRef`, which stays under Git's ownership. Admission
+   separately rejects any *new* `Product` create/update that targets a category
+   already `Terminating`, so no fresh reference can be created against a category
+   that is about to disappear.
+6. Once the child count reaches zero, the controller removes the finalizer and the
+   datastore record is hard-deleted. The product decouple in step 5 is not a
+   precondition for this step — it can complete before, during, or after removal,
+   but MUST eventually converge to `CategoryResolved=False`/`CategoryDeleted` for
+   every product that referenced the deleted category.
 
 **Move vs delete/recreate:** Moving a category to a different parent is an update to
 `spec.parentRef`, not a delete/recreate. The UID is preserved. All descendant
