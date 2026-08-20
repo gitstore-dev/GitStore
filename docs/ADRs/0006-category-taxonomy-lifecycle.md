@@ -68,17 +68,25 @@ Controller-managed fields (not author-writable): `metadata.uid`,
    `fileRef.name` present when `media` is non-empty.
 3. Post-receive admission:
    - Namespace and repository `Active`.
-   - `ownerReferences` written pointing at repository.
+   - `ownerReferences` written pointing at repository (pre-existing gap: not yet
+     implemented by any admission path — tracked separately from this ADR's
+     GH#243/spec 052 amendment below).
    - If `spec.parentRef` is absent: stored as root node; `ancestorPath = name`;
-     `ParentResolved=True` (vacuously, no parent required).
+     `ParentResolved=True` (vacuously, no parent required); no parent
+     `ownerReferences` entry (there is no parent to point at).
    - If `spec.parentRef` references a category in the same push (co-creation):
      `ancestorPath = parentName/childName` tentatively; `ParentResolved=True` if
-     the parent was admitted before this child in the same batch.
+     the parent was admitted before this child in the same batch; an
+     `ownerReferences` entry `{kind: CategoryTaxonomy, uid: <parent uid>,
+     blockOwnerDeletion: true}` is written on the child at the same moment
+     (GH#243/spec 052).
    - If `spec.parentRef` references an existing category in the datastore: full
-     ancestor path inherited; `ParentResolved=True`.
+     ancestor path inherited; `ParentResolved=True`; same `ownerReferences` entry
+     written as above.
    - If `spec.parentRef` references a category that does not exist anywhere:
      category stored as tentative root; `ancestorPath = name`; `ParentResolved=False`
-     with reason `ParentNotFound`.
+     with reason `ParentNotFound`; no `ownerReferences` entry yet — the controller
+     writes it asynchronously once `ParentResolved` later transitions to `True`.
    - Intra-push cycles (A→B, B→A in the same commit): both stored with
      `Acyclic=False`.
    - `AdmissionAccepted=True`.
@@ -93,9 +101,11 @@ Controller-managed fields (not author-writable): `metadata.uid`,
 1. Author edits the category file and pushes, or issues `updateCategoryTaxonomy`.
 2. Immutable fields in Phase 1: `metadata.name`, `metadata.namespace`.
 3. `spec.parentRef` change (re-parenting): allowed in Phase 1. The controller
-   recomputes `ancestorPath` for the node and all its descendants after admission.
-   If the new parent does not exist yet, `ParentResolved=False` and the controller
-   retries asynchronously.
+   recomputes `ancestorPath` for the node and all its descendants after admission,
+   and replaces the node's `ownerReferences` parent entry with one pointing at the
+   new parent's `uid` (GH#243/spec 052). If the new parent does not exist yet,
+   `ParentResolved=False`, the `ownerReferences` parent entry is removed until it
+   does, and the controller retries asynchronously.
 4. Admission cycle-detection: when `spec.parentRef` changes, admission checks for
    self-loops and direct mutual cycles (A→B, B→A) synchronously. Deep multi-hop
    cycle detection is deferred to the controller to avoid O(depth) synchronous DB
@@ -103,30 +113,46 @@ Controller-managed fields (not author-writable): `metadata.uid`,
 
 #### Delete
 
+Dependent tracking uses Kubernetes-style `metadata.ownerReferences` with
+`blockOwnerDeletion` (GH#243/spec 052) rather than a `spec.parentRef.name`/
+`spec.categoryRef.name` string-match scan: every child category holds an
+`ownerReferences` entry on itself pointing at its parent with
+`blockOwnerDeletion: true` (see "Create"/"Update" above); every product holds one
+pointing at its resolved category with `blockOwnerDeletion: false`, written by the
+controller once `CategoryResolved` transitions to `True`.
+
 1. Author deletes the category file and pushes, or issues `deleteCategoryTaxonomy`.
-2. Before any record is removed, admission checks whether any other `CategoryTaxonomy`
-   records have `spec.parentRef.name` pointing at this category (children exist). If so,
-   **rejected** with `FailedPrecondition: child categories present`. Assigned products
-   are **not** checked here and never block this step — see step 5.
+2. Before any record is removed, admission queries for any resource whose
+   `metadata.ownerReferences` contains an entry for this category's `uid` with
+   `blockOwnerDeletion: true` (children). If any exist, **rejected** with
+   `FailedPrecondition: child categories present`. Products — entries with
+   `blockOwnerDeletion: false` — are **not** checked here and never block this
+   step; see step 5.
 3. If the child check passes, the API adds the `gitstore.dev/foreground-deletion`
-   finalizer and sets `metadata.deletionTimestamp`, regardless of how many `Product`
-   records currently have `spec.categoryRef.name` pointing at this category.
-4. The controller re-checks the child count on every reconcile of the terminating
-   category; a child created after step 2 still withholds final removal (step 6).
-5. Concurrently, for every `Product` whose `spec.categoryRef.name` points at the
-   terminating category, the controller sets that product's `CategoryResolved`
-   condition to `False` with reason `CategoryDeleted` — the same unresolved-reference
-   pattern already used for a category's own unresolved `spec.parentRef`
-   (`ParentResolved=False`/`ParentNotFound`) — without modifying the product's
-   git-authored `spec.categoryRef`, which stays under Git's ownership. Admission
+   finalizer and sets `metadata.deletionTimestamp`, regardless of how many
+   `blockOwnerDeletion: false` (product) entries currently name this category.
+4. The controller re-runs the `blockOwnerDeletion: true` query on every reconcile
+   of the terminating category; a child created after step 2 (and its own
+   admission writing a fresh `blockOwnerDeletion: true` entry) still withholds
+   final removal (step 6).
+5. Concurrently, for every resource with a `blockOwnerDeletion: false` entry naming
+   the terminating category (i.e. every dependent `Product`), the controller both
+   removes that `ownerReferences` entry (orphaning the product, mirroring
+   Kubernetes' Orphan deletion-propagation policy) and sets that product's
+   `CategoryResolved` condition to `False` with reason `CategoryDeleted` — the same
+   unresolved-reference pattern already used for a category's own unresolved
+   `spec.parentRef` (`ParentResolved=False`/`ParentNotFound`) — without modifying
+   the product's git-authored `spec.categoryRef`, which stays under Git's
+   ownership; `ownerReferences` is a different, controller-managed field. Admission
    separately rejects any *new* `Product` create/update that targets a category
-   already `Terminating`, so no fresh reference can be created against a category
-   that is about to disappear.
-6. Once the child count reaches zero, the controller removes the finalizer and the
-   datastore record is hard-deleted. The product decouple in step 5 is not a
-   precondition for this step — it can complete before, during, or after removal,
-   but MUST eventually converge to `CategoryResolved=False`/`CategoryDeleted` for
-   every product that referenced the deleted category.
+   already `Terminating`, so no fresh `blockOwnerDeletion: false` entry can be
+   created against a category that is about to disappear.
+6. Once the `blockOwnerDeletion: true` query returns zero results, the controller
+   removes the finalizer and the datastore record is hard-deleted. The product
+   decouple in step 5 is not a precondition for this step — it can complete
+   before, during, or after removal, but MUST eventually converge to
+   `CategoryResolved=False`/`CategoryDeleted` (and an orphaned `ownerReferences`
+   entry) for every product that referenced the deleted category.
 
 **Move vs delete/recreate:** Moving a category to a different parent is an update to
 `spec.parentRef`, not a delete/recreate. The UID is preserved. All descendant
@@ -195,7 +221,7 @@ Laptop category description.
 |--------------------------|------------------------------------------------------------------------------------------------------|
 | `createCategoryTaxonomy` | Commits `categories/<name>.md` to the named repository (or `gitstore-system`); waits for admission.  |
 | `updateCategoryTaxonomy` | Commits updated manifest; waits for admission.                                                       |
-| `deleteCategoryTaxonomy` | Validates no children or assigned products; adds `foregroundDeletion` finalizer; sets `Terminating`. |
+| `deleteCategoryTaxonomy` | Validates no `blockOwnerDeletion: true` dependents (children); adds `foregroundDeletion` finalizer; sets `Terminating`. Assigned products (`blockOwnerDeletion: false`) never block; the controller decouples them asynchronously. |
 | `getCategoryTaxonomy`    | Read-only datastore query; includes controller-computed `ancestorPath`.                              |
 | `listCategoryTaxonomies` | Read-only datastore query, namespace-scoped; filterable by `ancestorPath` prefix.                    |
 
@@ -221,7 +247,7 @@ Cross-namespace `spec.parentRef` is **rejected at admission time** in Phase 1.
 | `AncestorPathReady` | `ancestorPath` is up-to-date and reflects the current parent chain.                     |
 | `MediaResolved`     | All `spec.media[*].fileRef` entries found (deferred to Phase 2, GH#244).                |
 | `Ready`             | Parent resolved, acyclic, ancestor path current.                                        |
-| `Terminating`       | `foregroundDeletion` finalizer present; children and assigned products must be drained. |
+| `Terminating`       | `foregroundDeletion` finalizer present; `blockOwnerDeletion: true` dependents (children) must be drained before removal. `blockOwnerDeletion: false` dependents (assigned products) are decoupled asynchronously, not drained, and never gate removal. |
 
 When `AncestorPathReady=False`, queries that filter by ancestor path may return stale
 results. This is a transient state during large tree re-parents and resolves within one
@@ -231,10 +257,18 @@ controller reconcile pass.
 
 Positive:
 - Category hierarchy is fully reviewable through git history.
-- Deletion is safe: children and assigned products block deletion.
+- Deletion is safe for structural dependents: children block deletion, and
+  `ownerReferences`/`blockOwnerDeletion` makes that check an indexed lookup rather
+  than a full-table name scan.
+- Deletion of a category with assigned products is not blocked, but is not silent
+  either: products are decoupled (orphaned `ownerReferences`, `CategoryResolved=
+  False`/`CategoryDeleted`) instead of being left pointing at nothing.
 - Re-parenting preserves UIDs; cascade `ancestorPath` recomputation is safe.
 - Cycle detection is layered: instant self-loop rejection at push, async deep detection
   by controller.
+- The `ownerReferences`/`blockOwnerDeletion` mechanism is reusable as-is for the
+  File resource's future reverse-reference tracking (ADR-0008, doc 034 Phase 2),
+  rather than requiring a second, bespoke dependent-tracking mechanism.
 
 Negative:
 - Re-parenting a deep category triggers a potentially large controller fan-out to
@@ -247,8 +281,11 @@ Negative:
 - [ADR-0002](0002-namespace-lifecycle.md) — Namespace must be `Active`.
 - [ADR-0003](0003-repository-lifecycle.md) — Repository must be `Active`.
 - [ADR-0004](0004-product-lifecycle.md) — Products reference categories via
-  `spec.categoryRef`; product deletion does not affect the category, but category
-  deletion is blocked while products are assigned.
+  `spec.categoryRef`, recorded as a `blockOwnerDeletion: false` `ownerReferences`
+  entry once resolved (GH#243/spec 052). Product deletion does not affect the
+  category. Category deletion is **not** blocked by assigned products; instead the
+  controller decouples each one (`CategoryResolved=False`/`CategoryDeleted`) as
+  part of the category's deletion reconcile.
 - [ADR-0007](0007-collection-lifecycle.md) — Collections may reference categories in
   their selector; category rename/move does not auto-update collection selectors.
 - [ADR-0008](0008-file-lifecycle.md) — `spec.media[*].fileRef` resolved
