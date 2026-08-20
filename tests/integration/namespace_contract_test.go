@@ -176,7 +176,6 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/app"
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
-	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
@@ -193,6 +192,25 @@ type mockGitWriter struct {
 }
 
 type testUserAuthN struct{}
+
+type namespaceOwnerAuthZ struct{}
+
+func (*namespaceOwnerAuthZ) Name() string { return "namespace-owner-test" }
+
+func (*namespaceOwnerAuthZ) Authorize(
+	_ context.Context,
+	principal *authpkg.Principal,
+	_ string,
+	resource authpkg.ResourceContext,
+) (authpkg.Decision, error) {
+	if principal.IsAdmin() {
+		return authpkg.Allow("namespace-owner-test", "administrator"), nil
+	}
+	if resource.OwnerSub != "" && resource.OwnerSub != principal.Subject {
+		return authpkg.Deny("namespace-owner-test", "resource belongs to another user"), nil
+	}
+	return authpkg.Allow("namespace-owner-test", "owner or unowned resource"), nil
+}
 
 func (*testUserAuthN) Name() string { return "integration-users" }
 func (*testUserAuthN) Capabilities() authpkg.Capability { return authpkg.CapAuthenticate }
@@ -273,7 +291,7 @@ func main() {
 
 	registry := authpkg.NewProviderRegistry(
 		authpkg.NewChainedAuthN(&testUserAuthN{}, staticAdmin, anonymous.New()),
-		allowall.New(zap.NewNop()),
+		&namespaceOwnerAuthZ{},
 		nil,
 	)
 	store, err := memdb.New()

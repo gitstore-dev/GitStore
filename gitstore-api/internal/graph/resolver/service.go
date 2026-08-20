@@ -863,7 +863,8 @@ func (s *Service) RenameRepository(ctx context.Context, repoID, newName, callerU
 	if oldName == newName {
 		return repo, nil
 	}
-	if err := s.store.RenameRepository(ctx, repo.Namespace, oldName, newName); err != nil {
+	mutationCtx := datastore.WithMutationAudit(ctx, callerUsername, s.clock.Now().UTC())
+	if err := s.store.RenameRepository(mutationCtx, repo.Namespace, oldName, newName); err != nil {
 		s.logger.Error("failed to rename repository",
 			zap.String("repo_id", repoID),
 			zap.String("old_name", oldName),
@@ -918,7 +919,8 @@ func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespace, c
 	if fromNamespace == toNamespaceName {
 		return repo, nil
 	}
-	if err := s.store.TransferRepository(ctx, repoID, fromNamespace, toNamespaceName); err != nil {
+	mutationCtx := datastore.WithMutationAudit(ctx, callerUsername, s.clock.Now().UTC())
+	if err := s.store.TransferRepository(mutationCtx, repoID, fromNamespace, toNamespaceName); err != nil {
 		s.logger.Error("failed to transfer repository",
 			zap.String("repo_id", repoID),
 			zap.String("from_namespace", fromNamespace),
