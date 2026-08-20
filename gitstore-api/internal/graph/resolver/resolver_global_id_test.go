@@ -139,7 +139,8 @@ func TestRepositoryNodeIdentityUsesStableRelayIDAndMetadataUID(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, mustEncodeNodeID(nodeKindRepository, globalIDTestRepositoryID), repository.ID)
 	require.NotNil(t, repository.Metadata)
-	assert.Equal(t, repository.ID, repository.Metadata.UID)
+	assert.Equal(t, globalIDTestRepositoryID, repository.Metadata.UID)
+	assert.NotEqual(t, repository.ID, repository.Metadata.UID)
 	assert.Equal(t, "1", repository.Metadata.ResourceVersion)
 	assert.Equal(t, int32(1), repository.Metadata.Generation)
 }
@@ -202,8 +203,9 @@ func seedGlobalIDTestData(t *testing.T, ctx context.Context, store datastore.Dat
 		ProductRefName:    "product-1",
 	}))
 	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{
-		ID:                globalIDTestRepositoryID,
-		NamespaceID:       globalIDTestNamespaceID,
+		UID:               globalIDTestRepositoryID,
+		Namespace:         "namespace-1",
+		RepositoryID:      globalIDTestRepositoryID,
 		Name:              "repository-1",
 		DefaultBranch:     "main",
 		StorageClass:      "default",

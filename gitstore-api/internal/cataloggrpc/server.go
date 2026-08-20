@@ -275,7 +275,8 @@ func (s *Server) validateNamespaceAuthoringTarget(ctx context.Context, repositor
 	if err != nil {
 		return fmt.Errorf("validate: Namespace manifests require repository gitstore-system/gitstore-system: %w", err)
 	}
-	namespace, err := s.store.GetNamespace(ctx, repository.NamespaceID)
+	datastore.NormalizeRepositoryContract(repository)
+	namespace, err := s.store.GetNamespaceByName(ctx, repository.Namespace)
 	if err != nil {
 		return fmt.Errorf("validate: Namespace manifests require repository gitstore-system/gitstore-system: %w", err)
 	}
@@ -353,9 +354,10 @@ func (s *Server) resolveNamespaceIdentifier(ctx context.Context, repositoryID st
 	if err != nil || repo == nil {
 		return "", fmt.Errorf("admit_resources: repository %s not found: %w", repositoryID, err)
 	}
-	ns, err := s.store.GetNamespace(ctx, repo.NamespaceID)
+	datastore.NormalizeRepositoryContract(repo)
+	ns, err := s.store.GetNamespaceByName(ctx, repo.Namespace)
 	if err != nil || ns == nil {
-		return "", fmt.Errorf("admit_resources: namespace %s not found for repository %s: %w", repo.NamespaceID, repositoryID, err)
+		return "", fmt.Errorf("admit_resources: namespace %s not found for repository %s: %w", repo.Namespace, repositoryID, err)
 	}
 	return ns.Name, nil
 }
@@ -648,7 +650,7 @@ func (s *Server) admitParsedEntries(
 		case "ProductVariant":
 			s.admitProductVariant(ctx, e.parsed.ProductVariant, e.body, admCtx, e.path, op, existing)
 		case "Namespace":
-			s.admitNamespace(ctx, e.parsed.Namespace, admCtx, op, existing)
+			s.admitNamespace(ctx, e.parsed.Namespace, e.body, admCtx, e.path, op, existing)
 		}
 	}
 	return nil
@@ -818,21 +820,119 @@ func productCategoryRefName(specJSON []byte) string {
 func (s *Server) admitNamespace(
 	ctx context.Context,
 	resource *catalog.NamespaceResource,
+	body []byte,
 	admCtx AdmissionContext,
+	sourcePath string,
 	op admission.Operation,
 	rawExisting any,
 ) {
 	name := resource.Metadata.Name
 	existing, _ := rawExisting.(*datastore.Namespace)
-	namespace, created, err := namespaceadmission.ApplyManifest(
-		ctx,
-		s.store,
-		s.ids,
-		resource,
-		admCtx.Now,
-		admCtx.Revision,
-		"admission",
-	)
+	if namespaceadmission.IsBootstrap(name) {
+		s.log.Warn("admit_resources: Namespace rejected",
+			zap.String("name", name),
+			zap.String("operation", string(op)),
+			zap.Bool("existing", existing != nil),
+			zap.Error(namespaceadmission.ErrBootstrapNamespace))
+		return
+	}
+	tier, ok := namespaceadmission.TierFromManifest(resource.Spec.Tier)
+	if !ok {
+		s.log.Warn("admit_resources: Namespace rejected",
+			zap.String("name", name),
+			zap.String("operation", string(op)),
+			zap.Bool("existing", existing != nil),
+			zap.Error(fmt.Errorf("unsupported tier %q", resource.Spec.Tier)))
+		return
+	}
+	specJSON, err := json.Marshal(resource.Spec)
+	if err != nil {
+		s.log.Warn("admit_resources: Namespace rejected",
+			zap.String("name", name),
+			zap.String("operation", string(op)),
+			zap.Error(fmt.Errorf("marshal spec: %w", err)))
+		return
+	}
+	ownerReferences := json.RawMessage(`[]`)
+	if len(resource.Metadata.OwnerReferences) > 0 {
+		ownerReferences, err = json.Marshal(resource.Metadata.OwnerReferences)
+		if err != nil {
+			s.log.Warn("admit_resources: Namespace rejected",
+				zap.String("name", name),
+				zap.String("operation", string(op)),
+				zap.Error(fmt.Errorf("marshal owner references: %w", err)))
+			return
+		}
+	}
+
+	created := existing == nil
+	namespace := existing
+	if created {
+		namespace = &datastore.Namespace{
+			APIVersion:        resource.APIVersion,
+			Kind:              resource.Kind,
+			UID:               s.ids.NewID(),
+			Name:              name,
+			Generation:        datastore.NamespaceInitialGeneration,
+			ResourceVersion:   datastore.NamespaceInitialResourceVersion,
+			Revision:          admCtx.Revision,
+			CreationTimestamp: admCtx.Now,
+			CreationActor:     "admission",
+			UpdateTimestamp:   admCtx.Now,
+			UpdateActor:       "admission",
+			Labels:            cloneStringMap(resource.Metadata.Labels),
+			Annotations:       cloneStringMap(resource.Metadata.Annotations),
+			OwnerReferences:   ownerReferences,
+			Finalizers:        append([]string(nil), resource.Metadata.Finalizers...),
+			SourcePath:        sourcePath,
+			GitCommitSHA:      admCtx.CommitSHA,
+			GitRef:            admCtx.RefName,
+			Spec:              specJSON,
+			Body:              string(body),
+			Title:             resource.Spec.Title,
+			Tier:              tier,
+		}
+		datastore.NormalizeNamespaceContract(namespace)
+		namespace.Status = namespaceadmission.AdmissionStatus(namespace.Generation, admCtx.Revision, admCtx.Now)
+		err = s.store.CreateNamespace(ctx, namespace)
+	} else if namespaceadmission.TierRank(tier) < namespaceadmission.TierRank(existing.Tier) {
+		err = namespaceadmission.ErrTierDemotion
+	} else {
+		authorChanged := existing.APIVersion != resource.APIVersion ||
+			existing.Kind != resource.Kind ||
+			!reflect.DeepEqual(existing.Labels, resource.Metadata.Labels) ||
+			!reflect.DeepEqual(existing.Annotations, resource.Metadata.Annotations) ||
+			specBodyChanged(existing.Spec, existing.Body, specJSON, body)
+		systemChanged := existing.Revision != admCtx.Revision ||
+			existing.SourcePath != sourcePath ||
+			existing.GitCommitSHA != admCtx.CommitSHA ||
+			existing.GitRef != admCtx.RefName
+		if !authorChanged && !systemChanged {
+			return
+		}
+		expectedResourceVersion := existing.ResourceVersion
+		existing.APIVersion = resource.APIVersion
+		existing.Kind = resource.Kind
+		existing.Revision = admCtx.Revision
+		existing.UpdateTimestamp = admCtx.Now
+		existing.UpdateActor = "admission"
+		existing.Labels = cloneStringMap(resource.Metadata.Labels)
+		existing.Annotations = cloneStringMap(resource.Metadata.Annotations)
+		existing.SourcePath = sourcePath
+		existing.GitCommitSHA = admCtx.CommitSHA
+		existing.GitRef = admCtx.RefName
+		existing.Spec = specJSON
+		existing.Body = string(body)
+		existing.Title = resource.Spec.Title
+		existing.Tier = tier
+		if authorChanged {
+			datastore.AdvanceNamespaceSpecVersion(existing)
+		} else {
+			datastore.AdvanceNamespaceSystemVersion(existing)
+		}
+		existing.Status = namespaceadmission.AdmissionStatus(existing.Generation, admCtx.Revision, admCtx.Now)
+		err = s.store.UpdateNamespace(ctx, existing, expectedResourceVersion)
+	}
 	if err != nil {
 		s.log.Warn("admit_resources: Namespace rejected",
 			zap.String("name", name),
@@ -846,6 +946,17 @@ func (s *Server) admitNamespace(
 		eventType = eventbus.Added
 	}
 	s.publishNamespaceEvent(eventType, namespace)
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if input == nil {
+		return map[string]string{}
+	}
+	output := make(map[string]string, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
 }
 
 func (s *Server) admitProduct(

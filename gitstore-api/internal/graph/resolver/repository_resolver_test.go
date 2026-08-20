@@ -46,7 +46,9 @@ func TestCreateRepository_assignsUUIDv7AndCallsGRPC(t *testing.T) {
 
 	assert.NotEmpty(t, repo.ID)
 	assert.Equal(t, "my-catalog", repo.Name)
-	assert.Equal(t, testNsID1, repo.NamespaceID)
+	assert.Equal(t, "acme", repo.Namespace)
+	assert.Equal(t, "acme", repo.NamespaceID)
+	assert.Equal(t, repo.UID, repo.RepositoryID)
 	assert.Equal(t, "main", repo.DefaultBranch)
 	assert.Equal(t, "default", repo.StorageClass)
 	assert.Equal(t, int64(1), repo.Generation)
@@ -118,10 +120,10 @@ func TestRenameRepository_oldNameNotFoundNewNameReturnsSameRepoID(t *testing.T) 
 	assert.Equal(t, "2", renamed.ResourceVersion)
 	assert.JSONEq(t, `{"observedGeneration":0,"conditions":[]}`, string(renamed.Status))
 
-	_, err = svcStore(t, svc).LookupRepository(ctx, testNsID1, "old-name")
+	_, err = svcStore(t, svc).LookupRepository(ctx, "acme-rename", "old-name")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 
-	m, err := svcStore(t, svc).LookupRepository(ctx, testNsID1, "new-name")
+	m, err := svcStore(t, svc).LookupRepository(ctx, "acme-rename", "new-name")
 	require.NoError(t, err)
 	assert.Equal(t, originalID, m.RepoID)
 }
@@ -147,15 +149,16 @@ func TestTransferRepository_oldNSInvalidatedNewNSReturnsSameRepoID(t *testing.T)
 	transferred, err := svc.TransferRepository(ctx, originalID, testNsID2, "test-user")
 	require.NoError(t, err)
 	assert.Equal(t, originalID, transferred.ID)
-	assert.Equal(t, testNsID2, transferred.NamespaceID)
+	assert.Equal(t, "ns-to", transferred.Namespace)
+	assert.Equal(t, "ns-to", transferred.NamespaceID)
 	assert.Equal(t, int64(1), transferred.Generation)
 	assert.Equal(t, "2", transferred.ResourceVersion)
 	assert.JSONEq(t, `{"observedGeneration":0,"conditions":[]}`, string(transferred.Status))
 
-	_, err = svcStore(t, svc).LookupRepository(ctx, testNsID1, "app")
+	_, err = svcStore(t, svc).LookupRepository(ctx, "ns-from", "app")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 
-	m, err := svcStore(t, svc).LookupRepository(ctx, testNsID2, "app")
+	m, err := svcStore(t, svc).LookupRepository(ctx, "ns-to", "app")
 	require.NoError(t, err)
 	assert.Equal(t, originalID, m.RepoID)
 }
@@ -182,7 +185,7 @@ func TestDeleteRepository_callsGRPCAndRemovesMapping(t *testing.T) {
 	require.Len(t, writer.deleteRepoCalls, 1)
 	assert.Equal(t, repo.ID, writer.deleteRepoCalls[0])
 
-	_, err = svcStore(t, svc).LookupRepository(ctx, testNsID1, "to-delete")
+	_, err = svcStore(t, svc).LookupRepository(ctx, "ns-del", "to-delete")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
@@ -271,5 +274,25 @@ func TestLookupNamespaceByRepoID_returnsMapping(t *testing.T) {
 	m, err := svc.LookupNamespaceByRepoID(ctx, repo.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "configs", m.Name)
-	assert.Equal(t, testNsID1, m.NamespaceID)
+	assert.Equal(t, "ns-reverse", m.Namespace)
+	assert.Equal(t, "ns-reverse", m.NamespaceID)
+}
+
+func TestListRepositoriesUsesOptionalGlobalLister(t *testing.T) {
+	svc := newTestSvc(t, &mockGitWriter{})
+	ctx := context.Background()
+	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
+		UID:           testNsID1,
+		Name:          "global-list",
+		Tier:          datastore.NamespaceTierUser,
+		CreationActor: "test",
+		UpdateActor:   "test",
+	}))
+	_, err := svc.CreateRepository(ctx, "global-list", "catalog", "main", "default", "test-user")
+	require.NoError(t, err)
+
+	result, err := svc.ListRepositories(ctx, datastore.PageParams{First: 1})
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+	assert.LessOrEqual(t, result.TotalCount, int32(2))
 }

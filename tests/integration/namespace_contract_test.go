@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"sync"
 	"testing"
@@ -49,16 +51,27 @@ type namespaceContractNamespace struct {
 	CreatedBy   string  `json:"createdBy"`
 	UpdatedAt   string  `json:"updatedAt"`
 	UpdatedBy   string  `json:"updatedBy"`
+	Body        *string `json:"body"`
 }
 
 type namespaceContractNamespaceMeta struct {
-	Name              string   `json:"name"`
-	UID               string   `json:"uid"`
-	ResourceVersion   string   `json:"resourceVersion"`
-	Generation        int      `json:"generation"`
-	CreationTimestamp string   `json:"creationTimestamp"`
-	Revision          *string  `json:"revision"`
-	Finalizers        []string `json:"finalizers"`
+	Name              string                            `json:"name"`
+	Labels            map[string]any                    `json:"labels"`
+	Annotations       map[string]any                    `json:"annotations"`
+	UID               string                            `json:"uid"`
+	ResourceVersion   string                            `json:"resourceVersion"`
+	Generation        int                               `json:"generation"`
+	CreationTimestamp string                            `json:"creationTimestamp"`
+	Revision          *string                           `json:"revision"`
+	OwnerReferences   []namespaceContractOwnerReference `json:"ownerReferences"`
+	Finalizers        []string                          `json:"finalizers"`
+}
+
+type namespaceContractOwnerReference struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	UID        string `json:"uid"`
 }
 
 type namespaceContractNamespaceSpec struct {
@@ -154,8 +167,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -175,6 +190,35 @@ import (
 
 type mockGitWriter struct {
 	mu sync.Mutex
+}
+
+type testUserAuthN struct{}
+
+func (*testUserAuthN) Name() string { return "integration-users" }
+func (*testUserAuthN) Capabilities() authpkg.Capability { return authpkg.CapAuthenticate }
+func (*testUserAuthN) Authenticate(_ context.Context, req authpkg.AuthRequest) (*authpkg.Principal, authpkg.Decision, error) {
+	const prefix = "Bearer test-user:"
+	authorization := req.Header.Get("Authorization")
+	if !strings.HasPrefix(authorization, prefix) {
+		return nil, authpkg.Challenge("integration-users", "not an integration user token"), nil
+	}
+	subject := strings.TrimSpace(strings.TrimPrefix(authorization, prefix))
+	if subject == "" {
+		return nil, authpkg.Deny("integration-users", "empty integration user"), nil
+	}
+	return &authpkg.Principal{
+		Subject: subject,
+		Issuer: "integration",
+		Roles: []string{"developer"},
+		AuthMethod: "integration-test",
+	}, authpkg.Allow("integration-users", "integration user authenticated"), nil
+}
+func (*testUserAuthN) RevokeSession(context.Context, string, time.Time) error { return authpkg.ErrNotSupported }
+func (*testUserAuthN) RefreshSession(context.Context, string) (string, time.Time, error) {
+	return "", time.Time{}, authpkg.ErrNotSupported
+}
+func (*testUserAuthN) IssueSession(context.Context, string) (string, time.Time, error) {
+	return "", time.Time{}, authpkg.ErrNotSupported
 }
 
 func (m *mockGitWriter) CommitFile(_ context.Context, _ gitclient.CommitFileParams) (string, error) {
@@ -228,7 +272,7 @@ func main() {
 	defer staticAdmin.Shutdown()
 
 	registry := authpkg.NewProviderRegistry(
-		authpkg.NewChainedAuthN(staticAdmin, anonymous.New()),
+		authpkg.NewChainedAuthN(&testUserAuthN{}, staticAdmin, anonymous.New()),
 		allowall.New(zap.NewNop()),
 		nil,
 	)
@@ -239,7 +283,7 @@ func main() {
 	ids := apiruntime.NewSequenceIDGenerator()
 	now := time.Now().UTC()
 	systemNamespace := &datastore.Namespace{
-		ID:                ids.NewID(),
+		UID:               ids.NewID(),
 		Name:              "gitstore-system",
 		Title:             "GitStore System",
 		Tier:              datastore.NamespaceTierOrganization,
@@ -252,8 +296,8 @@ func main() {
 		panic(err)
 	}
 	systemRepository := &datastore.Repository{
-		ID:                ids.NewID(),
-		NamespaceID:       systemNamespace.ID,
+		UID:               ids.NewID(),
+		Namespace:         systemNamespace.Name,
 		Name:              "gitstore-system",
 		DefaultBranch:     "main",
 		StorageClass:      "system",
@@ -266,9 +310,9 @@ func main() {
 		panic(err)
 	}
 	if err := store.CreateNamespaceMapping(context.Background(), &datastore.NamespaceMapping{
-		NamespaceID: systemNamespace.ID,
-		Name:        systemRepository.Name,
-		RepoID:      systemRepository.ID,
+		Namespace:    systemNamespace.Name,
+		Name:         systemRepository.Name,
+		RepositoryID: systemRepository.UID,
 	}); err != nil {
 		panic(err)
 	}
@@ -282,9 +326,59 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	mux := http.NewServeMux()
+	mux.Handle("/", handler)
+	mux.HandleFunc("/__test/resource-body", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		namespace := r.URL.Query().Get("namespace")
+		name := r.URL.Query().Get("name")
+		switch r.URL.Query().Get("kind") {
+		case "Namespace":
+			resource, err := store.GetNamespaceByName(r.Context(), name)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			expected := resource.ResourceVersion
+			resource.Body = string(body)
+			datastore.AdvanceNamespaceSpecVersion(resource)
+			err = store.UpdateNamespace(r.Context(), resource, expected)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		case "Repository":
+			mapping, err := store.LookupRepository(r.Context(), namespace, name)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			resource, err := store.GetRepository(r.Context(), mapping.RepositoryID)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			expected := resource.ResourceVersion
+			resource.Body = string(body)
+			datastore.AdvanceRepositorySpecVersion(resource)
+			err = store.UpdateRepository(r.Context(), resource, expected)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		default:
+			http.Error(w, "unknown kind", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	server := &http.Server{
 		Addr:    "127.0.0.1:" + os.Getenv("NAMESPACE_CONTRACT_TEST_PORT"),
-		Handler: handler,
+		Handler: mux,
 	}
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, err)
@@ -425,6 +519,29 @@ func (h *namespaceContractHarness) gql(query string, vars map[string]any) gqlRes
 func (h *namespaceContractHarness) gqlAnonymous(query string, vars map[string]any) gqlResponse {
 	h.t.Helper()
 	return gqlQueryWithURL(h.t, h.apiURL, "", query, vars)
+}
+
+func (h *namespaceContractHarness) gqlWithToken(token, query string, vars map[string]any) gqlResponse {
+	h.t.Helper()
+	return gqlQueryWithURL(h.t, h.apiURL, token, query, vars)
+}
+
+func (h *namespaceContractHarness) setResourceBody(kind, namespace, name, body string) {
+	h.t.Helper()
+	endpoint := h.apiURL + "/__test/resource-body?kind=" + url.QueryEscape(kind) +
+		"&namespace=" + url.QueryEscape(namespace) + "&name=" + url.QueryEscape(name)
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewBufferString(body))
+	if err != nil {
+		h.t.Fatalf("build body fixture request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.t.Fatalf("set %s body: %v", kind, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		h.t.Fatalf("set %s body status = %d, want %d", kind, resp.StatusCode, http.StatusNoContent)
+	}
 }
 
 func namespaceContractErrors(errs []json.RawMessage) string {
@@ -823,6 +940,149 @@ func TestNamespaceContract_NamespacesConnectionProjectsDeclarativeFields(t *test
 		}
 	}
 	t.Fatalf("namespace %q not found in namespaces connection", identifier)
+}
+
+func TestNamespaceContract_DirectAndConnectionEnvelopeBodyParity(t *testing.T) {
+	h := newNamespaceContractHarness(t)
+	identifier := uniqueName("namespace-envelope-parity")
+	h.createNamespace(identifier, "Namespace Envelope Parity")
+	t.Cleanup(func() {
+		h.cleanupNamespace(identifier)
+	})
+	body := "# Namespace body\n\nRaw **Markdown** is preserved.\n"
+	h.setResourceBody("Namespace", "", identifier, body)
+
+	selection := `{
+		id
+		apiVersion
+		kind
+		metadata {
+			name
+			labels
+			annotations
+			uid
+			resourceVersion
+			generation
+			creationTimestamp
+			revision
+			ownerReferences {
+				apiVersion
+				kind
+				name
+				uid
+			}
+			finalizers
+		}
+		spec {
+			title
+			tier
+			repositoryDefaults {
+				visibility
+				defaultBranch
+			}
+			pushPolicyDefaults {
+				maxPackSizeBytes
+				maxFileSizeBytes
+			}
+		}
+		status {
+			observedGeneration
+			lastAppliedRevision
+			conditions {
+				type
+				status
+			}
+		}
+		identifier
+		displayName
+		tier
+		createdAt
+		createdBy
+		updatedAt
+		updatedBy
+		body
+	}`
+
+	directResponse := h.gqlAnonymous(
+		`query($identifier: String!) {
+			namespace(by: {identifier: $identifier}) `+selection+`
+		}`,
+		map[string]any{"identifier": identifier},
+	)
+	if len(directResponse.Errors) > 0 {
+		t.Fatalf("graphql errors querying namespace parity: %s", namespaceContractErrors(directResponse.Errors))
+	}
+	var directData struct {
+		Namespace *namespaceContractNamespace `json:"namespace"`
+	}
+	if err := json.Unmarshal(directResponse.Data, &directData); err != nil {
+		t.Fatalf("unmarshal direct namespace parity response: %v", err)
+	}
+	if directData.Namespace == nil {
+		t.Fatal("direct namespace is nil")
+	}
+	if directData.Namespace.Metadata == nil {
+		t.Fatal("direct namespace metadata is nil")
+	}
+
+	connectionResponse := h.gqlAnonymous(
+		`query {
+			namespaces(first: 100) {
+				edges {
+					node `+selection+`
+				}
+			}
+		}`,
+		nil,
+	)
+	if len(connectionResponse.Errors) > 0 {
+		t.Fatalf("graphql errors querying namespace connection parity: %s", namespaceContractErrors(connectionResponse.Errors))
+	}
+	var connectionData struct {
+		Namespaces struct {
+			Edges []struct {
+				Node *namespaceContractNamespace `json:"node"`
+			} `json:"edges"`
+		} `json:"namespaces"`
+	}
+	if err := json.Unmarshal(connectionResponse.Data, &connectionData); err != nil {
+		t.Fatalf("unmarshal namespace connection parity response: %v", err)
+	}
+	var connected *namespaceContractNamespace
+	for _, edge := range connectionData.Namespaces.Edges {
+		if edge.Node != nil && edge.Node.Metadata != nil && edge.Node.Metadata.Name == identifier {
+			connected = edge.Node
+			break
+		}
+	}
+	if connected == nil {
+		t.Fatalf("namespace %q not found in connection", identifier)
+	}
+
+	if !reflect.DeepEqual(directData.Namespace, connected) {
+		t.Fatalf("direct namespace and connection edge differ:\ndirect: %+v\nedge: %+v", directData.Namespace, connected)
+	}
+	if directData.Namespace.Metadata.UID == "" {
+		t.Fatal("metadata.uid is empty")
+	}
+	if directData.Namespace.ID == directData.Namespace.Metadata.UID {
+		t.Fatalf("Relay id %q must remain distinct from canonical uid", directData.Namespace.ID)
+	}
+	if directData.Namespace.Metadata.Labels == nil || directData.Namespace.Metadata.Annotations == nil {
+		t.Fatalf("metadata maps must be present: labels=%v annotations=%v",
+			directData.Namespace.Metadata.Labels, directData.Namespace.Metadata.Annotations)
+	}
+	if directData.Namespace.Metadata.OwnerReferences == nil || directData.Namespace.Metadata.Finalizers == nil {
+		t.Fatalf("lifecycle fields must be present: ownerReferences=%v finalizers=%v",
+			directData.Namespace.Metadata.OwnerReferences, directData.Namespace.Metadata.Finalizers)
+	}
+	if directData.Namespace.Body == nil || *directData.Namespace.Body != body {
+		t.Fatalf("body = %v, want raw Markdown %q", directData.Namespace.Body, body)
+	}
+	if directData.Namespace.CreatedBy == "" || directData.Namespace.UpdatedBy == "" {
+		t.Fatalf("audit actors must be populated: createdBy=%q updatedBy=%q",
+			directData.Namespace.CreatedBy, directData.Namespace.UpdatedBy)
+	}
 }
 
 func TestNamespaceContract_CreateNamespaceReturnsAdditiveContract(t *testing.T) {

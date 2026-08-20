@@ -52,11 +52,11 @@ func TestEnsureBootstrapResourcesCreatesExactlyTwoNamespacesAndRepositoriesIdemp
 		assert.Equal(t, bootstrapActor, namespace.CreationActor)
 		assert.Equal(t, datastore.NamespaceInitialResourceVersion, namespace.ResourceVersion)
 
-		mapping, lookupErr := store.LookupRepository(context.Background(), namespace.ID, bootstrapRepositoryName)
+		mapping, lookupErr := store.LookupRepository(context.Background(), namespace.Name, bootstrapRepositoryName)
 		require.NoError(t, lookupErr)
-		repository, repoErr := store.GetRepository(context.Background(), mapping.RepoID)
+		repository, repoErr := store.GetRepository(context.Background(), mapping.RepositoryID)
 		require.NoError(t, repoErr)
 		assert.Equal(t, bootstrapRepositoryName, repository.Name)
-		assert.Equal(t, namespace.ID, repository.NamespaceID)
+		assert.Equal(t, namespace.Name, repository.Namespace)
 	}
 }

@@ -29,15 +29,28 @@ type repositoryReadContractResource struct {
 	CreatedBy     string                           `json:"createdBy"`
 	UpdatedAt     string                           `json:"updatedAt"`
 	UpdatedBy     string                           `json:"updatedBy"`
+	Body          *string                          `json:"body"`
 }
 
 type repositoryReadContractMetadata struct {
-	Name              string `json:"name"`
-	Namespace         string `json:"namespace"`
-	UID               string `json:"uid"`
-	ResourceVersion   string `json:"resourceVersion"`
-	Generation        int    `json:"generation"`
-	CreationTimestamp string `json:"creationTimestamp"`
+	Name              string                         `json:"name"`
+	Namespace         string                         `json:"namespace"`
+	Labels            map[string]any                 `json:"labels"`
+	Annotations       map[string]any                 `json:"annotations"`
+	UID               string                         `json:"uid"`
+	ResourceVersion   string                         `json:"resourceVersion"`
+	Generation        int                            `json:"generation"`
+	CreationTimestamp string                         `json:"creationTimestamp"`
+	Revision          *string                        `json:"revision"`
+	OwnerReferences   []repositoryReadOwnerReference `json:"ownerReferences"`
+	Finalizers        []string                       `json:"finalizers"`
+}
+
+type repositoryReadOwnerReference struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	UID        string `json:"uid"`
 }
 
 type repositoryReadContractSpec struct {
@@ -173,6 +186,53 @@ func TestRepositoryReadContract_DeprecatesOnlyLegacyDuplicateFields(t *testing.T
 	assert.Nil(t, fields["id"].reason)
 }
 
+func TestRepositoryReadContract_DirectNodeAndConnectionEnvelopeBodyParity(t *testing.T) {
+	h := newNamespaceContractHarness(t)
+	namespace := uniqueName("repository-envelope-parity")
+	h.createNamespace(namespace, "Repository Envelope Parity")
+	t.Cleanup(func() {
+		h.cleanupNamespace(namespace)
+	})
+
+	name := uniqueName("repository-body")
+	id := repositoryReadContractCreate(t, h, namespace, name)
+	t.Cleanup(func() {
+		repositoryReadContractDelete(t, h, id)
+	})
+	body := "# Repository body\n\nRaw **Markdown** is preserved.\n"
+	h.setResourceBody("Repository", namespace, name, body)
+
+	byPath := repositoryReadContractQueryByPath(t, h, namespace, name)
+	byID := repositoryReadContractQueryByID(t, h, byPath.ID)
+	byNode := repositoryReadContractQueryByNode(t, h, byPath.ID)
+	listed := repositoryReadContractList(t, h, namespace)
+
+	assert.Equal(t, byPath, byID)
+	assert.Equal(t, byPath, byNode)
+	var connected *repositoryReadContractResource
+	for _, repository := range listed {
+		if repository != nil && repository.Metadata != nil && repository.Metadata.Name == name {
+			connected = repository
+			break
+		}
+	}
+	require.NotNil(t, connected)
+	assert.Equal(t, byPath, connected)
+
+	require.NotNil(t, byPath.Metadata)
+	require.NotNil(t, byPath.Body)
+	assert.Equal(t, body, *byPath.Body)
+	assert.NotEmpty(t, byPath.Metadata.UID)
+	assert.NotEqual(t, byPath.Metadata.UID, byPath.ID, "Relay id must remain distinct from canonical uid")
+	assert.Equal(t, namespace, byPath.Metadata.Namespace)
+	assert.NotNil(t, byPath.Metadata.Labels)
+	assert.NotNil(t, byPath.Metadata.Annotations)
+	assert.NotNil(t, byPath.Metadata.OwnerReferences)
+	assert.NotNil(t, byPath.Metadata.Finalizers)
+	assert.NotEmpty(t, byPath.CreatedBy)
+	assert.NotEmpty(t, byPath.UpdatedBy)
+}
+
 func repositoryReadContractSelection() string {
 	return `{
 		id
@@ -181,10 +241,20 @@ func repositoryReadContractSelection() string {
 		metadata {
 			name
 			namespace
+			labels
+			annotations
 			uid
 			resourceVersion
 			generation
 			creationTimestamp
+			revision
+			ownerReferences {
+				apiVersion
+				kind
+				name
+				uid
+			}
+			finalizers
 		}
 		spec {
 			defaultBranch
@@ -232,6 +302,7 @@ func repositoryReadContractSelection() string {
 		createdBy
 		updatedAt
 		updatedBy
+		body
 	}`
 }
 
@@ -397,10 +468,15 @@ func assertRepositoryReadIntegrationShape(
 	assert.Equal(t, "Repository", got.Kind)
 	assert.Equal(t, name, got.Metadata.Name)
 	assert.Equal(t, namespace, got.Metadata.Namespace)
-	assert.Equal(t, got.ID, got.Metadata.UID)
+	assert.NotEmpty(t, got.ID)
+	assert.NotEqual(t, got.ID, got.Metadata.UID, "Relay id must remain distinct from canonical uid")
 	assert.NotEmpty(t, got.Metadata.ResourceVersion)
 	assert.GreaterOrEqual(t, got.Metadata.Generation, 1)
 	assert.NotEmpty(t, got.Metadata.CreationTimestamp)
+	assert.NotNil(t, got.Metadata.Labels)
+	assert.NotNil(t, got.Metadata.Annotations)
+	assert.NotNil(t, got.Metadata.OwnerReferences)
+	assert.NotNil(t, got.Metadata.Finalizers)
 
 	assert.Equal(t, got.DefaultBranch, got.Spec.DefaultBranch)
 	assert.Equal(t, "PRIVATE", got.Spec.Visibility)

@@ -82,7 +82,7 @@ func newRepositoryReadHarness(t *testing.T) *repositoryReadHarness {
 	root.WithStorageDataDir(repositoryReadDataDir)
 
 	namespace := &datastore.Namespace{
-		ID:                repositoryReadNamespaceID,
+		UID:               repositoryReadNamespaceID,
 		Name:              "repository-read-contract",
 		Title:             "Repository Read Contract",
 		Tier:              datastore.NamespaceTierUser,
@@ -95,9 +95,17 @@ func newRepositoryReadHarness(t *testing.T) *repositoryReadHarness {
 
 	repos := []*datastore.Repository{
 		{
-			ID:                "01960000-0000-7000-8000-000000000121",
-			NamespaceID:       namespace.ID,
+			APIVersion:        "gitstore.dev/v1beta1",
+			Kind:              "Repository",
+			UID:               "01960000-0000-7000-8000-000000000121",
+			Namespace:         namespace.Name,
 			Name:              "catalog",
+			RepositoryID:      "01960000-0000-7000-8000-000000000121",
+			Revision:          "main@sha1:abc123",
+			Labels:            map[string]string{"team": "catalog"},
+			Annotations:       map[string]string{"owner": "alice"},
+			OwnerReferences:   json.RawMessage(`[]`),
+			Body:              "Catalog repository.",
 			DefaultBranch:     "main",
 			StorageClass:      "fast",
 			CreationTimestamp: time.Date(2026, time.August, 16, 18, 1, 0, 0, time.UTC),
@@ -111,9 +119,14 @@ func newRepositoryReadHarness(t *testing.T) *repositoryReadHarness {
 			MaxFileSizeBytes:  262144,
 		},
 		{
-			ID:                "01960000-0000-7000-8000-000000000122",
-			NamespaceID:       namespace.ID,
+			APIVersion:        "gitstore.dev/v1beta1",
+			Kind:              "Repository",
+			UID:               "01960000-0000-7000-8000-000000000122",
+			Namespace:         namespace.Name,
 			Name:              "assets",
+			RepositoryID:      "01960000-0000-7000-8000-000000000122",
+			OwnerReferences:   json.RawMessage(`[]`),
+			Body:              "",
 			DefaultBranch:     "trunk",
 			StorageClass:      "archive",
 			CreationTimestamp: time.Date(2026, time.August, 16, 18, 3, 0, 0, time.UTC),
@@ -130,9 +143,9 @@ func newRepositoryReadHarness(t *testing.T) *repositoryReadHarness {
 	for _, repo := range repos {
 		require.NoError(t, baseStore.CreateRepository(ctx, repo))
 		require.NoError(t, baseStore.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
-			NamespaceID: namespace.ID,
-			Name:        repo.Name,
-			RepoID:      repo.ID,
+			Namespace:    namespace.Name,
+			Name:         repo.Name,
+			RepositoryID: repo.UID,
 		}))
 	}
 	countingStore.resetNamespaceCalls()
@@ -169,8 +182,8 @@ func TestRepositoryReadContract_SingleAndNodeUseCompleteSharedProjection(t *test
 	assertRepositoryReadContract(t, byID, expected, h.namespace)
 	assert.Equal(t, byPath, byID)
 	byIDCalls, byIdentifierCalls = h.store.namespaceCalls()
-	assert.Equal(t, 1, byIDCalls)
-	assert.Equal(t, 0, byIdentifierCalls)
+	assert.Equal(t, 0, byIDCalls)
+	assert.Equal(t, 1, byIdentifierCalls)
 
 	h.store.resetNamespaceCalls()
 	node, err := query.Node(ctx, byPath.ID)
@@ -180,8 +193,8 @@ func TestRepositoryReadContract_SingleAndNodeUseCompleteSharedProjection(t *test
 	assertRepositoryReadContract(t, nodeRepository, expected, h.namespace)
 	assert.Equal(t, byPath, nodeRepository)
 	byIDCalls, byIdentifierCalls = h.store.namespaceCalls()
-	assert.Equal(t, 1, byIDCalls)
-	assert.Equal(t, 0, byIdentifierCalls)
+	assert.Equal(t, 0, byIDCalls)
+	assert.Equal(t, 1, byIdentifierCalls)
 }
 
 func TestRepositoryReadContract_ListUsesResolvedNamespaceWithoutPerRowLookups(t *testing.T) {
@@ -217,6 +230,23 @@ func TestRepositoryReadContract_ListUsesResolvedNamespaceWithoutPerRowLookups(t 
 	assert.Equal(t, 1, byIdentifierCalls, "list resolver should resolve the namespace exactly once")
 }
 
+func TestBuildRepositoryConnectionPreservesUnknownCountAndBody(t *testing.T) {
+	h := newRepositoryReadHarness(t)
+	connection, err := resolver.BuildRepositoryConnection(
+		&datastore.PageResult[datastore.Repository]{
+			Items:      []*datastore.Repository{h.repos[0]},
+			TotalCount: -1,
+		},
+		h.namespace,
+		repositoryReadDataDir,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, int32(-1), connection.TotalCount)
+	require.Len(t, connection.Edges, 1)
+	require.NotNil(t, connection.Edges[0].Node.Body)
+	assert.Equal(t, h.repos[0].Body, *connection.Edges[0].Node.Body)
+}
+
 func assertRepositoryReadContract(
 	t *testing.T,
 	got *model.Repository,
@@ -235,12 +265,19 @@ func assertRepositoryReadContract(
 	assert.Equal(t, "Repository", got.Kind)
 	assert.Equal(t, expected.Name, got.Metadata.Name)
 	assert.Equal(t, namespace.Name, got.Metadata.Namespace)
-	assert.Equal(t, got.ID, got.Metadata.UID)
+	assert.Equal(t, expected.UID, got.Metadata.UID)
+	assert.NotEqual(t, got.ID, got.Metadata.UID)
 	assert.Equal(t, expected.ResourceVersion, got.Metadata.ResourceVersion)
 	assert.Equal(t, int32(expected.Generation), got.Metadata.Generation)
 	assert.Equal(t, expected.CreationTimestamp, got.Metadata.CreationTimestamp)
-	assert.Empty(t, got.Metadata.Labels)
-	assert.Empty(t, got.Metadata.Annotations)
+	assert.Len(t, got.Metadata.Labels, len(expected.Labels))
+	for key, value := range expected.Labels {
+		assert.Equal(t, value, got.Metadata.Labels[key])
+	}
+	assert.Len(t, got.Metadata.Annotations, len(expected.Annotations))
+	for key, value := range expected.Annotations {
+		assert.Equal(t, value, got.Metadata.Annotations[key])
+	}
 	assert.Empty(t, got.Metadata.OwnerReferences)
 
 	assert.Equal(t, expected.DefaultBranch, got.Spec.DefaultBranch)
@@ -252,7 +289,7 @@ func assertRepositoryReadContract(
 	assert.Nil(t, got.Spec.PushPolicy.AdmissionControl)
 
 	assert.NotNil(t, got.Status.Conditions)
-	assert.Equal(t, repositoryReadStoragePath(repositoryReadDataDir, expected.ID), got.Status.Resolved.StoragePath)
+	assert.Equal(t, repositoryReadStoragePath(repositoryReadDataDir, expected.UID), got.Status.Resolved.StoragePath)
 	assert.Equal(t, expected.StorageClass, got.Status.Resolved.StorageClass)
 
 	assert.Equal(t, expected.Name, got.Name)
@@ -265,6 +302,8 @@ func assertRepositoryReadContract(
 	assert.Equal(t, expected.CreationActor, got.CreatedBy)
 	assert.Equal(t, expected.UpdateTimestamp, got.UpdatedAt)
 	assert.Equal(t, expected.UpdateActor, got.UpdatedBy)
+	require.NotNil(t, got.Body)
+	assert.Equal(t, expected.Body, *got.Body)
 }
 
 func repositoryReadStoragePath(dataDir, repositoryID string) string {

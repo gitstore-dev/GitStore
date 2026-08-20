@@ -50,7 +50,7 @@ func ensureBootstrapResources(
 			}
 			now := clock.Now().UTC()
 			namespace = &datastore.Namespace{
-				ID:                id,
+				UID:               id,
 				Name:              bootstrap.name,
 				Title:             bootstrap.title,
 				Tier:              bootstrap.tier,
@@ -82,7 +82,7 @@ func ensureBootstrapRepository(
 	ids apiruntime.IDGenerator,
 	namespace *datastore.Namespace,
 ) error {
-	if _, err := store.LookupRepository(ctx, namespace.ID, bootstrapRepositoryName); err == nil {
+	if _, err := store.LookupRepository(ctx, namespace.Name, bootstrapRepositoryName); err == nil {
 		return nil
 	} else if !errors.Is(err, datastore.ErrNotFound) {
 		return fmt.Errorf("lookup system repository: %w", err)
@@ -94,8 +94,8 @@ func ensureBootstrapRepository(
 	}
 	now := clock.Now().UTC()
 	repository := &datastore.Repository{
-		ID:                id,
-		NamespaceID:       namespace.ID,
+		UID:               id,
+		Namespace:         namespace.Name,
 		Name:              bootstrapRepositoryName,
 		DefaultBranch:     "main",
 		StorageClass:      "default",
@@ -109,16 +109,16 @@ func ensureBootstrapRepository(
 		return fmt.Errorf("create system repository row: %w", err)
 	}
 	if err := store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
-		NamespaceID: namespace.ID,
-		Name:        bootstrapRepositoryName,
-		RepoID:      repository.ID,
+		Namespace:    namespace.Name,
+		Name:         bootstrapRepositoryName,
+		RepositoryID: repository.UID,
 	}); err != nil {
-		_ = store.DeleteRepository(ctx, repository.ID)
+		_ = store.DeleteRepository(ctx, repository.UID)
 		return fmt.Errorf("create system repository mapping: %w", err)
 	}
-	if _, err := git.CreateRepository(ctx, repository.ID, repository.StorageClass); err != nil {
-		_ = store.DeleteNamespaceMapping(ctx, namespace.ID, bootstrapRepositoryName)
-		_ = store.DeleteRepository(ctx, repository.ID)
+	if _, err := git.CreateRepository(ctx, repository.UID, repository.StorageClass); err != nil {
+		_ = store.DeleteNamespaceMapping(ctx, namespace.Name, bootstrapRepositoryName)
+		_ = store.DeleteRepository(ctx, repository.UID)
 		return fmt.Errorf("provision system repository storage: %w", err)
 	}
 	return nil

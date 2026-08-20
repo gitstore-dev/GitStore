@@ -2140,6 +2140,29 @@ func (ec *executionContext) fieldContext_ObjectMeta_ownerReferences(_ context.Co
 	return fc, nil
 }
 
+func (ec *executionContext) _ObjectMeta_finalizers(ctx context.Context, field graphql.CollectedField, obj *model.ObjectMeta) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ObjectMeta_finalizers(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Finalizers, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ObjectMeta_finalizers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ObjectMeta", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _PageInfo_hasNextPage(ctx context.Context, field graphql.CollectedField, obj *model.PageInfo) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -4185,6 +4208,11 @@ func (ec *executionContext) _ObjectMeta(ctx context.Context, sel ast.SelectionSe
 			out.Values[i] = ec._ObjectMeta_revision(ctx, field, obj)
 		case "ownerReferences":
 			out.Values[i] = ec._ObjectMeta_ownerReferences(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "finalizers":
+			out.Values[i] = ec._ObjectMeta_finalizers(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

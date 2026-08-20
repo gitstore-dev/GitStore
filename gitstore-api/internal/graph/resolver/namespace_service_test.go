@@ -260,7 +260,7 @@ func TestDeleteNamespace_withRepository_rejected(t *testing.T) {
 	_, err = svc.GetNamespaceByName(ctx, ns.Name)
 	require.NoError(t, err)
 
-	result, err := svc.Store().ListRepositoriesByNamespace(ctx, ns.ID, datastore.PageParams{})
+	result, err := svc.Store().ListRepositoriesByNamespace(ctx, ns.Name, datastore.PageParams{})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 1)
 }

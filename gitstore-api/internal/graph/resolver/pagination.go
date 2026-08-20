@@ -239,14 +239,14 @@ func BuildNamespaceConnection(result *datastore.PageResult[datastore.Namespace])
 	edges := make([]*model.NamespaceEdge, len(result.Items))
 	for i, ns := range result.Items {
 		edges[i] = &model.NamespaceEdge{
-			Cursor: EncodeKeysetCursor(ns.CreationTimestamp, ns.ID),
+			Cursor: EncodeKeysetCursor(ns.CreationTimestamp, ns.UID),
 			Node:   DatastoreNamespaceToGraphQL(ns),
 		}
 	}
 	return &model.NamespaceConnection{
 		Edges:      edges,
 		TotalCount: result.TotalCount,
-		PageInfo:   buildPageInfo(result, func(ns *datastore.Namespace) string { return EncodeKeysetCursor(ns.CreationTimestamp, ns.ID) }),
+		PageInfo:   buildPageInfo(result, func(ns *datastore.Namespace) string { return EncodeKeysetCursor(ns.CreationTimestamp, ns.UID) }),
 	}
 }
 
@@ -256,17 +256,21 @@ func BuildRepositoryConnection(
 	result *datastore.PageResult[datastore.Repository],
 	namespace *datastore.Namespace,
 	dataDir string,
-) *model.RepositoryConnection {
+) (*model.RepositoryConnection, error) {
 	edges := make([]*model.RepositoryEdge, len(result.Items))
 	for i, r := range result.Items {
+		node, err := datastoreRepositoryToModelStrict(r, namespace, dataDir)
+		if err != nil {
+			return nil, err
+		}
 		edges[i] = &model.RepositoryEdge{
-			Cursor: EncodeKeysetCursor(r.CreationTimestamp, r.ID),
-			Node:   datastoreRepositoryToModel(r, namespace, dataDir),
+			Cursor: EncodeKeysetCursor(r.CreationTimestamp, r.UID),
+			Node:   node,
 		}
 	}
 	return &model.RepositoryConnection{
 		Edges:      edges,
 		TotalCount: result.TotalCount,
-		PageInfo:   buildPageInfo(result, func(r *datastore.Repository) string { return EncodeKeysetCursor(r.CreationTimestamp, r.ID) }),
-	}
+		PageInfo:   buildPageInfo(result, func(r *datastore.Repository) string { return EncodeKeysetCursor(r.CreationTimestamp, r.UID) }),
+	}, nil
 }

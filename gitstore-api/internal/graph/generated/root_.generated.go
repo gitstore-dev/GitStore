@@ -347,6 +347,7 @@ type ComplexityRoot struct {
 	ObjectMeta struct {
 		Annotations       func(childComplexity int) int
 		CreationTimestamp func(childComplexity int) int
+		Finalizers        func(childComplexity int) int
 		Generation        func(childComplexity int) int
 		Labels            func(childComplexity int) int
 		Name              func(childComplexity int) int
@@ -2078,6 +2079,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ObjectMeta.CreationTimestamp(childComplexity), true
+
+	case "ObjectMeta.finalizers":
+		if e.ComplexityRoot.ObjectMeta.Finalizers == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ObjectMeta.Finalizers(childComplexity), true
 
 	case "ObjectMeta.generation":
 		if e.ComplexityRoot.ObjectMeta.Generation == nil {
@@ -6204,6 +6212,7 @@ type ObjectMeta {
   creationTimestamp: DateTime!
   revision: String
   ownerReferences: [OwnerReference!]!
+  finalizers: [String!]!
 }
 
 """
@@ -6912,6 +6921,8 @@ func (ec *executionContext) childFields_ObjectMeta(ctx context.Context, field gr
 		return ec.fieldContext_ObjectMeta_revision(ctx, field)
 	case "ownerReferences":
 		return ec.fieldContext_ObjectMeta_ownerReferences(ctx, field)
+	case "finalizers":
+		return ec.fieldContext_ObjectMeta_finalizers(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ObjectMeta", field.Name)
 }
