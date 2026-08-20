@@ -49,6 +49,12 @@ go run ./cmd/gitctl scylla-projection-audit > projection-audit.json
 jq '{findings: (.findings | length), actions: (.actions | length)}' projection-audit.json
 ```
 
+The Scylla driver fetches audit rows in 1,000-row pages and has no fixed
+100,000-row ceiling. The audit retains comparison indexes for the selected
+keyspace, so operator memory still scales with resource and projection count.
+Run large audits from a controlled operator host and monitor both client memory
+and coordinator latency.
+
 The audit compares authoritative rows with Namespace, Repository, mapping, and
 catalogue query projections. Findings are deterministic:
 
@@ -58,9 +64,11 @@ catalogue query projections. Findings are deterministic:
 - `duplicate`: the correct projection exists and an extra projection points to
   the same resource.
 
-`repairable:false` means a valid competing authoritative resource claims the
-same unique key. Do not delete or overwrite that owner. Resolve the
-authoritative conflict first.
+`repairable:false` means either a valid competing authoritative resource claims
+the same unique key or the projection participates in an in-flight write
+reservation. Do not delete or overwrite it online. Resolve authoritative
+conflicts first; investigate reservation findings against mutation logs before
+performing any manual cleanup.
 
 ## 3. Dry run
 

@@ -127,15 +127,12 @@ jobs:
         git -C "$tmpdir" commit -m "ci: seed initial commit"
         git -C "$tmpdir" push origin main
 
-    - name: Run Namespace and Repository integration contracts
+    - name: Run full integration suite
       working-directory: ./tests/integration
       env:
         NAMESPACE: gitci
         REPOSITORY: catalog
-      run: >-
-        go test -count=1 -v -timeout 240s
-        -run 'Test(NamespaceContract|RepositoryReadContract|RepositoryVersionContract)'
-        ./...
+      run: go test -count=1 -v -timeout 240s ./...
 
     - name: Collect logs on failure
       if: failure()
@@ -250,15 +247,12 @@ jobs:
           git -C "$tmpdir" commit -m "ci: seed initial commit"
           git -C "$tmpdir" push origin main
 
-      - name: Run Namespace and Repository integration contracts
+      - name: Run full integration suite
         working-directory: ./tests/integration
         env:
           NAMESPACE: gitci
           REPOSITORY: catalog
-        run: >-
-          go test -count=1 -v -timeout 240s
-          -run 'Test(NamespaceContract|RepositoryReadContract|RepositoryVersionContract)'
-          ./...
+        run: go test -count=1 -v -timeout 240s ./...
 
       - name: Collect logs on failure
         if: failure()
