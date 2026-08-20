@@ -198,7 +198,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 	assert.Equal(t, path, created.SourcePath)
 	assert.Equal(t, a, created.GitCommitSHA)
 	assert.Equal(t, "refs/heads/main", created.GitRef)
-	assert.JSONEq(t, `{"Title":"Acme Store","Tier":"USER","RepositoryDefaults":null,"PushPolicyDefaults":null}`, string(created.Spec))
+	assert.JSONEq(t, `{"title":"Acme Store","tier":"USER"}`, string(created.Spec))
 	assert.Equal(t, "", created.Body)
 	assert.Contains(t, string(created.Status), "AdmissionAccepted")
 
