@@ -185,6 +185,10 @@ func (m *mockGitWriter) CommitFileForRepo(_ context.Context, _ string, _ gitclie
 	return "deadbeef", nil
 }
 
+func (m *mockGitWriter) ResolveRefForRepo(_ context.Context, _ string, _ string) (string, error) {
+	return "deadbeef", nil
+}
+
 func (m *mockGitWriter) DeleteFile(_ context.Context, _ gitclient.DeleteFileParams) (string, error) {
 	return "cafe1234", nil
 }

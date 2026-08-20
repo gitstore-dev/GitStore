@@ -29,13 +29,13 @@ type ObjectMeta struct {
 	Labels      map[string]string `yaml:"labels"`
 	Annotations map[string]string `yaml:"annotations"`
 	// System-managed (read-only; populated from datastore at read time)
-	UID               string           `yaml:"uid"`
-	ResourceVersion   string           `yaml:"resourceVersion"`
-	Generation        int64            `yaml:"generation"`
-	CreationTimestamp time.Time        `yaml:"creationTimestamp"`
-	Revision          string           `yaml:"revision"`
-	OwnerReferences   []OwnerReference `yaml:"ownerReferences"`
-	Finalizers        []string         `yaml:"finalizers"`
+	UID               string           `yaml:"uid,omitempty"`
+	ResourceVersion   string           `yaml:"resourceVersion,omitempty"`
+	Generation        int64            `yaml:"generation,omitempty"`
+	CreationTimestamp time.Time        `yaml:"creationTimestamp,omitempty"`
+	Revision          string           `yaml:"revision,omitempty"`
+	OwnerReferences   []OwnerReference `yaml:"ownerReferences,omitempty"`
+	Finalizers        []string         `yaml:"finalizers,omitempty"`
 }
 
 // ProductSpec is the author-controlled declarative specification for a product.

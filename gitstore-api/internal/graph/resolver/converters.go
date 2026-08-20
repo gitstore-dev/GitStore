@@ -42,6 +42,11 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 		displayName = &dn
 	}
 	status := namespaceStatusFromJSON(ns.Status)
+	var specDefaults struct {
+		RepositoryDefaults *model.NamespaceRepositoryDefaults `json:"repositoryDefaults,omitempty"`
+		PushPolicyDefaults *model.NamespacePushPolicyDefaults `json:"pushPolicyDefaults,omitempty"`
+	}
+	_ = json.Unmarshal(ns.Spec, &specDefaults)
 	if ns.DeletionTimestamp != nil {
 		status.Conditions = upsertTerminatingCondition(status.Conditions, ns.Generation, *ns.DeletionTimestamp)
 	}
@@ -67,8 +72,10 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 			Finalizers:        append([]string{}, ns.Finalizers...),
 		},
 		Spec: &model.NamespaceSpec{
-			Title: displayName,
-			Tier:  datastoreNamespaceTierToModel(ns.Tier),
+			Title:              displayName,
+			Tier:               datastoreNamespaceTierToModel(ns.Tier),
+			RepositoryDefaults: specDefaults.RepositoryDefaults,
+			PushPolicyDefaults: specDefaults.PushPolicyDefaults,
 		},
 		Status:      status,
 		Identifier:  ns.Name,

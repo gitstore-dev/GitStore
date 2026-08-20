@@ -216,6 +216,7 @@ type namespaceRow struct {
 	Name              string     `db:"name"`
 	Title             string     `db:"title"`
 	Tier              string     `db:"tier"`
+	Spec              string     `db:"spec"`
 	Generation        int64      `db:"generation"`
 	ResourceVersion   string     `db:"resource_version"`
 	Status            string     `db:"status"`
@@ -1076,10 +1077,10 @@ func (s *scyllaDatastore) CreateNamespace(ctx context.Context, ns *datastore.Nam
 	}
 
 	const insertByID = "INSERT INTO namespaces_by_id " +
-		"(id, name, title, tier, generation, resource_version, status, deletion_timestamp, finalizers, creation_timestamp, creation_actor, update_timestamp, update_actor) " +
-		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS"
+		"(id, name, title, tier, spec, generation, resource_version, status, deletion_timestamp, finalizers, creation_timestamp, creation_actor, update_timestamp, update_actor) " +
+		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS"
 	applied, err = s.session.Query(insertByID, nil).WithContext(ctx).Bind(
-		row.ID, row.Name, row.Title, row.Tier, row.Generation, row.ResourceVersion,
+		row.ID, row.Name, row.Title, row.Tier, row.Spec, row.Generation, row.ResourceVersion,
 		row.Status, row.DeletionTimestamp, row.Finalizers, row.CreationTimestamp, row.CreationActor, row.UpdateTimestamp, row.UpdateActor,
 	).ExecCASRelease()
 	if err != nil || !applied {
@@ -1177,11 +1178,11 @@ func (s *scyllaDatastore) ListNamespaces(ctx context.Context, page datastore.Pag
 
 func (s *scyllaDatastore) UpdateNamespace(ctx context.Context, ns *datastore.Namespace, expectedResourceVersion string) error {
 	row := toNamespaceRow(ns)
-	const statement = "UPDATE namespaces_by_id SET name=?, title=?, tier=?, generation=?, resource_version=?, " +
+	const statement = "UPDATE namespaces_by_id SET name=?, title=?, tier=?, spec=?, generation=?, resource_version=?, " +
 		"status=?, deletion_timestamp=?, finalizers=?, creation_timestamp=?, creation_actor=?, update_timestamp=?, update_actor=? " +
 		"WHERE id=? IF resource_version=?"
 	applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(
-		row.Name, row.Title, row.Tier, row.Generation, row.ResourceVersion,
+		row.Name, row.Title, row.Tier, row.Spec, row.Generation, row.ResourceVersion,
 		row.Status, row.DeletionTimestamp, row.Finalizers, row.CreationTimestamp, row.CreationActor, row.UpdateTimestamp, row.UpdateActor,
 		row.ID, expectedResourceVersion,
 	).ExecCASRelease()
@@ -1539,6 +1540,7 @@ func toNamespaceRow(ns *datastore.Namespace) *namespaceRow {
 		Name:              ns.Name,
 		Title:             ns.Title,
 		Tier:              string(ns.Tier),
+		Spec:              string(ns.Spec),
 		Generation:        ns.Generation,
 		ResourceVersion:   ns.ResourceVersion,
 		Status:            string(ns.Status),
@@ -1556,6 +1558,7 @@ func fromNamespaceRow(r *namespaceRow) *datastore.Namespace {
 		Name:              r.Name,
 		Title:             r.Title,
 		Tier:              datastore.NamespaceTier(r.Tier),
+		Spec:              []byte(r.Spec),
 		Generation:        r.Generation,
 		ResourceVersion:   r.ResourceVersion,
 		Status:            []byte(r.Status),

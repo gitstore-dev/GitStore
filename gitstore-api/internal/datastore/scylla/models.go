@@ -208,6 +208,7 @@ var (
 			"name",
 			"title",
 			"tier",
+			"spec",
 			"generation",
 			"resource_version",
 			"status",

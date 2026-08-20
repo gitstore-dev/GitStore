@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS namespaces_by_id (
     name                 text,
     title                text,
     tier                 text,
+    spec                 text,
     generation           bigint,
     resource_version     text,
     status               text,

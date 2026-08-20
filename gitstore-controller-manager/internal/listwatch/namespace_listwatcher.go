@@ -116,10 +116,37 @@ func NewNamespaceListWatcher(client *graphqlclient.Client) *NamespaceListWatcher
 	return &NamespaceListWatcher{client: client}
 }
 
-// List paginates all Namespaces and returns the highest observed version.
+const namespaceWatchBootstrapCursor = "__namespace_watch_bootstrap__"
+
+// List establishes an event-bus cursor before paginating Namespaces. Changes
+// racing with the snapshot are replayed by the subsequent Watch from that
+// cursor.
 func (lw *NamespaceListWatcher) List(ctx context.Context) (ListResponse[namespacecontroller.Namespace], error) {
+	watcher, err := lw.Watch(ctx, namespaceWatchBootstrapCursor)
+	if err != nil {
+		return ListResponse[namespacecontroller.Namespace]{}, fmt.Errorf("listwatch: establish namespace watch cursor: %w", err)
+	}
+	defer watcher.Stop()
+
+	var cursorEvent WatchEvent[namespacecontroller.Namespace]
+	select {
+	case ev, ok := <-watcher.Events():
+		if !ok {
+			if err := watcher.Err(); err != nil {
+				return ListResponse[namespacecontroller.Namespace]{}, fmt.Errorf("listwatch: establish namespace watch cursor: %w", err)
+			}
+			return ListResponse[namespacecontroller.Namespace]{}, fmt.Errorf("listwatch: namespace watch closed before bookmark")
+		}
+		cursorEvent = ev
+	case <-ctx.Done():
+		return ListResponse[namespacecontroller.Namespace]{}, ctx.Err()
+	}
+	if cursorEvent.Type != Bookmark || cursorEvent.ResourceVersion == "" {
+		return ListResponse[namespacecontroller.Namespace]{}, fmt.Errorf("listwatch: namespace watch did not return a bootstrap bookmark")
+	}
+	watcher.Stop()
+
 	var items []namespacecontroller.Namespace
-	highestVersion := ""
 	var after *string
 	for {
 		var response namespacesControllerListResponse
@@ -133,26 +160,17 @@ func (lw *NamespaceListWatcher) List(ctx context.Context) (ListResponse[namespac
 		for _, edge := range response.Namespaces.Edges {
 			item := edge.Node.toNamespace()
 			items = append(items, item)
-			if item.ResourceVersion > highestVersion {
-				highestVersion = item.ResourceVersion
-			}
 		}
 		if !response.Namespaces.PageInfo.HasNextPage || response.Namespaces.PageInfo.EndCursor == nil {
 			break
 		}
 		after = response.Namespaces.PageInfo.EndCursor
 	}
-	if highestVersion == "" {
-		highestVersion = noResourceVersionSentinel
-	}
-	return ListResponse[namespacecontroller.Namespace]{Items: items, ResourceVersion: highestVersion}, nil
+	return ListResponse[namespacecontroller.Namespace]{Items: items, ResourceVersion: cursorEvent.ResourceVersion}, nil
 }
 
 // Watch opens the generic watchResources stream for Namespace events.
 func (lw *NamespaceListWatcher) Watch(ctx context.Context, resourceVersion string) (Watcher[namespacecontroller.Namespace], error) {
-	if resourceVersion == noResourceVersionSentinel {
-		resourceVersion = ""
-	}
 	vars := map[string]any{}
 	if resourceVersion != "" {
 		vars["resourceVersion"] = resourceVersion

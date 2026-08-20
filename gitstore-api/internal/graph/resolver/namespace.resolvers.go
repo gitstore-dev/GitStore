@@ -10,6 +10,7 @@ import (
 	"errors"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -21,6 +22,7 @@ func (r *mutationResolver) CreateNamespace(ctx context.Context, input model.Crea
 	if err != nil {
 		return nil, err
 	}
+	r.publishNamespaceEvent(eventbus.Added, ns)
 
 	return &model.CreateNamespacePayload{
 		Namespace: DatastoreNamespaceToGraphQL(ns),
@@ -33,6 +35,7 @@ func (r *mutationResolver) UpdateNamespace(ctx context.Context, input model.Upda
 	if err != nil {
 		return nil, err
 	}
+	r.publishNamespaceEvent(eventbus.Modified, ns)
 	return &model.UpdateNamespacePayload{Namespace: DatastoreNamespaceToGraphQL(ns)}, nil
 }
 

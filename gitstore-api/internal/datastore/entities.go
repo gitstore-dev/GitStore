@@ -22,6 +22,7 @@ type Namespace struct {
 	Name              string
 	Title             string
 	Tier              NamespaceTier
+	Spec              json.RawMessage
 	CreationTimestamp time.Time
 	CreationActor     string
 	UpdateTimestamp   time.Time

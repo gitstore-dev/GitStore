@@ -12,6 +12,21 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 )
 
+const namespaceWatchBootstrapCursor = "__namespace_watch_bootstrap__"
+
+func (r *Resolver) publishNamespaceEvent(eventType eventbus.EventType, namespace *datastore.Namespace) {
+	if r.eventBus == nil || namespace == nil {
+		return
+	}
+	r.eventBus.Publish(eventbus.Event{
+		Type:            eventType,
+		Kind:            "Namespace",
+		Name:            namespace.Name,
+		ResourceVersion: namespace.ResourceVersion,
+		Object:          namespace,
+	})
+}
+
 // publishCategoryTaxonomyStatusEvent fans out a Modified event after a
 // successful status write, so a watcher observing the resource also sees
 // controller-driven status changes, not only spec-pipeline admissions

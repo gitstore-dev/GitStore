@@ -106,7 +106,11 @@ func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, 
 	if resourceVersion != nil {
 		rv = *resourceVersion
 	}
-	events, unsubscribe, err := r.eventBus.Subscribe(kind, rv)
+	bootstrap := kind == "Namespace" && rv == namespaceWatchBootstrapCursor
+	if bootstrap {
+		rv = ""
+	}
+	events, unsubscribe, startCursor, err := r.eventBus.SubscribeWithCursor(kind, rv)
 	if err != nil {
 		if errors.Is(err, eventbus.ErrWatchExpired) {
 			r.logger.Warn("watch cursor expired; controller must re-list",
@@ -127,6 +131,15 @@ func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, 
 	go func() {
 		defer close(out)
 		defer unsubscribe()
+		if bootstrap {
+			bookmark := toGenericWatchEvent(kind, eventbus.Event{Kind: kind, Cursor: startCursor})
+			bookmark.Type = model.WatchEventTypeBookmark
+			select {
+			case out <- bookmark:
+			case <-ctx.Done():
+				return
+			}
+		}
 		for {
 			select {
 			case <-ctx.Done():

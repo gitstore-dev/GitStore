@@ -11,18 +11,18 @@ type NamespaceResource struct {
 }
 
 type NamespaceSpec struct {
-	Title              string                       `yaml:"title" validate:"omitempty,max=200"`
-	Tier               string                       `yaml:"tier" validate:"required,oneof=USER ORGANIZATION"`
-	RepositoryDefaults *NamespaceRepositoryDefaults `yaml:"repositoryDefaults"`
-	PushPolicyDefaults *NamespacePushPolicyDefaults `yaml:"pushPolicyDefaults"`
+	Title              string                       `yaml:"title" json:"title" validate:"omitempty,max=200"`
+	Tier               string                       `yaml:"tier" json:"tier" validate:"required,oneof=USER ORGANIZATION"`
+	RepositoryDefaults *NamespaceRepositoryDefaults `yaml:"repositoryDefaults" json:"repositoryDefaults,omitempty"`
+	PushPolicyDefaults *NamespacePushPolicyDefaults `yaml:"pushPolicyDefaults" json:"pushPolicyDefaults,omitempty"`
 }
 
 type NamespaceRepositoryDefaults struct {
-	Visibility    string `yaml:"visibility"`
-	DefaultBranch string `yaml:"defaultBranch"`
+	Visibility    string `yaml:"visibility" json:"visibility"`
+	DefaultBranch string `yaml:"defaultBranch" json:"defaultBranch"`
 }
 
 type NamespacePushPolicyDefaults struct {
-	MaxPackSizeBytes int64 `yaml:"maxPackSizeBytes"`
-	MaxFileSizeBytes int64 `yaml:"maxFileSizeBytes"`
+	MaxPackSizeBytes int64 `yaml:"maxPackSizeBytes" json:"maxPackSizeBytes"`
+	MaxFileSizeBytes int64 `yaml:"maxFileSizeBytes" json:"maxFileSizeBytes"`
 }

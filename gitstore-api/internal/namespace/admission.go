@@ -63,6 +63,7 @@ func ApplyManifest(
 			Name:              name,
 			Title:             resource.Spec.Title,
 			Tier:              tier,
+			Spec:              mustMarshalSpec(resource.Spec),
 			CreationTimestamp: now,
 			CreationActor:     actor,
 			UpdateTimestamp:   now,
@@ -88,6 +89,7 @@ func ApplyManifest(
 	expectedResourceVersion := existing.ResourceVersion
 	existing.Title = resource.Spec.Title
 	existing.Tier = tier
+	existing.Spec = mustMarshalSpec(resource.Spec)
 	existing.UpdateTimestamp = now
 	existing.UpdateActor = actor
 	datastore.AdvanceNamespaceSpecVersion(existing)
@@ -96,6 +98,14 @@ func ApplyManifest(
 		return nil, false, fmt.Errorf("namespace admission: update: %w", err)
 	}
 	return existing, false, nil
+}
+
+func mustMarshalSpec(spec catalog.NamespaceSpec) []byte {
+	data, err := json.Marshal(spec)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 func TierFromManifest(tier string) (datastore.NamespaceTier, bool) {

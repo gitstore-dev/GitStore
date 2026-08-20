@@ -7,6 +7,7 @@
 package resolver
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
@@ -59,6 +61,7 @@ type GitWriter interface {
 	DeleteRepository(ctx context.Context, repositoryID string) error
 	CommitFile(ctx context.Context, p gitclient.CommitFileParams) (string, error)
 	CommitFileForRepo(ctx context.Context, repositoryID string, p gitclient.CommitFileParams) (string, error)
+	ResolveRefForRepo(ctx context.Context, repositoryID, ref string) (string, error)
 	DeleteFile(ctx context.Context, p gitclient.DeleteFileParams) (string, error)
 	CreateTag(ctx context.Context, p gitclient.CreateTagParams) (string, error)
 }
@@ -282,6 +285,9 @@ func (s *Service) commitAndAdmitNamespace(ctx context.Context, resource *catalog
 	}
 	content := append([]byte("---\n"), yamlBody...)
 	content = append(content, []byte("---\n")...)
+	if _, _, err := validate.NewParser().ParseResource(bytes.NewReader(content)); err != nil {
+		return nil, gqlerror.Errorf("Namespace manifest validation failed: %v", err)
+	}
 	verb := "Update"
 	if create {
 		verb = "Create"
@@ -294,6 +300,13 @@ func (s *Service) commitAndAdmitNamespace(ctx context.Context, resource *catalog
 	})
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to commit Namespace manifest: %v", err)
+	}
+	currentHead, err := s.gitWriter.ResolveRefForRepo(ctx, mapping.RepoID, "refs/heads/main")
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to verify Namespace commit: %v", err)
+	}
+	if currentHead != sha {
+		return nil, gqlerror.Errorf("Namespace commit was superseded by a newer commit")
 	}
 
 	now := s.clock.Now().UTC()
@@ -362,6 +375,24 @@ func namespaceResourceFromInput(apiVersion, kind string, metadata *model.Namespa
 	if spec.Title != nil {
 		title = *spec.Title
 	}
+	resourceSpec := catalog.NamespaceSpec{
+		Title: title,
+		Tier:  string(spec.Tier),
+	}
+	if defaults := spec.RepositoryDefaults; defaults != nil {
+		resourceSpec.RepositoryDefaults = &catalog.NamespaceRepositoryDefaults{
+			DefaultBranch: stringOrEmpty(defaults.DefaultBranch),
+		}
+		if defaults.Visibility != nil {
+			resourceSpec.RepositoryDefaults.Visibility = defaults.Visibility.String()
+		}
+	}
+	if defaults := spec.PushPolicyDefaults; defaults != nil {
+		resourceSpec.PushPolicyDefaults = &catalog.NamespacePushPolicyDefaults{
+			MaxPackSizeBytes: int64OrZero(defaults.MaxPackSizeBytes),
+			MaxFileSizeBytes: int64OrZero(defaults.MaxFileSizeBytes),
+		}
+	}
 	return &catalog.NamespaceResource{
 		APIVersion: apiVersion,
 		Kind:       kind,
@@ -370,11 +401,22 @@ func namespaceResourceFromInput(apiVersion, kind string, metadata *model.Namespa
 			Labels:      labels,
 			Annotations: annotations,
 		},
-		Spec: catalog.NamespaceSpec{
-			Title: title,
-			Tier:  string(spec.Tier),
-		},
+		Spec: resourceSpec,
 	}, nil
+}
+
+func stringOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func int64OrZero(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func stringMap(input map[string]any) (map[string]string, error) {

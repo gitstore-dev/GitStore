@@ -38,6 +38,31 @@ func namespaceNodeJSON(name, rv string, generation int, finalizers []string) map
 
 func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if websocket.IsWebSocketUpgrade(r) {
+			upgrader := websocket.Upgrader{Subprotocols: []string{"graphql-transport-ws"}}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				t.Errorf("upgrade failed: %v", err)
+				return
+			}
+			defer conn.Close()
+			var initMsg map[string]any
+			if err := conn.ReadJSON(&initMsg); err != nil {
+				return
+			}
+			_ = conn.WriteJSON(map[string]any{"type": "connection_ack"})
+			var subMsg map[string]any
+			if err := conn.ReadJSON(&subMsg); err != nil {
+				return
+			}
+			_ = conn.WriteJSON(map[string]any{
+				"id": subMsg["id"], "type": "next",
+				"payload": map[string]any{"data": map[string]any{"watchResources": map[string]any{
+					"type": "BOOKMARK", "kind": "Namespace", "resourceVersion": "17",
+				}}},
+			})
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
 			"namespaces": map[string]any{
@@ -56,8 +81,8 @@ func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 	if len(resp.Items) != 1 || resp.Items[0].Name != "acme" {
 		t.Fatalf("Items = %+v, want acme", resp.Items)
 	}
-	if resp.ResourceVersion != "8" {
-		t.Fatalf("ResourceVersion = %q, want 8", resp.ResourceVersion)
+	if resp.ResourceVersion != "17" {
+		t.Fatalf("ResourceVersion = %q, want 17", resp.ResourceVersion)
 	}
 }
 
