@@ -49,6 +49,13 @@ graph TD
 - **`gitstore-controller-manager`**: Go controller runtime that reconciles through the API and exposes health, metrics, and poison-item endpoints.
 - **`gitstore-admin`**: Optional Astro/React web UI that talks to `gitstore-api`.
 
+The API, controller manager, and Git service are the three core services. The
+production target requires each to run with multiple replicas under autoscaling.
+Production features must preserve replica-safe state, pluggable multi-user
+authentication and authorization, catalogue operation at millions-of-products
+scale, and sustained Git push throughput. The admin UI and other clients are
+optional.
+
 See the module READMEs for boundaries and commands:
 
 - [gitstore-api/README.md](gitstore-api/README.md)

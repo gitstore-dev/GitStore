@@ -31,6 +31,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - No datastore schema changes; catalog-resource existence checks use memdb's in-process `RepositoryID` indexes and namespace-partition-scoped ScyllaDB queries, while repository existence uses the existing `NamespaceID` index. No new `Status`/finalizer fields are added to `Namespace` or `Repository` — this spec implements only the synchronous precondition-check half of ADR-0002/ADR-0003's deletion flow, not the async `Terminating`/`foregroundDeletion`-finalizer state machine (deferred; requires a `Status` field and a controller neither resource has today) (041-namespace-repo-finalizers)
 - Go 1.25 (`gitstore-api`, `gitstore-controller-manager`) + existing `gitstore-api/internal/eventbus.Bus` (spec 040, already used by `CategoryTaxonomy`'s `publishCategoryTaxonomyEvent`); existing generic `watchResources`/`WatchEvent` GraphQL subscription contract (spec 040, kind-agnostic — no schema change needed to carry `"Product"` as a `kind` value); existing `gitstore-controller-manager/internal/listwatch.ListWatcher[T]`/`Watcher[T]`/`Runner[T]` (spec 036, already implemented once for `CategoryTaxonomyListWatcher`); existing `gitstore-controller-manager/internal/cache.Cache[T]`/`EventHandler[T]` (spec 026, already used for the category→parent-category enqueue pattern); existing `gitstore-controller-manager/internal/manager.Manager.Enqueue` (spec 026); existing `gitstore-controller-manager/internal/graphqlclient.Client` (spec 039). No new dependency is introduced in either module. (042-product-category-count)
 - No new storage or schema changes. `gitstore-api` gains no new datastore field — Product admission already carries `RepositoryID`/`Namespace`/`Name` and the `categoryRef.name` needed to identify affected categories; the eventbus itself is in-memory-only per its existing design (no durability across restart, per spec 040 research.md R2/R3, unchanged here). `gitstore-controller-manager` gains a new in-memory Product cache (mirroring the existing `CategoryTaxonomy` cache), no persistent storage. (042-product-category-count)
+- Go 1.25 (`gitstore-api`) + existing `gocqlx/v3 v3.0.4`, `gocql`, `go-memdb v1.3.5`, `go.uber.org/zap`, and `prometheus/client_golang`; no new dependency (048-scylla-query-design)
+- ScyllaDB 5.x+ query-specific denormalized tables with `go-memdb` as the development and contract-test backend (048-scylla-query-design)
 
 ## Commands
 
@@ -96,6 +98,10 @@ Common bootstrap variables:
 
 - Use Conventional Commits
 - After implementing a feature update the documentation in [`docs/`](docs/).
+- For changes to `gitstore-api`, `gitstore-controller-manager`, or
+  `gitstore-git-service`, plans and tests must cover multi-replica correctness,
+  rolling upgrades, pluggable AuthN/AuthZ, production-scale bounded work, and
+  sustained Git push or reconciliation load where applicable.
 
 ## Tool Usage
 
@@ -105,7 +111,7 @@ Common bootstrap variables:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/046-namespace-api-semantics/plan.md
+at specs/048-scylla-query-design/plan.md
 <!-- SPECKIT END -->
 
 ## graphify

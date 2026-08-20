@@ -1,11 +1,32 @@
 <!--
 Sync Impact Report:
-- Version change: UNINITIALIZED → 1.0.0
-- Initial ratification of GitStore Constitution
-- Principles defined: 7 core principles (Test-First, API-First, Clear Contracts, Observability, User Story Driven, Incremental Delivery, Simplicity)
-- Added sections: Architecture Constraints, Development Workflow
-- Templates requiring updates: ✅ All templates already aligned with these principles
-- Follow-up TODOs: None - all placeholders filled
+- Version change: 1.0.0 -> 2.0.0
+- Modified principles:
+  - IV. Observability & Debuggability -> IV. Production Observability & Debuggability
+  - VI. Incremental Delivery -> VI. Independently Deployable Delivery
+  - VII. Simplicity & YAGNI -> VII. Simplicity with Proven Scale
+- Added principles:
+  - VIII. Horizontally Replicable Core Services
+  - IX. Multi-User Authentication, Authorization & Isolation
+  - X. Production Capacity, Backpressure & Load Validation
+- Added sections:
+  - Core Service Topology
+  - Replica Safety
+  - Production Capacity Envelope
+- Removed sections:
+  - None
+- Templates requiring updates:
+  - ✅ .specify/templates/plan-template.md
+  - ✅ .specify/templates/spec-template.md
+  - ✅ .specify/templates/tasks-template.md
+  - ✅ .specify/templates/commands/ (directory absent; no command templates to update)
+- Runtime guidance updated:
+  - ✅ README.md
+  - ✅ docs/architecture.md
+  - ✅ docs/developer-guide.md
+  - ✅ AGENTS.md
+  - ✅ specs/048-scylla-query-design/plan.md
+- Follow-up TODOs: None
 -->
 
 # GitStore Constitution
@@ -14,132 +35,236 @@ Sync Impact Report:
 
 ### I. Test-First Development (NON-NEGOTIABLE)
 
-**Tests MUST be written before implementation code.** All user stories require contract tests and integration tests written first, verified to fail, then implementation follows (Red-Green-Refactor cycle). No implementation task may begin until its corresponding test task is complete and failing. This is strictly enforced and cannot be bypassed.
+Tests MUST be written before implementation code. Every user story requires the
+smallest appropriate contract and integration tests, written first and verified
+to fail before implementation begins. Changes to concurrency, replica behavior,
+authorization, data integrity, or load-bearing paths MUST include tests for
+failure and recovery, not only the successful path.
 
-**Rationale:** Test-first development ensures requirements are testable, prevents scope creep, documents expected behaviour, and catches regressions early. For a multiservice architecture with git validation on the critical path, test-first is essential to prevent data corruption and maintain system integrity.
+**Rationale:** GitStore accepts commerce data through Git and projects it across
+multiple services and storage models. Test-first development prevents silent
+data corruption and makes cross-service behavior reviewable.
 
 ### II. API-First Design
 
-**All service boundaries MUST define contracts before implementation.** GraphQL schemas, API interfaces, and service contracts are defined, reviewed, and version-controlled before any resolver or handler code is written. Contracts serve as the single source of truth for service communication.
+All service boundaries MUST define contracts before implementation. GraphQL
+schemas, gRPC protocols, datastore interfaces, event shapes, and controller
+contracts MUST be reviewed and version-controlled before handlers or consumers
+are implemented. Authorization and error semantics are part of each contract.
 
-**Rationale:** In a polyglot architecture (Rust/Go/TypeScript), clear contracts prevent integration issues, enable parallel development across services, and provide type safety boundaries. Contract-first development allows frontend and backend teams to work independently.
+**Rationale:** The Go API and controller manager, Rust Git service, and external
+clients must evolve independently without relying on undocumented behavior.
 
 ### III. Clear Contracts & Versioning
 
-**All public interfaces MUST follow semantic versioning.** Breaking changes require MAJOR version bump, new features MINOR, bug fixes PATCH. GraphQL schema changes follow schema evolution principles (additive changes preferred, deprecation before removal). Release tags MUST use semantic versioning (v1.0.0) or date-based tags (YYYY-MM-DD).
+All public interfaces MUST follow semantic versioning. Breaking changes require
+a MAJOR version bump, additive features require MINOR, and compatible fixes
+require PATCH. GraphQL changes MUST prefer additive evolution and deprecation
+before removal. Persisted and inter-service contract changes MUST document
+compatibility, rollout order, and rollback behavior.
 
-**Rationale:** Git-backed catalogue management requires stable versioning for rollback capabilities. Storefronts depend on consistent API contracts. Clear versioning prevents breaking changes from reaching production and enables safe rollback to previous catalogue versions.
+**Rationale:** Stable contracts permit independent replica rollouts, safe
+rollback, and compatibility across services during rolling deployment.
 
-### IV. Observability & Debuggability
+### IV. Production Observability & Debuggability
 
-**Structured logging MUST be implemented in all services.** Every service (git-server, API, admin-ui) requires structured logging with consistent format, request ID propagation across service boundaries, and error context capture. All validation failures, git operations, and catalogue updates MUST be logged with sufficient detail for debugging.
+The API, controller manager, and Git service MUST emit structured logs, metrics,
+health/readiness state, and correlation identifiers appropriate to their
+boundaries. Signals MUST expose request latency, errors, authorization outcomes,
+queue depth, retry/backoff behavior, replica saturation, Git push stages, and
+controller convergence. Errors MUST identify the affected resource and operation
+without exposing credentials or sensitive content.
 
-**Rationale:** Multi-service architecture requires distributed tracing capabilities. Git operations and validation errors must be auditable. Request IDs enable end-to-end transaction tracking from admin UI → GraphQL API → git server.
+**Rationale:** Autoscaled services and asynchronous reconciliation cannot be
+operated safely without end-to-end evidence of load, failure, and recovery.
 
 ### V. User Story Driven Development
 
-**All work MUST map to user stories with independent test criteria.** Features are organised by user story (P1, P2, P3) with each story independently completable and testable. Tasks include [Story] labels (US1, US2, US3) for traceability. No speculative features outside defined user stories.
+All work MUST map to prioritized user stories with independent acceptance
+criteria. Tasks MUST retain story labels for traceability. Each story MUST state
+the user-visible result and, when it affects a core service, measurable
+availability, authorization, and capacity expectations.
 
-**Rationale:** User story organisation enables incremental delivery, parallel development, and clear acceptance criteria. Each story delivers measurable user value and can be deployed independently without breaking other stories.
+**Rationale:** User stories keep production-hardening work tied to observable
+outcomes rather than speculative infrastructure.
 
-### VI. Incremental Delivery
+### VI. Independently Deployable Delivery
 
-**MVP MUST deliver minimal viable user story (P1).** Development follows P1 (git workflow) → P2 (categories/collections) → P3 (admin UI) priority order. Each user story adds value without requiring subsequent stories. Features can be deployed incrementally with P1 providing core functionality.
+Every delivery slice MUST preserve compatibility with independently deployed
+API, controller-manager, and Git-service replicas. Features MUST be deployable
+incrementally, support rolling upgrades, and remain correct when old and new
+replicas overlap within the documented compatibility window. Priority order is
+defined by each feature specification rather than a fixed historical roadmap.
 
-**Rationale:** GitStore's git-based approach provides value even without admin UI (P3). Technical users and AI agents can use the system with just P1. Incremental delivery reduces risk, enables earlier feedback, and allows prioritisation adjustments based on user feedback.
+**Rationale:** Core services scale and roll independently. Delivery that requires
+a simultaneous fleet restart is operationally unsafe.
 
-### VII. Simplicity & YAGNI (You Aren't Gonna Need It)
+### VII. Simplicity with Proven Scale
 
-**Start simple, justify complexity.** No speculative features, premature abstractions, or multi-tenant capabilities until proven necessary. In-memory caching preferred over external dependencies. Architecture complexity (polyglot Rust/Go/TypeScript) MUST be justified with clear technical rationale.
+Implement the simplest design that satisfies the declared production envelope.
+New services, brokers, caches, indexes, and abstractions MUST have measured or
+contractual justification. Simplicity MUST NOT be used to justify process-local
+correctness state, unbounded scans, single-replica assumptions, authorization
+bypasses, or designs that fail at the required scale.
 
-**Rationale:** Complexity is a liability. Every dependency, abstraction, and feature adds maintenance burden. GitStore's core value proposition (git-backed catalogues) should not be obscured by premature optimisation or speculative features.
+**Rationale:** Unnecessary components increase operational burden, but an
+under-designed system merely defers that burden to production incidents.
+
+### VIII. Horizontally Replicable Core Services (NON-NEGOTIABLE)
+
+The API, controller manager, and Git service MUST each support deployment with
+multiple replicas and autoscaling. Correctness MUST NOT depend on requests
+returning to the same process. Durable state, work ownership, idempotency,
+concurrency control, repository placement, and recovery MUST have an explicit
+replica-safe design. A feature that introduces process-local correctness state
+MUST provide a replica-consistent replacement before production use.
+
+**Rationale:** Replica deployment is a core operating mode, not a future
+optimization. Autoscaling must increase capacity without creating divergent
+catalogue state, duplicate reconciliation, or conflicting Git references.
+
+### IX. Multi-User Authentication, Authorization & Isolation (NON-NEGOTIABLE)
+
+GitStore MUST support concurrent human, service, and agent identities through
+the pluggable authentication and authorization infrastructure. Every external
+and service-to-service entry point MUST authenticate callers and enforce
+authorization at the owning service boundary. Namespace and repository access
+MUST be isolated by policy; UI behavior MUST never be the enforcement layer.
+Identity and authorization decisions MUST be auditable and replica-consistent.
+
+**Rationale:** Commerce operations involve multiple users and automation agents
+with different privileges. A single-admin or trusted-network assumption is not
+an acceptable production security model.
+
+### X. Production Capacity, Backpressure & Load Validation (NON-NEGOTIABLE)
+
+GitStore MUST support catalogues containing at least 5,000,000 products and
+sustained peak Git push workloads. Core read and reconciliation paths MUST use
+bounded, query-first access patterns. Push validation, admission, projection,
+and reconciliation MUST apply bounded concurrency, backpressure, timeouts, and
+retry policies rather than unbounded queues or goroutines.
+
+Every feature affecting a load-bearing path MUST define its production dataset,
+request or push concurrency, payload shape, latency/error objectives, and soak
+duration. It MUST validate those objectives with repeatable load, soak, or
+capacity tests before production readiness is claimed.
+
+**Rationale:** Short benchmarks do not prove that GitStore can sustain commerce
+traffic. Capacity must remain stable under prolonged pushes, large catalogues,
+replica changes, retries, and downstream slowdown.
 
 ## Architecture Constraints
 
-### Multi-Service Architecture
+### Core Service Topology
 
-GitStore comprises three independent services:
+GitStore has three independently deployable core services:
 
-1. **Git Service (Rust)**: Built-in git engine with pre-push validation and gRPC notification stream (pending GH#139)
-2. **GraphQL API (Go)**: Relay-compliant API layer exposing catalogue data
-3. **Controller Manager (Go)**: A control loop that reconciles catalogue desired state
+1. **API (`gitstore-api`, Go)**: GraphQL, Git Smart HTTP front door,
+   authentication/authorization, admission, and datastore access.
+2. **Controller Manager (`gitstore-controller-manager`, Go)**: Watch, queue,
+   reconcile, status, retry, and operational control loops.
+3. **Git Service (`gitstore-git-service`, Rust)**: Bare repository storage,
+   Git transport primitives, reference updates, and receive-hook execution.
 
-**Justification for Polyglot Architecture:**
-- Rust provides superior performance and memory safety for git operations and validation (critical path)
-- Go offers mature GraphQL ecosystem (gqlgen, Relay support) with strong typing for API contracts
+The admin UI and other GraphQL/Git clients are optional consumers, not core
+services. Core services communicate only through versioned contracts and MUST
+not depend on another service's private storage.
 
-**Alternatives Rejected:**
-- Single-language monolith would compromise either git performance (ruling out Go/TypeScript) or GraphQL ecosystem maturity (ruling out Rust)
-- All-JavaScript approach lacks sufficient git library ecosystem and validation performance
+### Replica Safety
 
-### Performance Targets
+- API replicas MUST keep durable resource, authorization, session, revocation,
+  and idempotency semantics consistent across replicas.
+- Controller-manager replicas MUST use idempotent reconciliation and an explicit
+  coordination, partitioning, or duplicate-safe work model.
+- Git-service replicas MUST define repository placement, single-writer or
+  equivalent reference-update safety, routing, storage durability, and failover.
+- Local memory and local filesystem state MAY be used for development or caches,
+  but production correctness MUST survive process replacement and rescheduling.
+- Rolling upgrades MUST preserve contract compatibility and avoid split-brain
+  state.
 
-- Storefront catalogue queries: < 50 milliseconds for 5000+ products
-- Storefront update latency: < 5 seconds from git push to controller reconciliation
-- Git push validation: < 5 milliseconds for 500 file push
+### Production Capacity Envelope
 
-### Scale Constraints
-
-- Product catalogue size: up to 5,000,000 products initially
-- Git repository size: < 100GB for Markdown + metadata and media
-- Concurrent admin UI users: 100-500 initially
+- Authoritative and projected catalogue storage MUST support at least 5,000,000
+  products without full-dataset scans on routine request paths.
+- Git push handling MUST remain stable during sustained peak traffic, including
+  validation, admission, datastore projection, watch delivery, and controller
+  convergence.
+- Queues, partitions, batches, request bodies, worker pools, retries, and
+  timeouts MUST have explicit bounds.
+- Feature plans MUST state measurable p95/p99 latency, throughput, error-rate,
+  recovery, and resource-saturation objectives for affected production paths.
+- Autoscaling and failover tests MUST demonstrate correct behavior with at least
+  two replicas for every affected core service.
 
 ## Development Workflow
 
 ### Test-First Workflow (Enforced)
 
-1. Write contract tests for GraphQL schema operations
-2. Write integration tests for cross-service interactions
-3. Verify all tests FAIL (red)
-4. Implement minimal code to pass tests (green)
-5. Refactor while maintaining test passing state
-6. Commit with tests included in same commit
+1. Define API, authorization, replica, and capacity contracts where applicable.
+2. Write contract and integration tests.
+3. Add concurrency, failover, and recovery tests for core-service changes.
+4. Verify the new tests fail for the expected reason.
+5. Implement the minimum code required to pass.
+6. Refactor while preserving all tests.
+7. Run focused load or soak validation for load-bearing changes.
+8. Commit tests and implementation in the same logical change.
 
 ### Task Execution Order
 
-1. **Setup Phase**: Initialise project structure and dependencies
-2. **Foundational Phase**: Core infrastructure (BLOCKS all user stories)
-3. **User Story Phases**: Implement P1 → P2 → P3 in priority order
-4. **Polish Phase**: Cross-cutting concerns after story completion
+1. **Setup**: Project structure, tooling, and test fixtures.
+2. **Foundational**: Contracts, auth boundaries, replica model, observability,
+   and capacity harnesses that block user stories.
+3. **User Stories**: Implement independently testable stories in feature-defined
+   priority order.
+4. **Production Readiness**: Load/soak, failover, rolling-upgrade, security, and
+   runbook validation.
 
 ### Quality Gates
 
-- All tests passing before commit
-- No commented-out code except with TODO(reason) and issue link
-- Structured logging implemented for all new endpoints/operations
-- GraphQL schema changes reviewed for breaking changes
-- Constitution compliance verified in PR review
+- `make pr-ready` passes before a pull request is considered ready.
+- New behavior has tests that were demonstrated to fail before implementation.
+- Core-service changes document and test behavior with multiple replicas.
+- Load-bearing changes meet declared capacity and sustained-load objectives.
+- Protected operations include authentication and authorization tests.
+- Logs, metrics, readiness, and error handling cover new operational states.
+- Contract changes document compatibility, rollout, and rollback.
+- Documentation and runbooks are updated with the implementation.
+- Constitution compliance is verified during PR review.
 
 ## Governance
 
 ### Authority
 
-This constitution supersedes all other development practices, conventions, and preferences. When team practices conflict with constitution principles, the constitution takes precedence.
+This constitution supersedes all other development practices, conventions, and
+preferences. Runtime guidance may add detail but may not weaken these rules.
 
 ### Amendment Process
 
-1. Propose amendment with clear rationale and examples
-2. Document impact on existing code and templates
-3. Require team consensus for MAJOR version changes
-4. Update all dependent templates (plan-template.md, spec-template.md, tasks-template.md)
-5. Update constitution version following semantic versioning
+1. Propose an amendment with rationale and concrete examples.
+2. Document impact on existing code, active plans, templates, and operations.
+3. Require team consensus for MAJOR version changes.
+4. Update dependent Spec Kit templates and runtime guidance.
+5. Record the semantic version change and amendment date.
 
 ### Compliance Review
 
-- All PRs MUST include constitution compliance verification
-- Complexity violations (Principle VII) MUST be justified in PR description
-- Test-first violations (Principle I) result in automatic PR rejection
-- Constitution violations can only be overridden by team consensus with documented justification
+- Every feature plan MUST contain a pre-design and post-design constitution check.
+- Every pull request MUST include constitution compliance verification.
+- Principle violations MUST be explicit in the plan's complexity table, include
+  rejected alternatives, identify risk, and link a remediation issue.
+- Principles marked NON-NEGOTIABLE cannot be waived for production readiness.
 
 ### Version Control
 
-- Constitution changes MUST increment version number
-- MAJOR: Principle removal, redefinition, or backward-incompatible governance change
-- MINOR: New principle added or existing principle materially expanded
-- PATCH: Clarifications, wording improvements, typo fixes
+- Constitution changes MUST increment the version.
+- MAJOR: Principle removal, redefinition, or incompatible governance change.
+- MINOR: New principle or materially expanded mandatory guidance.
+- PATCH: Non-semantic clarification, wording improvement, or typo fix.
 
 ### Runtime Guidance
 
-For day-to-day development guidance and agent-specific instructions, refer to agent context files (e.g., `.claude/CLAUDE.md`) which supplement but do not override constitution principles.
+Day-to-day repository and agent instructions supplement this constitution.
+When they conflict, this constitution takes precedence.
 
-**Version**: 1.0.0 | **Ratified**: 2026-03-09 | **Last Amended**: 2026-03-09
+**Version**: 2.0.0 | **Ratified**: 2026-03-09 | **Last Amended**: 2026-08-19

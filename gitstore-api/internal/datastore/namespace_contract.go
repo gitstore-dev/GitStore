@@ -20,6 +20,12 @@ func NormalizeNamespaceContract(namespace *Namespace) {
 	if namespace == nil {
 		return
 	}
+	if namespace.UID == "" {
+		namespace.UID = namespace.ID
+	}
+	if namespace.ID == "" {
+		namespace.ID = namespace.UID
+	}
 	if namespace.Generation < NamespaceInitialGeneration {
 		namespace.Generation = NamespaceInitialGeneration
 	}

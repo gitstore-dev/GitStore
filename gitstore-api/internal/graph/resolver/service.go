@@ -827,6 +827,7 @@ func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespaceID,
 		return nil, gqlerror.Errorf("failed to transfer repository")
 	}
 	repo.NamespaceID = toNamespaceID
+	repo.Namespace = toNamespaceID
 	repo.UpdateTimestamp = s.clock.Now().UTC()
 	repo.UpdateActor = callerUsername
 	expectedResourceVersion := repo.ResourceVersion

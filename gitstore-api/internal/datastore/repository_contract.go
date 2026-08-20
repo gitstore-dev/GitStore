@@ -21,6 +21,18 @@ func NormalizeRepositoryContract(repository *Repository) {
 	if repository == nil {
 		return
 	}
+	if repository.UID == "" {
+		repository.UID = repository.ID
+	}
+	if repository.ID == "" {
+		repository.ID = repository.UID
+	}
+	if repository.Namespace == "" {
+		repository.Namespace = repository.NamespaceID
+	}
+	if repository.NamespaceID == "" {
+		repository.NamespaceID = repository.Namespace
+	}
 	if repository.Generation < RepositoryInitialGeneration {
 		repository.Generation = RepositoryInitialGeneration
 	}
@@ -29,6 +41,29 @@ func NormalizeRepositoryContract(repository *Repository) {
 	}
 	if len(repository.Status) == 0 {
 		repository.Status = append(json.RawMessage(nil), repositoryInitialStatus...)
+	}
+	if repository.Finalizers == nil {
+		repository.Finalizers = []string{}
+	}
+}
+
+// NormalizeNamespaceMappingContract keeps canonical mapping names populated
+// while legacy callers are migrated.
+func NormalizeNamespaceMappingContract(mapping *NamespaceMapping) {
+	if mapping == nil {
+		return
+	}
+	if mapping.Namespace == "" {
+		mapping.Namespace = mapping.NamespaceID
+	}
+	if mapping.NamespaceID == "" {
+		mapping.NamespaceID = mapping.Namespace
+	}
+	if mapping.RepositoryID == "" {
+		mapping.RepositoryID = mapping.RepoID
+	}
+	if mapping.RepoID == "" {
+		mapping.RepoID = mapping.RepositoryID
 	}
 }
 
