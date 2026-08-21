@@ -122,10 +122,10 @@ pub mod catalog_service_client {
         pub async fn validate_category_taxonomy_deletion(
             &mut self,
             request: impl tonic::IntoRequest<
-                super::CategoryTaxonomyDeletionValidationRequest,
+                super::ValidateCategoryTaxonomyDeletionRequest,
             >,
         ) -> std::result::Result<
-            tonic::Response<super::CategoryTaxonomyDeletionValidationResponse>,
+            tonic::Response<super::ValidateCategoryTaxonomyDeletionResponse>,
             tonic::Status,
         > {
             self.inner
@@ -203,9 +203,9 @@ pub mod catalog_service_server {
         >;
         async fn validate_category_taxonomy_deletion(
             &self,
-            request: tonic::Request<super::CategoryTaxonomyDeletionValidationRequest>,
+            request: tonic::Request<super::ValidateCategoryTaxonomyDeletionRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::CategoryTaxonomyDeletionValidationResponse>,
+            tonic::Response<super::ValidateCategoryTaxonomyDeletionResponse>,
             tonic::Status,
         >;
         async fn admit_resources(
@@ -346,9 +346,9 @@ pub mod catalog_service_server {
                     impl<
                         T: CatalogService,
                     > tonic::server::UnaryService<
-                        super::CategoryTaxonomyDeletionValidationRequest,
+                        super::ValidateCategoryTaxonomyDeletionRequest,
                     > for ValidateCategoryTaxonomyDeletionSvc<T> {
-                        type Response = super::CategoryTaxonomyDeletionValidationResponse;
+                        type Response = super::ValidateCategoryTaxonomyDeletionResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
@@ -356,7 +356,7 @@ pub mod catalog_service_server {
                         fn call(
                             &mut self,
                             request: tonic::Request<
-                                super::CategoryTaxonomyDeletionValidationRequest,
+                                super::ValidateCategoryTaxonomyDeletionRequest,
                             >,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);

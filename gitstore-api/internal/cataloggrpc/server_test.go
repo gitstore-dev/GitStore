@@ -1277,7 +1277,7 @@ spec:
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			response, err := srv.ValidateCategoryTaxonomyDeletion(context.Background(),
-				&catalogv1.CategoryTaxonomyDeletionValidationRequest{
+				&catalogv1.ValidateCategoryTaxonomyDeletionRequest{
 					RepositoryId: testRepoID,
 					Trees:        []*catalogv1.CategoryTaxonomyDeletionTree{tt.tree},
 				})

@@ -51,7 +51,7 @@ type CatalogServiceClient interface {
 	// ValidateCategoryTaxonomyDeletion validates CategoryTaxonomy deletions against
 	// the proposed trees before refs are updated. It is read-only and is invoked
 	// only when a push removes at least one file.
-	ValidateCategoryTaxonomyDeletion(ctx context.Context, in *CategoryTaxonomyDeletionValidationRequest, opts ...grpc.CallOption) (*CategoryTaxonomyDeletionValidationResponse, error)
+	ValidateCategoryTaxonomyDeletion(ctx context.Context, in *ValidateCategoryTaxonomyDeletionRequest, opts ...grpc.CallOption) (*ValidateCategoryTaxonomyDeletionResponse, error)
 	// AdmitResources triggers catalog storage for resources in an accepted push commit.
 	// The git service calls this in the post-receive phase (fire-and-forget).
 	// The git service does not wait for this call to complete before responding to the author.
@@ -76,9 +76,9 @@ func (c *catalogServiceClient) ValidateResources(ctx context.Context, in *Valida
 	return out, nil
 }
 
-func (c *catalogServiceClient) ValidateCategoryTaxonomyDeletion(ctx context.Context, in *CategoryTaxonomyDeletionValidationRequest, opts ...grpc.CallOption) (*CategoryTaxonomyDeletionValidationResponse, error) {
+func (c *catalogServiceClient) ValidateCategoryTaxonomyDeletion(ctx context.Context, in *ValidateCategoryTaxonomyDeletionRequest, opts ...grpc.CallOption) (*ValidateCategoryTaxonomyDeletionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CategoryTaxonomyDeletionValidationResponse)
+	out := new(ValidateCategoryTaxonomyDeletionResponse)
 	err := c.cc.Invoke(ctx, CatalogService_ValidateCategoryTaxonomyDeletion_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -107,7 +107,7 @@ type CatalogServiceServer interface {
 	// ValidateCategoryTaxonomyDeletion validates CategoryTaxonomy deletions against
 	// the proposed trees before refs are updated. It is read-only and is invoked
 	// only when a push removes at least one file.
-	ValidateCategoryTaxonomyDeletion(context.Context, *CategoryTaxonomyDeletionValidationRequest) (*CategoryTaxonomyDeletionValidationResponse, error)
+	ValidateCategoryTaxonomyDeletion(context.Context, *ValidateCategoryTaxonomyDeletionRequest) (*ValidateCategoryTaxonomyDeletionResponse, error)
 	// AdmitResources triggers catalog storage for resources in an accepted push commit.
 	// The git service calls this in the post-receive phase (fire-and-forget).
 	// The git service does not wait for this call to complete before responding to the author.
@@ -125,7 +125,7 @@ type UnimplementedCatalogServiceServer struct{}
 func (UnimplementedCatalogServiceServer) ValidateResources(context.Context, *ValidateResourcesRequest) (*ValidateResourcesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidateResources not implemented")
 }
-func (UnimplementedCatalogServiceServer) ValidateCategoryTaxonomyDeletion(context.Context, *CategoryTaxonomyDeletionValidationRequest) (*CategoryTaxonomyDeletionValidationResponse, error) {
+func (UnimplementedCatalogServiceServer) ValidateCategoryTaxonomyDeletion(context.Context, *ValidateCategoryTaxonomyDeletionRequest) (*ValidateCategoryTaxonomyDeletionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidateCategoryTaxonomyDeletion not implemented")
 }
 func (UnimplementedCatalogServiceServer) AdmitResources(context.Context, *AdmitResourcesRequest) (*AdmitResourcesResponse, error) {
@@ -171,7 +171,7 @@ func _CatalogService_ValidateResources_Handler(srv interface{}, ctx context.Cont
 }
 
 func _CatalogService_ValidateCategoryTaxonomyDeletion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CategoryTaxonomyDeletionValidationRequest)
+	in := new(ValidateCategoryTaxonomyDeletionRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -183,7 +183,7 @@ func _CatalogService_ValidateCategoryTaxonomyDeletion_Handler(srv interface{}, c
 		FullMethod: CatalogService_ValidateCategoryTaxonomyDeletion_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CatalogServiceServer).ValidateCategoryTaxonomyDeletion(ctx, req.(*CategoryTaxonomyDeletionValidationRequest))
+		return srv.(CatalogServiceServer).ValidateCategoryTaxonomyDeletion(ctx, req.(*ValidateCategoryTaxonomyDeletionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }

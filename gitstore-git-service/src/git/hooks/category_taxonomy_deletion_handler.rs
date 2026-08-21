@@ -20,7 +20,7 @@ pub mod catalog_proto {
 }
 
 use catalog_proto::catalog_service_client::CatalogServiceClient;
-use catalog_proto::{CategoryTaxonomyDeletionTree, CategoryTaxonomyDeletionValidationRequest};
+use catalog_proto::{CategoryTaxonomyDeletionTree, ValidateCategoryTaxonomyDeletionRequest};
 
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 
@@ -72,7 +72,7 @@ impl CategoryTaxonomyDeletionHandler {
         let tree_count = trees.len();
         let start = std::time::Instant::now();
         let mut client = self.client.clone();
-        let mut request = tonic::Request::new(CategoryTaxonomyDeletionValidationRequest {
+        let mut request = tonic::Request::new(ValidateCategoryTaxonomyDeletionRequest {
             repository_id,
             trees,
         });
@@ -222,7 +222,7 @@ mod tests {
     use super::*;
     use crate::git::hooks::category_taxonomy_deletion_handler::catalog_proto::{
         catalog_service_server::{CatalogService, CatalogServiceServer},
-        AdmitResourcesRequest, AdmitResourcesResponse, CategoryTaxonomyDeletionValidationResponse,
+        AdmitResourcesRequest, AdmitResourcesResponse, ValidateCategoryTaxonomyDeletionResponse,
         ValidateResourcesRequest, ValidateResourcesResponse,
     };
 
@@ -245,15 +245,15 @@ mod tests {
 
         async fn validate_category_taxonomy_deletion(
             &self,
-            request: Request<CategoryTaxonomyDeletionValidationRequest>,
-        ) -> Result<Response<CategoryTaxonomyDeletionValidationResponse>, Status> {
+            request: Request<ValidateCategoryTaxonomyDeletionRequest>,
+        ) -> Result<Response<ValidateCategoryTaxonomyDeletionResponse>, Status> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let trees = request.into_inner().trees;
             assert_eq!(trees.len(), 1);
             if let Some(blob) = trees[0].old_blobs.first() {
                 assert_eq!(blob.path, "file.txt");
             }
-            Ok(Response::new(CategoryTaxonomyDeletionValidationResponse {
+            Ok(Response::new(ValidateCategoryTaxonomyDeletionResponse {
                 accepted: self.accepted,
                 reason: "child categories present".to_string(),
             }))

@@ -29,7 +29,7 @@ service CatalogService {
   // ValidateCategoryTaxonomyDeletion validates CategoryTaxonomy deletions against
   // the proposed trees before refs are updated. It is read-only and is invoked
   // only when a push removes at least one file.
-  rpc ValidateCategoryTaxonomyDeletion(CategoryTaxonomyDeletionValidationRequest) returns (CategoryTaxonomyDeletionValidationResponse);
+  rpc ValidateCategoryTaxonomyDeletion(ValidateCategoryTaxonomyDeletionRequest) returns (ValidateCategoryTaxonomyDeletionResponse);
 
   // AdmitResources triggers catalog storage for resources in an accepted push commit.
   // The git service calls this in the post-receive phase (fire-and-forget).
@@ -98,17 +98,17 @@ message CategoryTaxonomyDeletionTree {
   repeated ResourceBlob proposed_blobs = 2;
 }
 
-// CategoryTaxonomyDeletionValidationRequest carries every changed ref tree in
+// ValidateCategoryTaxonomyDeletionRequest carries every changed ref tree in
 // an atomic receive-pack operation. The API only reads these resources and
 // returns a precondition result; lifecycle mutation remains post-receive.
-message CategoryTaxonomyDeletionValidationRequest {
+message ValidateCategoryTaxonomyDeletionRequest {
   string repository_id = 15;
   repeated CategoryTaxonomyDeletionTree trees = 1;
 }
 
-// CategoryTaxonomyDeletionValidationResponse is a stable, non-sensitive
+// ValidateCategoryTaxonomyDeletionResponse is a stable, non-sensitive
 // precondition result for the pre-receive hook.
-message CategoryTaxonomyDeletionValidationResponse {
+message ValidateCategoryTaxonomyDeletionResponse {
   bool accepted = 1;
   string reason = 2;
 }

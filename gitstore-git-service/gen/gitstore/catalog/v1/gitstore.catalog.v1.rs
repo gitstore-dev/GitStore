@@ -67,20 +67,20 @@ pub struct CategoryTaxonomyDeletionTree {
     #[prost(message, repeated, tag="2")]
     pub proposed_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
 }
-/// CategoryTaxonomyDeletionValidationRequest carries every changed ref tree in
+/// ValidateCategoryTaxonomyDeletionRequest carries every changed ref tree in
 /// an atomic receive-pack operation. The API only reads these resources and
 /// returns a precondition result; lifecycle mutation remains post-receive.
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CategoryTaxonomyDeletionValidationRequest {
+pub struct ValidateCategoryTaxonomyDeletionRequest {
     #[prost(string, tag="15")]
     pub repository_id: ::prost::alloc::string::String,
     #[prost(message, repeated, tag="1")]
     pub trees: ::prost::alloc::vec::Vec<CategoryTaxonomyDeletionTree>,
 }
-/// CategoryTaxonomyDeletionValidationResponse is a stable, non-sensitive
+/// ValidateCategoryTaxonomyDeletionResponse is a stable, non-sensitive
 /// precondition result for the pre-receive hook.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CategoryTaxonomyDeletionValidationResponse {
+pub struct ValidateCategoryTaxonomyDeletionResponse {
     #[prost(bool, tag="1")]
     pub accepted: bool,
     #[prost(string, tag="2")]

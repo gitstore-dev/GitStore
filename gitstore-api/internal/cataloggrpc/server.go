@@ -288,8 +288,8 @@ func (s *Server) ValidateResources(
 // child deletion or reparenting to satisfy a parent deletion precondition.
 func (s *Server) ValidateCategoryTaxonomyDeletion(
 	ctx context.Context,
-	req *catalogv1.CategoryTaxonomyDeletionValidationRequest,
-) (*catalogv1.CategoryTaxonomyDeletionValidationResponse, error) {
+	req *catalogv1.ValidateCategoryTaxonomyDeletionRequest,
+) (*catalogv1.ValidateCategoryTaxonomyDeletionResponse, error) {
 	if req.GetRepositoryId() == "" {
 		return nil, grpcstatus.Error(codes.InvalidArgument, "repository_id is required")
 	}
@@ -334,7 +334,7 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 				Name:       parentRef.Name,
 			}
 			if _, blocked := deletedCategories[parent.key()]; blocked {
-				return &catalogv1.CategoryTaxonomyDeletionValidationResponse{
+				return &catalogv1.ValidateCategoryTaxonomyDeletionResponse{
 					Accepted: false,
 					Reason:   "child categories present",
 				}, nil
@@ -342,7 +342,7 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 		}
 	}
 
-	return &catalogv1.CategoryTaxonomyDeletionValidationResponse{Accepted: true}, nil
+	return &catalogv1.ValidateCategoryTaxonomyDeletionResponse{Accepted: true}, nil
 }
 
 func (s *Server) parseDeletionTreeEntries(blobs []*catalogv1.ResourceBlob, defaultNamespace string) ([]*parsedEntry, error) {

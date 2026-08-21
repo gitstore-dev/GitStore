@@ -214,8 +214,8 @@ mod tests {
 
     use catalog_proto::{
         catalog_service_server::{CatalogService, CatalogServiceServer},
-        AdmitResourcesResponse, CategoryTaxonomyDeletionValidationRequest,
-        CategoryTaxonomyDeletionValidationResponse, ValidateResourcesRequest,
+        AdmitResourcesResponse, ValidateCategoryTaxonomyDeletionRequest,
+        ValidateCategoryTaxonomyDeletionResponse, ValidateResourcesRequest,
         ValidateResourcesResponse,
     };
     use std::sync::{
@@ -264,9 +264,9 @@ mod tests {
 
         async fn validate_category_taxonomy_deletion(
             &self,
-            _req: Request<CategoryTaxonomyDeletionValidationRequest>,
-        ) -> Result<Response<CategoryTaxonomyDeletionValidationResponse>, Status> {
-            Ok(Response::new(CategoryTaxonomyDeletionValidationResponse {
+            _req: Request<ValidateCategoryTaxonomyDeletionRequest>,
+        ) -> Result<Response<ValidateCategoryTaxonomyDeletionResponse>, Status> {
+            Ok(Response::new(ValidateCategoryTaxonomyDeletionResponse {
                 accepted: true,
                 reason: String::new(),
             }))
