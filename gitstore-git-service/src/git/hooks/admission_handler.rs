@@ -90,6 +90,7 @@ impl AdmissionHandler for AdmissionControlHandler {
             let ref_name = update.ref_name.clone();
             let mut client = self.client.clone();
             let repository_id = repository_id.to_string();
+            let actor_subject = hook_ctx.actor_subject.clone();
             let changed_paths = repo
                 .as_ref()
                 .map(|r| compute_changed_paths_in_repo(r, &update.old_oid, &update.new_oid))
@@ -103,6 +104,7 @@ impl AdmissionHandler for AdmissionControlHandler {
                     old_commit_sha,
                     new_commit_sha,
                     changed_paths,
+                    actor_subject,
                 };
                 if let Err(e) = client.admit_resources(req).await {
                     error!(
@@ -220,7 +222,7 @@ mod tests {
     };
     use std::sync::{
         atomic::{AtomicU32, Ordering},
-        Arc,
+        Arc, Mutex,
     };
     use tokio::time::Duration;
     use tonic::{transport::Server, Request, Response, Status};
@@ -240,6 +242,7 @@ mod tests {
 
     struct MockCatalogService {
         admit_call_count: Arc<AtomicU32>,
+        actor_subject: Arc<Mutex<String>>,
     }
 
     #[tonic::async_trait]
@@ -256,9 +259,10 @@ mod tests {
 
         async fn admit_resources(
             &self,
-            _req: Request<AdmitResourcesRequest>,
+            req: Request<AdmitResourcesRequest>,
         ) -> Result<Response<AdmitResourcesResponse>, Status> {
             self.admit_call_count.fetch_add(1, Ordering::SeqCst);
+            *self.actor_subject.lock().unwrap() = req.into_inner().actor_subject;
             Ok(Response::new(AdmitResourcesResponse {}))
         }
 
@@ -274,10 +278,18 @@ mod tests {
     }
 
     async fn start_mock_server(admit_count: Arc<AtomicU32>) -> String {
+        start_mock_server_with_actor(admit_count, Arc::new(Mutex::new(String::new()))).await
+    }
+
+    async fn start_mock_server_with_actor(
+        admit_count: Arc<AtomicU32>,
+        actor_subject: Arc<Mutex<String>>,
+    ) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let svc = MockCatalogService {
             admit_call_count: admit_count,
+            actor_subject,
         };
         tokio::spawn(async move {
             Server::builder()
@@ -332,6 +344,30 @@ mod tests {
             1,
             "expected one AdmitResources call"
         );
+    }
+
+    #[tokio::test]
+    async fn test_matching_ref_forwards_actor_subject() {
+        let count = Arc::new(AtomicU32::new(0));
+        let actor_subject = Arc::new(Mutex::new(String::new()));
+        let addr = start_mock_server_with_actor(count, actor_subject.clone()).await;
+        let handler = AdmissionControlHandler::connect(&addr, "refs/heads/main".to_string())
+            .await
+            .unwrap();
+
+        handler
+            .admit(
+                "post-receive",
+                &[make_update("refs/heads/main", false)],
+                "repo-1",
+                std::path::Path::new(""),
+                &make_hook_context("alice"),
+            )
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(*actor_subject.lock().unwrap(), "alice");
     }
 
     // T019b: ref NOT matching branch_pattern → Accept immediately, no gRPC call

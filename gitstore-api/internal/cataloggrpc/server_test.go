@@ -184,6 +184,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 		CommitSha:    a,
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
+		ActorSubject: "alice",
 	})
 	require.NoError(t, err)
 	created, err := store.GetNamespaceByName(context.Background(), "acme-store")
@@ -194,6 +195,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 	assert.Equal(t, "1", created.ResourceVersion)
 	assert.Equal(t, "gitstore.dev/v1beta1", created.APIVersion)
 	assert.Equal(t, "Namespace", created.Kind)
+	assert.Equal(t, "alice", created.CreationActor)
 	assert.NotEmpty(t, created.UID)
 	assert.Equal(t, "main@sha1:"+a, created.Revision)
 	assert.Equal(t, path, created.SourcePath)

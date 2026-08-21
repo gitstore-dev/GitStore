@@ -545,12 +545,18 @@ func (s *Server) AdmitResources(
 	branch := strings.TrimPrefix(req.RefName, "refs/heads/")
 	revision := branch + "@sha1:" + newCommit
 	now := s.clock.Now().UTC()
+	actorSubject := strings.TrimSpace(req.GetActorSubject())
+	if actorSubject == "" {
+		// Preserve compatibility with git-service replicas that predate actor_subject.
+		actorSubject = "admission"
+	}
 
 	// Build the admission context once so every per-file admit helper can read
 	// namespace, commit SHA, ref, and wall-clock time without re-querying the DB.
 	admCtx := AdmissionContext{
 		RepositoryID: req.RepositoryId,
 		Namespace:    repoNamespace,
+		ActorSubject: actorSubject,
 		CommitSHA:    newCommit,
 		RefName:      req.RefName,
 		Revision:     revision,
@@ -1052,9 +1058,9 @@ func (s *Server) admitNamespace(
 				ResourceVersion:   datastore.NamespaceInitialResourceVersion,
 				Revision:          admCtx.Revision,
 				CreationTimestamp: admCtx.Now,
-				CreationActor:     "admission",
+				CreationActor:     admCtx.ActorSubject,
 				UpdateTimestamp:   admCtx.Now,
-				UpdateActor:       "admission",
+				UpdateActor:       admCtx.ActorSubject,
 				Labels:            cloneStringMap(resource.Metadata.Labels),
 				Annotations:       cloneStringMap(resource.Metadata.Annotations),
 				OwnerReferences:   ownerReferences,
@@ -1090,7 +1096,7 @@ func (s *Server) admitNamespace(
 			existing.Kind = resource.Kind
 			existing.Revision = admCtx.Revision
 			existing.UpdateTimestamp = admCtx.Now
-			existing.UpdateActor = "admission"
+			existing.UpdateActor = admCtx.ActorSubject
 			existing.Labels = cloneStringMap(resource.Metadata.Labels)
 			existing.Annotations = cloneStringMap(resource.Metadata.Annotations)
 			existing.SourcePath = sourcePath
