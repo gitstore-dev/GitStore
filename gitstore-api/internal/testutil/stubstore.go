@@ -23,6 +23,22 @@ type StubStore struct {
 	GetCategoryTaxonomyFunc func(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error)
 }
 
+func (s *StubStore) CreateFile(_ context.Context, _ *datastore.File) error { return nil }
+func (s *StubStore) GetFile(_ context.Context, _ string) (*datastore.File, error) {
+	return nil, datastore.ErrNotFound
+}
+func (s *StubStore) GetFileByName(_ context.Context, _, _ string) (*datastore.File, error) {
+	return nil, datastore.ErrNotFound
+}
+func (s *StubStore) ListFiles(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
+	return &datastore.PageResult[datastore.File]{}, nil
+}
+func (s *StubStore) UpdateFile(_ context.Context, _ *datastore.File) error { return nil }
+func (s *StubStore) DeleteFile(_ context.Context, _ string) error          { return nil }
+func (s *StubStore) UpdateFileStatus(_ context.Context, _, _ string, _ datastore.FileStatusPatch) (*datastore.File, error) {
+	return nil, datastore.ErrNotFound
+}
+
 func (s *StubStore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
 	if s.GetNamespaceByNameFunc != nil {
 		return s.GetNamespaceByNameFunc(ctx, name)

@@ -378,10 +378,71 @@ type EligibilityDefinition struct {
 	Constraints []*PriceRuleConstraint `json:"constraints"`
 }
 
+type File struct {
+	ID         string      `json:"id"`
+	APIVersion string      `json:"apiVersion"`
+	Kind       string      `json:"kind"`
+	Metadata   *ObjectMeta `json:"metadata"`
+	Spec       *FileSpec   `json:"spec"`
+	Status     *FileStatus `json:"status,omitempty"`
+	Body       *string     `json:"body,omitempty"`
+}
+
+func (File) IsNode() {}
+
+// Globally unique identifier (format: [type]_[base62])
+func (this File) GetID() string { return this.ID }
+
+type FileChecksum struct {
+	Algorithm string `json:"algorithm"`
+	Value     string `json:"value"`
+}
+
+type FileImageProcessing struct {
+	Variants []*FileVariantRequest `json:"variants"`
+}
+
+type FileProcessing struct {
+	Image *FileImageProcessing `json:"image,omitempty"`
+}
+
 type FileReference struct {
 	Name     string `json:"name"`
 	Kind     string `json:"kind"`
 	Optional bool   `json:"optional"`
+}
+
+type FileSource struct {
+	Type           string        `json:"type"`
+	URI            string        `json:"uri"`
+	Checksum       *FileChecksum `json:"checksum,omitempty"`
+	CredentialsRef *SecretRef    `json:"credentialsRef,omitempty"`
+}
+
+type FileSpec struct {
+	ContentType string          `json:"contentType"`
+	Type        *string         `json:"type,omitempty"`
+	Source      *FileSource     `json:"source"`
+	Processing  *FileProcessing `json:"processing,omitempty"`
+}
+
+type FileStatus struct {
+	ObservedGeneration  int32                   `json:"observedGeneration"`
+	LastAppliedRevision string                  `json:"lastAppliedRevision"`
+	Conditions          []*Condition            `json:"conditions"`
+	Resolved            *ResolvedFileDefinition `json:"resolved,omitempty"`
+}
+
+type FileVariantRequest struct {
+	Name string `json:"name"`
+}
+
+type FileWatchEvent struct {
+	Type            WatchEventType `json:"type"`
+	Namespace       *string        `json:"namespace,omitempty"`
+	Name            string         `json:"name"`
+	ResourceVersion string         `json:"resourceVersion"`
+	File            *File          `json:"file,omitempty"`
 }
 
 type HookToggle struct {
@@ -1056,9 +1117,15 @@ type ResolvedCollectionDefinition struct {
 }
 
 type ResolvedFileDefinition struct {
-	Name        string  `json:"name"`
-	URL         string  `json:"url"`
-	ContentType *string `json:"contentType,omitempty"`
+	Name             string                 `json:"name"`
+	URL              string                 `json:"url"`
+	ContentType      *string                `json:"contentType,omitempty"`
+	ResolvedVariants []*ResolvedFileVariant `json:"resolvedVariants"`
+}
+
+type ResolvedFileVariant struct {
+	Name string  `json:"name"`
+	URL  *string `json:"url,omitempty"`
 }
 
 // Resolved inventory summary for a ProductVariant.
@@ -1121,6 +1188,13 @@ type ResolvedRepositoryDefinition struct {
 type SchemaValidationDefaults struct {
 	Phase          *string `json:"phase,omitempty"`
 	TimeoutSeconds *int32  `json:"timeoutSeconds,omitempty"`
+}
+
+type SecretRef struct {
+	Kind      string  `json:"kind"`
+	Name      string  `json:"name"`
+	Key       *string `json:"key,omitempty"`
+	Namespace *string `json:"namespace,omitempty"`
 }
 
 // A resolved name/value pair representing one product option selection.

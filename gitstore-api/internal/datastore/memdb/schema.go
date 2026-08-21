@@ -10,6 +10,9 @@ var schema = &memdb.DBSchema{
 		"product": resourceTableSchema("product", map[string]*memdb.IndexSchema{
 			"repository_id": optionalStringIndex("repository_id", "RepositoryID"),
 		}),
+		"file": resourceTableSchema("file", map[string]*memdb.IndexSchema{
+			"repository_id": optionalStringIndex("repository_id", "RepositoryID"),
+		}),
 		"category_taxonomy": resourceTableSchema("category_taxonomy", map[string]*memdb.IndexSchema{
 			"parent_name":   optionalStringIndex("parent_name", "ParentName"),
 			"ancestor_path": optionalStringIndex("ancestor_path", "AncestorPath"),

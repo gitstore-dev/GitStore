@@ -65,6 +65,7 @@ type QueryResolver interface {
 type SubscriptionResolver interface {
 	WatchResources(ctx context.Context, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.WatchEvent, error)
 	WatchCategories(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.CategoryWatchEvent, error)
+	WatchFiles(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.FileWatchEvent, error)
 	WatchProducts(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.ProductWatchEvent, error)
 }
 
@@ -761,6 +762,36 @@ func (ec *executionContext) field_Query_repository_args(ctx context.Context, raw
 }
 
 func (ec *executionContext) field_Subscription_watchCategories_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "namespace",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["namespace"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "selector",
+		func(ctx context.Context, v any) (*model.LabelSelectorInput, error) {
+			return ec.unmarshalOLabelSelectorInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐLabelSelectorInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["selector"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "resourceVersion",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["resourceVersion"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_Subscription_watchFiles_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
 	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "namespace",
@@ -3172,6 +3203,50 @@ func (ec *executionContext) fieldContext_Subscription_watchCategories(ctx contex
 	return fc, nil
 }
 
+func (ec *executionContext) _Subscription_watchFiles(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	return graphql.ResolveFieldStream(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Subscription_watchFiles(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Subscription().WatchFiles(ctx, fc.Args["namespace"].(*string), fc.Args["selector"].(*model.LabelSelectorInput), fc.Args["resourceVersion"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.FileWatchEvent) graphql.Marshaler {
+			return ec.marshalNFileWatchEvent2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐFileWatchEvent(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Subscription_watchFiles(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_FileWatchEvent(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subscription_watchFiles_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Subscription_watchProducts(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
 	return graphql.ResolveFieldStream(
 		ctx,
@@ -3970,6 +4045,13 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			return graphql.Null
 		}
 		return ec._Namespace(ctx, sel, obj)
+	case model.File:
+		return ec._File(ctx, sel, &obj)
+	case *model.File:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._File(ctx, sel, obj)
 	case model.Collection:
 		return ec._Collection(ctx, sel, &obj)
 	case *model.Collection:
@@ -4793,6 +4875,8 @@ func (ec *executionContext) _Subscription(ctx context.Context, sel ast.Selection
 		return ec._Subscription_watchResources(ctx, fields[0])
 	case "watchCategories":
 		return ec._Subscription_watchCategories(ctx, fields[0])
+	case "watchFiles":
+		return ec._Subscription_watchFiles(ctx, fields[0])
 	case "watchProducts":
 		return ec._Subscription_watchProducts(ctx, fields[0])
 	default:

@@ -114,7 +114,7 @@ Common bootstrap variables:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/048-scylla-query-design/plan.md
+at specs/051-file-resource-contract/plan.md
 <!-- SPECKIT END -->
 
 ## graphify

@@ -161,6 +161,131 @@ func New() (datastore.Datastore, error) {
 
 func (m *memdbDatastore) Close() error { return nil }
 
+func (m *memdbDatastore) CreateFile(_ context.Context, f *datastore.File) error {
+	if f == nil {
+		return fmt.Errorf("%w: file is nil", datastore.ErrInvalidArgument)
+	}
+	txn := m.db.Txn(true)
+	if raw, _ := txn.First("file", "id", f.UID); raw != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: file uid %s", datastore.ErrAlreadyExists, f.UID)
+	}
+	if raw, _ := txn.First("file", "name_namespace", f.Namespace, f.Name); raw != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: file %s/%s", datastore.ErrAlreadyExists, f.Namespace, f.Name)
+	}
+	if err := txn.Insert("file", cloneFile(f)); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: insert file: %w", err)
+	}
+	if err := syncOwnerReferenceProjections(txn, f.Namespace, f.RepositoryID, "File", f.UID, f.Name, f.ResourceVersion, f.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) GetFile(_ context.Context, uid string) (*datastore.File, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("file", "id", uid)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return cloneFile(raw.(*datastore.File)), nil
+}
+
+func (m *memdbDatastore) GetFileByName(_ context.Context, namespace, name string) (*datastore.File, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("file", "name_namespace", namespace, name)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return cloneFile(raw.(*datastore.File)), nil
+}
+
+func (m *memdbDatastore) ListFiles(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	it, err := txn.Get("file", "namespace", namespace)
+	if err != nil {
+		return nil, fmt.Errorf("memdb: list files: %w", err)
+	}
+	var all []*datastore.File
+	for obj := it.Next(); obj != nil; obj = it.Next() {
+		all = append(all, cloneFile(obj.(*datastore.File)))
+	}
+	return paginateSlice(all, page, func(f *datastore.File) (time.Time, string) { return f.CreationTimestamp, f.UID }), nil
+}
+
+func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File) error {
+	if f == nil {
+		return fmt.Errorf("%w: file is nil", datastore.ErrInvalidArgument)
+	}
+	txn := m.db.Txn(true)
+	if raw, _ := txn.First("file", "id", f.UID); raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: file uid %s", datastore.ErrNotFound, f.UID)
+	}
+	if raw, _ := txn.First("file", "name_namespace", f.Namespace, f.Name); raw != nil && raw.(*datastore.File).UID != f.UID {
+		txn.Abort()
+		return fmt.Errorf("%w: file %s/%s", datastore.ErrAlreadyExists, f.Namespace, f.Name)
+	}
+	if err := txn.Insert("file", cloneFile(f)); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: update file: %w", err)
+	}
+	if err := syncOwnerReferenceProjections(txn, f.Namespace, f.RepositoryID, "File", f.UID, f.Name, f.ResourceVersion, f.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) DeleteFile(_ context.Context, uid string) error {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("file", "id", uid)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: file uid %s", datastore.ErrNotFound, uid)
+	}
+
+	if err := txn.Delete("file", raw); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: delete file: %w", err)
+	}
+	file := raw.(*datastore.File)
+	if err := deleteOwnerReferenceProjections(txn, "File", file.UID); err != nil {
+		txn.Abort()
+		return err
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) UpdateFileStatus(_ context.Context, namespace, name string, patch datastore.FileStatusPatch) (*datastore.File, error) {
+	txn := m.db.Txn(true)
+	raw, err := txn.First("file", "name_namespace", namespace, name)
+	if err != nil || raw == nil {
+		txn.Abort()
+		return nil, fmt.Errorf("%w: file %s/%s", datastore.ErrNotFound, namespace, name)
+	}
+	updated := cloneFile(raw.(*datastore.File))
+	if err := datastore.ApplyFileStatusPatch(updated, patch); err != nil {
+		txn.Abort()
+		return nil, err
+	}
+	if err := txn.Insert("file", updated); err != nil {
+		txn.Abort()
+		return nil, fmt.Errorf("memdb: update file status: %w", err)
+	}
+	txn.Commit()
+	return cloneFile(updated), nil
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // notFoundOrErr converts a nil result from txn.First into ErrNotFound,
@@ -1162,6 +1287,21 @@ func cloneProduct(product *datastore.Product) *datastore.Product {
 	clone.Spec = append([]byte(nil), product.Spec...)
 	clone.Status = append([]byte(nil), product.Status...)
 	clone.DeletionTimestamp = cloneTimePointer(product.DeletionTimestamp)
+	return &clone
+}
+
+func cloneFile(file *datastore.File) *datastore.File {
+	if file == nil {
+		return nil
+	}
+	clone := *file
+	clone.Labels = cloneStringMap(file.Labels)
+	clone.Annotations = cloneStringMap(file.Annotations)
+	clone.OwnerReferences = append([]byte(nil), file.OwnerReferences...)
+	clone.Finalizers = append([]string(nil), file.Finalizers...)
+	clone.Spec = append([]byte(nil), file.Spec...)
+	clone.Status = append([]byte(nil), file.Status...)
+	clone.DeletionTimestamp = cloneTimePointer(file.DeletionTimestamp)
 	return &clone
 }
 

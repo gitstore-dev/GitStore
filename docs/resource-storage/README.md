@@ -187,3 +187,6 @@ Subresources should use the same storage decision as the data they represent:
 - [CategoryTaxonomy Spec Reference](../categories/category-taxonomy-spec.md)
 - [Collection Spec Reference](../collections/collection-spec.md)
 - [Pluggable Identity and Access Design](../implementation/019-pluggable_auth_design.md)
+File manifests are documented in `git-backed.md`; the File contract is
+`storage.gitstore.dev/v1beta1` / `File`. Source payload work and controller
+processing are intentionally deferred from the current admission phase.

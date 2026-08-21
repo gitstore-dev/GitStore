@@ -170,6 +170,48 @@ type CategoryTaxonomyStatusPatch struct {
 	Resolved            *catalog.ResolvedCategoryTaxonomy
 }
 
+type FileStatusPatch struct {
+	ResourceVersion     string
+	ObservedGeneration  *int64
+	LastAppliedRevision *string
+	Conditions          []catalog.Condition
+	Resolved            *catalog.ResolvedFileDefinition
+}
+
+func ApplyFileStatusPatch(f *File, patch FileStatusPatch) error {
+	if patch.ResourceVersion != f.ResourceVersion {
+		return ErrConflict
+	}
+	var status catalog.FileStatus
+	if len(f.Status) > 0 {
+		if err := json.Unmarshal(f.Status, &status); err != nil {
+			return fmt.Errorf("datastore: unmarshal file status: %w", err)
+		}
+	}
+	if patch.ObservedGeneration != nil {
+		status.ObservedGeneration = *patch.ObservedGeneration
+	}
+	if patch.LastAppliedRevision != nil {
+		status.LastAppliedRevision = *patch.LastAppliedRevision
+	}
+	if patch.Conditions != nil {
+		if err := catalog.ValidateFileConditions(patch.Conditions); err != nil {
+			return err
+		}
+		status.Conditions = patch.Conditions
+	}
+	if patch.Resolved != nil {
+		status.Resolved = patch.Resolved
+	}
+	raw, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	f.Status = raw
+	f.ResourceVersion = nextResourceVersion(f.ResourceVersion)
+	return nil
+}
+
 type NamespaceStatusPatch struct {
 	ResourceVersion     string
 	ObservedGeneration  *int64
@@ -252,7 +294,16 @@ func ApplyCategoryTaxonomyStatusPatch(c *CategoryTaxonomy, patch CategoryTaxonom
 // The abstraction never retries or reconnects internally; storage errors are
 // propagated immediately to callers (FR-007a).
 type Datastore interface {
+	// File operations
+	CreateFile(ctx context.Context, f *File) error
+	GetFile(ctx context.Context, uid string) (*File, error)
+	GetFileByName(ctx context.Context, namespace, name string) (*File, error)
+	ListFiles(ctx context.Context, namespace string, page PageParams) (*PageResult[File], error)
+	UpdateFile(ctx context.Context, f *File) error
+	DeleteFile(ctx context.Context, uid string) error
+
 	// Product operations
+	UpdateFileStatus(ctx context.Context, namespace, name string, patch FileStatusPatch) (*File, error)
 	CreateProduct(ctx context.Context, p *Product) error
 	GetProduct(ctx context.Context, uid string) (*Product, error)
 	GetProductByName(ctx context.Context, namespace, name string) (*Product, error)
