@@ -1353,6 +1353,29 @@ func (ec *executionContext) fieldContext_UpdateCategoryStatusPayload_conflict(_ 
 	return fc, nil
 }
 
+func (ec *executionContext) _UpdateCategoryStatusPayload_hasMoreProductDependents(ctx context.Context, field graphql.CollectedField, obj *model.UpdateCategoryStatusPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UpdateCategoryStatusPayload_hasMoreProductDependents(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.HasMoreProductDependents, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UpdateCategoryStatusPayload_hasMoreProductDependents(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UpdateCategoryStatusPayload", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
 // endregion **************************** field.gotpl *****************************
 
 // region    **************************** input.gotpl *****************************
@@ -1630,7 +1653,7 @@ func (ec *executionContext) unmarshalInputUpdateCategoryStatusInput(ctx context.
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "namespace", "resourceVersion", "observedGeneration", "lastAppliedRevision", "conditions", "resolved"}
+	fieldsInOrder := [...]string{"name", "namespace", "resourceVersion", "observedGeneration", "lastAppliedRevision", "conditions", "resolved", "completeDeletion", "decoupleProducts"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -1686,6 +1709,20 @@ func (ec *executionContext) unmarshalInputUpdateCategoryStatusInput(ctx context.
 				return it, err
 			}
 			it.Resolved = data
+		case "completeDeletion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("completeDeletion"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CompleteDeletion = data
+		case "decoupleProducts":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("decoupleProducts"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DecoupleProducts = data
 		}
 	}
 	return it, nil
@@ -2367,6 +2404,11 @@ func (ec *executionContext) _UpdateCategoryStatusPayload(ctx context.Context, se
 			out.Values[i] = ec._UpdateCategoryStatusPayload_category(ctx, field, obj)
 		case "conflict":
 			out.Values[i] = ec._UpdateCategoryStatusPayload_conflict(ctx, field, obj)
+		case "hasMoreProductDependents":
+			out.Values[i] = ec._UpdateCategoryStatusPayload_hasMoreProductDependents(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

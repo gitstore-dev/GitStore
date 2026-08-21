@@ -40,6 +40,51 @@ func categoryNodeJSON(uid, name, namespace, rv string, generation int, parentRef
 	}
 }
 
+func TestList_DecodesCategoryLifecycleMetadata(t *testing.T) {
+	deletionTimestamp := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
+	node := categoryNodeJSON("uid-1", "electronics", "acme", "7", 1, "")
+	metadata := node["metadata"].(map[string]any)
+	metadata["finalizers"] = []string{"gitstore.dev/foreground-deletion"}
+	metadata["deletionTimestamp"] = deletionTimestamp
+	metadata["ownerReferences"] = []any{map[string]any{
+		"uid": "parent-uid", "kind": "CategoryTaxonomy", "blockOwnerDeletion": true,
+	}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if strings.Contains(req.Query, "namespaces(") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"namespaces": map[string]any{
+				"edges":    []any{map[string]any{"node": map[string]any{"identifier": "acme"}}},
+				"pageInfo": map[string]any{"hasNextPage": false},
+			}}})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"categories": map[string]any{
+			"edges":    []any{map[string]any{"node": node}},
+			"pageInfo": map[string]any{"hasNextPage": false},
+		}}})
+	}))
+	defer srv.Close()
+
+	response, err := listwatch.NewCategoryTaxonomyListWatcher(graphqlclient.New(srv.URL, "test-token")).List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	category := response.Items[0]
+	if category.DeletionTimestamp == nil || category.DeletionTimestamp.Format(time.RFC3339) != deletionTimestamp {
+		t.Fatalf("deletion timestamp = %v, want %s", category.DeletionTimestamp, deletionTimestamp)
+	}
+	if len(category.Finalizers) != 1 || category.Finalizers[0] != "gitstore.dev/foreground-deletion" {
+		t.Fatalf("finalizers = %v", category.Finalizers)
+	}
+	if len(category.OwnerReferences) != 1 || !category.OwnerReferences[0].BlockOwnerDeletion {
+		t.Fatalf("owner references = %#v", category.OwnerReferences)
+	}
+}
+
 func TestList_PaginatesToCompletionAndReturnsHighestResourceVersion(t *testing.T) {
 	pages := []map[string]any{
 		{
