@@ -2,7 +2,7 @@
 
 **Feature Branch**: `053-controller-reconciliation-closure`
 **Created**: 2026-08-20
-**Status**: Draft
+**Status**: Closed
 **Input**: User description: "Controller Manager Reconciliation Loop for Core Resources and CRDs — Phase-1 closeout and rescope of GH#165. GH#165 is an umbrella issue whose own Implementation Plan (#180-#183) and Namespace-specific slice (spec 046) are fully shipped. Its body-text dependency list (#131, #149, #164) is stale: #131 is closed, #149/#164 are Phase-4 CRD work per docs/implementation/032-phased-implementation.md, and should not gate a Phase-1 initiative. #243 (CategoryTaxonomy deletion/GC) is the one legitimate Phase-1-relevant dependent still citing #165 as a blocker, but that blocker is resolved now that the controller-manager runtime exists; #243's real remaining gap is its own unwritten spec (specs/052-categorytaxonomy-deletion-semantics). This spec documents that audit and specifies the closeout/rescope actions needed to bring GH#165 and its dependency graph in line with actual code and doc state."
 
 ## User Scenarios & Testing *(mandatory)*
