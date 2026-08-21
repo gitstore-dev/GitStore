@@ -2,7 +2,7 @@
 
 **Feature Branch**: `052-categorytaxonomy-deletion-semantics`
 **Created**: 2026-08-20
-**Status**: Draft
+**Status**: Closed
 **Input**: User description: "CategoryTaxonomy Deletion Semantics, OwnerReferences, and Garbage Collection (GH#243). Define and implement deletion semantics for CategoryTaxonomy resources when dependents (child categories or associated products) still exist. Determine garbage collection strategy via OwnerReferences. In scope: define deletion semantics (block vs cascade), define what happens to orphaned child categories, define what happens to products associated with a deleted category, define the GC strategy via controller reconciliation, integration tests covering deletion with and without dependents. Out of scope: CategoryTaxonomy creation/update validation (GH#82, spec 021), controller manager runtime (GH#165)."
 
 ## Clarifications

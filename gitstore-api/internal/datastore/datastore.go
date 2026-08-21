@@ -27,6 +27,53 @@ var (
 // DefaultPageSize is used when First/Last is zero.
 const DefaultPageSize = 100
 
+// MaxOwnerDependentPageSize is the hard upper bound for reverse-owner pages.
+// It prevents a caller from turning a controller continuation into an
+// unbounded datastore read.
+const MaxOwnerDependentPageSize = 100
+
+// CategoryTaxonomyForegroundDeletionFinalizer holds a CategoryTaxonomy while
+// its controller rechecks blocking dependents and decouples Products.
+const CategoryTaxonomyForegroundDeletionFinalizer = "gitstore.dev/foreground-deletion"
+
+// MarkCategoryTaxonomyTerminating writes the lifecycle condition that makes a
+// foreground deletion visible before a controller observes the next watch
+// event. It does not advance resourceVersion; callers include it in their
+// atomic deletion-mark transition.
+func MarkCategoryTaxonomyTerminating(category *CategoryTaxonomy, at time.Time) error {
+	var status catalog.CategoryTaxonomyStatus
+	if len(category.Status) > 0 {
+		if err := json.Unmarshal(category.Status, &status); err != nil {
+			return fmt.Errorf("datastore: unmarshal category taxonomy status: %w", err)
+		}
+	}
+	condition := catalog.Condition{
+		Type:               catalog.ConditionTerminating,
+		Status:             catalog.ConditionTrue,
+		ObservedGeneration: category.Generation,
+		LastTransitionTime: at,
+		Reason:             "DeletionRequested",
+		Message:            "CategoryTaxonomy is awaiting foreground deletion completion.",
+	}
+	replaced := false
+	for index := range status.Conditions {
+		if status.Conditions[index].Type == catalog.ConditionTerminating {
+			status.Conditions[index] = condition
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		status.Conditions = append(status.Conditions, condition)
+	}
+	raw, err := json.Marshal(status)
+	if err != nil {
+		return fmt.Errorf("datastore: marshal terminating category taxonomy status: %w", err)
+	}
+	category.Status = raw
+	return nil
+}
+
 // PageParams defines keyset pagination parameters for any list operation.
 type PageParams struct {
 	First  int    // forward page size (0 = DefaultPageSize)
@@ -58,6 +105,44 @@ type PageResult[T any] struct {
 	HasNext     bool
 	HasPrevious bool
 	TotalCount  int32 // -1 if unknown/expensive to compute
+}
+
+// OwnerReferenceScope restricts dependent lookups to the repository that
+// authored both resources. Owner UIDs are not globally sufficient because
+// controllers and admission operate on repository-scoped catalog records.
+type OwnerReferenceScope struct {
+	Namespace    string
+	RepositoryID string
+}
+
+// OwnerDependent is the minimal, stable record returned by a reverse
+// owner-reference query. Its cursor is DependentUID, ordered ascending.
+type OwnerDependent struct {
+	DependentUID    string
+	DependentKind   string
+	Name            string
+	ResourceVersion string
+}
+
+// OwnerDependentPage is a bounded, keyset-paginated dependent page.
+type OwnerDependentPage struct {
+	Items      []OwnerDependent
+	NextCursor string
+}
+
+// OwnerReferenceStore is implemented by durable stores that maintain the
+// reverse owner-reference projection. It intentionally remains additive to
+// Datastore so older test stores and rolling-upgrade readers continue to work.
+type OwnerReferenceStore interface {
+	HasBlockingOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID string) (bool, error)
+	ListNonBlockingProductOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID, after string, limit int) (OwnerDependentPage, error)
+}
+
+// CategoryTaxonomyDeletionStore provides the durable foreground-deletion
+// lifecycle used by both Git admission and the existing deleteCategory API.
+type CategoryTaxonomyDeletionStore interface {
+	MarkCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string, at time.Time) (*CategoryTaxonomy, error)
+	CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*CategoryTaxonomy, error)
 }
 
 // GlobalRepositoryLister is the optional contract for backends that provide a

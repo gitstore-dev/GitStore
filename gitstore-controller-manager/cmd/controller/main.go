@@ -175,6 +175,7 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 		statusClient,
 		categorytaxonomy.NewProductCounter(client),
 		mgr.Enqueue,
+		categorytaxonomy.NewGraphQLDeletionClient(client),
 	)
 
 	runner := &listwatch.Runner[categorytaxonomy.CategoryTaxonomy]{

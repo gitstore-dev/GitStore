@@ -274,6 +274,7 @@ type ComplexityRoot struct {
 		UpdateCategoryStatus      func(childComplexity int, input model.UpdateCategoryStatusInput) int
 		UpdateCollection          func(childComplexity int, input model.UpdateCollectionInput) int
 		UpdateNamespace           func(childComplexity int, input model.UpdateNamespaceInput) int
+		UpdateProductStatus       func(childComplexity int, input model.UpdateProductStatusInput) int
 		UpdateResourceStatus      func(childComplexity int, input model.UpdateResourceStatusInput) int
 	}
 
@@ -347,6 +348,7 @@ type ComplexityRoot struct {
 	ObjectMeta struct {
 		Annotations       func(childComplexity int) int
 		CreationTimestamp func(childComplexity int) int
+		DeletionTimestamp func(childComplexity int) int
 		Finalizers        func(childComplexity int) int
 		Generation        func(childComplexity int) int
 		Labels            func(childComplexity int) int
@@ -359,10 +361,11 @@ type ComplexityRoot struct {
 	}
 
 	OwnerReference struct {
-		APIVersion func(childComplexity int) int
-		Kind       func(childComplexity int) int
-		Name       func(childComplexity int) int
-		UID        func(childComplexity int) int
+		APIVersion         func(childComplexity int) int
+		BlockOwnerDeletion func(childComplexity int) int
+		Kind               func(childComplexity int) int
+		Name               func(childComplexity int) int
+		UID                func(childComplexity int) int
 	}
 
 	PageInfo struct {
@@ -699,8 +702,9 @@ type ComplexityRoot struct {
 	}
 
 	UpdateCategoryStatusPayload struct {
-		Category func(childComplexity int) int
-		Conflict func(childComplexity int) int
+		Category                 func(childComplexity int) int
+		Conflict                 func(childComplexity int) int
+		HasMoreProductDependents func(childComplexity int) int
 	}
 
 	UpdateCollectionPayload struct {
@@ -710,6 +714,11 @@ type ComplexityRoot struct {
 
 	UpdateNamespacePayload struct {
 		Namespace func(childComplexity int) int
+	}
+
+	UpdateProductStatusPayload struct {
+		Conflict func(childComplexity int) int
+		Product  func(childComplexity int) int
 	}
 
 	UpdateResourceStatusPayload struct {
@@ -1753,6 +1762,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.UpdateNamespace(childComplexity, args["input"].(model.UpdateNamespaceInput)), true
 
+	case "Mutation.updateProductStatus":
+		if e.ComplexityRoot.Mutation.UpdateProductStatus == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateProductStatus_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateProductStatus(childComplexity, args["input"].(model.UpdateProductStatusInput)), true
+
 	case "Mutation.updateResourceStatus":
 		if e.ComplexityRoot.Mutation.UpdateResourceStatus == nil {
 			break
@@ -2080,6 +2101,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ObjectMeta.CreationTimestamp(childComplexity), true
 
+	case "ObjectMeta.deletionTimestamp":
+		if e.ComplexityRoot.ObjectMeta.DeletionTimestamp == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ObjectMeta.DeletionTimestamp(childComplexity), true
+
 	case "ObjectMeta.finalizers":
 		if e.ComplexityRoot.ObjectMeta.Finalizers == nil {
 			break
@@ -2149,6 +2177,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.OwnerReference.APIVersion(childComplexity), true
+
+	case "OwnerReference.blockOwnerDeletion":
+		if e.ComplexityRoot.OwnerReference.BlockOwnerDeletion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.OwnerReference.BlockOwnerDeletion(childComplexity), true
 
 	case "OwnerReference.kind":
 		if e.ComplexityRoot.OwnerReference.Kind == nil {
@@ -3577,6 +3612,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateCategoryStatusPayload.Conflict(childComplexity), true
 
+	case "UpdateCategoryStatusPayload.hasMoreProductDependents":
+		if e.ComplexityRoot.UpdateCategoryStatusPayload.HasMoreProductDependents == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateCategoryStatusPayload.HasMoreProductDependents(childComplexity), true
+
 	case "UpdateCollectionPayload.collection":
 		if e.ComplexityRoot.UpdateCollectionPayload.Collection == nil {
 			break
@@ -3597,6 +3639,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.UpdateNamespacePayload.Namespace(childComplexity), true
+
+	case "UpdateProductStatusPayload.conflict":
+		if e.ComplexityRoot.UpdateProductStatusPayload.Conflict == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateProductStatusPayload.Conflict(childComplexity), true
+
+	case "UpdateProductStatusPayload.product":
+		if e.ComplexityRoot.UpdateProductStatusPayload.Product == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateProductStatusPayload.Product(childComplexity), true
 
 	case "UpdateResourceStatusPayload.conflict":
 		if e.ComplexityRoot.UpdateResourceStatusPayload.Conflict == nil {
@@ -3735,6 +3791,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputUpdateCategoryStatusInput,
 		ec.unmarshalInputUpdateCollectionInput,
 		ec.unmarshalInputUpdateNamespaceInput,
+		ec.unmarshalInputUpdateProductStatusInput,
 		ec.unmarshalInputUpdateResourceStatusInput,
 	)
 	first := true
@@ -4421,6 +4478,19 @@ input UpdateCategoryStatusInput {
 
   """Null = unchanged. Kind-specific — not part of any generic patch shape."""
   resolved: ResolvedCategoryTaxonomyInput
+
+  """
+  Controller-only foreground-deletion completion request. This extends the
+  existing status subresource rather than introducing a parallel
+  CategoryTaxonomy mutation.
+  """
+  completeDeletion: Boolean
+
+  """
+  Controller-only bounded Product drain. The server removes non-blocking
+  owner references and writes CategoryDeleted without changing product spec.
+  """
+  decoupleProducts: Boolean
 }
 
 input ResolvedCategoryTaxonomyInput {
@@ -4442,6 +4512,9 @@ type UpdateCategoryStatusPayload {
 
   """Non-null only when the resourceVersion precondition failed."""
   conflict: StatusConflict
+
+  """True when another bounded Product page remains to be processed."""
+  hasMoreProductDependents: Boolean!
 }
 
 # ============================================================================
@@ -5137,6 +5210,13 @@ extend type Subscription {
   ): ProductWatchEvent!
 }
 
+extend type Mutation {
+  """
+  Controller-only Product status and category-resolution update.
+  """
+  updateProductStatus(input: UpdateProductStatusInput!): UpdateProductStatusPayload!
+}
+
 """
 Product-specific watch event. Carries the same envelope as
 CategoryWatchEvent but with a strongly-typed ` + "`" + `product` + "`" + ` field instead
@@ -5187,6 +5267,19 @@ type ProductStatus {
   resolved: ResolvedProductDefinition
 }
 
+input UpdateProductStatusInput {
+  name: String!
+  namespace: String!
+  resourceVersion: String!
+  conditions: [ConditionInput!]
+  removeOwnerUID: String
+}
+
+type UpdateProductStatusPayload {
+  product: Product
+  conflict: StatusConflict
+}
+
 """A pointer to another catalogue resource."""
 type CatalogObjectReference {
   apiVersion: String
@@ -5203,6 +5296,7 @@ type OwnerReference {
   kind: String!
   name: String!
   uid: ID!
+  blockOwnerDeletion: Boolean!
 }
 
 type MediaDefinition {
@@ -6213,6 +6307,7 @@ type ObjectMeta {
   revision: String
   ownerReferences: [OwnerReference!]!
   finalizers: [String!]!
+  deletionTimestamp: DateTime
 }
 
 """
@@ -6923,6 +7018,8 @@ func (ec *executionContext) childFields_ObjectMeta(ctx context.Context, field gr
 		return ec.fieldContext_ObjectMeta_ownerReferences(ctx, field)
 	case "finalizers":
 		return ec.fieldContext_ObjectMeta_finalizers(ctx, field)
+	case "deletionTimestamp":
+		return ec.fieldContext_ObjectMeta_deletionTimestamp(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ObjectMeta", field.Name)
 }
@@ -6937,6 +7034,8 @@ func (ec *executionContext) childFields_OwnerReference(ctx context.Context, fiel
 		return ec.fieldContext_OwnerReference_name(ctx, field)
 	case "uid":
 		return ec.fieldContext_OwnerReference_uid(ctx, field)
+	case "blockOwnerDeletion":
+		return ec.fieldContext_OwnerReference_blockOwnerDeletion(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type OwnerReference", field.Name)
 }
@@ -7565,6 +7664,8 @@ func (ec *executionContext) childFields_UpdateCategoryStatusPayload(ctx context.
 		return ec.fieldContext_UpdateCategoryStatusPayload_category(ctx, field)
 	case "conflict":
 		return ec.fieldContext_UpdateCategoryStatusPayload_conflict(ctx, field)
+	case "hasMoreProductDependents":
+		return ec.fieldContext_UpdateCategoryStatusPayload_hasMoreProductDependents(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateCategoryStatusPayload", field.Name)
 }
@@ -7585,6 +7686,16 @@ func (ec *executionContext) childFields_UpdateNamespacePayload(ctx context.Conte
 		return ec.fieldContext_UpdateNamespacePayload_namespace(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateNamespacePayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateProductStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "product":
+		return ec.fieldContext_UpdateProductStatusPayload_product(ctx, field)
+	case "conflict":
+		return ec.fieldContext_UpdateProductStatusPayload_conflict(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateProductStatusPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateResourceStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

@@ -114,7 +114,7 @@ func TestInitialSchemaUsesQueryFirstNamespaceTables(t *testing.T) {
 	assert.NotContains(t, schema, "TimeWindowCompactionStrategy")
 }
 
-func TestScyllaSchemaUsesTwoAlphaBaselineMigrations(t *testing.T) {
+func TestScyllaSchemaIncludesOwnerReferenceProjectionMigration(t *testing.T) {
 	entries, err := migrations.Files.ReadDir(".")
 	require.NoError(t, err)
 
@@ -128,6 +128,7 @@ func TestScyllaSchemaUsesTwoAlphaBaselineMigrations(t *testing.T) {
 	assert.ElementsMatch(t, []string{
 		"001_initial_schema.cql",
 		"002_secondary_indexes.cql",
+		"003_owner_reference_dependents.cql",
 	}, names)
 }
 

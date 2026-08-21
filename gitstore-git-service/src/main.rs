@@ -11,10 +11,10 @@ use tracing::{error, info};
 use std::sync::Arc;
 
 use gitstore::auth::interceptor::HmacInterceptor;
-use gitstore::git::hooks::validation_handler::SchemaValidationHandler;
 use gitstore::git::hooks::{
-    admission_handler::AdmissionControlHandler, HookPipeline, NoopAdmissionHandler,
-    NoopValidationHandler,
+    admission_handler::AdmissionControlHandler,
+    category_taxonomy_deletion_handler::CategoryTaxonomyDeletionHandler, HookPipeline,
+    NoopAdmissionHandler, NoopValidationHandler,
 };
 use gitstore::grpc::server::{proto::git_service_server::GitServiceServer, GitServiceImpl};
 
@@ -75,19 +75,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!(path = %data_path.display(), "Created data directory");
     }
 
-    // Build validation handler — connect lazily so startup never blocks on catalog service.
+    // Build the deletion-only pre-receive handler. It calls the catalog API only
+    // when a ref update removes a path; creates and updates remain post-receive.
     let catalog_url = cfg.catalog_service.uri.clone();
     let validation_timeout = std::time::Duration::from_secs(cfg.schema_validation.timeout_secs);
     let validation_handler: Arc<dyn gitstore::git::hooks::ValidationHandler + Send + Sync> =
-        match SchemaValidationHandler::connect(&catalog_url, validation_timeout, "".to_string())
-            .await
+        match CategoryTaxonomyDeletionHandler::connect(
+            &catalog_url,
+            validation_timeout,
+            "".to_string(),
+        )
+        .await
         {
             Ok(h) => {
-                info!(url = %catalog_url, "SchemaValidationHandler connected");
+                info!(url = %catalog_url, "CategoryTaxonomyDeletionHandler connected");
                 Arc::new(h)
             }
             Err(e) => {
-                tracing::warn!(error = %e, "SchemaValidationHandler unavailable at startup; using noop");
+                tracing::warn!(error = %e, "CategoryTaxonomyDeletionHandler unavailable at startup; using noop");
                 Arc::new(NoopValidationHandler)
             }
         };

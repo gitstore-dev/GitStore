@@ -26,6 +26,11 @@ service CatalogService {
   // The response carries all violations across all blobs in a single call.
   rpc ValidateResources(ValidateResourcesRequest) returns (ValidateResourcesResponse);
 
+  // ValidateCategoryTaxonomyDeletion validates CategoryTaxonomy deletions against
+  // the proposed trees before refs are updated. It is read-only and is invoked
+  // only when a push removes at least one file.
+  rpc ValidateCategoryTaxonomyDeletion(CategoryTaxonomyDeletionValidationRequest) returns (CategoryTaxonomyDeletionValidationResponse);
+
   // AdmitResources triggers catalog storage for resources in an accepted push commit.
   // The git service calls this in the post-receive phase (fire-and-forget).
   // The git service does not wait for this call to complete before responding to the author.
@@ -82,6 +87,30 @@ message ValidateResourcesResponse {
   // Non-empty only when accepted=false.
   // All violations across all files are collected before returning (no fail-fast).
   repeated ValidationError errors = 2;
+}
+
+// CategoryTaxonomyDeletionTree carries one old/proposed ref-tree pair. The Git
+// service sends the complete resource sets because the proposed tree, rather
+// than the currently admitted catalog state, determines whether a child is
+// deleted or reparented atomically with its parent.
+message CategoryTaxonomyDeletionTree {
+  repeated ResourceBlob old_blobs = 1;
+  repeated ResourceBlob proposed_blobs = 2;
+}
+
+// CategoryTaxonomyDeletionValidationRequest carries every changed ref tree in
+// an atomic receive-pack operation. The API only reads these resources and
+// returns a precondition result; lifecycle mutation remains post-receive.
+message CategoryTaxonomyDeletionValidationRequest {
+  string repository_id = 15;
+  repeated CategoryTaxonomyDeletionTree trees = 1;
+}
+
+// CategoryTaxonomyDeletionValidationResponse is a stable, non-sensitive
+// precondition result for the pre-receive hook.
+message CategoryTaxonomyDeletionValidationResponse {
+  bool accepted = 1;
+  string reason = 2;
 }
 
 // AdmitResourcesRequest identifies the accepted push commit to admit into the catalog.

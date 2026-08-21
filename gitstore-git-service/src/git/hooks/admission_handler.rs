@@ -214,7 +214,9 @@ mod tests {
 
     use catalog_proto::{
         catalog_service_server::{CatalogService, CatalogServiceServer},
-        AdmitResourcesResponse, ValidateResourcesRequest, ValidateResourcesResponse,
+        AdmitResourcesResponse, CategoryTaxonomyDeletionValidationRequest,
+        CategoryTaxonomyDeletionValidationResponse, ValidateResourcesRequest,
+        ValidateResourcesResponse,
     };
     use std::sync::{
         atomic::{AtomicU32, Ordering},
@@ -258,6 +260,16 @@ mod tests {
         ) -> Result<Response<AdmitResourcesResponse>, Status> {
             self.admit_call_count.fetch_add(1, Ordering::SeqCst);
             Ok(Response::new(AdmitResourcesResponse {}))
+        }
+
+        async fn validate_category_taxonomy_deletion(
+            &self,
+            _req: Request<CategoryTaxonomyDeletionValidationRequest>,
+        ) -> Result<Response<CategoryTaxonomyDeletionValidationResponse>, Status> {
+            Ok(Response::new(CategoryTaxonomyDeletionValidationResponse {
+                accepted: true,
+                reason: String::new(),
+            }))
         }
     }
 

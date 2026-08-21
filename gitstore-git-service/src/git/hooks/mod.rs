@@ -2,6 +2,7 @@
 // Copyright (c) 2026 GitStore contributors
 
 pub mod admission_handler;
+pub mod category_taxonomy_deletion_handler;
 pub mod validation_handler;
 
 use std::path::Path;
@@ -95,8 +96,7 @@ pub struct ResourceBlob {
 // ValidationHandler trait
 // ---------------------------------------------------------------------------
 
-/// Called in the pre-receive phase (blocking). Receives pre-extracted resource blobs
-/// from the quarantine area and returns an admission decision.
+/// Called in the pre-receive phase (blocking).
 #[async_trait]
 pub trait ValidationHandler: Send + Sync {
     async fn validate(
@@ -104,6 +104,19 @@ pub trait ValidationHandler: Send + Sync {
         blobs: &[ResourceBlob],
         hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision>;
+
+    /// Validates a receive-pack operation. Handlers that only need changed blobs
+    /// can use the default implementation; proposed-tree handlers override it.
+    async fn validate_receive(
+        &self,
+        git_dir: &Path,
+        updates: &[RefUpdate],
+        quarantine_dir: Option<&Path>,
+        hook_ctx: &HookContext,
+    ) -> anyhow::Result<AdmissionDecision> {
+        let blobs = extract_resource_blobs(git_dir, updates, quarantine_dir);
+        self.validate(&blobs, hook_ctx).await
+    }
 }
 
 /// Default no-op implementation — always accepts.
@@ -449,10 +462,14 @@ impl HookPipeline {
         }
         // Invoke the validation handler at its configured phase (blocking, fail-closed).
         if phase == self.schema_validation_phase {
-            let blobs = extract_resource_blobs(git_dir, updates, quarantine_dir);
             let result = tokio::time::timeout(
                 self.schema_validation_timeout,
-                self.validation_handler.validate(&blobs, hook_ctx),
+                self.validation_handler.validate_receive(
+                    git_dir,
+                    updates,
+                    quarantine_dir,
+                    hook_ctx,
+                ),
             )
             .await;
             let duration_ms = start.elapsed().as_millis() as u64;
@@ -513,6 +530,44 @@ impl HookPipeline {
 // ---------------------------------------------------------------------------
 // Blob extraction
 // ---------------------------------------------------------------------------
+
+/// Opens a repository with quarantined pack files temporarily exposed to gix.
+/// The temporary links are always removed before returning.
+pub(crate) fn with_quarantine_repo<T>(
+    git_dir: &Path,
+    quarantine_dir: Option<&Path>,
+    operation: impl FnOnce(&gix::Repository) -> Result<T, String>,
+) -> Result<T, String> {
+    let pack_dir = git_dir.join("objects").join("pack");
+    let mut staged_files: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(q) = quarantine_dir {
+        let _ = std::fs::create_dir_all(&pack_dir);
+        if let Ok(entries) = std::fs::read_dir(q) {
+            for entry in entries.flatten() {
+                let src = entry.path();
+                let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if ext == "pack" || ext == "idx" {
+                    let dst = pack_dir.join(entry.file_name());
+                    if !dst.exists()
+                        && (std::fs::hard_link(&src, &dst).is_ok()
+                            || std::fs::copy(&src, &dst).is_ok())
+                    {
+                        staged_files.push(dst);
+                    }
+                }
+            }
+        }
+    }
+
+    let result = gix::open(git_dir)
+        .map_err(|e| format!("open repository: {e}"))
+        .and_then(|repo| operation(&repo));
+
+    for file in staged_files {
+        let _ = std::fs::remove_file(file);
+    }
+    result
+}
 
 /// Walk the commit trees for all ref updates and collect resource blobs (files
 /// beginning with `---`).
@@ -710,7 +765,7 @@ fn collect_changed_blobs_from_trees(
     }
 }
 
-fn collect_blobs_from_tree(
+pub(crate) fn collect_blobs_from_tree(
     repo: &gix::Repository,
     tree_id: gix::ObjectId,
     prefix: &str,

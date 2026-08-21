@@ -617,13 +617,15 @@ type ObjectMeta struct {
 	Revision          *string           `json:"revision,omitempty"`
 	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
 	Finalizers        []string          `json:"finalizers"`
+	DeletionTimestamp *time.Time        `json:"deletionTimestamp,omitempty"`
 }
 
 type OwnerReference struct {
-	APIVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
-	Name       string `json:"name"`
-	UID        string `json:"uid"`
+	APIVersion         string `json:"apiVersion"`
+	Kind               string `json:"kind"`
+	Name               string `json:"name"`
+	UID                string `json:"uid"`
+	BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
 }
 
 // Information about pagination in a connection
@@ -1216,6 +1218,13 @@ type UpdateCategoryStatusInput struct {
 	Conditions []*ConditionInput `json:"conditions,omitempty"`
 	// Null = unchanged. Kind-specific — not part of any generic patch shape.
 	Resolved *ResolvedCategoryTaxonomyInput `json:"resolved,omitempty"`
+	// Controller-only foreground-deletion completion request. This extends the
+	// existing status subresource rather than introducing a parallel
+	// CategoryTaxonomy mutation.
+	CompleteDeletion *bool `json:"completeDeletion,omitempty"`
+	// Controller-only bounded Product drain. The server removes non-blocking
+	// owner references and writes CategoryDeleted without changing product spec.
+	DecoupleProducts *bool `json:"decoupleProducts,omitempty"`
 }
 
 type UpdateCategoryStatusPayload struct {
@@ -1223,6 +1232,8 @@ type UpdateCategoryStatusPayload struct {
 	Category *Category `json:"category,omitempty"`
 	// Non-null only when the resourceVersion precondition failed.
 	Conflict *StatusConflict `json:"conflict,omitempty"`
+	// True when another bounded Product page remains to be processed.
+	HasMoreProductDependents bool `json:"hasMoreProductDependents"`
 }
 
 type UpdateCollectionInput struct {
@@ -1244,6 +1255,19 @@ type UpdateNamespaceInput struct {
 
 type UpdateNamespacePayload struct {
 	Namespace *Namespace `json:"namespace,omitempty"`
+}
+
+type UpdateProductStatusInput struct {
+	Name            string            `json:"name"`
+	Namespace       string            `json:"namespace"`
+	ResourceVersion string            `json:"resourceVersion"`
+	Conditions      []*ConditionInput `json:"conditions,omitempty"`
+	RemoveOwnerUID  *string           `json:"removeOwnerUID,omitempty"`
+}
+
+type UpdateProductStatusPayload struct {
+	Product  *Product        `json:"product,omitempty"`
+	Conflict *StatusConflict `json:"conflict,omitempty"`
 }
 
 type UpdateResourceStatusInput struct {

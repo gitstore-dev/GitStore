@@ -56,6 +56,36 @@ pub struct ValidateResourcesResponse {
     #[prost(message, repeated, tag="2")]
     pub errors: ::prost::alloc::vec::Vec<ValidationError>,
 }
+/// CategoryTaxonomyDeletionTree carries one old/proposed ref-tree pair. The Git
+/// service sends the complete resource sets because the proposed tree, rather
+/// than the currently admitted catalog state, determines whether a child is
+/// deleted or reparented atomically with its parent.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CategoryTaxonomyDeletionTree {
+    #[prost(message, repeated, tag="1")]
+    pub old_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
+    #[prost(message, repeated, tag="2")]
+    pub proposed_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
+}
+/// CategoryTaxonomyDeletionValidationRequest carries every changed ref tree in
+/// an atomic receive-pack operation. The API only reads these resources and
+/// returns a precondition result; lifecycle mutation remains post-receive.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CategoryTaxonomyDeletionValidationRequest {
+    #[prost(string, tag="15")]
+    pub repository_id: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="1")]
+    pub trees: ::prost::alloc::vec::Vec<CategoryTaxonomyDeletionTree>,
+}
+/// CategoryTaxonomyDeletionValidationResponse is a stable, non-sensitive
+/// precondition result for the pre-receive hook.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CategoryTaxonomyDeletionValidationResponse {
+    #[prost(bool, tag="1")]
+    pub accepted: bool,
+    #[prost(string, tag="2")]
+    pub reason: ::prost::alloc::string::String,
+}
 /// AdmitResourcesRequest identifies the accepted push commit to admit into the catalog.
 /// gitstore-api fetches, parses, and stores resources independently using its own
 /// GitService client — the git service does not send blobs for admission.
