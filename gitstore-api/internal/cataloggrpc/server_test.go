@@ -598,6 +598,120 @@ func makeProduct(name string) []byte {
 	return []byte("---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: " + name + "\n  namespace: gitstore\nspec:\n  title: " + name + "\n---\n")
 }
 
+func makeFile(name string) []byte {
+	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/" + name + ".jpg\n---\nAlt text")
+}
+
+func makeFileWithContentType(name, contentType string) []byte {
+	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: " + contentType + "\n  source:\n    type: s3\n    uri: s3://bucket/" + name + "\n---\nAlt text")
+}
+
+func TestValidateAndAdmitResources_File(t *testing.T) {
+	store := newTestDatastore(t)
+	commit := strings.Repeat("f", 40)
+	git := &mockGitReader{
+		listFilesFunc: func(context.Context, string, string, string) ([]string, error) {
+			return []string{"files/hero.md"}, nil
+		},
+		readFileFunc: func(context.Context, string, string, string) ([]byte, error) {
+			return makeFile("hero"), nil
+		},
+	}
+
+	srv := newCatalogServer(t, store, git, func(deps *cataloggrpc.ServerDeps) {
+		deps.IDGenerator = apiruntime.NewSequenceIDGenerator("11111111-1111-7111-8111-111111111113")
+	})
+	validation, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs:        []*catalogv1.ResourceBlob{{Path: "files/hero.md", Content: makeFile("hero")}},
+	})
+	require.NoError(t, err)
+	require.True(t, validation.Accepted)
+	invalid, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs:        []*catalogv1.ResourceBlob{{Path: "files/bad.md", Content: []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: bad\nspec:\n  contentType: image/jpeg\n  source:\n    type: unsupported\n    uri: s3://bucket/bad\n---\n")}},
+	})
+	require.NoError(t, err)
+	require.False(t, invalid.Accepted)
+	require.NotEmpty(t, invalid.Errors)
+	assert.Contains(t, invalid.Errors[0].Message, "spec.source.type")
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, CommitSha: commit, RefName: "refs/heads/main",
+	})
+	require.NoError(t, err)
+	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
+	require.NoError(t, err)
+	require.Equal(t, "Alt text", file.Body)
+	var status catalog.FileStatus
+	require.NoError(t, json.Unmarshal(file.Status, &status))
+	require.Len(t, status.Conditions, 2)
+	require.Equal(t, catalog.ConditionAdmissionAccepted, status.Conditions[0].Type)
+	require.Equal(t, catalog.ConditionReady, status.Conditions[1].Type)
+}
+
+func TestValidateResources_FileDuplicateIdentityRejected(t *testing.T) {
+	srv := newCatalogServer(t, newTestDatastore(t), nil)
+	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/hero\n---\n")
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs: []*catalogv1.ResourceBlob{
+			{Path: "files/hero.md", Content: content},
+			{Path: "files/hero-copy.md", Content: content},
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, resp.Accepted)
+	require.NotEmpty(t, resp.Errors)
+	assert.Contains(t, resp.Errors[0].Message, "duplicate resource identity")
+}
+
+func TestValidateResources_FileAggregatesVariantAndCredentialsErrors(t *testing.T) {
+	srv := newCatalogServer(t, newTestDatastore(t), nil)
+	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: broken\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/broken\n    credentialsRef:\n      kind: Secret\n      name: cloud\n      namespace: other\n  processing:\n    image:\n      variants:\n        - name: \"\"\n---\n")
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs:        []*catalogv1.ResourceBlob{{Path: "files/broken.md", Content: content}},
+	})
+	require.NoError(t, err)
+	require.False(t, resp.Accepted)
+	require.GreaterOrEqual(t, len(resp.Errors), 2)
+	messages := collectMessages(resp.Errors)
+	assert.Contains(t, strings.Join(messages, "\n"), "credentialsRef.namespace")
+	assert.Contains(t, strings.Join(messages, "\n"), "variants[0].name")
+}
+
+func TestAdmitResources_FileContentTypeIsImmutable(t *testing.T) {
+	store := newTestDatastore(t)
+	a, b, c := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)
+	current := a
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {"files/hero.md": makeFileWithContentType("hero", "image/jpeg")},
+		b: {"files/hero.md": makeFileWithContentType("hero", "image/png")},
+		c: {"files/hero.md": []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/hero\n---\nUpdated alt text")},
+	})
+	srv := newCatalogServer(t, store, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, CommitSha: a, RefName: "refs/heads/main",
+	})
+	require.NoError(t, err)
+	current = b
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, CommitSha: b, OldCommitSha: a, NewCommitSha: b, RefName: "refs/heads/main",
+	})
+	require.NoError(t, err)
+	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
+	require.NoError(t, err)
+	assert.Contains(t, string(file.Spec), `"ContentType":"image/jpeg"`)
+	current = c
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, CommitSha: c, OldCommitSha: b, NewCommitSha: c, RefName: "refs/heads/main",
+	})
+	require.NoError(t, err)
+	file, err = store.GetFileByName(context.Background(), "gitstore", "hero")
+	require.NoError(t, err)
+	assert.Equal(t, "Updated alt text", file.Body)
+}
+
 // T020a: valid commit_sha with one product file → CreateProduct called with correct spec fields
 func TestAdmitResources_NewProduct_Created(t *testing.T) {
 	memStore := newTestDatastore(t)

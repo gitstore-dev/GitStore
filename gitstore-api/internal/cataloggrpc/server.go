@@ -202,6 +202,13 @@ func (s *Server) publishProductEvent(evType eventbus.EventType, p *datastore.Pro
 	})
 }
 
+func (s *Server) publishFileEvent(evType eventbus.EventType, f *datastore.File) {
+	if s.eventBus == nil || f == nil {
+		return
+	}
+	s.eventBus.Publish(eventbus.Event{Type: evType, Kind: "File", Namespace: f.Namespace, Name: f.Name, ResourceVersion: f.ResourceVersion, Object: f})
+}
+
 func (s *Server) publishNamespaceEvent(evType eventbus.EventType, namespace *datastore.Namespace) {
 	if s.eventBus == nil || namespace == nil {
 		return
@@ -234,6 +241,7 @@ func (s *Server) ValidateResources(
 	req *catalogv1.ValidateResourcesRequest,
 ) (*catalogv1.ValidateResourcesResponse, error) {
 	var allErrors []*catalogv1.ValidationError
+	seenIdentities := make(map[string]string)
 
 	for _, blob := range req.Blobs {
 		// Opt-in: blobs not starting with `---` are not product resources.
@@ -242,7 +250,18 @@ func (s *Server) ValidateResources(
 			continue
 		}
 
-		parsed, _, err := s.parser.ParseResource(bytes.NewReader(blob.Content))
+		parsed, body, err := s.parser.ParseResource(bytes.NewReader(blob.Content))
+		if err == nil && parsed != nil {
+			if entry, ok, entryErr := newParsedEntry(blob.Path, parsed, body, ""); entryErr != nil {
+				err = entryErr
+			} else if ok {
+				if previousPath, exists := seenIdentities[entry.identity.key()]; exists {
+					err = fmt.Errorf("duplicate resource identity %s/%s (also declared at %s)", entry.identity.Kind, entry.identity.Name, previousPath)
+				} else {
+					seenIdentities[entry.identity.key()] = blob.Path
+				}
+			}
+		}
 		if err == nil && parsed != nil && parsed.Namespace != nil {
 			err = s.validateNamespaceAuthoringTarget(ctx, req.RepositoryId, blob.Path, parsed.Namespace.Metadata.Name)
 		}
@@ -762,6 +781,8 @@ func (s *Server) admitParsedEntries(
 			s.admitProductVariant(ctx, e.parsed.ProductVariant, e.body, admCtx, e.path, op, existing)
 		case "Namespace":
 			s.admitNamespace(ctx, e.parsed.Namespace, e.body, admCtx, e.path, op, existing)
+		case "File":
+			s.admitFile(ctx, e.parsed.File, e.body, admCtx, e.path, op, existing)
 		}
 	}
 	return nil
@@ -807,6 +828,8 @@ func (s *Server) lookupResourceByIdentity(ctx context.Context, id resourceIdenti
 		return s.store.GetProductVariantByName(ctx, id.Namespace, id.Name)
 	case "Namespace":
 		return s.store.GetNamespaceByName(ctx, id.Name)
+	case "File":
+		return s.store.GetFileByName(ctx, id.Namespace, id.Name)
 	default:
 		return nil, datastore.ErrNotFound
 	}
@@ -883,6 +906,9 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) error 
 		s.log.Info("admit_resources: Namespace manifest deletion ignored; use deleteNamespace",
 			zap.String("name", r.Name))
 		return nil
+	case *datastore.File:
+		uid = r.UID
+		deleteErr = s.store.DeleteFile(ctx, r.UID)
 	default:
 		deleteErr = datastore.ErrNotFound
 	}
@@ -1154,6 +1180,99 @@ func cloneStringMap(input map[string]string) map[string]string {
 		output[key] = value
 	}
 	return output
+}
+
+func fileAdmissionStatus(generation int64, revision string, now time.Time) []byte {
+	status := catalog.FileStatus{
+		ObservedGeneration:  generation,
+		LastAppliedRevision: revision,
+		Conditions: []catalog.Condition{
+			{Type: catalog.ConditionAdmissionAccepted, Status: catalog.ConditionTrue, ObservedGeneration: generation, LastTransitionTime: now},
+			{Type: catalog.ConditionReady, Status: catalog.ConditionTrue, ObservedGeneration: generation, LastTransitionTime: now},
+		},
+	}
+	b, _ := json.Marshal(status)
+	return b
+}
+
+func (s *Server) admitFile(
+	ctx context.Context,
+	resource *catalog.FileResource,
+	body []byte,
+	admCtx AdmissionContext,
+	sourcePath string,
+	op admission.Operation,
+	rawExisting any,
+) {
+	if resource == nil {
+		return
+	}
+	specJSON, err := json.Marshal(resource.Spec)
+	if err != nil {
+		s.log.Error("admit_resources: marshal file spec failed", zap.Error(err))
+		return
+	}
+	namespace := resource.Metadata.Namespace
+	if namespace == "" {
+		namespace = admCtx.Namespace
+	}
+	existing, _ := rawExisting.(*datastore.File)
+	if existing == nil || op == admission.OperationCreate {
+		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
+		if !ok {
+			return
+		}
+		f := &datastore.File{
+			UID: uid, Namespace: namespace, Name: resource.Metadata.Name,
+			APIVersion: resource.APIVersion, Kind: resource.Kind,
+			Labels: cloneStringMap(resource.Metadata.Labels), Annotations: cloneStringMap(resource.Metadata.Annotations),
+			Generation: 1, ResourceVersion: "1", CreationTimestamp: admCtx.Now,
+			Revision: admCtx.Revision, RepositoryID: admCtx.RepositoryID, SourcePath: sourcePath,
+			GitCommitSHA: admCtx.CommitSHA, GitRef: admCtx.RefName, Spec: specJSON, Body: string(body),
+		}
+		f.Status = fileAdmissionStatus(1, admCtx.Revision, admCtx.Now)
+		if err := s.store.CreateFile(ctx, f); err != nil {
+			s.log.Error("admit_resources: create file failed", zap.Error(err))
+		} else {
+			s.publishFileEvent(eventbus.Added, f)
+		}
+		return
+	}
+	changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
+	changedMetadata := existing.APIVersion != resource.APIVersion || existing.Kind != resource.Kind ||
+		!reflect.DeepEqual(existing.Labels, resource.Metadata.Labels) || !reflect.DeepEqual(existing.Annotations, resource.Metadata.Annotations)
+	changedProvenance := existing.RepositoryID != admCtx.RepositoryID || existing.SourcePath != sourcePath ||
+		existing.GitCommitSHA != admCtx.CommitSHA || existing.GitRef != admCtx.RefName
+	if !changedSpecBody && !changedMetadata && !changedProvenance {
+		return
+	}
+	if existingSpecContentType(existing.Spec) != resource.Spec.ContentType {
+		s.log.Warn("admit_resources: File contentType is immutable", zap.String("name", resource.Metadata.Name))
+		return
+	}
+	gen := existing.Generation
+	if changedSpecBody {
+		gen++
+	}
+	existing.APIVersion, existing.Kind = resource.APIVersion, resource.Kind
+	existing.Labels, existing.Annotations = cloneStringMap(resource.Metadata.Labels), cloneStringMap(resource.Metadata.Annotations)
+	existing.Generation, existing.ResourceVersion = gen, nextResourceVersion(existing.ResourceVersion)
+	existing.Revision, existing.RepositoryID, existing.SourcePath = admCtx.Revision, admCtx.RepositoryID, sourcePath
+	existing.GitCommitSHA, existing.GitRef, existing.Spec, existing.Body = admCtx.CommitSHA, admCtx.RefName, specJSON, string(body)
+	existing.Status = fileAdmissionStatus(gen, admCtx.Revision, admCtx.Now)
+	if err := s.store.UpdateFile(ctx, existing); err != nil {
+		s.log.Error("admit_resources: update file failed", zap.Error(err))
+	} else {
+		s.publishFileEvent(eventbus.Modified, existing)
+	}
+}
+
+func existingSpecContentType(raw []byte) string {
+	var spec catalog.FileSpec
+	if json.Unmarshal(raw, &spec) != nil {
+		return ""
+	}
+	return spec.ContentType
 }
 
 func (s *Server) admitProduct(

@@ -37,6 +37,9 @@ type scyllaDatastore struct {
 	collectionTable                   *table.Table
 	collectionByNameTable             *table.Table
 	collectionByUIDTable              *table.Table
+	fileByNamespaceTable              *table.Table
+	fileByNameTable                   *table.Table
+	fileByUIDTable                    *table.Table
 	productVariantByNamespaceTable    *table.Table
 	productVariantByNameTable         *table.Table
 	productVariantByUIDTable          *table.Table
@@ -321,6 +324,9 @@ func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) 
 		collectionTable:                   Collection,
 		collectionByNameTable:             CollectionByName,
 		collectionByUIDTable:              CollectionByUID,
+		fileByNamespaceTable:              FileByNamespace,
+		fileByNameTable:                   FileByName,
+		fileByUIDTable:                    FileByUID,
 		productVariantByNamespaceTable:    ProductVariantByNamespace,
 		productVariantByNameTable:         ProductVariantByName,
 		productVariantByUIDTable:          ProductVariantByUID,

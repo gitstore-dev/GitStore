@@ -528,6 +528,87 @@ func stringMapToJSONMap(m map[string]string) map[string]any {
 	return out
 }
 
+// DatastoreFileToGraphQL converts a datastore File to its typed GraphQL view.
+func DatastoreFileToGraphQL(f *datastore.File) *model.File {
+	if f == nil {
+		return nil
+	}
+	ownerRefs, err := ownerRefsFromJSONStrict(f.OwnerReferences)
+	if err != nil {
+		return nil
+	}
+	meta := &model.ObjectMeta{
+		Name: f.Name, Namespace: f.Namespace, Labels: stringMapToJSONMap(f.Labels),
+		Annotations: stringMapToJSONMap(f.Annotations), UID: mustEncodeNodeID(nodeKindFile, f.UID),
+		ResourceVersion: f.ResourceVersion, Generation: int32(f.Generation),
+		CreationTimestamp: f.CreationTimestamp, OwnerReferences: ownerRefs,
+		Finalizers: append([]string{}, f.Finalizers...), DeletionTimestamp: f.DeletionTimestamp,
+	}
+	if f.Revision != "" {
+		revision := f.Revision
+		meta.Revision = &revision
+	}
+	spec := &catalog.FileSpec{}
+	if len(f.Spec) > 0 && json.Unmarshal(f.Spec, spec) != nil {
+		return nil
+	}
+	fileSpec := &model.FileSpec{
+		ContentType: spec.ContentType,
+		Source:      &model.FileSource{Type: spec.Source.Type, URI: spec.Source.URI},
+	}
+	if spec.Type != "" {
+		fileSpec.Type = &spec.Type
+	}
+	if spec.Source.Checksum != nil {
+		fileSpec.Source.Checksum = &model.FileChecksum{Algorithm: spec.Source.Checksum.Algorithm, Value: spec.Source.Checksum.Value}
+	}
+	if spec.Source.CredentialsRef != nil {
+		ref := spec.Source.CredentialsRef
+		fileSpec.Source.CredentialsRef = &model.SecretRef{Kind: ref.Kind, Name: ref.Name}
+		if ref.Key != "" {
+			fileSpec.Source.CredentialsRef.Key = &ref.Key
+		}
+		if ref.Namespace != "" {
+			fileSpec.Source.CredentialsRef.Namespace = &ref.Namespace
+		}
+	}
+	if spec.Processing != nil && spec.Processing.Image != nil {
+		fileSpec.Processing = &model.FileProcessing{Image: &model.FileImageProcessing{}}
+		for _, variant := range spec.Processing.Image.Variants {
+			fileSpec.Processing.Image.Variants = append(fileSpec.Processing.Image.Variants, &model.FileVariantRequest{Name: variant.Name})
+		}
+	}
+	var status *model.FileStatus
+	if len(f.Status) > 0 {
+		var raw struct {
+			ObservedGeneration  int32                           `json:"observedGeneration"`
+			LastAppliedRevision string                          `json:"lastAppliedRevision"`
+			Conditions          []rawCondition                  `json:"conditions"`
+			Resolved            *catalog.ResolvedFileDefinition `json:"resolved,omitempty"`
+		}
+		if json.Unmarshal(f.Status, &raw) == nil {
+			conditions := make([]*model.Condition, 0, len(raw.Conditions))
+			for _, condition := range raw.Conditions {
+				conditions = append(conditions, conditionFromRaw(condition))
+			}
+			status = &model.FileStatus{ObservedGeneration: raw.ObservedGeneration, LastAppliedRevision: raw.LastAppliedRevision, Conditions: conditions}
+			if raw.Resolved != nil {
+				resolved := &model.ResolvedFileDefinition{Name: raw.Resolved.Name, URL: raw.Resolved.URL}
+				if raw.Resolved.ContentType != "" {
+					resolved.ContentType = &raw.Resolved.ContentType
+				}
+				for _, variant := range raw.Resolved.ResolvedVariants {
+					url := variant.URL
+					resolved.ResolvedVariants = append(resolved.ResolvedVariants, &model.ResolvedFileVariant{Name: variant.Name, URL: &url})
+				}
+				status.Resolved = resolved
+			}
+		}
+	}
+	body := f.Body
+	return &model.File{ID: mustEncodeNodeID(nodeKindFile, f.UID), APIVersion: f.APIVersion, Kind: f.Kind, Metadata: meta, Spec: fileSpec, Status: status, Body: &body}
+}
+
 // categoryStatusFromJSON deserialises a CategoryTaxonomyStatus blob.
 func categoryStatusFromJSON(raw json.RawMessage) *model.CategoryTaxonomyStatus {
 	if len(raw) == 0 {

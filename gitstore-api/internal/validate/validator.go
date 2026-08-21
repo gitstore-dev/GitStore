@@ -43,6 +43,7 @@ type ParsedResource struct {
 	Collection       *catalog.CollectionResource
 	ProductVariant   *catalog.ProductVariantResource
 	Namespace        *catalog.NamespaceResource
+	File             *catalog.FileResource
 }
 
 // ParseResource reads a Markdown document, extracts YAML frontmatter,
@@ -184,6 +185,27 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 			return nil, nil, errors.Join(errs...)
 		}
 		return &ParsedResource{Kind: "Namespace", Namespace: &res}, body, nil
+
+	case "File":
+		var res catalog.FileResource
+		body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
+		}
+		var errs []error
+		if err := p.validator().Struct(res); err != nil {
+			errs = append(errs, toFriendlyError(err))
+		}
+		if err := res.Spec.Validate(); err != nil {
+			errs = append(errs, err)
+		}
+		if err := validateLabels(res.Metadata.Labels); err != nil {
+			errs = append(errs, err)
+		}
+		if len(errs) > 0 {
+			return nil, nil, errors.Join(errs...)
+		}
+		return &ParsedResource{Kind: "File", File: &res}, body, nil
 
 	default:
 		return nil, nil, fmt.Errorf("validate: kind %q is not a recognized catalog resource type", kindProbe.Kind)

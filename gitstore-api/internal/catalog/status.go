@@ -4,10 +4,27 @@
 package catalog
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/shopspring/decimal"
 )
+
+func ValidateFileConditions(conditions []Condition) error {
+	allowed := map[ConditionType]bool{
+		ConditionAdmissionAccepted: true, ConditionSourceResolved: true,
+		ConditionProcessingComplete: true, ConditionReady: true, ConditionTerminating: true,
+	}
+	for i, condition := range conditions {
+		if !allowed[condition.Type] {
+			return fmt.Errorf("file condition %d has unsupported type %q", i, condition.Type)
+		}
+		if condition.Status != ConditionTrue && condition.Status != ConditionFalse && condition.Status != ConditionUnknown {
+			return fmt.Errorf("file condition %d has unsupported status %q", i, condition.Status)
+		}
+	}
+	return nil
+}
 
 // ConditionType is the name of a product status condition.
 type ConditionType = string
@@ -16,16 +33,18 @@ type ConditionType = string
 type ConditionStatus = string
 
 const (
-	ConditionPublished         ConditionType = "Published"
-	ConditionAdmissionAccepted ConditionType = "AdmissionAccepted"
-	ConditionCategoryResolved  ConditionType = "CategoryResolved"
-	ConditionOptionsAccepted   ConditionType = "OptionsAccepted"
-	ConditionVariantsResolved  ConditionType = "VariantsResolved"
-	ConditionReady             ConditionType = "Ready"
-	ConditionParentResolved    ConditionType = "ParentResolved"
-	ConditionAcyclic           ConditionType = "Acyclic"
-	ConditionSystemRepoReady   ConditionType = "SystemRepoReady"
-	ConditionTerminating       ConditionType = "Terminating"
+	ConditionPublished          ConditionType = "Published"
+	ConditionAdmissionAccepted  ConditionType = "AdmissionAccepted"
+	ConditionCategoryResolved   ConditionType = "CategoryResolved"
+	ConditionOptionsAccepted    ConditionType = "OptionsAccepted"
+	ConditionVariantsResolved   ConditionType = "VariantsResolved"
+	ConditionReady              ConditionType = "Ready"
+	ConditionParentResolved     ConditionType = "ParentResolved"
+	ConditionAcyclic            ConditionType = "Acyclic"
+	ConditionSystemRepoReady    ConditionType = "SystemRepoReady"
+	ConditionTerminating        ConditionType = "Terminating"
+	ConditionSourceResolved     ConditionType = "SourceResolved"
+	ConditionProcessingComplete ConditionType = "ProcessingComplete"
 
 	// ProductVariant-specific condition types.
 	ConditionProductResolved ConditionType = "ProductResolved"
@@ -87,9 +106,10 @@ type VariantSummaryDefinition struct {
 
 // ResolvedFileDefinition is a resolved media file with a CDN URL.
 type ResolvedFileDefinition struct {
-	Name        string `json:"name"`
-	URL         string `json:"url"`
-	ContentType string `json:"contentType,omitempty"`
+	Name             string                `json:"name"`
+	URL              string                `json:"url"`
+	ContentType      string                `json:"contentType,omitempty"`
+	ResolvedVariants []ResolvedFileVariant `json:"resolvedVariants,omitempty"`
 }
 
 // SystemObjectMeta holds read-only fields the system assigns. Merged with

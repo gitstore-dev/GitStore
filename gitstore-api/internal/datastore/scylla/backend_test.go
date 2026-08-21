@@ -434,6 +434,43 @@ func TestScylla_UpdateRepositoryRejectsStaleResourceVersion(t *testing.T) {
 	assert.Equal(t, "2", got.ResourceVersion)
 }
 
+func TestScylla_FileRoundTripAndIndexedLookup(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	file := &datastore.File{
+		UID: newID(), Namespace: "test-ns", Name: "hero-" + newID()[:8],
+		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File",
+		Generation: 1, ResourceVersion: "1", CreationTimestamp: time.Now().UTC(),
+		Spec: json.RawMessage(`{"ContentType":"image/jpeg","Source":{"Type":"s3","URI":"s3://bucket/hero"}}`),
+		Body: "alt text", OwnerReferences: json.RawMessage(`[{"kind":"Repository","name":"repo","uid":"owner"}]`),
+		Status: json.RawMessage(`{"conditions":[]}`),
+	}
+	require.NoError(t, store.CreateFile(ctx, file))
+	got, err := store.GetFileByName(ctx, file.Namespace, file.Name)
+	require.NoError(t, err)
+	assert.Equal(t, file.UID, got.UID)
+	assert.JSONEq(t, string(file.Spec), string(got.Spec))
+	assert.JSONEq(t, string(file.OwnerReferences), string(got.OwnerReferences))
+	assert.Equal(t, file.Body, got.Body)
+}
+
+func TestScylla_FileOwnerReferenceProjectionUsesOwnerRepositoryScope(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	file := &datastore.File{
+		UID: newID(), Namespace: "test-ns", Name: "owned-" + newID()[:8],
+		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File",
+		Generation: 1, ResourceVersion: "1", CreationTimestamp: time.Now().UTC(),
+		RepositoryID:    "00000000-0000-0000-0000-000000000002",
+		OwnerReferences: json.RawMessage(`[{"kind":"Repository","uid":"owner","repositoryID":"00000000-0000-0000-0000-000000000003","blockOwnerDeletion":true}]`),
+	}
+	require.NoError(t, store.CreateFile(ctx, file))
+	owners := store.(datastore.OwnerReferenceStore)
+	blocked, err := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{Namespace: file.Namespace, RepositoryID: "00000000-0000-0000-0000-000000000003"}, "owner")
+	require.NoError(t, err)
+	assert.True(t, blocked)
+}
+
 // ── Product ───────────────────────────────────────────────────────────────────
 
 func TestScylla_CreateGetProduct(t *testing.T) {

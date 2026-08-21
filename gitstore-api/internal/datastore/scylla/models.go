@@ -98,6 +98,17 @@ var (
 		Columns: []string{"uid", "namespace", "creation_timestamp"},
 		PartKey: []string{"uid"},
 	})
+	FileByNamespace = table.New(table.Metadata{
+		Name: "files_by_namespace", Columns: authoritativeColumns(true, true),
+		PartKey: []string{"namespace"}, SortKey: []string{"creation_timestamp", "uid"},
+	})
+	FileByName = table.New(table.Metadata{
+		Name: "files_by_name", Columns: []string{"namespace", "name", "uid", "creation_timestamp"},
+		PartKey: []string{"namespace"}, SortKey: []string{"name"},
+	})
+	FileByUID = table.New(table.Metadata{
+		Name: "files_by_uid", Columns: []string{"uid", "namespace", "creation_timestamp"}, PartKey: []string{"uid"},
+	})
 
 	NamespaceByUID = table.New(table.Metadata{
 		Name:    "namespaces_by_uid",

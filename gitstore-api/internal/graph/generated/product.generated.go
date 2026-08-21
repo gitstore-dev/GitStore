@@ -1451,6 +1451,38 @@ func (ec *executionContext) fieldContext_ResolvedFileDefinition_contentType(_ co
 	return graphql.NewScalarFieldContext("ResolvedFileDefinition", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _ResolvedFileDefinition_resolvedVariants(ctx context.Context, field graphql.CollectedField, obj *model.ResolvedFileDefinition) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ResolvedFileDefinition_resolvedVariants(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ResolvedVariants, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.ResolvedFileVariant) graphql.Marshaler {
+			return ec.marshalNResolvedFileVariant2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResolvedFileVariantᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ResolvedFileDefinition_resolvedVariants(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ResolvedFileDefinition",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ResolvedFileVariant(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ResolvedProductDefinition_category(ctx context.Context, field graphql.CollectedField, obj *model.ResolvedProductDefinition) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2543,6 +2575,11 @@ func (ec *executionContext) _ResolvedFileDefinition(ctx context.Context, sel ast
 			}
 		case "contentType":
 			out.Values[i] = ec._ResolvedFileDefinition_contentType(ctx, field, obj)
+		case "resolvedVariants":
+			out.Values[i] = ec._ResolvedFileDefinition_resolvedVariants(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -2997,6 +3034,13 @@ func (ec *executionContext) marshalOResolvedCategoryDefinition2ᚖgithubᚗcom�
 		return graphql.Null
 	}
 	return ec._ResolvedCategoryDefinition(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOResolvedFileDefinition2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResolvedFileDefinition(ctx context.Context, sel ast.SelectionSet, v *model.ResolvedFileDefinition) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ResolvedFileDefinition(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOResolvedProductDefinition2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResolvedProductDefinition(ctx context.Context, sel ast.SelectionSet, v *model.ResolvedProductDefinition) graphql.Marshaler {
