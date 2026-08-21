@@ -140,6 +140,10 @@ message AdmitResourcesRequest {
   // changed in the accepted update. When absent, gitstore-api derives the
   // changed resource set by comparing old_commit_sha and new_commit_sha.
   repeated string changed_paths = 5;
+
+  // actor_subject is the authenticated principal that performed the push.
+  // It contains only the stable subject identifier, never raw credentials.
+  string actor_subject = 6;
 }
 
 // AdmitResourcesResponse is intentionally empty.

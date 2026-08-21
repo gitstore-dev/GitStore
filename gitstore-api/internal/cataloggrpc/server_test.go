@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,6 +184,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 		CommitSha:    a,
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
+		ActorSubject: "alice",
 	})
 	require.NoError(t, err)
 	created, err := store.GetNamespaceByName(context.Background(), "acme-store")
@@ -193,6 +195,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 	assert.Equal(t, "1", created.ResourceVersion)
 	assert.Equal(t, "gitstore.dev/v1beta1", created.APIVersion)
 	assert.Equal(t, "Namespace", created.Kind)
+	assert.Equal(t, "alice", created.CreationActor)
 	assert.NotEmpty(t, created.UID)
 	assert.Equal(t, "main@sha1:"+a, created.Revision)
 	assert.Equal(t, path, created.SourcePath)
@@ -300,6 +303,103 @@ spec:
 	assert.Equal(t, int64(2), updated.Generation)
 	assert.Equal(t, "2", updated.ResourceVersion)
 	assert.Equal(t, created.UID, updated.UID)
+}
+
+func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *testing.T) {
+	store := newNamespacePolicyDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	path := "namespaces/race-store.md"
+	files := map[string]map[string][]byte{
+		a: {path: namespaceManifest("race-store", "Older Revision", "USER")},
+		b: {path: namespaceManifest("race-store", "Newer Revision", "USER")},
+	}
+
+	var mu sync.Mutex
+	current := a
+	blockFirstAListing := true
+	olderListingStarted := make(chan struct{})
+	releaseOlder := make(chan struct{})
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, ref string) ([]string, error) {
+			mu.Lock()
+			block := ref == a && blockFirstAListing
+			if block {
+				blockFirstAListing = false
+			}
+			tree := files[ref]
+			mu.Unlock()
+			if block {
+				close(olderListingStarted)
+				<-releaseOlder
+			}
+			paths := make([]string, 0, len(tree))
+			for filePath := range tree {
+				paths = append(paths, filePath)
+			}
+			sort.Strings(paths)
+			return paths, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, ref string) ([]byte, error) {
+			mu.Lock()
+			content := files[ref][path]
+			mu.Unlock()
+			return content, nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return current, nil
+		},
+	}
+	olderServer := newCatalogServer(t, store, git)
+	newerServer := newCatalogServer(t, store, git)
+	olderDone := make(chan error, 1)
+	go func() {
+		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+			RepositoryId: testRepoID,
+			OldCommitSha: zero,
+			NewCommitSha: a,
+			CommitSha:    a,
+			RefName:      "refs/heads/main",
+			ChangedPaths: []string{path},
+		})
+		olderDone <- err
+	}()
+
+	select {
+	case <-olderListingStarted:
+	case <-time.After(time.Second):
+		t.Fatal("older admission did not verify and begin loading its commit")
+	}
+
+	mu.Lock()
+	current = b
+	mu.Unlock()
+	_, err := newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: a,
+		NewCommitSha: b,
+		CommitSha:    b,
+		RefName:      "refs/heads/main",
+		ChangedPaths: []string{path},
+	})
+	require.NoError(t, err)
+
+	close(releaseOlder)
+	select {
+	case err := <-olderDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("older admission did not finish")
+	}
+
+	namespace, err := store.GetNamespaceByName(context.Background(), "race-store")
+	require.NoError(t, err)
+	assert.Equal(t, "Newer Revision", namespace.Title)
+	assert.Equal(t, b, namespace.GitCommitSHA)
+	assert.Equal(t, "main@sha1:"+b, namespace.Revision)
 }
 
 func TestAdmitResources_NamespaceBootstrapNameRejected(t *testing.T) {

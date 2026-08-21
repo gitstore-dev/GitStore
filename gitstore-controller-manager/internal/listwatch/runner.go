@@ -62,6 +62,12 @@ type Runner[T any] struct {
 	ReplayEnqueue func(types.WorkItemKey) error
 	KeyFunc       func(T) types.WorkItemKey
 	RevisionFunc  func(T) string // extracts resourceVersion from an object, for expiry-recovery diffing
+	// AcceptUpdate determines whether a Modified event may replace the cached
+	// object. Nil accepts every update.
+	AcceptUpdate func(oldObj, newObj T) bool
+	// ShouldEnqueueUpdate determines whether an accepted Modified event should
+	// enqueue reconciliation. Nil enqueues every accepted update.
+	ShouldEnqueueUpdate func(oldObj, newObj T) bool
 	// DisableReplay prevents this runner from tracking its own keys. This is
 	// useful for observer-only runners whose durable work is represented by
 	// RelatedReplayKeys instead.
@@ -381,26 +387,40 @@ func (r *Runner[T]) handleEvent(ctx context.Context, ev WatchEvent[T], pendingDe
 
 	if ev.Type != Bookmark {
 		key := r.KeyFunc(ev.Object)
-
-		suppressed := false
-		if rev, ok := pendingDedup[key]; ok {
-			delete(pendingDedup, key)
-			if ev.Type != Deleted && rev == r.RevisionFunc(ev.Object) {
-				// Exact same state already captured by the bootstrap list
-				// and enqueued from it — update the cache but do not
-				// double-enqueue.
-				r.Cache.Set(key, ev.Object)
-				suppressed = true
+		accepted := true
+		shouldEnqueue := true
+		if ev.Type == Modified {
+			if oldObj, exists := r.Cache.Get(key); exists {
+				if r.AcceptUpdate != nil && !r.AcceptUpdate(oldObj, ev.Object) {
+					accepted = false
+					shouldEnqueue = false
+				} else if r.ShouldEnqueueUpdate != nil {
+					shouldEnqueue = r.ShouldEnqueueUpdate(oldObj, ev.Object)
+				}
 			}
 		}
 
-		if !suppressed {
+		suppressed := !shouldEnqueue
+		if accepted {
+			if rev, ok := pendingDedup[key]; ok {
+				delete(pendingDedup, key)
+				if ev.Type != Deleted && rev == r.RevisionFunc(ev.Object) {
+					// Exact same state already captured by the bootstrap list
+					// and enqueued from it — update the cache but do not
+					// double-enqueue.
+					suppressed = true
+				}
+			}
+
 			switch ev.Type {
 			case Added, Modified:
 				r.Cache.Set(key, ev.Object)
 			case Deleted:
 				r.Cache.Delete(key)
 			}
+		}
+
+		if !suppressed {
 			r.rememberForReplay(key)
 			r.enqueue(key)
 		}

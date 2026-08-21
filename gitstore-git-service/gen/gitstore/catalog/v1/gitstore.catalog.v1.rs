@@ -115,6 +115,10 @@ pub struct AdmitResourcesRequest {
     /// changed resource set by comparing old_commit_sha and new_commit_sha.
     #[prost(string, repeated, tag="5")]
     pub changed_paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// actor_subject is the authenticated principal that performed the push.
+    /// It contains only the stable subject identifier, never raw credentials.
+    #[prost(string, tag="6")]
+    pub actor_subject: ::prost::alloc::string::String,
 }
 /// AdmitResourcesResponse is intentionally empty.
 /// The git service does not inspect this response; it is fire-and-forget.
