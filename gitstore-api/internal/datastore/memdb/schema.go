@@ -15,6 +15,45 @@ var schema = &memdb.DBSchema{
 			"ancestor_path": optionalStringIndex("ancestor_path", "AncestorPath"),
 			"repository_id": optionalStringIndex("repository_id", "RepositoryID"),
 		}),
+		"owner_reference": {
+			Name: "owner_reference",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {
+					Name:    "id",
+					Unique:  true,
+					Indexer: &memdb.StringFieldIndex{Field: "ID"},
+				},
+				"owner_block": {
+					Name:   "owner_block",
+					Unique: false,
+					Indexer: &memdb.CompoundIndex{Indexes: []memdb.Indexer{
+						&memdb.StringFieldIndex{Field: "Namespace"},
+						&memdb.StringFieldIndex{Field: "RepositoryID"},
+						&memdb.StringFieldIndex{Field: "OwnerUID"},
+						&memdb.StringFieldIndex{Field: "BlockKey"},
+					}},
+				},
+				"owner_product": {
+					Name:   "owner_product",
+					Unique: false,
+					Indexer: &memdb.CompoundIndex{Indexes: []memdb.Indexer{
+						&memdb.StringFieldIndex{Field: "Namespace"},
+						&memdb.StringFieldIndex{Field: "RepositoryID"},
+						&memdb.StringFieldIndex{Field: "OwnerUID"},
+						&memdb.StringFieldIndex{Field: "DependentKind"},
+						&memdb.StringFieldIndex{Field: "BlockKey"},
+					}},
+				},
+				"dependent": {
+					Name:   "dependent",
+					Unique: false,
+					Indexer: &memdb.CompoundIndex{Indexes: []memdb.Indexer{
+						&memdb.StringFieldIndex{Field: "DependentKind"},
+						&memdb.StringFieldIndex{Field: "DependentUID"},
+					}},
+				},
+			},
+		},
 		"product_variant": resourceTableSchema("product_variant", map[string]*memdb.IndexSchema{
 			"sku_namespace": {
 				Name:   "sku_namespace",

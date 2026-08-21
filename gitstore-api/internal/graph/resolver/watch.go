@@ -46,6 +46,20 @@ func (r *Resolver) publishCategoryTaxonomyStatusEvent(c *datastore.CategoryTaxon
 	})
 }
 
+func (r *Resolver) publishCategoryTaxonomyDeletedEvent(c *datastore.CategoryTaxonomy) {
+	if r.eventBus == nil || c == nil {
+		return
+	}
+	r.eventBus.Publish(eventbus.Event{
+		Type:            eventbus.Deleted,
+		Kind:            "CategoryTaxonomy",
+		Namespace:       c.Namespace,
+		Name:            c.Name,
+		ResourceVersion: c.ResourceVersion,
+		Object:          c,
+	})
+}
+
 func (r *Resolver) publishNamespaceStatusEvent(namespace *datastore.Namespace) {
 	if r.eventBus == nil || namespace == nil {
 		return

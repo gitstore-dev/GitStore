@@ -5,9 +5,11 @@ package security
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 	"unicode"
@@ -214,6 +216,47 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 				Extensions: map[string]any{"code": "FORBIDDEN"},
 			}
 		}
+	case "updateProductStatus":
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
+		}
+		name, _ := nestedStringArg(fc.Args, "input", "name")
+		namespace, _ := nestedStringArg(fc.Args, "input", "namespace")
+		decision, err := authz.Authorize(ctx, principal, "product.status.write", auth.ResourceContext{
+			Kind: "product", Name: name, Attrs: map[string]any{"namespace": namespace},
+		})
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return nil, &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
+		}
+	case "deleteCategory":
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
+		}
+		encodedID, _ := nestedStringArg(fc.Args, "input", "id")
+		uid, err := decodeCategoryID(encodedID)
+		if err != nil {
+			return nil, gqlerror.Errorf("invalid category ID")
+		}
+		category, err := a.store.GetCategoryTaxonomy(ctx, uid)
+		if err != nil {
+			if errors.Is(err, datastore.ErrNotFound) {
+				return nil, gqlerror.Errorf("category not found")
+			}
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		decision, err := authz.Authorize(ctx, principal, "category.delete", auth.ResourceContext{
+			Kind: "categoryTaxonomy", Name: category.Name, OwnerSub: category.CreationActor,
+			Attrs: map[string]any{"namespace": category.Namespace, "repositoryID": category.RepositoryID},
+		})
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return nil, &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
+		}
 	case "updateResourceStatus":
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
@@ -237,6 +280,26 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	}
 
 	return next(ctx)
+}
+
+func decodeCategoryID(encoded string) (string, error) {
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(string(decoded))
+	if err != nil || u.Scheme != "gid" || u.Host != "GitStore" {
+		return "", fmt.Errorf("invalid global ID")
+	}
+	parts := strings.SplitN(strings.TrimPrefix(u.EscapedPath(), "/"), "/", 2)
+	if len(parts) != 2 || parts[0] != "Category" {
+		return "", fmt.Errorf("invalid category global ID")
+	}
+	uid, err := url.PathUnescape(parts[1])
+	if err != nil || uid == "" {
+		return "", fmt.Errorf("invalid category UID")
+	}
+	return uid, nil
 }
 
 // lowerCamelFirst lowercases the first rune of s, matching GraphQL's

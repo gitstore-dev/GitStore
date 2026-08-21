@@ -146,7 +146,7 @@ func NewServer(deps ServerDeps) (*Server, error) {
 		celEnv = newCELEnv()
 	}
 	chain := admission.NewChain(deps.Logger)
-	chain.RegisterValidatingPolicy(admcatalog.NewProductValidatingPolicy(deps.Logger))
+	chain.RegisterValidatingPolicy(admcatalog.NewProductValidatingPolicy(deps.Logger, deps.Store))
 	chain.RegisterValidatingPolicy(admcatalog.NewCollectionValidatingPolicy(deps.Logger))
 	chain.RegisterValidatingPolicy(admcatalog.NewProductVariantValidatingPolicy(deps.Store, celEnv, deps.Logger))
 	chain.RegisterValidatingPolicy(admcatalog.NewCategoryTaxonomyValidatingPolicy(deps.Store, deps.Logger))
@@ -244,6 +244,19 @@ func (s *Server) ValidateResources(
 		if err == nil && parsed != nil && parsed.Namespace != nil {
 			err = s.validateNamespaceAuthoringTarget(ctx, req.RepositoryId, blob.Path, parsed.Namespace.Metadata.Name)
 		}
+		if err == nil && parsed != nil && parsed.CategoryTaxonomy != nil {
+			category := parsed.CategoryTaxonomy
+			if category.Spec.ParentRef != nil && category.Spec.ParentRef.Name != "" {
+				namespace, resolveErr := s.resolveNamespaceIdentifier(ctx, req.RepositoryId)
+				if resolveErr != nil {
+					err = fmt.Errorf("resolve category namespace: %w", resolveErr)
+				} else if parent, lookupErr := s.store.GetCategoryTaxonomyByName(ctx, namespace, category.Spec.ParentRef.Name); lookupErr == nil && parent.DeletionTimestamp != nil {
+					err = fmt.Errorf("parent category %q is terminating", category.Spec.ParentRef.Name)
+				} else if lookupErr != nil && !errors.Is(lookupErr, datastore.ErrNotFound) {
+					err = fmt.Errorf("resolve parent category %q: %w", category.Spec.ParentRef.Name, lookupErr)
+				}
+			}
+		}
 		if err == nil {
 			continue
 		}
@@ -268,6 +281,86 @@ func (s *Server) ValidateResources(
 		Accepted: false,
 		Errors:   allErrors,
 	}, nil
+}
+
+// ValidateCategoryTaxonomyDeletion checks proposed trees without changing
+// datastore state. The complete old and proposed resource sets allow an atomic
+// child deletion or reparenting to satisfy a parent deletion precondition.
+func (s *Server) ValidateCategoryTaxonomyDeletion(
+	ctx context.Context,
+	req *catalogv1.ValidateCategoryTaxonomyDeletionRequest,
+) (*catalogv1.ValidateCategoryTaxonomyDeletionResponse, error) {
+	if req.GetRepositoryId() == "" {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "repository_id is required")
+	}
+	namespace, err := s.resolveNamespaceIdentifier(ctx, req.GetRepositoryId())
+	if err != nil {
+		return nil, grpcstatus.Error(codes.Unavailable, "category deletion validation unavailable")
+	}
+
+	for _, tree := range req.GetTrees() {
+		oldEntries, err := s.parseDeletionTreeEntries(tree.GetOldBlobs(), namespace)
+		if err != nil {
+			return nil, grpcstatus.Errorf(codes.InvalidArgument, "invalid old resource tree: %v", err)
+		}
+		proposedEntries, err := s.parseDeletionTreeEntries(tree.GetProposedBlobs(), namespace)
+		if err != nil {
+			return nil, grpcstatus.Errorf(codes.InvalidArgument, "invalid proposed resource tree: %v", err)
+		}
+
+		deletedCategories := make(map[string]struct{})
+		for _, operation := range deriveResourceAdmissionOperations(oldEntries, proposedEntries, nil) {
+			if operation.operation == admission.OperationDelete &&
+				operation.identity.Kind == "CategoryTaxonomy" {
+				deletedCategories[operation.identity.key()] = struct{}{}
+			}
+		}
+		if len(deletedCategories) == 0 {
+			continue
+		}
+
+		for _, entry := range proposedEntries {
+			if entry.parsed.Kind != "CategoryTaxonomy" {
+				continue
+			}
+			parentRef := entry.parsed.CategoryTaxonomy.Spec.ParentRef
+			if parentRef == nil || parentRef.Name == "" {
+				continue
+			}
+			parent := resourceIdentity{
+				APIVersion: entry.identity.APIVersion,
+				Kind:       "CategoryTaxonomy",
+				Namespace:  entry.identity.Namespace,
+				Name:       parentRef.Name,
+			}
+			if _, blocked := deletedCategories[parent.key()]; blocked {
+				return &catalogv1.ValidateCategoryTaxonomyDeletionResponse{
+					Accepted: false,
+					Reason:   "child categories present",
+				}, nil
+			}
+		}
+	}
+
+	return &catalogv1.ValidateCategoryTaxonomyDeletionResponse{Accepted: true}, nil
+}
+
+func (s *Server) parseDeletionTreeEntries(blobs []*catalogv1.ResourceBlob, defaultNamespace string) ([]*parsedEntry, error) {
+	entries := make([]*parsedEntry, 0, len(blobs))
+	for _, blob := range blobs {
+		parsed, body, err := s.parser.ParseResource(bytes.NewReader(blob.GetContent()))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", blob.GetPath(), err)
+		}
+		entry, ok, err := newParsedEntry(blob.GetPath(), parsed, body, defaultNamespace)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", blob.GetPath(), err)
+		}
+		if ok {
+			entries = append(entries, entry)
+		}
+	}
+	return entries, nil
 }
 
 func (s *Server) validateNamespaceAuthoringTarget(ctx context.Context, repositoryID, sourcePath, name string) error {
@@ -465,6 +558,9 @@ func (s *Server) AdmitResources(
 			zap.String("repository_id", req.RepositoryId),
 			zap.String("commit_sha", newCommit),
 			zap.Error(err))
+		if errors.Is(err, errCategoryDeletionBlocked) {
+			return nil, grpcstatus.Error(codes.FailedPrecondition, "child categories present")
+		}
 		return nil, grpcstatus.Errorf(codes.Internal, "admit_resources: %v", err)
 	}
 
@@ -537,7 +633,9 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 	for _, op := range ops {
 		switch op.operation {
 		case admission.OperationDelete:
-			s.deleteResource(ctx, op.identity)
+			if err := s.deleteResource(ctx, op.identity); err != nil {
+				return err
+			}
 		case admission.OperationCreate, admission.OperationUpdate:
 			if op.newEntry == nil {
 				continue
@@ -701,7 +799,9 @@ func (s *Server) lookupResourceByIdentity(ctx context.Context, id resourceIdenti
 	}
 }
 
-func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) {
+var errCategoryDeletionBlocked = errors.New("category deletion blocked by child categories")
+
+func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) error {
 	existing, err := s.lookupResourceByIdentity(ctx, id)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
@@ -709,14 +809,14 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) {
 				zap.String("kind", id.Kind),
 				zap.String("namespace", id.Namespace),
 				zap.String("name", id.Name))
-			return
+			return nil
 		}
 		s.log.Error("admit_resources: delete lookup failed",
 			zap.String("kind", id.Kind),
 			zap.String("namespace", id.Namespace),
 			zap.String("name", id.Name),
 			zap.Error(err))
-		return
+		return fmt.Errorf("delete %s %s/%s: %w", id.Kind, id.Namespace, id.Name, err)
 	}
 
 	var uid string
@@ -726,8 +826,40 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) {
 		uid = r.UID
 		deleteErr = s.store.DeleteProduct(ctx, r.UID)
 	case *datastore.CategoryTaxonomy:
-		uid = r.UID
-		deleteErr = s.store.DeleteCategoryTaxonomy(ctx, r.UID)
+		owners, ok := s.store.(datastore.OwnerReferenceStore)
+		if !ok {
+			return fmt.Errorf("category deletion requires owner-reference datastore support")
+		}
+		lookupStarted := time.Now()
+		hasChildren, lookupErr := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{
+			Namespace: r.Namespace, RepositoryID: r.RepositoryID,
+		}, r.UID)
+		categoryDeletionDependentLookupDuration.Observe(time.Since(lookupStarted).Seconds())
+		if lookupErr != nil {
+			s.log.Warn("category deletion dependent lookup failed",
+				zap.String("namespace", r.Namespace),
+				zap.String("name", r.Name),
+				zap.Error(lookupErr))
+			return fmt.Errorf("check category deletion dependents: %w", lookupErr)
+		}
+		if hasChildren {
+			categoryDeletionBlockedTotal.Inc()
+			s.log.Info("category deletion blocked by child owner reference",
+				zap.String("namespace", r.Namespace),
+				zap.String("name", r.Name),
+				zap.String("uid", r.UID))
+			return fmt.Errorf("%w: %s/%s", errCategoryDeletionBlocked, r.Namespace, r.Name)
+		}
+		lifecycle, ok := s.store.(datastore.CategoryTaxonomyDeletionStore)
+		if !ok {
+			return fmt.Errorf("category deletion requires lifecycle datastore support")
+		}
+		terminating, markErr := lifecycle.MarkCategoryTaxonomyDeletion(ctx, r.Namespace, r.Name, r.ResourceVersion, s.clock.Now().UTC())
+		if markErr != nil {
+			return fmt.Errorf("mark category deletion: %w", markErr)
+		}
+		s.publishCategoryTaxonomyEvent(eventbus.Modified, terminating)
+		return nil
 	case *datastore.Collection:
 		uid = r.UID
 		deleteErr = s.store.DeleteCollection(ctx, r.UID)
@@ -737,7 +869,7 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) {
 	case *datastore.Namespace:
 		s.log.Info("admit_resources: Namespace manifest deletion ignored; use deleteNamespace",
 			zap.String("name", r.Name))
-		return
+		return nil
 	default:
 		deleteErr = datastore.ErrNotFound
 	}
@@ -748,7 +880,7 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) {
 			zap.String("name", id.Name),
 			zap.String("uid", uid),
 			zap.Error(deleteErr))
-		return
+		return fmt.Errorf("delete %s %s/%s: %w", id.Kind, id.Namespace, id.Name, deleteErr)
 	}
 	if catTaxonomy, ok := existing.(*datastore.CategoryTaxonomy); ok {
 		s.publishCategoryTaxonomyEvent(eventbus.Deleted, catTaxonomy)
@@ -761,6 +893,7 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) {
 		zap.String("namespace", id.Namespace),
 		zap.String("name", id.Name),
 		zap.String("uid", uid))
+	return nil
 }
 
 // detectCycles delegates to the admission/catalog package implementation.
@@ -815,6 +948,36 @@ func productCategoryRefName(specJSON []byte) string {
 		return ""
 	}
 	return spec.CategoryRef.Name
+}
+
+// resolvedCategoryOwnerReferences writes only controller-managed category
+// ownership. Author manifests cannot supply ownerReferences, and unresolved
+// references intentionally produce no reverse projection.
+func (s *Server) resolvedCategoryOwnerReferences(ctx context.Context, namespace string, reference *catalog.ObjectReference, blockOwnerDeletion bool) json.RawMessage {
+	empty := json.RawMessage(`[]`)
+	if reference == nil || reference.Name == "" {
+		return empty
+	}
+	owner, err := s.store.GetCategoryTaxonomyByName(ctx, namespace, reference.Name)
+	if err != nil || owner == nil || owner.DeletionTimestamp != nil {
+		return empty
+	}
+	references, err := json.Marshal([]catalog.OwnerReference{{
+		APIVersion:         owner.APIVersion,
+		Kind:               "CategoryTaxonomy",
+		Name:               owner.Name,
+		UID:                owner.UID,
+		BlockOwnerDeletion: blockOwnerDeletion,
+		RepositoryID:       owner.RepositoryID,
+	}})
+	if err != nil {
+		s.log.Warn("admit_resources: marshal category owner reference failed",
+			zap.String("namespace", namespace),
+			zap.String("name", reference.Name),
+			zap.Error(err))
+		return empty
+	}
+	return references
 }
 
 func (s *Server) admitNamespace(
@@ -995,6 +1158,7 @@ func (s *Server) admitProduct(
 		}
 		op = admission.OperationCreate
 	}
+	ownerReferences := s.resolvedCategoryOwnerReferences(ctx, namespace, resource.Spec.CategoryRef, false)
 
 	if d, denied := s.chain.Admit(ctx, admission.AdmissionRequest{
 		Object:    resource,
@@ -1032,6 +1196,7 @@ func (s *Server) admitProduct(
 			Kind:              resource.Kind,
 			Labels:            resource.Metadata.Labels,
 			Annotations:       resource.Metadata.Annotations,
+			OwnerReferences:   ownerReferences,
 			Generation:        1,
 			ResourceVersion:   "1",
 			CreationTimestamp: admCtx.Now,
@@ -1058,7 +1223,8 @@ func (s *Server) admitProduct(
 			!reflect.DeepEqual(existing.Annotations, resource.Metadata.Annotations)
 		changedProvenance := existing.RepositoryID != admCtx.RepositoryID ||
 			existing.SourcePath != sourcePath
-		if !changedSpecBody && !changedMetadata && !changedProvenance {
+		changedOwnerReferences := !bytes.Equal(existing.OwnerReferences, ownerReferences)
+		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedOwnerReferences {
 			return
 		}
 		// Diff categoryRef before existing.Spec is overwritten below, so the
@@ -1076,6 +1242,7 @@ func (s *Server) admitProduct(
 		existing.Kind = resource.Kind
 		existing.Labels = resource.Metadata.Labels
 		existing.Annotations = resource.Metadata.Annotations
+		existing.OwnerReferences = ownerReferences
 		existing.Generation = gen
 		existing.ResourceVersion = nextResourceVersion(existing.ResourceVersion)
 		existing.Revision = admCtx.Revision
@@ -1535,6 +1702,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		}
 		// If parent not found: tentative root path stays as `name`.
 	}
+	ownerReferences := s.resolvedCategoryOwnerReferences(ctx, namespace, resource.Spec.ParentRef, true)
 
 	// Record the computed path immediately so that any sibling category later in
 	// this push's topological order sees the correct full path for this node,
@@ -1555,6 +1723,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 			Kind:              resource.Kind,
 			Labels:            resource.Metadata.Labels,
 			Annotations:       resource.Metadata.Annotations,
+			OwnerReferences:   ownerReferences,
 			Generation:        1,
 			ResourceVersion:   "1",
 			CreationTimestamp: admCtx.Now,
@@ -1590,7 +1759,8 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		changedProvenance := existing.RepositoryID != admCtx.RepositoryID ||
 			existing.SourcePath != sourcePath
 		changedHierarchy := existing.ParentName != parentName || existing.AncestorPath != ancestorPath
-		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedHierarchy {
+		changedOwnerReferences := !bytes.Equal(existing.OwnerReferences, ownerReferences)
+		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedHierarchy && !changedOwnerReferences {
 			return
 		}
 		gen := existing.Generation
@@ -1601,6 +1771,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		existing.Kind = resource.Kind
 		existing.Labels = resource.Metadata.Labels
 		existing.Annotations = resource.Metadata.Annotations
+		existing.OwnerReferences = ownerReferences
 		existing.Generation = gen
 		existing.ResourceVersion = nextResourceVersion(existing.ResourceVersion)
 		existing.Revision = admCtx.Revision

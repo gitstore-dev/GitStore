@@ -192,6 +192,10 @@ func (m *memdbDatastore) CreateProduct(_ context.Context, p *datastore.Product) 
 		txn.Abort()
 		return fmt.Errorf("memdb: insert product: %w", err)
 	}
+	if err := syncOwnerReferenceProjections(txn, stored.Namespace, stored.RepositoryID, "Product", stored.UID, stored.Name, stored.ResourceVersion, stored.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
+	}
 	txn.Commit()
 	return nil
 }
@@ -258,6 +262,10 @@ func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product) 
 		txn.Abort()
 		return fmt.Errorf("memdb: update product: %w", err)
 	}
+	if err := syncOwnerReferenceProjections(txn, p.Namespace, p.RepositoryID, "Product", p.UID, p.Name, p.ResourceVersion, p.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
+	}
 	txn.Commit()
 	return nil
 }
@@ -268,6 +276,10 @@ func (m *memdbDatastore) DeleteProduct(_ context.Context, uid string) error {
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: product uid %s", datastore.ErrNotFound, uid)
+	}
+	if err := deleteOwnerReferenceProjections(txn, "Product", uid); err != nil {
+		txn.Abort()
+		return err
 	}
 	if err := txn.Delete("product", raw); err != nil {
 		txn.Abort()
@@ -437,6 +449,10 @@ func (m *memdbDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.
 		txn.Abort()
 		return fmt.Errorf("memdb: insert category_taxonomy: %w", err)
 	}
+	if err := syncOwnerReferenceProjections(txn, stored.Namespace, stored.RepositoryID, "CategoryTaxonomy", stored.UID, stored.Name, stored.ResourceVersion, stored.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
+	}
 	txn.Commit()
 	return nil
 }
@@ -501,6 +517,10 @@ func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.
 		txn.Abort()
 		return fmt.Errorf("memdb: update category_taxonomy: %w", err)
 	}
+	if err := syncOwnerReferenceProjections(txn, c.Namespace, c.RepositoryID, "CategoryTaxonomy", c.UID, c.Name, c.ResourceVersion, c.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
+	}
 	txn.Commit()
 	return nil
 }
@@ -523,6 +543,10 @@ func (m *memdbDatastore) UpdateCategoryTaxonomyStatus(_ context.Context, namespa
 		txn.Abort()
 		return nil, fmt.Errorf("memdb: update category_taxonomy status: %w", insErr)
 	}
+	if err := syncOwnerReferenceProjections(txn, updated.Namespace, updated.RepositoryID, "CategoryTaxonomy", updated.UID, updated.Name, updated.ResourceVersion, updated.OwnerReferences); err != nil {
+		txn.Abort()
+		return nil, err
+	}
 	txn.Commit()
 	return cloneCategoryTaxonomy(updated), nil
 }
@@ -533,6 +557,10 @@ func (m *memdbDatastore) DeleteCategoryTaxonomy(_ context.Context, uid string) e
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: category_taxonomy uid %s", datastore.ErrNotFound, uid)
+	}
+	if err := deleteOwnerReferenceProjections(txn, "CategoryTaxonomy", uid); err != nil {
+		txn.Abort()
+		return err
 	}
 	if err := txn.Delete("category_taxonomy", raw); err != nil {
 		txn.Abort()

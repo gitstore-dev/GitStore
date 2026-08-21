@@ -1156,6 +1156,140 @@ spec:
 `)
 }
 
+func deletionValidationTree(oldResources, proposedResources map[string][]byte) *catalogv1.CategoryTaxonomyDeletionTree {
+	toBlobs := func(resources map[string][]byte) []*catalogv1.ResourceBlob {
+		blobs := make([]*catalogv1.ResourceBlob, 0, len(resources))
+		for path, content := range resources {
+			blobs = append(blobs, &catalogv1.ResourceBlob{
+				Path:    path,
+				BlobOid: path,
+				Content: content,
+			})
+		}
+		return blobs
+	}
+	return &catalogv1.CategoryTaxonomyDeletionTree{
+		OldBlobs:      toBlobs(oldResources),
+		ProposedBlobs: toBlobs(proposedResources),
+	}
+}
+
+func TestValidateCategoryTaxonomyDeletionUsesProposedTree(t *testing.T) {
+	srv := newCatalogServer(t, newTestDatastore(t), nil)
+	parent := makeCategoryTaxonomy("parent")
+	child := makeCategoryTaxonomyWithParent("child", "parent")
+	reparentedChild := makeCategoryTaxonomyWithParent("child", "other-parent")
+	implicitParent := []byte(`---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: implicit-parent
+spec:
+  title: Parent
+---
+`)
+	implicitChild := []byte(`---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: implicit-child
+spec:
+  title: Child
+  parentRef:
+    name: implicit-parent
+---
+`)
+	productWithCategory := []byte(`---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: widget
+  namespace: gitstore
+spec:
+  title: Widget
+  categoryRef:
+    name: parent
+---
+`)
+
+	tests := []struct {
+		name     string
+		tree     *catalogv1.CategoryTaxonomyDeletionTree
+		accepted bool
+	}{
+		{
+			name: "parent only deletion is rejected",
+			tree: deletionValidationTree(
+				map[string][]byte{
+					"categories/parent.md": parent,
+					"categories/child.md":  child,
+				},
+				map[string][]byte{"categories/child.md": child},
+			),
+			accepted: false,
+		},
+		{
+			name: "implicit namespace parent deletion is rejected",
+			tree: deletionValidationTree(
+				map[string][]byte{
+					"categories/parent.md": implicitParent,
+					"categories/child.md":  implicitChild,
+				},
+				map[string][]byte{"categories/child.md": implicitChild},
+			),
+			accepted: false,
+		},
+		{
+			name: "atomic parent and child deletion is accepted",
+			tree: deletionValidationTree(
+				map[string][]byte{
+					"categories/parent.md": parent,
+					"categories/child.md":  child,
+				},
+				map[string][]byte{},
+			),
+			accepted: true,
+		},
+		{
+			name: "atomic child reparenting is accepted",
+			tree: deletionValidationTree(
+				map[string][]byte{
+					"categories/parent.md": parent,
+					"categories/child.md":  child,
+				},
+				map[string][]byte{"categories/child.md": reparentedChild},
+			),
+			accepted: true,
+		},
+		{
+			name: "product only dependency is accepted",
+			tree: deletionValidationTree(
+				map[string][]byte{
+					"categories/parent.md": parent,
+					"products/widget.md":   productWithCategory,
+				},
+				map[string][]byte{"products/widget.md": productWithCategory},
+			),
+			accepted: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response, err := srv.ValidateCategoryTaxonomyDeletion(context.Background(),
+				&catalogv1.ValidateCategoryTaxonomyDeletionRequest{
+					RepositoryId: testRepoID,
+					Trees:        []*catalogv1.CategoryTaxonomyDeletionTree{tt.tree},
+				})
+			require.NoError(t, err)
+			assert.Equal(t, tt.accepted, response.Accepted)
+			if !tt.accepted {
+				assert.Equal(t, "child categories present", response.Reason)
+			}
+		})
+	}
+}
+
 func TestAdmitResources_IntraPushCycle_BothStoredWithAcyclicFalse(t *testing.T) {
 	memStore := newTestDatastore(t)
 	files := map[string][]byte{
@@ -1322,6 +1456,14 @@ func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, "electronics/computers", child.AncestorPath)
 	assert.Equal(t, "electronics", child.ParentName)
+	parent, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, err)
+	var references []catalog.OwnerReference
+	require.NoError(t, json.Unmarshal(child.OwnerReferences, &references))
+	require.Len(t, references, 1)
+	assert.Equal(t, parent.UID, references[0].UID)
+	assert.Equal(t, "CategoryTaxonomy", references[0].Kind)
+	assert.True(t, references[0].BlockOwnerDeletion)
 }
 
 func TestAdmitResources_CoCreation_ParentAndChildInSamePush(t *testing.T) {

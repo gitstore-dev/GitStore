@@ -363,6 +363,7 @@ func DatastoreProductToGraphQL(p *datastore.Product) *model.Product {
 		CreationTimestamp: p.CreationTimestamp,
 		OwnerReferences:   ownerRefsFromJSON(p.OwnerReferences),
 		Finalizers:        append([]string{}, p.Finalizers...),
+		DeletionTimestamp: p.DeletionTimestamp,
 	}
 	if p.Revision != "" {
 		meta.Revision = &p.Revision
@@ -470,6 +471,7 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 		CreationTimestamp: c.CreationTimestamp,
 		OwnerReferences:   ownerRefsFromJSON(c.OwnerReferences),
 		Finalizers:        append([]string{}, c.Finalizers...),
+		DeletionTimestamp: c.DeletionTimestamp,
 	}
 	if c.Revision != "" {
 		meta.Revision = &c.Revision
@@ -484,6 +486,14 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 		spec.Media = []*model.MediaDefinition{}
 	}
 
+	categoryStatus := categoryStatusFromJSON(c.Status)
+	if c.DeletionTimestamp != nil {
+		if categoryStatus == nil {
+			categoryStatus = &model.CategoryTaxonomyStatus{Conditions: []*model.Condition{}}
+		}
+		categoryStatus.Conditions = upsertTerminatingCondition(categoryStatus.Conditions, c.Generation, *c.DeletionTimestamp)
+	}
+
 	apiVersion := c.APIVersion
 	kind := c.Kind
 	cat := &model.Category{
@@ -492,7 +502,7 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 		Kind:       &kind,
 		Metadata:   meta,
 		Spec:       spec,
-		Status:     categoryStatusFromJSON(c.Status),
+		Status:     categoryStatus,
 		Body:       nil,
 		Parent:     nil,
 		Children:   []*model.Category{},
@@ -576,6 +586,7 @@ func DatastoreCollectionToGraphQL(c *datastore.Collection) *model.Collection {
 		CreationTimestamp: c.CreationTimestamp,
 		OwnerReferences:   ownerRefsFromJSON(c.OwnerReferences),
 		Finalizers:        append([]string{}, c.Finalizers...),
+		DeletionTimestamp: c.DeletionTimestamp,
 	}
 	if c.Revision != "" {
 		r := c.Revision

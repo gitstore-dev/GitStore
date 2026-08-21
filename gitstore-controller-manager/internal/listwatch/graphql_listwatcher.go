@@ -16,7 +16,11 @@ import (
 )
 
 const categoryFields = `
-  metadata { uid name namespace resourceVersion generation }
+  metadata {
+    uid name namespace resourceVersion generation
+    finalizers deletionTimestamp
+    ownerReferences { uid kind blockOwnerDeletion }
+  }
   spec {
     parentRef { name }
     media { fileRef { name optional } }
@@ -56,11 +60,18 @@ subscription($resourceVersion: String) {
 }`
 
 type categoryMetadataJSON struct {
-	UID             string `json:"uid"`
-	Name            string `json:"name"`
-	Namespace       string `json:"namespace"`
-	ResourceVersion string `json:"resourceVersion"`
-	Generation      int64  `json:"generation"`
+	UID               string     `json:"uid"`
+	Name              string     `json:"name"`
+	Namespace         string     `json:"namespace"`
+	ResourceVersion   string     `json:"resourceVersion"`
+	Generation        int64      `json:"generation"`
+	Finalizers        []string   `json:"finalizers"`
+	DeletionTimestamp *time.Time `json:"deletionTimestamp"`
+	OwnerReferences   []struct {
+		UID                string `json:"uid"`
+		Kind               string `json:"kind"`
+		BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+	} `json:"ownerReferences"`
 }
 
 type mediaJSON struct {
@@ -108,11 +119,18 @@ type categoryNodeJSON struct {
 
 func (n categoryNodeJSON) toCategoryTaxonomy() categorytaxonomy.CategoryTaxonomy {
 	c := categorytaxonomy.CategoryTaxonomy{
-		UID:             n.Metadata.UID,
-		Namespace:       n.Metadata.Namespace,
-		Name:            n.Metadata.Name,
-		Generation:      n.Metadata.Generation,
-		ResourceVersion: n.Metadata.ResourceVersion,
+		UID:               n.Metadata.UID,
+		Namespace:         n.Metadata.Namespace,
+		Name:              n.Metadata.Name,
+		Generation:        n.Metadata.Generation,
+		ResourceVersion:   n.Metadata.ResourceVersion,
+		Finalizers:        append([]string(nil), n.Metadata.Finalizers...),
+		DeletionTimestamp: n.Metadata.DeletionTimestamp,
+	}
+	for _, ref := range n.Metadata.OwnerReferences {
+		c.OwnerReferences = append(c.OwnerReferences, categorytaxonomy.OwnerReference{
+			UID: ref.UID, Kind: ref.Kind, BlockOwnerDeletion: ref.BlockOwnerDeletion,
+		})
 	}
 	if n.Spec.ParentRef != nil {
 		c.ParentRefName = n.Spec.ParentRef.Name

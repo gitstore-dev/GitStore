@@ -105,10 +105,14 @@ type SystemObjectMeta struct {
 
 // OwnerReference is a typed pointer to the resource that owns this object.
 type OwnerReference struct {
-	APIVersion string `yaml:"apiVersion" json:"apiVersion"`
-	Kind       string `yaml:"kind"       json:"kind"`
-	Name       string `yaml:"name"       json:"name"`
-	UID        string `yaml:"uid"        json:"uid"`
+	APIVersion         string `yaml:"apiVersion"         json:"apiVersion"`
+	Kind               string `yaml:"kind"               json:"kind"`
+	Name               string `yaml:"name"               json:"name"`
+	UID                string `yaml:"uid"                json:"uid"`
+	BlockOwnerDeletion bool   `yaml:"blockOwnerDeletion" json:"blockOwnerDeletion"`
+	// RepositoryID is internal projection scope. It is system-populated so
+	// cross-repository references in one namespace are indexed with the owner.
+	RepositoryID string `yaml:"-" json:"repositoryID,omitempty"`
 }
 
 // CategoryTaxonomyStatus is the system-written state for a category taxonomy. Never stored in git.

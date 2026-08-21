@@ -45,7 +45,7 @@ concurrency:
 
 jobs:
   integration-test:
-    name: Feature 048 Integration (memdb)
+    name: Integration (memdb)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -67,7 +67,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.25.x'
+        go-version: '1.26.0'
         cache-dependency-path: tests/integration/go.sum
 
     - name: Set up Docker Compose
@@ -157,7 +157,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.25.x'
+        go-version: '1.26.0'
         cache-dependency-path: gitstore-api/go.sum
 
     - name: Run backend-neutral datastore hardening
@@ -168,7 +168,7 @@ jobs:
       run: go test -tags memdb -count=1 -v -race -timeout 180s ./tests/contract/datastore/...
 
   integration-test-scylla:
-    name: Feature 048 Integration (ScyllaDB)
+    name: Integration (ScyllaDB)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -188,7 +188,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25.x'
+          go-version: '1.26.0'
           cache-dependency-path: tests/integration/go.sum
 
       - name: Set up Docker Compose
@@ -277,7 +277,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.25.x'
+        go-version: '1.26.0'
         cache-dependency-path: gitstore-api/go.sum
 
     - name: Start ScyllaDB
@@ -310,7 +310,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.25.x'
+        go-version: '1.26.0'
         cache-dependency-path: gitstore-api/go.sum
 
     - name: Run repair CLI tests
@@ -341,7 +341,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.25.x'
+        go-version: '1.26.0'
         cache-dependency-path: gitstore-api/go.sum
 
     - name: Build git-service Docker image
@@ -366,7 +366,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.25.x'
+        go-version: '1.26.0'
         cache-dependency-path: gitstore-controller-manager/go.sum
 
     - name: Run controller-manager contract tests

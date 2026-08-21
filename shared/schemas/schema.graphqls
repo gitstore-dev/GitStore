@@ -275,6 +275,7 @@ type ObjectMeta {
   revision: String
   ownerReferences: [OwnerReference!]!
   finalizers: [String!]!
+  deletionTimestamp: DateTime
 }
 
 """
