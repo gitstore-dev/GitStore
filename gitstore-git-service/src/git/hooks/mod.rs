@@ -133,6 +133,55 @@ impl ValidationHandler for NoopValidationHandler {
     }
 }
 
+/// Runs multiple blocking validation policies in order and stops at the first
+/// rejection. Receive-aware handlers retain access to the old and proposed
+/// trees instead of being reduced to changed blobs.
+pub struct ChainedValidationHandler {
+    handlers: Vec<Arc<dyn ValidationHandler + Send + Sync>>,
+}
+
+impl ChainedValidationHandler {
+    pub fn new(handlers: Vec<Arc<dyn ValidationHandler + Send + Sync>>) -> Self {
+        Self { handlers }
+    }
+}
+
+#[async_trait]
+impl ValidationHandler for ChainedValidationHandler {
+    async fn validate(
+        &self,
+        blobs: &[ResourceBlob],
+        hook_ctx: &HookContext,
+    ) -> anyhow::Result<AdmissionDecision> {
+        for handler in &self.handlers {
+            match handler.validate(blobs, hook_ctx).await? {
+                AdmissionDecision::Accept => {}
+                rejected @ AdmissionDecision::Reject(_) => return Ok(rejected),
+            }
+        }
+        Ok(AdmissionDecision::Accept)
+    }
+
+    async fn validate_receive(
+        &self,
+        git_dir: &Path,
+        updates: &[RefUpdate],
+        quarantine_dir: Option<&Path>,
+        hook_ctx: &HookContext,
+    ) -> anyhow::Result<AdmissionDecision> {
+        for handler in &self.handlers {
+            match handler
+                .validate_receive(git_dir, updates, quarantine_dir, hook_ctx)
+                .await?
+            {
+                AdmissionDecision::Accept => {}
+                rejected @ AdmissionDecision::Reject(_) => return Ok(rejected),
+            }
+        }
+        Ok(AdmissionDecision::Accept)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AdmissionHandler trait
 // ---------------------------------------------------------------------------

@@ -153,10 +153,10 @@ func categoryReferences(ctx context.Context, store datastore.Datastore, category
 	references := nonCategoryReferences(category.OwnerReferences)
 	if category.ParentName != "" {
 		parent, err := store.GetCategoryTaxonomyByName(ctx, category.Namespace, category.ParentName)
-		if err == nil && parent.RepositoryID == category.RepositoryID {
+		if err == nil {
 			references = append(references, catalog.OwnerReference{
 				APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy", Name: parent.Name,
-				UID: parent.UID, BlockOwnerDeletion: true,
+				UID: parent.UID, BlockOwnerDeletion: true, RepositoryID: parent.RepositoryID,
 			})
 		} else if err != nil && !errors.Is(err, datastore.ErrNotFound) {
 			return nil, fmt.Errorf("resolve category parent %s/%s: %w", category.Namespace, category.ParentName, err)
@@ -176,10 +176,10 @@ func productReferences(ctx context.Context, store datastore.Datastore, product *
 		return json.Marshal(references)
 	}
 	category, err := store.GetCategoryTaxonomyByName(ctx, product.Namespace, spec.CategoryRef.Name)
-	if err == nil && category.RepositoryID == product.RepositoryID {
+	if err == nil {
 		references = append(references, catalog.OwnerReference{
 			APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy", Name: category.Name,
-			UID: category.UID, BlockOwnerDeletion: false,
+			UID: category.UID, BlockOwnerDeletion: false, RepositoryID: category.RepositoryID,
 		})
 	} else if err != nil && !errors.Is(err, datastore.ErrNotFound) {
 		return nil, fmt.Errorf("resolve product category %s/%s: %w", product.Namespace, spec.CategoryRef.Name, err)

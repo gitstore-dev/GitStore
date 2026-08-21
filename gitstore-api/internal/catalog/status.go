@@ -110,6 +110,9 @@ type OwnerReference struct {
 	Name               string `yaml:"name"               json:"name"`
 	UID                string `yaml:"uid"                json:"uid"`
 	BlockOwnerDeletion bool   `yaml:"blockOwnerDeletion" json:"blockOwnerDeletion"`
+	// RepositoryID is internal projection scope. It is system-populated so
+	// cross-repository references in one namespace are indexed with the owner.
+	RepositoryID string `yaml:"-" json:"repositoryID,omitempty"`
 }
 
 // CategoryTaxonomyStatus is the system-written state for a category taxonomy. Never stored in git.

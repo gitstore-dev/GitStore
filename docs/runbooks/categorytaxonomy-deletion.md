@@ -36,6 +36,10 @@ interruption:
 (cd gitstore-api && go run ./cmd/backfill-owner-references --resume-after '<cursor>')
 ```
 
+Do not enable deletion enforcement until the non-dry-run backfill completes
+without a resume cursor and verification reports no resolved resource missing
+its owner projection.
+
 ## Rollout and rollback
 
 Deploy the additive schema and GraphQL/list-watch fields first, then backfill
@@ -47,5 +51,7 @@ CategoryTaxonomy manifest removal is checked synchronously in pre-receive
 against the full old and proposed ref trees. A parent-only deletion rejects;
 deleting or reparenting its children atomically is accepted. Products remain
 non-blocking. API timeout, transport failure, or malformed proposed resource
-trees reject the push safely. Creates and updates remain asynchronous
-post-receive admission and do not incur this pre-receive API call.
+trees reject the push safely. Modified resource files are included even when
+their path remains present, so removing one document from a multi-document
+file or changing its identity is validated as a deletion. Schema validation
+remains active for all pushes.

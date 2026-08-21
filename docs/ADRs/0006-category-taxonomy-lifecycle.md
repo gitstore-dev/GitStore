@@ -147,12 +147,13 @@ controller once `CategoryResolved` transitions to `True`.
    separately rejects any *new* `Product` create/update that targets a category
    already `Terminating`, so no fresh `blockOwnerDeletion: false` entry can be
    created against a category that is about to disappear.
-6. Once the `blockOwnerDeletion: true` query returns zero results, the controller
-   removes the finalizer and the datastore record is hard-deleted. The product
-   decouple in step 5 is not a precondition for this step — it can complete
-   before, during, or after removal, but MUST eventually converge to
-   `CategoryResolved=False`/`CategoryDeleted` (and an orphaned `ownerReferences`
-   entry) for every product that referenced the deleted category.
+6. Product decoupling is a completion condition. The controller processes
+   bounded, idempotent pages from the durable reverse projection and retains the
+   category plus finalizer across crashes and replica handoff. Only a fresh
+   empty Product-dependent page permits the final step.
+7. Final removal conditionally establishes zero blocking dependents and completed
+   Product cleanup at the datastore boundary. Category create/re-parent admission
+   rejects a `Terminating` parent, closing the check/delete race.
 
 **Move vs delete/recreate:** Moving a category to a different parent is an update to
 `spec.parentRef`, not a delete/recreate. The UID is preserved. All descendant

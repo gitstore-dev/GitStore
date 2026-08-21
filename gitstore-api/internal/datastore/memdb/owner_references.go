@@ -54,10 +54,14 @@ func syncOwnerReferenceProjections(txn *gomemdb.Txn, namespace, repositoryID, ki
 		if ref.UID == "" {
 			continue
 		}
+		ownerRepositoryID := ref.RepositoryID
+		if ownerRepositoryID == "" {
+			ownerRepositoryID = repositoryID
+		}
 		projection := &ownerReferenceProjection{
-			ID:              projectionID(namespace, repositoryID, ref.UID, kind, uid),
+			ID:              projectionID(namespace, ownerRepositoryID, ref.UID, kind, uid),
 			Namespace:       namespace,
-			RepositoryID:    repositoryID,
+			RepositoryID:    ownerRepositoryID,
 			OwnerUID:        ref.UID,
 			BlockKey:        blockKey(ref.BlockOwnerDeletion),
 			DependentUID:    uid,

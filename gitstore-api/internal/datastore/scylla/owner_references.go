@@ -55,7 +55,11 @@ func (s *scyllaDatastore) syncOwnerReferenceDependents(
 		if ref.UID == "" {
 			continue
 		}
-		if err := s.deleteOwnerReferenceDependent(ctx, namespace, repositoryID, ref.UID, ref.BlockOwnerDeletion, dependentKind, dependentUID); err != nil {
+		ownerRepositoryID := ref.RepositoryID
+		if ownerRepositoryID == "" {
+			ownerRepositoryID = repositoryID
+		}
+		if err := s.deleteOwnerReferenceDependent(ctx, namespace, ownerRepositoryID, ref.UID, ref.BlockOwnerDeletion, dependentKind, dependentUID); err != nil {
 			return err
 		}
 	}
@@ -63,8 +67,12 @@ func (s *scyllaDatastore) syncOwnerReferenceDependents(
 		if ref.UID == "" {
 			continue
 		}
+		ownerRepositoryID := ref.RepositoryID
+		if ownerRepositoryID == "" {
+			ownerRepositoryID = repositoryID
+		}
 		if err := s.upsertOwnerReferenceDependent(ctx, ownerReferenceDependentRow{
-			Namespace: namespace, RepositoryID: repositoryID, OwnerUID: ref.UID,
+			Namespace: namespace, RepositoryID: ownerRepositoryID, OwnerUID: ref.UID,
 			BlockOwnerDeletion: ref.BlockOwnerDeletion, DependentKind: dependentKind,
 			DependentUID: dependentUID, Name: name, ResourceVersion: resourceVersion,
 		}); err != nil {

@@ -244,6 +244,19 @@ func (s *Server) ValidateResources(
 		if err == nil && parsed != nil && parsed.Namespace != nil {
 			err = s.validateNamespaceAuthoringTarget(ctx, req.RepositoryId, blob.Path, parsed.Namespace.Metadata.Name)
 		}
+		if err == nil && parsed != nil && parsed.CategoryTaxonomy != nil {
+			category := parsed.CategoryTaxonomy
+			if category.Spec.ParentRef != nil && category.Spec.ParentRef.Name != "" {
+				namespace, resolveErr := s.resolveNamespaceIdentifier(ctx, req.RepositoryId)
+				if resolveErr != nil {
+					err = fmt.Errorf("resolve category namespace: %w", resolveErr)
+				} else if parent, lookupErr := s.store.GetCategoryTaxonomyByName(ctx, namespace, category.Spec.ParentRef.Name); lookupErr == nil && parent.DeletionTimestamp != nil {
+					err = fmt.Errorf("parent category %q is terminating", category.Spec.ParentRef.Name)
+				} else if lookupErr != nil && !errors.Is(lookupErr, datastore.ErrNotFound) {
+					err = fmt.Errorf("resolve parent category %q: %w", category.Spec.ParentRef.Name, lookupErr)
+				}
+			}
+		}
 		if err == nil {
 			continue
 		}
@@ -955,6 +968,7 @@ func (s *Server) resolvedCategoryOwnerReferences(ctx context.Context, namespace 
 		Name:               owner.Name,
 		UID:                owner.UID,
 		BlockOwnerDeletion: blockOwnerDeletion,
+		RepositoryID:       owner.RepositoryID,
 	}})
 	if err != nil {
 		s.log.Warn("admit_resources: marshal category owner reference failed",

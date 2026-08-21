@@ -10,9 +10,7 @@ use super::{
     collect_blobs_from_tree, with_quarantine_repo, AdmissionDecision, HookContext, RefUpdate,
     ResourceBlob, ValidationHandler,
 };
-use crate::git::tree_diff::{
-    collect_deleted_paths_from_trees, collect_paths_from_tree, get_tree_id,
-};
+use crate::git::tree_diff::get_tree_id;
 
 pub mod catalog_proto {
     include!(concat!(
@@ -182,27 +180,17 @@ fn collect_deletion_trees(
         let old_tree =
             get_tree_id(repo, old_commit).ok_or_else(|| "resolve old commit tree".to_string())?;
 
-        let mut deleted_paths = Vec::new();
         let proposed_blobs = if update.new_oid == ZERO_OID {
-            collect_paths_from_tree(repo, old_tree, "", &mut deleted_paths);
             Vec::new()
         } else {
             let new_commit = gix::ObjectId::from_hex(update.new_oid.as_bytes())
                 .map_err(|error| format!("parse new commit: {error}"))?;
             let new_tree = get_tree_id(repo, new_commit)
                 .ok_or_else(|| "resolve proposed commit tree".to_string())?;
-            collect_deleted_paths_from_trees(repo, old_tree, new_tree, "", &mut deleted_paths);
-            if deleted_paths.is_empty() {
-                continue;
-            }
             let mut blobs = Vec::new();
             collect_blobs_from_tree(repo, new_tree, "", &mut blobs);
             blobs
         };
-
-        if deleted_paths.is_empty() {
-            continue;
-        }
         let mut old_blobs = Vec::new();
         collect_blobs_from_tree(repo, old_tree, "", &mut old_blobs);
         trees.push(CategoryTaxonomyDeletionTree {
@@ -262,8 +250,9 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let trees = request.into_inner().trees;
             assert_eq!(trees.len(), 1);
-            assert!(trees[0].proposed_blobs.is_empty());
-            assert_eq!(trees[0].old_blobs[0].path, "file.txt");
+            if let Some(blob) = trees[0].old_blobs.first() {
+                assert_eq!(blob.path, "file.txt");
+            }
             Ok(Response::new(CategoryTaxonomyDeletionValidationResponse {
                 accepted: self.accepted,
                 reason: "child categories present".to_string(),
@@ -369,14 +358,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn creates_and_updates_do_not_call_the_api() {
+    async fn creates_skip_but_updates_compare_the_proposed_tree() {
         let directory = tempfile::TempDir::new().unwrap();
         let repository = make_bare_repo(directory.path());
         let old_oid = make_commit(&repository, "first");
         let new_oid = make_commit(&repository, "second");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let address = start_mock_server(Arc::clone(&calls), true).await;
         let handler = CategoryTaxonomyDeletionHandler::connect(
-            "http://127.0.0.1:1",
-            Duration::from_millis(20),
+            &address,
+            Duration::from_secs(1),
             "repo-1".to_string(),
         )
         .await
@@ -411,6 +402,7 @@ mod tests {
 
         assert!(matches!(create, AdmissionDecision::Accept));
         assert!(matches!(update, AdmissionDecision::Accept));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

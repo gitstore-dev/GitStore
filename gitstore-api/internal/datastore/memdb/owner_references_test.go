@@ -102,6 +102,31 @@ func TestCategoryTaxonomyDeletionLifecycleUsesResourceVersionPreconditions(t *te
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
+func TestOwnerReferenceProjectionUsesOwnerRepositoryScope(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	owners := store.(datastore.OwnerReferenceStore)
+	ctx := context.Background()
+	parentUID := "00000000-0000-0000-0000-000000000050"
+	references, err := json.Marshal([]catalog.OwnerReference{{
+		Kind: "CategoryTaxonomy", Name: "parent", UID: parentUID,
+		BlockOwnerDeletion: true, RepositoryID: "owner-repo",
+	}})
+	require.NoError(t, err)
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{
+		UID: "00000000-0000-0000-0000-000000000051", Namespace: "acme",
+		RepositoryID: "dependent-repo", Name: "child", ResourceVersion: "1",
+		CreationTimestamp: time.Now(), OwnerReferences: references,
+	}))
+
+	blocked, err := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{Namespace: "acme", RepositoryID: "owner-repo"}, parentUID)
+	require.NoError(t, err)
+	assert.True(t, blocked)
+	blocked, err = owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{Namespace: "acme", RepositoryID: "dependent-repo"}, parentUID)
+	require.NoError(t, err)
+	assert.False(t, blocked)
+}
+
 func TestOwnerReferenceProjectionCapsProductPagesAndIgnoresLegacyRecords(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)

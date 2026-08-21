@@ -13,7 +13,8 @@ use std::sync::Arc;
 use gitstore::auth::interceptor::HmacInterceptor;
 use gitstore::git::hooks::{
     admission_handler::AdmissionControlHandler,
-    category_taxonomy_deletion_handler::CategoryTaxonomyDeletionHandler, HookPipeline,
+    category_taxonomy_deletion_handler::CategoryTaxonomyDeletionHandler,
+    validation_handler::SchemaValidationHandler, ChainedValidationHandler, HookPipeline,
     NoopAdmissionHandler, NoopValidationHandler,
 };
 use gitstore::grpc::server::{proto::git_service_server::GitServiceServer, GitServiceImpl};
@@ -75,27 +76,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!(path = %data_path.display(), "Created data directory");
     }
 
-    // Build the deletion-only pre-receive handler. It calls the catalog API only
-    // when a ref update removes a path; creates and updates remain post-receive.
+    // Preserve schema validation and add the deletion-specific proposed-tree
+    // check as a second blocking policy.
     let catalog_url = cfg.catalog_service.uri.clone();
     let validation_timeout = std::time::Duration::from_secs(cfg.schema_validation.timeout_secs);
-    let validation_handler: Arc<dyn gitstore::git::hooks::ValidationHandler + Send + Sync> =
-        match CategoryTaxonomyDeletionHandler::connect(
+    let validation_handler: Arc<dyn gitstore::git::hooks::ValidationHandler + Send + Sync> = {
+        let schema =
+            SchemaValidationHandler::connect(&catalog_url, validation_timeout, "".to_string())
+                .await;
+        let deletion = CategoryTaxonomyDeletionHandler::connect(
             &catalog_url,
             validation_timeout,
             "".to_string(),
         )
-        .await
-        {
-            Ok(h) => {
-                info!(url = %catalog_url, "CategoryTaxonomyDeletionHandler connected");
-                Arc::new(h)
+        .await;
+        match (schema, deletion) {
+            (Ok(schema), Ok(deletion)) => {
+                info!(url = %catalog_url, "schema and CategoryTaxonomy deletion validators connected");
+                Arc::new(ChainedValidationHandler::new(vec![
+                    Arc::new(schema),
+                    Arc::new(deletion),
+                ]))
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "CategoryTaxonomyDeletionHandler unavailable at startup; using noop");
+            (schema, deletion) => {
+                tracing::warn!(schema_error = ?schema.err(), deletion_error = ?deletion.err(), "validation handlers unavailable at startup; using noop");
                 Arc::new(NoopValidationHandler)
             }
-        };
+        }
+    };
 
     // Build admission handler.
     let admission_handler: Arc<dyn gitstore::git::hooks::AdmissionHandler + Send + Sync> =

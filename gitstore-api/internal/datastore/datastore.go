@@ -107,9 +107,9 @@ type PageResult[T any] struct {
 	TotalCount  int32 // -1 if unknown/expensive to compute
 }
 
-// OwnerReferenceScope restricts dependent lookups to the repository that
-// authored both resources. Owner UIDs are not globally sufficient because
-// controllers and admission operate on repository-scoped catalog records.
+// OwnerReferenceScope restricts dependent lookups to the owner's repository.
+// Dependents may be authored in another repository in the same namespace;
+// their system-managed owner reference carries this owner scope.
 type OwnerReferenceScope struct {
 	Namespace    string
 	RepositoryID string
