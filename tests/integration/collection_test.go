@@ -213,6 +213,46 @@ func queryCollection(t *testing.T, namespace, name string) *collectionQueryResul
 	return data.Collection
 }
 
+// tryQueryCollection is queryCollection without the fatal-on-GraphQL-error
+// behavior, so a poll loop can tolerate a transient "not found" (the
+// collection's own existence, not just its status, races the GraphQL read
+// path immediately after push) instead of dying on the first attempt.
+func tryQueryCollection(t *testing.T, namespace, name string) (*collectionQueryResult, []json.RawMessage) {
+	t.Helper()
+	resp := gqlQuery(t, `
+		query($namespace: String!, $name: String!) {
+			collection(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+				id
+				apiVersion
+				kind
+				metadata { name uid }
+				spec { title }
+				status {
+					observedGeneration
+					lastAppliedRevision
+					conditions { type status reason message observedGeneration }
+					resolved { memberCount }
+				}
+				products(first: 50) {
+					edges { node { metadata { name } } }
+					pageInfo { hasNextPage }
+					totalCount
+				}
+			}
+		}
+	`, map[string]any{"namespace": namespace, "name": name})
+	if len(resp.Errors) > 0 {
+		return nil, resp.Errors
+	}
+	var data struct {
+		Collection *collectionQueryResult `json:"collection"`
+	}
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("unmarshal collection response: %v", err)
+	}
+	return data.Collection, nil
+}
+
 // findCondition returns the first condition with the given type, or nil.
 func findCondition(conditions []collectionCondition, condType string) *collectionCondition {
 	for i := range conditions {
@@ -220,6 +260,35 @@ func findCondition(conditions []collectionCondition, condType string) *collectio
 			return &conditions[i]
 		}
 	}
+	return nil
+}
+
+// waitForCollectionStatus polls until name's status satisfies want, or fails
+// the test after timeout. Admission-time status writeback races the
+// GraphQL read path under load, so a fixed sleep before the first (and
+// only) query is not reliable — see waitForResolved in
+// categorytaxonomy_reconciler_test.go for the same pattern.
+func waitForCollectionStatus(t *testing.T, namespace, name string, timeout time.Duration, want func(*collectionQueryResult) bool) *collectionQueryResult {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last *collectionQueryResult
+	var lastErrs []json.RawMessage
+	for time.Now().Before(deadline) {
+		coll, errs := tryQueryCollection(t, namespace, name)
+		if len(errs) == 0 {
+			last, lastErrs = coll, nil
+			if last != nil && last.Status != nil && want(last) {
+				return last
+			}
+		} else {
+			lastErrs = errs
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if len(lastErrs) > 0 {
+		t.Fatalf("timed out after %s waiting for collection %q to become queryable; last graphql errors: %s", timeout, name, lastErrs)
+	}
+	t.Fatalf("timed out after %s waiting for collection %q's status to satisfy the expected condition; last observed: %+v", timeout, name, last)
 	return nil
 }
 
@@ -237,25 +306,16 @@ func TestCollection_ValidPushAccepted(t *testing.T) {
 		t.Fatalf("expected push to succeed for valid collection, got error:\n%s", out)
 	}
 
-	time.Sleep(500 * time.Millisecond)
-
-	coll := queryCollection(t, ns, name)
-	if coll == nil {
-		t.Fatalf("collection %q not found after push", name)
-	}
+	coll := waitForCollectionStatus(t, ns, name, 10*time.Second, func(c *collectionQueryResult) bool {
+		return findCondition(c.Status.Conditions, "AdmissionAccepted") != nil
+	})
 	if coll.Kind != "Collection" {
 		t.Errorf("kind: got %q, want %q", coll.Kind, "Collection")
 	}
 	if coll.Spec.Title != name {
 		t.Errorf("spec.title: got %q, want %q", coll.Spec.Title, name)
 	}
-	if coll.Status == nil {
-		t.Fatal("status is nil, expected populated status after admission")
-	}
 	admitted := findCondition(coll.Status.Conditions, "AdmissionAccepted")
-	if admitted == nil {
-		t.Fatalf("AdmissionAccepted condition not found in: %+v", coll.Status.Conditions)
-	}
 	if admitted.Status != "TRUE" {
 		t.Errorf("AdmissionAccepted condition status: got %q, want %q", admitted.Status, "TRUE")
 	}
