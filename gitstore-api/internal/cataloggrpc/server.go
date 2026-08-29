@@ -1424,12 +1424,25 @@ func (s *Server) admitFile(
 			GitCommitSHA: admCtx.CommitSHA, GitRef: admCtx.RefName, Spec: specJSON, Body: string(body),
 		}
 		f.Status = fileAdmissionStatus(1, admCtx.Revision, admCtx.Now)
-		if err := s.store.CreateFile(ctx, f); err != nil {
-			s.log.Error("admit_resources: create file failed", zap.Error(err))
-		} else {
+		if err := s.store.CreateFile(ctx, f); err == nil {
 			s.publishFileEvent(eventbus.Added, f)
+			return
+		} else if !errors.Is(err, datastore.ErrAlreadyExists) {
+			s.log.Error("admit_resources: create file failed", zap.Error(err))
+			return
 		}
-		return
+		// Another replica may have created this identity after operationForEntry
+		// observed it as absent. If this admission still owns the ref tip, reload
+		// the winner and converge through the resource-version-guarded update
+		// path below. A stale admission must leave the winner untouched.
+		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
+			return
+		}
+		existing, err = s.store.GetFileByName(ctx, namespace, resource.Metadata.Name)
+		if err != nil {
+			s.log.Error("admit_resources: reload File after create conflict failed", zap.Error(err))
+			return
+		}
 	}
 	for attempt := 0; attempt < maxFileAdmissionUpdateAttempts; attempt++ {
 		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
