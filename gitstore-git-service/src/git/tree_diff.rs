@@ -142,6 +142,48 @@ pub fn collect_diff_paths_from_trees(
     }
 }
 
+/// Walk two trees and append only file paths removed from `old_tree_id`.
+///
+/// This is used by pre-receive deletion validation to avoid an API call for
+/// creates and updates. A tree/blob replacement is a deletion of the old path.
+pub fn collect_deleted_paths_from_trees(
+    repo: &gix::Repository,
+    old_tree_id: gix::ObjectId,
+    new_tree_id: gix::ObjectId,
+    prefix: &str,
+    out: &mut Vec<String>,
+) {
+    let old_entries = decode_tree(repo, old_tree_id);
+    let new_entries = decode_tree(repo, new_tree_id);
+    let new_map: std::collections::HashMap<String, (gix::ObjectId, gix::object::tree::EntryKind)> =
+        new_entries
+            .iter()
+            .map(|entry| (entry.filename.to_string(), (entry.oid, entry.mode.kind())))
+            .collect();
+
+    for old_entry in old_entries {
+        let name = old_entry.filename.to_string();
+        let path = make_path(prefix, &name);
+        match new_map.get(&name) {
+            Some((new_oid, new_kind))
+                if old_entry.mode.kind() == gix::object::tree::EntryKind::Tree
+                    && *new_kind == gix::object::tree::EntryKind::Tree =>
+            {
+                collect_deleted_paths_from_trees(repo, old_entry.oid, *new_oid, &path, out);
+            }
+            Some((_, new_kind)) if *new_kind == old_entry.mode.kind() => {}
+            _ => match old_entry.mode.kind() {
+                gix::object::tree::EntryKind::Tree => {
+                    collect_paths_from_tree(repo, old_entry.oid, &path, out);
+                }
+                gix::object::tree::EntryKind::Blob
+                | gix::object::tree::EntryKind::BlobExecutable => out.push(path),
+                _ => {}
+            },
+        }
+    }
+}
+
 #[inline]
 pub fn make_path(prefix: &str, name: &str) -> String {
     if prefix.is_empty() {

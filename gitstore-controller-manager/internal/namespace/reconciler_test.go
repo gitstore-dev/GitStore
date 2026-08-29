@@ -69,7 +69,7 @@ func seedNamespaceCache(t *testing.T, items ...Namespace) cache.CacheAccessor[Na
 }
 
 func admittedCondition(generation int64) *status.Condition {
-	return &status.Condition{Type: "AdmissionAccepted", Status: "True", ObservedGeneration: generation}
+	return &status.Condition{Type: "AdmissionAccepted", Status: "TRUE", ObservedGeneration: generation}
 }
 
 func conditionByType(t *testing.T, conditions []*status.Condition, conditionType string) *status.Condition {
@@ -126,14 +126,14 @@ func TestReconcileAdmittedNamespaceProvisionsSystemRepositoryAndMarksReady(t *te
 	if patch.ResourceVersion != "7" || patch.ObservedGeneration == nil || *patch.ObservedGeneration != 3 {
 		t.Fatalf("patch version fields = %+v, want rv=7 generation=3", patch)
 	}
-	if got := conditionByType(t, patch.Conditions, "AdmissionAccepted").Status; got != "True" {
-		t.Errorf("AdmissionAccepted = %q, want True", got)
+	if got := conditionByType(t, patch.Conditions, "AdmissionAccepted").Status; got != "TRUE" {
+		t.Errorf("AdmissionAccepted = %q, want TRUE", got)
 	}
-	if got := conditionByType(t, patch.Conditions, "SystemRepoReady").Status; got != "True" {
-		t.Errorf("SystemRepoReady = %q, want True", got)
+	if got := conditionByType(t, patch.Conditions, "SystemRepoReady").Status; got != "TRUE" {
+		t.Errorf("SystemRepoReady = %q, want TRUE", got)
 	}
-	if got := conditionByType(t, patch.Conditions, "Ready").Status; got != "True" {
-		t.Errorf("Ready = %q, want True", got)
+	if got := conditionByType(t, patch.Conditions, "Ready").Status; got != "TRUE" {
+		t.Errorf("Ready = %q, want TRUE", got)
 	}
 }
 
@@ -168,11 +168,11 @@ func TestReconcileProvisionFailureWritesFalseConditionsAndRetries(t *testing.T) 
 	if len(sc.patches) != 1 {
 		t.Fatalf("status calls = %d, want 1", len(sc.patches))
 	}
-	if got := conditionByType(t, sc.patches[0].Conditions, "SystemRepoReady").Status; got != "False" {
-		t.Errorf("SystemRepoReady = %q, want False", got)
+	if got := conditionByType(t, sc.patches[0].Conditions, "SystemRepoReady").Status; got != "FALSE" {
+		t.Errorf("SystemRepoReady = %q, want FALSE", got)
 	}
-	if got := conditionByType(t, sc.patches[0].Conditions, "Ready").Status; got != "False" {
-		t.Errorf("Ready = %q, want False", got)
+	if got := conditionByType(t, sc.patches[0].Conditions, "Ready").Status; got != "FALSE" {
+		t.Errorf("Ready = %q, want FALSE", got)
 	}
 }
 
@@ -188,14 +188,14 @@ func TestReconcileReadyStatusNoOpDoesNotWriteAgain(t *testing.T) {
 				admittedCondition(2),
 				{
 					Type:               "SystemRepoReady",
-					Status:             "True",
+					Status:             "TRUE",
 					ObservedGeneration: 2,
 					Reason:             "RepositoryReady",
 					Message:            "per-namespace gitstore-system repository exists",
 				},
 				{
 					Type:               "Ready",
-					Status:             "True",
+					Status:             "TRUE",
 					ObservedGeneration: 2,
 					Reason:             "NamespaceReady",
 					Message:            "namespace admission and system repository provisioning are complete",
@@ -235,8 +235,8 @@ func TestReconcileWithoutAdmissionDoesNotProvision(t *testing.T) {
 	if len(repos.ensured) != 0 {
 		t.Fatalf("ensured = %v, want no provisioning before admission", repos.ensured)
 	}
-	if got := conditionByType(t, sc.patches[0].Conditions, "SystemRepoReady").Status; got != "False" {
-		t.Errorf("SystemRepoReady = %q, want False", got)
+	if got := conditionByType(t, sc.patches[0].Conditions, "SystemRepoReady").Status; got != "FALSE" {
+		t.Errorf("SystemRepoReady = %q, want FALSE", got)
 	}
 }
 

@@ -435,3 +435,20 @@ spec:
 
 ERP webhook subscription.
 ```
+## File resource
+
+The `File` resource uses `storage.gitstore.dev/v1beta1` and is admitted from
+Markdown frontmatter at paths such as `files/<metadata.name>.md`. Its
+author-controlled `spec` records content type, source URI, optional checksum
+metadata, credentials references, and processing variant hints; the Markdown
+body is retained as alt text. Namespace is inherited from the push repository
+when omitted.
+
+Admission initializes system status with `AdmissionAccepted=True` and
+`Ready=True`. Payload fetching, checksum verification, processing, uploads,
+purge, `fileRef` validation, and a File-specific controller are deferred.
+
+File status writes require the `file.status.write` authorization action. Both
+the typed `watchFiles` subscription and generic `watchResources(kind: "File")`
+subscription require `file.watch`; authorization receives the requested
+namespace as resource context and is evaluated before the event stream opens.

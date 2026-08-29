@@ -161,6 +161,148 @@ func New() (datastore.Datastore, error) {
 
 func (m *memdbDatastore) Close() error { return nil }
 
+func (m *memdbDatastore) CreateFile(_ context.Context, f *datastore.File) error {
+	if f == nil {
+		return fmt.Errorf("%w: file is nil", datastore.ErrInvalidArgument)
+	}
+	txn := m.db.Txn(true)
+	if raw, _ := txn.First("file", "id", f.UID); raw != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: file uid %s", datastore.ErrAlreadyExists, f.UID)
+	}
+	if raw, _ := txn.First("file", "name_namespace", f.Namespace, f.Name); raw != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: file %s/%s", datastore.ErrAlreadyExists, f.Namespace, f.Name)
+	}
+	if err := txn.Insert("file", cloneFile(f)); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: insert file: %w", err)
+	}
+	if err := syncOwnerReferenceProjections(txn, f.Namespace, f.RepositoryID, "File", f.UID, f.Name, f.ResourceVersion, f.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) GetFile(_ context.Context, uid string) (*datastore.File, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("file", "id", uid)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return cloneFile(raw.(*datastore.File)), nil
+}
+
+func (m *memdbDatastore) GetFileByName(_ context.Context, namespace, name string) (*datastore.File, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("file", "name_namespace", namespace, name)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return cloneFile(raw.(*datastore.File)), nil
+}
+
+func (m *memdbDatastore) ListFiles(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	it, err := txn.Get("file", "namespace", namespace)
+	if err != nil {
+		return nil, fmt.Errorf("memdb: list files: %w", err)
+	}
+	var all []*datastore.File
+	for obj := it.Next(); obj != nil; obj = it.Next() {
+		all = append(all, cloneFile(obj.(*datastore.File)))
+	}
+	return paginateSlice(all, page, func(f *datastore.File) (time.Time, string) { return f.CreationTimestamp, f.UID }), nil
+}
+
+func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File, expectedResourceVersion string) error {
+	if f == nil {
+		return fmt.Errorf("%w: file is nil", datastore.ErrInvalidArgument)
+	}
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("file", "id", f.UID)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: file uid %s", datastore.ErrNotFound, f.UID)
+	}
+	if raw.(*datastore.File).ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return fmt.Errorf("%w: file uid %s", datastore.ErrConflict, f.UID)
+	}
+	if raw, _ := txn.First("file", "name_namespace", f.Namespace, f.Name); raw != nil && raw.(*datastore.File).UID != f.UID {
+		txn.Abort()
+		return fmt.Errorf("%w: file %s/%s", datastore.ErrAlreadyExists, f.Namespace, f.Name)
+	}
+	if err := txn.Insert("file", cloneFile(f)); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: update file: %w", err)
+	}
+	if err := syncOwnerReferenceProjections(txn, f.Namespace, f.RepositoryID, "File", f.UID, f.Name, f.ResourceVersion, f.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) DeleteFile(_ context.Context, uid string) error {
+	return m.deleteFile(uid, "", false)
+}
+
+func (m *memdbDatastore) DeleteFileWithResourceVersion(_ context.Context, uid, expectedResourceVersion string) error {
+	return m.deleteFile(uid, expectedResourceVersion, true)
+}
+
+func (m *memdbDatastore) deleteFile(uid, expectedResourceVersion string, checkResourceVersion bool) error {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("file", "id", uid)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: file uid %s", datastore.ErrNotFound, uid)
+	}
+	if checkResourceVersion && raw.(*datastore.File).ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return datastore.ErrConflict
+	}
+
+	if err := txn.Delete("file", raw); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: delete file: %w", err)
+	}
+	file := raw.(*datastore.File)
+	if err := deleteOwnerReferenceProjections(txn, "File", file.UID); err != nil {
+		txn.Abort()
+		return err
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) UpdateFileStatus(_ context.Context, namespace, name string, patch datastore.FileStatusPatch) (*datastore.File, error) {
+	txn := m.db.Txn(true)
+	raw, err := txn.First("file", "name_namespace", namespace, name)
+	if err != nil || raw == nil {
+		txn.Abort()
+		return nil, fmt.Errorf("%w: file %s/%s", datastore.ErrNotFound, namespace, name)
+	}
+	updated := cloneFile(raw.(*datastore.File))
+	if err := datastore.ApplyFileStatusPatch(updated, patch); err != nil {
+		txn.Abort()
+		return nil, err
+	}
+	if err := txn.Insert("file", updated); err != nil {
+		txn.Abort()
+		return nil, fmt.Errorf("memdb: update file status: %w", err)
+	}
+	txn.Commit()
+	return cloneFile(updated), nil
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // notFoundOrErr converts a nil result from txn.First into ErrNotFound,
@@ -191,6 +333,10 @@ func (m *memdbDatastore) CreateProduct(_ context.Context, p *datastore.Product) 
 	if err := txn.Insert("product", stored); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: insert product: %w", err)
+	}
+	if err := syncOwnerReferenceProjections(txn, stored.Namespace, stored.RepositoryID, "Product", stored.UID, stored.Name, stored.ResourceVersion, stored.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
 	}
 	txn.Commit()
 	return nil
@@ -258,16 +404,36 @@ func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product) 
 		txn.Abort()
 		return fmt.Errorf("memdb: update product: %w", err)
 	}
+	if err := syncOwnerReferenceProjections(txn, p.Namespace, p.RepositoryID, "Product", p.UID, p.Name, p.ResourceVersion, p.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
+	}
 	txn.Commit()
 	return nil
 }
 
 func (m *memdbDatastore) DeleteProduct(_ context.Context, uid string) error {
+	return m.deleteProduct(uid, "", false)
+}
+
+func (m *memdbDatastore) DeleteProductWithResourceVersion(_ context.Context, uid, expectedResourceVersion string) error {
+	return m.deleteProduct(uid, expectedResourceVersion, true)
+}
+
+func (m *memdbDatastore) deleteProduct(uid, expectedResourceVersion string, checkResourceVersion bool) error {
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("product", "id", uid)
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: product uid %s", datastore.ErrNotFound, uid)
+	}
+	if checkResourceVersion && raw.(*datastore.Product).ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return datastore.ErrConflict
+	}
+	if err := deleteOwnerReferenceProjections(txn, "Product", uid); err != nil {
+		txn.Abort()
+		return err
 	}
 	if err := txn.Delete("product", raw); err != nil {
 		txn.Abort()
@@ -403,11 +569,23 @@ func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.Pr
 }
 
 func (m *memdbDatastore) DeleteProductVariant(_ context.Context, uid string) error {
+	return m.deleteProductVariant(uid, "", false)
+}
+
+func (m *memdbDatastore) DeleteProductVariantWithResourceVersion(_ context.Context, uid, expectedResourceVersion string) error {
+	return m.deleteProductVariant(uid, expectedResourceVersion, true)
+}
+
+func (m *memdbDatastore) deleteProductVariant(uid, expectedResourceVersion string, checkResourceVersion bool) error {
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("product_variant", "id", uid)
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: product_variant uid %s", datastore.ErrNotFound, uid)
+	}
+	if checkResourceVersion && raw.(*datastore.ProductVariant).ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return datastore.ErrConflict
 	}
 	if err := txn.Delete("product_variant", raw); err != nil {
 		txn.Abort()
@@ -436,6 +614,10 @@ func (m *memdbDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.
 	if err := txn.Insert("category_taxonomy", stored); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: insert category_taxonomy: %w", err)
+	}
+	if err := syncOwnerReferenceProjections(txn, stored.Namespace, stored.RepositoryID, "CategoryTaxonomy", stored.UID, stored.Name, stored.ResourceVersion, stored.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
 	}
 	txn.Commit()
 	return nil
@@ -501,6 +683,10 @@ func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.
 		txn.Abort()
 		return fmt.Errorf("memdb: update category_taxonomy: %w", err)
 	}
+	if err := syncOwnerReferenceProjections(txn, c.Namespace, c.RepositoryID, "CategoryTaxonomy", c.UID, c.Name, c.ResourceVersion, c.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
+	}
 	txn.Commit()
 	return nil
 }
@@ -523,6 +709,10 @@ func (m *memdbDatastore) UpdateCategoryTaxonomyStatus(_ context.Context, namespa
 		txn.Abort()
 		return nil, fmt.Errorf("memdb: update category_taxonomy status: %w", insErr)
 	}
+	if err := syncOwnerReferenceProjections(txn, updated.Namespace, updated.RepositoryID, "CategoryTaxonomy", updated.UID, updated.Name, updated.ResourceVersion, updated.OwnerReferences); err != nil {
+		txn.Abort()
+		return nil, err
+	}
 	txn.Commit()
 	return cloneCategoryTaxonomy(updated), nil
 }
@@ -533,6 +723,10 @@ func (m *memdbDatastore) DeleteCategoryTaxonomy(_ context.Context, uid string) e
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: category_taxonomy uid %s", datastore.ErrNotFound, uid)
+	}
+	if err := deleteOwnerReferenceProjections(txn, "CategoryTaxonomy", uid); err != nil {
+		txn.Abort()
+		return err
 	}
 	if err := txn.Delete("category_taxonomy", raw); err != nil {
 		txn.Abort()
@@ -624,11 +818,23 @@ func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collec
 }
 
 func (m *memdbDatastore) DeleteCollection(_ context.Context, uid string) error {
+	return m.deleteCollection(uid, "", false)
+}
+
+func (m *memdbDatastore) DeleteCollectionWithResourceVersion(_ context.Context, uid, expectedResourceVersion string) error {
+	return m.deleteCollection(uid, expectedResourceVersion, true)
+}
+
+func (m *memdbDatastore) deleteCollection(uid, expectedResourceVersion string, checkResourceVersion bool) error {
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("collection", "id", uid)
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: collection uid %s", datastore.ErrNotFound, uid)
+	}
+	if checkResourceVersion && raw.(*datastore.Collection).ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return datastore.ErrConflict
 	}
 	if err := txn.Delete("collection", raw); err != nil {
 		txn.Abort()
@@ -1134,6 +1340,21 @@ func cloneProduct(product *datastore.Product) *datastore.Product {
 	clone.Spec = append([]byte(nil), product.Spec...)
 	clone.Status = append([]byte(nil), product.Status...)
 	clone.DeletionTimestamp = cloneTimePointer(product.DeletionTimestamp)
+	return &clone
+}
+
+func cloneFile(file *datastore.File) *datastore.File {
+	if file == nil {
+		return nil
+	}
+	clone := *file
+	clone.Labels = cloneStringMap(file.Labels)
+	clone.Annotations = cloneStringMap(file.Annotations)
+	clone.OwnerReferences = append([]byte(nil), file.OwnerReferences...)
+	clone.Finalizers = append([]string(nil), file.Finalizers...)
+	clone.Spec = append([]byte(nil), file.Spec...)
+	clone.Status = append([]byte(nil), file.Status...)
+	clone.DeletionTimestamp = cloneTimePointer(file.DeletionTimestamp)
 	return &clone
 }
 

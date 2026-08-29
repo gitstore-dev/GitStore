@@ -31,6 +31,13 @@ extend type Subscription {
   ): ProductWatchEvent!
 }
 
+extend type Mutation {
+  """
+  Controller-only Product status and category-resolution update.
+  """
+  updateProductStatus(input: UpdateProductStatusInput!): UpdateProductStatusPayload!
+}
+
 """
 Product-specific watch event. Carries the same envelope as
 CategoryWatchEvent but with a strongly-typed `product` field instead
@@ -81,6 +88,19 @@ type ProductStatus {
   resolved: ResolvedProductDefinition
 }
 
+input UpdateProductStatusInput {
+  name: String!
+  namespace: String!
+  resourceVersion: String!
+  conditions: [ConditionInput!]
+  removeOwnerUID: String
+}
+
+type UpdateProductStatusPayload {
+  product: Product
+  conflict: StatusConflict
+}
+
 """A pointer to another catalogue resource."""
 type CatalogObjectReference {
   apiVersion: String
@@ -97,6 +117,7 @@ type OwnerReference {
   kind: String!
   name: String!
   uid: ID!
+  blockOwnerDeletion: Boolean!
 }
 
 type MediaDefinition {

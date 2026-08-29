@@ -3,9 +3,10 @@
 
 // Health check endpoint for admin UI
 import type { APIRoute } from 'astro';
+import pkg from '../../../package.json';
 
 const startTime = Date.now();
-const version = '1.0.0';
+const version = pkg.version;
 
 export const GET: APIRoute = async () => {
   return new Response(

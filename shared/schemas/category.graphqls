@@ -459,6 +459,19 @@ input UpdateCategoryStatusInput {
 
   """Null = unchanged. Kind-specific — not part of any generic patch shape."""
   resolved: ResolvedCategoryTaxonomyInput
+
+  """
+  Controller-only foreground-deletion completion request. This extends the
+  existing status subresource rather than introducing a parallel
+  CategoryTaxonomy mutation.
+  """
+  completeDeletion: Boolean
+
+  """
+  Controller-only bounded Product drain. The server removes non-blocking
+  owner references and writes CategoryDeleted without changing product spec.
+  """
+  decoupleProducts: Boolean
 }
 
 input ResolvedCategoryTaxonomyInput {
@@ -480,6 +493,9 @@ type UpdateCategoryStatusPayload {
 
   """Non-null only when the resourceVersion precondition failed."""
   conflict: StatusConflict
+
+  """True when another bounded Product page remains to be processed."""
+  hasMoreProductDependents: Boolean!
 }
 
 # ============================================================================

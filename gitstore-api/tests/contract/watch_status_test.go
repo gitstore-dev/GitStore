@@ -59,6 +59,73 @@ func requireNoCategoryEvent(t *testing.T, ch <-chan *model.CategoryWatchEvent) {
 	}
 }
 
+func TestWatchFiles_DeliversTypedPayloadAndFiltersNamespace(t *testing.T) {
+	r, _, bus := newWatchTestResolver(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, err := r.Subscription().WatchFiles(ctx, strptr("acme"), nil, nil)
+	require.NoError(t, err)
+	file := &datastore.File{
+		UID: "00000000-0000-0000-0000-000000000061", Namespace: "acme", Name: "hero",
+		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "7",
+		Spec: json.RawMessage(`{"ContentType":"image/jpeg","Source":{"Type":"s3","URI":"s3://bucket/hero"}}`),
+		Body: "alt text",
+	}
+	bus.Publish(eventbus.Event{Type: eventbus.Added, Kind: "File", Namespace: "other", Name: "ignored", ResourceVersion: "6", Object: file})
+	bus.Publish(eventbus.Event{Type: eventbus.Added, Kind: "File", Namespace: "acme", Name: "hero", ResourceVersion: "7", Object: file})
+	select {
+	case ev := <-events:
+		require.Equal(t, "hero", ev.Name)
+		require.Equal(t, model.WatchEventTypeAdded, ev.Type)
+		require.NotNil(t, ev.File)
+		require.Equal(t, "alt text", *ev.File.Body)
+		require.Equal(t, "image/jpeg", ev.File.Spec.ContentType)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for File watch event")
+	}
+}
+
+func strptr(s string) *string { return &s }
+
+func TestWatchFiles_PreservesDuplicateEventsInCursorOrder(t *testing.T) {
+	r, _, bus := newWatchTestResolver(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, err := r.Subscription().WatchFiles(ctx, nil, nil, nil)
+	require.NoError(t, err)
+	file := &datastore.File{
+		UID: "00000000-0000-0000-0000-000000000063", Namespace: "acme", Name: "hero",
+		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File",
+	}
+
+	for i := 0; i < 2; i++ {
+		bus.Publish(eventbus.Event{Type: eventbus.Modified, Kind: "File", Namespace: "acme", Name: "hero", Object: file})
+	}
+	first := <-events
+	second := <-events
+	require.NotEqual(t, first.ResourceVersion, second.ResourceVersion)
+	require.Equal(t, model.WatchEventTypeModified, first.Type)
+	require.Equal(t, model.WatchEventTypeModified, second.Type)
+}
+
+func TestWatchFiles_PreservesPublishedOrderWhenResourceVersionsAreOutOfOrder(t *testing.T) {
+	r, _, bus := newWatchTestResolver(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, err := r.Subscription().WatchFiles(ctx, nil, nil, nil)
+	require.NoError(t, err)
+	file := &datastore.File{
+		UID: "00000000-0000-0000-0000-000000000064", Namespace: "acme", Name: "hero",
+		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File",
+	}
+	bus.Publish(eventbus.Event{Type: eventbus.Modified, Kind: "File", Namespace: "acme", Name: "hero", ResourceVersion: "9", Object: file})
+	bus.Publish(eventbus.Event{Type: eventbus.Modified, Kind: "File", Namespace: "acme", Name: "hero", ResourceVersion: "8", Object: file})
+	first := <-events
+	second := <-events
+	require.Equal(t, "1", first.ResourceVersion)
+	require.Equal(t, "2", second.ResourceVersion)
+}
+
 // T014: watchCategories delivers Added/Modified/Deleted in admission order.
 func TestWatchCategories_DeliversEventsInOrder(t *testing.T) {
 	r, _, bus := newWatchTestResolver(t)
@@ -136,13 +203,35 @@ func TestWatchResources_GenericPathParitiesWithWatchCategories(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for generic watch event")
 	}
-
 	rv := "nonexistent"
 	_, err = r.Subscription().WatchResources(ctx, "CategoryTaxonomy", nil, nil, &rv)
 	require.Error(t, err)
 	var gqlErr *gqlerror.Error
 	require.True(t, errors.As(err, &gqlErr))
 	require.Equal(t, "WATCH_EXPIRED", gqlErr.Extensions["code"])
+}
+
+func TestWatchResources_FileProjectsObject(t *testing.T) {
+	r, _, bus := newWatchTestResolver(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events, err := r.Subscription().WatchResources(ctx, "File", nil, nil, nil)
+	require.NoError(t, err)
+	file := &datastore.File{
+		UID: "00000000-0000-0000-0000-000000000062", Namespace: "acme", Name: "hero",
+		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "8",
+		Spec: json.RawMessage(`{"ContentType":"image/png","Source":{"Type":"git","URI":"blob://hero"}}`),
+	}
+	bus.Publish(eventbus.Event{Type: eventbus.Modified, Kind: "File", Namespace: "acme", Name: "hero", ResourceVersion: "8", Object: file})
+	select {
+	case ev := <-events:
+		require.Equal(t, "File", ev.Kind)
+		require.Equal(t, "1", ev.ResourceVersion)
+		require.Equal(t, "hero", ev.Object["Name"])
+		require.Equal(t, "image/png", ev.Object["Spec"].(map[string]any)["ContentType"])
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for generic File watch event")
+	}
 }
 
 // T018: a resource transitioning into/out of an active namespace filter

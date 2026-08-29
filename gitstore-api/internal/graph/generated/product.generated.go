@@ -425,6 +425,29 @@ func (ec *executionContext) fieldContext_OwnerReference_uid(_ context.Context, f
 	return graphql.NewScalarFieldContext("OwnerReference", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
+func (ec *executionContext) _OwnerReference_blockOwnerDeletion(ctx context.Context, field graphql.CollectedField, obj *model.OwnerReference) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_OwnerReference_blockOwnerDeletion(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.BlockOwnerDeletion, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_OwnerReference_blockOwnerDeletion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("OwnerReference", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
 func (ec *executionContext) _PriceRangeDefinition_currencyCode(ctx context.Context, field graphql.CollectedField, obj *model.PriceRangeDefinition) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1428,6 +1451,38 @@ func (ec *executionContext) fieldContext_ResolvedFileDefinition_contentType(_ co
 	return graphql.NewScalarFieldContext("ResolvedFileDefinition", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _ResolvedFileDefinition_resolvedVariants(ctx context.Context, field graphql.CollectedField, obj *model.ResolvedFileDefinition) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ResolvedFileDefinition_resolvedVariants(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ResolvedVariants, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*model.ResolvedFileVariant) graphql.Marshaler {
+			return ec.marshalNResolvedFileVariant2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResolvedFileVariantᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ResolvedFileDefinition_resolvedVariants(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ResolvedFileDefinition",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ResolvedFileVariant(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ResolvedProductDefinition_category(ctx context.Context, field graphql.CollectedField, obj *model.ResolvedProductDefinition) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1611,6 +1666,70 @@ func (ec *executionContext) fieldContext_ResolvedProductDefinition_media(_ conte
 	return fc, nil
 }
 
+func (ec *executionContext) _UpdateProductStatusPayload_product(ctx context.Context, field graphql.CollectedField, obj *model.UpdateProductStatusPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UpdateProductStatusPayload_product(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Product, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Product) graphql.Marshaler {
+			return ec.marshalOProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UpdateProductStatusPayload_product(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UpdateProductStatusPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Product(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UpdateProductStatusPayload_conflict(ctx context.Context, field graphql.CollectedField, obj *model.UpdateProductStatusPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UpdateProductStatusPayload_conflict(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Conflict, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.StatusConflict) graphql.Marshaler {
+			return ec.marshalOStatusConflict2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐStatusConflict(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UpdateProductStatusPayload_conflict(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UpdateProductStatusPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_StatusConflict(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _VariantSummaryDefinition_total(ctx context.Context, field graphql.CollectedField, obj *model.VariantSummaryDefinition) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1683,6 +1802,64 @@ func (ec *executionContext) fieldContext_VariantSummaryDefinition_unavailable(_ 
 // endregion **************************** field.gotpl *****************************
 
 // region    **************************** input.gotpl *****************************
+
+func (ec *executionContext) unmarshalInputUpdateProductStatusInput(ctx context.Context, obj any) (model.UpdateProductStatusInput, error) {
+	var it model.UpdateProductStatusInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"name", "namespace", "resourceVersion", "conditions", "removeOwnerUID"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		case "resourceVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resourceVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ResourceVersion = data
+		case "conditions":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("conditions"))
+			data, err := ec.unmarshalOConditionInput2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐConditionInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Conditions = data
+		case "removeOwnerUID":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("removeOwnerUID"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RemoveOwnerUID = data
+		}
+	}
+	return it, nil
+}
 
 // endregion **************************** input.gotpl *****************************
 
@@ -1859,6 +2036,11 @@ func (ec *executionContext) _OwnerReference(ctx context.Context, sel ast.Selecti
 			}
 		case "uid":
 			out.Values[i] = ec._OwnerReference_uid(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "blockOwnerDeletion":
+			out.Values[i] = ec._OwnerReference_blockOwnerDeletion(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -2393,6 +2575,11 @@ func (ec *executionContext) _ResolvedFileDefinition(ctx context.Context, sel ast
 			}
 		case "contentType":
 			out.Values[i] = ec._ResolvedFileDefinition_contentType(ctx, field, obj)
+		case "resolvedVariants":
+			out.Values[i] = ec._ResolvedFileDefinition_resolvedVariants(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -2448,6 +2635,44 @@ func (ec *executionContext) _ResolvedProductDefinition(ctx context.Context, sel 
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var updateProductStatusPayloadImplementors = []string{"UpdateProductStatusPayload"}
+
+func (ec *executionContext) _UpdateProductStatusPayload(ctx context.Context, sel ast.SelectionSet, obj *model.UpdateProductStatusPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, updateProductStatusPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UpdateProductStatusPayload")
+		case "product":
+			out.Values[i] = ec._UpdateProductStatusPayload_product(ctx, field, obj)
+		case "conflict":
+			out.Values[i] = ec._UpdateProductStatusPayload_conflict(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -2764,6 +2989,25 @@ func (ec *executionContext) marshalNResolvedFileDefinition2ᚖgithubᚗcomᚋgit
 	return ec._ResolvedFileDefinition(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNUpdateProductStatusInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductStatusInput(ctx context.Context, v any) (model.UpdateProductStatusInput, error) {
+	res, err := ec.unmarshalInputUpdateProductStatusInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNUpdateProductStatusPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductStatusPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateProductStatusPayload) graphql.Marshaler {
+	return ec._UpdateProductStatusPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNUpdateProductStatusPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductStatusPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateProductStatusPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UpdateProductStatusPayload(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalOCatalogObjectReference2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogObjectReference(ctx context.Context, sel ast.SelectionSet, v *model.CatalogObjectReference) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -2790,6 +3034,13 @@ func (ec *executionContext) marshalOResolvedCategoryDefinition2ᚖgithubᚗcom�
 		return graphql.Null
 	}
 	return ec._ResolvedCategoryDefinition(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOResolvedFileDefinition2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResolvedFileDefinition(ctx context.Context, sel ast.SelectionSet, v *model.ResolvedFileDefinition) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ResolvedFileDefinition(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOResolvedProductDefinition2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResolvedProductDefinition(ctx context.Context, sel ast.SelectionSet, v *model.ResolvedProductDefinition) graphql.Marshaler {
