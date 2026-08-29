@@ -36,7 +36,7 @@ func (s *stubDatastore) GetFileByName(_ context.Context, _, _ string) (*datastor
 func (s *stubDatastore) ListFiles(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) UpdateFile(_ context.Context, _ *datastore.File) error {
+func (s *stubDatastore) UpdateFile(_ context.Context, _ *datastore.File, _ string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) DeleteFile(_ context.Context, _ string) error { return s.getProductErr }

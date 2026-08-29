@@ -162,9 +162,9 @@ func (d *InstrumentedDatastore) ListFiles(ctx context.Context, namespace string,
 	d.observe("ListFiles", start, err)
 	return v, err
 }
-func (d *InstrumentedDatastore) UpdateFile(ctx context.Context, f *File) error {
+func (d *InstrumentedDatastore) UpdateFile(ctx context.Context, f *File, expectedResourceVersion string) error {
 	start := time.Now()
-	err := d.next.UpdateFile(d.withFindingObserver(ctx), f)
+	err := d.next.UpdateFile(d.withFindingObserver(ctx), f, expectedResourceVersion)
 	d.observe("UpdateFile", start, err)
 	return err
 }
@@ -531,6 +531,82 @@ func (d *InstrumentedDatastore) DeleteNamespaceMapping(ctx context.Context, name
 	err := d.next.DeleteNamespaceMapping(d.withFindingObserver(ctx), namespaceID, name)
 	d.observe("DeleteNamespaceMapping", start, err)
 	return err
+}
+
+// ── OwnerReferenceStore ──────────────────────────────────────────────────────
+//
+// OwnerReferenceStore and CategoryTaxonomyDeletionStore below are additive to
+// Datastore (see their doc comments in datastore.go), so InstrumentedDatastore
+// must forward them explicitly rather than relying on method promotion:
+// wrapping next in this decorator would otherwise make every backend look
+// like it doesn't implement these interfaces to a type assertion on the
+// wrapper, even though the concrete backend (memdb, Scylla) does.
+
+func (d *InstrumentedDatastore) HasBlockingOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID string) (bool, error) {
+	start := time.Now()
+	owners, ok := d.next.(OwnerReferenceStore)
+	if !ok {
+		err := fmt.Errorf("%w: backend does not support owner-reference queries", ErrInvalidArgument)
+		d.observe("HasBlockingOwnerDependents", start, err)
+		return false, err
+	}
+	v, err := owners.HasBlockingOwnerDependents(d.withFindingObserver(ctx), scope, ownerUID)
+	d.observe("HasBlockingOwnerDependents", start, err)
+	return v, err
+}
+
+func (d *InstrumentedDatastore) ListBlockingOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID, after string, limit int) (OwnerDependentPage, error) {
+	start := time.Now()
+	owners, ok := d.next.(OwnerReferenceStore)
+	if !ok {
+		err := fmt.Errorf("%w: backend does not support owner-reference queries", ErrInvalidArgument)
+		d.observe("ListBlockingOwnerDependents", start, err)
+		return OwnerDependentPage{}, err
+	}
+	v, err := owners.ListBlockingOwnerDependents(d.withFindingObserver(ctx), scope, ownerUID, after, limit)
+	d.observe("ListBlockingOwnerDependents", start, err)
+	return v, err
+}
+
+func (d *InstrumentedDatastore) ListNonBlockingProductOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID, after string, limit int) (OwnerDependentPage, error) {
+	start := time.Now()
+	owners, ok := d.next.(OwnerReferenceStore)
+	if !ok {
+		err := fmt.Errorf("%w: backend does not support owner-reference queries", ErrInvalidArgument)
+		d.observe("ListNonBlockingProductOwnerDependents", start, err)
+		return OwnerDependentPage{}, err
+	}
+	v, err := owners.ListNonBlockingProductOwnerDependents(d.withFindingObserver(ctx), scope, ownerUID, after, limit)
+	d.observe("ListNonBlockingProductOwnerDependents", start, err)
+	return v, err
+}
+
+// ── CategoryTaxonomyDeletionStore ────────────────────────────────────────────
+
+func (d *InstrumentedDatastore) MarkCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string, at time.Time) (*CategoryTaxonomy, error) {
+	start := time.Now()
+	lifecycle, ok := d.next.(CategoryTaxonomyDeletionStore)
+	if !ok {
+		err := fmt.Errorf("%w: backend does not support category taxonomy deletion lifecycle", ErrInvalidArgument)
+		d.observe("MarkCategoryTaxonomyDeletion", start, err)
+		return nil, err
+	}
+	v, err := lifecycle.MarkCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion, at)
+	d.observe("MarkCategoryTaxonomyDeletion", start, err)
+	return v, err
+}
+
+func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*CategoryTaxonomy, error) {
+	start := time.Now()
+	lifecycle, ok := d.next.(CategoryTaxonomyDeletionStore)
+	if !ok {
+		err := fmt.Errorf("%w: backend does not support category taxonomy deletion lifecycle", ErrInvalidArgument)
+		d.observe("CompleteCategoryTaxonomyDeletion", start, err)
+		return nil, err
+	}
+	v, err := lifecycle.CompleteCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion)
+	d.observe("CompleteCategoryTaxonomyDeletion", start, err)
+	return v, err
 }
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────

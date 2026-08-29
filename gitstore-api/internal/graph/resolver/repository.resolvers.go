@@ -7,7 +7,9 @@ package resolver
 
 import (
 	"context"
+	"errors"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
@@ -178,7 +180,13 @@ func (r *queryResolver) Repository(ctx context.Context, by model.RepositoryBy) (
 		}
 		mapping, err := r.service.LookupRepository(ctx, ns.Name, by.NamespacePath.Name)
 		if err != nil {
-			return nil, gqlerror.Errorf("repository not found")
+			if errors.Is(err, datastore.ErrNotFound) {
+				return nil, &gqlerror.Error{
+					Message:    "repository not found",
+					Extensions: map[string]any{"code": "NOT_FOUND"},
+				}
+			}
+			return nil, err
 		}
 		repo, err := r.service.GetRepository(ctx, mapping.RepositoryID)
 		if err != nil {

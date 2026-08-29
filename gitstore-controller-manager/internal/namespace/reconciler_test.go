@@ -5,10 +5,15 @@ package namespace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
@@ -69,7 +74,7 @@ func seedNamespaceCache(t *testing.T, items ...Namespace) cache.CacheAccessor[Na
 }
 
 func admittedCondition(generation int64) *status.Condition {
-	return &status.Condition{Type: "AdmissionAccepted", Status: "True", ObservedGeneration: generation}
+	return &status.Condition{Type: "AdmissionAccepted", Status: "TRUE", ObservedGeneration: generation}
 }
 
 func conditionByType(t *testing.T, conditions []*status.Condition, conditionType string) *status.Condition {
@@ -126,14 +131,71 @@ func TestReconcileAdmittedNamespaceProvisionsSystemRepositoryAndMarksReady(t *te
 	if patch.ResourceVersion != "7" || patch.ObservedGeneration == nil || *patch.ObservedGeneration != 3 {
 		t.Fatalf("patch version fields = %+v, want rv=7 generation=3", patch)
 	}
-	if got := conditionByType(t, patch.Conditions, "AdmissionAccepted").Status; got != "True" {
-		t.Errorf("AdmissionAccepted = %q, want True", got)
+	if got := conditionByType(t, patch.Conditions, "AdmissionAccepted").Status; got != "TRUE" {
+		t.Errorf("AdmissionAccepted = %q, want TRUE", got)
 	}
-	if got := conditionByType(t, patch.Conditions, "SystemRepoReady").Status; got != "True" {
-		t.Errorf("SystemRepoReady = %q, want True", got)
+	if got := conditionByType(t, patch.Conditions, "SystemRepoReady").Status; got != "TRUE" {
+		t.Errorf("SystemRepoReady = %q, want TRUE", got)
 	}
-	if got := conditionByType(t, patch.Conditions, "Ready").Status; got != "True" {
-		t.Errorf("Ready = %q, want True", got)
+	if got := conditionByType(t, patch.Conditions, "Ready").Status; got != "TRUE" {
+		t.Errorf("Ready = %q, want TRUE", got)
+	}
+}
+
+// TestReconcileFreshNamespaceProvisionsSystemRepositoryViaRealClient exercises
+// the full Reconcile path with the real GraphQLRepositoryClient (not the
+// fake) against a server that reproduces gitstore-api's actual response for
+// a genuinely fresh environment: repository(by: namespacePath) returns a
+// "repository not found" / NOT_FOUND GraphQL error because gitstore-system
+// has never been created. Before the fix, systemRepositoryExists treated
+// that error as a hard failure and EnsureSystemRepository never reached
+// createRepository, so this reconcile would end in TransientFailure with
+// SystemRepoReady=FALSE forever. After the fix, it must fall through to
+// createRepository and reach Success with SystemRepoReady=TRUE.
+func TestReconcileFreshNamespaceProvisionsSystemRepositoryViaRealClient(t *testing.T) {
+	var queries, mutations int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(req.Query, "mutation") {
+			mutations++
+			_, _ = w.Write([]byte(`{"data":{"createRepository":{"repository":{"metadata":{"name":"gitstore-system"}}}}}`))
+			return
+		}
+		queries++
+		_, _ = w.Write([]byte(`{"data":{"repository":null},"errors":[{"message":"repository not found","extensions":{"code":"NOT_FOUND"}}]}`))
+	}))
+	defer srv.Close()
+
+	current := Namespace{
+		Name:            "acme",
+		Generation:      1,
+		ResourceVersion: "1",
+		Status: status.ResourceStatus{
+			ResourceVersion: "1",
+			Conditions:      []*status.Condition{admittedCondition(1)},
+		},
+	}
+	sc := &fakeStatusClient{}
+	repos := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, "token"))
+	r := NewReconciler(seedNamespaceCache(t, current), sc, repos, &fakeDeletionClient{})
+
+	result := r.Reconcile(context.Background(), namespaceKey("acme"))
+
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %#v, want types.Success", result)
+	}
+	if queries != 1 || mutations != 1 {
+		t.Fatalf("queries=%d mutations=%d, want 1/1 (createRepository must actually be called)", queries, mutations)
+	}
+	if len(sc.patches) != 1 {
+		t.Fatalf("status calls = %d, want 1", len(sc.patches))
+	}
+	if got := conditionByType(t, sc.patches[0].Conditions, "SystemRepoReady").Status; got != "TRUE" {
+		t.Errorf("SystemRepoReady = %q, want TRUE", got)
 	}
 }
 
@@ -168,11 +230,11 @@ func TestReconcileProvisionFailureWritesFalseConditionsAndRetries(t *testing.T) 
 	if len(sc.patches) != 1 {
 		t.Fatalf("status calls = %d, want 1", len(sc.patches))
 	}
-	if got := conditionByType(t, sc.patches[0].Conditions, "SystemRepoReady").Status; got != "False" {
-		t.Errorf("SystemRepoReady = %q, want False", got)
+	if got := conditionByType(t, sc.patches[0].Conditions, "SystemRepoReady").Status; got != "FALSE" {
+		t.Errorf("SystemRepoReady = %q, want FALSE", got)
 	}
-	if got := conditionByType(t, sc.patches[0].Conditions, "Ready").Status; got != "False" {
-		t.Errorf("Ready = %q, want False", got)
+	if got := conditionByType(t, sc.patches[0].Conditions, "Ready").Status; got != "FALSE" {
+		t.Errorf("Ready = %q, want FALSE", got)
 	}
 }
 
@@ -188,14 +250,14 @@ func TestReconcileReadyStatusNoOpDoesNotWriteAgain(t *testing.T) {
 				admittedCondition(2),
 				{
 					Type:               "SystemRepoReady",
-					Status:             "True",
+					Status:             "TRUE",
 					ObservedGeneration: 2,
 					Reason:             "RepositoryReady",
 					Message:            "per-namespace gitstore-system repository exists",
 				},
 				{
 					Type:               "Ready",
-					Status:             "True",
+					Status:             "TRUE",
 					ObservedGeneration: 2,
 					Reason:             "NamespaceReady",
 					Message:            "namespace admission and system repository provisioning are complete",
@@ -235,8 +297,8 @@ func TestReconcileWithoutAdmissionDoesNotProvision(t *testing.T) {
 	if len(repos.ensured) != 0 {
 		t.Fatalf("ensured = %v, want no provisioning before admission", repos.ensured)
 	}
-	if got := conditionByType(t, sc.patches[0].Conditions, "SystemRepoReady").Status; got != "False" {
-		t.Errorf("SystemRepoReady = %q, want False", got)
+	if got := conditionByType(t, sc.patches[0].Conditions, "SystemRepoReady").Status; got != "FALSE" {
+		t.Errorf("SystemRepoReady = %q, want FALSE", got)
 	}
 }
 

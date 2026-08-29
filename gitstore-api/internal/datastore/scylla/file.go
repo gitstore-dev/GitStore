@@ -143,7 +143,7 @@ func (s *scyllaDatastore) ListFiles(ctx context.Context, ns string, page datasto
 	}
 	return buildPageResult(items, page.Limit(), page), nil
 }
-func (s *scyllaDatastore) UpdateFile(ctx context.Context, f *datastore.File) error {
+func (s *scyllaDatastore) UpdateFile(ctx context.Context, f *datastore.File, expectedResourceVersion string) error {
 	old, err := s.GetFile(ctx, f.UID)
 	if err != nil {
 		return err
@@ -151,12 +151,15 @@ func (s *scyllaDatastore) UpdateFile(ctx context.Context, f *datastore.File) err
 	if old.Namespace != f.Namespace || old.Name != f.Name {
 		return datastore.ErrConflict
 	}
-	if err := validateResourceVersionTransition(old.ResourceVersion, f.ResourceVersion); err != nil {
+	if old.ResourceVersion != expectedResourceVersion {
+		return datastore.ErrConflict
+	}
+	if err := validateResourceVersionTransition(expectedResourceVersion, f.ResourceVersion); err != nil {
 		return err
 	}
 	row := toFileRow(f)
 	row.CreationTimestamp = old.CreationTimestamp
-	if err := s.updateFileAuthoritative(ctx, row, old.ResourceVersion); err != nil {
+	if err := s.updateFileAuthoritative(ctx, row, expectedResourceVersion); err != nil {
 		return err
 	}
 	return s.syncOwnerReferenceDependents(ctx, f.Namespace, f.RepositoryID, "File", f.UID, f.Name, f.ResourceVersion, old.OwnerReferences, f.OwnerReferences)
@@ -196,7 +199,7 @@ func (s *scyllaDatastore) UpdateFileStatus(ctx context.Context, ns, name string,
 	if err := datastore.ApplyFileStatusPatch(f, p); err != nil {
 		return nil, err
 	}
-	if err := s.UpdateFile(ctx, f); err != nil {
+	if err := s.UpdateFile(ctx, f, p.ResourceVersion); err != nil {
 		return nil, err
 	}
 	return f, nil

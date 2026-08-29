@@ -149,3 +149,23 @@ func TestGraphQLFieldAuthorizerAuthorizesGenericFileWatch(t *testing.T) {
 	assert.Equal(t, "file.watch", authz.action)
 	assert.Equal(t, "acme-store", authz.resource.Attrs["namespace"])
 }
+
+func TestGraphQLFieldAuthorizerLeavesExistingNonFileWatchesUnchanged(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Deny("stub-authz", "no new permission")}
+	registry := auth.NewProviderRegistry(nil, authz, nil)
+	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
+	ctx := graphql.WithFieldContext(context.Background(), &graphql.FieldContext{
+		Object: "Subscription",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "watchProducts"}},
+		Args:   map[string]any{"namespace": "acme-store"},
+	})
+
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+		called = true
+		return "ok", nil
+	})
+	require.NoError(t, err)
+	assert.True(t, called)
+	assert.Empty(t, authz.action, "existing Product watch policy must not change in a File-scoped feature")
+}

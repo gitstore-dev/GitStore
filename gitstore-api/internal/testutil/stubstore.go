@@ -33,7 +33,7 @@ func (s *StubStore) GetFileByName(_ context.Context, _, _ string) (*datastore.Fi
 func (s *StubStore) ListFiles(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
 	return &datastore.PageResult[datastore.File]{}, nil
 }
-func (s *StubStore) UpdateFile(_ context.Context, _ *datastore.File) error              { return nil }
+func (s *StubStore) UpdateFile(_ context.Context, _ *datastore.File, _ string) error    { return nil }
 func (s *StubStore) DeleteFile(_ context.Context, _ string) error                       { return nil }
 func (s *StubStore) DeleteFileWithResourceVersion(_ context.Context, _, _ string) error { return nil }
 func (s *StubStore) UpdateFileStatus(_ context.Context, _, _ string, _ datastore.FileStatusPatch) (*datastore.File, error) {

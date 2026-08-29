@@ -220,14 +220,19 @@ func (m *memdbDatastore) ListFiles(_ context.Context, namespace string, page dat
 	return paginateSlice(all, page, func(f *datastore.File) (time.Time, string) { return f.CreationTimestamp, f.UID }), nil
 }
 
-func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File) error {
+func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File, expectedResourceVersion string) error {
 	if f == nil {
 		return fmt.Errorf("%w: file is nil", datastore.ErrInvalidArgument)
 	}
 	txn := m.db.Txn(true)
-	if raw, _ := txn.First("file", "id", f.UID); raw == nil {
+	raw, _ := txn.First("file", "id", f.UID)
+	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: file uid %s", datastore.ErrNotFound, f.UID)
+	}
+	if raw.(*datastore.File).ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return fmt.Errorf("%w: file uid %s", datastore.ErrConflict, f.UID)
 	}
 	if raw, _ := txn.First("file", "name_namespace", f.Namespace, f.Name); raw != nil && raw.(*datastore.File).UID != f.UID {
 		txn.Abort()
@@ -853,6 +858,21 @@ func (m *memdbDatastore) ListProductsByLabelSelector(_ context.Context, namespac
 			result = append(result, cloneProduct(p))
 		}
 	}
+	// Callers (e.g. resolver.BuildProductConnectionFromSlice) require
+	// products pre-sorted by (CreationTimestamp DESC, UID DESC) before
+	// applying a first/last page limit — the memdb "namespace" index
+	// iterates in UID order, not creation order, so without this sort a
+	// selector matching more items than the page size silently truncates
+	// to an arbitrary (UID-lexical) subset instead of the newest N. The
+	// ScyllaDB backend gets this for free by paginating through the
+	// already-sorted ListProducts stream.
+	sort.Slice(result, func(i, j int) bool {
+		cmp := result[i].CreationTimestamp.Compare(result[j].CreationTimestamp)
+		if cmp != 0 {
+			return cmp > 0 // DESC
+		}
+		return result[i].UID > result[j].UID // DESC
+	})
 	return result, nil
 }
 
