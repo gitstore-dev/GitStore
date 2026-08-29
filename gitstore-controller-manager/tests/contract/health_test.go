@@ -45,7 +45,7 @@ func TestHealth_JSONFieldsPresent(t *testing.T) {
 
 	go func() { _ = mgr.Start(ctx) }()
 
-	handler := health.NewHandler(mgr)
+	handler := health.NewHandler(mgr, "0.0.1-alpha.0")
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	handler.ServeHTTP(rec, req)
@@ -61,6 +61,10 @@ func TestHealth_JSONFieldsPresent(t *testing.T) {
 
 	if _, ok := body["status"]; !ok {
 		t.Error("missing top-level 'status' field")
+	}
+
+	if version, ok := body["version"]; !ok || version == "" {
+		t.Error("missing top-level 'version' field")
 	}
 
 	kinds, ok := body["kinds"].(map[string]any)
