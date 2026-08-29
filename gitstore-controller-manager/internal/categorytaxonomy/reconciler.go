@@ -161,6 +161,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 
 	parentResolvedCond := computeParentResolved(r.cache, current)
 	acyclicCond := computeAcyclic(inCycle[current.Name])
+	acyclicChanged := conditionStatusByType(current.Status.Conditions, conditionAcyclic) != acyclicCond.Status
 	fileRefCond := computeFileRefCondition(current)
 	readyCond := computeReady(parentResolvedCond, acyclicCond, fileRefCond)
 
@@ -207,7 +208,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		return r.reconcileDeletion(ctx, current)
 	}
 
-	if !inCycle[current.Name] && hierarchyChanged(previous, resolved) {
+	// Re-enqueue whatever points at this node (its children per ParentRefName,
+	// or — for a cycle participant — the other cycle member(s), since a
+	// cycle's edges mean each participant is also the other's "child") on
+	// either a structural change or an Acyclic transition. Gating solely on
+	// hierarchyChanged missed the case where a cycle participant flips
+	// Acyclic without a Depth/Path change (FR-008 freezes those while
+	// cycling), leaving affected nodes stuck on stale conditions until an
+	// unrelated event happened to re-trigger them.
+	if hierarchyChanged(previous, resolved) || acyclicChanged {
 		r.reenqueueChildren(key)
 	}
 
@@ -271,6 +280,15 @@ func preserveLastTransitionTimes(fresh []*status.Condition, prior []*status.Cond
 			f.LastTransitionTime = p.LastTransitionTime
 		}
 	}
+}
+
+func conditionStatusByType(conditions []*status.Condition, condType string) string {
+	for _, c := range conditions {
+		if c != nil && c.Type == condType {
+			return c.Status
+		}
+	}
+	return ""
 }
 
 func hierarchyChanged(previous *ResolvedCategoryTaxonomy, current ResolvedCategoryTaxonomy) bool {
