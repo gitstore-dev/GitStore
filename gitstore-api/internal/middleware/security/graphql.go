@@ -295,14 +295,13 @@ func (a *Authorize) authorizeSubscription(
 ) (any, error) {
 	var kind string
 	switch fc.Field.Name {
-	case "watchCategories":
-		kind = "Category"
-	case "watchProducts":
-		kind = "Product"
 	case "watchFiles":
 		kind = "File"
 	case "watchResources":
 		kind, _ = directStringArg(fc.Args, "kind")
+		if kind != "File" {
+			return next(ctx)
+		}
 	default:
 		return next(ctx)
 	}

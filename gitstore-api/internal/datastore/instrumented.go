@@ -162,9 +162,9 @@ func (d *InstrumentedDatastore) ListFiles(ctx context.Context, namespace string,
 	d.observe("ListFiles", start, err)
 	return v, err
 }
-func (d *InstrumentedDatastore) UpdateFile(ctx context.Context, f *File) error {
+func (d *InstrumentedDatastore) UpdateFile(ctx context.Context, f *File, expectedResourceVersion string) error {
 	start := time.Now()
-	err := d.next.UpdateFile(d.withFindingObserver(ctx), f)
+	err := d.next.UpdateFile(d.withFindingObserver(ctx), f, expectedResourceVersion)
 	d.observe("UpdateFile", start, err)
 	return err
 }

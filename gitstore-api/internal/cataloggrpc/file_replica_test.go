@@ -191,6 +191,119 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 	assert.Equal(t, "2", file.ResourceVersion, "only the winning update may advance the durable version")
 }
 
+type orderedFileUpdateStore struct {
+	datastore.Datastore
+	olderCommit, newerCommit                  string
+	olderEntered, releaseOlder, olderFinished chan struct{}
+	newerEntered, releaseNewer                chan struct{}
+	olderOnce, newerOnce                      sync.Once
+}
+
+func (s *orderedFileUpdateStore) UpdateFile(ctx context.Context, file *datastore.File, expectedResourceVersion string) error {
+	if file.GitCommitSHA == s.olderCommit {
+		s.olderOnce.Do(func() {
+			close(s.olderEntered)
+			<-s.releaseOlder
+		})
+		err := s.Datastore.UpdateFile(ctx, file, expectedResourceVersion)
+		close(s.olderFinished)
+		return err
+	}
+	if file.GitCommitSHA == s.newerCommit {
+		s.newerOnce.Do(func() {
+			close(s.newerEntered)
+			<-s.releaseNewer
+		})
+	}
+	return s.Datastore.UpdateFile(ctx, file, expectedResourceVersion)
+}
+
+// TestAdmitResources_FileCurrentCommitRetriesAfterConcurrentConflict forces
+// both replicas to load resourceVersion 1, lets stale commit B win the first
+// CAS, then proves current commit C reloads resourceVersion 2 and retries to
+// durable convergence instead of logging its conflict and returning success.
+func TestAdmitResources_FileCurrentCommitRetriesAfterConcurrentConflict(t *testing.T) {
+	base := newTestDatastore(t)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	c := strings.Repeat("c", 40)
+	path := "files/hero.md"
+	files := map[string]map[string][]byte{
+		a: {path: makeFile("hero")},
+		b: {path: makeFileWithBody("hero", "Older update")},
+		c: {path: makeFileWithBody("hero", "Current update")},
+	}
+	current := a
+	seed := newCatalogServer(t, base, newTreeGitReader(&current, files))
+	_, err := seed.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, CommitSha: a, RefName: "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	store := &orderedFileUpdateStore{
+		Datastore: base, olderCommit: b, newerCommit: c,
+		olderEntered: make(chan struct{}), releaseOlder: make(chan struct{}), olderFinished: make(chan struct{}),
+		newerEntered: make(chan struct{}), releaseNewer: make(chan struct{}),
+	}
+	var mu sync.Mutex
+	current = b
+	git := newTreeGitReader(&current, files)
+	git.resolveRefFunc = func(context.Context, string, string) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return current, nil
+	}
+	olderServer := newCatalogServer(t, store, git)
+	newerServer := newCatalogServer(t, store, git)
+
+	olderDone := make(chan error, 1)
+	go func() {
+		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+			RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b, CommitSha: b,
+			RefName: "refs/heads/main", ChangedPaths: []string{path},
+		})
+		olderDone <- err
+	}()
+	select {
+	case <-store.olderEntered:
+	case <-time.After(time.Second):
+		t.Fatal("older update did not reach the datastore CAS")
+	}
+
+	mu.Lock()
+	current = c
+	mu.Unlock()
+	newerDone := make(chan error, 1)
+	go func() {
+		_, err := newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+			RepositoryId: testRepoID, OldCommitSha: b, NewCommitSha: c, CommitSha: c,
+			RefName: "refs/heads/main", ChangedPaths: []string{path},
+		})
+		newerDone <- err
+	}()
+	select {
+	case <-store.newerEntered:
+	case <-time.After(time.Second):
+		t.Fatal("current update did not reach the datastore CAS")
+	}
+
+	close(store.releaseOlder)
+	select {
+	case <-store.olderFinished:
+	case <-time.After(time.Second):
+		t.Fatal("older update did not finish its CAS")
+	}
+	close(store.releaseNewer)
+	require.NoError(t, <-olderDone)
+	require.NoError(t, <-newerDone)
+
+	file, err := base.GetFileByName(context.Background(), "gitstore", "hero")
+	require.NoError(t, err)
+	assert.Equal(t, c, file.GitCommitSHA)
+	assert.Equal(t, "Current update", file.Body)
+	assert.Equal(t, "3", file.ResourceVersion)
+}
+
 // TestAdmitResources_FileUpdateSurvivesReplicaProcessReplacement models a
 // replica crashing (or being rolled) between two pushes: the Server instance
 // that admitted the create is discarded entirely and a brand-new Server
