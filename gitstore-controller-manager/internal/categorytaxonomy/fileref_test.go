@@ -17,8 +17,8 @@ func TestComputeFileRefCondition_RequiredMediaProducesUnknownCondition(t *testin
 	if cond == nil {
 		t.Fatal("expected a non-nil condition for an optional:false media entry")
 	}
-	if cond.Status != "Unknown" {
-		t.Errorf("Status = %q, want Unknown", cond.Status)
+	if cond.Status != "UNKNOWN" {
+		t.Errorf("Status = %q, want UNKNOWN", cond.Status)
 	}
 }
 
@@ -48,8 +48,8 @@ func TestComputeFileRefCondition_MixedMediaOnlyFlagsRequired(t *testing.T) {
 
 	cond := computeFileRefCondition(c)
 
-	if cond == nil || cond.Status != "Unknown" {
-		t.Fatalf("expected an Unknown condition when any required entry exists, got %+v", cond)
+	if cond == nil || cond.Status != "UNKNOWN" {
+		t.Fatalf("expected an UNKNOWN condition when any required entry exists, got %+v", cond)
 	}
 }
 

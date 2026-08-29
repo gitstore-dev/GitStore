@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,8 +26,8 @@ import (
 )
 
 var (
-	scyllaAddr     string
-	scyllaKeyspace string
+	scyllaAddr             string
+	scyllaKeyspaceSequence atomic.Uint64
 )
 
 func TestMain(m *testing.M) {
@@ -34,12 +35,7 @@ func TestMain(m *testing.M) {
 	if scyllaAddr == "" {
 		scyllaAddr = "127.0.0.1:9042"
 	}
-	scyllaKeyspace = fmt.Sprintf("gitstore_contract_test_%d", os.Getpid())
-
-	provisionKeyspace(scyllaAddr, scyllaKeyspace)
 	code := m.Run()
-	dropKeyspace(scyllaAddr, scyllaKeyspace)
-
 	os.Exit(code)
 }
 
@@ -133,6 +129,20 @@ func openRootSession(addr string) (*gocql.Session, error) {
 
 func newScyllaDatastore(t *testing.T) datastore.Datastore {
 	t.Helper()
+	keyspace := newScyllaTestKeyspace(t)
+	return newScyllaDatastoreInKeyspace(t, keyspace)
+}
+
+func newScyllaTestKeyspace(t *testing.T) string {
+	t.Helper()
+	keyspace := fmt.Sprintf("gitstore_contract_test_%d_%d", os.Getpid(), scyllaKeyspaceSequence.Add(1))
+	provisionKeyspace(scyllaAddr, keyspace)
+	t.Cleanup(func() { dropKeyspace(scyllaAddr, keyspace) })
+	return keyspace
+}
+
+func newScyllaDatastoreInKeyspace(t *testing.T, keyspace string) datastore.Datastore {
+	t.Helper()
 	host, portStr, splitErr := net.SplitHostPort(scyllaAddr)
 	if splitErr != nil {
 		host = scyllaAddr
@@ -141,7 +151,7 @@ func newScyllaDatastore(t *testing.T) datastore.Datastore {
 	port, _ := strconv.Atoi(portStr)
 	cfg := config.ScyllaConfig{
 		Hosts:                 []string{scyllaAddr},
-		Keyspace:              scyllaKeyspace,
+		Keyspace:              keyspace,
 		DisableShardAwarePort: true,
 		IgnorePeerAddr:        true,
 		AddressTranslator:     contactPointTranslator(host, port),
@@ -154,7 +164,8 @@ func newScyllaDatastore(t *testing.T) datastore.Datastore {
 
 func newScyllaDatastores(t *testing.T) (datastore.Datastore, datastore.Datastore) {
 	t.Helper()
-	return newScyllaDatastore(t), newScyllaDatastore(t)
+	keyspace := newScyllaTestKeyspace(t)
+	return newScyllaDatastoreInKeyspace(t, keyspace), newScyllaDatastoreInKeyspace(t, keyspace)
 }
 
 func TestContractScylla(t *testing.T) {

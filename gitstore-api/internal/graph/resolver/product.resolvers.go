@@ -7,15 +7,95 @@ package resolver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
+
+// UpdateProductStatus applies controller-managed category-resolution state.
+// It may remove exactly one resolved category owner reference, but never
+// touches the Git-authored spec.categoryRef.
+func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.UpdateProductStatusInput) (*model.UpdateProductStatusPayload, error) {
+	product, err := r.store.GetProductByName(ctx, input.Namespace, input.Name)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, &gqlerror.Error{
+				Message:    fmt.Sprintf("Product %s/%s not found", input.Namespace, input.Name),
+				Extensions: map[string]any{"code": "NOT_FOUND"},
+			}
+		}
+		return nil, gqlerror.Errorf("retrieve product status: %v", err)
+	}
+	if product.ResourceVersion != input.ResourceVersion {
+		return &model.UpdateProductStatusPayload{
+			Conflict: &model.StatusConflict{CurrentResourceVersion: product.ResourceVersion},
+		}, nil
+	}
+	if input.RemoveOwnerUID != nil {
+		var refs []catalog.OwnerReference
+		if len(product.OwnerReferences) > 0 {
+			if err := json.Unmarshal(product.OwnerReferences, &refs); err != nil {
+				return nil, gqlerror.Errorf("decode product owner references: %v", err)
+			}
+		}
+		filtered := refs[:0]
+		for _, ref := range refs {
+			if ref.UID != *input.RemoveOwnerUID {
+				filtered = append(filtered, ref)
+			}
+		}
+		ownerReferences, err := json.Marshal(filtered)
+		if err != nil {
+			return nil, gqlerror.Errorf("encode product owner references: %v", err)
+		}
+		product.OwnerReferences = ownerReferences
+	}
+	var status catalog.ProductStatus
+	if len(product.Status) > 0 {
+		if err := json.Unmarshal(product.Status, &status); err != nil {
+			return nil, gqlerror.Errorf("decode product status: %v", err)
+		}
+	}
+	if input.Conditions != nil {
+		status.Conditions = mergeProductConditions(status.Conditions, toConditions(input.Conditions))
+	}
+	statusJSON, err := json.Marshal(status)
+	if err != nil {
+		return nil, gqlerror.Errorf("encode product status: %v", err)
+	}
+	product.Status = statusJSON
+	datastore.AdvanceProductSystemVersion(product)
+	if err := r.store.UpdateProduct(ctx, product); err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			current, getErr := r.store.GetProductByName(ctx, input.Namespace, input.Name)
+			if getErr == nil {
+				return &model.UpdateProductStatusPayload{
+					Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion},
+				}, nil
+			}
+		}
+		return nil, gqlerror.Errorf("update product status: %v", err)
+	}
+	if r.eventBus != nil {
+		r.eventBus.Publish(eventbus.Event{
+			Type:            eventbus.Modified,
+			Kind:            "Product",
+			Namespace:       product.Namespace,
+			Name:            product.Name,
+			ResourceVersion: product.ResourceVersion,
+			Object:          product,
+		})
+	}
+	return &model.UpdateProductStatusPayload{Product: DatastoreProductToGraphQL(product)}, nil
+}
 
 // Product is the resolver for the product field.
 func (r *queryResolver) Product(ctx context.Context, by model.ProductBy) (*model.Product, error) {
@@ -60,9 +140,6 @@ func (r *subscriptionResolver) WatchProducts(ctx context.Context, namespace *str
 	if resourceVersion != nil {
 		rv = *resourceVersion
 	}
-	// The controller uses this private token to request a bookmark before its
-	// initial Product snapshot. Numeric cursors, including "0", remain real
-	// lower bounds for event-bus replay.
 	bootstrap := rv == productWatchBootstrapCursor
 	if bootstrap {
 		rv = ""
@@ -80,10 +157,6 @@ func (r *subscriptionResolver) WatchProducts(ctx context.Context, namespace *str
 		}
 		return nil, gqlerror.Errorf("watch subscription failed: %v", err)
 	}
-	r.logger.Debug("watch subscription opened",
-		zap.String("kind", "Product"),
-		zap.Bool("resumed", rv != ""))
-
 	out := make(chan *model.ProductWatchEvent, 16)
 	go func() {
 		defer close(out)

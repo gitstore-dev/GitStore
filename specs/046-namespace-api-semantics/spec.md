@@ -1,8 +1,9 @@
 # Feature Specification: Namespace API Semantics: Spec Writes, Status Updates, Concurrency
 
 **Feature Branch**: `046-namespace-api-semantics`
+
 **Created**: 2026-08-17
-**Status**: Draft
+**Status**: Closed
 **Input**: User description: "Namespace API Semantics: Spec Writes, Status Updates, Concurrency (GH#172). Context: GH#172 is unblocked now that GH#171 (Namespace declarative .spec/.status schema) has shipped. Define namespace API semantics for .spec updates, status-subresource style .status updates, and optimistic concurrency behavior. Scope: define create/update/delete behavior and error contracts, define the status update path and ownership boundaries, define resourceVersion conflict semantics for concurrent writes, and provide API examples for successful and rejected operations. GH#172 blocks GH#174 (Namespace Watch Contract)."
 
 ## Clarifications

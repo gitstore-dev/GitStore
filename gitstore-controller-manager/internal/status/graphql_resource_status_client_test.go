@@ -32,7 +32,7 @@ func TestResourceStatusApplySendsKindAwareMutation(t *testing.T) {
 		ObservedGeneration: &generation,
 		Conditions: []*status.Condition{{
 			Type:               "SystemRepoReady",
-			Status:             "True",
+			Status:             "TRUE",
 			ObservedGeneration: generation,
 		}},
 	})

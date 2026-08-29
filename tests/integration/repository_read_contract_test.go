@@ -313,7 +313,7 @@ func repositoryReadContractQueryByPath(
 	name string,
 ) *repositoryReadContractResource {
 	t.Helper()
-	resp := h.gqlAnonymous(
+	resp := h.gql(
 		`query($namespace: String!, $name: String!) {
 			repository(by: {namespacePath: {namespace: $namespace, name: $name}}) `+repositoryReadContractSelection()+`
 		}`,
@@ -334,7 +334,7 @@ func repositoryReadContractQueryByID(
 	id string,
 ) *repositoryReadContractResource {
 	t.Helper()
-	resp := h.gqlAnonymous(
+	resp := h.gql(
 		`query($id: ID!) {
 			repository(by: {id: $id}) `+repositoryReadContractSelection()+`
 		}`,
@@ -355,7 +355,7 @@ func repositoryReadContractQueryByNode(
 	id string,
 ) *repositoryReadContractResource {
 	t.Helper()
-	resp := h.gqlAnonymous(
+	resp := h.gql(
 		`query($id: ID!) {
 			node(id: $id) {
 				... on Repository `+repositoryReadContractSelection()+`
@@ -378,7 +378,7 @@ func repositoryReadContractList(
 	namespace string,
 ) []*repositoryReadContractResource {
 	t.Helper()
-	resp := h.gqlAnonymous(
+	resp := h.gql(
 		`query($namespace: String!) {
 			repositories(namespace: $namespace, first: 20) {
 				edges {

@@ -11,10 +11,13 @@ package categorytaxonomy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
@@ -22,11 +25,14 @@ import (
 // CategoryTaxonomy is the cache entity populated by the Runner[CategoryTaxonomy]
 // list-then-watch loop against watchCategories/categories.
 type CategoryTaxonomy struct {
-	UID             string
-	Namespace       string
-	Name            string
-	Generation      int64
-	ResourceVersion string
+	UID               string
+	Namespace         string
+	Name              string
+	Generation        int64
+	ResourceVersion   string
+	OwnerReferences   []OwnerReference
+	Finalizers        []string
+	DeletionTimestamp *time.Time
 	// ParentRefName is empty when this category has no parent (root candidate).
 	// Mirrors spec.parentRef.name.
 	ParentRefName string
@@ -34,6 +40,13 @@ type CategoryTaxonomy struct {
 	// condition (US3, FR-010/FR-011).
 	Media  []MediaRef
 	Status status.ResourceStatus
+}
+
+// OwnerReference is the lifecycle-relevant subset of metadata.ownerReferences.
+type OwnerReference struct {
+	UID                string
+	Kind               string
+	BlockOwnerDeletion bool
 }
 
 // MediaRef mirrors one spec.media[].fileRef entry.
@@ -71,6 +84,7 @@ type Reconciler struct {
 	statusClient status.StatusClient
 	productCount ProductCounter
 	enqueue      EnqueueFunc
+	deletion     DeletionClient
 }
 
 // NewReconciler returns a Reconciler reading from c, writing status through
@@ -78,8 +92,12 @@ type Reconciler struct {
 // affected descendants via enqueue (research.md R2). enqueue may be nil if
 // the caller does not need descendant propagation (e.g. in a test that only
 // exercises a single node).
-func NewReconciler(c cache.CacheAccessor[CategoryTaxonomy], statusClient status.StatusClient, productCounter ProductCounter, enqueue EnqueueFunc) *Reconciler {
-	return &Reconciler{cache: c, statusClient: statusClient, productCount: productCounter, enqueue: enqueue}
+func NewReconciler(c cache.CacheAccessor[CategoryTaxonomy], statusClient status.StatusClient, productCounter ProductCounter, enqueue EnqueueFunc, deletionClients ...DeletionClient) *Reconciler {
+	var deletion DeletionClient
+	if len(deletionClients) > 0 {
+		deletion = deletionClients[0]
+	}
+	return &Reconciler{cache: c, statusClient: statusClient, productCount: productCounter, enqueue: enqueue, deletion: deletion}
 }
 
 // Reconcile implements types.Reconciler. See contracts/reconciler-contract.md
@@ -143,6 +161,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 
 	parentResolvedCond := computeParentResolved(r.cache, current)
 	acyclicCond := computeAcyclic(inCycle[current.Name])
+	// current.Status.Conditions comes from the real GraphQL list/watch
+	// path, where ConditionStatus is the enum wire value ("TRUE"/"FALSE");
+	// acyclicCond.Status uses this package's statusTrue/statusFalse
+	// constants, which now match that same wire casing directly, so a
+	// plain equality compare is safe here.
+	acyclicChanged := conditionStatusByType(current.Status.Conditions, conditionAcyclic) != acyclicCond.Status
 	fileRefCond := computeFileRefCondition(current)
 	readyCond := computeReady(parentResolvedCond, acyclicCond, fileRefCond)
 
@@ -151,6 +175,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		conditions = append(conditions, fileRefCond)
 	}
 	conditions = append(conditions, &readyCond)
+	if current.DeletionTimestamp != nil || slices.Contains(current.Finalizers, datastoreForegroundDeletionFinalizer) {
+		transition := time.Now().UTC()
+		if current.DeletionTimestamp != nil {
+			transition = *current.DeletionTimestamp
+		}
+		conditions = append(conditions, &status.Condition{
+			Type:               "Terminating",
+			Status:             statusTrue,
+			ObservedGeneration: current.Generation,
+			LastTransitionTime: transition,
+			Reason:             "DeletionRequested",
+			Message:            "CategoryTaxonomy is awaiting foreground deletion completion.",
+		})
+	}
 	preserveLastTransitionTimes(conditions, current.Status.Conditions)
 
 	gen := current.Generation
@@ -162,7 +200,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 	}
 
 	if patch.IsNoOp(current.Status) {
-		return types.ResultOK()
+		return r.reconcileDeletion(ctx, current)
 	}
 
 	// Any Apply failure -- including types.ErrConflict -- is retried: a
@@ -171,11 +209,51 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 	if err := r.statusClient.Apply(ctx, key, patch); err != nil {
 		return types.ResultTransient(err)
 	}
+	if current.DeletionTimestamp != nil || slices.Contains(current.Finalizers, datastoreForegroundDeletionFinalizer) {
+		return r.reconcileDeletion(ctx, current)
+	}
 
-	if !inCycle[current.Name] && hierarchyChanged(previous, resolved) {
+	// Re-enqueue whatever points at this node (its children per ParentRefName,
+	// or — for a cycle participant — the other cycle member(s), since a
+	// cycle's edges mean each participant is also the other's "child") on
+	// either a structural change or an Acyclic transition. Gating solely on
+	// hierarchyChanged missed the case where a cycle participant flips
+	// Acyclic without a Depth/Path change (FR-008 freezes those while
+	// cycling), leaving affected nodes stuck on stale conditions until an
+	// unrelated event happened to re-trigger them.
+	if hierarchyChanged(previous, resolved) || acyclicChanged {
 		r.reenqueueChildren(key)
 	}
 
+	return types.ResultOK()
+}
+
+const (
+	datastoreForegroundDeletionFinalizer = "gitstore.dev/foreground-deletion"
+	categoryDeletionRetryInterval        = time.Second
+)
+
+func (r *Reconciler) reconcileDeletion(ctx context.Context, current CategoryTaxonomy) types.ReconcileResult {
+	if r.deletion == nil || (current.DeletionTimestamp == nil && !slices.Contains(current.Finalizers, datastoreForegroundDeletionFinalizer)) {
+		return types.ResultOK()
+	}
+	hasMore, err := r.deletion.DecoupleProducts(ctx, current.Namespace, current.Name, current.ResourceVersion)
+	if err != nil {
+		health.CategoryDeletionRetriesTotal.Inc()
+		return types.ResultTransient(fmt.Errorf("categorytaxonomy: decouple Products: %w", err))
+	}
+	if hasMore {
+		health.CategoryDeletionProductPagesTotal.Inc()
+		return types.ResultAfter(categoryDeletionRetryInterval)
+	}
+	if err := r.deletion.CompleteDeletion(ctx, current.Namespace, current.Name, current.ResourceVersion); err != nil {
+		if errors.Is(err, types.ErrConflict) {
+			health.CategoryDeletionConflictsTotal.Inc()
+		} else {
+			health.CategoryDeletionRetriesTotal.Inc()
+		}
+		return types.ResultTransient(fmt.Errorf("categorytaxonomy: complete deletion: %w", err))
+	}
 	return types.ResultOK()
 }
 
@@ -207,6 +285,15 @@ func preserveLastTransitionTimes(fresh []*status.Condition, prior []*status.Cond
 			f.LastTransitionTime = p.LastTransitionTime
 		}
 	}
+}
+
+func conditionStatusByType(conditions []*status.Condition, condType string) string {
+	for _, c := range conditions {
+		if c != nil && c.Type == condType {
+			return c.Status
+		}
+	}
+	return ""
 }
 
 func hierarchyChanged(previous *ResolvedCategoryTaxonomy, current ResolvedCategoryTaxonomy) bool {

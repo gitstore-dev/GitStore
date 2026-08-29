@@ -25,6 +25,7 @@ import (
 	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/version"
 	"go.uber.org/zap"
 )
 
@@ -153,7 +154,7 @@ func registerNamespace(ctx context.Context, mgr *manager.Manager, checkpointStor
 // buildMux returns the HTTP handler for the health/metrics and management surface.
 func buildMux(mgr *manager.Manager) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /health", health.NewHandler(mgr))
+	mux.Handle("GET /health", health.NewHandler(mgr, version.Version))
 	mux.Handle("GET /metrics", health.NewMetricsHandler(mgr))
 	mux.HandleFunc("GET /controller/v1/poison/{kind}", api.ListPoisonHandler(mgr))
 	mux.HandleFunc("POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue", api.RequeuePoisonHandler(mgr))
@@ -175,6 +176,7 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 		statusClient,
 		categorytaxonomy.NewProductCounter(client),
 		mgr.Enqueue,
+		categorytaxonomy.NewGraphQLDeletionClient(client),
 	)
 
 	runner := &listwatch.Runner[categorytaxonomy.CategoryTaxonomy]{
@@ -187,6 +189,8 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 			return types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: c.Namespace, Name: c.Name}
 		},
 		RevisionFunc:        func(c categorytaxonomy.CategoryTaxonomy) string { return c.ResourceVersion },
+		AcceptUpdate:        categorytaxonomy.AcceptWatchUpdate,
+		ShouldEnqueueUpdate: categorytaxonomy.ShouldEnqueueWatchUpdate,
 		FlushIntervalEvents: cfg.Controller.CheckpointFlushIntervalEvents,
 		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
 		Log:                 log,
@@ -220,6 +224,9 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 			enqueueParent(c.Namespace, c.ParentRefName)
 		},
 		OnUpdate: func(_ types.WorkItemKey, old, current categorytaxonomy.CategoryTaxonomy) {
+			if old.ParentRefName == current.ParentRefName {
+				return
+			}
 			enqueueParent(old.Namespace, old.ParentRefName)
 			enqueueParent(current.Namespace, current.ParentRefName)
 		},
