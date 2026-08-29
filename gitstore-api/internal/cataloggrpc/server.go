@@ -811,7 +811,7 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 		return err
 	}
 	for _, op := range deletes {
-		if err := s.deleteResource(ctx, op.identity); err != nil {
+		if err := s.deleteResource(ctx, op.identity, admCtx.RefName); err != nil {
 			return err
 		}
 	}
@@ -976,7 +976,7 @@ func (s *Server) lookupResourceByIdentity(ctx context.Context, id resourceIdenti
 
 var errCategoryDeletionBlocked = errors.New("category deletion blocked by child categories")
 
-func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) error {
+func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, refName string) error {
 	existing, err := s.lookupResourceByIdentity(ctx, id)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
@@ -992,6 +992,24 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) error 
 			zap.String("name", id.Name),
 			zap.Error(err))
 		return fmt.Errorf("delete %s %s/%s: %w", id.Kind, id.Namespace, id.Name, err)
+	}
+
+	// A branch deletion's changed_paths covers every path in the deleted
+	// ref's final tree (git-service's compute_changed_paths), including
+	// files inherited unchanged from another still-live ref (e.g. a
+	// feature branch's full tree, which also contains everything already
+	// on main). Only actually delete when this resource's own
+	// last-admitted ref matches the ref being deleted -- otherwise it is
+	// still legitimately reachable elsewhere and this is a phantom
+	// deletion from the deleted ref's now-irrelevant tree contents.
+	if ownRef, ok := resourceGitRef(existing); ok && refName != "" && ownRef != refName {
+		s.log.Info("admit_resources: delete skipped; resource owned by a different ref",
+			zap.String("kind", id.Kind),
+			zap.String("namespace", id.Namespace),
+			zap.String("name", id.Name),
+			zap.String("deleted_ref", refName),
+			zap.String("owning_ref", ownRef))
+		return nil
 	}
 
 	var uid string
@@ -1072,6 +1090,28 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) error 
 		zap.String("name", id.Name),
 		zap.String("uid", uid))
 	return nil
+}
+
+// resourceGitRef returns existing's GitRef field and true, or "", false for
+// a kind that has no GitRef (none currently -- kept defensive for future
+// kinds added to lookupResourceByIdentity without one).
+func resourceGitRef(existing any) (string, bool) {
+	switch r := existing.(type) {
+	case *datastore.Product:
+		return r.GitRef, true
+	case *datastore.CategoryTaxonomy:
+		return r.GitRef, true
+	case *datastore.Collection:
+		return r.GitRef, true
+	case *datastore.ProductVariant:
+		return r.GitRef, true
+	case *datastore.File:
+		return r.GitRef, true
+	case *datastore.Namespace:
+		return r.GitRef, true
+	default:
+		return "", false
+	}
 }
 
 // detectCycles delegates to the admission/catalog package implementation.

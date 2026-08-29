@@ -699,27 +699,20 @@ func TestCollection_SelectorDoesNotExist(t *testing.T) {
 	if out, err := hColl.push(); err != nil {
 		t.Fatalf("collection push failed:\n%s", out)
 	}
-	time.Sleep(500 * time.Millisecond)
 
-	coll := queryCollection(t, ns, collName)
-	if coll == nil {
-		t.Fatal("collection not found")
-	}
+	coll := waitForCollectionStatus(t, ns, collName, 10*time.Second, func(c *collectionQueryResult) bool {
+		for _, n := range productNamesFromEdges(c) {
+			if n == noSaleProduct {
+				return true
+			}
+		}
+		return false
+	})
 	names := productNamesFromEdges(coll)
 	for _, n := range names {
 		if n == saleProduct {
 			t.Errorf("sale product (has label) should be excluded by DoesNotExist selector, but was found")
 		}
-	}
-	found := false
-	for _, n := range names {
-		if n == noSaleProduct {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("no-sale product should be included by DoesNotExist selector, but was not found")
 	}
 }
 
