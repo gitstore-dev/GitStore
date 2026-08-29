@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 	"sync"
 	"time"
@@ -40,8 +41,24 @@ var migrationLibraryMu sync.Mutex
 // per-statement schema-agreement wait for Scylla's distributed schema metadata.
 // instanceID should be a unique string per process (e.g. a UUID).
 func RunMigrations(ctx context.Context, rawSession *gocql.Session, keyspace, instanceID string, log *zap.Logger) error {
+	return RunMigrationsWithFS(ctx, rawSession, keyspace, instanceID, log, migrations.Files)
+}
+
+// RunMigrationsWithFS runs the normal startup migration path with an explicit
+// embedded migration bundle. Release tooling and tests use it to verify that a
+// behavior rollback artifact retained every already-applied forward migration.
+func RunMigrationsWithFS(
+	ctx context.Context,
+	rawSession *gocql.Session,
+	keyspace, instanceID string,
+	log *zap.Logger,
+	migrationFiles fs.FS,
+) error {
 	if log == nil {
 		log = zap.NewNop()
+	}
+	if migrationFiles == nil {
+		return errors.New("migration files are required")
 	}
 
 	if err := execSchemaStatement(ctx, rawSession, log,
@@ -75,7 +92,7 @@ func RunMigrations(ctx context.Context, rawSession *gocql.Session, keyspace, ins
 	session := gocqlx.NewSession(rawSession)
 
 	log.Info("running CQL migrations")
-	if err := applyGocqlxMigrations(ctx, session); err != nil {
+	if err := applyGocqlxMigrations(ctx, session, migrationFiles); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
 
@@ -83,7 +100,7 @@ func RunMigrations(ctx context.Context, rawSession *gocql.Session, keyspace, ins
 	return nil
 }
 
-func applyGocqlxMigrations(ctx context.Context, session gocqlx.Session) error {
+func applyGocqlxMigrations(ctx context.Context, session gocqlx.Session, migrationFiles fs.FS) error {
 	migrationLibraryMu.Lock()
 	defer migrationLibraryMu.Unlock()
 
@@ -93,7 +110,7 @@ func applyGocqlxMigrations(ctx context.Context, session gocqlx.Session) error {
 		migrate.DefaultAwaitSchemaAgreement = previousAwait
 	}()
 
-	return migrate.FromFS(ctx, session, migrations.Files)
+	return migrate.FromFS(ctx, session, migrationFiles)
 }
 
 func acquireLockWithRetry(ctx context.Context, session *gocql.Session, instanceID string, log *zap.Logger) (bool, error) {

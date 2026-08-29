@@ -58,6 +58,10 @@ func (m *mockGitWriter) ResolveRefForRepo(_ context.Context, _ string, _ string)
 	return "deadbeef", nil
 }
 
+func (m *mockGitWriter) ReadFileForRepo(_ context.Context, _, _, _ string) ([]byte, error) {
+	return nil, nil
+}
+
 func (m *mockGitWriter) DeleteFile(_ context.Context, p gitclient.DeleteFileParams) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

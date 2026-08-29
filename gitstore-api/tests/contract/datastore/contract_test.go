@@ -845,6 +845,74 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.False(t, has)
 	})
 
+	t.Run("Namespace/TestRepositoryLifecycleCoordination", func(t *testing.T) {
+		ns := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, ns))
+		repository := newRepository(ns.Name)
+
+		require.NoError(t, ds.CreateRepositoryInActiveNamespace(ctx, repository))
+		current, err := ds.GetNamespace(ctx, ns.UID)
+		require.NoError(t, err)
+		deletedAt := time.Now().UTC().Truncate(time.Millisecond)
+		expectedResourceVersion := current.ResourceVersion
+		current.DeletionTimestamp = &deletedAt
+		datastore.AdvanceNamespaceSystemVersion(current)
+		require.ErrorIs(t, ds.MarkNamespaceDeletion(ctx, current, expectedResourceVersion), datastore.ErrNamespaceNotEmpty)
+
+		require.NoError(t, ds.DeleteRepository(ctx, repository.UID))
+		current, err = ds.GetNamespace(ctx, ns.UID)
+		require.NoError(t, err)
+		expectedResourceVersion = current.ResourceVersion
+		current.DeletionTimestamp = &deletedAt
+		datastore.AdvanceNamespaceSystemVersion(current)
+		require.NoError(t, ds.MarkNamespaceDeletion(ctx, current, expectedResourceVersion))
+
+		late := newRepository(ns.Name)
+		require.ErrorIs(t, ds.CreateRepositoryInActiveNamespace(ctx, late), datastore.ErrNamespaceNotActive)
+	})
+
+	t.Run("Repository/TestTransferRequiresActiveTargetAndBlocksDeletion", func(t *testing.T) {
+		source := newNamespace(datastore.NamespaceTierUser)
+		target := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, source))
+		require.NoError(t, ds.CreateNamespace(ctx, target))
+
+		repository := newRepository(source.Name)
+		repository.Name = "catalog"
+		require.NoError(t, ds.CreateRepositoryInActiveNamespace(ctx, repository))
+		require.NoError(t, ds.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
+			Namespace:    source.Name,
+			Name:         repository.Name,
+			RepositoryID: repository.UID,
+		}))
+
+		require.NoError(t, ds.TransferRepository(ctx, repository.UID, source.Name, target.Name))
+		transferred, err := ds.GetRepository(ctx, repository.UID)
+		require.NoError(t, err)
+		assert.Equal(t, target.Name, transferred.Namespace)
+
+		currentTarget, err := ds.GetNamespace(ctx, target.UID)
+		require.NoError(t, err)
+		expectedResourceVersion := currentTarget.ResourceVersion
+		deletedAt := time.Now().UTC().Truncate(time.Millisecond)
+		currentTarget.DeletionTimestamp = &deletedAt
+		datastore.AdvanceNamespaceSystemVersion(currentTarget)
+		require.ErrorIs(t, ds.MarkNamespaceDeletion(ctx, currentTarget, expectedResourceVersion), datastore.ErrNamespaceNotEmpty)
+
+		terminatingTarget := newNamespace(datastore.NamespaceTierUser)
+		require.NoError(t, ds.CreateNamespace(ctx, terminatingTarget))
+		expectedResourceVersion = terminatingTarget.ResourceVersion
+		terminatingTarget.DeletionTimestamp = &deletedAt
+		datastore.AdvanceNamespaceSystemVersion(terminatingTarget)
+		require.NoError(t, ds.MarkNamespaceDeletion(ctx, terminatingTarget, expectedResourceVersion))
+
+		err = ds.TransferRepository(ctx, repository.UID, target.Name, terminatingTarget.Name)
+		require.ErrorIs(t, err, datastore.ErrNamespaceNotActive)
+		stillTransferred, getErr := ds.GetRepository(ctx, repository.UID)
+		require.NoError(t, getErr)
+		assert.Equal(t, target.Name, stillTransferred.Namespace)
+	})
+
 	t.Run("Repository/TestDuplicateUIDAndScopedName", func(t *testing.T) {
 		namespace := "repo-uniqueness-" + newID()[:8]
 		repository := newRepository(namespace)
@@ -886,6 +954,12 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		repositoryID := newID()
 		fromNamespace := "mapping-from-" + newID()[:8]
 		toNamespace := "mapping-to-" + newID()[:8]
+		from := newNamespace(datastore.NamespaceTierUser)
+		from.Name = fromNamespace
+		to := newNamespace(datastore.NamespaceTierUser)
+		to.Name = toNamespace
+		require.NoError(t, ds.CreateNamespace(ctx, from))
+		require.NoError(t, ds.CreateNamespace(ctx, to))
 		mapping := &datastore.NamespaceMapping{
 			Namespace:    fromNamespace,
 			Name:         "old-name",

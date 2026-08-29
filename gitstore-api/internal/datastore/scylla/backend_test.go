@@ -1090,6 +1090,90 @@ func TestScylla_NamespaceDirectUID_FullEnvelopeAndBodyRoundTrip(t *testing.T) {
 	assert.JSONEq(t, string(namespace.OwnerReferences), string(got.OwnerReferences))
 }
 
+func TestScylla_NamespaceRepositoryLifecycleCoordinationAcrossReplicas(t *testing.T) {
+	storeA, storeB := newTestStores(t)
+	ctx := context.Background()
+	namespace := &datastore.Namespace{
+		UID:               newID(),
+		Name:              "repository-lifecycle-" + newID()[:8],
+		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+	}
+	require.NoError(t, storeA.CreateNamespace(ctx, namespace))
+	repository := &datastore.Repository{
+		UID:               newID(),
+		Namespace:         namespace.Name,
+		Name:              "catalog",
+		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+	}
+
+	require.NoError(t, storeB.CreateRepositoryInActiveNamespace(ctx, repository))
+	current, err := storeA.GetNamespace(ctx, namespace.UID)
+	require.NoError(t, err)
+	deletedAt := time.Now().UTC().Truncate(time.Millisecond)
+	expectedResourceVersion := current.ResourceVersion
+	current.DeletionTimestamp = &deletedAt
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.ErrorIs(t, storeA.MarkNamespaceDeletion(ctx, current, expectedResourceVersion), datastore.ErrNamespaceNotEmpty)
+
+	require.NoError(t, storeB.DeleteRepository(ctx, repository.UID))
+	current, err = storeA.GetNamespace(ctx, namespace.UID)
+	require.NoError(t, err)
+	expectedResourceVersion = current.ResourceVersion
+	current.DeletionTimestamp = &deletedAt
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.NoError(t, storeA.MarkNamespaceDeletion(ctx, current, expectedResourceVersion))
+
+	late := *repository
+	late.UID = newID()
+	late.Name = "late"
+	require.ErrorIs(t, storeB.CreateRepositoryInActiveNamespace(ctx, &late), datastore.ErrNamespaceNotActive)
+}
+
+func TestScylla_NamespaceRepositoryLifecycleLegacyNullFence(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	namespace := &datastore.Namespace{
+		UID:               newID(),
+		Name:              "legacy-fence-" + newID()[:8],
+		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+	}
+	require.NoError(t, store.CreateNamespace(ctx, namespace))
+	clearNamespaceRepositoryFence(t, namespace.UID)
+
+	repository := &datastore.Repository{
+		UID:               newID(),
+		Namespace:         namespace.Name,
+		Name:              "catalog",
+		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond),
+	}
+	require.NoError(t, store.CreateRepositoryInActiveNamespace(ctx, repository))
+	require.NoError(t, store.DeleteRepository(ctx, repository.UID))
+
+	current, err := store.GetNamespace(ctx, namespace.UID)
+	require.NoError(t, err)
+	expectedResourceVersion := current.ResourceVersion
+	deletedAt := time.Now().UTC().Truncate(time.Millisecond)
+	current.DeletionTimestamp = &deletedAt
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.NoError(t, store.MarkNamespaceDeletion(ctx, current, expectedResourceVersion))
+}
+
+func clearNamespaceRepositoryFence(t *testing.T, namespaceUID string) {
+	t.Helper()
+	session, err := openRootSession(scyllaAddr)
+	require.NoError(t, err)
+	t.Cleanup(session.Close)
+	uid, err := gocql.ParseUUID(namespaceUID)
+	require.NoError(t, err)
+	require.NoError(t, session.Query(
+		fmt.Sprintf(
+			"UPDATE %s.namespaces_by_uid SET repository_creation_epoch=null, pending_repository_creations=null WHERE uid=?",
+			scyllaKeyspace,
+		),
+		uid,
+	).Exec())
+}
+
 func TestScylla_RepositoryDirectUIDPathReversePath_FullEnvelopeAndBodyRoundTrip(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

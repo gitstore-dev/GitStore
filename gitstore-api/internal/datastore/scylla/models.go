@@ -112,7 +112,7 @@ var (
 
 	NamespaceByUID = table.New(table.Metadata{
 		Name:    "namespaces_by_uid",
-		Columns: authoritativeColumns(false, false, "title", "tier"),
+		Columns: authoritativeColumns(false, false, "title", "tier", "repository_creation_epoch", "pending_repository_creations"),
 		PartKey: []string{"uid"},
 	})
 	NamespaceByName = table.New(table.Metadata{

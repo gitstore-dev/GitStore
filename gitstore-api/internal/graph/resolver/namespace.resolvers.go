@@ -13,6 +13,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
+	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
@@ -45,16 +46,20 @@ func (r *mutationResolver) DeleteNamespace(ctx context.Context, input model.Dele
 	if !ok || ns.Name != input.Identifier {
 		return nil, gqlerror.Errorf("namespace deletion authorization context is missing")
 	}
-	if err := r.service.DeleteNamespace(ctx, ns); err != nil {
+	outcome, err := r.service.DeleteNamespace(ctx, ns)
+	if err != nil {
 		return nil, err
 	}
-	terminating, err := r.service.GetNamespaceByName(ctx, input.Identifier)
-	if err == nil {
-		r.publishNamespaceStatusEvent(terminating)
+	if outcome == namespaceadmission.DeletionOutcomeTerminationStarted {
+		terminating, getErr := r.service.GetNamespaceByName(ctx, input.Identifier)
+		if getErr == nil {
+			r.publishNamespaceStatusEvent(terminating)
+		}
 	}
 
 	return &model.DeleteNamespacePayload{
 		DeletedIdentifier: input.Identifier,
+		Outcome:           model.NamespaceDeletionOutcome(outcome),
 	}, nil
 }
 

@@ -398,6 +398,13 @@ func (d *InstrumentedDatastore) UpdateNamespace(ctx context.Context, ns *Namespa
 	return err
 }
 
+func (d *InstrumentedDatastore) MarkNamespaceDeletion(ctx context.Context, ns *Namespace, expectedResourceVersion string) error {
+	start := time.Now()
+	err := d.next.MarkNamespaceDeletion(d.withFindingObserver(ctx), ns, expectedResourceVersion)
+	d.observe("MarkNamespaceDeletion", start, err)
+	return err
+}
+
 func (d *InstrumentedDatastore) DeleteNamespace(ctx context.Context, id string) error {
 	start := time.Now()
 	err := d.next.DeleteNamespace(d.withFindingObserver(ctx), id)
@@ -425,6 +432,13 @@ func (d *InstrumentedDatastore) CreateRepository(ctx context.Context, r *Reposit
 	start := time.Now()
 	err := d.next.CreateRepository(d.withFindingObserver(ctx), r)
 	d.observe("CreateRepository", start, err)
+	return err
+}
+
+func (d *InstrumentedDatastore) CreateRepositoryInActiveNamespace(ctx context.Context, r *Repository) error {
+	start := time.Now()
+	err := d.next.CreateRepositoryInActiveNamespace(d.withFindingObserver(ctx), r)
+	d.observe("CreateRepositoryInActiveNamespace", start, err)
 	return err
 }
 

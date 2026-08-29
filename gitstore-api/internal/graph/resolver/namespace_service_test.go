@@ -7,13 +7,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
+	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // ── createNamespace ────────────────────────────────────────────────────────────
@@ -163,6 +168,128 @@ func TestUpdateNamespace_advancesGenerationAndAdmissionRevision(t *testing.T) {
 	assert.Equal(t, updated.Generation, status.Conditions[0].ObservedGeneration)
 }
 
+func TestUpdateNamespacePreservesCurrentGitMarkdownBody(t *testing.T) {
+	ctx := context.Background()
+	writer := &mockGitWriter{}
+	svc := newTestSvc(t, writer)
+	created, err := svc.CreateNamespace(ctx, createNamespaceInput("preserved-body", model.NamespaceTierUser), "alice")
+	require.NoError(t, err)
+	require.Len(t, writer.commitCalls, 1)
+
+	const body = "# Existing documentation\n\nKeep this Markdown exactly.\n"
+	path := "namespaces/preserved-body.md"
+	currentManifest := append([]byte(nil), writer.commitCalls[0].Content...)
+	currentManifest = append(currentManifest, []byte(body)...)
+	writer.setFile(path, currentManifest)
+
+	input := updateNamespaceInput(created.Name, model.NamespaceTierOrganization)
+	title := "Updated frontmatter"
+	input.Spec.Title = &title
+	updated, err := svc.UpdateNamespace(ctx, input, "bob")
+	require.NoError(t, err)
+	require.Len(t, writer.commitCalls, 2)
+
+	assert.Equal(t, body, updated.Body)
+	assert.Equal(t, body, string(writer.commitCalls[1].Content[len(writer.commitCalls[1].Content)-len(body):]))
+	assert.Contains(t, string(writer.commitCalls[1].Content), "title: Updated frontmatter")
+}
+
+func TestNamespaceGraphQLPersistsCompleteAuthoredStateAndProvenance(t *testing.T) {
+	ctx := context.Background()
+	createSHA := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	updateSHA := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	writer := newCommitOrderGitWriter("deadbeef", createSHA, updateSHA)
+	svc := newTestSvc(t, &mockGitWriter{})
+	svc.SetGitWriter(writer)
+
+	title := "Complete authored state"
+	visibility := model.RepositoryVisibilityPrivate
+	defaultBranch := "trunk"
+	maxPack := int64(4096)
+	maxFile := int64(1024)
+	input := createNamespaceInput("complete-authored", model.NamespaceTierUser)
+	input.Metadata.Labels = map[string]any{"team": "catalog"}
+	input.Metadata.Annotations = map[string]any{"owner": "alice"}
+	input.Spec.Title = &title
+	input.Spec.RepositoryDefaults = &model.NamespaceRepositoryDefaultsInput{
+		Visibility:    &visibility,
+		DefaultBranch: &defaultBranch,
+	}
+	input.Spec.PushPolicyDefaults = &model.NamespacePushPolicyDefaultsInput{
+		MaxPackSizeBytes: &maxPack,
+		MaxFileSizeBytes: &maxFile,
+	}
+
+	created, err := svc.CreateNamespace(ctx, input, "alice")
+	require.NoError(t, err)
+	assert.Equal(t, "gitstore.dev/v1beta1", created.APIVersion)
+	assert.Equal(t, "Namespace", created.Kind)
+	assert.Equal(t, map[string]string{"team": "catalog"}, created.Labels)
+	assert.Equal(t, map[string]string{"owner": "alice"}, created.Annotations)
+	assert.Equal(t, "namespaces/complete-authored.md", created.SourcePath)
+	assert.Equal(t, createSHA, created.GitCommitSHA)
+	assert.Equal(t, "refs/heads/main", created.GitRef)
+	var createdSpec catalog.NamespaceSpec
+	require.NoError(t, json.Unmarshal(created.Spec, &createdSpec))
+	assert.Equal(t, "trunk", createdSpec.RepositoryDefaults.DefaultBranch)
+	assert.Equal(t, "PRIVATE", createdSpec.RepositoryDefaults.Visibility)
+	assert.Equal(t, maxPack, createdSpec.PushPolicyDefaults.MaxPackSizeBytes)
+	assert.Equal(t, maxFile, createdSpec.PushPolicyDefaults.MaxFileSizeBytes)
+
+	updatedInput := updateNamespaceInput(created.Name, model.NamespaceTierUser)
+	updatedInput.Metadata.Labels = map[string]any{"team": "platform"}
+	updatedInput.Metadata.Annotations = map[string]any{"owner": "bob"}
+	updatedInput.Spec.Title = &title
+	updatedVisibility := model.RepositoryVisibilityInternal
+	updatedBranch := "main"
+	updatedPack := int64(8192)
+	updatedFile := int64(2048)
+	updatedInput.Spec.RepositoryDefaults = &model.NamespaceRepositoryDefaultsInput{
+		Visibility:    &updatedVisibility,
+		DefaultBranch: &updatedBranch,
+	}
+	updatedInput.Spec.PushPolicyDefaults = &model.NamespacePushPolicyDefaultsInput{
+		MaxPackSizeBytes: &updatedPack,
+		MaxFileSizeBytes: &updatedFile,
+	}
+
+	updated, err := svc.UpdateNamespace(ctx, updatedInput, "bob")
+	require.NoError(t, err)
+	assert.Equal(t, created.Generation+1, updated.Generation)
+	assert.Equal(t, "2", updated.ResourceVersion)
+	assert.Equal(t, map[string]string{"team": "platform"}, updated.Labels)
+	assert.Equal(t, map[string]string{"owner": "bob"}, updated.Annotations)
+	assert.Equal(t, updateSHA, updated.GitCommitSHA)
+	assert.Equal(t, "refs/heads/main", updated.GitRef)
+	var updatedSpec catalog.NamespaceSpec
+	require.NoError(t, json.Unmarshal(updated.Spec, &updatedSpec))
+	assert.Equal(t, "main", updatedSpec.RepositoryDefaults.DefaultBranch)
+	assert.Equal(t, "INTERNAL", updatedSpec.RepositoryDefaults.Visibility)
+	assert.Equal(t, updatedPack, updatedSpec.PushPolicyDefaults.MaxPackSizeBytes)
+	assert.Equal(t, updatedFile, updatedSpec.PushPolicyDefaults.MaxFileSizeBytes)
+}
+
+func TestNamespaceGraphQLSystemOnlyProvenanceAdvancesOnlyResourceVersion(t *testing.T) {
+	ctx := context.Background()
+	createSHA := "cccccccccccccccccccccccccccccccccccccccc"
+	updateSHA := "dddddddddddddddddddddddddddddddddddddddd"
+	writer := newCommitOrderGitWriter("deadbeef", createSHA, updateSHA)
+	svc := newTestSvc(t, &mockGitWriter{})
+	svc.SetGitWriter(writer)
+	input := createNamespaceInput("provenance-only", model.NamespaceTierUser)
+
+	created, err := svc.CreateNamespace(ctx, input, "alice")
+	require.NoError(t, err)
+	updated, err := svc.UpdateNamespace(ctx, updateNamespaceInput(created.Name, model.NamespaceTierUser), "alice")
+	require.NoError(t, err)
+
+	assert.Equal(t, created.Generation, updated.Generation)
+	assert.Equal(t, "2", updated.ResourceVersion)
+	assert.Equal(t, updateSHA, updated.GitCommitSHA)
+	assert.Equal(t, "refs/heads/main", updated.GitRef)
+	assert.Equal(t, "namespaces/provenance-only.md", updated.SourcePath)
+}
+
 // ── namespaces query ───────────────────────────────────────────────────────────
 
 func TestListNamespaces_returnsAll(t *testing.T) {
@@ -206,7 +333,7 @@ func TestDeleteNamespace_owner_success(t *testing.T) {
 	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 
-	err = svc.DeleteNamespace(context.Background(), ns)
+	_, err = svc.DeleteNamespace(context.Background(), ns)
 	require.NoError(t, err)
 
 	terminating, err := svc.GetNamespaceByName(context.Background(), "to-delete")
@@ -223,7 +350,7 @@ func TestDeleteNamespace_admin_canDeleteAny(t *testing.T) {
 	require.NoError(t, err)
 
 	// admin deletes alice's namespace
-	err = svc.DeleteNamespace(context.Background(), ns)
+	_, err = svc.DeleteNamespace(context.Background(), ns)
 	require.NoError(t, err)
 }
 
@@ -233,13 +360,13 @@ func TestDeleteNamespace_withoutAuthorizationCheck_serviceAllowsDelete(t *testin
 	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 
-	err = svc.DeleteNamespace(context.Background(), ns)
+	_, err = svc.DeleteNamespace(context.Background(), ns)
 	require.NoError(t, err)
 }
 
 func TestDeleteNamespace_unknownIdentifier_notFound(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
-	err := svc.DeleteNamespace(context.Background(), &datastore.Namespace{ID: "does-not-exist", Name: "does-not-exist"})
+	_, err := svc.DeleteNamespace(context.Background(), &datastore.Namespace{ID: "does-not-exist", Name: "does-not-exist"})
 	assert.Error(t, err)
 }
 
@@ -253,9 +380,9 @@ func TestDeleteNamespace_withRepository_rejected(t *testing.T) {
 	_, err = svc.CreateRepository(ctx, ns.ID, "some-repo", "main", "default", "alice")
 	require.NoError(t, err)
 
-	err = svc.DeleteNamespace(ctx, ns)
+	_, err = svc.DeleteNamespace(ctx, ns)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "contains repositories and cannot be deleted")
+	requireDeletionReasons(t, err, namespaceadmission.ReasonNamespaceNotEmpty)
 
 	_, err = svc.GetNamespaceByName(ctx, ns.Name)
 	require.NoError(t, err)
@@ -277,7 +404,7 @@ func TestDeleteNamespace_afterRepositoriesRemoved_succeeds(t *testing.T) {
 
 	require.NoError(t, svc.DeleteRepository(ctx, repo.ID, "alice"))
 
-	err = svc.DeleteNamespace(ctx, ns)
+	_, err = svc.DeleteNamespace(ctx, ns)
 	require.NoError(t, err)
 	terminating, err := svc.GetNamespaceByName(ctx, ns.Name)
 	require.NoError(t, err)
@@ -290,10 +417,12 @@ func TestDeleteNamespace_redundantDeleteDoesNotAdvanceVersion(t *testing.T) {
 	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("redundant-delete", model.NamespaceTierUser), "alice")
 	require.NoError(t, err)
 
-	require.NoError(t, svc.DeleteNamespace(ctx, ns))
+	_, err = svc.DeleteNamespace(ctx, ns)
+	require.NoError(t, err)
 	first, err := svc.GetNamespaceByName(ctx, ns.Name)
 	require.NoError(t, err)
-	require.NoError(t, svc.DeleteNamespace(ctx, first))
+	_, err = svc.DeleteNamespace(ctx, first)
+	require.NoError(t, err)
 	second, err := svc.GetNamespaceByName(ctx, ns.Name)
 	require.NoError(t, err)
 	assert.Equal(t, first.ResourceVersion, second.ResourceVersion)
@@ -304,8 +433,11 @@ func TestDeleteNamespace_bootstrapRejected(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	ns, err := svc.GetNamespaceByName(context.Background(), "gitstore-system")
 	require.NoError(t, err)
-	err = svc.DeleteNamespace(context.Background(), ns)
-	require.ErrorContains(t, err, "system-managed")
+	_, err = svc.DeleteNamespace(context.Background(), ns)
+	requireDeletionReasons(t, err,
+		namespaceadmission.ReasonBootstrapNamespace,
+		namespaceadmission.ReasonNamespaceNotEmpty,
+	)
 }
 
 func TestCompleteNamespaceDeletion_removesTerminatingNamespace(t *testing.T) {
@@ -313,7 +445,8 @@ func TestCompleteNamespaceDeletion_removesTerminatingNamespace(t *testing.T) {
 	ctx := context.Background()
 	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("complete-delete", model.NamespaceTierUser), "alice")
 	require.NoError(t, err)
-	require.NoError(t, svc.DeleteNamespace(ctx, ns))
+	_, err = svc.DeleteNamespace(ctx, ns)
+	require.NoError(t, err)
 	terminating, err := svc.GetNamespaceByName(ctx, ns.Name)
 	require.NoError(t, err)
 
@@ -330,7 +463,8 @@ func TestCompleteNamespaceDeletion_staleVersionConflicts(t *testing.T) {
 	ctx := context.Background()
 	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("stale-complete", model.NamespaceTierUser), "alice")
 	require.NoError(t, err)
-	require.NoError(t, svc.DeleteNamespace(ctx, ns))
+	_, err = svc.DeleteNamespace(ctx, ns)
+	require.NoError(t, err)
 
 	current, err := svc.CompleteNamespaceDeletion(ctx, ns.Name, ns.ResourceVersion)
 	require.ErrorIs(t, err, datastore.ErrConflict)
@@ -338,19 +472,109 @@ func TestCompleteNamespaceDeletion_staleVersionConflicts(t *testing.T) {
 	assert.Equal(t, "2", current.ResourceVersion)
 }
 
-func TestCompleteNamespaceDeletion_rechecksRepositories(t *testing.T) {
+func TestCreateRepository_terminatingNamespaceRejected(t *testing.T) {
 	svc := newTestSvc(t, &mockGitWriter{})
 	ctx := context.Background()
 	ns, err := svc.CreateNamespace(ctx, createNamespaceInput("repo-race-delete", model.NamespaceTierUser), "alice")
 	require.NoError(t, err)
-	require.NoError(t, svc.DeleteNamespace(ctx, ns))
+	_, err = svc.DeleteNamespace(ctx, ns)
+	require.NoError(t, err)
 	terminating, err := svc.GetNamespaceByName(ctx, ns.Name)
 	require.NoError(t, err)
 	_, err = svc.CreateRepository(ctx, ns.ID, "late-repo", "main", "default", "alice")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "terminating")
+	assert.Equal(t, "2", terminating.ResourceVersion)
+}
+
+type namespaceDeleteCreateRaceStore struct {
+	datastore.Datastore
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *namespaceDeleteCreateRaceStore) blockDeletionMark() {
+	s.once.Do(func() {
+		close(s.started)
+		<-s.release
+	})
+}
+
+func (s *namespaceDeleteCreateRaceStore) UpdateNamespace(
+	ctx context.Context,
+	namespace *datastore.Namespace,
+	expectedResourceVersion string,
+) error {
+	if namespace.DeletionTimestamp != nil {
+		s.blockDeletionMark()
+	}
+	return s.Datastore.UpdateNamespace(ctx, namespace, expectedResourceVersion)
+}
+
+func (s *namespaceDeleteCreateRaceStore) MarkNamespaceDeletion(
+	ctx context.Context,
+	namespace *datastore.Namespace,
+	expectedResourceVersion string,
+) error {
+	s.blockDeletionMark()
+	type deletionMarker interface {
+		MarkNamespaceDeletion(context.Context, *datastore.Namespace, string) error
+	}
+	return s.Datastore.(deletionMarker).MarkNamespaceDeletion(ctx, namespace, expectedResourceVersion)
+}
+
+func TestNamespaceReplicaRepositoryCreateCannotCommitAcrossDeletionMark(t *testing.T) {
+	ctx := context.Background()
+	seed := newTestSvc(t, &mockGitWriter{})
+	namespace, err := seed.CreateNamespace(ctx, createNamespaceInput("delete-create-race", model.NamespaceTierUser), "alice")
 	require.NoError(t, err)
 
-	_, err = svc.CompleteNamespaceDeletion(ctx, ns.Name, terminating.ResourceVersion)
-	require.ErrorContains(t, err, "still contains repositories")
+	store := &namespaceDeleteCreateRaceStore{
+		Datastore: seed.Store(),
+		started:   make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	deleteReplica, err := resolver.NewService(resolver.ServiceDeps{
+		Store:     store,
+		GitWriter: &mockGitWriter{},
+		Logger:    zap.NewNop(),
+	})
+	require.NoError(t, err)
+	createReplica, err := resolver.NewService(resolver.ServiceDeps{
+		Store:     store,
+		GitWriter: &mockGitWriter{},
+		Logger:    zap.NewNop(),
+	})
+	require.NoError(t, err)
+
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, deleteErr := deleteReplica.DeleteNamespace(ctx, namespace)
+		deleteDone <- deleteErr
+	}()
+
+	select {
+	case <-store.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("namespace deletion did not reach its conditional mark")
+	}
+	repository, err := createReplica.CreateRepository(ctx, namespace.ID, "winner", "main", "default", "bob")
+	require.NoError(t, err)
+	close(store.release)
+	select {
+	case deleteErr := <-deleteDone:
+		requireDeletionReasons(t, deleteErr, namespaceadmission.ReasonNamespaceNotEmpty)
+	case <-time.After(2 * time.Second):
+		t.Fatal("namespace deletion did not finish")
+	}
+
+	current, err := seed.GetNamespaceByName(ctx, namespace.Name)
+	require.NoError(t, err)
+	assert.Nil(t, current.DeletionTimestamp)
+	persistedRepository, err := seed.GetRepository(ctx, repository.ID)
+	require.NoError(t, err)
+	assert.Equal(t, namespace.Name, persistedRepository.Namespace)
 }
 
 func TestDeleteNamespace_recreatedIdentifierDoesNotDeleteReplacement(t *testing.T) {
@@ -362,7 +586,7 @@ func TestDeleteNamespace_recreatedIdentifierDoesNotDeleteReplacement(t *testing.
 	replacement, err := svc.CreateNamespace(context.Background(), input, "mallory")
 	require.NoError(t, err)
 
-	err = svc.DeleteNamespace(context.Background(), authorized)
+	_, err = svc.DeleteNamespace(context.Background(), authorized)
 	require.Error(t, err)
 
 	got, err := svc.GetNamespaceByName(context.Background(), input.Metadata.Name)

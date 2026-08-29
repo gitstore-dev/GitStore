@@ -59,6 +59,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `make test-scylla-hardening` — run focused datastore contracts without an external Scylla instance.
 - `make test-scylla-integration SCYLLA_TEST_ADDR=<host:port>` — run tagged Scylla datastore contracts.
 - `make test-scylla-capacity` — run the opt-in capacity/soak test; configure `SCYLLA_CAPACITY_PRODUCTS`, `SCYLLA_CAPACITY_CONCURRENCY`, and `SCYLLA_CAPACITY_DURATION`.
+- `make test-namespace-admission-capacity` — run the opt-in two-replica 30-minute Namespace validation soak; configure `NAMESPACE_CAPACITY_DURATION` to a value of at least `30m`. The harness enforces 500 files/request, at most 50 Namespace manifests, 10 requests/second, concurrency 20, latency/error/correctness/recovery limits, and per-replica CPU, retained-memory, and goroutine thresholds.
 - `make admin-compose`, `make admin-stop`, `make admin-down`, `make admin-logs` — optional admin compose wrappers.
 
 Common bootstrap variables:
@@ -115,7 +116,7 @@ Common bootstrap variables:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/051-file-resource-contract/plan.md
+at specs/047-namespace-admission-matrix/plan.md
 <!-- SPECKIT END -->
 
 ## graphify

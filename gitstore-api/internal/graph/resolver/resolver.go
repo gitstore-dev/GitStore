@@ -30,12 +30,13 @@ type Resolver struct {
 
 // ResolverDeps contains dependencies for the root GraphQL resolver.
 type ResolverDeps struct {
-	Store       datastore.Datastore
-	GitWriter   GitWriter
-	Registry    *auth.ProviderRegistry
-	Logger      *zap.Logger
-	Clock       apiruntime.Clock
-	IDGenerator apiruntime.IDGenerator
+	Store                        datastore.Datastore
+	GitWriter                    GitWriter
+	Registry                     *auth.ProviderRegistry
+	Logger                       *zap.Logger
+	Clock                        apiruntime.Clock
+	IDGenerator                  apiruntime.IDGenerator
+	NamespaceRepositoryFenceMode NamespaceRepositoryFenceMode
 	// EventBus backs the watchCategories/watchResources subscription
 	// resolvers (spec 040). Optional — nil disables watch subscriptions.
 	EventBus *eventbus.Bus
@@ -48,11 +49,12 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 	}
 	SetConverterLogger(deps.Logger)
 	svc, err := NewService(ServiceDeps{
-		Store:       deps.Store,
-		GitWriter:   deps.GitWriter,
-		Logger:      deps.Logger,
-		Clock:       deps.Clock,
-		IDGenerator: deps.IDGenerator,
+		Store:                        deps.Store,
+		GitWriter:                    deps.GitWriter,
+		Logger:                       deps.Logger,
+		Clock:                        deps.Clock,
+		IDGenerator:                  deps.IDGenerator,
+		NamespaceRepositoryFenceMode: deps.NamespaceRepositoryFenceMode,
 	})
 	if err != nil {
 		return nil, err

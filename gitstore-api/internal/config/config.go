@@ -22,6 +22,7 @@ type Config struct {
 	Auth      AuthConfig      `mapstructure:"auth"`
 	Cache     CacheConfig     `mapstructure:"cache"`
 	Datastore DatastoreConfig `mapstructure:"datastore"`
+	Features  FeatureConfig   `mapstructure:"features"`
 	Log       LogConfig       `mapstructure:"log"`
 }
 
@@ -108,6 +109,11 @@ type CacheConfig struct {
 	TTL int `mapstructure:"ttl"`
 }
 
+// FeatureConfig holds staged rollout gates.
+type FeatureConfig struct {
+	NamespaceRepositoryFence string `mapstructure:"namespace_repository_fence"`
+}
+
 // LogConfig holds logger settings.
 type LogConfig struct {
 	Level  string `mapstructure:"level"`
@@ -171,6 +177,7 @@ func Load() (*Config, error) {
 	v.SetDefault("datastore.scylla.username", "")
 	v.SetDefault("datastore.scylla.password", "")
 	v.SetDefault("datastore.scylla.tls", false)
+	v.SetDefault("features.namespace_repository_fence", "auto")
 
 	// Config file (optional)
 	v.SetConfigName("config")
@@ -214,6 +221,7 @@ func Load() (*Config, error) {
 		"datastore.backend": true, "datastore.scylla.hosts": true,
 		"datastore.scylla.keyspace": true, "datastore.scylla.username": true,
 		"datastore.scylla.password": true, "datastore.scylla.tls": true,
+		"features.namespace_repository_fence": true,
 	}
 	for _, k := range v.AllKeys() {
 		if !knownKeys[k] {
@@ -246,6 +254,9 @@ func validateConfig(cfg *Config) error {
 	if err := validateDatastoreConfig(&cfg.Datastore); err != nil {
 		return err
 	}
+	if err := validateFeatureConfig(&cfg.Features); err != nil {
+		return err
+	}
 	return validateLogFormat(&cfg.Log)
 }
 
@@ -260,6 +271,37 @@ func validateDatastoreConfig(ds *DatastoreConfig) error {
 		return nil
 	default:
 		return fmt.Errorf("invalid datastore backend %q; valid values: memdb, scylla", ds.Backend)
+	}
+}
+
+func validateFeatureConfig(features *FeatureConfig) error {
+	mode := strings.ToLower(strings.TrimSpace(features.NamespaceRepositoryFence))
+	if mode == "" {
+		mode = "auto"
+	}
+	switch mode {
+	case "auto", "enabled", "disabled":
+		features.NamespaceRepositoryFence = mode
+		return nil
+	default:
+		return fmt.Errorf(
+			"invalid namespace repository fence mode %q; valid values: auto, enabled, disabled",
+			features.NamespaceRepositoryFence,
+		)
+	}
+}
+
+// NamespaceRepositoryFenceEnabled resolves the rollout gate. Development
+// memdb keeps the existing behavior; Scylla requires explicit activation.
+func (c *Config) NamespaceRepositoryFenceEnabled() bool {
+	mode := strings.ToLower(strings.TrimSpace(c.Features.NamespaceRepositoryFence))
+	switch mode {
+	case "enabled":
+		return true
+	case "disabled":
+		return false
+	default:
+		return strings.EqualFold(c.Datastore.Backend, "memdb")
 	}
 }
 
@@ -296,6 +338,7 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddString("log.format", c.Log.Format)
 	enc.AddString("datastore.backend", c.Datastore.Backend)
 	enc.AddString("datastore.scylla.password", redact(c.Datastore.Scylla.Password))
+	enc.AddString("features.namespace_repository_fence", c.Features.NamespaceRepositoryFence)
 	return nil
 }
 

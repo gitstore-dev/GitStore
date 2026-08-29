@@ -22,6 +22,12 @@ var (
 	// caller's resourceVersion precondition does not match the resource's
 	// current value (optimistic concurrency, spec 040 FR-009).
 	ErrConflict = errors.New("datastore: resourceVersion conflict")
+	// ErrNamespaceNotActive means a repository creation lost the durable
+	// race with Namespace termination.
+	ErrNamespaceNotActive = errors.New("datastore: namespace is not active")
+	// ErrNamespaceNotEmpty means a Namespace deletion mark observed a
+	// committed or in-flight repository creation.
+	ErrNamespaceNotEmpty = errors.New("datastore: namespace is not empty")
 )
 
 // DefaultPageSize is used when First/Last is zero.
@@ -358,6 +364,9 @@ type Datastore interface {
 	GetNamespaceByName(ctx context.Context, name string) (*Namespace, error)
 	ListNamespaces(ctx context.Context, page PageParams) (*PageResult[Namespace], error)
 	UpdateNamespace(ctx context.Context, ns *Namespace, expectedResourceVersion string) error
+	// MarkNamespaceDeletion atomically verifies the resourceVersion and that no
+	// repository can commit across the empty-to-terminating transition.
+	MarkNamespaceDeletion(ctx context.Context, ns *Namespace, expectedResourceVersion string) error
 	DeleteNamespace(ctx context.Context, uid string) error
 	DeleteNamespaceWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 	// HasRepositories reports whether at least one Repository record
@@ -368,6 +377,9 @@ type Datastore interface {
 
 	// Repository operations
 	CreateRepository(ctx context.Context, r *Repository) error
+	// CreateRepositoryInActiveNamespace atomically or conditionally proves the
+	// owning Namespace is active before the repository can commit.
+	CreateRepositoryInActiveNamespace(ctx context.Context, r *Repository) error
 	GetRepository(ctx context.Context, uid string) (*Repository, error)
 	ListRepositoriesByNamespace(ctx context.Context, namespace string, page PageParams) (*PageResult[Repository], error)
 	// UpdateRepository replaces a repository only when its persisted
@@ -387,6 +399,8 @@ type Datastore interface {
 	LookupRepository(ctx context.Context, namespace, name string) (*NamespaceMapping, error)
 	LookupNamespaceByRepoID(ctx context.Context, repositoryID string) (*NamespaceMapping, error)
 	RenameRepository(ctx context.Context, namespace, oldName, newName string) error
+	// TransferRepository moves the authoritative Repository and mapping only
+	// after durably reserving an active target Namespace.
 	TransferRepository(ctx context.Context, repositoryID, fromNamespace, toNamespace string) error
 	DeleteNamespaceMapping(ctx context.Context, namespace, name string) error
 

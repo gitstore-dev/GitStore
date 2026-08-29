@@ -6,6 +6,9 @@ package memdb_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -150,4 +153,131 @@ func TestMemdb_NamespaceDuplicateUIDAndName(t *testing.T) {
 	duplicateName := *first
 	duplicateName.UID = "00000000-0000-0000-0000-000000000114"
 	require.ErrorIs(t, ds.CreateNamespace(ctx, &duplicateName), datastore.ErrAlreadyExists)
+}
+
+func TestMemdb_NamespaceRepositoryLifecycleCoordination(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	namespace := &datastore.Namespace{
+		UID:               "00000000-0000-0000-0000-000000000115",
+		Name:              "repository-lifecycle",
+		CreationTimestamp: time.Now().UTC(),
+	}
+	require.NoError(t, ds.CreateNamespace(ctx, namespace))
+	repository := &datastore.Repository{
+		UID:               "00000000-0000-0000-0000-000000000116",
+		Namespace:         namespace.Name,
+		Name:              "catalog",
+		CreationTimestamp: time.Now().UTC(),
+	}
+
+	require.NoError(t, ds.CreateRepositoryInActiveNamespace(ctx, repository))
+	current, err := ds.GetNamespace(ctx, namespace.UID)
+	require.NoError(t, err)
+	deletedAt := time.Now().UTC()
+	current.DeletionTimestamp = &deletedAt
+	expectedResourceVersion := current.ResourceVersion
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.ErrorIs(t, ds.MarkNamespaceDeletion(ctx, current, expectedResourceVersion), datastore.ErrNamespaceNotEmpty)
+
+	require.NoError(t, ds.DeleteRepository(ctx, repository.UID))
+	current, err = ds.GetNamespace(ctx, namespace.UID)
+	require.NoError(t, err)
+	expectedResourceVersion = current.ResourceVersion
+	current.DeletionTimestamp = &deletedAt
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.NoError(t, ds.MarkNamespaceDeletion(ctx, current, expectedResourceVersion))
+
+	lateRepository := *repository
+	lateRepository.UID = "00000000-0000-0000-0000-000000000117"
+	lateRepository.Name = "late"
+	require.ErrorIs(t, ds.CreateRepositoryInActiveNamespace(ctx, &lateRepository), datastore.ErrNamespaceNotActive)
+}
+
+func TestMemdb_RepositoryTransferAndTargetTerminationHaveOneWinner(t *testing.T) {
+	const trials = 50
+	for trial := 0; trial < trials; trial++ {
+		trial := trial
+		t.Run(fmt.Sprintf("trial-%d", trial), func(t *testing.T) {
+			t.Parallel()
+			ds := newBackend(t)
+			ctx := context.Background()
+			source := &datastore.Namespace{
+				UID:               fmt.Sprintf("10000000-0000-0000-0000-%012d", trial*3+1),
+				Name:              fmt.Sprintf("transfer-source-%d", trial),
+				CreationTimestamp: time.Now().UTC(),
+			}
+			target := &datastore.Namespace{
+				UID:               fmt.Sprintf("10000000-0000-0000-0000-%012d", trial*3+2),
+				Name:              fmt.Sprintf("transfer-target-%d", trial),
+				CreationTimestamp: time.Now().UTC(),
+			}
+			require.NoError(t, ds.CreateNamespace(ctx, source))
+			require.NoError(t, ds.CreateNamespace(ctx, target))
+			repository := &datastore.Repository{
+				UID:               fmt.Sprintf("10000000-0000-0000-0000-%012d", trial*3+3),
+				Namespace:         source.Name,
+				Name:              "catalog",
+				CreationTimestamp: time.Now().UTC(),
+			}
+			require.NoError(t, ds.CreateRepositoryInActiveNamespace(ctx, repository))
+			require.NoError(t, ds.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
+				Namespace:    source.Name,
+				Name:         repository.Name,
+				RepositoryID: repository.UID,
+			}))
+
+			currentTarget, err := ds.GetNamespace(ctx, target.UID)
+			require.NoError(t, err)
+			expectedResourceVersion := currentTarget.ResourceVersion
+			deletedAt := time.Now().UTC()
+			currentTarget.DeletionTimestamp = &deletedAt
+			datastore.AdvanceNamespaceSystemVersion(currentTarget)
+
+			start := make(chan struct{})
+			results := make(chan error, 2)
+			var workers sync.WaitGroup
+			workers.Add(2)
+			go func() {
+				defer workers.Done()
+				<-start
+				results <- ds.TransferRepository(ctx, repository.UID, source.Name, target.Name)
+			}()
+			go func() {
+				defer workers.Done()
+				<-start
+				results <- ds.MarkNamespaceDeletion(ctx, currentTarget, expectedResourceVersion)
+			}()
+			close(start)
+			workers.Wait()
+			close(results)
+
+			var succeeded int
+			var failed error
+			for err := range results {
+				if err == nil {
+					succeeded++
+				} else {
+					failed = err
+				}
+			}
+			require.Equal(t, 1, succeeded)
+			require.True(t,
+				errors.Is(failed, datastore.ErrNamespaceNotActive) ||
+					errors.Is(failed, datastore.ErrNamespaceNotEmpty),
+				"unexpected losing error: %v", failed,
+			)
+
+			persistedRepository, err := ds.GetRepository(ctx, repository.UID)
+			require.NoError(t, err)
+			persistedTarget, err := ds.GetNamespace(ctx, target.UID)
+			require.NoError(t, err)
+			if persistedRepository.Namespace == target.Name {
+				assert.Nil(t, persistedTarget.DeletionTimestamp)
+			} else {
+				assert.Equal(t, source.Name, persistedRepository.Namespace)
+				assert.NotNil(t, persistedTarget.DeletionTimestamp)
+			}
+		})
+	}
 }

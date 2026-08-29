@@ -185,6 +185,29 @@ func (ec *executionContext) fieldContext_DeleteNamespacePayload_deletedIdentifie
 	return graphql.NewScalarFieldContext("DeleteNamespacePayload", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _DeleteNamespacePayload_outcome(ctx context.Context, field graphql.CollectedField, obj *model.DeleteNamespacePayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_DeleteNamespacePayload_outcome(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Outcome, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.NamespaceDeletionOutcome) graphql.Marshaler {
+			return ec.marshalNNamespaceDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceDeletionOutcome(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_DeleteNamespacePayload_outcome(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("DeleteNamespacePayload", field, false, false, errors.New("field of type NamespaceDeletionOutcome does not have child fields"))
+}
+
 func (ec *executionContext) _HookToggle_enabled(ctx context.Context, field graphql.CollectedField, obj *model.HookToggle) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2109,6 +2132,11 @@ func (ec *executionContext) _DeleteNamespacePayload(ctx context.Context, sel ast
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "outcome":
+			out.Values[i] = ec._DeleteNamespacePayload_outcome(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -2818,6 +2846,16 @@ func (ec *executionContext) marshalNNamespaceConnection2ᚖgithubᚗcomᚋgitsto
 		return graphql.Null
 	}
 	return ec._NamespaceConnection(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNNamespaceDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceDeletionOutcome(ctx context.Context, v any) (model.NamespaceDeletionOutcome, error) {
+	var res model.NamespaceDeletionOutcome
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNNamespaceDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceDeletionOutcome(ctx context.Context, sel ast.SelectionSet, v model.NamespaceDeletionOutcome) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) marshalNNamespaceEdge2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐNamespaceEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.NamespaceEdge) graphql.Marshaler {

@@ -307,6 +307,21 @@ type UpdateNamespacePayload {
 }
 
 """
+The successful result of requesting Namespace termination.
+"""
+enum NamespaceDeletionOutcome {
+  """
+  This request set the deletion timestamp and foreground deletion finalizer.
+  """
+  TERMINATION_STARTED
+
+  """
+  The Namespace was already terminating, so no datastore write occurred.
+  """
+  ALREADY_TERMINATING
+}
+
+"""
 Payload returned after successfully deleting a namespace.
 """
 type DeleteNamespacePayload {
@@ -314,6 +329,11 @@ type DeleteNamespacePayload {
   The identifier of the deleted namespace.
   """
   deletedIdentifier: String!
+
+  """
+  Whether this request started termination or observed an existing termination.
+  """
+  outcome: NamespaceDeletionOutcome!
 }
 
 type CompleteNamespaceDeletionPayload {

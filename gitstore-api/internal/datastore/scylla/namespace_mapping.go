@@ -439,19 +439,70 @@ func (s *scyllaDatastore) TransferRepository(ctx context.Context, repositoryID, 
 	if _, err := gocql.ParseUUID(repositoryID); err != nil {
 		return fmt.Errorf("%w: invalid repository id %s", datastore.ErrInvalidArgument, repositoryID)
 	}
-	repository, err := s.GetRepository(ctx, repositoryID)
-	if errors.Is(err, datastore.ErrNotFound) {
-		return s.transferRepositoryMappingWithoutAuthoritative(ctx, repositoryID, fromNamespace, toNamespace)
-	}
-	if err != nil {
-		return err
-	}
 	namespace, err := s.GetNamespaceByName(ctx, toNamespace)
 	if err != nil {
 		return fmt.Errorf("scylla: validate target namespace %s: %w", toNamespace, err)
 	}
 	if namespace.Name != toNamespace {
 		return fmt.Errorf("%w: target namespace lookup returned %s", datastore.ErrConflict, namespace.Name)
+	}
+	if namespace.DeletionTimestamp != nil {
+		return datastore.ErrNamespaceNotActive
+	}
+	if fromNamespace == toNamespace {
+		return s.transferRepositoryReserved(ctx, repositoryID, fromNamespace, toNamespace)
+	}
+	if err := s.reserveNamespaceRepository(ctx, namespace.UID); err != nil {
+		return err
+	}
+	transferErr := s.transferRepositoryReserved(ctx, repositoryID, fromNamespace, toNamespace)
+	if errors.Is(transferErr, datastore.ErrRepairRequired) {
+		return transferErr
+	}
+	if transferErr != nil {
+		if releaseErr := s.releaseNamespaceRepository(ctx, namespace.UID); releaseErr != nil {
+			return datastore.NewRepairRequiredError(
+				datastore.MutationStep{
+					Operation:    "transfer_repository",
+					ResourceKind: "Namespace",
+					ResourceUID:  namespace.UID,
+					Projection:   "namespaces_by_uid.pending_repository_creations",
+					LookupKey:    namespace.Name,
+					Action:       "release_reservation",
+				},
+				transferErr,
+				releaseErr,
+			)
+		}
+		return transferErr
+	}
+	if err := s.releaseNamespaceRepository(ctx, namespace.UID); err != nil {
+		return datastore.NewRepairRequiredError(
+			datastore.MutationStep{
+				Operation:    "transfer_repository",
+				ResourceKind: "Namespace",
+				ResourceUID:  namespace.UID,
+				Projection:   "namespaces_by_uid.pending_repository_creations",
+				LookupKey:    namespace.Name,
+				Action:       "complete_reservation",
+			},
+			fmt.Errorf("repository %s was transferred into namespace %s", repositoryID, namespace.Name),
+			err,
+		)
+	}
+	return nil
+}
+
+func (s *scyllaDatastore) transferRepositoryReserved(
+	ctx context.Context,
+	repositoryID, fromNamespace, toNamespace string,
+) error {
+	repository, err := s.GetRepository(ctx, repositoryID)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return s.transferRepositoryMappingWithoutAuthoritative(ctx, repositoryID, fromNamespace, toNamespace)
+	}
+	if err != nil {
+		return err
 	}
 	source := repositoryPath{namespace: fromNamespace, name: repository.Name}
 	target := repositoryPath{namespace: toNamespace, name: repository.Name}

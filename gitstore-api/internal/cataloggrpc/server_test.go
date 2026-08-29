@@ -307,13 +307,15 @@ spec:
 
 func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *testing.T) {
 	store := newNamespacePolicyDatastore(t)
-	zero := strings.Repeat("0", 40)
+	initial := strings.Repeat("c", 40)
 	a := strings.Repeat("a", 40)
 	b := strings.Repeat("b", 40)
 	path := "namespaces/race-store.md"
+	seedNamespaceForReplicaRace(t, store, "race-store", "Initial Revision", initial, path)
 	files := map[string]map[string][]byte{
-		a: {path: namespaceManifest("race-store", "Older Revision", "USER")},
-		b: {path: namespaceManifest("race-store", "Newer Revision", "USER")},
+		initial: {path: namespaceManifest("race-store", "Initial Revision", "USER")},
+		a:       {path: namespaceManifest("race-store", "Older Revision", "USER")},
+		b:       {path: namespaceManifest("race-store", "Newer Revision", "USER")},
 	}
 
 	var mu sync.Mutex
@@ -359,7 +361,7 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 	go func() {
 		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 			RepositoryId: testRepoID,
-			OldCommitSha: zero,
+			OldCommitSha: initial,
 			NewCommitSha: a,
 			CommitSha:    a,
 			RefName:      "refs/heads/main",

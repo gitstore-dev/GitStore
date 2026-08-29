@@ -167,11 +167,17 @@ func (s *StubStore) ListNamespaces(_ context.Context, _ datastore.PageParams) (*
 func (s *StubStore) UpdateNamespace(_ context.Context, _ *datastore.Namespace, _ string) error {
 	return nil
 }
+func (s *StubStore) MarkNamespaceDeletion(_ context.Context, _ *datastore.Namespace, _ string) error {
+	return nil
+}
 func (s *StubStore) DeleteNamespace(_ context.Context, _ string) error { return nil }
 func (s *StubStore) DeleteNamespaceWithResourceVersion(_ context.Context, _, _ string) error {
 	return nil
 }
 func (s *StubStore) CreateRepository(_ context.Context, _ *datastore.Repository) error { return nil }
+func (s *StubStore) CreateRepositoryInActiveNamespace(_ context.Context, _ *datastore.Repository) error {
+	return nil
+}
 func (s *StubStore) ListRepositoriesByNamespace(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
 	return &datastore.PageResult[datastore.Repository]{}, nil
 }

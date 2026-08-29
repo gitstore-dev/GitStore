@@ -13,6 +13,7 @@ import (
 
 	"github.com/adrg/frontmatter"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	"github.com/go-playground/validator/v10"
 	"gopkg.in/yaml.v3"
 )
@@ -177,6 +178,9 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		}
 		if res.Metadata.Namespace != "" {
 			errs = append(errs, fmt.Errorf("validate: metadata.namespace must not be set for Namespace resources"))
+		}
+		if err := namespaceadmission.ValidateIdentifier(res.Metadata.Name); err != nil {
+			errs = append(errs, fmt.Errorf("validate: %w", err))
 		}
 		if err := validateLabels(res.Metadata.Labels); err != nil {
 			errs = append(errs, err)

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
@@ -475,6 +476,62 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {
 	assert.False(t, called)
 	assert.Contains(t, err.Error(), "permission denied")
 	assert.Equal(t, "namespace.delete.any", authz.action)
+}
+
+func TestGraphQLFieldAuthorizerDeleteNamespaceDenialHidesDeletionDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		namespace *datastore.Namespace
+	}{
+		{
+			name: "bootstrap and non-empty",
+			namespace: &datastore.Namespace{
+				ID:            "bootstrap-id",
+				Name:          "gitstore-system",
+				CreationActor: "system",
+			},
+		},
+		{
+			name: "already terminating",
+			namespace: &datastore.Namespace{
+				ID:                "terminating-id",
+				Name:              "terminating",
+				CreationActor:     "alice",
+				DeletionTimestamp: func() *time.Time { now := time.Now().UTC(); return &now }(),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			authz := &stubAuthZProvider{decision: auth.Deny("stub-authz", "no access")}
+			registry := auth.NewProviderRegistry(nil, authz, nil)
+			store := &testutil.StubStore{
+				GetNamespaceByNameFunc: func(_ context.Context, _ string) (*datastore.Namespace, error) {
+					return tc.namespace, nil
+				},
+			}
+			mw := NewAuthorizeWithStore(registry, store, zap.NewNop())
+			ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "mallory", AuthMethod: "static-admin"})
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+				Object: "Mutation",
+				Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
+				Args: map[string]any{
+					"input": model.DeleteNamespaceInput{Identifier: tc.namespace.Name},
+				},
+			})
+
+			called := false
+			_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+				called = true
+				return "ok", nil
+			})
+			require.Error(t, err)
+			assert.False(t, called)
+			assert.Contains(t, err.Error(), "permission denied")
+			assert.NotContains(t, err.Error(), "BOOTSTRAP_NAMESPACE")
+			assert.NotContains(t, err.Error(), "NAMESPACE_NOT_EMPTY")
+			assert.NotContains(t, err.Error(), "ALREADY_TERMINATING")
+		})
+	}
 }
 
 func TestGraphQLFieldAuthorizerDeleteNamespacePassesAuthorizedRecord(t *testing.T) {
