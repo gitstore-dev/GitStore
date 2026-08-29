@@ -74,6 +74,27 @@ func TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent(t *testing.
 	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
 	require.NoError(t, err)
 	assert.Equal(t, "Alt text", file.Body)
+	assert.Equal(t, "1", file.ResourceVersion, "an identical create collision must not manufacture an update")
+
+	controllerRevision := "controller-resolved"
+	file, err = store.UpdateFileStatus(context.Background(), "gitstore", "hero", datastore.FileStatusPatch{
+		ResourceVersion: file.ResourceVersion, LastAppliedRevision: &controllerRevision,
+	})
+	require.NoError(t, err)
+	statusAfterController := append([]byte(nil), file.Status...)
+	resourceVersionAfterController := file.ResourceVersion
+
+	// A delayed duplicate delivery for the same commit must remain a no-op
+	// even though the stored representation normalizes omitted metadata maps
+	// to empty maps. In particular it must not erase controller-owned status.
+	_, err = replicas[0].AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, CommitSha: commit, RefName: "refs/heads/main",
+	})
+	require.NoError(t, err)
+	file, err = store.GetFileByName(context.Background(), "gitstore", "hero")
+	require.NoError(t, err)
+	assert.Equal(t, resourceVersionAfterController, file.ResourceVersion)
+	assert.Equal(t, statusAfterController, []byte(file.Status))
 
 	page, err := store.ListFiles(context.Background(), "gitstore", datastore.PageParams{})
 	require.NoError(t, err)

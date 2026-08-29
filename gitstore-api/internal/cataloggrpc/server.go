@@ -1447,7 +1447,8 @@ func (s *Server) admitFile(
 	for attempt := 0; attempt < maxFileAdmissionUpdateAttempts; attempt++ {
 		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
 		changedMetadata := existing.APIVersion != resource.APIVersion || existing.Kind != resource.Kind ||
-			!reflect.DeepEqual(existing.Labels, resource.Metadata.Labels) || !reflect.DeepEqual(existing.Annotations, resource.Metadata.Annotations)
+			!reflect.DeepEqual(existing.Labels, cloneStringMap(resource.Metadata.Labels)) ||
+			!reflect.DeepEqual(existing.Annotations, cloneStringMap(resource.Metadata.Annotations))
 		changedProvenance := existing.RepositoryID != admCtx.RepositoryID || existing.SourcePath != sourcePath ||
 			existing.GitCommitSHA != admCtx.CommitSHA || existing.GitRef != admCtx.RefName
 		if !changedSpecBody && !changedMetadata && !changedProvenance {
