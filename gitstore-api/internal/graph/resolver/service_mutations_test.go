@@ -34,6 +34,7 @@ type mockGitWriter struct {
 	files           map[string][]byte
 
 	commitErr     error
+	readErr       error
 	deleteErr     error
 	createRepoErr error
 	deleteRepoErr error
@@ -84,6 +85,9 @@ func (m *mockGitWriter) ReadFileForRepo(_ context.Context, _, path, _ string) ([
 	defer m.mu.Unlock()
 	content, ok := m.files[path]
 	if !ok {
+		if m.readErr != nil {
+			return nil, m.readErr
+		}
 		return nil, errors.New("file read is not configured")
 	}
 	return append([]byte(nil), content...), nil

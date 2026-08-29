@@ -103,44 +103,41 @@ func (s *scyllaDatastore) CreateRepositoryInActiveNamespace(ctx context.Context,
 	if namespace.DeletionTimestamp != nil {
 		return datastore.ErrNamespaceNotActive
 	}
-	if err := s.reserveNamespaceRepository(ctx, namespace.UID); err != nil {
+	return executeNamespaceRepositoryReservation(
+		func() error { return s.reserveNamespaceRepository(ctx, namespace.UID) },
+		func() error { return s.releaseNamespaceRepository(ctx, namespace.UID) },
+		func() error { return s.CreateRepository(ctx, repository) },
+		datastore.MutationStep{
+			Operation:    "create_repository",
+			ResourceKind: "Namespace",
+			ResourceUID:  namespace.UID,
+			Projection:   "namespaces_by_uid.pending_repository_creations",
+			LookupKey:    namespace.Name,
+		},
+		fmt.Sprintf("repository %s was created", repository.UID),
+	)
+}
+
+func executeNamespaceRepositoryReservation(
+	reserve, release, operation func() error,
+	step datastore.MutationStep,
+	successDescription string,
+) error {
+	if err := reserve(); err != nil {
 		return err
 	}
-	if err := s.CreateRepository(ctx, repository); err != nil {
-		if errors.Is(err, datastore.ErrRepairRequired) {
-			return err
-		}
-		if releaseErr := s.releaseNamespaceRepository(ctx, namespace.UID); releaseErr != nil {
-			return datastore.NewRepairRequiredError(
-				datastore.MutationStep{
-					Operation:    "create_repository",
-					ResourceKind: "Namespace",
-					ResourceUID:  namespace.UID,
-					Projection:   "namespaces_by_uid.pending_repository_creations",
-					LookupKey:    namespace.Name,
-					Action:       "release_reservation",
-				},
-				err,
-				releaseErr,
-			)
-		}
-		return err
+	operationErr := operation()
+	releaseErr := release()
+	if releaseErr == nil {
+		return operationErr
 	}
-	if err := s.releaseNamespaceRepository(ctx, namespace.UID); err != nil {
-		return datastore.NewRepairRequiredError(
-			datastore.MutationStep{
-				Operation:    "create_repository",
-				ResourceKind: "Namespace",
-				ResourceUID:  namespace.UID,
-				Projection:   "namespaces_by_uid.pending_repository_creations",
-				LookupKey:    namespace.Name,
-				Action:       "complete_reservation",
-			},
-			fmt.Errorf("repository %s was created", repository.UID),
-			err,
-		)
+	step.Action = "release_reservation"
+	primary := operationErr
+	if primary == nil {
+		step.Action = "complete_reservation"
+		primary = errors.New(successDescription)
 	}
-	return nil
+	return datastore.NewRepairRequiredError(step, primary, releaseErr)
 }
 
 func (s *scyllaDatastore) loadNamespaceRepositoryFence(ctx context.Context, namespaceUID string) (namespaceRepositoryFence, error) {

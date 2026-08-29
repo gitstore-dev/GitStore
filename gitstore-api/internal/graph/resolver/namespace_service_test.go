@@ -19,6 +19,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ── createNamespace ────────────────────────────────────────────────────────────
@@ -192,6 +194,28 @@ func TestUpdateNamespacePreservesCurrentGitMarkdownBody(t *testing.T) {
 	assert.Equal(t, body, updated.Body)
 	assert.Equal(t, body, string(writer.commitCalls[1].Content[len(writer.commitCalls[1].Content)-len(body):]))
 	assert.Contains(t, string(writer.commitCalls[1].Content), "title: Updated frontmatter")
+}
+
+func TestUpdateNamespaceAllowsMissingMainBranchManifest(t *testing.T) {
+	ctx := context.Background()
+	writer := &mockGitWriter{}
+	svc := newTestSvc(t, writer)
+	created, err := svc.CreateNamespace(ctx, createNamespaceInput("non-main-authored", model.NamespaceTierUser), "alice")
+	require.NoError(t, err)
+
+	writer.mu.Lock()
+	delete(writer.files, "namespaces/non-main-authored.md")
+	writer.readErr = status.Error(codes.NotFound, "file not found")
+	writer.mu.Unlock()
+
+	updated, err := svc.UpdateNamespace(
+		ctx,
+		updateNamespaceInput(created.Name, model.NamespaceTierOrganization),
+		"bob",
+	)
+	require.NoError(t, err)
+	require.Len(t, writer.commitCalls, 2)
+	assert.Empty(t, updated.Body)
 }
 
 func TestNamespaceGraphQLPersistsCompleteAuthoredStateAndProvenance(t *testing.T) {

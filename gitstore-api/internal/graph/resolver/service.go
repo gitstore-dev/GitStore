@@ -26,6 +26,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 )
 
@@ -579,10 +581,12 @@ func (s *Service) commitAndAdmitNamespace(
 			"refs/heads/main",
 			resource.Metadata.Name,
 		)
-		if readErr != nil {
+		if readErr != nil && status.Code(readErr) != codes.NotFound {
 			return nil, gqlerror.Errorf("failed to read current Namespace manifest: %v", readErr)
 		}
-		body = namespaceMarkdownBody(currentContent, body)
+		if readErr == nil {
+			body = namespaceMarkdownBody(currentContent, body)
+		}
 		content, err = encodeNamespaceResource(resource, body)
 		if err != nil {
 			return nil, err
@@ -741,7 +745,7 @@ func (s *Service) readNamespaceAtCommit(
 ) (*catalog.NamespaceResource, []byte, []byte, error) {
 	content, err := s.gitWriter.ReadFileForRepo(ctx, repositoryID, path, commitSHA)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("%w: read current Namespace manifest: %v", namespaceadmission.ErrAuthoringRefCheck, err)
+		return nil, nil, nil, fmt.Errorf("%w: read current Namespace manifest: %w", namespaceadmission.ErrAuthoringRefCheck, err)
 	}
 	parsed, body, err := validate.NewParser().ParseResource(bytes.NewReader(content))
 	if err != nil {

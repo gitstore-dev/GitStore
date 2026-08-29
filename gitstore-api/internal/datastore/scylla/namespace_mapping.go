@@ -452,45 +452,21 @@ func (s *scyllaDatastore) TransferRepository(ctx context.Context, repositoryID, 
 	if fromNamespace == toNamespace {
 		return s.transferRepositoryReserved(ctx, repositoryID, fromNamespace, toNamespace)
 	}
-	if err := s.reserveNamespaceRepository(ctx, namespace.UID); err != nil {
-		return err
-	}
-	transferErr := s.transferRepositoryReserved(ctx, repositoryID, fromNamespace, toNamespace)
-	if errors.Is(transferErr, datastore.ErrRepairRequired) {
-		return transferErr
-	}
-	if transferErr != nil {
-		if releaseErr := s.releaseNamespaceRepository(ctx, namespace.UID); releaseErr != nil {
-			return datastore.NewRepairRequiredError(
-				datastore.MutationStep{
-					Operation:    "transfer_repository",
-					ResourceKind: "Namespace",
-					ResourceUID:  namespace.UID,
-					Projection:   "namespaces_by_uid.pending_repository_creations",
-					LookupKey:    namespace.Name,
-					Action:       "release_reservation",
-				},
-				transferErr,
-				releaseErr,
-			)
-		}
-		return transferErr
-	}
-	if err := s.releaseNamespaceRepository(ctx, namespace.UID); err != nil {
-		return datastore.NewRepairRequiredError(
-			datastore.MutationStep{
-				Operation:    "transfer_repository",
-				ResourceKind: "Namespace",
-				ResourceUID:  namespace.UID,
-				Projection:   "namespaces_by_uid.pending_repository_creations",
-				LookupKey:    namespace.Name,
-				Action:       "complete_reservation",
-			},
-			fmt.Errorf("repository %s was transferred into namespace %s", repositoryID, namespace.Name),
-			err,
-		)
-	}
-	return nil
+	return executeNamespaceRepositoryReservation(
+		func() error { return s.reserveNamespaceRepository(ctx, namespace.UID) },
+		func() error { return s.releaseNamespaceRepository(ctx, namespace.UID) },
+		func() error {
+			return s.transferRepositoryReserved(ctx, repositoryID, fromNamespace, toNamespace)
+		},
+		datastore.MutationStep{
+			Operation:    "transfer_repository",
+			ResourceKind: "Namespace",
+			ResourceUID:  namespace.UID,
+			Projection:   "namespaces_by_uid.pending_repository_creations",
+			LookupKey:    namespace.Name,
+		},
+		fmt.Sprintf("repository %s was transferred into namespace %s", repositoryID, namespace.Name),
+	)
 }
 
 func (s *scyllaDatastore) transferRepositoryReserved(
