@@ -88,55 +88,72 @@ two honest shapes, both of which model "two replicas" as strictly
   sequential handoff, not safety under two replicas racing the same key at
   the same time.
 
-**Known gap, stated honestly rather than papered over:** if a spec's
-production-readiness requirement is specifically "two replicas may reconcile
-the same key *simultaneously* and must not double-apply a side effect or
-corrupt a conflicting write," neither worked example above proves that,
-because neither one lets two reconciler instances overlap in time. Writing
-that test requires new synchronization that doesn't exist yet in this repo's
-test helpers: e.g. two goroutines started together, each blocked on a shared
-channel/barrier until both are ready, then released to call `Reconcile` (or
-attempt a conflicting mutation) at the same instant against one shared
-mutex-guarded fake or datastore, asserting exactly one side "wins" a
-CAS/resourceVersion check and the other retries safely rather than
-corrupting state. Until a spec actually needs and writes that test, don't
-cite this runbook as if the pattern already has a true-concurrency worked
-example — it doesn't.
+**Required bar for "multi-replica correctness" — the sequential shapes above
+do not satisfy it on their own.** A production-readiness task titled
+"multi-replica correctness" (or equivalent constitution language about
+"behavior with multiple replicas") means two replicas may reconcile the same
+key *simultaneously*, not one-after-another. Neither shape above proves
+that, because in both, one reconciler/Runner+Manager instance's `Reconcile`
+call (or its full teardown) completes before the second instance is even
+constructed — there is no overlap. **A test only satisfies the
+multi-replica-correctness gate if it forces genuine overlap:**
 
-Use the sequential dual-instance shape when the reconciler-under-test is
-simple enough that constructing two instances and calling `Reconcile`
-directly is enough to prove idempotency across a restart. Reach for the real
-Runner/Manager restart shape only when the checkpoint/dispatch machinery
-itself is part of what you're validating (e.g. a new `ListWatcher`
-implementation). Reach for the (currently unwritten) true-concurrency shape
-above only when the invariant you need is specifically about simultaneous
-overlap, not restart-safety.
+1. Two reconciler/handler instances, each driven from its own goroutine.
+2. An explicit synchronization barrier between them — e.g. both goroutines
+   send on (or receive from) a shared unbuffered channel, or both block on a
+   `sync.WaitGroup.Wait()` released only once both have called `Done()` on
+   arrival — so that neither instance's call into the datastore/fake
+   proceeds until *both* are guaranteed to be mid-flight at the same time.
+   Without this barrier, Go's scheduler gives no guarantee two goroutines
+   actually overlap; "I used `go func()` twice" is not sufficient by itself.
+3. Both instances then call `Reconcile` (or attempt the same conflicting
+   mutation) while genuinely interleaved, against one shared mutex-guarded
+   fake or a real datastore's actual optimistic-concurrency path
+   (`resourceVersion` CAS or equivalent).
+4. The assertion is on the *outcome of that conflict*, not just "both
+   finished": exactly one side must win the CAS and the other must observe
+   a clean, well-typed conflict/retry (`ErrConflict` or equivalent) — not
+   corrupted merged state, not two winners, not a silently duplicated side
+   effect (e.g. `CompleteDeletion` called twice, a decouple counter
+   double-incremented).
+
+**No test in this codebase today meets this bar.** Both shapes documented
+above (the sequential dual-instance fake and the real Runner+Manager
+restart test) are restart-safety tests, not concurrency tests, and are
+**not** an acceptable substitute when a spec's task is specifically
+"multi-replica correctness" — don't check that task off by pointing at
+either of them. They remain useful and worth keeping for what they actually
+prove (idempotency across a restart), but a new resource's
+multi-replica-correctness task requires writing the barrier-synchronized
+test described above from scratch; nothing in this repo can be copied
+as-is for the overlap requirement.
 
 **How to apply this to a new resource:**
 
 1. Identify every external client/side effect the reconciler under test
    calls (a status client, a decouple/mutation RPC, a completion call).
-   Build a fake with `sync.Mutex`-guarded counters for each.
-2. Pick the sequential-dual-instance or real-Runner/Manager-restart shape
-   above based on whether you're also validating checkpoint/dispatch
-   machinery. Both are restart-safety tests, not concurrency tests.
-3. Construct at least two independent reconciler (or Runner+Manager)
-   instances sharing the same fake/store, and force one to leave the work
-   item mid-progress (a bounded continuation, an in-flight item at teardown).
-   Tear the first instance down fully before constructing the second — that
-   sequencing is what makes the test about restart-safety, and you should
-   say so in the test's doc comment rather than implying concurrency.
-4. Assert exact counts on the fake after the second instance runs — not just
-   "eventually succeeded," but "ran exactly once," "did not re-run a
-   completed step," and "a stale reconcile after completion is a terminal
-   no-op."
-5. If — and only if — your spec's invariant is specifically about
-   *simultaneous* overlap (not restart), do not reuse the shapes above
-   unmodified. Write a new test with an explicit synchronization barrier
-   (e.g. two goroutines released together via a shared channel) so both
-   reconciler instances genuinely race the same key, and say in this
-   runbook (via a follow-up edit) once such a worked example exists — as of
-   this writing, it does not.
+   Build a fake with `sync.Mutex`-guarded counters for each, or use the
+   real datastore's conflict path if you're testing at that layer.
+2. For restart-safety (necessary but not sufficient on its own): pick the
+   sequential-dual-instance or real-Runner/Manager-restart shape above
+   based on whether you're also validating checkpoint/dispatch machinery.
+   Tear the first instance down fully before constructing the second, and
+   say explicitly in the test's doc comment that this proves restart-safety,
+   not concurrent-replica safety — don't let the naming imply more than the
+   test proves.
+3. Assert exact counts on the fake after the second instance runs in the
+   restart-safety test — "ran exactly once," "did not re-run a completed
+   step," "a stale reconcile after completion is a terminal no-op."
+4. **Required, separately, for the multi-replica-correctness gate itself:**
+   write a new test with two goroutines synchronized through an explicit
+   barrier (a channel or `WaitGroup`) so both reconciler/handler instances'
+   mutation calls genuinely interleave against the same fake or real
+   datastore CAS path. Assert exactly one clean winner and one clean
+   conflict/retry — never corrupted state or a duplicated side effect. Do
+   not substitute a sequential test for this step and mark the task done;
+   as of this writing, no worked example of this shape exists anywhere in
+   this codebase, so you are writing the first one, not adapting an
+   existing pattern.
 
 ## 2. Capacity/soak testing
 
@@ -198,54 +215,68 @@ test-scylla-capacity: ## Run the opt-in Scylla capacity and soak test.
 		go test -tags scylla -count=1 -timeout 0 -run TestScyllaCapacity ./internal/datastore/scylla/...
 ```
 
-**Verification gap — read before trusting a "PASS":** `TestScyllaCapacity`
-does **not** independently confirm that the claimed dataset scale was
-actually loaded before it runs. Read `assertPartitionSizes` and
-`assertBoundedPage`/`assertQueryBound` directly: both accept a zero-row
-result without failing.
+**Known limitation, requires a code change, not a docs workaround — read
+before trusting a "PASS":** `TestScyllaCapacity` does **not** independently
+confirm that the claimed dataset scale was actually loaded, and — checked
+again directly against a review finding — there is currently **no
+remediation available from documentation alone**, because the test itself
+never surfaces a real count anywhere:
 
 - `assertPartitionSizes` iterates `system.large_partitions`, increments a
   `seen` counter per matching row, and only calls `t.Errorf` for rows it
-  actually scans. If the keyspace has zero recorded large partitions (an
-  empty or barely-populated cluster), `seen` stays `0`, no `t.Errorf` ever
-  fires, and the function returns cleanly — it only logs `"checked 0
-  recorded large partitions for keyspace ..."`, it does not fail.
-- `assertQueryBound` (called by `assertBoundedPage`) counts rows scanned
-  from a `LIMIT`-bounded query and only fails with `t.Fatalf` if
-  `rows > limit`. Zero rows satisfies `rows > limit` as `false`, so an empty
-  table passes the "bounded page" check identically to a correctly
-  paginated multi-million-row table.
+  actually scans. Zero recorded large partitions means `seen` stays `0`, no
+  `t.Errorf` fires, and the function returns cleanly, logging only
+  `"checked 0 recorded large partitions for keyspace ..."`.
+- `assertQueryBound` (called by `assertBoundedPage`) only fails with
+  `t.Fatalf` if `rows > limit`; zero rows satisfies `rows > limit` as
+  `false`, so an empty table passes identically to a correctly paginated
+  multi-million-row table.
 - `runMutationLoad`'s `completed == mutations` assertion is real work (CAS
   reserve/release cycles against `namespace_mappings`), but it is
-  **unrelated to the configured `GITSTORE_SCYLLA_CAPACITY_PRODUCTS` scale** —
-  the test never counts rows in a Product (or equivalent) table and never
-  compares that count against the configured target. The `Products < 5_000_000`
-  check in `loadCapacityConfig`/`TestScyllaCapacity` only validates the
-  *env var value itself* before the run starts; nothing later in the test
-  verifies that many rows actually exist in the cluster.
+  **unrelated to the configured `GITSTORE_SCYLLA_CAPACITY_PRODUCTS` scale**.
+- **Critically, `TestScyllaCapacity` has no preload phase of its own at
+  all.** Read `loadCapacityConfig`/`TestScyllaCapacity` again: the only
+  reference to loading data is `t.Skip("set GITSTORE_SCYLLA_CAPACITY_RUN=1
+  after preloading the capacity dataset")` — preloading is an entirely
+  out-of-band, manual/external step that happens *before* `go test` is
+  even invoked. The `Products < 5_000_000` check only validates the **env
+  var value itself**, and nothing in the Go test file ever counts rows in a
+  Product (or equivalent) table, logs that count, or compares it against
+  the configured target. A prior version of this runbook suggested checking
+  `gitctl scylla-projection-audit`'s output as a substitute — that does not
+  work either: `ProjectionRepairService.Audit` produces `findings`/`actions`
+  for authoritative-vs-projection *consistency* drift, and returns an empty
+  result for both a toy dataset and a correctly-loaded 5-million-row
+  dataset alike, because it was never designed to count rows. There is
+  **no existing signal anywhere in this repo — test output, audit tool, or
+  otherwise — that an operator can check to confirm the claimed scale was
+  actually loaded.**
 
 **Practical consequence:** it is possible to run `make test-scylla-capacity`
-against a nearly-empty Scylla cluster, get a clean `PASS`, and mistakenly
-report it as a validated 5-million-row capacity/soak result. Before trusting
-a capacity run's result:
+against a nearly-empty Scylla cluster, get a clean `PASS`, and have no way
+to detect that from the test's own output. This is a **tracked follow-up
+requiring a code change to `TestScyllaCapacity` itself**, not something a
+runbook can work around after the fact:
 
-1. Do not treat `go test ... PASS` alone as evidence of anything. Read the
-   test's own `t.Logf` output for `"checked %d recorded large partitions"`
-   and `"%s bounded page returned %d rows"` and confirm those counts are
-   nonzero and plausible for the configured scale — a `0` in either is a
-   silent no-op, not a validated result.
-2. Independently confirm the preload actually happened at the configured
-   `GITSTORE_SCYLLA_CAPACITY_PRODUCTS` scale before running the test at all
-   — e.g. via `cqlsh` row counts on the relevant table(s), or
-   `gitctl scylla-projection-audit` (see "Projection audit, repair, and
-   capacity validation" in `docs/developer-guide.md`) — since the test
-   itself will not catch a preload that silently loaded far fewer rows than
-   claimed.
-3. If your new resource's capacity test should actually enforce this rather
-   than rely on manual verification, add an explicit row-count assertion
-   against the configured `*_PRODUCTS`-equivalent env var before running the
-   partition/page/mutation checks — don't inherit `TestScyllaCapacity`'s gap
-   silently.
+1. **Required code fix (not yet done):** add an explicit preload-verification
+   step to `TestScyllaCapacity` — e.g. a bounded/approximate row count on
+   the relevant Product (or equivalent) table(s) (exact `COUNT(*)` over
+   millions of Scylla rows is prohibitively expensive; use a
+   token-range-sampled estimate, a tracked metadata/counter row maintained
+   by the preload step, or `system.size_estimates`) — that logs the
+   observed count and fails the test if it falls materially short of
+   `cfg.Products`. Until this exists, treat this as an open item for
+   whichever spec next touches `gitstore-api/internal/datastore/scylla/capacity_test.go`.
+2. Until that code fix lands, do not trust a bare `PASS` from
+   `make test-scylla-capacity` as evidence of a validated capacity run at
+   all. The only currently-available (weak) mitigation is fully manual and
+   out-of-band: independently query the preloaded table's row count via
+   `cqlsh` (or equivalent) immediately before invoking `go test`, and record
+   that number yourself alongside the test's `t.Logf` output — the test
+   cannot corroborate it for you.
+3. If your new resource's capacity test is written from scratch rather than
+   copying `capacity_test.go`, build the row-count assertion in from the
+   start rather than inheriting this gap.
 
 **Where results get recorded:** there is no separate results file or
 dashboard convention yet. The established practice (see `capacity_test.go`'s
@@ -280,14 +311,15 @@ reference it from the spec's `tasks.md` — don't invent a new dashboard.
    root `Makefile` (never document a bare `go test` invocation as the primary
    entry point) and document required env vars in this repo's `Makefile` per
    the "Development Guidelines" rule that root `Makefile` is canonical.
-8. Make the test itself assert nonzero, scale-matching results wherever
-   possible (an explicit row-count check against the configured products/
-   scale env var), and where that's not practical, log counts loudly enough
-   (`t.Logf`) that a human reviewing output — not just the `PASS`/`FAIL`
-   line — can catch a silently-empty preload. Do not copy
-   `TestScyllaCapacity`'s zero-row-accepting `assertPartitionSizes`/
-   `assertBoundedPage` shape without deciding whether that gap is acceptable
-   for your resource.
+8. **Required, not optional:** include an explicit preload-verification
+   assertion — a bounded/approximate row count on the resource's table(s),
+   logged and compared against the configured scale env var — before
+   relying on partition/page/mutation checks. `TestScyllaCapacity` itself
+   does not do this (see the "Known limitation" callout above); do not
+   copy its zero-row-accepting `assertPartitionSizes`/`assertBoundedPage`
+   shape, or its total absence of a preload-count check, into a new
+   resource's capacity test without deciding that gap is acceptable — the
+   default should be to close it, not inherit it.
 
 ## 3. Rolling-upgrade compatibility
 
@@ -359,6 +391,40 @@ step that failed is retried exactly once — useful for validating your own
 multi-step Scylla mutation executor's retry/roll-forward safety alongside
 rolling-upgrade read compatibility.
 
+**This pattern is one-directional today, and that's a real gap, not just a
+documentation nit.** Every worked example above tests *new* code reading an
+*old*-shaped fixture (a record created before the field existed). A rolling
+upgrade also runs the **reverse** direction: an old replica's binary — with
+an older, narrower struct/deserializer — reads a record a *new* replica
+already wrote with the new field populated, and may then perform a
+read-modify-write of its own (e.g. updating some unrelated field) using its
+old, narrower in-memory representation. If that old code's write path
+round-trips through a typed struct that doesn't know about the new field,
+the old replica's write can silently drop/clobber the new field — a
+"deserialize into old shape, mutate, re-serialize" bug that a
+new-reads-old-fixture test can never catch, because it never exercises old
+code at all.
+
+**Checked directly, and confirmed: no test in this codebase covers this
+direction.** Searched for any "old code encounters new-shaped record,"
+"backward compatibility," "forward compatibility," "unknown field," or
+round-trip-preservation test across `gitstore-api` and
+`gitstore-controller-manager` — nothing exists. `datastore.CategoryTaxonomy`
+stores `OwnerReferences json.RawMessage` as its own dedicated Go struct
+field (not embedded inside a shared JSON blob that an old struct might
+partially decode), so a same-binary read-modify-write is safe by
+construction *inside this one API process* — but that says nothing about
+what an actually-older API **binary** (running as a separate replica during
+a rolling upgrade against the same Scylla-backed row) would do with a
+column it was compiled without knowledge of. No test in this repo exercises
+two different code versions against the same row at all, so this is
+genuinely unverified, not verified-and-safe.
+
+**This is a required second checklist item, symmetric to the first, not an
+optional extra** — see the checklist below. As of this writing, there is no
+worked example to cite for it in this codebase; the first spec that adds
+one should update this section to point at it.
+
 **How to apply this to a new resource:**
 
 1. For each backend you support (memdb and Scylla), write a test that
@@ -378,6 +444,20 @@ rolling-upgrade read compatibility.
    `TestOwnerReferenceProjectionFailureIsRetriedAsRollForwardRecovery`,
    injecting a failure at a named step and asserting no step re-runs after
    it already succeeded.
+5. **Required, symmetric to step 1, not optional:** add the reverse-direction
+   test. Construct a record using the *new*-shaped fixture (new field
+   populated), decode it through your change's *old*-shaped
+   struct/deserializer (the type as it existed before your change — you may
+   need to keep or reconstruct that older type in the test itself), perform
+   whatever read-modify-write the old code would actually do, and assert the
+   new field survives that round trip unchanged in the underlying
+   record/column rather than being silently dropped or nulled out. If your
+   storage layer makes this safe by construction (e.g. a CQL `UPDATE`
+   statement that only ever names the columns it knows about, never a
+   full-row `INSERT`/replace), write a test that proves *that* specific
+   claim — e.g. assert the generated CQL statement or executed query is a
+   column-scoped `UPDATE`, not a full-row replace — rather than asserting
+   nothing and relying on the claim being true.
 
 ## 4. Namespace-isolation / security-boundary testing
 
@@ -478,31 +558,57 @@ if s.Source.CredentialsRef != nil && s.Source.CredentialsRef.Namespace != "" &&
 GraphQL (`credentialsRef: SecretRef` on `FileSource`), so it is reachable
 through reads, not just admission.
 
-**What's actually tested today is thinner than a full worked example.** The
-only existing test touching this is
-`gitstore-api/internal/catalog/file_test.go`'s
-`TestFileSpecSourceValidation`, and it only exercises the **accept** path —
-a `CredentialsRef` whose `Namespace` matches the resource's own namespace
-validates successfully. There is no test anywhere in the repo (verified via
-`grep -rn "CredentialsRef.Namespace\|credentialsRef.namespace must match"`
-across `*_test.go`) that exercises the **reject** path — a `CredentialsRef`
-naming a *different* namespace — nor any test at the
-`gitstore-api/internal/cataloggrpc`, `gitstore-api/internal/auth`, or
-`gitstore-api/internal/graph` layer that checks a `SecretRef` doesn't leak
-across a real cross-namespace admission/status/watch/read boundary. This
-matches spec 051's own tracking: `specs/051-file-resource-contract/tasks.md`
+**Correction (verified 2026-08-29 against a second review finding): the
+admission-reject path IS already covered — an earlier version of this
+section overclaimed a total gap.** Two levels of testing exist:
+
+- `gitstore-api/internal/catalog/file_test.go`'s
+  `TestFileSpecSourceValidation` covers only the **accept** path — a
+  `CredentialsRef` whose `Namespace` matches the resource's own namespace
+  validates successfully.
+- `gitstore-api/internal/cataloggrpc/server_test.go`'s
+  `TestValidateResources_FileAggregatesVariantAndCredentialsErrors`
+  (around line 668) **does** cover the reject path, at the real gRPC
+  admission boundary: it submits a `File` whose
+  `spec.source.credentialsRef.namespace: other` doesn't match the
+  resource's own namespace (`gitstore`) through `srv.ValidateResources`,
+  asserts `resp.Accepted` is `false`, and asserts one of the aggregated
+  error messages contains `"credentialsRef.namespace"` — proving a
+  cross-namespace `SecretRef` reference is rejected at the point a File
+  resource is admitted via a real push, not just at the narrower
+  `FileSpec.Validate` unit level.
+
+**What is genuinely still untested is narrower than "SecretRef leak checks"
+as a whole: it's specifically the *post-admission, authenticated
+status/watch/read* boundary.** `TestValidateResources_...` proves a
+cross-namespace `SecretRef` is rejected *before* a File is ever admitted —
+but it says nothing about what happens if a File carrying a cross-namespace
+`SecretRef` somehow already exists in the datastore (e.g. a record written
+before this validation rule shipped, written directly against the
+datastore in a test/migration, or admitted under some other path that
+doesn't run this check). No test in this repo exercises: a File with a
+`CredentialsRef.Namespace` that differs from the File's own namespace, read
+back through `gitstore-api/internal/graph` (a GraphQL query/resolver), a
+status update, or a watch subscription — asserting that field's exposure
+still respects namespace boundaries (or is redacted/denied) for a caller
+authenticated as a different tenant. This is genuinely open — not covered by
+`authz_repository_contract_test.go` (that test doesn't touch File at all)
+and not covered by `repository_authorization_test.go` (Repository-specific).
+It matches spec 051's own tracking: `specs/051-file-resource-contract/tasks.md`
 T041 ("Add authenticated namespace-isolation and SecretRef boundary tests
 for File admission/status/watch paths") is unchecked as of this writing and
 explicitly annotated `Blocked: existing auth integration covers
 repository/namespace authorization, but has no File admission/status/watch
 endpoint harness; SecretRef validation is covered by runnable unit tests
-only.` Another agent may be completing T041 in a parallel worktree as part
-of spec 051 — if so, **point this section at whatever File-specific
-`SecretRef` boundary test lands from that work instead of re-deriving one**,
-following the same worked-example format as patterns 1-3 above. Until that
-lands, record this honestly as a genuinely open gap rather than citing
-`TestFileSpecSourceValidation`'s accept-path-only coverage as if it were a
-complete worked example.
+only` — note that annotation itself was written before/independent of the
+`TestValidateResources_FileAggregatesVariantAndCredentialsErrors` admission
+coverage identified above, so its "covered by runnable unit tests only"
+framing undersells the admission-level coverage that already exists; what
+it correctly flags as missing is the status/watch/read boundary. Another
+agent may be completing T041 in a parallel worktree as part of spec 051 —
+if so, **point this section at whatever File-specific status/watch
+boundary test lands from that work instead of re-deriving one**, following
+the same worked-example format as patterns 1-3 above.
 
 **How to apply this to a new resource:**
 
@@ -528,14 +634,21 @@ complete worked example.
    covers (a) and (b) but not (c).
 4. If your resource introduces any field that references a secret,
    credential, or other sensitive external identifier (a `SecretRef`-style
-   field): add a unit test for the **reject** path (a reference naming a
-   different namespace than the resource's own is rejected at validation),
-   not just the accept path — `gitstore-api/internal/catalog/file_test.go`'s
-   `TestFileSpecSourceValidation` is a cautionary example of covering only
-   the accept path. Then add the same cross-namespace-read negative test
-   from step 3 specifically for that field's exposure (admission, status,
-   watch, and GraphQL read paths) — don't assume a generic isolation test
-   written for other fields already covers it.
+   field): add tests for **both** the unit-level accept path (matching
+   namespace validates) **and** the reject path at the real admission
+   boundary (a cross-namespace reference is rejected via the actual gRPC
+   `ValidateResources`/admission call, not just the narrower `Validate()`
+   unit method) — follow
+   `gitstore-api/internal/cataloggrpc/server_test.go`'s
+   `TestValidateResources_FileAggregatesVariantAndCredentialsErrors` for the
+   admission-reject shape. Then — separately, and this is the part most
+   likely to be missing — add the cross-namespace-read negative test from
+   step 3 specifically for that field's *post-admission* exposure (a status
+   query, a watch subscription, and a GraphQL read/resolver path), covering
+   the case where a cross-namespace reference already exists in the
+   datastore rather than being caught at admission time. Don't assume the
+   admission-reject test already covers this; as of this writing in this
+   codebase, it doesn't.
 
 ## Related
 
@@ -552,3 +665,6 @@ complete worked example.
 - `gitstore-api/internal/datastore/scylla/owner_references_test.go`
 - `gitstore-api/internal/graph/resolver/repository_authorization_test.go`
 - `tests/integration/authz_repository_contract_test.go`
+- `gitstore-api/internal/cataloggrpc/server_test.go` (`TestValidateResources_FileAggregatesVariantAndCredentialsErrors`)
+- `gitstore-api/internal/catalog/file.go`, `gitstore-api/internal/catalog/file_test.go`
+- `specs/051-file-resource-contract/tasks.md` (T041)
