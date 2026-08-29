@@ -251,6 +251,10 @@ func (m *mockGitWriter) ResolveRefForRepo(_ context.Context, _ string, _ string)
 	return "deadbeef", nil
 }
 
+func (m *mockGitWriter) ReadFileForRepo(_ context.Context, _ string, _ string, _ string) ([]byte, error) {
+	return nil, nil
+}
+
 func (m *mockGitWriter) DeleteFile(_ context.Context, _ gitclient.DeleteFileParams) (string, error) {
 	return "cafe1234", nil
 }
