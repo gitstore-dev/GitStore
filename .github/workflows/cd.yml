@@ -29,9 +29,46 @@ env:
   CONTROLLER_MANAGER_IMAGE: ${{ github.repository_owner }}/controller-manager
 
 jobs:
+  compute-latest-eligibility:
+    name: Compute latest tag eligibility
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      latest_enable: ${{ steps.compute.outputs.latest_enable }}
+    steps:
+    - name: Determine whether this build may own the latest tag
+      id: compute
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        REPO: ${{ github.repository }}
+        REF_NAME: ${{ github.ref_name }}
+      run: |
+        # docker/metadata-action's own latest=auto never applies `latest` to a
+        # prerelease tag (v0.0.1-alpha.1), by design, regardless of whether a
+        # stable release exists yet - see docker/metadata-action#typesemver.
+        # This repo wants latest to track the newest build (prerelease
+        # included) until the first stable release ships, then permanently
+        # stop tracking prereleases. That needs explicit computation:
+        #   - a stable tag (no prerelease suffix) is always latest-eligible.
+        #   - a prerelease tag is latest-eligible only if no stable release
+        #     has ever been published.
+        if [[ "$REF_NAME" != v*-* ]]; then
+          echo "latest_enable=true" >> "$GITHUB_OUTPUT"
+        else
+          has_stable=$(gh release list --repo "$REPO" --json tagName,isPrerelease --limit 100 \
+            | jq 'any(.isPrerelease == false)')
+          if [ "$has_stable" = "true" ]; then
+            echo "latest_enable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "latest_enable=true" >> "$GITHUB_OUTPUT"
+          fi
+        fi
+
   build-git-service-image:
     name: Build and Push Git Service Image
     runs-on: ubuntu-latest
+    needs: [compute-latest-eligibility]
     permissions:
       contents: read
       packages: write
@@ -58,7 +95,7 @@ jobs:
       with:
         images: ${{ env.REGISTRY }}/${{ env.GIT_SERVICE_IMAGE }}
         flavor: |
-          latest=auto
+          latest=${{ needs.compute-latest-eligibility.outputs.latest_enable }}
         tags: |
           type=ref,event=branch
           type=ref,event=pr
@@ -83,6 +120,7 @@ jobs:
   build-api-image:
     name: Build and Push API Image
     runs-on: ubuntu-latest
+    needs: [compute-latest-eligibility]
     permissions:
       contents: read
       packages: write
@@ -109,7 +147,7 @@ jobs:
       with:
         images: ${{ env.REGISTRY }}/${{ env.API_IMAGE }}
         flavor: |
-          latest=auto
+          latest=${{ needs.compute-latest-eligibility.outputs.latest_enable }}
         tags: |
           type=ref,event=branch
           type=ref,event=pr
@@ -134,6 +172,7 @@ jobs:
   build-admin-image:
     name: Build and Push Admin Image
     runs-on: ubuntu-latest
+    needs: [compute-latest-eligibility]
     permissions:
       contents: read
       packages: write
@@ -160,7 +199,7 @@ jobs:
       with:
         images: ${{ env.REGISTRY }}/${{ env.ADMIN_IMAGE }}
         flavor: |
-          latest=auto
+          latest=${{ needs.compute-latest-eligibility.outputs.latest_enable }}
         tags: |
           type=ref,event=branch
           type=ref,event=pr
@@ -185,6 +224,7 @@ jobs:
   build-controller-manager-image:
     name: Build and Push Controller Manager Image
     runs-on: ubuntu-latest
+    needs: [compute-latest-eligibility]
     permissions:
       contents: read
       packages: write
@@ -211,7 +251,7 @@ jobs:
       with:
         images: ${{ env.REGISTRY }}/${{ env.CONTROLLER_MANAGER_IMAGE }}
         flavor: |
-          latest=auto
+          latest=${{ needs.compute-latest-eligibility.outputs.latest_enable }}
         tags: |
           type=ref,event=branch
           type=ref,event=pr

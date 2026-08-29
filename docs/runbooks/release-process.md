@@ -11,6 +11,16 @@ This page covers how GitStore's automated release pipeline (Release Please) work
 
 The two workflows (`release-please.yml` and `cd.yml`) are fully decoupled — `release-please.yml` never invokes or waits on `cd.yml`; it only pushes a tag, and `cd.yml`'s own trigger does the rest.
 
+## Required One-Time Setup (manual, not in version control)
+
+**`RELEASE_PLEASE_TOKEN` repo secret — required, or nothing downstream ever fires.** `release-please.yml` passes `token: ${{ secrets.RELEASE_PLEASE_TOKEN }}` to the action. If this secret doesn't exist, the action silently falls back to nothing and the step fails, or (if you remove the `token:` line entirely) falls back to the default `GITHUB_TOKEN` — which GitHub explicitly documents as **not triggering other workflows**: commits/tags/PRs created by the default `GITHUB_TOKEN` don't fire `on: push`/`on: pull_request` events, to prevent recursive workflow runs. Concretely, without this secret: the release PR never gets CI checks run on it, and the tag Release Please pushes on merge never triggers `cd.yml` — so no versioned Docker images ever get built.
+
+Create either:
+- A fine-grained **Personal Access Token** scoped to this repo with `contents: write` and `pull-requests: write`, stored as the `RELEASE_PLEASE_TOKEN` secret, or
+- A **GitHub App** installation token (Google's recommended approach — rotates automatically, no user account tied to it), minted via `actions/create-github-app-token` and passed through as `RELEASE_PLEASE_TOKEN`.
+
+This must be done by a repo admin before the pipeline works end to end; it can't be expressed as a file in this repo.
+
 ## Versioning Scheme
 
 GitStore uses **one unified semantic version** for the whole project, not independent per-service versions. That single version drives the GitHub Release and all 4 Docker image tags simultaneously.
@@ -45,8 +55,10 @@ Use the same mechanism for:
 
 ## Docker `latest` Tag Behavior
 
-`latest` is produced by `docker/metadata-action`'s built-in `flavor: latest=auto` — no custom scripting.
+`docker/metadata-action`'s built-in `flavor: latest=auto` does **not** do what this repo needs: by design, it never applies `latest` to a prerelease tag at all, regardless of whether a stable release exists yet (confirmed against its own docs — prerelease tags "will only extend `{{version}}` as tag"). So `cd.yml` computes this explicitly instead, in a `compute-latest-eligibility` job that runs before the 4 image builds and feeds each one's `flavor: | latest=${{ ... }}` with an explicit `true`/`false`:
 
+- **A stable tag** (no `-alpha`/`-beta`/`-rc` suffix) is always latest-eligible.
+- **A prerelease tag** is latest-eligible only if `gh release list` shows no stable (non-prerelease) release has ever been published to this repo.
 - **Before any stable release exists**: `latest` tracks whichever alpha/beta build was published most recently.
 - **After the first stable release** (e.g. `0.0.1`): `latest` permanently stops tracking prereleases. Any alpha/beta/rc published *after* that point will never become `latest` again — only a newer stable release can move it.
 - **Practical implication for consumers**: once a stable release exists, anyone who wants "whatever's newest, prereleases included" must pin to the exact version tag (e.g. `:0.0.2-beta.1`), not `:latest`.
