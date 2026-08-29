@@ -644,7 +644,7 @@ func (s *scyllaDatastore) deleteProductWithResourceVersion(ctx context.Context, 
 		},
 	}
 	projections := []mutationAction{
-		mutationAction{
+		{
 			Step: catalogueStep("delete", "Product", uid, ownerReferenceDependentsTable, uid, "delete-owner-references"),
 			Apply: func(ctx context.Context) error {
 				return s.syncOwnerReferenceDependents(ctx, p.Namespace, p.RepositoryID, "Product", p.UID, p.Name, p.ResourceVersion, p.OwnerReferences, nil)
@@ -653,7 +653,7 @@ func (s *scyllaDatastore) deleteProductWithResourceVersion(ctx context.Context, 
 				return s.syncOwnerReferenceDependents(ctx, p.Namespace, p.RepositoryID, "Product", p.UID, p.Name, p.ResourceVersion, nil, p.OwnerReferences)
 			},
 		},
-		mutationAction{
+		{
 			Step: catalogueStep("delete", "Product", uid, "products_by_name", p.Namespace+"/"+p.Name, "delete-name"),
 			Apply: func(ctx context.Context) error {
 				return s.releaseName(ctx, "products_by_name", p.Namespace, p.Name, parsedUID)
@@ -662,7 +662,7 @@ func (s *scyllaDatastore) deleteProductWithResourceVersion(ctx context.Context, 
 				return s.reserveName(ctx, "Product", "products_by_name", p.Namespace, p.Name, parsedUID, p.CreationTimestamp)
 			},
 		},
-		mutationAction{
+		{
 			Step: catalogueStep("delete", "Product", uid, "products_by_uid", uid, "delete-uid"),
 			Apply: func(ctx context.Context) error {
 				return s.releaseUID(ctx, "products_by_uid", p.Namespace, parsedUID, p.CreationTimestamp)
@@ -1272,7 +1272,7 @@ func (s *scyllaDatastore) deleteCollectionWithResourceVersion(ctx context.Contex
 		},
 	}
 	projections := []mutationAction{
-		mutationAction{
+		{
 			Step: catalogueStep("delete", "Collection", uid, "collection_by_name", c.Namespace+"/"+c.Name, "delete-name"),
 			Apply: func(ctx context.Context) error {
 				return s.releaseName(ctx, "collection_by_name", c.Namespace, c.Name, parsedUID)
@@ -1281,7 +1281,7 @@ func (s *scyllaDatastore) deleteCollectionWithResourceVersion(ctx context.Contex
 				return s.reserveName(ctx, "Collection", "collection_by_name", c.Namespace, c.Name, parsedUID, c.CreationTimestamp)
 			},
 		},
-		mutationAction{
+		{
 			Step: catalogueStep("delete", "Collection", uid, "collection_by_uid", uid, "delete-uid"),
 			Apply: func(ctx context.Context) error {
 				return s.releaseUID(ctx, "collection_by_uid", c.Namespace, parsedUID, c.CreationTimestamp)
