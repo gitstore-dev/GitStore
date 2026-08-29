@@ -1,83 +1,100 @@
-# Contract: `static-users` AuthN Provider
+# Contract: `static-users` AuthN + UserDir Provider
 
 ## `AuthNProvider` interface compliance
 
-`static-users` implements the existing, unmodified `gitstore-api/internal/auth.AuthNProvider` interface — no interface change:
-
-```go
-type AuthNProvider interface {
-    Name() string
-    Capabilities() Capability
-    Authenticate(ctx context.Context, req AuthRequest) (*Principal, Decision, error)
-    RevokeSession(ctx context.Context, jti string, expiresAt time.Time) error
-    RefreshSession(ctx context.Context, oldToken string) (newToken string, exp time.Time, err error)
-    IssueSession(ctx context.Context, subject string) (token string, exp time.Time, err error)
-}
-```
+`static-users` implements the existing, unmodified `gitstore-api/internal/auth.AuthNProvider` interface:
 
 | Method | Contract |
 |---|---|
 | `Name()` | Returns `"static-users"`. |
-| `Capabilities()` | `CapAuthenticate \| CapIssueSession \| CapIntrospect` — identical capability set to `static-admin`. |
-| `Authenticate` | Basic Auth: look up `username` in the loaded user map; `bcrypt.CompareHashAndPassword` against the stored hash; on match, return `Allow` with a `Principal` per `data-model.md`'s Principal shape (no hardcoded roles). Bearer: verify signature with `auth.staticusers.jwt.secret` and `jwt.WithIssuer(auth.staticusers.jwt.issuer)`; on success, check the provider's own blacklist by `jti`; on any parse/verify failure that is not "wrong key/issuer" ambiguity, return `Challenge` (not my token) exactly mirroring `static-admin.authenticateBearer`'s `Challenge` vs. `Deny` split for expired-vs-foreign tokens. Unknown username, wrong password, or unrecognized scheme → `Challenge`, never `Deny` — this preserves the existing chain contract that "not my credential" falls through to the next provider rather than hard-failing the whole chain (mirrors `static-admin.authenticateBasic`'s `Challenge`-on-unknown-username behavior exactly). |
-| `RevokeSession` | Adds `jti` to `static-users`' own in-memory blacklist (structurally identical to `staticadmin`'s `sessionBlacklist`, own instance, own goroutine). Returns `nil` unconditionally, exactly as `static-admin.RevokeSession` does — `ChainedAuthN.RevokeSession` already broadcasts to every provider that returns non-`ErrNotSupported`, so both providers' blacklists get the revocation regardless of which one issued the original token. |
-| `RefreshSession` | Parses `oldToken` with `static-users`' own secret/issuer, honoring the same expired-within-leeway (`jwt.WithLeeway(2*time.Minute)`) and refresh-grace-window semantics `static-admin.RefreshSession` uses. **Must** fail (return an error, not silently no-op) for a token that does not verify against its own secret/issuer — this is what makes provider-identity routing (see below) safe even before any registry-level change lands, since a misrouted `RefreshSession(oldToken)` call to the wrong provider will simply fail with a parse error rather than succeeding incorrectly. |
-| `IssueSession` | Mints a new HS256 JWT for the given `subject`, signed with `auth.staticusers.jwt.secret`/`issuer`, generating a fresh `jti`. **Constraint (FR-007)**: this method itself has no way to reject an "unowned" subject (it has no record of which subject just authenticated via which provider — that context lives one layer up, in the `Login` resolver) — closing FR-007 is the registry/resolver-level responsibility described below, not a per-method validation inside `IssueSession` itself. |
+| `Capabilities()` | `CapAuthenticate \| CapIssueSession \| CapIntrospect \| CapUserLookup` — the last flag is new relative to `static-admin`'s former set, reflecting the new `UserDirProvider` implementation below. |
+| `Authenticate` | Basic Auth: look up `username` in the loaded user map; `bcrypt.CompareHashAndPassword` against the stored hash; on match, return `Allow` with a `Principal` per `data-model.md`'s Principal shape (no hardcoded roles — FR-004). Bearer: verify signature with `auth.jwt.secret` and `jwt.WithIssuer(auth.jwt.issuer)`; on success, check the provider's own blacklist by `jti`. Unknown username, wrong password, or unrecognized scheme → `Challenge`, mirroring `static-admin.authenticateBasic`'s former behavior exactly (falls through the chain rather than hard-failing). |
+| `RevokeSession` | Adds `jti` to `static-users`' own in-memory blacklist (structurally identical to `staticadmin`'s former `sessionBlacklist`). |
+| `RefreshSession` | Parses `oldToken` with `static-users`' secret/issuer, honoring the same expired-within-leeway (`jwt.WithLeeway(2*time.Minute)`) and refresh-grace-window semantics `static-admin.RefreshSession` used. |
+| `IssueSession` | Mints a new HS256 JWT for the given `subject`, signed with `auth.jwt.secret`/`issuer`, generating a fresh `jti`. Since `static-users` is the only provider in any currently-designed chain that supports `IssueSession` (research.md Decision 8), `ChainedAuthN.IssueSession`'s existing "first supporter wins" resolution is unambiguous — no registry-level change is needed for this method's correctness. |
 
-## Provider-identity-routed session issuance (registry/resolver-level contract)
+## `UserDirProvider` interface compliance (new)
 
-To satisfy FR-007/FR-006 without any change to `static-admin`'s or `static-users`' own provider code, the shared chain/registry plumbing gains one additive method:
+`static-users` also implements the existing, unmodified `gitstore-api/internal/auth.UserDirProvider` interface:
 
-```go
-// gitstore-api/internal/auth/registry.go — additive, existing methods unchanged
-func (c *ChainedAuthN) IssueSessionFor(ctx context.Context, principal *Principal) (string, time.Time, error) {
-    for _, p := range c.providers {
-        if p.Name() == principal.AuthMethod {
-            return p.IssueSession(ctx, principal.Subject)
-        }
-    }
-    return "", time.Time{}, ErrNotSupported
-}
-```
+| Method | Contract |
+|---|---|
+| `Name()` | Returns `"static-users"` (shared with the `AuthNProvider` side — one Go type implements both interfaces). |
+| `GetBySubject(ctx, subject)` | Returns a `*auth.UserProfile` per `data-model.md`'s shape for a known username. Returns `staticusers.ErrUserNotFound` (new sentinel, distinct from `auth.ErrNotSupported`) for an unknown one. |
+| `ListGroups(ctx, subject)` | Returns `(nil, nil)` for a known username (no groups concept in `users.yaml` — "zero groups" is a correct, supported answer). Returns `(nil, staticusers.ErrUserNotFound)` for an unknown one. |
+| `SearchUsers(ctx, query, limit)` | Case-insensitive substring match over `username`/`display_name`/`email`, capped at `limit`. Sufficient for this feature's "tens, not thousands" scale (spec.md Assumptions). |
+| `UpsertProfile(ctx, p)` | Returns `auth.ErrNotSupported` — no mutation API in v1 (FR-010). |
+| `Deactivate(ctx, subject)` | Returns `auth.ErrNotSupported` — same reason. |
 
-And the `Login` resolver (`gitstore-api/internal/graph/resolver/auth_service.go`) calls `IssueSessionFor(ctx, principal)` instead of the existing generic `IssueSession(ctx, principal.Subject)`, using the `principal.AuthMethod` that `Authenticate` already populated (it is set to `decision.Provider`'s underlying provider name for both `static-admin` and `static-users` already — see `staticadmin/provider.go`'s `AuthMethod: "static-admin"` literal and this spec's own `data-model.md` Principal shape for `static-users`).
-
-This is the only change to shared (non-provider-specific) code this feature makes. `ChainedAuthN.IssueSession` (the generic, first-provider-wins method) remains for any future caller that legitimately does not have a `Principal` in hand (none exists today), preserving backward compatibility.
+No resolver wires `registry.UserDir()` to anything as part of this spec (research.md Decision 11) — these methods are implemented, tested, and ready for a future consumer, but have none today, matching this spec's own finding that `registry.UserDir()` has zero live callers anywhere in `gitstore-api/internal/graph`.
 
 ## `buildProviderRegistry` wiring contract
 
-`gitstore-api/internal/app/server.go`'s existing `switch name { case "static-admin": ...; case "anonymous": ...; default: ... }` dispatch (inside `buildProviderRegistry`) gains one additional case, structurally identical to the `static-admin` case:
+`gitstore-api/internal/app/server.go`'s `switch name { case "static-admin": ...; case "anonymous": ...; default: ... }` dispatch (inside `buildProviderRegistry`) loses its `"static-admin"` case and gains a `"static-users"` case:
 
 ```go
 case "static-users":
-    p, err := staticusers.New(cfg.Auth.StaticUsers, log)
+    p, err := staticusers.New(cfg.Auth, log)   // cfg.Auth.JWT + cfg.Auth.StaticUsers
     if err != nil {
         return nil, nil, nil, fmt.Errorf("init static-users provider: %w", err)
     }
     authnProviders = append(authnProviders, p)
-    shutdowns = append(shutdowns, p)          // blacklist-pruning goroutine, mirrors static-admin
+    shutdowns = append(shutdowns, p)          // blacklist-pruning goroutine, mirrors static-admin's former shutdown
 ```
 
-`static-users` also implements the same `policyReloader`-shaped `Reload() error` method `rbac-local` exposes, so the existing SIGHUP handler in `Start()` can be extended (additive change, existing SIGHUP wiring untouched for `rbac-local`) to also reload any active `static-users` provider found in the chain.
+`buildProviderRegistry` also wires `static-users` as the `UserDirProvider` when it is active (replacing the unconditional `userdirnone.New()` call): if `"static-users"` is in the chain, the same constructed `*staticusers.StaticUsersProvider` instance is passed as the `UserDirProvider` to `auth.NewProviderRegistry`; otherwise `userdirnone.New()` remains the default (e.g., for an `anonymous`-only or future `oidc-jwt`-only chain with no local user list to serve directory lookups from).
 
-## Chain ordering guidance (non-normative operator documentation, not enforced by code)
+The default chain literal changes from `[]string{"static-admin", "anonymous"}` to `[]string{"static-users", "anonymous"}` — both the inline fallback in `buildProviderRegistry` and `config.go`'s `v.SetDefault("auth.authn.chain", ...)`.
 
-Because `Authenticate` correctly falls through via `Challenge` regardless of order (each provider only claims requests it recognizes), and because `IssueSessionFor`/`RefreshSession`'s own-secret-verification close the ordering hazard described in `research.md` Decision 4, **no specific chain order is required for correctness**. The documented example order is:
+`static-users` also implements the same `policyReloader`-shaped `Reload() error` method `rbac-local` exposes, so the existing SIGHUP handler in `Start()` is extended (additive change, existing `rbac-local` SIGHUP wiring untouched) to also reload any active `static-users` provider.
 
-```text
-GITSTORE_AUTH__AUTHN__CHAIN=static-admin,static-users,anonymous
+## Migration-safety check placement (FR-013)
+
+Implemented in `buildProviderRegistry`, immediately after both the `static-users` and (if active) `rbac-local` providers are constructed — this is the first point both providers' *loaded* state (the actual username list and the actual `role_bindings` map) is available in the same scope:
+
+```go
+if staticUsersProvider != nil && cfg.Auth.AuthZ.Provider == "rbac-local" {
+    if !rbacLocalProvider.HasAnyRoleBindingFor(staticUsersProvider.Usernames()) {
+        return nil, nil, nil, fmt.Errorf(
+            "static-users is configured with %d user(s), but rbac-local's policy.yaml has no " +
+            "role_bindings entry for any of them — every static-users login would be denied by " +
+            "default_deny; add a role_bindings entry for at least one configured username",
+            len(staticUsersProvider.Usernames()),
+        )
+    }
+}
 ```
 
-matching the existing convention that `anonymous` remains last (`docs/implementation/020-pluggable_auth_architecture.md` §2e already documents this constraint and is unchanged by this spec).
+`RBACLocalProvider.HasAnyRoleBindingFor([]string) bool` is a small, additive, read-only helper added to `rbaclocal/provider.go` (checks `policy.RoleBindings` for any of the given usernames as a key) — this is the one place `rbac-local`'s own package gains a new method in this spec, and it is a pure read-only query over already-loaded state, not a change to `Authorize`'s decision logic (research.md Decision 9's "zero source changes to `Authorize`/`Policy` semantics" finding is preserved; this is additive, not a semantic change).
 
-## Example `.env` additions (local-multiuser profile)
+## Config-validation contract (FR-014/FR-015/FR-016)
 
-```text
-# Additive to the existing local-fast profile — static-admin is untouched.
-GITSTORE_AUTH__AUTHN__CHAIN=static-admin,static-users,anonymous
-GITSTORE_AUTH__AUTHZ__PROVIDER=rbac-local
-GITSTORE_AUTH__RBAC__POLICY_FILE=policy.yaml
-GITSTORE_AUTH__STATICUSERS__USERS_FILE=users.yaml
-GITSTORE_AUTH__STATICUSERS__JWT__SECRET=dev-static-users-secret-change-me
-GITSTORE_AUTH__STATICUSERS__JWT__ISSUER=gitstore-static-users
+```go
+// gitstore-api/internal/config/config.go — additive function, called from validateConfig
+// alongside the existing validateDatastoreConfig/validateLogFormat calls.
+func validateAuthChainConfig(cfg *Config) error {
+    hasStaticUsers := slices.Contains(cfg.Auth.AuthN.Chain, "static-users")
+    if hasStaticUsers && cfg.Auth.JWT.Secret == "" {
+        return errors.New("auth.jwt.secret is required when static-users is in auth.authn.chain")
+    }
+    return nil
+}
+```
+
+`JWTConfig.Secret`'s struct tag changes from `validate:"secret" validate:"required"` to no `validate` tag at all — the requirement moves entirely into this explicit function. `GrpcAuthConfig.HmacSecret`'s `validate:"required"` tag is **not touched** (FR-015). The new `auth.staticusers.users_file` key gets no `validate` tag either (FR-016) — its own loadability is enforced only inside `buildProviderRegistry`'s `case "static-users":`, exactly the pattern this fix generalizes from.
+
+## `Principal.IsAdmin()` documentation contract (FR-022)
+
+```go
+// IsAdmin returns true when the principal carries the built-in "admin" role.
+//
+// This reflects only roles the AuthN provider itself set on Principal.Roles at
+// authentication time (e.g. static-admin's former hardcoded assignment). It does
+// NOT reflect roles granted transiently by an AuthZProvider's own subject-keyed
+// mechanism (e.g. rbac-local's role_bindings), which never writes back onto
+// Principal. For any provider that defers role assignment to the AuthZ layer —
+// static-users included — this method always returns false, regardless of what
+// role_bindings grants that subject. Callers needing an authoritative admin
+// check MUST call AuthZProvider.Authorize instead.
+func (p *Principal) IsAdmin() bool { ... }
 ```

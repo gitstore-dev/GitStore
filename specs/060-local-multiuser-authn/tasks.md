@@ -1,9 +1,9 @@
-# Tasks: Local Multi-User AuthN Provider (`static-users`)
+# Tasks: Local Multi-User AuthN + UserDir Provider (`static-users`)
 
 **Input**: Design documents from `/specs/060-local-multiuser-authn/`
 **Prerequisites**: plan.md (required), spec.md (required for user stories), data-model.md, contracts/, research.md, quickstart.md
 
-**Tests**: Test-first development is required for the provider, registry, and test-harness migration work in this feature.
+**Tests**: Test-first development is required for the provider, registry/config, and test-harness migration work in this feature.
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and validation.
 
@@ -11,114 +11,133 @@
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-**Purpose**: Establish the new provider package and confirm the two structural templates this feature draws from.
+**Purpose**: Establish the new provider package before removing the old one.
 
-- [ ] T001 Create the `gitstore-api/internal/auth/provider/staticusers/` package skeleton (`provider.go`, `users.go` stubs)
-- [ ] T002 [P] Re-confirm `rbaclocal/policy.go`'s `loadPolicy`/`validatePolicy` shape and `staticadmin/provider.go`'s session-lifecycle shape as the two structural templates (no code yet — a documentation/traceability checkpoint recorded in PR description, per research.md Decisions 2 and 4)
+- [ ] T001 Create the `gitstore-api/internal/auth/provider/staticusers/` package skeleton (`provider.go`, `users.go`, `errors.go` stubs)
+- [ ] T002 [P] Move `jti.go`'s `generateJTI` from `staticadmin/` to `staticusers/` (unchanged content, new package name)
 
 ---
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**Purpose**: Land the user-list loader and the registry-level session-issuance routing fix before provider-level authentication work begins.
+**Purpose**: Land the user-list loader, UserDir read methods, the rbac-local helper, and the config-validation fix before the provider swap and harness migration begin.
 
-**Checkpoint**: `users.yaml` can be loaded/validated/reloaded, and `ChainedAuthN` can route session issuance to a named provider; US1-US4 can proceed.
+**Checkpoint**: `users.yaml` can be loaded/validated/reloaded; UserDir reads work; `rbac-local` can report role_binding coverage; config validation is chain-aware. US1-US4 can proceed.
 
 - [ ] T003 [P] Add failing tests for `loadUsers`/`Reload` (missing file, malformed YAML, wrong `version`, duplicate username, empty `password_hash`) in `gitstore-api/internal/auth/provider/staticusers/staticusers_test.go`
-- [ ] T004 Implement `UserList`/`UserEntry` and `loadUsers`/`validateUsers` in `gitstore-api/internal/auth/provider/staticusers/users.go` until T003 is green
-- [ ] T005 [P] Add a failing test for `ChainedAuthN.IssueSessionFor(ctx, principal)` routing to the provider named by `principal.AuthMethod` (not the first `IssueSession`-supporting provider) in `gitstore-api/internal/auth/registry_test.go`
-- [ ] T006 Implement `ChainedAuthN.IssueSessionFor` in `gitstore-api/internal/auth/registry.go` until T005 is green
+- [ ] T004 Implement `UserList`/`UserEntry` (including `display_name`/`email`) and `loadUsers`/`validateUsers` in `gitstore-api/internal/auth/provider/staticusers/users.go` until T003 is green
+- [ ] T005 [P] Add failing tests for `GetBySubject`/`ListGroups`/`SearchUsers` (known user, unknown user → `ErrUserNotFound`, case-insensitive substring search) in `gitstore-api/internal/auth/provider/staticusers/staticusers_test.go`
+- [ ] T006 Implement `ErrUserNotFound` in `errors.go` and the `UserDirProvider` methods in `provider.go` until T005 is green
+- [ ] T007 [P] Add a failing test for `RBACLocalProvider.HasAnyRoleBindingFor([]string) bool` in `gitstore-api/internal/auth/provider/rbaclocal/rbaclocal_test.go`, confirming `Authorize`'s existing tests are unaffected
+- [ ] T008 Implement `HasAnyRoleBindingFor` as an additive, read-only method in `gitstore-api/internal/auth/provider/rbaclocal/provider.go` until T007 is green
+- [ ] T009 [P] Add failing tests for `validateAuthChainConfig` (static-users in chain + empty JWT secret → error; static-users absent + empty JWT secret → no error; empty gRPC HMAC secret → error regardless of chain) in `gitstore-api/internal/config/config_test.go`
+- [ ] T010 Remove `JWTConfig.Secret`'s `validate:"required"` struct tag and implement `validateAuthChainConfig`, called from `validateConfig`, in `gitstore-api/internal/config/config.go` until T009 is green
 
 ---
 
 ## Phase 3: User Story 1 - An operator configures multiple named local users who can each authenticate with their own credentials (Priority: P1) 🎯 MVP
 
-**Goal**: `static-users` authenticates two or more distinct configured identities via Basic Auth and issues each its own session token.
+**Goal**: `static-users` authenticates two or more distinct configured identities via Basic Auth and issues each its own session token, working identically simply for a single-user configuration.
 
-**Independent Test**: Configure two users, log in as each with their own credentials, confirm each token's subject matches only that user.
+**Independent Test**: Configure two users, log in as each with their own credentials, confirm each token's subject matches only that user; confirm a single-user configuration is no harder than the old single-admin setup.
 
 ### Tests for User Story 1
 
-- [ ] T007 [P] [US1] Add failing tests for `StaticUsersProvider.Authenticate` Basic Auth paths (success, unknown username, wrong password, malformed header) in `gitstore-api/internal/auth/provider/staticusers/staticusers_test.go`
-- [ ] T008 [P] [US1] Add failing tests for `StaticUsersProvider.IssueSession`/`RevokeSession`/`RefreshSession` (mirroring `staticadmin_test.go`'s session-lifecycle coverage, own blacklist instance) in `gitstore-api/internal/auth/provider/staticusers/staticusers_test.go`
-- [ ] T009 [P] [US1] Add a failing config-validation test asserting server construction fails when `static-users` is listed in `auth.authn.chain` but `auth.staticusers.jwt.secret` is empty, in `gitstore-api/internal/config/config_test.go`
+- [ ] T011 [P] [US1] Add failing tests for `StaticUsersProvider.Authenticate` Basic Auth paths (success, unknown username, wrong password, malformed header) in `gitstore-api/internal/auth/provider/staticusers/staticusers_test.go`
+- [ ] T012 [P] [US1] Add failing tests for `StaticUsersProvider.IssueSession`/`RevokeSession`/`RefreshSession`/Bearer verification in `gitstore-api/internal/auth/provider/staticusers/staticusers_test.go`
 
 ### Implementation for User Story 1
 
-- [ ] T010 [US1] Implement `StaticUsersProvider.Authenticate` (Basic Auth + Bearer verification against its own secret/issuer) in `gitstore-api/internal/auth/provider/staticusers/provider.go` until T007 is green
-- [ ] T011 [US1] Implement `StaticUsersProvider.IssueSession`/`RevokeSession`/`RefreshSession` and its own `sessionBlacklist` in `gitstore-api/internal/auth/provider/staticusers/provider.go` until T008 is green
-- [ ] T012 [US1] Add `StaticUsersConfig`/`auth.staticusers.*` Viper keys, defaults, and known-keys entries in `gitstore-api/internal/config/config.go` until T009 is green
-- [ ] T013 [US1] Add the `case "static-users":` dispatch in `buildProviderRegistry` in `gitstore-api/internal/app/server.go`, including shutdown registration for the blacklist-pruning goroutine
-- [ ] T014 [US1] Extend the existing SIGHUP reload handler in `gitstore-api/internal/app/server.go`'s `Start()` to also reload any active `static-users` provider
+- [ ] T013 [US1] Implement `StaticUsersProvider.Authenticate` (Basic Auth + Bearer verification against `auth.jwt.secret`/`issuer`) in `gitstore-api/internal/auth/provider/staticusers/provider.go` until T011 is green
+- [ ] T014 [US1] Implement `StaticUsersProvider.IssueSession`/`RevokeSession`/`RefreshSession` and its own `sessionBlacklist` until T012 is green
 
-**Checkpoint**: An operator can configure `users.yaml`, chain in `static-users`, and log in as multiple distinct users — independently verifiable via `quickstart.md`'s manual steps 1-6.
+**Checkpoint**: A single- or multi-user `users.yaml` configuration works end-to-end for login — independently verifiable via `quickstart.md`'s fresh-setup steps.
 
 ---
 
-## Phase 4: User Story 2 - `rbac-local`'s existing multi-subject `role_bindings` become exercisable end-to-end (Priority: P1)
+## Phase 4: User Story 2 - `role_bindings` becomes the sole, load-bearing mechanism for any role (Priority: P1)
 
-**Goal**: Two real `static-users` identities bound to two different roles produce different, correct authorization outcomes, with zero `rbac-local` source changes.
+**Goal**: Two real `static-users` identities bound to two different roles produce different, correct authorization outcomes; an unbound identity is denied everything under `default_deny`; `Principal.IsAdmin()` is confirmed never authoritative for `static-users` principals.
 
-**Independent Test**: Bind `alice`→`namespace-owner` and `bob`→`developer` in `policy.yaml`'s `role_bindings`; authenticate as each; confirm differing authorization outcomes for a role-differentiated action.
+**Independent Test**: Bind `alice`→`admin` and `bob`→`developer`; authenticate as each; confirm differing outcomes. Authenticate as an unbound third identity; confirm it is denied a `default_deny`-gated action.
 
 ### Tests for User Story 2
 
-- [ ] T015 [P] [US2] Add a failing test configuring two `static-users` identities bound to two different roles via `role_bindings` and asserting differing `rbac-local.Authorize` outcomes for a role-differentiated action, in `gitstore-api/internal/auth/provider/rbaclocal/rbaclocal_test.go` (new test function; no change to `rbaclocal`'s non-test source)
+- [ ] T015 [P] [US2] Add a failing test configuring two `static-users` identities bound to two different roles via `role_bindings` and asserting differing `rbac-local.Authorize` outcomes, plus a third, unbound identity asserting denial under `default_deny`, in `gitstore-api/internal/auth/provider/rbaclocal/rbaclocal_test.go` (zero change to non-test `rbaclocal` source)
+- [ ] T016 [P] [US2] Add a failing test asserting `StaticUsersProvider.Authenticate`'s resulting `Principal.Roles` is always empty, and `Principal.IsAdmin()` is always `false`, regardless of any `role_bindings` entry — in `gitstore-api/internal/auth/provider/staticusers/staticusers_test.go`
 
 ### Implementation for User Story 2
 
-- [ ] T016 [US2] Confirm T015 passes with zero changes to `gitstore-api/internal/auth/provider/rbaclocal/provider.go` or `policy.go` (this task is a verification checkpoint per research.md Decision 5, not an implementation task — if it requires a source change, that is a signal the research finding needs revisiting before proceeding)
+- [ ] T017 [US2] Confirm T015/T016 pass with zero implementation changes beyond Phase 2/3 (verification checkpoint — if either requires a source change, that is a signal research.md Decisions 2/9 need revisiting)
+- [ ] T018 [US2] Update `Principal.IsAdmin()`'s doc comment in `gitstore-api/internal/auth/types.go` per FR-022/contracts/static-users-provider.md
 
-**Checkpoint**: `role_bindings` is proven to work end-to-end with real, distinct, credential-authenticated subjects for the first time.
+**Checkpoint**: `role_bindings` is proven to be the sole source of any role, including "admin," for real, distinct, credential-authenticated subjects.
 
 ---
 
-## Phase 5: User Story 3 - A `static-users`-issued token can never be misinterpreted as a `static-admin` identity, or vice versa (Priority: P1)
+## Phase 5: User Story 3 - Migration never silently drops administrative access (Priority: P1)
 
-**Goal**: Cross-provider token verification and session issuance are provably safe by construction.
+**Goal**: The startup safety check fails fast exactly when it should, and only then; a fully-followed migration retains equivalent access.
 
-**Independent Test**: A `static-users` token is rejected by `static-admin`'s verifier and vice versa; a `static-users` login always issues a `static-users`-signed token regardless of chain order.
+**Independent Test**: Follow the migration procedure fully → succeeds with equivalent access. Skip the `role_bindings` step → server refuses to start with an actionable error. Use `allow-all` instead of `rbac-local` → no such check fires.
 
 ### Tests for User Story 3
 
-- [ ] T017 [P] [US3] Add a failing test asserting a `static-users`-issued bearer token is rejected (`Challenge`, not `Allow`) by a real `StaticAdminProvider.Authenticate` call, in `gitstore-api/internal/auth/provider/staticadmin/staticadmin_test.go` (new test function only; no change to `staticadmin`'s non-test source)
-- [ ] T018 [P] [US3] Add a failing test asserting a `static-admin`-issued bearer token is rejected by a real `StaticUsersProvider.Authenticate` call, in `gitstore-api/internal/auth/provider/staticusers/staticusers_test.go`
-- [ ] T019 [P] [US3] Add a failing `Login` resolver test asserting a `static-users` login issues a `static-users`-signed token even when `static-admin` is listed earlier in `auth.authn.chain`, in `gitstore-api/internal/graph/resolver/auth_resolvers_test.go`
+- [ ] T019 [P] [US3] Add a failing test for `buildProviderRegistry` asserting construction fails when `static-users` + `rbac-local` are configured and zero configured usernames have a `role_bindings` entry, in `gitstore-api/internal/app/server_test.go`
+- [ ] T020 [P] [US3] Add failing tests for the same function asserting construction succeeds when (a) `authz.provider` is `allow-all` under the same user/policy configuration, and (b) at least one configured username has a `role_bindings` entry
 
 ### Implementation for User Story 3
 
-- [ ] T020 [US3] Confirm T017/T018 pass given T010-T011's distinct-secret implementation (verification checkpoint — no new source change expected beyond Phase 3, per research.md Decision 4's shared-secret-risk closure)
-- [ ] T021 [US3] Update `Login` in `gitstore-api/internal/graph/resolver/auth_service.go` to call `r.registry.AuthN().IssueSessionFor(ctx, principal)` instead of `IssueSession(ctx, principal.Subject)`, until T019 is green
+- [ ] T021 [US3] Implement the migration-safety check in `buildProviderRegistry` (`gitstore-api/internal/app/server.go`), calling `HasAnyRoleBindingFor`, until T019/T020 are green
+- [ ] T022 [US3] Remove `AuthConfig.Admin`/`UserConfig` (type and field) and add `AuthConfig.StaticUsers` in `gitstore-api/internal/config/config.go`; update `auth.authn.chain`'s default (config.go and server.go), defaults/known-keys map, and `MarshalLogObject`
+- [ ] T023 [US3] Replace `buildProviderRegistry`'s `case "static-admin":` with `case "static-users":` (including wiring `static-users` as the `UserDirProvider` when active) in `gitstore-api/internal/app/server.go`; extend the existing SIGHUP reload handler
 
-**Checkpoint**: Adding `static-users` to the chain is proven, by test, not to create a privilege-escalation path in either direction.
+**Checkpoint**: An operator cannot migrate into a silent lockout — verified by test, not merely documented.
 
 ---
 
-## Phase 6: User Story 4 - The `test-user:` backdoor is retired in favor of real logins (Priority: P2)
+## Phase 6: `static-admin` removal and dependent-file fixes
 
-**Goal**: `tests/integration`'s namespace-isolation coverage authenticates two real users through `static-users`, with the bypass mechanism removed entirely.
+**Goal**: Delete the replaced provider and fix every reference the removal breaks or leaves stale.
 
-**Independent Test**: `TestRepositoryAuthorization_TwoUserNamespaceIsolation` passes using real logins; `grep -rn "test-user:" tests/integration/` returns zero matches.
+- [ ] T024 Delete `gitstore-api/internal/auth/provider/staticadmin/` (`provider.go`, `jti.go`, `staticadmin_test.go`) entirely
+- [ ] T025 [P] Fix `gitstore-api/cmd/server/main_test.go`'s `staticadmin.New(...)` call to `staticusers.New(...)`
+- [ ] T026 [P] Fix `gitstore-api/internal/middleware/security/secure_test.go`'s `newTestRegistry` helper the same way
+- [ ] T027 [P] Fix `gitstore-api/internal/graph/resolver/auth_resolvers_test.go`'s `newTestRegistry` helper the same way
+- [ ] T028 [P] Relabel the cosmetic `"static-admin"` `AuthMethod` string literals to `"static-users"` in `gitstore-api/internal/middleware/security/graphql_test.go`, `gitstore-api/internal/middleware/security/graphql_file_status_test.go`, `gitstore-api/internal/auth/provider/rbaclocal/rbaclocal_test.go`, `gitstore-api/internal/auth/provider/allowall/allowall_test.go`
+- [ ] T029 Confirm `grep -rn "staticadmin\|static-admin" gitstore-api/ --include="*.go"` returns zero matches outside `gitstore-api/gen/` (explicitly out of scope, generated code)
+
+---
+
+## Phase 7: User Story 4 - Retire the `test-user:` backdoor and the harness's `static-admin` bootstrap (Priority: P2)
+
+**Goal**: `tests/integration`'s namespace-isolation coverage authenticates real users through `static-users`, with both the bypass and the now-uncompilable `staticadmin` bootstrap removed.
+
+**Independent Test**: `TestRepositoryAuthorization_TwoUserNamespaceIsolation` and the rest of `namespace_contract_test.go`'s suite pass; `grep -rn "test-user:\|staticadmin\|static-admin" tests/integration/` returns zero matches.
 
 ### Tests for User Story 4
 
-- [ ] T022 [US4] Confirm `TestRepositoryAuthorization_TwoUserNamespaceIsolation` and its helpers currently pass (baseline, before migration) — no code change
+- [ ] T030 [US4] Confirm the current test suite's baseline (before migration) — no code change
 
 ### Implementation for User Story 4
 
-- [ ] T023 [US4] Remove the standalone `testUserAuthN` type (lines 194, 215-240) from `tests/integration/namespace_contract_test.go`
-- [ ] T024 [US4] Replace the embedded helper-source string's `ProviderRegistry` wiring in `tests/integration/namespace_contract_test.go` with a real `staticusers.New(...)` call configured against a test-fixture `users.yaml` (`alice`/`bob`, throwaway bcrypt hashes) per `contracts/backdoor-retirement.md`, leaving `namespaceOwnerAuthZ` and the `/__test/resource-body` route untouched
-- [ ] T025 [US4] Add a harness helper (e.g. `gqlAsRealUser`) in `tests/integration/namespace_contract_test.go` that performs a real `login` mutation for a given username/password and returns the resulting access token
-- [ ] T026 [US4] Migrate `TestRepositoryAuthorization_TwoUserNamespaceIsolation`, `createNamespaceAsUser`, `createRepositoryAsUser`, `repositoriesAsUser` in `tests/integration/authz_repository_contract_test.go` to use T025's helper instead of `"test-user:<subject>"` strings
-- [ ] T027 [US4] Confirm `grep -rn "test-user:" tests/integration/` returns zero matches and `TestRepositoryAuthorization_TwoUserNamespaceIsolation` passes with equivalent assertions
+- [ ] T031 [US4] Remove the standalone `testUserAuthN` type and its embedded-source duplicate from `tests/integration/namespace_contract_test.go`
+- [ ] T032 [US4] Replace the file's `staticadmin` import and bootstrap construction (both the standalone Go code and the embedded helper-source string) with a `staticusers.New(...)` call against a test-fixture `users.yaml` per `contracts/backdoor-retirement.md`
+- [ ] T033 [US4] Fix `namespaceOwnerAuthZ.Authorize`'s `principal.IsAdmin()` check to recognize the harness's known bootstrap subject directly, since `static-users` never sets `Principal.Roles`
+- [ ] T034 [US4] Add a harness helper (e.g. `gqlAsRealUser`) performing a real `login` mutation and returning the resulting access token
+- [ ] T035 [US4] Migrate `TestRepositoryAuthorization_TwoUserNamespaceIsolation`, `createNamespaceAsUser`, `createRepositoryAsUser`, `repositoriesAsUser` in `tests/integration/authz_repository_contract_test.go` to use T034's helper instead of `"test-user:<subject>"` strings
+- [ ] T036 [US4] Confirm `grep -rn "test-user:\|staticadmin\|static-admin" tests/integration/` returns zero matches and the full `namespace_contract_test.go`/`authz_repository_contract_test.go` suites pass
 
-**Checkpoint**: No test-only unauthenticated-identity bypass remains anywhere in `tests/integration/`.
+**Checkpoint**: No test-only unauthenticated-identity bypass, and no reference to the removed provider, remains anywhere in `tests/integration/`.
 
 ---
 
-## Phase 7: Polish & Documentation
+## Phase 8: Polish & Documentation
 
-- [ ] T028 [P] Add a `static-users` subsection to `docs/implementation/020-pluggable_auth_architecture.md` §2 (sibling to §2a `static-admin`), the new Viper keys to §5a, and a new Rollout Phase entry to §7
-- [ ] T029 [P] Add `gitstore-api/users.yaml.example` documenting the schema from `data-model.md`
-- [ ] T030 Flag (via a tracked follow-up issue or a dated note, not an edit performed by this spec) that `docs/runbooks/production-readiness-testing.md` Pattern 4's worked-example citation should be updated to point at the migrated real-login test once T026 lands
-- [ ] T031 Run `make build`, `make test`, `make lint`, `make pr-ready` and confirm all pass
+- [ ] T037 [P] Replace `Makefile`'s `gen-admin-password` target with `hash-static-user-password`; update `bootstrap-token`/`bootstrap-namespace`/`bootstrap-repository` hint text (keep `ADMIN_USERNAME`/`ADMIN_PASSWORD` variable names unchanged)
+- [ ] T038 [P] Update `gitstore-api/.env.example` (remove `GITSTORE_AUTH__ADMIN__*` lines, update the chain example, document `GITSTORE_AUTH__STATICUSERS__USERS_FILE`)
+- [ ] T039 [P] Add `gitstore-api/users.yaml.example` documenting the schema from `data-model.md`
+- [ ] T040 [P] Rewrite `docs/implementation/020-pluggable_auth_architecture.md` §2a (static-users, not static-admin, including UserDir), §5a (config keys), §7 Phase 1 language
+- [ ] T041 [P] Update `docs/user-guide.md:380` and `docs/api-reference.md:25`'s `static-admin` example references
+- [ ] T042 Flag (via a tracked follow-up issue or dated note, not an edit performed by this spec) that `docs/implementation/021-controller_service_account_auth.md`'s `static-admin`-based "status quo" premise, and `docs/runbooks/production-readiness-testing.md`'s Pattern 4 citation, both need updating once this spec ships
+- [ ] T043 Run `make build`, `make test`, `make lint`, `make pr-ready` and confirm all pass

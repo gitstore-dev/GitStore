@@ -1,19 +1,20 @@
-# Quickstart: Local Multi-User AuthN Provider (`static-users`)
+# Quickstart: Local Multi-User AuthN + UserDir Provider (`static-users`)
 
 ## Test-first implementation order
 
-1. **`staticusers.loadUsers`/`Reload`** (`gitstore-api/internal/auth/provider/staticusers`): add failing tests for missing file, malformed YAML, wrong `version`, duplicate username, and missing/empty `password_hash` — mirroring `rbaclocal_test.go`'s coverage shape. Implement `users.go` until green.
-2. **`StaticUsersProvider.Authenticate`/session lifecycle**: add failing tests for Basic Auth success, unknown username, wrong password, Bearer verify success, Bearer verify against an expired token, Bearer verify against a foreign-signature token, `RevokeSession`, `RefreshSession` grace-window behavior, `IssueSession` — mirroring `staticadmin_test.go`'s coverage shape. Implement `provider.go` until green.
-3. **Cross-provider token safety** (User Story 3): add a failing test asserting a `static-users`-issued token is rejected by a real `StaticAdminProvider.Authenticate` call, and a `static-admin`-issued token is rejected by a real `StaticUsersProvider.Authenticate` call. Confirm green once both providers are configured with distinct secrets/issuers.
-4. **`ChainedAuthN.IssueSessionFor`** (`gitstore-api/internal/auth/registry.go`): add a failing test proving it routes to the provider whose `Name()` matches `principal.AuthMethod`, not the first provider in the chain that merely supports `IssueSession`. Add a failing `Login` resolver test (`auth_service_test.go` or equivalent) proving a `static-users` login issues a token signed by `static-users`, even with `static-admin` listed first in the chain. Implement `IssueSessionFor` and update the `Login` call site until green.
-5. **Config wiring** (`gitstore-api/internal/config/config.go`, `gitstore-api/internal/app/server.go`): add a failing test asserting server construction fails when `static-users` is listed in `auth.authn.chain` but `auth.staticusers.jwt.secret` is empty. Add the config struct, defaults, known-keys entries, and the `buildProviderRegistry` `case "static-users":`. Extend the existing SIGHUP handler to also reload any active `static-users` provider.
-6. **`rbac-local` role_bindings end-to-end** (User Story 2): add a failing integration/unit test configuring two `static-users` identities bound to two different roles via `policy.yaml`'s existing `role_bindings`, asserting different authorization outcomes for a role-differentiated action — with zero changes to `rbaclocal/provider.go` or `rbaclocal/policy.go`.
-7. **Backdoor retirement** (User Story 4): per `contracts/backdoor-retirement.md`, remove `testUserAuthN` (both the standalone type and its embedded-source duplicate) from `tests/integration/namespace_contract_test.go`; wire a real `staticusers.New(...)` (with test-fixture `alice`/`bob` credentials) into the synthetic helper server's provider chain; migrate `TestRepositoryAuthorization_TwoUserNamespaceIsolation` and its helpers in `tests/integration/authz_repository_contract_test.go` to authenticate via real `login` calls. Confirm `grep -rn "test-user:" tests/integration/` returns zero matches.
+1. **`staticusers.loadUsers`/`Reload` + UserDir read methods** (`gitstore-api/internal/auth/provider/staticusers`): add failing tests for missing file, malformed YAML, wrong `version`, duplicate username, missing/empty `password_hash`, and for `GetBySubject`/`ListGroups`/`SearchUsers` (known user, unknown user → `ErrUserNotFound`, case-insensitive search). Implement `users.go` and the UserDir side of `provider.go` until green.
+2. **`StaticUsersProvider.Authenticate`/session lifecycle**: add failing tests for Basic Auth success/unknown-user/wrong-password, Bearer verify success/expired/foreign-signature, `RevokeSession`, `RefreshSession` grace-window behavior, `IssueSession` — mirroring `staticadmin_test.go`'s former coverage shape (that file is deleted as part of this same change). Implement the AuthN side of `provider.go` until green.
+3. **`RBACLocalProvider.HasAnyRoleBindingFor`**: add a failing test asserting it returns `true` when any given username is a `role_bindings` key and `false` otherwise, with zero change to `Authorize`'s existing test coverage. Implement it in `rbaclocal/provider.go` until green.
+4. **`validateAuthChainConfig`**: add failing tests covering (a) `static-users` in chain + empty `auth.jwt.secret` → error; (b) `static-users` absent + empty `auth.jwt.secret` → no error; (c) empty `auth.grpc.hmac_secret` → error regardless of chain contents. Remove `JWTConfig.Secret`'s `validate:"required"` tag and implement the function until green.
+5. **Migration-safety check**: add a failing test for `buildProviderRegistry` asserting construction fails when `static-users` + `rbac-local` are both configured and no configured username has a `role_bindings` entry, succeeds when `authz.provider` is `allow-all` under the same user/policy configuration, and succeeds when at least one configured username has an entry. Implement the check until green.
+6. **Config/wiring cutover**: remove `AuthConfig.Admin`/`UserConfig`; add `AuthConfig.StaticUsers`; update `auth.authn.chain`'s default in both `config.go` and `server.go`; replace `buildProviderRegistry`'s `"static-admin"` case with `"static-users"` (including UserDir wiring); update `MarshalLogObject`.
+7. **Delete `staticadmin`**: remove the package; fix the resulting compile errors in the three test files that directly construct it (`cmd/server/main_test.go`, `middleware/security/secure_test.go`, `graph/resolver/auth_resolvers_test.go`) by switching to `staticusers.New(...)`; relabel the cosmetic `"static-admin"` string literals in the four label-only test files.
+8. **Harness migration** (User Story 4): per `contracts/backdoor-retirement.md`, remove `testUserAuthN`, migrate the harness's own bootstrap identity from `staticadmin.New` to `staticusers.New`, fix `namespaceOwnerAuthZ`'s `principal.IsAdmin()` check, and migrate `TestRepositoryAuthorization_TwoUserNamespaceIsolation` and its helpers to real logins. Confirm `grep -rn "test-user:\|staticadmin\|static-admin" tests/integration/` returns zero matches.
 
-## Manual verification
+## Manual verification — fresh (non-migration) setup
 
 ```bash
-# 1. Generate bcrypt hashes for two local users (reuses the existing gitctl subcommand)
+# 1. Generate bcrypt hashes for two local users (unchanged tool)
 cd gitstore-api
 go run ./cmd/gitctl hash-password 'alice-password'
 go run ./cmd/gitctl hash-password 'bob-password'
@@ -24,24 +25,25 @@ version: v1
 users:
   - username: alice
     password_hash: "<hash from step 1>"
+    display_name: "Alice Doe"
+    email: "alice@example.com"
   - username: bob
     password_hash: "<hash from step 1>"
 EOF
 
 # 3. Add role_bindings for alice/bob to gitstore-api/policy.yaml (existing file)
 #    role_bindings:
-#      "admin": [admin]
-#      "alice": [namespace-owner]
+#      "alice": [admin]
 #      "bob": [developer]
 
-# 4. Configure the chain (gitstore-api/.env, additive to the existing local-fast profile)
+# 4. Configure the chain (gitstore-api/.env) — static-users is now the default local provider
 cat >> .env <<'EOF'
-GITSTORE_AUTH__AUTHN__CHAIN=static-admin,static-users,anonymous
+GITSTORE_AUTH__AUTHN__CHAIN=static-users,anonymous
 GITSTORE_AUTH__AUTHZ__PROVIDER=rbac-local
 GITSTORE_AUTH__STATICUSERS__USERS_FILE=users.yaml
-GITSTORE_AUTH__STATICUSERS__JWT__SECRET=dev-static-users-secret-change-me
-GITSTORE_AUTH__STATICUSERS__JWT__ISSUER=gitstore-static-users
 EOF
+# Note: GITSTORE_AUTH__JWT__SECRET is still required here — static-users is in the chain.
+# It would NOT be required if the chain were, e.g., ["anonymous"] alone.
 
 # 5. Start the stack
 cd ..
@@ -51,13 +53,48 @@ make dev   # or: make compose
 curl -s -X POST http://localhost:4000/graphql \
   -H 'Content-Type: application/json' \
   --data '{"query":"mutation($u:String!,$p:String!){ login(input:{username:$u,password:$p}) { token { accessToken } } }","variables":{"u":"alice","p":"alice-password"}}'
+```
 
-curl -s -X POST http://localhost:4000/graphql \
-  -H 'Content-Type: application/json' \
-  --data '{"query":"mutation($u:String!,$p:String!){ login(input:{username:$u,password:$p}) { token { accessToken } } }","variables":{"u":"bob","p":"bob-password"}}'
+## Manual verification — migrating an existing `static-admin` deployment
 
-# 7. Confirm alice's token is rejected as an admin token and vice versa, e.g. by decoding
-#    each JWT's header/payload and confirming distinct issuers, or by presenting alice's
-#    token to any admin-only mutation and confirming it is denied unless role_bindings
-#    explicitly grants alice the admin role.
+```bash
+# 1. Note the existing admin credential (before upgrading past this spec).
+#    Old: GITSTORE_AUTH__ADMIN__USERNAME, GITSTORE_AUTH__ADMIN__PASSWORD_HASH (already a bcrypt hash).
+
+# 2. Reuse the existing hash directly in gitstore-api/users.yaml (no need to regenerate
+#    if you don't want to change the password — bcrypt hashes are provider-agnostic):
+cat > gitstore-api/users.yaml <<'EOF'
+version: v1
+users:
+  - username: admin          # or whatever GITSTORE_AUTH__ADMIN__USERNAME was
+    password_hash: "<the existing GITSTORE_AUTH__ADMIN__PASSWORD_HASH value>"
+EOF
+
+# 3. THIS STEP IS NOT OPTIONAL — add the role_bindings entry, or the server will refuse
+#    to start once static-users + rbac-local are both configured (FR-013):
+#    policy.yaml:
+#      role_bindings:
+#        "admin": [admin]
+
+# 4. Update the chain and remove the legacy keys from gitstore-api/.env:
+#    - GITSTORE_AUTH__AUTHN__CHAIN=static-users,anonymous   (was: static-admin,anonymous)
+#    - remove GITSTORE_AUTH__ADMIN__USERNAME / GITSTORE_AUTH__ADMIN__PASSWORD_HASH (now unused)
+#    - GITSTORE_AUTH__JWT__SECRET stays as-is — static-users reuses it unchanged
+#    - GITSTORE_AUTH__STATICUSERS__USERS_FILE=users.yaml
+
+# 5. Start the stack. If step 3 was skipped, the server fails fast with an error naming
+#    the missing role_bindings entry, instead of starting and silently denying every
+#    request from the "admin" identity.
+make dev
+```
+
+## Regenerating a hash for the Makefile-based bootstrap flow
+
+```bash
+# Replaces the removed `make gen-admin-password`:
+make hash-static-user-password PASSWORD='a-new-password'
+# Prints the bcrypt hash, plus a reminder to add it to users.yaml and add/confirm the
+# matching role_bindings entry in policy.yaml. `make bootstrap-token`/`bootstrap-namespace`/
+# `bootstrap-repository` keep using the ADMIN_USERNAME/ADMIN_PASSWORD Makefile variables
+# unchanged — they now describe whichever static-users identity is used to bootstrap.
 ```

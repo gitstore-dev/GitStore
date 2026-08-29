@@ -1,23 +1,23 @@
-# Implementation Plan: Local Multi-User AuthN Provider (`static-users`)
+# Implementation Plan: Local Multi-User AuthN + UserDir Provider (`static-users`)
 
-**Branch**: `060-local-multiuser-authn` | **Date**: 2026-08-29 | **Spec**: [spec.md](spec.md)
+**Branch**: `060-local-multiuser-authn` | **Date**: 2026-08-29 (revised 2026-08-29) | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `/specs/060-local-multiuser-authn/spec.md`
 
 ## Summary
 
-Add `static-users`, a new, additional, opt-in `AuthNProvider` implementation in `gitstore-api` that authenticates HTTP Basic Auth credentials against a config-driven `users.yaml` file listing `{username, bcrypt password_hash}` pairs — structurally a hybrid of `static-admin`'s Basic Auth/JWT session-lifecycle code and `rbac-local`'s file-load/validate/reload convention. `static-admin` is left completely unchanged. `static-users` uses its own dedicated JWT signing secret/issuer to prevent a traced cross-provider privilege-escalation path (research.md Decision 4), and never hardcodes a role, deferring entirely to `rbac-local`'s existing, unmodified `role_bindings` mechanism. One small, additive registry-level change (`ChainedAuthN.IssueSessionFor`) routes session issuance to the provider that actually authenticated the principal, closing a chain-ordering hazard without touching either provider's own code. The test-only `test-user:` bearer-token backdoor in `tests/integration/namespace_contract_test.go` is retired in favor of real `static-users` logins in `TestRepositoryAuthorization_TwoUserNamespaceIsolation`.
+Remove `static-admin` entirely and replace it with `static-users`, a new `AuthNProvider` **and** `UserDirProvider` in `gitstore-api` that authenticates HTTP Basic Auth credentials against a config-driven `users.yaml` file listing `{username, bcrypt password_hash, display_name?, email?}` entries. "Admin" stops being a distinct code concept — it becomes purely an `rbac-local` role name, granted through the existing, unmodified `role_bindings` mechanism. Because `static-admin`'s hardcoded role assignment disappears with it, this plan adds a startup safety check that fails fast if `static-users` + `rbac-local` are both active but no configured username has any `role_bindings` entry, preventing a silent, migration-induced lockout. The migration itself is a documented, operator-run, breaking change (justified against this project's pre-stable alpha-phase precedent), not a runtime env-var fallback. A previously-planned registry-level `IssueSessionFor` addition is dropped as no longer necessary once `static-admin` is gone. Along the way, this plan fixes a confirmed, pre-existing config-validation bug: `auth.jwt.secret` was unconditionally required regardless of whether any local credential provider was even chained in; it becomes conditional on `static-users`' presence in `auth.authn.chain`, while `auth.grpc.hmac_secret` (unrelated to AuthN provider choice) is confirmed correctly unconditional and left untouched.
 
 ## Technical Context
 
-**Language/Version**: Go 1.25 (`gitstore-api`). No Rust (`gitstore-git-service`) or `gitstore-controller-manager` change — this feature is entirely within `gitstore-api`'s AuthN plane and its own integration test harness.
-**Primary Dependencies**: `golang.org/x/crypto/bcrypt` (already in `go.mod`, used identically to `static-admin`), `github.com/golang-jwt/jwt/v5` (already in `go.mod`), `gopkg.in/yaml.v3` (already in `go.mod`, used by `rbac-local`), `go.uber.org/zap`, `github.com/spf13/viper`. No new dependency in any `go.mod`/`Cargo.toml`.
-**Storage**: None. No `datastore.Datastore` interface or schema change. The new user list is a config file (`users.yaml`), not a datastore-backed entity — mirroring `rbac-local`'s `policy.yaml`, which is also not datastore-backed.
-**Testing**: Go unit tests for the new `staticusers` package (mirroring `staticadmin_test.go`'s and `rbaclocal_test.go`'s coverage shapes: load/validate/reload, Basic Auth success/failure, Bearer verify success/expired/foreign-token, revoke, refresh, issue); a unit test proving `static-users`-signed tokens fail `static-admin.authenticateBearer` and vice versa (User Story 3); a `registry_test.go` addition for the new `IssueSessionFor` method; migrated `tests/integration/authz_repository_contract_test.go` and `tests/integration/namespace_contract_test.go` coverage per `contracts/backdoor-retirement.md`; root `make test`/`make build`/`make pr-ready`.
+**Language/Version**: Go 1.25 (`gitstore-api`). No Rust (`gitstore-git-service`) or `gitstore-controller-manager` change.
+**Primary Dependencies**: `golang.org/x/crypto/bcrypt`, `github.com/golang-jwt/jwt/v5`, `gopkg.in/yaml.v3`, `go.uber.org/zap`, `github.com/spf13/viper` — all already in `go.mod`. No new dependency.
+**Storage**: None. No `datastore.Datastore` schema change. `users.yaml` is a config file, not datastore-backed, mirroring `policy.yaml`.
+**Testing**: Go unit tests for the new `staticusers` package (AuthN: load/validate/reload, Basic Auth, Bearer, revoke/refresh/issue; UserDir: get/list/search, not-found sentinel, unsupported writes); a unit test for the new `RBACLocalProvider.HasAnyRoleBindingFor` helper; a unit test for the new `validateAuthChainConfig` function covering both the conditional-JWT-secret case and the unconditional-HMAC-secret case; migrated `tests/integration/authz_repository_contract_test.go` and `tests/integration/namespace_contract_test.go` per `contracts/backdoor-retirement.md`; root `make test`/`make build`/`make pr-ready`.
 **Target Platform**: Linux server and Darwin development hosts already supported by `gitstore-api`.
-**Project Type**: Single-service, additive feature within `gitstore-api`'s existing pluggable AuthN/AuthZ architecture (`docs/implementation/020-pluggable_auth_architecture.md`).
-**Performance Goals**: Not on any hot path beyond what `static-admin` already costs per request (one bcrypt compare on Basic Auth, one HMAC verify on Bearer) — no new performance target.
-**Constraints**: MUST NOT modify `static-admin`'s source, config keys, or behavior (FR-003). MUST NOT modify `rbac-local`'s source (research.md Decision 5 confirms it needs none). MUST NOT modify `oidc-jwt`/spec 059. MUST NOT introduce a new UserDir provider (research.md Decision 6). The one shared-code change (`ChainedAuthN.IssueSessionFor`) MUST be additive — no existing `AuthNProvider`/`ChainedAuthN`/`ProviderRegistry` method signature changes.
-**Scale/Scope**: Config-file-driven user counts (tens, not thousands) — this is explicitly the lightweight/testing/small-deployment path, not a scaled multi-tenant identity store (spec.md Assumptions).
+**Project Type**: Single-service, replacement-in-place feature within `gitstore-api`'s existing pluggable AuthN/AuthZ architecture.
+**Performance Goals**: Not on any hot path beyond what `static-admin` already cost per request (one bcrypt compare on Basic Auth, one HMAC verify on Bearer) — no new performance target.
+**Constraints**: MUST NOT modify `rbac-local`'s `Authorize`/`Policy` decision semantics (only an additive, read-only helper method is added). MUST NOT modify `oidc-jwt`/spec 059. MUST NOT introduce a `users.yaml`/`policy.yaml` mutation API (v1 remains config-file-driven, hand-edited). MUST NOT auto-migrate legacy `GITSTORE_AUTH__ADMIN__*` env vars at runtime.
+**Scale/Scope**: Config-file-driven user counts (tens, not thousands) — the lightweight/testing/small-deployment path, not a scaled multi-tenant identity store.
 
 ## Constitution Check
 
@@ -27,24 +27,25 @@ Add `static-users`, a new, additional, opt-in `AuthNProvider` implementation in 
 
 | Principle | Result | Plan evidence |
 |---|---|---|
-| I. Test-First Development | PASS | Failing unit tests for `staticusers` (load/validate/reload, auth, session lifecycle, cross-provider token-rejection) and for `ChainedAuthN.IssueSessionFor` are written before their implementations (Phase 2/3 task ordering). |
-| II. API-First Design | PASS | The `users.yaml` schema (`data-model.md`) and the `AuthNProvider`/registry contracts (`contracts/static-users-provider.md`) are defined before any provider code is written. No GraphQL schema change at all — `login`/`logout`/`refreshToken` mutations are untouched (their resolvers already delegate generically to the registry). |
-| III. Clear Contracts & Versioning | PASS | Purely additive: one new provider name, one new config section, one new registry method. No existing `AuthNProvider`/`AuthZProvider`/`UserDirProvider` interface signature changes. `static-admin`'s contract is explicitly unchanged (FR-003). |
-| IV. Observability & Debuggability | PASS | `static-users` logs load/reload/auth-decision events with the same `zap` structured-logging conventions `static-admin`/`rbac-local` already use; the `DecisionLogger` AuthZ middleware (unchanged) continues to log every `rbac-local` decision for `static-users` subjects exactly as it does for any other subject. |
-| V. User Story Driven Development | PASS | Work maps to US1 (multi-user authn), US2 (`rbac-local` role_bindings exercised end-to-end), US3 (cross-provider token-safety), US4 (backdoor retirement). |
-| VI. Incremental Delivery | PASS | US1-US3 (the provider itself, fully correct and safe) are independently shippable and testable before US4's test-harness migration begins; US4 depends on US1 existing but not vice versa. |
-| VII. Simplicity & YAGNI | PASS | Every structural choice (file format, load/reload discipline, hashing, session-lifecycle shape) is copied verbatim from one of two already-existing, already-tested providers (`static-admin`, `rbac-local`) rather than inventing new patterns. The one genuinely new piece of shared code (`IssueSessionFor`) is the minimum necessary to close a traced, real security gap (research.md Decision 4) — not speculative. |
+| I. Test-First Development | PASS | Failing unit tests for `staticusers` (AuthN + UserDir), `HasAnyRoleBindingFor`, and `validateAuthChainConfig` are written before their implementations (Phase 2/3 task ordering). |
+| II. API-First Design | PASS | The `users.yaml` schema (`data-model.md`) and the `AuthNProvider`/`UserDirProvider`/config-validation contracts (`contracts/static-users-provider.md`) are defined before any provider code is written. Zero GraphQL schema changes. |
+| III. Clear Contracts & Versioning | PASS (with a documented, precedent-backed exception) | The removal of `static-admin`'s config keys is a breaking change to environment-variable-level configuration, justified per Constitution Principle III's own precedent: spec 030 and spec 046 both already established that removing something never shipped in a stable release is not a breaking change under semver — this project is at `0.1.0-alpha.2`, no stable release exists. See Complexity Tracking. |
+| IV. Observability & Debuggability | PASS | `static-users` logs load/reload/auth-decision events with the same `zap` conventions `static-admin`/`rbac-local` used; the migration-safety startup failure (FR-013) is a clear, actionable error, not a silent misconfiguration. |
+| V. User Story Driven Development | PASS | Work maps to US1 (multi-user AuthN), US2 (`role_bindings` end-to-end and now load-bearing), US3 (migration safety net), US4 (backdoor + harness-bootstrap retirement). |
+| VI. Incremental Delivery | PASS | US1-US3 (the provider itself, fully correct and safe) are independently shippable and testable before US4's test-harness migration begins. |
+| VII. Simplicity & YAGNI | PASS | Every structural choice is copied from `static-admin`'s or `rbac-local`'s existing, already-tested code. The previously-planned `IssueSessionFor` addition is explicitly *removed* in this revision once its motivating problem (two coexisting local providers) no longer exists — the simpler outcome, not a more complex one, is the correct one here. |
 
-**Gate result**: PASS. No complexity exceptions required.
+**Gate result**: PASS. One documented, precedent-backed exception (breaking config-key removal, justified under Principle III's own established pre-stable-release precedent) — recorded in Complexity Tracking, not treated as a silent violation.
 
 ### Post-design gate
 
 Phase 1 design preserves the pre-design result:
 
-- `staticusers.UserList`/`UserEntry` mirror `rbaclocal.Policy`/`RolePolicy`'s exact struct-tag/versioning shape (data-model.md);
-- `StaticUsersProvider`'s session-lifecycle fields (`blacklist`, `jwtSecret`, `jwtDuration`, `refreshGrace`) mirror `StaticAdminProvider`'s exact fields and behavior (contracts/static-users-provider.md);
-- `buildProviderRegistry`'s new `case "static-users":` reuses the existing `switch name { ... }` dispatch shape verbatim (contracts/static-users-provider.md);
-- the backdoor-retirement migration (contracts/backdoor-retirement.md) changes only test-scoped code and leaves the unrelated `namespaceOwnerAuthZ` and `/__test/resource-body` fixtures untouched (FR-015).
+- `staticusers.UserList`/`UserEntry` mirror `rbaclocal.Policy`/`RolePolicy`'s exact struct-tag/versioning shape;
+- `StaticUsersProvider`'s AuthN fields mirror `StaticAdminProvider`'s former exact fields and behavior; its new UserDir methods reuse the same loaded state, no second load path;
+- `buildProviderRegistry`'s `case "static-users":` reuses the existing `switch name { ... }` dispatch shape verbatim, simply replacing the removed `"static-admin"` case;
+- `RBACLocalProvider.HasAnyRoleBindingFor` is additive and read-only — `Authorize`'s decision logic is untouched, preserving the first draft's (and this revision's re-confirmed) finding that `rbac-local` needs no semantic changes;
+- `validateAuthChainConfig` reuses the existing two-phase "generic struct validation, then explicit semantic checks" pattern already present in `validateConfig` (`validateDatastoreConfig`/`validateLogFormat`) rather than inventing a new validation mechanism.
 
 **Post-design result**: PASS.
 
@@ -59,11 +60,11 @@ specs/060-local-multiuser-authn/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   ├── static-users-provider.md      # AuthNProvider contract, registry IssueSessionFor addition, wiring
-│   └── backdoor-retirement.md        # exact test-user: mechanism trace + migration contract
+│   ├── static-users-provider.md      # AuthN + UserDir contract, registry/config wiring, migration-safety check placement
+│   └── backdoor-retirement.md        # test-user: mechanism + harness static-admin bootstrap + namespaceOwnerAuthZ fix
 ├── checklists/
 │   └── requirements.md
-└── tasks.md                           # created later by /speckit-tasks
+└── tasks.md
 ```
 
 ### Source Code (repository root)
@@ -72,45 +73,65 @@ specs/060-local-multiuser-authn/
 gitstore-api/
 ├── internal/
 │   ├── auth/
-│   │   ├── registry.go                       # additive: ChainedAuthN.IssueSessionFor(ctx, *Principal)
-│   │   ├── registry_test.go                   # new tests for IssueSessionFor routing
+│   │   ├── types.go                           # Principal.IsAdmin() doc-comment update only (FR-022) — no behavior change
 │   │   └── provider/
-│   │       └── staticusers/                   # NEW package, sibling to staticadmin/ and rbaclocal/
-│   │           ├── provider.go                  # StaticUsersProvider: Authenticate/RevokeSession/RefreshSession/IssueSession/Reload
-│   │           ├── users.go                     # UserList/UserEntry + loadUsers (mirrors rbaclocal/policy.go)
-│   │           ├── jti.go                       # generateJTI (mirrors staticadmin/jti.go, or shared helper extracted — decided in Phase 0 research if warranted)
-│   │           └── staticusers_test.go
+│   │       ├── staticadmin/                    # DELETED entirely (provider.go, jti.go, staticadmin_test.go)
+│   │       ├── staticusers/                    # NEW package, replaces staticadmin as sibling to rbaclocal/
+│   │       │   ├── provider.go                   # StaticUsersProvider: AuthNProvider methods (mirrors former staticadmin) + UserDirProvider methods (new)
+│   │       │   ├── users.go                      # UserList/UserEntry + loadUsers/validateUsers (mirrors rbaclocal/policy.go)
+│   │       │   ├── errors.go                     # ErrUserNotFound sentinel
+│   │       │   ├── jti.go                        # generateJTI (moved from staticadmin/jti.go, unchanged)
+│   │       │   └── staticusers_test.go
+│   │       └── rbaclocal/
+│   │           └── provider.go                  # additive: HasAnyRoleBindingFor([]string) bool (read-only; Authorize untouched)
 │   ├── config/
-│   │   └── config.go                          # AuthConfig gains StaticUsers StaticUsersConfig `mapstructure:"staticusers"`; new defaults + known-keys entries
-│   ├── app/
-│   │   └── server.go                          # buildProviderRegistry gains `case "static-users":`; SIGHUP reload extended to any active static-users provider
-│   └── graph/resolver/
-│       └── auth_service.go                     # Login calls registry.AuthN().IssueSessionFor(ctx, principal) instead of IssueSession(ctx, principal.Subject)
-└── users.yaml.example                         # NEW, mirrors an existing policy.yaml.example convention if present, else a new documented example file
+│   │   └── config.go                          # Admin/UserConfig fields+type deleted; JWTConfig.Secret loses `validate:"required"`; new StaticUsersConfig; new validateAuthChainConfig; defaults/known-keys/log-marshaling updated
+│   └── app/
+│       └── server.go                          # buildProviderRegistry: "static-admin" case removed, "static-users" case added (also wires UserDirProvider); default chain literal updated; migration-safety check (FR-013) added; SIGHUP reload extended
+├── users.yaml.example                         # NEW, documents the schema from data-model.md
+└── .env.example                               # ADMIN__USERNAME/PASSWORD_HASH lines removed; chain example updated
 
 tests/integration/
-├── namespace_contract_test.go                 # testUserAuthN removed; embedded helper source wires staticusers.New(...) with test-fixture users.yaml instead
+├── namespace_contract_test.go                 # testUserAuthN removed; embedded helper source's staticadmin import/bootstrap replaced with staticusers; namespaceOwnerAuthZ's IsAdmin() check replaced
 └── authz_repository_contract_test.go          # TestRepositoryAuthorization_TwoUserNamespaceIsolation + helpers migrated to real static-users logins
 
+gitstore-api/cmd/server/main_test.go                              # staticadmin.New(...) call migrated to staticusers.New(...)
+gitstore-api/internal/middleware/security/secure_test.go          # same
+gitstore-api/internal/graph/resolver/auth_resolvers_test.go       # same
+gitstore-api/internal/middleware/security/graphql_test.go         # "static-admin" AuthMethod string literals relabeled to "static-users" (cosmetic, no import to migrate)
+gitstore-api/internal/middleware/security/graphql_file_status_test.go  # same
+gitstore-api/internal/auth/provider/rbaclocal/rbaclocal_test.go   # same
+gitstore-api/internal/auth/provider/allowall/allowall_test.go     # same
+
+Makefile                                       # gen-admin-password target replaced by hash-static-user-password; bootstrap-token/bootstrap-namespace/bootstrap-repository hint text updated (ADMIN_USERNAME/ADMIN_PASSWORD variable names kept unchanged)
+
 docs/
-├── implementation/020-pluggable_auth_architecture.md   # §2 gains a new static-users subsection (sibling to static-admin's); §5a gains the new Viper keys; §7 Rollout Phases gains a new phase entry
-└── runbooks/production-readiness-testing.md            # Pattern 4's worked-example citation flagged for a follow-up update (not performed by this spec — see spec.md Assumptions)
+├── implementation/020-pluggable_auth_architecture.md   # §2a rewritten (static-users, not static-admin); §5a config keys updated; §7 Phase 1 language updated
+├── user-guide.md                                       # line 380's static-admin example updated
+└── api-reference.md                                    # line 25's static-admin example updated
 ```
 
-**Structure Decision**: A new provider package (`staticusers/`) sibling to the two existing providers it draws from, one additive registry method, one additive config section, one additive `buildProviderRegistry` case, and a test-harness migration confined to `tests/integration/`. No new service, no new datastore backend, no existing interface signature change, no change to `static-admin`, `rbac-local`, or `oidc-jwt`.
+**Explicitly out of scope for this plan** (research.md Decision 7): `gitstore-api/gen/gitstore/git/v1/*` (generated code — never hand-edited); `docs/implementation/021-controller_service_account_auth.md` (a separate, unimplemented spec's own premise — flagged, not edited); `docs/implementation/019-pluggable_auth_design.md` (superseded historical record).
+
+**Structure Decision**: A direct in-place replacement of one provider package by another, sibling to `rbac-local`; one additive read-only method on `rbac-local`; config-struct removal plus one conditional-validation fix on the same already-being-touched config surface; a test-harness migration confined to `tests/integration/` plus the handful of unit-test files that directly imported the removed package. No new service, no new datastore backend, no `AuthNProvider`/`UserDirProvider`/`AuthZProvider` interface change.
 
 ## Phase 0: Research Outcomes
 
 Research decisions are recorded in [research.md](research.md):
 
-1. Provider name: `static-users` (plural), config keys under `auth.staticusers.*` — chosen to preserve the `static-*` family relationship to `static-admin` while signaling the one-vs-many distinction.
-2. File-loading convention: a dedicated `users.yaml` file, structurally mirroring `rbaclocal/policy.go`'s exact load/validate/reload shape — not embedded in `policy.yaml`, not a raw Viper env-var list.
-3. Password hashing: bcrypt via the existing `gitctl hash-password` subcommand — no new hashing tool or dependency.
-4. **Critical, traced finding**: `static-admin.authenticateBearer` grants its hardcoded `admin` role to *any* bearer token verifying against its own secret/issuer, regardless of subject. `static-users` MUST use a dedicated signing secret/issuer (closes the shared-secret risk with zero `static-admin` change) AND session issuance MUST be routed to the provider that actually authenticated the principal via a new, additive `ChainedAuthN.IssueSessionFor` method (closes the chain-ordering risk, also with zero `static-admin`/`static-users`-internal change — the fix lives in shared registry plumbing and the `Login` resolver's call site).
-5. `rbac-local` requires zero source changes — confirmed by reading `Authorize`/`Policy` in full; `role_bindings` already operates on an arbitrary subject string with no provider-specific assumption.
-6. UserDir (`none`) requires no change — confirmed by an exhaustive grep showing zero live consumers of `registry.UserDir()` anywhere in the GraphQL layer today.
-7. The `test-user:` backdoor is a wholly test-scoped mechanism (an embedded-source-string-compiled throwaway subprocess binary), never linked into the real `gitstore-api` binary — but its continued presence is a lingering unauthenticated-identity-bypass pattern in the codebase, and its exact two migration targets are `tests/integration/authz_repository_contract_test.go` and `tests/integration/namespace_contract_test.go` (no other file matches `test-user:`).
-8. Relationship to spec 059: purely complementary, zero shared code or design dependency in either direction.
+1. Full replacement, not a sibling — `static-admin` deleted entirely; default chain becomes `["static-users","anonymous"]`.
+2. "Admin" is no longer a code concept — purely an `rbac-local` role name via `role_bindings`.
+3. `Principal.IsAdmin()` is no longer reliable for `static-users` principals; confirmed dead on every live (non-test) code path already; doc-comment updated; the one real test-double caller (`namespaceOwnerAuthZ`) is fixed as part of the harness migration.
+4. Migration path: clean breaking change, no runtime env-var fallback — justified by this project's own pre-stable-alpha precedent (spec 030, spec 046, `cmd/gitctl` replacing `cmd/hashpw`) and by a structural reason (an auto-migrated credential would still need a matching `role_bindings` entry in a separately-owned config file, which a runtime auto-write would have to reach into).
+5. The role_bindings safety net: a fail-fast startup check when `static-users` + `rbac-local` are active but no configured username has any `role_bindings` entry — closes the exact "migrated and silently lost admin access" hazard.
+6. Migration tooling: `gitctl hash-password` (unchanged) plus a renamed Makefile convenience wrapper that prints a reminder, no auto-writing of either YAML file.
+7. Removal scope enumerated exhaustively by grep and categorized (provider package, production wiring, tests importing the package, tests using it only as a string label, generated code, in-scope docs, flagged-but-out-of-scope docs).
+8. `ChainedAuthN.IssueSessionFor` (planned in the first draft) is dropped — its motivating problem (two coexisting local, token-minting providers) no longer exists once `static-admin` is removed.
+9. `rbac-local` sufficiency re-confirmed unchanged.
+10. UserDir: implement the read half now, backed by two new optional `users.yaml` fields — reverses the first draft's "no change needed" conclusion because the premise (no real multi-identity data worth serving) changed.
+11. Nothing consumes UserDir yet; `createdBy`/`updatedBy` are the natural future candidates but changing them is a separate, additive GraphQL design decision deferred to whichever future spec needs it.
+12. Config-validation bug found and fixed: `auth.jwt.secret` was unconditionally required regardless of chain contents; made conditional. `auth.grpc.hmac_secret` (the suspected "third env var") confirmed correctly unconditional and explicitly ruled out of the fix.
+13. Relationship to spec 059 unchanged.
 
 All technical unknowns are resolved; no `NEEDS CLARIFICATION` remains.
 
@@ -118,27 +139,30 @@ All technical unknowns are resolved; no `NEEDS CLARIFICATION` remains.
 
 ### Data model
 
-[data-model.md](data-model.md) defines the `users.yaml` file schema, the in-memory `UserList`/`UserEntry`/`StaticUsersProvider` shapes, the new Viper config keys, the `Principal` shape `static-users` produces (no hardcoded roles), and the (unmodified) `policy.yaml` `role_bindings` usage pattern operators will use to make `static-users` identities meaningful for authorization.
+[data-model.md](data-model.md) defines the `users.yaml` schema (including the new optional `display_name`/`email` fields), the in-memory `UserList`/`UserEntry`/`StaticUsersProvider` shapes, the config-struct removal and repurposing (`AuthConfig.Admin` deleted, `AuthConfig.JWT` repurposed to `static-users`, new `AuthConfig.StaticUsers`), the `validateAuthChainConfig` fix, the `Principal`/`UserProfile` shapes `static-users` produces, and the (unmodified) `policy.yaml` `role_bindings` usage pattern that is now load-bearing for any administrative access.
 
 ### Interface contracts
 
-- [contracts/static-users-provider.md](contracts/static-users-provider.md): the `AuthNProvider` method-by-method contract, the additive `ChainedAuthN.IssueSessionFor` method and its call site change in the `Login` resolver, the `buildProviderRegistry` wiring addition, and non-normative chain-ordering guidance.
-- [contracts/backdoor-retirement.md](contracts/backdoor-retirement.md): the exact, traced mechanism behind the `test-user:` bypass, its precise migration targets, and the target post-migration state.
-- [quickstart.md](quickstart.md): test-first implementation order, plus manual verification steps.
+- [contracts/static-users-provider.md](contracts/static-users-provider.md): the `AuthNProvider` + `UserDirProvider` method-by-method contract, the `buildProviderRegistry` wiring change, the `HasAnyRoleBindingFor` helper and the migration-safety check's exact placement, the `validateAuthChainConfig` fix, and the `Principal.IsAdmin()` doc-comment update.
+- [contracts/backdoor-retirement.md](contracts/backdoor-retirement.md): the exact, traced mechanism behind both the `test-user:` bypass *and* the harness's own `static-admin`-based bootstrap (a mechanical consequence of removal, not optional), the `namespaceOwnerAuthZ` fix, and the target post-migration state.
+- [quickstart.md](quickstart.md): test-first implementation order, plus manual verification and migration steps.
 
 ### Implementation sequence
 
-1. Add failing unit tests for `staticusers.loadUsers`/`Reload` (missing file, malformed YAML, duplicate username, missing hash) mirroring `rbaclocal_test.go`'s shape. Implement `users.go` until green.
-2. Add failing unit tests for `StaticUsersProvider.Authenticate` (Basic Auth success/unknown-user/wrong-password; Bearer success/expired/foreign-signature) and session lifecycle (`IssueSession`/`RevokeSession`/`RefreshSession`) mirroring `staticadmin_test.go`'s shape. Implement `provider.go` until green.
-3. Add a failing unit test proving a `static-users`-signed token is rejected by `static-admin.authenticateBearer` and a `static-admin`-signed token is rejected by `static-users`' verifier (User Story 3 / SC-002). Confirm green with distinct secrets/issuers — no implementation change needed beyond Steps 1-2 if secrets are correctly distinct.
-4. Add a failing test for `ChainedAuthN.IssueSessionFor` routing to the provider named by `principal.AuthMethod`, plus a failing `Login` resolver test proving a `static-users` login issues a `static-users`-signed token even when `static-admin` is earlier in the chain (User Story 3 / SC-003). Implement `IssueSessionFor` and the `Login` call-site change until green.
-5. Add the `auth.staticusers.*` Viper config keys, defaults, and known-keys entries in `config.go`; add the `case "static-users":` in `buildProviderRegistry`; extend SIGHUP reload. Add a failing config-validation test first (missing `staticusers.jwt.secret` when `static-users` is chained in).
-6. Add failing `rbac-local` `role_bindings` integration coverage proving two `static-users` subjects bound to two different roles produce different authorization outcomes, with zero `rbac-local` source changes (User Story 2 / SC-004).
-7. Migrate `tests/integration/namespace_contract_test.go` and `tests/integration/authz_repository_contract_test.go` per `contracts/backdoor-retirement.md`; confirm `grep -rn "test-user:" tests/integration/` returns zero matches (User Story 4 / SC-005).
-8. Update `docs/implementation/020-pluggable_auth_architecture.md` (§2, §5a, §7) documenting the new provider and rollout phase; note the `docs/runbooks/production-readiness-testing.md` Pattern 4 citation as a flagged follow-up (not performed here). Run targeted tests, `make build`, `make test`, `make pr-ready`.
+1. Add failing unit tests for `staticusers.loadUsers`/`Reload` (missing file, malformed YAML, wrong `version`, duplicate username, empty `password_hash`) and for the new UserDir read methods (`GetBySubject`/`ListGroups`/`SearchUsers`, including the not-found sentinel). Implement `users.go`/`provider.go`'s UserDir side until green.
+2. Add failing unit tests for `StaticUsersProvider.Authenticate`/session lifecycle (mirroring `staticadmin_test.go`'s former shape, minus anything cross-provider-specific — there is no second local provider to test against anymore). Implement `provider.go`'s AuthN side until green.
+3. Add a failing unit test for `RBACLocalProvider.HasAnyRoleBindingFor`. Implement it as a pure, additive, read-only method until green — confirm `Authorize`'s existing tests are unaffected.
+4. Add a failing unit test for `validateAuthChainConfig` (both directions: `static-users` in chain + empty secret fails; `static-users` absent + empty secret succeeds; `auth.grpc.hmac_secret` empty always fails regardless of chain). Implement it, and remove `JWTConfig.Secret`'s struct tag, until green.
+5. Add a failing test for `buildProviderRegistry`'s migration-safety check (FR-013): `static-users` + `rbac-local` + zero matching `role_bindings` fails with an actionable error; the same with `allow-all` succeeds; the same with at least one matching `role_bindings` entry succeeds. Implement the check until green.
+6. Remove `AuthConfig.Admin`/`UserConfig`, add `AuthConfig.StaticUsers`, update defaults/known-keys/`MarshalLogObject`, replace `buildProviderRegistry`'s `"static-admin"` case with `"static-users"` (including UserDir wiring), update the default chain literal in both `config.go` and `server.go`.
+7. Delete `gitstore-api/internal/auth/provider/staticadmin/` entirely. Fix the resulting compile errors in `gitstore-api/cmd/server/main_test.go`, `gitstore-api/internal/middleware/security/secure_test.go`, `gitstore-api/internal/graph/resolver/auth_resolvers_test.go` by switching their `staticadmin.New(...)` calls to `staticusers.New(...)`.
+8. Relabel the cosmetic `"static-admin"` `AuthMethod` string literals in `gitstore-api/internal/middleware/security/{graphql_test.go,graphql_file_status_test.go}`, `gitstore-api/internal/auth/provider/rbaclocal/rbaclocal_test.go`, `gitstore-api/internal/auth/provider/allowall/allowall_test.go` to `"static-users"`.
+9. Migrate `tests/integration/namespace_contract_test.go` (backdoor removal, `staticadmin`→`staticusers` bootstrap migration, `namespaceOwnerAuthZ` fix) and `tests/integration/authz_repository_contract_test.go` per `contracts/backdoor-retirement.md`. Confirm `grep -rn "test-user:\|staticadmin\|static-admin" tests/integration/` returns zero matches.
+10. Update `Makefile` (`gen-admin-password` → `hash-static-user-password`, hint text in `bootstrap-token`/`bootstrap-namespace`/`bootstrap-repository`), `gitstore-api/.env.example`, `docs/implementation/020-pluggable_auth_architecture.md` (§2a/§5a/§7), `docs/user-guide.md`, `docs/api-reference.md`. Note `docs/implementation/021-controller_service_account_auth.md`'s stale premise as a flagged, not-performed-here follow-up (mirroring how the first draft flagged `docs/runbooks/production-readiness-testing.md`). Run targeted tests, `make build`, `make test`, `make pr-ready`.
 
 ## Complexity Tracking
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |---|---|---|
-| One additive change to shared registry plumbing (`ChainedAuthN.IssueSessionFor`) touching code outside the new provider package | Closing the traced `IssueSession` chain-ordering privilege-escalation hazard (research.md Decision 4) cannot be done inside `static-users`' own code alone — the ambiguity is inherent to `ChainedAuthN`'s existing "first provider that supports it" resolution strategy, which has no way to know which provider authenticated a given subject | Leaving it as an operator-chain-ordering documentation concern was considered and rejected — it is exactly the kind of "correct only by convention, not by construction" outcome that would silently reintroduce a real privilege-escalation path on a misconfigured chain, with no startup warning; a small, additive, well-tested registry method is a strictly smaller risk than that alternative |
+| Breaking removal of `auth.admin.*` configuration keys and the `static-admin` provider, with no runtime backward-compatibility shim | This project has no stable release yet (`0.1.0-alpha.2`); Constitution Principle III's own precedent (already invoked verbatim by spec 030 and spec 046) treats removing something never shipped in a stable release as not a breaking change under semver. A runtime auto-migration shim was seriously considered and rejected on structural grounds (research.md Decision 4): it would still need to reach into `rbac-local`'s separately-owned `policy.yaml` to synthesize a usable role binding, reproducing in a new form the exact "administrative access granted by something invisible in the policy file" problem this spec removes from `static-admin`'s hardcoded role. | A runtime fallback that migrates the credential but not its role binding was rejected — it is precisely the silent-lockout hazard Decision 5's safety net exists to prevent, so choosing it would mean solving that hazard with one hand while reintroducing a variant of it with the other. |
+| One additive method on `rbac-local` (`HasAnyRoleBindingFor`), touching code outside the new provider package | The migration-safety check (FR-013) needs to query `rbac-local`'s loaded `role_bindings` from `buildProviderRegistry`, and no existing read-only accessor exposes that map | Duplicating `role_bindings`' loading/parsing inside `staticusers` or `server.go` instead of adding one accessor method to the package that already owns the data was rejected as strictly worse: it would create a second, independent parser for the same file format, risking drift from `rbaclocal/policy.go`'s own validation rules |
