@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.2](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.1...v0.1.0-alpha.2) (2026-08-29)
+
+
+### Bug Fixes
+
+* **ci:** don't emit an invalid sha tag on tag-triggered builds ([#389](https://github.com/gitstore-dev/GitStore/issues/389)) ([0238038](https://github.com/gitstore-dev/GitStore/commit/023803879aa38dfe03656acb9ef52d6970fc5807))
+
 ## [0.1.0-alpha.1](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.0...v0.1.0-alpha.1) (2026-08-29)
 
 
