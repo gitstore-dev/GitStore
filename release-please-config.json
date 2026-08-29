@@ -1,9 +1,12 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "c761c09be1dff570ffa781748704d523a973d178",
   "packages": {
     ".": {
       "release-type": "simple",
       "versioning": "prerelease",
+      "prerelease": true,
+      "prerelease-type": "alpha",
       "changelog-sections": [
         { "type": "feat", "section": "Features" },
         { "type": "fix", "section": "Bug Fixes" },
