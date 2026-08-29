@@ -99,6 +99,13 @@ func toUpdateCategoryStatusInput(key types.WorkItemKey, patch *StatusPatch) (map
 	return input, nil
 }
 
+// normalizeConditionStatus upper-cases a Condition.Status value before it is
+// sent over the wire as the GraphQL ConditionStatus enum (TRUE/FALSE/UNKNOWN).
+// categorytaxonomy's own statusTrue/statusFalse/statusUnknown constants
+// already match this casing directly, so this is a no-op for that package,
+// but internal/namespace's reconciler still constructs conditions with
+// Go-idiomatic "True"/"False" literals -- this remains load-bearing for
+// that caller and must not be deleted while that's still the case.
 func normalizeConditionStatus(status string) string {
 	status = strings.TrimSpace(status)
 	switch strings.ToUpper(status) {

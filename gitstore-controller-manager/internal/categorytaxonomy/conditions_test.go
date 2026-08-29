@@ -17,8 +17,8 @@ func TestComputeParentResolved_AbsentParentRef(t *testing.T) {
 
 	cond := computeParentResolved(c, self)
 
-	if cond.Status != "True" {
-		t.Errorf("Status = %q, want True", cond.Status)
+	if cond.Status != "TRUE" {
+		t.Errorf("Status = %q, want TRUE", cond.Status)
 	}
 }
 
@@ -29,8 +29,8 @@ func TestComputeParentResolved_ResolvingParentRef(t *testing.T) {
 
 	cond := computeParentResolved(c, self)
 
-	if cond.Status != "True" {
-		t.Errorf("Status = %q, want True", cond.Status)
+	if cond.Status != "TRUE" {
+		t.Errorf("Status = %q, want TRUE", cond.Status)
 	}
 }
 
@@ -40,8 +40,8 @@ func TestComputeParentResolved_NonexistentParentRef(t *testing.T) {
 
 	cond := computeParentResolved(c, self)
 
-	if cond.Status != "False" {
-		t.Errorf("Status = %q, want False", cond.Status)
+	if cond.Status != "FALSE" {
+		t.Errorf("Status = %q, want FALSE", cond.Status)
 	}
 	if cond.Reason == "" || cond.Message == "" {
 		t.Error("expected a reason/message identifying the missing parent")
@@ -50,56 +50,56 @@ func TestComputeParentResolved_NonexistentParentRef(t *testing.T) {
 
 func TestComputeAcyclic_CycleParticipantIsFalse(t *testing.T) {
 	cond := computeAcyclic(true)
-	if cond.Status != "False" {
-		t.Errorf("Status = %q, want False", cond.Status)
+	if cond.Status != "FALSE" {
+		t.Errorf("Status = %q, want FALSE", cond.Status)
 	}
 }
 
 func TestComputeAcyclic_NonParticipantIsTrue(t *testing.T) {
 	cond := computeAcyclic(false)
-	if cond.Status != "True" {
-		t.Errorf("Status = %q, want True", cond.Status)
+	if cond.Status != "TRUE" {
+		t.Errorf("Status = %q, want TRUE", cond.Status)
 	}
 }
 
 func TestComputeReady_AllTrueYieldsTrue(t *testing.T) {
-	parentResolved := status.Condition{Type: "ParentResolved", Status: "True"}
-	acyclic := status.Condition{Type: "Acyclic", Status: "True"}
+	parentResolved := status.Condition{Type: "ParentResolved", Status: "TRUE"}
+	acyclic := status.Condition{Type: "Acyclic", Status: "TRUE"}
 
 	cond := computeReady(parentResolved, acyclic, nil)
-	if cond.Status != "True" {
-		t.Errorf("Status = %q, want True", cond.Status)
+	if cond.Status != "TRUE" {
+		t.Errorf("Status = %q, want TRUE", cond.Status)
 	}
 }
 
 func TestComputeReady_AnyNonTrueYieldsFalse(t *testing.T) {
-	parentResolved := status.Condition{Type: "ParentResolved", Status: "False"}
-	acyclic := status.Condition{Type: "Acyclic", Status: "True"}
+	parentResolved := status.Condition{Type: "ParentResolved", Status: "FALSE"}
+	acyclic := status.Condition{Type: "Acyclic", Status: "TRUE"}
 
 	cond := computeReady(parentResolved, acyclic, nil)
-	if cond.Status != "False" {
-		t.Errorf("Status = %q, want False", cond.Status)
+	if cond.Status != "FALSE" {
+		t.Errorf("Status = %q, want FALSE", cond.Status)
 	}
 }
 
 func TestComputeReady_UnknownFileRefConditionYieldsFalse(t *testing.T) {
-	parentResolved := status.Condition{Type: "ParentResolved", Status: "True"}
-	acyclic := status.Condition{Type: "Acyclic", Status: "True"}
-	fileRef := &status.Condition{Type: "FileRefConfirmed", Status: "Unknown"}
+	parentResolved := status.Condition{Type: "ParentResolved", Status: "TRUE"}
+	acyclic := status.Condition{Type: "Acyclic", Status: "TRUE"}
+	fileRef := &status.Condition{Type: "FileRefConfirmed", Status: "UNKNOWN"}
 
 	cond := computeReady(parentResolved, acyclic, fileRef)
-	if cond.Status != "False" {
-		t.Errorf("Status = %q, want False (Unknown is not True)", cond.Status)
+	if cond.Status != "FALSE" {
+		t.Errorf("Status = %q, want FALSE (UNKNOWN is not TRUE)", cond.Status)
 	}
 }
 
 func TestComputeReady_AbsentFileRefConditionDoesNotBlockReady(t *testing.T) {
-	parentResolved := status.Condition{Type: "ParentResolved", Status: "True"}
-	acyclic := status.Condition{Type: "Acyclic", Status: "True"}
+	parentResolved := status.Condition{Type: "ParentResolved", Status: "TRUE"}
+	acyclic := status.Condition{Type: "Acyclic", Status: "TRUE"}
 
 	cond := computeReady(parentResolved, acyclic, nil)
-	if cond.Status != "True" {
-		t.Errorf("Status = %q, want True (no file-ref condition present)", cond.Status)
+	if cond.Status != "TRUE" {
+		t.Errorf("Status = %q, want TRUE (no file-ref condition present)", cond.Status)
 	}
 }
 
@@ -139,8 +139,8 @@ func TestReconcile_CycleParticipant_PathDepthFrozen_AcyclicFalse(t *testing.T) {
 	for _, cond := range sc.calls[0].Conditions {
 		if cond.Type == "Acyclic" {
 			acyclicFound = true
-			if cond.Status != "False" {
-				t.Errorf("Acyclic.Status = %q, want False", cond.Status)
+			if cond.Status != "FALSE" {
+				t.Errorf("Acyclic.Status = %q, want FALSE", cond.Status)
 			}
 		}
 	}
@@ -199,8 +199,8 @@ func TestReconcile_CycleBroken_AcyclicTrueAndRecomputes(t *testing.T) {
 	}
 
 	for _, cond := range sc.calls[0].Conditions {
-		if cond.Type == "Acyclic" && cond.Status != "True" {
-			t.Errorf("Acyclic.Status = %q, want True", cond.Status)
+		if cond.Type == "Acyclic" && cond.Status != "TRUE" {
+			t.Errorf("Acyclic.Status = %q, want TRUE", cond.Status)
 		}
 	}
 }
