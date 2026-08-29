@@ -602,7 +602,6 @@ func TestCollection_SelectorNotIn(t *testing.T) {
 	if out, err := hProducts.push(); err != nil {
 		t.Fatalf("seeding products failed:\n%s", out)
 	}
-	time.Sleep(500 * time.Millisecond)
 
 	collName := fmt.Sprintf("notin-coll-%d", ts)
 	hColl := newPushHelper(t)
@@ -610,27 +609,24 @@ func TestCollection_SelectorNotIn(t *testing.T) {
 	if out, err := hColl.push(); err != nil {
 		t.Fatalf("collection push failed:\n%s", out)
 	}
-	time.Sleep(500 * time.Millisecond)
 
-	coll := queryCollection(t, ns, collName)
-	if coll == nil {
-		t.Fatal("collection not found")
-	}
+	// Admission-time membership computation races the GraphQL read path
+	// under load (same pattern as TestCollection_SelectorDoesNotExist);
+	// poll for the samsung product to appear rather than a fixed sleep
+	// followed by a single query.
+	coll := waitForCollectionStatus(t, ns, collName, 10*time.Second, func(c *collectionQueryResult) bool {
+		for _, n := range productNamesFromEdges(c) {
+			if n == samsungProduct {
+				return true
+			}
+		}
+		return false
+	})
 	names := productNamesFromEdges(coll)
 	for _, n := range names {
 		if n == appleProduct {
 			t.Errorf("apple product should be excluded by NotIn selector, but was found in collection")
 		}
-	}
-	found := false
-	for _, n := range names {
-		if n == samsungProduct {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("samsung product should be included by NotIn selector, but was not found")
 	}
 }
 
