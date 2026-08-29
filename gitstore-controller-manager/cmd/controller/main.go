@@ -25,6 +25,7 @@ import (
 	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/version"
 	"go.uber.org/zap"
 )
 
@@ -153,7 +154,7 @@ func registerNamespace(ctx context.Context, mgr *manager.Manager, checkpointStor
 // buildMux returns the HTTP handler for the health/metrics and management surface.
 func buildMux(mgr *manager.Manager) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /health", health.NewHandler(mgr))
+	mux.Handle("GET /health", health.NewHandler(mgr, version.Version))
 	mux.Handle("GET /metrics", health.NewMetricsHandler(mgr))
 	mux.HandleFunc("GET /controller/v1/poison/{kind}", api.ListPoisonHandler(mgr))
 	mux.HandleFunc("POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue", api.RequeuePoisonHandler(mgr))
