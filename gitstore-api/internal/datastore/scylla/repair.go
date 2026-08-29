@@ -399,6 +399,9 @@ func ValidateRepairPlan(plan RepairPlan) error {
 		if projection == nil || !knownProjectionTable(projection.Table) {
 			return fmt.Errorf("action %d has an invalid projection table", i)
 		}
+		if action.Type == RepairDelete && !projectionDeleteRepairable(projection.Table) {
+			return fmt.Errorf("action %d cannot delete reservation projection %s safely online", i, projection.Table)
+		}
 		if projection.UID != action.UID {
 			return fmt.Errorf("action %d uid does not match its projection owner", i)
 		}
@@ -902,13 +905,22 @@ func (s *scyllaProjectionRepairStore) ApplyAction(ctx context.Context, action Re
 		if err != nil {
 			return false, err
 		}
-		if resource != nil {
+		if !repairDeleteResourceMatches(action, resource) {
 			return false, nil
 		}
 		return s.deleteProjection(ctx, *action.Before)
 	default:
 		return false, fmt.Errorf("unsupported repair action %q", action.Type)
 	}
+}
+
+func repairDeleteResourceMatches(action RepairAction, resource *AuthoritativeResource) bool {
+	if action.RequireAbsentResource {
+		return resource == nil
+	}
+	return resource != nil &&
+		action.ExpectedResourceVersion != "" &&
+		resource.ResourceVersion == action.ExpectedResourceVersion
 }
 
 func (s *scyllaProjectionRepairStore) insertProjection(ctx context.Context, row ProjectionRecord) (bool, error) {

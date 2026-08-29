@@ -45,7 +45,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-const version = "1.0.0"
+const version = "0.1.0-alpha.2" // x-release-please-version
 
 // eventBusCapacity is the number of recent events retained per resource
 // kind for watch-subscription resume (spec 040, research.md R3).

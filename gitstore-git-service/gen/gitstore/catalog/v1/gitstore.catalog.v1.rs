@@ -15,6 +15,16 @@ pub struct ResourceBlob {
     #[prost(bytes="vec", tag="3")]
     pub content: ::prost::alloc::vec::Vec<u8>,
 }
+/// ResourceValidationTree carries the changed resource blobs from one ref
+/// update. Old and proposed blobs are both available to stateless validation so
+/// immutable author fields can be compared before the ref is advanced.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResourceValidationTree {
+    #[prost(message, repeated, tag="1")]
+    pub old_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
+    #[prost(message, repeated, tag="2")]
+    pub proposed_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
+}
 /// ValidationError is a single field-level violation returned by ValidateResources.
 /// Matches the ParseError shape from spec#015 (validate.Parse).
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -43,6 +53,10 @@ pub struct ValidateResourcesRequest {
     /// Only files with a YAML frontmatter block are included (detected by the git service).
     #[prost(message, repeated, tag="1")]
     pub blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
+    /// trees is the preferred receive-aware representation. blobs remains for
+    /// rolling compatibility with older Git-service/API replicas.
+    #[prost(message, repeated, tag="2")]
+    pub trees: ::prost::alloc::vec::Vec<ResourceValidationTree>,
 }
 /// ValidateResourcesResponse carries the aggregate validation outcome.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -55,6 +69,36 @@ pub struct ValidateResourcesResponse {
     /// All violations across all files are collected before returning (no fail-fast).
     #[prost(message, repeated, tag="2")]
     pub errors: ::prost::alloc::vec::Vec<ValidationError>,
+}
+/// CategoryTaxonomyDeletionTree carries one old/proposed ref-tree pair. The Git
+/// service sends the complete resource sets because the proposed tree, rather
+/// than the currently admitted catalog state, determines whether a child is
+/// deleted or reparented atomically with its parent.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CategoryTaxonomyDeletionTree {
+    #[prost(message, repeated, tag="1")]
+    pub old_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
+    #[prost(message, repeated, tag="2")]
+    pub proposed_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
+}
+/// ValidateCategoryTaxonomyDeletionRequest carries every changed ref tree in
+/// an atomic receive-pack operation. The API only reads these resources and
+/// returns a precondition result; lifecycle mutation remains post-receive.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidateCategoryTaxonomyDeletionRequest {
+    #[prost(string, tag="15")]
+    pub repository_id: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="1")]
+    pub trees: ::prost::alloc::vec::Vec<CategoryTaxonomyDeletionTree>,
+}
+/// ValidateCategoryTaxonomyDeletionResponse is a stable, non-sensitive
+/// precondition result for the pre-receive hook.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidateCategoryTaxonomyDeletionResponse {
+    #[prost(bool, tag="1")]
+    pub accepted: bool,
+    #[prost(string, tag="2")]
+    pub reason: ::prost::alloc::string::String,
 }
 /// AdmitResourcesRequest identifies the accepted push commit to admit into the catalog.
 /// gitstore-api fetches, parses, and stores resources independently using its own
@@ -85,6 +129,10 @@ pub struct AdmitResourcesRequest {
     /// changed resource set by comparing old_commit_sha and new_commit_sha.
     #[prost(string, repeated, tag="5")]
     pub changed_paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// actor_subject is the authenticated principal that performed the push.
+    /// It contains only the stable subject identifier, never raw credentials.
+    #[prost(string, tag="6")]
+    pub actor_subject: ::prost::alloc::string::String,
 }
 /// AdmitResourcesResponse is intentionally empty.
 /// The git service does not inspect this response; it is fire-and-forget.

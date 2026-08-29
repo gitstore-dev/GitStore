@@ -5,9 +5,11 @@ package security
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strings"
 	"unicode"
@@ -110,13 +112,14 @@ func (a *Authorize) GraphQLAuthorizer(ctx context.Context, next graphql.Operatio
 }
 
 // GraphQLFieldAuthorizer runs fine-grained GraphQL authorization checks for
-// mutation fields that require policy evaluation against resource context.
+// mutation and subscription fields that require policy evaluation against
+// resource context.
 func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Resolver) (any, error) {
 	if a.logger == nil {
 		a.logger = zap.NewNop()
 	}
 	fc := graphql.GetFieldContext(ctx)
-	if fc == nil || fc.Object != "Mutation" {
+	if fc == nil || (fc.Object != "Mutation" && fc.Object != "Subscription") {
 		return next(ctx)
 	}
 
@@ -127,6 +130,9 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	var authz auth.AuthZProvider
 	if a.registry != nil {
 		authz = a.registry.AuthZ()
+	}
+	if fc.Object == "Subscription" {
+		return a.authorizeSubscription(ctx, next, fc, principal, authz)
 	}
 
 	switch fc.Field.Name {
@@ -214,6 +220,47 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 				Extensions: map[string]any{"code": "FORBIDDEN"},
 			}
 		}
+	case "updateProductStatus":
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
+		}
+		name, _ := nestedStringArg(fc.Args, "input", "name")
+		namespace, _ := nestedStringArg(fc.Args, "input", "namespace")
+		decision, err := authz.Authorize(ctx, principal, "product.status.write", auth.ResourceContext{
+			Kind: "product", Name: name, Attrs: map[string]any{"namespace": namespace},
+		})
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return nil, &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
+		}
+	case "deleteCategory":
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
+		}
+		encodedID, _ := nestedStringArg(fc.Args, "input", "id")
+		uid, err := decodeCategoryID(encodedID)
+		if err != nil {
+			return nil, gqlerror.Errorf("invalid category ID")
+		}
+		category, err := a.store.GetCategoryTaxonomy(ctx, uid)
+		if err != nil {
+			if errors.Is(err, datastore.ErrNotFound) {
+				return nil, gqlerror.Errorf("category not found")
+			}
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		decision, err := authz.Authorize(ctx, principal, "category.delete", auth.ResourceContext{
+			Kind: "categoryTaxonomy", Name: category.Name, OwnerSub: category.CreationActor,
+			Attrs: map[string]any{"namespace": category.Namespace, "repositoryID": category.RepositoryID},
+		})
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return nil, &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
+		}
 	case "updateResourceStatus":
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
@@ -237,6 +284,66 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	}
 
 	return next(ctx)
+}
+
+func (a *Authorize) authorizeSubscription(
+	ctx context.Context,
+	next graphql.Resolver,
+	fc *graphql.FieldContext,
+	principal *auth.Principal,
+	authz auth.AuthZProvider,
+) (any, error) {
+	var kind string
+	switch fc.Field.Name {
+	case "watchFiles":
+		kind = "File"
+	case "watchResources":
+		kind, _ = directStringArg(fc.Args, "kind")
+		if kind != "File" {
+			return next(ctx)
+		}
+	default:
+		return next(ctx)
+	}
+	if authz == nil {
+		return nil, gqlerror.Errorf("authorization service unavailable")
+	}
+	namespace, _ := directStringArg(fc.Args, "namespace")
+	action := lowerCamelFirst(kind) + ".watch"
+	decision, err := authz.Authorize(ctx, principal, action, auth.ResourceContext{
+		Kind:  kind,
+		Attrs: map[string]any{"namespace": namespace},
+	})
+	if err != nil {
+		return nil, gqlerror.Errorf("authorization error")
+	}
+	if decision.Outcome == auth.OutcomeDeny {
+		return nil, &gqlerror.Error{
+			Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
+			Extensions: map[string]any{"code": "FORBIDDEN"},
+		}
+	}
+	return next(ctx)
+}
+
+func decodeCategoryID(encoded string) (string, error) {
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(string(decoded))
+	if err != nil || u.Scheme != "gid" || u.Host != "GitStore" {
+		return "", fmt.Errorf("invalid global ID")
+	}
+	parts := strings.SplitN(strings.TrimPrefix(u.EscapedPath(), "/"), "/", 2)
+	if len(parts) != 2 || parts[0] != "Category" {
+		return "", fmt.Errorf("invalid category global ID")
+	}
+	uid, err := url.PathUnescape(parts[1])
+	if err != nil || uid == "" {
+		return "", fmt.Errorf("invalid category UID")
+	}
+	return uid, nil
 }
 
 // lowerCamelFirst lowercases the first rune of s, matching GraphQL's
@@ -272,6 +379,24 @@ func (a *Authorize) namespaceDeleteAction(ctx context.Context, name string, prin
 // only the struct-based representation is handled here.
 func nestedStringArg(args map[string]any, parent, key string) (string, bool) {
 	return nestedStringPath(args, parent, key)
+}
+
+func directStringArg(args map[string]any, key string) (string, bool) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return "", false
+	}
+	rv := reflect.ValueOf(value)
+	for rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return "", false
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.String {
+		return "", false
+	}
+	return rv.String(), true
 }
 
 func nestedStringPath(args map[string]any, path ...string) (string, bool) {

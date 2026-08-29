@@ -348,6 +348,27 @@ func TestCatalogueDeleteCompensationFailureRequiresRepair(t *testing.T) {
 	assert.False(t, state["name"])
 }
 
+func TestConditionalDeleteConflictDoesNotMutateProjections(t *testing.T) {
+	projectionDeletes := 0
+	executor := newMutationExecutor(nil)
+	authoritative := mutationAction{
+		Step:  datastore.MutationStep{Operation: "delete", ResourceKind: "ProductVariant", Projection: "authoritative", Action: "delete-authoritative"},
+		Apply: func(context.Context) error { return datastore.ErrConflict },
+	}
+	projection := mutationAction{
+		Step: datastore.MutationStep{Operation: "delete", ResourceKind: "ProductVariant", Projection: "sku", Action: "delete-sku"},
+		Apply: func(context.Context) error {
+			projectionDeletes++
+			return nil
+		},
+	}
+
+	err := executor.executeConditionalDelete(context.Background(), "1", authoritative, projection)
+
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	assert.Zero(t, projectionDeletes)
+}
+
 func createActions(kind string, state map[string]bool, projections []string) []mutationAction {
 	actions := make([]mutationAction, 0, len(projections))
 	for _, projection := range projections {

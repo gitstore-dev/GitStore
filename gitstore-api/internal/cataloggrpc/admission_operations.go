@@ -114,6 +114,12 @@ func comparableForParsed(parsed *validate.ParsedResource, body []byte, defaultNa
 			return comparableResource{}, false
 		}
 		return comparableFromMeta(r.APIVersion, r.Kind, r.Metadata, r.Spec, body, ""), true
+	case "File":
+		r := parsed.File
+		if r == nil {
+			return comparableResource{}, false
+		}
+		return comparableFromMeta(r.APIVersion, r.Kind, r.Metadata, r.Spec, body, defaultNamespace), true
 	default:
 		return comparableResource{}, false
 	}

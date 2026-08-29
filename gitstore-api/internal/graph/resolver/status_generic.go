@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
@@ -69,9 +70,11 @@ func (r *mutationResolver) updateNamespaceStatusGeneric(ctx context.Context, inp
 				Message:    fmt.Sprintf("Namespace %s not found", input.Name),
 				Extensions: map[string]any{"code": "NOT_FOUND"},
 			}
+
 		}
 		return nil, gqlerror.Errorf("update resource status: %v", err)
 	}
+
 	patch := datastore.NamespaceStatusPatch{ResourceVersion: input.ResourceVersion}
 	if input.ObservedGeneration != nil {
 		generation := int64(*input.ObservedGeneration)
@@ -103,4 +106,36 @@ func (r *mutationResolver) updateNamespaceStatusGeneric(ctx context.Context, inp
 	}
 	r.publishNamespaceStatusEvent(namespace)
 	return &model.UpdateResourceStatusPayload{Object: namespaceToJSONMap(namespace)}, nil
+}
+
+func (r *mutationResolver) updateFileStatusGeneric(ctx context.Context, input model.UpdateResourceStatusInput) (*model.UpdateResourceStatusPayload, error) {
+	patch := datastore.FileStatusPatch{ResourceVersion: input.ResourceVersion, LastAppliedRevision: input.LastAppliedRevision}
+	if input.ObservedGeneration != nil {
+		gen := int64(*input.ObservedGeneration)
+		patch.ObservedGeneration = &gen
+	}
+	if input.Conditions != nil {
+		patch.Conditions = toConditions(input.Conditions)
+	}
+	if input.Resolved != nil {
+		patch.Resolved = fileResolvedFromJSONMap(input.Resolved)
+	}
+	updated, err := r.store.UpdateFileStatus(ctx, input.Namespace, input.Name, patch)
+	if err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			current, getErr := r.store.GetFileByName(ctx, input.Namespace, input.Name)
+			if getErr != nil {
+				return nil, gqlerror.Errorf("status update conflict: %v", getErr)
+			}
+			return &model.UpdateResourceStatusPayload{Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion}}, nil
+		}
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, &gqlerror.Error{Message: fmt.Sprintf("File %s/%s not found", input.Namespace, input.Name), Extensions: map[string]any{"code": "NOT_FOUND"}}
+		}
+		return nil, gqlerror.Errorf("update resource status: %v", err)
+	}
+	if r.eventBus != nil {
+		r.eventBus.Publish(eventbus.Event{Type: eventbus.Modified, Kind: "File", Namespace: updated.Namespace, Name: updated.Name, ResourceVersion: updated.ResourceVersion, Object: updated})
+	}
+	return &model.UpdateResourceStatusPayload{Object: fileToJSONMap(updated)}, nil
 }

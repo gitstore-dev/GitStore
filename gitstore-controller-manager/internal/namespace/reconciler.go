@@ -25,6 +25,16 @@ const (
 	conditionSystemRepoReady   = "SystemRepoReady"
 	conditionReady             = "Ready"
 
+	// statusTrue/statusFalse match the GraphQL wire enum ConditionStatus
+	// (shared/schemas/schema.graphqls: TRUE/FALSE/UNKNOWN), not Go's
+	// zero-value bool-ish casing. This matters because
+	// internal/status.StatusPatch.IsNoOp compares Condition.Status
+	// case-sensitively against values read back from the real GraphQL
+	// list/watch path, which always carries the enum's upper-case wire
+	// casing.
+	statusTrue  = "TRUE"
+	statusFalse = "FALSE"
+
 	namespaceDrainPollInterval = 5 * time.Second
 )
 
@@ -154,7 +164,7 @@ func mergeControllerConditions(current Namespace, admitted, systemReady bool, pr
 
 	systemCondition := &status.Condition{
 		Type:               conditionSystemRepoReady,
-		Status:             "False",
+		Status:             statusFalse,
 		ObservedGeneration: current.Generation,
 		LastTransitionTime: time.Now(),
 	}
@@ -166,21 +176,21 @@ func mergeControllerConditions(current Namespace, admitted, systemReady bool, pr
 		systemCondition.Reason = "ProvisioningFailed"
 		systemCondition.Message = provisionErr.Error()
 	default:
-		systemCondition.Status = "True"
+		systemCondition.Status = statusTrue
 		systemCondition.Reason = "RepositoryReady"
 		systemCondition.Message = "per-namespace gitstore-system repository exists"
 	}
 
 	readyCondition := &status.Condition{
 		Type:               conditionReady,
-		Status:             "False",
+		Status:             statusFalse,
 		ObservedGeneration: current.Generation,
 		LastTransitionTime: time.Now(),
 		Reason:             "ConditionsNotSatisfied",
 		Message:            "AdmissionAccepted and SystemRepoReady must both be True",
 	}
 	if admitted && systemReady {
-		readyCondition.Status = "True"
+		readyCondition.Status = statusTrue
 		readyCondition.Reason = "NamespaceReady"
 		readyCondition.Message = "namespace admission and system repository provisioning are complete"
 	}

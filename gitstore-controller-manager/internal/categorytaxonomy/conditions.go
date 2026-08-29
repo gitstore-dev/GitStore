@@ -18,9 +18,16 @@ const (
 	conditionReady          = "Ready"
 	conditionFileRefPrefix  = "FileRefConfirmed"
 
-	statusTrue    = "True"
-	statusFalse   = "False"
-	statusUnknown = "Unknown"
+	// statusTrue/statusFalse/statusUnknown match the GraphQL wire enum
+	// ConditionStatus (shared/schemas/schema.graphqls: TRUE/FALSE/UNKNOWN),
+	// not Go's zero-value bool-ish casing. This matters because
+	// internal/status.StatusPatch.IsNoOp compares Condition.Status
+	// case-sensitively against values read back from the real GraphQL
+	// list/watch path, which always carries the enum's upper-case wire
+	// casing.
+	statusTrue    = "TRUE"
+	statusFalse   = "FALSE"
+	statusUnknown = "UNKNOWN"
 )
 
 // computeParentResolved implements FR-006: True when self.ParentRefName is

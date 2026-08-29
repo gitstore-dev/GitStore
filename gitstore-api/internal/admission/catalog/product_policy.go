@@ -7,25 +7,42 @@ import (
 	"context"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	catalogapi "github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"go.uber.org/zap"
 )
 
-// ProductValidatingPolicy implements admission.ValidatingAdmissionPolicy for
-// Kind == "Product". It is a stub with no checks in spec 027 — a named
-// placeholder so that future rules are added by editing this file rather than
-// creating new infrastructure.
+// ProductValidatingPolicy implements category-target admission checks.
 type ProductValidatingPolicy struct {
-	log *zap.Logger
+	store datastore.Datastore
+	log   *zap.Logger
 }
 
 // NewProductValidatingPolicy constructs the policy.
-func NewProductValidatingPolicy(log *zap.Logger) *ProductValidatingPolicy {
-	return &ProductValidatingPolicy{log: log}
+func NewProductValidatingPolicy(log *zap.Logger, stores ...datastore.Datastore) *ProductValidatingPolicy {
+	var store datastore.Datastore
+	if len(stores) > 0 {
+		store = stores[0]
+	}
+	return &ProductValidatingPolicy{store: store, log: log}
 }
 
 func (p *ProductValidatingPolicy) Name() string { return "ProductValidatingPolicy" }
 
-// Validate returns Allowed with no conditions. No checks in spec 027.
-func (p *ProductValidatingPolicy) Validate(_ context.Context, _ admission.AdmissionRequest) admission.AdmissionDecision {
+// Validate rejects a Product that targets an already-terminating category.
+// Missing categories remain legitimate unresolved references.
+func (p *ProductValidatingPolicy) Validate(ctx context.Context, req admission.AdmissionRequest) admission.AdmissionDecision {
+	resource, ok := req.Object.(*catalogapi.ProductResource)
+	if !ok || resource == nil || resource.Spec.CategoryRef == nil || resource.Spec.CategoryRef.Name == "" || p.store == nil {
+		return admission.DecisionAllow()
+	}
+	namespace := resource.Metadata.Namespace
+	if namespace == "" {
+		namespace = req.Namespace
+	}
+	category, err := p.store.GetCategoryTaxonomyByName(ctx, namespace, resource.Spec.CategoryRef.Name)
+	if err == nil && category != nil && category.DeletionTimestamp != nil {
+		return admission.DecisionDeny("CategoryTerminating", "spec.categoryRef.name")
+	}
 	return admission.DecisionAllow()
 }

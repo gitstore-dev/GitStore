@@ -84,6 +84,9 @@ When a namespace is bootstrapped the API automatically creates a repository name
 2. Admission re-validates the spec delta and updates the datastore record.
 3. Enforced immutable fields: `metadata.name`, `spec.tier` (demotion not allowed in
    Phase 1).
+4. Admission rechecks the authoring ref before each Namespace write. Conditional
+   `resourceVersion` updates prevent a delayed, older commit from replacing a newer
+   admitted revision across API replicas.
 
 Bootstrap namespaces are system-managed and reject `updateNamespace`.
 

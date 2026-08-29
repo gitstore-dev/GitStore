@@ -24,6 +24,29 @@ type stubDatastore struct {
 	getProductFinding *datastore.ProjectionFinding
 }
 
+func (s *stubDatastore) CreateFile(_ context.Context, _ *datastore.File) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) GetFile(_ context.Context, _ string) (*datastore.File, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) GetFileByName(_ context.Context, _, _ string) (*datastore.File, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) ListFiles(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) UpdateFile(_ context.Context, _ *datastore.File, _ string) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) DeleteFile(_ context.Context, _ string) error { return s.getProductErr }
+func (s *stubDatastore) DeleteFileWithResourceVersion(_ context.Context, _, _ string) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) UpdateFileStatus(_ context.Context, _, _ string, _ datastore.FileStatusPatch) (*datastore.File, error) {
+	return nil, s.getProductErr
+}
+
 func (s *stubDatastore) CreateProduct(_ context.Context, _ *datastore.Product) error {
 	return s.getProductErr
 }
@@ -43,6 +66,9 @@ func (s *stubDatastore) UpdateProduct(_ context.Context, _ *datastore.Product) e
 	return s.getProductErr
 }
 func (s *stubDatastore) DeleteProduct(_ context.Context, _ string) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) DeleteProductWithResourceVersion(_ context.Context, _, _ string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) CreateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
@@ -90,6 +116,9 @@ func (s *stubDatastore) UpdateProductVariant(_ context.Context, _ *datastore.Pro
 func (s *stubDatastore) DeleteProductVariant(_ context.Context, _ string) error {
 	return s.getProductErr
 }
+func (s *stubDatastore) DeleteProductVariantWithResourceVersion(_ context.Context, _, _ string) error {
+	return s.getProductErr
+}
 func (s *stubDatastore) CreateCollection(_ context.Context, _ *datastore.Collection) error {
 	return s.getProductErr
 }
@@ -106,6 +135,9 @@ func (s *stubDatastore) UpdateCollection(_ context.Context, _ *datastore.Collect
 	return s.getProductErr
 }
 func (s *stubDatastore) DeleteCollection(_ context.Context, _ string) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) DeleteCollectionWithResourceVersion(_ context.Context, _, _ string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) ListProductsByLabelSelector(_ context.Context, _ string, _ catalog.LabelSelector) ([]*datastore.Product, error) {

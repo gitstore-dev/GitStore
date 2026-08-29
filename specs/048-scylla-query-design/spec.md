@@ -2,7 +2,7 @@
 
 **Feature Branch**: `048-scylla-query-design`  
 **Created**: 2026-08-19  
-**Status**: Draft  
+**Status**: In progress  
 **Input**: User description: "Create a branch with the current branch as tip and implement #353 and the related Scylla hardening sub-issues."
 
 ## User Scenarios & Testing *(mandatory)*
