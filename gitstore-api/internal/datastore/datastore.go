@@ -135,6 +135,7 @@ type OwnerDependentPage struct {
 // Datastore so older test stores and rolling-upgrade readers continue to work.
 type OwnerReferenceStore interface {
 	HasBlockingOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID string) (bool, error)
+	ListBlockingOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID, after string, limit int) (OwnerDependentPage, error)
 	ListNonBlockingProductOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID, after string, limit int) (OwnerDependentPage, error)
 }
 

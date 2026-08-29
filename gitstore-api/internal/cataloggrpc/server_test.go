@@ -712,6 +712,22 @@ func TestAdmitResources_FileContentTypeIsImmutable(t *testing.T) {
 	assert.Equal(t, "Updated alt text", file.Body)
 }
 
+func TestValidateResources_FileContentTypeIsImmutable(t *testing.T) {
+	srv := newCatalogServer(t, newTestDatastore(t), nil)
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Trees: []*catalogv1.ResourceValidationTree{{
+			OldBlobs:      []*catalogv1.ResourceBlob{{Path: "files/hero.md", Content: makeFileWithContentType("hero", "image/jpeg")}},
+			ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "files/hero.md", Content: makeFileWithContentType("hero", "image/png")}},
+		}},
+	})
+	require.NoError(t, err)
+	require.False(t, resp.Accepted)
+	require.Len(t, resp.Errors, 1)
+	assert.Equal(t, "spec.contentType", resp.Errors[0].Field)
+	assert.Contains(t, resp.Errors[0].Message, "immutable")
+}
+
 // T020a: valid commit_sha with one product file → CreateProduct called with correct spec fields
 func TestAdmitResources_NewProduct_Created(t *testing.T) {
 	memStore := newTestDatastore(t)
@@ -1504,6 +1520,34 @@ spec:
 	}
 }
 
+func TestValidateCategoryTaxonomyDeletionRejectsIndexedChildOutsideProposedTree(t *testing.T) {
+	store := newTestDatastore(t)
+	ctx := context.Background()
+	parent := &datastore.CategoryTaxonomy{
+		UID: "00000000-0000-0000-0000-000000000311", Namespace: "gitstore", Name: "parent",
+		RepositoryID: testRepoID, ResourceVersion: "1", APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy",
+	}
+	child := &datastore.CategoryTaxonomy{
+		UID: "00000000-0000-0000-0000-000000000312", Namespace: "gitstore", Name: "child",
+		RepositoryID: wrongNamespaceRepoID, ResourceVersion: "1", APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy",
+		OwnerReferences: []byte(`[{"apiVersion":"catalog.gitstore.dev/v1beta1","kind":"CategoryTaxonomy","name":"parent","uid":"00000000-0000-0000-0000-000000000311","repositoryID":"00000000-0000-0000-0000-000000000001","blockOwnerDeletion":true}]`),
+	}
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, parent))
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, child))
+
+	srv := newCatalogServer(t, store, nil)
+	response, err := srv.ValidateCategoryTaxonomyDeletion(ctx, &catalogv1.ValidateCategoryTaxonomyDeletionRequest{
+		RepositoryId: testRepoID,
+		Trees: []*catalogv1.CategoryTaxonomyDeletionTree{deletionValidationTree(
+			map[string][]byte{"categories/parent.md": makeCategoryTaxonomy("parent")},
+			map[string][]byte{},
+		)},
+	})
+	require.NoError(t, err)
+	assert.False(t, response.Accepted)
+	assert.Equal(t, "child categories present", response.Reason)
+}
+
 func TestAdmitResources_IntraPushCycle_BothStoredWithAcyclicFalse(t *testing.T) {
 	memStore := newTestDatastore(t)
 	files := map[string][]byte{
@@ -2247,6 +2291,37 @@ func TestAdmitResources_OperationAwareDeleteRemovesProductVariant(t *testing.T) 
 
 	_, err = store.GetProductVariantByName(context.Background(), "gitstore", "red")
 	assert.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestAdmitResources_ReparentChildBeforeDeletingFormerParent(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	current := a
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {
+			"categories/parent.md": makeCategoryTaxonomy("parent"),
+			"categories/other.md":  makeCategoryTaxonomy("other"),
+			"categories/child.md":  makeCategoryTaxonomyWithParent("child", "parent"),
+		},
+		b: {
+			"categories/other.md": makeCategoryTaxonomy("other"),
+			"categories/child.md": makeCategoryTaxonomyWithParent("child", "other"),
+		},
+	})
+	srv := newCatalogServer(t, store, git)
+	admitDelta(t, srv, zero, a)
+
+	current = b
+	admitDelta(t, srv, a, b)
+
+	child, err := store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "child")
+	require.NoError(t, err)
+	assert.Equal(t, "other", child.ParentName)
+	parent, err := store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "parent")
+	require.NoError(t, err)
+	assert.NotNil(t, parent.DeletionTimestamp)
 }
 
 // T017 (spec 042): deleting a product with a categoryRef publishes a

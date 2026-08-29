@@ -61,7 +61,7 @@ type ResolvedFileVariant struct {
 	URL  string `json:"url,omitempty"`
 }
 
-func (s FileSpec) Validate() error {
+func (s FileSpec) Validate(resourceNamespace string) error {
 	switch s.Source.Type {
 	case "git", "lfs", "s3", "gcs":
 	default:
@@ -76,7 +76,8 @@ func (s FileSpec) Validate() error {
 	if s.Source.Checksum != nil && (s.Source.Checksum.Algorithm == "" || s.Source.Checksum.Value == "") {
 		return fmt.Errorf("validate: spec.source.checksum.algorithm and value are required together")
 	}
-	if s.Source.CredentialsRef != nil && s.Source.CredentialsRef.Namespace != "" {
+	if s.Source.CredentialsRef != nil && s.Source.CredentialsRef.Namespace != "" &&
+		s.Source.CredentialsRef.Namespace != resourceNamespace {
 		return fmt.Errorf("validate: spec.source.credentialsRef.namespace must match the resource namespace")
 	}
 	if s.Processing != nil && s.Processing.Image != nil {

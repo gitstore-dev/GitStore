@@ -129,16 +129,16 @@ func (s *scyllaDatastore) getFileByKey(ctx context.Context, ns string, created t
 	return fromFileRow(&row), nil
 }
 func (s *scyllaDatastore) ListFiles(ctx context.Context, ns string, page datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
-	stmt := fmt.Sprintf("SELECT %s FROM files_by_namespace WHERE namespace=?", strings.Join(s.fileByNamespaceTable.Metadata().Columns, ", "))
+	pq := buildPaginatedSelect(s.fileByNamespaceTable, page, "namespace", ns, namespaceClusterKeys, nil, nil)
 	var rows []fileRow
-	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(ns).SelectRelease(&rows); err != nil {
+	if err := s.session.Query(pq.Stmt, nil).WithContext(ctx).Bind(pq.Args...).SelectRelease(&rows); err != nil {
 		return nil, err
 	}
 	items := make([]*datastore.File, len(rows))
 	for i := range rows {
 		items[i] = fromFileRow(&rows[i])
 	}
-	return &datastore.PageResult[datastore.File]{Items: items, TotalCount: int32(len(items))}, nil
+	return buildPageResult(items, page.Limit(), page), nil
 }
 func (s *scyllaDatastore) UpdateFile(ctx context.Context, f *datastore.File) error {
 	old, err := s.GetFile(ctx, f.UID)

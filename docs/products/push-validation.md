@@ -15,10 +15,20 @@ Only files whose raw bytes begin with a YAML frontmatter delimiter (`---`) are s
 
 ## Pre-receive Validation
 
-The git service walks the incoming commit tree (from the quarantine area) and collects candidate files. For each file:
+The git service walks the changed portions of the old and proposed commit trees
+(from the quarantine area) and collects candidate files. For each file:
 
 - If the file does not start with `---`, it is skipped.
 - If the file starts with `---`, it is sent to `CatalogService.ValidateResources` as a `ResourceBlob`.
+
+For a changed resource, the call also carries its old and proposed Git blobs.
+This enables stateless immutable-field checks before the ref advances: File
+`spec.contentType`, ProductVariant `spec.sku` and `spec.productRef`, and
+Namespace tier demotions are rejected without a datastore read. `metadata.name`
+and `metadata.namespace` remain resource identity, so changing either is a
+delete/create operation rather than an in-place update. Product,
+CategoryTaxonomy, and Collection have no additional immutable authored fields;
+Repository rename is intentionally supported by its API contract.
 
 The validation call is **blocking** and has a configurable timeout (`GITSTORE_SCHEMA_VALIDATION__TIMEOUT_SECS`, default 10 seconds). If the validation service is unreachable or times out, the push is **rejected** (fail-closed).
 
@@ -41,7 +51,7 @@ The API then:
 4. Calls `GetFile` for changed resource files, parses frontmatter, dispatches on `kind`, and stores, updates, or deletes the catalog record.
 5. Sets `AdmissionAccepted: True` status on stored or updated resources.
 
-Supported `kind` values: `Product`, `ProductVariant`, `CategoryTaxonomy`, `Collection`.
+Supported `kind` values: `Product`, `ProductVariant`, `CategoryTaxonomy`, `Collection`, `File`, and `Namespace`.
 
 Failures for individual resources are logged with operation, namespace, name, and conflict details where available. They do not block remaining resources and cannot reject a Git push that has already been accepted.
 

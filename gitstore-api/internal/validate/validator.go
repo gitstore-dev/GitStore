@@ -196,7 +196,7 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		if err := p.validator().Struct(res); err != nil {
 			errs = append(errs, toFriendlyError(err))
 		}
-		if err := res.Spec.Validate(); err != nil {
+		if err := res.Spec.Validate(res.Metadata.Namespace); err != nil {
 			errs = append(errs, err)
 		}
 		if err := validateLabels(res.Metadata.Labels); err != nil {

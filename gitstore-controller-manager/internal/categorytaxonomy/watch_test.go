@@ -3,7 +3,10 @@
 
 package categorytaxonomy
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestAcceptWatchUpdate(t *testing.T) {
 	t.Parallel()
@@ -65,5 +68,14 @@ func TestShouldEnqueueWatchUpdate(t *testing.T) {
 	}
 	if !ShouldEnqueueWatchUpdate(oldObj, CategoryTaxonomy{Generation: 3, ResourceVersion: "11"}) {
 		t.Fatal("new spec generation should enqueue reconciliation")
+	}
+	deletedAt := time.Now().UTC()
+	if !ShouldEnqueueWatchUpdate(oldObj, CategoryTaxonomy{
+		Generation:        2,
+		ResourceVersion:   "11",
+		DeletionTimestamp: &deletedAt,
+		Finalizers:        []string{datastoreForegroundDeletionFinalizer},
+	}) {
+		t.Fatal("deletion lifecycle update should enqueue reconciliation")
 	}
 }

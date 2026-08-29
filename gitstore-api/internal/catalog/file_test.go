@@ -28,8 +28,13 @@ func TestFileSpecSourceValidation(t *testing.T) {
 	require.NoError(t, (FileSpec{
 		ContentType: "image/jpeg",
 		Source:      FileSourceDefinition{Type: "s3", URI: "s3://bucket/key"},
-	}).Validate())
-	require.Error(t, (FileSpec{ContentType: "image/jpeg"}).Validate())
+	}).Validate("store"))
+	require.NoError(t, (FileSpec{
+		ContentType: "image/jpeg", Source: FileSourceDefinition{
+			Type: "s3", URI: "s3://bucket/key", CredentialsRef: &SecretRef{Kind: "Secret", Name: "cloud", Namespace: "store"},
+		},
+	}).Validate("store"))
+	require.Error(t, (FileSpec{ContentType: "image/jpeg"}).Validate("store"))
 }
 
 func TestFileResourceContractIdentityDefaultsAndSystemStatus(t *testing.T) {
@@ -45,7 +50,7 @@ func TestFileResourceContractIdentityDefaultsAndSystemStatus(t *testing.T) {
 	require.Equal(t, FileAPIVersion, resource.APIVersion)
 	require.Equal(t, "File", resource.Kind)
 	require.Equal(t, "hero", resource.Metadata.Name)
-	require.NoError(t, resource.Spec.Validate())
+	require.NoError(t, resource.Spec.Validate(resource.Metadata.Namespace))
 
 	raw, err := json.Marshal(FileStatus{
 		ObservedGeneration: 1,

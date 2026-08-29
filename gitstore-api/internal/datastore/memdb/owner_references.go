@@ -103,6 +103,35 @@ func (m *memdbDatastore) HasBlockingOwnerDependents(_ context.Context, scope dat
 	return it.Next() != nil, nil
 }
 
+func (m *memdbDatastore) ListBlockingOwnerDependents(_ context.Context, scope datastore.OwnerReferenceScope, ownerUID, after string, limit int) (datastore.OwnerDependentPage, error) {
+	if limit <= 0 {
+		limit = datastore.DefaultPageSize
+	}
+	if limit > datastore.MaxOwnerDependentPageSize {
+		limit = datastore.MaxOwnerDependentPageSize
+	}
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	it, err := txn.Get("owner_reference", "owner_block", scope.Namespace, scope.RepositoryID, ownerUID, "1")
+	if err != nil {
+		return datastore.OwnerDependentPage{}, fmt.Errorf("memdb: list blocking owner dependents: %w", err)
+	}
+	page := datastore.OwnerDependentPage{}
+	for raw := it.Next(); raw != nil; raw = it.Next() {
+		projection := raw.(*ownerReferenceProjection)
+		if projection.DependentUID <= after {
+			continue
+		}
+		page.Items = append(page.Items, datastore.OwnerDependent{DependentUID: projection.DependentUID, DependentKind: projection.DependentKind, Name: projection.Name, ResourceVersion: projection.ResourceVersion})
+	}
+	sort.Slice(page.Items, func(i, j int) bool { return page.Items[i].DependentUID < page.Items[j].DependentUID })
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor = page.Items[len(page.Items)-1].DependentUID
+	}
+	return page, nil
+}
+
 func (m *memdbDatastore) ListNonBlockingProductOwnerDependents(_ context.Context, scope datastore.OwnerReferenceScope, ownerUID, after string, limit int) (datastore.OwnerDependentPage, error) {
 	if limit <= 0 {
 		limit = datastore.DefaultPageSize

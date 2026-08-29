@@ -180,16 +180,29 @@ fn collect_deletion_trees(
         let old_tree =
             get_tree_id(repo, old_commit).ok_or_else(|| "resolve old commit tree".to_string())?;
 
-        let proposed_blobs = if update.new_oid == ZERO_OID {
-            Vec::new()
+        let proposed_tree = if update.new_oid == ZERO_OID {
+            None
         } else {
             let new_commit = gix::ObjectId::from_hex(update.new_oid.as_bytes())
                 .map_err(|error| format!("parse new commit: {error}"))?;
-            let new_tree = get_tree_id(repo, new_commit)
-                .ok_or_else(|| "resolve proposed commit tree".to_string())?;
+            Some(
+                get_tree_id(repo, new_commit)
+                    .ok_or_else(|| "resolve proposed commit tree".to_string())?,
+            )
+        };
+        // Avoid packaging complete trees (and making an RPC) for ordinary
+        // edits. Only an update that removes or changes a CategoryTaxonomy can
+        // require the deletion precondition check.
+        if !removes_category_taxonomy(repo, old_tree, proposed_tree) {
+            continue;
+        }
+
+        let proposed_blobs = if let Some(new_tree) = proposed_tree {
             let mut blobs = Vec::new();
             collect_blobs_from_tree(repo, new_tree, "", &mut blobs);
             blobs
+        } else {
+            Vec::new()
         };
         let mut old_blobs = Vec::new();
         collect_blobs_from_tree(repo, old_tree, "", &mut old_blobs);
@@ -199,6 +212,98 @@ fn collect_deletion_trees(
         });
     }
     Ok(trees)
+}
+
+fn removes_category_taxonomy(
+    repo: &gix::Repository,
+    old_tree: gix::ObjectId,
+    proposed_tree: Option<gix::ObjectId>,
+) -> bool {
+    let Some(proposed_tree) = proposed_tree else {
+        return tree_contains_category_taxonomy(repo, old_tree);
+    };
+    category_removed_from_trees(repo, old_tree, proposed_tree)
+}
+
+fn category_removed_from_trees(
+    repo: &gix::Repository,
+    old_tree: gix::ObjectId,
+    proposed_tree: gix::ObjectId,
+) -> bool {
+    let old_entries = crate::git::tree_diff::decode_tree(repo, old_tree);
+    let proposed_entries = crate::git::tree_diff::decode_tree(repo, proposed_tree);
+    let proposed_by_name: std::collections::HashMap<_, _> = proposed_entries
+        .iter()
+        .map(|entry| (entry.filename.to_string(), entry))
+        .collect();
+    for old in old_entries {
+        let proposed = proposed_by_name.get(&old.filename.to_string());
+        match (
+            old.mode.kind(),
+            proposed.map(|entry| (entry.oid, entry.mode.kind())),
+        ) {
+            (
+                gix::object::tree::EntryKind::Tree,
+                Some((new_id, gix::object::tree::EntryKind::Tree)),
+            ) if old.oid != new_id => {
+                if category_removed_from_trees(repo, old.oid, new_id) {
+                    return true;
+                }
+            }
+            (gix::object::tree::EntryKind::Tree, Some((_, gix::object::tree::EntryKind::Tree))) => {
+            }
+            (gix::object::tree::EntryKind::Tree, _)
+                if tree_contains_category_taxonomy(repo, old.oid) =>
+            {
+                return true
+            }
+            (kind, Some((new_id, new_kind)))
+                if is_blob(kind) && is_blob(new_kind) && old.oid != new_id =>
+            {
+                if is_category_taxonomy_blob(repo, old.oid)
+                    && !is_category_taxonomy_blob(repo, new_id)
+                {
+                    return true;
+                }
+            }
+            (kind, None) if is_blob(kind) && is_category_taxonomy_blob(repo, old.oid) => {
+                return true
+            }
+            (kind, Some(_)) if is_blob(kind) && is_category_taxonomy_blob(repo, old.oid) => {
+                return true
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn tree_contains_category_taxonomy(repo: &gix::Repository, tree: gix::ObjectId) -> bool {
+    crate::git::tree_diff::decode_tree(repo, tree)
+        .into_iter()
+        .any(|entry| match entry.mode.kind() {
+            gix::object::tree::EntryKind::Tree => tree_contains_category_taxonomy(repo, entry.oid),
+            kind if is_blob(kind) => is_category_taxonomy_blob(repo, entry.oid),
+            _ => false,
+        })
+}
+
+fn is_blob(kind: gix::object::tree::EntryKind) -> bool {
+    matches!(
+        kind,
+        gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable
+    )
+}
+
+fn is_category_taxonomy_blob(repo: &gix::Repository, oid: gix::ObjectId) -> bool {
+    repo.find_object(oid)
+        .map(|object| {
+            object
+                .data
+                .windows(b"kind: CategoryTaxonomy".len())
+                .any(|part| part == b"kind: CategoryTaxonomy")
+        })
+        .unwrap_or(false)
 }
 
 fn to_proto_blob(blob: ResourceBlob) -> catalog_proto::ResourceBlob {
@@ -358,7 +463,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn creates_skip_but_updates_compare_the_proposed_tree() {
+    async fn creates_and_non_deletion_updates_skip_validation() {
         let directory = tempfile::TempDir::new().unwrap();
         let repository = make_bare_repo(directory.path());
         let old_oid = make_commit(&repository, "first");
@@ -402,7 +507,7 @@ mod tests {
 
         assert!(matches!(create, AdmissionDecision::Accept));
         assert!(matches!(update, AdmissionDecision::Accept));
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
@@ -449,7 +554,10 @@ mod tests {
     async fn unavailable_api_rejects_deletion() {
         let directory = tempfile::TempDir::new().unwrap();
         let repository = make_bare_repo(directory.path());
-        let old_oid = make_commit(&repository, "first");
+        let old_oid = make_commit(
+            &repository,
+            "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: CategoryTaxonomy\nmetadata:\n  name: parent\nspec:\n  title: Parent\n---\n",
+        );
         let handler = CategoryTaxonomyDeletionHandler::connect(
             "http://127.0.0.1:1",
             Duration::from_millis(100),
