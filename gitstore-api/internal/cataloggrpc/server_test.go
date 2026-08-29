@@ -2270,6 +2270,52 @@ func admitDelta(t *testing.T, srv *cataloggrpc.Server, oldCommit, newCommit stri
 	require.NoError(t, err)
 }
 
+type concurrentProductDeleteStore struct {
+	datastore.Datastore
+}
+
+func (s *concurrentProductDeleteStore) DeleteProductWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
+	current, err := s.GetProduct(ctx, uid)
+	if err != nil {
+		return err
+	}
+	current.ResourceVersion = "concurrent-write"
+	if err := s.UpdateProduct(ctx, current); err != nil {
+		return err
+	}
+	return s.Datastore.DeleteProductWithResourceVersion(ctx, uid, expectedResourceVersion)
+}
+
+func TestAdmitResources_DeleteRejectsConcurrentReownership(t *testing.T) {
+	base := newTestDatastore(t)
+	store := &concurrentProductDeleteStore{Datastore: base}
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	current := a
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {"products/widget.md": makeProduct("widget")},
+		b: {},
+	})
+	srv := newCatalogServer(t, store, git)
+	admitDelta(t, srv, zero, a)
+
+	current = b
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    b,
+		OldCommitSha: a,
+		NewCommitSha: b,
+		RefName:      "refs/heads/main",
+	})
+	require.Equal(t, codes.Internal, grpcstatus.Code(err))
+	require.ErrorContains(t, err, datastore.ErrConflict.Error())
+
+	product, getErr := base.GetProductByName(context.Background(), "gitstore", "widget")
+	require.NoError(t, getErr)
+	assert.Equal(t, "concurrent-write", product.ResourceVersion)
+}
+
 func TestAdmitResources_OperationAwareDeleteRemovesProductVariant(t *testing.T) {
 	store := newTestDatastore(t)
 	zero := strings.Repeat("0", 40)

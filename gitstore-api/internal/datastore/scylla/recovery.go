@@ -163,6 +163,20 @@ func (e *mutationExecutor) executeDelete(
 	return e.injector.Inject(authoritative.Step.Action, failureAfter)
 }
 
+// executeConditionalDelete applies the authoritative CAS before touching any
+// projection. A stale resourceVersion therefore fails without mutating lookup
+// rows. Once the delete commits, projection failures are handled as roll-forward
+// repair work; restoring a stale pre-delete snapshot would be unsafe because a
+// concurrent writer may already own different projection keys.
+func (e *mutationExecutor) executeConditionalDelete(
+	ctx context.Context,
+	expectedResourceVersion string,
+	authoritative mutationAction,
+	projections ...mutationAction,
+) error {
+	return e.executeUpdate(ctx, expectedResourceVersion, authoritative, projections...)
+}
+
 func (e *mutationExecutor) compensate(
 	ctx context.Context,
 	completed []mutationAction,

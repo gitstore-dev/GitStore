@@ -302,6 +302,7 @@ type Datastore interface {
 	ListFiles(ctx context.Context, namespace string, page PageParams) (*PageResult[File], error)
 	UpdateFile(ctx context.Context, f *File) error
 	DeleteFile(ctx context.Context, uid string) error
+	DeleteFileWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 
 	// Product operations
 	UpdateFileStatus(ctx context.Context, namespace, name string, patch FileStatusPatch) (*File, error)
@@ -311,6 +312,7 @@ type Datastore interface {
 	ListProducts(ctx context.Context, namespace string, page PageParams) (*PageResult[Product], error)
 	UpdateProduct(ctx context.Context, p *Product) error
 	DeleteProduct(ctx context.Context, uid string) error
+	DeleteProductWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 
 	// CategoryTaxonomy operations
 	CreateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error
@@ -336,6 +338,7 @@ type Datastore interface {
 	ListProductVariantsByProductRef(ctx context.Context, namespace, productRefName string) ([]*ProductVariant, error)
 	UpdateProductVariant(ctx context.Context, v *ProductVariant) error
 	DeleteProductVariant(ctx context.Context, uid string) error
+	DeleteProductVariantWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 
 	// Collection operations
 	CreateCollection(ctx context.Context, c *Collection) error
@@ -344,6 +347,7 @@ type Datastore interface {
 	ListCollections(ctx context.Context, namespace string, page PageParams) (*PageResult[Collection], error)
 	UpdateCollection(ctx context.Context, c *Collection) error
 	DeleteCollection(ctx context.Context, uid string) error
+	DeleteCollectionWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 	ListProductsByLabelSelector(ctx context.Context, namespace string, selector catalog.LabelSelector) ([]*Product, error)
 
 	// Namespace operations
