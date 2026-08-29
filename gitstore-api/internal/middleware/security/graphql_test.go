@@ -601,6 +601,113 @@ func TestGraphQLFieldAuthorizerDeleteCategoryUsesPersistedScope(t *testing.T) {
 	assert.Equal(t, "catalog-repo", authz.resource.Attrs["repositoryID"])
 }
 
+func TestGraphQLFieldAuthorizerWatchFilesUsesWatchAction(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
+	ns := "acme"
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "alice", AuthMethod: "static-admin"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Subscription",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "watchFiles"}},
+		Args:   map[string]any{"namespace": &ns},
+	})
+
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return "ok", nil })
+	require.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, "file.watch", authz.action)
+	assert.Equal(t, "File", authz.resource.Kind)
+	assert.Equal(t, "acme", authz.resource.Attrs["namespace"])
+}
+
+func TestGraphQLFieldAuthorizerWatchCategoriesUsesWatchAction(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "alice", AuthMethod: "static-admin"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Subscription",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "watchCategories"}},
+		Args:   map[string]any{"namespace": (*string)(nil)},
+	})
+
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return "ok", nil })
+	require.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, "categoryTaxonomy.watch", authz.action)
+	assert.NotContains(t, authz.resource.Attrs, "namespace")
+}
+
+func TestGraphQLFieldAuthorizerWatchProductsUsesWatchAction(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "alice", AuthMethod: "static-admin"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Subscription",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "watchProducts"}},
+		Args:   map[string]any{},
+	})
+
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return "ok", nil })
+	require.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, "product.watch", authz.action)
+}
+
+func TestGraphQLFieldAuthorizerWatchResourcesUsesLowerCamelKindWatchAction(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "alice", AuthMethod: "static-admin"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Subscription",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "watchResources"}},
+		Args:   map[string]any{"kind": "BackfillJob"},
+	})
+
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { return "ok", nil })
+	require.NoError(t, err)
+	assert.Equal(t, "backfillJob.watch", authz.action)
+	assert.Equal(t, "BackfillJob", authz.resource.Kind)
+}
+
+func TestGraphQLFieldAuthorizerWatchFilesDenyReturnsForbidden(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Deny("stub-authz", "no rights to this namespace")}
+	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
+	ns := "other-tenant"
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "eve", AuthMethod: "static-admin"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Subscription",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "watchFiles"}},
+		Args:   map[string]any{"namespace": &ns},
+	})
+
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return "ok", nil })
+	require.Error(t, err)
+	assert.False(t, called, "the subscription resolver must never run when the field authorizer denies")
+	var gqlErr *gqlerror.Error
+	require.True(t, errors.As(err, &gqlErr))
+	assert.Equal(t, "FORBIDDEN", gqlErr.Extensions["code"])
+}
+
+func TestGraphQLFieldAuthorizerWatchFilesFailsWithoutAuthZ(t *testing.T) {
+	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, nil, nil), &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "eve", AuthMethod: "static-admin"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Subscription",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "watchFiles"}},
+		Args:   map[string]any{"namespace": (*string)(nil)},
+	})
+
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return "ok", nil })
+	require.Error(t, err)
+	assert.False(t, called)
+	assert.Contains(t, err.Error(), "authorization service unavailable")
+}
+
 func TestGraphQLFieldAuthorizerUpdateResourceStatusUsesLowerCamelKindAction(t *testing.T) {
 	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
 	registry := auth.NewProviderRegistry(nil, authz, nil)

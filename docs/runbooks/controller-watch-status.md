@@ -4,6 +4,15 @@
 
 A controller's `watchCategories`/`watchResources` subscription disconnects and reconnects (a normal occurrence), or its `updateCategoryStatus`/`updateResourceStatus` writes are being rejected. This runbook helps distinguish a transient, self-healing disconnect from a cursor that has actually expired (requiring a re-list), and helps interpret a sustained status-write-conflict rate.
 
+## Diagnostic Steps: Subscription Authorization Denials
+
+Every watch subscription field (`watchCategories`, `watchFiles`, `watchProducts`, and the generic `watchResources`) is authorized once, at subscribe time, by `GraphQLFieldAuthorizer` (`gitstore-api/internal/middleware/security/graphql.go`) — the same seam that already gates mutations like `updateCategoryStatus`. A denied subscribe attempt fails immediately with a GraphQL error carrying `extensions.code == "FORBIDDEN"` and never opens an event channel (the resolver never runs, so no partial/empty stream is returned).
+
+1. If a controller or client's subscription is rejected outright (not disconnecting/reconnecting, but failing on the initial `subscribe`), check the derived action string in the error's `permission denied: <reason>` message. The action follows `<kind>.watch` (e.g. `categoryTaxonomy.watch`, `file.watch`, `product.watch`, or `<kind>.watch` for whatever kind was passed to `watchResources`).
+2. Under the default `allow-all` AuthZ provider (local/dev `docker compose`), this check always passes — denials are only possible when the deployment is configured with `rbac-local` (`GITSTORE_AUTH__AUTHZ__PROVIDER=rbac-local`) or another `AuthZProvider` that enforces per-namespace policy.
+3. If a deployment switched to `rbac-local` and a previously-working controller (e.g. `gitstore-controller-manager`, which always calls these subscriptions without a `namespace` argument — i.e. it watches every namespace) starts failing to subscribe, grant its bound role the corresponding `<kind>.watch` action (or `"*"`) in `policy.yaml`, the same way the existing `controller` role convention already grants `*.status.write` (see `specs/040-controller-watch-status-api/research.md` R5).
+4. This check runs once per subscription, not once per delivered event — a subscription that was authorized to open cannot be revoked mid-stream by a later policy change (the caller must resubscribe for a new decision to take effect).
+
 ## Diagnostic Steps: Watch Disconnects
 
 1. Check the rate of subscriptions being opened for the affected kind:

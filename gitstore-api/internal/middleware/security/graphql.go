@@ -112,13 +112,19 @@ func (a *Authorize) GraphQLAuthorizer(ctx context.Context, next graphql.Operatio
 }
 
 // GraphQLFieldAuthorizer runs fine-grained GraphQL authorization checks for
-// mutation fields that require policy evaluation against resource context.
+// mutation and subscription fields that require policy evaluation against
+// resource context. For subscriptions, this runs exactly once per field —
+// at subscribe time, when gqlgen resolves the root Subscription field to
+// obtain its event channel — not once per delivered event (gqlgen's
+// per-event marshaling of a subscription's result type re-enters
+// AroundFields with FieldContext.Object set to that result type, e.g.
+// "FileWatchEvent", never "Subscription" again).
 func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Resolver) (any, error) {
 	if a.logger == nil {
 		a.logger = zap.NewNop()
 	}
 	fc := graphql.GetFieldContext(ctx)
-	if fc == nil || fc.Object != "Mutation" {
+	if fc == nil || (fc.Object != "Mutation" && fc.Object != "Subscription") {
 		return next(ctx)
 	}
 
@@ -277,9 +283,58 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 				Extensions: map[string]any{"code": "FORBIDDEN"},
 			}
 		}
+	case "watchCategories":
+		if err := a.authorizeWatch(ctx, principal, authz, "categoryTaxonomy.watch", "CategoryTaxonomy", fc.Args); err != nil {
+			return nil, err
+		}
+	case "watchFiles":
+		if err := a.authorizeWatch(ctx, principal, authz, "file.watch", "File", fc.Args); err != nil {
+			return nil, err
+		}
+	case "watchProducts":
+		if err := a.authorizeWatch(ctx, principal, authz, "product.watch", "Product", fc.Args); err != nil {
+			return nil, err
+		}
+	case "watchResources":
+		kind, _ := fc.Args["kind"].(string)
+		action := lowerCamelFirst(kind) + ".watch"
+		if err := a.authorizeWatch(ctx, principal, authz, action, kind, fc.Args); err != nil {
+			return nil, err
+		}
 	}
 
 	return next(ctx)
+}
+
+// authorizeWatch enforces subscribe-time authorization for a watchXxx
+// subscription field. namespace (when present in args) is threaded through
+// as a ResourceContext attribute for forward-compatibility with
+// attribute-aware AuthZProvider implementations; rbac-local's current
+// policy engine only matches on the action string, mirroring the same
+// coarse-grained enforcement already applied to "repository.read" (Git
+// Smart HTTP) and every other action in this codebase.
+func (a *Authorize) authorizeWatch(ctx context.Context, principal *auth.Principal, authz auth.AuthZProvider, action, kind string, args map[string]any) error {
+	if authz == nil {
+		return gqlerror.Errorf("authorization service unavailable")
+	}
+	attrs := map[string]any{}
+	if ns, ok := args["namespace"].(*string); ok && ns != nil {
+		attrs["namespace"] = *ns
+	}
+	decision, err := authz.Authorize(ctx, principal, action, auth.ResourceContext{
+		Kind:  kind,
+		Attrs: attrs,
+	})
+	if err != nil {
+		return gqlerror.Errorf("authorization error")
+	}
+	if decision.Outcome == auth.OutcomeDeny {
+		return &gqlerror.Error{
+			Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
+			Extensions: map[string]any{"code": "FORBIDDEN"},
+		}
+	}
+	return nil
 }
 
 func decodeCategoryID(encoded string) (string, error) {
