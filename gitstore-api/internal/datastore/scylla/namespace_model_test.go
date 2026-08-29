@@ -60,6 +60,7 @@ func TestAuthoritativeTablesUseCanonicalResourceEnvelope(t *testing.T) {
 		"ProductVariant":   ProductVariantByNamespace.Metadata().Columns,
 		"Collection":       Collection.Metadata().Columns,
 		"CategoryTaxonomy": CategoryTaxonomy.Metadata().Columns,
+		"File":             FileByNamespace.Metadata().Columns,
 	} {
 		t.Run(name, func(t *testing.T) {
 			assert.Subset(t, metadata, required)
@@ -114,7 +115,7 @@ func TestInitialSchemaUsesQueryFirstNamespaceTables(t *testing.T) {
 	assert.NotContains(t, schema, "TimeWindowCompactionStrategy")
 }
 
-func TestScyllaSchemaUsesTwoAlphaBaselineMigrations(t *testing.T) {
+func TestScyllaSchemaIncludesOwnerReferenceProjectionMigration(t *testing.T) {
 	entries, err := migrations.Files.ReadDir(".")
 	require.NoError(t, err)
 
@@ -128,7 +129,22 @@ func TestScyllaSchemaUsesTwoAlphaBaselineMigrations(t *testing.T) {
 	assert.ElementsMatch(t, []string{
 		"001_initial_schema.cql",
 		"002_secondary_indexes.cql",
+		"003_owner_reference_dependents.cql",
+		"004_file_resource.cql",
 	}, names)
+}
+
+func TestFileMigrationDefinesAuthoritativeAndLookupTables(t *testing.T) {
+	content, err := migrations.Files.ReadFile("004_file_resource.cql")
+	require.NoError(t, err)
+	schema := string(content)
+	for _, tableName := range []string{"files_by_namespace", "files_by_name", "files_by_uid"} {
+		assert.Contains(t, schema, "CREATE TABLE IF NOT EXISTS "+tableName)
+	}
+	for _, column := range []string{"api_version", "kind", "namespace", "uid", "name", "resource_version", "repository_id", "spec", "body", "status"} {
+		assert.Contains(t, schema, column)
+	}
+	assert.Contains(t, schema, "PRIMARY KEY ((namespace), creation_timestamp, uid)")
 }
 
 func TestSecondaryIndexMigrationIsIntentionallyEmpty(t *testing.T) {

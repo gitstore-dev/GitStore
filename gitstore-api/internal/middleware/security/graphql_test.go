@@ -5,6 +5,7 @@ package security
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"testing"
@@ -381,11 +382,13 @@ type stubAuthZProvider struct {
 	decision auth.Decision
 	err      error
 	action   string
+	resource auth.ResourceContext
 }
 
 func (s *stubAuthZProvider) Name() string { return "stub-authz" }
-func (s *stubAuthZProvider) Authorize(_ context.Context, _ *auth.Principal, action string, _ auth.ResourceContext) (auth.Decision, error) {
+func (s *stubAuthZProvider) Authorize(_ context.Context, _ *auth.Principal, action string, resource auth.ResourceContext) (auth.Decision, error) {
 	s.action = action
+	s.resource = resource
 	return s.decision, s.err
 }
 
@@ -559,6 +562,43 @@ func TestGraphQLFieldAuthorizerUpdateCategoryStatusDenyReturnsForbidden(t *testi
 	var gqlErr *gqlerror.Error
 	require.True(t, errors.As(err, &gqlErr))
 	assert.Equal(t, "FORBIDDEN", gqlErr.Extensions["code"])
+}
+
+func TestGraphQLFieldAuthorizerUpdateProductStatusUsesPolicy(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller", AuthMethod: "static-admin"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Mutation", Field: graphql.CollectedField{Field: &ast.Field{Name: "updateProductStatus"}}, Args: map[string]any{
+		"input": model.UpdateProductStatusInput{Name: "phone", Namespace: "shop", ResourceVersion: "7"},
+	}})
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return "ok", nil })
+	require.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, "product.status.write", authz.action)
+}
+
+func TestGraphQLFieldAuthorizerDeleteCategoryUsesPersistedScope(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	store := &testutil.StubStore{GetCategoryTaxonomyFunc: func(_ context.Context, uid string) (*datastore.CategoryTaxonomy, error) {
+		assert.Equal(t, "category-uid", uid)
+		return &datastore.CategoryTaxonomy{UID: uid, Name: "phones", Namespace: "shop", RepositoryID: "catalog-repo", CreationActor: "alice"}, nil
+	}}
+	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), store, zap.NewNop())
+	id := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Category/category-uid"))
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "alice", AuthMethod: "static-admin"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Mutation", Field: graphql.CollectedField{Field: &ast.Field{Name: "deleteCategory"}}, Args: map[string]any{
+		"input": model.DeleteCategoryInput{ID: id},
+	}})
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return "ok", nil })
+	require.NoError(t, err)
+	assert.True(t, called)
+	assert.Equal(t, "category.delete", authz.action)
+	assert.Equal(t, "phones", authz.resource.Name)
+	assert.Equal(t, "alice", authz.resource.OwnerSub)
+	assert.Equal(t, "shop", authz.resource.Attrs["namespace"])
+	assert.Equal(t, "catalog-repo", authz.resource.Attrs["repositoryID"])
 }
 
 func TestGraphQLFieldAuthorizerUpdateResourceStatusUsesLowerCamelKindAction(t *testing.T) {

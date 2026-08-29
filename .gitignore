@@ -76,15 +76,7 @@ gitstore-controller-manager/coverage.txt
 .claude/
 
 # graphify local-machine state (not portable across clones)
-graphify-out/.graphify_labels.json
-graphify-out/.graphify_labels.json.sig
-graphify-out/GRAPH_REPORT.md
-graphify-out/graph.html
-graphify-out/.graphify_python
-graphify-out/.graphify_root
-graphify-out/cost.json
-graphify-out/cache/
-graphify-out/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/
+/graphify-out/
 
 # speckit extension catalog cache (downloaded from remote, machine-local)
 .specify/extensions/.cache/

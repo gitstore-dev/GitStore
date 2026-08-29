@@ -20,6 +20,23 @@ type StubStore struct {
 	GetRepositoryFunc       func(ctx context.Context, id string) (*datastore.Repository, error)
 	HasRepositoriesFunc     func(ctx context.Context, namespaceID string) (bool, error)
 	HasCatalogResourcesFunc func(ctx context.Context, repoID string) (bool, error)
+	GetCategoryTaxonomyFunc func(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error)
+}
+
+func (s *StubStore) CreateFile(_ context.Context, _ *datastore.File) error { return nil }
+func (s *StubStore) GetFile(_ context.Context, _ string) (*datastore.File, error) {
+	return nil, datastore.ErrNotFound
+}
+func (s *StubStore) GetFileByName(_ context.Context, _, _ string) (*datastore.File, error) {
+	return nil, datastore.ErrNotFound
+}
+func (s *StubStore) ListFiles(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
+	return &datastore.PageResult[datastore.File]{}, nil
+}
+func (s *StubStore) UpdateFile(_ context.Context, _ *datastore.File) error { return nil }
+func (s *StubStore) DeleteFile(_ context.Context, _ string) error          { return nil }
+func (s *StubStore) UpdateFileStatus(_ context.Context, _, _ string, _ datastore.FileStatusPatch) (*datastore.File, error) {
+	return nil, datastore.ErrNotFound
 }
 
 func (s *StubStore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
@@ -72,7 +89,10 @@ func (s *StubStore) DeleteProduct(_ context.Context, _ string) error            
 func (s *StubStore) CreateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
 	return nil
 }
-func (s *StubStore) GetCategoryTaxonomy(_ context.Context, _ string) (*datastore.CategoryTaxonomy, error) {
+func (s *StubStore) GetCategoryTaxonomy(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error) {
+	if s.GetCategoryTaxonomyFunc != nil {
+		return s.GetCategoryTaxonomyFunc(ctx, uid)
+	}
 	return nil, datastore.ErrNotFound
 }
 func (s *StubStore) GetCategoryTaxonomyByName(_ context.Context, _, _ string) (*datastore.CategoryTaxonomy, error) {

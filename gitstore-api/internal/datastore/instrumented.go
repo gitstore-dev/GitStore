@@ -131,6 +131,49 @@ func (d *InstrumentedDatastore) DeleteProduct(ctx context.Context, id string) er
 	return err
 }
 
+func (d *InstrumentedDatastore) CreateFile(ctx context.Context, f *File) error {
+	start := time.Now()
+	err := d.next.CreateFile(d.withFindingObserver(ctx), f)
+	d.observe("CreateFile", start, err)
+	return err
+}
+func (d *InstrumentedDatastore) GetFile(ctx context.Context, id string) (*File, error) {
+	start := time.Now()
+	v, err := d.next.GetFile(d.withFindingObserver(ctx), id)
+	d.observe("GetFile", start, err)
+	return v, err
+}
+func (d *InstrumentedDatastore) GetFileByName(ctx context.Context, namespace, name string) (*File, error) {
+	start := time.Now()
+	v, err := d.next.GetFileByName(d.withFindingObserver(ctx), namespace, name)
+	d.observe("GetFileByName", start, err)
+	return v, err
+}
+func (d *InstrumentedDatastore) ListFiles(ctx context.Context, namespace string, p PageParams) (*PageResult[File], error) {
+	start := time.Now()
+	v, err := d.next.ListFiles(d.withFindingObserver(ctx), namespace, p)
+	d.observe("ListFiles", start, err)
+	return v, err
+}
+func (d *InstrumentedDatastore) UpdateFile(ctx context.Context, f *File) error {
+	start := time.Now()
+	err := d.next.UpdateFile(d.withFindingObserver(ctx), f)
+	d.observe("UpdateFile", start, err)
+	return err
+}
+func (d *InstrumentedDatastore) DeleteFile(ctx context.Context, id string) error {
+	start := time.Now()
+	err := d.next.DeleteFile(d.withFindingObserver(ctx), id)
+	d.observe("DeleteFile", start, err)
+	return err
+}
+func (d *InstrumentedDatastore) UpdateFileStatus(ctx context.Context, namespace, name string, p FileStatusPatch) (*File, error) {
+	start := time.Now()
+	v, err := d.next.UpdateFileStatus(d.withFindingObserver(ctx), namespace, name, p)
+	d.observe("UpdateFileStatus", start, err)
+	return v, err
+}
+
 // ── CategoryTaxonomy ───────────────────────────────────────────────────────
 
 func (d *InstrumentedDatastore) CreateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error {

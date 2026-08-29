@@ -378,10 +378,71 @@ type EligibilityDefinition struct {
 	Constraints []*PriceRuleConstraint `json:"constraints"`
 }
 
+type File struct {
+	ID         string      `json:"id"`
+	APIVersion string      `json:"apiVersion"`
+	Kind       string      `json:"kind"`
+	Metadata   *ObjectMeta `json:"metadata"`
+	Spec       *FileSpec   `json:"spec"`
+	Status     *FileStatus `json:"status,omitempty"`
+	Body       *string     `json:"body,omitempty"`
+}
+
+func (File) IsNode() {}
+
+// Globally unique identifier (format: [type]_[base62])
+func (this File) GetID() string { return this.ID }
+
+type FileChecksum struct {
+	Algorithm string `json:"algorithm"`
+	Value     string `json:"value"`
+}
+
+type FileImageProcessing struct {
+	Variants []*FileVariantRequest `json:"variants"`
+}
+
+type FileProcessing struct {
+	Image *FileImageProcessing `json:"image,omitempty"`
+}
+
 type FileReference struct {
 	Name     string `json:"name"`
 	Kind     string `json:"kind"`
 	Optional bool   `json:"optional"`
+}
+
+type FileSource struct {
+	Type           string        `json:"type"`
+	URI            string        `json:"uri"`
+	Checksum       *FileChecksum `json:"checksum,omitempty"`
+	CredentialsRef *SecretRef    `json:"credentialsRef,omitempty"`
+}
+
+type FileSpec struct {
+	ContentType string          `json:"contentType"`
+	Type        *string         `json:"type,omitempty"`
+	Source      *FileSource     `json:"source"`
+	Processing  *FileProcessing `json:"processing,omitempty"`
+}
+
+type FileStatus struct {
+	ObservedGeneration  int32                   `json:"observedGeneration"`
+	LastAppliedRevision string                  `json:"lastAppliedRevision"`
+	Conditions          []*Condition            `json:"conditions"`
+	Resolved            *ResolvedFileDefinition `json:"resolved,omitempty"`
+}
+
+type FileVariantRequest struct {
+	Name string `json:"name"`
+}
+
+type FileWatchEvent struct {
+	Type            WatchEventType `json:"type"`
+	Namespace       *string        `json:"namespace,omitempty"`
+	Name            string         `json:"name"`
+	ResourceVersion string         `json:"resourceVersion"`
+	File            *File          `json:"file,omitempty"`
 }
 
 type HookToggle struct {
@@ -617,13 +678,15 @@ type ObjectMeta struct {
 	Revision          *string           `json:"revision,omitempty"`
 	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
 	Finalizers        []string          `json:"finalizers"`
+	DeletionTimestamp *time.Time        `json:"deletionTimestamp,omitempty"`
 }
 
 type OwnerReference struct {
-	APIVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
-	Name       string `json:"name"`
-	UID        string `json:"uid"`
+	APIVersion         string `json:"apiVersion"`
+	Kind               string `json:"kind"`
+	Name               string `json:"name"`
+	UID                string `json:"uid"`
+	BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
 }
 
 // Information about pagination in a connection
@@ -1054,9 +1117,15 @@ type ResolvedCollectionDefinition struct {
 }
 
 type ResolvedFileDefinition struct {
-	Name        string  `json:"name"`
-	URL         string  `json:"url"`
-	ContentType *string `json:"contentType,omitempty"`
+	Name             string                 `json:"name"`
+	URL              string                 `json:"url"`
+	ContentType      *string                `json:"contentType,omitempty"`
+	ResolvedVariants []*ResolvedFileVariant `json:"resolvedVariants"`
+}
+
+type ResolvedFileVariant struct {
+	Name string  `json:"name"`
+	URL  *string `json:"url,omitempty"`
 }
 
 // Resolved inventory summary for a ProductVariant.
@@ -1119,6 +1188,13 @@ type ResolvedRepositoryDefinition struct {
 type SchemaValidationDefaults struct {
 	Phase          *string `json:"phase,omitempty"`
 	TimeoutSeconds *int32  `json:"timeoutSeconds,omitempty"`
+}
+
+type SecretRef struct {
+	Kind      string  `json:"kind"`
+	Name      string  `json:"name"`
+	Key       *string `json:"key,omitempty"`
+	Namespace *string `json:"namespace,omitempty"`
 }
 
 // A resolved name/value pair representing one product option selection.
@@ -1216,6 +1292,13 @@ type UpdateCategoryStatusInput struct {
 	Conditions []*ConditionInput `json:"conditions,omitempty"`
 	// Null = unchanged. Kind-specific — not part of any generic patch shape.
 	Resolved *ResolvedCategoryTaxonomyInput `json:"resolved,omitempty"`
+	// Controller-only foreground-deletion completion request. This extends the
+	// existing status subresource rather than introducing a parallel
+	// CategoryTaxonomy mutation.
+	CompleteDeletion *bool `json:"completeDeletion,omitempty"`
+	// Controller-only bounded Product drain. The server removes non-blocking
+	// owner references and writes CategoryDeleted without changing product spec.
+	DecoupleProducts *bool `json:"decoupleProducts,omitempty"`
 }
 
 type UpdateCategoryStatusPayload struct {
@@ -1223,6 +1306,8 @@ type UpdateCategoryStatusPayload struct {
 	Category *Category `json:"category,omitempty"`
 	// Non-null only when the resourceVersion precondition failed.
 	Conflict *StatusConflict `json:"conflict,omitempty"`
+	// True when another bounded Product page remains to be processed.
+	HasMoreProductDependents bool `json:"hasMoreProductDependents"`
 }
 
 type UpdateCollectionInput struct {
@@ -1244,6 +1329,19 @@ type UpdateNamespaceInput struct {
 
 type UpdateNamespacePayload struct {
 	Namespace *Namespace `json:"namespace,omitempty"`
+}
+
+type UpdateProductStatusInput struct {
+	Name            string            `json:"name"`
+	Namespace       string            `json:"namespace"`
+	ResourceVersion string            `json:"resourceVersion"`
+	Conditions      []*ConditionInput `json:"conditions,omitempty"`
+	RemoveOwnerUID  *string           `json:"removeOwnerUID,omitempty"`
+}
+
+type UpdateProductStatusPayload struct {
+	Product  *Product        `json:"product,omitempty"`
+	Conflict *StatusConflict `json:"conflict,omitempty"`
 }
 
 type UpdateResourceStatusInput struct {

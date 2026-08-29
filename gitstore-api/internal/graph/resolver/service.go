@@ -161,6 +161,189 @@ func (s *Service) GetCategoryTaxonomyByName(ctx context.Context, namespace, name
 	return c, nil
 }
 
+// DeleteCategory requests foreground deletion of a CategoryTaxonomy. The
+// caller has already selected the resource by immutable UID; all dependent
+// checks remain scope-bound to the persisted record.
+func (s *Service) DeleteCategory(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error) {
+	category, err := s.store.GetCategoryTaxonomy(ctx, uid)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, gqlerror.Errorf("category not found")
+		}
+		return nil, gqlerror.Errorf("failed to retrieve category")
+	}
+	if category.DeletionTimestamp != nil {
+		return category, nil
+	}
+	owners, ok := s.store.(datastore.OwnerReferenceStore)
+	if !ok {
+		return nil, gqlerror.Errorf("category deletion is unavailable while owner-reference indexing is disabled")
+	}
+	hasChildren, err := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{
+		Namespace: category.Namespace, RepositoryID: category.RepositoryID,
+	}, category.UID)
+	if err != nil {
+		s.logger.Error("failed to check category deletion dependents",
+			zap.String("namespace", category.Namespace),
+			zap.String("name", category.Name),
+			zap.Error(err))
+		return nil, gqlerror.Errorf("failed to check category deletion dependents")
+	}
+	if hasChildren {
+		return nil, gqlerror.Errorf("category %q has child categories and cannot be deleted", category.Name)
+	}
+	lifecycle, ok := s.store.(datastore.CategoryTaxonomyDeletionStore)
+	if !ok {
+		return nil, gqlerror.Errorf("category deletion lifecycle is unavailable")
+	}
+	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, s.clock.Now().UTC())
+	if err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			return nil, gqlerror.Errorf("category %q changed while deletion was requested", category.Name)
+		}
+		return nil, gqlerror.Errorf("failed to mark category for deletion")
+	}
+	return terminating, nil
+}
+
+// CompleteCategoryDeletion finalizes a controller-observed foreground
+// deletion. It repeats the blocking-dependent check immediately before the
+// resource-version-guarded delete so a child-created race cannot orphan it.
+func (s *Service) CompleteCategoryDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*datastore.CategoryTaxonomy, error) {
+	category, err := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to retrieve category deletion state")
+	}
+	if category.ResourceVersion != expectedResourceVersion {
+		return category, datastore.ErrConflict
+	}
+	if category.DeletionTimestamp == nil || !containsString(category.Finalizers, datastore.CategoryTaxonomyForegroundDeletionFinalizer) {
+		return nil, gqlerror.Errorf("category %q is not awaiting foreground deletion", name)
+	}
+	owners, ok := s.store.(datastore.OwnerReferenceStore)
+	if !ok {
+		return nil, gqlerror.Errorf("category deletion is unavailable while owner-reference indexing is disabled")
+	}
+	hasChildren, err := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{
+		Namespace: category.Namespace, RepositoryID: category.RepositoryID,
+	}, category.UID)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to recheck category deletion dependents")
+	}
+	if hasChildren {
+		return category, gqlerror.Errorf("category %q still has child categories", name)
+	}
+	lifecycle, ok := s.store.(datastore.CategoryTaxonomyDeletionStore)
+	if !ok {
+		return nil, gqlerror.Errorf("category deletion lifecycle is unavailable")
+	}
+	deleted, err := lifecycle.CompleteCategoryTaxonomyDeletion(ctx, namespace, name, expectedResourceVersion)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return deleted, nil
+}
+
+// DecoupleCategoryProducts handles one bounded reverse-index page. Products
+// retain their authored categoryRef while their resolved owner reference and
+// CategoryResolved condition are updated atomically with the source record.
+func (s *Service) DecoupleCategoryProducts(ctx context.Context, namespace, name, expectedResourceVersion string) ([]*datastore.Product, bool, error) {
+	category, err := s.store.GetCategoryTaxonomyByName(ctx, namespace, name)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, gqlerror.Errorf("failed to retrieve category deletion state")
+	}
+	if category.DeletionTimestamp == nil {
+		return nil, false, gqlerror.Errorf("category %q is not terminating", name)
+	}
+	if category.ResourceVersion != expectedResourceVersion {
+		return nil, false, datastore.ErrConflict
+	}
+	owners, ok := s.store.(datastore.OwnerReferenceStore)
+	if !ok {
+		return nil, false, gqlerror.Errorf("category deletion is unavailable while owner-reference indexing is disabled")
+	}
+	page, err := owners.ListNonBlockingProductOwnerDependents(ctx, datastore.OwnerReferenceScope{
+		Namespace: category.Namespace, RepositoryID: category.RepositoryID,
+	}, category.UID, "", datastore.DefaultPageSize)
+	if err != nil {
+		return nil, false, gqlerror.Errorf("list category Product dependents: %v", err)
+	}
+
+	updated := make([]*datastore.Product, 0, len(page.Items))
+	for _, dependent := range page.Items {
+		product, err := s.store.GetProduct(ctx, dependent.DependentUID)
+		if errors.Is(err, datastore.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, false, gqlerror.Errorf("retrieve category Product dependent: %v", err)
+		}
+		// A Product update raced with the page read. Do not overwrite
+		// Git-authored state; its current projection will be retried by a
+		// later bounded continuation.
+		if product.ResourceVersion != dependent.ResourceVersion {
+			continue
+		}
+		var references []catalog.OwnerReference
+		if len(product.OwnerReferences) > 0 {
+			if err := json.Unmarshal(product.OwnerReferences, &references); err != nil {
+				return nil, false, gqlerror.Errorf("decode Product owner references: %v", err)
+			}
+		}
+		filtered := references[:0]
+		for _, reference := range references {
+			if reference.UID != category.UID {
+				filtered = append(filtered, reference)
+			}
+		}
+		product.OwnerReferences, err = json.Marshal(filtered)
+		if err != nil {
+			return nil, false, gqlerror.Errorf("encode Product owner references: %v", err)
+		}
+
+		var productStatus catalog.ProductStatus
+		if len(product.Status) > 0 {
+			if err := json.Unmarshal(product.Status, &productStatus); err != nil {
+				return nil, false, gqlerror.Errorf("decode Product status: %v", err)
+			}
+		}
+		productStatus.Conditions = mergeProductConditions(productStatus.Conditions, []catalog.Condition{{
+			Type:               catalog.ConditionCategoryResolved,
+			Status:             catalog.ConditionFalse,
+			ObservedGeneration: product.Generation,
+			LastTransitionTime: s.clock.Now().UTC(),
+			Reason:             "CategoryDeleted",
+			Message:            "Referenced category is being deleted.",
+		}})
+		product.Status, err = json.Marshal(productStatus)
+		if err != nil {
+			return nil, false, gqlerror.Errorf("encode Product status: %v", err)
+		}
+		datastore.AdvanceProductSystemVersion(product)
+		if err := s.store.UpdateProduct(ctx, product); err != nil {
+			return nil, false, gqlerror.Errorf("decouple Product %q: %v", product.Name, err)
+		}
+		updated = append(updated, product)
+	}
+
+	remaining, err := owners.ListNonBlockingProductOwnerDependents(ctx, datastore.OwnerReferenceScope{
+		Namespace: category.Namespace, RepositoryID: category.RepositoryID,
+	}, category.UID, "", 1)
+	if err != nil {
+		return nil, false, gqlerror.Errorf("check remaining category Product dependents: %v", err)
+	}
+	return updated, len(remaining.Items) > 0, nil
+}
+
 // GetCollections returns paginated collections for a namespace.
 func (s *Service) GetCollections(ctx context.Context, namespace string, params datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
 	result, err := s.store.ListCollections(ctx, namespace, params)

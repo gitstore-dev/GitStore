@@ -11,6 +11,7 @@ import "time"
 type AdmissionContext struct {
 	RepositoryID string
 	Namespace    string    // resolved namespace identifier
+	ActorSubject string    // authenticated principal that performed the push
 	CommitSHA    string    // full SHA of the accepted push commit
 	RefName      string    // fully-qualified ref, e.g. "refs/heads/main"
 	Revision     string    // human revision label, e.g. "main@sha1:abc123"

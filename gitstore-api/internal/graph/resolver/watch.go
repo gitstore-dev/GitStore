@@ -46,6 +46,20 @@ func (r *Resolver) publishCategoryTaxonomyStatusEvent(c *datastore.CategoryTaxon
 	})
 }
 
+func (r *Resolver) publishCategoryTaxonomyDeletedEvent(c *datastore.CategoryTaxonomy) {
+	if r.eventBus == nil || c == nil {
+		return
+	}
+	r.eventBus.Publish(eventbus.Event{
+		Type:            eventbus.Deleted,
+		Kind:            "CategoryTaxonomy",
+		Namespace:       c.Namespace,
+		Name:            c.Name,
+		ResourceVersion: c.ResourceVersion,
+		Object:          c,
+	})
+}
+
 func (r *Resolver) publishNamespaceStatusEvent(namespace *datastore.Namespace) {
 	if r.eventBus == nil || namespace == nil {
 		return
@@ -130,6 +144,32 @@ func toCategoryWatchEvent(ev eventbus.Event) *model.CategoryWatchEvent {
 	return out
 }
 
+func fileEventMatchesSelector(ev eventbus.Event, selector *model.LabelSelectorInput) bool {
+	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
+		return true
+	}
+	file, ok := ev.Object.(*datastore.File)
+	return ok && file != nil && matchesWatchSelector(selector, file.Labels)
+}
+
+func toFileWatchEvent(ev eventbus.Event) *model.FileWatchEvent {
+	out := &model.FileWatchEvent{
+		Type:            toWatchEventType(ev.Type),
+		Name:            ev.Name,
+		ResourceVersion: ev.Cursor,
+	}
+	if ev.Namespace != "" {
+		ns := ev.Namespace
+		out.Namespace = &ns
+	}
+	if ev.Type != eventbus.Deleted {
+		if file, ok := ev.Object.(*datastore.File); ok {
+			out.File = DatastoreFileToGraphQL(file)
+		}
+	}
+	return out
+}
+
 // toGenericWatchEvent maps an eventbus.Event to the JSON-boxed WatchEvent
 // used by the generic watchResources subscription (spec 040 FR-006). The
 // object is marshaled through model conversion where a typed converter is
@@ -151,7 +191,34 @@ func toGenericWatchEvent(kind string, ev eventbus.Event) *model.WatchEvent {
 			out.Object = categoryTaxonomyToJSONMap(c)
 		} else if namespace, ok := ev.Object.(*datastore.Namespace); ok {
 			out.Object = namespaceToJSONMap(namespace)
+		} else if file, ok := ev.Object.(*datastore.File); ok {
+			out.Object = fileToJSONMap(file)
 		}
+	}
+
+	return out
+}
+
+func fileResolvedFromJSONMap(m map[string]any) *catalog.ResolvedFileDefinition {
+	if m == nil {
+		return nil
+	}
+	raw, _ := json.Marshal(m)
+	var out catalog.ResolvedFileDefinition
+	if json.Unmarshal(raw, &out) != nil {
+		return nil
+	}
+	return &out
+}
+
+func fileToJSONMap(file *datastore.File) map[string]any {
+	raw, err := json.Marshal(file)
+	if err != nil {
+		return nil
+	}
+	var out map[string]any
+	if json.Unmarshal(raw, &out) != nil {
+		return nil
 	}
 	return out
 }

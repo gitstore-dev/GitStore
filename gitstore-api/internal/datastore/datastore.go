@@ -27,6 +27,53 @@ var (
 // DefaultPageSize is used when First/Last is zero.
 const DefaultPageSize = 100
 
+// MaxOwnerDependentPageSize is the hard upper bound for reverse-owner pages.
+// It prevents a caller from turning a controller continuation into an
+// unbounded datastore read.
+const MaxOwnerDependentPageSize = 100
+
+// CategoryTaxonomyForegroundDeletionFinalizer holds a CategoryTaxonomy while
+// its controller rechecks blocking dependents and decouples Products.
+const CategoryTaxonomyForegroundDeletionFinalizer = "gitstore.dev/foreground-deletion"
+
+// MarkCategoryTaxonomyTerminating writes the lifecycle condition that makes a
+// foreground deletion visible before a controller observes the next watch
+// event. It does not advance resourceVersion; callers include it in their
+// atomic deletion-mark transition.
+func MarkCategoryTaxonomyTerminating(category *CategoryTaxonomy, at time.Time) error {
+	var status catalog.CategoryTaxonomyStatus
+	if len(category.Status) > 0 {
+		if err := json.Unmarshal(category.Status, &status); err != nil {
+			return fmt.Errorf("datastore: unmarshal category taxonomy status: %w", err)
+		}
+	}
+	condition := catalog.Condition{
+		Type:               catalog.ConditionTerminating,
+		Status:             catalog.ConditionTrue,
+		ObservedGeneration: category.Generation,
+		LastTransitionTime: at,
+		Reason:             "DeletionRequested",
+		Message:            "CategoryTaxonomy is awaiting foreground deletion completion.",
+	}
+	replaced := false
+	for index := range status.Conditions {
+		if status.Conditions[index].Type == catalog.ConditionTerminating {
+			status.Conditions[index] = condition
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		status.Conditions = append(status.Conditions, condition)
+	}
+	raw, err := json.Marshal(status)
+	if err != nil {
+		return fmt.Errorf("datastore: marshal terminating category taxonomy status: %w", err)
+	}
+	category.Status = raw
+	return nil
+}
+
 // PageParams defines keyset pagination parameters for any list operation.
 type PageParams struct {
 	First  int    // forward page size (0 = DefaultPageSize)
@@ -60,6 +107,45 @@ type PageResult[T any] struct {
 	TotalCount  int32 // -1 if unknown/expensive to compute
 }
 
+// OwnerReferenceScope restricts dependent lookups to the owner's repository.
+// Dependents may be authored in another repository in the same namespace;
+// their system-managed owner reference carries this owner scope.
+type OwnerReferenceScope struct {
+	Namespace    string
+	RepositoryID string
+}
+
+// OwnerDependent is the minimal, stable record returned by a reverse
+// owner-reference query. Its cursor is DependentUID, ordered ascending.
+type OwnerDependent struct {
+	DependentUID    string
+	DependentKind   string
+	Name            string
+	ResourceVersion string
+}
+
+// OwnerDependentPage is a bounded, keyset-paginated dependent page.
+type OwnerDependentPage struct {
+	Items      []OwnerDependent
+	NextCursor string
+}
+
+// OwnerReferenceStore is implemented by durable stores that maintain the
+// reverse owner-reference projection. It intentionally remains additive to
+// Datastore so older test stores and rolling-upgrade readers continue to work.
+type OwnerReferenceStore interface {
+	HasBlockingOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID string) (bool, error)
+	ListBlockingOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID, after string, limit int) (OwnerDependentPage, error)
+	ListNonBlockingProductOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID, after string, limit int) (OwnerDependentPage, error)
+}
+
+// CategoryTaxonomyDeletionStore provides the durable foreground-deletion
+// lifecycle used by both Git admission and the existing deleteCategory API.
+type CategoryTaxonomyDeletionStore interface {
+	MarkCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string, at time.Time) (*CategoryTaxonomy, error)
+	CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*CategoryTaxonomy, error)
+}
+
 // GlobalRepositoryLister is the optional contract for backends that provide a
 // globally ordered Repository connection. Backends whose exact count requires
 // scanning historical partitions return TotalCount = -1.
@@ -83,6 +169,48 @@ type CategoryTaxonomyStatusPatch struct {
 	LastAppliedRevision *string
 	Conditions          []catalog.Condition // nil = unchanged; non-nil = full replacement
 	Resolved            *catalog.ResolvedCategoryTaxonomy
+}
+
+type FileStatusPatch struct {
+	ResourceVersion     string
+	ObservedGeneration  *int64
+	LastAppliedRevision *string
+	Conditions          []catalog.Condition
+	Resolved            *catalog.ResolvedFileDefinition
+}
+
+func ApplyFileStatusPatch(f *File, patch FileStatusPatch) error {
+	if patch.ResourceVersion != f.ResourceVersion {
+		return ErrConflict
+	}
+	var status catalog.FileStatus
+	if len(f.Status) > 0 {
+		if err := json.Unmarshal(f.Status, &status); err != nil {
+			return fmt.Errorf("datastore: unmarshal file status: %w", err)
+		}
+	}
+	if patch.ObservedGeneration != nil {
+		status.ObservedGeneration = *patch.ObservedGeneration
+	}
+	if patch.LastAppliedRevision != nil {
+		status.LastAppliedRevision = *patch.LastAppliedRevision
+	}
+	if patch.Conditions != nil {
+		if err := catalog.ValidateFileConditions(patch.Conditions); err != nil {
+			return err
+		}
+		status.Conditions = patch.Conditions
+	}
+	if patch.Resolved != nil {
+		status.Resolved = patch.Resolved
+	}
+	raw, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	f.Status = raw
+	f.ResourceVersion = nextResourceVersion(f.ResourceVersion)
+	return nil
 }
 
 type NamespaceStatusPatch struct {
@@ -167,7 +295,16 @@ func ApplyCategoryTaxonomyStatusPatch(c *CategoryTaxonomy, patch CategoryTaxonom
 // The abstraction never retries or reconnects internally; storage errors are
 // propagated immediately to callers (FR-007a).
 type Datastore interface {
+	// File operations
+	CreateFile(ctx context.Context, f *File) error
+	GetFile(ctx context.Context, uid string) (*File, error)
+	GetFileByName(ctx context.Context, namespace, name string) (*File, error)
+	ListFiles(ctx context.Context, namespace string, page PageParams) (*PageResult[File], error)
+	UpdateFile(ctx context.Context, f *File) error
+	DeleteFile(ctx context.Context, uid string) error
+
 	// Product operations
+	UpdateFileStatus(ctx context.Context, namespace, name string, patch FileStatusPatch) (*File, error)
 	CreateProduct(ctx context.Context, p *Product) error
 	GetProduct(ctx context.Context, uid string) (*Product, error)
 	GetProductByName(ctx context.Context, namespace, name string) (*Product, error)
