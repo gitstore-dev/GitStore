@@ -14,11 +14,19 @@
 #
 # The public contract is intentionally resource-shaped so callers can mirror a
 # manifest they would otherwise author in Git. renameRepository and
-# transferRepository keep their existing input/output shapes unchanged — only
-# their resolver *behavior* changes, to an unconditional Unimplemented error
-# (see repository-admission.md). deleteRepository is unchanged in shape; its
-# behavior changes internally to a finalizer-marking write instead of a
-# synchronous hard delete.
+# transferRepository keep their existing input/output shapes unchanged, but
+# change in two coupled ways that ship together: their resolver *behavior*
+# becomes an unconditional Unimplemented error, and their field definitions in
+# shared/schemas/repository.graphqls gain a @deprecated(reason: "...")
+# directive citing ADR-0003's Phase 2 deferral (see repository-admission.md).
+# This intentionally supersedes spec 045's Acceptance Scenario #4 / SC-003
+# ("createRepository, renameRepository, transferRepository, and
+# deleteRepository continue to succeed and fail under exactly the same
+# conditions as before") for these two mutations only — an explicit,
+# ADR-0003-directed regression against that prior spec's stated invariant,
+# not an oversight. deleteRepository is unchanged in shape; its behavior
+# changes internally to a finalizer-marking write instead of a synchronous
+# hard delete.
 
 input RepositoryMetadataInput {
   name: String!
@@ -100,5 +108,23 @@ extend type Mutation {
 # here: RenameRepositoryInput/RenameRepositoryPayload and
 # TransferRepositoryInput/TransferRepositoryPayload in
 # shared/schemas/repository.graphqls keep their existing shape unchanged.
-# Only their resolvers change, to unconditionally return an Unimplemented
-# error, per ADR-0003's Phase 1 recommendation and this spec's FR-010.
+# Two things change in-place on their existing field definitions in that file
+# (not shown here as a redefinition, since gqlgen's `extend type Mutation`
+# cannot re-annotate an already-defined field — the actual edit lands directly
+# on the Mutation type in shared/schemas/repository.graphqls):
+#
+#   extend type Mutation {
+#     renameRepository(input: RenameRepositoryInput!): RenameRepositoryPayload!
+#       @deprecated(reason: "Not supported; see docs/ADRs/0003-repository-lifecycle.md Phase 2. Delete and recreate instead.")
+#     transferRepository(input: TransferRepositoryInput!): TransferRepositoryPayload!
+#       @deprecated(reason: "Not supported; see docs/ADRs/0003-repository-lifecycle.md Phase 2.")
+#   }
+#
+# 1. Resolver behavior: unconditionally return an Unimplemented error, per
+#    ADR-0003's Phase 1 recommendation and this spec's FR-010.
+# 2. Schema annotation: @deprecated(reason: "...") as shown above, so
+#    introspection surfaces the phase-out independent of runtime behavior.
+#
+# Both ship together. This is an explicit, called-out supersession of spec
+# 045's Acceptance Scenario #4 / SC-003 for these two mutations only — see
+# the header comment above and spec.md's User Story 4 / FR-010.

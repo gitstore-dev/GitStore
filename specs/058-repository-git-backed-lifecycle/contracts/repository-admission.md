@@ -80,6 +80,6 @@ The resolver then:
 
 `createRepository`/`updateRepository` targeting the bootstrap repository name `gitstore-system` within any namespace: rejected immediately, no commit attempted.
 
-`renameRepository`/`transferRepository`: unconditionally return `Unimplemented`; no manifest is constructed, no commit is attempted, no datastore record is touched.
+`renameRepository`/`transferRepository`: unconditionally return `Unimplemented`; no manifest is constructed, no commit is attempted, no datastore record is touched. Both field definitions in `shared/schemas/repository.graphqls` additionally carry a `@deprecated(reason: "...")` directive citing ADR-0003's Phase 2 deferral, so schema introspection surfaces the phase-out independent of whether a caller ever invokes either mutation. **This intentionally supersedes spec 045's Acceptance Scenario #4/SC-003** ("`createRepository`, `renameRepository`, `transferRepository`, and `deleteRepository` continue to succeed and fail under exactly the same conditions as before") for these two mutations only — spec 045's invariant held for its own read-schema-only change; it is deliberately not preserved here, per ADR-0003's binding Phase 1 recommendation. `createRepository`/`deleteRepository` are unaffected.
 
 `deleteRepository`: unchanged trigger (GraphQL mutation, not a manifest deletion), but now sets `DeletionTimestamp`/`Finalizers` instead of hard-deleting synchronously, per the deletion state machine in `data-model.md`.

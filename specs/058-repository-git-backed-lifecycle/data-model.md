@@ -42,7 +42,7 @@ No changes to this file are required.
 | Updated by | Never (no update path defined for the bootstrap repository) | New manifest pushed/committed to `<namespace>/gitstore-system` |
 | Deletable | Never while its namespace exists (FR-012) | Yes, once empty of catalog resources (spec 041) and its bare Git repository is confirmed removable, and not already `Terminating` |
 | `createRepository`/`updateRepository` mutation behavior | Rejected outright (FR-008) | Commits manifest, waits for admission |
-| `renameRepository`/`transferRepository` mutation behavior | `Unimplemented` (unconditional, same as every other repository) | `Unimplemented` (unconditional, FR-010) |
+| `renameRepository`/`transferRepository` mutation behavior | `Unimplemented` (unconditional) + `@deprecated` schema annotation, same as every other repository | `Unimplemented` (unconditional) + `@deprecated` schema annotation (FR-010) |
 
 ## Admission state machine
 
@@ -165,7 +165,7 @@ The required fields are:
 ## Relationship to specs 041, 045, 046, 048, and future 047/GH#174 analogs
 
 - **Spec 041** (`HasCatalogResources`): reused unchanged as the catalog-resource half of the finalizer-drain condition.
-- **Spec 045** (`Repository` contract): the `Generation`/`ResourceVersion`/`Status`/`Finalizers`/`DeletionTimestamp` fields and their contract-helper functions are reused verbatim; this spec is the first to give them real values.
+- **Spec 045** (`Repository` contract): the `Generation`/`ResourceVersion`/`Status`/`Finalizers`/`DeletionTimestamp` fields and their contract-helper functions are reused verbatim; this spec is the first to give them real values. **Explicit supersession**: this spec deliberately breaks spec 045's Acceptance Scenario #4/SC-003 ("`createRepository`, `renameRepository`, `transferRepository`, and `deleteRepository` ... continue to succeed and fail under exactly the same conditions as before") for `renameRepository`/`transferRepository` only — both now unconditionally return `Unimplemented` instead of succeeding via datastore write, and are marked `@deprecated`. Spec 045's invariant was correct for its own read-schema-only scope; it is intentionally not preserved here for these two mutations, per ADR-0003's Phase 1 recommendation. `createRepository`/`deleteRepository` are unaffected by this supersession.
 - **Spec 046** (Namespace API Semantics): the admission-dispatch-case pattern, the finalizer/`Terminating` state machine shape, the controller-manager reconciler pattern, and the declarative mutation envelope shape are all copied for Repository, one tier down the ownership chain.
 - **Spec 048** (Scylla query design): Repository's query-first Scylla projections and `UpdateRepository`'s `IF resource_version=?` LWT are reused unchanged; no new access pattern is introduced.
 - **Future "Repository Validation and Admission Matrix"** (mirrors spec 047): owns the full structural-vs-policy validation rule catalogue beyond what this spec's admission state machine already specifies.
