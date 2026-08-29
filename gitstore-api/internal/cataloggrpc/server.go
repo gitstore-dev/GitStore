@@ -811,7 +811,7 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 		return err
 	}
 	for _, op := range deletes {
-		if err := s.deleteResource(ctx, op.identity, admCtx.RefName); err != nil {
+		if err := s.deleteResource(ctx, op.identity, admCtx.RepositoryID, admCtx.RefName); err != nil {
 			return err
 		}
 	}
@@ -976,7 +976,7 @@ func (s *Server) lookupResourceByIdentity(ctx context.Context, id resourceIdenti
 
 var errCategoryDeletionBlocked = errors.New("category deletion blocked by child categories")
 
-func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, refName string) error {
+func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, repositoryID, refName string) error {
 	existing, err := s.lookupResourceByIdentity(ctx, id)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
@@ -999,15 +999,22 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, refNam
 	// files inherited unchanged from another still-live ref (e.g. a
 	// feature branch's full tree, which also contains everything already
 	// on main). Only actually delete when this resource's own
-	// last-admitted ref matches the ref being deleted -- otherwise it is
-	// still legitimately reachable elsewhere and this is a phantom
-	// deletion from the deleted ref's now-irrelevant tree contents.
-	if ownRef, ok := resourceGitRef(existing); ok && refName != "" && ownRef != refName {
-		s.log.Info("admit_resources: delete skipped; resource owned by a different ref",
+	// last-admitted repository AND ref match the ones being deleted --
+	// otherwise it is still legitimately reachable elsewhere and this is
+	// a phantom deletion from the deleted ref's now-irrelevant tree
+	// contents. Both must match: resource identity (namespace, kind,
+	// name) is not scoped by repository, so two repositories in the same
+	// namespace using the same ref name (e.g. both "refs/heads/main")
+	// could otherwise collide on the ref check alone.
+	if ownRepo, ownRef, ok := resourceOwnership(existing); ok && refName != "" &&
+		(ownRepo != repositoryID || ownRef != refName) {
+		s.log.Info("admit_resources: delete skipped; resource owned by a different repository/ref",
 			zap.String("kind", id.Kind),
 			zap.String("namespace", id.Namespace),
 			zap.String("name", id.Name),
+			zap.String("deleted_repository", repositoryID),
 			zap.String("deleted_ref", refName),
+			zap.String("owning_repository", ownRepo),
 			zap.String("owning_ref", ownRef))
 		return nil
 	}
@@ -1092,25 +1099,24 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, refNam
 	return nil
 }
 
-// resourceGitRef returns existing's GitRef field and true, or "", false for
-// a kind that has no GitRef (none currently -- kept defensive for future
-// kinds added to lookupResourceByIdentity without one).
-func resourceGitRef(existing any) (string, bool) {
+// resourceOwnership returns existing's (RepositoryID, GitRef) and true, or
+// ("", "", false) for a kind that has no such fields (Namespace isn't
+// scoped to a single repository, and deleteResource's Namespace case
+// returns before this check runs anyway).
+func resourceOwnership(existing any) (string, string, bool) {
 	switch r := existing.(type) {
 	case *datastore.Product:
-		return r.GitRef, true
+		return r.RepositoryID, r.GitRef, true
 	case *datastore.CategoryTaxonomy:
-		return r.GitRef, true
+		return r.RepositoryID, r.GitRef, true
 	case *datastore.Collection:
-		return r.GitRef, true
+		return r.RepositoryID, r.GitRef, true
 	case *datastore.ProductVariant:
-		return r.GitRef, true
+		return r.RepositoryID, r.GitRef, true
 	case *datastore.File:
-		return r.GitRef, true
-	case *datastore.Namespace:
-		return r.GitRef, true
+		return r.RepositoryID, r.GitRef, true
 	default:
-		return "", false
+		return "", "", false
 	}
 }
 
