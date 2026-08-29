@@ -5,6 +5,7 @@ package namespace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
@@ -107,9 +108,35 @@ func (c *GraphQLRepositoryClient) systemRepositoryExists(ctx context.Context, na
 			},
 		},
 	}, &response); err != nil {
+		if isNotFoundError(err) {
+			// The repository genuinely does not exist yet — this is the
+			// expected steady state before EnsureSystemRepository creates
+			// it, not a hard failure.
+			return false, nil
+		}
 		return false, fmt.Errorf("namespace repository client: query system repository: %w", err)
 	}
 	return response.Repository != nil, nil
+}
+
+// isNotFoundError reports whether err is a GraphQL error signaling that the
+// queried repository does not exist. The primary signal is the "NOT_FOUND"
+// extensions code gitstore-api's resolvers use for missing resources.
+// During a rolling deployment, this controller may still query an
+// older API replica whose repository(by: namespacePath) resolver predates
+// that convention and returns only the plain message "repository not
+// found" with no extensions code — that legacy shape is recognized too, so
+// EnsureSystemRepository keeps working through a mixed-version rollout
+// rather than requiring every old replica to drain first.
+func isNotFoundError(err error) bool {
+	var gqlErr *graphqlclient.Error
+	if !errors.As(err, &gqlErr) || gqlErr == nil {
+		return false
+	}
+	if code, _ := gqlErr.Extensions["code"].(string); code == "NOT_FOUND" {
+		return true
+	}
+	return gqlErr.Extensions == nil && gqlErr.Message == "repository not found"
 }
 
 // HasRepositories reports whether the namespace currently owns any repository.
