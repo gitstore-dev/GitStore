@@ -622,16 +622,29 @@ func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
 	if err != nil {
 		return err
 	}
+	return s.deleteProductWithResourceVersion(ctx, p, p.ResourceVersion, false)
+}
+
+func (s *scyllaDatastore) DeleteProductWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
+	p, err := s.GetProduct(ctx, uid)
+	if err != nil {
+		return err
+	}
+	return s.deleteProductWithResourceVersion(ctx, p, expectedResourceVersion, true)
+}
+
+func (s *scyllaDatastore) deleteProductWithResourceVersion(ctx context.Context, p *datastore.Product, expectedResourceVersion string, authoritativeFirst bool) error {
+	uid := p.UID
 	parsedUID := mustParseUUID(uid)
 
-	err = s.mutations.executeDelete(ctx,
-		mutationAction{
-			Step: catalogueStep("delete", "Product", uid, "products_by_namespace", uid, "delete-authoritative"),
-			Apply: func(ctx context.Context) error {
-				return s.deleteProductAuthoritative(ctx, toProductRow(p), p.ResourceVersion)
-			},
+	authoritative := mutationAction{
+		Step: catalogueStep("delete", "Product", uid, "products_by_namespace", uid, "delete-authoritative"),
+		Apply: func(ctx context.Context) error {
+			return s.deleteProductAuthoritative(ctx, toProductRow(p), expectedResourceVersion)
 		},
-		mutationAction{
+	}
+	projections := []mutationAction{
+		{
 			Step: catalogueStep("delete", "Product", uid, ownerReferenceDependentsTable, uid, "delete-owner-references"),
 			Apply: func(ctx context.Context) error {
 				return s.syncOwnerReferenceDependents(ctx, p.Namespace, p.RepositoryID, "Product", p.UID, p.Name, p.ResourceVersion, p.OwnerReferences, nil)
@@ -640,7 +653,7 @@ func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
 				return s.syncOwnerReferenceDependents(ctx, p.Namespace, p.RepositoryID, "Product", p.UID, p.Name, p.ResourceVersion, nil, p.OwnerReferences)
 			},
 		},
-		mutationAction{
+		{
 			Step: catalogueStep("delete", "Product", uid, "products_by_name", p.Namespace+"/"+p.Name, "delete-name"),
 			Apply: func(ctx context.Context) error {
 				return s.releaseName(ctx, "products_by_name", p.Namespace, p.Name, parsedUID)
@@ -649,7 +662,7 @@ func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
 				return s.reserveName(ctx, "Product", "products_by_name", p.Namespace, p.Name, parsedUID, p.CreationTimestamp)
 			},
 		},
-		mutationAction{
+		{
 			Step: catalogueStep("delete", "Product", uid, "products_by_uid", uid, "delete-uid"),
 			Apply: func(ctx context.Context) error {
 				return s.releaseUID(ctx, "products_by_uid", p.Namespace, parsedUID, p.CreationTimestamp)
@@ -658,7 +671,13 @@ func (s *scyllaDatastore) DeleteProduct(ctx context.Context, uid string) error {
 				return s.reserveUID(ctx, "Product", "products_by_uid", p.Namespace, parsedUID, p.CreationTimestamp)
 			},
 		},
-	)
+	}
+	var err error
+	if authoritativeFirst {
+		err = s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
+	} else {
+		err = s.mutations.executeDelete(ctx, authoritative, projections...)
+	}
 	if err != nil {
 		return fmt.Errorf("scylla: delete product: %w", err)
 	}
@@ -1231,16 +1250,29 @@ func (s *scyllaDatastore) DeleteCollection(ctx context.Context, uid string) erro
 	if err != nil {
 		return err
 	}
+	return s.deleteCollectionWithResourceVersion(ctx, c, c.ResourceVersion, false)
+}
+
+func (s *scyllaDatastore) DeleteCollectionWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
+	c, err := s.GetCollection(ctx, uid)
+	if err != nil {
+		return err
+	}
+	return s.deleteCollectionWithResourceVersion(ctx, c, expectedResourceVersion, true)
+}
+
+func (s *scyllaDatastore) deleteCollectionWithResourceVersion(ctx context.Context, c *datastore.Collection, expectedResourceVersion string, authoritativeFirst bool) error {
+	uid := c.UID
 	parsedUID := mustParseUUID(uid)
 
-	err = s.mutations.executeDelete(ctx,
-		mutationAction{
-			Step: catalogueStep("delete", "Collection", uid, "collection", uid, "delete-authoritative"),
-			Apply: func(ctx context.Context) error {
-				return s.deleteCollectionAuthoritative(ctx, toCollectionRow(c), c.ResourceVersion)
-			},
+	authoritative := mutationAction{
+		Step: catalogueStep("delete", "Collection", uid, "collection", uid, "delete-authoritative"),
+		Apply: func(ctx context.Context) error {
+			return s.deleteCollectionAuthoritative(ctx, toCollectionRow(c), expectedResourceVersion)
 		},
-		mutationAction{
+	}
+	projections := []mutationAction{
+		{
 			Step: catalogueStep("delete", "Collection", uid, "collection_by_name", c.Namespace+"/"+c.Name, "delete-name"),
 			Apply: func(ctx context.Context) error {
 				return s.releaseName(ctx, "collection_by_name", c.Namespace, c.Name, parsedUID)
@@ -1249,7 +1281,7 @@ func (s *scyllaDatastore) DeleteCollection(ctx context.Context, uid string) erro
 				return s.reserveName(ctx, "Collection", "collection_by_name", c.Namespace, c.Name, parsedUID, c.CreationTimestamp)
 			},
 		},
-		mutationAction{
+		{
 			Step: catalogueStep("delete", "Collection", uid, "collection_by_uid", uid, "delete-uid"),
 			Apply: func(ctx context.Context) error {
 				return s.releaseUID(ctx, "collection_by_uid", c.Namespace, parsedUID, c.CreationTimestamp)
@@ -1258,7 +1290,13 @@ func (s *scyllaDatastore) DeleteCollection(ctx context.Context, uid string) erro
 				return s.reserveUID(ctx, "Collection", "collection_by_uid", c.Namespace, parsedUID, c.CreationTimestamp)
 			},
 		},
-	)
+	}
+	var err error
+	if authoritativeFirst {
+		err = s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
+	} else {
+		err = s.mutations.executeDelete(ctx, authoritative, projections...)
+	}
 	if err != nil {
 		return fmt.Errorf("scylla: delete collection: %w", err)
 	}
@@ -1673,6 +1711,19 @@ func (s *scyllaDatastore) DeleteProductVariant(ctx context.Context, uid string) 
 	if err != nil {
 		return err
 	}
+	return s.deleteProductVariantWithResourceVersion(ctx, v, v.ResourceVersion, false)
+}
+
+func (s *scyllaDatastore) DeleteProductVariantWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
+	v, err := s.GetProductVariant(ctx, uid)
+	if err != nil {
+		return err
+	}
+	return s.deleteProductVariantWithResourceVersion(ctx, v, expectedResourceVersion, true)
+}
+
+func (s *scyllaDatastore) deleteProductVariantWithResourceVersion(ctx context.Context, v *datastore.ProductVariant, expectedResourceVersion string, authoritativeFirst bool) error {
+	uid := v.UID
 	parsedUID := mustParseUUID(uid)
 	projections := []mutationAction{
 		{
@@ -1720,15 +1771,18 @@ func (s *scyllaDatastore) DeleteProductVariant(ctx context.Context, uid string) 
 			},
 		})
 	}
-	err = s.mutations.executeDelete(ctx,
-		mutationAction{
-			Step: catalogueStep("delete", "ProductVariant", uid, "product_variant_by_namespace", uid, "delete-authoritative"),
-			Apply: func(ctx context.Context) error {
-				return s.deleteProductVariantAuthoritative(ctx, toProductVariantRow(v), v.ResourceVersion)
-			},
+	authoritative := mutationAction{
+		Step: catalogueStep("delete", "ProductVariant", uid, "product_variant_by_namespace", uid, "delete-authoritative"),
+		Apply: func(ctx context.Context) error {
+			return s.deleteProductVariantAuthoritative(ctx, toProductVariantRow(v), expectedResourceVersion)
 		},
-		projections...,
-	)
+	}
+	var err error
+	if authoritativeFirst {
+		err = s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
+	} else {
+		err = s.mutations.executeDelete(ctx, authoritative, projections...)
+	}
 	if err != nil {
 		return fmt.Errorf("scylla: delete product_variant: %w", err)
 	}

@@ -1024,7 +1024,7 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 	switch r := existing.(type) {
 	case *datastore.Product:
 		uid = r.UID
-		deleteErr = s.store.DeleteProduct(ctx, r.UID)
+		deleteErr = s.store.DeleteProductWithResourceVersion(ctx, r.UID, r.ResourceVersion)
 	case *datastore.CategoryTaxonomy:
 		owners, ok := s.store.(datastore.OwnerReferenceStore)
 		if !ok {
@@ -1062,17 +1062,17 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 		return nil
 	case *datastore.Collection:
 		uid = r.UID
-		deleteErr = s.store.DeleteCollection(ctx, r.UID)
+		deleteErr = s.store.DeleteCollectionWithResourceVersion(ctx, r.UID, r.ResourceVersion)
 	case *datastore.ProductVariant:
 		uid = r.UID
-		deleteErr = s.store.DeleteProductVariant(ctx, r.UID)
+		deleteErr = s.store.DeleteProductVariantWithResourceVersion(ctx, r.UID, r.ResourceVersion)
 	case *datastore.Namespace:
 		s.log.Info("admit_resources: Namespace manifest deletion ignored; use deleteNamespace",
 			zap.String("name", r.Name))
 		return nil
 	case *datastore.File:
 		uid = r.UID
-		deleteErr = s.store.DeleteFile(ctx, r.UID)
+		deleteErr = s.store.DeleteFileWithResourceVersion(ctx, r.UID, r.ResourceVersion)
 	default:
 		deleteErr = datastore.ErrNotFound
 	}

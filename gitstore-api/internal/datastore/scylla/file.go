@@ -166,8 +166,19 @@ func (s *scyllaDatastore) DeleteFile(ctx context.Context, uid string) error {
 	if err != nil {
 		return err
 	}
+	return s.deleteFileWithResourceVersion(ctx, f, f.ResourceVersion)
+}
+func (s *scyllaDatastore) DeleteFileWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
+	f, err := s.GetFile(ctx, uid)
+	if err != nil {
+		return err
+	}
+	return s.deleteFileWithResourceVersion(ctx, f, expectedResourceVersion)
+}
+func (s *scyllaDatastore) deleteFileWithResourceVersion(ctx context.Context, f *datastore.File, expectedResourceVersion string) error {
+	uid := f.UID
 	parsed := mustParseUUID(uid)
-	if err := s.deleteFileAuthoritative(ctx, toFileRow(f), f.ResourceVersion); err != nil {
+	if err := s.deleteFileAuthoritative(ctx, toFileRow(f), expectedResourceVersion); err != nil {
 		return err
 	}
 	if err := s.syncOwnerReferenceDependents(ctx, f.Namespace, f.RepositoryID, "File", f.UID, f.Name, f.ResourceVersion, f.OwnerReferences, nil); err != nil {

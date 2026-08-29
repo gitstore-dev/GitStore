@@ -246,11 +246,23 @@ func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File) error 
 }
 
 func (m *memdbDatastore) DeleteFile(_ context.Context, uid string) error {
+	return m.deleteFile(uid, "", false)
+}
+
+func (m *memdbDatastore) DeleteFileWithResourceVersion(_ context.Context, uid, expectedResourceVersion string) error {
+	return m.deleteFile(uid, expectedResourceVersion, true)
+}
+
+func (m *memdbDatastore) deleteFile(uid, expectedResourceVersion string, checkResourceVersion bool) error {
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("file", "id", uid)
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: file uid %s", datastore.ErrNotFound, uid)
+	}
+	if checkResourceVersion && raw.(*datastore.File).ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return datastore.ErrConflict
 	}
 
 	if err := txn.Delete("file", raw); err != nil {
@@ -396,11 +408,23 @@ func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product) 
 }
 
 func (m *memdbDatastore) DeleteProduct(_ context.Context, uid string) error {
+	return m.deleteProduct(uid, "", false)
+}
+
+func (m *memdbDatastore) DeleteProductWithResourceVersion(_ context.Context, uid, expectedResourceVersion string) error {
+	return m.deleteProduct(uid, expectedResourceVersion, true)
+}
+
+func (m *memdbDatastore) deleteProduct(uid, expectedResourceVersion string, checkResourceVersion bool) error {
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("product", "id", uid)
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: product uid %s", datastore.ErrNotFound, uid)
+	}
+	if checkResourceVersion && raw.(*datastore.Product).ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return datastore.ErrConflict
 	}
 	if err := deleteOwnerReferenceProjections(txn, "Product", uid); err != nil {
 		txn.Abort()
@@ -540,11 +564,23 @@ func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.Pr
 }
 
 func (m *memdbDatastore) DeleteProductVariant(_ context.Context, uid string) error {
+	return m.deleteProductVariant(uid, "", false)
+}
+
+func (m *memdbDatastore) DeleteProductVariantWithResourceVersion(_ context.Context, uid, expectedResourceVersion string) error {
+	return m.deleteProductVariant(uid, expectedResourceVersion, true)
+}
+
+func (m *memdbDatastore) deleteProductVariant(uid, expectedResourceVersion string, checkResourceVersion bool) error {
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("product_variant", "id", uid)
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: product_variant uid %s", datastore.ErrNotFound, uid)
+	}
+	if checkResourceVersion && raw.(*datastore.ProductVariant).ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return datastore.ErrConflict
 	}
 	if err := txn.Delete("product_variant", raw); err != nil {
 		txn.Abort()
@@ -777,11 +813,23 @@ func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collec
 }
 
 func (m *memdbDatastore) DeleteCollection(_ context.Context, uid string) error {
+	return m.deleteCollection(uid, "", false)
+}
+
+func (m *memdbDatastore) DeleteCollectionWithResourceVersion(_ context.Context, uid, expectedResourceVersion string) error {
+	return m.deleteCollection(uid, expectedResourceVersion, true)
+}
+
+func (m *memdbDatastore) deleteCollection(uid, expectedResourceVersion string, checkResourceVersion bool) error {
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("collection", "id", uid)
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: collection uid %s", datastore.ErrNotFound, uid)
+	}
+	if checkResourceVersion && raw.(*datastore.Collection).ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return datastore.ErrConflict
 	}
 	if err := txn.Delete("collection", raw); err != nil {
 		txn.Abort()
