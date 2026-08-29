@@ -6,7 +6,7 @@ This page covers how GitStore's automated release pipeline (Release Please) work
 
 [Release Please](https://github.com/googleapis/release-please) watches every squash-merge to `main`. It maintains a standing **release PR** that accumulates a version bump and changelog from Conventional Commit PR titles since the last release. Merging that release PR is what actually cuts a release:
 
-1. Release Please pushes a tag (e.g. `v0.0.1-alpha.1`) and creates the GitHub Release with generated notes.
+1. Release Please pushes a tag (e.g. `v0.1.0-alpha.1`) and creates the GitHub Release with generated notes.
 2. `.github/workflows/cd.yml`'s existing `on.push.tags: ['v*']` trigger fires independently and builds+pushes all 4 Docker images (`api`, `controller-manager`, `git-service`, `admin`) to `ghcr.io`, tagged with that exact version.
 
 The two workflows (`release-please.yml` and `cd.yml`) are fully decoupled — `release-please.yml` never invokes or waits on `cd.yml`; it only pushes a tag, and `cd.yml`'s own trigger does the rest.
@@ -35,14 +35,19 @@ This must be done before the pipeline works end to end; it can't be expressed as
 
 GitStore uses **one unified semantic version** for the whole project, not independent per-service versions. That single version drives the GitHub Release and all 4 Docker image tags simultaneously.
 
-- **Prerelease numbering is dot-separated**: `0.0.1-alpha.1`, `0.0.1-alpha.2`, ... — never `0.0.1-ALPHA1`. This matters: semver compares non-numeric prerelease identifiers as whole strings, so `ALPHA10` would sort *before* `ALPHA2`. The dot makes the trailing number its own identifier, which compares numerically at any scale.
+- **Prerelease numbering is dot-separated**: `0.1.0-alpha.1`, `0.1.0-alpha.2`, ... — never `0.1.0-ALPHA1`. This matters: semver compares non-numeric prerelease identifiers as whole strings, so `ALPHA10` would sort *before* `ALPHA2`. The dot makes the trailing number its own identifier, which compares numerically at any scale.
+- **Starts at `0.1.0-alpha.N`, not `0.0.1-alpha.N`.** This is a hard requirement of how release-please's `versioning: prerelease` strategy actually works (verified against its source, not just docs — see the next bullet), not a stylistic choice.
 - **Only `feat`, `fix`, and breaking (`!`) commits trigger a version bump by default** (Release Please's standard type-to-bump mapping). `chore`, `docs`, `refactor`, `test`, `ci`, `build`, and `style` commits are recorded in the changelog under hidden/miscellaneous sections but don't move the version on their own.
-- **During a prerelease phase** (any version with an `-alpha.N`/`-beta.N` suffix), qualifying commits only increment the trailing prerelease counter — they never bump the semver core (major/minor/patch) while a prerelease is active. That's release-please's `versioning: prerelease` config for this repo's package.
+- **During a prerelease phase, qualifying commits only increment the trailing prerelease counter — but only if the semver core is already anchored at the right boundary for that commit's severity.** Specifically (from `PrereleaseMinorVersionUpdate`/`PrereleaseMajorVersionUpdate`/`PrereleasePatchVersionUpdate` in release-please's source):
+  - `fix:` commits always just bump the prerelease counter, regardless of the current patch value.
+  - `feat:` commits only just bump the prerelease counter if `patch === 0`; otherwise they do a normal minor bump (reset patch to 0, increment minor) and restart the prerelease counter at `.0`. **This is exactly what broke the very first release attempt** — the manifest was originally seeded at `0.0.1-alpha.0` (patch `1`), so the first `feat:` commit bumped it to `0.1.0-alpha.0` instead of staying at `0.0.1-alpha.1`.
+  - Breaking changes only just bump the prerelease counter if `minor === 0 && patch === 0`; otherwise a normal major bump + counter restart.
+  - **Practical consequence**: because this repo will have ongoing `feat:` commits throughout the whole alpha phase, the version must stay minor-anchored (`0.1.0-alpha.N`, patch always `0`) for the "just bump the counter" behavior to hold indefinitely. Never manually edit the manifest to a non-zero patch while a prerelease is active — the next `feat:` commit will silently core-bump again.
 - **Phase names (`alpha` → `beta` → stable) never change automatically.** Moving from one phase to the next is a deliberate human action — see Graduation below.
 
 ## Reviewing and Merging a Release PR
 
-The release PR is titled something like `chore: release 0.0.1-alpha.4` and its diff only ever touches: `.release-please-manifest.json`, `CHANGELOG.md`, and the 4 version-marker files it keeps in sync (`gitstore-git-service/Cargo.toml`, `gitstore-admin/package.json`, `gitstore-api/internal/app/server.go`'s marker line, `gitstore-controller-manager/internal/version/version.go`'s marker line).
+The release PR is titled something like `chore: release 0.1.0-alpha.4` and its diff only ever touches: `.release-please-manifest.json`, `CHANGELOG.md`, and the 4 version-marker files it keeps in sync (`gitstore-git-service/Cargo.toml`, `gitstore-admin/package.json`, `gitstore-api/internal/app/server.go`'s marker line, `gitstore-controller-manager/internal/version/version.go`'s marker line).
 
 - **Don't hand-edit the release PR.** Release Please force-resyncs it on every subsequent push to `main` — any manual edit to its diff will be overwritten. If the proposed version or changelog content is wrong, fix it via `release-please-config.json` or a `Release-As` override (below), not by editing the PR directly.
 - Merging the release PR is the only action that actually cuts a release. Nothing else in this pipeline does.
@@ -52,15 +57,15 @@ The release PR is titled something like `chore: release 0.0.1-alpha.4` and its d
 This is a manual, operator-driven action — never automatic. To force the next release to a specific version regardless of what the accumulated commits would otherwise compute:
 
 ```bash
-git commit --allow-empty -m "chore: release main" -m "Release-As: 0.0.1-beta.1"
+git commit --allow-empty -m "chore: release main" -m "Release-As: 0.1.0-beta.1"
 git push origin main
 ```
 
 (Verify the exact `Release-As:` footer syntax against the pinned `googleapis/release-please-action` version's current docs before relying on it — this convention has been stable across recent majors but confirm before your first graduation.)
 
 Use the same mechanism for:
-- **Alpha → beta**: `Release-As: 0.0.1-beta.1`
-- **Beta → stable**: `Release-As: 0.0.1` (no prerelease suffix — this is what permanently flips Docker's `latest` tag behavior, see below)
+- **Alpha → beta**: `Release-As: 0.1.0-beta.1` (keep patch at `0` — the same minor-anchoring requirement applies to beta, since `feat:` commits will keep landing there too)
+- **Beta → stable**: `Release-As: 0.1.0` (no prerelease suffix — this is what permanently flips Docker's `latest` tag behavior, see below)
 - **Any one-off correction**: e.g. a bad automatic bump, or a hotfix that needs a specific version out of band.
 
 ## Docker `latest` Tag Behavior
@@ -70,8 +75,8 @@ Use the same mechanism for:
 - **A stable tag** (no `-alpha`/`-beta`/`-rc` suffix) is always latest-eligible.
 - **A prerelease tag** is latest-eligible only if `gh release list` shows no stable (non-prerelease) release has ever been published to this repo.
 - **Before any stable release exists**: `latest` tracks whichever alpha/beta build was published most recently.
-- **After the first stable release** (e.g. `0.0.1`): `latest` permanently stops tracking prereleases. Any alpha/beta/rc published *after* that point will never become `latest` again — only a newer stable release can move it.
-- **Practical implication for consumers**: once a stable release exists, anyone who wants "whatever's newest, prereleases included" must pin to the exact version tag (e.g. `:0.0.2-beta.1`), not `:latest`.
+- **After the first stable release** (e.g. `0.1.0`): `latest` permanently stops tracking prereleases. Any alpha/beta/rc published *after* that point will never become `latest` again — only a newer stable release can move it.
+- **Practical implication for consumers**: once a stable release exists, anyone who wants "whatever's newest, prereleases included" must pin to the exact version tag (e.g. `:0.2.0-beta.1`), not `:latest`.
 
 ## Troubleshooting
 
