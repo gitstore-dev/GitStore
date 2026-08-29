@@ -292,6 +292,44 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 	})
 
+	t.Run("ConditionalDelete/RejectsStaleResourceVersion", func(t *testing.T) {
+		product := newProduct()
+		product.ResourceVersion = "2"
+		require.NoError(t, ds.CreateProduct(ctx, product))
+		require.ErrorIs(t, ds.DeleteProductWithResourceVersion(ctx, product.UID, "1"), datastore.ErrConflict)
+		_, err := ds.GetProduct(ctx, product.UID)
+		require.NoError(t, err)
+		require.NoError(t, ds.DeleteProductWithResourceVersion(ctx, product.UID, "2"))
+
+		collection := newCollection()
+		collection.ResourceVersion = "2"
+		require.NoError(t, ds.CreateCollection(ctx, collection))
+		require.ErrorIs(t, ds.DeleteCollectionWithResourceVersion(ctx, collection.UID, "1"), datastore.ErrConflict)
+		_, err = ds.GetCollection(ctx, collection.UID)
+		require.NoError(t, err)
+		require.NoError(t, ds.DeleteCollectionWithResourceVersion(ctx, collection.UID, "2"))
+
+		variant := &datastore.ProductVariant{
+			UID: newID(), Namespace: "test-ns", Name: "variant-" + newID()[:8],
+			APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "ProductVariant", ResourceVersion: "2",
+		}
+		require.NoError(t, ds.CreateProductVariant(ctx, variant))
+		require.ErrorIs(t, ds.DeleteProductVariantWithResourceVersion(ctx, variant.UID, "1"), datastore.ErrConflict)
+		_, err = ds.GetProductVariant(ctx, variant.UID)
+		require.NoError(t, err)
+		require.NoError(t, ds.DeleteProductVariantWithResourceVersion(ctx, variant.UID, "2"))
+
+		file := &datastore.File{
+			UID: newID(), Namespace: "test-ns", Name: "file-" + newID()[:8],
+			APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "2",
+		}
+		require.NoError(t, ds.CreateFile(ctx, file))
+		require.ErrorIs(t, ds.DeleteFileWithResourceVersion(ctx, file.UID, "1"), datastore.ErrConflict)
+		_, err = ds.GetFile(ctx, file.UID)
+		require.NoError(t, err)
+		require.NoError(t, ds.DeleteFileWithResourceVersion(ctx, file.UID, "2"))
+	})
+
 	t.Run("Product/ListAll", func(t *testing.T) {
 		before, err := ds.ListProducts(ctx, "test-ns", datastore.PageParams{})
 		require.NoError(t, err)
