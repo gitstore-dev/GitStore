@@ -78,6 +78,41 @@ func TestGraphQLRepositoryClientCreatesSystemRepositoryOnNotFoundError(t *testin
 	}
 }
 
+// TestGraphQLRepositoryClientCreatesSystemRepositoryOnLegacyNotFoundMessage
+// covers a mixed-version rolling deployment: during a rollout, the
+// controller-manager may still query an older gitstore-api replica whose
+// repository(by: namespacePath) resolver predates the NOT_FOUND extensions
+// code convention and returns only the plain message "repository not
+// found" with no extensions. EnsureSystemRepository must still recognize
+// that as "doesn't exist yet" rather than aborting until every old replica
+// has drained.
+func TestGraphQLRepositoryClientCreatesSystemRepositoryOnLegacyNotFoundMessage(t *testing.T) {
+	var queries, mutations int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(req.Query, "mutation") {
+			mutations++
+			_, _ = w.Write([]byte(`{"data":{"createRepository":{"repository":{"metadata":{"name":"gitstore-system"}}}}}`))
+			return
+		}
+		queries++
+		_, _ = w.Write([]byte(`{"data":{"repository":null},"errors":[{"message":"repository not found"}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, "token"))
+	if err := client.EnsureSystemRepository(context.Background(), "acme"); err != nil {
+		t.Fatalf("EnsureSystemRepository failed: %v", err)
+	}
+	if queries != 1 || mutations != 1 {
+		t.Fatalf("queries=%d mutations=%d, want 1/1 (createRepository must actually be called against a legacy API replica)", queries, mutations)
+	}
+}
+
 // TestGraphQLRepositoryClientPropagatesGenuineQueryErrors confirms that a
 // non-"not found" GraphQL error (e.g. a genuine server error) still
 // propagates as a hard failure and does not silently fall through to
