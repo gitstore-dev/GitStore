@@ -3,6 +3,8 @@ name: PR Title Lint
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  merge_group:
+    branches: [ main ]
 
 permissions:
   pull-requests: read
@@ -12,7 +14,12 @@ jobs:
   lint-pr-title:
     runs-on: ubuntu-latest
     steps:
-      - uses: amannn/action-semantic-pull-request@v6
+      # merge_group events have no PR to lint - the title was already
+      # validated on the pull_request event before this PR could even
+      # enter the merge queue. Skip trivially so the required check still
+      # reports a result against the synthetic merge-group commit.
+      - if: github.event_name == 'pull_request'
+        uses: amannn/action-semantic-pull-request@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
