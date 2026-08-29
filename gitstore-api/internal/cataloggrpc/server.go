@@ -1386,6 +1386,8 @@ func fileAdmissionStatus(generation int64, revision string, now time.Time) []byt
 	return b
 }
 
+const maxFileAdmissionUpdateAttempts = 3
+
 func (s *Server) admitFile(
 	ctx context.Context,
 	resource *catalog.FileResource,
@@ -1422,40 +1424,72 @@ func (s *Server) admitFile(
 			GitCommitSHA: admCtx.CommitSHA, GitRef: admCtx.RefName, Spec: specJSON, Body: string(body),
 		}
 		f.Status = fileAdmissionStatus(1, admCtx.Revision, admCtx.Now)
-		if err := s.store.CreateFile(ctx, f); err != nil {
-			s.log.Error("admit_resources: create file failed", zap.Error(err))
-		} else {
+		if err := s.store.CreateFile(ctx, f); err == nil {
 			s.publishFileEvent(eventbus.Added, f)
+			return
+		} else if !errors.Is(err, datastore.ErrAlreadyExists) {
+			s.log.Error("admit_resources: create file failed", zap.Error(err))
+			return
 		}
-		return
+		// Another replica may have created this identity after operationForEntry
+		// observed it as absent. If this admission still owns the ref tip, reload
+		// the winner and converge through the resource-version-guarded update
+		// path below. A stale admission must leave the winner untouched.
+		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
+			return
+		}
+		existing, err = s.store.GetFileByName(ctx, namespace, resource.Metadata.Name)
+		if err != nil {
+			s.log.Error("admit_resources: reload File after create conflict failed", zap.Error(err))
+			return
+		}
 	}
-	changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
-	changedMetadata := existing.APIVersion != resource.APIVersion || existing.Kind != resource.Kind ||
-		!reflect.DeepEqual(existing.Labels, resource.Metadata.Labels) || !reflect.DeepEqual(existing.Annotations, resource.Metadata.Annotations)
-	changedProvenance := existing.RepositoryID != admCtx.RepositoryID || existing.SourcePath != sourcePath ||
-		existing.GitCommitSHA != admCtx.CommitSHA || existing.GitRef != admCtx.RefName
-	if !changedSpecBody && !changedMetadata && !changedProvenance {
-		return
+	for attempt := 0; attempt < maxFileAdmissionUpdateAttempts; attempt++ {
+		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
+		changedMetadata := existing.APIVersion != resource.APIVersion || existing.Kind != resource.Kind ||
+			!reflect.DeepEqual(existing.Labels, cloneStringMap(resource.Metadata.Labels)) ||
+			!reflect.DeepEqual(existing.Annotations, cloneStringMap(resource.Metadata.Annotations))
+		changedProvenance := existing.RepositoryID != admCtx.RepositoryID || existing.SourcePath != sourcePath ||
+			existing.GitCommitSHA != admCtx.CommitSHA || existing.GitRef != admCtx.RefName
+		if !changedSpecBody && !changedMetadata && !changedProvenance {
+			return
+		}
+		if existingSpecContentType(existing.Spec) != resource.Spec.ContentType {
+			s.log.Warn("admit_resources: File contentType is immutable", zap.String("name", resource.Metadata.Name))
+			return
+		}
+		expectedResourceVersion := existing.ResourceVersion
+		gen := existing.Generation
+		if changedSpecBody {
+			gen++
+		}
+		existing.APIVersion, existing.Kind = resource.APIVersion, resource.Kind
+		existing.Labels, existing.Annotations = cloneStringMap(resource.Metadata.Labels), cloneStringMap(resource.Metadata.Annotations)
+		existing.Generation, existing.ResourceVersion = gen, nextResourceVersion(expectedResourceVersion)
+		existing.Revision, existing.RepositoryID, existing.SourcePath = admCtx.Revision, admCtx.RepositoryID, sourcePath
+		existing.GitCommitSHA, existing.GitRef, existing.Spec, existing.Body = admCtx.CommitSHA, admCtx.RefName, specJSON, string(body)
+		existing.Status = fileAdmissionStatus(gen, admCtx.Revision, admCtx.Now)
+		err := s.store.UpdateFile(ctx, existing, expectedResourceVersion)
+		if err == nil {
+			s.publishFileEvent(eventbus.Modified, existing)
+			return
+		}
+		if !errors.Is(err, datastore.ErrConflict) {
+			s.log.Error("admit_resources: update file failed", zap.Error(err))
+			return
+		}
+		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
+			return
+		}
+		existing, err = s.store.GetFileByName(ctx, namespace, resource.Metadata.Name)
+		if err != nil {
+			s.log.Error("admit_resources: reload File after update conflict failed", zap.Error(err))
+			return
+		}
 	}
-	if existingSpecContentType(existing.Spec) != resource.Spec.ContentType {
-		s.log.Warn("admit_resources: File contentType is immutable", zap.String("name", resource.Metadata.Name))
-		return
-	}
-	gen := existing.Generation
-	if changedSpecBody {
-		gen++
-	}
-	existing.APIVersion, existing.Kind = resource.APIVersion, resource.Kind
-	existing.Labels, existing.Annotations = cloneStringMap(resource.Metadata.Labels), cloneStringMap(resource.Metadata.Annotations)
-	existing.Generation, existing.ResourceVersion = gen, nextResourceVersion(existing.ResourceVersion)
-	existing.Revision, existing.RepositoryID, existing.SourcePath = admCtx.Revision, admCtx.RepositoryID, sourcePath
-	existing.GitCommitSHA, existing.GitRef, existing.Spec, existing.Body = admCtx.CommitSHA, admCtx.RefName, specJSON, string(body)
-	existing.Status = fileAdmissionStatus(gen, admCtx.Revision, admCtx.Now)
-	if err := s.store.UpdateFile(ctx, existing); err != nil {
-		s.log.Error("admit_resources: update file failed", zap.Error(err))
-	} else {
-		s.publishFileEvent(eventbus.Modified, existing)
-	}
+	s.log.Error("admit_resources: update File conflict retry budget exhausted",
+		zap.String("namespace", namespace), zap.String("name", resource.Metadata.Name),
+		zap.String("commit_sha", admCtx.CommitSHA))
 }
 
 func existingSpecContentType(raw []byte) string {

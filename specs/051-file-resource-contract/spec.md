@@ -4,7 +4,7 @@
 
 **Created**: 2026-08-19
 
-**Status**: Closed
+**Status**: In progress
 
 **Input**: User description: "Support Kubernetes-style `File` frontmatter as the technical media primitive for GitStore (GH#79). Define the declarative `.spec`/`.status` schema contract for a brand-new `File` resource: top-level `apiVersion`/`kind`/`metadata`/`spec`/`status` envelope; `FileSpec` fields `contentType`, `source` (`FileSourceDefinition`), `type`, `processing.image.variants`; a lifecycle `status` indicator (`Uploaded`, `Processing`, `Ready`, `Failed`); the Markdown body used as alt text; validation that documents self-identify as `kind: File`. File-only — `MediaAsset` is an explicitly out-of-scope follow-on resource."
 

@@ -74,6 +74,27 @@ func TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent(t *testing.
 	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
 	require.NoError(t, err)
 	assert.Equal(t, "Alt text", file.Body)
+	assert.Equal(t, "1", file.ResourceVersion, "an identical create collision must not manufacture an update")
+
+	controllerRevision := "controller-resolved"
+	file, err = store.UpdateFileStatus(context.Background(), "gitstore", "hero", datastore.FileStatusPatch{
+		ResourceVersion: file.ResourceVersion, LastAppliedRevision: &controllerRevision,
+	})
+	require.NoError(t, err)
+	statusAfterController := append([]byte(nil), file.Status...)
+	resourceVersionAfterController := file.ResourceVersion
+
+	// A delayed duplicate delivery for the same commit must remain a no-op
+	// even though the stored representation normalizes omitted metadata maps
+	// to empty maps. In particular it must not erase controller-owned status.
+	_, err = replicas[0].AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, CommitSha: commit, RefName: "refs/heads/main",
+	})
+	require.NoError(t, err)
+	file, err = store.GetFileByName(context.Background(), "gitstore", "hero")
+	require.NoError(t, err)
+	assert.Equal(t, resourceVersionAfterController, file.ResourceVersion)
+	assert.Equal(t, statusAfterController, []byte(file.Status))
 
 	page, err := store.ListFiles(context.Background(), "gitstore", datastore.PageParams{})
 	require.NoError(t, err)
@@ -189,6 +210,221 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 	assert.Equal(t, c, file.GitCommitSHA, "the stale update must not overwrite the already-durable newer update")
 	assert.Equal(t, "Newest update", file.Body)
 	assert.Equal(t, "2", file.ResourceVersion, "only the winning update may advance the durable version")
+}
+
+type orderedFileUpdateStore struct {
+	datastore.Datastore
+	olderCommit, newerCommit                  string
+	olderEntered, releaseOlder, olderFinished chan struct{}
+	newerEntered, releaseNewer                chan struct{}
+	olderOnce, newerOnce                      sync.Once
+}
+
+type orderedFileCreateStore struct {
+	datastore.Datastore
+	olderCommit, newerCommit                  string
+	olderEntered, releaseOlder, olderFinished chan struct{}
+	newerEntered, releaseNewer                chan struct{}
+	olderOnce, newerOnce                      sync.Once
+}
+
+func (s *orderedFileCreateStore) CreateFile(ctx context.Context, file *datastore.File) error {
+	if file.GitCommitSHA == s.olderCommit {
+		s.olderOnce.Do(func() {
+			close(s.olderEntered)
+			<-s.releaseOlder
+		})
+		err := s.Datastore.CreateFile(ctx, file)
+		close(s.olderFinished)
+		return err
+	}
+	if file.GitCommitSHA == s.newerCommit {
+		s.newerOnce.Do(func() {
+			close(s.newerEntered)
+			<-s.releaseNewer
+		})
+	}
+	return s.Datastore.CreateFile(ctx, file)
+}
+
+// TestAdmitResources_FileCurrentCreateRetriesAfterConcurrentCollision forces
+// two replicas to observe a missing File, lets stale commit B create it first,
+// then proves current commit C reloads that row and converges through the
+// guarded update path after its create receives ErrAlreadyExists.
+func TestAdmitResources_FileCurrentCreateRetriesAfterConcurrentCollision(t *testing.T) {
+	base := newTestDatastore(t)
+	b := strings.Repeat("b", 40)
+	c := strings.Repeat("c", 40)
+	path := "files/hero.md"
+	files := map[string]map[string][]byte{
+		b: {path: makeFileWithBody("hero", "Older create")},
+		c: {path: makeFileWithBody("hero", "Current create")},
+	}
+	store := &orderedFileCreateStore{
+		Datastore: base, olderCommit: b, newerCommit: c,
+		olderEntered: make(chan struct{}), releaseOlder: make(chan struct{}), olderFinished: make(chan struct{}),
+		newerEntered: make(chan struct{}), releaseNewer: make(chan struct{}),
+	}
+	var mu sync.Mutex
+	current := b
+	git := newTreeGitReader(&current, files)
+	git.resolveRefFunc = func(context.Context, string, string) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return current, nil
+	}
+	olderServer := newCatalogServer(t, store, git)
+	newerServer := newCatalogServer(t, store, git)
+
+	olderDone := make(chan error, 1)
+	go func() {
+		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+			RepositoryId: testRepoID, CommitSha: b, RefName: "refs/heads/main",
+		})
+		olderDone <- err
+	}()
+	select {
+	case <-store.olderEntered:
+	case <-time.After(time.Second):
+		t.Fatal("older admission did not reach File create")
+	}
+
+	mu.Lock()
+	current = c
+	mu.Unlock()
+	newerDone := make(chan error, 1)
+	go func() {
+		_, err := newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+			RepositoryId: testRepoID, CommitSha: c, RefName: "refs/heads/main",
+		})
+		newerDone <- err
+	}()
+	select {
+	case <-store.newerEntered:
+	case <-time.After(time.Second):
+		t.Fatal("newer admission did not reach File create")
+	}
+
+	close(store.releaseOlder)
+	select {
+	case <-store.olderFinished:
+	case <-time.After(time.Second):
+		t.Fatal("older admission did not persist its create")
+	}
+	close(store.releaseNewer)
+	require.NoError(t, <-olderDone)
+	require.NoError(t, <-newerDone)
+
+	file, err := base.GetFileByName(context.Background(), "gitstore", "hero")
+	require.NoError(t, err)
+	assert.Equal(t, c, file.GitCommitSHA)
+	assert.Equal(t, "Current create", file.Body)
+	assert.Equal(t, "2", file.ResourceVersion)
+}
+
+func (s *orderedFileUpdateStore) UpdateFile(ctx context.Context, file *datastore.File, expectedResourceVersion string) error {
+	if file.GitCommitSHA == s.olderCommit {
+		s.olderOnce.Do(func() {
+			close(s.olderEntered)
+			<-s.releaseOlder
+		})
+		err := s.Datastore.UpdateFile(ctx, file, expectedResourceVersion)
+		close(s.olderFinished)
+		return err
+	}
+	if file.GitCommitSHA == s.newerCommit {
+		s.newerOnce.Do(func() {
+			close(s.newerEntered)
+			<-s.releaseNewer
+		})
+	}
+	return s.Datastore.UpdateFile(ctx, file, expectedResourceVersion)
+}
+
+// TestAdmitResources_FileCurrentCommitRetriesAfterConcurrentConflict forces
+// both replicas to load resourceVersion 1, lets stale commit B win the first
+// CAS, then proves current commit C reloads resourceVersion 2 and retries to
+// durable convergence instead of logging its conflict and returning success.
+func TestAdmitResources_FileCurrentCommitRetriesAfterConcurrentConflict(t *testing.T) {
+	base := newTestDatastore(t)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	c := strings.Repeat("c", 40)
+	path := "files/hero.md"
+	files := map[string]map[string][]byte{
+		a: {path: makeFile("hero")},
+		b: {path: makeFileWithBody("hero", "Older update")},
+		c: {path: makeFileWithBody("hero", "Current update")},
+	}
+	current := a
+	seed := newCatalogServer(t, base, newTreeGitReader(&current, files))
+	_, err := seed.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, CommitSha: a, RefName: "refs/heads/main",
+	})
+	require.NoError(t, err)
+
+	store := &orderedFileUpdateStore{
+		Datastore: base, olderCommit: b, newerCommit: c,
+		olderEntered: make(chan struct{}), releaseOlder: make(chan struct{}), olderFinished: make(chan struct{}),
+		newerEntered: make(chan struct{}), releaseNewer: make(chan struct{}),
+	}
+	var mu sync.Mutex
+	current = b
+	git := newTreeGitReader(&current, files)
+	git.resolveRefFunc = func(context.Context, string, string) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return current, nil
+	}
+	olderServer := newCatalogServer(t, store, git)
+	newerServer := newCatalogServer(t, store, git)
+
+	olderDone := make(chan error, 1)
+	go func() {
+		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+			RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b, CommitSha: b,
+			RefName: "refs/heads/main", ChangedPaths: []string{path},
+		})
+		olderDone <- err
+	}()
+	select {
+	case <-store.olderEntered:
+	case <-time.After(time.Second):
+		t.Fatal("older update did not reach the datastore CAS")
+	}
+
+	mu.Lock()
+	current = c
+	mu.Unlock()
+	newerDone := make(chan error, 1)
+	go func() {
+		_, err := newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+			RepositoryId: testRepoID, OldCommitSha: b, NewCommitSha: c, CommitSha: c,
+			RefName: "refs/heads/main", ChangedPaths: []string{path},
+		})
+		newerDone <- err
+	}()
+	select {
+	case <-store.newerEntered:
+	case <-time.After(time.Second):
+		t.Fatal("current update did not reach the datastore CAS")
+	}
+
+	close(store.releaseOlder)
+	select {
+	case <-store.olderFinished:
+	case <-time.After(time.Second):
+		t.Fatal("older update did not finish its CAS")
+	}
+	close(store.releaseNewer)
+	require.NoError(t, <-olderDone)
+	require.NoError(t, <-newerDone)
+
+	file, err := base.GetFileByName(context.Background(), "gitstore", "hero")
+	require.NoError(t, err)
+	assert.Equal(t, c, file.GitCommitSHA)
+	assert.Equal(t, "Current update", file.Body)
+	assert.Equal(t, "3", file.ResourceVersion)
 }
 
 // TestAdmitResources_FileUpdateSurvivesReplicaProcessReplacement models a

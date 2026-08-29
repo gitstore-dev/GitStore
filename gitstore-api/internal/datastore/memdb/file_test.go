@@ -51,6 +51,31 @@ func TestFileStatusUpdateUsesResourceVersionGuard(t *testing.T) {
 	require.ErrorIs(t, err, datastore.ErrConflict)
 }
 
+func TestFileUpdateUsesResourceVersionGuard(t *testing.T) {
+	store, err := New()
+	require.NoError(t, err)
+	defer store.Close()
+	file := &datastore.File{
+		UID: "00000000-0000-0000-0000-000000000054", Namespace: "ns", Name: "hero",
+		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "1",
+	}
+	require.NoError(t, store.CreateFile(context.Background(), file))
+
+	winner := *file
+	winner.ResourceVersion = "2"
+	winner.Body = "winner"
+	require.NoError(t, store.UpdateFile(context.Background(), &winner, "1"))
+
+	stale := *file
+	stale.ResourceVersion = "2"
+	stale.Body = "stale"
+	err = store.UpdateFile(context.Background(), &stale, "1")
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	durable, err := store.GetFile(context.Background(), file.UID)
+	require.NoError(t, err)
+	require.Equal(t, "winner", durable.Body)
+}
+
 func TestFileOwnerReferenceProjectionIsRepositoryScoped(t *testing.T) {
 	store, err := New()
 	require.NoError(t, err)
@@ -71,7 +96,7 @@ func TestFileOwnerReferenceProjectionIsRepositoryScoped(t *testing.T) {
 	require.False(t, blocked)
 	file.OwnerReferences = nil
 	file.ResourceVersion = "2"
-	require.NoError(t, store.UpdateFile(context.Background(), file))
+	require.NoError(t, store.UpdateFile(context.Background(), file, "1"))
 	blocked, err = owners.HasBlockingOwnerDependents(context.Background(), datastore.OwnerReferenceScope{Namespace: "ns", RepositoryID: "owner-repo"}, "owner")
 	require.NoError(t, err)
 	require.False(t, blocked)

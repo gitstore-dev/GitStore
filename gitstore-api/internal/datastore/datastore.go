@@ -300,7 +300,9 @@ type Datastore interface {
 	GetFile(ctx context.Context, uid string) (*File, error)
 	GetFileByName(ctx context.Context, namespace, name string) (*File, error)
 	ListFiles(ctx context.Context, namespace string, page PageParams) (*PageResult[File], error)
-	UpdateFile(ctx context.Context, f *File) error
+	// UpdateFile replaces a File only when expectedResourceVersion still
+	// matches the durable row, returning ErrConflict otherwise.
+	UpdateFile(ctx context.Context, f *File, expectedResourceVersion string) error
 	DeleteFile(ctx context.Context, uid string) error
 	DeleteFileWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 

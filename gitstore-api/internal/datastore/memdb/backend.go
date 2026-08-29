@@ -220,14 +220,19 @@ func (m *memdbDatastore) ListFiles(_ context.Context, namespace string, page dat
 	return paginateSlice(all, page, func(f *datastore.File) (time.Time, string) { return f.CreationTimestamp, f.UID }), nil
 }
 
-func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File) error {
+func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File, expectedResourceVersion string) error {
 	if f == nil {
 		return fmt.Errorf("%w: file is nil", datastore.ErrInvalidArgument)
 	}
 	txn := m.db.Txn(true)
-	if raw, _ := txn.First("file", "id", f.UID); raw == nil {
+	raw, _ := txn.First("file", "id", f.UID)
+	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: file uid %s", datastore.ErrNotFound, f.UID)
+	}
+	if raw.(*datastore.File).ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return fmt.Errorf("%w: file uid %s", datastore.ErrConflict, f.UID)
 	}
 	if raw, _ := txn.First("file", "name_namespace", f.Namespace, f.Name); raw != nil && raw.(*datastore.File).UID != f.UID {
 		txn.Abort()
