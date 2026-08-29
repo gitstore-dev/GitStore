@@ -811,7 +811,7 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 		return err
 	}
 	for _, op := range deletes {
-		if err := s.deleteResource(ctx, op.identity); err != nil {
+		if err := s.deleteResource(ctx, op.identity, admCtx.RepositoryID, admCtx.RefName); err != nil {
 			return err
 		}
 	}
@@ -976,7 +976,7 @@ func (s *Server) lookupResourceByIdentity(ctx context.Context, id resourceIdenti
 
 var errCategoryDeletionBlocked = errors.New("category deletion blocked by child categories")
 
-func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) error {
+func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, repositoryID, refName string) error {
 	existing, err := s.lookupResourceByIdentity(ctx, id)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
@@ -992,6 +992,31 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) error 
 			zap.String("name", id.Name),
 			zap.Error(err))
 		return fmt.Errorf("delete %s %s/%s: %w", id.Kind, id.Namespace, id.Name, err)
+	}
+
+	// A branch deletion's changed_paths covers every path in the deleted
+	// ref's final tree (git-service's compute_changed_paths), including
+	// files inherited unchanged from another still-live ref (e.g. a
+	// feature branch's full tree, which also contains everything already
+	// on main). Only actually delete when this resource's own
+	// last-admitted repository AND ref match the ones being deleted --
+	// otherwise it is still legitimately reachable elsewhere and this is
+	// a phantom deletion from the deleted ref's now-irrelevant tree
+	// contents. Both must match: resource identity (namespace, kind,
+	// name) is not scoped by repository, so two repositories in the same
+	// namespace using the same ref name (e.g. both "refs/heads/main")
+	// could otherwise collide on the ref check alone.
+	if ownRepo, ownRef, ok := resourceOwnership(existing); ok && refName != "" &&
+		(ownRepo != repositoryID || ownRef != refName) {
+		s.log.Info("admit_resources: delete skipped; resource owned by a different repository/ref",
+			zap.String("kind", id.Kind),
+			zap.String("namespace", id.Namespace),
+			zap.String("name", id.Name),
+			zap.String("deleted_repository", repositoryID),
+			zap.String("deleted_ref", refName),
+			zap.String("owning_repository", ownRepo),
+			zap.String("owning_ref", ownRef))
+		return nil
 	}
 
 	var uid string
@@ -1072,6 +1097,27 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity) error 
 		zap.String("name", id.Name),
 		zap.String("uid", uid))
 	return nil
+}
+
+// resourceOwnership returns existing's (RepositoryID, GitRef) and true, or
+// ("", "", false) for a kind that has no such fields (Namespace isn't
+// scoped to a single repository, and deleteResource's Namespace case
+// returns before this check runs anyway).
+func resourceOwnership(existing any) (string, string, bool) {
+	switch r := existing.(type) {
+	case *datastore.Product:
+		return r.RepositoryID, r.GitRef, true
+	case *datastore.CategoryTaxonomy:
+		return r.RepositoryID, r.GitRef, true
+	case *datastore.Collection:
+		return r.RepositoryID, r.GitRef, true
+	case *datastore.ProductVariant:
+		return r.RepositoryID, r.GitRef, true
+	case *datastore.File:
+		return r.RepositoryID, r.GitRef, true
+	default:
+		return "", "", false
+	}
 }
 
 // detectCycles delegates to the admission/catalog package implementation.
