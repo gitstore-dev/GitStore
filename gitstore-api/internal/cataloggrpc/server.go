@@ -712,6 +712,12 @@ func (s *Server) AdmitResources(
 
 	oldEntries := s.loadParsedEntries(ctx, req.RepositoryId, req.GetOldCommitSha(), admCtx.Namespace, req.GetChangedPaths())
 	newEntries := s.loadParsedEntries(ctx, req.RepositoryId, newCommit, admCtx.Namespace, req.GetChangedPaths())
+	// A newer push may land while this replica is loading and parsing both
+	// trees. Recheck the ref immediately before datastore mutation so a stale
+	// in-flight update cannot overwrite the newer commit's durable state.
+	if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, newCommit) {
+		return &catalogv1.AdmitResourcesResponse{}, nil
+	}
 	ops := deriveResourceAdmissionOperations(oldEntries, newEntries, req.GetChangedPaths())
 	if err := s.applyResourceOperations(ctx, ops, admCtx); err != nil {
 		s.log.Error("admit_resources: apply operations failed",

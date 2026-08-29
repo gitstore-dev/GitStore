@@ -112,13 +112,14 @@ func (a *Authorize) GraphQLAuthorizer(ctx context.Context, next graphql.Operatio
 }
 
 // GraphQLFieldAuthorizer runs fine-grained GraphQL authorization checks for
-// mutation fields that require policy evaluation against resource context.
+// mutation and subscription fields that require policy evaluation against
+// resource context.
 func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Resolver) (any, error) {
 	if a.logger == nil {
 		a.logger = zap.NewNop()
 	}
 	fc := graphql.GetFieldContext(ctx)
-	if fc == nil || fc.Object != "Mutation" {
+	if fc == nil || (fc.Object != "Mutation" && fc.Object != "Subscription") {
 		return next(ctx)
 	}
 
@@ -129,6 +130,9 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	var authz auth.AuthZProvider
 	if a.registry != nil {
 		authz = a.registry.AuthZ()
+	}
+	if fc.Object == "Subscription" {
+		return a.authorizeSubscription(ctx, next, fc, principal, authz)
 	}
 
 	switch fc.Field.Name {
@@ -282,6 +286,47 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	return next(ctx)
 }
 
+func (a *Authorize) authorizeSubscription(
+	ctx context.Context,
+	next graphql.Resolver,
+	fc *graphql.FieldContext,
+	principal *auth.Principal,
+	authz auth.AuthZProvider,
+) (any, error) {
+	var kind string
+	switch fc.Field.Name {
+	case "watchCategories":
+		kind = "Category"
+	case "watchProducts":
+		kind = "Product"
+	case "watchFiles":
+		kind = "File"
+	case "watchResources":
+		kind, _ = directStringArg(fc.Args, "kind")
+	default:
+		return next(ctx)
+	}
+	if authz == nil {
+		return nil, gqlerror.Errorf("authorization service unavailable")
+	}
+	namespace, _ := directStringArg(fc.Args, "namespace")
+	action := lowerCamelFirst(kind) + ".watch"
+	decision, err := authz.Authorize(ctx, principal, action, auth.ResourceContext{
+		Kind:  kind,
+		Attrs: map[string]any{"namespace": namespace},
+	})
+	if err != nil {
+		return nil, gqlerror.Errorf("authorization error")
+	}
+	if decision.Outcome == auth.OutcomeDeny {
+		return nil, &gqlerror.Error{
+			Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
+			Extensions: map[string]any{"code": "FORBIDDEN"},
+		}
+	}
+	return next(ctx)
+}
+
 func decodeCategoryID(encoded string) (string, error) {
 	decoded, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
@@ -335,6 +380,24 @@ func (a *Authorize) namespaceDeleteAction(ctx context.Context, name string, prin
 // only the struct-based representation is handled here.
 func nestedStringArg(args map[string]any, parent, key string) (string, bool) {
 	return nestedStringPath(args, parent, key)
+}
+
+func directStringArg(args map[string]any, key string) (string, bool) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return "", false
+	}
+	rv := reflect.ValueOf(value)
+	for rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return "", false
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.String {
+		return "", false
+	}
+	return rv.String(), true
 }
 
 func nestedStringPath(args map[string]any, path ...string) (string, bool) {
