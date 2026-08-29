@@ -178,7 +178,10 @@ func (r *queryResolver) Repository(ctx context.Context, by model.RepositoryBy) (
 		}
 		mapping, err := r.service.LookupRepository(ctx, ns.Name, by.NamespacePath.Name)
 		if err != nil {
-			return nil, gqlerror.Errorf("repository not found")
+			return nil, &gqlerror.Error{
+				Message:    "repository not found",
+				Extensions: map[string]any{"code": "NOT_FOUND"},
+			}
 		}
 		repo, err := r.service.GetRepository(ctx, mapping.RepositoryID)
 		if err != nil {

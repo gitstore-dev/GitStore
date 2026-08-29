@@ -5,6 +5,7 @@ package namespace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
@@ -107,9 +108,28 @@ func (c *GraphQLRepositoryClient) systemRepositoryExists(ctx context.Context, na
 			},
 		},
 	}, &response); err != nil {
+		if isNotFoundError(err) {
+			// The repository genuinely does not exist yet — this is the
+			// expected steady state before EnsureSystemRepository creates
+			// it, not a hard failure.
+			return false, nil
+		}
 		return false, fmt.Errorf("namespace repository client: query system repository: %w", err)
 	}
 	return response.Repository != nil, nil
+}
+
+// isNotFoundError reports whether err is a GraphQL error whose extensions
+// carry the "NOT_FOUND" code (the convention gitstore-api's resolvers use
+// for missing resources, e.g. the repository(by: namespacePath) query when
+// no repository has been created yet).
+func isNotFoundError(err error) bool {
+	var gqlErr *graphqlclient.Error
+	if !errors.As(err, &gqlErr) || gqlErr == nil {
+		return false
+	}
+	code, _ := gqlErr.Extensions["code"].(string)
+	return code == "NOT_FOUND"
 }
 
 // HasRepositories reports whether the namespace currently owns any repository.

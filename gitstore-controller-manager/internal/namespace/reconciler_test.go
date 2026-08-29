@@ -5,10 +5,15 @@ package namespace
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
@@ -134,6 +139,63 @@ func TestReconcileAdmittedNamespaceProvisionsSystemRepositoryAndMarksReady(t *te
 	}
 	if got := conditionByType(t, patch.Conditions, "Ready").Status; got != "TRUE" {
 		t.Errorf("Ready = %q, want TRUE", got)
+	}
+}
+
+// TestReconcileFreshNamespaceProvisionsSystemRepositoryViaRealClient exercises
+// the full Reconcile path with the real GraphQLRepositoryClient (not the
+// fake) against a server that reproduces gitstore-api's actual response for
+// a genuinely fresh environment: repository(by: namespacePath) returns a
+// "repository not found" / NOT_FOUND GraphQL error because gitstore-system
+// has never been created. Before the fix, systemRepositoryExists treated
+// that error as a hard failure and EnsureSystemRepository never reached
+// createRepository, so this reconcile would end in TransientFailure with
+// SystemRepoReady=FALSE forever. After the fix, it must fall through to
+// createRepository and reach Success with SystemRepoReady=TRUE.
+func TestReconcileFreshNamespaceProvisionsSystemRepositoryViaRealClient(t *testing.T) {
+	var queries, mutations int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Query string `json:"query"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(req.Query, "mutation") {
+			mutations++
+			_, _ = w.Write([]byte(`{"data":{"createRepository":{"repository":{"metadata":{"name":"gitstore-system"}}}}}`))
+			return
+		}
+		queries++
+		_, _ = w.Write([]byte(`{"data":{"repository":null},"errors":[{"message":"repository not found","extensions":{"code":"NOT_FOUND"}}]}`))
+	}))
+	defer srv.Close()
+
+	current := Namespace{
+		Name:            "acme",
+		Generation:      1,
+		ResourceVersion: "1",
+		Status: status.ResourceStatus{
+			ResourceVersion: "1",
+			Conditions:      []*status.Condition{admittedCondition(1)},
+		},
+	}
+	sc := &fakeStatusClient{}
+	repos := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, "token"))
+	r := NewReconciler(seedNamespaceCache(t, current), sc, repos, &fakeDeletionClient{})
+
+	result := r.Reconcile(context.Background(), namespaceKey("acme"))
+
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %#v, want types.Success", result)
+	}
+	if queries != 1 || mutations != 1 {
+		t.Fatalf("queries=%d mutations=%d, want 1/1 (createRepository must actually be called)", queries, mutations)
+	}
+	if len(sc.patches) != 1 {
+		t.Fatalf("status calls = %d, want 1", len(sc.patches))
+	}
+	if got := conditionByType(t, sc.patches[0].Conditions, "SystemRepoReady").Status; got != "TRUE" {
+		t.Errorf("SystemRepoReady = %q, want TRUE", got)
 	}
 }
 
