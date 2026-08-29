@@ -15,6 +15,16 @@ pub struct ResourceBlob {
     #[prost(bytes="vec", tag="3")]
     pub content: ::prost::alloc::vec::Vec<u8>,
 }
+/// ResourceValidationTree carries the changed resource blobs from one ref
+/// update. Old and proposed blobs are both available to stateless validation so
+/// immutable author fields can be compared before the ref is advanced.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResourceValidationTree {
+    #[prost(message, repeated, tag="1")]
+    pub old_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
+    #[prost(message, repeated, tag="2")]
+    pub proposed_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
+}
 /// ValidationError is a single field-level violation returned by ValidateResources.
 /// Matches the ParseError shape from spec#015 (validate.Parse).
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -43,6 +53,10 @@ pub struct ValidateResourcesRequest {
     /// Only files with a YAML frontmatter block are included (detected by the git service).
     #[prost(message, repeated, tag="1")]
     pub blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
+    /// trees is the preferred receive-aware representation. blobs remains for
+    /// rolling compatibility with older Git-service/API replicas.
+    #[prost(message, repeated, tag="2")]
+    pub trees: ::prost::alloc::vec::Vec<ResourceValidationTree>,
 }
 /// ValidateResourcesResponse carries the aggregate validation outcome.
 #[derive(Clone, PartialEq, ::prost::Message)]

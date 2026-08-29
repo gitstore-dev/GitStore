@@ -737,80 +737,136 @@ fn collect_changed_blobs(
     let Some(new_tree) = get_tree_id(repo, new_commit_id) else {
         return;
     };
-    collect_changed_blobs_from_trees(repo, old_tree, new_tree, "", out);
+    let mut old_blobs = Vec::new();
+    collect_changed_resource_blobs_from_trees(repo, old_tree, new_tree, "", &mut old_blobs, out);
 }
 
-fn collect_changed_blobs_from_trees(
+/// Collect the changed resource blobs from both sides of one ref update.
+/// Keeping the old side lets schema validation compare immutable fields using
+/// only Git objects while refs are still unchanged.
+pub(crate) fn collect_changed_resource_blobs(
+    repo: &gix::Repository,
+    old_commit_id: Option<gix::ObjectId>,
+    new_commit_id: Option<gix::ObjectId>,
+) -> (Vec<ResourceBlob>, Vec<ResourceBlob>) {
+    let mut old_blobs = Vec::new();
+    let mut proposed_blobs = Vec::new();
+    match (
+        old_commit_id.and_then(|id| get_tree_id(repo, id)),
+        new_commit_id.and_then(|id| get_tree_id(repo, id)),
+    ) {
+        (Some(old_tree), Some(new_tree)) => collect_changed_resource_blobs_from_trees(
+            repo,
+            old_tree,
+            new_tree,
+            "",
+            &mut old_blobs,
+            &mut proposed_blobs,
+        ),
+        (Some(old_tree), None) => collect_blobs_from_tree(repo, old_tree, "", &mut old_blobs),
+        (None, Some(new_tree)) => collect_blobs_from_tree(repo, new_tree, "", &mut proposed_blobs),
+        (None, None) => {}
+    }
+    (old_blobs, proposed_blobs)
+}
+
+fn collect_changed_resource_blobs_from_trees(
     repo: &gix::Repository,
     old_tree_id: gix::ObjectId,
     new_tree_id: gix::ObjectId,
     prefix: &str,
-    out: &mut Vec<ResourceBlob>,
+    old_out: &mut Vec<ResourceBlob>,
+    proposed_out: &mut Vec<ResourceBlob>,
 ) {
     let old_entries = decode_tree(repo, old_tree_id);
     let new_entries = decode_tree(repo, new_tree_id);
-    if new_entries.is_empty() {
-        return;
-    }
 
-    // Build a map from filename → (oid, mode) for old entries.
     let old_map: std::collections::HashMap<String, (gix::ObjectId, gix::object::tree::EntryKind)> =
         old_entries
             .iter()
             .map(|e| (e.filename.to_string(), (e.oid, e.mode.kind())))
             .collect();
+    let new_map: std::collections::HashMap<String, (gix::ObjectId, gix::object::tree::EntryKind)> =
+        new_entries
+            .iter()
+            .map(|e| (e.filename.to_string(), (e.oid, e.mode.kind())))
+            .collect();
+    let mut names: Vec<_> = old_map.keys().chain(new_map.keys()).collect();
+    names.sort();
+    names.dedup();
 
-    for entry in &new_entries {
-        let name = entry.filename.to_string();
-        let path = make_path(prefix, &name);
-        match entry.mode.kind() {
-            gix::object::tree::EntryKind::Tree => {
-                let new_sub_id: gix::ObjectId = entry.oid;
-                let old_sub_id = old_map
-                    .get(&name)
-                    .filter(|(_, k)| *k == gix::object::tree::EntryKind::Tree)
-                    .map(|(id, _)| *id);
-                match old_sub_id {
-                    Some(old_sub) if old_sub == new_sub_id => {
-                        // Subtree unchanged — skip entirely.
-                    }
-                    Some(old_sub) => {
-                        collect_changed_blobs_from_trees(repo, old_sub, new_sub_id, &path, out);
-                    }
-                    None => {
-                        // New subtree — scan all blobs in it.
-                        collect_blobs_from_tree(repo, new_sub_id, &path, out);
-                    }
+    for name in names {
+        let path = make_path(prefix, name);
+        match (old_map.get(name), new_map.get(name)) {
+            (
+                Some((old_id, gix::object::tree::EntryKind::Tree)),
+                Some((new_id, gix::object::tree::EntryKind::Tree)),
+            ) if old_id != new_id => {
+                collect_changed_resource_blobs_from_trees(
+                    repo,
+                    *old_id,
+                    *new_id,
+                    &path,
+                    old_out,
+                    proposed_out,
+                );
+            }
+            (
+                Some((old_id, gix::object::tree::EntryKind::Tree)),
+                Some((new_id, gix::object::tree::EntryKind::Tree)),
+            ) if old_id == new_id => {}
+            (Some((old_id, gix::object::tree::EntryKind::Tree)), _) => {
+                collect_blobs_from_tree(repo, *old_id, &path, old_out);
+                if let Some((new_id, kind)) = new_map.get(name) {
+                    collect_resource_entry(repo, *new_id, *kind, &path, proposed_out);
                 }
             }
-            gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable => {
-                let new_blob_id: gix::ObjectId = entry.oid;
-                let old_blob_id = old_map
-                    .get(&name)
-                    .filter(|(_, k)| {
-                        matches!(
-                            k,
-                            gix::object::tree::EntryKind::Blob
-                                | gix::object::tree::EntryKind::BlobExecutable
-                        )
-                    })
-                    .map(|(id, _)| *id);
-                if old_blob_id == Some(new_blob_id) {
-                    continue; // Content identical — skip.
+            (_, Some((new_id, gix::object::tree::EntryKind::Tree))) => {
+                if let Some((old_id, kind)) = old_map.get(name) {
+                    collect_resource_entry(repo, *old_id, *kind, &path, old_out);
                 }
-                if let Ok(blob_obj) = repo.find_object(new_blob_id) {
-                    let content = blob_obj.data.to_vec();
-                    if content.starts_with(b"---") {
-                        out.push(ResourceBlob {
-                            path,
-                            blob_oid: new_blob_id.to_string(),
-                            content,
-                        });
-                    }
-                }
+                collect_blobs_from_tree(repo, *new_id, &path, proposed_out);
             }
-            _ => {}
+            (Some((old_id, old_kind)), Some((new_id, new_kind)))
+                if old_id != new_id || old_kind != new_kind =>
+            {
+                collect_resource_entry(repo, *old_id, *old_kind, &path, old_out);
+                collect_resource_entry(repo, *new_id, *new_kind, &path, proposed_out);
+            }
+            (Some(_), Some(_)) => {}
+            (Some((old_id, old_kind)), None) => {
+                collect_resource_entry(repo, *old_id, *old_kind, &path, old_out)
+            }
+            (None, Some((new_id, new_kind))) => {
+                collect_resource_entry(repo, *new_id, *new_kind, &path, proposed_out)
+            }
+            (None, None) => {}
         }
+    }
+}
+
+fn collect_resource_entry(
+    repo: &gix::Repository,
+    object_id: gix::ObjectId,
+    kind: gix::object::tree::EntryKind,
+    path: &str,
+    out: &mut Vec<ResourceBlob>,
+) {
+    match kind {
+        gix::object::tree::EntryKind::Tree => collect_blobs_from_tree(repo, object_id, path, out),
+        gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable => {
+            if let Ok(blob_obj) = repo.find_object(object_id) {
+                let content = blob_obj.data.to_vec();
+                if content.starts_with(b"---") {
+                    out.push(ResourceBlob {
+                        path: path.to_string(),
+                        blob_oid: object_id.to_string(),
+                        content,
+                    });
+                }
+            }
+        }
+        _ => {}
     }
 }
 

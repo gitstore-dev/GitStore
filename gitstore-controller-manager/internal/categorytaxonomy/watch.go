@@ -3,7 +3,10 @@
 
 package categorytaxonomy
 
-import "math/big"
+import (
+	"math/big"
+	"slices"
+)
 
 // AcceptWatchUpdate rejects stale CategoryTaxonomy watch payloads. Generation
 // orders spec changes; resourceVersion orders status updates within one
@@ -25,5 +28,13 @@ func AcceptWatchUpdate(oldObj, newObj CategoryTaxonomy) bool {
 // Product changes enqueue affected categories through the Product watcher, so
 // only a newer spec generation needs direct CategoryTaxonomy reconciliation.
 func ShouldEnqueueWatchUpdate(oldObj, newObj CategoryTaxonomy) bool {
-	return newObj.Generation > oldObj.Generation
+	if newObj.Generation > oldObj.Generation {
+		return true
+	}
+	// Foreground deletion changes system-owned lifecycle metadata without
+	// advancing generation. It must nevertheless wake the reconciler so it can
+	// remove the finalizer after dependents have been handled.
+	return oldObj.DeletionTimestamp == nil && newObj.DeletionTimestamp != nil ||
+		!slices.Contains(oldObj.Finalizers, datastoreForegroundDeletionFinalizer) &&
+			slices.Contains(newObj.Finalizers, datastoreForegroundDeletionFinalizer)
 }

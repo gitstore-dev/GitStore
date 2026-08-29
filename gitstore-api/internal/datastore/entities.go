@@ -103,6 +103,33 @@ type Product struct {
 	Status json.RawMessage
 }
 
+type File struct {
+	UID               string
+	Namespace         string
+	Name              string
+	APIVersion        string
+	Kind              string
+	Generation        int64
+	ResourceVersion   string
+	CreationTimestamp time.Time
+	CreationActor     string
+	UpdateTimestamp   time.Time
+	UpdateActor       string
+	Revision          string
+	Labels            map[string]string
+	Annotations       map[string]string
+	OwnerReferences   json.RawMessage
+	Finalizers        []string
+	DeletionTimestamp *time.Time
+	RepositoryID      string
+	SourcePath        string
+	GitCommitSHA      string
+	GitRef            string
+	Spec              json.RawMessage
+	Body              string
+	Status            json.RawMessage
+}
+
 // CategoryTaxonomy is the git-backed Kubernetes-style category resource.
 // Mirrors the Product entity structure. Distinct from the legacy Category entity.
 type CategoryTaxonomy struct {

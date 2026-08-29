@@ -24,6 +24,26 @@ type stubDatastore struct {
 	getProductFinding *datastore.ProjectionFinding
 }
 
+func (s *stubDatastore) CreateFile(_ context.Context, _ *datastore.File) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) GetFile(_ context.Context, _ string) (*datastore.File, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) GetFileByName(_ context.Context, _, _ string) (*datastore.File, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) ListFiles(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) UpdateFile(_ context.Context, _ *datastore.File) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) DeleteFile(_ context.Context, _ string) error { return s.getProductErr }
+func (s *stubDatastore) UpdateFileStatus(_ context.Context, _, _ string, _ datastore.FileStatusPatch) (*datastore.File, error) {
+	return nil, s.getProductErr
+}
+
 func (s *stubDatastore) CreateProduct(_ context.Context, _ *datastore.Product) error {
 	return s.getProductErr
 }

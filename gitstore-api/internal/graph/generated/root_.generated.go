@@ -209,10 +209,66 @@ type ComplexityRoot struct {
 		Operator    func(childComplexity int) int
 	}
 
+	File struct {
+		APIVersion func(childComplexity int) int
+		Body       func(childComplexity int) int
+		ID         func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
+	}
+
+	FileChecksum struct {
+		Algorithm func(childComplexity int) int
+		Value     func(childComplexity int) int
+	}
+
+	FileImageProcessing struct {
+		Variants func(childComplexity int) int
+	}
+
+	FileProcessing struct {
+		Image func(childComplexity int) int
+	}
+
 	FileReference struct {
 		Kind     func(childComplexity int) int
 		Name     func(childComplexity int) int
 		Optional func(childComplexity int) int
+	}
+
+	FileSource struct {
+		Checksum       func(childComplexity int) int
+		CredentialsRef func(childComplexity int) int
+		Type           func(childComplexity int) int
+		URI            func(childComplexity int) int
+	}
+
+	FileSpec struct {
+		ContentType func(childComplexity int) int
+		Processing  func(childComplexity int) int
+		Source      func(childComplexity int) int
+		Type        func(childComplexity int) int
+	}
+
+	FileStatus struct {
+		Conditions          func(childComplexity int) int
+		LastAppliedRevision func(childComplexity int) int
+		ObservedGeneration  func(childComplexity int) int
+		Resolved            func(childComplexity int) int
+	}
+
+	FileVariantRequest struct {
+		Name func(childComplexity int) int
+	}
+
+	FileWatchEvent struct {
+		File            func(childComplexity int) int
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Type            func(childComplexity int) int
 	}
 
 	HookToggle struct {
@@ -612,9 +668,15 @@ type ComplexityRoot struct {
 	}
 
 	ResolvedFileDefinition struct {
-		ContentType func(childComplexity int) int
-		Name        func(childComplexity int) int
-		URL         func(childComplexity int) int
+		ContentType      func(childComplexity int) int
+		Name             func(childComplexity int) int
+		ResolvedVariants func(childComplexity int) int
+		URL              func(childComplexity int) int
+	}
+
+	ResolvedFileVariant struct {
+		Name func(childComplexity int) int
+		URL  func(childComplexity int) int
 	}
 
 	ResolvedInventoryDefinition struct {
@@ -664,6 +726,13 @@ type ComplexityRoot struct {
 		TimeoutSeconds func(childComplexity int) int
 	}
 
+	SecretRef struct {
+		Key       func(childComplexity int) int
+		Kind      func(childComplexity int) int
+		Name      func(childComplexity int) int
+		Namespace func(childComplexity int) int
+	}
+
 	SelectedOptionDefinition struct {
 		Name  func(childComplexity int) int
 		Value func(childComplexity int) int
@@ -679,6 +748,7 @@ type ComplexityRoot struct {
 
 	Subscription struct {
 		WatchCategories func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchFiles      func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchProducts   func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchResources  func(childComplexity int, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 	}
@@ -1408,6 +1478,83 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.EligibilityDefinition.Operator(childComplexity), true
 
+	case "File.apiVersion":
+		if e.ComplexityRoot.File.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.File.APIVersion(childComplexity), true
+
+	case "File.body":
+		if e.ComplexityRoot.File.Body == nil {
+			break
+		}
+
+		return e.ComplexityRoot.File.Body(childComplexity), true
+
+	case "File.id":
+		if e.ComplexityRoot.File.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.File.ID(childComplexity), true
+
+	case "File.kind":
+		if e.ComplexityRoot.File.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.File.Kind(childComplexity), true
+
+	case "File.metadata":
+		if e.ComplexityRoot.File.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.File.Metadata(childComplexity), true
+
+	case "File.spec":
+		if e.ComplexityRoot.File.Spec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.File.Spec(childComplexity), true
+
+	case "File.status":
+		if e.ComplexityRoot.File.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.File.Status(childComplexity), true
+
+	case "FileChecksum.algorithm":
+		if e.ComplexityRoot.FileChecksum.Algorithm == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileChecksum.Algorithm(childComplexity), true
+
+	case "FileChecksum.value":
+		if e.ComplexityRoot.FileChecksum.Value == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileChecksum.Value(childComplexity), true
+
+	case "FileImageProcessing.variants":
+		if e.ComplexityRoot.FileImageProcessing.Variants == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileImageProcessing.Variants(childComplexity), true
+
+	case "FileProcessing.image":
+		if e.ComplexityRoot.FileProcessing.Image == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileProcessing.Image(childComplexity), true
+
 	case "FileReference.kind":
 		if e.ComplexityRoot.FileReference.Kind == nil {
 			break
@@ -1428,6 +1575,132 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.FileReference.Optional(childComplexity), true
+
+	case "FileSource.checksum":
+		if e.ComplexityRoot.FileSource.Checksum == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileSource.Checksum(childComplexity), true
+
+	case "FileSource.credentialsRef":
+		if e.ComplexityRoot.FileSource.CredentialsRef == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileSource.CredentialsRef(childComplexity), true
+
+	case "FileSource.type":
+		if e.ComplexityRoot.FileSource.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileSource.Type(childComplexity), true
+
+	case "FileSource.uri":
+		if e.ComplexityRoot.FileSource.URI == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileSource.URI(childComplexity), true
+
+	case "FileSpec.contentType":
+		if e.ComplexityRoot.FileSpec.ContentType == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileSpec.ContentType(childComplexity), true
+
+	case "FileSpec.processing":
+		if e.ComplexityRoot.FileSpec.Processing == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileSpec.Processing(childComplexity), true
+
+	case "FileSpec.source":
+		if e.ComplexityRoot.FileSpec.Source == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileSpec.Source(childComplexity), true
+
+	case "FileSpec.type":
+		if e.ComplexityRoot.FileSpec.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileSpec.Type(childComplexity), true
+
+	case "FileStatus.conditions":
+		if e.ComplexityRoot.FileStatus.Conditions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileStatus.Conditions(childComplexity), true
+
+	case "FileStatus.lastAppliedRevision":
+		if e.ComplexityRoot.FileStatus.LastAppliedRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileStatus.LastAppliedRevision(childComplexity), true
+
+	case "FileStatus.observedGeneration":
+		if e.ComplexityRoot.FileStatus.ObservedGeneration == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileStatus.ObservedGeneration(childComplexity), true
+
+	case "FileStatus.resolved":
+		if e.ComplexityRoot.FileStatus.Resolved == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileStatus.Resolved(childComplexity), true
+
+	case "FileVariantRequest.name":
+		if e.ComplexityRoot.FileVariantRequest.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileVariantRequest.Name(childComplexity), true
+
+	case "FileWatchEvent.file":
+		if e.ComplexityRoot.FileWatchEvent.File == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileWatchEvent.File(childComplexity), true
+
+	case "FileWatchEvent.name":
+		if e.ComplexityRoot.FileWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileWatchEvent.Name(childComplexity), true
+
+	case "FileWatchEvent.namespace":
+		if e.ComplexityRoot.FileWatchEvent.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileWatchEvent.Namespace(childComplexity), true
+
+	case "FileWatchEvent.resourceVersion":
+		if e.ComplexityRoot.FileWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileWatchEvent.ResourceVersion(childComplexity), true
+
+	case "FileWatchEvent.type":
+		if e.ComplexityRoot.FileWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileWatchEvent.Type(childComplexity), true
 
 	case "HookToggle.enabled":
 		if e.ComplexityRoot.HookToggle.Enabled == nil {
@@ -3282,12 +3555,33 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ResolvedFileDefinition.Name(childComplexity), true
 
+	case "ResolvedFileDefinition.resolvedVariants":
+		if e.ComplexityRoot.ResolvedFileDefinition.ResolvedVariants == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedFileDefinition.ResolvedVariants(childComplexity), true
+
 	case "ResolvedFileDefinition.url":
 		if e.ComplexityRoot.ResolvedFileDefinition.URL == nil {
 			break
 		}
 
 		return e.ComplexityRoot.ResolvedFileDefinition.URL(childComplexity), true
+
+	case "ResolvedFileVariant.name":
+		if e.ComplexityRoot.ResolvedFileVariant.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedFileVariant.Name(childComplexity), true
+
+	case "ResolvedFileVariant.url":
+		if e.ComplexityRoot.ResolvedFileVariant.URL == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedFileVariant.URL(childComplexity), true
 
 	case "ResolvedInventoryDefinition.availableQuantity":
 		if e.ComplexityRoot.ResolvedInventoryDefinition.AvailableQuantity == nil {
@@ -3471,6 +3765,34 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.SchemaValidationDefaults.TimeoutSeconds(childComplexity), true
 
+	case "SecretRef.key":
+		if e.ComplexityRoot.SecretRef.Key == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecretRef.Key(childComplexity), true
+
+	case "SecretRef.kind":
+		if e.ComplexityRoot.SecretRef.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecretRef.Kind(childComplexity), true
+
+	case "SecretRef.name":
+		if e.ComplexityRoot.SecretRef.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecretRef.Name(childComplexity), true
+
+	case "SecretRef.namespace":
+		if e.ComplexityRoot.SecretRef.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SecretRef.Namespace(childComplexity), true
+
 	case "SelectedOptionDefinition.name":
 		if e.ComplexityRoot.SelectedOptionDefinition.Name == nil {
 			break
@@ -3510,6 +3832,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.WatchCategories(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
+	case "Subscription.watchFiles":
+		if e.ComplexityRoot.Subscription.WatchFiles == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchFiles_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchFiles(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
 
 	case "Subscription.watchProducts":
 		if e.ComplexityRoot.Subscription.WatchProducts == nil {
@@ -4810,6 +5144,91 @@ type CatalogStats {
   categoryCount: Int!
   collectionCount: Int!
   orphanedReferences: Int!
+}
+`, BuiltIn: false},
+	{Name: "../../../../shared/schemas/file.graphqls", Input: `# File Resource — typed watch contract
+
+extend type Subscription {
+  """
+  Dedicated, compile-time-typed watch entry point for File resources.
+  """
+  watchFiles(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): FileWatchEvent!
+}
+
+type FileWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  file: File
+}
+
+type File implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: FileSpec!
+  status: FileStatus
+  body: String
+}
+
+type FileSpec {
+  contentType: String!
+  type: String
+  source: FileSource!
+  processing: FileProcessing
+}
+
+type FileSource {
+  type: String!
+  uri: String!
+  checksum: FileChecksum
+  credentialsRef: SecretRef
+}
+
+type FileChecksum {
+  algorithm: String!
+  value: String!
+}
+
+type SecretRef {
+  kind: String!
+  name: String!
+  key: String
+  namespace: String
+}
+
+type FileProcessing {
+  image: FileImageProcessing
+}
+
+type FileImageProcessing {
+  variants: [FileVariantRequest!]!
+}
+
+type FileVariantRequest {
+  name: String!
+}
+
+type FileStatus {
+  observedGeneration: Int!
+  lastAppliedRevision: String!
+  conditions: [Condition!]!
+  resolved: ResolvedFileDefinition
+}
+
+extend type ResolvedFileDefinition {
+  resolvedVariants: [ResolvedFileVariant!]!
+}
+
+type ResolvedFileVariant {
+  name: String!
+  url: String
 }
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/namespace.graphqls", Input: `# SPDX-License-Identifier: AGPL-3.0-or-later
@@ -6782,6 +7201,52 @@ func (ec *executionContext) childFields_EligibilityDefinition(ctx context.Contex
 	return nil, fmt.Errorf("no field named %q was found under type EligibilityDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_File(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_File_id(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_File_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_File_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_File_metadata(ctx, field)
+	case "spec":
+		return ec.fieldContext_File_spec(ctx, field)
+	case "status":
+		return ec.fieldContext_File_status(ctx, field)
+	case "body":
+		return ec.fieldContext_File_body(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type File", field.Name)
+}
+
+func (ec *executionContext) childFields_FileChecksum(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "algorithm":
+		return ec.fieldContext_FileChecksum_algorithm(ctx, field)
+	case "value":
+		return ec.fieldContext_FileChecksum_value(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FileChecksum", field.Name)
+}
+
+func (ec *executionContext) childFields_FileImageProcessing(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "variants":
+		return ec.fieldContext_FileImageProcessing_variants(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FileImageProcessing", field.Name)
+}
+
+func (ec *executionContext) childFields_FileProcessing(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "image":
+		return ec.fieldContext_FileProcessing_image(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FileProcessing", field.Name)
+}
+
 func (ec *executionContext) childFields_FileReference(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "name":
@@ -6792,6 +7257,72 @@ func (ec *executionContext) childFields_FileReference(ctx context.Context, field
 		return ec.fieldContext_FileReference_optional(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type FileReference", field.Name)
+}
+
+func (ec *executionContext) childFields_FileSource(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_FileSource_type(ctx, field)
+	case "uri":
+		return ec.fieldContext_FileSource_uri(ctx, field)
+	case "checksum":
+		return ec.fieldContext_FileSource_checksum(ctx, field)
+	case "credentialsRef":
+		return ec.fieldContext_FileSource_credentialsRef(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FileSource", field.Name)
+}
+
+func (ec *executionContext) childFields_FileSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "contentType":
+		return ec.fieldContext_FileSpec_contentType(ctx, field)
+	case "type":
+		return ec.fieldContext_FileSpec_type(ctx, field)
+	case "source":
+		return ec.fieldContext_FileSpec_source(ctx, field)
+	case "processing":
+		return ec.fieldContext_FileSpec_processing(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FileSpec", field.Name)
+}
+
+func (ec *executionContext) childFields_FileStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "observedGeneration":
+		return ec.fieldContext_FileStatus_observedGeneration(ctx, field)
+	case "lastAppliedRevision":
+		return ec.fieldContext_FileStatus_lastAppliedRevision(ctx, field)
+	case "conditions":
+		return ec.fieldContext_FileStatus_conditions(ctx, field)
+	case "resolved":
+		return ec.fieldContext_FileStatus_resolved(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FileStatus", field.Name)
+}
+
+func (ec *executionContext) childFields_FileVariantRequest(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_FileVariantRequest_name(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FileVariantRequest", field.Name)
+}
+
+func (ec *executionContext) childFields_FileWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_FileWatchEvent_type(ctx, field)
+	case "namespace":
+		return ec.fieldContext_FileWatchEvent_namespace(ctx, field)
+	case "name":
+		return ec.fieldContext_FileWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_FileWatchEvent_resourceVersion(ctx, field)
+	case "file":
+		return ec.fieldContext_FileWatchEvent_file(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FileWatchEvent", field.Name)
 }
 
 func (ec *executionContext) childFields_HookToggle(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7498,8 +8029,20 @@ func (ec *executionContext) childFields_ResolvedFileDefinition(ctx context.Conte
 		return ec.fieldContext_ResolvedFileDefinition_url(ctx, field)
 	case "contentType":
 		return ec.fieldContext_ResolvedFileDefinition_contentType(ctx, field)
+	case "resolvedVariants":
+		return ec.fieldContext_ResolvedFileDefinition_resolvedVariants(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ResolvedFileDefinition", field.Name)
+}
+
+func (ec *executionContext) childFields_ResolvedFileVariant(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_ResolvedFileVariant_name(ctx, field)
+	case "url":
+		return ec.fieldContext_ResolvedFileVariant_url(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ResolvedFileVariant", field.Name)
 }
 
 func (ec *executionContext) childFields_ResolvedInventoryDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7594,6 +8137,20 @@ func (ec *executionContext) childFields_SchemaValidationDefaults(ctx context.Con
 		return ec.fieldContext_SchemaValidationDefaults_timeoutSeconds(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type SchemaValidationDefaults", field.Name)
+}
+
+func (ec *executionContext) childFields_SecretRef(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "kind":
+		return ec.fieldContext_SecretRef_kind(ctx, field)
+	case "name":
+		return ec.fieldContext_SecretRef_name(ctx, field)
+	case "key":
+		return ec.fieldContext_SecretRef_key(ctx, field)
+	case "namespace":
+		return ec.fieldContext_SecretRef_namespace(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SecretRef", field.Name)
 }
 
 func (ec *executionContext) childFields_SelectedOptionDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

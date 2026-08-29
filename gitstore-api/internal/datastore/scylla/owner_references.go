@@ -129,6 +129,36 @@ func (s *scyllaDatastore) HasBlockingOwnerDependents(ctx context.Context, scope 
 	return true, nil
 }
 
+func (s *scyllaDatastore) ListBlockingOwnerDependents(ctx context.Context, scope datastore.OwnerReferenceScope, ownerUID, after string, limit int) (datastore.OwnerDependentPage, error) {
+	if limit <= 0 {
+		limit = datastore.DefaultPageSize
+	}
+	if limit > datastore.MaxOwnerDependentPageSize {
+		limit = datastore.MaxOwnerDependentPageSize
+	}
+	stmt := `SELECT dependent_uid, dependent_kind, name, resource_version FROM owner_reference_dependents WHERE namespace=? AND repository_id=? AND owner_uid=? AND block_owner_deletion=?`
+	args := []any{scope.Namespace, scope.RepositoryID, ownerUID, true}
+	if after != "" {
+		stmt += " AND dependent_uid > ?"
+		args = append(args, after)
+	}
+	stmt += " LIMIT ?"
+	args = append(args, limit+1)
+	var rows []ownerReferenceDependentRow
+	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&rows); err != nil {
+		return datastore.OwnerDependentPage{}, fmt.Errorf("scylla: list blocking owner dependents: %w", err)
+	}
+	page := datastore.OwnerDependentPage{Items: make([]datastore.OwnerDependent, 0, len(rows))}
+	for _, row := range rows {
+		page.Items = append(page.Items, datastore.OwnerDependent{DependentUID: row.DependentUID, DependentKind: row.DependentKind, Name: row.Name, ResourceVersion: row.ResourceVersion})
+	}
+	if len(page.Items) > limit {
+		page.Items = page.Items[:limit]
+		page.NextCursor = page.Items[len(page.Items)-1].DependentUID
+	}
+	return page, nil
+}
+
 func (s *scyllaDatastore) ListNonBlockingProductOwnerDependents(
 	ctx context.Context,
 	scope datastore.OwnerReferenceScope,
