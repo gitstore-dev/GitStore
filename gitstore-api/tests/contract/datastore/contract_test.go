@@ -312,6 +312,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		variant := &datastore.ProductVariant{
 			UID: newID(), Namespace: "test-ns", Name: "variant-" + newID()[:8],
 			APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "ProductVariant", ResourceVersion: "2",
+			SKU: "sku-" + newID()[:8], ProductRefName: "product-" + newID()[:8],
 		}
 		require.NoError(t, ds.CreateProductVariant(ctx, variant))
 		require.ErrorIs(t, ds.DeleteProductVariantWithResourceVersion(ctx, variant.UID, "1"), datastore.ErrConflict)
