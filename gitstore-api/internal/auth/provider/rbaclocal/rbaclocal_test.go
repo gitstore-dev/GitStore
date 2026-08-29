@@ -159,6 +159,54 @@ roles:
 	assert.Equal(t, authpkg.OutcomeDeny, d.Outcome)
 }
 
+// TestRBACLocal_FileStatusActions_FollowSameOwnAnyConventionAsOtherResources
+// proves that rbac-local's action-string model — already relied on by
+// Namespace/Repository's "own" vs "any" action-suffix convention — applies
+// uniformly to File-shaped action names without any provider code changes.
+// Authorize takes an opaque action string and never inspects the resource
+// kind at all (see RBACLocalProvider.Authorize's unused ResourceContext
+// parameter), so the same policy shape that isolates namespace/repository
+// actions today already generalizes correctly to gate File's generic
+// status-write and watch endpoints whenever a resolver is wired to call it
+// (spec 051 T041 — the authz boundary File's admission/status/watch paths
+// will depend on).
+func TestRBACLocal_FileStatusActions_FollowSameOwnAnyConventionAsOtherResources(t *testing.T) {
+	policy := `version: v1
+default_deny: true
+roles:
+  file-editor:
+    allow:
+      - "file.status.write.own"
+    deny:
+      - "file.status.write.any"
+  viewer:
+    allow:
+      - "file.watch.read"
+role_bindings:
+  editor: [file-editor]
+  reader: [viewer]
+`
+	p := newRBACProvider(t, policy)
+	editor := &authpkg.Principal{Subject: "editor", AuthMethod: "test"}
+	reader := &authpkg.Principal{Subject: "reader", AuthMethod: "test"}
+
+	d, err := p.Authorize(context.Background(), editor, "file.status.write.own", authpkg.ResourceContext{Kind: "file"})
+	require.NoError(t, err)
+	assert.Equal(t, authpkg.OutcomeAllow, d.Outcome, "a file-editor must be allowed to write status on files it owns")
+
+	d, err = p.Authorize(context.Background(), editor, "file.status.write.any", authpkg.ResourceContext{Kind: "file"})
+	require.NoError(t, err)
+	assert.Equal(t, authpkg.OutcomeDeny, d.Outcome, "a file-editor must not be allowed to write status on files outside its own scope")
+
+	d, err = p.Authorize(context.Background(), reader, "file.status.write.own", authpkg.ResourceContext{Kind: "file"})
+	require.NoError(t, err)
+	assert.Equal(t, authpkg.OutcomeDeny, d.Outcome, "a viewer role must not gain file-editor's write action")
+
+	d, err = p.Authorize(context.Background(), reader, "file.watch.read", authpkg.ResourceContext{Kind: "file"})
+	require.NoError(t, err)
+	assert.Equal(t, authpkg.OutcomeAllow, d.Outcome, "a viewer must be allowed to watch files")
+}
+
 func TestRBACLocal_RoleBindings_SubjectWithNoRoles_GetsBindingRoles(t *testing.T) {
 	// Principal arrives with no Roles but has a matching role_bindings entry.
 	policy := `version: v1

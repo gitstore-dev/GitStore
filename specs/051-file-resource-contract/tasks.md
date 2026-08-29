@@ -110,12 +110,15 @@ Ready=True without a phase field.
 ## Phase 6: Polish & Cross-Cutting Concerns
 
 - [X] T038 [P] Add File schema and admission documentation, including the worked example and deferred Phase 2 boundaries, in `docs/resource-storage/git-backed.md` and `docs/resource-storage/README.md`
-- [ ] T039 [P] Add multi-replica/process-replacement tests for File identity, status writes, and duplicate admission behavior in `gitstore-api/internal/cataloggrpc` and `gitstore-api/internal/datastore`
-  - Blocked: no multi-process or replica test harness exists in this repository; adding one would require external deployment infrastructure.
-- [ ] T040 [P] Add rolling-upgrade compatibility coverage for old/new API replicas ignoring or accepting File records safely in `gitstore-api/internal/cataloggrpc`
-  - Blocked: no old/new API-version or rolling-upgrade harness exists in this repository.
-- [ ] T041 [P] Add authenticated namespace-isolation and SecretRef boundary tests for File admission/status/watch paths in `gitstore-api/internal/auth`, `gitstore-api/internal/cataloggrpc`, and `gitstore-api/internal/graph`
-  - Blocked: existing auth integration covers repository/namespace authorization, but has no File admission/status/watch endpoint harness; SecretRef validation is covered by runnable unit tests only.
+- [X] T039 [P] Add multi-replica/process-replacement tests for File identity, status writes, and duplicate admission behavior in `gitstore-api/internal/cataloggrpc` and `gitstore-api/internal/datastore`
+  - `gitstore-api/internal/datastore/memdb/file_concurrency_test.go`: concurrent `CreateFile` calls racing the same namespace/name identity resolve to exactly one durable winner; concurrent `UpdateFileStatus` calls built from the same stale resourceVersion linearize to exactly one success.
+  - `gitstore-api/internal/cataloggrpc/file_replica_test.go`: two `Server` instances sharing one store admit a duplicate push delivery idempotently; an older in-flight commit cannot clobber a newer already-durable admission; a freshly constructed `Server` (simulating a replica process replacement) correctly continues a prior replica's File identity using only durable state.
+- [X] T040 [P] Add rolling-upgrade compatibility coverage for old/new API replicas ignoring or accepting File records safely in `gitstore-api/internal/cataloggrpc`
+  - `gitstore-api/internal/cataloggrpc/file_rolling_upgrade_test.go`: a push mixing a valid File with a kind unrecognized by this build still admits the File and safely skips the unknown kind; updates against a File row shaped as an older replica would have written it (missing the optional `processing`/`resolved` keys) succeed, including correct enforcement of contentType immutability against the legacy-shaped record.
+- [X] T041 [P] Add authenticated namespace-isolation and SecretRef boundary tests for File admission/status/watch paths in `gitstore-api/internal/auth`, `gitstore-api/internal/cataloggrpc`, and `gitstore-api/internal/graph`
+  - `gitstore-api/internal/cataloggrpc/file_isolation_test.go`: File identity admitted into two different namespaces never collides or leaks across namespaces; a cross-namespace `credentialsRef` is rejected end-to-end at `AdmitResources` itself (never persisted), not merely at the optional pre-receive validation hook.
+  - `gitstore-api/internal/graph/resolver/file_status_isolation_test.go`: the generic `updateResourceStatus` mutation is scoped strictly to (namespace, name) — a status write to one namespace's File never touches a same-named File in a different namespace.
+  - `gitstore-api/internal/auth/provider/rbaclocal/rbaclocal_test.go`: the existing action-string RBAC model (already relied on for Namespace/Repository's own-vs-any convention) generalizes correctly to File-shaped `file.status.write.*`/`file.watch.read` actions without any provider changes — the authz boundary File's generic status/watch endpoints depend on.
 - [X] T042 Run the focused File suites and `make pr-ready`, then validate the commands in `specs/051-file-resource-contract/quickstart.md`
 
 ## Dependencies & Execution Order
