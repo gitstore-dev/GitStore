@@ -447,3 +447,8 @@ when omitted.
 Admission initializes system status with `AdmissionAccepted=True` and
 `Ready=True`. Payload fetching, checksum verification, processing, uploads,
 purge, `fileRef` validation, and a File-specific controller are deferred.
+
+File status writes require the `file.status.write` authorization action. Both
+the typed `watchFiles` subscription and generic `watchResources(kind: "File")`
+subscription require `file.watch`; authorization receives the requested
+namespace as resource context and is evaluated before the event stream opens.

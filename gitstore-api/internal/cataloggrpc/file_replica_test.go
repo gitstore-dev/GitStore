@@ -89,26 +89,39 @@ func TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent(t *testing.
 // must not clobber the newer, already-durable state (spec 051 T039).
 func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.T) {
 	store := newTestDatastore(t)
-	zero := strings.Repeat("0", 40)
 	a := strings.Repeat("a", 40)
 	b := strings.Repeat("b", 40)
+	c := strings.Repeat("c", 40)
 	path := "files/hero.md"
 	files := map[string]map[string][]byte{
 		a: {path: makeFile("hero")},
-		b: {path: makeFileWithContentType("hero", "image/jpeg")},
+		b: {path: makeFileWithBody("hero", "Older update")},
+		c: {path: makeFileWithBody("hero", "Newest update")},
 	}
 
+	// Seed a real durable File first. Both raced admissions below are updates,
+	// so the test cannot accidentally pass through create collision handling.
+	seedCurrent := a
+	seedServer := newCatalogServer(t, store, newTreeGitReader(&seedCurrent, files))
+	_, err := seedServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, CommitSha: a, RefName: "refs/heads/main",
+	})
+	require.NoError(t, err)
+	seeded, err := store.GetFileByName(context.Background(), "gitstore", "hero")
+	require.NoError(t, err)
+	require.Equal(t, "1", seeded.ResourceVersion)
+
 	var mu sync.Mutex
-	current := a
-	blockFirstAListing := true
+	current := b
+	blockFirstBListing := true
 	olderListingStarted := make(chan struct{})
 	releaseOlder := make(chan struct{})
 	git := &mockGitReader{
 		listFilesFunc: func(_ context.Context, _, _, ref string) ([]string, error) {
 			mu.Lock()
-			block := ref == a && blockFirstAListing
+			block := ref == b && blockFirstBListing
 			if block {
-				blockFirstAListing = false
+				blockFirstBListing = false
 			}
 			tree := files[ref]
 			mu.Unlock()
@@ -142,7 +155,7 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 	olderDone := make(chan error, 1)
 	go func() {
 		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			RepositoryId: testRepoID, OldCommitSha: zero, NewCommitSha: a, CommitSha: a,
+			RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b, CommitSha: b,
 			RefName: "refs/heads/main", ChangedPaths: []string{path},
 		})
 		olderDone <- err
@@ -155,10 +168,10 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 	}
 
 	mu.Lock()
-	current = b
+	current = c
 	mu.Unlock()
-	_, err := newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b, CommitSha: b,
+	_, err = newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, OldCommitSha: b, NewCommitSha: c, CommitSha: c,
 		RefName: "refs/heads/main", ChangedPaths: []string{path},
 	})
 	require.NoError(t, err)
@@ -173,7 +186,9 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 
 	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
 	require.NoError(t, err)
-	assert.Equal(t, b, file.GitCommitSHA, "the stale older-commit admission must not overwrite the already-durable newer commit")
+	assert.Equal(t, c, file.GitCommitSHA, "the stale update must not overwrite the already-durable newer update")
+	assert.Equal(t, "Newest update", file.Body)
+	assert.Equal(t, "2", file.ResourceVersion, "only the winning update may advance the durable version")
 }
 
 // TestAdmitResources_FileUpdateSurvivesReplicaProcessReplacement models a
