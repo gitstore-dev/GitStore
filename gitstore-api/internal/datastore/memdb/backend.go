@@ -858,6 +858,21 @@ func (m *memdbDatastore) ListProductsByLabelSelector(_ context.Context, namespac
 			result = append(result, cloneProduct(p))
 		}
 	}
+	// Callers (e.g. resolver.BuildProductConnectionFromSlice) require
+	// products pre-sorted by (CreationTimestamp DESC, UID DESC) before
+	// applying a first/last page limit — the memdb "namespace" index
+	// iterates in UID order, not creation order, so without this sort a
+	// selector matching more items than the page size silently truncates
+	// to an arbitrary (UID-lexical) subset instead of the newest N. The
+	// ScyllaDB backend gets this for free by paginating through the
+	// already-sorted ListProducts stream.
+	sort.Slice(result, func(i, j int) bool {
+		cmp := result[i].CreationTimestamp.Compare(result[j].CreationTimestamp)
+		if cmp != 0 {
+			return cmp > 0 // DESC
+		}
+		return result[i].UID > result[j].UID // DESC
+	})
 	return result, nil
 }
 
