@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -183,6 +184,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 		CommitSha:    a,
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
+		ActorSubject: "alice",
 	})
 	require.NoError(t, err)
 	created, err := store.GetNamespaceByName(context.Background(), "acme-store")
@@ -193,6 +195,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 	assert.Equal(t, "1", created.ResourceVersion)
 	assert.Equal(t, "gitstore.dev/v1beta1", created.APIVersion)
 	assert.Equal(t, "Namespace", created.Kind)
+	assert.Equal(t, "alice", created.CreationActor)
 	assert.NotEmpty(t, created.UID)
 	assert.Equal(t, "main@sha1:"+a, created.Revision)
 	assert.Equal(t, path, created.SourcePath)
@@ -300,6 +303,103 @@ spec:
 	assert.Equal(t, int64(2), updated.Generation)
 	assert.Equal(t, "2", updated.ResourceVersion)
 	assert.Equal(t, created.UID, updated.UID)
+}
+
+func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *testing.T) {
+	store := newNamespacePolicyDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	path := "namespaces/race-store.md"
+	files := map[string]map[string][]byte{
+		a: {path: namespaceManifest("race-store", "Older Revision", "USER")},
+		b: {path: namespaceManifest("race-store", "Newer Revision", "USER")},
+	}
+
+	var mu sync.Mutex
+	current := a
+	blockFirstAListing := true
+	olderListingStarted := make(chan struct{})
+	releaseOlder := make(chan struct{})
+	git := &mockGitReader{
+		listFilesFunc: func(_ context.Context, _, _, ref string) ([]string, error) {
+			mu.Lock()
+			block := ref == a && blockFirstAListing
+			if block {
+				blockFirstAListing = false
+			}
+			tree := files[ref]
+			mu.Unlock()
+			if block {
+				close(olderListingStarted)
+				<-releaseOlder
+			}
+			paths := make([]string, 0, len(tree))
+			for filePath := range tree {
+				paths = append(paths, filePath)
+			}
+			sort.Strings(paths)
+			return paths, nil
+		},
+		readFileFunc: func(_ context.Context, _, path, ref string) ([]byte, error) {
+			mu.Lock()
+			content := files[ref][path]
+			mu.Unlock()
+			return content, nil
+		},
+		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return current, nil
+		},
+	}
+	olderServer := newCatalogServer(t, store, git)
+	newerServer := newCatalogServer(t, store, git)
+	olderDone := make(chan error, 1)
+	go func() {
+		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+			RepositoryId: testRepoID,
+			OldCommitSha: zero,
+			NewCommitSha: a,
+			CommitSha:    a,
+			RefName:      "refs/heads/main",
+			ChangedPaths: []string{path},
+		})
+		olderDone <- err
+	}()
+
+	select {
+	case <-olderListingStarted:
+	case <-time.After(time.Second):
+		t.Fatal("older admission did not verify and begin loading its commit")
+	}
+
+	mu.Lock()
+	current = b
+	mu.Unlock()
+	_, err := newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: a,
+		NewCommitSha: b,
+		CommitSha:    b,
+		RefName:      "refs/heads/main",
+		ChangedPaths: []string{path},
+	})
+	require.NoError(t, err)
+
+	close(releaseOlder)
+	select {
+	case err := <-olderDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("older admission did not finish")
+	}
+
+	namespace, err := store.GetNamespaceByName(context.Background(), "race-store")
+	require.NoError(t, err)
+	assert.Equal(t, "Newer Revision", namespace.Title)
+	assert.Equal(t, b, namespace.GitCommitSHA)
+	assert.Equal(t, "main@sha1:"+b, namespace.Revision)
 }
 
 func TestAdmitResources_NamespaceBootstrapNameRejected(t *testing.T) {
@@ -496,6 +596,136 @@ func (m *mockGitReader) ResolveRef(ctx context.Context, repositoryID, ref string
 // makeProduct builds a valid product blob for a given name.
 func makeProduct(name string) []byte {
 	return []byte("---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: " + name + "\n  namespace: gitstore\nspec:\n  title: " + name + "\n---\n")
+}
+
+func makeFile(name string) []byte {
+	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/" + name + ".jpg\n---\nAlt text")
+}
+
+func makeFileWithContentType(name, contentType string) []byte {
+	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: " + contentType + "\n  source:\n    type: s3\n    uri: s3://bucket/" + name + "\n---\nAlt text")
+}
+
+func TestValidateAndAdmitResources_File(t *testing.T) {
+	store := newTestDatastore(t)
+	commit := strings.Repeat("f", 40)
+	git := &mockGitReader{
+		listFilesFunc: func(context.Context, string, string, string) ([]string, error) {
+			return []string{"files/hero.md"}, nil
+		},
+		readFileFunc: func(context.Context, string, string, string) ([]byte, error) {
+			return makeFile("hero"), nil
+		},
+	}
+
+	srv := newCatalogServer(t, store, git, func(deps *cataloggrpc.ServerDeps) {
+		deps.IDGenerator = apiruntime.NewSequenceIDGenerator("11111111-1111-7111-8111-111111111113")
+	})
+	validation, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs:        []*catalogv1.ResourceBlob{{Path: "files/hero.md", Content: makeFile("hero")}},
+	})
+	require.NoError(t, err)
+	require.True(t, validation.Accepted)
+	invalid, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs:        []*catalogv1.ResourceBlob{{Path: "files/bad.md", Content: []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: bad\nspec:\n  contentType: image/jpeg\n  source:\n    type: unsupported\n    uri: s3://bucket/bad\n---\n")}},
+	})
+	require.NoError(t, err)
+	require.False(t, invalid.Accepted)
+	require.NotEmpty(t, invalid.Errors)
+	assert.Contains(t, invalid.Errors[0].Message, "spec.source.type")
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, CommitSha: commit, RefName: "refs/heads/main",
+	})
+	require.NoError(t, err)
+	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
+	require.NoError(t, err)
+	require.Equal(t, "Alt text", file.Body)
+	var status catalog.FileStatus
+	require.NoError(t, json.Unmarshal(file.Status, &status))
+	require.Len(t, status.Conditions, 2)
+	require.Equal(t, catalog.ConditionAdmissionAccepted, status.Conditions[0].Type)
+	require.Equal(t, catalog.ConditionReady, status.Conditions[1].Type)
+}
+
+func TestValidateResources_FileDuplicateIdentityRejected(t *testing.T) {
+	srv := newCatalogServer(t, newTestDatastore(t), nil)
+	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/hero\n---\n")
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs: []*catalogv1.ResourceBlob{
+			{Path: "files/hero.md", Content: content},
+			{Path: "files/hero-copy.md", Content: content},
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, resp.Accepted)
+	require.NotEmpty(t, resp.Errors)
+	assert.Contains(t, resp.Errors[0].Message, "duplicate resource identity")
+}
+
+func TestValidateResources_FileAggregatesVariantAndCredentialsErrors(t *testing.T) {
+	srv := newCatalogServer(t, newTestDatastore(t), nil)
+	content := []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: broken\n  namespace: gitstore\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/broken\n    credentialsRef:\n      kind: Secret\n      name: cloud\n      namespace: other\n  processing:\n    image:\n      variants:\n        - name: \"\"\n---\n")
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Blobs:        []*catalogv1.ResourceBlob{{Path: "files/broken.md", Content: content}},
+	})
+	require.NoError(t, err)
+	require.False(t, resp.Accepted)
+	require.GreaterOrEqual(t, len(resp.Errors), 2)
+	messages := collectMessages(resp.Errors)
+	assert.Contains(t, strings.Join(messages, "\n"), "credentialsRef.namespace")
+	assert.Contains(t, strings.Join(messages, "\n"), "variants[0].name")
+}
+
+func TestAdmitResources_FileContentTypeIsImmutable(t *testing.T) {
+	store := newTestDatastore(t)
+	a, b, c := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40)
+	current := a
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {"files/hero.md": makeFileWithContentType("hero", "image/jpeg")},
+		b: {"files/hero.md": makeFileWithContentType("hero", "image/png")},
+		c: {"files/hero.md": []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: hero\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/hero\n---\nUpdated alt text")},
+	})
+	srv := newCatalogServer(t, store, git)
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, CommitSha: a, RefName: "refs/heads/main",
+	})
+	require.NoError(t, err)
+	current = b
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, CommitSha: b, OldCommitSha: a, NewCommitSha: b, RefName: "refs/heads/main",
+	})
+	require.NoError(t, err)
+	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
+	require.NoError(t, err)
+	assert.Contains(t, string(file.Spec), `"ContentType":"image/jpeg"`)
+	current = c
+	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, CommitSha: c, OldCommitSha: b, NewCommitSha: c, RefName: "refs/heads/main",
+	})
+	require.NoError(t, err)
+	file, err = store.GetFileByName(context.Background(), "gitstore", "hero")
+	require.NoError(t, err)
+	assert.Equal(t, "Updated alt text", file.Body)
+}
+
+func TestValidateResources_FileContentTypeIsImmutable(t *testing.T) {
+	srv := newCatalogServer(t, newTestDatastore(t), nil)
+	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Trees: []*catalogv1.ResourceValidationTree{{
+			OldBlobs:      []*catalogv1.ResourceBlob{{Path: "files/hero.md", Content: makeFileWithContentType("hero", "image/jpeg")}},
+			ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "files/hero.md", Content: makeFileWithContentType("hero", "image/png")}},
+		}},
+	})
+	require.NoError(t, err)
+	require.False(t, resp.Accepted)
+	require.Len(t, resp.Errors, 1)
+	assert.Equal(t, "spec.contentType", resp.Errors[0].Field)
+	assert.Contains(t, resp.Errors[0].Message, "immutable")
 }
 
 // T020a: valid commit_sha with one product file → CreateProduct called with correct spec fields
@@ -1156,6 +1386,168 @@ spec:
 `)
 }
 
+func deletionValidationTree(oldResources, proposedResources map[string][]byte) *catalogv1.CategoryTaxonomyDeletionTree {
+	toBlobs := func(resources map[string][]byte) []*catalogv1.ResourceBlob {
+		blobs := make([]*catalogv1.ResourceBlob, 0, len(resources))
+		for path, content := range resources {
+			blobs = append(blobs, &catalogv1.ResourceBlob{
+				Path:    path,
+				BlobOid: path,
+				Content: content,
+			})
+		}
+		return blobs
+	}
+	return &catalogv1.CategoryTaxonomyDeletionTree{
+		OldBlobs:      toBlobs(oldResources),
+		ProposedBlobs: toBlobs(proposedResources),
+	}
+}
+
+func TestValidateCategoryTaxonomyDeletionUsesProposedTree(t *testing.T) {
+	srv := newCatalogServer(t, newTestDatastore(t), nil)
+	parent := makeCategoryTaxonomy("parent")
+	child := makeCategoryTaxonomyWithParent("child", "parent")
+	reparentedChild := makeCategoryTaxonomyWithParent("child", "other-parent")
+	implicitParent := []byte(`---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: implicit-parent
+spec:
+  title: Parent
+---
+`)
+	implicitChild := []byte(`---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: CategoryTaxonomy
+metadata:
+  name: implicit-child
+spec:
+  title: Child
+  parentRef:
+    name: implicit-parent
+---
+`)
+	productWithCategory := []byte(`---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: widget
+  namespace: gitstore
+spec:
+  title: Widget
+  categoryRef:
+    name: parent
+---
+`)
+
+	tests := []struct {
+		name     string
+		tree     *catalogv1.CategoryTaxonomyDeletionTree
+		accepted bool
+	}{
+		{
+			name: "parent only deletion is rejected",
+			tree: deletionValidationTree(
+				map[string][]byte{
+					"categories/parent.md": parent,
+					"categories/child.md":  child,
+				},
+				map[string][]byte{"categories/child.md": child},
+			),
+			accepted: false,
+		},
+		{
+			name: "implicit namespace parent deletion is rejected",
+			tree: deletionValidationTree(
+				map[string][]byte{
+					"categories/parent.md": implicitParent,
+					"categories/child.md":  implicitChild,
+				},
+				map[string][]byte{"categories/child.md": implicitChild},
+			),
+			accepted: false,
+		},
+		{
+			name: "atomic parent and child deletion is accepted",
+			tree: deletionValidationTree(
+				map[string][]byte{
+					"categories/parent.md": parent,
+					"categories/child.md":  child,
+				},
+				map[string][]byte{},
+			),
+			accepted: true,
+		},
+		{
+			name: "atomic child reparenting is accepted",
+			tree: deletionValidationTree(
+				map[string][]byte{
+					"categories/parent.md": parent,
+					"categories/child.md":  child,
+				},
+				map[string][]byte{"categories/child.md": reparentedChild},
+			),
+			accepted: true,
+		},
+		{
+			name: "product only dependency is accepted",
+			tree: deletionValidationTree(
+				map[string][]byte{
+					"categories/parent.md": parent,
+					"products/widget.md":   productWithCategory,
+				},
+				map[string][]byte{"products/widget.md": productWithCategory},
+			),
+			accepted: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response, err := srv.ValidateCategoryTaxonomyDeletion(context.Background(),
+				&catalogv1.ValidateCategoryTaxonomyDeletionRequest{
+					RepositoryId: testRepoID,
+					Trees:        []*catalogv1.CategoryTaxonomyDeletionTree{tt.tree},
+				})
+			require.NoError(t, err)
+			assert.Equal(t, tt.accepted, response.Accepted)
+			if !tt.accepted {
+				assert.Equal(t, "child categories present", response.Reason)
+			}
+		})
+	}
+}
+
+func TestValidateCategoryTaxonomyDeletionRejectsIndexedChildOutsideProposedTree(t *testing.T) {
+	store := newTestDatastore(t)
+	ctx := context.Background()
+	parent := &datastore.CategoryTaxonomy{
+		UID: "00000000-0000-0000-0000-000000000311", Namespace: "gitstore", Name: "parent",
+		RepositoryID: testRepoID, ResourceVersion: "1", APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy",
+	}
+	child := &datastore.CategoryTaxonomy{
+		UID: "00000000-0000-0000-0000-000000000312", Namespace: "gitstore", Name: "child",
+		RepositoryID: wrongNamespaceRepoID, ResourceVersion: "1", APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy",
+		OwnerReferences: []byte(`[{"apiVersion":"catalog.gitstore.dev/v1beta1","kind":"CategoryTaxonomy","name":"parent","uid":"00000000-0000-0000-0000-000000000311","repositoryID":"00000000-0000-0000-0000-000000000001","blockOwnerDeletion":true}]`),
+	}
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, parent))
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, child))
+
+	srv := newCatalogServer(t, store, nil)
+	response, err := srv.ValidateCategoryTaxonomyDeletion(ctx, &catalogv1.ValidateCategoryTaxonomyDeletionRequest{
+		RepositoryId: testRepoID,
+		Trees: []*catalogv1.CategoryTaxonomyDeletionTree{deletionValidationTree(
+			map[string][]byte{"categories/parent.md": makeCategoryTaxonomy("parent")},
+			map[string][]byte{},
+		)},
+	})
+	require.NoError(t, err)
+	assert.False(t, response.Accepted)
+	assert.Equal(t, "child categories present", response.Reason)
+}
+
 func TestAdmitResources_IntraPushCycle_BothStoredWithAcyclicFalse(t *testing.T) {
 	memStore := newTestDatastore(t)
 	files := map[string][]byte{
@@ -1322,6 +1714,14 @@ func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, "electronics/computers", child.AncestorPath)
 	assert.Equal(t, "electronics", child.ParentName)
+	parent, err := memStore.GetCategoryTaxonomyByName(context.Background(), "gitstore", "electronics")
+	require.NoError(t, err)
+	var references []catalog.OwnerReference
+	require.NoError(t, json.Unmarshal(child.OwnerReferences, &references))
+	require.Len(t, references, 1)
+	assert.Equal(t, parent.UID, references[0].UID)
+	assert.Equal(t, "CategoryTaxonomy", references[0].Kind)
+	assert.True(t, references[0].BlockOwnerDeletion)
 }
 
 func TestAdmitResources_CoCreation_ParentAndChildInSamePush(t *testing.T) {
@@ -1870,6 +2270,52 @@ func admitDelta(t *testing.T, srv *cataloggrpc.Server, oldCommit, newCommit stri
 	require.NoError(t, err)
 }
 
+type concurrentProductDeleteStore struct {
+	datastore.Datastore
+}
+
+func (s *concurrentProductDeleteStore) DeleteProductWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
+	current, err := s.GetProduct(ctx, uid)
+	if err != nil {
+		return err
+	}
+	current.ResourceVersion = "concurrent-write"
+	if err := s.UpdateProduct(ctx, current); err != nil {
+		return err
+	}
+	return s.Datastore.DeleteProductWithResourceVersion(ctx, uid, expectedResourceVersion)
+}
+
+func TestAdmitResources_DeleteRejectsConcurrentReownership(t *testing.T) {
+	base := newTestDatastore(t)
+	store := &concurrentProductDeleteStore{Datastore: base}
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	current := a
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {"products/widget.md": makeProduct("widget")},
+		b: {},
+	})
+	srv := newCatalogServer(t, store, git)
+	admitDelta(t, srv, zero, a)
+
+	current = b
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		CommitSha:    b,
+		OldCommitSha: a,
+		NewCommitSha: b,
+		RefName:      "refs/heads/main",
+	})
+	require.Equal(t, codes.Internal, grpcstatus.Code(err))
+	require.ErrorContains(t, err, datastore.ErrConflict.Error())
+
+	product, getErr := base.GetProductByName(context.Background(), "gitstore", "widget")
+	require.NoError(t, getErr)
+	assert.Equal(t, "concurrent-write", product.ResourceVersion)
+}
+
 func TestAdmitResources_OperationAwareDeleteRemovesProductVariant(t *testing.T) {
 	store := newTestDatastore(t)
 	zero := strings.Repeat("0", 40)
@@ -1891,6 +2337,37 @@ func TestAdmitResources_OperationAwareDeleteRemovesProductVariant(t *testing.T) 
 
 	_, err = store.GetProductVariantByName(context.Background(), "gitstore", "red")
 	assert.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestAdmitResources_ReparentChildBeforeDeletingFormerParent(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	current := a
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {
+			"categories/parent.md": makeCategoryTaxonomy("parent"),
+			"categories/other.md":  makeCategoryTaxonomy("other"),
+			"categories/child.md":  makeCategoryTaxonomyWithParent("child", "parent"),
+		},
+		b: {
+			"categories/other.md": makeCategoryTaxonomy("other"),
+			"categories/child.md": makeCategoryTaxonomyWithParent("child", "other"),
+		},
+	})
+	srv := newCatalogServer(t, store, git)
+	admitDelta(t, srv, zero, a)
+
+	current = b
+	admitDelta(t, srv, a, b)
+
+	child, err := store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "child")
+	require.NoError(t, err)
+	assert.Equal(t, "other", child.ParentName)
+	parent, err := store.GetCategoryTaxonomyByName(context.Background(), "gitstore", "parent")
+	require.NoError(t, err)
+	assert.NotNil(t, parent.DeletionTimestamp)
 }
 
 // T017 (spec 042): deleting a product with a categoryRef publishes a

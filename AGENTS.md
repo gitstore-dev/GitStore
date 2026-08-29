@@ -99,7 +99,8 @@ Common bootstrap variables:
   ./scripts/install-git-hooks.sh
   ```
 
-- Use Conventional Commits
+- Use Conventional Commits. PR titles are CI-enforced Conventional Commits (`.github/workflows/pr-title-lint.yml`) since squash-merge makes the PR title the commit message Release Please parses.
+- Releases are automated via Release Please (`.github/workflows/release-please.yml`); see [Release Process](docs/runbooks/release-process.md) for versioning scheme, graduation between alpha/beta/stable, and troubleshooting.
 - After implementing a feature update the documentation in [`docs/`](docs/).
 - For changes to `gitstore-api`, `gitstore-controller-manager`, or
   `gitstore-git-service`, plans and tests must cover multi-replica correctness,
@@ -114,7 +115,7 @@ Common bootstrap variables:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/048-scylla-query-design/plan.md
+at specs/051-file-resource-contract/plan.md
 <!-- SPECKIT END -->
 
 ## graphify

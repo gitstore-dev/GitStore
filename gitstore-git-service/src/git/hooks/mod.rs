@@ -2,6 +2,7 @@
 // Copyright (c) 2026 GitStore contributors
 
 pub mod admission_handler;
+pub mod category_taxonomy_deletion_handler;
 pub mod validation_handler;
 
 use std::path::Path;
@@ -95,8 +96,7 @@ pub struct ResourceBlob {
 // ValidationHandler trait
 // ---------------------------------------------------------------------------
 
-/// Called in the pre-receive phase (blocking). Receives pre-extracted resource blobs
-/// from the quarantine area and returns an admission decision.
+/// Called in the pre-receive phase (blocking).
 #[async_trait]
 pub trait ValidationHandler: Send + Sync {
     async fn validate(
@@ -104,6 +104,19 @@ pub trait ValidationHandler: Send + Sync {
         blobs: &[ResourceBlob],
         hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision>;
+
+    /// Validates a receive-pack operation. Handlers that only need changed blobs
+    /// can use the default implementation; proposed-tree handlers override it.
+    async fn validate_receive(
+        &self,
+        git_dir: &Path,
+        updates: &[RefUpdate],
+        quarantine_dir: Option<&Path>,
+        hook_ctx: &HookContext,
+    ) -> anyhow::Result<AdmissionDecision> {
+        let blobs = extract_resource_blobs(git_dir, updates, quarantine_dir);
+        self.validate(&blobs, hook_ctx).await
+    }
 }
 
 /// Default no-op implementation — always accepts.
@@ -116,6 +129,55 @@ impl ValidationHandler for NoopValidationHandler {
         _blobs: &[ResourceBlob],
         _hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
+        Ok(AdmissionDecision::Accept)
+    }
+}
+
+/// Runs multiple blocking validation policies in order and stops at the first
+/// rejection. Receive-aware handlers retain access to the old and proposed
+/// trees instead of being reduced to changed blobs.
+pub struct ChainedValidationHandler {
+    handlers: Vec<Arc<dyn ValidationHandler + Send + Sync>>,
+}
+
+impl ChainedValidationHandler {
+    pub fn new(handlers: Vec<Arc<dyn ValidationHandler + Send + Sync>>) -> Self {
+        Self { handlers }
+    }
+}
+
+#[async_trait]
+impl ValidationHandler for ChainedValidationHandler {
+    async fn validate(
+        &self,
+        blobs: &[ResourceBlob],
+        hook_ctx: &HookContext,
+    ) -> anyhow::Result<AdmissionDecision> {
+        for handler in &self.handlers {
+            match handler.validate(blobs, hook_ctx).await? {
+                AdmissionDecision::Accept => {}
+                rejected @ AdmissionDecision::Reject(_) => return Ok(rejected),
+            }
+        }
+        Ok(AdmissionDecision::Accept)
+    }
+
+    async fn validate_receive(
+        &self,
+        git_dir: &Path,
+        updates: &[RefUpdate],
+        quarantine_dir: Option<&Path>,
+        hook_ctx: &HookContext,
+    ) -> anyhow::Result<AdmissionDecision> {
+        for handler in &self.handlers {
+            match handler
+                .validate_receive(git_dir, updates, quarantine_dir, hook_ctx)
+                .await?
+            {
+                AdmissionDecision::Accept => {}
+                rejected @ AdmissionDecision::Reject(_) => return Ok(rejected),
+            }
+        }
         Ok(AdmissionDecision::Accept)
     }
 }
@@ -449,10 +511,14 @@ impl HookPipeline {
         }
         // Invoke the validation handler at its configured phase (blocking, fail-closed).
         if phase == self.schema_validation_phase {
-            let blobs = extract_resource_blobs(git_dir, updates, quarantine_dir);
             let result = tokio::time::timeout(
                 self.schema_validation_timeout,
-                self.validation_handler.validate(&blobs, hook_ctx),
+                self.validation_handler.validate_receive(
+                    git_dir,
+                    updates,
+                    quarantine_dir,
+                    hook_ctx,
+                ),
             )
             .await;
             let duration_ms = start.elapsed().as_millis() as u64;
@@ -513,6 +579,44 @@ impl HookPipeline {
 // ---------------------------------------------------------------------------
 // Blob extraction
 // ---------------------------------------------------------------------------
+
+/// Opens a repository with quarantined pack files temporarily exposed to gix.
+/// The temporary links are always removed before returning.
+pub(crate) fn with_quarantine_repo<T>(
+    git_dir: &Path,
+    quarantine_dir: Option<&Path>,
+    operation: impl FnOnce(&gix::Repository) -> Result<T, String>,
+) -> Result<T, String> {
+    let pack_dir = git_dir.join("objects").join("pack");
+    let mut staged_files: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(q) = quarantine_dir {
+        let _ = std::fs::create_dir_all(&pack_dir);
+        if let Ok(entries) = std::fs::read_dir(q) {
+            for entry in entries.flatten() {
+                let src = entry.path();
+                let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if ext == "pack" || ext == "idx" {
+                    let dst = pack_dir.join(entry.file_name());
+                    if !dst.exists()
+                        && (std::fs::hard_link(&src, &dst).is_ok()
+                            || std::fs::copy(&src, &dst).is_ok())
+                    {
+                        staged_files.push(dst);
+                    }
+                }
+            }
+        }
+    }
+
+    let result = gix::open(git_dir)
+        .map_err(|e| format!("open repository: {e}"))
+        .and_then(|repo| operation(&repo));
+
+    for file in staged_files {
+        let _ = std::fs::remove_file(file);
+    }
+    result
+}
 
 /// Walk the commit trees for all ref updates and collect resource blobs (files
 /// beginning with `---`).
@@ -633,84 +737,140 @@ fn collect_changed_blobs(
     let Some(new_tree) = get_tree_id(repo, new_commit_id) else {
         return;
     };
-    collect_changed_blobs_from_trees(repo, old_tree, new_tree, "", out);
+    let mut old_blobs = Vec::new();
+    collect_changed_resource_blobs_from_trees(repo, old_tree, new_tree, "", &mut old_blobs, out);
 }
 
-fn collect_changed_blobs_from_trees(
+/// Collect the changed resource blobs from both sides of one ref update.
+/// Keeping the old side lets schema validation compare immutable fields using
+/// only Git objects while refs are still unchanged.
+pub(crate) fn collect_changed_resource_blobs(
+    repo: &gix::Repository,
+    old_commit_id: Option<gix::ObjectId>,
+    new_commit_id: Option<gix::ObjectId>,
+) -> (Vec<ResourceBlob>, Vec<ResourceBlob>) {
+    let mut old_blobs = Vec::new();
+    let mut proposed_blobs = Vec::new();
+    match (
+        old_commit_id.and_then(|id| get_tree_id(repo, id)),
+        new_commit_id.and_then(|id| get_tree_id(repo, id)),
+    ) {
+        (Some(old_tree), Some(new_tree)) => collect_changed_resource_blobs_from_trees(
+            repo,
+            old_tree,
+            new_tree,
+            "",
+            &mut old_blobs,
+            &mut proposed_blobs,
+        ),
+        (Some(old_tree), None) => collect_blobs_from_tree(repo, old_tree, "", &mut old_blobs),
+        (None, Some(new_tree)) => collect_blobs_from_tree(repo, new_tree, "", &mut proposed_blobs),
+        (None, None) => {}
+    }
+    (old_blobs, proposed_blobs)
+}
+
+fn collect_changed_resource_blobs_from_trees(
     repo: &gix::Repository,
     old_tree_id: gix::ObjectId,
     new_tree_id: gix::ObjectId,
     prefix: &str,
-    out: &mut Vec<ResourceBlob>,
+    old_out: &mut Vec<ResourceBlob>,
+    proposed_out: &mut Vec<ResourceBlob>,
 ) {
     let old_entries = decode_tree(repo, old_tree_id);
     let new_entries = decode_tree(repo, new_tree_id);
-    if new_entries.is_empty() {
-        return;
-    }
 
-    // Build a map from filename → (oid, mode) for old entries.
     let old_map: std::collections::HashMap<String, (gix::ObjectId, gix::object::tree::EntryKind)> =
         old_entries
             .iter()
             .map(|e| (e.filename.to_string(), (e.oid, e.mode.kind())))
             .collect();
+    let new_map: std::collections::HashMap<String, (gix::ObjectId, gix::object::tree::EntryKind)> =
+        new_entries
+            .iter()
+            .map(|e| (e.filename.to_string(), (e.oid, e.mode.kind())))
+            .collect();
+    let mut names: Vec<_> = old_map.keys().chain(new_map.keys()).collect();
+    names.sort();
+    names.dedup();
 
-    for entry in &new_entries {
-        let name = entry.filename.to_string();
-        let path = make_path(prefix, &name);
-        match entry.mode.kind() {
-            gix::object::tree::EntryKind::Tree => {
-                let new_sub_id: gix::ObjectId = entry.oid;
-                let old_sub_id = old_map
-                    .get(&name)
-                    .filter(|(_, k)| *k == gix::object::tree::EntryKind::Tree)
-                    .map(|(id, _)| *id);
-                match old_sub_id {
-                    Some(old_sub) if old_sub == new_sub_id => {
-                        // Subtree unchanged — skip entirely.
-                    }
-                    Some(old_sub) => {
-                        collect_changed_blobs_from_trees(repo, old_sub, new_sub_id, &path, out);
-                    }
-                    None => {
-                        // New subtree — scan all blobs in it.
-                        collect_blobs_from_tree(repo, new_sub_id, &path, out);
-                    }
+    for name in names {
+        let path = make_path(prefix, name);
+        match (old_map.get(name), new_map.get(name)) {
+            (
+                Some((old_id, gix::object::tree::EntryKind::Tree)),
+                Some((new_id, gix::object::tree::EntryKind::Tree)),
+            ) if old_id != new_id => {
+                collect_changed_resource_blobs_from_trees(
+                    repo,
+                    *old_id,
+                    *new_id,
+                    &path,
+                    old_out,
+                    proposed_out,
+                );
+            }
+            (
+                Some((old_id, gix::object::tree::EntryKind::Tree)),
+                Some((new_id, gix::object::tree::EntryKind::Tree)),
+            ) if old_id == new_id => {}
+            (Some((old_id, gix::object::tree::EntryKind::Tree)), _) => {
+                collect_blobs_from_tree(repo, *old_id, &path, old_out);
+                if let Some((new_id, kind)) = new_map.get(name) {
+                    collect_resource_entry(repo, *new_id, *kind, &path, proposed_out);
                 }
             }
-            gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable => {
-                let new_blob_id: gix::ObjectId = entry.oid;
-                let old_blob_id = old_map
-                    .get(&name)
-                    .filter(|(_, k)| {
-                        matches!(
-                            k,
-                            gix::object::tree::EntryKind::Blob
-                                | gix::object::tree::EntryKind::BlobExecutable
-                        )
-                    })
-                    .map(|(id, _)| *id);
-                if old_blob_id == Some(new_blob_id) {
-                    continue; // Content identical — skip.
+            (_, Some((new_id, gix::object::tree::EntryKind::Tree))) => {
+                if let Some((old_id, kind)) = old_map.get(name) {
+                    collect_resource_entry(repo, *old_id, *kind, &path, old_out);
                 }
-                if let Ok(blob_obj) = repo.find_object(new_blob_id) {
-                    let content = blob_obj.data.to_vec();
-                    if content.starts_with(b"---") {
-                        out.push(ResourceBlob {
-                            path,
-                            blob_oid: new_blob_id.to_string(),
-                            content,
-                        });
-                    }
-                }
+                collect_blobs_from_tree(repo, *new_id, &path, proposed_out);
             }
-            _ => {}
+            (Some((old_id, old_kind)), Some((new_id, new_kind)))
+                if old_id != new_id || old_kind != new_kind =>
+            {
+                collect_resource_entry(repo, *old_id, *old_kind, &path, old_out);
+                collect_resource_entry(repo, *new_id, *new_kind, &path, proposed_out);
+            }
+            (Some(_), Some(_)) => {}
+            (Some((old_id, old_kind)), None) => {
+                collect_resource_entry(repo, *old_id, *old_kind, &path, old_out)
+            }
+            (None, Some((new_id, new_kind))) => {
+                collect_resource_entry(repo, *new_id, *new_kind, &path, proposed_out)
+            }
+            (None, None) => {}
         }
     }
 }
 
-fn collect_blobs_from_tree(
+fn collect_resource_entry(
+    repo: &gix::Repository,
+    object_id: gix::ObjectId,
+    kind: gix::object::tree::EntryKind,
+    path: &str,
+    out: &mut Vec<ResourceBlob>,
+) {
+    match kind {
+        gix::object::tree::EntryKind::Tree => collect_blobs_from_tree(repo, object_id, path, out),
+        gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable => {
+            if let Ok(blob_obj) = repo.find_object(object_id) {
+                let content = blob_obj.data.to_vec();
+                if content.starts_with(b"---") {
+                    out.push(ResourceBlob {
+                        path: path.to_string(),
+                        blob_oid: object_id.to_string(),
+                        content,
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(crate) fn collect_blobs_from_tree(
     repo: &gix::Repository,
     tree_id: gix::ObjectId,
     prefix: &str,

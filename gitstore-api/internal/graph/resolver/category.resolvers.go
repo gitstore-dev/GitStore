@@ -46,10 +46,19 @@ func (r *mutationResolver) UpdateCategory(ctx context.Context, input model.Updat
 	return nil, errors.New("category mutations are managed via git push")
 }
 
-// DeleteCategory is the resolver for the deleteCategory field.
-// Category mutations are managed via git push; this stub returns an informative error.
+// DeleteCategory is the resolver for the existing CategoryTaxonomy-backed
+// deleteCategory API. It starts (or returns) the shared foreground lifecycle.
 func (r *mutationResolver) DeleteCategory(ctx context.Context, input model.DeleteCategoryInput) (*model.DeleteCategoryPayload, error) {
-	return nil, errors.New("category mutations are managed via git push")
+	uid, err := decodeNodeIDAs(nodeKindCategory, input.ID)
+	if err != nil {
+		return nil, err
+	}
+	category, err := r.service.DeleteCategory(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+	r.publishCategoryTaxonomyStatusEvent(category)
+	return &model.DeleteCategoryPayload{DeletedCategoryID: &input.ID}, nil
 }
 
 // ReorderCategories is the resolver for the reorderCategories field.
@@ -64,6 +73,49 @@ func (r *mutationResolver) ReorderCategories(ctx context.Context, input model.Re
 
 // UpdateCategoryStatus is the resolver for the updateCategoryStatus field.
 func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model.UpdateCategoryStatusInput) (*model.UpdateCategoryStatusPayload, error) {
+	if input.DecoupleProducts != nil && *input.DecoupleProducts {
+		products, hasMore, err := r.service.DecoupleCategoryProducts(ctx, input.Namespace, input.Name, input.ResourceVersion)
+		if errors.Is(err, datastore.ErrConflict) {
+			current, getErr := r.store.GetCategoryTaxonomyByName(ctx, input.Namespace, input.Name)
+			if getErr != nil {
+				return nil, gqlerror.Errorf("decouple Products conflict, and could not re-fetch current version: %v", getErr)
+			}
+			return &model.UpdateCategoryStatusPayload{
+				Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion},
+			}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, product := range products {
+			if r.eventBus != nil {
+				r.eventBus.Publish(eventbus.Event{
+					Type:            eventbus.Modified,
+					Kind:            "Product",
+					Namespace:       product.Namespace,
+					Name:            product.Name,
+					ResourceVersion: product.ResourceVersion,
+					Object:          product,
+				})
+			}
+		}
+		return &model.UpdateCategoryStatusPayload{HasMoreProductDependents: hasMore}, nil
+	}
+	if input.CompleteDeletion != nil && *input.CompleteDeletion {
+		deleted, err := r.service.CompleteCategoryDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)
+		if errors.Is(err, datastore.ErrConflict) {
+			return &model.UpdateCategoryStatusPayload{
+				Conflict: &model.StatusConflict{CurrentResourceVersion: deleted.ResourceVersion},
+			}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if deleted != nil {
+			r.publishCategoryTaxonomyDeletedEvent(deleted)
+		}
+		return &model.UpdateCategoryStatusPayload{}, nil
+	}
 	patch := toCategoryTaxonomyStatusPatch(input)
 	updated, err := r.store.UpdateCategoryTaxonomyStatus(ctx, input.Namespace, input.Name, patch)
 	if err != nil {

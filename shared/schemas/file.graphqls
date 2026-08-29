@@ -1,0 +1,84 @@
+# File Resource — typed watch contract
+
+extend type Subscription {
+  """
+  Dedicated, compile-time-typed watch entry point for File resources.
+  """
+  watchFiles(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): FileWatchEvent!
+}
+
+type FileWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  file: File
+}
+
+type File implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: FileSpec!
+  status: FileStatus
+  body: String
+}
+
+type FileSpec {
+  contentType: String!
+  type: String
+  source: FileSource!
+  processing: FileProcessing
+}
+
+type FileSource {
+  type: String!
+  uri: String!
+  checksum: FileChecksum
+  credentialsRef: SecretRef
+}
+
+type FileChecksum {
+  algorithm: String!
+  value: String!
+}
+
+type SecretRef {
+  kind: String!
+  name: String!
+  key: String
+  namespace: String
+}
+
+type FileProcessing {
+  image: FileImageProcessing
+}
+
+type FileImageProcessing {
+  variants: [FileVariantRequest!]!
+}
+
+type FileVariantRequest {
+  name: String!
+}
+
+type FileStatus {
+  observedGeneration: Int!
+  lastAppliedRevision: String!
+  conditions: [Condition!]!
+  resolved: ResolvedFileDefinition
+}
+
+extend type ResolvedFileDefinition {
+  resolvedVariants: [ResolvedFileVariant!]!
+}
+
+type ResolvedFileVariant {
+  name: String!
+  url: String
+}

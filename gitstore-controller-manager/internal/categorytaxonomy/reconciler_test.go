@@ -14,6 +14,8 @@ import (
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type fakeStatusClient struct {
@@ -36,6 +38,24 @@ func (f *fakeStatusClient) callCount() int {
 }
 
 func noProducts(context.Context, string, string) (int64, error) { return 0, nil }
+
+type fakeDeletionClient struct {
+	hasMore       bool
+	decoupleCalls int
+	completeCalls int
+	decoupleErr   error
+	completeErr   error
+}
+
+func (f *fakeDeletionClient) DecoupleProducts(context.Context, string, string, string) (bool, error) {
+	f.decoupleCalls++
+	return f.hasMore, f.decoupleErr
+}
+
+func (f *fakeDeletionClient) CompleteDeletion(context.Context, string, string, string) error {
+	f.completeCalls++
+	return f.completeErr
+}
 
 func TestReconcile_MissingFromCache_ReturnsTerminal(t *testing.T) {
 	c := seedCache(t) // empty
@@ -103,9 +123,9 @@ func TestReconcile_NoOpWhenPatchMatchesCurrentStatus(t *testing.T) {
 		ResourceVersion: "1",
 		Resolved:        resolved,
 		Conditions: []*status.Condition{
-			{Type: "ParentResolved", Status: "True", LastTransitionTime: now},
-			{Type: "Acyclic", Status: "True", LastTransitionTime: now},
-			{Type: "Ready", Status: "True", LastTransitionTime: now},
+			{Type: "ParentResolved", Status: "TRUE", LastTransitionTime: now},
+			{Type: "Acyclic", Status: "TRUE", LastTransitionTime: now},
+			{Type: "Ready", Status: "TRUE", LastTransitionTime: now},
 		},
 	}
 	c := seedCache(t, root)
@@ -136,4 +156,134 @@ func TestReconcile_ConflictMapsToTransientFailure(t *testing.T) {
 	if !errors.Is(tf.Err, types.ErrConflict) {
 		t.Errorf("TransientFailure.Err = %v, want errors.Is(..., types.ErrConflict)", tf.Err)
 	}
+}
+
+func TestReconcile_TerminatingCategoryDecouplesProductsThenCompletes(t *testing.T) {
+	deletedAt := time.Now().UTC().Truncate(time.Second)
+	resolved, err := json.Marshal(ResolvedCategoryTaxonomy{Path: []string{"electronics"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := CategoryTaxonomy{
+		Namespace: "acme", Name: "electronics", ResourceVersion: "4",
+		DeletionTimestamp: &deletedAt, Finalizers: []string{datastoreForegroundDeletionFinalizer},
+		Status: status.ResourceStatus{
+			ResourceVersion: "4", Resolved: resolved,
+			Conditions: []*status.Condition{
+				{Type: "ParentResolved", Status: "TRUE", LastTransitionTime: deletedAt},
+				{Type: "Acyclic", Status: "TRUE", LastTransitionTime: deletedAt},
+				{Type: "Ready", Status: "TRUE", LastTransitionTime: deletedAt},
+				{Type: "Terminating", Status: "TRUE", LastTransitionTime: deletedAt},
+			},
+		},
+	}
+	deletion := &fakeDeletionClient{}
+	r := NewReconciler(seedCache(t, root), &fakeStatusClient{}, noProducts, nil, deletion)
+
+	result := r.Reconcile(context.Background(), key("acme", "electronics"))
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %T, want types.Success", result)
+	}
+	if deletion.decoupleCalls != 1 || deletion.completeCalls != 1 {
+		t.Fatalf("deletion calls = decouple %d, complete %d; want 1 each", deletion.decoupleCalls, deletion.completeCalls)
+	}
+}
+
+func TestReconcile_TerminatingCategoryContinuesAfterBoundedProductPage(t *testing.T) {
+	deletedAt := time.Now().UTC().Truncate(time.Second)
+	resolved, err := json.Marshal(ResolvedCategoryTaxonomy{Path: []string{"electronics"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := CategoryTaxonomy{
+		Namespace: "acme", Name: "electronics", ResourceVersion: "4",
+		DeletionTimestamp: &deletedAt, Finalizers: []string{datastoreForegroundDeletionFinalizer},
+		Status: status.ResourceStatus{
+			ResourceVersion: "4", Resolved: resolved,
+			Conditions: []*status.Condition{
+				{Type: "ParentResolved", Status: "TRUE", LastTransitionTime: deletedAt},
+				{Type: "Acyclic", Status: "TRUE", LastTransitionTime: deletedAt},
+				{Type: "Ready", Status: "TRUE", LastTransitionTime: deletedAt},
+				{Type: "Terminating", Status: "TRUE", LastTransitionTime: deletedAt},
+			},
+		},
+	}
+	deletion := &fakeDeletionClient{hasMore: true}
+	r := NewReconciler(seedCache(t, root), &fakeStatusClient{}, noProducts, nil, deletion)
+
+	if _, ok := r.Reconcile(context.Background(), key("acme", "electronics")).(types.RequeueAfter); !ok {
+		t.Fatalf("expected bounded Product page to schedule a continuation")
+	}
+	if deletion.completeCalls != 0 {
+		t.Fatalf("completion must wait for remaining Product pages")
+	}
+}
+
+func TestReconcile_TerminationStatusIsVisibleBeforeLifecycleOperations(t *testing.T) {
+	deletedAt := time.Now().UTC().Truncate(time.Second)
+	root := CategoryTaxonomy{
+		Namespace: "acme", Name: "electronics", ResourceVersion: "4", Generation: 7,
+		DeletionTimestamp: &deletedAt, Finalizers: []string{datastoreForegroundDeletionFinalizer},
+	}
+	statusClient := &fakeStatusClient{}
+	deletion := &fakeDeletionClient{}
+	result := NewReconciler(seedCache(t, root), statusClient, noProducts, nil, deletion).
+		Reconcile(context.Background(), key("acme", "electronics"))
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %T, want types.Success", result)
+	}
+	require.Equal(t, 1, statusClient.callCount())
+	conditions := statusClient.calls[0].Conditions
+	require.Condition(t, func() bool {
+		for _, condition := range conditions {
+			if condition.Type == "Terminating" && condition.Status == "TRUE" && condition.Reason == "DeletionRequested" {
+				return true
+			}
+		}
+		return false
+	})
+	assert.Equal(t, 1, deletion.decoupleCalls)
+	assert.Equal(t, 1, deletion.completeCalls)
+}
+
+func TestReconcile_TerminatingCategoryRetriesDecouplingAndCompletionConflicts(t *testing.T) {
+	deletedAt := time.Now().UTC().Truncate(time.Second)
+	resolved, err := json.Marshal(ResolvedCategoryTaxonomy{Path: []string{"electronics"}})
+	require.NoError(t, err)
+	root := CategoryTaxonomy{
+		Namespace: "acme", Name: "electronics", ResourceVersion: "4",
+		DeletionTimestamp: &deletedAt, Finalizers: []string{datastoreForegroundDeletionFinalizer},
+		Status: status.ResourceStatus{ResourceVersion: "4", Resolved: resolved, Conditions: []*status.Condition{
+			{Type: "ParentResolved", Status: "TRUE", LastTransitionTime: deletedAt},
+			{Type: "Acyclic", Status: "TRUE", LastTransitionTime: deletedAt},
+			{Type: "Ready", Status: "TRUE", LastTransitionTime: deletedAt},
+			{Type: "Terminating", Status: "TRUE", LastTransitionTime: deletedAt},
+		}},
+	}
+	for name, deletion := range map[string]*fakeDeletionClient{
+		"decoupling failure":  {decoupleErr: errors.New("temporary page failure")},
+		"completion conflict": {completeErr: types.ErrConflict},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := NewReconciler(seedCache(t, root), &fakeStatusClient{}, noProducts, nil, deletion).
+				Reconcile(context.Background(), key("acme", "electronics"))
+			_, transient := result.(types.TransientFailure)
+			assert.True(t, transient)
+			if deletion.decoupleErr != nil {
+				assert.Zero(t, deletion.completeCalls)
+			} else {
+				assert.Equal(t, 1, deletion.completeCalls)
+			}
+		})
+	}
+}
+
+func TestReconcile_RemovedCategoryIsTerminalWithoutDeletionCalls(t *testing.T) {
+	deletion := &fakeDeletionClient{}
+	result := NewReconciler(seedCache(t), &fakeStatusClient{}, noProducts, nil, deletion).
+		Reconcile(context.Background(), key("acme", "removed"))
+	_, terminal := result.(types.TerminalFailure)
+	assert.True(t, terminal)
+	assert.Zero(t, deletion.decoupleCalls)
+	assert.Zero(t, deletion.completeCalls)
 }

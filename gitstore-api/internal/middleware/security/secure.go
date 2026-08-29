@@ -38,6 +38,7 @@ type Authorize struct {
 type datastoreGetter interface {
 	GetRepository(ctx context.Context, id string) (*datastore.Repository, error)
 	GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error)
+	GetCategoryTaxonomy(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error)
 }
 
 type RateLimit struct {

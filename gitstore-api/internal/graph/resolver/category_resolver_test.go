@@ -5,9 +5,12 @@ package resolver
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -24,6 +27,15 @@ func newCategoryResolverEnv(t *testing.T) (*queryResolver, datastore.Datastore) 
 	r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop()})
 	require.NoError(t, err)
 	return &queryResolver{Resolver: r}, store
+}
+
+func newCategoryMutationResolverEnv(t *testing.T) (*mutationResolver, datastore.Datastore) {
+	t.Helper()
+	store, err := memdb.New()
+	require.NoError(t, err)
+	r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop()})
+	require.NoError(t, err)
+	return &mutationResolver{Resolver: r}, store
 }
 
 func seedCategory(t *testing.T, store datastore.Datastore, ns, name string, createdAt time.Time) *datastore.CategoryTaxonomy {
@@ -246,4 +258,184 @@ func TestCategoryResolver_Categories_TotalCount(t *testing.T) {
 	if result.TotalCount >= 0 {
 		assert.Equal(t, int32(5), result.TotalCount)
 	}
+}
+
+func TestDeleteCategoryMarksChildlessCategory(t *testing.T) {
+	mutation, store := newCategoryMutationResolverEnv(t)
+	category := seedCategory(t, store, "test-ns", "parent", time.Now().UTC())
+	category.RepositoryID = "repo-1"
+	require.NoError(t, store.UpdateCategoryTaxonomy(context.Background(), category))
+
+	payload, err := mutation.DeleteCategory(context.Background(), model.DeleteCategoryInput{
+		ID: mustEncodeNodeID(nodeKindCategory, category.UID),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, payload)
+	assert.Equal(t, mustEncodeNodeID(nodeKindCategory, category.UID), *payload.DeletedCategoryID)
+
+	terminating, err := store.GetCategoryTaxonomyByName(context.Background(), category.Namespace, category.Name)
+	require.NoError(t, err)
+	assert.NotNil(t, terminating.DeletionTimestamp)
+	assert.Contains(t, terminating.Finalizers, datastore.CategoryTaxonomyForegroundDeletionFinalizer)
+	var status catalog.CategoryTaxonomyStatus
+	require.NoError(t, json.Unmarshal(terminating.Status, &status))
+	assert.Condition(t, func() bool {
+		for _, condition := range status.Conditions {
+			if condition.Type == catalog.ConditionTerminating &&
+				condition.Status == catalog.ConditionTrue &&
+				condition.ObservedGeneration == terminating.Generation &&
+				condition.Reason == "DeletionRequested" {
+				return true
+			}
+		}
+		return false
+	}, "terminating condition was not written")
+}
+
+func TestDeleteCategoryRejectsBlockingChild(t *testing.T) {
+	mutation, store := newCategoryMutationResolverEnv(t)
+	parent := seedCategory(t, store, "test-ns", "parent", time.Now().UTC())
+	parent.RepositoryID = "repo-1"
+	require.NoError(t, store.UpdateCategoryTaxonomy(context.Background(), parent))
+	ownerReferences, err := json.Marshal([]catalog.OwnerReference{{
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy", Name: parent.Name, UID: parent.UID, BlockOwnerDeletion: true,
+	}})
+	require.NoError(t, err)
+	child := seedCategory(t, store, parent.Namespace, "child", time.Now().UTC())
+	child.RepositoryID = parent.RepositoryID
+	child.OwnerReferences = ownerReferences
+	child.ResourceVersion = "2"
+	require.NoError(t, store.UpdateCategoryTaxonomy(context.Background(), child))
+
+	payload, err := mutation.DeleteCategory(context.Background(), model.DeleteCategoryInput{
+		ID: mustEncodeNodeID(nodeKindCategory, parent.UID),
+	})
+	assert.Nil(t, payload)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "child categories")
+
+	current, getErr := store.GetCategoryTaxonomy(context.Background(), parent.UID)
+	require.NoError(t, getErr)
+	assert.Nil(t, current.DeletionTimestamp)
+}
+
+func TestUpdateCategoryStatusDecouplesNonBlockingProducts(t *testing.T) {
+	mutation, store := newCategoryMutationResolverEnv(t)
+	ctx := context.Background()
+	category := seedCategory(t, store, "test-ns", "parent", time.Now().UTC())
+	category.RepositoryID = "repo-1"
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category))
+	lifecycle := store.(datastore.CategoryTaxonomyDeletionStore)
+	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
+	require.NoError(t, err)
+
+	ownerReferences, err := json.Marshal([]catalog.OwnerReference{{
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy", Name: category.Name, UID: category.UID,
+	}})
+	require.NoError(t, err)
+	product := &datastore.Product{
+		UID: "00000000-0000-0000-0000-000000000010", Namespace: category.Namespace, RepositoryID: category.RepositoryID, Name: "product",
+		ResourceVersion: "1", CreationTimestamp: time.Now(), OwnerReferences: ownerReferences,
+		Spec: []byte(`{"categoryRef":{"name":"parent"}}`),
+	}
+	require.NoError(t, store.CreateProduct(ctx, product))
+	decouple := true
+	payload, err := mutation.UpdateCategoryStatus(ctx, model.UpdateCategoryStatusInput{
+		Namespace: category.Namespace, Name: category.Name, ResourceVersion: terminating.ResourceVersion, DecoupleProducts: &decouple,
+	})
+	require.NoError(t, err)
+	assert.False(t, payload.HasMoreProductDependents)
+
+	updated, err := store.GetProduct(ctx, product.UID)
+	require.NoError(t, err)
+	assert.JSONEq(t, `[]`, string(updated.OwnerReferences))
+	assert.JSONEq(t, `{"categoryRef":{"name":"parent"}}`, string(updated.Spec), "categoryRef remains Git-authored")
+	assert.Contains(t, string(updated.Status), `"CategoryDeleted"`)
+}
+
+func TestUpdateCategoryStatusDecouplesProductsInBoundedPages(t *testing.T) {
+	mutation, store := newCategoryMutationResolverEnv(t)
+	ctx := context.Background()
+	category := seedCategory(t, store, "test-ns", "parent", time.Now().UTC())
+	category.RepositoryID = "repo-1"
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category))
+	lifecycle := store.(datastore.CategoryTaxonomyDeletionStore)
+	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
+	require.NoError(t, err)
+
+	references, err := json.Marshal([]catalog.OwnerReference{{
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy",
+		Name: category.Name, UID: category.UID,
+	}})
+	require.NoError(t, err)
+	for i := 0; i < datastore.MaxOwnerDependentPageSize+1; i++ {
+		product := &datastore.Product{
+			UID: uuid.New().String(), Namespace: category.Namespace, RepositoryID: category.RepositoryID,
+			Name: fmt.Sprintf("product-%03d", i), ResourceVersion: "1", CreationTimestamp: time.Now(),
+			OwnerReferences: references, Spec: []byte(`{"categoryRef":{"name":"parent"}}`),
+		}
+		require.NoError(t, store.CreateProduct(ctx, product))
+	}
+
+	decouple := true
+	first, err := mutation.UpdateCategoryStatus(ctx, model.UpdateCategoryStatusInput{
+		Namespace: category.Namespace, Name: category.Name, ResourceVersion: terminating.ResourceVersion, DecoupleProducts: &decouple,
+	})
+	require.NoError(t, err)
+	assert.True(t, first.HasMoreProductDependents, "the first bounded page must request a continuation")
+
+	second, err := mutation.UpdateCategoryStatus(ctx, model.UpdateCategoryStatusInput{
+		Namespace: category.Namespace, Name: category.Name, ResourceVersion: terminating.ResourceVersion, DecoupleProducts: &decouple,
+	})
+	require.NoError(t, err)
+	assert.False(t, second.HasMoreProductDependents)
+
+	owners := store.(datastore.OwnerReferenceStore)
+	page, err := owners.ListNonBlockingProductOwnerDependents(ctx, datastore.OwnerReferenceScope{
+		Namespace: category.Namespace, RepositoryID: category.RepositoryID,
+	}, category.UID, "", 1)
+	require.NoError(t, err)
+	assert.Empty(t, page.Items)
+}
+
+func TestUpdateCategoryStatusDecoupleRejectsStaleCategoryVersion(t *testing.T) {
+	mutation, store := newCategoryMutationResolverEnv(t)
+	ctx := context.Background()
+	category := seedCategory(t, store, "test-ns", "parent", time.Now().UTC())
+	lifecycle := store.(datastore.CategoryTaxonomyDeletionStore)
+	terminating, err := lifecycle.MarkCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, time.Now().UTC())
+	require.NoError(t, err)
+
+	decouple := true
+	payload, err := mutation.UpdateCategoryStatus(ctx, model.UpdateCategoryStatusInput{
+		Namespace: category.Namespace, Name: category.Name, ResourceVersion: "stale", DecoupleProducts: &decouple,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, payload.Conflict)
+	assert.Equal(t, terminating.ResourceVersion, payload.Conflict.CurrentResourceVersion)
+}
+
+func TestDeleteCategoryIsIdempotentAndRepositoryScoped(t *testing.T) {
+	mutation, store := newCategoryMutationResolverEnv(t)
+	ctx := context.Background()
+	parent := seedCategory(t, store, "test-ns", "parent", time.Now().UTC())
+	parent.RepositoryID = "repo-1"
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, parent))
+	refs, err := json.Marshal([]catalog.OwnerReference{{
+		Kind: "CategoryTaxonomy", Name: parent.Name, UID: parent.UID, BlockOwnerDeletion: true,
+	}})
+	require.NoError(t, err)
+	child := seedCategory(t, store, parent.Namespace, "unrelated-repository-child", time.Now().UTC())
+	child.RepositoryID = "repo-2"
+	child.OwnerReferences = refs
+	child.ResourceVersion = "2"
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, child))
+
+	input := model.DeleteCategoryInput{ID: mustEncodeNodeID(nodeKindCategory, parent.UID)}
+	first, err := mutation.DeleteCategory(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	second, err := mutation.DeleteCategory(ctx, input)
+	require.NoError(t, err)
+	assert.Equal(t, first.DeletedCategoryID, second.DeletedCategoryID)
 }

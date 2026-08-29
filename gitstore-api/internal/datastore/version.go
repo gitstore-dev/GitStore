@@ -14,3 +14,21 @@ func nextResourceVersion(current string) string {
 	}
 	return version.Add(version, big.NewInt(1)).String()
 }
+
+// AdvanceCategoryTaxonomySystemVersion advances a category resourceVersion for
+// API/controller-managed lifecycle metadata without changing generation.
+func AdvanceCategoryTaxonomySystemVersion(category *CategoryTaxonomy) {
+	if category == nil {
+		return
+	}
+	category.ResourceVersion = nextResourceVersion(category.ResourceVersion)
+}
+
+// AdvanceProductSystemVersion advances Product lifecycle metadata without
+// mutating authored spec or generation.
+func AdvanceProductSystemVersion(product *Product) {
+	if product == nil {
+		return
+	}
+	product.ResourceVersion = nextResourceVersion(product.ResourceVersion)
+}

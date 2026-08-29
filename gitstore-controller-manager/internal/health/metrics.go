@@ -49,4 +49,25 @@ var (
 		Name: "gitstore_controller_checkpoint_replay_backlog",
 		Help: "Number of watch events enqueued as work items but not yet dispatched, per kind.",
 	}, []string{"kind"})
+
+	CategoryDeletionProductPagesTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "gitstore",
+		Subsystem: "category_deletion",
+		Name:      "product_pages_total",
+		Help:      "Bounded Product dependent pages processed by CategoryTaxonomy deletion.",
+	})
+
+	CategoryDeletionConflictsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "gitstore",
+		Subsystem: "category_deletion",
+		Name:      "completion_conflicts_total",
+		Help:      "Optimistic concurrency conflicts while completing CategoryTaxonomy deletion.",
+	})
+
+	CategoryDeletionRetriesTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "gitstore",
+		Subsystem: "category_deletion",
+		Name:      "retries_total",
+		Help:      "Transient CategoryTaxonomy deletion reconciliation retries.",
+	})
 )

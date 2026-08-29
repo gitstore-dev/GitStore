@@ -25,12 +25,13 @@ type KindStat struct {
 }
 
 type healthResponse struct {
-	Status string              `json:"status"`
-	Kinds  map[string]KindStat `json:"kinds"`
+	Status  string              `json:"status"`
+	Version string              `json:"version"`
+	Kinds   map[string]KindStat `json:"kinds"`
 }
 
 // NewHandler returns an http.Handler for GET /health.
-func NewHandler(mgr ManagerStats) http.Handler {
+func NewHandler(mgr ManagerStats, version string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		kinds := mgr.KindStats()
 
@@ -46,7 +47,7 @@ func NewHandler(mgr ManagerStats) http.Handler {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(httpStatus)
-		_ = json.NewEncoder(w).Encode(healthResponse{Status: status, Kinds: kinds})
+		_ = json.NewEncoder(w).Encode(healthResponse{Status: status, Version: version, Kinds: kinds})
 	})
 }
 

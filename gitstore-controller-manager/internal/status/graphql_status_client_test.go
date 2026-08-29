@@ -29,7 +29,7 @@ func testPatch() *status.StatusPatch {
 		ObservedGeneration: &gen,
 		Conditions: []*status.Condition{{
 			Type:               "Ready",
-			Status:             "True",
+			Status:             "TRUE",
 			ObservedGeneration: gen,
 			LastTransitionTime: now,
 		}},
