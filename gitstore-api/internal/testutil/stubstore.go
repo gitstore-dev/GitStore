@@ -33,8 +33,9 @@ func (s *StubStore) GetFileByName(_ context.Context, _, _ string) (*datastore.Fi
 func (s *StubStore) ListFiles(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
 	return &datastore.PageResult[datastore.File]{}, nil
 }
-func (s *StubStore) UpdateFile(_ context.Context, _ *datastore.File) error { return nil }
-func (s *StubStore) DeleteFile(_ context.Context, _ string) error          { return nil }
+func (s *StubStore) UpdateFile(_ context.Context, _ *datastore.File) error              { return nil }
+func (s *StubStore) DeleteFile(_ context.Context, _ string) error                       { return nil }
+func (s *StubStore) DeleteFileWithResourceVersion(_ context.Context, _, _ string) error { return nil }
 func (s *StubStore) UpdateFileStatus(_ context.Context, _, _ string, _ datastore.FileStatusPatch) (*datastore.File, error) {
 	return nil, datastore.ErrNotFound
 }
@@ -86,6 +87,9 @@ func (s *StubStore) ListProducts(_ context.Context, _ string, _ datastore.PagePa
 }
 func (s *StubStore) UpdateProduct(_ context.Context, _ *datastore.Product) error { return nil }
 func (s *StubStore) DeleteProduct(_ context.Context, _ string) error             { return nil }
+func (s *StubStore) DeleteProductWithResourceVersion(_ context.Context, _, _ string) error {
+	return nil
+}
 func (s *StubStore) CreateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
 	return nil
 }
@@ -130,6 +134,9 @@ func (s *StubStore) UpdateProductVariant(_ context.Context, _ *datastore.Product
 	return nil
 }
 func (s *StubStore) DeleteProductVariant(_ context.Context, _ string) error { return nil }
+func (s *StubStore) DeleteProductVariantWithResourceVersion(_ context.Context, _, _ string) error {
+	return nil
+}
 func (s *StubStore) CreateCollection(_ context.Context, _ *datastore.Collection) error {
 	return nil
 }
@@ -144,6 +151,9 @@ func (s *StubStore) ListCollections(_ context.Context, _ string, _ datastore.Pag
 }
 func (s *StubStore) UpdateCollection(_ context.Context, _ *datastore.Collection) error { return nil }
 func (s *StubStore) DeleteCollection(_ context.Context, _ string) error                { return nil }
+func (s *StubStore) DeleteCollectionWithResourceVersion(_ context.Context, _, _ string) error {
+	return nil
+}
 func (s *StubStore) ListProductsByLabelSelector(_ context.Context, _ string, _ catalog.LabelSelector) ([]*datastore.Product, error) {
 	return nil, nil
 }
