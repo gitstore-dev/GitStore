@@ -16,6 +16,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Honest scope note (spec 051 T040): this repository has no dual-binary or
+// dual-struct-version harness — there is no compiled pre-051 gitstore-api
+// anywhere to actually invoke, so nothing here literally runs "old code"
+// against "new" data or vice versa. Every test below runs the *current*
+// build. What each test actually establishes is:
+//  1. TestAdmitResources_FileAdmittedAlongsideKindUnknownToThisReplica
+//     exercises the current build's generic, kind-agnostic "unrecognized
+//     kind → log and skip, don't fail the push" mechanism (validator.go's
+//     default case; loadParsedEntries' continue-on-parse-error path). That
+//     mechanism is not File-specific — it is the exact mechanism that would
+//     have made a pre-051 replica (one with no "File" case at all) safely
+//     ignore a `kind: File` push before this spec shipped, and is the same
+//     mechanism a current replica relies on to ignore any future kind it
+//     doesn't know about yet. Exercising it with a stand-in unknown kind
+//     is a faithful proxy for that cross-version behavior, not a literal
+//     old-replica invocation.
+//  2. TestAdmitResources_FileUpdateAcceptsRecordWrittenBeforeOptionalFieldsExisted
+//     and TestAdmitResources_FileContentTypeImmutabilityEnforcedAgainstLegacyShapeSpec
+//     construct a File row with the exact on-disk JSON shape a record
+//     predating the optional `processing`/`resolved` keys would have —
+//     the same technique this repo's accepted worked example for this
+//     pattern already uses (memdb/owner_references_test.go's
+//     TestOwnerReferenceProjectionCapsProductPagesAndIgnoresLegacyRecords,
+//     cited by docs/runbooks/production-readiness-testing.md's Pattern 3)
+//     — and prove the *current* admission code reads and updates that
+//     shape correctly. This is additive-schema-evolution coverage, not a
+//     test of an actual old binary's behavior.
+//
+// If a real two-version harness (e.g. a vendored older struct definition,
+// or a second binary) is ever added to this repository, these tests should
+// be revisited to run against it directly.
+
 // makeFutureKindDocument builds a frontmatter document identifying as a kind
 // this build of gitstore-api does not recognize — standing in for a resource
 // kind introduced by a newer replica during a rolling upgrade (or, viewed

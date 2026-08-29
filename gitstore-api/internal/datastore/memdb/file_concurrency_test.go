@@ -72,6 +72,43 @@ func TestFileConcurrentCreateSameIdentity_ExactlyOneWinnerPersists(t *testing.T)
 	assert.Len(t, page.Items, 1, "the race must never leave more than one durable row for the identity")
 }
 
+// TestFileOwnerReferenceProjection_PreOwnerReferencesRecordRemainsReadable is
+// the File-shaped analogue of owner_references_test.go's
+// TestOwnerReferenceProjectionCapsProductPagesAndIgnoresLegacyRecords "pre-
+// ownerReferences record from a rolling upgrade remains readable" case —
+// the worked example this repo's production-readiness runbook
+// (docs/runbooks/production-readiness-testing.md, Pattern 3) cites for
+// rolling-upgrade coverage. It constructs a File with OwnerReferences,
+// Spec, and Status left entirely unset (Go zero values) — exactly what a
+// record predating those fields, or written by a code path that never
+// populates them, would look like on disk — and asserts the *current*
+// OwnerReferenceStore and CRUD paths read it back without error and
+// without a false-positive blocking dependent (spec 051 T040).
+func TestFileOwnerReferenceProjection_PreOwnerReferencesRecordRemainsReadable(t *testing.T) {
+	store, err := New()
+	require.NoError(t, err)
+	defer store.Close()
+	owners, ok := any(store).(datastore.OwnerReferenceStore)
+	require.True(t, ok)
+
+	legacy := &datastore.File{
+		UID: "00000000-0000-0000-0000-000000000300", Namespace: "ns", Name: "legacy-hero",
+		RepositoryID: "repo-1", ResourceVersion: "1", CreationTimestamp: time.Now(),
+		// OwnerReferences, Spec, and Status are deliberately never set.
+	}
+	require.NoError(t, store.CreateFile(context.Background(), legacy))
+
+	got, err := store.GetFileByName(context.Background(), "ns", "legacy-hero")
+	require.NoError(t, err)
+	assert.Nil(t, got.OwnerReferences)
+	assert.Nil(t, got.Spec)
+	assert.Nil(t, got.Status)
+
+	blocking, err := owners.HasBlockingOwnerDependents(context.Background(), datastore.OwnerReferenceScope{Namespace: "ns", RepositoryID: "repo-1"}, "any-owner-uid")
+	require.NoError(t, err)
+	assert.False(t, blocking, "a legacy File with no OwnerReferences must never be misread as a blocking dependent")
+}
+
 // TestFileConcurrentStatusUpdatesAreLinearizedByResourceVersion simulates two
 // or more replicas (or a replica racing its own retry) applying a status
 // patch built from the same stale resourceVersion snapshot concurrently.
