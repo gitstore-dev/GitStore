@@ -42,6 +42,7 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         REPO: ${{ github.repository }}
+        REF_TYPE: ${{ github.ref_type }}
         REF_NAME: ${{ github.ref_name }}
       run: |
         # docker/metadata-action's own latest=auto never applies `latest` to a
@@ -50,10 +51,14 @@ jobs:
         # This repo wants latest to track the newest build (prerelease
         # included) until the first stable release ships, then permanently
         # stop tracking prereleases. That needs explicit computation:
+        #   - a branch push (e.g. plain merges to main) is never latest-
+        #     eligible - latest is a property of a release, not of main.
         #   - a stable tag (no prerelease suffix) is always latest-eligible.
         #   - a prerelease tag is latest-eligible only if no stable release
         #     has ever been published.
-        if [[ "$REF_NAME" != v*-* ]]; then
+        if [ "$REF_TYPE" != "tag" ]; then
+          echo "latest_enable=false" >> "$GITHUB_OUTPUT"
+        elif [[ "$REF_NAME" != v*-* ]]; then
           echo "latest_enable=true" >> "$GITHUB_OUTPUT"
         else
           has_stable=$(gh release list --repo "$REPO" --json tagName,isPrerelease --limit 100 \

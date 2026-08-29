@@ -13,13 +13,23 @@ The two workflows (`release-please.yml` and `cd.yml`) are fully decoupled — `r
 
 ## Required One-Time Setup (manual, not in version control)
 
-**`RELEASE_PLEASE_TOKEN` repo secret — required, or nothing downstream ever fires.** `release-please.yml` passes `token: ${{ secrets.RELEASE_PLEASE_TOKEN }}` to the action. If this secret doesn't exist, the action silently falls back to nothing and the step fails, or (if you remove the `token:` line entirely) falls back to the default `GITHUB_TOKEN` — which GitHub explicitly documents as **not triggering other workflows**: commits/tags/PRs created by the default `GITHUB_TOKEN` don't fire `on: push`/`on: pull_request` events, to prevent recursive workflow runs. Concretely, without this secret: the release PR never gets CI checks run on it, and the tag Release Please pushes on merge never triggers `cd.yml` — so no versioned Docker images ever get built.
+**A GitHub App installation token — required, or nothing downstream ever fires.** `release-please.yml` mints a fresh token via `actions/create-github-app-token` and passes it to the release-please action. Without a real token here, the action falls back to the default `GITHUB_TOKEN` — which GitHub explicitly documents as **not triggering other workflows** (its own recursion-prevention: commits/tags/PRs created by the default token don't fire `on: push`/`on: pull_request` events). Concretely, without this: the release PR never gets CI checks run on it, and the tag Release Please pushes on merge never triggers `cd.yml` — so no versioned Docker images ever get built. This is [Release Please's own documented recommendation](https://github.com/googleapis/release-please-action#github-credentials), chosen over a plain Personal Access Token specifically because GitHub App installation tokens are minted fresh (1-hour lived) on every workflow run — no manual rotation, no expiry to track, ever.
 
-Create either:
-- A fine-grained **Personal Access Token** scoped to this repo with `contents: write` and `pull-requests: write`, stored as the `RELEASE_PLEASE_TOKEN` secret, or
-- A **GitHub App** installation token (Google's recommended approach — rotates automatically, no user account tied to it), minted via `actions/create-github-app-token` and passed through as `RELEASE_PLEASE_TOKEN`.
+**One-time setup, by a repo admin:**
 
-This must be done by a repo admin before the pipeline works end to end; it can't be expressed as a file in this repo.
+1. **Create the App**: GitHub → Settings → Developer settings → **GitHub Apps** → **New GitHub App** (org-level: `github.com/organizations/gitstore-dev/settings/apps/new`). Give it a name (e.g. `gitstore-release-bot`), any homepage URL, **uncheck "Active" under Webhook** (not needed).
+2. **Permissions** (under "Repository permissions" on the same creation page — same 3 categories you were configuring for the PAT):
+   - **Contents**: Read and write
+   - **Issues**: Read and write
+   - **Pull requests**: Read and write
+   - (**Metadata**: Read-only — set automatically, required, not optional.)
+3. **Generate a private key**: after creating the App, on its settings page, scroll to "Private keys" → **Generate a private key**. This downloads a `.pem` file — save it, you can't re-download it later (only generate a new one).
+4. **Install the App on this repo**: on the App's settings page → **Install App** → select `gitstore-dev/GitStore` → **Only select repositories** (not "All repositories").
+5. **Store 2 values in repo settings** (Settings → Secrets and variables → Actions):
+   - A repository **variable** (not secret — the client ID isn't sensitive) named `RELEASE_PLEASE_APP_CLIENT_ID`, value = the App's **Client ID** (shown on the App's settings page, *not* the numeric App ID).
+   - A repository **secret** named `RELEASE_PLEASE_APP_PRIVATE_KEY`, value = the full contents of the `.pem` file from step 3 (paste it as-is, including the `-----BEGIN/END-----` lines).
+
+This must be done before the pipeline works end to end; it can't be expressed as a file in this repo.
 
 ## Versioning Scheme
 
