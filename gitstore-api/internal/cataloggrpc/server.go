@@ -394,6 +394,9 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 	}
 	namespace, err := s.resolveNamespaceIdentifier(ctx, req.GetRepositoryId())
 	if err != nil {
+		s.log.Error("validate_category_taxonomy_deletion: cannot resolve namespace for repository",
+			zap.String("repository_id", req.GetRepositoryId()),
+			zap.Error(err))
 		return nil, grpcstatus.Error(codes.Unavailable, "category deletion validation unavailable")
 	}
 
@@ -445,6 +448,9 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 		// covers children authored in other repositories of the namespace.
 		owners, ok := s.store.(datastore.OwnerReferenceStore)
 		if !ok {
+			s.log.Error("validate_category_taxonomy_deletion: datastore does not implement OwnerReferenceStore",
+				zap.String("repository_id", req.GetRepositoryId()),
+				zap.String("namespace", namespace))
 			return nil, grpcstatus.Error(codes.Unavailable, "category deletion validation unavailable")
 		}
 		for _, operation := range deriveResourceAdmissionOperations(oldEntries, proposedEntries, nil) {
@@ -456,12 +462,23 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 				if errors.Is(lookupErr, datastore.ErrNotFound) {
 					continue
 				}
+				s.log.Error("validate_category_taxonomy_deletion: lookup category taxonomy failed",
+					zap.String("repository_id", req.GetRepositoryId()),
+					zap.String("namespace", operation.identity.Namespace),
+					zap.String("name", operation.identity.Name),
+					zap.Error(lookupErr))
 				return nil, grpcstatus.Error(codes.Unavailable, "category deletion validation unavailable")
 			}
 			cursor := ""
 			for {
 				page, listErr := owners.ListBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{Namespace: owner.Namespace, RepositoryID: owner.RepositoryID}, owner.UID, cursor, datastore.MaxOwnerDependentPageSize)
 				if listErr != nil {
+					s.log.Error("validate_category_taxonomy_deletion: list blocking owner dependents failed",
+						zap.String("repository_id", req.GetRepositoryId()),
+						zap.String("namespace", owner.Namespace),
+						zap.String("owner_uid", owner.UID),
+						zap.String("cursor", cursor),
+						zap.Error(listErr))
 					return nil, grpcstatus.Error(codes.Unavailable, "category deletion validation unavailable")
 				}
 				for _, dependent := range page.Items {
