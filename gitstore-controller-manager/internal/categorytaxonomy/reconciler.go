@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
@@ -161,7 +162,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 
 	parentResolvedCond := computeParentResolved(r.cache, current)
 	acyclicCond := computeAcyclic(inCycle[current.Name])
-	acyclicChanged := conditionStatusByType(current.Status.Conditions, conditionAcyclic) != acyclicCond.Status
+	// Case-insensitive: current.Status.Conditions comes from the real
+	// GraphQL list/watch path, where ConditionStatus is the enum wire
+	// value ("TRUE"/"FALSE"); acyclicCond.Status uses this package's
+	// internal "True"/"False" constants, normalized to the enum casing
+	// only later, on write, by graphql_status_client.go's
+	// normalizeConditionStatus. A case-sensitive compare here would never
+	// match against real traffic, making this always true and turning
+	// the reenqueue below into an unconditional one on every reconcile.
+	acyclicChanged := !strings.EqualFold(conditionStatusByType(current.Status.Conditions, conditionAcyclic), acyclicCond.Status)
 	fileRefCond := computeFileRefCondition(current)
 	readyCond := computeReady(parentResolvedCond, acyclicCond, fileRefCond)
 
