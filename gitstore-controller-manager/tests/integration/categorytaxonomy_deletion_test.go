@@ -57,10 +57,10 @@ func TestIntegration_CategoryDeletionResumesAfterControllerRestart(t *testing.T)
 		UID: "parent-uid", Namespace: "acme", Name: "parent", ResourceVersion: "5",
 		DeletionTimestamp: &deletedAt, Finalizers: []string{"gitstore.dev/foreground-deletion"},
 		Status: status.ResourceStatus{ResourceVersion: "5", Resolved: resolved, Conditions: []*status.Condition{
-			{Type: "ParentResolved", Status: "True", LastTransitionTime: deletedAt},
-			{Type: "Acyclic", Status: "True", LastTransitionTime: deletedAt},
-			{Type: "Ready", Status: "True", LastTransitionTime: deletedAt},
-			{Type: "Terminating", Status: "True", LastTransitionTime: deletedAt},
+			{Type: "ParentResolved", Status: "TRUE", LastTransitionTime: deletedAt},
+			{Type: "Acyclic", Status: "TRUE", LastTransitionTime: deletedAt},
+			{Type: "Ready", Status: "TRUE", LastTransitionTime: deletedAt},
+			{Type: "Terminating", Status: "TRUE", LastTransitionTime: deletedAt},
 		}},
 	}
 	categories := cache.New[categorytaxonomy.CategoryTaxonomy]()

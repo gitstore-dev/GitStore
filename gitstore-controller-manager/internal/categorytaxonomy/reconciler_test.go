@@ -123,9 +123,9 @@ func TestReconcile_NoOpWhenPatchMatchesCurrentStatus(t *testing.T) {
 		ResourceVersion: "1",
 		Resolved:        resolved,
 		Conditions: []*status.Condition{
-			{Type: "ParentResolved", Status: "True", LastTransitionTime: now},
-			{Type: "Acyclic", Status: "True", LastTransitionTime: now},
-			{Type: "Ready", Status: "True", LastTransitionTime: now},
+			{Type: "ParentResolved", Status: "TRUE", LastTransitionTime: now},
+			{Type: "Acyclic", Status: "TRUE", LastTransitionTime: now},
+			{Type: "Ready", Status: "TRUE", LastTransitionTime: now},
 		},
 	}
 	c := seedCache(t, root)
@@ -170,10 +170,10 @@ func TestReconcile_TerminatingCategoryDecouplesProductsThenCompletes(t *testing.
 		Status: status.ResourceStatus{
 			ResourceVersion: "4", Resolved: resolved,
 			Conditions: []*status.Condition{
-				{Type: "ParentResolved", Status: "True", LastTransitionTime: deletedAt},
-				{Type: "Acyclic", Status: "True", LastTransitionTime: deletedAt},
-				{Type: "Ready", Status: "True", LastTransitionTime: deletedAt},
-				{Type: "Terminating", Status: "True", LastTransitionTime: deletedAt},
+				{Type: "ParentResolved", Status: "TRUE", LastTransitionTime: deletedAt},
+				{Type: "Acyclic", Status: "TRUE", LastTransitionTime: deletedAt},
+				{Type: "Ready", Status: "TRUE", LastTransitionTime: deletedAt},
+				{Type: "Terminating", Status: "TRUE", LastTransitionTime: deletedAt},
 			},
 		},
 	}
@@ -201,10 +201,10 @@ func TestReconcile_TerminatingCategoryContinuesAfterBoundedProductPage(t *testin
 		Status: status.ResourceStatus{
 			ResourceVersion: "4", Resolved: resolved,
 			Conditions: []*status.Condition{
-				{Type: "ParentResolved", Status: "True", LastTransitionTime: deletedAt},
-				{Type: "Acyclic", Status: "True", LastTransitionTime: deletedAt},
-				{Type: "Ready", Status: "True", LastTransitionTime: deletedAt},
-				{Type: "Terminating", Status: "True", LastTransitionTime: deletedAt},
+				{Type: "ParentResolved", Status: "TRUE", LastTransitionTime: deletedAt},
+				{Type: "Acyclic", Status: "TRUE", LastTransitionTime: deletedAt},
+				{Type: "Ready", Status: "TRUE", LastTransitionTime: deletedAt},
+				{Type: "Terminating", Status: "TRUE", LastTransitionTime: deletedAt},
 			},
 		},
 	}
@@ -236,7 +236,7 @@ func TestReconcile_TerminationStatusIsVisibleBeforeLifecycleOperations(t *testin
 	conditions := statusClient.calls[0].Conditions
 	require.Condition(t, func() bool {
 		for _, condition := range conditions {
-			if condition.Type == "Terminating" && condition.Status == "True" && condition.Reason == "DeletionRequested" {
+			if condition.Type == "Terminating" && condition.Status == "TRUE" && condition.Reason == "DeletionRequested" {
 				return true
 			}
 		}
@@ -254,10 +254,10 @@ func TestReconcile_TerminatingCategoryRetriesDecouplingAndCompletionConflicts(t 
 		Namespace: "acme", Name: "electronics", ResourceVersion: "4",
 		DeletionTimestamp: &deletedAt, Finalizers: []string{datastoreForegroundDeletionFinalizer},
 		Status: status.ResourceStatus{ResourceVersion: "4", Resolved: resolved, Conditions: []*status.Condition{
-			{Type: "ParentResolved", Status: "True", LastTransitionTime: deletedAt},
-			{Type: "Acyclic", Status: "True", LastTransitionTime: deletedAt},
-			{Type: "Ready", Status: "True", LastTransitionTime: deletedAt},
-			{Type: "Terminating", Status: "True", LastTransitionTime: deletedAt},
+			{Type: "ParentResolved", Status: "TRUE", LastTransitionTime: deletedAt},
+			{Type: "Acyclic", Status: "TRUE", LastTransitionTime: deletedAt},
+			{Type: "Ready", Status: "TRUE", LastTransitionTime: deletedAt},
+			{Type: "Terminating", Status: "TRUE", LastTransitionTime: deletedAt},
 		}},
 	}
 	for name, deletion := range map[string]*fakeDeletionClient{
