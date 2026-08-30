@@ -310,6 +310,17 @@ Completed:
   backoff, confirms ambiguous commit outcomes by querying both replicas, and
   still fails permanent GraphQL errors immediately; focused tests cover peer
   conflict retry, permanent-error rejection, and ambiguous-success read-back;
+- the next production-size attempt ran the `cdc6711` hot-path binaries for
+  3,075.40 seconds, then stopped during replay preparation when transition
+  3,382 exhausted all six alternating-replica attempts with the same retryable
+  `NAMESPACE_CONFLICT` / `RESOURCE_VERSION_CONFLICT`. Both replicas remained
+  ready, the journal high-water reached 21,400, leader CDC lag was about 4.3 ms,
+  append errors remained zero, and `replay_events_total` remained zero. The
+  10,000-event replay, 1,000-subscriber soak, replacement, and CPU/RSS gates did
+  not start, so this is failure evidence rather than T061 completion. Replay
+  seeding is now deliberately single-writer because it creates retained
+  history rather than measuring load; the unchanged 20-worker pool remains
+  active for the measured sustained and burst phase;
 - the full replacement 60-minute/1,000-subscriber deployed gate remains
   pending and T061 is intentionally open until its emitted metrics are recorded
   here;

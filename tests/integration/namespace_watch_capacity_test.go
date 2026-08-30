@@ -609,7 +609,11 @@ func createCapacityRange(t *testing.T, client *http.Client, cfg capacityConfig, 
 	jobs := make(chan int)
 	errs := make(chan error, count)
 	var wg sync.WaitGroup
-	for range cfg.mutationWorkers {
+	// Replay preparation seeds retained history; it is not the measured load
+	// phase. Serialize it so spec-047's optimistic global commit boundary is not
+	// turned into an unrelated contention test. The soak below still uses the
+	// configured worker pool for sustained and burst traffic.
+	for range capacityReplayPreparationWorkers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -631,7 +635,10 @@ func createCapacityRange(t *testing.T, client *http.Client, cfg capacityConfig, 
 	}
 }
 
-const capacityReplayCreateAttempts = 6
+const (
+	capacityReplayPreparationWorkers = 1
+	capacityReplayCreateAttempts     = 6
+)
 
 func createCapacityNamespaceForReplay(client *http.Client, cfg capacityConfig, name string, sequence int) error {
 	primary, peer := cfg.apiA, cfg.apiB
