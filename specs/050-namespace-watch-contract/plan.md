@@ -185,6 +185,13 @@ missing projection causes a retry without progress advancement; an
 authoritative row already removed by create rollback suppresses the staged
 addition.
 
+Namespace deletion commits the authoritative `namespaces_by_uid` removal
+before changing its list and name projections. A rejected conditional delete
+therefore leaves the bootstrap list untouched. The materializer withholds the
+resulting DELETED event until `namespaces_by_bucket` no longer exposes the row,
+so a successful delete is always repaired by an event after any earlier
+bootstrap bookmark.
+
 Deletion marking/finalizer changes remain MODIFIED; only permanent row removal
 is DELETED.
 

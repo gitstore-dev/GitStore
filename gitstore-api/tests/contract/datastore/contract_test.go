@@ -789,9 +789,19 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		ns := newNamespace(datastore.NamespaceTierUser)
 		require.NoError(t, ds.CreateNamespace(ctx, ns))
 		assert.ErrorIs(t, ds.DeleteNamespaceWithResourceVersion(ctx, ns.UID, "stale"), datastore.ErrConflict)
+		got, err := ds.GetNamespaceByName(ctx, ns.Name)
+		require.NoError(t, err)
+		assert.Equal(t, ns.UID, got.UID, "a rejected delete must leave lookup projections intact")
+		listed, err := ds.ListNamespaces(ctx, datastore.PageParams{First: 100})
+		require.NoError(t, err)
+		listedAfterConflict := false
+		for _, candidate := range listed.Items {
+			listedAfterConflict = listedAfterConflict || candidate.UID == ns.UID
+		}
+		assert.True(t, listedAfterConflict, "a rejected delete must leave the bootstrap list intact")
 		require.NoError(t, ds.DeleteNamespaceWithResourceVersion(ctx, ns.UID, ns.ResourceVersion))
 
-		_, err := ds.GetNamespace(ctx, ns.UID)
+		_, err = ds.GetNamespace(ctx, ns.UID)
 		assert.ErrorIs(t, err, datastore.ErrNotFound)
 		_, err = ds.GetNamespaceByName(ctx, ns.Name)
 		assert.ErrorIs(t, err, datastore.ErrNotFound)

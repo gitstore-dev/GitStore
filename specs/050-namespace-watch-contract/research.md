@@ -84,6 +84,14 @@ acknowledged without inventing a successful event. This preserves the
 bootstrap list/watch boundary without treating a query projection as an event
 source.
 
+Deletion uses the inverse ordering: the authoritative LWT commits before list
+and name projections are removed. A conflicting or failed LWT cannot
+transiently hide an otherwise unchanged Namespace from a bootstrap list. For a
+successful delete, the CDC materializer waits until the exact
+`namespaces_by_bucket` row is absent before publishing DELETED. A bootstrap
+that still saw the projection therefore starts before that DELETED cursor and
+will drain the event; a bootstrap at or after the event cannot list the row.
+
 **Rationale**: CDC has multiple streams, so its native clustering order is only
 per stream. A global sequence gives every API replica one stable replay order.
 Bucketed event partitions prevent an unbounded hot partition while the singleton

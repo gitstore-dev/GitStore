@@ -139,6 +139,17 @@ roles:
 	}
 }
 
+func TestDevelopmentControllerPolicyAllowsNamespaceWatch(t *testing.T) {
+	policyPath := filepath.Join("..", "..", "..", "..", "..", "config", "policy.yaml")
+	p, err := New(config.RBACConfig{PolicyFile: policyPath}, zap.NewNop())
+	require.NoError(t, err)
+
+	principal := &authpkg.Principal{Subject: "controller", Roles: []string{"controller"}, AuthMethod: "static-token"}
+	decision, err := p.Authorize(context.Background(), principal, "namespace.watch", authpkg.ResourceContext{})
+	require.NoError(t, err)
+	assert.Equal(t, authpkg.OutcomeAllow, decision.Outcome)
+}
+
 func TestRBACLocal_DefaultDenyAbsent_DefaultsToTrue(t *testing.T) {
 	// Policy with no default_deny key — should secure-default to deny for unmatched actions.
 	policy := `version: v1

@@ -51,6 +51,7 @@ func (s *scyllaDatastore) RunNamespaceCDC(ctx context.Context, materializer *wat
 	factory := &namespaceCDCConsumerFactory{
 		sequencer:     sequencer,
 		additionReady: s.namespaceCDCAdditionReady,
+		deletionReady: s.namespaceCDCDeletionReady,
 	}
 	reader, err := scyllacdc.NewReader(runCtx, &scyllacdc.ReaderConfig{
 		Session:               s.session.Session,
@@ -98,6 +99,7 @@ func (l zapCDCLogger) Printf(format string, values ...interface{}) {
 type namespaceCDCConsumerFactory struct {
 	sequencer     *namespaceCDCSequencer
 	additionReady func(context.Context, *datastore.Namespace) (bool, error)
+	deletionReady func(context.Context, *datastore.Namespace) (bool, error)
 }
 
 func (f *namespaceCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, input scyllacdc.CreateChangeConsumerInput) (scyllacdc.ChangeConsumer, error) {
@@ -113,6 +115,7 @@ func (f *namespaceCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, 
 		streamID:      streamID,
 		reporter:      input.ProgressReporter,
 		additionReady: f.additionReady,
+		deletionReady: f.deletionReady,
 	}, nil
 }
 
@@ -121,6 +124,7 @@ type namespaceCDCConsumer struct {
 	streamID      string
 	reporter      *scyllacdc.ProgressReporter
 	additionReady func(context.Context, *datastore.Namespace) (bool, error)
+	deletionReady func(context.Context, *datastore.Namespace) (bool, error)
 }
 
 func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Change) error {
@@ -159,6 +163,10 @@ func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Cha
 	if before == nil && after != nil && c.additionReady != nil {
 		request.shouldPublish = func(publishCtx context.Context) (bool, error) {
 			return c.additionReady(publishCtx, after)
+		}
+	} else if before != nil && after == nil && c.deletionReady != nil {
+		request.shouldPublish = func(publishCtx context.Context) (bool, error) {
+			return c.deletionReady(publishCtx, before)
 		}
 	}
 	return c.sequencer.Submit(ctx, request)
@@ -412,6 +420,36 @@ func (s *scyllaDatastore) namespaceCDCAdditionReady(ctx context.Context, namespa
 		return false, fmt.Errorf("read Namespace CDC authoritative row: %w", err)
 	}
 	return false, fmt.Errorf("namespace CDC listing projection is not committed")
+}
+
+// namespaceCDCDeletionReady prevents a DELETED event from crossing the public
+// journal linearization point while the deleted Namespace is still visible in
+// the list projection. Namespace deletion commits the authoritative row first,
+// so a failed conditional delete never transiently removes the projection. A
+// successful delete remains repairable by the later DELETED event until this
+// check observes that projection cleanup has completed.
+func (s *scyllaDatastore) namespaceCDCDeletionReady(ctx context.Context, namespace *datastore.Namespace) (bool, error) {
+	if namespace == nil {
+		return false, nil
+	}
+	uid, err := gocql.ParseUUID(namespace.UID)
+	if err != nil {
+		return false, fmt.Errorf("parse Namespace CDC deletion uid: %w", err)
+	}
+	var indexRow struct {
+		UID gocql.UUID `db:"uid"`
+	}
+	err = s.session.Query(
+		"SELECT uid FROM namespaces_by_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?",
+		nil,
+	).WithContext(ctx).Bind(namespaceBucket(namespace.CreationTimestamp), namespace.CreationTimestamp, uid).GetRelease(&indexRow)
+	if errors.Is(err, gocql.ErrNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read Namespace CDC listing projection: %w", err)
+	}
+	return false, fmt.Errorf("namespace CDC listing projection deletion is not committed")
 }
 
 func namespaceCDCSequenceLess(left, right namespaceCDCSequenceRequest) bool {
