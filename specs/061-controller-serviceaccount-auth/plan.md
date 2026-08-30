@@ -115,7 +115,8 @@ gitstore-api/cmd/gitctl/
 
 gitstore-controller-manager/
 ├── internal/
-│   ├── config/config.go                          # new ServiceAccountNamespace/ServiceAccountName/ServiceAccountKeyID/ServiceAccountPrivateKeyFile config keys; ApiToken's doc comment updated to "deprecated dev/CI fallback"
+│   ├── config/config.go                          # new ServiceAccountNamespace/ServiceAccountName/ServiceAccountKeyID/ServiceAccountKeyRef (an ADR 0001 SecretRef, not a path)/SecretProviderBootstrap config keys; ApiToken's doc comment updated to "deprecated dev/CI fallback"
+│   ├── secret/                                   # NEW (ADR 0009 §3): bootstrap-tier SecretResolver — Ref/BootstrapProviderConfig types, file + env providers, ADR 0001 error classes, fail-closed. Prerequisite for the credential source below
 │   └── graphqlclient/
 │       ├── client.go                               # Client.token string → Client.credentials CredentialSource; do()/Subscribe() call credentials.Current(ctx)
 │       ├── credential.go                           # NEW: CredentialSource interface, Credential struct, StaticToken, ServiceAccountSource

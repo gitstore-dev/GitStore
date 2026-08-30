@@ -147,14 +147,25 @@ type ControllerConfig struct {
 	// ...existing ApiURI/ApiToken/... unchanged; ApiToken's doc comment
 	// updated to state it is a deprecated dev/CI fallback used only when no
 	// ServiceAccount signer below is configured...
-	ServiceAccountNamespace    string `mapstructure:"serviceaccount_namespace"`     // GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE, e.g. "controllers"
-	ServiceAccountName        string `mapstructure:"serviceaccount_name"`          // GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME, default "category-taxonomy"
-	ServiceAccountKeyID       string `mapstructure:"serviceaccount_key_id"`        // GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID
-	ServiceAccountPrivateKeyFile string `mapstructure:"serviceaccount_private_key_file"` // GITSTORE_CONTROLLER__SERVICEACCOUNT__PRIVATE_KEY_FILE
+	ServiceAccountNamespace string `mapstructure:"serviceaccount_namespace"` // GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE, e.g. "controllers"
+	ServiceAccountName      string `mapstructure:"serviceaccount_name"`      // GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME, default "category-taxonomy"
+	ServiceAccountKeyID     string `mapstructure:"serviceaccount_key_id"`    // GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID
+
+	// ServiceAccountKeyRef locates the signing private key as an ADR 0001
+	// SecretRef, resolved through a bootstrap-tier SecretResolver per
+	// ADR 0009 §3. This deliberately replaces a bespoke
+	// GITSTORE_CONTROLLER__SERVICEACCOUNT__PRIVATE_KEY_FILE path: components
+	// MUST NOT read secret material directly from a filesystem path.
+	ServiceAccountKeyRef secret.Ref `mapstructure:"serviceaccount_key_ref"` // GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__{NAME,KEY}
+
+	// SecretProviderBootstrap binds the bootstrap-tier provider (file | env |
+	// k8s | vault | aws-secrets-manager). "file" is the local-development and
+	// Docker-Compose default. ADR 0009 §3.
+	SecretProviderBootstrap secret.BootstrapProviderConfig `mapstructure:"secret_provider_bootstrap"` // GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__*
 }
 ```
 
-Precedence (FR-015): if `ServiceAccountPrivateKeyFile` is set, `ServiceAccountSource` is used; otherwise, if `ApiToken` is set, `StaticToken` is used; otherwise, startup fails (no credential source configured at all) — mirroring today's existing `ApiToken`-required validation, just made conditional on no signer being configured.
+Precedence (FR-015): if `ServiceAccountKeyRef` is set, `ServiceAccountSource` is used, with the key resolved at startup through the configured bootstrap-tier resolver; otherwise, if `ApiToken` is set, `StaticToken` is used; otherwise, startup fails (no credential source configured at all) — mirroring today's existing `ApiToken`-required validation, just made conditional on no signer being configured. A bootstrap resolution failure is fatal and fails closed using ADR 0001's error classes (`NotFound`, `MissingKey`, `Forbidden`, `ProviderUnavailable`), never silently degrading to `StaticToken`.
 
 ## 5. `gitstore-controller-manager`-side `Credential`/`CredentialSource` shapes
 

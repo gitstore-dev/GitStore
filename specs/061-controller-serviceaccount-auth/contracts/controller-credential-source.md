@@ -37,7 +37,11 @@ client := graphqlclient.New(cfg.Controller.ApiURI, cfg.Controller.ApiToken)
 
 ```go
 // main(): constructed exactly once
-credentials, err := buildCredentialSource(cfg, log) // StaticToken or ServiceAccountSource, per precedence below
+resolver, err := secret.NewBootstrapResolver(cfg.Controller.SecretProviderBootstrap, log) // ADR 0009 §3
+if err != nil {
+    log.Fatal("failed to build bootstrap secret resolver", zap.Error(err))
+}
+credentials, err := buildCredentialSource(ctx, cfg, resolver, log) // StaticToken or ServiceAccountSource, per precedence below
 if err != nil {
     log.Fatal("failed to build credential source", zap.Error(err))
 }
@@ -55,14 +59,22 @@ wrapper: `NewWithCredentialSource(baseURL, StaticToken{Token: token})`.
 
 ## `buildCredentialSource` precedence (FR-015)
 
-1. If `cfg.Controller.ServiceAccountPrivateKeyFile != ""`: construct a
-   `ServiceAccountSource` (namespace/name/keyID/private key loaded from that
-   file). Takes precedence over `ApiToken` whenever configured.
+1. If `cfg.Controller.ServiceAccountKeyRef` is set: resolve that ADR 0001
+   `SecretRef` through the configured **bootstrap-tier** `SecretResolver`
+   (ADR 0009 §3), and construct a `ServiceAccountSource` from the
+   namespace/name/keyID plus the resolved private key. Takes precedence over
+   `ApiToken` whenever configured. A resolution failure is **fatal and fails
+   closed** — it MUST NOT fall through to step 2.
 2. Else if `cfg.Controller.ApiToken != ""`: construct a `StaticToken` —
    the deprecated dev/CI compatibility path (FR-014), unmodified in behavior.
 3. Else: fail startup with an actionable error naming both config surfaces —
    mirrors today's existing single-check `ApiToken`-required validation, made
    conditional rather than removed.
+
+Per ADR 0009 §1, the private key is never read directly via `os.ReadFile` from a
+configured path; the `type: file` bootstrap provider is the supported
+local-development equivalent and keeps provider topology out of the
+component's own code.
 
 ## `ServiceAccountSource` renewal behavior (User Story 4)
 

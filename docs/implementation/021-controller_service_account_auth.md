@@ -407,7 +407,13 @@ controller.api_token                   GITSTORE_CONTROLLER__API_TOKEN          #
 controller.serviceaccount_namespace    GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE  ""   # e.g. "controllers"
 controller.serviceaccount_name         GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME       "category-taxonomy"
 controller.serviceaccount_key_id       GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID      ""
-controller.serviceaccount_private_key_file GITSTORE_CONTROLLER__SERVICEACCOUNT__PRIVATE_KEY_FILE ""
+# Signing key is an ADR 0001 SecretRef resolved through a bootstrap-tier
+# SecretResolver (ADR 0009 §3) — NOT a raw filesystem path. The earlier
+# controller.serviceaccount_private_key_file draft is superseded.
+controller.serviceaccount_key_ref.name GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME ""
+controller.serviceaccount_key_ref.key  GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY  "privateKey"
+controller.secret_provider_bootstrap.type      GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__TYPE      "file"
+controller.secret_provider_bootstrap.base_path GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH "/etc/gitstore/secrets"
 ```
 
 The ServiceAccount record is a datastore-only authentication-runtime resource. Its namespace/name, UID, disabled state, and enrolled public keys must be implemented through `datastore.Datastore` in both `go-memdb` and ScyllaDB from the first implementation phase. An in-memory record is not an acceptable starting point because API restart would erase the trust anchor and force re-enrollment. An assertion `jti` replay cache and the active-WebSocket index may remain in memory for the initial single-instance profile; multi-replica deployment requires a shared replay store and a revocation broadcast mechanism.
