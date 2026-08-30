@@ -87,27 +87,33 @@ func TestNamespaceWatchBoundsPerStreamProgressAcrossGenerations(t *testing.T) {
 func TestNamespaceWatchHidesStagedNamespaceFromBootstrapReads(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
-	now := time.Now().UTC().Truncate(time.Millisecond)
-	namespace := &datastore.Namespace{
-		APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace", UID: newID(),
-		Name: "staged-" + newID()[:8], Title: "Staged", Tier: datastore.NamespaceTierUser,
-		ResourceVersion: "1", Generation: 1, CreationTimestamp: now, UpdateTimestamp: now,
+	now := time.Now().UTC().Truncate(time.Millisecond).Add(-3 * time.Second)
+	namespaces := make([]*datastore.Namespace, 3)
+	for i := range namespaces {
+		namespaces[i] = &datastore.Namespace{
+			APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace", UID: newID(),
+			Name: fmt.Sprintf("staged-page-%d-%s", i, newID()[:8]), Title: "Staged", Tier: datastore.NamespaceTierUser,
+			ResourceVersion: "1", Generation: 1, CreationTimestamp: now.Add(time.Duration(i) * time.Second), UpdateTimestamp: now.Add(time.Duration(i) * time.Second),
+		}
+		require.NoError(t, store.CreateNamespace(ctx, namespaces[i]))
 	}
-	require.NoError(t, store.CreateNamespace(ctx, namespace))
+	staged := namespaces[1]
 
 	raw := newRawSession(t)
 	require.NoError(t, raw.Query("UPDATE namespaces_by_uid SET watch_committed=? WHERE uid=?").
-		Bind(false, namespace.UID).Exec())
+		Bind(false, staged.UID).Exec())
 	raw.Close()
 
-	_, err := store.GetNamespace(ctx, namespace.UID)
+	_, err := store.GetNamespace(ctx, staged.UID)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
-	_, err = store.GetNamespaceByName(ctx, namespace.Name)
+	_, err = store.GetNamespaceByName(ctx, staged.Name)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
-	listed, err := store.ListNamespaces(ctx, datastore.PageParams{First: 100})
+	listed, err := store.ListNamespaces(ctx, datastore.PageParams{First: 1})
 	require.NoError(t, err)
+	require.Len(t, listed.Items, 1)
+	require.True(t, listed.HasNext, "staged N+1 row must not hide the next committed Namespace")
 	for _, item := range listed.Items {
-		require.NotEqual(t, namespace.UID, item.UID)
+		require.NotEqual(t, staged.UID, item.UID)
 	}
 }
 

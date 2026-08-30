@@ -2196,9 +2196,25 @@ func (s *scyllaDatastore) GetNamespaceByName(ctx context.Context, name string) (
 func (s *scyllaDatastore) ListNamespaces(ctx context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {
 	limit := page.Limit()
 	backward := page.Last > 0
-	rows := make([]namespaceIndexRow, 0, limit+1)
+	// Fetch beyond N+1 so transient create-saga rows cannot consume the page
+	// lookahead. If staged rows exceed the bounded allowance, fail closed and
+	// let the bootstrap retry instead of returning an incomplete snapshot.
+	const stagedScanAllowance = 1024
+	rawFetchLimit := limit + 1 + stagedScanAllowance + 1
+	rows := make([]namespaceIndexRow, 0, rawFetchLimit)
 	for _, bucket := range namespaceBucketsForPage(page, time.Now().UTC()) {
+		remaining := rawFetchLimit - len(rows)
+		if remaining <= 0 {
+			break
+		}
 		bucketPage := page
+		if backward {
+			bucketPage.First = 0
+			bucketPage.Last = max(1, remaining-1)
+		} else {
+			bucketPage.First = max(1, remaining-1)
+			bucketPage.Last = 0
+		}
 		if page.After != "" && !cursorInNamespaceBucket(page.After, bucket) {
 			bucketPage.After = ""
 		}
@@ -2211,8 +2227,8 @@ func (s *scyllaDatastore) ListNamespaces(ctx context.Context, page datastore.Pag
 			return nil, fmt.Errorf("scylla: list namespaces bucket %s: %w", bucket, err)
 		}
 		rows = append(rows, bucketRows...)
-		if len(rows) >= limit+1 {
-			rows = rows[:limit+1]
+		if len(rows) >= rawFetchLimit {
+			rows = rows[:rawFetchLimit]
 			break
 		}
 	}
@@ -2230,6 +2246,12 @@ func (s *scyllaDatastore) ListNamespaces(ctx context.Context, page datastore.Pag
 			return nil, fmt.Errorf("scylla: hydrate listed namespace: %w", err)
 		}
 		namespaces = append(namespaces, namespace)
+		if len(namespaces) >= limit+1 {
+			break
+		}
+	}
+	if len(namespaces) < limit+1 && len(rows) >= rawFetchLimit {
+		return nil, fmt.Errorf("scylla: list namespaces exceeded staged-row scan allowance %d", stagedScanAllowance)
 	}
 
 	return buildPageResult(namespaces, limit, page), nil
