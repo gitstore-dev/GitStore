@@ -40,6 +40,9 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
+	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vektah/gqlparser/v2/ast"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -82,6 +85,30 @@ type Server struct {
 	grpcListener     net.Listener
 	rbacReloader     policyReloader
 	providerShutdown []providerShutdowner
+	namespaceWatch   *namespaceWatchRuntime
+}
+
+type namespaceCDCRunner interface {
+	RunNamespaceCDC(context.Context, *watchjournal.Materializer, datastore.NamespaceWatchLease, time.Duration, func()) error
+}
+
+type namespaceWatchRuntime struct {
+	journal      datastore.NamespaceWatchJournal
+	materializer *watchjournal.Materializer
+	leaseManager *watchjournal.LeaseManager
+	readiness    *watchjournal.Readiness
+	metrics      *watchjournal.Metrics
+	runner       namespaceCDCRunner
+	cfg          config.NamespaceWatchConfig
+	log          *zap.Logger
+	cancel       context.CancelFunc
+}
+
+func namespaceWatchMetrics(runtime *namespaceWatchRuntime) *watchjournal.Metrics {
+	if runtime == nil {
+		return nil
+	}
+	return runtime.metrics
 }
 
 // NewServer builds the API, Git HTTP, and catalog gRPC servers from config.
@@ -94,11 +121,50 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	}
 	clock := apiruntime.SystemClock{}
 
-	store, err := dsfactory.NewDatastore(cfg.Datastore, log)
+	rawStore, err := dsfactory.NewDatastore(cfg.Datastore, log)
 	if err != nil {
 		return nil, fmt.Errorf("create datastore: %w", err)
 	}
-	store = datastore.NewInstrumentedDatastore(store, cfg.Datastore.Backend, log)
+	var namespaceWatch *namespaceWatchRuntime
+	var namespaceJournal datastore.NamespaceWatchJournal
+	if cfg.Watch.Namespace.ReadersEnabled || cfg.Watch.Namespace.MaterializerEnabled {
+		journal, journalErr := dsfactory.NamespaceWatchJournal(rawStore)
+		if journalErr != nil {
+			_ = rawStore.Close()
+			return nil, fmt.Errorf("create Namespace watch journal: %w", journalErr)
+		}
+		namespaceJournal = journal
+		metrics, metricsErr := watchjournal.NewMetrics(prometheus.DefaultRegisterer)
+		if metricsErr != nil {
+			_ = rawStore.Close()
+			return nil, fmt.Errorf("register Namespace watch metrics: %w", metricsErr)
+		}
+		clock := apiruntime.SystemClock{}
+		namespaceWatch = &namespaceWatchRuntime{
+			journal: journal,
+			materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{
+				EventTTL:         time.Duration(cfg.Watch.Namespace.JournalRetentionSeconds) * time.Second,
+				BookmarkInterval: time.Duration(cfg.Watch.Namespace.BookmarkIntervalSeconds) * time.Second,
+				Clock:            clock,
+				Metrics:          metrics,
+			}),
+			leaseManager: watchjournal.NewLeaseManager(
+				journal,
+				uuid.NewString(),
+				time.Duration(cfg.Watch.Namespace.LeaseTTLSeconds)*time.Second,
+				time.Duration(cfg.Watch.Namespace.LeaseRenewIntervalSeconds)*time.Second,
+				clock,
+			),
+			readiness: watchjournal.NewReadiness(time.Duration(cfg.Watch.Namespace.MaxMaterializerLagSeconds) * time.Second),
+			metrics:   metrics,
+			cfg:       cfg.Watch.Namespace,
+			log:       log,
+		}
+		if runner, ok := rawStore.(namespaceCDCRunner); ok {
+			namespaceWatch.runner = runner
+		}
+	}
+	store := datastore.NewInstrumentedDatastore(rawStore, cfg.Datastore.Backend, log)
 	ids := apiruntime.UUIDGenerator{}
 
 	gitClient, err := gitclient.NewClientWithAddr(cfg.Git.Grpc.Uri, cfg.Auth.Grpc.HmacSecret)
@@ -140,6 +206,9 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		Clock:                        clock,
 		IDs:                          ids,
 		EventBus:                     eventBus,
+		NamespaceJournal:             namespaceJournal,
+		NamespaceWatch:               cfg.Watch.Namespace,
+		NamespaceMetrics:             namespaceWatchMetrics(namespaceWatch),
 		NamespaceRepositoryFenceMode: namespaceRepositoryFenceMode,
 		RateLimitPerSecond:           cfg.Api.RateLimitPerSecond,
 		RateLimitBurst:               cfg.Api.RateLimitBurst,
@@ -150,7 +219,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, err
 	}
 
-	router := healthHandler(gqlRouter, store, log, clock)
+	router := healthHandler(gqlRouter, store, log, clock, namespaceWatch)
 	var graphQlHandler http.Handler = router
 
 	httpServer := &http.Server{
@@ -209,6 +278,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		grpcListener:     grpcListener,
 		rbacReloader:     rbacReloader,
 		providerShutdown: providerShutdowns,
+		namespaceWatch:   namespaceWatch,
 	}, nil
 }
 
@@ -223,6 +293,9 @@ type GraphQLHandlerDeps struct {
 	// EventBus backs the watchCategories/watchResources subscription
 	// resolvers (spec 040). Optional — nil disables watch subscriptions.
 	EventBus                     *eventbus.Bus
+	NamespaceJournal             datastore.NamespaceWatchJournal
+	NamespaceWatch               config.NamespaceWatchConfig
+	NamespaceMetrics             *watchjournal.Metrics
 	NamespaceRepositoryFenceMode resolver.NamespaceRepositoryFenceMode
 	// RateLimitPerSecond/RateLimitBurst configure the per-client-IP token
 	// bucket guarding /graphql. A zero RateLimitPerSecond falls back to
@@ -246,6 +319,9 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 		Clock:                        deps.Clock,
 		IDGenerator:                  deps.IDs,
 		EventBus:                     deps.EventBus,
+		NamespaceJournal:             deps.NamespaceJournal,
+		NamespaceWatch:               deps.NamespaceWatch,
+		NamespaceMetrics:             deps.NamespaceMetrics,
 		NamespaceRepositoryFenceMode: deps.NamespaceRepositoryFenceMode,
 	})
 	if err != nil {
@@ -312,12 +388,27 @@ func playgroundHandler(c *gin.Context) {
 	h.ServeHTTP(c.Writer, c.Request)
 }
 
-func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock) *gin.Engine {
+func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock, namespaceWatch *namespaceWatchRuntime) *gin.Engine {
+	var namespaceWatchReady func(context.Context) error
+	if namespaceWatch != nil {
+		namespaceWatchReady = func(ctx context.Context) error {
+			bounds, err := namespaceWatch.journal.Bounds(ctx)
+			if err != nil {
+				return err
+			}
+			maxLag := time.Duration(namespaceWatch.cfg.MaxMaterializerLagSeconds) * time.Second
+			if bounds.UpdatedAt.IsZero() || time.Since(bounds.UpdatedAt) > maxLag {
+				return watchjournal.ErrMaterializerNotReady
+			}
+			return nil
+		}
+	}
 	healthHandler := health.NewHandler(health.HandlerDeps{
-		Store:   store,
-		Logger:  log,
-		Version: version,
-		Clock:   clock,
+		Store:               store,
+		Logger:              log,
+		Version:             version,
+		Clock:               clock,
+		NamespaceWatchReady: namespaceWatchReady,
 	})
 
 	router.GET("/health", healthHandler.Health)
@@ -385,6 +476,11 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 
 // Start starts all servers in background goroutines.
 func (s *Server) Start() {
+	if s.namespaceWatch != nil && s.namespaceWatch.cfg.MaterializerEnabled {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.namespaceWatch.cancel = cancel
+		go s.namespaceWatch.run(ctx)
+	}
 	// Listen for SIGHUP to trigger a live policy reload on rbac-local.
 	if s.rbacReloader != nil {
 		sigCh := make(chan os.Signal, 1)
@@ -444,6 +540,9 @@ func (s *Server) Shutdown(ctx context.Context) {
 
 // Close releases non-server resources.
 func (s *Server) Close() {
+	if s.namespaceWatch != nil && s.namespaceWatch.cancel != nil {
+		s.namespaceWatch.cancel()
+	}
 	for _, p := range s.providerShutdown {
 		p.Shutdown()
 	}
@@ -455,5 +554,73 @@ func (s *Server) Close() {
 	}
 	if s.store != nil {
 		_ = s.store.Close()
+	}
+}
+
+func (r *namespaceWatchRuntime) run(ctx context.Context) {
+	retry := time.NewTicker(time.Second)
+	defer retry.Stop()
+	for {
+		lease, acquired, err := r.leaseManager.Acquire(ctx)
+		if err != nil {
+			r.log.Error("Namespace materializer lease acquisition failed", zap.Error(err))
+		} else if acquired {
+			r.runAsLeader(ctx, lease)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-retry.C:
+		}
+	}
+}
+
+func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datastore.NamespaceWatchLease) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	r.metrics.SetLeader(true)
+	defer r.metrics.SetLeader(false)
+
+	errCh := make(chan error, 2)
+	go func() { errCh <- r.leaseManager.Maintain(ctx, lease) }()
+	if r.runner != nil {
+		ready := make(chan struct{})
+		go func() {
+			errCh <- r.runner.RunNamespaceCDC(ctx, r.materializer, lease, time.Duration(r.cfg.CDCRetentionSeconds)*time.Second, func() { close(ready) })
+		}()
+		select {
+		case <-parent.Done():
+			return
+		case err := <-errCh:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				r.log.Warn("Namespace materializer failed before CDC readiness", zap.Error(err))
+			}
+			return
+		case <-ready:
+		}
+	}
+	if _, err := r.materializer.AppendBookmark(ctx, lease); err != nil {
+		r.log.Error("Namespace materializer initial bookmark failed", zap.Error(err))
+		return
+	}
+	r.readiness.Update(watchjournal.MaterializerStatus{LastProgressAt: time.Now().UTC(), JournalContinuous: true})
+	bookmark := time.NewTicker(time.Duration(r.cfg.BookmarkIntervalSeconds) * time.Second)
+	defer bookmark.Stop()
+	for {
+		select {
+		case <-parent.Done():
+			return
+		case err := <-errCh:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				r.log.Warn("Namespace materializer leadership ended", zap.Error(err))
+			}
+			return
+		case <-bookmark.C:
+			if _, err := r.materializer.AppendBookmark(ctx, lease); err != nil {
+				r.log.Error("Namespace materializer bookmark failed", zap.Error(err))
+				return
+			}
+			r.readiness.Update(watchjournal.MaterializerStatus{LastProgressAt: time.Now().UTC(), JournalContinuous: true})
+		}
 	}
 }

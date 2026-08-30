@@ -242,6 +242,10 @@ func TestRunMigrations_UsesTenDayGCGrace(t *testing.T) {
 		if strings.HasSuffix(tableName, "$paxos") || strings.HasPrefix(tableName, "schema_migrations") {
 			continue
 		}
+		if tableName == "namespaces_by_uid_scylla_cdc_log" {
+			assert.Equalf(t, 0, gcGraceSeconds, "Scylla-managed CDC log %s", tableName)
+			continue
+		}
 		assert.Equalf(t, 864000, gcGraceSeconds, "table %s", tableName)
 	}
 	require.NoError(t, iter.Close())
@@ -275,7 +279,18 @@ func TestRunMigrations_SupportedRollbackArtifactRetainsForwardMigrationSet(t *te
 	)
 	require.ErrorContains(t, err, "database is ahead")
 
-	supportedRollbackMigrations := migrationSetThrough(t, "005_namespace_repository_fence.cql")
+	preWatchBinaryMigrations := migrationSetThrough(t, "005_namespace_repository_fence.cql")
+	err = scylla.RunMigrationsWithFS(
+		ctx,
+		session,
+		scyllaKeyspace,
+		uuid.New().String(),
+		log,
+		preWatchBinaryMigrations,
+	)
+	require.ErrorContains(t, err, "database is ahead")
+
+	supportedRollbackMigrations := migrationSetThrough(t, "006_namespace_watch_cdc.cql")
 	require.NoError(t, scylla.RunMigrationsWithFS(
 		ctx,
 		session,

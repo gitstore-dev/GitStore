@@ -1,6 +1,8 @@
 # Environment
 .env
 .env.local
+.env*
+!.env.example
 
 # Rust
 target/
@@ -19,7 +21,9 @@ target/
 *.so
 *.dylib
 *.test
+*.out
 *.prof
+vendor/
 coverage.out
 cover.out
 .coverprofile
@@ -41,6 +45,7 @@ yarn-error.log*
 .idea/
 *.swp
 *.swo
+*.tmp
 *~
 
 # OS

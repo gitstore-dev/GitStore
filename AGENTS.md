@@ -33,6 +33,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - No new storage or schema changes. `gitstore-api` gains no new datastore field — Product admission already carries `RepositoryID`/`Namespace`/`Name` and the `categoryRef.name` needed to identify affected categories; the eventbus itself is in-memory-only per its existing design (no durability across restart, per spec 040 research.md R2/R3, unchanged here). `gitstore-controller-manager` gains a new in-memory Product cache (mirroring the existing `CategoryTaxonomy` cache), no persistent storage. (042-product-category-count)
 - Go 1.25 (`gitstore-api`) + existing `gocqlx/v3 v3.0.4`, `gocql`, `go-memdb v1.3.5`, `go.uber.org/zap`, and `prometheus/client_golang`; no new dependency (048-scylla-query-design)
 - ScyllaDB 5.x+ query-specific denormalized tables with `go-memdb` as the development and contract-test backend (048-scylla-query-design)
+- Go 1.25 (`gitstore-api`); gqlgen v0.17.90 generated GraphQL contracts + Existing gocqlx/gocql Scylla stack, go-memdb, gqlgen WebSocket transport, zap, Prometheus client; new `github.com/scylladb/scylla-cdc-go v1.2.1` for production CDC stream/topology/progress handling (050-namespace-watch-contract)
+- Migration 006 enables full-preimage/postimage CDC with 14-day TTL on `namespaces_by_uid` and adds bounded journal clock/events, CDC progress, and materializer lease tables. Memdb uses an in-process implementation of the same journal contract for development. No spec-047 Namespace row fields change. (050-namespace-watch-contract)
 
 ## Commands
 
@@ -81,9 +83,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 050-namespace-watch-contract: Added Go 1.25 (`gitstore-api`); gqlgen v0.17.90 generated GraphQL contracts + Existing gocqlx/gocql Scylla stack, go-memdb, gqlgen WebSocket transport, zap, Prometheus client; new `github.com/scylladb/scylla-cdc-go v1.2.1` for production CDC stream/topology/progress handling
 - 042-product-category-count: Added Go 1.25 (`gitstore-api`, `gitstore-controller-manager`) + existing `gitstore-api/internal/eventbus.Bus` (spec 040, already used by `CategoryTaxonomy`'s `publishCategoryTaxonomyEvent`); existing generic `watchResources`/`WatchEvent` GraphQL subscription contract (spec 040, kind-agnostic — no schema change needed to carry `"Product"` as a `kind` value); existing `gitstore-controller-manager/internal/listwatch.ListWatcher[T]`/`Watcher[T]`/`Runner[T]` (spec 036, already implemented once for `CategoryTaxonomyListWatcher`); existing `gitstore-controller-manager/internal/cache.Cache[T]`/`EventHandler[T]` (spec 026, already used for the category→parent-category enqueue pattern); existing `gitstore-controller-manager/internal/manager.Manager.Enqueue` (spec 026); existing `gitstore-controller-manager/internal/graphqlclient.Client` (spec 039). No new dependency is introduced in either module.
 - 041-namespace-repo-finalizers: Adds real `HasRepositories`/`HasCatalogResources` existence checks to the `Datastore` interface, replacing the `hasRepositories()` stub in `gitstore-api/internal/graph/resolver/service.go` that always returned `false`; enforces `deleteNamespace`/`deleteRepository` preconditions per ADR-0002/ADR-0003 steps 1-2 only (synchronous check-then-reject, not the async `Terminating`/finalizer state machine, which is out of scope pending a `Status` field and controller neither resource has yet); adds `gitstore-system` auto-provisioning to `createNamespace`
-- 039-category-taxonomy-reconciler: Added Go 1.25 (`gitstore-controller-manager`) + existing `internal/types.Reconciler`/`ReconcileResult` (spec 026), existing `internal/status.StatusClient`/`StatusPatch` (spec 026, extended by spec 040 with `Resolved json.RawMessage`), existing `internal/listwatch.ListWatcher[T]`/`Watcher[T]`/`Runner[T]` (spec 036), existing `internal/cache.Cache[T]`/`CacheAccessor[T]`; new GraphQL client for `POST /graphql` + `graphql-transport-ws` subscriptions
 
 
 <!-- MANUAL ADDITIONS START -->
@@ -119,7 +121,7 @@ Common bootstrap variables:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/047-namespace-admission-matrix/plan.md
+at specs/050-namespace-watch-contract/plan.md
 <!-- SPECKIT END -->
 
 ## graphify

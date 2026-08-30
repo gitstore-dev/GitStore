@@ -23,6 +23,7 @@ type Config struct {
 	Cache     CacheConfig     `mapstructure:"cache"`
 	Datastore DatastoreConfig `mapstructure:"datastore"`
 	Features  FeatureConfig   `mapstructure:"features"`
+	Watch     WatchConfig     `mapstructure:"watch"`
 	Log       LogConfig       `mapstructure:"log"`
 }
 
@@ -114,6 +115,31 @@ type FeatureConfig struct {
 	NamespaceRepositoryFence string `mapstructure:"namespace_repository_fence"`
 }
 
+// WatchConfig holds per-kind durable watch settings.
+type WatchConfig struct {
+	Namespace NamespaceWatchConfig `mapstructure:"namespace"`
+}
+
+// NamespaceWatchConfig bounds the Namespace CDC materializer and journal.
+// Integer time values keep TOML/environment configuration explicit and are
+// converted to durations at the watch boundary.
+type NamespaceWatchConfig struct {
+	ReadersEnabled            bool `mapstructure:"readers_enabled"`
+	MaterializerEnabled       bool `mapstructure:"materializer_enabled"`
+	JournalRetentionSeconds   int  `mapstructure:"journal_retention_seconds" validate:"min=1"`
+	CDCRetentionSeconds       int  `mapstructure:"cdc_retention_seconds" validate:"min=1"`
+	BucketSize                int  `mapstructure:"bucket_size" validate:"min=1"`
+	ReadBatchSize             int  `mapstructure:"read_batch_size" validate:"min=1"`
+	MaxReplayEvents           int  `mapstructure:"max_replay_events" validate:"min=1"`
+	SubscriberBuffer          int  `mapstructure:"subscriber_buffer" validate:"min=1"`
+	PollMinMillis             int  `mapstructure:"poll_min_millis" validate:"min=1"`
+	PollMaxMillis             int  `mapstructure:"poll_max_millis" validate:"min=1"`
+	BookmarkIntervalSeconds   int  `mapstructure:"bookmark_interval_seconds" validate:"min=1"`
+	LeaseTTLSeconds           int  `mapstructure:"lease_ttl_seconds" validate:"min=1"`
+	LeaseRenewIntervalSeconds int  `mapstructure:"lease_renew_interval_seconds" validate:"min=1"`
+	MaxMaterializerLagSeconds int  `mapstructure:"max_materializer_lag_seconds" validate:"min=1"`
+}
+
 // LogConfig holds logger settings.
 type LogConfig struct {
 	Level  string `mapstructure:"level"`
@@ -191,6 +217,20 @@ func load(path string) (*Config, error) {
 	v.SetDefault("datastore.scylla.password", "")
 	v.SetDefault("datastore.scylla.tls", false)
 	v.SetDefault("features.namespace_repository_fence", "auto")
+	v.SetDefault("watch.namespace.readers_enabled", false)
+	v.SetDefault("watch.namespace.materializer_enabled", false)
+	v.SetDefault("watch.namespace.journal_retention_seconds", 7*24*60*60)
+	v.SetDefault("watch.namespace.cdc_retention_seconds", 14*24*60*60)
+	v.SetDefault("watch.namespace.bucket_size", 4096)
+	v.SetDefault("watch.namespace.read_batch_size", 256)
+	v.SetDefault("watch.namespace.max_replay_events", 100000)
+	v.SetDefault("watch.namespace.subscriber_buffer", 64)
+	v.SetDefault("watch.namespace.poll_min_millis", 100)
+	v.SetDefault("watch.namespace.poll_max_millis", 2000)
+	v.SetDefault("watch.namespace.bookmark_interval_seconds", 30)
+	v.SetDefault("watch.namespace.lease_ttl_seconds", 30)
+	v.SetDefault("watch.namespace.lease_renew_interval_seconds", 10)
+	v.SetDefault("watch.namespace.max_materializer_lag_seconds", 60)
 
 	// Config discovery is optional for compatibility; an explicit path is not.
 	if path != "" {
@@ -239,6 +279,13 @@ func load(path string) (*Config, error) {
 		"datastore.scylla.keyspace": true, "datastore.scylla.username": true,
 		"datastore.scylla.password": true, "datastore.scylla.tls": true,
 		"features.namespace_repository_fence": true,
+		"watch.namespace.readers_enabled":     true, "watch.namespace.materializer_enabled": true,
+		"watch.namespace.journal_retention_seconds": true, "watch.namespace.cdc_retention_seconds": true,
+		"watch.namespace.bucket_size": true, "watch.namespace.read_batch_size": true,
+		"watch.namespace.max_replay_events": true, "watch.namespace.subscriber_buffer": true,
+		"watch.namespace.poll_min_millis": true, "watch.namespace.poll_max_millis": true,
+		"watch.namespace.bookmark_interval_seconds": true, "watch.namespace.lease_ttl_seconds": true,
+		"watch.namespace.lease_renew_interval_seconds": true, "watch.namespace.max_materializer_lag_seconds": true,
 	}
 	sharedServiceKey := func(k string) bool {
 		for _, prefix := range []string{"controller.", "grpc.", "hooks.", "schema_validation.", "admission_control.", "catalog_service."} {
@@ -282,7 +329,26 @@ func validateConfig(cfg *Config) error {
 	if err := validateFeatureConfig(&cfg.Features); err != nil {
 		return err
 	}
+	if err := validateNamespaceWatchConfig(&cfg.Watch.Namespace); err != nil {
+		return err
+	}
 	return validateLogFormat(&cfg.Log)
+}
+
+func validateNamespaceWatchConfig(w *NamespaceWatchConfig) error {
+	if w.CDCRetentionSeconds < w.JournalRetentionSeconds {
+		return fmt.Errorf("invalid Namespace watch bounds: CDC retention must be at least journal retention")
+	}
+	if w.ReadBatchSize > w.BucketSize {
+		return fmt.Errorf("invalid Namespace watch bounds: read batch size must not exceed bucket size")
+	}
+	if w.PollMinMillis > w.PollMaxMillis {
+		return fmt.Errorf("invalid Namespace watch bounds: minimum poll interval must not exceed maximum")
+	}
+	if w.LeaseRenewIntervalSeconds >= w.LeaseTTLSeconds {
+		return fmt.Errorf("invalid Namespace watch bounds: lease renewal interval must be less than lease TTL")
+	}
+	return nil
 }
 
 // validateDatastoreConfig validates backend selection and ScyllaDB settings.
@@ -364,6 +430,8 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddString("datastore.backend", c.Datastore.Backend)
 	enc.AddString("datastore.scylla.password", redact(c.Datastore.Scylla.Password))
 	enc.AddString("features.namespace_repository_fence", c.Features.NamespaceRepositoryFence)
+	enc.AddBool("watch.namespace.readers_enabled", c.Watch.Namespace.ReadersEnabled)
+	enc.AddBool("watch.namespace.materializer_enabled", c.Watch.Namespace.MaterializerEnabled)
 	return nil
 }
 

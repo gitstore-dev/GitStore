@@ -19,16 +19,16 @@
 - [x] Success criteria are technology-agnostic (no implementation details) — stated as consumer-observable outcomes.
 - [x] All acceptance scenarios are defined — 3 user stories, each with Given/When/Then acceptance scenarios.
 - [x] Edge cases are identified — 5 edge cases covering empty state, Terminating-vs-Deleted distinction, post-removal resume, at-least-once delivery, and the absent-deletionTimestamp trap.
-- [x] Scope is clearly bounded — FR-012 and the Assumptions section enumerate explicit non-goals (no cascade-delete design, no new mutation semantics, no new payload field, no dedicated typed subscription).
-- [x] Dependencies and assumptions identified — Clarifications and Assumptions sections record the relationship to spec 040 and spec 046, and the already-implemented status of the mechanism.
+- [x] Scope is clearly bounded — FR-012 and PR-007 preserve spec-047 admission/deletion semantics and exclude cascade deletion, while FR-014 and FR-018–FR-024 explicitly include the typed subscription and replica-safe watch infrastructure.
+- [x] Dependencies and assumptions identified — Clarifications and Assumptions record the relationship to specs 040, 046, and shipped spec 047; planning evidence corrected the former assumption that process-local watch history was already replica-safe.
 
 ## Feature Readiness
 
 - [x] All functional requirements have clear acceptance criteria — each FR maps to at least one user-story acceptance scenario or success criterion.
 - [x] User scenarios cover primary flows — initial list-then-watch establishment, resume/expiry, and documentation/discoverability.
-- [x] Feature meets measurable outcomes defined in Success Criteria — SC-001 through SC-006 cover every FR.
+- [x] Feature meets measurable outcomes defined in Success Criteria — SC-001 through SC-013 cover typed contract, replay/expiry, replica safety, authorization, backpressure, rolling recovery, and sustained capacity.
 - [x] No implementation details leak into specification — see Content Quality notes above.
 
 ## Notes
 
-- This is a formalize-and-verify specification for an already-implemented mechanism (confirmed by reading `gitstore-api/internal/eventbus`, `gitstore-api/internal/graph/resolver/watch.go` and `namespace.resolvers.go`, `gitstore-api/internal/graph/resolver/schema.resolvers.go`, and `gitstore-controller-manager/internal/listwatch/namespace_listwatcher.go` directly), not a greenfield design. All checklist items pass on the first validation pass; no iteration was required.
+- The first draft treated the existing process-local mechanism as sufficient. Planning against the current multi-replica constitution found that assumption invalid and expanded the feature to own a durable Namespace-only CDC journal, explicit AuthZ, backpressure/expiry, bookmarks, observability, rollout, and load validation while preserving shipped spec-047 behavior.

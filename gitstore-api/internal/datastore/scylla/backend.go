@@ -27,6 +27,7 @@ import (
 // scyllaDatastore implements datastore.Datastore backed by ScyllaDB.
 type scyllaDatastore struct {
 	session                           gocqlx.Session
+	keyspace                          string
 	log                               *zap.Logger
 	productByNamespaceTable           *table.Table
 	productByNameTable                *table.Table
@@ -316,6 +317,7 @@ func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) 
 
 	return &scyllaDatastore{
 		session:                           gocqlx.NewSession(rawSession),
+		keyspace:                          cfg.Keyspace,
 		log:                               log,
 		productByNamespaceTable:           ProductByNamespace,
 		productByNameTable:                ProductByName,

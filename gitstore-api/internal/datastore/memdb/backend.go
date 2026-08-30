@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/google/uuid"
 	gomemdb "github.com/hashicorp/go-memdb"
 )
 
@@ -148,6 +150,13 @@ func decodeCursor(cursor string) (*datastore.PageCursor, error) {
 // memdbDatastore implements datastore.Datastore using hashicorp/go-memdb.
 type memdbDatastore struct {
 	db *gomemdb.MemDB
+
+	namespaceWatchMu       sync.RWMutex
+	namespaceWatchEpoch    string
+	namespaceWatchSequence uint64
+	namespaceWatchEvents   []datastore.NamespaceWatchEvent
+	namespaceWatchLease    datastore.NamespaceWatchLease
+	namespaceWatchProgress map[string]datastore.NamespaceCDCProgress
 }
 
 // New creates an empty in-memory datastore backed by go-memdb.
@@ -156,7 +165,11 @@ func New() (datastore.Datastore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("memdb: failed to initialise: %w", err)
 	}
-	return &memdbDatastore{db: db}, nil
+	return &memdbDatastore{
+		db:                     db,
+		namespaceWatchEpoch:    uuid.NewString(),
+		namespaceWatchProgress: make(map[string]datastore.NamespaceCDCProgress),
+	}, nil
 }
 
 func (m *memdbDatastore) Close() error { return nil }
@@ -901,6 +914,7 @@ func (m *memdbDatastore) CreateNamespace(_ context.Context, ns *datastore.Namesp
 		return fmt.Errorf("memdb: insert namespace: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedNamespace(datastore.NamespaceWatchAdded, stored)
 	return nil
 }
 
@@ -965,6 +979,7 @@ func (m *memdbDatastore) UpdateNamespace(_ context.Context, ns *datastore.Namesp
 		return fmt.Errorf("memdb: update namespace: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedNamespace(datastore.NamespaceWatchModified, ns)
 	return nil
 }
 
@@ -1002,6 +1017,7 @@ func (m *memdbDatastore) MarkNamespaceDeletion(_ context.Context, ns *datastore.
 		return fmt.Errorf("memdb: mark namespace deletion: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedNamespace(datastore.NamespaceWatchModified, ns)
 	return nil
 }
 
@@ -1016,7 +1032,9 @@ func (m *memdbDatastore) DeleteNamespace(_ context.Context, uid string) error {
 		txn.Abort()
 		return fmt.Errorf("memdb: delete namespace: %w", err)
 	}
+	deleted := normalizedNamespaceCopy(raw.(*datastore.Namespace))
 	txn.Commit()
+	m.recordCommittedNamespace(datastore.NamespaceWatchDeleted, deleted)
 	return nil
 }
 
@@ -1036,7 +1054,9 @@ func (m *memdbDatastore) DeleteNamespaceWithResourceVersion(_ context.Context, u
 		txn.Abort()
 		return fmt.Errorf("memdb: delete namespace with resource version: %w", err)
 	}
+	deleted := normalizedNamespaceCopy(current)
 	txn.Commit()
+	m.recordCommittedNamespace(datastore.NamespaceWatchDeleted, deleted)
 	return nil
 }
 

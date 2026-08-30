@@ -133,6 +133,31 @@ For config files, admin auth keys are nested under `[auth.admin]` (for example, 
 See [Namespace admission operations](runbooks/namespace-admission.md) for the
 mandatory mixed-version ingress/AuthZ deny and rollback procedure.
 
+### Namespace watch journal
+
+The Namespace watch is disabled by default and must be rolled out migration
+first. All time values are integers in seconds or milliseconds as named.
+
+| Key | Environment variable | Default | Bound / purpose |
+|---|---|---:|---|
+| `watch.namespace.readers_enabled` | `GITSTORE_WATCH__NAMESPACE__READERS_ENABLED` | `false` | Enables typed and generic Namespace journal readers. |
+| `watch.namespace.materializer_enabled` | `GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED` | `false` | Allows this replica to contend for the fenced CDC materializer lease. |
+| `watch.namespace.journal_retention_seconds` | `GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS` | `604800` | Seven-day journal TTL. |
+| `watch.namespace.cdc_retention_seconds` | `GITSTORE_WATCH__NAMESPACE__CDC_RETENTION_SECONDS` | `1209600` | Fourteen-day CDC TTL; must be at least journal retention. |
+| `watch.namespace.bucket_size` | `GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE` | `4096` | Maximum sequences per journal partition bucket. |
+| `watch.namespace.read_batch_size` | `GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE` | `256` | Replay/poll page; must not exceed bucket size. |
+| `watch.namespace.max_replay_events` | `GITSTORE_WATCH__NAMESPACE__MAX_REPLAY_EVENTS` | `100000` | Resume ceiling before `WATCH_EXPIRED`. |
+| `watch.namespace.subscriber_buffer` | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER` | `64` | Per-subscription delivery buffer; overflow fails closed. |
+| `watch.namespace.poll_min_millis` | `GITSTORE_WATCH__NAMESPACE__POLL_MIN_MILLIS` | `100` | Minimum journal poll delay. |
+| `watch.namespace.poll_max_millis` | `GITSTORE_WATCH__NAMESPACE__POLL_MAX_MILLIS` | `2000` | Maximum adaptive poll delay; must be at least poll-min. |
+| `watch.namespace.bookmark_interval_seconds` | `GITSTORE_WATCH__NAMESPACE__BOOKMARK_INTERVAL_SECONDS` | `30` | Durable idle BOOKMARK interval. |
+| `watch.namespace.lease_ttl_seconds` | `GITSTORE_WATCH__NAMESPACE__LEASE_TTL_SECONDS` | `30` | Materializer lease TTL. |
+| `watch.namespace.lease_renew_interval_seconds` | `GITSTORE_WATCH__NAMESPACE__LEASE_RENEW_INTERVAL_SECONDS` | `10` | Renewal interval; must be less than lease TTL. |
+| `watch.namespace.max_materializer_lag_seconds` | `GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS` | `60` | Reader readiness freshness ceiling. |
+
+See [Namespace watch contract](namespace/namespace-watch.md) and the
+[controller watch/status runbook](runbooks/controller-watch-status.md).
+
 ### Scylla projection operations
 
 `gitctl` reads the same Scylla environment variables for offline projection

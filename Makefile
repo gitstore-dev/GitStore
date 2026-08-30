@@ -35,12 +35,19 @@ SCYLLA_CAPACITY_PRODUCTS ?= 5000000
 SCYLLA_CAPACITY_CONCURRENCY ?= 32
 SCYLLA_CAPACITY_DURATION ?= 10m
 NAMESPACE_CAPACITY_DURATION ?= 30m
+NAMESPACE_WATCH_CAPACITY_DURATION ?= 60m
+NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS ?= 1000
+NAMESPACE_WATCH_API_A ?= http://localhost:4000
+NAMESPACE_WATCH_API_B ?= http://localhost:4001
+NAMESPACE_WATCH_API_REPLACEMENT ?=
+NAMESPACE_WATCH_TOKEN ?=
+NAMESPACE_WATCH_OVERFLOW_TRANSITIONS ?=
 
 export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CACHE
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
 .PHONY: help git api controller dev compose scylla compose-scylla ps logs stop down validate-local-config compose-config-check
-.PHONY: build test lint license-check pr-ready test-scylla-hardening test-scylla-integration test-scylla-capacity test-namespace-admission-capacity
+.PHONY: build test lint license-check pr-ready test-scylla-hardening test-scylla-integration test-scylla-capacity test-namespace-admission-capacity test-namespace-watch-capacity test-namespace-watch-recovery
 .PHONY: bootstrap bootstrap-token bootstrap-namespace bootstrap-repository git-clean-data
 .PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools gen-admin-password gen-jwt-secret gen-hmac-secret
 
@@ -60,6 +67,10 @@ help: ## Show available targets and common variables.
 	@printf "  SCYLLA_CAPACITY_CONCURRENCY=%s\n" "$(SCYLLA_CAPACITY_CONCURRENCY)"
 	@printf "  SCYLLA_CAPACITY_DURATION=%s\n" "$(SCYLLA_CAPACITY_DURATION)"
 	@printf "  NAMESPACE_CAPACITY_DURATION=%s\n" "$(NAMESPACE_CAPACITY_DURATION)"
+	@printf "  NAMESPACE_WATCH_CAPACITY_DURATION=%s\n" "$(NAMESPACE_WATCH_CAPACITY_DURATION)"
+	@printf "  NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS=%s\n" "$(NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS)"
+	@printf "  NAMESPACE_WATCH_API_A=%s NAMESPACE_WATCH_API_B=%s\n" "$(NAMESPACE_WATCH_API_A)" "$(NAMESPACE_WATCH_API_B)"
+	@printf "  NAMESPACE_WATCH_TOKEN=<token> Required for the cross-replica Namespace watch probe\n"
 	@printf "  BOOTSTRAP_TOKEN=<token>   Use an existing bearer token for bootstrap\n"
 	@printf "  NAMESPACE=%s REPOSITORY=%s DEFAULT_BRANCH=%s\n" "$(NAMESPACE)" "$(REPOSITORY)" "$(DEFAULT_BRANCH)"
 
@@ -189,6 +200,22 @@ test-namespace-admission-capacity: ## Run the opt-in two-replica Namespace admis
 		GITSTORE_NAMESPACE_CAPACITY_DURATION="$(NAMESPACE_CAPACITY_DURATION)" \
 		GITSTORE_NAMESPACE_CAPACITY_RUN=1 \
 		go test -count=1 -timeout 0 -run '^TestNamespaceValidationCapacity$$' ./internal/cataloggrpc
+
+test-namespace-watch-capacity: ## Run the opt-in 60-minute Namespace watch capacity gate.
+	@cd "$(API_DIR)" && \
+		GITSTORE_NAMESPACE_WATCH_CAPACITY_DURATION="$(NAMESPACE_WATCH_CAPACITY_DURATION)" \
+		GITSTORE_NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS="$(NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS)" \
+		GITSTORE_NAMESPACE_WATCH_CAPACITY_RUN=1 \
+		go test -count=1 -timeout 0 -run '^TestNamespaceWatchCapacity$$' ./internal/watchjournal
+
+test-namespace-watch-recovery: ## Probe bootstrap/resume, replacement, expiry, and overflow across two API replicas.
+	@cd "$(ROOT)/tests/integration" && \
+		NAMESPACE_WATCH_API_A="$(NAMESPACE_WATCH_API_A)" \
+		NAMESPACE_WATCH_API_B="$(NAMESPACE_WATCH_API_B)" \
+		NAMESPACE_WATCH_API_REPLACEMENT="$(NAMESPACE_WATCH_API_REPLACEMENT)" \
+		NAMESPACE_WATCH_TOKEN="$(NAMESPACE_WATCH_TOKEN)" \
+		NAMESPACE_WATCH_OVERFLOW_TRANSITIONS="$(NAMESPACE_WATCH_OVERFLOW_TRANSITIONS)" \
+		go test -count=1 -run '^TestNamespaceWatch(CrossReplicaBootstrapAndResume|RecoveryProbe|DocumentedConsumer)$$' .
 
 lint: ## Run Rust formatting/clippy and Go formatting/vet/staticcheck.
 	@cd "$(GIT_SERVICE_DIR)" && cargo fmt --all -- --check

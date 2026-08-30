@@ -104,7 +104,6 @@ func (r *mutationResolver) updateNamespaceStatusGeneric(ctx context.Context, inp
 		}
 		return nil, gqlerror.Errorf("update resource status: %v", err)
 	}
-	r.publishNamespaceStatusEvent(namespace)
 	return &model.UpdateResourceStatusPayload{Object: namespaceToJSONMap(namespace)}, nil
 }
 

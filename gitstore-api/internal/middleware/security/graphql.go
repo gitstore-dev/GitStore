@@ -297,9 +297,11 @@ func (a *Authorize) authorizeSubscription(
 	switch fc.Field.Name {
 	case "watchFiles":
 		kind = "File"
+	case "watchNamespaces":
+		kind = "Namespace"
 	case "watchResources":
 		kind, _ = directStringArg(fc.Args, "kind")
-		if kind != "File" {
+		if kind != "File" && kind != "Namespace" {
 			return next(ctx)
 		}
 	default:
@@ -308,11 +310,15 @@ func (a *Authorize) authorizeSubscription(
 	if authz == nil {
 		return nil, gqlerror.Errorf("authorization service unavailable")
 	}
-	namespace, _ := directStringArg(fc.Args, "namespace")
 	action := lowerCamelFirst(kind) + ".watch"
+	resource := auth.ResourceContext{Kind: kind, Attrs: map[string]any{}}
+	if kind == "File" {
+		namespace, _ := directStringArg(fc.Args, "namespace")
+		resource.Attrs["namespace"] = namespace
+	}
 	decision, err := authz.Authorize(ctx, principal, action, auth.ResourceContext{
-		Kind:  kind,
-		Attrs: map[string]any{"namespace": namespace},
+		Kind:  resource.Kind,
+		Attrs: resource.Attrs,
 	})
 	if err != nil {
 		return nil, gqlerror.Errorf("authorization error")

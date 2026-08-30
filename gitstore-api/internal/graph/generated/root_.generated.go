@@ -402,6 +402,13 @@ type ComplexityRoot struct {
 		ObservedGeneration  func(childComplexity int) int
 	}
 
+	NamespaceWatchEvent struct {
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Type            func(childComplexity int) int
+	}
+
 	ObjectMeta struct {
 		Annotations       func(childComplexity int) int
 		CreationTimestamp func(childComplexity int) int
@@ -750,6 +757,7 @@ type ComplexityRoot struct {
 	Subscription struct {
 		WatchCategories func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchFiles      func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchNamespaces func(childComplexity int, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchProducts   func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchResources  func(childComplexity int, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 	}
@@ -2363,6 +2371,34 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.NamespaceStatus.ObservedGeneration(childComplexity), true
 
+	case "NamespaceWatchEvent.name":
+		if e.ComplexityRoot.NamespaceWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceWatchEvent.Name(childComplexity), true
+
+	case "NamespaceWatchEvent.namespace":
+		if e.ComplexityRoot.NamespaceWatchEvent.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceWatchEvent.Namespace(childComplexity), true
+
+	case "NamespaceWatchEvent.resourceVersion":
+		if e.ComplexityRoot.NamespaceWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceWatchEvent.ResourceVersion(childComplexity), true
+
+	case "NamespaceWatchEvent.type":
+		if e.ComplexityRoot.NamespaceWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.NamespaceWatchEvent.Type(childComplexity), true
+
 	case "ObjectMeta.annotations":
 		if e.ComplexityRoot.ObjectMeta.Annotations == nil {
 			break
@@ -3847,6 +3883,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.WatchFiles(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
+	case "Subscription.watchNamespaces":
+		if e.ComplexityRoot.Subscription.WatchNamespaces == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchNamespaces_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchNamespaces(childComplexity, args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
 
 	case "Subscription.watchProducts":
 		if e.ComplexityRoot.Subscription.WatchProducts == nil {
@@ -5588,6 +5636,29 @@ extend type Mutation {
   Permanently delete a terminating namespace after its repositories are gone.
   """
   completeNamespaceDeletion(input: CompleteNamespaceDeletionInput!): CompleteNamespaceDeletionPayload!
+}
+
+extend type Subscription {
+  """
+  Canonical cluster-scoped Namespace watch. The bootstrap sentinel establishes
+  a high-water BOOKMARK before the caller lists Namespaces. A retained cursor
+  resumes strictly after that event; continuity failures return WATCH_EXPIRED.
+  """
+  watchNamespaces(
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): NamespaceWatchEvent!
+}
+
+"""
+Strongly typed Namespace journal event. resourceVersion is an opaque durable
+journal cursor and is distinct from namespace.metadata.resourceVersion.
+"""
+type NamespaceWatchEvent {
+  type: WatchEventType!
+  name: String!
+  resourceVersion: String!
+  namespace: Namespace
 }
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/product.graphqls", Input: `# Product Resource — Kubernetes-style GraphQL Schema
@@ -7519,6 +7590,20 @@ func (ec *executionContext) childFields_NamespaceStatus(ctx context.Context, fie
 		return ec.fieldContext_NamespaceStatus_conditions(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type NamespaceStatus", field.Name)
+}
+
+func (ec *executionContext) childFields_NamespaceWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_NamespaceWatchEvent_type(ctx, field)
+	case "name":
+		return ec.fieldContext_NamespaceWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_NamespaceWatchEvent_resourceVersion(ctx, field)
+	case "namespace":
+		return ec.fieldContext_NamespaceWatchEvent_namespace(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type NamespaceWatchEvent", field.Name)
 }
 
 func (ec *executionContext) childFields_ObjectMeta(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

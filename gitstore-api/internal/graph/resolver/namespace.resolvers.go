@@ -10,10 +10,9 @@ import (
 	"errors"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
-	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
+	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
@@ -23,8 +22,6 @@ func (r *mutationResolver) CreateNamespace(ctx context.Context, input model.Crea
 	if err != nil {
 		return nil, err
 	}
-	r.publishNamespaceEvent(eventbus.Added, ns)
-
 	return &model.CreateNamespacePayload{
 		Namespace: DatastoreNamespaceToGraphQL(ns),
 	}, nil
@@ -36,7 +33,6 @@ func (r *mutationResolver) UpdateNamespace(ctx context.Context, input model.Upda
 	if err != nil {
 		return nil, err
 	}
-	r.publishNamespaceEvent(eventbus.Modified, ns)
 	return &model.UpdateNamespacePayload{Namespace: DatastoreNamespaceToGraphQL(ns)}, nil
 }
 
@@ -50,13 +46,6 @@ func (r *mutationResolver) DeleteNamespace(ctx context.Context, input model.Dele
 	if err != nil {
 		return nil, err
 	}
-	if outcome == namespaceadmission.DeletionOutcomeTerminationStarted {
-		terminating, getErr := r.service.GetNamespaceByName(ctx, input.Identifier)
-		if getErr == nil {
-			r.publishNamespaceStatusEvent(terminating)
-		}
-	}
-
 	return &model.DeleteNamespacePayload{
 		DeletedIdentifier: input.Identifier,
 		Outcome:           model.NamespaceDeletionOutcome(outcome),
@@ -73,9 +62,6 @@ func (r *mutationResolver) CompleteNamespaceDeletion(ctx context.Context, input 
 	}
 	if err != nil {
 		return nil, err
-	}
-	if deleted != nil {
-		r.publishNamespaceDeletedEvent(deleted)
 	}
 	return &model.CompleteNamespaceDeletionPayload{DeletedIdentifier: &input.Identifier}, nil
 }
@@ -113,4 +99,64 @@ func (r *queryResolver) Namespaces(ctx context.Context, first *int32, after *str
 		return nil, err
 	}
 	return BuildNamespaceConnection(result), nil
+}
+
+// WatchNamespaces is the resolver for the watchNamespaces field.
+func (r *subscriptionResolver) WatchNamespaces(ctx context.Context, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.NamespaceWatchEvent, error) {
+	if r.namespaceSubscriber == nil || !r.namespaceWatch.ReadersEnabled {
+		return nil, namespaceWatchGraphQLError(&watchjournal.TerminalError{Code: watchjournal.CodeUnavailable, Reason: "MATERIALIZER_NOT_READY"})
+	}
+	rawCursor := ""
+	if resourceVersion != nil {
+		rawCursor = *resourceVersion
+	}
+	stream, err := r.namespaceSubscriber.SubscribePath(ctx, rawCursor, "typed")
+	if err != nil {
+		return nil, namespaceWatchGraphQLError(err)
+	}
+	out := make(chan *model.NamespaceWatchEvent, r.namespaceWatch.SubscriberBuffer)
+	go func() {
+		defer close(out)
+		events := stream.Events
+		errorsOut := stream.Errors
+		for events != nil || errorsOut != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case streamErr, ok := <-errorsOut:
+				if !ok {
+					errorsOut = nil
+					continue
+				}
+				if streamErr != nil {
+					addNamespaceWatchSubscriptionError(ctx, namespaceWatchGraphQLError(streamErr))
+					return
+				}
+			case event, ok := <-events:
+				if !ok {
+					events = nil
+					continue
+				}
+				namespace, decodeErr := namespaceFromJournalEvent(event)
+				if decodeErr != nil {
+					addNamespaceWatchSubscriptionError(ctx, decodeErr)
+					return
+				}
+				if !namespaceJournalEventMatchesSelector(namespace, selector) {
+					continue
+				}
+				converted, convertErr := NamespaceJournalEventToGraphQL(event, namespace)
+				if convertErr != nil {
+					addNamespaceWatchSubscriptionError(ctx, convertErr)
+					return
+				}
+				select {
+				case out <- converted:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }

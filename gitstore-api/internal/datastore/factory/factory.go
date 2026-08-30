@@ -26,3 +26,14 @@ func NewDatastore(cfg config.DatastoreConfig, log *zap.Logger) (datastore.Datast
 		return nil, fmt.Errorf("invalid datastore backend %q; valid values: memdb, scylla", cfg.Backend)
 	}
 }
+
+// NamespaceWatchJournal resolves the optional watch capability before callers
+// wrap the datastore with instrumentation that intentionally exposes only the
+// core Datastore interface.
+func NamespaceWatchJournal(store datastore.Datastore) (datastore.NamespaceWatchJournal, error) {
+	capable, ok := store.(datastore.NamespaceWatchCapable)
+	if !ok || capable.NamespaceWatchJournal() == nil {
+		return nil, fmt.Errorf("datastore does not implement the Namespace watch journal capability")
+	}
+	return capable.NamespaceWatchJournal(), nil
+}

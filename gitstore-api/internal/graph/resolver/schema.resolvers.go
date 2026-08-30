@@ -101,6 +101,12 @@ func (r *queryResolver) CatalogVersion(ctx context.Context) (*model.CatalogVersi
 
 // WatchResources is the resolver for the watchResources field.
 func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.WatchEvent, error) {
+	if kind == "Namespace" {
+		if namespace != nil && *namespace != "" {
+			return nil, &gqlerror.Error{Message: "Namespace watch is cluster-scoped and does not accept namespace", Extensions: map[string]any{"code": "BAD_USER_INPUT"}}
+		}
+		return r.watchNamespaceResources(ctx, selector, resourceVersion)
+	}
 	if r.eventBus == nil {
 		return nil, gqlerror.Errorf("watch subscriptions are not available")
 	}
@@ -108,11 +114,7 @@ func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, 
 	if resourceVersion != nil {
 		rv = *resourceVersion
 	}
-	bootstrap := kind == "Namespace" && rv == namespaceWatchBootstrapCursor
-	if bootstrap {
-		rv = ""
-	}
-	events, unsubscribe, startCursor, err := r.eventBus.SubscribeWithCursor(kind, rv)
+	events, unsubscribe, _, err := r.eventBus.SubscribeWithCursor(kind, rv)
 	if err != nil {
 		if errors.Is(err, eventbus.ErrWatchExpired) {
 			r.logger.Warn("watch cursor expired; controller must re-list",
@@ -133,15 +135,6 @@ func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, 
 	go func() {
 		defer close(out)
 		defer unsubscribe()
-		if bootstrap {
-			bookmark := toGenericWatchEvent(kind, eventbus.Event{Kind: kind, Cursor: startCursor})
-			bookmark.Type = model.WatchEventTypeBookmark
-			select {
-			case out <- bookmark:
-			case <-ctx.Done():
-				return
-			}
-		}
 		for {
 			select {
 			case <-ctx.Done():

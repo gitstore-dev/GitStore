@@ -4,28 +4,18 @@
 package resolver
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 
+	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 )
-
-const namespaceWatchBootstrapCursor = "__namespace_watch_bootstrap__"
-
-func (r *Resolver) publishNamespaceEvent(eventType eventbus.EventType, namespace *datastore.Namespace) {
-	if r.eventBus == nil || namespace == nil {
-		return
-	}
-	r.eventBus.Publish(eventbus.Event{
-		Type:            eventType,
-		Kind:            "Namespace",
-		Name:            namespace.Name,
-		ResourceVersion: namespace.ResourceVersion,
-		Object:          namespace,
-	})
-}
 
 // publishCategoryTaxonomyStatusEvent fans out a Modified event after a
 // successful status write, so a watcher observing the resource also sees
@@ -60,32 +50,6 @@ func (r *Resolver) publishCategoryTaxonomyDeletedEvent(c *datastore.CategoryTaxo
 	})
 }
 
-func (r *Resolver) publishNamespaceStatusEvent(namespace *datastore.Namespace) {
-	if r.eventBus == nil || namespace == nil {
-		return
-	}
-	r.eventBus.Publish(eventbus.Event{
-		Type:            eventbus.Modified,
-		Kind:            "Namespace",
-		Name:            namespace.Name,
-		ResourceVersion: namespace.ResourceVersion,
-		Object:          namespace,
-	})
-}
-
-func (r *Resolver) publishNamespaceDeletedEvent(namespace *datastore.Namespace) {
-	if r.eventBus == nil || namespace == nil {
-		return
-	}
-	r.eventBus.Publish(eventbus.Event{
-		Type:            eventbus.Deleted,
-		Kind:            "Namespace",
-		Name:            namespace.Name,
-		ResourceVersion: namespace.ResourceVersion,
-		Object:          namespace,
-	})
-}
-
 func toWatchEventType(t eventbus.EventType) model.WatchEventType {
 	switch t {
 	case eventbus.Added:
@@ -97,6 +61,140 @@ func toWatchEventType(t eventbus.EventType) model.WatchEventType {
 	default:
 		return model.WatchEventTypeBookmark
 	}
+}
+
+// NamespaceJournalEventToGraphQL maps the durable event envelope without
+// weakening the shipped Namespace resource contract.
+func NamespaceJournalEventToGraphQL(event datastore.NamespaceWatchEvent, namespace *datastore.Namespace) (*model.NamespaceWatchEvent, error) {
+	if namespace == nil && (event.Type == datastore.NamespaceWatchAdded || event.Type == datastore.NamespaceWatchModified) {
+		var err error
+		namespace, err = namespaceFromJournalEvent(event)
+		if err != nil {
+			return nil, err
+		}
+	}
+	out := &model.NamespaceWatchEvent{
+		Type:            model.WatchEventType(event.Type),
+		Name:            event.Name,
+		ResourceVersion: watchjournal.EncodeCursor(event.Epoch, event.Sequence),
+	}
+	if event.Type == datastore.NamespaceWatchAdded || event.Type == datastore.NamespaceWatchModified {
+		out.Namespace = DatastoreNamespaceToGraphQL(namespace)
+	}
+	return out, nil
+}
+
+func namespaceFromJournalEvent(event datastore.NamespaceWatchEvent) (*datastore.Namespace, error) {
+	if event.Type == datastore.NamespaceWatchDeleted || event.Type == datastore.NamespaceWatchBookmark {
+		return nil, nil
+	}
+	if len(event.Payload) == 0 {
+		return nil, gqlerror.Errorf("Namespace journal data event has no payload")
+	}
+	namespace := &datastore.Namespace{}
+	if err := json.Unmarshal(event.Payload, namespace); err != nil {
+		return nil, gqlerror.Errorf("decode Namespace journal payload: %v", err)
+	}
+	return namespace, nil
+}
+
+func namespaceJournalEventToGeneric(event datastore.NamespaceWatchEvent) (*model.WatchEvent, *datastore.Namespace, error) {
+	typed, err := NamespaceJournalEventToGraphQL(event, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	namespace, err := namespaceFromJournalEvent(event)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := &model.WatchEvent{
+		Type: typed.Type, Kind: "Namespace", Name: typed.Name,
+		ResourceVersion: typed.ResourceVersion,
+	}
+	if namespace != nil {
+		out.Object = namespaceToJSONMap(namespace)
+	}
+	return out, namespace, nil
+}
+
+func namespaceJournalEventMatchesSelector(namespace *datastore.Namespace, selector *model.LabelSelectorInput) bool {
+	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
+		return true
+	}
+	return namespace != nil && matchesWatchSelector(selector, namespace.Labels)
+}
+
+func namespaceWatchGraphQLError(err error) *gqlerror.Error {
+	terminal, ok := watchjournal.AsTerminal(err)
+	if !ok {
+		return gqlerror.Errorf("namespace watch failed")
+	}
+	return &gqlerror.Error{
+		Message:    terminal.Error(),
+		Extensions: map[string]any{"code": terminal.Code, "reason": string(terminal.Reason)},
+	}
+}
+
+func addNamespaceWatchSubscriptionError(ctx context.Context, err error) {
+	var gqlErr *gqlerror.Error
+	if !errors.As(err, &gqlErr) {
+		gqlErr = gqlerror.Errorf("namespace watch failed")
+	}
+	transport.AddSubscriptionError(ctx, gqlErr)
+}
+
+func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.WatchEvent, error) {
+	if r.namespaceSubscriber == nil || !r.namespaceWatch.ReadersEnabled {
+		return nil, namespaceWatchGraphQLError(&watchjournal.TerminalError{Code: watchjournal.CodeUnavailable, Reason: "MATERIALIZER_NOT_READY"})
+	}
+	rawCursor := ""
+	if resourceVersion != nil {
+		rawCursor = *resourceVersion
+	}
+	stream, err := r.namespaceSubscriber.SubscribePath(ctx, rawCursor, "generic")
+	if err != nil {
+		return nil, namespaceWatchGraphQLError(err)
+	}
+	out := make(chan *model.WatchEvent, r.namespaceWatch.SubscriberBuffer)
+	go func() {
+		defer close(out)
+		events := stream.Events
+		errorsOut := stream.Errors
+		for events != nil || errorsOut != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case streamErr, ok := <-errorsOut:
+				if !ok {
+					errorsOut = nil
+					continue
+				}
+				if streamErr != nil {
+					addNamespaceWatchSubscriptionError(ctx, namespaceWatchGraphQLError(streamErr))
+					return
+				}
+			case event, ok := <-events:
+				if !ok {
+					events = nil
+					continue
+				}
+				converted, namespace, convertErr := namespaceJournalEventToGeneric(event)
+				if convertErr != nil {
+					addNamespaceWatchSubscriptionError(ctx, convertErr)
+					return
+				}
+				if !namespaceJournalEventMatchesSelector(namespace, selector) {
+					continue
+				}
+				select {
+				case out <- converted:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }
 
 // categoryEventMatchesFilters reports whether ev satisfies the namespace

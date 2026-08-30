@@ -20,6 +20,20 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__RATE_LIMIT_PER_SECOND",
 		"GITSTORE_API__RATE_LIMIT_BURST",
 		"GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE",
+		"GITSTORE_WATCH__NAMESPACE__READERS_ENABLED",
+		"GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED",
+		"GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS",
+		"GITSTORE_WATCH__NAMESPACE__CDC_RETENTION_SECONDS",
+		"GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE",
+		"GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE",
+		"GITSTORE_WATCH__NAMESPACE__MAX_REPLAY_EVENTS",
+		"GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER",
+		"GITSTORE_WATCH__NAMESPACE__POLL_MIN_MILLIS",
+		"GITSTORE_WATCH__NAMESPACE__POLL_MAX_MILLIS",
+		"GITSTORE_WATCH__NAMESPACE__BOOKMARK_INTERVAL_SECONDS",
+		"GITSTORE_WATCH__NAMESPACE__LEASE_TTL_SECONDS",
+		"GITSTORE_WATCH__NAMESPACE__LEASE_RENEW_INTERVAL_SECONDS",
+		"GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS",
 		"GITSTORE_GIT__GRPC__URI",
 		"GITSTORE_GIT__WS__URI",
 		"GITSTORE_GIT__HTTP__URI",
@@ -87,6 +101,49 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	assert.Equal(t, "24h", cfg.Auth.JWT.Duration)
 	assert.Equal(t, "gitstore", cfg.Auth.JWT.Issuer)
 	assert.Equal(t, "60s", cfg.Auth.JWT.RefreshGrace)
+	assert.False(t, cfg.Watch.Namespace.ReadersEnabled)
+	assert.False(t, cfg.Watch.Namespace.MaterializerEnabled)
+	assert.Equal(t, 7*24*60*60, cfg.Watch.Namespace.JournalRetentionSeconds)
+	assert.Equal(t, 14*24*60*60, cfg.Watch.Namespace.CDCRetentionSeconds)
+	assert.Equal(t, 4096, cfg.Watch.Namespace.BucketSize)
+	assert.Equal(t, 256, cfg.Watch.Namespace.ReadBatchSize)
+	assert.Equal(t, 100000, cfg.Watch.Namespace.MaxReplayEvents)
+	assert.Equal(t, 64, cfg.Watch.Namespace.SubscriberBuffer)
+	assert.Equal(t, 100, cfg.Watch.Namespace.PollMinMillis)
+	assert.Equal(t, 2000, cfg.Watch.Namespace.PollMaxMillis)
+	assert.Equal(t, 30, cfg.Watch.Namespace.BookmarkIntervalSeconds)
+	assert.Equal(t, 30, cfg.Watch.Namespace.LeaseTTLSeconds)
+	assert.Equal(t, 10, cfg.Watch.Namespace.LeaseRenewIntervalSeconds)
+	assert.Equal(t, 60, cfg.Watch.Namespace.MaxMaterializerLagSeconds)
+}
+
+func TestLoad_NamespaceWatchEnvOverrides(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__READERS_ENABLED", "true")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED", "true")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE", "128")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER", "32")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.True(t, cfg.Watch.Namespace.ReadersEnabled)
+	assert.True(t, cfg.Watch.Namespace.MaterializerEnabled)
+	assert.Equal(t, 128, cfg.Watch.Namespace.ReadBatchSize)
+	assert.Equal(t, 32, cfg.Watch.Namespace.SubscriberBuffer)
+}
+
+func TestLoad_RejectsUnsafeNamespaceWatchBounds(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS", "120")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__CDC_RETENTION_SECONDS", "60")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CDC retention")
 }
 
 func TestLoad_EnvVarOverridesDefault(t *testing.T) {

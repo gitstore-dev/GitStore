@@ -28,6 +28,10 @@ var (
 	// ErrNamespaceNotEmpty means a Namespace deletion mark observed a
 	// committed or in-flight repository creation.
 	ErrNamespaceNotEmpty = errors.New("datastore: namespace is not empty")
+	// ErrStaleWatchLease rejects materializer writes from a lost lease owner.
+	ErrStaleWatchLease = errors.New("datastore: stale Namespace watch lease")
+	// ErrWatchCursorEpoch rejects reads from another journal epoch.
+	ErrWatchCursorEpoch = errors.New("datastore: Namespace watch cursor epoch mismatch")
 )
 
 // DefaultPageSize is used when First/Last is zero.
@@ -37,6 +41,27 @@ const DefaultPageSize = 100
 // It prevents a caller from turning a controller continuation into an
 // unbounded datastore read.
 const MaxOwnerDependentPageSize = 100
+
+// NamespaceWatchJournal is an optional datastore capability. Keeping it
+// separate from Datastore avoids forcing resource-only test doubles to own
+// watch infrastructure while allowing both production backends to expose the
+// same durable contract.
+type NamespaceWatchJournal interface {
+	Bounds(ctx context.Context) (NamespaceWatchBounds, error)
+	Append(ctx context.Context, lease NamespaceWatchLease, event NamespaceWatchEvent, ttl time.Duration) (NamespaceWatchEvent, error)
+	ReadAfter(ctx context.Context, cursor NamespaceWatchCursor, limit int) ([]NamespaceWatchEvent, error)
+	AcquireLease(ctx context.Context, holder string, now time.Time, ttl time.Duration) (NamespaceWatchLease, bool, error)
+	RenewLease(ctx context.Context, lease NamespaceWatchLease, now time.Time, ttl time.Duration) (NamespaceWatchLease, bool, error)
+	ReleaseLease(ctx context.Context, lease NamespaceWatchLease) error
+	LoadProgress(ctx context.Context, streamID string) (NamespaceCDCProgress, error)
+	SaveProgress(ctx context.Context, lease NamespaceWatchLease, progress NamespaceCDCProgress) error
+}
+
+// NamespaceWatchCapable is implemented by datastores that can serve the
+// Namespace watch journal.
+type NamespaceWatchCapable interface {
+	NamespaceWatchJournal() NamespaceWatchJournal
+}
 
 // CategoryTaxonomyForegroundDeletionFinalizer holds a CategoryTaxonomy while
 // its controller rechecks blocking dependents and decouples Products.
