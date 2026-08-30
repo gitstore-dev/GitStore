@@ -70,23 +70,45 @@ DeleteServiceAccount(ctx context.Context, uid string) error
 `gitstore-api/internal/datastore/scylla/migrations/007_service_account.cql` (`005` is taken by spec 047 on `main`; `006` is reserved by in-flight spec 050 — see research.md's reservation table and re-verify against sibling branches before creating this file):
 
 ```sql
-CREATE TABLE IF NOT EXISTS service_accounts (
-    uid              text PRIMARY KEY,
-    namespace        text,
-    name             text,
-    disabled         boolean,
-    generation       bigint,
-    resource_version text,
-    creation_ts      timestamp,
-    creation_actor   text,
-    update_ts        timestamp,
-    update_actor     text,
-    public_keys      text, -- JSON-encoded []ServiceAccountPublicKey, mirroring how Status/Spec json.RawMessage columns already store structured data elsewhere
-    deletion_ts      timestamp
+-- Query-first, mirroring 004_file_resource.cql. No secondary index: 002 records
+-- that the alpha baseline intentionally has none, and spec 048 actively removed
+-- the ones Repository had ("no secondary index as a primary Namespace/Repository
+-- read path"). Authentication is exactly the kind of routing path that rule
+-- exists to protect, so ServiceAccount adds none.
+
+-- Authoritative row. Partitioned by namespace, mirroring files_by_namespace.
+CREATE TABLE IF NOT EXISTS service_accounts_by_namespace (
+    namespace          text,
+    creation_timestamp timestamp,
+    uid                uuid,
+    name               text,
+    generation         bigint,
+    resource_version   text,
+    creation_actor     text,
+    update_timestamp   timestamp,
+    update_actor       text,
+    deletion_timestamp timestamp,
+    disabled           boolean,
+    public_keys        text, -- JSON-encoded []ServiceAccountPublicKey, mirroring the existing spec/status/owner_references text columns
+    PRIMARY KEY ((namespace), creation_timestamp, uid)
 );
 
-CREATE INDEX IF NOT EXISTS service_accounts_by_subject ON service_accounts (namespace, name);
+-- Subject lookup + name reservation: serviceaccount:<namespace>:<name>.
+CREATE TABLE IF NOT EXISTS service_accounts_by_name (
+    namespace text, name text, uid uuid, creation_timestamp timestamp,
+    PRIMARY KEY ((namespace), name)
+);
+
+-- UID lookup + reservation, for the uid-keyed mutation methods.
+CREATE TABLE IF NOT EXISTS service_accounts_by_uid (
+    uid uuid, namespace text, creation_timestamp timestamp,
+    PRIMARY KEY ((uid))
+);
 ```
+
+**Naming and types follow the established envelope**, not this spec's own invention: `creation_timestamp`/`update_timestamp`/`deletion_timestamp` (never `creation_ts`), `creation_actor`/`update_actor`, `generation bigint`, `resource_version text`, and `uid uuid` — a real CQL `uuid`, not `text`. Go-side `ServiceAccount.UID` stays a `string` (matching every other entity in `entities.go`); the row struct holds `gocql.UUID` with `mustParseUUID`/`.String()` conversion at the boundary, exactly as `fileRow` does. Creation reserves through `reserveName`/`reserveUID` LWTs before writing the authoritative row, per spec 048's reservation-first rule.
+
+**Open item for Phase 0 (not resolved here)**: `GetServiceAccountBySubject` costs two reads under this layout (`service_accounts_by_name` → `service_accounts_by_namespace`), and `serviceaccount-jwt` may call it on every authenticated request to observe `disabled`/deletion. That is the same shape `File` already accepts, but `File` is not on a per-request auth path. Resolve during implementation by measuring, then choosing between (a) accepting two reads, (b) a short-TTL in-process cache bounded by the revocation-latency budget doc 021 §8d already defines, or (c) denormalizing `disabled` into `service_accounts_by_name`. Do **not** resolve it by adding a secondary index.
 
 ## 2. Access-token claims (issued by `serviceaccount-jwt`'s issuer half; carried forward verbatim from doc 021 §9a)
 
