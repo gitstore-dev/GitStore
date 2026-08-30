@@ -59,6 +59,12 @@ func (m *memdbDatastore) ReadAfter(_ context.Context, cursor datastore.Namespace
 	if cursor.Epoch != "" && cursor.Epoch != m.namespaceWatchEpoch {
 		return nil, datastore.ErrWatchCursorEpoch
 	}
+	if len(m.namespaceWatchEvents) > 0 && cursor.Sequence+1 < m.namespaceWatchEvents[0].Sequence {
+		return nil, datastore.ErrWatchRetentionExpired
+	}
+	if len(m.namespaceWatchEvents) == 0 && cursor.Sequence < m.namespaceWatchSequence {
+		return nil, datastore.ErrWatchRetentionExpired
+	}
 	if limit <= 0 || limit > 256 {
 		limit = 256
 	}

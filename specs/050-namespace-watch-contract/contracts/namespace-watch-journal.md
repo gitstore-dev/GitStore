@@ -47,7 +47,9 @@ nwv1:<epoch-uuid>:<base36-sequence>
 - Sequence orders events inside an epoch.
 - The journal retains seven days, bucketed in groups of 4,096 events.
 - Cursor validation refreshes the stored lower bound from the first live TTL
-  row, advancing monotonically across empty expired buckets.
+  row, advancing monotonically across at most 32 expired buckets per call.
+- Incomplete retention reconciliation fails registration unavailable; TTL
+  expiry racing an established reader terminates with `RETENTION_EXPIRED`.
 - Reads return at most 256 events per query.
 - One subscription may replay at most 100,000 events.
 - Resume starts strictly after the supplied cursor.

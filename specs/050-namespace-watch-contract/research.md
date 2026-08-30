@@ -90,7 +90,11 @@ Bucketed event partitions prevent an unbounded hot partition while the singleton
 clock is acceptable for the declared Namespace mutation envelope. Bounds checks
 derive the first live TTL row from the current sequence bucket and advance the
 stored lower bound monotonically; empty expired buckets are skipped once, so
-cursor expiry and telemetry reflect actual retained rows.
+cursor expiry and telemetry reflect actual retained rows. Each validation scans
+at most 32 buckets and durably checkpoints its progress with one LWT. Until a
+retained row or `highWater + 1` is reached, registration fails unavailable
+instead of serving stale bounds. A TTL race during an established stream maps
+to `RETENTION_EXPIRED` rather than an idle loop or generic discontinuity.
 
 **Alternatives considered**:
 

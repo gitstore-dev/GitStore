@@ -128,7 +128,9 @@ func (s *Subscriber) run(ctx context.Context, cursor datastore.NamespaceWatchCur
 		batch, err := s.store.ReadAfter(ctx, cursor, s.cfg.ReadBatchSize)
 		if err != nil {
 			reason := ReasonJournalDiscontinuity
-			if errors.Is(err, datastore.ErrWatchCursorEpoch) {
+			if errors.Is(err, datastore.ErrWatchRetentionExpired) {
+				reason = ReasonRetentionExpired
+			} else if errors.Is(err, datastore.ErrWatchCursorEpoch) {
 				reason = ReasonEpochMismatch
 			}
 			s.sendExpired(errorsOut, reason, err)

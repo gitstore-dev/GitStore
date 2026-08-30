@@ -71,6 +71,22 @@ func TestSubscriberFailsOnJournalDiscontinuity(t *testing.T) {
 	assertTerminalReason(t, <-stream.Errors, CodeExpired, ReasonJournalDiscontinuity)
 }
 
+func TestSubscriberMapsMidstreamRetentionExpiry(t *testing.T) {
+	t.Parallel()
+	epoch := uuid.NewString()
+	journal := &subscriberJournal{bounds: datastore.NamespaceWatchBounds{
+		Epoch: epoch, Oldest: 1, HighWater: 2, UpdatedAt: time.Now().UTC(), ProgressAt: time.Now().UTC(),
+	}}
+	journal.read = func(datastore.NamespaceWatchCursor, int) ([]datastore.NamespaceWatchEvent, error) {
+		return nil, datastore.ErrWatchRetentionExpired
+	}
+	stream, err := NewSubscriber(journal, SubscriberConfig{BufferSize: 1}).Subscribe(context.Background(), EncodeCursor(epoch, 0))
+	if err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+	assertTerminalReason(t, <-stream.Errors, CodeExpired, ReasonRetentionExpired)
+}
+
 func TestSubscriberOverflowIsTerminal(t *testing.T) {
 	t.Parallel()
 	epoch := uuid.NewString()

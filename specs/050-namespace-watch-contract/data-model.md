@@ -166,7 +166,9 @@ Parsing rules:
 
 Before validating a new cursor, Scylla derives `oldest` from the first live TTL
 row at or after the stored lower bound and advances the static clock value by
-LWT. Empty expired sequence buckets are skipped monotonically.
+LWT. Empty expired sequence buckets are skipped monotonically with a 32-bucket
+per-call budget; an incomplete scan is checkpointed and fails closed until a
+later call reaches the exact retained bound.
 
 The bootstrap sentinel remains private client/server coordination and is never
 persisted as a resumable cursor.

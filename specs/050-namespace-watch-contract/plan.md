@@ -198,7 +198,10 @@ active-stream watermark, and a newly registered stream behind the published
 frontier fails closed. The published frontier is persisted before per-stream
 progress and restored after restart. The journal append is the public per-kind ordering
 linearization point. Bounds checks advance the stored `oldest` value from the
-first live TTL row before validating a new subscription cursor.
+first live TTL row before validating a new subscription cursor, scanning at
+most 32 buckets and checkpointing once per call. Incomplete reconciliation
+fails registration unavailable; a TTL race after registration terminates with
+`RETENTION_EXPIRED`.
 
 The materializer writes the event before saving per-stream CDC progress. A
 failure between those steps causes a duplicate after recovery. The controller

@@ -52,7 +52,7 @@ func TestNamespaceWatchLeaseFencesJournalAndProgressWrites(t *testing.T) {
 }
 
 func TestNamespaceWatchBoundsAdvanceAfterTTLExpiry(t *testing.T) {
-	store := newTestStore(t)
+	store := newTestStoreWithWatchBucket(t, 2)
 	raw := newRawSession(t)
 	require.NoError(t, raw.Query("TRUNCATE namespace_watch_events").Exec())
 	require.NoError(t, raw.Query("TRUNCATE namespace_watch_clock").Exec())
@@ -66,18 +66,35 @@ func TestNamespaceWatchBoundsAdvanceAfterTTLExpiry(t *testing.T) {
 	require.True(t, acquired)
 	t.Cleanup(func() { _ = journal.ReleaseLease(context.Background(), lease) })
 
-	first, err := journal.Append(ctx, lease, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchBookmark}, time.Second)
-	require.NoError(t, err)
+	var last datastore.NamespaceWatchEvent
+	for range 70 {
+		last, err = journal.Append(ctx, lease, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchBookmark}, 2*time.Second)
+		require.NoError(t, err)
+	}
 	require.Eventually(t, func() bool {
-		bounds, boundsErr := journal.Bounds(ctx)
-		return boundsErr == nil && bounds.Oldest == first.Sequence+1 && bounds.HighWater == first.Sequence
+		var count int64
+		return namespaceWatchEventCount(t, &count) == nil && count == 0
 	}, 10*time.Second, 100*time.Millisecond)
+
+	_, err = journal.Bounds(ctx)
+	require.ErrorContains(t, err, "retention reconciliation is incomplete")
+	bounds, err := journal.Bounds(ctx)
+	require.NoError(t, err)
+	require.Equal(t, last.Sequence+1, bounds.Oldest)
+	require.Equal(t, last.Sequence, bounds.HighWater)
 
 	second, err := journal.Append(ctx, lease, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchBookmark}, time.Minute)
 	require.NoError(t, err)
-	bounds, err := journal.Bounds(ctx)
+	bounds, err = journal.Bounds(ctx)
 	require.NoError(t, err)
 	require.Equal(t, second.Sequence, bounds.Oldest)
+}
+
+func namespaceWatchEventCount(t *testing.T, count *int64) error {
+	t.Helper()
+	raw := newRawSession(t)
+	defer raw.Close()
+	return raw.Query("SELECT count(*) FROM namespace_watch_events").Scan(count)
 }
 
 func TestNamespaceAuthoritativeCommitsProduceCDCButRejectedWritesDoNot(t *testing.T) {
@@ -164,7 +181,12 @@ func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
 		bounds, boundsErr := journal.Bounds(context.Background())
 		lastBoundsErr = boundsErr
 		if boundsErr == nil {
-			cursor.Epoch = bounds.Epoch
+			if cursor.Epoch == "" {
+				cursor.Epoch = bounds.Epoch
+				if bounds.Oldest > 0 {
+					cursor.Sequence = bounds.Oldest - 1
+				}
+			}
 			events, readErr := journal.ReadAfter(context.Background(), cursor, 256)
 			require.NoError(t, readErr)
 			for _, event := range events {

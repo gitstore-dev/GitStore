@@ -32,6 +32,9 @@ var (
 	ErrStaleWatchLease = errors.New("datastore: stale Namespace watch lease")
 	// ErrWatchCursorEpoch rejects reads from another journal epoch.
 	ErrWatchCursorEpoch = errors.New("datastore: Namespace watch cursor epoch mismatch")
+	// ErrWatchRetentionExpired rejects reads whose next sequence has already
+	// expired from the retained journal.
+	ErrWatchRetentionExpired = errors.New("datastore: Namespace watch retention expired")
 )
 
 // DefaultPageSize is used when First/Last is zero.
