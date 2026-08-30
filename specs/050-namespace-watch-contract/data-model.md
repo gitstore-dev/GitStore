@@ -104,8 +104,9 @@ change and therefore no journal event.
 
 Migration 006 adds an internal `watch_committed boolean` marker to
 `namespaces_by_uid`. Creation sets it only after the listing projection is
-durable. CDC additions wait for that marker, while deletion preimages without
-it are recognized as rollback cleanup and are not published.
+durable. The initial false-marker CDC insert advances progress without a public
+event; its false-to-true promotion is normalized to ADDED. Deletion preimages
+with a false marker are recognized as rollback cleanup and are not published.
 
 ## NamespaceWatchClockAndProgress
 

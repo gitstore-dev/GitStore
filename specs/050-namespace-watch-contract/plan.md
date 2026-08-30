@@ -173,19 +173,24 @@ from rollback cleanup. Scylla persists CDC with the base write and consistency
 level. Spec-047 service/resolver/catalog gRPC code continues returning the same
 public outcomes.
 
-The materializer consumes one logical CDC mutation, coalesces its
+The materializer consumes CDC mutations, coalesces their
 preimage/delta/postimage rows, and classifies:
 
-- absent preimage + committed postimage -> ADDED;
+- initial `watch_committed=false` insert -> progress-only staging record;
+- `watch_committed=false` to `true` promotion -> ADDED;
+- legacy absent preimage + committed/null-marker postimage -> ADDED after a
+  projection-readiness check;
 - existing preimage + committed postimage -> MODIFIED;
 - final row delete + preimage -> DELETED;
 - no base write -> no event.
 
-An ADDED candidate crosses the journal boundary only after its matching
-`namespaces_by_bucket` row is readable. A present authoritative row with a
-missing projection causes a retry without progress advancement; an
-authoritative row already removed by create rollback suppresses the staged
-addition.
+The marker promotion is itself durable proof that `namespaces_by_bucket` was
+committed, so it crosses the journal boundary as ADDED without rereading
+mutable authoritative state. This closes the race where the initial staged CDC
+record could be consumed before the later marker write. A legacy direct ADDED
+candidate still crosses only after its matching projection is readable.
+Deletion of a false-marker preimage identifies rollback cleanup and is
+suppressed.
 
 Namespace deletion commits the authoritative `namespaces_by_uid` removal
 before changing its list and name projections. A rejected conditional delete

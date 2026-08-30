@@ -180,6 +180,21 @@ func TestNamespaceCDCDeletionSuppressesUncommittedCreateRollback(t *testing.T) {
 	assert.False(t, ready)
 }
 
+func TestNamespaceCDCCommitMarkerTransitions(t *testing.T) {
+	namespace := &datastore.Namespace{Name: "catalog"}
+
+	assert.Equal(t, namespaceCDCSuppress, namespaceCDCDispositionFor(nil, false, namespace, false),
+		"the staged authoritative insert advances progress without publishing")
+	assert.Equal(t, namespaceCDCPromotedAddition, namespaceCDCDispositionFor(namespace, false, namespace, true),
+		"the projection commit marker is the public ADDED transition")
+	assert.Equal(t, namespaceCDCRegular, namespaceCDCDispositionFor(nil, false, namespace, true),
+		"legacy direct additions retain the projection-readiness gate")
+	assert.Equal(t, namespaceCDCRegular, namespaceCDCDispositionFor(namespace, true, namespace, true),
+		"ordinary committed updates remain MODIFIED transitions")
+	assert.Equal(t, namespaceCDCRegular, namespaceCDCDispositionFor(namespace, false, nil, false),
+		"rollback deletes remain governed by the deletion readiness gate")
+}
+
 func sequenceTestRequest(streamID, name string, at gocql.UUID, progressed chan<- string) namespaceCDCSequenceRequest {
 	return namespaceCDCSequenceRequest{
 		streamID: streamID,

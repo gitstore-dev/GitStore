@@ -77,13 +77,15 @@ restored after process replacement. The
 journal append is the public per-kind ordering linearization point; causally
 concurrent writes have no earlier externally observable total order.
 
-Before publishing ADDED, the materializer verifies that the matching
-`namespaces_by_bucket` row is visible. If the authoritative row still exists
-without its list projection, progress is not advanced and CDC is retried; if
-the authoritative row has already been rolled back, the staged addition is
-acknowledged without inventing a successful event. This preserves the
-bootstrap list/watch boundary without treating a query projection as an event
-source.
+New writers insert the authoritative row with `watch_committed=false`, commit
+the list projection, and then promote the marker to true. The initial CDC
+insert advances progress without publishing; the false-to-true promotion is
+normalized to ADDED because it is durable proof that the projection was
+visible first. A false-marker delete is rollback cleanup and is suppressed.
+For rolling-upgrade compatibility, a legacy direct addition with a null marker
+still verifies the matching `namespaces_by_bucket` row before publication.
+This preserves the bootstrap list/watch boundary without treating a query
+projection as an event source or racing an authoritative reread.
 
 Deletion uses the inverse ordering: the authoritative LWT commits before list
 and name projections are removed. A conflicting or failed LWT cannot

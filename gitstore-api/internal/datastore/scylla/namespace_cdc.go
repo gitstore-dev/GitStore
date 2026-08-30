@@ -129,7 +129,15 @@ type namespaceCDCConsumer struct {
 
 func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Change) error {
 	before, beforeCommitted := namespaceCDCPostimage(change.PreImage)
-	after, _ := namespaceCDCPostimage(change.PostImage)
+	after, afterCommitted := namespaceCDCPostimage(change.PostImage)
+	disposition := namespaceCDCDispositionFor(before, beforeCommitted, after, afterCommitted)
+	if disposition == namespaceCDCPromotedAddition {
+		// The false -> true commit-marker update is the durable proof that the
+		// listing projection was committed. Present it to the materializer as
+		// the ADDED transition; the preceding staged insert is intentionally
+		// progress-only so it cannot race the projection write.
+		before = nil
+	}
 	name := ""
 	if after != nil {
 		name = after.Name
@@ -160,7 +168,9 @@ func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Cha
 			At:               change.Time.Time().UTC(),
 		},
 	}
-	if before == nil && after != nil && c.additionReady != nil {
+	if disposition == namespaceCDCSuppress {
+		request.shouldPublish = func(context.Context) (bool, error) { return false, nil }
+	} else if before == nil && after != nil && disposition != namespaceCDCPromotedAddition && c.additionReady != nil {
 		request.shouldPublish = func(publishCtx context.Context) (bool, error) {
 			return c.additionReady(publishCtx, after)
 		}
@@ -170,6 +180,29 @@ func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Cha
 		}
 	}
 	return c.sequencer.Submit(ctx, request)
+}
+
+type namespaceCDCDisposition uint8
+
+const (
+	namespaceCDCRegular namespaceCDCDisposition = iota
+	namespaceCDCSuppress
+	namespaceCDCPromotedAddition
+)
+
+// namespaceCDCDispositionFor turns the private creation commit marker into a
+// two-record protocol. The initial false postimage is acknowledged without a
+// public event. Its later false -> true update is emitted as ADDED because the
+// marker is written only after the listing projection is durable. This avoids
+// rereading mutable authoritative state between those two CDC records.
+func namespaceCDCDispositionFor(before *datastore.Namespace, beforeCommitted bool, after *datastore.Namespace, afterCommitted bool) namespaceCDCDisposition {
+	if after != nil && !afterCommitted {
+		return namespaceCDCSuppress
+	}
+	if before != nil && !beforeCommitted && after != nil && afterCommitted {
+		return namespaceCDCPromotedAddition
+	}
+	return namespaceCDCRegular
 }
 
 func (c *namespaceCDCConsumer) End() error {
@@ -386,11 +419,12 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 	}
 }
 
-// namespaceCDCAdditionReady prevents an ADDED event from crossing the public
-// journal linearization point before the list projection is visible. A missing
-// authoritative row means the create rolled back and the staged CDC addition
-// can be acknowledged without publication; a still-present authoritative row
-// with no projection is retried by restarting from durable CDC progress.
+// namespaceCDCAdditionReady protects direct additions from an older binary
+// that does not participate in the false -> true commit-marker protocol. New
+// binaries publish the marker promotion itself as ADDED, since that write is
+// already ordered after the durable list projection. For a legacy direct
+// addition, a missing authoritative row denotes a rolled-back create and a
+// still-present row without its projection is retried from durable progress.
 func (s *scyllaDatastore) namespaceCDCAdditionReady(ctx context.Context, namespace *datastore.Namespace) (bool, error) {
 	if namespace == nil {
 		return false, nil

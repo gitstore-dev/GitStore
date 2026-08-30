@@ -274,6 +274,16 @@ func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
 				require.NoError(t, json.Unmarshal(event.Payload, &payload))
 				require.Equal(t, namespace.Name, payload.Name)
 				require.Equal(t, "catalog", event.SelectorLabels["team"])
+				// Keep the reader alive briefly so the private commit-marker update
+				// cannot leak as a second public MODIFIED event.
+				time.Sleep(500 * time.Millisecond)
+				_, boundsErr = journal.Bounds(context.Background())
+				require.NoError(t, boundsErr)
+				more, readErr := journal.ReadAfter(context.Background(), cursor, 256)
+				require.NoError(t, readErr)
+				for _, next := range more {
+					require.NotEqual(t, namespace.Name, next.Name, "commit marker emitted a duplicate public transition")
+				}
 				cancel()
 				return
 			}
