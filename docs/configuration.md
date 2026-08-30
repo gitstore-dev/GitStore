@@ -13,12 +13,37 @@ Services load configuration from multiple sources in a fixed order. A higher-pri
 2. Config file                  (optional)
 3. .env file                    (optional)
 4. Environment variables        (highest priority)
-5. CLI flags --config-file, --log-level  (gitstore-git-service only; override everything)
+5. CLI value overrides such as `--log-level` (where supported)
 ```
+
+All three services accept `--config-file <path>`. The flag selects the file
+source; values from the environment still override values in that file. An
+explicit path is required to exist and be readable. Without the flag, the Go
+services retain optional `config.toml` discovery and the Git service retains
+optional `gitstore.toml` discovery in the working directory.
+
+## Shared Local Compose Configuration
+
+`make compose` activates the Compose `local` profile and mounts
+`config/config.toml` read-only into all three core containers. The API also
+receives the development RBAC policy at `config/policy.yaml`. Select another
+host-side file explicitly with:
+
+```bash
+make compose CONFIG_FILE=./config/config.stage.toml
+```
+
+The tracked file contains only development credentials (`admin` / `admin123`),
+a long-lived development controller token, and a development HMAC/JWT secret.
+Never deploy it to production. Production deployments should mount a reviewed
+configuration/policy revision on every replica and inject secrets through the
+deployment platform. Configuration is startup-only, so replicas remain
+stateless and rolling upgrades can mix binaries with and without the additive
+flag while existing environment/default discovery remains supported.
 
 ### Sensitive values
 
-Keys marked **Sensitive** are always logged as `<redacted>` (when set) or `<unset>` (when absent), regardless of log level. Sensitive values must never be placed in config files — set them via environment variables or `.env` only.
+Keys marked **Sensitive** are always logged as `<redacted>` (when set) or `<unset>` (when absent), regardless of log level. Production secrets should be supplied externally rather than committed to config files; the tracked local fixture is intentionally development-only.
 
 An empty string (`KEY=`) for a **Required** key is treated identically to an absent key and causes a startup failure listing all failing keys.
 
@@ -27,6 +52,8 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 ## gitstore-api
 
 **Config file**: `config.toml` (optional, current working directory)
+
+**Explicit file**: `gitstore-api --config-file /path/to/config.toml` (required when selected)
 
 **`.env` file**: `.env` (optional, current working directory)
 **Env var prefix**: `GITSTORE_`
@@ -269,6 +296,8 @@ uri = "http://localhost:6000"
 ## gitstore-controller-manager
 
 **Config file**: `config.toml` (optional, current working directory)
+
+**Explicit file**: `gitstore-controller-manager --config-file /path/to/config.toml` (required when selected)
 
 **`.env` file**: `.env` (optional, current working directory)
 **Env var prefix**: `GITSTORE_`

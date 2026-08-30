@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -21,7 +22,17 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load()
+	configFile, err := parseConfigFile(os.Args[1:])
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Failed to parse arguments: %v\n", err)
+		os.Exit(2)
+	}
+	var cfg *config.Config
+	if configFile == "" {
+		cfg, err = config.Load()
+	} else {
+		cfg, err = config.LoadFrom(configFile)
+	}
 	gin.SetMode(gin.ReleaseMode)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
@@ -60,4 +71,13 @@ func main() {
 	server.Shutdown(shutdownCtx)
 
 	log.Info("Server stopped")
+}
+
+func parseConfigFile(args []string) (string, error) {
+	flags := flag.NewFlagSet("gitstore-api", flag.ContinueOnError)
+	path := flags.String("config-file", "", "path to an explicit TOML configuration file")
+	if err := flags.Parse(args); err != nil {
+		return "", err
+	}
+	return *path, nil
 }

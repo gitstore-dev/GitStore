@@ -171,6 +171,39 @@ func TestLoad_EnvVarOverridesConfigFile(t *testing.T) {
 	assert.Equal(t, 9999, cfg.Api.Port)
 }
 
+func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	path := filepath.Join(t.TempDir(), "shared.toml")
+	content := `[api]
+port = 7111
+[auth.admin]
+username = "admin"
+password_hash = "$2a$10$hash"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[controller]
+port = 5001
+[grpc]
+port = 50051
+[hooks.git_receive_pack]
+pre_receive = { enabled = true }
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+	t.Setenv("GITSTORE_API__PORT", "7222")
+
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	assert.Equal(t, 7222, cfg.Api.Port)
+}
+
+func TestLoadFrom_MissingExplicitFileFails(t *testing.T) {
+	_, err := LoadFrom(filepath.Join(t.TempDir(), "missing.toml"))
+	require.Error(t, err)
+}
+
 // T007: startup log redaction test
 
 func TestLoad_StartupLogRedactsSensitiveFields(t *testing.T) {

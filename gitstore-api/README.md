@@ -67,6 +67,10 @@ gitstore-api/
 
 ## Configuration Highlights
 
+Pass `--config-file PATH` to require and load an explicit TOML file. Environment
+variables override file values. Root `make compose` uses the shared
+development-only `config/config.toml` and needs no API `.env` file.
+
 Required for local API startup unless provided by `.env`:
 
 | Variable                              | Default                  | Purpose                  |

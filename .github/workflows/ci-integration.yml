@@ -74,13 +74,13 @@ jobs:
       uses: docker/setup-compose-action@v2
 
     - name: Build and start core stack
-      run: docker compose up -d --build
+      run: docker compose --profile local -f compose.yml -f compose.local.yml up -d --build
 
     - name: Wait for services to be healthy
       run: |
         echo "Waiting for gitstore-api (GraphQL + git HTTP)..."
         timeout 60 sh -c 'until curl -sf http://localhost:4000/health; do sleep 2; done'
-        docker compose ps
+        docker compose --profile local -f compose.yml -f compose.local.yml ps
 
     - name: Wait for git-service gRPC to be ready
       run: timeout 30 sh -c 'until nc -z localhost 50051; do sleep 1; done'
@@ -89,7 +89,7 @@ jobs:
       run: timeout 30 sh -c 'until nc -z localhost 6000; do sleep 1; done'
 
     - name: Mint controller-manager bearer token and restart it with credentials
-      # controller-manager already started (via `docker compose up -d`) with no
+      # controller-manager already started (via `docker compose --profile local -f compose.yml -f compose.local.yml up -d`) with no
       # Authorization header, so its reconciler's status-write mutations are
       # rejected outright by the API's "authentication required" gate (every
       # mutation except login/refreshToken requires an authenticated principal,
@@ -104,7 +104,7 @@ jobs:
         echo "GITSTORE_CONTROLLER__API_TOKEN=$token" >> "$GITHUB_ENV"
 
     - name: Recreate controller-manager with its bearer token
-      run: docker compose up -d --no-deps controller-manager
+      run: docker compose --profile local -f compose.yml -f compose.local.yml up -d --no-deps controller-manager
 
     - name: Wait for controller-manager to be healthy
       run: timeout 30 sh -c 'until curl -sf http://localhost:5001/health; do sleep 1; done'
@@ -136,11 +136,11 @@ jobs:
 
     - name: Collect logs on failure
       if: failure()
-      run: docker compose logs
+      run: docker compose --profile local -f compose.yml -f compose.local.yml logs
 
     - name: Cleanup
       if: always()
-      run: docker compose down -v
+      run: docker compose --profile local -f compose.yml -f compose.local.yml down -v
 
   datastore-contract-test:
     name: Datastore Hardening (backend-neutral + memdb)
@@ -195,7 +195,7 @@ jobs:
         uses: docker/setup-compose-action@v2
 
       - name: Build and start core stack with ScyllaDB
-        run: docker compose -f compose.yml -f compose.scylla.yml up -d --build
+        run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.scylla.yml up -d --build
 
       - name: Wait for ScyllaDB to be healthy
         run: timeout 120 sh -c 'until nc -z localhost 9042; do sleep 2; done'
@@ -204,7 +204,7 @@ jobs:
         run: |
           echo "Waiting for gitstore-api (GraphQL + git HTTP)..."
           timeout 90 sh -c 'until curl -sf http://localhost:4000/health; do sleep 2; done'
-          docker compose -f compose.yml -f compose.scylla.yml ps
+          docker compose --profile local -f compose.yml -f compose.local.yml -f compose.scylla.yml ps
 
       - name: Wait for git-service gRPC to be ready
         run: timeout 30 sh -c 'until nc -z localhost 50051; do sleep 1; done'
@@ -225,7 +225,7 @@ jobs:
           echo "GITSTORE_CONTROLLER__API_TOKEN=$token" >> "$GITHUB_ENV"
 
       - name: Recreate controller-manager with its bearer token
-        run: docker compose -f compose.yml -f compose.scylla.yml up -d --no-deps controller-manager
+        run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.scylla.yml up -d --no-deps controller-manager
 
       - name: Wait for controller-manager to be healthy
         run: timeout 30 sh -c 'until curl -sf http://localhost:5001/health; do sleep 1; done'
@@ -256,11 +256,11 @@ jobs:
 
       - name: Collect logs on failure
         if: failure()
-        run: docker compose -f compose.yml -f compose.scylla.yml logs
+        run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.scylla.yml logs
 
       - name: Cleanup
         if: always()
-        run: docker compose -f compose.yml -f compose.scylla.yml down -v
+        run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.scylla.yml down -v
 
   datastore-contract-test-scylla:
     name: Datastore Hardening (tagged ScyllaDB + failure injection)

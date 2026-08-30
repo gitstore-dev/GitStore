@@ -63,6 +63,19 @@ type LogConfig struct {
 
 // Load reads configuration from environment variables and optional .env file.
 func Load() (*Config, error) {
+	return load("")
+}
+
+// LoadFrom loads the explicitly selected configuration file. The file is
+// required; Load retains optional current-directory discovery compatibility.
+func LoadFrom(path string) (*Config, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, errors.New("config file path must not be empty")
+	}
+	return load(path)
+}
+
+func load(path string) (*Config, error) {
 	_ = godotenv.Load()
 
 	v := viper.New()
@@ -78,12 +91,16 @@ func Load() (*Config, error) {
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 
-	v.SetConfigName("config")
-	v.SetConfigType("toml")
-	v.AddConfigPath(".")
+	if path != "" {
+		v.SetConfigFile(path)
+	} else {
+		v.SetConfigName("config")
+		v.SetConfigType("toml")
+		v.AddConfigPath(".")
+	}
 	if err := v.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError
-		if !errors.As(err, &notFound) {
+		if path != "" || !errors.As(err, &notFound) {
 			return nil, err
 		}
 	}

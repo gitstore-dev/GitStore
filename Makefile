@@ -10,6 +10,9 @@ GIT_SERVICE_DIR := $(ROOT)/gitstore-git-service
 GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR)
 
 API_ENV_FILE ?= $(API_DIR)/.env
+CONFIG_FILE ?= ./config/config.toml
+POLICY_FILE := ./config/policy.yaml
+LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
 DIFF_BASE ?= origin/main
 
@@ -36,7 +39,7 @@ NAMESPACE_CAPACITY_DURATION ?= 30m
 export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CACHE
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
-.PHONY: help git api controller dev compose scylla compose-scylla ps logs stop down
+.PHONY: help git api controller dev compose scylla compose-scylla ps logs stop down validate-local-config compose-config-check
 .PHONY: build test lint license-check pr-ready test-scylla-hardening test-scylla-integration test-scylla-capacity test-namespace-admission-capacity
 .PHONY: bootstrap bootstrap-token bootstrap-namespace bootstrap-repository git-clean-data
 .PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools gen-admin-password gen-jwt-secret gen-hmac-secret
@@ -48,6 +51,7 @@ help: ## Show available targets and common variables.
 	@printf "  COMPOSE_BAKE=true         Compose build bake setting for Docker Compose\n"
 	@printf "  SERVICE=<name>            Limit logs/stop to one compose service\n"
 	@printf "  GIT_DATA_DIR=%s\n" "$(GIT_DATA_DIR)"
+	@printf "  CONFIG_FILE=%s        Shared local-profile configuration\n" "$(CONFIG_FILE)"
 	@printf "  API_URL=%s\n" "$(API_URL)"
 	@printf "  ADMIN_USERNAME=%s\n" "$(ADMIN_USERNAME)"
 	@printf "  ADMIN_PASSWORD=<password> Required for login unless BOOTSTRAP_TOKEN or cached token is available\n"
@@ -123,26 +127,36 @@ dev: ## Run local git service and API together in the foreground.
 	trap - EXIT; \
 	exit "$$status"
 
-compose: ## Run API and git service with Docker Compose.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml up --build $(DETACH_FLAG)
+validate-local-config:
+	@test -f "$(CONFIG_FILE)" || { echo "CONFIG_FILE does not exist: $(CONFIG_FILE)"; exit 2; }
+	@test -r "$(CONFIG_FILE)" || { echo "CONFIG_FILE is not readable: $(CONFIG_FILE)"; exit 2; }
+	@test -f "$(POLICY_FILE)" || { echo "Local RBAC policy does not exist: $(POLICY_FILE)"; exit 2; }
+	@test -r "$(POLICY_FILE)" || { echo "Local RBAC policy is not readable: $(POLICY_FILE)"; exit 2; }
+
+compose-config-check: validate-local-config ## Validate local profile arguments and read-only mounts.
+	@CONFIG_FILE="$(abspath $(CONFIG_FILE))" ./scripts/check-local-compose-config.sh
+
+compose: validate-local-config ## Run all core services with the shared local configuration.
+	@$(LOCAL_COMPOSE) up --build $(DETACH_FLAG)
 
 scylla: ## Run only local Scylla services with Docker Compose.
 	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml up $(DETACH_FLAG) scylla scylla-init
 
 compose-scylla: ## Run API, git service, and Scylla with Docker Compose.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml up --build $(DETACH_FLAG)
+compose-scylla: validate-local-config
+	@$(LOCAL_COMPOSE) -f compose.scylla.yml up --build $(DETACH_FLAG)
 
-ps: ## Show compose service status.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml -f compose.admin.yml ps
+ps: validate-local-config ## Show compose service status.
+	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml ps
 
-logs: ## Follow compose logs; optionally pass SERVICE=<name>.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml -f compose.admin.yml logs -f $(SERVICE)
+logs: validate-local-config ## Follow compose logs; optionally pass SERVICE=<name>.
+	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml logs -f $(SERVICE)
 
-stop: ## Stop compose services; optionally pass SERVICE=<name>.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml -f compose.admin.yml stop $(SERVICE)
+stop: validate-local-config ## Stop compose services; optionally pass SERVICE=<name>.
+	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml stop $(SERVICE)
 
-down: ## Stop and remove compose services and networks.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml -f compose.admin.yml down
+down: validate-local-config ## Stop and remove compose services and networks.
+	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml down
 
 build: ## Build Rust and Go services.
 	@cd "$(GIT_SERVICE_DIR)" && cargo build --verbose
@@ -380,14 +394,14 @@ git-clean-data: ## Remove native local git-service repository data; requires CON
 	fi
 	@rm -rf "$(GIT_DATA_DIR)"
 
-admin-compose: ## Run the optional admin compose stack.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.admin.yml up --build $(DETACH_FLAG) admin
+admin-compose: validate-local-config ## Run the optional admin compose stack.
+	@$(LOCAL_COMPOSE) -f compose.admin.yml up --build $(DETACH_FLAG) admin
 
-admin-down: ## Stop and remove the admin compose stack.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.admin.yml down
+admin-down: validate-local-config ## Stop and remove the admin compose stack.
+	@$(LOCAL_COMPOSE) -f compose.admin.yml down
 
-admin-stop: ## Stop only the admin compose service.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.admin.yml stop admin
+admin-stop: validate-local-config ## Stop only the admin compose service.
+	@$(LOCAL_COMPOSE) -f compose.admin.yml stop admin
 
-admin-logs: ## Follow admin compose logs.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.admin.yml logs -f admin
+admin-logs: validate-local-config ## Follow admin compose logs.
+	@$(LOCAL_COMPOSE) -f compose.admin.yml logs -f admin

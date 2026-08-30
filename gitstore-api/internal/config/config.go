@@ -144,6 +144,19 @@ type ScyllaConfig struct {
 // Load reads configuration from all sources (defaults → config file → env vars)
 // and returns the resolved, validated Config.
 func Load() (*Config, error) {
+	return load("")
+}
+
+// LoadFrom loads configuration from path. Unlike Load's current-directory
+// discovery, an explicitly selected file is required to exist and be readable.
+func LoadFrom(path string) (*Config, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, errors.New("config file path must not be empty")
+	}
+	return load(path)
+}
+
+func load(path string) (*Config, error) {
 	// .env file is optional; ignore error if absent
 	_ = godotenv.Load()
 
@@ -179,13 +192,17 @@ func Load() (*Config, error) {
 	v.SetDefault("datastore.scylla.tls", false)
 	v.SetDefault("features.namespace_repository_fence", "auto")
 
-	// Config file (optional)
-	v.SetConfigName("config")
-	v.SetConfigType("toml")
-	v.AddConfigPath(".")
+	// Config discovery is optional for compatibility; an explicit path is not.
+	if path != "" {
+		v.SetConfigFile(path)
+	} else {
+		v.SetConfigName("config")
+		v.SetConfigType("toml")
+		v.AddConfigPath(".")
+	}
 	if err := v.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError
-		if !errors.As(err, &notFound) {
+		if path != "" || !errors.As(err, &notFound) {
 			return nil, err
 		}
 	}
@@ -223,8 +240,16 @@ func Load() (*Config, error) {
 		"datastore.scylla.password": true, "datastore.scylla.tls": true,
 		"features.namespace_repository_fence": true,
 	}
+	sharedServiceKey := func(k string) bool {
+		for _, prefix := range []string{"controller.", "grpc.", "hooks.", "schema_validation.", "admission_control.", "catalog_service."} {
+			if strings.HasPrefix(k, prefix) {
+				return true
+			}
+		}
+		return strings.HasPrefix(k, "git.") && !strings.HasPrefix(k, "git.grpc.")
+	}
 	for _, k := range v.AllKeys() {
-		if !knownKeys[k] {
+		if !knownKeys[k] && !sharedServiceKey(k) {
 			logger.Warn("unknown configuration key", zap.String("key", k))
 		}
 	}

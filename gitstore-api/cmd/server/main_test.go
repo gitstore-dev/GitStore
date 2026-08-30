@@ -43,6 +43,12 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestParseConfigFile(t *testing.T) {
+	path, err := parseConfigFile([]string{"--config-file", "/config/shared.toml"})
+	require.NoError(t, err)
+	assert.Equal(t, "/config/shared.toml", path)
+}
+
 func (m *mockGitWriter) CommitFile(_ context.Context, p gitclient.CommitFileParams) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
