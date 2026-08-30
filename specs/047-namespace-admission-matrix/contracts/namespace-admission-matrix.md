@@ -11,6 +11,11 @@
 If any structural error exists in a validation request, including
 `IMMUTABLE_NAME`, policy checks are not evaluated.
 
+Git admission classifies a declaration as an update when its durable Namespace
+identity already exists, even if the old commit has no same-path manifest. This
+allows a previously deleted or cross-ref manifest to be reintroduced. Explicit
+create APIs still reject duplicate durable names.
+
 The bootstrap create/update policy entry documents behavior already owned by
 spec 046. It does not change FR-010's existing reserved-identifier validation or
 introduce an additional protected-namespace mechanism.

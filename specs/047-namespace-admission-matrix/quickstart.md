@@ -30,6 +30,8 @@ Verified on 2026-08-29:
 - non-Namespace resources never invoke Namespace policy;
 - same-path name changes return `metadata.name` / `immutable`;
 - simultaneous path-and-name changes are evaluated as new declarations;
+- reintroduced manifests with an existing durable Namespace identity are
+  evaluated as updates even when the old commit has no same-path blob;
 - bootstrap, duplicate-name, tier-demotion, and terminating-target policy
   rejections return stable reasons;
 - GraphQL structural, immutable, policy, not-found, and conflict errors expose

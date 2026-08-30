@@ -266,6 +266,50 @@ func TestValidateResourcesPathAndNameChangeIsNewDeclaration(t *testing.T) {
 	assert.Equal(t, admission.OperationCreate, spy.calls[0].Operation)
 }
 
+func TestValidateResourcesReintroducedNamespaceUsesUpdate(t *testing.T) {
+	spy := &namespacePolicySpy{}
+	srv := newCatalogServer(t, newNamespacePolicyDatastore(t), nil, withNamespacePolicySpy(spy))
+
+	resp, err := srv.ValidateResources(context.Background(), namespaceValidationRequest(
+		nil,
+		[]*catalogv1.ResourceBlob{namespaceBlob("namespaces/other.md", "other", "USER")},
+	))
+
+	require.NoError(t, err)
+	assert.True(t, resp.Accepted)
+	require.Len(t, spy.calls, 1)
+	assert.Equal(t, admission.OperationUpdate, spy.calls[0].Operation)
+}
+
+func TestAdmitResourcesReintroducedNamespaceUpdatesDurableIdentity(t *testing.T) {
+	store := newNamespacePolicyDatastore(t)
+	oldCommit := strings.Repeat("e", 40)
+	newCommit := strings.Repeat("f", 40)
+	current := newCommit
+	path := "namespaces/other.md"
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		oldCommit: {},
+		newCommit: {path: namespaceManifest("other", "Reintroduced", "ORGANIZATION")},
+	})
+	srv := newCatalogServer(t, store, git)
+
+	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID,
+		OldCommitSha: oldCommit,
+		NewCommitSha: newCommit,
+		CommitSha:    newCommit,
+		RefName:      "refs/heads/main",
+		ChangedPaths: []string{path},
+	})
+
+	require.NoError(t, err)
+	updated, err := store.GetNamespaceByName(context.Background(), "other")
+	require.NoError(t, err)
+	assert.Equal(t, "Reintroduced", updated.Title)
+	assert.Equal(t, datastore.NamespaceTierOrganization, updated.Tier)
+	assert.Equal(t, path, updated.SourcePath)
+}
+
 func TestValidateResourcesNamespacePolicyUsesStableConstraint(t *testing.T) {
 	spy := &namespacePolicySpy{decision: &namespaceadmission.Decision{
 		Phase:   namespaceadmission.PhasePolicy,
@@ -298,10 +342,6 @@ func TestValidateResourcesNamespacePolicyMatrix(t *testing.T) {
 			old:        []*catalogv1.ResourceBlob{namespaceBlob("namespaces/default.md", "default", "USER")},
 			proposed:   namespaceBlob("namespaces/default.md", "default", "ORGANIZATION"),
 			constraint: "metadata.name:policy/bootstrap-namespace",
-		},
-		"duplicate create": {
-			proposed:   namespaceBlob("namespaces/other.md", "other", "USER"),
-			constraint: "metadata.name:policy/namespace-already-exists",
 		},
 		"tier demotion": {
 			prepare: func(t *testing.T, store datastore.Datastore) {

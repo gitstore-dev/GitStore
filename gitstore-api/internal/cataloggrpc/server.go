@@ -340,6 +340,16 @@ func (s *Server) validateNamespacePolicies(
 
 	var validationErrors []*catalogv1.ValidationError
 	for _, candidate := range candidates {
+		if candidate.operation == admission.OperationCreate {
+			_, lookupErr := s.store.GetNamespaceByName(ctx, candidate.name)
+			switch {
+			case lookupErr == nil:
+				candidate.operation = admission.OperationUpdate
+			case errors.Is(lookupErr, datastore.ErrNotFound):
+			default:
+				return nil, true, fmt.Errorf("lookup Namespace %s for policy operation: %w", candidate.name, lookupErr)
+			}
+		}
 		decision, _, err := s.namespacePolicy.Evaluate(ctx, namespaceadmission.PolicyCheck{
 			Operation: candidate.operation,
 			Name:      candidate.name,
@@ -1232,6 +1242,10 @@ func (s *Server) operationForEntry(
 		existing, err := s.lookupResourceByIdentity(ctx, e.identity)
 		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
 			return "", nil, fmt.Errorf("lookup %s %s/%s: %w", e.identity.Kind, e.identity.Namespace, e.identity.Name, err)
+		}
+		if existingNamespace, ok := existing.(*datastore.Namespace); e.identity.Kind == "Namespace" &&
+			op.operation == admission.OperationCreate && ok && existingNamespace != nil {
+			return admission.OperationUpdate, existingNamespace, nil
 		}
 		return op.operation, existing, nil
 	}
