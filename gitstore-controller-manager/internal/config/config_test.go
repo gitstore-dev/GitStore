@@ -4,12 +4,47 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
 )
+
+func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared.toml")
+	content := `[controller]
+port = 6111
+api_uri = "http://api:4000/graphql"
+api_token = "file-token"
+[api]
+port = 4000
+[grpc]
+port = 50051
+[log]
+level = "info"
+format = "json"
+`
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GITSTORE_CONTROLLER__PORT", "6222")
+	cfg, err := config.LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom() error: %v", err)
+	}
+	if cfg.Controller.Port != 6222 {
+		t.Fatalf("Port = %d, want 6222", cfg.Controller.Port)
+	}
+}
+
+func TestLoadFrom_MissingExplicitFileFails(t *testing.T) {
+	if _, err := config.LoadFrom(filepath.Join(t.TempDir(), "missing.toml")); err == nil {
+		t.Fatal("expected missing explicit file error")
+	}
+}
 
 // setenv sets environment variables for a test and clears them on cleanup.
 func setenv(t *testing.T, pairs ...string) {

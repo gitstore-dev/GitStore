@@ -36,6 +36,10 @@ Controllers reconcile through `gitstore-api`; the manager does not talk directly
 
 ## Configuration Highlights
 
+Pass `--config-file PATH` to require and load an explicit TOML file. Environment
+variables override file values. Root `make compose` supplies the shared local
+configuration, including the controller bearer token.
+
 | Variable                                       | Default                         | Purpose                       |
 |------------------------------------------------|---------------------------------|-------------------------------|
 | `GITSTORE_CONTROLLER__PORT`                    | `5001`                          | HTTP listen port              |

@@ -86,11 +86,4 @@ COPY --from=builder /build/git-service /app/git-service
 # Expose git protocol and websocket ports
 EXPOSE 9418 8080
 
-ENV GITSTORE_HTTP__PORT=9418
-ENV GITSTORE_WS__PORT=8080
-ENV GITSTORE_GIT__DATA_DIR=/data/repos
-ENV GITSTORE_LOG__LEVEL=info
-ENV GITSTORE_LOG__FORMAT=json
-ENV GITSTORE_GIT__REPO__MAX_FILE_SIZE=52428800
-
 CMD ["/app/git-service"]

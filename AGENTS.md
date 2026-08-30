@@ -42,7 +42,9 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `make api` — run `gitstore-api` locally in the foreground. Requires `gitstore-api/.env` or shell env for required auth secrets.
 - `make controller` — run `gitstore-controller-manager` locally in the foreground on port 5001. Requires `GITSTORE_CONTROLLER__API_URI` pointing at a running API (default: `http://localhost:4000/graphql`).
 - `make dev` — run the native git service and API together in the foreground with shutdown trapping.
-- `make compose` — run the core Docker Compose stack (API + git service) in the foreground.
+- `make compose` — run all three core services with the Docker Compose `local` profile and shared `CONFIG_FILE` (default: `./config/config.toml`) in the foreground; no service `.env` files are required.
+- `make compose-config-check` — validate local-profile config selection, explicit binary arguments, and read-only config/policy mounts without starting services.
+- `make validate-local-config` — verify the selected `CONFIG_FILE` and local RBAC policy exist and are readable.
 - `DETACH=1 make compose` — run the core Docker Compose stack in the background.
 - `make scylla` — run only local Scylla services from `compose.yml` + `compose.scylla.yml`.
 - `make compose-scylla` — run the full core stack with Scylla from `compose.yml` + `compose.scylla.yml`.
@@ -63,6 +65,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `make admin-compose`, `make admin-stop`, `make admin-down`, `make admin-logs` — optional admin compose wrappers.
 
 Common bootstrap variables:
+- `CONFIG_FILE ?= ./config/config.toml` (override with an explicit file such as `./config/config.stage.toml`)
 - `API_URL ?= http://localhost:4000/graphql`
 - `ADMIN_USERNAME ?= admin`
 - `ADMIN_PASSWORD` is required unless `BOOTSTRAP_TOKEN` is provided or a cached bootstrap token exists.

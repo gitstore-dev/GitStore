@@ -20,6 +20,12 @@ The optional admin compose override adds:
 
 Git clients connect to the API on Git Smart HTTP port `5000`. The Git service is internal gRPC storage/transport and stores bare repositories in the `git-repo-data-root` volume.
 
+Core services are enabled by the `local` profile. Use the root Make targets so
+the profile and `compose.local.yml` are applied consistently. They validate the
+selected `CONFIG_FILE` and `config/policy.yaml` before startup. Both files are
+mounted read-only; `CONFIG_FILE=./config/config.prod.toml` selects an alternate
+host filename without changing container arguments.
+
 ## Basic Health Checks
 
 ```bash
@@ -106,7 +112,15 @@ query Repository {
 
 ### API container exits during startup
 
-Check required auth settings:
+With `make compose`, first validate the shared fixture and resolved mounts:
+
+```bash
+make validate-local-config
+CONFIG_FILE=./config/config.toml docker compose --profile local \
+  -f compose.yml -f compose.local.yml config
+```
+
+For non-profile/manual startup, check required auth settings:
 
 - `GITSTORE_AUTH__ADMIN__USERNAME`
 - `GITSTORE_AUTH__ADMIN__PASSWORD_HASH`

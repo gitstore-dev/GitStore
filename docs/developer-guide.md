@@ -66,6 +66,13 @@ make compose DETACH=1
 make ps
 ```
 
+This starts all three core services through the `local` Compose profile using
+the shared, read-only `config/config.toml` and `config/policy.yaml` fixtures. No
+service `.env` file is required. The local login is `admin` / `admin123`.
+Choose an alternate shared file with
+`make compose CONFIG_FILE=./config/config.stage.toml`; the selected host path
+is mounted at the same container path for every service.
+
 Run native services:
 
 ```bash
@@ -97,6 +104,7 @@ Useful variables:
 | `NAMESPACE`       | `gitstore-test`                 | Namespace to create                         |
 | `REPOSITORY`      | `catalog`                       | Repository to create                        |
 | `DEFAULT_BRANCH`  | `main`                          | Repository default branch                   |
+| `CONFIG_FILE`     | `./config/config.toml`          | Shared local Compose configuration          |
 
 ## Datastore Backends
 

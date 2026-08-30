@@ -1,0 +1,91 @@
+# Development-only shared configuration for the Docker Compose local profile.
+# Do not reuse these credentials outside an isolated developer workstation.
+
+[grpc]
+port = 50051
+
+[git]
+data_dir = "/data/repos"
+
+[git.repo]
+max_file_size = 52428800
+max_pack_size_bytes = 52428800
+
+[hooks.git_receive_pack]
+pre_receive = { enabled = true }
+update = { enabled = false }
+post_receive = { enabled = true }
+proc_receive = { enabled = false }
+post_update = { enabled = false }
+reference_transaction = { enabled = false }
+
+[schema_validation]
+phase = "pre-receive"
+timeout_secs = 10
+
+[admission_control]
+phase = "post-receive"
+branch_pattern = "refs/heads/.*"
+
+[catalog_service]
+uri = "http://api:6000"
+
+[api]
+port = 4000
+git_port = 5000
+grpc_port = 6000
+rate_limit_per_second = 50
+rate_limit_burst = 100
+
+[git.grpc]
+uri = "dns:///git-service:50051"
+
+[cache]
+ttl = 300
+
+[datastore]
+backend = "memdb"
+
+[auth.admin]
+username = "admin"
+# bcrypt hash for the development password: admin123
+password_hash = "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
+
+[auth.jwt]
+secret = "local-development-jwt-secret-at-least-32-characters"
+duration = "24h"
+issuer = "gitstore"
+refresh_grace = "60s"
+
+[auth.grpc]
+hmac_secret = "local-development-grpc-hmac-secret"
+
+[auth.authn]
+chain = ["static-admin", "anonymous"]
+
+[auth.authz]
+provider = "rbac-local"
+
+[auth.userdir]
+provider = "none"
+
+[auth.rbac]
+policy_file = "/config/policy.yaml"
+
+[controller]
+port = 5001
+api_uri = "http://api:4000/graphql"
+# Development-only admin JWT, valid through 2099, signed by auth.jwt.secret.
+api_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjb250cm9sbGVyIiwiaXNzIjoiZ2l0c3RvcmUiLCJpYXQiOjE3NjcyMjU2MDAsImV4cCI6NDEwMjQ0NDgwMCwianRpIjoibG9jYWwtY29udHJvbGxlci10b2tlbiJ9.U6etHyprdZxvC-dYsnoByBNRRhFQR6pE4TLXbeb6tN4"
+default_max_attempts = 5
+default_stall_threshold = "5m"
+checkpoint_dir = "/data/checkpoints"
+checkpoint_flush_interval_events = 100
+max_watch_backoff = "30s"
+
+[features]
+namespace_repository_fence = "auto"
+
+[log]
+level = "info"
+format = "json"

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -30,7 +31,17 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load()
+	configFile, err := parseConfigFile(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to parse arguments: %v\n", err)
+		os.Exit(2)
+	}
+	var cfg *config.Config
+	if configFile == "" {
+		cfg, err = config.Load()
+	} else {
+		cfg, err = config.LoadFrom(configFile)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 		os.Exit(1)
@@ -102,6 +113,15 @@ func main() {
 		log.Warn("HTTP server shutdown error", zap.Error(err))
 	}
 	log.Info("controller-manager stopped")
+}
+
+func parseConfigFile(args []string) (string, error) {
+	flags := flag.NewFlagSet("gitstore-controller-manager", flag.ContinueOnError)
+	path := flags.String("config-file", "", "path to an explicit TOML configuration file")
+	if err := flags.Parse(args); err != nil {
+		return "", err
+	}
+	return *path, nil
 }
 
 // registerNamespace wires Namespace list/watch, repository provisioning,

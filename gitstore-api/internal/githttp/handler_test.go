@@ -500,6 +500,34 @@ func TestGitHttpAuthorizerReadOnly(t *testing.T) {
 	}
 }
 
+func TestGitHttpAuthorizerAnonymousDenyChallengesForCredentials(t *testing.T) {
+	registry := auth.NewProviderRegistry(
+		auth.NewChainedAuthN(anonymous.New()),
+		&stubAuthZProvider{decision: auth.Deny("stub-authz", "authentication required")},
+		nil,
+	)
+
+	store := &testutil.StubStore{
+		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
+			return &datastore.Namespace{UID: "ns-id-1", Name: id}, nil
+		},
+		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
+			return &datastore.NamespaceMapping{RepositoryID: "01960000-0000-7000-8000-000000000001"}, nil
+		},
+	}
+
+	router := NewMuxWithStore(SmartHttpDeps{
+		GitClient: &mockGitClient{}, Store: store, Logger: zap.NewNop(),
+		Ids: apiruntime.NewSequenceIDGenerator(), Registry: registry,
+	})
+	req := httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-upload-pack", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Equal(t, `Basic realm="GitStore"`, w.Header().Get("WWW-Authenticate"))
+}
+
 // T024: write-capable principal on receive-pack passes through.
 func TestGitHttpAuthorizerWriteAllowed(t *testing.T) {
 	writePrincipal := &auth.Principal{Subject: "writer", AuthMethod: "basic", Roles: []string{"writer"}}

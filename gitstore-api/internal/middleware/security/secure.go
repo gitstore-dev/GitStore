@@ -235,7 +235,8 @@ const repoIDKey = "repoID"
 //   - /info/refs and /git-upload-pack → "repository.read"
 //   - /git-receive-pack              → "repository.write"
 //
-// Aborts with 403 on deny.
+// Aborts with 401 on an anonymous deny so Git credential helpers can retry,
+// and with 403 when an authenticated principal lacks permission.
 func (a *Authorize) GitHttpAuthorizer(c *gin.Context) {
 	if a.logger == nil {
 		a.logger = zap.NewNop()
@@ -281,6 +282,11 @@ func (a *Authorize) GitHttpAuthorizer(c *gin.Context) {
 	}
 	if decision.Outcome == auth.OutcomeDeny {
 		a.logger.Warn("authz denied", zap.String("action", action), zap.String("reason", decision.Reason))
+		if principal.AuthMethod == "none" {
+			c.Header("WWW-Authenticate", `Basic realm="GitStore"`)
+			c.AbortWithStatus(http.StatusUnauthorized)
+			return
+		}
 		c.AbortWithStatus(http.StatusForbidden)
 		return
 	}
