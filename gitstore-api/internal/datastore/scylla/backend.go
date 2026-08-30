@@ -2045,7 +2045,7 @@ func (s *scyllaDatastore) resolveNamespaceCreateCommit(
 			WatchCommitted *bool `db:"watch_committed"`
 		}
 		err := s.session.Query("SELECT watch_committed FROM namespaces_by_uid WHERE uid=?", nil).
-			WithContext(resolveCtx).Bind(row.UID).GetRelease(&state)
+			Consistency(gocql.LocalSerial).WithContext(resolveCtx).Bind(row.UID).GetRelease(&state)
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, nil
 		}
@@ -2369,7 +2369,7 @@ func (s *scyllaDatastore) resolveNamespaceDeleteCommit(
 			UID gocql.UUID `db:"uid"`
 		}
 		err := s.session.Query("SELECT uid FROM namespaces_by_uid WHERE uid=?", nil).
-			WithContext(resolveCtx).Bind(uid).GetRelease(&found)
+			Consistency(gocql.LocalSerial).WithContext(resolveCtx).Bind(uid).GetRelease(&found)
 		if errors.Is(err, gocql.ErrNotFound) {
 			return false, nil
 		}
