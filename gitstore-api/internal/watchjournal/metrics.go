@@ -24,7 +24,8 @@ type Metrics struct {
 	appendErrors     prometheus.Counter
 	replayEvents     prometheus.Counter
 	replayLatency    prometheus.Histogram
-	bookmarkAge      prometheus.Gauge
+	bookmarkAge      prometheus.GaugeFunc
+	bookmarkNanos    atomic.Int64
 	deliveryLatency  prometheus.Histogram
 	collectors       []prometheus.Collector
 }
@@ -40,11 +41,21 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 		appendErrors:    prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_namespace_watch_append_errors_total", Help: "Namespace journal append failures."}),
 		replayEvents:    prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_namespace_watch_replay_events_total", Help: "Namespace journal events replayed."}),
 		replayLatency:   prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_namespace_watch_replay_duration_seconds", Help: "Namespace journal replay duration."}),
-		bookmarkAge:     prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_bookmark_age_seconds", Help: "Age of the latest durable Namespace bookmark."}),
 		deliveryLatency: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_namespace_watch_delivery_latency_seconds", Help: "Namespace CDC-to-subscriber delivery latency."}),
 	}
 	m.cdcLag = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_cdc_lag_seconds", Help: "Age of the latest observed Namespace CDC position."}, func() float64 {
 		nanos := m.cdcProgressNanos.Load()
+		if nanos == 0 {
+			return 0
+		}
+		age := time.Since(time.Unix(0, nanos)).Seconds()
+		if age < 0 {
+			return 0
+		}
+		return age
+	})
+	m.bookmarkAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_bookmark_age_seconds", Help: "Age of the latest durable Namespace bookmark."}, func() float64 {
+		nanos := m.bookmarkNanos.Load()
 		if nanos == 0 {
 			return 0
 		}
@@ -104,16 +115,22 @@ func (m *Metrics) SetBounds(bounds datastore.NamespaceWatchBounds, now time.Time
 		m.ObserveCDCProgress(bounds.ProgressAt)
 	}
 	if !bounds.UpdatedAt.IsZero() && !now.Before(bounds.UpdatedAt) {
-		m.bookmarkAge.Set(now.Sub(bounds.UpdatedAt).Seconds())
+		m.ObserveBookmark(bounds.UpdatedAt)
 	}
 }
 func (m *Metrics) ObserveMaterialized(event datastore.NamespaceWatchEvent, now time.Time) {
 	m.journalHigh.Set(float64(event.Sequence))
-	if !event.At.IsZero() && !now.Before(event.At) {
-		age := now.Sub(event.At).Seconds()
-		if event.Type == datastore.NamespaceWatchBookmark {
-			m.bookmarkAge.Set(age)
-		}
+	if event.Type == datastore.NamespaceWatchBookmark && !event.At.IsZero() && !now.Before(event.At) {
+		m.ObserveBookmark(event.At)
+	}
+}
+
+// ObserveBookmark records the latest durable bookmark timestamp. The
+// GaugeFunc derives age at scrape time so a stalled bookmark producer is
+// visible even when no subscriber opens and refreshes journal bounds.
+func (m *Metrics) ObserveBookmark(at time.Time) {
+	if !at.IsZero() {
+		m.bookmarkNanos.Store(at.UnixNano())
 	}
 }
 

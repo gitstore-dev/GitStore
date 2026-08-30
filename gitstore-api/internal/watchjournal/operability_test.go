@@ -42,6 +42,20 @@ func TestNamespaceWatchCDCLagAdvancesBetweenScrapes(t *testing.T) {
 	assert.Greater(t, second, first)
 }
 
+func TestNamespaceWatchBookmarkAgeAdvancesBetweenScrapes(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewMetrics(registry)
+	require.NoError(t, err)
+	metrics.ObserveBookmark(time.Now().Add(-time.Second))
+
+	first := testutil.ToFloat64(metrics.bookmarkAge)
+	time.Sleep(20 * time.Millisecond)
+	second := testutil.ToFloat64(metrics.bookmarkAge)
+
+	assert.GreaterOrEqual(t, first, 1.0)
+	assert.Greater(t, second, first)
+}
+
 func TestReadinessRequiresRecentMaterializerAndContinuousJournal(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	readiness := NewReadiness(60 * time.Second)
