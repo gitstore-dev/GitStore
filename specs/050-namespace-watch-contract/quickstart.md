@@ -266,12 +266,44 @@ Completed:
   three probes passed in 5.702 seconds (6.13 seconds wall), cross-replica event
   visibility was 872.7 ms, fenced lease handoff advanced token 1 to 2 in about
   4.975 seconds, and the replacement replica became ready in 48 ms;
-- short capacity-harness smoke with 50 subscribers for 3 seconds;
-- the full capacity gate with 1,000 subscribers for 60 minutes passed in
-  3600.513 seconds. Its enforced assertions proved exact event counts with no
-  subscriber terminal errors, p95 latency <= 1 second, p99 latency <= 3
-  seconds, 10,000-event replay <= 5 seconds, utilized normalized CPU < 80%,
-  and retained heap growth <= 10%;
+- the original in-process `internal/watchjournal` capacity smoke and 60-minute
+  run completed, but review correctly determined that they did not exercise
+  deployed GraphQL/WebSocket transports, two API processes, or Scylla and
+  therefore do **not** count as PR-003/T061 evidence;
+- the replacement gate is deployment-driven from
+  `tests/integration/namespace_watch_capacity_test.go`: it requires two
+  distinct API URLs, a replacement endpoint naming one of them, a trigger file
+  watched by the deployment harness, and an authenticated token;
+  creates acknowledged Namespace transitions through both GraphQL endpoints;
+  splits real WebSocket subscriptions across both replicas; replays 10,000
+  retained events through GraphQL; checks sustained and burst scheduling,
+  missing transitions, stream errors, p95/p99 visibility, replacement recovery,
+  requires the triggered endpoint to become unavailable and return with a new
+  `process_start_time_seconds`, resumes a peer-issued cursor through that new
+  process, reconnects replacement-disrupted subscribers from each socket's last
+  observed cursor while preserving GraphQL terminal errors, and enforces
+  GOMAXPROCS-normalized per-process CPU and resident memory from `/metrics` (a
+  short smoke may explicitly relax only the CPU/resident assertions);
+- the focused integration test compile and `go vet ./...` passed;
+- a short deployed smoke against two API containers and a fresh shared Scylla
+  keyspace acknowledged 50 Namespace mutations split across both GraphQL
+  endpoints, then failed its bounded replay with
+  `WATCH_UNAVAILABLE/MATERIALIZER_NOT_READY`; both `/health` and `/ready`
+  subsequently reported healthy, but the authoritative Namespace rows were
+  `watch_committed=true` while the corresponding journal window contained only
+  `BOOKMARK` records. No replacement was triggered and this failed smoke is not
+  T061 evidence;
+- after commit `4e7a38f` corrected false-to-true commit promotion, a 12-second
+  functional deployment smoke with 20 subscribers and 50-event replay reached
+  the final latency assertion after passing real API-A outage/restart identity,
+  cursor-resumed subscriber failover, zero-missing delivery, replay, mutation
+  error, and recovery assertions. Its p95 was 5.47 seconds because the forced
+  replacement and lease-handoff interval dominated the intentionally tiny
+  sample; this is functional smoke evidence only, and the production latency
+  threshold remains unchanged for the 60-minute gate;
+- the full replacement 60-minute/1,000-subscriber deployed gate remains
+  pending and T061 is intentionally open until its emitted metrics are recorded
+  here;
 - `make pr-ready` across Go, Rust, static analysis, formatting, and license
   checks;
 - `graphify update .` followed by a query that surfaced the Namespace CDC
@@ -286,19 +318,41 @@ make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9042
 NAMESPACE_WATCH_API_A=http://127.0.0.1:4100 \
 NAMESPACE_WATCH_API_B=http://127.0.0.1:4101 \
 NAMESPACE_WATCH_API_REPLACEMENT=http://127.0.0.1:4100 \
+NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=/private/tmp/gitstore-watch-smoke-replace \
 NAMESPACE_WATCH_TOKEN="$TOKEN" \
   make test-namespace-watch-recovery
-make test-namespace-watch-capacity \
-  NAMESPACE_WATCH_CAPACITY_DURATION=3s \
-  NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS=50
+NAMESPACE_WATCH_API_A=http://127.0.0.1:4100 \
+NAMESPACE_WATCH_API_B=http://127.0.0.1:4101 \
+NAMESPACE_WATCH_API_REPLACEMENT=http://127.0.0.1:4100 \
+NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=/private/tmp/gitstore-watch-capacity-smoke-replace \
+NAMESPACE_WATCH_TOKEN="$TOKEN" \
+  make test-namespace-watch-capacity \
+    NAMESPACE_WATCH_CAPACITY_DURATION=12s \
+    NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS=20 \
+    NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS=50 \
+    NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES=3 \
+    NAMESPACE_WATCH_CAPACITY_REPLACEMENT_DELAY=5s \
+    NAMESPACE_WATCH_CAPACITY_BURST_INTERVAL=2s \
+    NAMESPACE_WATCH_CAPACITY_BURST_SIZE=10
 STATICCHECK_CACHE=/private/tmp/gitstore-050-staticcheck \
   GOCACHE=/private/tmp/gitstore-050-gocache make pr-ready
 graphify update .
 graphify query "How does Namespace CDC flow through the durable watch journal materializer to typed and generic GraphQL subscriptions, including readiness and cursors?"
 ```
 
-Re-run the capacity gate before production rollout with:
+Run the still-pending PR-003/T061 gate before production rollout against two
+distinct API processes backed by the same Scylla deployment. The deployment
+harness must watch `NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE` and restart the
+process addressed by `NAMESPACE_WATCH_API_REPLACEMENT` in place after the test
+writes that file. The gate must observe both the outage and a changed
+`process_start_time_seconds`; merely pointing at an already-live endpoint is
+not replacement evidence:
 
 ```bash
-make test-namespace-watch-capacity
+NAMESPACE_WATCH_API_A=http://api-a:4000 \
+NAMESPACE_WATCH_API_B=http://api-b:4000 \
+NAMESPACE_WATCH_API_REPLACEMENT=http://api-a:4000 \
+NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=/var/run/gitstore/watch-capacity-replace \
+NAMESPACE_WATCH_TOKEN="$TOKEN" \
+  make test-namespace-watch-capacity
 ```

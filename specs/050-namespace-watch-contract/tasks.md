@@ -142,13 +142,13 @@
 
 **Purpose**: Validate production-scale behavior, rollout safety, repository guidance, and the complete quality gate.
 
-- [X] T055 [P] Add a threshold-enforcing two-replica 60-minute soak for 10 transitions/s, 100/s bursts, 1,000 subscribers, 10,000-event replay, rolling replacement, CPU, and retained memory in `gitstore-api/internal/watchjournal/namespace_watch_capacity_test.go`
+- [X] T055 [P] Add a deployment-driven two-replica 60-minute soak in `tests/integration/namespace_watch_capacity_test.go` that uses authenticated GraphQL mutations and WebSocket subscriptions against two distinct API endpoints sharing Scylla, and enforces 10 transitions/s, 100/s bursts, 1,000 subscribers, 10,000-event replay, deployment-triggered observed outage/new-process recovery, latency/errors/missing transitions, and mandatory per-process CPU/resident memory from `/metrics` for the full gate
 - [X] T056 [P] Add migration-006 compatibility and supported-artifact rollback assertions in `gitstore-api/internal/datastore/scylla/namespace_watch_rolling_upgrade_test.go`
-- [X] T057 Add the executable Namespace watch capacity and cross-replica probe commands to `Makefile`
+- [X] T057 Add the executable deployment-driven Namespace watch capacity and cross-replica recovery probe commands to `Makefile`
 - [X] T058 [P] Add alert thresholds and bounded-cardinality Namespace watch metric guidance to `docs/runbooks/controller-watch-status.md`
 - [X] T059 Run the focused schema, security, resolver, journal, memdb, and Scylla-hardening suites described in `specs/050-namespace-watch-contract/quickstart.md`
 - [X] T060 Run the tagged Scylla CDC/materializer integration suite and cross-replica recovery probe described in `specs/050-namespace-watch-contract/quickstart.md`
-- [X] T061 Run the 60-minute Namespace watch capacity gate and record threshold evidence in `specs/050-namespace-watch-contract/quickstart.md`
+- [ ] T061 Run the deployment-driven 60-minute Namespace watch capacity gate against two API processes and their shared Scylla journal, then record the emitted GraphQL/WebSocket, replay, recovery, `/metrics`, and threshold evidence in `specs/050-namespace-watch-contract/quickstart.md`
 - [X] T062 Run `make pr-ready`, resolve all failures, and record the final validation commands in `specs/050-namespace-watch-contract/quickstart.md`
 - [X] T063 Run `graphify update .` and verify the refreshed architecture graph captures the Namespace CDC, journal, materializer, and GraphQL watch paths in `graphify-out/graph.json`
 
