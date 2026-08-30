@@ -1,0 +1,24 @@
+services:
+  git-service:
+    profiles: [local]
+    command: ["/app/git-service", "--config-file", "/config/gitstore.toml"]
+    volumes:
+      - ${CONFIG_FILE:-./config/config.toml}:/config/gitstore.toml:ro
+
+  api:
+    profiles: [local]
+    command: ["/app/api", "--config-file", "/config/gitstore.toml"]
+    volumes:
+      - ${CONFIG_FILE:-./config/config.toml}:/config/gitstore.toml:ro
+      - ./config/policy.yaml:/config/policy.yaml:ro
+
+  controller-manager:
+    profiles: [local]
+    command: ["/app/controller-manager", "--config-file", "/config/gitstore.toml"]
+    volumes:
+      - ${CONFIG_FILE:-./config/config.toml}:/config/gitstore.toml:ro
+      - controller-checkpoints:/data/checkpoints
+
+volumes:
+  controller-checkpoints:
+    driver: local

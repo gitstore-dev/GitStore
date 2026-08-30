@@ -1,0 +1,19 @@
+# DEVELOPMENT ONLY. Production deployments must provide a reviewed policy.
+version: v1
+roles:
+  admin:
+    allow:
+      - "*"
+    deny: []
+  controller:
+    allow:
+      - "*.status.write"
+      - "category.status.write"
+      - "namespace.status.write"
+    deny: []
+default_deny: true
+role_bindings:
+  admin:
+    - admin
+  controller:
+    - controller

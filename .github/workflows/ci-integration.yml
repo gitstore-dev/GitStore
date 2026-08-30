@@ -50,8 +50,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-    # Stub credentials available to every step (including Collect logs / Cleanup)
-    # so docker compose can interpolate compose.yml without the :? guard firing.
+    # CI-specific credentials override the tracked development fixture.
     env:
       GITSTORE_GIT__DATA_DIR: ./data/repos
       GITSTORE_AUTH__ADMIN__USERNAME: admin
@@ -89,12 +88,8 @@ jobs:
       run: timeout 30 sh -c 'until nc -z localhost 6000; do sleep 1; done'
 
     - name: Mint controller-manager bearer token and restart it with credentials
-      # controller-manager already started (via `docker compose --profile local -f compose.yml -f compose.local.yml up -d`) with no
-      # Authorization header, so its reconciler's status-write mutations are
-      # rejected outright by the API's "authentication required" gate (every
-      # mutation except login/refreshToken requires an authenticated principal,
-      # independent of the allow-all authz provider). Mint a real token now that
-      # the API is up, then recreate just this one container with it set.
+      # The CI JWT secret overrides the local fixture's signing secret, so mint
+      # a matching token and recreate just the controller container with it.
       run: |
         token_json=$(curl -sf -H 'Content-Type: application/json' \
           --data '{"query":"mutation($username: String!, $password: String!) { login(input: { username: $username, password: $password }) { token { accessToken } } }","variables":{"username":"admin","password":"admin123"}}' \
@@ -213,9 +208,8 @@ jobs:
         run: timeout 30 sh -c 'until nc -z localhost 6000; do sleep 1; done'
 
       - name: Mint controller-manager bearer token and restart it with credentials
-        # See the memdb job's identically-named step for why this is needed:
-        # every mutation requires an authenticated principal regardless of the
-        # allow-all authz provider, and controller-manager starts with no token.
+        # The CI JWT secret overrides the local fixture's signing secret, so the
+        # controller needs a matching token.
         run: |
           token_json=$(curl -sf -H 'Content-Type: application/json' \
             --data '{"query":"mutation($username: String!, $password: String!) { login(input: { username: $username, password: $password }) { token { accessToken } } }","variables":{"username":"admin","password":"admin123"}}' \
