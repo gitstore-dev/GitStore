@@ -266,6 +266,32 @@ func TestNamespaceCreateCommitResolutionRequiresRepairWhenAmbiguous(t *testing.T
 	assert.Equal(t, "confirm_watch_commit", repair.Step.Action)
 }
 
+func TestNamespaceDeleteCommitResolutionConfirmsAmbiguousSuccess(t *testing.T) {
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+
+	committed, err := runNamespaceDeleteCommitResolution(requestCtx, context.DeadlineExceeded, func(resolveCtx context.Context) (bool, error) {
+		require.NoError(t, resolveCtx.Err())
+		return false, nil
+	})
+
+	require.NoError(t, err)
+	require.True(t, committed)
+}
+
+func TestNamespaceDeleteCommitResolutionRequiresRepairWhenAmbiguous(t *testing.T) {
+	committed, err := runNamespaceDeleteCommitResolution(context.Background(), context.DeadlineExceeded, func(context.Context) (bool, error) {
+		return false, errors.New("authoritative read failed")
+	})
+
+	require.False(t, committed)
+	require.ErrorIs(t, err, datastore.ErrRepairRequired)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	var repair *datastore.RepairRequiredError
+	require.ErrorAs(t, err, &repair)
+	assert.Equal(t, "confirm_authoritative_delete", repair.Step.Action)
+}
+
 func sequenceTestRequest(streamID, name string, at gocql.UUID, progressed chan<- string) namespaceCDCSequenceRequest {
 	return namespaceCDCSequenceRequest{
 		streamID: streamID,

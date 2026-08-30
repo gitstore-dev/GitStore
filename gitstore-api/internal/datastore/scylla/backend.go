@@ -2319,22 +2319,16 @@ func (s *scyllaDatastore) DeleteNamespace(ctx context.Context, uidString string)
 	// Failed writes must leave the bootstrap list unchanged; CDC holds the
 	// resulting DELETED event until the projection cleanup below is visible.
 	if err := s.session.Query("DELETE FROM namespaces_by_uid WHERE uid=?", nil).WithContext(ctx).Bind(uid).ExecRelease(); err != nil {
-		return fmt.Errorf("scylla: delete namespace: %w", err)
+		primary := fmt.Errorf("scylla: delete namespace: %w", err)
+		committed, resolveErr := s.resolveNamespaceDeleteCommit(ctx, uid, primary)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		if !committed {
+			return primary
+		}
 	}
-	if err := s.deleteNamespaceIndexes(ctx, ns); err != nil {
-		return datastore.NewRepairRequiredError(
-			datastore.MutationStep{
-				Operation:    "delete_namespace",
-				ResourceKind: "Namespace",
-				ResourceUID:  uidString,
-				Projection:   "namespace_indexes",
-				Action:       "delete_after_authoritative_commit",
-			},
-			errors.New("scylla: authoritative namespace delete committed"),
-			err,
-		)
-	}
-	return nil
+	return s.completeNamespaceDeleteCleanup(ctx, ns)
 }
 
 func (s *scyllaDatastore) DeleteNamespaceWithResourceVersion(ctx context.Context, uidString, expectedResourceVersion string) error {
@@ -2349,17 +2343,66 @@ func (s *scyllaDatastore) DeleteNamespaceWithResourceVersion(ctx context.Context
 		mustParseUUID(uidString), expectedResourceVersion,
 	).ExecCASRelease()
 	if err != nil {
-		return fmt.Errorf("scylla: delete namespace with resource version: %w", err)
+		primary := fmt.Errorf("scylla: delete namespace with resource version: %w", err)
+		committed, resolveErr := s.resolveNamespaceDeleteCommit(ctx, mustParseUUID(uidString), primary)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		if !committed {
+			return primary
+		}
+		return s.completeNamespaceDeleteCleanup(ctx, ns)
 	}
 	if !applied {
 		return datastore.ErrConflict
 	}
+	return s.completeNamespaceDeleteCleanup(ctx, ns)
+}
+
+func (s *scyllaDatastore) resolveNamespaceDeleteCommit(
+	ctx context.Context,
+	uid gocql.UUID,
+	primary error,
+) (bool, error) {
+	return runNamespaceDeleteCommitResolution(ctx, primary, func(resolveCtx context.Context) (bool, error) {
+		var found struct {
+			UID gocql.UUID `db:"uid"`
+		}
+		err := s.session.Query("SELECT uid FROM namespaces_by_uid WHERE uid=?", nil).
+			WithContext(resolveCtx).Bind(uid).GetRelease(&found)
+		if errors.Is(err, gocql.ErrNotFound) {
+			return false, nil
+		}
+		return err == nil, err
+	})
+}
+
+func runNamespaceDeleteCommitResolution(
+	ctx context.Context,
+	primary error,
+	readAuthoritative func(context.Context) (bool, error),
+) (bool, error) {
+	resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceProjectionCleanupTimeout)
+	defer cancel()
+	exists, err := readAuthoritative(resolveCtx)
+	if err != nil {
+		return false, datastore.NewRepairRequiredError(datastore.MutationStep{
+			Operation:    "delete_namespace",
+			ResourceKind: "Namespace",
+			Projection:   "namespaces_by_uid",
+			Action:       "confirm_authoritative_delete",
+		}, primary, fmt.Errorf("confirm authoritative namespace delete: %w", err))
+	}
+	return !exists, nil
+}
+
+func (s *scyllaDatastore) completeNamespaceDeleteCleanup(ctx context.Context, ns *datastore.Namespace) error {
 	if err := s.deleteNamespaceIndexes(ctx, ns); err != nil {
 		return datastore.NewRepairRequiredError(
 			datastore.MutationStep{
 				Operation:    "delete_namespace",
 				ResourceKind: "Namespace",
-				ResourceUID:  uidString,
+				ResourceUID:  ns.UID,
 				Projection:   "namespace_indexes",
 				Action:       "delete_after_authoritative_commit",
 			},
