@@ -262,10 +262,16 @@ Completed:
 - tagged Scylla datastore integration, including the official
   `scylla-cdc-go` reader materializing an acknowledged Namespace mutation;
 - the deployment-shaped two-replica recovery gate on a fresh Scylla keyspace:
-  all three probes passed in 5.964 seconds (6.35 seconds wall), cross-replica
-  event visibility was 783.8 ms, fenced lease handoff advanced token 1 to 2,
-  and the replacement replica became ready in 52 ms;
+  migration 006 completed in 887 ms with its corrected physical schema, all
+  three probes passed in 5.702 seconds (6.13 seconds wall), cross-replica event
+  visibility was 872.7 ms, fenced lease handoff advanced token 1 to 2 in about
+  4.975 seconds, and the replacement replica became ready in 48 ms;
 - short capacity-harness smoke with 50 subscribers for 3 seconds;
+- the full capacity gate with 1,000 subscribers for 60 minutes passed in
+  3600.513 seconds. Its enforced assertions proved exact event counts with no
+  subscriber terminal errors, p95 latency <= 1 second, p99 latency <= 3
+  seconds, 10,000-event replay <= 5 seconds, utilized normalized CPU < 80%,
+  and retained heap growth <= 10%;
 - `make pr-ready` across Go, Rust, static analysis, formatting, and license
   checks;
 - `graphify update .` followed by a query that surfaced the Namespace CDC
@@ -291,10 +297,7 @@ graphify update .
 graphify query "How does Namespace CDC flow through the durable watch journal materializer to typed and generic GraphQL subscriptions, including readiness and cursors?"
 ```
 
-The remaining operational gate is the full 60-minute, 1,000-subscriber
-capacity run and threshold capture.
-
-Run those gates before production rollout with:
+Re-run the capacity gate before production rollout with:
 
 ```bash
 make test-namespace-watch-capacity
