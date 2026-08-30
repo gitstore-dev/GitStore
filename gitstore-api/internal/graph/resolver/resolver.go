@@ -59,13 +59,14 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 	var namespaceSubscriber *watchjournal.Subscriber
 	if deps.NamespaceJournal != nil && deps.NamespaceWatch.ReadersEnabled {
 		namespaceSubscriber = watchjournal.NewSubscriber(deps.NamespaceJournal, watchjournal.SubscriberConfig{
-			ReadBatchSize:      deps.NamespaceWatch.ReadBatchSize,
-			MaxReplayEvents:    deps.NamespaceWatch.MaxReplayEvents,
-			BufferSize:         deps.NamespaceWatch.SubscriberBuffer,
-			PollMin:            time.Duration(deps.NamespaceWatch.PollMinMillis) * time.Millisecond,
-			PollMax:            time.Duration(deps.NamespaceWatch.PollMaxMillis) * time.Millisecond,
-			MaxMaterializerLag: time.Duration(deps.NamespaceWatch.MaxMaterializerLagSeconds) * time.Second,
-			Metrics:            deps.NamespaceMetrics,
+			ReadBatchSize:       deps.NamespaceWatch.ReadBatchSize,
+			MaxReplayEvents:     deps.NamespaceWatch.MaxReplayEvents,
+			BufferSize:          deps.NamespaceWatch.SubscriberBuffer,
+			BackpressureTimeout: time.Duration(deps.NamespaceWatch.SubscriberBackpressureMillis) * time.Millisecond,
+			PollMin:             time.Duration(deps.NamespaceWatch.PollMinMillis) * time.Millisecond,
+			PollMax:             time.Duration(deps.NamespaceWatch.PollMaxMillis) * time.Millisecond,
+			MaxMaterializerLag:  time.Duration(deps.NamespaceWatch.MaxMaterializerLagSeconds) * time.Second,
+			Metrics:             deps.NamespaceMetrics,
 		})
 	}
 	SetConverterLogger(deps.Logger)

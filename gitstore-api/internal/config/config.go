@@ -124,20 +124,21 @@ type WatchConfig struct {
 // Integer time values keep TOML/environment configuration explicit and are
 // converted to durations at the watch boundary.
 type NamespaceWatchConfig struct {
-	ReadersEnabled            bool `mapstructure:"readers_enabled"`
-	MaterializerEnabled       bool `mapstructure:"materializer_enabled"`
-	JournalRetentionSeconds   int  `mapstructure:"journal_retention_seconds" validate:"min=1"`
-	CDCRetentionSeconds       int  `mapstructure:"cdc_retention_seconds" validate:"min=1"`
-	BucketSize                int  `mapstructure:"bucket_size" validate:"min=1"`
-	ReadBatchSize             int  `mapstructure:"read_batch_size" validate:"min=1"`
-	MaxReplayEvents           int  `mapstructure:"max_replay_events" validate:"min=1"`
-	SubscriberBuffer          int  `mapstructure:"subscriber_buffer" validate:"min=1"`
-	PollMinMillis             int  `mapstructure:"poll_min_millis" validate:"min=1"`
-	PollMaxMillis             int  `mapstructure:"poll_max_millis" validate:"min=1"`
-	BookmarkIntervalSeconds   int  `mapstructure:"bookmark_interval_seconds" validate:"min=1"`
-	LeaseTTLSeconds           int  `mapstructure:"lease_ttl_seconds" validate:"min=1"`
-	LeaseRenewIntervalSeconds int  `mapstructure:"lease_renew_interval_seconds" validate:"min=1"`
-	MaxMaterializerLagSeconds int  `mapstructure:"max_materializer_lag_seconds" validate:"min=1"`
+	ReadersEnabled               bool `mapstructure:"readers_enabled"`
+	MaterializerEnabled          bool `mapstructure:"materializer_enabled"`
+	JournalRetentionSeconds      int  `mapstructure:"journal_retention_seconds" validate:"min=1"`
+	CDCRetentionSeconds          int  `mapstructure:"cdc_retention_seconds" validate:"min=1"`
+	BucketSize                   int  `mapstructure:"bucket_size" validate:"min=1"`
+	ReadBatchSize                int  `mapstructure:"read_batch_size" validate:"min=1"`
+	MaxReplayEvents              int  `mapstructure:"max_replay_events" validate:"min=1"`
+	SubscriberBuffer             int  `mapstructure:"subscriber_buffer" validate:"min=1"`
+	SubscriberBackpressureMillis int  `mapstructure:"subscriber_backpressure_millis" validate:"min=1"`
+	PollMinMillis                int  `mapstructure:"poll_min_millis" validate:"min=1"`
+	PollMaxMillis                int  `mapstructure:"poll_max_millis" validate:"min=1"`
+	BookmarkIntervalSeconds      int  `mapstructure:"bookmark_interval_seconds" validate:"min=1"`
+	LeaseTTLSeconds              int  `mapstructure:"lease_ttl_seconds" validate:"min=1"`
+	LeaseRenewIntervalSeconds    int  `mapstructure:"lease_renew_interval_seconds" validate:"min=1"`
+	MaxMaterializerLagSeconds    int  `mapstructure:"max_materializer_lag_seconds" validate:"min=1"`
 }
 
 // LogConfig holds logger settings.
@@ -225,6 +226,7 @@ func load(path string) (*Config, error) {
 	v.SetDefault("watch.namespace.read_batch_size", 256)
 	v.SetDefault("watch.namespace.max_replay_events", 100000)
 	v.SetDefault("watch.namespace.subscriber_buffer", 64)
+	v.SetDefault("watch.namespace.subscriber_backpressure_millis", 30000)
 	v.SetDefault("watch.namespace.poll_min_millis", 100)
 	v.SetDefault("watch.namespace.poll_max_millis", 2000)
 	v.SetDefault("watch.namespace.bookmark_interval_seconds", 30)
@@ -283,7 +285,8 @@ func load(path string) (*Config, error) {
 		"watch.namespace.journal_retention_seconds": true, "watch.namespace.cdc_retention_seconds": true,
 		"watch.namespace.bucket_size": true, "watch.namespace.read_batch_size": true,
 		"watch.namespace.max_replay_events": true, "watch.namespace.subscriber_buffer": true,
-		"watch.namespace.poll_min_millis": true, "watch.namespace.poll_max_millis": true,
+		"watch.namespace.subscriber_backpressure_millis": true,
+		"watch.namespace.poll_min_millis":                true, "watch.namespace.poll_max_millis": true,
 		"watch.namespace.bookmark_interval_seconds": true, "watch.namespace.lease_ttl_seconds": true,
 		"watch.namespace.lease_renew_interval_seconds": true, "watch.namespace.max_materializer_lag_seconds": true,
 	}

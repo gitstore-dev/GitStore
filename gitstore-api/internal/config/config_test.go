@@ -109,6 +109,7 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	assert.Equal(t, 256, cfg.Watch.Namespace.ReadBatchSize)
 	assert.Equal(t, 100000, cfg.Watch.Namespace.MaxReplayEvents)
 	assert.Equal(t, 64, cfg.Watch.Namespace.SubscriberBuffer)
+	assert.Equal(t, 30000, cfg.Watch.Namespace.SubscriberBackpressureMillis)
 	assert.Equal(t, 100, cfg.Watch.Namespace.PollMinMillis)
 	assert.Equal(t, 2000, cfg.Watch.Namespace.PollMaxMillis)
 	assert.Equal(t, 30, cfg.Watch.Namespace.BookmarkIntervalSeconds)
@@ -125,6 +126,7 @@ func TestLoad_NamespaceWatchEnvOverrides(t *testing.T) {
 	t.Setenv("GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED", "true")
 	t.Setenv("GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE", "128")
 	t.Setenv("GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER", "32")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BACKPRESSURE_MILLIS", "1500")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -132,6 +134,7 @@ func TestLoad_NamespaceWatchEnvOverrides(t *testing.T) {
 	assert.True(t, cfg.Watch.Namespace.MaterializerEnabled)
 	assert.Equal(t, 128, cfg.Watch.Namespace.ReadBatchSize)
 	assert.Equal(t, 32, cfg.Watch.Namespace.SubscriberBuffer)
+	assert.Equal(t, 1500, cfg.Watch.Namespace.SubscriberBackpressureMillis)
 }
 
 func TestLoad_RejectsUnsafeNamespaceWatchBounds(t *testing.T) {

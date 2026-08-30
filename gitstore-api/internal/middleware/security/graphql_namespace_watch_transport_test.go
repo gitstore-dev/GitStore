@@ -57,8 +57,9 @@ func (*transportWatchJournal) SaveProgress(context.Context, datastore.NamespaceW
 func namespaceWatchConfig() config.NamespaceWatchConfig {
 	return config.NamespaceWatchConfig{
 		ReadersEnabled: true, ReadBatchSize: 256, MaxReplayEvents: 100000,
-		SubscriberBuffer: 64, PollMinMillis: 1, PollMaxMillis: 2,
-		MaxMaterializerLagSeconds: 60,
+		SubscriberBuffer: 1, PollMinMillis: 1, PollMaxMillis: 2,
+		SubscriberBackpressureMillis: 1,
+		MaxMaterializerLagSeconds:    60,
 	}
 }
 
@@ -143,7 +144,7 @@ func TestNamespaceWatchRuntimeDiscontinuityIsNotNormalClosure(t *testing.T) {
 
 func TestNamespaceWatchOverflowIsNotNormalClosure(t *testing.T) {
 	epoch := uuid.NewString()
-	events := make([]datastore.NamespaceWatchEvent, 5000)
+	events := make([]datastore.NamespaceWatchEvent, 100000)
 	for i := range events {
 		events[i] = datastore.NamespaceWatchEvent{
 			Epoch: epoch, Sequence: uint64(i + 1), Type: datastore.NamespaceWatchBookmark,
@@ -159,7 +160,8 @@ func TestNamespaceWatchOverflowIsNotNormalClosure(t *testing.T) {
 		},
 	}
 	conn := openNamespaceWatch(t, journal, watchjournal.EncodeCursor(epoch, 0))
-	for i := 0; i < 512; i++ {
+	time.Sleep(100 * time.Millisecond) // Let the server encounter a genuinely slow consumer.
+	for i := 0; i < 10000; i++ {
 		var message map[string]any
 		require.NoError(t, conn.ReadJSON(&message))
 		switch message["type"] {
