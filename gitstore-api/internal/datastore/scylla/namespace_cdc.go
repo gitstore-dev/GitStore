@@ -411,7 +411,7 @@ func (s *scyllaDatastore) namespaceCDCAdditionReady(ctx context.Context, namespa
 	if err != nil {
 		return false, fmt.Errorf("read Namespace CDC authoritative row: %w", err)
 	}
-	return false, fmt.Errorf("Namespace CDC listing projection is not committed")
+	return false, fmt.Errorf("namespace CDC listing projection is not committed")
 }
 
 func namespaceCDCSequenceLess(left, right namespaceCDCSequenceRequest) bool {
