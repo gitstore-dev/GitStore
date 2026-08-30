@@ -11,7 +11,7 @@ Formalize `docs/implementation/021-controller_service_account_auth.md`'s already
 
 **Language/Version**: Go 1.25 (`gitstore-api`, `gitstore-controller-manager`). No Rust (`gitstore-git-service`) change — this spec is entirely an AuthN/identity-plane and controller-client concern, orthogonal to git validation/admission.
 **Primary Dependencies**: `github.com/golang-jwt/jwt/v5 v5.3.1` (already in `gitstore-api/go.mod`; supports `EdDSA`/`ES256` signing methods needed for FR-012 — no version bump required), `go.uber.org/zap`, `github.com/spf13/viper`, `github.com/google/uuid` (ServiceAccount UID generation, already used elsewhere for UIDs), `gocqlx/v3` + `gocql` (ScyllaDB), `go-memdb` (dev datastore) — all already present. `gitstore-controller-manager`'s `graphqlclient` package and `gorilla/websocket` are already present and require no new dependency. No new external dependency in either service.
-**Storage**: New `ServiceAccount` datastore entity and its memdb table + Scylla migration (numbered after the existing `004_file_resource.cql`, i.e. `005_service_account.cql`), added to `datastore.Datastore`'s interface (`CreateServiceAccount`/`GetServiceAccountBySubject`/`ListServiceAccountKeys`/`UpdateServiceAccountKeys`/`DisableServiceAccount`/`DeleteServiceAccount`), mirroring the `File` entity's existing `entities.go` struct + `memdb/backend.go` + `scylla/file.go` + `scylla/migrations/004_file_resource.cql` pattern (spec 051) as its template. An in-memory-only assertion-`jti` replay cache and WebSocket live-connection registry are explicitly *not* datastore-backed (single-instance-scoped by design, per doc 021 §8c/§8d and this spec's own Assumptions on multi-replica deferral).
+**Storage**: New `ServiceAccount` datastore entity and its memdb table + Scylla migration (`006_service_account.cql`, numbered after `005_namespace_repository_fence.cql`, which spec 047 / PR #370 added), added to `datastore.Datastore`'s interface (`CreateServiceAccount`/`GetServiceAccountBySubject`/`ListServiceAccountKeys`/`UpdateServiceAccountKeys`/`DisableServiceAccount`/`DeleteServiceAccount`), mirroring the `File` entity's existing `entities.go` struct + `memdb/backend.go` + `scylla/file.go` + `scylla/migrations/004_file_resource.cql` pattern (spec 051) as its template. An in-memory-only assertion-`jti` replay cache and WebSocket live-connection registry are explicitly *not* datastore-backed (single-instance-scoped by design, per doc 021 §8c/§8d and this spec's own Assumptions on multi-replica deferral).
 **Testing**: Go unit tests for `serviceaccountjwt`/`serviceaccountassertion` providers (mirroring `staticadmin_test.go`'s/spec 060's `staticusers_test.go`'s shape: load/validate, sign/verify, clock-skew, replay, revocation); datastore contract tests against both memdb and Scylla backends (mirroring `repository_contract_test.go`/`file_test.go`); `gitstore-controller-manager` unit tests for `CredentialSource`/`ServiceAccountSource` (sign, exchange, cache, proactive renewal, backoff-on-failure); integration tests for the full assertion→token→authenticated-request flow and for WebSocket `InitFunc` accept/reject/revoke; root `make test`/`make build`/`make pr-ready`.
 **Target Platform**: Linux server and Darwin development hosts already supported by all services.
 **Project Type**: Multi-service feature spanning `gitstore-api` (identity plane) and `gitstore-controller-manager` (credential consumer); `gitstore-git-service` is untouched.
@@ -98,7 +98,7 @@ gitstore-api/
 │   │   ├── memdb/backend.go                       # memdb table + method implementations (mirrors File's methods in the same file)
 │   │   └── scylla/
 │   │       ├── serviceaccount.go                    # Scylla implementation (mirrors scylla/file.go)
-│   │       └── migrations/005_service_account.cql   # new table, numbered after 004_file_resource.cql
+│   │       └── migrations/006_service_account.cql   # new table, numbered after 005_namespace_repository_fence.cql
 │   ├── graph/resolver/
 │   │   ├── serviceaccount.resolvers.go            # NEW: issueServiceAccountToken/createServiceAccount/rotateServiceAccountKey/deleteServiceAccount resolvers
 │   │   └── serviceaccount_service_test.go
@@ -108,7 +108,7 @@ gitstore-api/
 │       └── server.go                              # buildProviderRegistry: two new case arms; transport.Websocket gains InitFunc + CloseFunc; new live-connection registry wiring
 ├── shared/schemas/
 │   └── serviceaccount.graphqls                    # NEW: ServiceAccount type, IssueServiceAccountTokenInput/Payload, CreateServiceAccountInput/Payload, RotateServiceAccountKeyInput, DeleteServiceAccountInput/Payload
-└── policy.yaml.example                            # category-taxonomy-controller role + role_bindings entry added as a documented example (not a default — FR-009's opt-in posture)
+└── policy.yaml.example                            # gitstore-controller-manager role + role_bindings entry added as a documented example (not a default — FR-009's opt-in posture)
 
 gitstore-api/cmd/gitctl/
 └── main.go                                        # new `enroll-serviceaccount` subcommand (US5): generate/accept key pair, call createServiceAccount/rotateServiceAccountKey using an already-authenticated session, write only the private key locally
@@ -161,7 +161,7 @@ All technical unknowns doc 021 already resolved are treated as resolved; the onl
 2. Add failing unit tests for `serviceaccountassertion`/`serviceaccountjwt` (claim validation, signature verification, replay rejection, clock skew, `OutcomeChallenge` vs. `OutcomeDeny`). Implement both providers until green.
 3. Add failing resolver tests for `createServiceAccount`/`rotateServiceAccountKey`/`deleteServiceAccount`/`issueServiceAccountToken` (authorization gating, key overlap, UID-mismatch rejection, disabled/deleted denial). Implement resolvers, the new `shared/schemas/serviceaccount.graphqls` schema, and the `issueServiceAccountToken`-specific field authorizer until green.
 4. Wire both providers into `buildProviderRegistry`'s `switch` (opt-in only; default chain unchanged) and add the metrics/logging doc 021 §13 specifies.
-5. Add `contracts/serviceaccount-provider.md`'s `policy.yaml` example role/binding (`category-taxonomy-controller`) as documented example config, not a shipped default.
+5. Add `contracts/serviceaccount-provider.md`'s `policy.yaml` example role/binding (`gitstore-controller-manager`) as documented example config, not a shipped default.
 6. Add failing unit tests for `gitstore-controller-manager`'s `CredentialSource`/`StaticToken`/`ServiceAccountSource` (sign, exchange, cache, proactive renew, backoff-on-failure, precedence over `GITSTORE_CONTROLLER__API_TOKEN`). Implement `credential.go`, rewire `client.go`'s `do()`/`Subscribe()`, and consolidate `main.go`'s three call sites into one shared client/`CredentialSource` construction.
 7. Add the `gitctl enroll-serviceaccount` subcommand with a failing idempotency test first.
 8. Add `transport.Websocket.InitFunc`/`CloseFunc`, the live-connection registry, and revocation-on-disable/delete, with failing tests first (accept/reject/revoke/expiry-deadline).

@@ -67,7 +67,7 @@ DeleteServiceAccount(ctx context.Context, uid string) error
 
 ### Scylla migration
 
-`gitstore-api/internal/datastore/scylla/migrations/005_service_account.cql` (numbered immediately after `004_file_resource.cql`, the latest existing migration):
+`gitstore-api/internal/datastore/scylla/migrations/006_service_account.cql` (numbered immediately after `005_namespace_repository_fence.cql`, the latest existing migration after spec 047 / PR #370 landed):
 
 ```sql
 CREATE TABLE IF NOT EXISTS service_accounts (

@@ -488,21 +488,46 @@ the same server-owned SDL/middleware pattern for future Category list/watch enfo
 
 ### 10b. Controller role (`rbac-local` `policy.yaml` fragment)
 
+> **Corrected 2026-08-30 (spec 061, on rebase onto spec 047 / PR #370).** An earlier revision of this
+> section scoped the role to the CategoryTaxonomy reconciler alone and asserted `no namespace.*, no
+> repository.*`. That is wrong for the shipped binary: `gitstore-controller-manager`'s
+> `cmd/controller/main.go` registers three workloads (`registerNamespace`, `registerCategoryTaxonomy`,
+> `registerProductWatch`) that share **one** credential source and therefore **one** service account.
+> The role below is the union of all three workloads' required actions.
+
 ```yaml
 roles:
-  category-taxonomy-controller:
+  gitstore-controller-manager:
     allow:
+      # CategoryTaxonomy reconciler
       - category.list
       - category.watch
       - product.list
       - product.read.unpublished
       - category.status.write
-    deny: []   # least privilege: no admin, no namespace.*, no repository.*
+      - category.delete
+      # Namespace reconciler
+      - repository.create.any     # see note below - .own is unreachable for a machine subject
+      - namespace.status.write    # completeNamespaceDeletion
+    deny: []   # least privilege: no admin role, no namespace.delete.*, no repository.delete.*
 
 role_bindings:
-  "serviceaccount:controllers:category-taxonomy":
-    - category-taxonomy-controller
+  "serviceaccount:controllers:gitstore-controller-manager":
+    - gitstore-controller-manager
 ```
+
+**Why `repository.create.any` rather than `repository.create.own`.**
+`Resolver.authorizeRepositoryTenant` (`gitstore-api/internal/graph/resolver/repository_authorization.go`)
+picks the `.own`/`.any` suffix by comparing the target namespace's `CreationActor` to
+`principal.Subject`, and falls back to `.any` whenever they differ. A controller's subject
+(`serviceaccount:controllers:...`) never equals a human-created namespace's `CreationActor`, so
+system-repository provisioning **always** requests `repository.create.any`. Granting only
+`repository.create.own` would deny every provisioning call. Spec 047 (PR #370) makes this
+load-bearing rather than theoretical, since system-repository provisioning is now on the enforced
+namespace-admission path. Narrowing this grant — for example a resource-context predicate limiting
+it to the reserved system-repository name, or an explicit machine-actor scope rule — requires an
+`rbac-local` policy-semantics change and is deliberately out of scope for spec 061 (its FR-021
+forbids changing `rbac-local` decision semantics). It is recorded there as a follow-on concern.
 
 `product.read.unpublished` is required because the controller's product counter reconciles the
 complete admitted catalog, not the storefront/public projection. Under 022, `product.list` supplies
@@ -568,7 +593,7 @@ At every phase, `static-admin` login and the existing `ChainedAuthN` short-circu
 | 2                    | Idempotent `gitctl` identity enrollment and deployment integration; public key registered, private key stored through the deployment secret mechanism; no bearer bootstrap file   | Any supported deployment cannot enroll without copying an access token into controller configuration |
 | 3                    | `graphqlclient.CredentialSource`, assertion exchange, proactive renewal, recovery after expiry, and WS reconnect with `resourceVersion` resume                                    | Controller cannot recover after access-token expiry or reconnect cleanly                             |
 | 4                    | WebSocket `InitFunc`, expiry-bound contexts, live connection registry, and cancellation on ServiceAccount disable/delete                                                          | A connection survives expiry/revocation or existing subscription tests regress                       |
-| 5                    | `policy.yaml` ships the `category-taxonomy-controller` role/binding; production defaults include both providers; static API token documented as deprecated dev/CI compatibility   | Any supported profile loses a working auth path or required controller action returns `OutcomeDeny`  |
+| 5                    | `policy.yaml` ships the `gitstore-controller-manager` role/binding; production defaults include both providers; static API token documented as deprecated dev/CI compatibility   | Any supported profile loses a working auth path or required controller action returns `OutcomeDeny`  |
 | 6 (future, optional) | In-cluster `oidc-jwt`-style provider trusting Kubernetes-issued tokens, gated by explicit issuer allowlist config, as an additional chain entry                                   | N/A — purely additive; disabled by default                                                           |
 
 ---

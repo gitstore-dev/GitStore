@@ -25,8 +25,8 @@
 - [ ] T003 Add the `ServiceAccount`/`ServiceAccountPublicKey` structs to `gitstore-api/internal/datastore/entities.go`
 - [ ] T004 Add `CreateServiceAccount`/`GetServiceAccountByUID`/`GetServiceAccountBySubject`/`ListServiceAccounts`/`UpdateServiceAccountKeys`/`SetServiceAccountDisabled`/`DeleteServiceAccount` to the `Datastore` interface in `gitstore-api/internal/datastore/datastore.go`
 - [ ] T005 [P] Add failing contract tests for all `ServiceAccount` datastore methods against the memdb backend in `gitstore-api/internal/datastore/memdb/service_account_test.go`; implement the methods in `gitstore-api/internal/datastore/memdb/backend.go` until green
-- [ ] T006 [P] Add failing contract tests for all `ServiceAccount` datastore methods against the Scylla backend (mirroring `scylla/file.go`'s test shape); implement `gitstore-api/internal/datastore/scylla/serviceaccount.go` and `gitstore-api/internal/datastore/scylla/migrations/005_service_account.cql` until green
-- [ ] T007 [P] Add `AuthConfig.ServiceAccount ServiceAccountConfig` (issuer/audience/assertion_audience/signing_key/default_ttl/max_ttl/clock_skew) to `gitstore-api/internal/config/config.go`, with `signing_key` required only when a service-account provider is chained in (mirroring spec 060's `validateAuthChainConfig` conditional-requirement pattern, not `validate:"required"`)
+- [ ] T006 [P] Add failing contract tests for all `ServiceAccount` datastore methods against the Scylla backend (mirroring `scylla/file.go`'s test shape); implement `gitstore-api/internal/datastore/scylla/serviceaccount.go` and `gitstore-api/internal/datastore/scylla/migrations/006_service_account.cql` until green
+- [ ] T007 [P] Add `AuthConfig.ServiceAccount ServiceAccountConfig` (issuer/audience/assertion_audience/signing_key/default_ttl/max_ttl/clock_skew) to `gitstore-api/internal/config/config.go`, with `signing_key` required only when a service-account provider is chained in (mirroring spec 060's `validateAuthChainConfig` conditional-requirement pattern, not `validate:"required"`). Register every new `auth.serviceaccount.*` key in `Load()`'s `knownKeys` map and give each a `v.SetDefault(...)` — spec 047 / PR #370 added a strict-schema sweep that logs an `unknown configuration key` warning for any key absent from that map, so omitting them produces a spurious warning on every startup
 
 ---
 
@@ -70,7 +70,7 @@
 - [ ] T018 [US2] Add `shared/schemas/serviceaccount.graphqls` per `contracts/serviceaccount-mutations.md`; regenerate gqlgen code (never hand-edited)
 - [ ] T019 [US2] Implement `createServiceAccount`/`rotateServiceAccountKey`/`deleteServiceAccount`/`issueServiceAccountToken` resolvers in `gitstore-api/internal/graph/resolver/serviceaccount.resolvers.go` until T014-T017 are green
 - [ ] T020 [US2] Add the `issueServiceAccountToken`-specific subject/UID field-level gate to `GraphQLFieldAuthorizer` in `gitstore-api/internal/middleware/security/graphql.go`, and add `serviceaccount.create`/`serviceaccount.key.rotate`/`serviceaccount.delete` action-string gating for the three CRUD mutations
-- [ ] T021 [US2] Add a documented (not default) `category-taxonomy-controller` role and `serviceaccount:controllers:category-taxonomy` `role_bindings` example to `gitstore-api/policy.yaml.example`
+- [ ] T021 [US2] Add a documented (not default) `gitstore-controller-manager` role and `serviceaccount:controllers:gitstore-controller-manager` `role_bindings` example to `gitstore-api/policy.yaml.example`, matching doc 021 §10b's corrected union role — it MUST include `repository.create.any` and `namespace.status.write` alongside the CategoryTaxonomy actions, and MUST carry §10b's inline comment explaining why `.own` is unreachable for a machine subject
 
 **Checkpoint**: User Stories 1-2 together satisfy SC-001/SC-002 — an operator can mint a working credential with zero `static-admin`/`static-users` configured.
 
@@ -84,12 +84,14 @@
 
 ### Tests for User Story 3
 
-- [ ] T022 [P] [US3] Add a failing integration test binding `serviceaccount:controllers:category-taxonomy` to a role permitting only `category.status.write` and confirming an admin-only action is denied, in `tests/integration/serviceaccount_auth_test.go`
+- [ ] T022 [P] [US3] Add a failing integration test binding `serviceaccount:controllers:gitstore-controller-manager` to a role permitting only `category.status.write` and confirming an admin-only action is denied, in `tests/integration/serviceaccount_auth_test.go`
+- [ ] T022a [P] [US3] Add a failing integration test covering the **namespace reconciler's** actions under the same binding (spec.md US3 scenarios 5-6, added on the spec 047 rebase): (a) provisioning a system repository into a namespace whose `CreationActor` is a *human* user succeeds — proving the role grants `repository.create.any`, the suffix `authorizeRepositoryTenant` actually derives for a machine subject, and that a `repository.create.own`-only role would fail here; (b) `completeNamespaceDeletion` succeeds via `namespace.status.write`; (c) `deleteNamespace` and `repository.delete.any` are denied
 - [ ] T023 [P] [US3] Add a failing unit test asserting `serviceaccountjwt.Authenticate`'s returned `Principal.Roles` is always empty, regardless of any `role_bindings` entry, in `gitstore-api/internal/auth/provider/serviceaccountjwt/provider_test.go`
 
 ### Implementation for User Story 3
 
 - [ ] T024 [US3] Confirm (no code change expected — `rbac-local` requires none, per research.md Decision re-confirming spec 060's identical finding) that `RBACLocalProvider.Authorize`'s existing subject-keyed `role_bindings` merge handles `serviceaccount:...` subjects correctly; if any gap is found, fix only `rbac-local`'s handling of the *subject string format*, never its decision semantics (FR-021)
+- [ ] T024a [US3] Verify no `authorizeRepositoryTenant` change is needed to make T022a pass — the `.own`/`.any` derivation is expected to work unmodified for machine subjects, resolving to `.any`. If a change *does* appear necessary, stop: narrowing `repository.create.any` for machine subjects is an `rbac-local`/authorization-semantics change that FR-021 forbids in this spec, and MUST be raised as a follow-on spec rather than absorbed here
 - [ ] T025 [US3] Run T022-T023 to green; run full existing `rbaclocal` test suite to confirm zero regressions (post-design-gate requirement)
 
 **Checkpoint**: User Stories 1-3 (this spec's full P1/MVP scope) are complete and independently verifiable. Spec 060 is now unblocked per spec.md's Success Criteria SC-001/SC-002/SC-003/SC-005.
