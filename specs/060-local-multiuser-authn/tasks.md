@@ -7,6 +7,8 @@
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and validation.
 
+> ⚠️ **Ordering gate before implementation begins** (raised on PR #405, 2026-08-29): spec 061 (`061-controller-serviceaccount-auth`, PR #409) SHOULD land before, or in the same release window as, this spec. Removing `static-admin` leaves `gitstore-controller-manager` with no non-human credential path, and its only remaining local option would be a human-shaped `static-users` entry — the exact anti-pattern spec 061 exists to eliminate. Nothing here breaks at compile time (`graphqlclient.Client` and `make bootstrap-token` are provider-agnostic), so this is a release-sequencing and documentation gate, not a code dependency. See spec.md's Dependencies section (DEP-001/002/003), and T042/T042a.
+
 ## Format: `[ID] [P?] [Story] Description with exact file path`
 
 ## Phase 1: Setup (Shared Infrastructure)
@@ -136,8 +138,10 @@
 
 - [ ] T037 [P] Replace `Makefile`'s `gen-admin-password` target with `hash-static-user-password`; update `bootstrap-token`/`bootstrap-namespace`/`bootstrap-repository` hint text (keep `ADMIN_USERNAME`/`ADMIN_PASSWORD` variable names unchanged)
 - [ ] T038 [P] Update `gitstore-api/.env.example` (remove `GITSTORE_AUTH__ADMIN__*` lines, update the chain example, document `GITSTORE_AUTH__STATICUSERS__USERS_FILE`)
-- [ ] T039 [P] Add `gitstore-api/users.yaml.example` documenting the schema from `data-model.md`
+- [X] T039 [P] Add `gitstore-api/users.yaml.example` documenting the schema from `data-model.md`, and `gitstore-api/policy.yaml.example` documenting `rbac-local`'s existing schema including the `role_bindings` entries this spec makes load-bearing (both delivered; real `users.yaml`/`policy.yaml` added to `.gitignore`, all `*.example` added to `.dockerignore`, so operator config can never be committed or baked into an image)
 - [ ] T040 [P] Rewrite `docs/implementation/020-pluggable_auth_architecture.md` §2a (static-users, not static-admin, including UserDir), §5a (config keys), §7 Phase 1 language
 - [ ] T041 [P] Update `docs/user-guide.md:380` and `docs/api-reference.md:25`'s `static-admin` example references
-- [ ] T042 Flag (via a tracked follow-up issue or dated note, not an edit performed by this spec) that `docs/implementation/021-controller_service_account_auth.md`'s `static-admin`-based "status quo" premise, and `docs/runbooks/production-readiness-testing.md`'s Pattern 4 citation, both need updating once this spec ships
+- [ ] T042 Verify spec 061 (`061-controller-serviceaccount-auth`, PR #409) has landed, or is landing in the same release window, before this spec's implementation merges — per spec.md Dependencies DEP-001. `docs/implementation/021-controller_service_account_auth.md`'s `static-admin`-based "status quo" premise is spec 061's own edit to make, not this spec's; this task is the ordering gate, not a doc edit
+- [ ] T042a [P] In this spec's migration documentation (the `020-pluggable_auth_architecture.md` §7 rewrite in T040 and `quickstart.md`'s migration section), explicitly answer "how do I authenticate `gitstore-controller-manager` after `static-admin` is removed?" by pointing at spec 061's `serviceaccount-jwt` path — per spec.md DEP-002, this documentation MUST NOT instruct operators to create a human-shaped `static-users` entry for the controller. If spec 061 has not landed at the time of writing, name that explicitly as a known gap with a forward reference
+- [ ] T042b Flag (via a tracked follow-up issue or dated note, not an edit performed by this spec) that `docs/runbooks/production-readiness-testing.md`'s Pattern 4 citation needs updating to describe the real-login-based test once this spec's User Story 4 migration ships
 - [ ] T043 Run `make build`, `make test`, `make lint`, `make pr-ready` and confirm all pass

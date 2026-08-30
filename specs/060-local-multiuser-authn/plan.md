@@ -9,14 +9,14 @@ Remove `static-admin` entirely and replace it with `static-users`, a new `AuthNP
 
 ## Technical Context
 
-**Language/Version**: Go 1.25 (`gitstore-api`). No Rust (`gitstore-git-service`) or `gitstore-controller-manager` change.
+**Language/Version**: Go 1.25 (`gitstore-api`). No Rust (`gitstore-git-service`) or `gitstore-controller-manager` change — the latter is deliberate, not an oversight: the controller-manager's post-`static-admin` credential path is owned by spec 061 (`061-controller-serviceaccount-auth`, PR #409), per spec.md's Dependencies section (DEP-001/003).
 **Primary Dependencies**: `golang.org/x/crypto/bcrypt`, `github.com/golang-jwt/jwt/v5`, `gopkg.in/yaml.v3`, `go.uber.org/zap`, `github.com/spf13/viper` — all already in `go.mod`. No new dependency.
 **Storage**: None. No `datastore.Datastore` schema change. `users.yaml` is a config file, not datastore-backed, mirroring `policy.yaml`.
 **Testing**: Go unit tests for the new `staticusers` package (AuthN: load/validate/reload, Basic Auth, Bearer, revoke/refresh/issue; UserDir: get/list/search, not-found sentinel, unsupported writes); a unit test for the new `RBACLocalProvider.HasAnyRoleBindingFor` helper; a unit test for the new `validateAuthChainConfig` function covering both the conditional-JWT-secret case and the unconditional-HMAC-secret case; migrated `tests/integration/authz_repository_contract_test.go` and `tests/integration/namespace_contract_test.go` per `contracts/backdoor-retirement.md`; root `make test`/`make build`/`make pr-ready`.
 **Target Platform**: Linux server and Darwin development hosts already supported by `gitstore-api`.
 **Project Type**: Single-service, replacement-in-place feature within `gitstore-api`'s existing pluggable AuthN/AuthZ architecture.
 **Performance Goals**: Not on any hot path beyond what `static-admin` already cost per request (one bcrypt compare on Basic Auth, one HMAC verify on Bearer) — no new performance target.
-**Constraints**: MUST NOT modify `rbac-local`'s `Authorize`/`Policy` decision semantics (only an additive, read-only helper method is added). MUST NOT modify `oidc-jwt`/spec 059. MUST NOT introduce a `users.yaml`/`policy.yaml` mutation API (v1 remains config-file-driven, hand-edited). MUST NOT auto-migrate legacy `GITSTORE_AUTH__ADMIN__*` env vars at runtime.
+**Constraints**: MUST NOT modify `rbac-local`'s `Authorize`/`Policy` decision semantics (only an additive, read-only helper method is added). MUST NOT modify `oidc-jwt`/spec 059. MUST NOT introduce a `users.yaml`/`policy.yaml` mutation API (v1 remains config-file-driven, hand-edited). MUST NOT auto-migrate legacy `GITSTORE_AUTH__ADMIN__*` env vars at runtime. MUST NOT document creating a `static-users` (human-shaped) credential for `gitstore-controller-manager` — that path belongs to spec 061's `serviceaccount-jwt` provider (spec.md DEP-002).
 **Scale/Scope**: Config-file-driven user counts (tens, not thousands) — the lightweight/testing/small-deployment path, not a scaled multi-tenant identity store.
 
 ## Constitution Check

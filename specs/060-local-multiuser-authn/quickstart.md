@@ -88,6 +88,17 @@ EOF
 make dev
 ```
 
+> **Authenticating `gitstore-controller-manager` after this migration** — do **not** create a
+> `users.yaml` entry for the controller. `users.yaml` identities are human-shaped
+> (username + bcrypt password, HTTP Basic Auth) and a controller must never be
+> indistinguishable from a human operator in the audit trail. The controller's supported
+> credential path is spec 061's (`061-controller-serviceaccount-auth`, PR #409)
+> `serviceaccount-jwt` provider: register a `ServiceAccount`, enroll its public key, and
+> exchange a signed assertion via `issueServiceAccountToken` for a short-lived token to
+> place in `GITSTORE_CONTROLLER__API_TOKEN`. See spec.md's Dependencies section
+> (DEP-001/002). If spec 061 has not yet landed in your deployment's release, this is a
+> known gap tracked by that spec — not a reason to mint a human credential for a machine.
+
 ## Regenerating a hash for the Makefile-based bootstrap flow
 
 ```bash
