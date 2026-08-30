@@ -186,6 +186,27 @@ Both tiers and both consumers inherit ADR 0001's rules without modification:
 - Observability uses ADR 0001's structured fields and metric shapes, with
   `consumer` and `purpose` distinguishing identity resolution from resource
   secret resolution.
+- **Per-service isolation of process-identity material.** A bootstrap-tier
+  source holding one service's identity key must be readable by that service
+  alone. Two services must never share a mount, file, or provider path that
+  carries either one's identity key. This is not a hardening preference — it is
+  what makes the tier meaningful: an identity key readable by a second process
+  is an identity that process can assume, which collapses the distinction
+  between authenticating and impersonating, and silently voids any
+  least-privilege binding attached to the subject.
+
+  The live counter-example is `compose.local.yml` (#410), which mounts a single
+  `config/config.toml` read-only into `git-service`, `api`, **and**
+  `controller-manager` at `/config/gitstore.toml`. That file already carries
+  `auth.jwt.secret`, `auth.grpc.hmac_secret`, `auth.admin.password_hash`, and
+  `controller.api_token`. It is a legitimate developer-convenience profile and
+  is labelled development-only, but it is structurally unable to hold
+  service-account key material: an API access-token signing key placed there is
+  readable by the very controller whose privileges it bounds, letting that
+  controller mint a token for any subject. Deployments that adopt the shared
+  profile must therefore source identity keys from per-service mounts, and
+  specs introducing identity keys must say so explicitly rather than leaving
+  implementers to infer it from the profile's development-only labelling.
 
 ### 5. What this ADR does not change
 
