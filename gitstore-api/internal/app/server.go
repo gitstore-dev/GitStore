@@ -127,17 +127,22 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	// subscriptions (spec 040). Shared between the gRPC admission path
 	// (publisher) and the GraphQL resolvers (subscribers).
 	eventBus := eventbus.New(eventBusCapacity)
+	namespaceRepositoryFenceMode := resolver.NamespaceRepositoryFenceDisabled
+	if cfg.NamespaceRepositoryFenceEnabled() {
+		namespaceRepositoryFenceMode = resolver.NamespaceRepositoryFenceEnabled
+	}
 
 	gqlRouter, err := NewGraphQLHandler(GraphQLHandlerDeps{
-		Store:              store,
-		GitWriter:          gitClient,
-		Logger:             log,
-		Registry:           registry,
-		Clock:              clock,
-		IDs:                ids,
-		EventBus:           eventBus,
-		RateLimitPerSecond: cfg.Api.RateLimitPerSecond,
-		RateLimitBurst:     cfg.Api.RateLimitBurst,
+		Store:                        store,
+		GitWriter:                    gitClient,
+		Logger:                       log,
+		Registry:                     registry,
+		Clock:                        clock,
+		IDs:                          ids,
+		EventBus:                     eventBus,
+		NamespaceRepositoryFenceMode: namespaceRepositoryFenceMode,
+		RateLimitPerSecond:           cfg.Api.RateLimitPerSecond,
+		RateLimitBurst:               cfg.Api.RateLimitBurst,
 	})
 	if err != nil {
 		_ = gitClient.Close()
@@ -217,7 +222,8 @@ type GraphQLHandlerDeps struct {
 	IDs       apiruntime.IDGenerator
 	// EventBus backs the watchCategories/watchResources subscription
 	// resolvers (spec 040). Optional — nil disables watch subscriptions.
-	EventBus *eventbus.Bus
+	EventBus                     *eventbus.Bus
+	NamespaceRepositoryFenceMode resolver.NamespaceRepositoryFenceMode
 	// RateLimitPerSecond/RateLimitBurst configure the per-client-IP token
 	// bucket guarding /graphql. A zero RateLimitPerSecond falls back to
 	// defaultRateLimitPerSecond/defaultRateLimitBurst (the same defaults
@@ -233,13 +239,14 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 		return nil, fmt.Errorf("app: authn and authz provider registry is required")
 	}
 	rootResolver, err := resolver.NewResolver(resolver.ResolverDeps{
-		Store:       deps.Store,
-		GitWriter:   deps.GitWriter,
-		Registry:    deps.Registry,
-		Logger:      deps.Logger,
-		Clock:       deps.Clock,
-		IDGenerator: deps.IDs,
-		EventBus:    deps.EventBus,
+		Store:                        deps.Store,
+		GitWriter:                    deps.GitWriter,
+		Registry:                     deps.Registry,
+		Logger:                       deps.Logger,
+		Clock:                        deps.Clock,
+		IDGenerator:                  deps.IDs,
+		EventBus:                     deps.EventBus,
+		NamespaceRepositoryFenceMode: deps.NamespaceRepositoryFenceMode,
 	})
 	if err != nil {
 		return nil, err

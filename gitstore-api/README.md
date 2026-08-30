@@ -79,6 +79,7 @@ Required for local API startup unless provided by `.env`:
 | `GITSTORE_API__GRPC_PORT`             | `6000`                   | CatalogService gRPC port |
 | `GITSTORE_GIT__GRPC__URI`             | `dns:///localhost:50051` | GitService gRPC target   |
 | `GITSTORE_DATASTORE__BACKEND`         | `memdb`                  | `memdb` or `scylla`      |
+| `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE` | `auto` | Fence rollout gate; `auto` enables memdb and disables Scylla |
 | `GITSTORE_LOG__LEVEL`                 | `info`                   | Log level                |
 | `GITSTORE_LOG__FORMAT`                | `json`                   | `json` or `text`         |
 

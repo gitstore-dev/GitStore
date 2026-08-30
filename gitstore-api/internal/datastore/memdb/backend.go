@@ -968,6 +968,43 @@ func (m *memdbDatastore) UpdateNamespace(_ context.Context, ns *datastore.Namesp
 	return nil
 }
 
+func (m *memdbDatastore) MarkNamespaceDeletion(_ context.Context, ns *datastore.Namespace, expectedResourceVersion string) error {
+	if ns == nil {
+		return fmt.Errorf("%w: namespace is nil", datastore.ErrInvalidArgument)
+	}
+	datastore.NormalizeNamespaceContract(ns)
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("namespaces", "id", ns.UID)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: namespace uid %s", datastore.ErrNotFound, ns.UID)
+	}
+	current := raw.(*datastore.Namespace)
+	if current.ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return datastore.ErrConflict
+	}
+	if current.DeletionTimestamp != nil {
+		txn.Abort()
+		return datastore.ErrNamespaceNotActive
+	}
+	repository, err := txn.First("repository", "namespace", current.Name)
+	if err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: mark namespace deletion repository check: %w", err)
+	}
+	if repository != nil {
+		txn.Abort()
+		return datastore.ErrNamespaceNotEmpty
+	}
+	if err := txn.Insert("namespaces", normalizedNamespaceCopy(ns)); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: mark namespace deletion: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
 func (m *memdbDatastore) DeleteNamespace(_ context.Context, uid string) error {
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("namespaces", "id", uid)
@@ -1032,6 +1069,14 @@ func normalizedNamespaceCopy(namespace *datastore.Namespace) *datastore.Namespac
 // ── Repository ────────────────────────────────────────────────────────────────
 
 func (m *memdbDatastore) CreateRepository(_ context.Context, r *datastore.Repository) error {
+	return m.createRepository(r, false)
+}
+
+func (m *memdbDatastore) CreateRepositoryInActiveNamespace(_ context.Context, r *datastore.Repository) error {
+	return m.createRepository(r, true)
+}
+
+func (m *memdbDatastore) createRepository(r *datastore.Repository, requireActiveNamespace bool) error {
 	if r == nil {
 		return fmt.Errorf("%w: repository is nil", datastore.ErrInvalidArgument)
 	}
@@ -1041,6 +1086,21 @@ func (m *memdbDatastore) CreateRepository(_ context.Context, r *datastore.Reposi
 	}
 	stored := normalizedRepositoryCopy(r)
 	txn := m.db.Txn(true)
+	if requireActiveNamespace {
+		rawNamespace, err := txn.First("namespaces", "name", r.Namespace)
+		if err != nil {
+			txn.Abort()
+			return fmt.Errorf("memdb: repository namespace lookup: %w", err)
+		}
+		if rawNamespace == nil {
+			txn.Abort()
+			return fmt.Errorf("%w: namespace %s", datastore.ErrNotFound, r.Namespace)
+		}
+		if rawNamespace.(*datastore.Namespace).DeletionTimestamp != nil {
+			txn.Abort()
+			return datastore.ErrNamespaceNotActive
+		}
+	}
 	if raw, _ := txn.First("repository", "id", r.UID); raw != nil {
 		txn.Abort()
 		return fmt.Errorf("%w: repository uid %s", datastore.ErrAlreadyExists, r.UID)
@@ -1270,8 +1330,21 @@ func (m *memdbDatastore) RenameRepository(_ context.Context, namespace, oldName,
 	return nil
 }
 
-func (m *memdbDatastore) TransferRepository(_ context.Context, repositoryID, fromNamespace, toNamespace string) error {
+func (m *memdbDatastore) TransferRepository(ctx context.Context, repositoryID, fromNamespace, toNamespace string) error {
 	txn := m.db.Txn(true)
+	rawTargetNamespace, err := txn.First("namespaces", "name", toNamespace)
+	if err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: transfer target namespace lookup: %w", err)
+	}
+	if rawTargetNamespace == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: namespace %s", datastore.ErrNotFound, toNamespace)
+	}
+	if rawTargetNamespace.(*datastore.Namespace).DeletionTimestamp != nil {
+		txn.Abort()
+		return datastore.ErrNamespaceNotActive
+	}
 	raw, _ := txn.First("namespace_mapping", "repository_id", repositoryID)
 	if raw == nil {
 		txn.Abort()
@@ -1290,6 +1363,42 @@ func (m *memdbDatastore) TransferRepository(_ context.Context, repositoryID, fro
 		txn.Abort()
 		return fmt.Errorf("%w: namespace_mapping (%s, %s)", datastore.ErrAlreadyExists, toNamespace, old.Name)
 	}
+
+	var updatedRepository *datastore.Repository
+	if rawRepository, lookupErr := txn.First("repository", "id", repositoryID); lookupErr != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: transfer repository lookup: %w", lookupErr)
+	} else if rawRepository != nil {
+		current := normalizedRepositoryCopy(rawRepository.(*datastore.Repository))
+		if current.Namespace != fromNamespace && current.Namespace != toNamespace {
+			txn.Abort()
+			return fmt.Errorf(
+				"%w: repository %s authoritative namespace is %s",
+				datastore.ErrConflict,
+				repositoryID,
+				current.Namespace,
+			)
+		}
+		if current.Name != old.Name {
+			txn.Abort()
+			return fmt.Errorf(
+				"%w: repository %s authoritative name is %s",
+				datastore.ErrConflict,
+				repositoryID,
+				current.Name,
+			)
+		}
+		if current.Namespace != toNamespace {
+			current.Namespace = toNamespace
+			current.NamespaceID = toNamespace
+			if audit, ok := datastore.MutationAuditFromContext(ctx); ok {
+				current.UpdateActor = audit.Actor
+				current.UpdateTimestamp = audit.Timestamp
+			}
+			datastore.AdvanceRepositorySystemVersion(current)
+			updatedRepository = current
+		}
+	}
 	if err := txn.Delete("namespace_mapping", old); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: transfer delete old mapping: %w", err)
@@ -1303,6 +1412,12 @@ func (m *memdbDatastore) TransferRepository(_ context.Context, repositoryID, fro
 	if err := txn.Insert("namespace_mapping", updated); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: transfer insert new mapping: %w", err)
+	}
+	if updatedRepository != nil {
+		if err := txn.Insert("repository", updatedRepository); err != nil {
+			txn.Abort()
+			return fmt.Errorf("memdb: transfer update repository: %w", err)
+		}
 	}
 	txn.Commit()
 	return nil

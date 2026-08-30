@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
@@ -196,6 +197,57 @@ func TestReconcileFreshNamespaceProvisionsSystemRepositoryViaRealClient(t *testi
 	}
 	if got := conditionByType(t, sc.patches[0].Conditions, "SystemRepoReady").Status; got != "TRUE" {
 		t.Errorf("SystemRepoReady = %q, want TRUE", got)
+	}
+}
+
+func TestReconcilePreservesAdmissionAcceptedWhileUpdatingControllerConditions(t *testing.T) {
+	acceptedAt := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	admission := &status.Condition{
+		Type:               "AdmissionAccepted",
+		Status:             "TRUE",
+		ObservedGeneration: 4,
+		LastTransitionTime: acceptedAt,
+		Reason:             "AdmittedByHookPipeline",
+		Message:            "Namespace manifest admitted successfully.",
+	}
+	current := Namespace{
+		Name:            "acme",
+		Generation:      4,
+		ResourceVersion: "11",
+		Status: status.ResourceStatus{
+			ResourceVersion:    "11",
+			ObservedGeneration: 4,
+			Conditions: []*status.Condition{
+				admission,
+				{Type: "SystemRepoReady", Status: "FALSE", ObservedGeneration: 3},
+				{Type: "Ready", Status: "FALSE", ObservedGeneration: 3},
+			},
+		},
+	}
+	sc := &fakeStatusClient{}
+	r := NewReconciler(seedNamespaceCache(t, current), sc, &fakeRepositoryClient{}, &fakeDeletionClient{})
+
+	result := r.Reconcile(context.Background(), namespaceKey("acme"))
+
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %T, want types.Success", result)
+	}
+	if len(sc.patches) != 1 {
+		t.Fatalf("status calls = %d, want 1", len(sc.patches))
+	}
+	patch := sc.patches[0]
+	preserved := conditionByType(t, patch.Conditions, "AdmissionAccepted")
+	if preserved == admission {
+		t.Fatal("AdmissionAccepted condition was not copied")
+	}
+	if *preserved != *admission {
+		t.Errorf("AdmissionAccepted = %+v, want %+v", preserved, admission)
+	}
+	if got := conditionByType(t, patch.Conditions, "SystemRepoReady"); got.Status != "TRUE" || got.ObservedGeneration != 4 {
+		t.Errorf("SystemRepoReady = %+v, want TRUE at generation 4", got)
+	}
+	if got := conditionByType(t, patch.Conditions, "Ready"); got.Status != "TRUE" || got.ObservedGeneration != 4 {
+		t.Errorf("Ready = %+v, want TRUE at generation 4", got)
 	}
 }
 

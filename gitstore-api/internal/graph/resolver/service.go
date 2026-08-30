@@ -12,9 +12,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
+	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
@@ -25,27 +26,22 @@ import (
 	"github.com/google/uuid"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 )
-
-// identifierRegex matches valid namespace identifiers: DNS label, 1-63 chars.
-var identifierRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$|^[a-z0-9]$`)
 
 // SystemRepositoryName is the well-known repository auto-provisioned for
 // every namespace on creation (ADR-0002/ADR-0003). It is the authoring
 // target for git-backed management of the namespace's own resources.
 const SystemRepositoryName = "gitstore-system"
 
-// reservedIdentifiers is the set of identifiers that cannot be used as namespace names.
-var reservedIdentifiers = map[string]struct{}{
-	"admin": {}, "root": {}, "system": {}, "default": {}, "api": {}, "git": {},
-	"www": {}, "mail": {}, "smtp": {}, "ftp": {}, "org": {}, "orgs": {},
-	"static": {}, "assets": {}, "cdn": {}, "docs": {}, "help": {}, "support": {},
-	"billing": {}, "status": {}, "health": {}, "internal": {}, "local": {},
-	"localhost": {}, "null": {}, "undefined": {}, "true": {}, "false": {},
-	"new": {}, "test": {}, "gitstore": {}, "enterprise": {}, "user": {},
-	"namespace": {}, "namespaces": {}, "repo": {}, "repos": {},
-}
+type NamespaceRepositoryFenceMode string
+
+const (
+	NamespaceRepositoryFenceEnabled  NamespaceRepositoryFenceMode = "enabled"
+	NamespaceRepositoryFenceDisabled NamespaceRepositoryFenceMode = "disabled"
+)
 
 // Service provides business logic for GraphQL operations
 type Service struct {
@@ -54,6 +50,11 @@ type Service struct {
 	logger    *zap.Logger
 	clock     apiruntime.Clock
 	ids       apiruntime.IDGenerator
+
+	namespacePolicy  namespaceadmission.PolicyEvaluator
+	namespaceMetrics *namespaceadmission.Metrics
+
+	namespaceRepositoryFenceEnabled bool
 }
 
 // GitWriter is the write subset of gitclient.Client used by the Service.
@@ -64,17 +65,21 @@ type GitWriter interface {
 	CommitFile(ctx context.Context, p gitclient.CommitFileParams) (string, error)
 	CommitFileForRepo(ctx context.Context, repositoryID string, p gitclient.CommitFileParams) (string, error)
 	ResolveRefForRepo(ctx context.Context, repositoryID, ref string) (string, error)
+	ReadFileForRepo(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
 	DeleteFile(ctx context.Context, p gitclient.DeleteFileParams) (string, error)
 	CreateTag(ctx context.Context, p gitclient.CreateTagParams) (string, error)
 }
 
 // ServiceDeps contains dependencies for GraphQL business logic.
 type ServiceDeps struct {
-	Store       datastore.Datastore
-	GitWriter   GitWriter
-	Logger      *zap.Logger
-	Clock       apiruntime.Clock
-	IDGenerator apiruntime.IDGenerator
+	Store                        datastore.Datastore
+	GitWriter                    GitWriter
+	Logger                       *zap.Logger
+	Clock                        apiruntime.Clock
+	IDGenerator                  apiruntime.IDGenerator
+	NamespacePolicyEvaluator     namespaceadmission.PolicyEvaluator
+	NamespaceMetrics             *namespaceadmission.Metrics
+	NamespaceRepositoryFenceMode NamespaceRepositoryFenceMode
 }
 
 // NewService creates a new service instance backed by the datastore.
@@ -93,12 +98,34 @@ func NewService(deps ServiceDeps) (*Service, error) {
 	if ids == nil {
 		ids = apiruntime.UUIDGenerator{}
 	}
+	namespacePolicy := deps.NamespacePolicyEvaluator
+	if namespacePolicy == nil {
+		namespacePolicy = namespaceadmission.NewPolicyEvaluator(deps.Store)
+	}
+	namespaceMetrics := deps.NamespaceMetrics
+	if namespaceMetrics == nil {
+		namespaceMetrics = namespaceadmission.DefaultMetrics()
+	}
+	namespaceRepositoryFenceEnabled := true
+	switch deps.NamespaceRepositoryFenceMode {
+	case "", NamespaceRepositoryFenceEnabled:
+	case NamespaceRepositoryFenceDisabled:
+		namespaceRepositoryFenceEnabled = false
+	default:
+		return nil, fmt.Errorf(
+			"resolver: invalid namespace repository fence mode %q",
+			deps.NamespaceRepositoryFenceMode,
+		)
+	}
 	return &Service{
-		store:     deps.Store,
-		gitWriter: deps.GitWriter,
-		logger:    deps.Logger,
-		clock:     clock,
-		ids:       ids,
+		store:                           deps.Store,
+		gitWriter:                       deps.GitWriter,
+		logger:                          deps.Logger,
+		clock:                           clock,
+		ids:                             ids,
+		namespacePolicy:                 namespacePolicy,
+		namespaceMetrics:                namespaceMetrics,
+		namespaceRepositoryFenceEnabled: namespaceRepositoryFenceEnabled,
 	}, nil
 }
 
@@ -424,34 +451,101 @@ func (s *Service) UpdateCollection(ctx context.Context, uid string, input map[st
 // same admission function used by the post-receive pipeline.
 // Authorization is enforced in GraphQL middleware before this method is called.
 func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespaceInput, callerUsername string) (*datastore.Namespace, error) {
+	started := time.Now()
 	resource, err := namespaceResourceFromCreateInput(input)
+	var content []byte
+	if err == nil {
+		content, err = validateNamespaceResource(resource)
+	}
+	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.PhaseStructural, time.Since(started))
 	if err != nil {
+		s.recordNamespaceGraphQLError("CREATE", namespaceInputName(input.Metadata), err)
 		return nil, err
 	}
-	if _, err := s.store.GetNamespaceByName(ctx, resource.Metadata.Name); err == nil {
-		return nil, gqlerror.Errorf("namespace with identifier %q already exists", resource.Metadata.Name)
-	} else if !errors.Is(err, datastore.ErrNotFound) {
-		return nil, gqlerror.Errorf("failed to check namespace existence")
+	preflight, err := s.evaluateNamespacePolicy(ctx, resource, admission.OperationCreate)
+	if err != nil {
+		s.recordNamespaceGraphQLError("CREATE", resource.Metadata.Name, err)
+		return nil, err
 	}
-	return s.commitAndAdmitNamespace(ctx, resource, callerUsername, true)
+	return s.commitAndAdmitNamespace(ctx, resource, content, callerUsername, true, preflight)
 }
 
 // UpdateNamespace commits and admits a replacement Namespace spec.
 func (s *Service) UpdateNamespace(ctx context.Context, input model.UpdateNamespaceInput, callerUsername string) (*datastore.Namespace, error) {
+	started := time.Now()
 	resource, err := namespaceResourceFromUpdateInput(input)
+	var content []byte
+	if err == nil {
+		content, err = validateNamespaceResource(resource)
+	}
+	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.PhaseStructural, time.Since(started))
 	if err != nil {
+		s.recordNamespaceGraphQLError("UPDATE", namespaceInputName(input.Metadata), err)
 		return nil, err
 	}
-	if _, err := s.store.GetNamespaceByName(ctx, resource.Metadata.Name); err != nil {
-		if errors.Is(err, datastore.ErrNotFound) {
-			return nil, gqlerror.Errorf("namespace %q not found", resource.Metadata.Name)
-		}
-		return nil, gqlerror.Errorf("failed to retrieve namespace")
+	preflight, err := s.evaluateNamespacePolicy(ctx, resource, admission.OperationUpdate)
+	if err != nil {
+		s.recordNamespaceGraphQLError("UPDATE", resource.Metadata.Name, err)
+		return nil, err
 	}
-	return s.commitAndAdmitNamespace(ctx, resource, callerUsername, false)
+	return s.commitAndAdmitNamespace(ctx, resource, content, callerUsername, false, preflight)
 }
 
-func (s *Service) commitAndAdmitNamespace(ctx context.Context, resource *catalog.NamespaceResource, callerUsername string, create bool) (*datastore.Namespace, error) {
+func (s *Service) evaluateNamespacePolicy(
+	ctx context.Context,
+	resource *catalog.NamespaceResource,
+	operation admission.Operation,
+) (namespaceadmission.Preflight, error) {
+	started := time.Now()
+	tier, _ := namespaceadmission.TierFromManifest(resource.Spec.Tier)
+	decision, preflight, err := s.namespacePolicy.Evaluate(ctx, namespaceadmission.PolicyCheck{
+		Operation:        operation,
+		Name:             resource.Metadata.Name,
+		Tier:             tier,
+		CapturePreflight: true,
+	})
+	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.PhasePolicy, time.Since(started))
+	if err != nil {
+		return namespaceadmission.Preflight{}, gqlerror.Errorf("Namespace policy evaluation failed")
+	}
+	if decision == nil {
+		if !preflight.Captured {
+			return namespaceadmission.Preflight{}, gqlerror.Errorf("Namespace policy evaluation did not capture durable preflight state")
+		}
+		return preflight, nil
+	}
+	if decision.Reason == namespaceadmission.ReasonNamespaceNotFound {
+		return namespaceadmission.Preflight{}, NewNamespaceNotFoundError(fmt.Sprintf("namespace %q not found", resource.Metadata.Name))
+	}
+	return namespaceadmission.Preflight{}, NewNamespacePolicyError(decision.Reason, decision.Message)
+}
+
+func validateNamespaceResource(resource *catalog.NamespaceResource) ([]byte, error) {
+	return encodeNamespaceResource(resource, nil)
+}
+
+func encodeNamespaceResource(resource *catalog.NamespaceResource, body []byte) ([]byte, error) {
+	yamlBody, err := yaml.Marshal(resource)
+	if err != nil {
+		return nil, NewNamespaceStructuralError(namespaceadmission.ReasonInvalidEnvelope, "failed to encode Namespace manifest")
+	}
+	content := append([]byte("---\n"), yamlBody...)
+	content = append(content, []byte("---\n")...)
+	content = append(content, body...)
+	if _, _, err := validate.NewParser().ParseResource(bytes.NewReader(content)); err != nil {
+		return nil, NewNamespaceStructuralError(namespaceadmission.ReasonInvalidEnvelope, fmt.Sprintf("Namespace manifest validation failed: %v", err))
+	}
+	return content, nil
+}
+
+func (s *Service) commitAndAdmitNamespace(
+	ctx context.Context,
+	resource *catalog.NamespaceResource,
+	content []byte,
+	callerUsername string,
+	create bool,
+	preflight namespaceadmission.Preflight,
+) (*datastore.Namespace, error) {
 	if s.gitWriter == nil {
 		return nil, gqlerror.Errorf("namespace Git writer is unavailable")
 	}
@@ -471,21 +565,35 @@ func (s *Service) commitAndAdmitNamespace(ctx context.Context, resource *catalog
 	}
 	datastore.NormalizeNamespaceMappingContract(mapping)
 
-	yamlBody, err := yaml.Marshal(resource)
-	if err != nil {
-		return nil, gqlerror.Errorf("failed to encode Namespace manifest")
-	}
-	content := append([]byte("---\n"), yamlBody...)
-	content = append(content, []byte("---\n")...)
-	if _, _, err := validate.NewParser().ParseResource(bytes.NewReader(content)); err != nil {
-		return nil, gqlerror.Errorf("Namespace manifest validation failed: %v", err)
-	}
 	verb := "Update"
 	if create {
 		verb = "Create"
 	}
+	path := fmt.Sprintf("namespaces/%s.md", resource.Metadata.Name)
+	body := []byte(nil)
+	if !create {
+		var currentContent []byte
+		var readErr error
+		_, body, currentContent, readErr = s.readNamespaceAtCommit(
+			ctx,
+			mapping.RepositoryID,
+			path,
+			"refs/heads/main",
+			resource.Metadata.Name,
+		)
+		if readErr != nil && status.Code(readErr) != codes.NotFound {
+			return nil, gqlerror.Errorf("failed to read current Namespace manifest: %v", readErr)
+		}
+		if readErr == nil {
+			body = namespaceMarkdownBody(currentContent, body)
+		}
+		content, err = encodeNamespaceResource(resource, body)
+		if err != nil {
+			return nil, err
+		}
+	}
 	sha, err := s.gitWriter.CommitFileForRepo(ctx, mapping.RepositoryID, gitclient.CommitFileParams{
-		Path:          fmt.Sprintf("namespaces/%s.md", resource.Metadata.Name),
+		Path:          path,
 		Content:       content,
 		CommitMessage: fmt.Sprintf("%s Namespace %s", verb, resource.Metadata.Name),
 		AuthorName:    callerUsername,
@@ -493,35 +601,214 @@ func (s *Service) commitAndAdmitNamespace(ctx context.Context, resource *catalog
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to commit Namespace manifest: %v", err)
 	}
-	currentHead, err := s.gitWriter.ResolveRefForRepo(ctx, mapping.RepositoryID, "refs/heads/main")
-	if err != nil {
-		return nil, gqlerror.Errorf("failed to verify Namespace commit: %v", err)
-	}
-	if currentHead != sha {
-		return nil, gqlerror.Errorf("Namespace commit was superseded by a newer commit")
-	}
-
 	now := s.clock.Now().UTC()
-	namespace, _, err := namespaceadmission.ApplyManifest(
+	namespace, err := s.convergeCommittedNamespace(
 		ctx,
-		s.store,
-		s.ids,
+		mapping.RepositoryID,
+		path,
 		resource,
 		now,
-		"main@sha1:"+sha,
 		callerUsername,
+		sha,
+		content,
+		body,
+		namespaceAdmissionOperation(create),
+		preflight,
 	)
 	if err != nil {
+		var mapped error
 		switch {
 		case errors.Is(err, namespaceadmission.ErrBootstrapNamespace):
-			return nil, gqlerror.Errorf("bootstrap namespace %q is system-managed", resource.Metadata.Name)
+			mapped = NewNamespacePolicyError(namespaceadmission.ReasonBootstrapNamespace, fmt.Sprintf("bootstrap namespace %q is system-managed", resource.Metadata.Name))
 		case errors.Is(err, namespaceadmission.ErrTierDemotion):
-			return nil, gqlerror.Errorf("namespace tier demotion is not allowed")
+			mapped = NewNamespacePolicyError(namespaceadmission.ReasonTierDemotion, "namespace tier demotion is not allowed")
+		case errors.Is(err, namespaceadmission.ErrNamespaceTerminating):
+			mapped = NewNamespacePolicyError(namespaceadmission.ReasonNamespaceTerminating, fmt.Sprintf("namespace %q is terminating", resource.Metadata.Name))
+		case errors.Is(err, namespaceadmission.ErrNamespaceAlreadyExists):
+			mapped = NewNamespacePolicyError(namespaceadmission.ReasonNamespaceAlreadyExists, fmt.Sprintf("namespace with identifier %q already exists", resource.Metadata.Name))
+		case errors.Is(err, namespaceadmission.ErrNamespaceNotFound):
+			mapped = NewNamespaceNotFoundError(fmt.Sprintf("namespace %q not found", resource.Metadata.Name))
+		case errors.Is(err, namespaceadmission.ErrAuthoringRefCheck):
+			return nil, gqlerror.Errorf("failed to verify Namespace commit: %v", err)
+		case errors.Is(err, namespaceadmission.ErrAuthoringRefSuperseded):
+			mapped = NewNamespaceConflictError(namespaceadmission.ReasonResourceVersionConflict, "Namespace commit was superseded by a newer commit")
+		case errors.Is(err, datastore.ErrConflict):
+			mapped = NewNamespaceConflictError(namespaceadmission.ReasonResourceVersionConflict, fmt.Sprintf("namespace %q changed while the update was applied", resource.Metadata.Name))
 		default:
 			return nil, gqlerror.Errorf("Namespace admission failed: %v", err)
 		}
+		s.recordNamespaceGraphQLError(namespaceOperation(create), resource.Metadata.Name, mapped)
+		return nil, mapped
 	}
 	return namespace, nil
+}
+
+func (s *Service) convergeCommittedNamespace(
+	ctx context.Context,
+	repositoryID, path string,
+	resource *catalog.NamespaceResource,
+	now time.Time,
+	actor, committedSHA string,
+	committedContent, committedBody []byte,
+	operation admission.Operation,
+	preflight namespaceadmission.Preflight,
+) (*datastore.Namespace, error) {
+	targetResource := resource
+	targetBody := append([]byte(nil), committedBody...)
+	targetSHA := committedSHA
+	targetOperation := operation
+	targetPreflight := preflight
+
+	for range namespaceadmission.AdmissionWriteAttempts {
+		currentHead, err := s.gitWriter.ResolveRefForRepo(ctx, repositoryID, "refs/heads/main")
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", namespaceadmission.ErrAuthoringRefCheck, err)
+		}
+		if currentHead != targetSHA {
+			latestResource, latestBody, latestContent, readErr := s.readNamespaceAtCommit(
+				ctx,
+				repositoryID,
+				path,
+				currentHead,
+				resource.Metadata.Name,
+			)
+			if readErr != nil {
+				return nil, readErr
+			}
+			if !bytes.Equal(latestContent, committedContent) {
+				current, lookupErr := s.store.GetNamespaceByName(ctx, resource.Metadata.Name)
+				if lookupErr == nil && current.GitCommitSHA == currentHead {
+					return current, nil
+				}
+				return nil, namespaceadmission.ErrAuthoringRefSuperseded
+			}
+			targetResource = latestResource
+			targetBody = latestBody
+			targetSHA = currentHead
+			targetOperation = ""
+			targetPreflight = namespaceadmission.Preflight{}
+		}
+
+		namespace, _, err := namespaceadmission.ApplyManifestOrdered(
+			ctx,
+			s.store,
+			s.ids,
+			targetResource,
+			now,
+			"main@sha1:"+targetSHA,
+			actor,
+			namespaceadmission.ApplyManifestOptions{
+				Operation:     targetOperation,
+				Preflight:     targetPreflight,
+				WriteAttempts: namespaceadmission.AdmissionWriteAttempts,
+				Body:          targetBody,
+				SourcePath:    path,
+				GitCommitSHA:  targetSHA,
+				GitRef:        "refs/heads/main",
+				CheckAuthoringRef: func(checkCtx context.Context) (bool, error) {
+					head, resolveErr := s.gitWriter.ResolveRefForRepo(checkCtx, repositoryID, "refs/heads/main")
+					if resolveErr != nil {
+						return false, fmt.Errorf("%w: %v", namespaceadmission.ErrAuthoringRefCheck, resolveErr)
+					}
+					return head == targetSHA, nil
+				},
+			},
+		)
+		if errors.Is(err, namespaceadmission.ErrAuthoringRefSuperseded) {
+			targetOperation = ""
+			targetPreflight = namespaceadmission.Preflight{}
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		currentHead, resolveErr := s.gitWriter.ResolveRefForRepo(ctx, repositoryID, "refs/heads/main")
+		if resolveErr != nil {
+			return nil, fmt.Errorf("%w: %v", namespaceadmission.ErrAuthoringRefCheck, resolveErr)
+		}
+		if currentHead != targetSHA {
+			targetOperation = ""
+			targetPreflight = namespaceadmission.Preflight{}
+			continue
+		}
+		return namespace, nil
+	}
+	return nil, namespaceadmission.ErrAuthoringRefSuperseded
+}
+
+func (s *Service) readNamespaceAtCommit(
+	ctx context.Context,
+	repositoryID, path, commitSHA, expectedName string,
+) (*catalog.NamespaceResource, []byte, []byte, error) {
+	content, err := s.gitWriter.ReadFileForRepo(ctx, repositoryID, path, commitSHA)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("%w: read current Namespace manifest: %w", namespaceadmission.ErrAuthoringRefCheck, err)
+	}
+	parsed, body, err := validate.NewParser().ParseResource(bytes.NewReader(content))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("%w: parse current Namespace manifest: %v", namespaceadmission.ErrAuthoringRefCheck, err)
+	}
+	if parsed == nil || parsed.Namespace == nil || parsed.Namespace.Metadata.Name != expectedName {
+		return nil, nil, nil, fmt.Errorf("%w: current Namespace manifest at %s no longer declares %q", namespaceadmission.ErrAuthoringRefCheck, path, expectedName)
+	}
+	return parsed.Namespace, body, append([]byte(nil), content...), nil
+}
+
+func namespaceMarkdownBody(content, parsedBody []byte) []byte {
+	if len(parsedBody) > 0 {
+		return append([]byte(nil), parsedBody...)
+	}
+	lines := bytes.Split(content, []byte("\n"))
+	if len(lines) < 3 || !bytes.Equal(bytes.TrimSpace(lines[0]), []byte("---")) {
+		return nil
+	}
+	for index := 1; index < len(lines); index++ {
+		if !bytes.Equal(bytes.TrimSpace(lines[index]), []byte("---")) {
+			continue
+		}
+		return bytes.Join(lines[index+1:], []byte("\n"))
+	}
+	return nil
+}
+
+func namespaceInputName(metadata *model.NamespaceMetadataInput) string {
+	if metadata == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(metadata.Name))
+}
+
+func namespaceOperation(create bool) string {
+	if create {
+		return string(admission.OperationCreate)
+	}
+	return string(admission.OperationUpdate)
+}
+
+func namespaceAdmissionOperation(create bool) admission.Operation {
+	if create {
+		return admission.OperationCreate
+	}
+	return admission.OperationUpdate
+}
+
+func (s *Service) recordNamespaceGraphQLError(operation, name string, err error) {
+	var graphErr *gqlerror.Error
+	if !errors.As(err, &graphErr) {
+		return
+	}
+	phase, _ := graphErr.Extensions["phase"].(string)
+	reason, _ := graphErr.Extensions["reason"].(string)
+	if phase == "" || reason == "" {
+		return
+	}
+	s.namespaceMetrics.ObserveRejection(namespaceadmission.Phase(phase), namespaceadmission.Reason(reason))
+	s.logger.Warn("Namespace mutation rejected",
+		zap.String("operation", operation),
+		zap.String("phase", phase),
+		zap.String("reason", reason),
+		zap.String("namespace", name),
+		zap.Bool("conflict", graphErr.Extensions["code"] == namespaceadmission.CodeConflict))
 }
 
 func namespaceResourceFromCreateInput(input model.CreateNamespaceInput) (*catalog.NamespaceResource, error) {
@@ -534,34 +821,32 @@ func namespaceResourceFromUpdateInput(input model.UpdateNamespaceInput) (*catalo
 
 func namespaceResourceFromInput(apiVersion, kind string, metadata *model.NamespaceMetadataInput, spec *model.NamespaceSpecInput) (*catalog.NamespaceResource, error) {
 	if apiVersion != namespaceAPIVersion {
-		return nil, gqlerror.Errorf("apiVersion must be %q", namespaceAPIVersion)
+		return nil, NewNamespaceStructuralError(namespaceadmission.ReasonInvalidEnvelope, fmt.Sprintf("apiVersion must be %q", namespaceAPIVersion))
 	}
 	if kind != namespaceKind {
-		return nil, gqlerror.Errorf("kind must be %q", namespaceKind)
+		return nil, NewNamespaceStructuralError(namespaceadmission.ReasonInvalidEnvelope, fmt.Sprintf("kind must be %q", namespaceKind))
 	}
 	if metadata == nil || spec == nil {
-		return nil, gqlerror.Errorf("metadata and spec are required")
+		return nil, NewNamespaceStructuralError(namespaceadmission.ReasonInvalidEnvelope, "metadata and spec are required")
 	}
 	identifier := strings.ToLower(strings.TrimSpace(metadata.Name))
-	if !identifierRegex.MatchString(identifier) {
-		return nil, gqlerror.Errorf("invalid identifier: must match DNS label format (lowercase alphanumeric and hyphens, 1-63 chars, no leading/trailing hyphen)")
-	}
-	if namespaceadmission.IsBootstrap(identifier) {
-		return nil, gqlerror.Errorf("bootstrap namespace %q is system-managed", identifier)
-	}
-	if _, reserved := reservedIdentifiers[identifier]; reserved {
-		return nil, gqlerror.Errorf("identifier %q is reserved", identifier)
+	if err := namespaceadmission.ValidateIdentifier(identifier); err != nil {
+		reason := namespaceadmission.ReasonInvalidIdentifier
+		if errors.Is(err, namespaceadmission.ErrReservedIdentifier) {
+			reason = namespaceadmission.ReasonReservedIdentifier
+		}
+		return nil, NewNamespaceStructuralError(reason, err.Error())
 	}
 	if !spec.Tier.IsValid() {
-		return nil, gqlerror.Errorf("invalid namespace tier %q: must be USER or ORGANIZATION", spec.Tier)
+		return nil, NewNamespaceStructuralError(namespaceadmission.ReasonInvalidTier, fmt.Sprintf("invalid namespace tier %q: must be USER or ORGANIZATION", spec.Tier))
 	}
 	labels, err := stringMap(metadata.Labels)
 	if err != nil {
-		return nil, gqlerror.Errorf("metadata.labels: %v", err)
+		return nil, NewNamespaceStructuralError(namespaceadmission.ReasonInvalidEnvelope, fmt.Sprintf("metadata.labels: %v", err))
 	}
 	annotations, err := stringMap(metadata.Annotations)
 	if err != nil {
-		return nil, gqlerror.Errorf("metadata.annotations: %v", err)
+		return nil, NewNamespaceStructuralError(namespaceadmission.ReasonInvalidEnvelope, fmt.Sprintf("metadata.annotations: %v", err))
 	}
 	title := ""
 	if spec.Title != nil {
@@ -731,41 +1016,64 @@ func (s *Service) ListNamespaces(ctx context.Context, params datastore.PageParam
 
 // DeleteNamespace deletes a namespace after safety checks.
 // Authorization is enforced in GraphQL middleware before this method is called.
-func (s *Service) DeleteNamespace(ctx context.Context, ns *datastore.Namespace) error {
-	if ns == nil || ns.ID == "" {
-		return gqlerror.Errorf("namespace deletion target is missing")
+func (s *Service) DeleteNamespace(ctx context.Context, ns *datastore.Namespace) (namespaceadmission.DeletionOutcome, error) {
+	if ns == nil || namespaceUID(ns) == "" || ns.Name == "" {
+		return "", gqlerror.Errorf("namespace deletion target is missing")
 	}
-	if namespaceadmission.IsBootstrap(ns.Name) {
-		return gqlerror.Errorf("bootstrap namespace %q is system-managed", ns.Name)
+	if err := s.requireNamespaceRepositoryFence("DELETE_NAMESPACE"); err != nil {
+		return "", err
 	}
 
 	current, err := s.store.GetNamespaceByName(ctx, ns.Name)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
-			return gqlerror.Errorf("namespace %q not found", ns.Name)
+			return "", gqlerror.Errorf("namespace %q not found", ns.Name)
 		}
-		return gqlerror.Errorf("failed to delete namespace")
+		return "", gqlerror.Errorf("failed to delete namespace")
 	}
-	if current.ID != ns.ID {
-		return gqlerror.Errorf("namespace %q no longer refers to the requested resource", ns.Name)
+	if namespaceUID(current) != namespaceUID(ns) {
+		return "", gqlerror.Errorf("namespace %q no longer refers to the requested resource", ns.Name)
 	}
 	if current.DeletionTimestamp != nil {
-		return nil
+		outcome := namespaceadmission.DeletionOutcomeAlreadyTerminating
+		s.namespaceMetrics.ObserveDeletionOutcome(outcome)
+		s.logger.Info("Namespace deletion completed",
+			zap.String("operation", "delete"),
+			zap.String("namespace", current.Name),
+			zap.String("outcome", string(outcome)),
+			zap.Int("blocker_count", 0))
+		return outcome, nil
 	}
 
+	blockers := make([]namespaceadmission.Reason, 0, 2)
+	if namespaceadmission.IsBootstrap(current.Name) {
+		blockers = append(blockers, namespaceadmission.ReasonBootstrapNamespace)
+	}
 	hasRepos, err := s.store.HasRepositories(ctx, current.Name)
 	if err != nil {
 		s.logger.Error("failed to check for existing repositories",
-			zap.String("name", current.Name),
+			zap.String("operation", "delete"),
+			zap.String("namespace", current.Name),
 			zap.Error(err),
 		)
-		return gqlerror.Errorf("failed to delete namespace")
+		return "", gqlerror.Errorf("failed to delete namespace")
 	}
 	if hasRepos {
-		s.logger.Info("namespace deletion rejected: contains repositories",
-			zap.String("name", current.Name),
-		)
-		return gqlerror.Errorf("namespace %q contains repositories and cannot be deleted", current.Name)
+		blockers = append(blockers, namespaceadmission.ReasonNamespaceNotEmpty)
+	}
+	blockers = namespaceadmission.OrderDeletionBlockers(blockers)
+	if len(blockers) > 0 {
+		reasons := make([]string, len(blockers))
+		for i, blocker := range blockers {
+			reasons[i] = string(blocker)
+			s.namespaceMetrics.ObserveDeletionBlocked(blocker)
+		}
+		s.logger.Warn("Namespace deletion rejected",
+			zap.String("operation", "delete"),
+			zap.String("namespace", current.Name),
+			zap.Strings("reasons", reasons),
+			zap.Int("blocker_count", len(blockers)))
+		return "", NewNamespaceDeletionBlockedError(blockers, fmt.Sprintf("namespace %q cannot be deleted", current.Name))
 	}
 
 	now := s.clock.Now().UTC()
@@ -776,20 +1084,68 @@ func (s *Service) DeleteNamespace(ctx context.Context, ns *datastore.Namespace) 
 	expectedResourceVersion := current.ResourceVersion
 	datastore.AdvanceNamespaceSystemVersion(current)
 	current.UpdateTimestamp = now
-	if err := s.store.UpdateNamespace(ctx, current, expectedResourceVersion); err != nil {
+	if err := s.store.MarkNamespaceDeletion(ctx, current, expectedResourceVersion); err != nil {
+		if errors.Is(err, datastore.ErrNamespaceNotEmpty) {
+			s.namespaceMetrics.ObserveDeletionBlocked(namespaceadmission.ReasonNamespaceNotEmpty)
+			return "", NewNamespaceDeletionBlockedError(
+				[]namespaceadmission.Reason{namespaceadmission.ReasonNamespaceNotEmpty},
+				fmt.Sprintf("namespace %q cannot be deleted", current.Name),
+			)
+		}
+		if errors.Is(err, datastore.ErrNamespaceNotActive) {
+			latest, reloadErr := s.store.GetNamespaceByName(ctx, current.Name)
+			if reloadErr == nil &&
+				namespaceUID(latest) == namespaceUID(current) &&
+				latest.DeletionTimestamp != nil {
+				outcome := namespaceadmission.DeletionOutcomeAlreadyTerminating
+				s.namespaceMetrics.ObserveDeletionOutcome(outcome)
+				s.logger.Info("Namespace deletion completed",
+					zap.String("operation", "delete"),
+					zap.String("namespace", latest.Name),
+					zap.String("outcome", string(outcome)),
+					zap.Int("blocker_count", 0))
+				return outcome, nil
+			}
+		}
 		if errors.Is(err, datastore.ErrConflict) {
-			return gqlerror.Errorf("namespace %q changed while deletion was requested", current.Name)
+			conflictErr := NewNamespaceConflictError(
+				namespaceadmission.ReasonResourceVersionConflict,
+				fmt.Sprintf("namespace %q changed while deletion was requested", current.Name),
+			)
+			s.recordNamespaceGraphQLError("delete", current.Name, conflictErr)
+			return "", conflictErr
 		}
 		s.logger.Error("failed to delete namespace",
-			zap.String("name", current.Name),
+			zap.String("operation", "delete"),
+			zap.String("namespace", current.Name),
 			zap.Error(err),
 		)
-		return gqlerror.Errorf("failed to delete namespace")
+		return "", gqlerror.Errorf("failed to delete namespace")
 	}
-	return nil
+	outcome := namespaceadmission.DeletionOutcomeTerminationStarted
+	s.namespaceMetrics.ObserveDeletionOutcome(outcome)
+	s.logger.Info("Namespace deletion completed",
+		zap.String("operation", "delete"),
+		zap.String("namespace", current.Name),
+		zap.String("outcome", string(outcome)),
+		zap.Int("blocker_count", 0))
+	return outcome, nil
+}
+
+func namespaceUID(ns *datastore.Namespace) string {
+	if ns == nil {
+		return ""
+	}
+	if ns.UID != "" {
+		return ns.UID
+	}
+	return ns.ID
 }
 
 func (s *Service) CompleteNamespaceDeletion(ctx context.Context, name, expectedResourceVersion string) (*datastore.Namespace, error) {
+	if err := s.requireNamespaceRepositoryFence("COMPLETE_NAMESPACE_DELETION"); err != nil {
+		return nil, err
+	}
 	if namespaceadmission.IsBootstrap(name) {
 		return nil, gqlerror.Errorf("bootstrap namespace %q is system-managed", name)
 	}
@@ -859,6 +1215,9 @@ func fanoutStoragePath(dataDir, repoID string) string {
 // CreateRepository creates a new repository and its namespace mapping, then provisions
 // storage via gRPC. Returns the created Repository entity.
 func (s *Service) CreateRepository(ctx context.Context, namespace, name, defaultBranch, storageClass, callerUsername string) (*datastore.Repository, error) {
+	if err := s.requireNamespaceRepositoryFence("CREATE_REPOSITORY"); err != nil {
+		return nil, err
+	}
 	namespaceName, err := s.canonicalNamespaceName(ctx, namespace)
 	if err != nil {
 		return nil, err
@@ -906,9 +1265,15 @@ func (s *Service) CreateRepository(ctx context.Context, namespace, name, default
 		UpdateActor:       callerUsername,
 	}
 	datastore.NormalizeRepositoryContract(repo)
-	if err := s.store.CreateRepository(ctx, repo); err != nil {
+	if err := s.store.CreateRepositoryInActiveNamespace(ctx, repo); err != nil {
 		if errors.Is(err, datastore.ErrAlreadyExists) {
 			return nil, gqlerror.Errorf("repository already exists")
+		}
+		if errors.Is(err, datastore.ErrNamespaceNotActive) {
+			return nil, gqlerror.Errorf("namespace %q is terminating", namespaceName)
+		}
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, gqlerror.Errorf("namespace %q not found", namespaceName)
 		}
 		s.logger.Error("failed to create repository", zap.String("repo_id", repo.UID), zap.Error(err))
 		return nil, gqlerror.Errorf("failed to create repository")
@@ -1086,6 +1451,9 @@ func (s *Service) RenameRepository(ctx context.Context, repoID, newName, callerU
 
 // TransferRepository transfers a repository to a different namespace. Storage is not moved.
 func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespace, callerUsername string) (*datastore.Repository, error) {
+	if err := s.requireNamespaceRepositoryFence("TRANSFER_REPOSITORY"); err != nil {
+		return nil, err
+	}
 	toNamespaceName, err := s.canonicalNamespaceName(ctx, toNamespace)
 	if err != nil {
 		return nil, err
@@ -1104,6 +1472,12 @@ func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespace, c
 	}
 	mutationCtx := datastore.WithMutationAudit(ctx, callerUsername, s.clock.Now().UTC())
 	if err := s.store.TransferRepository(mutationCtx, repoID, fromNamespace, toNamespaceName); err != nil {
+		if errors.Is(err, datastore.ErrNamespaceNotActive) {
+			return nil, gqlerror.Errorf("namespace %q is terminating", toNamespaceName)
+		}
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, gqlerror.Errorf("namespace %q not found", toNamespaceName)
+		}
 		s.logger.Error("failed to transfer repository",
 			zap.String("repo_id", repoID),
 			zap.String("from_namespace", fromNamespace),
@@ -1120,25 +1494,23 @@ func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespace, c
 	if persisted.Namespace == toNamespaceName {
 		return persisted, nil
 	}
-	repo.Namespace = toNamespaceName
-	repo.NamespaceID = toNamespaceName
-	repo.UpdateTimestamp = s.clock.Now().UTC()
-	repo.UpdateActor = callerUsername
-	expectedResourceVersion := repo.ResourceVersion
-	datastore.AdvanceRepositorySystemVersion(repo)
-	if err := s.store.UpdateRepository(ctx, repo, expectedResourceVersion); err != nil {
-		s.logger.Error("failed to update repository record after transfer",
-			zap.String("repo_id", repoID),
-			zap.Error(err),
-		)
-		return nil, gqlerror.Errorf("failed to update repository record")
-	}
-	s.logger.Info("transfer repository",
+	s.logger.Error("repository transfer did not update authoritative namespace",
 		zap.String("repo_id", repoID),
 		zap.String("from_namespace", fromNamespace),
 		zap.String("to_namespace", toNamespaceName),
+		zap.String("persisted_namespace", persisted.Namespace),
 	)
-	return repo, nil
+	return nil, gqlerror.Errorf("failed to transfer repository")
+}
+
+func (s *Service) requireNamespaceRepositoryFence(operation string) error {
+	if s.namespaceRepositoryFenceEnabled {
+		return nil
+	}
+	s.logger.Warn("Namespace repository mutation rejected by rollout gate",
+		zap.String("operation", operation),
+		zap.String("reason", "ROLLOUT_GATE_DISABLED"))
+	return NewNamespaceRepositoryFenceDisabledError(operation)
 }
 
 // DeleteRepository deletes a repository, its mapping, and its storage via gRPC.

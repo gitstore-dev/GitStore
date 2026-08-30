@@ -198,6 +198,7 @@ type ComplexityRoot struct {
 
 	DeleteNamespacePayload struct {
 		DeletedIdentifier func(childComplexity int) int
+		Outcome           func(childComplexity int) int
 	}
 
 	DeleteRepositoryPayload struct {
@@ -1456,6 +1457,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.DeleteNamespacePayload.DeletedIdentifier(childComplexity), true
+
+	case "DeleteNamespacePayload.outcome":
+		if e.ComplexityRoot.DeleteNamespacePayload.Outcome == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteNamespacePayload.Outcome(childComplexity), true
 
 	case "DeleteRepositoryPayload.deletedRepositoryId":
 		if e.ComplexityRoot.DeleteRepositoryPayload.DeletedRepositoryID == nil {
@@ -5540,6 +5548,21 @@ type UpdateNamespacePayload {
 }
 
 """
+The successful result of requesting Namespace termination.
+"""
+enum NamespaceDeletionOutcome {
+  """
+  This request set the deletion timestamp and foreground deletion finalizer.
+  """
+  TERMINATION_STARTED
+
+  """
+  The Namespace was already terminating, so no datastore write occurred.
+  """
+  ALREADY_TERMINATING
+}
+
+"""
 Payload returned after successfully deleting a namespace.
 """
 type DeleteNamespacePayload {
@@ -5547,6 +5570,11 @@ type DeleteNamespacePayload {
   The identifier of the deleted namespace.
   """
   deletedIdentifier: String!
+
+  """
+  Whether this request started termination or observed an existing termination.
+  """
+  outcome: NamespaceDeletionOutcome!
 }
 
 type CompleteNamespaceDeletionPayload {
@@ -7179,6 +7207,8 @@ func (ec *executionContext) childFields_DeleteNamespacePayload(ctx context.Conte
 	switch field.Name {
 	case "deletedIdentifier":
 		return ec.fieldContext_DeleteNamespacePayload_deletedIdentifier(ctx, field)
+	case "outcome":
+		return ec.fieldContext_DeleteNamespacePayload_outcome(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DeleteNamespacePayload", field.Name)
 }

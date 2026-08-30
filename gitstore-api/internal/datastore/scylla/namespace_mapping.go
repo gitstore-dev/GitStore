@@ -439,19 +439,49 @@ func (s *scyllaDatastore) TransferRepository(ctx context.Context, repositoryID, 
 	if _, err := gocql.ParseUUID(repositoryID); err != nil {
 		return fmt.Errorf("%w: invalid repository id %s", datastore.ErrInvalidArgument, repositoryID)
 	}
-	repository, err := s.GetRepository(ctx, repositoryID)
-	if errors.Is(err, datastore.ErrNotFound) {
-		return s.transferRepositoryMappingWithoutAuthoritative(ctx, repositoryID, fromNamespace, toNamespace)
-	}
-	if err != nil {
-		return err
-	}
 	namespace, err := s.GetNamespaceByName(ctx, toNamespace)
 	if err != nil {
 		return fmt.Errorf("scylla: validate target namespace %s: %w", toNamespace, err)
 	}
 	if namespace.Name != toNamespace {
 		return fmt.Errorf("%w: target namespace lookup returned %s", datastore.ErrConflict, namespace.Name)
+	}
+	if namespace.DeletionTimestamp != nil {
+		return datastore.ErrNamespaceNotActive
+	}
+	if fromNamespace == toNamespace {
+		return s.transferRepositoryReserved(ctx, repositoryID, fromNamespace, toNamespace)
+	}
+	return executeNamespaceRepositoryReservation(
+		ctx,
+		func() error { return s.reserveNamespaceRepository(ctx, namespace.UID) },
+		func(releaseCtx context.Context) error {
+			return s.releaseNamespaceRepository(releaseCtx, namespace.UID)
+		},
+		func() error {
+			return s.transferRepositoryReserved(ctx, repositoryID, fromNamespace, toNamespace)
+		},
+		datastore.MutationStep{
+			Operation:    "transfer_repository",
+			ResourceKind: "Namespace",
+			ResourceUID:  namespace.UID,
+			Projection:   "namespaces_by_uid.pending_repository_creations",
+			LookupKey:    namespace.Name,
+		},
+		fmt.Sprintf("repository %s was transferred into namespace %s", repositoryID, namespace.Name),
+	)
+}
+
+func (s *scyllaDatastore) transferRepositoryReserved(
+	ctx context.Context,
+	repositoryID, fromNamespace, toNamespace string,
+) error {
+	repository, err := s.GetRepository(ctx, repositoryID)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return s.transferRepositoryMappingWithoutAuthoritative(ctx, repositoryID, fromNamespace, toNamespace)
+	}
+	if err != nil {
+		return err
 	}
 	source := repositoryPath{namespace: fromNamespace, name: repository.Name}
 	target := repositoryPath{namespace: toNamespace, name: repository.Name}

@@ -54,6 +54,20 @@ func TestNamespaceDocumentationManifestContract(t *testing.T) {
 	}
 }
 
+func TestNamespaceDeletionOutcomeSchemaContract(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	schemaPath := filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "..", "shared", "schemas", "namespace.graphqls")
+	content, err := os.ReadFile(schemaPath)
+	require.NoError(t, err)
+
+	text := string(content)
+	assert.Contains(t, text, "enum NamespaceDeletionOutcome {")
+	assert.Contains(t, text, "TERMINATION_STARTED")
+	assert.Contains(t, text, "ALREADY_TERMINATING")
+	assert.Regexp(t, `(?s)type DeleteNamespacePayload\s*\{.*outcome:\s*NamespaceDeletionOutcome!`, text)
+}
+
 func fencedYAMLBlocks(markdown string) []string {
 	parts := strings.Split(markdown, "```yaml")
 	blocks := make([]string, 0, len(parts)-1)

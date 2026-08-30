@@ -407,6 +407,7 @@ Use Conventional Commits.
 | `GITSTORE_API__GRPC_PORT`             | `6000`                   | CatalogService gRPC port |
 | `GITSTORE_GIT__GRPC__URI`             | `dns:///localhost:50051` | GitService gRPC target   |
 | `GITSTORE_DATASTORE__BACKEND`         | `memdb`                  | `memdb` or `scylla`      |
+| `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE` | `auto` | `auto`, `disabled`, or `enabled`; see the Namespace admission runbook |
 | `GITSTORE_AUTH__ADMIN__USERNAME`      | unset                    | Admin login username     |
 | `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | unset                    | bcrypt password hash     |
 | `GITSTORE_AUTH__JWT__SECRET`          | unset                    | JWT signing secret       |

@@ -9,12 +9,15 @@ package scylla_test
 
 import (
 	"context"
+	"io/fs"
 	"net"
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla/migrations"
 	"github.com/gocql/gocql"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -114,6 +117,7 @@ func TestRunMigrations_RepositoryResourceContractColumns(t *testing.T) {
 		"max_pack_size_bytes": "bigint",
 		"max_file_size_bytes": "bigint",
 	}
+
 	for column, expectedType := range expectedColumns {
 		t.Run(column, func(t *testing.T) {
 			var columnName, columnType string
@@ -126,6 +130,24 @@ func TestRunMigrations_RepositoryResourceContractColumns(t *testing.T) {
 			assert.Equal(t, column, columnName)
 			assert.Equal(t, expectedType, columnType)
 		})
+	}
+}
+
+func TestRunMigrations_NamespaceRepositoryFenceColumns(t *testing.T) {
+	session := newRawSession(t)
+	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), zap.NewNop()))
+
+	for _, column := range []string{"repository_creation_epoch", "pending_repository_creations"} {
+		var columnName, columnType string
+		err := session.Query(
+			`SELECT column_name, type FROM system_schema.columns
+			 WHERE keyspace_name = ? AND table_name = 'namespaces_by_uid' AND column_name = ?`,
+			scyllaKeyspace,
+			column,
+		).Scan(&columnName, &columnType)
+		require.NoError(t, err)
+		assert.Equal(t, column, columnName)
+		assert.Equal(t, "bigint", columnType)
 	}
 }
 
@@ -233,6 +255,52 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 	// Running migrations twice must not return an error.
 	require.NoError(t, scylla.RunMigrations(ctx, session, scyllaKeyspace, uuid.New().String(), log))
 	require.NoError(t, scylla.RunMigrations(ctx, session, scyllaKeyspace, uuid.New().String(), log))
+}
+
+func TestRunMigrations_SupportedRollbackArtifactRetainsForwardMigrationSet(t *testing.T) {
+	session := newRawSession(t)
+	ctx := context.Background()
+	log := zap.NewNop()
+
+	require.NoError(t, scylla.RunMigrations(ctx, session, scyllaKeyspace, uuid.New().String(), log))
+
+	legacyBinaryMigrations := migrationSetThrough(t, "004_file_resource.cql")
+	err := scylla.RunMigrationsWithFS(
+		ctx,
+		session,
+		scyllaKeyspace,
+		uuid.New().String(),
+		log,
+		legacyBinaryMigrations,
+	)
+	require.ErrorContains(t, err, "database is ahead")
+
+	supportedRollbackMigrations := migrationSetThrough(t, "005_namespace_repository_fence.cql")
+	require.NoError(t, scylla.RunMigrationsWithFS(
+		ctx,
+		session,
+		scyllaKeyspace,
+		uuid.New().String(),
+		log,
+		supportedRollbackMigrations,
+	))
+}
+
+func migrationSetThrough(t *testing.T, last string) fstest.MapFS {
+	t.Helper()
+	entries, err := fs.ReadDir(migrations.Files, ".")
+	require.NoError(t, err)
+	files := make(fstest.MapFS)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".cql") || entry.Name() > last {
+			continue
+		}
+		content, readErr := fs.ReadFile(migrations.Files, entry.Name())
+		require.NoError(t, readErr)
+		files[entry.Name()] = &fstest.MapFile{Data: content, Mode: 0o444}
+	}
+	require.Contains(t, files, last)
+	return files
 }
 
 func TestRunMigrations_LockReleasedAfterSuccess(t *testing.T) {

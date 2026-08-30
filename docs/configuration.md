@@ -97,6 +97,15 @@ For config files, admin auth keys are nested under `[auth.admin]` (for example, 
 | `datastore.scylla.tls`                      | `GITSTORE_DATASTORE__SCYLLA__TLS`                         | boolean         | `false`          | No       | No        | Enable TLS for Scylla connections              |
 | `datastore.scylla.disable_shard_aware_port` | `GITSTORE_DATASTORE__SCYLLA__DISABLE_SHARD_AWARE_PORT`    | boolean         | `false`          | No       | No        | Disable shard-aware Scylla port discovery      |
 
+### Feature rollout gates
+
+| Key | Env Var | Type | Default | Required | Sensitive | Description |
+|---|---|---|---|---|---|---|
+| `features.namespace_repository_fence` | `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE` | string | `auto` | No | No | `auto`, `disabled`, or `enabled`. `auto` enables memdb and disables Scylla; enable Scylla only after migration 005 and full API-fleet convergence. |
+
+See [Namespace admission operations](runbooks/namespace-admission.md) for the
+mandatory mixed-version ingress/AuthZ deny and rollback procedure.
+
 ### Scylla projection operations
 
 `gitctl` reads the same Scylla environment variables for offline projection

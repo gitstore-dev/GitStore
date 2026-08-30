@@ -359,6 +359,8 @@ type DeleteNamespaceInput struct {
 type DeleteNamespacePayload struct {
 	// The identifier of the deleted namespace.
 	DeletedIdentifier string `json:"deletedIdentifier"`
+	// Whether this request started termination or observed an existing termination.
+	Outcome NamespaceDeletionOutcome `json:"outcome"`
 }
 
 type DeleteRepositoryInput struct {
@@ -1680,6 +1682,64 @@ func (e *LabelSelectorOperator) UnmarshalJSON(b []byte) error {
 }
 
 func (e LabelSelectorOperator) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// The successful result of requesting Namespace termination.
+type NamespaceDeletionOutcome string
+
+const (
+	// This request set the deletion timestamp and foreground deletion finalizer.
+	NamespaceDeletionOutcomeTerminationStarted NamespaceDeletionOutcome = "TERMINATION_STARTED"
+	// The Namespace was already terminating, so no datastore write occurred.
+	NamespaceDeletionOutcomeAlreadyTerminating NamespaceDeletionOutcome = "ALREADY_TERMINATING"
+)
+
+var AllNamespaceDeletionOutcome = []NamespaceDeletionOutcome{
+	NamespaceDeletionOutcomeTerminationStarted,
+	NamespaceDeletionOutcomeAlreadyTerminating,
+}
+
+func (e NamespaceDeletionOutcome) IsValid() bool {
+	switch e {
+	case NamespaceDeletionOutcomeTerminationStarted, NamespaceDeletionOutcomeAlreadyTerminating:
+		return true
+	}
+	return false
+}
+
+func (e NamespaceDeletionOutcome) String() string {
+	return string(e)
+}
+
+func (e *NamespaceDeletionOutcome) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = NamespaceDeletionOutcome(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid NamespaceDeletionOutcome", str)
+	}
+	return nil
+}
+
+func (e NamespaceDeletionOutcome) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *NamespaceDeletionOutcome) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e NamespaceDeletionOutcome) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

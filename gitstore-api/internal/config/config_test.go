@@ -19,6 +19,7 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__PORT",
 		"GITSTORE_API__RATE_LIMIT_PER_SECOND",
 		"GITSTORE_API__RATE_LIMIT_BURST",
+		"GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE",
 		"GITSTORE_GIT__GRPC__URI",
 		"GITSTORE_GIT__WS__URI",
 		"GITSTORE_GIT__HTTP__URI",
@@ -380,6 +381,66 @@ func TestLoad_DatastoreBackendScyllaIsValid(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	assert.Equal(t, "scylla", cfg.Datastore.Backend)
+}
+
+func TestLoad_NamespaceRepositoryFenceAutoPreservesDevAndBlocksScylla(t *testing.T) {
+	t.Run("memdb enabled", func(t *testing.T) {
+		restore := clearEnv(t)
+		defer restore()
+		setRequiredAuth(t)
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, "auto", cfg.Features.NamespaceRepositoryFence)
+		assert.True(t, cfg.NamespaceRepositoryFenceEnabled())
+	})
+
+	t.Run("scylla disabled", func(t *testing.T) {
+		restore := clearEnv(t)
+		defer restore()
+		setRequiredAuth(t)
+		t.Setenv("GITSTORE_DATASTORE__BACKEND", "scylla")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, "auto", cfg.Features.NamespaceRepositoryFence)
+		assert.False(t, cfg.NamespaceRepositoryFenceEnabled())
+	})
+}
+
+func TestLoad_NamespaceRepositoryFenceExplicitModes(t *testing.T) {
+	t.Run("enabled permits Scylla activation", func(t *testing.T) {
+		restore := clearEnv(t)
+		defer restore()
+		setRequiredAuth(t)
+		t.Setenv("GITSTORE_DATASTORE__BACKEND", "scylla")
+		t.Setenv("GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE", "enabled")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.True(t, cfg.NamespaceRepositoryFenceEnabled())
+	})
+
+	t.Run("disabled blocks memdb", func(t *testing.T) {
+		restore := clearEnv(t)
+		defer restore()
+		setRequiredAuth(t)
+		t.Setenv("GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE", "disabled")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.False(t, cfg.NamespaceRepositoryFenceEnabled())
+	})
+
+	t.Run("invalid mode rejected", func(t *testing.T) {
+		restore := clearEnv(t)
+		defer restore()
+		setRequiredAuth(t)
+		t.Setenv("GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE", "sometimes")
+
+		_, err := Load()
+		require.ErrorContains(t, err, "namespace repository fence")
+	})
 }
 
 func TestLoad_DatastoreBackendUnknownValueReturnsError(t *testing.T) {

@@ -70,6 +70,8 @@ func TestAuthoritativeTablesUseCanonicalResourceEnvelope(t *testing.T) {
 			} else {
 				assert.NotContains(t, metadata, "namespace")
 				assert.NotContains(t, metadata, "repository_id")
+				assert.Contains(t, metadata, "repository_creation_epoch")
+				assert.Contains(t, metadata, "pending_repository_creations")
 			}
 		})
 	}
@@ -131,7 +133,17 @@ func TestScyllaSchemaIncludesOwnerReferenceProjectionMigration(t *testing.T) {
 		"002_secondary_indexes.cql",
 		"003_owner_reference_dependents.cql",
 		"004_file_resource.cql",
+		"005_namespace_repository_fence.cql",
 	}, names)
+}
+
+func TestNamespaceRepositoryFenceMigration(t *testing.T) {
+	content, err := migrations.Files.ReadFile("005_namespace_repository_fence.cql")
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "ALTER TABLE namespaces_by_uid ADD repository_creation_epoch bigint")
+	assert.Contains(t, string(content), "ALTER TABLE namespaces_by_uid ADD pending_repository_creations bigint")
+	assert.Contains(t, NamespaceByUID.Metadata().Columns, "repository_creation_epoch")
+	assert.Contains(t, NamespaceByUID.Metadata().Columns, "pending_repository_creations")
 }
 
 func TestFileMigrationDefinesAuthoritativeAndLookupTables(t *testing.T) {

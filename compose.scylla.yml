@@ -40,6 +40,7 @@ services:
       - GITSTORE_DATASTORE__BACKEND=scylla
       - GITSTORE_DATASTORE__SCYLLA__HOSTS=scylla:9042
       - GITSTORE_DATASTORE__SCYLLA__KEYSPACE=gitstore
+      - GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=enabled
 
 volumes:
   scylla-data:

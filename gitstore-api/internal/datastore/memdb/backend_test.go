@@ -433,6 +433,14 @@ func mappingFixture(namespace, name, repositoryID string) *datastore.NamespaceMa
 	}
 }
 
+func namespaceFixture(uid, name string) *datastore.Namespace {
+	return &datastore.Namespace{
+		UID:               uid,
+		Name:              name,
+		CreationTimestamp: time.Now(),
+	}
+}
+
 func TestMemdb_CreateAndGetRepository(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
@@ -827,6 +835,8 @@ func TestMemdb_RenameRepository_TargetConflictPreservesOldMapping(t *testing.T) 
 func TestMemdb_TransferRepository_OldNSNotFoundNewNSReturnsSameRepoID(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
+	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000011", namespace1)))
+	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000012", namespace2)))
 	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(namespace1, "app", repoID1)))
 
 	require.NoError(t, ds.TransferRepository(ctx, repoID1, namespace1, namespace2))
@@ -842,6 +852,8 @@ func TestMemdb_TransferRepository_OldNSNotFoundNewNSReturnsSameRepoID(t *testing
 func TestMemdb_TransferRepository_ValidatesSourceAndTarget(t *testing.T) {
 	ds := newBackend(t)
 	ctx := context.Background()
+	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000013", namespace1)))
+	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000014", namespace2)))
 	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(namespace1, "app", repoID1)))
 	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(namespace2, "app", repoID2)))
 

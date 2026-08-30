@@ -242,30 +242,32 @@ type productVariantProductRefRow struct {
 }
 
 type namespaceRow struct {
-	APIVersion        string            `db:"api_version"`
-	Kind              string            `db:"kind"`
-	UID               gocql.UUID        `db:"uid"`
-	Name              string            `db:"name"`
-	Title             string            `db:"title"`
-	Tier              string            `db:"tier"`
-	Generation        int64             `db:"generation"`
-	ResourceVersion   string            `db:"resource_version"`
-	Revision          string            `db:"revision"`
-	CreationTimestamp time.Time         `db:"creation_timestamp"`
-	CreationActor     string            `db:"creation_actor"`
-	UpdateTimestamp   time.Time         `db:"update_timestamp"`
-	UpdateActor       string            `db:"update_actor"`
-	Labels            map[string]string `db:"labels"`
-	Annotations       map[string]string `db:"annotations"`
-	OwnerReferences   string            `db:"owner_references"`
-	Finalizers        []string          `db:"finalizers"`
-	DeletionTimestamp *time.Time        `db:"deletion_timestamp"`
-	SourcePath        string            `db:"source_path"`
-	GitCommitSHA      string            `db:"git_commit_sha"`
-	GitRef            string            `db:"git_ref"`
-	Spec              string            `db:"spec"`
-	Body              string            `db:"body"`
-	Status            string            `db:"status"`
+	APIVersion                 string            `db:"api_version"`
+	Kind                       string            `db:"kind"`
+	UID                        gocql.UUID        `db:"uid"`
+	Name                       string            `db:"name"`
+	Title                      string            `db:"title"`
+	Tier                       string            `db:"tier"`
+	Generation                 int64             `db:"generation"`
+	ResourceVersion            string            `db:"resource_version"`
+	Revision                   string            `db:"revision"`
+	CreationTimestamp          time.Time         `db:"creation_timestamp"`
+	CreationActor              string            `db:"creation_actor"`
+	UpdateTimestamp            time.Time         `db:"update_timestamp"`
+	UpdateActor                string            `db:"update_actor"`
+	Labels                     map[string]string `db:"labels"`
+	Annotations                map[string]string `db:"annotations"`
+	OwnerReferences            string            `db:"owner_references"`
+	Finalizers                 []string          `db:"finalizers"`
+	DeletionTimestamp          *time.Time        `db:"deletion_timestamp"`
+	SourcePath                 string            `db:"source_path"`
+	GitCommitSHA               string            `db:"git_commit_sha"`
+	GitRef                     string            `db:"git_ref"`
+	Spec                       string            `db:"spec"`
+	Body                       string            `db:"body"`
+	Status                     string            `db:"status"`
+	RepositoryCreationEpoch    *int64            `db:"repository_creation_epoch"`
+	PendingRepositoryCreations *int64            `db:"pending_repository_creations"`
 }
 
 type namespaceNameRow struct {
@@ -2102,6 +2104,64 @@ func (s *scyllaDatastore) UpdateNamespace(ctx context.Context, ns *datastore.Nam
 	return nil
 }
 
+func (s *scyllaDatastore) MarkNamespaceDeletion(ctx context.Context, ns *datastore.Namespace, expectedResourceVersion string) error {
+	if ns == nil {
+		return fmt.Errorf("%w: namespace is nil", datastore.ErrInvalidArgument)
+	}
+	datastore.NormalizeNamespaceContract(ns)
+	if ns.UID == "" || ns.DeletionTimestamp == nil {
+		return fmt.Errorf("%w: namespace uid and deletion timestamp are required", datastore.ErrInvalidArgument)
+	}
+	fence, err := s.loadNamespaceRepositoryFence(ctx, ns.UID)
+	if err != nil {
+		return err
+	}
+	if fence.DeletionTimestamp != nil {
+		return datastore.ErrNamespaceNotActive
+	}
+	if fence.pending() > 0 {
+		return datastore.ErrNamespaceNotEmpty
+	}
+	hasRepositories, err := s.HasRepositories(ctx, ns.Name)
+	if err != nil {
+		return err
+	}
+	if hasRepositories {
+		return datastore.ErrNamespaceNotEmpty
+	}
+
+	row := toNamespaceRow(ns)
+	const statement = "UPDATE namespaces_by_uid SET api_version=?, kind=?, name=?, title=?, tier=?, generation=?, resource_version=?, revision=?, " +
+		"creation_timestamp=?, creation_actor=?, update_timestamp=?, update_actor=?, labels=?, annotations=?, owner_references=?, " +
+		"finalizers=?, deletion_timestamp=?, source_path=?, git_commit_sha=?, git_ref=?, spec=?, body=?, status=? " +
+		"WHERE uid=? IF resource_version=? AND repository_creation_epoch=? AND pending_repository_creations=? AND deletion_timestamp=?"
+	applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(
+		row.APIVersion, row.Kind, row.Name, row.Title, row.Tier, row.Generation, row.ResourceVersion, row.Revision,
+		row.CreationTimestamp, row.CreationActor, row.UpdateTimestamp, row.UpdateActor, row.Labels, row.Annotations, row.OwnerReferences,
+		row.Finalizers, row.DeletionTimestamp, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
+		row.UID, expectedResourceVersion, fence.expectedEpoch(), fence.expectedPending(), nil,
+	).ExecCASRelease()
+	if err != nil {
+		return fmt.Errorf("scylla: mark namespace deletion: %w", err)
+	}
+	if applied {
+		return nil
+	}
+	latestFence, fenceErr := s.loadNamespaceRepositoryFence(ctx, ns.UID)
+	if fenceErr == nil {
+		if latestFence.DeletionTimestamp != nil {
+			return datastore.ErrNamespaceNotActive
+		}
+		if latestFence.pending() > 0 {
+			return datastore.ErrNamespaceNotEmpty
+		}
+	}
+	if hasRepositories, hasErr := s.HasRepositories(ctx, ns.Name); hasErr == nil && hasRepositories {
+		return datastore.ErrNamespaceNotEmpty
+	}
+	return datastore.ErrConflict
+}
+
 func (s *scyllaDatastore) DeleteNamespace(ctx context.Context, uidString string) error {
 	ns, err := s.GetNamespace(ctx, uidString)
 	if err != nil {
@@ -2517,31 +2577,35 @@ func mustParseUUID(s string) gocql.UUID {
 
 func toNamespaceRow(ns *datastore.Namespace) *namespaceRow {
 	datastore.NormalizeNamespaceContract(ns)
+	repositoryCreationEpoch := int64(0)
+	pendingRepositoryCreations := int64(0)
 	return &namespaceRow{
-		APIVersion:        ns.APIVersion,
-		Kind:              ns.Kind,
-		UID:               mustParseUUID(ns.UID),
-		Name:              ns.Name,
-		Title:             ns.Title,
-		Tier:              string(ns.Tier),
-		Generation:        ns.Generation,
-		ResourceVersion:   ns.ResourceVersion,
-		Revision:          ns.Revision,
-		CreationTimestamp: ns.CreationTimestamp,
-		CreationActor:     ns.CreationActor,
-		UpdateTimestamp:   ns.UpdateTimestamp,
-		UpdateActor:       ns.UpdateActor,
-		Labels:            ns.Labels,
-		Annotations:       ns.Annotations,
-		OwnerReferences:   string(ns.OwnerReferences),
-		Finalizers:        append([]string(nil), ns.Finalizers...),
-		DeletionTimestamp: ns.DeletionTimestamp,
-		SourcePath:        ns.SourcePath,
-		GitCommitSHA:      ns.GitCommitSHA,
-		GitRef:            ns.GitRef,
-		Spec:              string(ns.Spec),
-		Body:              ns.Body,
-		Status:            string(ns.Status),
+		APIVersion:                 ns.APIVersion,
+		Kind:                       ns.Kind,
+		UID:                        mustParseUUID(ns.UID),
+		Name:                       ns.Name,
+		Title:                      ns.Title,
+		Tier:                       string(ns.Tier),
+		Generation:                 ns.Generation,
+		ResourceVersion:            ns.ResourceVersion,
+		Revision:                   ns.Revision,
+		CreationTimestamp:          ns.CreationTimestamp,
+		CreationActor:              ns.CreationActor,
+		UpdateTimestamp:            ns.UpdateTimestamp,
+		UpdateActor:                ns.UpdateActor,
+		Labels:                     ns.Labels,
+		Annotations:                ns.Annotations,
+		OwnerReferences:            string(ns.OwnerReferences),
+		Finalizers:                 append([]string(nil), ns.Finalizers...),
+		DeletionTimestamp:          ns.DeletionTimestamp,
+		SourcePath:                 ns.SourcePath,
+		GitCommitSHA:               ns.GitCommitSHA,
+		GitRef:                     ns.GitRef,
+		Spec:                       string(ns.Spec),
+		Body:                       ns.Body,
+		Status:                     string(ns.Status),
+		RepositoryCreationEpoch:    &repositoryCreationEpoch,
+		PendingRepositoryCreations: &pendingRepositoryCreations,
 	}
 }
 

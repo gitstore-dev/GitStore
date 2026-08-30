@@ -86,6 +86,11 @@ Omitted nested defaults mean that the Namespace supplies no override. Authors mu
 | `spec` | Author | Mutable through Git |
 | `status` | System | Status-write path only |
 
+Accepted writes persist the complete authored envelope, labels, annotations,
+full `spec`, and Markdown body. Any authored change advances both `generation`
+and `resourceVersion`. A Git path, commit, ref, or revision change with
+otherwise identical authored content advances only `resourceVersion`.
+
 Validation, immutable-field enforcement, policy ceilings, phase validation, and
 admission are defined by GH#173. Watch and resume behavior is defined by
 GH#174. Repository override merging and effective policy resolution are
@@ -147,3 +152,74 @@ admitted generation, and records the admitted Git revision in
 `lastAppliedRevision`. Reconciliation preserves that revision, advances only
 `resourceVersion`, and sets `SystemRepoReady` and `Ready`. Accepted deletion
 sets the deletion timestamp/finalizer and exposes `Terminating`.
+
+## Admission and deletion phase matrix
+
+| Operation | Structural/pre-receive phase | Stateful policy phase | Successful result |
+|---|---|---|---|
+| Create | Validates the envelope, API version/kind, identifier, reserved names, required spec, tier, authoring target, and duplicate request identity. | Rejects bootstrap targets and an existing Namespace with the same name. | Persists generation 1 with `AdmissionAccepted=True`. |
+| Update | Applies the create checks and rejects a same-path `metadata.name` change as immutable. | Requires an existing active Namespace and rejects bootstrap targets, tier demotion, and terminating targets. | Conditionally advances generation and writes `AdmissionAccepted=True` for that generation. |
+| Delete | Validates the identifier and authorized UID/name continuity. | Returns an idempotent outcome for an already-terminating Namespace; otherwise evaluates bootstrap and non-empty blockers together. | Marks an eligible Namespace for foreground deletion. |
+| Reconcile | Not a request-time validation phase. | Waits for accepted admission before provisioning the system repository. | Updates `SystemRepoReady` and `Ready` without replacing `AdmissionAccepted`. |
+
+Any structural failure short-circuits the request before stateful policy
+evaluation. Rejected creates and updates do not persist the rejected manifest.
+In particular, a rejected update leaves the last accepted generation,
+`AdmissionAccepted` condition, and `lastAppliedRevision` unchanged.
+
+## Stable failure reasons
+
+GraphQL errors use stable category codes and reason extensions:
+
+| Category code | Stable reasons |
+|---|---|
+| `NAMESPACE_STRUCTURAL_VALIDATION_FAILED` | `INVALID_ENVELOPE`, `INVALID_IDENTIFIER`, `RESERVED_IDENTIFIER`, `INVALID_TIER`, `INVALID_AUTHORING_TARGET`, `DUPLICATE_IDENTITY` |
+| `NAMESPACE_IMMUTABLE_FIELD` | `IMMUTABLE_NAME` |
+| `NAMESPACE_POLICY_REJECTED` | `BOOTSTRAP_NAMESPACE`, `NAMESPACE_ALREADY_EXISTS`, `NAMESPACE_NOT_FOUND`, `TIER_DEMOTION`, `NAMESPACE_TERMINATING` |
+| `NAMESPACE_CONFLICT` | `RESOURCE_VERSION_CONFLICT` |
+| `NAMESPACE_DELETION_BLOCKED` | `BOOTSTRAP_NAMESPACE`, `NAMESPACE_NOT_EMPTY` |
+
+Git pre-receive validation keeps the existing protobuf shape. Structural
+failures use their concrete `constraint`, immutable name changes use
+`immutable`, and policy failures use `policy/<kebab-case-reason>`.
+GraphQL and Git use the same DNS-label and reserved-identifier validator.
+Bootstrap identifiers remain a policy rejection rather than a structural
+reserved-name error.
+
+## Descendant commit convergence
+
+Namespace admission is ordered by the current authoring ref, not by arrival
+time of post-receive work. If a submitted commit already has a descendant,
+GraphQL and catalog gRPC read the Namespace manifest at the current head and the
+same path. Disjoint X/Y commits therefore both materialize; if both change X,
+only the newest content is eligible to win. Stale non-Namespace admission work
+continues to be skipped.
+
+## Deletion outcomes
+
+- `TERMINATION_STARTED`: the Namespace was eligible and the request wrote its
+  deletion timestamp and `gitstore.dev/foreground-deletion` finalizer.
+- `ALREADY_TERMINATING`: deletion was already in progress; the request succeeds
+  as a no-op and does not advance `resourceVersion`.
+- `NAMESPACE_DELETION_BLOCKED`: deletion is rejected. The `reasons` extension
+  contains every applicable blocker in deterministic order:
+  `BOOTSTRAP_NAMESPACE`, then `NAMESPACE_NOT_EMPTY`.
+
+Repository creation and the empty-to-terminating transition are coordinated in
+the datastore. memdb performs each decision in one write transaction. Scylla
+uses a per-Namespace monotonic creation epoch plus pending-reservation counter,
+so a repository create and a termination marker cannot both win across API
+replicas. Repository creation against a terminating Namespace is rejected.
+
+## Status ownership
+
+| Status field or condition | Owner | Contract |
+|---|---|---|
+| `AdmissionAccepted` | Namespace admission path | Persisted only after an accepted create/update; `True` and tied to the accepted generation. |
+| `status.observedGeneration` and `lastAppliedRevision` | Namespace admission path | Identify the most recently accepted generation and Git revision. Rejected updates leave both unchanged. |
+| `SystemRepoReady` | Namespace controller | Reports per-Namespace system repository provisioning. |
+| `Ready` | Namespace controller | Reports the conjunction of admission acceptance and system repository readiness. |
+| `Terminating` | GraphQL read projection from lifecycle metadata | Derived separately from the deletion timestamp; it does not replace or reinterpret `AdmissionAccepted`. |
+
+Controller status updates merge their owned conditions with existing status and
+must preserve `AdmissionAccepted` and the admission revision.

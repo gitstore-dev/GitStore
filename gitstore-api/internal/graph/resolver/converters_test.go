@@ -107,6 +107,60 @@ func TestDatastoreNamespaceToGraphQL_IdentityAndVersionDefaultsArePerResource(t 
 	assert.Equal(t, second.CreationTimestamp, secondModel.Metadata.CreationTimestamp)
 }
 
+func TestDatastoreNamespaceToGraphQL_AdmissionAcceptedAndTerminatingRemainDistinct(t *testing.T) {
+	acceptedAt := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	deletionRequestedAt := acceptedAt.Add(time.Hour)
+	ns := namespaceContractFixture("00000000-0000-0000-0000-000000000303", "terminating")
+	ns.Generation = 3
+	ns.DeletionTimestamp = &deletionRequestedAt
+	ns.Status = json.RawMessage(`{
+		"observedGeneration": 3,
+		"lastAppliedRevision": "main@sha1:accepted",
+		"conditions": [{
+			"type": "AdmissionAccepted",
+			"status": "True",
+			"observedGeneration": 3,
+			"lastTransitionTime": "2026-08-29T12:00:00Z",
+			"reason": "AdmittedByHookPipeline",
+			"message": "Namespace manifest admitted successfully."
+		}]
+	}`)
+
+	got := datastoreNamespaceToModel(ns)
+
+	require.NotNil(t, got)
+	require.NotNil(t, got.Status)
+	assert.Equal(t, int32(3), got.Status.ObservedGeneration)
+	require.Len(t, got.Status.Conditions, 2)
+
+	admission := namespaceModelConditionByType(t, got.Status.Conditions, catalog.ConditionAdmissionAccepted)
+	assert.Equal(t, model.ConditionStatusTrue, admission.Status)
+	require.NotNil(t, admission.ObservedGeneration)
+	assert.Equal(t, int32(3), *admission.ObservedGeneration)
+	assert.Equal(t, acceptedAt, admission.LastTransitionTime)
+	require.NotNil(t, admission.Reason)
+	assert.Equal(t, "AdmittedByHookPipeline", *admission.Reason)
+
+	terminating := namespaceModelConditionByType(t, got.Status.Conditions, catalog.ConditionTerminating)
+	assert.Equal(t, model.ConditionStatusTrue, terminating.Status)
+	require.NotNil(t, terminating.ObservedGeneration)
+	assert.Equal(t, int32(3), *terminating.ObservedGeneration)
+	assert.Equal(t, deletionRequestedAt, terminating.LastTransitionTime)
+	require.NotNil(t, terminating.Reason)
+	assert.Equal(t, "DeletionRequested", *terminating.Reason)
+}
+
+func namespaceModelConditionByType(t *testing.T, conditions []*model.Condition, conditionType string) *model.Condition {
+	t.Helper()
+	for _, condition := range conditions {
+		if condition != nil && condition.Type == conditionType {
+			return condition
+		}
+	}
+	t.Fatalf("condition %q not found in %+v", conditionType, conditions)
+	return nil
+}
+
 func repositoryContractFixture() (*datastore.Repository, *datastore.Namespace) {
 	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	return &datastore.Repository{

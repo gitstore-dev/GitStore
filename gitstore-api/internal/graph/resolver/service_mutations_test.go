@@ -5,6 +5,7 @@ package resolver_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -30,8 +31,10 @@ type mockGitWriter struct {
 
 	createRepoCalls []string
 	deleteRepoCalls []string
+	files           map[string][]byte
 
 	commitErr     error
+	readErr       error
 	deleteErr     error
 	createRepoErr error
 	deleteRepoErr error
@@ -66,11 +69,37 @@ func (m *mockGitWriter) CommitFileForRepo(_ context.Context, repositoryID string
 	if m.commitErr != nil {
 		return "", m.commitErr
 	}
+	if m.files == nil {
+		m.files = make(map[string][]byte)
+	}
+	m.files[p.Path] = append([]byte(nil), p.Content...)
 	return "deadbeef", nil
 }
 
 func (m *mockGitWriter) ResolveRefForRepo(_ context.Context, _ string, _ string) (string, error) {
 	return "deadbeef", nil
+}
+
+func (m *mockGitWriter) ReadFileForRepo(_ context.Context, _, path, _ string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	content, ok := m.files[path]
+	if !ok {
+		if m.readErr != nil {
+			return nil, m.readErr
+		}
+		return nil, errors.New("file read is not configured")
+	}
+	return append([]byte(nil), content...), nil
+}
+
+func (m *mockGitWriter) setFile(path string, content []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.files == nil {
+		m.files = make(map[string][]byte)
+	}
+	m.files[path] = append([]byte(nil), content...)
 }
 
 func (m *mockGitWriter) DeleteFile(_ context.Context, p gitclient.DeleteFileParams) (string, error) {
@@ -92,6 +121,14 @@ func (m *mockGitWriter) CreateTag(_ context.Context, p gitclient.CreateTagParams
 
 // newTestSvc builds a Service backed by an in-memory datastore.
 func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
+	return newTestSvcWithFenceMode(t, writer, "")
+}
+
+func newTestSvcWithFenceMode(
+	t *testing.T,
+	writer *mockGitWriter,
+	mode resolver.NamespaceRepositoryFenceMode,
+) *resolver.Service {
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -126,9 +163,10 @@ func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
 		RepositoryID: systemRepository.UID,
 	}))
 	svc, err := resolver.NewService(resolver.ServiceDeps{
-		Store:     store,
-		GitWriter: writer,
-		Logger:    zap.NewNop(),
+		Store:                        store,
+		GitWriter:                    writer,
+		Logger:                       zap.NewNop(),
+		NamespaceRepositoryFenceMode: mode,
 	})
 	require.NoError(t, err)
 	return svc

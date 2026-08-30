@@ -53,6 +53,215 @@ type repositoryIndexRow struct {
 	UID               gocql.UUID `db:"uid"`
 }
 
+const (
+	namespaceRepositoryFenceAttempts  = 8
+	namespaceRepositoryReleaseTimeout = 5 * time.Second
+)
+
+// The pending counter blocks termination while a create is in flight. The
+// monotonic epoch also detects a create that starts and finishes between the
+// deletion path's fence snapshot and its emptiness check.
+type namespaceRepositoryFence struct {
+	RepositoryCreationEpoch    *int64     `db:"repository_creation_epoch"`
+	PendingRepositoryCreations *int64     `db:"pending_repository_creations"`
+	DeletionTimestamp          *time.Time `db:"deletion_timestamp"`
+}
+
+func (f namespaceRepositoryFence) epoch() int64 {
+	if f.RepositoryCreationEpoch == nil {
+		return 0
+	}
+	return *f.RepositoryCreationEpoch
+}
+
+func (f namespaceRepositoryFence) pending() int64 {
+	if f.PendingRepositoryCreations == nil {
+		return 0
+	}
+	return *f.PendingRepositoryCreations
+}
+
+func (f namespaceRepositoryFence) expectedEpoch() any {
+	if f.RepositoryCreationEpoch == nil {
+		return nil
+	}
+	return *f.RepositoryCreationEpoch
+}
+
+func (f namespaceRepositoryFence) expectedPending() any {
+	if f.PendingRepositoryCreations == nil {
+		return nil
+	}
+	return *f.PendingRepositoryCreations
+}
+
+func (s *scyllaDatastore) CreateRepositoryInActiveNamespace(ctx context.Context, repository *datastore.Repository) error {
+	if repository == nil {
+		return fmt.Errorf("%w: repository is nil", datastore.ErrInvalidArgument)
+	}
+	namespace, err := s.GetNamespaceByName(ctx, repository.Namespace)
+	if err != nil {
+		return err
+	}
+	if namespace.DeletionTimestamp != nil {
+		return datastore.ErrNamespaceNotActive
+	}
+	return executeNamespaceRepositoryReservation(
+		ctx,
+		func() error { return s.reserveNamespaceRepository(ctx, namespace.UID) },
+		func(releaseCtx context.Context) error {
+			return s.releaseNamespaceRepository(releaseCtx, namespace.UID)
+		},
+		func() error { return s.CreateRepository(ctx, repository) },
+		datastore.MutationStep{
+			Operation:    "create_repository",
+			ResourceKind: "Namespace",
+			ResourceUID:  namespace.UID,
+			Projection:   "namespaces_by_uid.pending_repository_creations",
+			LookupKey:    namespace.Name,
+		},
+		fmt.Sprintf("repository %s was created", repository.UID),
+	)
+}
+
+func executeNamespaceRepositoryReservation(
+	ctx context.Context,
+	reserve func() error,
+	release func(context.Context) error,
+	operation func() error,
+	step datastore.MutationStep,
+	successDescription string,
+) error {
+	if err := reserve(); err != nil {
+		return err
+	}
+	operationErr := operation()
+	if errors.Is(operationErr, datastore.ErrRepairRequired) {
+		return operationErr
+	}
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceRepositoryReleaseTimeout)
+	defer cancel()
+	releaseErr := release(releaseCtx)
+	if releaseErr == nil {
+		return operationErr
+	}
+	step.Action = "release_reservation"
+	primary := operationErr
+	if primary == nil {
+		step.Action = "complete_reservation"
+		primary = errors.New(successDescription)
+	}
+	return datastore.NewRepairRequiredError(step, primary, releaseErr)
+}
+
+func (s *scyllaDatastore) completeNamespaceRepositoryRepair(
+	ctx context.Context,
+	repair NamespaceRepositoryFenceRepair,
+) error {
+	uid := mustParseUUID(repair.UID)
+	applied, err := s.session.Query(
+		"UPDATE namespaces_by_uid SET pending_repository_creations=? WHERE uid=? "+
+			"IF repository_creation_epoch=? AND pending_repository_creations=? AND deletion_timestamp=?",
+		nil,
+	).WithContext(ctx).Bind(
+		int64(0),
+		uid,
+		repair.RepositoryCreationEpoch,
+		repair.PendingRepositoryCreations,
+		nil,
+	).ExecCASRelease()
+	if err != nil {
+		return fmt.Errorf("scylla: complete namespace repository repair: %w", err)
+	}
+	if !applied {
+		return datastore.ErrConflict
+	}
+	return nil
+}
+
+func (s *scyllaDatastore) loadNamespaceRepositoryFence(ctx context.Context, namespaceUID string) (namespaceRepositoryFence, error) {
+	uid, err := gocql.ParseUUID(namespaceUID)
+	if err != nil {
+		return namespaceRepositoryFence{}, fmt.Errorf("%w: invalid namespace uid %s", datastore.ErrInvalidArgument, namespaceUID)
+	}
+	var fence namespaceRepositoryFence
+	if err := s.session.Query(
+		"SELECT repository_creation_epoch, pending_repository_creations, deletion_timestamp FROM namespaces_by_uid WHERE uid=?",
+		nil,
+	).WithContext(ctx).Bind(uid).GetRelease(&fence); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return namespaceRepositoryFence{}, fmt.Errorf("%w: namespace uid %s", datastore.ErrNotFound, namespaceUID)
+		}
+		return namespaceRepositoryFence{}, fmt.Errorf("scylla: load namespace repository fence: %w", err)
+	}
+	return fence, nil
+}
+
+func (s *scyllaDatastore) reserveNamespaceRepository(ctx context.Context, namespaceUID string) error {
+	uid := mustParseUUID(namespaceUID)
+	for range namespaceRepositoryFenceAttempts {
+		fence, err := s.loadNamespaceRepositoryFence(ctx, namespaceUID)
+		if err != nil {
+			return err
+		}
+		if fence.DeletionTimestamp != nil {
+			return datastore.ErrNamespaceNotActive
+		}
+		applied, err := s.session.Query(
+			"UPDATE namespaces_by_uid SET repository_creation_epoch=?, pending_repository_creations=? WHERE uid=? "+
+				"IF repository_creation_epoch=? AND pending_repository_creations=? AND deletion_timestamp=?",
+			nil,
+		).WithContext(ctx).Bind(
+			fence.epoch()+1,
+			fence.pending()+1,
+			uid,
+			fence.expectedEpoch(),
+			fence.expectedPending(),
+			nil,
+		).ExecCASRelease()
+		if err != nil {
+			return fmt.Errorf("scylla: reserve namespace repository creation: %w", err)
+		}
+		if applied {
+			return nil
+		}
+	}
+	return datastore.ErrConflict
+}
+
+func (s *scyllaDatastore) releaseNamespaceRepository(ctx context.Context, namespaceUID string) error {
+	uid := mustParseUUID(namespaceUID)
+	for range namespaceRepositoryFenceAttempts {
+		fence, err := s.loadNamespaceRepositoryFence(ctx, namespaceUID)
+		if err != nil {
+			if errors.Is(err, datastore.ErrNotFound) {
+				return nil
+			}
+			return err
+		}
+		if fence.pending() <= 0 {
+			return nil
+		}
+		applied, err := s.session.Query(
+			"UPDATE namespaces_by_uid SET pending_repository_creations=? WHERE uid=? "+
+				"IF repository_creation_epoch=? AND pending_repository_creations=?",
+			nil,
+		).WithContext(ctx).Bind(
+			fence.pending()-1,
+			uid,
+			fence.expectedEpoch(),
+			fence.expectedPending(),
+		).ExecCASRelease()
+		if err != nil {
+			return fmt.Errorf("scylla: release namespace repository reservation: %w", err)
+		}
+		if applied {
+			return nil
+		}
+	}
+	return datastore.ErrConflict
+}
+
 func (s *scyllaDatastore) CreateRepository(ctx context.Context, repository *datastore.Repository) error {
 	if repository == nil {
 		return fmt.Errorf("%w: repository is nil", datastore.ErrInvalidArgument)

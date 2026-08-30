@@ -31,12 +31,13 @@ SCYLLA_TEST_ADDR ?= 127.0.0.1:9042
 SCYLLA_CAPACITY_PRODUCTS ?= 5000000
 SCYLLA_CAPACITY_CONCURRENCY ?= 32
 SCYLLA_CAPACITY_DURATION ?= 10m
+NAMESPACE_CAPACITY_DURATION ?= 30m
 
 export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CACHE
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
 .PHONY: help git api controller dev compose scylla compose-scylla ps logs stop down
-.PHONY: build test lint license-check pr-ready test-scylla-hardening test-scylla-integration test-scylla-capacity
+.PHONY: build test lint license-check pr-ready test-scylla-hardening test-scylla-integration test-scylla-capacity test-namespace-admission-capacity
 .PHONY: bootstrap bootstrap-token bootstrap-namespace bootstrap-repository git-clean-data
 .PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools gen-admin-password gen-jwt-secret gen-hmac-secret
 
@@ -54,6 +55,7 @@ help: ## Show available targets and common variables.
 	@printf "  SCYLLA_CAPACITY_PRODUCTS=%s\n" "$(SCYLLA_CAPACITY_PRODUCTS)"
 	@printf "  SCYLLA_CAPACITY_CONCURRENCY=%s\n" "$(SCYLLA_CAPACITY_CONCURRENCY)"
 	@printf "  SCYLLA_CAPACITY_DURATION=%s\n" "$(SCYLLA_CAPACITY_DURATION)"
+	@printf "  NAMESPACE_CAPACITY_DURATION=%s\n" "$(NAMESPACE_CAPACITY_DURATION)"
 	@printf "  BOOTSTRAP_TOKEN=<token>   Use an existing bearer token for bootstrap\n"
 	@printf "  NAMESPACE=%s REPOSITORY=%s DEFAULT_BRANCH=%s\n" "$(NAMESPACE)" "$(REPOSITORY)" "$(DEFAULT_BRANCH)"
 
@@ -167,6 +169,12 @@ test-scylla-capacity: ## Run the opt-in Scylla capacity and soak test.
 		GITSTORE_SCYLLA_CAPACITY_SOAK_DURATION="$(SCYLLA_CAPACITY_DURATION)" \
 		GITSTORE_SCYLLA_CAPACITY_RUN=1 \
 		go test -tags scylla -count=1 -timeout 0 -run TestScyllaCapacity ./internal/datastore/scylla/...
+
+test-namespace-admission-capacity: ## Run the opt-in two-replica Namespace admission soak.
+	@cd "$(API_DIR)" && \
+		GITSTORE_NAMESPACE_CAPACITY_DURATION="$(NAMESPACE_CAPACITY_DURATION)" \
+		GITSTORE_NAMESPACE_CAPACITY_RUN=1 \
+		go test -count=1 -timeout 0 -run '^TestNamespaceValidationCapacity$$' ./internal/cataloggrpc
 
 lint: ## Run Rust formatting/clippy and Go formatting/vet/staticcheck.
 	@cd "$(GIT_SERVICE_DIR)" && cargo fmt --all -- --check
