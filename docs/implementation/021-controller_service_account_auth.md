@@ -78,7 +78,7 @@ Derived from the objective, the decision standard, and confirmed external mechan
 
 ### 4c. In-cluster vs. out-of-cluster implications
 
-- **In-cluster (optional, future):** gitstore-api could add an `oidc-jwt`-style AuthN provider that trusts a specific cluster's ServiceAccount-token issuer (audience must include `gitstore-api`; issuer must be on an explicit allowlist; JWKS fetched from that cluster's discovery endpoint; subject taken from `system:serviceaccount:<ns>:<name>` and mapped into GitStore's own `Principal.Subject`). Kubernetes RBAC (who can `create pods` with that ServiceAccount) stays entirely inside the cluster and is irrelevant to GitStore's own `AuthZProvider` decision — GitStore RBAC (`rbac-local`/OPA policy) is a completely separate binding from the *GitStore* subject string to GitStore actions. Multiple clusters/issuers require an explicit per-issuer JWKS+audience+namespace-trust allowlist to prevent subject collisions (two different clusters both minting `system:serviceaccount:controllers:category-taxonomy`).
+- **In-cluster (optional, future):** gitstore-api could add an `oidc-jwt`-style AuthN provider that trusts a specific cluster's ServiceAccount-token issuer (audience must include `gitstore-api`; issuer must be on an explicit allowlist; JWKS fetched from that cluster's discovery endpoint; subject taken from `system:serviceaccount:<ns>:<name>` and mapped into GitStore's own `Principal.Subject`). Kubernetes RBAC (who can `create pods` with that ServiceAccount) stays entirely inside the cluster and is irrelevant to GitStore's own `AuthZProvider` decision — GitStore RBAC (`rbac-local`/OPA policy) is a completely separate binding from the *GitStore* subject string to GitStore actions. Multiple clusters/issuers require an explicit per-issuer JWKS+audience+namespace-trust allowlist to prevent subject collisions (two different clusters both minting `system:serviceaccount:controllers:gitstore-controller-manager`).
 - **Out-of-cluster (native process, Docker Compose, CI, non-K8s installs):** there is no Kubernetes issuer or kubelet credential projector to trust. GitStore's own issuer (§9) is the only option. Deployment tooling generates or supplies the controller private key, registers the public key and ServiceAccount record through an authenticated installation operation, and thereafter the controller can obtain tokens without a live administrator or a still-valid previous token.
 
 **Conclusion:** the Kubernetes-issued-token path is a legitimate optional *addition* once GitStore has in-cluster deployments with a clear operational need for it — but it cannot be the primary design, because it does not cover native/Compose/CI. Kubernetes workloads do **not** require an administrator to copy a bootstrap token into each Pod: an operator declares the ServiceAccount/RBAC/workload, and the control plane plus kubelet deliver and rotate the credential automatically. GitStore should preserve that separation. Its installation process enrolls identity and public trust material; its controller performs automatic token acquisition and renewal. GitStore can therefore adapt the properties of the modern Kubernetes ServiceAccount model without pretending it has Kubernetes' universal kubelet machinery.
@@ -109,7 +109,7 @@ flowchart TB
         Registry["Persistent ServiceAccount registry<br/>namespace, name, UID, disabled, public keys"]
         Issue["IssueServiceAccountToken<br/>verify short-lived client assertion<br/>mint short-TTL access JWT"]
         AuthN["serviceaccount-jwt AuthNProvider<br/>verify iss / aud / exp / sub<br/>against signing key and SA registry"]
-        AuthZ["rbac-local AuthZProvider<br/>role binding: serviceaccount:ctrl:category-taxonomy<br/>→ controller"]
+        AuthZ["rbac-local AuthZProvider<br/>role binding: serviceaccount:controllers:gitstore-controller-manager<br/>→ controller"]
         WS["WebSocket InitFunc + connection registry<br/>deadline at token exp<br/>cancel on SA disable/delete"]
 
         CRUD --> Registry --> Issue --> AuthN --> AuthZ
@@ -405,7 +405,7 @@ auth.serviceaccount.clock_skew         GITSTORE_AUTH__SERVICEACCOUNT__CLOCK_SKEW
 
 controller.api_token                   GITSTORE_CONTROLLER__API_TOKEN          # DEPRECATED dev/CI compatibility only (§11)
 controller.serviceaccount_namespace    GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE  ""   # e.g. "controllers"
-controller.serviceaccount_name         GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME       "category-taxonomy"
+controller.serviceaccount_name         GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME       "gitstore-controller-manager"
 controller.serviceaccount_key_id       GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID      ""
 # Signing key is an ADR 0001 SecretRef resolved through a bootstrap-tier
 # SecretResolver (ADR 0009 §3) — NOT a raw filesystem path. The earlier

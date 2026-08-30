@@ -25,7 +25,7 @@ make api
 
 # 3. Sign a client assertion with the matching private key and exchange it
 #    (via a small test script, or gitctl enroll-serviceaccount's issuance helper)
-curl -sS $API_URL -d '{"query":"mutation IssueToken($input: IssueServiceAccountTokenInput!) { issueServiceAccountToken(input: $input) { status { token expiresAt } } }", "variables": {"input": {"metadata": {"namespace":"controllers","name":"category-taxonomy"}, "spec": {}}}}' \
+curl -sS $API_URL -d '{"query":"mutation IssueToken($input: IssueServiceAccountTokenInput!) { issueServiceAccountToken(input: $input) { status { token expiresAt } } }", "variables": {"input": {"metadata": {"namespace":"controllers","name":"gitstore-controller-manager"}, "spec": {}}}}' \
   -H "Authorization: Bearer $ASSERTION"
 
 # 4. Use the returned access token exactly like today's static-admin/static-users token

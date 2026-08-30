@@ -154,10 +154,10 @@ binding, not a physical path:
 identity:
   serviceAccount:
     namespace: controllers
-    name: category-taxonomy
+    name: gitstore-controller-manager
   keyRef:
     kind: SecretRef
-    name: category-taxonomy-signing-key
+    name: gitstore-controller-manager-signing-key
     key: privateKey
 secretProviders:
   bootstrap:

@@ -17,7 +17,7 @@ type ServiceAccount struct {
 	// "serviceaccount:<Namespace>:<Name>", never stored redundantly)
 	UID       string // stable, survives Disabled toggles; changes only on delete+recreate
 	Namespace string // convention string, e.g. "controllers" — not GitStore's Namespace resource
-	Name      string // e.g. "category-taxonomy"
+	Name      string // e.g. "gitstore-controller-manager" — names the *process*, not one of its reconcilers
 
 	Disabled bool // true blocks new assertion exchange and new access-token authentication immediately
 
@@ -170,7 +170,7 @@ type ControllerConfig struct {
 	// updated to state it is a deprecated dev/CI fallback used only when no
 	// ServiceAccount signer below is configured...
 	ServiceAccountNamespace string `mapstructure:"serviceaccount_namespace"` // GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE, e.g. "controllers"
-	ServiceAccountName      string `mapstructure:"serviceaccount_name"`      // GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME, default "category-taxonomy"
+	ServiceAccountName      string `mapstructure:"serviceaccount_name"`      // GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME, default "gitstore-controller-manager"
 	ServiceAccountKeyID     string `mapstructure:"serviceaccount_key_id"`    // GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID
 
 	// ServiceAccountKeyRef locates the signing private key as an ADR 0001
