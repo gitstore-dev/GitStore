@@ -8,6 +8,11 @@
 # committed or built into an image; only the tracked *.example templates are.
 policy.yaml
 users.yaml
+# Exception: config/policy.yaml is the tracked development-only policy shipped by
+# #410 and mounted into the local Compose profile. It is already tracked, so the
+# rules above do not currently shadow it, but without this negation a delete-and-
+# re-add would silently fail to stage it.
+!config/policy.yaml
 
 # Rust
 target/
