@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"math"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -119,4 +120,38 @@ func TestNamespaceWatchRuntimeStopsRetryingAfterOrderingDiscontinuity(t *testing
 		t.Fatal("runtime kept retrying an unrecoverable CDC discontinuity")
 	}
 	require.EqualValues(t, 1, runner.calls.Load())
+}
+
+func TestNamespaceWatchReadinessRefreshesFollowerMetricsFromSharedBounds(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	journal := store.(datastore.NamespaceWatchJournal)
+	now := time.Now().UTC()
+	lease, acquired, err := journal.AcquireLease(context.Background(), "leader", now, time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	_, err = journal.Append(context.Background(), lease, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchBookmark, At: now}, time.Hour)
+	require.NoError(t, err)
+	registry := prometheus.NewRegistry()
+	metrics, err := watchjournal.NewMetrics(registry)
+	require.NoError(t, err)
+	runtime := &namespaceWatchRuntime{
+		journal: journal, metrics: metrics,
+		cfg: config.NamespaceWatchConfig{MaxMaterializerLagSeconds: 60},
+	}
+
+	require.NoError(t, namespaceWatchReadiness(context.Background(), runtime, now.Add(time.Second)))
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	observed := 0
+	for _, family := range families {
+		if family.GetName() != "gitstore_namespace_watch_cdc_lag_seconds" && family.GetName() != "gitstore_namespace_watch_bookmark_age_seconds" {
+			continue
+		}
+		observed++
+		require.Len(t, family.Metric, 1)
+		require.False(t, math.IsInf(family.Metric[0].GetGauge().GetValue(), 1), "%s must reflect shared bounds", family.GetName())
+	}
+	require.Equal(t, 2, observed)
 }

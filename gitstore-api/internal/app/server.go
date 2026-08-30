@@ -393,15 +393,7 @@ func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logge
 	var namespaceWatchReady func(context.Context) error
 	if namespaceWatch != nil {
 		namespaceWatchReady = func(ctx context.Context) error {
-			bounds, err := namespaceWatch.journal.Bounds(ctx)
-			if err != nil {
-				return err
-			}
-			maxLag := time.Duration(namespaceWatch.cfg.MaxMaterializerLagSeconds) * time.Second
-			if bounds.ProgressAt.IsZero() || time.Since(bounds.ProgressAt) > maxLag {
-				return watchjournal.ErrMaterializerNotReady
-			}
-			return nil
+			return namespaceWatchReadiness(ctx, namespaceWatch, clock.Now())
 		}
 	}
 	healthHandler := health.NewHandler(health.HandlerDeps{
@@ -416,6 +408,22 @@ func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logge
 	router.GET("/ready", healthHandler.Ready)
 	router.GET("/metrics", healthHandler.Metrics)
 	return router
+}
+
+func namespaceWatchReadiness(ctx context.Context, runtime *namespaceWatchRuntime, now time.Time) error {
+	bounds, err := runtime.journal.Bounds(ctx)
+	if err != nil {
+		return err
+	}
+	// Bounds are shared durable state. Refreshing metrics here keeps follower
+	// replicas aligned with the leader even though they do not receive the
+	// materializer's process-local observation callbacks.
+	runtime.metrics.SetBounds(bounds, now)
+	maxLag := time.Duration(runtime.cfg.MaxMaterializerLagSeconds) * time.Second
+	if bounds.ProgressAt.IsZero() || now.Sub(bounds.ProgressAt) > maxLag {
+		return watchjournal.ErrMaterializerNotReady
+	}
+	return nil
 }
 
 // buildProviderRegistry constructs a ProviderRegistry from the application config.
