@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"io"
 	"math/bits"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"sort"
 	"strconv"
@@ -612,11 +614,7 @@ func createCapacityRange(t *testing.T, client *http.Client, cfg capacityConfig, 
 		go func() {
 			defer wg.Done()
 			for sequence := range jobs {
-				endpoint := cfg.apiA
-				if sequence%2 == 1 {
-					endpoint = cfg.apiB
-				}
-				if err := createCapacityNamespace(client, endpoint, cfg.token, capacityName(prefix, sequence)); err != nil {
+				if err := createCapacityNamespaceForReplay(client, cfg, capacityName(prefix, sequence), sequence); err != nil {
 					errs <- fmt.Errorf("transition %d: %w", sequence, err)
 				}
 			}
@@ -631,6 +629,75 @@ func createCapacityRange(t *testing.T, client *http.Client, cfg capacityConfig, 
 	for err := range errs {
 		require.NoError(t, err, "all replay preparation transitions must be acknowledged")
 	}
+}
+
+const capacityReplayCreateAttempts = 6
+
+func createCapacityNamespaceForReplay(client *http.Client, cfg capacityConfig, name string, sequence int) error {
+	primary, peer := cfg.apiA, cfg.apiB
+	if sequence%2 == 1 {
+		primary, peer = peer, primary
+	}
+	endpoints := [2]string{primary, peer}
+	var lastErr error
+	for attempt := 0; attempt < capacityReplayCreateAttempts; attempt++ {
+		endpoint := endpoints[attempt%len(endpoints)]
+		lastErr = createCapacityNamespace(client, endpoint, cfg.token, name)
+		if lastErr == nil {
+			return nil
+		}
+		if !capacityCreateRetryable(lastErr) && !capacityCreateAmbiguous(lastErr) {
+			return lastErr
+		}
+		if confirmCapacityNamespaceExists(cfg, name, 750*time.Millisecond) {
+			return nil
+		}
+		if attempt+1 < capacityReplayCreateAttempts {
+			time.Sleep(time.Duration(1<<attempt) * 25 * time.Millisecond)
+		}
+	}
+	return fmt.Errorf("create remained retryable after %d attempts: %w", capacityReplayCreateAttempts, lastErr)
+}
+
+type capacityGraphQLErrors struct{ raw string }
+
+func (e *capacityGraphQLErrors) Error() string { return "GraphQL errors: " + e.raw }
+
+type capacityHTTPStatusError struct {
+	status int
+	body   string
+}
+
+func (e *capacityHTTPStatusError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.status, e.body) }
+
+func capacityCreateRetryable(err error) bool {
+	var graphqlErr *capacityGraphQLErrors
+	if !errors.As(err, &graphqlErr) {
+		return false
+	}
+	return strings.Contains(graphqlErr.raw, `"code":"NAMESPACE_CONFLICT"`) ||
+		strings.Contains(graphqlErr.raw, `"reason":"RESOURCE_VERSION_CONFLICT"`)
+}
+
+func capacityCreateAmbiguous(err error) bool {
+	var statusErr *capacityHTTPStatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.status == http.StatusRequestTimeout || statusErr.status == http.StatusTooManyRequests || statusErr.status >= 500
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+func confirmCapacityNamespaceExists(cfg capacityConfig, name string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	client := &http.Client{Timeout: 250 * time.Millisecond}
+	for time.Now().Before(deadline) {
+		if capacityNamespaceExists(client, cfg.apiA, cfg.token, name) || capacityNamespaceExists(client, cfg.apiB, cfg.token, name) {
+			return true
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return false
 }
 
 func createCapacityNamespace(client *http.Client, apiURL, token, name string) error {
@@ -658,14 +725,14 @@ func createCapacityNamespace(client *http.Client, apiURL, token, name string) er
 	defer response.Body.Close()
 	if response.StatusCode/100 != 2 {
 		contents, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return fmt.Errorf("HTTP %s: %s", response.Status, contents)
+		return &capacityHTTPStatusError{status: response.StatusCode, body: string(contents)}
 	}
 	var result gqlResponse
 	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
 		return err
 	}
 	if len(result.Errors) != 0 {
-		return fmt.Errorf("GraphQL errors: %s", namespaceContractErrors(result.Errors))
+		return &capacityGraphQLErrors{raw: namespaceContractErrors(result.Errors)}
 	}
 	var data struct {
 		CreateNamespace *struct {
@@ -715,6 +782,89 @@ func capacityNamespaceExists(client *http.Client, apiURL, token, name string) bo
 		} `json:"data"`
 	}
 	return json.NewDecoder(response.Body).Decode(&result) == nil && result.Data.Namespace != nil && result.Data.Namespace.ID != ""
+}
+
+func TestCapacityReplayCreateRetriesOnlyConflicts(t *testing.T) {
+	t.Run("conflict alternates to peer", func(t *testing.T) {
+		var primaryCalls, peerCalls atomic.Int64
+		primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var request gqlRequest
+			_ = json.NewDecoder(r.Body).Decode(&request)
+			if !strings.Contains(request.Query, "mutation") {
+				_, _ = io.WriteString(w, `{"data":{"namespace":null}}`)
+				return
+			}
+			primaryCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"errors":[{"message":"superseded","extensions":{"code":"NAMESPACE_CONFLICT","reason":"RESOURCE_VERSION_CONFLICT"}}]}`)
+		}))
+		defer primary.Close()
+		peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var request gqlRequest
+			_ = json.NewDecoder(r.Body).Decode(&request)
+			if !strings.Contains(request.Query, "mutation") {
+				_, _ = io.WriteString(w, `{"data":{"namespace":null}}`)
+				return
+			}
+			peerCalls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"data":{"createNamespace":{"namespace":{"metadata":{"name":"replay-name"}}}}}`)
+		}))
+		defer peer.Close()
+
+		err := createCapacityNamespaceForReplay(http.DefaultClient, capacityConfig{apiA: primary.URL, apiB: peer.URL}, "replay-name", 2)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, primaryCalls.Load())
+		require.EqualValues(t, 1, peerCalls.Load())
+	})
+
+	t.Run("permanent GraphQL error is not retried", func(t *testing.T) {
+		var peerCalls atomic.Int64
+		primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"errors":[{"message":"invalid","extensions":{"code":"BAD_USER_INPUT"}}]}`)
+		}))
+		defer primary.Close()
+		peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			peerCalls.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer peer.Close()
+
+		err := createCapacityNamespaceForReplay(http.DefaultClient, capacityConfig{apiA: primary.URL, apiB: peer.URL}, "replay-name", 2)
+		require.Error(t, err)
+		require.False(t, capacityCreateRetryable(err))
+		require.Zero(t, peerCalls.Load())
+	})
+
+	t.Run("ambiguous response confirms committed Namespace", func(t *testing.T) {
+		var peerCalls atomic.Int64
+		primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var request gqlRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("decode request: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if strings.Contains(request.Query, "mutation") {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = io.WriteString(w, `commit outcome unknown`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"data":{"namespace":{"id":"confirmed"}}}`)
+		}))
+		defer primary.Close()
+		peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			peerCalls.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer peer.Close()
+
+		err := createCapacityNamespaceForReplay(http.DefaultClient, capacityConfig{apiA: primary.URL, apiB: peer.URL}, "replay-name", 2)
+		require.NoError(t, err)
+		require.Zero(t, peerCalls.Load())
+	})
 }
 
 type capacityRecoveryResult struct {

@@ -301,6 +301,15 @@ Completed:
   replacement and lease-handoff interval dominated the intentionally tiny
   sample; this is functional smoke evidence only, and the production latency
   threshold remains unchanged for the 60-minute gate;
+- the first production-size attempt stopped after 970.81 seconds at the end of
+  replay preparation: 9,999 of 10,000 distinct GraphQL Namespace creates were
+  acknowledged, while transition 109 returned the spec-047 retryable
+  `NAMESPACE_CONFLICT` / `RESOURCE_VERSION_CONFLICT`. Replay, the 60-minute
+  soak, and replacement did not start. The deployment harness now bounds these
+  preparation retries to six attempts, alternates replicas with exponential
+  backoff, confirms ambiguous commit outcomes by querying both replicas, and
+  still fails permanent GraphQL errors immediately; focused tests cover peer
+  conflict retry, permanent-error rejection, and ambiguous-success read-back;
 - the full replacement 60-minute/1,000-subscriber deployed gate remains
   pending and T061 is intentionally open until its emitted metrics are recorded
   here;
