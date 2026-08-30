@@ -189,9 +189,11 @@ Namespace, remove or transfer all repositories, then retry deletion.
    rather than remove the finalizer by hand.
 5. A repeated user deletion returning `ALREADY_TERMINATING` is healthy and must
    not advance `resourceVersion`.
-6. Repository create/transfer fence cleanup uses a bounded context detached from
-   request cancellation. A persistent positive pending counter therefore
-   indicates a datastore cleanup failure, not an ordinary client disconnect.
+6. Ordinary repository create/transfer fence cleanup uses a bounded context
+   detached from request cancellation. Repair-required writes intentionally
+   retain the fence until a quiesced `scylla-projection-repair --confirm` run
+   completes projection repair, verifies a clean audit, and clears the retained
+   reservation.
 
 ### Mutation rejected by the fence rollout gate
 

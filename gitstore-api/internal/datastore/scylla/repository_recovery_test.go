@@ -16,7 +16,7 @@ import (
 
 const sagaTestRepositoryID = "11111111-1111-1111-1111-111111111111"
 
-func TestNamespaceRepositoryReservationReleasesAfterRepairRequiredOperation(t *testing.T) {
+func TestNamespaceRepositoryReservationRetainsFenceAfterRepairRequiredOperation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	operationErr := datastore.NewRepairRequiredError(
 		datastore.MutationStep{Operation: "create_repository", Action: "converge_projection"},
@@ -44,7 +44,7 @@ func TestNamespaceRepositoryReservationReleasesAfterRepairRequiredOperation(t *t
 		"repository was created",
 	)
 
-	assert.Equal(t, 1, releases)
+	assert.Equal(t, 0, releases)
 	assert.Equal(t, operationErr, err)
 }
 

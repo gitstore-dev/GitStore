@@ -136,6 +136,9 @@ func executeNamespaceRepositoryReservation(
 		return err
 	}
 	operationErr := operation()
+	if errors.Is(operationErr, datastore.ErrRepairRequired) {
+		return operationErr
+	}
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceRepositoryReleaseTimeout)
 	defer cancel()
 	releaseErr := release(releaseCtx)
@@ -149,6 +152,31 @@ func executeNamespaceRepositoryReservation(
 		primary = errors.New(successDescription)
 	}
 	return datastore.NewRepairRequiredError(step, primary, releaseErr)
+}
+
+func (s *scyllaDatastore) completeNamespaceRepositoryRepair(
+	ctx context.Context,
+	repair NamespaceRepositoryFenceRepair,
+) error {
+	uid := mustParseUUID(repair.UID)
+	applied, err := s.session.Query(
+		"UPDATE namespaces_by_uid SET pending_repository_creations=? WHERE uid=? "+
+			"IF repository_creation_epoch=? AND pending_repository_creations=? AND deletion_timestamp=?",
+		nil,
+	).WithContext(ctx).Bind(
+		int64(0),
+		uid,
+		repair.RepositoryCreationEpoch,
+		repair.PendingRepositoryCreations,
+		nil,
+	).ExecCASRelease()
+	if err != nil {
+		return fmt.Errorf("scylla: complete namespace repository repair: %w", err)
+	}
+	if !applied {
+		return datastore.ErrConflict
+	}
+	return nil
 }
 
 func (s *scyllaDatastore) loadNamespaceRepositoryFence(ctx context.Context, namespaceUID string) (namespaceRepositoryFence, error) {
