@@ -83,8 +83,8 @@ Namespace lifecycle contract.
 Roll out in this order:
 
 1. Apply migration 006 everywhere and verify the Namespace base table has full
-   preimage/postimage CDC with the 14-day TTL plus the clock, journal, progress,
-   and fenced-lease tables.
+   preimage/postimage CDC with the 14-day TTL plus the journal-event table and
+   partition-local clock/lease/progress table.
 2. Keep both Namespace watch gates off while any API replica lacks the new
    schema/code. Deny Namespace watch ingress fleet-wide during mixed-version
    operation; an old replica cannot honor the durable cursor contract.
@@ -122,8 +122,9 @@ Namespace name, UID, cursor, holder ID, or replica ID):
 - replay and delivery histograms — alert if 10,000-event replay p95 exceeds 5
   seconds, delivery p95 exceeds 1 second, or delivery p99 exceeds 3 seconds.
 
-During replacement, the old leader may finish or lose its lease; fencing stops
-a stale holder from appending/progressing. A replacement should acquire the
+During replacement, the old leader may finish or lose its lease;
+partition-local conditional writes stop a stale holder from
+publishing/progressing. A replacement should acquire the
 lease, resume durable CDC progress, write a BOOKMARK, and restore readiness in
 30 seconds. Duplicates after append-before-progress recovery are safe and must
 be deduplicated by cursor; missing sequences are not safe and fail closed.

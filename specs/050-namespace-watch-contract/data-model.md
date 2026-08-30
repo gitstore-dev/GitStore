@@ -85,7 +85,9 @@ Durable replay row.
 | name | text | Namespace name; empty for BOOKMARK |
 | namespaceResourceVersion | text nullable | Resource row version for data events |
 | payload | blob nullable | Versioned JSON Namespace postimage for ADDED/MODIFIED |
+| selectorLabels | map/text nullable | Private postimage or last-known labels used for filtering; never exposed as the resource payload |
 | sourceChangeTime | timeuuid nullable | CDC write time |
+| fencingToken | bigint | Lease that staged the row; stale orphan rows are replaceable before visibility advances |
 | createdAt | timestamp | Journal append time |
 | expiresAt/TTL | seven days | Retention bound |
 
@@ -101,10 +103,12 @@ State transitions:
 Rejected, failed, conflicted, or no-op spec-047 operations create no base-table
 change and therefore no journal event.
 
-## NamespaceCDCProgress
+## NamespaceWatchClockAndProgress
 
-Durable per-stream checkpoint, compatible with
-`scylla-cdc-go.ProgressManager`.
+One Scylla partition contains the singleton clock and static lease state plus
+durable rows per CDC stream/generation. Co-location lets journal visibility and
+progress writes condition atomically on the active lease and remains compatible
+with `scylla-cdc-go.ProgressManager`.
 
 | Field | Type | Rules |
 |---|---|---|
@@ -132,9 +136,10 @@ Load-bounding leader lease.
 | expiresAt | timestamp | 30-second lease |
 | renewedAt | timestamp | Renew every 10 seconds |
 
-A lease holder may append only while its fencing token matches the journal
-clock. Brief overlap may append duplicates, which the at-least-once contract
-permits; a stale holder cannot advance shared CDC progress.
+A lease holder may publish only while its fencing token matches the static
+clock token and its expiry remains in the future in the same LWT. Brief overlap
+may stage an orphan row, but it cannot make that row visible or advance shared
+CDC progress; the next holder can replace it safely.
 
 ## NamespaceWatchCursor
 
@@ -211,4 +216,3 @@ WatchRegistration
 - Epoch changes are explicit and force every existing cursor to expire.
 - A replica restart does not change epoch or high water.
 - The generic and typed Namespace paths read the identical journal rows.
-

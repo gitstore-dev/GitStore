@@ -26,7 +26,7 @@ resourceVersion.
 | Authored/status/finalizer/provenance update | MODIFIED | Full postimage |
 | Deletion marker/finalizer attached | MODIFIED | Full postimage |
 | Idempotent repeated delete with no row write | none | none |
-| Permanent authoritative row removal | DELETED | name only |
+| Permanent authoritative row removal | DELETED | name plus private last-known selector labels; GraphQL payload remains null |
 | 30 seconds without a data event | BOOKMARK | none |
 | Rejected/failed/conflicting mutation | none | none |
 
@@ -48,7 +48,8 @@ nwv1:<epoch-uuid>:<base36-sequence>
 - One subscription may replay at most 100,000 events.
 - Resume starts strictly after the supplied cursor.
 - Cursor epoch mismatch, expiry, invalid future sequence, missing retained
-  bucket, replay overflow, or subscriber overflow returns `WATCH_EXPIRED`.
+  bucket, replay overflow, or sustained subscriber backpressure timeout returns
+  `WATCH_EXPIRED`.
 
 GraphQL terminal error:
 
@@ -138,7 +139,8 @@ For each CDC stream:
 1. Normalize the logical CDC change.
 2. Allocate a journal sequence with fenced LWT.
 3. Append the journal event with TTL.
-4. Save CDC progress using the same fencing token.
+4. Save CDC progress using an LWT conditioned on the same partition-local
+   holder, fencing token, and non-expired lease used to publish the event.
 
 Progress is never saved before step 3. Crash between 3 and 4 replays and may
 duplicate; crash before 3 retries without loss.
@@ -171,4 +173,3 @@ Required bounded-cardinality signals:
 - bookmark age;
 - end-to-end CDC-to-delivery latency;
 - watch readiness and unavailable reason.
-

@@ -59,8 +59,10 @@ References:
 
 **Decision**: An embedded materializer consumes every CDC stream, normalizes
 one logical base-table mutation into one Namespace event, and appends it to
-`namespace_watch_events`. A singleton `namespace_watch_clock` LWT allocates
-a monotonically increasing sequence. The opaque cursor is
+`namespace_watch_events`. A partition-local `namespace_watch_clock` stores the
+sequence clock, static lease/fencing state, and per-stream progress so every
+publication/progress LWT is atomically fenced. It allocates a monotonically
+increasing sequence. The opaque cursor is
 `nwv1:<epoch-uuid>:<sequence>`; event rows are bucketed by
 `sequence / 4096` and retained for seven days.
 
@@ -91,8 +93,10 @@ durably appended. A crash after append but before progress save causes a
 duplicate event with a later journal cursor on restart; this is permitted and
 measured. A crash before append leaves progress unchanged and the change is
 retried. The materializer lease is an optimization and load bound, not a
-correctness assumption: a fencing token prevents stale lease holders from
-saving progress, while duplicate appends from brief overlap remain safe.
+correctness assumption: the clock partition's static fencing token participates
+in the same LWT as journal visibility and per-stream progress, preventing stale
+lease holders from publishing or progressing. Orphan rows remain invisible and
+replaceable; duplicate appends from append-before-progress recovery remain safe.
 
 **Rationale**: The official CDC reader explicitly makes consumers responsible
 for saving progress and resumes after the last saved record. Append-before-save
@@ -204,8 +208,8 @@ preserve that leak.
 
 **Decision**:
 
-1. Apply migration 006, enabling CDC and creating clock, journal, progress, and
-   lease tables.
+1. Apply migration 006, enabling CDC and creating the journal-event table plus
+   the partition-local clock/lease/progress table.
 2. Deny both Namespace watch forms fleet-wide during mixed binaries.
 3. Deploy all API replicas with durable watch materialization disabled but
    schema support present.
@@ -255,4 +259,3 @@ work to catalogue product count. Thresholds are explicit and testable.
 
 - Reuse the old ring capacity as the only bound: rejected because it is
   process-local and event-count-only.
-

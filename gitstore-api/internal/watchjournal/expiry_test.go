@@ -78,7 +78,7 @@ func TestSubscriberOverflowIsTerminal(t *testing.T) {
 		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, Oldest: 1, HighWater: 2, UpdatedAt: time.Now().UTC()},
 		events: []datastore.NamespaceWatchEvent{{Epoch: epoch, Sequence: 1}, {Epoch: epoch, Sequence: 2}},
 	}
-	stream, err := NewSubscriber(journal, SubscriberConfig{BufferSize: 1}).Subscribe(context.Background(), EncodeCursor(epoch, 0))
+	stream, err := NewSubscriber(journal, SubscriberConfig{BufferSize: 1, BackpressureTimeout: 10 * time.Millisecond}).Subscribe(context.Background(), EncodeCursor(epoch, 0))
 	if err != nil {
 		t.Fatalf("Subscribe() error = %v", err)
 	}

@@ -6,11 +6,18 @@ ALTER TABLE namespaces_by_uid WITH cdc = {
 };
 
 CREATE TABLE IF NOT EXISTS namespace_watch_clock (
-  journal text PRIMARY KEY,
-  epoch uuid,
-  high_water bigint,
-  oldest bigint,
-  updated_at timestamp
+  journal text,
+  stream_id text,
+  epoch uuid static,
+  high_water bigint static,
+  oldest bigint static,
+  updated_at timestamp static,
+  holder text static,
+  fencing_token bigint static,
+  expires_at timestamp static,
+  position blob,
+  progress_updated_at timestamp,
+  PRIMARY KEY ((journal), stream_id)
 );
 
 CREATE TABLE IF NOT EXISTS namespace_watch_events (
@@ -20,22 +27,10 @@ CREATE TABLE IF NOT EXISTS namespace_watch_events (
   event_type text,
   name text,
   payload text,
+  selector_labels text,
   deduplication_key text,
+  fencing_token bigint,
   event_at timestamp,
   PRIMARY KEY ((epoch, bucket), sequence)
 ) WITH CLUSTERING ORDER BY (sequence ASC)
   AND default_time_to_live = 604800;
-
-CREATE TABLE IF NOT EXISTS namespace_cdc_progress (
-  stream_id text PRIMARY KEY,
-  position blob,
-  fencing_token bigint,
-  updated_at timestamp
-);
-
-CREATE TABLE IF NOT EXISTS namespace_watch_materializer_lease (
-  lease_name text PRIMARY KEY,
-  holder text,
-  fencing_token bigint,
-  expires_at timestamp
-);

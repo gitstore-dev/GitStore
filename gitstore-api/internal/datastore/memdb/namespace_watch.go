@@ -44,6 +44,7 @@ func (m *memdbDatastore) Append(_ context.Context, lease datastore.NamespaceWatc
 	m.namespaceWatchSequence++
 	event.Epoch = m.namespaceWatchEpoch
 	event.Sequence = m.namespaceWatchSequence
+	event.FencingToken = lease.FencingToken
 	event.Payload = append([]byte(nil), event.Payload...)
 	m.namespaceWatchEvents = append(m.namespaceWatchEvents, event)
 	return cloneWatchEvent(event), nil
@@ -149,6 +150,13 @@ func (m *memdbDatastore) pruneLocked(cutoff time.Time) {
 
 func cloneWatchEvent(event datastore.NamespaceWatchEvent) datastore.NamespaceWatchEvent {
 	event.Payload = append([]byte(nil), event.Payload...)
+	if event.SelectorLabels != nil {
+		labels := make(map[string]string, len(event.SelectorLabels))
+		for key, value := range event.SelectorLabels {
+			labels[key] = value
+		}
+		event.SelectorLabels = labels
+	}
 	return event
 }
 
@@ -171,6 +179,7 @@ func (m *memdbDatastore) recordCommittedNamespace(eventType datastore.NamespaceW
 	m.namespaceWatchEvents = append(m.namespaceWatchEvents, datastore.NamespaceWatchEvent{
 		Epoch: m.namespaceWatchEpoch, Sequence: m.namespaceWatchSequence,
 		Type: eventType, Name: namespace.Name, Payload: payload,
+		SelectorLabels:   cloneStringMap(namespace.Labels),
 		DeduplicationKey: fmt.Sprintf("memdb:%s:%s:%d", eventType, namespace.UID, m.namespaceWatchSequence),
 		At:               now,
 	})

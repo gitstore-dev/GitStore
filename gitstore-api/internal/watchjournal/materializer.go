@@ -56,18 +56,33 @@ func Classify(change Change) (datastore.NamespaceWatchEvent, bool) {
 	case len(change.Before) == 0 && len(change.After) > 0:
 		event.Type = datastore.NamespaceWatchAdded
 		event.Payload = append([]byte(nil), change.After...)
+		event.SelectorLabels = namespaceLabels(change.After)
 	case len(change.Before) > 0 && len(change.After) > 0:
 		if jsonEqual(change.Before, change.After) {
 			return datastore.NamespaceWatchEvent{}, false
 		}
 		event.Type = datastore.NamespaceWatchModified
 		event.Payload = append([]byte(nil), change.After...)
+		event.SelectorLabels = namespaceLabels(change.After)
 	case len(change.Before) > 0 && len(change.After) == 0:
 		event.Type = datastore.NamespaceWatchDeleted
+		event.SelectorLabels = namespaceLabels(change.Before)
 	default:
 		return datastore.NamespaceWatchEvent{}, false
 	}
 	return event, true
+}
+
+func namespaceLabels(payload json.RawMessage) map[string]string {
+	var namespace datastore.Namespace
+	if json.Unmarshal(payload, &namespace) != nil || len(namespace.Labels) == 0 {
+		return nil
+	}
+	labels := make(map[string]string, len(namespace.Labels))
+	for key, value := range namespace.Labels {
+		labels[key] = value
+	}
+	return labels
 }
 
 func jsonEqual(left, right json.RawMessage) bool {

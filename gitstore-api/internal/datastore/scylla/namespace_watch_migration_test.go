@@ -24,6 +24,8 @@ func TestNamespaceWatchMigrationContract(t *testing.T) {
 	assert.Contains(t, cql, "create table if not exists namespace_watch_clock")
 	assert.Contains(t, cql, "create table if not exists namespace_watch_events")
 	assert.Contains(t, cql, "default_time_to_live = 604800")
-	assert.Contains(t, cql, "create table if not exists namespace_cdc_progress")
-	assert.Contains(t, cql, "create table if not exists namespace_watch_materializer_lease")
+	assert.Contains(t, cql, "holder text static")
+	assert.Contains(t, cql, "fencing_token bigint static")
+	assert.Contains(t, cql, "position blob")
+	assert.Contains(t, cql, "selector_labels text")
 }

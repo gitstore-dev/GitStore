@@ -120,3 +120,38 @@ func TestSubscriberRejectsReplayBeyondConfiguredCap(t *testing.T) {
 	_, err := subscriber.Subscribe(context.Background(), EncodeCursor(epoch, 0))
 	assertTerminalReason(t, err, CodeExpired, ReasonReplayLimit)
 }
+
+func TestSubscriberBackpressuresRetainedReplayInsteadOfExpiring(t *testing.T) {
+	t.Parallel()
+	epoch := uuid.NewString()
+	now := time.Now().UTC()
+	events := make([]datastore.NamespaceWatchEvent, 128)
+	for i := range events {
+		events[i] = datastore.NamespaceWatchEvent{Epoch: epoch, Sequence: uint64(i + 1), At: now}
+	}
+	journal := &subscriberJournal{
+		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, Oldest: 1, HighWater: 128, UpdatedAt: now},
+		events: events,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, err := NewSubscriber(journal, SubscriberConfig{
+		BufferSize: 1, ReadBatchSize: 128, MaxReplayEvents: 100000,
+		BackpressureTimeout: time.Second,
+	}).Subscribe(ctx, EncodeCursor(epoch, 0))
+	if err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+	for want := uint64(1); want <= 128; want++ {
+		select {
+		case event := <-stream.Events:
+			if event.Sequence != want {
+				t.Fatalf("sequence = %d, want %d", event.Sequence, want)
+			}
+		case terminal := <-stream.Errors:
+			t.Fatalf("unexpected terminal error: %v", terminal)
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for sequence %d", want)
+		}
+	}
+}

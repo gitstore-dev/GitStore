@@ -5,6 +5,7 @@ package scylla
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -13,15 +14,21 @@ import (
 	"github.com/gocql/gocql"
 )
 
-const namespaceWatchJournalName = "namespace"
+const (
+	namespaceWatchJournalName = "namespace"
+	namespaceWatchClockStream = "__clock__"
+)
 
 func (s *scyllaDatastore) NamespaceWatchJournal() datastore.NamespaceWatchJournal { return s }
 
 type namespaceWatchClockRow struct {
-	Epoch     gocql.UUID `db:"epoch"`
-	HighWater int64      `db:"high_water"`
-	Oldest    int64      `db:"oldest"`
-	UpdatedAt time.Time  `db:"updated_at"`
+	Epoch        gocql.UUID `db:"epoch"`
+	HighWater    int64      `db:"high_water"`
+	Oldest       int64      `db:"oldest"`
+	UpdatedAt    time.Time  `db:"updated_at"`
+	Holder       string     `db:"holder"`
+	FencingToken int64      `db:"fencing_token"`
+	ExpiresAt    time.Time  `db:"expires_at"`
 }
 
 type namespaceWatchEventRow struct {
@@ -31,14 +38,10 @@ type namespaceWatchEventRow struct {
 	EventType        string     `db:"event_type"`
 	Name             string     `db:"name"`
 	Payload          string     `db:"payload"`
+	SelectorLabels   string     `db:"selector_labels"`
 	DeduplicationKey string     `db:"deduplication_key"`
+	FencingToken     int64      `db:"fencing_token"`
 	EventAt          time.Time  `db:"event_at"`
-}
-
-type namespaceWatchLeaseRow struct {
-	Holder       string    `db:"holder"`
-	FencingToken int64     `db:"fencing_token"`
-	ExpiresAt    time.Time `db:"expires_at"`
 }
 
 func (s *scyllaDatastore) ensureNamespaceWatchClock(ctx context.Context) (namespaceWatchClockRow, error) {
@@ -46,16 +49,17 @@ func (s *scyllaDatastore) ensureNamespaceWatchClock(ctx context.Context) (namesp
 	if err != nil {
 		return namespaceWatchClockRow{}, fmt.Errorf("scylla: create Namespace watch epoch: %w", err)
 	}
+	zeroExpiry := time.Unix(0, 0).UTC()
 	_, err = s.session.Query(
-		"INSERT INTO namespace_watch_clock (journal,epoch,high_water,oldest,updated_at) VALUES (?,?,?,?,?) IF NOT EXISTS",
+		"INSERT INTO namespace_watch_clock (journal,stream_id,epoch,high_water,oldest,updated_at,holder,fencing_token,expires_at) VALUES (?,?,?,?,?,?,?,?,?) IF NOT EXISTS",
 		nil,
-	).WithContext(ctx).Bind(namespaceWatchJournalName, epoch, int64(0), int64(0), time.Now().UTC()).ExecCASRelease()
+	).WithContext(ctx).Bind(namespaceWatchJournalName, namespaceWatchClockStream, epoch, int64(0), int64(0), time.Now().UTC(), "", int64(0), zeroExpiry).ExecCASRelease()
 	if err != nil {
 		return namespaceWatchClockRow{}, fmt.Errorf("scylla: initialize Namespace watch clock: %w", err)
 	}
 	var row namespaceWatchClockRow
 	if err := s.session.Query(
-		"SELECT epoch,high_water,oldest,updated_at FROM namespace_watch_clock WHERE journal=?",
+		"SELECT epoch,high_water,oldest,updated_at,holder,fencing_token,expires_at FROM namespace_watch_clock WHERE journal=? LIMIT 1",
 		nil,
 	).WithContext(ctx).Bind(namespaceWatchJournalName).GetRelease(&row); err != nil {
 		return namespaceWatchClockRow{}, fmt.Errorf("scylla: read Namespace watch clock: %w", err)
@@ -66,7 +70,7 @@ func (s *scyllaDatastore) ensureNamespaceWatchClock(ctx context.Context) (namesp
 func (s *scyllaDatastore) Bounds(ctx context.Context) (datastore.NamespaceWatchBounds, error) {
 	var row namespaceWatchClockRow
 	err := s.session.Query(
-		"SELECT epoch,high_water,oldest,updated_at FROM namespace_watch_clock WHERE journal=?",
+		"SELECT epoch,high_water,oldest,updated_at FROM namespace_watch_clock WHERE journal=? LIMIT 1",
 		nil,
 	).WithContext(ctx).Bind(namespaceWatchJournalName).GetRelease(&row)
 	if errors.Is(err, gocql.ErrNotFound) {
@@ -79,16 +83,12 @@ func (s *scyllaDatastore) Bounds(ctx context.Context) (datastore.NamespaceWatchB
 }
 
 func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceWatchLease, event datastore.NamespaceWatchEvent, ttl time.Duration) (datastore.NamespaceWatchEvent, error) {
-	valid, err := s.namespaceWatchLeaseValid(ctx, lease, time.Now())
-	if err != nil {
-		return datastore.NamespaceWatchEvent{}, err
-	}
-	if !valid {
-		return datastore.NamespaceWatchEvent{}, datastore.ErrStaleWatchLease
-	}
-
 	if event.At.IsZero() {
 		event.At = time.Now().UTC()
+	}
+	selectorLabels, err := json.Marshal(event.SelectorLabels)
+	if err != nil {
+		return datastore.NamespaceWatchEvent{}, fmt.Errorf("scylla: encode Namespace selector labels: %w", err)
 	}
 	ttlSeconds := int(ttl / time.Second)
 	if ttlSeconds < 1 {
@@ -99,15 +99,19 @@ func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceW
 		if clockErr != nil {
 			return datastore.NamespaceWatchEvent{}, clockErr
 		}
+		if !namespaceWatchLeaseMatches(clock, lease, time.Now()) {
+			return datastore.NamespaceWatchEvent{}, datastore.ErrStaleWatchLease
+		}
 		next := clock.HighWater + 1
 		candidate := event
 		candidate.Epoch = clock.Epoch.String()
 		candidate.Sequence = uint64(next)
+		candidate.FencingToken = lease.FencingToken
 		bucket := int64((candidate.Sequence - 1) / 4096)
 		inserted, insertErr := s.session.Query(
-			"INSERT INTO namespace_watch_events (epoch,bucket,sequence,event_type,name,payload,deduplication_key,event_at) VALUES (?,?,?,?,?,?,?,?) IF NOT EXISTS USING TTL ?",
+			"INSERT INTO namespace_watch_events (epoch,bucket,sequence,event_type,name,payload,selector_labels,deduplication_key,fencing_token,event_at) VALUES (?,?,?,?,?,?,?,?,?,?) IF NOT EXISTS USING TTL ?",
 			nil,
-		).WithContext(ctx).Bind(clock.Epoch, bucket, next, string(candidate.Type), candidate.Name, string(candidate.Payload), candidate.DeduplicationKey, candidate.At, ttlSeconds).ExecCASRelease()
+		).WithContext(ctx).Bind(clock.Epoch, bucket, next, string(candidate.Type), candidate.Name, string(candidate.Payload), string(selectorLabels), candidate.DeduplicationKey, int64(lease.FencingToken), candidate.At, ttlSeconds).ExecCASRelease()
 		if insertErr != nil {
 			return datastore.NamespaceWatchEvent{}, fmt.Errorf("scylla: append Namespace journal event: %w", insertErr)
 		}
@@ -116,23 +120,34 @@ func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceW
 			if loadErr != nil && !errors.Is(loadErr, gocql.ErrNotFound) {
 				return datastore.NamespaceWatchEvent{}, loadErr
 			}
-			// An event written before a crash is repaired into the visible clock
-			// before allocating another sequence. If CDC redelivered the same
-			// change, return that durable event and safely advance progress.
-			_, _ = s.session.Query(
-				"UPDATE namespace_watch_clock SET high_water=?,updated_at=? WHERE journal=? IF epoch=? AND high_water=?",
-				nil,
-			).WithContext(ctx).Bind(next, existing.At, namespaceWatchJournalName, clock.Epoch, clock.HighWater).ExecCASRelease()
+			if uint64(existing.FencingToken) < lease.FencingToken {
+				removed, removeErr := s.session.Query(
+					"DELETE FROM namespace_watch_events WHERE epoch=? AND bucket=? AND sequence=? IF fencing_token<?",
+					nil,
+				).WithContext(ctx).Bind(clock.Epoch, bucket, next, int64(lease.FencingToken)).ExecCASRelease()
+				if removeErr != nil {
+					return datastore.NamespaceWatchEvent{}, fmt.Errorf("scylla: remove stale Namespace journal event: %w", removeErr)
+				}
+				if removed {
+					continue
+				}
+			}
+			if uint64(existing.FencingToken) > lease.FencingToken {
+				return datastore.NamespaceWatchEvent{}, datastore.ErrStaleWatchLease
+			}
 			if existing.DeduplicationKey != "" && existing.DeduplicationKey == candidate.DeduplicationKey {
-				return existing, nil
+				published, publishErr := s.publishNamespaceWatchSequence(ctx, clock, lease, next, existing.At)
+				if publishErr != nil {
+					return datastore.NamespaceWatchEvent{}, publishErr
+				}
+				if published {
+					return existing, nil
+				}
 			}
 			continue
 		}
 
-		applied, casErr := s.session.Query(
-			"UPDATE namespace_watch_clock SET high_water=?,updated_at=? WHERE journal=? IF epoch=? AND high_water=?",
-			nil,
-		).WithContext(ctx).Bind(next, candidate.At, namespaceWatchJournalName, clock.Epoch, clock.HighWater).ExecCASRelease()
+		applied, casErr := s.publishNamespaceWatchSequence(ctx, clock, lease, next, candidate.At)
 		if casErr != nil {
 			return datastore.NamespaceWatchEvent{}, fmt.Errorf("scylla: publish Namespace journal sequence: %w", casErr)
 		}
@@ -141,8 +156,17 @@ func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceW
 			if latestErr != nil {
 				return datastore.NamespaceWatchEvent{}, latestErr
 			}
+			if !namespaceWatchLeaseMatches(latest, lease, time.Now()) {
+				return datastore.NamespaceWatchEvent{}, datastore.ErrStaleWatchLease
+			}
 			if latest.Epoch == clock.Epoch && latest.HighWater >= next {
-				return candidate, nil
+				existing, loadErr := s.namespaceWatchEvent(ctx, clock.Epoch, bucket, next)
+				if loadErr != nil {
+					return datastore.NamespaceWatchEvent{}, loadErr
+				}
+				if existing.DeduplicationKey == candidate.DeduplicationKey {
+					return existing, nil
+				}
 			}
 			continue
 		}
@@ -155,10 +179,21 @@ func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceW
 	return datastore.NamespaceWatchEvent{}, fmt.Errorf("scylla: append Namespace journal event: contention limit reached")
 }
 
+func (s *scyllaDatastore) publishNamespaceWatchSequence(ctx context.Context, clock namespaceWatchClockRow, lease datastore.NamespaceWatchLease, next int64, at time.Time) (bool, error) {
+	applied, err := s.session.Query(
+		"UPDATE namespace_watch_clock SET high_water=?,updated_at=? WHERE journal=? IF epoch=? AND high_water=? AND holder=? AND fencing_token=? AND expires_at>?",
+		nil,
+	).WithContext(ctx).Bind(next, at, namespaceWatchJournalName, clock.Epoch, clock.HighWater, lease.Holder, int64(lease.FencingToken), time.Now().UTC()).ExecCASRelease()
+	if err != nil {
+		return false, fmt.Errorf("scylla: publish Namespace journal sequence: %w", err)
+	}
+	return applied, nil
+}
+
 func (s *scyllaDatastore) namespaceWatchEvent(ctx context.Context, epoch gocql.UUID, bucket, sequence int64) (datastore.NamespaceWatchEvent, error) {
 	var row namespaceWatchEventRow
 	err := s.session.Query(
-		"SELECT epoch,bucket,sequence,event_type,name,payload,deduplication_key,event_at FROM namespace_watch_events WHERE epoch=? AND bucket=? AND sequence=?",
+		"SELECT epoch,bucket,sequence,event_type,name,payload,selector_labels,deduplication_key,fencing_token,event_at FROM namespace_watch_events WHERE epoch=? AND bucket=? AND sequence=?",
 		nil,
 	).WithContext(ctx).Bind(epoch, bucket, sequence).GetRelease(&row)
 	if err != nil {
@@ -166,7 +201,8 @@ func (s *scyllaDatastore) namespaceWatchEvent(ctx context.Context, epoch gocql.U
 	}
 	return datastore.NamespaceWatchEvent{
 		Epoch: row.Epoch.String(), Sequence: uint64(row.Sequence), Type: datastore.NamespaceWatchEventType(row.EventType),
-		Name: row.Name, Payload: []byte(row.Payload), DeduplicationKey: row.DeduplicationKey, At: row.EventAt,
+		Name: row.Name, Payload: []byte(row.Payload), SelectorLabels: decodeSelectorLabels(row.SelectorLabels),
+		DeduplicationKey: row.DeduplicationKey, FencingToken: uint64(row.FencingToken), At: row.EventAt,
 	}, nil
 }
 
@@ -198,14 +234,18 @@ func (s *scyllaDatastore) ReadAfter(ctx context.Context, cursor datastore.Namesp
 		}
 		var rows []namespaceWatchEventRow
 		err = s.session.Query(
-			"SELECT epoch,bucket,sequence,event_type,name,payload,deduplication_key,event_at FROM namespace_watch_events WHERE epoch=? AND bucket=? AND sequence>=? AND sequence<=? LIMIT ?",
+			"SELECT epoch,bucket,sequence,event_type,name,payload,selector_labels,deduplication_key,fencing_token,event_at FROM namespace_watch_events WHERE epoch=? AND bucket=? AND sequence>=? AND sequence<=? LIMIT ?",
 			nil,
 		).WithContext(ctx).Bind(epoch, bucket, int64(start), int64(bucketEnd), limit-len(out)).SelectRelease(&rows)
 		if err != nil {
 			return nil, fmt.Errorf("scylla: read Namespace journal events: %w", err)
 		}
 		for _, row := range rows {
-			out = append(out, datastore.NamespaceWatchEvent{Epoch: row.Epoch.String(), Sequence: uint64(row.Sequence), Type: datastore.NamespaceWatchEventType(row.EventType), Name: row.Name, Payload: []byte(row.Payload), DeduplicationKey: row.DeduplicationKey, At: row.EventAt})
+			out = append(out, datastore.NamespaceWatchEvent{
+				Epoch: row.Epoch.String(), Sequence: uint64(row.Sequence), Type: datastore.NamespaceWatchEventType(row.EventType),
+				Name: row.Name, Payload: []byte(row.Payload), SelectorLabels: decodeSelectorLabels(row.SelectorLabels),
+				DeduplicationKey: row.DeduplicationKey, FencingToken: uint64(row.FencingToken), At: row.EventAt,
+			})
 		}
 		start = bucketEnd + 1
 	}
@@ -213,42 +253,38 @@ func (s *scyllaDatastore) ReadAfter(ctx context.Context, cursor datastore.Namesp
 }
 
 func (s *scyllaDatastore) AcquireLease(ctx context.Context, holder string, now time.Time, ttl time.Duration) (datastore.NamespaceWatchLease, bool, error) {
-	expires := now.Add(ttl)
-	applied, err := s.session.Query(
-		"INSERT INTO namespace_watch_materializer_lease (lease_name,holder,fencing_token,expires_at) VALUES (?,?,?,?) IF NOT EXISTS",
-		nil,
-	).WithContext(ctx).Bind(namespaceWatchJournalName, holder, int64(1), expires).ExecCASRelease()
+	current, err := s.ensureNamespaceWatchClock(ctx)
 	if err != nil {
-		return datastore.NamespaceWatchLease{}, false, fmt.Errorf("scylla: acquire Namespace materializer lease: %w", err)
+		return datastore.NamespaceWatchLease{}, false, err
 	}
-	if applied {
-		return datastore.NamespaceWatchLease{Holder: holder, FencingToken: 1, ExpiresAt: expires}, true, nil
-	}
-	var current namespaceWatchLeaseRow
-	if err := s.session.Query("SELECT holder,fencing_token,expires_at FROM namespace_watch_materializer_lease WHERE lease_name=?", nil).
-		WithContext(ctx).Bind(namespaceWatchJournalName).GetRelease(&current); err != nil {
-		return datastore.NamespaceWatchLease{}, false, fmt.Errorf("scylla: read Namespace materializer lease: %w", err)
-	}
-	if now.Before(current.ExpiresAt) {
+	if current.Holder != "" && now.Before(current.ExpiresAt) {
 		return datastore.NamespaceWatchLease{}, false, nil
 	}
+	expires := now.Add(ttl)
 	next := current.FencingToken + 1
-	applied, err = s.session.Query(
-		"UPDATE namespace_watch_materializer_lease SET holder=?,fencing_token=?,expires_at=? WHERE lease_name=? IF holder=? AND fencing_token=? AND expires_at=?",
+	applied, err := s.session.Query(
+		"UPDATE namespace_watch_clock SET holder=?,fencing_token=?,expires_at=? WHERE journal=? IF holder=? AND fencing_token=? AND expires_at=?",
 		nil,
 	).WithContext(ctx).Bind(holder, next, expires, namespaceWatchJournalName, current.Holder, current.FencingToken, current.ExpiresAt).ExecCASRelease()
 	if err != nil {
-		return datastore.NamespaceWatchLease{}, false, fmt.Errorf("scylla: take over Namespace materializer lease: %w", err)
+		return datastore.NamespaceWatchLease{}, false, fmt.Errorf("scylla: acquire Namespace materializer lease: %w", err)
 	}
 	return datastore.NamespaceWatchLease{Holder: holder, FencingToken: uint64(next), ExpiresAt: expires}, applied, nil
 }
 
 func (s *scyllaDatastore) RenewLease(ctx context.Context, lease datastore.NamespaceWatchLease, now time.Time, ttl time.Duration) (datastore.NamespaceWatchLease, bool, error) {
+	current, err := s.ensureNamespaceWatchClock(ctx)
+	if err != nil {
+		return datastore.NamespaceWatchLease{}, false, err
+	}
+	if !namespaceWatchLeaseMatches(current, lease, now) {
+		return datastore.NamespaceWatchLease{}, false, nil
+	}
 	expires := now.Add(ttl)
 	applied, err := s.session.Query(
-		"UPDATE namespace_watch_materializer_lease SET expires_at=? WHERE lease_name=? IF holder=? AND fencing_token=?",
+		"UPDATE namespace_watch_clock SET expires_at=? WHERE journal=? IF holder=? AND fencing_token=? AND expires_at=?",
 		nil,
-	).WithContext(ctx).Bind(expires, namespaceWatchJournalName, lease.Holder, int64(lease.FencingToken)).ExecCASRelease()
+	).WithContext(ctx).Bind(expires, namespaceWatchJournalName, lease.Holder, int64(lease.FencingToken), current.ExpiresAt).ExecCASRelease()
 	if err != nil {
 		return datastore.NamespaceWatchLease{}, false, fmt.Errorf("scylla: renew Namespace materializer lease: %w", err)
 	}
@@ -258,9 +294,9 @@ func (s *scyllaDatastore) RenewLease(ctx context.Context, lease datastore.Namesp
 
 func (s *scyllaDatastore) ReleaseLease(ctx context.Context, lease datastore.NamespaceWatchLease) error {
 	_, err := s.session.Query(
-		"DELETE FROM namespace_watch_materializer_lease WHERE lease_name=? IF holder=? AND fencing_token=?",
+		"UPDATE namespace_watch_clock SET holder=?,expires_at=? WHERE journal=? IF holder=? AND fencing_token=?",
 		nil,
-	).WithContext(ctx).Bind(namespaceWatchJournalName, lease.Holder, int64(lease.FencingToken)).ExecCASRelease()
+	).WithContext(ctx).Bind("", time.Unix(0, 0).UTC(), namespaceWatchJournalName, lease.Holder, int64(lease.FencingToken)).ExecCASRelease()
 	if err != nil {
 		return fmt.Errorf("scylla: release Namespace materializer lease: %w", err)
 	}
@@ -271,10 +307,10 @@ func (s *scyllaDatastore) LoadProgress(ctx context.Context, streamID string) (da
 	var row struct {
 		StreamID  string    `db:"stream_id"`
 		Position  []byte    `db:"position"`
-		UpdatedAt time.Time `db:"updated_at"`
+		UpdatedAt time.Time `db:"progress_updated_at"`
 	}
-	err := s.session.Query("SELECT stream_id,position,updated_at FROM namespace_cdc_progress WHERE stream_id=?", nil).
-		WithContext(ctx).Bind(streamID).GetRelease(&row)
+	err := s.session.Query("SELECT stream_id,position,progress_updated_at FROM namespace_watch_clock WHERE journal=? AND stream_id=?", nil).
+		WithContext(ctx).Bind(namespaceWatchJournalName, streamID).GetRelease(&row)
 	if errors.Is(err, gocql.ErrNotFound) {
 		return datastore.NamespaceCDCProgress{}, datastore.ErrNotFound
 	}
@@ -285,34 +321,35 @@ func (s *scyllaDatastore) LoadProgress(ctx context.Context, streamID string) (da
 }
 
 func (s *scyllaDatastore) SaveProgress(ctx context.Context, lease datastore.NamespaceWatchLease, progress datastore.NamespaceCDCProgress) error {
-	valid, err := s.namespaceWatchLeaseValid(ctx, lease, time.Now())
-	if err != nil {
-		return err
+	if progress.StreamID == "" {
+		return fmt.Errorf("%w: CDC stream id is required", datastore.ErrInvalidArgument)
 	}
-	if !valid {
-		return datastore.ErrStaleWatchLease
-	}
-	err = s.session.Query(
-		"INSERT INTO namespace_cdc_progress (stream_id,position,fencing_token,updated_at) VALUES (?,?,?,?)",
+	applied, err := s.session.Query(
+		"UPDATE namespace_watch_clock SET position=?,progress_updated_at=? WHERE journal=? AND stream_id=? IF holder=? AND fencing_token=? AND expires_at>?",
 		nil,
-	).WithContext(ctx).Bind(progress.StreamID, progress.Position, int64(lease.FencingToken), progress.UpdatedAt).ExecRelease()
+	).WithContext(ctx).Bind(progress.Position, progress.UpdatedAt, namespaceWatchJournalName, progress.StreamID, lease.Holder, int64(lease.FencingToken), time.Now().UTC()).ExecCASRelease()
 	if err != nil {
 		return fmt.Errorf("scylla: save Namespace CDC progress: %w", err)
+	}
+	if !applied {
+		return datastore.ErrStaleWatchLease
 	}
 	return nil
 }
 
-func (s *scyllaDatastore) namespaceWatchLeaseValid(ctx context.Context, lease datastore.NamespaceWatchLease, now time.Time) (bool, error) {
-	var current namespaceWatchLeaseRow
-	err := s.session.Query("SELECT holder,fencing_token,expires_at FROM namespace_watch_materializer_lease WHERE lease_name=?", nil).
-		WithContext(ctx).Bind(namespaceWatchJournalName).GetRelease(&current)
-	if errors.Is(err, gocql.ErrNotFound) {
-		return false, nil
+func namespaceWatchLeaseMatches(current namespaceWatchClockRow, lease datastore.NamespaceWatchLease, now time.Time) bool {
+	return current.Holder == lease.Holder && uint64(current.FencingToken) == lease.FencingToken && now.Before(current.ExpiresAt)
+}
+
+func decodeSelectorLabels(raw string) map[string]string {
+	if raw == "" || raw == "null" {
+		return nil
 	}
-	if err != nil {
-		return false, fmt.Errorf("scylla: validate Namespace materializer lease: %w", err)
+	var labels map[string]string
+	if json.Unmarshal([]byte(raw), &labels) != nil {
+		return nil
 	}
-	return current.Holder == lease.Holder && uint64(current.FencingToken) == lease.FencingToken && now.Before(current.ExpiresAt), nil
+	return labels
 }
 
 func maxInt64(value, minimum int64) int64 {

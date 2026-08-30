@@ -22,6 +22,35 @@ type namespaceCDCTestRunner interface {
 	RunNamespaceCDC(context.Context, *watchjournal.Materializer, datastore.NamespaceWatchLease, time.Duration, func()) error
 }
 
+func TestNamespaceWatchLeaseFencesJournalAndProgressWrites(t *testing.T) {
+	store := newTestStore(t)
+	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	stale, acquired, err := journal.AcquireLease(ctx, "replica-a", now, time.Second)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	current, acquired, err := journal.AcquireLease(ctx, "replica-b", now.Add(2*time.Second), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.Greater(t, current.FencingToken, stale.FencingToken)
+	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), current)) })
+
+	_, err = journal.Append(ctx, stale, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchBookmark}, time.Hour)
+	require.ErrorIs(t, err, datastore.ErrStaleWatchLease)
+	err = journal.SaveProgress(ctx, stale, datastore.NamespaceCDCProgress{StreamID: "stream-a", Position: []byte("stale"), UpdatedAt: now})
+	require.ErrorIs(t, err, datastore.ErrStaleWatchLease)
+
+	appended, err := journal.Append(ctx, current, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchBookmark}, time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, current.FencingToken, appended.FencingToken)
+	require.NoError(t, journal.SaveProgress(ctx, current, datastore.NamespaceCDCProgress{StreamID: "stream-a", Position: []byte("current"), UpdatedAt: now.Add(2 * time.Second)}))
+	progress, err := journal.LoadProgress(ctx, "stream-a")
+	require.NoError(t, err)
+	require.Equal(t, []byte("current"), progress.Position)
+}
+
 func TestNamespaceAuthoritativeCommitsProduceCDCButRejectedWritesDoNot(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -30,6 +59,7 @@ func TestNamespaceAuthoritativeCommitsProduceCDCButRejectedWritesDoNot(t *testin
 		APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace", UID: newID(),
 		Name: "cdc-" + newID()[:8], Title: "CDC", Tier: datastore.NamespaceTierUser,
 		ResourceVersion: "1", Generation: 1, CreationTimestamp: now, UpdateTimestamp: now,
+		Labels: map[string]string{"team": "catalog"},
 	}
 
 	before := namespaceCDCRowCount(t)
@@ -93,6 +123,7 @@ func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
 		APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace", UID: newID(),
 		Name: "materialized-" + newID()[:8], Title: "Materialized", Tier: datastore.NamespaceTierUser,
 		ResourceVersion: "1", Generation: 1, CreationTimestamp: now, UpdateTimestamp: now,
+		Labels: map[string]string{"team": "catalog"},
 	}
 	require.NoError(t, store.CreateNamespace(context.Background(), namespace))
 
@@ -117,6 +148,7 @@ func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
 				var payload datastore.Namespace
 				require.NoError(t, json.Unmarshal(event.Payload, &payload))
 				require.Equal(t, namespace.Name, payload.Name)
+				require.Equal(t, "catalog", event.SelectorLabels["team"])
 				cancel()
 				return
 			}

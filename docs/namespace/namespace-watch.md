@@ -110,10 +110,12 @@ the authoritative spec-047 state. There is no `deletionTimestamp` field.
 Entering or leaving Terminating is a `MODIFIED` event and is derived from the
 foreground-deletion finalizer/status state. Final removal alone is `DELETED`.
 
-Selectors use the existing `LabelSelectorInput`. Data events match their full
-postimage labels; payload-free DELETED and BOOKMARK events are not selected by
-a non-empty selector. Namespace itself is cluster-scoped, so the subscription
-has no namespace argument.
+Selectors use the existing `LabelSelectorInput`. ADDED/MODIFIED events match
+their postimage labels and DELETED matches a private last-known label snapshot
+stored with the journal row. BOOKMARK always bypasses filtering so every
+subscriber can establish and advance its cursor. DELETED and BOOKMARK still
+expose a null Namespace payload. Namespace itself is cluster-scoped, so the
+subscription has no namespace argument.
 
 The pre-existing `watchResources(kind: "Namespace")` path remains compatible
 and uses the same cursor stream and error contract, but typed

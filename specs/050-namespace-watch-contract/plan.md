@@ -22,7 +22,7 @@ and mutation outcomes are inputs and are not reopened.
 
 **Language/Version**: Go 1.25 (`gitstore-api`); gqlgen v0.17.90 generated GraphQL contracts  
 **Primary Dependencies**: Existing gocqlx/gocql Scylla stack, go-memdb, gqlgen WebSocket transport, zap, Prometheus client; new `github.com/scylladb/scylla-cdc-go v1.2.1` for production CDC stream/topology/progress handling  
-**Storage**: Migration 006 enables full-preimage/postimage CDC with 14-day TTL on `namespaces_by_uid` and adds bounded journal clock/events, CDC progress, and materializer lease tables. Memdb uses an in-process implementation of the same journal contract for development. No spec-047 Namespace row fields change.  
+**Storage**: Migration 006 enables full-preimage/postimage CDC with 14-day TTL on `namespaces_by_uid` and adds bounded journal events plus a partition-local clock/lease/progress table. Memdb uses an in-process implementation of the same journal contract for development. No spec-047 Namespace row fields change.
 **Testing**: Go unit, resolver, middleware, transport, backend-neutral journal contracts, tagged memdb/Scylla integration, two-API-replica rolling-replacement tests, and a 60-minute threshold-enforcing capacity soak  
 **Target Platform**: Linux server; Darwin/Linux development environments  
 **Project Type**: GraphQL API subscription plus embedded Scylla CDC materializer/journal infrastructure  
@@ -31,7 +31,7 @@ and mutation outcomes are inputs and are not reopened.
 **Scale/Scope**: Cluster-scoped Namespace stream only. Product/category/file watches retain their current backends pending their own migration specs. Namespace volume is low relative to the 5,000,000-product catalogue, but infrastructure is tested under sustained push/admission traffic and 1,000 subscribers.  
 **Replica/Scaling Model**: Every API replica reads one shared journal epoch/cursor space. A Scylla-LWT lease/fencing token bounds CDC materialization to one active writer; overlap may duplicate but cannot lose events or permit stale progress. Any replica can register/replay a subscription.  
 **Authentication/Authorization**: Both typed and generic Namespace watches require cluster-scoped `namespace.watch` before cursor parsing, journal reads, or replay. Existing pluggable AuthN/AuthZ providers and decision logging remain the enforcement boundary.  
-**Load/Backpressure Model**: Journal buckets 4,096 events; read batches 256; subscriber channel 64; maximum resume 100,000 events; 100 ms journal poll with capped 2 s idle backoff; 30 s durable bookmark; 30 s materializer lease renewed every 10 s; overflow/retention/discontinuity fail closed.
+**Load/Backpressure Model**: Journal buckets 4,096 events; read batches 256; subscriber channel 64; maximum resume 100,000 events; bounded 30 s delivery backpressure; 100 ms journal poll with capped 2 s idle backoff; 30 s durable bookmark; 30 s materializer lease renewed every 10 s; sustained overflow/retention/discontinuity fail closed.
 
 ## Constitution Check
 
@@ -201,8 +201,8 @@ BOOKMARK at captured high water before the client lists. The client holds the
 subscription open, pages Namespaces, replaces its local snapshot, then drains
 queued rows after the cursor.
 
-A subscriber reads at most 256 rows per query, buffers 64 events, and replays at
-most 100,000. Any condition that prevents continuity returns `WATCH_EXPIRED`
+A subscriber reads at most 256 rows per query, buffers 64 events with bounded
+delivery backpressure, and replays at most 100,000. Any condition that prevents continuity returns `WATCH_EXPIRED`
 with a bounded reason; infrastructure unavailable before registration returns
 `WATCH_UNAVAILABLE`.
 
@@ -275,4 +275,3 @@ rollback or behavioral change.
 No constitution violation requires an exception. The new CDC journal is
 contractually required infrastructure, not optional abstraction: the previous
 local ring cannot satisfy feature 050 or the current production constitution.
-

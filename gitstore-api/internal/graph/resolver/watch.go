@@ -117,11 +117,18 @@ func namespaceJournalEventToGeneric(event datastore.NamespaceWatchEvent) (*model
 	return out, namespace, nil
 }
 
-func namespaceJournalEventMatchesSelector(namespace *datastore.Namespace, selector *model.LabelSelectorInput) bool {
+func namespaceJournalEventMatchesSelector(event datastore.NamespaceWatchEvent, namespace *datastore.Namespace, selector *model.LabelSelectorInput) bool {
 	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
 		return true
 	}
-	return namespace != nil && matchesWatchSelector(selector, namespace.Labels)
+	if event.Type == datastore.NamespaceWatchBookmark {
+		return true
+	}
+	labels := event.SelectorLabels
+	if namespace != nil {
+		labels = namespace.Labels
+	}
+	return matchesWatchSelector(selector, labels)
 }
 
 func namespaceWatchGraphQLError(err error) *gqlerror.Error {
@@ -183,7 +190,7 @@ func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.
 					addNamespaceWatchSubscriptionError(ctx, convertErr)
 					return
 				}
-				if !namespaceJournalEventMatchesSelector(namespace, selector) {
+				if !namespaceJournalEventMatchesSelector(event, namespace, selector) {
 					continue
 				}
 				select {

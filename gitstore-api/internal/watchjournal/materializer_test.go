@@ -42,8 +42,8 @@ func (s *orderedMaterializerStore) SaveProgress(_ context.Context, _ datastore.N
 }
 
 func TestClassifyCommittedNamespaceChanges(t *testing.T) {
-	before := json.RawMessage(`{"metadata":{"name":"shop"}}`)
-	after := json.RawMessage(`{"metadata":{"name":"shop"},"spec":{"title":"Shop"}}`)
+	before := json.RawMessage(`{"Name":"shop","Labels":{"team":"catalog"}}`)
+	after := json.RawMessage(`{"Name":"shop","Labels":{"team":"storefront"},"Title":"Shop"}`)
 
 	tests := []struct {
 		name   string
@@ -61,6 +61,13 @@ func TestClassifyCommittedNamespaceChanges(t *testing.T) {
 			event, ok := Classify(tt.change)
 			assert.Equal(t, tt.ok, ok)
 			assert.Equal(t, tt.want, event.Type)
+			if tt.ok {
+				wantLabel := "storefront"
+				if tt.want == datastore.NamespaceWatchDeleted {
+					wantLabel = "catalog"
+				}
+				assert.Equal(t, wantLabel, event.SelectorLabels["team"])
+			}
 		})
 	}
 }

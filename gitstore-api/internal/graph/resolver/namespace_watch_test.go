@@ -35,9 +35,10 @@ func TestTypedAndGenericNamespaceWatchShareBootstrapAndEvents(t *testing.T) {
 	})
 	require.NoError(t, err)
 	bootstrap := watchjournal.BootstrapCursor
-	typed, err := r.Subscription().WatchNamespaces(context.Background(), nil, &bootstrap)
+	selector := &model.LabelSelectorInput{MatchLabels: map[string]any{"team": "catalog"}}
+	typed, err := r.Subscription().WatchNamespaces(context.Background(), selector, &bootstrap)
 	require.NoError(t, err)
-	generic, err := r.Subscription().WatchResources(context.Background(), "Namespace", nil, nil, &bootstrap)
+	generic, err := r.Subscription().WatchResources(context.Background(), "Namespace", nil, selector, &bootstrap)
 	require.NoError(t, err)
 
 	typedBookmark := receiveTypedNamespaceEvent(t, typed)
@@ -61,6 +62,19 @@ func TestTypedAndGenericNamespaceWatchShareBootstrapAndEvents(t *testing.T) {
 	assert.Equal(t, "shop", typedAdded.Namespace.Metadata.Name)
 	assert.Equal(t, "shop", genericAdded.Name)
 	assert.Nil(t, genericAdded.Namespace)
+
+	_, err = journal.Append(context.Background(), lease, datastore.NamespaceWatchEvent{
+		Type: datastore.NamespaceWatchDeleted, Name: "shop",
+		SelectorLabels: map[string]string{"team": "catalog"}, At: time.Now(),
+	}, time.Hour)
+	require.NoError(t, err)
+
+	typedDeleted := receiveTypedNamespaceEvent(t, typed)
+	genericDeleted := receiveGenericNamespaceEvent(t, generic)
+	assert.Equal(t, model.WatchEventTypeDeleted, typedDeleted.Type)
+	assert.Equal(t, typedDeleted.ResourceVersion, genericDeleted.ResourceVersion)
+	assert.Nil(t, typedDeleted.Namespace)
+	assert.Nil(t, genericDeleted.Object)
 }
 
 func receiveTypedNamespaceEvent(t *testing.T, events <-chan *model.NamespaceWatchEvent) *model.NamespaceWatchEvent {

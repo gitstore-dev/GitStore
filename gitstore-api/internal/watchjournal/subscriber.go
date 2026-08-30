@@ -12,13 +12,14 @@ import (
 )
 
 type SubscriberConfig struct {
-	ReadBatchSize      int
-	MaxReplayEvents    int
-	BufferSize         int
-	PollMin            time.Duration
-	PollMax            time.Duration
-	MaxMaterializerLag time.Duration
-	Metrics            *Metrics
+	ReadBatchSize       int
+	MaxReplayEvents     int
+	BufferSize          int
+	PollMin             time.Duration
+	PollMax             time.Duration
+	MaxMaterializerLag  time.Duration
+	BackpressureTimeout time.Duration
+	Metrics             *Metrics
 }
 
 type Stream struct {
@@ -46,6 +47,9 @@ func NewSubscriber(store Store, cfg SubscriberConfig) *Subscriber {
 	}
 	if cfg.PollMax < cfg.PollMin {
 		cfg.PollMax = 2 * time.Second
+	}
+	if cfg.BackpressureTimeout <= 0 {
+		cfg.BackpressureTimeout = 30 * time.Second
 	}
 	return &Subscriber{store: store, cfg: cfg}
 }
@@ -155,13 +159,22 @@ func (s *Subscriber) run(ctx context.Context, cursor datastore.NamespaceWatchCur
 				s.sendExpired(errorsOut, ReasonReplayLimit, errors.New("replay limit exceeded"))
 				return
 			}
+			timer := time.NewTimer(s.cfg.BackpressureTimeout)
 			select {
 			case events <- event:
+				if !timer.Stop() {
+					<-timer.C
+				}
 				cursor.Sequence = event.Sequence
 				if s.cfg.Metrics != nil {
 					s.cfg.Metrics.ObserveDelivery(event.At, time.Now())
 				}
-			default:
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-timer.C:
 				if s.cfg.Metrics != nil {
 					s.cfg.Metrics.IncOverflow()
 				}
