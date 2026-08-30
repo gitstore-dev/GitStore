@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -76,8 +77,27 @@ func TestNamespaceWatchBoundsAdvanceAfterTTLExpiry(t *testing.T) {
 		return namespaceWatchEventCount(t, &count) == nil && count == 0
 	}, 10*time.Second, 100*time.Millisecond)
 
-	_, err = journal.Bounds(ctx)
-	require.ErrorContains(t, err, "retention reconciliation is incomplete")
+	start := make(chan struct{})
+	errorsOut := make(chan error, 8)
+	var callers sync.WaitGroup
+	for range 8 {
+		callers.Add(1)
+		go func() {
+			defer callers.Done()
+			<-start
+			_, boundsErr := journal.Bounds(ctx)
+			errorsOut <- boundsErr
+		}()
+	}
+	close(start)
+	callers.Wait()
+	close(errorsOut)
+	for boundsErr := range errorsOut {
+		if boundsErr != nil {
+			require.ErrorContains(t, boundsErr, "retention reconciliation is incomplete")
+			require.NotContains(t, boundsErr.Error(), "concurrent update")
+		}
+	}
 	bounds, err := journal.Bounds(ctx)
 	require.NoError(t, err)
 	require.Equal(t, last.Sequence+1, bounds.Oldest)

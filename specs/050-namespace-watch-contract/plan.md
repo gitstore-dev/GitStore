@@ -208,7 +208,9 @@ linearization point. Bounds checks advance the stored `oldest` value from the
 first live TTL row before validating a new subscription cursor, scanning at
 most 32 buckets and checkpointing once per call. Incomplete reconciliation
 fails registration unavailable; a TTL race after registration terminates with
-`RETENTION_EXPIRED`.
+`RETENTION_EXPIRED`. Concurrent replicas use a monotonic CAS for the checkpoint;
+a CAS loser rereads and accepts the winner's already-advanced lower bound
+rather than reporting a healthy journal unavailable.
 
 The materializer writes the event before saving per-stream CDC progress. A
 failure between those steps causes a duplicate after recovery. The controller

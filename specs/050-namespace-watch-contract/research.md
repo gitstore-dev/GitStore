@@ -103,6 +103,10 @@ at most 32 buckets and durably checkpoints its progress with one LWT. Until a
 retained row or `highWater + 1` is reached, registration fails unavailable
 instead of serving stale bounds. A TTL race during an established stream maps
 to `RETENTION_EXPIRED` rather than an idle loop or generic discontinuity.
+When replicas race to checkpoint the same retained lower bound, a CAS loser
+rereads the clock and accepts a winner that has already reached its monotonic
+target. An epoch change or a reread that remains below the computed target
+continues to fail unavailable.
 
 **Alternatives considered**:
 

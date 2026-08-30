@@ -100,9 +100,21 @@ func (s *scyllaDatastore) namespaceWatchBounds(ctx context.Context, refreshReten
 				return datastore.NamespaceWatchBounds{}, fmt.Errorf("scylla: advance Namespace watch retained lower bound: %w", updateErr)
 			}
 			if !applied {
-				return datastore.NamespaceWatchBounds{}, fmt.Errorf("scylla: advance Namespace watch retained lower bound: concurrent update")
+				var fresh namespaceWatchClockRow
+				readErr := s.session.Query(
+					"SELECT epoch,high_water,oldest,updated_at,cdc_progress_at FROM namespace_watch_clock WHERE journal=? LIMIT 1",
+					nil,
+				).WithContext(ctx).Bind(namespaceWatchJournalName).GetRelease(&fresh)
+				if readErr != nil {
+					return datastore.NamespaceWatchBounds{}, fmt.Errorf("scylla: reread Namespace watch retained lower bound: %w", readErr)
+				}
+				if fresh.Epoch != row.Epoch || fresh.Oldest < oldest {
+					return datastore.NamespaceWatchBounds{}, fmt.Errorf("scylla: advance Namespace watch retained lower bound: concurrent update did not reach %d", oldest)
+				}
+				row = fresh
+			} else {
+				row.Oldest = oldest
 			}
-			row.Oldest = oldest
 		}
 		if !complete {
 			return datastore.NamespaceWatchBounds{}, fmt.Errorf("scylla: Namespace watch retention reconciliation is incomplete")
