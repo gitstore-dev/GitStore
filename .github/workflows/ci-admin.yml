@@ -1,6 +1,6 @@
 name: CI Admin
 
-# Runs ONLY when files in gitstore-admin/ change.
+# Runs when admin code or its shared local-stack inputs change.
 # This job is informational and is NOT a required branch-protection status check.
 # Core CI (ci.yml) always runs unconditionally and gates merge.
 
@@ -9,10 +9,16 @@ on:
     branches: [ main ]
     paths:
       - 'gitstore-admin/**'
+      - 'compose.local.yml'
+      - 'config/config.toml'
+      - 'config/policy.yaml'
   pull_request:
     branches: [ main ]
     paths:
       - 'gitstore-admin/**'
+      - 'compose.local.yml'
+      - 'config/config.toml'
+      - 'config/policy.yaml'
 
 permissions: {}
 
