@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gocql/gocql"
+	scyllacdc "github.com/scylladb/scylla-cdc-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -143,6 +145,39 @@ func TestNamespaceWatchBucketUsesConfiguredSize(t *testing.T) {
 	assert.Equal(t, int64(0), namespaceWatchBucket(2, 2))
 	assert.Equal(t, int64(1), namespaceWatchBucket(3, 2))
 	assert.Equal(t, int64(2), namespaceWatchBucket(6, 2))
+}
+
+func TestNamespaceCDCProgressManagerObservesEmptyQueryProgress(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	lease, acquired, err := journal.AcquireLease(context.Background(), "replica-a", time.Now().UTC(), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	observed := make(chan time.Time, 1)
+	manager := &namespaceCDCProgressManager{
+		journal: journal,
+		lease:   lease,
+		observeProgress: func(at time.Time) {
+			observed <- at
+		},
+	}
+	progressTime := gocql.MinTimeUUID(time.Now().UTC())
+
+	err = manager.SaveProgress(context.Background(), time.Now().UTC(), "namespaces_by_uid", scyllacdc.StreamID("stream-a"), scyllacdc.Progress{LastProcessedRecordTime: progressTime})
+	require.NoError(t, err)
+	select {
+	case at := <-observed:
+		assert.False(t, at.IsZero())
+	case <-time.After(time.Second):
+		t.Fatal("CDC progress observation was not reported")
+	}
+}
+
+func TestNamespaceCDCDeletionSuppressesUncommittedCreateRollback(t *testing.T) {
+	ready, err := (*scyllaDatastore)(nil).namespaceCDCDeletionReady(context.Background(), &datastore.Namespace{}, false)
+	require.NoError(t, err)
+	assert.False(t, ready)
 }
 
 func sequenceTestRequest(streamID, name string, at gocql.UUID, progressed chan<- string) namespaceCDCSequenceRequest {

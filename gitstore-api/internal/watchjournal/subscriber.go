@@ -142,6 +142,19 @@ func (s *Subscriber) run(ctx context.Context, cursor datastore.NamespaceWatchCur
 				return
 			case <-time.After(delay):
 			}
+			bounds, boundsErr := s.store.Bounds(ctx)
+			if boundsErr != nil {
+				s.sendUnavailable(errorsOut, boundsErr)
+				return
+			}
+			if bounds.Epoch != cursor.Epoch {
+				s.sendExpired(errorsOut, ReasonEpochMismatch, errors.New("journal epoch changed"))
+				return
+			}
+			if s.cfg.MaxMaterializerLag > 0 && (bounds.ProgressAt.IsZero() || time.Since(bounds.ProgressAt) > s.cfg.MaxMaterializerLag) {
+				s.sendUnavailable(errorsOut, errors.New("materializer lag exceeds readiness bound"))
+				return
+			}
 			delay *= 2
 			if delay > s.cfg.PollMax {
 				delay = s.cfg.PollMax
@@ -203,4 +216,8 @@ func (s *Subscriber) sendExpired(out chan<- error, reason Reason, cause error) {
 		s.cfg.Metrics.IncExpiry(reason)
 	}
 	out <- expired(reason, cause)
+}
+
+func (s *Subscriber) sendUnavailable(out chan<- error, cause error) {
+	out <- unavailable(cause)
 }

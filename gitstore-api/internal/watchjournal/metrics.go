@@ -4,6 +4,7 @@
 package watchjournal
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -12,25 +13,25 @@ import (
 
 // Metrics contains bounded-cardinality Namespace watch signals.
 type Metrics struct {
-	leader          prometheus.Gauge
-	cdcLag          prometheus.Gauge
-	journalOldest   prometheus.Gauge
-	journalHigh     prometheus.Gauge
-	subscribers     *prometheus.GaugeVec
-	expired         *prometheus.CounterVec
-	overflow        prometheus.Counter
-	appendErrors    prometheus.Counter
-	replayEvents    prometheus.Counter
-	replayLatency   prometheus.Histogram
-	bookmarkAge     prometheus.Gauge
-	deliveryLatency prometheus.Histogram
-	collectors      []prometheus.Collector
+	leader           prometheus.Gauge
+	cdcLag           prometheus.GaugeFunc
+	cdcProgressNanos atomic.Int64
+	journalOldest    prometheus.Gauge
+	journalHigh      prometheus.Gauge
+	subscribers      *prometheus.GaugeVec
+	expired          *prometheus.CounterVec
+	overflow         prometheus.Counter
+	appendErrors     prometheus.Counter
+	replayEvents     prometheus.Counter
+	replayLatency    prometheus.Histogram
+	bookmarkAge      prometheus.Gauge
+	deliveryLatency  prometheus.Histogram
+	collectors       []prometheus.Collector
 }
 
 func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 	m := &Metrics{
 		leader:          prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_materializer_leader", Help: "Whether this replica owns the fenced Namespace CDC materializer lease."}),
-		cdcLag:          prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_cdc_lag_seconds", Help: "Age of the latest materialized Namespace CDC position."}),
 		journalOldest:   prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_journal_oldest_sequence", Help: "Oldest retained Namespace journal sequence."}),
 		journalHigh:     prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_journal_high_water_sequence", Help: "Current Namespace journal high-water sequence."}),
 		subscribers:     prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_subscribers", Help: "Active Namespace watch subscribers."}, []string{"path"}),
@@ -42,6 +43,17 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 		bookmarkAge:     prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_bookmark_age_seconds", Help: "Age of the latest durable Namespace bookmark."}),
 		deliveryLatency: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_namespace_watch_delivery_latency_seconds", Help: "Namespace CDC-to-subscriber delivery latency."}),
 	}
+	m.cdcLag = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_cdc_lag_seconds", Help: "Age of the latest observed Namespace CDC position."}, func() float64 {
+		nanos := m.cdcProgressNanos.Load()
+		if nanos == 0 {
+			return 0
+		}
+		age := time.Since(time.Unix(0, nanos)).Seconds()
+		if age < 0 {
+			return 0
+		}
+		return age
+	})
 	m.collectors = []prometheus.Collector{m.leader, m.cdcLag, m.journalOldest, m.journalHigh, m.subscribers, m.expired, m.overflow, m.appendErrors, m.replayEvents, m.replayLatency, m.bookmarkAge, m.deliveryLatency}
 	for _, collector := range m.collectors {
 		if err := registerer.Register(collector); err != nil {
@@ -89,7 +101,7 @@ func (m *Metrics) SetBounds(bounds datastore.NamespaceWatchBounds, now time.Time
 	m.journalOldest.Set(float64(bounds.Oldest))
 	m.journalHigh.Set(float64(bounds.HighWater))
 	if !bounds.ProgressAt.IsZero() && !now.Before(bounds.ProgressAt) {
-		m.cdcLag.Set(now.Sub(bounds.ProgressAt).Seconds())
+		m.ObserveCDCProgress(bounds.ProgressAt)
 	}
 	if !bounds.UpdatedAt.IsZero() && !now.Before(bounds.UpdatedAt) {
 		m.bookmarkAge.Set(now.Sub(bounds.UpdatedAt).Seconds())
@@ -101,8 +113,15 @@ func (m *Metrics) ObserveMaterialized(event datastore.NamespaceWatchEvent, now t
 		age := now.Sub(event.At).Seconds()
 		if event.Type == datastore.NamespaceWatchBookmark {
 			m.bookmarkAge.Set(age)
-		} else {
-			m.cdcLag.Set(age)
 		}
+	}
+}
+
+// ObserveCDCProgress records the persisted progress timestamp. The GaugeFunc
+// computes its age when Prometheus scrapes, so an idle or stuck reader's lag
+// continues increasing instead of freezing at the last observation.
+func (m *Metrics) ObserveCDCProgress(at time.Time) {
+	if !at.IsZero() {
+		m.cdcProgressNanos.Store(at.UnixNano())
 	}
 }

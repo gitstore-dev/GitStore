@@ -144,7 +144,7 @@ All time values are integers in seconds or milliseconds as named.
 | `watch.namespace.readers_enabled` | `GITSTORE_WATCH__NAMESPACE__READERS_ENABLED` | `true` | Enables typed and generic Namespace journal readers; set false as a rollback switch. |
 | `watch.namespace.materializer_enabled` | `GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED` | `true` | Allows this replica to contend for the fenced CDC materializer lease; set false as a rollback switch. |
 | `watch.namespace.journal_retention_seconds` | `GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS` | `604800` | Seven-day journal TTL. |
-| `watch.namespace.cdc_retention_seconds` | `GITSTORE_WATCH__NAMESPACE__CDC_RETENTION_SECONDS` | `1209600` | Fourteen-day CDC TTL; must be at least journal retention. |
+| `watch.namespace.cdc_retention_seconds` | `GITSTORE_WATCH__NAMESPACE__CDC_RETENTION_SECONDS` | `1209600` | Fixed fourteen-day CDC TTL from migration 006; other values are rejected at startup. |
 | `watch.namespace.cdc_confidence_window_millis` | `GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS` | `500` | Scylla CDC consistency window before changes become eligible for ordered materialization. |
 | `watch.namespace.bucket_size` | `GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE` | `4096` | Maximum sequences per journal partition bucket. |
 | `watch.namespace.read_batch_size` | `GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE` | `256` | Replay/poll page; must not exceed bucket size. |

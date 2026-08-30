@@ -22,6 +22,8 @@ type subscriberJournal struct {
 }
 
 func (j *subscriberJournal) Bounds(context.Context) (datastore.NamespaceWatchBounds, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	return j.bounds, nil
 }
 
@@ -129,6 +131,26 @@ func TestSubscriberDoesNotTreatFreshBookmarkAsCDCProgress(t *testing.T) {
 	}}
 	_, err := NewSubscriber(journal, SubscriberConfig{MaxMaterializerLag: time.Minute}).Subscribe(context.Background(), "")
 	assertTerminalReason(t, err, CodeUnavailable, ReasonMaterializerNotReady)
+}
+
+func TestSubscriberTerminatesWhenMaterializerStallsAfterAdmission(t *testing.T) {
+	epoch := uuid.NewString()
+	journal := &subscriberJournal{bounds: datastore.NamespaceWatchBounds{Epoch: epoch, ProgressAt: time.Now().UTC()}}
+	stream, err := NewSubscriber(journal, SubscriberConfig{
+		PollMin: time.Millisecond, PollMax: time.Millisecond, MaxMaterializerLag: time.Minute,
+	}).Subscribe(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+	journal.mu.Lock()
+	journal.bounds.ProgressAt = time.Now().UTC().Add(-2 * time.Minute)
+	journal.mu.Unlock()
+	select {
+	case terminal := <-stream.Errors:
+		assertTerminalReason(t, terminal, CodeUnavailable, ReasonMaterializerNotReady)
+	case <-time.After(time.Second):
+		t.Fatal("subscriber did not terminate after CDC progress became stale")
+	}
 }
 
 func TestSubscriberBackpressuresRetainedReplayInsteadOfExpiring(t *testing.T) {

@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 )
 
 type orderedMaterializerStore struct {
+	mu         sync.Mutex
 	calls      []string
 	appendErr  error
 	progress   datastore.NamespaceCDCProgress
@@ -24,6 +27,8 @@ type orderedMaterializerStore struct {
 }
 
 func (s *orderedMaterializerStore) Append(_ context.Context, _ datastore.NamespaceWatchLease, event datastore.NamespaceWatchEvent, _ time.Duration) (datastore.NamespaceWatchEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.calls = append(s.calls, "append")
 	if s.appendErr != nil {
 		return datastore.NamespaceWatchEvent{}, s.appendErr
@@ -36,8 +41,32 @@ func (s *orderedMaterializerStore) Append(_ context.Context, _ datastore.Namespa
 }
 
 func (s *orderedMaterializerStore) SaveProgress(_ context.Context, _ datastore.NamespaceWatchLease, progress datastore.NamespaceCDCProgress) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.calls = append(s.calls, "progress")
 	s.progress = progress
+	return nil
+}
+
+type concurrentMaterializerStore struct {
+	active atomic.Int32
+	max    atomic.Int32
+}
+
+func (s *concurrentMaterializerStore) Append(_ context.Context, _ datastore.NamespaceWatchLease, event datastore.NamespaceWatchEvent, _ time.Duration) (datastore.NamespaceWatchEvent, error) {
+	active := s.active.Add(1)
+	for {
+		current := s.max.Load()
+		if active <= current || s.max.CompareAndSwap(current, active) {
+			break
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	s.active.Add(-1)
+	return event, nil
+}
+
+func (*concurrentMaterializerStore) SaveProgress(context.Context, datastore.NamespaceWatchLease, datastore.NamespaceCDCProgress) error {
 	return nil
 }
 
@@ -67,6 +96,9 @@ func TestClassifyCommittedNamespaceChanges(t *testing.T) {
 					wantLabel = "catalog"
 				}
 				assert.Equal(t, wantLabel, event.SelectorLabels["team"])
+				if tt.want == datastore.NamespaceWatchModified {
+					assert.Equal(t, "catalog", event.PreviousSelectorLabels["team"])
+				}
 			}
 		})
 	}
@@ -107,4 +139,29 @@ func TestMaterializerRecoveryPermitsSafeDuplicate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, first.DeduplicationKey, second.DeduplicationKey)
 	assert.Greater(t, second.Sequence, first.Sequence)
+}
+
+func TestMaterializerSerializesCDCAndBookmarkAppends(t *testing.T) {
+	store := &concurrentMaterializerStore{}
+	materializer := NewMaterializer(store, MaterializerConfig{})
+	lease := datastore.NamespaceWatchLease{Holder: "replica-a", FencingToken: 7}
+	change := Change{StreamID: "stream-1", DeduplicationKey: "change-1", Name: "shop", After: json.RawMessage(`{"kind":"Namespace"}`)}
+
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		<-start
+		_, _ = materializer.Process(context.Background(), lease, change)
+	}()
+	go func() {
+		defer group.Done()
+		<-start
+		_, _ = materializer.AppendBookmark(context.Background(), lease)
+	}()
+	close(start)
+	group.Wait()
+
+	assert.Equal(t, int32(1), store.max.Load())
 }

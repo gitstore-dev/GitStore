@@ -159,20 +159,15 @@ func (m *memdbDatastore) pruneLocked(cutoff time.Time) {
 
 func cloneWatchEvent(event datastore.NamespaceWatchEvent) datastore.NamespaceWatchEvent {
 	event.Payload = append([]byte(nil), event.Payload...)
-	if event.SelectorLabels != nil {
-		labels := make(map[string]string, len(event.SelectorLabels))
-		for key, value := range event.SelectorLabels {
-			labels[key] = value
-		}
-		event.SelectorLabels = labels
-	}
+	event.SelectorLabels = cloneStringMap(event.SelectorLabels)
+	event.PreviousSelectorLabels = cloneStringMap(event.PreviousSelectorLabels)
 	return event
 }
 
 // recordCommittedNamespace is the development-backend equivalent of Scylla
 // CDC: it runs only after the memdb transaction commits and cannot invent an
 // event for a rejected/conflicting/no-op operation.
-func (m *memdbDatastore) recordCommittedNamespace(eventType datastore.NamespaceWatchEventType, namespace *datastore.Namespace) {
+func (m *memdbDatastore) recordCommittedNamespace(eventType datastore.NamespaceWatchEventType, namespace *datastore.Namespace, previousLabels map[string]string) {
 	if namespace == nil {
 		return
 	}
@@ -183,13 +178,14 @@ func (m *memdbDatastore) recordCommittedNamespace(eventType datastore.NamespaceW
 	}
 	m.namespaceWatchMu.Lock()
 	defer m.namespaceWatchMu.Unlock()
-	m.pruneLocked(now.Add(-7 * 24 * time.Hour))
+	m.pruneLocked(now.Add(-m.namespaceWatchRetention))
 	m.namespaceWatchSequence++
 	m.namespaceWatchEvents = append(m.namespaceWatchEvents, datastore.NamespaceWatchEvent{
 		Epoch: m.namespaceWatchEpoch, Sequence: m.namespaceWatchSequence,
 		Type: eventType, Name: namespace.Name, Payload: payload,
-		SelectorLabels:   cloneStringMap(namespace.Labels),
-		DeduplicationKey: fmt.Sprintf("memdb:%s:%s:%d", eventType, namespace.UID, m.namespaceWatchSequence),
-		At:               now,
+		SelectorLabels:         cloneStringMap(namespace.Labels),
+		PreviousSelectorLabels: cloneStringMap(previousLabels),
+		DeduplicationKey:       fmt.Sprintf("memdb:%s:%s:%d", eventType, namespace.UID, m.namespaceWatchSequence),
+		At:                     now,
 	})
 }

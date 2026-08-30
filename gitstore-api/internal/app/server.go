@@ -120,7 +120,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	}
 	clock := apiruntime.SystemClock{}
 
-	rawStore, err := dsfactory.NewDatastore(cfg.Datastore, log, cfg.Watch.Namespace.BucketSize)
+	rawStore, err := dsfactory.NewDatastore(cfg.Datastore, log, cfg.Watch.Namespace)
 	if err != nil {
 		return nil, fmt.Errorf("create datastore: %w", err)
 	}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
+	"github.com/gocql/gocql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,12 +53,65 @@ func TestNamespaceWatchLeaseFencesJournalAndProgressWrites(t *testing.T) {
 	require.Equal(t, []byte("current"), progress.Position)
 }
 
+func TestNamespaceWatchRejectsBucketLayoutMismatch(t *testing.T) {
+	first := newTestStore(t).(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	raw := newRawSession(t)
+	require.NoError(t, raw.Query("TRUNCATE namespace_watch_events").Exec())
+	require.NoError(t, raw.Query("TRUNCATE namespace_watch_clock").Exec())
+	raw.Close()
+	t.Cleanup(func() {
+		cleanup := newRawSession(t)
+		defer cleanup.Close()
+		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_events").Exec())
+		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_clock").Exec())
+	})
+
+	_, acquired, err := first.AcquireLease(context.Background(), "replica-a", time.Now().UTC(), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+
+	second := newTestStoreWithWatchBucket(t, 3).(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	_, _, err = second.AcquireLease(context.Background(), "replica-b", time.Now().UTC(), time.Minute)
+	require.ErrorContains(t, err, "bucket size is 4096, configured 3")
+}
+
+func TestNamespaceWatchInitializesBucketLayoutForMigrationFirstClock(t *testing.T) {
+	journal := newTestStore(t).(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	raw := newRawSession(t)
+	require.NoError(t, raw.Query("TRUNCATE namespace_watch_events").Exec())
+	require.NoError(t, raw.Query("TRUNCATE namespace_watch_clock").Exec())
+	epoch, err := gocql.RandomUUID()
+	require.NoError(t, err)
+	zeroExpiry := time.Unix(0, 0).UTC()
+	require.NoError(t, raw.Query(
+		"INSERT INTO namespace_watch_clock (journal,stream_id,epoch,high_water,oldest,update_timestamp,cdc_progress_timestamp,lease_holder,fencing_token,lease_expiration_timestamp) VALUES (?,?,?,?,?,?,?,?,?,?)",
+	).Bind("namespace", "__clock__", epoch, int64(0), int64(0), time.Now().UTC(), zeroExpiry, "", int64(0), zeroExpiry).Exec())
+	raw.Close()
+
+	lease, acquired, err := journal.AcquireLease(context.Background(), "new-replica", time.Now().UTC(), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), lease)) })
+
+	verify := newRawSession(t)
+	defer verify.Close()
+	var bucketSize int64
+	require.NoError(t, verify.Query("SELECT bucket_size FROM namespace_watch_clock WHERE journal=? LIMIT 1").Bind("namespace").Scan(&bucketSize))
+	require.Equal(t, int64(watchjournal.DefaultBucketSize), bucketSize)
+}
+
 func TestNamespaceWatchBoundsAdvanceAfterTTLExpiry(t *testing.T) {
 	store := newTestStoreWithWatchBucket(t, 2)
 	raw := newRawSession(t)
 	require.NoError(t, raw.Query("TRUNCATE namespace_watch_events").Exec())
 	require.NoError(t, raw.Query("TRUNCATE namespace_watch_clock").Exec())
 	raw.Close()
+	t.Cleanup(func() {
+		cleanup := newRawSession(t)
+		defer cleanup.Close()
+		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_events").Exec())
+		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_clock").Exec())
+	})
 
 	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
 	ctx := context.Background()

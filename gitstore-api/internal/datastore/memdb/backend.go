@@ -151,24 +151,30 @@ func decodeCursor(cursor string) (*datastore.PageCursor, error) {
 type memdbDatastore struct {
 	db *gomemdb.MemDB
 
-	namespaceWatchMu       sync.RWMutex
-	namespaceWatchEpoch    string
-	namespaceWatchSequence uint64
-	namespaceWatchEvents   []datastore.NamespaceWatchEvent
-	namespaceWatchLease    datastore.NamespaceWatchLease
-	namespaceWatchProgress map[string]datastore.NamespaceCDCProgress
+	namespaceWatchMu        sync.RWMutex
+	namespaceWatchEpoch     string
+	namespaceWatchSequence  uint64
+	namespaceWatchEvents    []datastore.NamespaceWatchEvent
+	namespaceWatchLease     datastore.NamespaceWatchLease
+	namespaceWatchProgress  map[string]datastore.NamespaceCDCProgress
+	namespaceWatchRetention time.Duration
 }
 
 // New creates an empty in-memory datastore backed by go-memdb.
-func New() (datastore.Datastore, error) {
+func New(watchRetention ...time.Duration) (datastore.Datastore, error) {
 	db, err := gomemdb.NewMemDB(schema)
 	if err != nil {
 		return nil, fmt.Errorf("memdb: failed to initialise: %w", err)
 	}
+	retention := 7 * 24 * time.Hour
+	if len(watchRetention) > 0 && watchRetention[0] > 0 {
+		retention = watchRetention[0]
+	}
 	return &memdbDatastore{
-		db:                     db,
-		namespaceWatchEpoch:    uuid.NewString(),
-		namespaceWatchProgress: make(map[string]datastore.NamespaceCDCProgress),
+		db:                      db,
+		namespaceWatchEpoch:     uuid.NewString(),
+		namespaceWatchProgress:  make(map[string]datastore.NamespaceCDCProgress),
+		namespaceWatchRetention: retention,
 	}, nil
 }
 
@@ -914,7 +920,7 @@ func (m *memdbDatastore) CreateNamespace(_ context.Context, ns *datastore.Namesp
 		return fmt.Errorf("memdb: insert namespace: %w", err)
 	}
 	txn.Commit()
-	m.recordCommittedNamespace(datastore.NamespaceWatchAdded, stored)
+	m.recordCommittedNamespace(datastore.NamespaceWatchAdded, stored, nil)
 	return nil
 }
 
@@ -979,7 +985,7 @@ func (m *memdbDatastore) UpdateNamespace(_ context.Context, ns *datastore.Namesp
 		return fmt.Errorf("memdb: update namespace: %w", err)
 	}
 	txn.Commit()
-	m.recordCommittedNamespace(datastore.NamespaceWatchModified, ns)
+	m.recordCommittedNamespace(datastore.NamespaceWatchModified, ns, current.Labels)
 	return nil
 }
 
@@ -994,7 +1000,7 @@ func (m *memdbDatastore) MarkNamespaceDeletion(_ context.Context, ns *datastore.
 		txn.Abort()
 		return fmt.Errorf("%w: namespace uid %s", datastore.ErrNotFound, ns.UID)
 	}
-	current := raw.(*datastore.Namespace)
+	current := normalizedNamespaceCopy(raw.(*datastore.Namespace))
 	if current.ResourceVersion != expectedResourceVersion {
 		txn.Abort()
 		return datastore.ErrConflict
@@ -1017,7 +1023,7 @@ func (m *memdbDatastore) MarkNamespaceDeletion(_ context.Context, ns *datastore.
 		return fmt.Errorf("memdb: mark namespace deletion: %w", err)
 	}
 	txn.Commit()
-	m.recordCommittedNamespace(datastore.NamespaceWatchModified, ns)
+	m.recordCommittedNamespace(datastore.NamespaceWatchModified, ns, current.Labels)
 	return nil
 }
 
@@ -1034,7 +1040,7 @@ func (m *memdbDatastore) DeleteNamespace(_ context.Context, uid string) error {
 	}
 	deleted := normalizedNamespaceCopy(raw.(*datastore.Namespace))
 	txn.Commit()
-	m.recordCommittedNamespace(datastore.NamespaceWatchDeleted, deleted)
+	m.recordCommittedNamespace(datastore.NamespaceWatchDeleted, deleted, nil)
 	return nil
 }
 
@@ -1056,7 +1062,7 @@ func (m *memdbDatastore) DeleteNamespaceWithResourceVersion(_ context.Context, u
 	}
 	deleted := normalizedNamespaceCopy(current)
 	txn.Commit()
-	m.recordCommittedNamespace(datastore.NamespaceWatchDeleted, deleted)
+	m.recordCommittedNamespace(datastore.NamespaceWatchDeleted, deleted, nil)
 	return nil
 }
 

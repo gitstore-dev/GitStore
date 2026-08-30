@@ -77,6 +77,37 @@ func TestTypedAndGenericNamespaceWatchShareBootstrapAndEvents(t *testing.T) {
 	assert.Nil(t, genericDeleted.Object)
 }
 
+func TestNamespaceWatchSelectorProjectsModifiedTransitions(t *testing.T) {
+	selector := &model.LabelSelectorInput{MatchLabels: map[string]any{"team": "catalog"}}
+	tests := []struct {
+		name     string
+		previous map[string]string
+		current  map[string]string
+		wantType datastore.NamespaceWatchEventType
+		want     bool
+		payload  bool
+	}{
+		{name: "remains outside", previous: map[string]string{"team": "payments"}, current: map[string]string{"team": "storefront"}},
+		{name: "enters selector", previous: map[string]string{"team": "payments"}, current: map[string]string{"team": "catalog"}, wantType: datastore.NamespaceWatchAdded, want: true, payload: true},
+		{name: "remains inside", previous: map[string]string{"team": "catalog"}, current: map[string]string{"team": "catalog"}, wantType: datastore.NamespaceWatchModified, want: true, payload: true},
+		{name: "leaves selector", previous: map[string]string{"team": "catalog"}, current: map[string]string{"team": "storefront"}, wantType: datastore.NamespaceWatchDeleted, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event, ok := projectNamespaceJournalEventForSelector(datastore.NamespaceWatchEvent{
+				Type: datastore.NamespaceWatchModified, Payload: json.RawMessage(`{"Name":"shop"}`),
+				SelectorLabels: tt.current, PreviousSelectorLabels: tt.previous,
+			}, selector)
+			assert.Equal(t, tt.want, ok)
+			if !tt.want {
+				return
+			}
+			assert.Equal(t, tt.wantType, event.Type)
+			assert.Equal(t, tt.payload, len(event.Payload) > 0)
+		})
+	}
+}
+
 func receiveTypedNamespaceEvent(t *testing.T, events <-chan *model.NamespaceWatchEvent) *model.NamespaceWatchEvent {
 	t.Helper()
 	select {

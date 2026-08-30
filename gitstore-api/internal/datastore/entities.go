@@ -73,18 +73,21 @@ type NamespaceWatchCursor struct {
 
 // NamespaceWatchEvent is the backend-neutral durable journal record. Payload
 // is a full committed Namespace postimage for ADDED/MODIFIED and nil for
-// DELETED/BOOKMARK. SelectorLabels preserves the last-known labels needed to
-// filter payload-less DELETED events without exposing a deleted resource.
+// DELETED/BOOKMARK. SelectorLabels preserves the postimage labels (or the
+// last-known labels for DELETED), while PreviousSelectorLabels preserves the
+// MODIFIED preimage labels. Together they let filtered watches express a
+// resource entering or leaving a selector without exposing deleted payloads.
 type NamespaceWatchEvent struct {
-	Epoch            string
-	Sequence         uint64
-	Type             NamespaceWatchEventType
-	Name             string
-	Payload          json.RawMessage
-	SelectorLabels   map[string]string
-	DeduplicationKey string
-	FencingToken     uint64
-	At               time.Time
+	Epoch                  string
+	Sequence               uint64
+	Type                   NamespaceWatchEventType
+	Name                   string
+	Payload                json.RawMessage
+	SelectorLabels         map[string]string
+	PreviousSelectorLabels map[string]string
+	DeduplicationKey       string
+	FencingToken           uint64
+	At                     time.Time
 }
 
 // NamespaceWatchBounds is the retained interval in one journal epoch.

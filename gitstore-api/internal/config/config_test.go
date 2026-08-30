@@ -153,6 +153,17 @@ func TestLoad_RejectsUnsafeNamespaceWatchBounds(t *testing.T) {
 	assert.Contains(t, err.Error(), "CDC retention")
 }
 
+func TestLoad_RejectsCDCWindowDifferentFromSchema(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__CDC_RETENTION_SECONDS", "2592000")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "migration 006 fixes CDC retention")
+}
+
 func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()

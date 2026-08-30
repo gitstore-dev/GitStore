@@ -22,7 +22,7 @@ and mutation outcomes are inputs and are not reopened.
 
 **Language/Version**: Go 1.25 (`gitstore-api`); gqlgen v0.17.90 generated GraphQL contracts  
 **Primary Dependencies**: Existing gocqlx/gocql Scylla stack, go-memdb, gqlgen WebSocket transport, zap, Prometheus client; new `github.com/scylladb/scylla-cdc-go v1.2.1` for production CDC stream/topology/progress handling  
-**Storage**: Migration 006 enables full-preimage/postimage CDC with 14-day TTL on `namespaces_by_uid` and adds bounded journal events plus a partition-local clock/lease/progress table. Memdb uses an in-process implementation of the same journal contract for development. No spec-047 Namespace row fields change.
+**Storage**: Migration 006 enables full-preimage/postimage CDC with 14-day TTL on `namespaces_by_uid`, adds an internal projection-commit marker, and adds bounded journal events plus a partition-local clock/lease/progress table. Memdb uses an in-process implementation of the same journal contract for development. No public spec-047 Namespace contract fields change.
 **Testing**: Go unit, resolver, middleware, transport, backend-neutral journal contracts, tagged memdb/Scylla integration, two-API-replica rolling-replacement tests, and a 60-minute threshold-enforcing capacity soak  
 **Target Platform**: Linux server; Darwin/Linux development environments  
 **Project Type**: GraphQL API subscription plus embedded Scylla CDC materializer/journal infrastructure  
@@ -165,11 +165,13 @@ No `NEEDS CLARIFICATION` remains.
 
 ### Committed change capture
 
-Migration 006 alters only the authoritative `namespaces_by_uid` table to enable
-CDC with full preimages/postimages and 14-day TTL. Scylla persists CDC with the
-base write and consistency level. Spec-047 service/resolver/catalog gRPC code
-continues making the same conditional mutations and returning the same
-outcomes.
+Migration 006 alters the authoritative `namespaces_by_uid` table to enable CDC
+with full preimages/postimages and 14-day TTL and adds an internal
+`watch_committed` marker. Namespace creation sets the marker only after its
+listing projection is durable, allowing CDC to distinguish a committed create
+from rollback cleanup. Scylla persists CDC with the base write and consistency
+level. Spec-047 service/resolver/catalog gRPC code continues returning the same
+public outcomes.
 
 The materializer consumes one logical CDC mutation, coalesces its
 preimage/delta/postimage rows, and classifies:

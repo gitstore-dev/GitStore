@@ -137,15 +137,16 @@ func (r *subscriptionResolver) WatchNamespaces(ctx context.Context, selector *mo
 					events = nil
 					continue
 				}
-				namespace, decodeErr := namespaceFromJournalEvent(event)
+				projected, matches := projectNamespaceJournalEventForSelector(event, selector)
+				if !matches {
+					continue
+				}
+				namespace, decodeErr := namespaceFromJournalEvent(projected)
 				if decodeErr != nil {
 					addNamespaceWatchSubscriptionError(ctx, decodeErr)
 					return
 				}
-				if !namespaceJournalEventMatchesSelector(event, namespace, selector) {
-					continue
-				}
-				converted, convertErr := NamespaceJournalEventToGraphQL(event, namespace)
+				converted, convertErr := NamespaceJournalEventToGraphQL(projected, namespace)
 				if convertErr != nil {
 					addNamespaceWatchSubscriptionError(ctx, convertErr)
 					return

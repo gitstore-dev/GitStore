@@ -271,6 +271,7 @@ type namespaceRow struct {
 	Status                     string            `db:"status"`
 	RepositoryCreationEpoch    *int64            `db:"repository_creation_epoch"`
 	PendingRepositoryCreations *int64            `db:"pending_repository_creations"`
+	WatchCommitted             *bool             `db:"watch_committed"`
 }
 
 type namespaceNameRow struct {
@@ -2014,6 +2015,18 @@ func (s *scyllaDatastore) CreateNamespace(ctx context.Context, ns *datastore.Nam
 		s.releaseNamespaceName(ctx, row.Name, row.UID)
 		return fmt.Errorf("scylla: create namespace listing index: %w", err)
 	}
+	applied, err = s.session.Query("UPDATE namespaces_by_uid SET watch_committed=? WHERE uid=? IF EXISTS", nil).
+		WithContext(ctx).Bind(true, row.UID).ExecCASRelease()
+	if err != nil || !applied {
+		_ = s.session.Query("DELETE FROM namespaces_by_uid WHERE uid=?", nil).WithContext(ctx).Bind(row.UID).ExecRelease()
+		_ = s.session.Query("DELETE FROM namespaces_by_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?", nil).
+			WithContext(ctx).Bind(namespaceBucket(row.CreationTimestamp), row.CreationTimestamp, row.UID).ExecRelease()
+		s.releaseNamespaceName(ctx, row.Name, row.UID)
+		if err != nil {
+			return fmt.Errorf("scylla: commit namespace watch visibility: %w", err)
+		}
+		return fmt.Errorf("scylla: commit namespace watch visibility: authoritative row disappeared")
+	}
 	return nil
 }
 
@@ -2581,6 +2594,7 @@ func toNamespaceRow(ns *datastore.Namespace) *namespaceRow {
 	datastore.NormalizeNamespaceContract(ns)
 	repositoryCreationEpoch := int64(0)
 	pendingRepositoryCreations := int64(0)
+	watchCommitted := false
 	return &namespaceRow{
 		APIVersion:                 ns.APIVersion,
 		Kind:                       ns.Kind,
@@ -2608,6 +2622,7 @@ func toNamespaceRow(ns *datastore.Namespace) *namespaceRow {
 		Status:                     string(ns.Status),
 		RepositoryCreationEpoch:    &repositoryCreationEpoch,
 		PendingRepositoryCreations: &pendingRepositoryCreations,
+		WatchCommitted:             &watchCommitted,
 	}
 }
 

@@ -23,8 +23,9 @@ decisions in a watch publisher creates a second source of truth.
 
 ## R2: Use Scylla CDC as the atomic production change source
 
-**Decision**: Migration 006 enables Scylla CDC with full preimages,
-postimages, and a 14-day CDC TTL on `namespaces_by_uid`. Production uses
+**Decision**: Migration 006 adds an internal creation-commit marker and enables
+Scylla CDC with full preimages, postimages, and a 14-day CDC TTL on
+`namespaces_by_uid`. Production uses
 `github.com/scylladb/scylla-cdc-go v1.2.1` to consume those changes.
 The memdb backend implements the same journal interface transactionally/in
 memory for development and backend-neutral contracts.
@@ -242,8 +243,9 @@ preserve that leak.
 
 **Decision**:
 
-1. Apply migration 006, enabling CDC and creating the journal-event table plus
-   the partition-local clock/lease/progress table.
+1. Apply migration 006, adding the internal commit marker, enabling CDC, and
+   creating the journal-event table plus the partition-local
+   clock/lease/progress table.
 2. Deny both Namespace watch forms fleet-wide during mixed binaries.
 3. Deploy all API replicas with schema support present and explicitly override
    the alpha-default-on durable watch gates to disabled.

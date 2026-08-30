@@ -117,18 +117,43 @@ func namespaceJournalEventToGeneric(event datastore.NamespaceWatchEvent) (*model
 	return out, namespace, nil
 }
 
-func namespaceJournalEventMatchesSelector(event datastore.NamespaceWatchEvent, namespace *datastore.Namespace, selector *model.LabelSelectorInput) bool {
+// projectNamespaceJournalEventForSelector applies Kubernetes-style selector
+// transition semantics. A MODIFIED event becomes ADDED when the resource
+// enters the selector and DELETED when it leaves, preventing filtered caches
+// from retaining objects that no longer match.
+func projectNamespaceJournalEventForSelector(event datastore.NamespaceWatchEvent, selector *model.LabelSelectorInput) (datastore.NamespaceWatchEvent, bool) {
 	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
-		return true
+		return event, true
 	}
 	if event.Type == datastore.NamespaceWatchBookmark {
-		return true
+		return event, true
 	}
-	labels := event.SelectorLabels
-	if namespace != nil {
-		labels = namespace.Labels
+	currentLabels := event.SelectorLabels
+	if currentLabels == nil && len(event.Payload) > 0 {
+		if namespace, err := namespaceFromJournalEvent(event); err == nil && namespace != nil {
+			currentLabels = namespace.Labels
+		}
 	}
-	return matchesWatchSelector(selector, labels)
+	currentMatches := matchesWatchSelector(selector, currentLabels)
+	if event.Type != datastore.NamespaceWatchModified {
+		return event, currentMatches
+	}
+
+	previousMatches := matchesWatchSelector(selector, event.PreviousSelectorLabels)
+	switch {
+	case previousMatches && currentMatches:
+		return event, true
+	case !previousMatches && currentMatches:
+		event.Type = datastore.NamespaceWatchAdded
+		return event, true
+	case previousMatches && !currentMatches:
+		event.Type = datastore.NamespaceWatchDeleted
+		event.Payload = nil
+		event.SelectorLabels = event.PreviousSelectorLabels
+		return event, true
+	default:
+		return event, false
+	}
 }
 
 func namespaceWatchGraphQLError(err error) *gqlerror.Error {
@@ -185,13 +210,14 @@ func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.
 					events = nil
 					continue
 				}
-				converted, namespace, convertErr := namespaceJournalEventToGeneric(event)
+				projected, matches := projectNamespaceJournalEventForSelector(event, selector)
+				if !matches {
+					continue
+				}
+				converted, _, convertErr := namespaceJournalEventToGeneric(projected)
 				if convertErr != nil {
 					addNamespaceWatchSubscriptionError(ctx, convertErr)
 					return
-				}
-				if !namespaceJournalEventMatchesSelector(event, namespace, selector) {
-					continue
 				}
 				select {
 				case out <- converted:

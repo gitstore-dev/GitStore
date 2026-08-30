@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -33,6 +34,10 @@ type MaterializerConfig struct {
 type Materializer struct {
 	store MaterializerStore
 	cfg   MaterializerConfig
+	// appendMu serializes the leader's CDC and bookmark producers. The Scylla
+	// journal allocates sequence numbers with CAS, but one leader should not
+	// manufacture avoidable contention against itself.
+	appendMu sync.Mutex
 }
 
 func NewMaterializer(store MaterializerStore, cfg MaterializerConfig) *Materializer {
@@ -64,6 +69,7 @@ func Classify(change Change) (datastore.NamespaceWatchEvent, bool) {
 		event.Type = datastore.NamespaceWatchModified
 		event.Payload = append([]byte(nil), change.After...)
 		event.SelectorLabels = namespaceLabels(change.After)
+		event.PreviousSelectorLabels = namespaceLabels(change.Before)
 	case len(change.Before) > 0 && len(change.After) == 0:
 		event.Type = datastore.NamespaceWatchDeleted
 		event.SelectorLabels = namespaceLabels(change.Before)
@@ -98,6 +104,9 @@ func jsonEqual(left, right json.RawMessage) bool {
 // Process appends before saving progress. A crash between those operations may
 // duplicate on recovery but cannot skip an acknowledged transition.
 func (m *Materializer) Process(ctx context.Context, lease datastore.NamespaceWatchLease, change Change) (datastore.NamespaceWatchEvent, error) {
+	m.appendMu.Lock()
+	defer m.appendMu.Unlock()
+
 	event, ok := Classify(change)
 	if !ok {
 		return datastore.NamespaceWatchEvent{}, nil
@@ -127,11 +136,25 @@ func (m *Materializer) Process(ctx context.Context, lease datastore.NamespaceWat
 	if err := m.store.SaveProgress(ctx, lease, progress); err != nil {
 		return appended, fmt.Errorf("save Namespace CDC progress: %w", err)
 	}
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.ObserveCDCProgress(progress.UpdatedAt)
+	}
 	return appended, nil
+}
+
+// ObserveCDCProgress updates lag accounting when the CDC reader advances an
+// empty query window without materializing an event.
+func (m *Materializer) ObserveCDCProgress(at time.Time) {
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.ObserveCDCProgress(at)
+	}
 }
 
 // AppendBookmark advances the shared cursor while idle.
 func (m *Materializer) AppendBookmark(ctx context.Context, lease datastore.NamespaceWatchLease) (datastore.NamespaceWatchEvent, error) {
+	m.appendMu.Lock()
+	defer m.appendMu.Unlock()
+
 	now := time.Now().UTC()
 	if m.cfg.Clock != nil {
 		now = m.cfg.Clock.Now()

@@ -84,6 +84,7 @@ Durable replay row.
 | name | text | Namespace name; empty for BOOKMARK |
 | payload | text nullable | Versioned JSON Namespace postimage for ADDED/MODIFIED |
 | labels | map<text, text> nullable | Native CQL postimage or last-known labels used for filtering; never exposed as the resource payload |
+| previous_labels | map<text, text> nullable | Native CQL MODIFIED preimage labels used to project selector entry/exit as ADDED/DELETED |
 | deduplication_key | text | Stable CDC identity or bookmark identity |
 | fencing_token | bigint | Lease that staged the row; stale orphan rows are replaceable before visibility advances |
 | event_timestamp | timestamp | Source change time or bookmark append time |
@@ -101,6 +102,11 @@ State transitions:
 Rejected, failed, conflicted, or no-op spec-047 operations create no base-table
 change and therefore no journal event.
 
+Migration 006 adds an internal `watch_committed boolean` marker to
+`namespaces_by_uid`. Creation sets it only after the listing projection is
+durable. CDC additions wait for that marker, while deletion preimages without
+it are recognized as rollback cleanup and are not published.
+
 ## NamespaceWatchClockAndProgress
 
 One Scylla partition contains the singleton clock and static lease state plus
@@ -115,6 +121,7 @@ with `scylla-cdc-go.ProgressManager`.
 | epoch | uuid static | Cursor epoch |
 | high_water | bigint static | Highest published sequence |
 | oldest | bigint static | Monotonic retained lower bound |
+| bucket_size | bigint static | Immutable partition layout for this journal epoch; replicas with a different configured value fail closed |
 | update_timestamp | timestamp static | Last journal append time |
 | cdc_progress_timestamp | timestamp static | Shared lag/health signal |
 | lease_holder | text static | Active materializer replica |

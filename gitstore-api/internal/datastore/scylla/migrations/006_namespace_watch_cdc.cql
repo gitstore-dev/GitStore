@@ -1,3 +1,5 @@
+ALTER TABLE namespaces_by_uid ADD watch_committed boolean;
+
 ALTER TABLE namespaces_by_uid WITH cdc = {
   'enabled': 'true',
   'preimage': 'full',
@@ -11,6 +13,7 @@ CREATE TABLE IF NOT EXISTS namespace_watch_clock (
   epoch uuid static,
   high_water bigint static,
   oldest bigint static,
+  bucket_size bigint static,
   update_timestamp timestamp static,
   cdc_progress_timestamp timestamp static,
   lease_holder text static,
@@ -29,6 +32,7 @@ CREATE TABLE IF NOT EXISTS namespace_watch_events (
   name text,
   payload text,
   labels map<text, text>,
+  previous_labels map<text, text>,
   deduplication_key text,
   fencing_token bigint,
   event_timestamp timestamp,
