@@ -4,9 +4,11 @@
 package watchjournal
 
 import (
+	"math"
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -42,6 +44,15 @@ func TestNamespaceWatchCDCLagAdvancesBetweenScrapes(t *testing.T) {
 	assert.Greater(t, second, first)
 }
 
+func TestNamespaceWatchMissingProgressAndBookmarkAreStale(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewMetrics(registry)
+	require.NoError(t, err)
+
+	assert.True(t, math.IsInf(testutil.ToFloat64(metrics.cdcLag), 1))
+	assert.True(t, math.IsInf(testutil.ToFloat64(metrics.bookmarkAge), 1))
+}
+
 func TestNamespaceWatchBookmarkAgeAdvancesBetweenScrapes(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewMetrics(registry)
@@ -53,6 +64,26 @@ func TestNamespaceWatchBookmarkAgeAdvancesBetweenScrapes(t *testing.T) {
 	second := testutil.ToFloat64(metrics.bookmarkAge)
 
 	assert.GreaterOrEqual(t, first, 1.0)
+	assert.Greater(t, second, first)
+}
+
+func TestNamespaceWatchBoundsTrackOnlyActualBookmarks(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewMetrics(registry)
+	require.NoError(t, err)
+	bookmarkAt := time.Now().Add(-time.Minute)
+
+	metrics.SetBounds(datastore.NamespaceWatchBounds{
+		UpdatedAt: time.Now(), BookmarkAt: bookmarkAt, ProgressAt: time.Now(),
+	}, time.Now())
+	first := testutil.ToFloat64(metrics.bookmarkAge)
+	time.Sleep(20 * time.Millisecond)
+	metrics.SetBounds(datastore.NamespaceWatchBounds{
+		UpdatedAt: time.Now(), BookmarkAt: bookmarkAt, ProgressAt: time.Now(),
+	}, time.Now())
+	second := testutil.ToFloat64(metrics.bookmarkAge)
+
+	assert.GreaterOrEqual(t, first, 60.0)
 	assert.Greater(t, second, first)
 }
 

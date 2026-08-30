@@ -44,9 +44,22 @@ func TestNamespaceWatchLeaseFencesJournalAndProgressWrites(t *testing.T) {
 	err = journal.SaveProgress(ctx, stale, datastore.NamespaceCDCProgress{StreamID: "stream-a", Position: []byte("stale"), UpdatedAt: now})
 	require.ErrorIs(t, err, datastore.ErrStaleWatchLease)
 
-	appended, err := journal.Append(ctx, current, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchBookmark}, time.Hour)
+	bookmarkAt := now.Add(3 * time.Second).Truncate(time.Millisecond)
+	appended, err := journal.Append(ctx, current, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchBookmark, At: bookmarkAt}, time.Hour)
 	require.NoError(t, err)
 	require.Equal(t, current.FencingToken, appended.FencingToken)
+	bounds, err := journal.Bounds(ctx)
+	require.NoError(t, err)
+	require.Equal(t, bookmarkAt, bounds.BookmarkAt)
+
+	dataAt := bookmarkAt.Add(time.Second)
+	_, err = journal.Append(ctx, current, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchAdded, Name: "after-bookmark", At: dataAt}, time.Hour)
+	require.NoError(t, err)
+	bounds, err = journal.Bounds(ctx)
+	require.NoError(t, err)
+	require.Equal(t, bookmarkAt, bounds.BookmarkAt, "ordinary events must not refresh the durable bookmark timestamp")
+	require.Equal(t, dataAt, bounds.UpdatedAt)
+
 	require.NoError(t, journal.SaveProgress(ctx, current, datastore.NamespaceCDCProgress{StreamID: "stream-a", Position: []byte("current"), UpdatedAt: now.Add(2 * time.Second)}))
 	progress, err := journal.LoadProgress(ctx, "stream-a")
 	require.NoError(t, err)

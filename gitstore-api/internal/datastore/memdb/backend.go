@@ -156,6 +156,7 @@ type memdbDatastore struct {
 	namespaceWatchEpoch     string
 	namespaceWatchSequence  uint64
 	namespaceWatchEvents    []datastore.NamespaceWatchEvent
+	namespaceWatchBookmark  time.Time
 	namespaceWatchLease     datastore.NamespaceWatchLease
 	namespaceWatchProgress  map[string]datastore.NamespaceCDCProgress
 	namespaceWatchRetention time.Duration

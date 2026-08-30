@@ -96,6 +96,9 @@ type NamespaceWatchBounds struct {
 	Oldest    uint64
 	HighWater uint64
 	UpdatedAt time.Time
+	// BookmarkAt is the timestamp of the latest actual durable BOOKMARK.
+	// Unlike UpdatedAt, ordinary data events do not advance it.
+	BookmarkAt time.Time
 	// ProgressAt is the last time the CDC reader consumed a change or
 	// successfully advanced an empty query window. Durable bookmarks do not
 	// advance it.

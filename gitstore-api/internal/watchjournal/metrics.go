@@ -4,6 +4,7 @@
 package watchjournal
 
 import (
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -46,7 +47,7 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 	m.cdcLag = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_cdc_lag_seconds", Help: "Age of the latest observed Namespace CDC position."}, func() float64 {
 		nanos := m.cdcProgressNanos.Load()
 		if nanos == 0 {
-			return 0
+			return math.Inf(1)
 		}
 		age := time.Since(time.Unix(0, nanos)).Seconds()
 		if age < 0 {
@@ -57,7 +58,7 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 	m.bookmarkAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_bookmark_age_seconds", Help: "Age of the latest durable Namespace bookmark."}, func() float64 {
 		nanos := m.bookmarkNanos.Load()
 		if nanos == 0 {
-			return 0
+			return math.Inf(1)
 		}
 		age := time.Since(time.Unix(0, nanos)).Seconds()
 		if age < 0 {
@@ -114,8 +115,8 @@ func (m *Metrics) SetBounds(bounds datastore.NamespaceWatchBounds, now time.Time
 	if !bounds.ProgressAt.IsZero() && !now.Before(bounds.ProgressAt) {
 		m.ObserveCDCProgress(bounds.ProgressAt)
 	}
-	if !bounds.UpdatedAt.IsZero() && !now.Before(bounds.UpdatedAt) {
-		m.ObserveBookmark(bounds.UpdatedAt)
+	if !bounds.BookmarkAt.IsZero() && !now.Before(bounds.BookmarkAt) {
+		m.ObserveBookmark(bounds.BookmarkAt)
 	}
 }
 func (m *Metrics) ObserveMaterialized(event datastore.NamespaceWatchEvent, now time.Time) {

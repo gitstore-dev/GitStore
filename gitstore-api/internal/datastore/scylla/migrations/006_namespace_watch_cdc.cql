@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS namespace_watch_clock (
   oldest bigint static,
   bucket_size bigint static,
   update_timestamp timestamp static,
+  bookmark_timestamp timestamp static,
   cdc_progress_timestamp timestamp static,
   lease_holder text static,
   fencing_token bigint static,

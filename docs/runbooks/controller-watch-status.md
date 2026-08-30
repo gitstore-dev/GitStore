@@ -108,7 +108,9 @@ Namespace name, UID, cursor, holder ID, or replica ID):
   zero for 30 seconds or above one for two lease TTLs.
 - `gitstore_namespace_watch_cdc_lag_seconds` and
   `gitstore_namespace_watch_bookmark_age_seconds` — warn above 30 seconds and
-  page above the 60-second readiness bound.
+  page above the 60-second readiness bound. Both report `+Inf` until their
+  first durable observation; bookmark age advances only from an actual
+  `BOOKMARK`, not ordinary journal activity.
 - `gitstore_namespace_watch_journal_oldest_sequence` and
   `gitstore_namespace_watch_journal_high_water_sequence` — alert if high water
   stops advancing during acknowledged mutations or the retained span shrinks

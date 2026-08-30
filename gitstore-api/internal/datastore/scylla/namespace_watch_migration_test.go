@@ -29,6 +29,7 @@ func TestNamespaceWatchMigrationContract(t *testing.T) {
 	assert.Contains(t, cql, "fencing_token bigint static")
 	assert.Contains(t, cql, "bucket_size bigint static")
 	assert.Contains(t, cql, "update_timestamp timestamp static")
+	assert.Contains(t, cql, "bookmark_timestamp timestamp static")
 	assert.Contains(t, cql, "cdc_progress_timestamp timestamp static")
 	assert.Contains(t, cql, "lease_expiration_timestamp timestamp static")
 	assert.Contains(t, cql, "progress_update_timestamp timestamp")

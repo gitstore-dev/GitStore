@@ -24,10 +24,11 @@ func (m *memdbDatastore) Bounds(context.Context) (datastore.NamespaceWatchBounds
 		updatedAt = m.namespaceWatchEvents[len(m.namespaceWatchEvents)-1].At
 	}
 	return datastore.NamespaceWatchBounds{
-		Epoch:     m.namespaceWatchEpoch,
-		Oldest:    oldest,
-		HighWater: m.namespaceWatchSequence,
-		UpdatedAt: updatedAt,
+		Epoch:      m.namespaceWatchEpoch,
+		Oldest:     oldest,
+		HighWater:  m.namespaceWatchSequence,
+		UpdatedAt:  updatedAt,
+		BookmarkAt: m.namespaceWatchBookmark,
 		// memdb has no asynchronous CDC reader, so its in-process journal
 		// activity is also its materializer progress signal.
 		ProgressAt: updatedAt,
@@ -50,6 +51,9 @@ func (m *memdbDatastore) Append(_ context.Context, lease datastore.NamespaceWatc
 	event.FencingToken = lease.FencingToken
 	event.Payload = append([]byte(nil), event.Payload...)
 	m.namespaceWatchEvents = append(m.namespaceWatchEvents, event)
+	if event.Type == datastore.NamespaceWatchBookmark {
+		m.namespaceWatchBookmark = event.At
+	}
 	return cloneWatchEvent(event), nil
 }
 
