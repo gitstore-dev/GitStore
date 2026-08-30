@@ -161,6 +161,11 @@ func TestNamespaceWatchOverflowIsNotNormalClosure(t *testing.T) {
 	}
 	conn := openNamespaceWatch(t, journal, watchjournal.EncodeCursor(epoch, 0))
 	time.Sleep(100 * time.Millisecond) // Let the server encounter a genuinely slow consumer.
+	// This case may need to drain the host's entire WebSocket/TCP send buffer
+	// before reaching the terminal frame. Keep the ordinary transport tests on
+	// their tight deadline, but give this bounded 100,001-frame drain enough
+	// headroom on slower CI runners.
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(15*time.Second)))
 	// The WebSocket stack may drain the subscriber into its socket buffer
 	// before this client starts reading. The terminal error must still follow
 	// within the finite retained replay, regardless of the host buffer size.
