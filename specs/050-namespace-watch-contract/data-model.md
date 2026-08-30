@@ -80,16 +80,14 @@ Durable replay row.
 | epoch | uuid | Cursor epoch |
 | bucket | bigint | `sequence / 4096`; partition component |
 | sequence | bigint | Global order and clustering key |
-| eventID | text | Stable CDC identity or bookmark identity |
-| eventType | text | ADDED/MODIFIED/DELETED/BOOKMARK |
+| event_type | text | ADDED/MODIFIED/DELETED/BOOKMARK |
 | name | text | Namespace name; empty for BOOKMARK |
-| namespaceResourceVersion | text nullable | Resource row version for data events |
-| payload | blob nullable | Versioned JSON Namespace postimage for ADDED/MODIFIED |
-| selectorLabels | map/text nullable | Private postimage or last-known labels used for filtering; never exposed as the resource payload |
-| sourceChangeTime | timeuuid nullable | CDC write time |
-| fencingToken | bigint | Lease that staged the row; stale orphan rows are replaceable before visibility advances |
-| createdAt | timestamp | Journal append time |
-| expiresAt/TTL | seven days | Retention bound |
+| payload | text nullable | Versioned JSON Namespace postimage for ADDED/MODIFIED |
+| labels | map<text, text> nullable | Native CQL postimage or last-known labels used for filtering; never exposed as the resource payload |
+| deduplication_key | text | Stable CDC identity or bookmark identity |
+| fencing_token | bigint | Lease that staged the row; stale orphan rows are replaceable before visibility advances |
+| event_timestamp | timestamp | Source change time or bookmark append time |
+| table TTL | seven days | Retention bound |
 
 Primary key: `((epoch, bucket), sequence)`.
 
@@ -112,16 +110,20 @@ with `scylla-cdc-go.ProgressManager`.
 
 | Field | Type | Rules |
 |---|---|---|
-| applicationName | text | Fixed versioned materializer identity |
-| generation | timestamp | CDC generation |
-| table | text | Authoritative Namespace table |
-| streamID | blob | CDC stream |
-| lastProcessedTime | timeuuid | Saved only after journal append |
-| startTime | timeuuid | Initial lower bound |
-| updatedAt | timestamp | Lag/health signal |
-| fencingToken | bigint | Stale leader cannot advance progress |
+| journal | text partition key | Fixed to `namespace` |
+| stream_id | text clustering key | `__clock__` or encoded CDC stream/generation/frontier identity |
+| epoch | uuid static | Cursor epoch |
+| high_water | bigint static | Highest published sequence |
+| oldest | bigint static | Monotonic retained lower bound |
+| update_timestamp | timestamp static | Last journal append time |
+| cdc_progress_timestamp | timestamp static | Shared lag/health signal |
+| lease_holder | text static | Active materializer replica |
+| fencing_token | bigint static | Stale leader cannot advance journal or progress |
+| lease_expiration_timestamp | timestamp static | Lease validity bound |
+| position | blob | Opaque CDC progress position |
+| progress_update_timestamp | timestamp | Per-stream progress save time |
 
-Restart resumes after `lastProcessedTime`. Append-before-save permits
+Restart resumes after the saved opaque `position`. Append-before-save permits
 duplicates but prevents loss.
 
 The sequencer maintains a watermark for every active CDC stream. It publishes
@@ -135,13 +137,13 @@ save.
 
 Load-bounding leader lease.
 
+The lease is the static state in `namespace_watch_clock`, not a separate table:
+
 | Field | Type | Rules |
 |---|---|---|
-| name | text partition key | Fixed to `namespace-watch-materializer` |
-| holderID | uuid | API replica identity |
-| fencingToken | bigint | Increments on acquisition |
-| expiresAt | timestamp | 30-second lease |
-| renewedAt | timestamp | Renew every 10 seconds |
+| lease_holder | text | API replica identity |
+| fencing_token | bigint | Increments on acquisition |
+| lease_expiration_timestamp | timestamp | 30-second lease; renewed every 10 seconds |
 
 A lease holder may publish only while its fencing token matches the static
 clock token and its expiry remains in the future in the same LWT. Brief overlap

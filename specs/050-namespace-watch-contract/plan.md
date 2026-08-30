@@ -204,7 +204,9 @@ write time with stream/arrival tie-breakers. Publication waits for the common
 active-stream watermark, and a newly registered stream behind the published
 frontier fails closed. The published frontier is persisted before per-stream
 progress and restored after restart. The journal append is the public per-kind ordering
-linearization point. Bounds checks advance the stored `oldest` value from the
+linearization point. Migration 006 follows the repository's existing Scylla
+conventions: timestamp columns use the `_timestamp` suffix and event labels use
+native `map<text, text>` storage rather than JSON-encoded text. Bounds checks advance the stored `oldest` value from the
 first live TTL row before validating a new subscription cursor, scanning at
 most 32 buckets and checkpointing once per call. Incomplete reconciliation
 fails registration unavailable; a TTL race after registration terminates with

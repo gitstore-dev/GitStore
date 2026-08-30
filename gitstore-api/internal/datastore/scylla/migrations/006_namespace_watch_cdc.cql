@@ -11,13 +11,13 @@ CREATE TABLE IF NOT EXISTS namespace_watch_clock (
   epoch uuid static,
   high_water bigint static,
   oldest bigint static,
-  updated_at timestamp static,
-  cdc_progress_at timestamp static,
-  holder text static,
+  update_timestamp timestamp static,
+  cdc_progress_timestamp timestamp static,
+  lease_holder text static,
   fencing_token bigint static,
-  expires_at timestamp static,
+  lease_expiration_timestamp timestamp static,
   position blob,
-  progress_updated_at timestamp,
+  progress_update_timestamp timestamp,
   PRIMARY KEY ((journal), stream_id)
 );
 
@@ -28,10 +28,10 @@ CREATE TABLE IF NOT EXISTS namespace_watch_events (
   event_type text,
   name text,
   payload text,
-  selector_labels text,
+  labels map<text, text>,
   deduplication_key text,
   fencing_token bigint,
-  event_at timestamp,
+  event_timestamp timestamp,
   PRIMARY KEY ((epoch, bucket), sequence)
 ) WITH CLUSTERING ORDER BY (sequence ASC)
   AND default_time_to_live = 604800;
