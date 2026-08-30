@@ -4,6 +4,11 @@
 .env*
 !.env.example
 
+# Local auth config (static-users/rbac-local) — operator-provided, must never be
+# committed or built into an image; only the tracked *.example templates are.
+policy.yaml
+users.yaml
+
 # Rust
 target/
 **/*.rs.bk

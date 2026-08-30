@@ -23,7 +23,14 @@ specs/
 
 # Environment
 .env*
-!.env.example
+
+# Example/template files — never needed at build or run time
+*.example
+
+# Local auth config (static-users/rbac-local) — operator-provided; must never
+# be baked into an image even if present locally and untracked by git.
+policy.yaml
+users.yaml
 
 # Build artifacts (will be rebuilt in container)
 target/

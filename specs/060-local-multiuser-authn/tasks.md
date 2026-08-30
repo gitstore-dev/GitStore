@@ -24,14 +24,14 @@
 
 **Checkpoint**: `users.yaml` can be loaded/validated/reloaded; UserDir reads work; `rbac-local` can report role_binding coverage; config validation is chain-aware. US1-US4 can proceed.
 
-- [ ] T003 [P] Add failing tests for `loadUsers`/`Reload` (missing file, malformed YAML, wrong `version`, duplicate username, empty `password_hash`) in `gitstore-api/internal/auth/provider/staticusers/staticusers_test.go`
-- [ ] T004 Implement `UserList`/`UserEntry` (including `display_name`/`email`) and `loadUsers`/`validateUsers` in `gitstore-api/internal/auth/provider/staticusers/users.go` until T003 is green
+- [ ] T003 [P] Add failing tests for `loadUsers`/`Reload` (missing file, malformed YAML, wrong `version`, duplicate username, empty `password_hash`) in `gitstore-api/internal/auth/provider/staticusers/staticusers_test.go`, including an assertion that each error's message names the configured file path and includes a remediation hint (per FR-013a), not just the wrapped underlying error
+- [ ] T004 Implement `UserList`/`UserEntry` (including `display_name`/`email`) and `loadUsers`/`validateUsers` in `gitstore-api/internal/auth/provider/staticusers/users.go` until T003 is green, wrapping the underlying `os.ReadFile`/`yaml.Unmarshal`/schema error with `%w` (per `contracts/static-users-provider.md`'s Config-validation contract section) while prepending the problem/fix/quickstart-pointer structure required by FR-013a
 - [ ] T005 [P] Add failing tests for `GetBySubject`/`ListGroups`/`SearchUsers` (known user, unknown user → `ErrUserNotFound`, case-insensitive substring search) in `gitstore-api/internal/auth/provider/staticusers/staticusers_test.go`
 - [ ] T006 Implement `ErrUserNotFound` in `errors.go` and the `UserDirProvider` methods in `provider.go` until T005 is green
 - [ ] T007 [P] Add a failing test for `RBACLocalProvider.HasAnyRoleBindingFor([]string) bool` in `gitstore-api/internal/auth/provider/rbaclocal/rbaclocal_test.go`, confirming `Authorize`'s existing tests are unaffected
 - [ ] T008 Implement `HasAnyRoleBindingFor` as an additive, read-only method in `gitstore-api/internal/auth/provider/rbaclocal/provider.go` until T007 is green
-- [ ] T009 [P] Add failing tests for `validateAuthChainConfig` (static-users in chain + empty JWT secret → error; static-users absent + empty JWT secret → no error; empty gRPC HMAC secret → error regardless of chain) in `gitstore-api/internal/config/config_test.go`
-- [ ] T010 Remove `JWTConfig.Secret`'s `validate:"required"` struct tag and implement `validateAuthChainConfig`, called from `validateConfig`, in `gitstore-api/internal/config/config.go` until T009 is green
+- [ ] T009 [P] Add failing tests for `validateAuthChainConfig` (static-users in chain + empty JWT secret → error; static-users absent + empty JWT secret → no error; empty gRPC HMAC secret → error regardless of chain) in `gitstore-api/internal/config/config_test.go`, including an assertion that the JWT-secret error's message contains the numbered remediation steps and `quickstart.md` pointer required by FR-013a/`contracts/static-users-provider.md`
+- [ ] T010 Remove `JWTConfig.Secret`'s `validate:"required"` struct tag and implement `validateAuthChainConfig`, called from `validateConfig`, in `gitstore-api/internal/config/config.go` until T009 is green, using the exact multi-line error format specified in `contracts/static-users-provider.md`'s Config-validation contract section
 
 ---
 
@@ -83,12 +83,12 @@
 
 ### Tests for User Story 3
 
-- [ ] T019 [P] [US3] Add a failing test for `buildProviderRegistry` asserting construction fails when `static-users` + `rbac-local` are configured and zero configured usernames have a `role_bindings` entry, in `gitstore-api/internal/app/server_test.go`
+- [ ] T019 [P] [US3] Add a failing test for `buildProviderRegistry` asserting construction fails when `static-users` + `rbac-local` are configured and zero configured usernames have a `role_bindings` entry, in `gitstore-api/internal/app/server_test.go`, including an assertion that the error message contains: the configured usernames, the `policy.yaml` path, the two numbered fix options, and the `quickstart.md` pointer (FR-013a)
 - [ ] T020 [P] [US3] Add failing tests for the same function asserting construction succeeds when (a) `authz.provider` is `allow-all` under the same user/policy configuration, and (b) at least one configured username has a `role_bindings` entry
 
 ### Implementation for User Story 3
 
-- [ ] T021 [US3] Implement the migration-safety check in `buildProviderRegistry` (`gitstore-api/internal/app/server.go`), calling `HasAnyRoleBindingFor`, until T019/T020 are green
+- [ ] T021 [US3] Implement the migration-safety check in `buildProviderRegistry` (`gitstore-api/internal/app/server.go`), calling `HasAnyRoleBindingFor`, using the exact multi-line error format specified in `contracts/static-users-provider.md`'s `buildProviderRegistry` wiring contract section, until T019/T020 are green
 - [ ] T022 [US3] Remove `AuthConfig.Admin`/`UserConfig` (type and field) and add `AuthConfig.StaticUsers` in `gitstore-api/internal/config/config.go`; update `auth.authn.chain`'s default (config.go and server.go), defaults/known-keys map, and `MarshalLogObject`
 - [ ] T023 [US3] Replace `buildProviderRegistry`'s `case "static-admin":` with `case "static-users":` (including wiring `static-users` as the `UserDirProvider` when active) in `gitstore-api/internal/app/server.go`; extend the existing SIGHUP reload handler
 

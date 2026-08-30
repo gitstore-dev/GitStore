@@ -54,20 +54,35 @@ Implemented in `buildProviderRegistry`, immediately after both the `static-users
 
 ```go
 if staticUsersProvider != nil && cfg.Auth.AuthZ.Provider == "rbac-local" {
-    if !rbacLocalProvider.HasAnyRoleBindingFor(staticUsersProvider.Usernames()) {
+    usernames := staticUsersProvider.Usernames()
+    if !rbacLocalProvider.HasAnyRoleBindingFor(usernames) {
         return nil, nil, nil, fmt.Errorf(
-            "static-users is configured with %d user(s), but rbac-local's policy.yaml has no " +
-            "role_bindings entry for any of them — every static-users login would be denied by " +
-            "default_deny; add a role_bindings entry for at least one configured username",
-            len(staticUsersProvider.Usernames()),
+            "startup failed: static-users + rbac-local migration safety check\n\n"+
+                "  Problem: static-users is configured with %d user(s) (%s), but rbac-local's\n"+
+                "  policy.yaml has no role_bindings entry for any of them. Every static-users\n"+
+                "  login would authenticate successfully and then be denied every action by\n"+
+                "  rbac-local's default_deny.\n\n"+
+                "  To fix, do ONE of the following:\n"+
+                "    1. Add a role_bindings entry in %s for at least one of the usernames above,\n"+
+                "       e.g.:\n"+
+                "         role_bindings:\n"+
+                "           %q:\n"+
+                "             - admin\n"+
+                "    2. If you don't want rbac-local enforcement yet, set\n"+
+                "       GITSTORE_AUTH__AUTHZ__PROVIDER=allow-all instead.\n\n"+
+                "  See specs/060-local-multiuser-authn/quickstart.md, 'Manual verification —\n"+
+                "  migrating an existing static-admin deployment', step 3, for a worked example.",
+            len(usernames), strings.Join(usernames, ", "), cfg.Auth.RBAC.PolicyFile, firstOrEmpty(usernames),
         )
     }
 }
 ```
 
+The multi-line format above (problem statement in the operator's own configured terms, numbered fix options, a `quickstart.md` pointer) is required by FR-013a for this check, `validateAuthChainConfig`'s `auth.jwt.secret` error, and `staticusers.loadUsers`'s file-load/validation errors alike — a bare one-line `fmt.Errorf` (e.g. `rbaclocal.loadPolicy`'s existing shape) is insufficient for any of these three checks specifically because they are the ones a human operator must recover from unassisted, mid-migration, per research.md Decision 5.
+
 `RBACLocalProvider.HasAnyRoleBindingFor([]string) bool` is a small, additive, read-only helper added to `rbaclocal/provider.go` (checks `policy.RoleBindings` for any of the given usernames as a key) — this is the one place `rbac-local`'s own package gains a new method in this spec, and it is a pure read-only query over already-loaded state, not a change to `Authorize`'s decision logic (research.md Decision 9's "zero source changes to `Authorize`/`Policy` semantics" finding is preserved; this is additive, not a semantic change).
 
-## Config-validation contract (FR-014/FR-015/FR-016)
+## Config-validation contract (FR-014/FR-015/FR-016/FR-013a)
 
 ```go
 // gitstore-api/internal/config/config.go — additive function, called from validateConfig
@@ -75,11 +90,24 @@ if staticUsersProvider != nil && cfg.Auth.AuthZ.Provider == "rbac-local" {
 func validateAuthChainConfig(cfg *Config) error {
     hasStaticUsers := slices.Contains(cfg.Auth.AuthN.Chain, "static-users")
     if hasStaticUsers && cfg.Auth.JWT.Secret == "" {
-        return errors.New("auth.jwt.secret is required when static-users is in auth.authn.chain")
+        return errors.New(
+            "startup failed: auth.jwt.secret is required\n\n" +
+                "  Problem: static-users is present in auth.authn.chain, but auth.jwt.secret\n" +
+                "  (env: GITSTORE_AUTH__JWT__SECRET) is empty. static-users cannot issue or\n" +
+                "  verify session tokens without it.\n\n" +
+                "  To fix, do ONE of the following:\n" +
+                "    1. Set GITSTORE_AUTH__JWT__SECRET to a random string (32+ chars). You can\n" +
+                "       generate one with: make gen-jwt-secret\n" +
+                "    2. If you don't intend to use static-users, remove it from\n" +
+                "       auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN).\n\n" +
+                "  See specs/060-local-multiuser-authn/quickstart.md, step 4, for a worked example.",
+        )
     }
     return nil
 }
 ```
+
+`staticusers.loadUsers`'s file-load/validation errors (missing file, malformed YAML, wrong `version`, duplicate username, empty `password_hash`) follow the same shape: they wrap the underlying `os.ReadFile`/`yaml.Unmarshal`/schema error (mirroring `rbaclocal.loadPolicy`'s existing wrap-with-`%w` convention so the root cause is never lost) but prepend the same three-part structure — problem in the operator's own terms (the configured `auth.staticusers.users_file` path, the specific field that failed), the exact fix (which file/key to edit and an example snippet), and a `quickstart.md` pointer — required by FR-013a.
 
 `JWTConfig.Secret`'s struct tag changes from `validate:"secret" validate:"required"` to no `validate` tag at all — the requirement moves entirely into this explicit function. `GrpcAuthConfig.HmacSecret`'s `validate:"required"` tag is **not touched** (FR-015). The new `auth.staticusers.users_file` key gets no `validate` tag either (FR-016) — its own loadability is enforced only inside `buildProviderRegistry`'s `case "static-users":`, exactly the pattern this fix generalizes from.
 
