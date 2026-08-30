@@ -5,8 +5,10 @@ package security_test
 
 import (
 	"context"
+	"net"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +29,53 @@ import (
 type transportWatchJournal struct {
 	bounds datastore.NamespaceWatchBounds
 	read   func(datastore.NamespaceWatchCursor, int) ([]datastore.NamespaceWatchEvent, error)
+}
+
+type blockingWriteListener struct {
+	net.Listener
+	accepted chan *blockingWriteConn
+}
+
+func (l *blockingWriteListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	wrapped := &blockingWriteConn{Conn: conn}
+	l.accepted <- wrapped
+	return wrapped, nil
+}
+
+type blockingWriteConn struct {
+	net.Conn
+	mu   sync.RWMutex
+	gate <-chan struct{}
+}
+
+func (c *blockingWriteConn) Write(payload []byte) (int, error) {
+	c.mu.RLock()
+	gate := c.gate
+	c.mu.RUnlock()
+	if gate != nil {
+		<-gate
+	}
+	return c.Conn.Write(payload)
+}
+
+func (c *blockingWriteConn) Block() func() {
+	gate := make(chan struct{})
+	c.mu.Lock()
+	c.gate = gate
+	c.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(gate)
+			c.mu.Lock()
+			c.gate = nil
+			c.mu.Unlock()
+		})
+	}
 }
 
 func (j *transportWatchJournal) Bounds(context.Context) (datastore.NamespaceWatchBounds, error) {
@@ -65,6 +114,12 @@ func namespaceWatchConfig() config.NamespaceWatchConfig {
 
 func openNamespaceWatch(t *testing.T, journal datastore.NamespaceWatchJournal, cursor string) *websocket.Conn {
 	t.Helper()
+	conn, _ := openNamespaceWatchWithWriteGate(t, journal, cursor, false)
+	return conn
+}
+
+func openNamespaceWatchWithWriteGate(t *testing.T, journal datastore.NamespaceWatchJournal, cursor string, blockWrites bool) (*websocket.Conn, func()) {
+	t.Helper()
 	root, err := resolver.NewResolver(resolver.ResolverDeps{
 		Store: &testutil.StubStore{}, Logger: zap.NewNop(),
 		NamespaceJournal: journal, NamespaceWatch: namespaceWatchConfig(),
@@ -72,23 +127,32 @@ func openNamespaceWatch(t *testing.T, journal datastore.NamespaceWatchJournal, c
 	require.NoError(t, err)
 	server := gqlhandler.New(generated.NewExecutableSchema(generated.Config{Resolvers: root}))
 	server.AddTransport(transport.Websocket{})
-	httpServer := httptest.NewServer(server)
+	httpServer := httptest.NewUnstartedServer(server)
+	listener := &blockingWriteListener{Listener: httpServer.Listener, accepted: make(chan *blockingWriteConn, 1)}
+	httpServer.Listener = listener
+	httpServer.Start()
 	t.Cleanup(httpServer.Close)
 	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}
 	conn, _, err := dialer.Dial(strings.Replace(httpServer.URL, "http", "ws", 1), nil)
 	require.NoError(t, err)
+	serverConn := <-listener.accepted
 	t.Cleanup(func() { _ = conn.Close() })
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
 	require.NoError(t, conn.WriteJSON(map[string]any{"type": "connection_init"}))
 	var ack map[string]any
 	require.NoError(t, conn.ReadJSON(&ack))
 	require.Equal(t, "connection_ack", ack["type"])
+	unblock := func() {}
+	if blockWrites {
+		unblock = serverConn.Block()
+		t.Cleanup(unblock)
+	}
 	query := `subscription($cursor: String) { watchNamespaces(resourceVersion: $cursor) { type resourceVersion } }`
 	require.NoError(t, conn.WriteJSON(map[string]any{
 		"id": "namespace-watch", "type": "subscribe",
 		"payload": map[string]any{"query": query, "variables": map[string]any{"cursor": cursor}},
 	}))
-	return conn
+	return conn, unblock
 }
 
 func requireWatchTransportError(t *testing.T, conn *websocket.Conn, code, reason string) {
@@ -144,7 +208,7 @@ func TestNamespaceWatchRuntimeDiscontinuityIsNotNormalClosure(t *testing.T) {
 
 func TestNamespaceWatchOverflowIsNotNormalClosure(t *testing.T) {
 	epoch := uuid.NewString()
-	events := make([]datastore.NamespaceWatchEvent, 100000)
+	events := make([]datastore.NamespaceWatchEvent, 10)
 	for i := range events {
 		events[i] = datastore.NamespaceWatchEvent{
 			Epoch: epoch, Sequence: uint64(i + 1), Type: datastore.NamespaceWatchBookmark,
@@ -159,16 +223,9 @@ func TestNamespaceWatchOverflowIsNotNormalClosure(t *testing.T) {
 			return nil, nil
 		},
 	}
-	conn := openNamespaceWatch(t, journal, watchjournal.EncodeCursor(epoch, 0))
-	time.Sleep(100 * time.Millisecond) // Let the server encounter a genuinely slow consumer.
-	// This case may need to drain the host's entire WebSocket/TCP send buffer
-	// before reaching the terminal frame. Keep the ordinary transport tests on
-	// their tight deadline, but give this bounded 100,001-frame drain enough
-	// headroom on slower CI runners.
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(15*time.Second)))
-	// The WebSocket stack may drain the subscriber into its socket buffer
-	// before this client starts reading. The terminal error must still follow
-	// within the finite retained replay, regardless of the host buffer size.
+	conn, unblock := openNamespaceWatchWithWriteGate(t, journal, watchjournal.EncodeCursor(epoch, 0), true)
+	time.Sleep(25 * time.Millisecond) // Exceeds the configured 1 ms backpressure timeout.
+	unblock()
 	for i := 0; i <= len(events); i++ {
 		var message map[string]any
 		require.NoError(t, conn.ReadJSON(&message))
