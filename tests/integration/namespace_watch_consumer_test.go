@@ -49,7 +49,7 @@ func TestNamespaceWatchDocumentedConsumer(t *testing.T) {
 
 	first := uniqueName("documented-consumer")
 	createNamespaceThrough(t, apiURL, token, first)
-	drained := readNamespaceWatchEvent(t, watch)
+	drained := readNamespaceWatchTransition(t, watch)
 	require.Equal(t, "ADDED", drained.Type)
 	require.Equal(t, first, drained.Name)
 	cache[drained.Name] = true
@@ -59,7 +59,7 @@ func TestNamespaceWatchDocumentedConsumer(t *testing.T) {
 	resumed := openNamespaceWatch(t, apiURL, token, drained.ResourceVersion)
 	second := uniqueName("documented-resume")
 	createNamespaceThrough(t, apiURL, token, second)
-	next := readNamespaceWatchEvent(t, resumed)
+	next := readNamespaceWatchTransition(t, resumed)
 	require.Equal(t, second, next.Name)
 	require.NotEqual(t, drained.ResourceVersion, next.ResourceVersion)
 }

@@ -211,8 +211,8 @@ preserve that leak.
 1. Apply migration 006, enabling CDC and creating the journal-event table plus
    the partition-local clock/lease/progress table.
 2. Deny both Namespace watch forms fleet-wide during mixed binaries.
-3. Deploy all API replicas with durable watch materialization disabled but
-   schema support present.
+3. Deploy all API replicas with schema support present and explicitly override
+   the alpha-default-on durable watch gates to disabled.
 4. Enable one fenced materializer, verify CDC progress and journal bookmarks,
    then enable journal readers on every replica.
 5. Run cross-replica probes and remove the external deny.

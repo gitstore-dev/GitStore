@@ -88,19 +88,21 @@ func (m *Metrics) ObserveDelivery(eventAt, now time.Time) {
 func (m *Metrics) SetBounds(bounds datastore.NamespaceWatchBounds, now time.Time) {
 	m.journalOldest.Set(float64(bounds.Oldest))
 	m.journalHigh.Set(float64(bounds.HighWater))
+	if !bounds.ProgressAt.IsZero() && !now.Before(bounds.ProgressAt) {
+		m.cdcLag.Set(now.Sub(bounds.ProgressAt).Seconds())
+	}
 	if !bounds.UpdatedAt.IsZero() && !now.Before(bounds.UpdatedAt) {
-		age := now.Sub(bounds.UpdatedAt).Seconds()
-		m.cdcLag.Set(age)
-		m.bookmarkAge.Set(age)
+		m.bookmarkAge.Set(now.Sub(bounds.UpdatedAt).Seconds())
 	}
 }
 func (m *Metrics) ObserveMaterialized(event datastore.NamespaceWatchEvent, now time.Time) {
 	m.journalHigh.Set(float64(event.Sequence))
 	if !event.At.IsZero() && !now.Before(event.At) {
 		age := now.Sub(event.At).Seconds()
-		m.cdcLag.Set(age)
 		if event.Type == datastore.NamespaceWatchBookmark {
 			m.bookmarkAge.Set(age)
+		} else {
+			m.cdcLag.Set(age)
 		}
 	}
 }

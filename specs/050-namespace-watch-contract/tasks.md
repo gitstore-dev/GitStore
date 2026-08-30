@@ -147,7 +147,7 @@
 - [X] T057 Add the executable Namespace watch capacity and cross-replica probe commands to `Makefile`
 - [X] T058 [P] Add alert thresholds and bounded-cardinality Namespace watch metric guidance to `docs/runbooks/controller-watch-status.md`
 - [X] T059 Run the focused schema, security, resolver, journal, memdb, and Scylla-hardening suites described in `specs/050-namespace-watch-contract/quickstart.md`
-- [ ] T060 Run the tagged Scylla CDC/materializer integration suite and cross-replica recovery probe described in `specs/050-namespace-watch-contract/quickstart.md`
+- [X] T060 Run the tagged Scylla CDC/materializer integration suite and cross-replica recovery probe described in `specs/050-namespace-watch-contract/quickstart.md`
 - [ ] T061 Run the 60-minute Namespace watch capacity gate and record threshold evidence in `specs/050-namespace-watch-contract/quickstart.md`
 - [X] T062 Run `make pr-ready`, resolve all failures, and record the final validation commands in `specs/050-namespace-watch-contract/quickstart.md`
 - [X] T063 Run `graphify update .` and verify the refreshed architecture graph captures the Namespace CDC, journal, materializer, and GraphQL watch paths in `graphify-out/graph.json`

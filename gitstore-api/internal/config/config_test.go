@@ -24,6 +24,7 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED",
 		"GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS",
 		"GITSTORE_WATCH__NAMESPACE__CDC_RETENTION_SECONDS",
+		"GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS",
 		"GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE",
 		"GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE",
 		"GITSTORE_WATCH__NAMESPACE__MAX_REPLAY_EVENTS",
@@ -101,10 +102,11 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	assert.Equal(t, "24h", cfg.Auth.JWT.Duration)
 	assert.Equal(t, "gitstore", cfg.Auth.JWT.Issuer)
 	assert.Equal(t, "60s", cfg.Auth.JWT.RefreshGrace)
-	assert.False(t, cfg.Watch.Namespace.ReadersEnabled)
-	assert.False(t, cfg.Watch.Namespace.MaterializerEnabled)
+	assert.True(t, cfg.Watch.Namespace.ReadersEnabled)
+	assert.True(t, cfg.Watch.Namespace.MaterializerEnabled)
 	assert.Equal(t, 7*24*60*60, cfg.Watch.Namespace.JournalRetentionSeconds)
 	assert.Equal(t, 14*24*60*60, cfg.Watch.Namespace.CDCRetentionSeconds)
+	assert.Equal(t, 500, cfg.Watch.Namespace.CDCConfidenceWindowMillis)
 	assert.Equal(t, 4096, cfg.Watch.Namespace.BucketSize)
 	assert.Equal(t, 256, cfg.Watch.Namespace.ReadBatchSize)
 	assert.Equal(t, 100000, cfg.Watch.Namespace.MaxReplayEvents)
@@ -122,16 +124,18 @@ func TestLoad_NamespaceWatchEnvOverrides(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	t.Setenv("GITSTORE_WATCH__NAMESPACE__READERS_ENABLED", "true")
-	t.Setenv("GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED", "true")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__READERS_ENABLED", "false")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED", "false")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS", "750")
 	t.Setenv("GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE", "128")
 	t.Setenv("GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER", "32")
 	t.Setenv("GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BACKPRESSURE_MILLIS", "1500")
 
 	cfg, err := Load()
 	require.NoError(t, err)
-	assert.True(t, cfg.Watch.Namespace.ReadersEnabled)
-	assert.True(t, cfg.Watch.Namespace.MaterializerEnabled)
+	assert.False(t, cfg.Watch.Namespace.ReadersEnabled)
+	assert.False(t, cfg.Watch.Namespace.MaterializerEnabled)
+	assert.Equal(t, 750, cfg.Watch.Namespace.CDCConfidenceWindowMillis)
 	assert.Equal(t, 128, cfg.Watch.Namespace.ReadBatchSize)
 	assert.Equal(t, 32, cfg.Watch.Namespace.SubscriberBuffer)
 	assert.Equal(t, 1500, cfg.Watch.Namespace.SubscriberBackpressureMillis)

@@ -93,6 +93,10 @@ type NamespaceWatchBounds struct {
 	Oldest    uint64
 	HighWater uint64
 	UpdatedAt time.Time
+	// ProgressAt is the last time the CDC reader consumed a change or
+	// successfully advanced an empty query window. Durable bookmarks do not
+	// advance it.
+	ProgressAt time.Time
 }
 
 // NamespaceWatchLease carries the materializer fencing token.

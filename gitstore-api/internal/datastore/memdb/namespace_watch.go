@@ -28,6 +28,9 @@ func (m *memdbDatastore) Bounds(context.Context) (datastore.NamespaceWatchBounds
 		Oldest:    oldest,
 		HighWater: m.namespaceWatchSequence,
 		UpdatedAt: updatedAt,
+		// memdb has no asynchronous CDC reader, so its in-process journal
+		// activity is also its materializer progress signal.
+		ProgressAt: updatedAt,
 	}, nil
 }
 

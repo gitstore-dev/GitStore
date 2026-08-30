@@ -19,7 +19,7 @@ import (
 )
 
 type namespaceCDCTestRunner interface {
-	RunNamespaceCDC(context.Context, *watchjournal.Materializer, datastore.NamespaceWatchLease, time.Duration, func()) error
+	RunNamespaceCDC(context.Context, *watchjournal.Materializer, datastore.NamespaceWatchLease, time.Duration, time.Duration, func()) error
 }
 
 func TestNamespaceWatchLeaseFencesJournalAndProgressWrites(t *testing.T) {
@@ -108,7 +108,7 @@ func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
 	errCh := make(chan error, 1)
 	ready := make(chan struct{})
 	go func() {
-		errCh <- runner.RunNamespaceCDC(ctx, materializer, lease, 14*24*time.Hour, func() { close(ready) })
+		errCh <- runner.RunNamespaceCDC(ctx, materializer, lease, 14*24*time.Hour, 500*time.Millisecond, func() { close(ready) })
 	}()
 	select {
 	case <-ready:

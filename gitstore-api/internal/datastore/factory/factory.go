@@ -16,12 +16,12 @@ import (
 // NewDatastore constructs the active Datastore backend from cfg.
 // Returns an error immediately if the backend value is unrecognised or
 // if the backend cannot be initialised (e.g. ScyllaDB unreachable).
-func NewDatastore(cfg config.DatastoreConfig, log *zap.Logger) (datastore.Datastore, error) {
+func NewDatastore(cfg config.DatastoreConfig, log *zap.Logger, watchBucketSize ...int) (datastore.Datastore, error) {
 	switch cfg.Backend {
 	case "memdb":
 		return memdb.New()
 	case "scylla":
-		return scylla.New(cfg.Scylla, log)
+		return scylla.New(cfg.Scylla, log, watchBucketSize...)
 	default:
 		return nil, fmt.Errorf("invalid datastore backend %q; valid values: memdb, scylla", cfg.Backend)
 	}

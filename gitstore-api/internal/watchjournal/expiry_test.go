@@ -30,7 +30,7 @@ func TestSubscriberRejectsUnprovableResumeCursors(t *testing.T) {
 	epoch := uuid.NewString()
 	now := time.Now().UTC()
 	base := &subscriberJournal{bounds: datastore.NamespaceWatchBounds{
-		Epoch: epoch, Oldest: 10, HighWater: 20, UpdatedAt: now,
+		Epoch: epoch, Oldest: 10, HighWater: 20, UpdatedAt: now, ProgressAt: now,
 	}}
 	tests := []struct {
 		name   string
@@ -55,7 +55,7 @@ func TestSubscriberFailsOnJournalDiscontinuity(t *testing.T) {
 	t.Parallel()
 	epoch := uuid.NewString()
 	journal := &subscriberJournal{bounds: datastore.NamespaceWatchBounds{
-		Epoch: epoch, Oldest: 1, HighWater: 3, UpdatedAt: time.Now().UTC(),
+		Epoch: epoch, Oldest: 1, HighWater: 3, UpdatedAt: time.Now().UTC(), ProgressAt: time.Now().UTC(),
 	}}
 	journal.read = func(cursor datastore.NamespaceWatchCursor, _ int) ([]datastore.NamespaceWatchEvent, error) {
 		if cursor.Sequence == 0 {
@@ -75,7 +75,7 @@ func TestSubscriberOverflowIsTerminal(t *testing.T) {
 	t.Parallel()
 	epoch := uuid.NewString()
 	journal := &subscriberJournal{
-		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, Oldest: 1, HighWater: 2, UpdatedAt: time.Now().UTC()},
+		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, Oldest: 1, HighWater: 2, UpdatedAt: time.Now().UTC(), ProgressAt: time.Now().UTC()},
 		events: []datastore.NamespaceWatchEvent{{Epoch: epoch, Sequence: 1}, {Epoch: epoch, Sequence: 2}},
 	}
 	stream, err := NewSubscriber(journal, SubscriberConfig{BufferSize: 1, BackpressureTimeout: 10 * time.Millisecond}).Subscribe(context.Background(), EncodeCursor(epoch, 0))

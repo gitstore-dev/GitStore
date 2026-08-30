@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS namespace_watch_clock (
   high_water bigint static,
   oldest bigint static,
   updated_at timestamp static,
+  cdc_progress_at timestamp static,
   holder text static,
   fencing_token bigint static,
   expires_at timestamp static,

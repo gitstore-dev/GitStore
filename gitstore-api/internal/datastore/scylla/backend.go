@@ -16,6 +16,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gocql/gocql"
 	"github.com/google/uuid"
 	"github.com/scylladb/gocqlx/v3"
@@ -55,6 +56,7 @@ type scyllaDatastore struct {
 	namespaceMappingTable             *table.Table
 	namespaceMappingByRepositoryTable *table.Table
 	mutations                         *mutationExecutor
+	namespaceWatchBucketSize          int64
 }
 
 // row structs mirror the CQL columns.
@@ -284,7 +286,7 @@ type namespaceIndexRow struct {
 
 // New opens a ScyllaDB connection, runs pending migrations, and returns a Datastore.
 // The keyspace must already exist; it is the operator's responsibility to provision it.
-func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) {
+func New(cfg config.ScyllaConfig, log *zap.Logger, watchBucketSize ...int) (datastore.Datastore, error) {
 	parsedHosts, port := parseHosts(cfg.Hosts)
 	cluster := gocql.NewCluster(parsedHosts...)
 	cluster.Keyspace = cfg.Keyspace
@@ -315,10 +317,15 @@ func New(cfg config.ScyllaConfig, log *zap.Logger) (datastore.Datastore, error) 
 		return nil, fmt.Errorf("scylla: migrations: %w", err)
 	}
 
+	bucketSize := int64(watchjournal.DefaultBucketSize)
+	if len(watchBucketSize) > 0 && watchBucketSize[0] > 0 {
+		bucketSize = int64(watchBucketSize[0])
+	}
 	return &scyllaDatastore{
 		session:                           gocqlx.NewSession(rawSession),
 		keyspace:                          cfg.Keyspace,
 		log:                               log,
+		namespaceWatchBucketSize:          bucketSize,
 		productByNamespaceTable:           ProductByNamespace,
 		productByNameTable:                ProductByName,
 		productByUIDTable:                 ProductByUID,

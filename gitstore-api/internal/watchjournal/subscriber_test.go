@@ -72,7 +72,7 @@ func TestSubscriberResumesStrictlyAfterCursorInBoundedPages(t *testing.T) {
 		events[i] = datastore.NamespaceWatchEvent{Epoch: epoch, Sequence: uint64(i + 1), Type: datastore.NamespaceWatchModified, At: now}
 	}
 	journal := &subscriberJournal{
-		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, Oldest: 1, HighWater: 600, UpdatedAt: now},
+		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, Oldest: 1, HighWater: 600, UpdatedAt: now, ProgressAt: now},
 		events: events,
 	}
 	subscriber := NewSubscriber(journal, SubscriberConfig{
@@ -114,11 +114,21 @@ func TestSubscriberRejectsReplayBeyondConfiguredCap(t *testing.T) {
 	t.Parallel()
 	epoch := uuid.NewString()
 	journal := &subscriberJournal{bounds: datastore.NamespaceWatchBounds{
-		Epoch: epoch, Oldest: 1, HighWater: 100001, UpdatedAt: time.Now().UTC(),
+		Epoch: epoch, Oldest: 1, HighWater: 100001, UpdatedAt: time.Now().UTC(), ProgressAt: time.Now().UTC(),
 	}}
 	subscriber := NewSubscriber(journal, SubscriberConfig{MaxReplayEvents: 100000})
 	_, err := subscriber.Subscribe(context.Background(), EncodeCursor(epoch, 0))
 	assertTerminalReason(t, err, CodeExpired, ReasonReplayLimit)
+}
+
+func TestSubscriberDoesNotTreatFreshBookmarkAsCDCProgress(t *testing.T) {
+	epoch := uuid.NewString()
+	now := time.Now().UTC()
+	journal := &subscriberJournal{bounds: datastore.NamespaceWatchBounds{
+		Epoch: epoch, UpdatedAt: now, ProgressAt: now.Add(-2 * time.Minute),
+	}}
+	_, err := NewSubscriber(journal, SubscriberConfig{MaxMaterializerLag: time.Minute}).Subscribe(context.Background(), "")
+	assertTerminalReason(t, err, CodeUnavailable, ReasonMaterializerNotReady)
 }
 
 func TestSubscriberBackpressuresRetainedReplayInsteadOfExpiring(t *testing.T) {
@@ -130,7 +140,7 @@ func TestSubscriberBackpressuresRetainedReplayInsteadOfExpiring(t *testing.T) {
 		events[i] = datastore.NamespaceWatchEvent{Epoch: epoch, Sequence: uint64(i + 1), At: now}
 	}
 	journal := &subscriberJournal{
-		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, Oldest: 1, HighWater: 128, UpdatedAt: now},
+		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, Oldest: 1, HighWater: 128, UpdatedAt: now, ProgressAt: now},
 		events: events,
 	}
 	ctx, cancel := context.WithCancel(context.Background())

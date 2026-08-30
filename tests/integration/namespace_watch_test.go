@@ -31,7 +31,7 @@ func TestNamespaceWatchCrossReplicaBootstrapAndResume(t *testing.T) {
 
 	firstName := uniqueName("watch-replica-b")
 	createNamespaceThrough(t, apiB, token, firstName)
-	added := readNamespaceWatchEvent(t, watchA)
+	added := readNamespaceWatchTransition(t, watchA)
 	assert.Equal(t, "ADDED", added.Type)
 	assert.Equal(t, firstName, added.Name)
 	require.NotEmpty(t, added.ResourceVersion)
@@ -40,7 +40,7 @@ func TestNamespaceWatchCrossReplicaBootstrapAndResume(t *testing.T) {
 	watchB := openNamespaceWatch(t, apiB, token, added.ResourceVersion)
 	secondName := uniqueName("watch-replica-a")
 	createNamespaceThrough(t, apiA, token, secondName)
-	resumed := readNamespaceWatchEvent(t, watchB)
+	resumed := readNamespaceWatchTransition(t, watchB)
 	assert.Equal(t, "ADDED", resumed.Type)
 	assert.Equal(t, secondName, resumed.Name)
 	assert.NotEqual(t, added.ResourceVersion, resumed.ResourceVersion)
@@ -69,7 +69,7 @@ func openNamespaceWatch(t *testing.T, apiURL, token, cursor string) *websocket.C
 	require.NoError(t, conn.WriteJSON(map[string]any{
 		"id": "namespace-watch", "type": "subscribe",
 		"payload": map[string]any{
-			"query":     `subscription($cursor: String) { watchNamespaces(resourceVersion: $cursor) { type name resourceVersion namespace { metadata { name resourceVersion generation finalizers } status { observedGeneration conditions { type status reason } } } }`,
+			"query":     `subscription($cursor: String) { watchNamespaces(resourceVersion: $cursor) { type name resourceVersion namespace { metadata { name resourceVersion generation finalizers } status { observedGeneration conditions { type status reason } } } } }`,
 			"variables": map[string]any{"cursor": cursor},
 		},
 	}))
@@ -91,6 +91,16 @@ func readNamespaceWatchEvent(t *testing.T, conn *websocket.Conn) namespaceWatchW
 	require.Equal(t, "next", message.Type)
 	require.Empty(t, message.Payload.Errors)
 	return message.Payload.Data.Watch
+}
+
+func readNamespaceWatchTransition(t *testing.T, conn *websocket.Conn) namespaceWatchWireEvent {
+	t.Helper()
+	for {
+		event := readNamespaceWatchEvent(t, conn)
+		if event.Type != "BOOKMARK" {
+			return event
+		}
+	}
 }
 
 func createNamespaceThrough(t *testing.T, apiURL, token, name string) {

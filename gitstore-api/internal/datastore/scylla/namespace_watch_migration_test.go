@@ -26,6 +26,7 @@ func TestNamespaceWatchMigrationContract(t *testing.T) {
 	assert.Contains(t, cql, "default_time_to_live = 604800")
 	assert.Contains(t, cql, "holder text static")
 	assert.Contains(t, cql, "fencing_token bigint static")
+	assert.Contains(t, cql, "cdc_progress_at timestamp static")
 	assert.Contains(t, cql, "position blob")
 	assert.Contains(t, cql, "selector_labels text")
 }

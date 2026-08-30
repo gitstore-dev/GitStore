@@ -149,8 +149,10 @@ duplicate; crash before 3 retries without loss.
 
 1. Deny generic and typed Namespace subscriptions fleet-wide.
 2. Apply migration 006.
-3. Deploy schema/readers/materializer code everywhere with activation disabled.
-4. Enable fenced materializer and wait for ready bookmark/high water.
+3. Deploy schema/readers/materializer code everywhere while explicitly
+   overriding the alpha-default-on activation gates to disabled.
+4. Enable fenced materializer and wait for persisted CDC query progress; a
+   bookmark/high water alone does not certify reader health.
 5. Enable journal readers everywhere.
 6. Prove cross-replica bootstrap/resume/expiry.
 7. Remove deny and enable clients to select `watchNamespaces`.

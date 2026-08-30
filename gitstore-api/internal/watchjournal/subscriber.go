@@ -72,7 +72,7 @@ func (s *Subscriber) SubscribePath(ctx context.Context, rawCursor, path string) 
 	if s.cfg.Metrics != nil {
 		s.cfg.Metrics.SetBounds(bounds, time.Now())
 	}
-	if s.cfg.MaxMaterializerLag > 0 && (bounds.UpdatedAt.IsZero() || time.Since(bounds.UpdatedAt) > s.cfg.MaxMaterializerLag) {
+	if s.cfg.MaxMaterializerLag > 0 && (bounds.ProgressAt.IsZero() || time.Since(bounds.ProgressAt) > s.cfg.MaxMaterializerLag) {
 		return nil, unavailable(errors.New("materializer lag exceeds readiness bound"))
 	}
 	bootstrap := rawCursor == BootstrapCursor

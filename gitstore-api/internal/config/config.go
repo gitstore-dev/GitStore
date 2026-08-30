@@ -128,6 +128,7 @@ type NamespaceWatchConfig struct {
 	MaterializerEnabled          bool `mapstructure:"materializer_enabled"`
 	JournalRetentionSeconds      int  `mapstructure:"journal_retention_seconds" validate:"min=1"`
 	CDCRetentionSeconds          int  `mapstructure:"cdc_retention_seconds" validate:"min=1"`
+	CDCConfidenceWindowMillis    int  `mapstructure:"cdc_confidence_window_millis" validate:"min=1"`
 	BucketSize                   int  `mapstructure:"bucket_size" validate:"min=1"`
 	ReadBatchSize                int  `mapstructure:"read_batch_size" validate:"min=1"`
 	MaxReplayEvents              int  `mapstructure:"max_replay_events" validate:"min=1"`
@@ -218,10 +219,11 @@ func load(path string) (*Config, error) {
 	v.SetDefault("datastore.scylla.password", "")
 	v.SetDefault("datastore.scylla.tls", false)
 	v.SetDefault("features.namespace_repository_fence", "auto")
-	v.SetDefault("watch.namespace.readers_enabled", false)
-	v.SetDefault("watch.namespace.materializer_enabled", false)
+	v.SetDefault("watch.namespace.readers_enabled", true)
+	v.SetDefault("watch.namespace.materializer_enabled", true)
 	v.SetDefault("watch.namespace.journal_retention_seconds", 7*24*60*60)
 	v.SetDefault("watch.namespace.cdc_retention_seconds", 14*24*60*60)
+	v.SetDefault("watch.namespace.cdc_confidence_window_millis", 500)
 	v.SetDefault("watch.namespace.bucket_size", 4096)
 	v.SetDefault("watch.namespace.read_batch_size", 256)
 	v.SetDefault("watch.namespace.max_replay_events", 100000)
@@ -283,7 +285,8 @@ func load(path string) (*Config, error) {
 		"features.namespace_repository_fence": true,
 		"watch.namespace.readers_enabled":     true, "watch.namespace.materializer_enabled": true,
 		"watch.namespace.journal_retention_seconds": true, "watch.namespace.cdc_retention_seconds": true,
-		"watch.namespace.bucket_size": true, "watch.namespace.read_batch_size": true,
+		"watch.namespace.cdc_confidence_window_millis": true,
+		"watch.namespace.bucket_size":                  true, "watch.namespace.read_batch_size": true,
 		"watch.namespace.max_replay_events": true, "watch.namespace.subscriber_buffer": true,
 		"watch.namespace.subscriber_backpressure_millis": true,
 		"watch.namespace.poll_min_millis":                true, "watch.namespace.poll_max_millis": true,

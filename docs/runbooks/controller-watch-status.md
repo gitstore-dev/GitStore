@@ -85,12 +85,14 @@ Roll out in this order:
 1. Apply migration 006 everywhere and verify the Namespace base table has full
    preimage/postimage CDC with the 14-day TTL plus the journal-event table and
    partition-local clock/lease/progress table.
-2. Keep both Namespace watch gates off while any API replica lacks the new
-   schema/code. Deny Namespace watch ingress fleet-wide during mixed-version
-   operation; an old replica cannot honor the durable cursor contract.
+2. Override both alpha-default-on Namespace watch gates to `false` while any
+   API replica lacks the new schema/code. Deny Namespace watch ingress
+   fleet-wide during mixed-version operation; an old replica cannot honor the
+   durable cursor contract.
 3. Enable `MATERIALIZER_ENABLED` on the converged fleet. Exactly one healthy
    replica should report materializer leader `1`; wait for a durable BOOKMARK
-   and CDC lag below 60 seconds.
+   and independently persisted CDC query progress below 60 seconds. A fresh
+   BOOKMARK alone does not certify CDC health.
 4. Enable `READERS_ENABLED`, restore watch ingress, and run the cross-replica
    bootstrap/resume probe before declaring rollout complete.
 

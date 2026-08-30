@@ -89,14 +89,13 @@ type Server struct {
 }
 
 type namespaceCDCRunner interface {
-	RunNamespaceCDC(context.Context, *watchjournal.Materializer, datastore.NamespaceWatchLease, time.Duration, func()) error
+	RunNamespaceCDC(context.Context, *watchjournal.Materializer, datastore.NamespaceWatchLease, time.Duration, time.Duration, func()) error
 }
 
 type namespaceWatchRuntime struct {
 	journal      datastore.NamespaceWatchJournal
 	materializer *watchjournal.Materializer
 	leaseManager *watchjournal.LeaseManager
-	readiness    *watchjournal.Readiness
 	metrics      *watchjournal.Metrics
 	runner       namespaceCDCRunner
 	cfg          config.NamespaceWatchConfig
@@ -121,7 +120,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	}
 	clock := apiruntime.SystemClock{}
 
-	rawStore, err := dsfactory.NewDatastore(cfg.Datastore, log)
+	rawStore, err := dsfactory.NewDatastore(cfg.Datastore, log, cfg.Watch.Namespace.BucketSize)
 	if err != nil {
 		return nil, fmt.Errorf("create datastore: %w", err)
 	}
@@ -155,10 +154,9 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 				time.Duration(cfg.Watch.Namespace.LeaseRenewIntervalSeconds)*time.Second,
 				clock,
 			),
-			readiness: watchjournal.NewReadiness(time.Duration(cfg.Watch.Namespace.MaxMaterializerLagSeconds) * time.Second),
-			metrics:   metrics,
-			cfg:       cfg.Watch.Namespace,
-			log:       log,
+			metrics: metrics,
+			cfg:     cfg.Watch.Namespace,
+			log:     log,
 		}
 		if runner, ok := rawStore.(namespaceCDCRunner); ok {
 			namespaceWatch.runner = runner
@@ -397,7 +395,7 @@ func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logge
 				return err
 			}
 			maxLag := time.Duration(namespaceWatch.cfg.MaxMaterializerLagSeconds) * time.Second
-			if bounds.UpdatedAt.IsZero() || time.Since(bounds.UpdatedAt) > maxLag {
+			if bounds.ProgressAt.IsZero() || time.Since(bounds.ProgressAt) > maxLag {
 				return watchjournal.ErrMaterializerNotReady
 			}
 			return nil
@@ -586,7 +584,12 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 	if r.runner != nil {
 		ready := make(chan struct{})
 		go func() {
-			errCh <- r.runner.RunNamespaceCDC(ctx, r.materializer, lease, time.Duration(r.cfg.CDCRetentionSeconds)*time.Second, func() { close(ready) })
+			errCh <- r.runner.RunNamespaceCDC(
+				ctx, r.materializer, lease,
+				time.Duration(r.cfg.CDCRetentionSeconds)*time.Second,
+				time.Duration(r.cfg.CDCConfidenceWindowMillis)*time.Millisecond,
+				func() { close(ready) },
+			)
 		}()
 		select {
 		case <-parent.Done():
@@ -603,7 +606,6 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 		r.log.Error("Namespace materializer initial bookmark failed", zap.Error(err))
 		return
 	}
-	r.readiness.Update(watchjournal.MaterializerStatus{LastProgressAt: time.Now().UTC(), JournalContinuous: true})
 	bookmark := time.NewTicker(time.Duration(r.cfg.BookmarkIntervalSeconds) * time.Second)
 	defer bookmark.Stop()
 	for {
@@ -620,7 +622,6 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 				r.log.Error("Namespace materializer bookmark failed", zap.Error(err))
 				return
 			}
-			r.readiness.Update(watchjournal.MaterializerStatus{LastProgressAt: time.Now().UTC(), JournalContinuous: true})
 		}
 	}
 }

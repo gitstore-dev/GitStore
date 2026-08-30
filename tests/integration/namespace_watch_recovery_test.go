@@ -32,7 +32,7 @@ func TestNamespaceWatchRecoveryProbe(t *testing.T) {
 	name := uniqueName("watch-recovery")
 	createNamespaceThrough(t, apiB, token, name)
 	resumed := openNamespaceWatch(t, apiB, token, cursor)
-	event := readNamespaceWatchEvent(t, resumed)
+	event := readNamespaceWatchTransition(t, resumed)
 	require.Equal(t, name, event.Name)
 	require.NotEqual(t, cursor, event.ResourceVersion)
 	cursor = event.ResourceVersion
@@ -51,7 +51,7 @@ func TestNamespaceWatchRecoveryProbe(t *testing.T) {
 		watch := openNamespaceWatch(t, replacement, token, cursor)
 		name := uniqueName("watch-handoff")
 		createNamespaceThrough(t, apiA, token, name)
-		event := readNamespaceWatchEvent(t, watch)
+		event := readNamespaceWatchTransition(t, watch)
 		require.Equal(t, name, event.Name)
 	})
 

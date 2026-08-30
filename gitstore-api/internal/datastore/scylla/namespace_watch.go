@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gocql/gocql"
 )
 
@@ -22,13 +23,14 @@ const (
 func (s *scyllaDatastore) NamespaceWatchJournal() datastore.NamespaceWatchJournal { return s }
 
 type namespaceWatchClockRow struct {
-	Epoch        gocql.UUID `db:"epoch"`
-	HighWater    int64      `db:"high_water"`
-	Oldest       int64      `db:"oldest"`
-	UpdatedAt    time.Time  `db:"updated_at"`
-	Holder       string     `db:"holder"`
-	FencingToken int64      `db:"fencing_token"`
-	ExpiresAt    time.Time  `db:"expires_at"`
+	Epoch         gocql.UUID `db:"epoch"`
+	HighWater     int64      `db:"high_water"`
+	Oldest        int64      `db:"oldest"`
+	UpdatedAt     time.Time  `db:"updated_at"`
+	CDCProgressAt time.Time  `db:"cdc_progress_at"`
+	Holder        string     `db:"holder"`
+	FencingToken  int64      `db:"fencing_token"`
+	ExpiresAt     time.Time  `db:"expires_at"`
 }
 
 type namespaceWatchEventRow struct {
@@ -51,15 +53,15 @@ func (s *scyllaDatastore) ensureNamespaceWatchClock(ctx context.Context) (namesp
 	}
 	zeroExpiry := time.Unix(0, 0).UTC()
 	_, err = s.session.Query(
-		"INSERT INTO namespace_watch_clock (journal,stream_id,epoch,high_water,oldest,updated_at,holder,fencing_token,expires_at) VALUES (?,?,?,?,?,?,?,?,?) IF NOT EXISTS",
+		"INSERT INTO namespace_watch_clock (journal,stream_id,epoch,high_water,oldest,updated_at,cdc_progress_at,holder,fencing_token,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?) IF NOT EXISTS",
 		nil,
-	).WithContext(ctx).Bind(namespaceWatchJournalName, namespaceWatchClockStream, epoch, int64(0), int64(0), time.Now().UTC(), "", int64(0), zeroExpiry).ExecCASRelease()
+	).WithContext(ctx).Bind(namespaceWatchJournalName, namespaceWatchClockStream, epoch, int64(0), int64(0), time.Now().UTC(), zeroExpiry, "", int64(0), zeroExpiry).ExecCASRelease()
 	if err != nil {
 		return namespaceWatchClockRow{}, fmt.Errorf("scylla: initialize Namespace watch clock: %w", err)
 	}
 	var row namespaceWatchClockRow
 	if err := s.session.Query(
-		"SELECT epoch,high_water,oldest,updated_at,holder,fencing_token,expires_at FROM namespace_watch_clock WHERE journal=? LIMIT 1",
+		"SELECT epoch,high_water,oldest,updated_at,cdc_progress_at,holder,fencing_token,expires_at FROM namespace_watch_clock WHERE journal=? LIMIT 1",
 		nil,
 	).WithContext(ctx).Bind(namespaceWatchJournalName).GetRelease(&row); err != nil {
 		return namespaceWatchClockRow{}, fmt.Errorf("scylla: read Namespace watch clock: %w", err)
@@ -70,7 +72,7 @@ func (s *scyllaDatastore) ensureNamespaceWatchClock(ctx context.Context) (namesp
 func (s *scyllaDatastore) Bounds(ctx context.Context) (datastore.NamespaceWatchBounds, error) {
 	var row namespaceWatchClockRow
 	err := s.session.Query(
-		"SELECT epoch,high_water,oldest,updated_at FROM namespace_watch_clock WHERE journal=? LIMIT 1",
+		"SELECT epoch,high_water,oldest,updated_at,cdc_progress_at FROM namespace_watch_clock WHERE journal=? LIMIT 1",
 		nil,
 	).WithContext(ctx).Bind(namespaceWatchJournalName).GetRelease(&row)
 	if errors.Is(err, gocql.ErrNotFound) {
@@ -79,7 +81,10 @@ func (s *scyllaDatastore) Bounds(ctx context.Context) (datastore.NamespaceWatchB
 	if err != nil {
 		return datastore.NamespaceWatchBounds{}, fmt.Errorf("scylla: read Namespace watch clock: %w", err)
 	}
-	return datastore.NamespaceWatchBounds{Epoch: row.Epoch.String(), Oldest: uint64(maxInt64(row.Oldest, 0)), HighWater: uint64(maxInt64(row.HighWater, 0)), UpdatedAt: row.UpdatedAt}, nil
+	return datastore.NamespaceWatchBounds{
+		Epoch: row.Epoch.String(), Oldest: uint64(maxInt64(row.Oldest, 0)), HighWater: uint64(maxInt64(row.HighWater, 0)),
+		UpdatedAt: row.UpdatedAt, ProgressAt: row.CDCProgressAt,
+	}, nil
 }
 
 func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceWatchLease, event datastore.NamespaceWatchEvent, ttl time.Duration) (datastore.NamespaceWatchEvent, error) {
@@ -107,7 +112,7 @@ func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceW
 		candidate.Epoch = clock.Epoch.String()
 		candidate.Sequence = uint64(next)
 		candidate.FencingToken = lease.FencingToken
-		bucket := int64((candidate.Sequence - 1) / 4096)
+		bucket := namespaceWatchBucket(candidate.Sequence, s.namespaceWatchBucketSize)
 		inserted, insertErr := s.session.Query(
 			"INSERT INTO namespace_watch_events (epoch,bucket,sequence,event_type,name,payload,selector_labels,deduplication_key,fencing_token,event_at) VALUES (?,?,?,?,?,?,?,?,?,?) IF NOT EXISTS USING TTL ?",
 			nil,
@@ -227,8 +232,12 @@ func (s *scyllaDatastore) ReadAfter(ctx context.Context, cursor datastore.Namesp
 	}
 	out := make([]datastore.NamespaceWatchEvent, 0, limit)
 	for start <= bounds.HighWater && len(out) < limit {
-		bucket := int64((start - 1) / 4096)
-		bucketEnd := uint64(bucket+1) * 4096
+		bucketSize := s.namespaceWatchBucketSize
+		if bucketSize <= 0 {
+			bucketSize = int64(watchjournal.DefaultBucketSize)
+		}
+		bucket := namespaceWatchBucket(start, bucketSize)
+		bucketEnd := uint64(bucket+1) * uint64(bucketSize)
 		if bucketEnd > bounds.HighWater {
 			bucketEnd = bounds.HighWater
 		}
@@ -324,10 +333,13 @@ func (s *scyllaDatastore) SaveProgress(ctx context.Context, lease datastore.Name
 	if progress.StreamID == "" {
 		return fmt.Errorf("%w: CDC stream id is required", datastore.ErrInvalidArgument)
 	}
-	applied, err := s.session.Query(
-		"UPDATE namespace_watch_clock SET position=?,progress_updated_at=? WHERE journal=? AND stream_id=? IF holder=? AND fencing_token=? AND expires_at>?",
-		nil,
-	).WithContext(ctx).Bind(progress.Position, progress.UpdatedAt, namespaceWatchJournalName, progress.StreamID, lease.Holder, int64(lease.FencingToken), time.Now().UTC()).ExecCASRelease()
+	query := "UPDATE namespace_watch_clock SET position=?,progress_updated_at=?,cdc_progress_at=? WHERE journal=? AND stream_id=? IF holder=? AND fencing_token=? AND expires_at>?"
+	values := []any{progress.Position, progress.UpdatedAt, progress.UpdatedAt, namespaceWatchJournalName, progress.StreamID, lease.Holder, int64(lease.FencingToken), time.Now().UTC()}
+	if progress.StreamID == namespaceCDCGenerationProgress {
+		query = "UPDATE namespace_watch_clock SET position=?,progress_updated_at=? WHERE journal=? AND stream_id=? IF holder=? AND fencing_token=? AND expires_at>?"
+		values = []any{progress.Position, progress.UpdatedAt, namespaceWatchJournalName, progress.StreamID, lease.Holder, int64(lease.FencingToken), time.Now().UTC()}
+	}
+	applied, err := s.session.Query(query, nil).WithContext(ctx).Bind(values...).ExecCASRelease()
 	if err != nil {
 		return fmt.Errorf("scylla: save Namespace CDC progress: %w", err)
 	}
@@ -335,6 +347,16 @@ func (s *scyllaDatastore) SaveProgress(ctx context.Context, lease datastore.Name
 		return datastore.ErrStaleWatchLease
 	}
 	return nil
+}
+
+func namespaceWatchBucket(sequence uint64, bucketSize int64) int64 {
+	if bucketSize <= 0 {
+		bucketSize = int64(watchjournal.DefaultBucketSize)
+	}
+	if sequence == 0 {
+		return 0
+	}
+	return int64((sequence - 1) / uint64(bucketSize))
 }
 
 func namespaceWatchLeaseMatches(current namespaceWatchClockRow, lease datastore.NamespaceWatchLease, now time.Time) bool {

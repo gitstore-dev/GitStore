@@ -261,6 +261,10 @@ Completed:
   suites;
 - tagged Scylla datastore integration, including the official
   `scylla-cdc-go` reader materializing an acknowledged Namespace mutation;
+- the deployment-shaped two-replica recovery gate on a fresh Scylla keyspace:
+  all three probes passed in 5.964 seconds (6.35 seconds wall), cross-replica
+  event visibility was 783.8 ms, fenced lease handoff advanced token 1 to 2,
+  and the replacement replica became ready in 52 ms;
 - short capacity-harness smoke with 50 subscribers for 3 seconds;
 - `make pr-ready` across Go, Rust, static analysis, formatting, and license
   checks;
@@ -273,6 +277,11 @@ Commands exercised:
 ```bash
 make test-scylla-hardening
 make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9042
+NAMESPACE_WATCH_API_A=http://127.0.0.1:4100 \
+NAMESPACE_WATCH_API_B=http://127.0.0.1:4101 \
+NAMESPACE_WATCH_API_REPLACEMENT=http://127.0.0.1:4100 \
+NAMESPACE_WATCH_TOKEN="$TOKEN" \
+  make test-namespace-watch-recovery
 make test-namespace-watch-capacity \
   NAMESPACE_WATCH_CAPACITY_DURATION=3s \
   NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS=50
@@ -282,19 +291,11 @@ graphify update .
 graphify query "How does Namespace CDC flow through the durable watch journal materializer to typed and generic GraphQL subscriptions, including readiness and cursors?"
 ```
 
-Operational gates still requiring the deployment-shaped environment:
-
-- the live two-replica rolling-replacement probe, including cross-replica
-  resume and forced materializer lease handoff;
-- the full 60-minute, 1,000-subscriber capacity run and threshold capture.
+The remaining operational gate is the full 60-minute, 1,000-subscriber
+capacity run and threshold capture.
 
 Run those gates before production rollout with:
 
 ```bash
-NAMESPACE_WATCH_API_A=https://api-a.example/graphql \
-NAMESPACE_WATCH_API_B=https://api-b.example/graphql \
-NAMESPACE_WATCH_TOKEN="$TOKEN" \
-  make test-namespace-watch-recovery
-
 make test-namespace-watch-capacity
 ```

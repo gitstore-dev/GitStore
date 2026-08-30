@@ -114,7 +114,7 @@ func requireWatchTransportError(t *testing.T, conn *websocket.Conn, code, reason
 func TestNamespaceWatchExpiredSurvivesWebSocketTransport(t *testing.T) {
 	epoch := uuid.NewString()
 	journal := &transportWatchJournal{
-		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, HighWater: 1, UpdatedAt: time.Now().UTC()},
+		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, HighWater: 1, UpdatedAt: time.Now().UTC(), ProgressAt: time.Now().UTC()},
 		read:   func(datastore.NamespaceWatchCursor, int) ([]datastore.NamespaceWatchEvent, error) { return nil, nil },
 	}
 	conn := openNamespaceWatch(t, journal, "nwv2:"+epoch+":1")
@@ -133,7 +133,7 @@ func TestNamespaceWatchUnavailableSurvivesWebSocketTransport(t *testing.T) {
 func TestNamespaceWatchRuntimeDiscontinuityIsNotNormalClosure(t *testing.T) {
 	epoch := uuid.NewString()
 	journal := &transportWatchJournal{
-		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, HighWater: 2, UpdatedAt: time.Now().UTC()},
+		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, HighWater: 2, UpdatedAt: time.Now().UTC(), ProgressAt: time.Now().UTC()},
 		read: func(datastore.NamespaceWatchCursor, int) ([]datastore.NamespaceWatchEvent, error) {
 			return []datastore.NamespaceWatchEvent{{Epoch: epoch, Sequence: 2}}, nil
 		},
@@ -151,7 +151,7 @@ func TestNamespaceWatchOverflowIsNotNormalClosure(t *testing.T) {
 		}
 	}
 	journal := &transportWatchJournal{
-		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, HighWater: uint64(len(events)), UpdatedAt: time.Now().UTC()},
+		bounds: datastore.NamespaceWatchBounds{Epoch: epoch, HighWater: uint64(len(events)), UpdatedAt: time.Now().UTC(), ProgressAt: time.Now().UTC()},
 		read: func(cursor datastore.NamespaceWatchCursor, _ int) ([]datastore.NamespaceWatchEvent, error) {
 			if cursor.Sequence == 0 {
 				return events, nil
@@ -161,7 +161,10 @@ func TestNamespaceWatchOverflowIsNotNormalClosure(t *testing.T) {
 	}
 	conn := openNamespaceWatch(t, journal, watchjournal.EncodeCursor(epoch, 0))
 	time.Sleep(100 * time.Millisecond) // Let the server encounter a genuinely slow consumer.
-	for i := 0; i < 10000; i++ {
+	// The WebSocket stack may drain the subscriber into its socket buffer
+	// before this client starts reading. The terminal error must still follow
+	// within the finite retained replay, regardless of the host buffer size.
+	for i := 0; i <= len(events); i++ {
 		var message map[string]any
 		require.NoError(t, conn.ReadJSON(&message))
 		switch message["type"] {

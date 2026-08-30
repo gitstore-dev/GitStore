@@ -228,8 +228,10 @@ callers cannot distinguish valid, invalid, or expired cursors.
 
 1. Install a fleet-wide deny for both Namespace watch forms.
 2. Apply migration 006 and verify CDC/log/journal schema.
-3. Deploy every new API replica with schema support and durable watch disabled.
-4. Enable the fenced materializer and require healthy bookmarks/lag.
+3. Deploy every new API replica with schema support and explicitly override the
+   alpha-default-on durable watch gates to disabled.
+4. Enable the fenced materializer and require healthy persisted CDC query
+   progress; bookmarks do not certify CDC health.
 5. Enable journal readers everywhere and run cross-replica probes.
 6. Remove the deny; clients may then select `watchNamespaces`.
 

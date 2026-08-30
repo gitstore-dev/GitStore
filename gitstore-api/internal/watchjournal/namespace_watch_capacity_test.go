@@ -43,7 +43,7 @@ func (j *capacityJournal) Bounds(context.Context) (datastore.NamespaceWatchBound
 	if len(j.events) > 0 {
 		updated = j.events[len(j.events)-1].At
 	}
-	return datastore.NamespaceWatchBounds{Epoch: j.epoch, Oldest: 1, HighWater: uint64(len(j.events)), UpdatedAt: updated}, nil
+	return datastore.NamespaceWatchBounds{Epoch: j.epoch, Oldest: 1, HighWater: uint64(len(j.events)), UpdatedAt: updated, ProgressAt: updated}, nil
 }
 
 func (j *capacityJournal) ReadAfter(_ context.Context, cursor datastore.NamespaceWatchCursor, limit int) ([]datastore.NamespaceWatchEvent, error) {
