@@ -146,16 +146,16 @@ compose-scylla: ## Run API, git service, and Scylla with Docker Compose.
 compose-scylla: validate-local-config
 	@$(LOCAL_COMPOSE) -f compose.scylla.yml up --build $(DETACH_FLAG)
 
-ps: validate-local-config ## Show compose service status.
+ps: ## Show compose service status.
 	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml ps
 
-logs: validate-local-config ## Follow compose logs; optionally pass SERVICE=<name>.
+logs: ## Follow compose logs; optionally pass SERVICE=<name>.
 	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml logs -f $(SERVICE)
 
-stop: validate-local-config ## Stop compose services; optionally pass SERVICE=<name>.
+stop: ## Stop compose services; optionally pass SERVICE=<name>.
 	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml stop $(SERVICE)
 
-down: validate-local-config ## Stop and remove compose services and networks.
+down: ## Stop and remove compose services and networks.
 	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml down
 
 build: ## Build Rust and Go services.
@@ -397,11 +397,11 @@ git-clean-data: ## Remove native local git-service repository data; requires CON
 admin-compose: validate-local-config ## Run the optional admin compose stack.
 	@$(LOCAL_COMPOSE) -f compose.admin.yml up --build $(DETACH_FLAG) admin
 
-admin-down: validate-local-config ## Stop and remove the admin compose stack.
+admin-down: ## Stop and remove the admin compose stack.
 	@$(LOCAL_COMPOSE) -f compose.admin.yml down
 
-admin-stop: validate-local-config ## Stop only the admin compose service.
+admin-stop: ## Stop only the admin compose service.
 	@$(LOCAL_COMPOSE) -f compose.admin.yml stop admin
 
-admin-logs: validate-local-config ## Follow admin compose logs.
+admin-logs: ## Follow admin compose logs.
 	@$(LOCAL_COMPOSE) -f compose.admin.yml logs -f admin
