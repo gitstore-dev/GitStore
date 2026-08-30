@@ -18,6 +18,7 @@ const (
 	namespaceWatchJournalName        = "namespace"
 	namespaceWatchClockStream        = "__clock__"
 	namespaceWatchRetentionScanLimit = 32
+	namespaceCDCProgressTTLSeconds   = 14 * 24 * 60 * 60
 )
 
 func (s *scyllaDatastore) NamespaceWatchJournal() datastore.NamespaceWatchJournal { return s }
@@ -455,9 +456,9 @@ func (s *scyllaDatastore) SaveProgress(ctx context.Context, lease datastore.Name
 	if progress.StreamID == "" {
 		return fmt.Errorf("%w: CDC stream id is required", datastore.ErrInvalidArgument)
 	}
-	query := "UPDATE namespace_watch_clock SET position=?,progress_update_timestamp=?,cdc_progress_timestamp=? WHERE journal=? AND stream_id=? IF lease_holder=? AND fencing_token=? AND lease_expiration_timestamp>?"
-	values := []any{progress.Position, progress.UpdatedAt, progress.UpdatedAt, namespaceWatchJournalName, progress.StreamID, lease.Holder, int64(lease.FencingToken), time.Now().UTC()}
-	if progress.StreamID == namespaceCDCGenerationProgress {
+	query := "UPDATE namespace_watch_clock USING TTL ? SET position=?,progress_update_timestamp=?,cdc_progress_timestamp=? WHERE journal=? AND stream_id=? IF lease_holder=? AND fencing_token=? AND lease_expiration_timestamp>?"
+	values := []any{namespaceCDCProgressTTLSeconds, progress.Position, progress.UpdatedAt, progress.UpdatedAt, namespaceWatchJournalName, progress.StreamID, lease.Holder, int64(lease.FencingToken), time.Now().UTC()}
+	if progress.StreamID == namespaceCDCGenerationProgress || progress.StreamID == namespaceCDCPublishedFrontierProgress {
 		query = "UPDATE namespace_watch_clock SET position=?,progress_update_timestamp=? WHERE journal=? AND stream_id=? IF lease_holder=? AND fencing_token=? AND lease_expiration_timestamp>?"
 		values = []any{progress.Position, progress.UpdatedAt, namespaceWatchJournalName, progress.StreamID, lease.Holder, int64(lease.FencingToken), time.Now().UTC()}
 	}

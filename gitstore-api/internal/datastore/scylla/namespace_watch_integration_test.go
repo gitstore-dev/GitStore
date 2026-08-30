@@ -53,6 +53,37 @@ func TestNamespaceWatchLeaseFencesJournalAndProgressWrites(t *testing.T) {
 	require.Equal(t, []byte("current"), progress.Position)
 }
 
+func TestNamespaceWatchBoundsPerStreamProgressAcrossGenerations(t *testing.T) {
+	store := newTestStore(t)
+	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	lease, acquired, err := journal.AcquireLease(ctx, "progress-ttl", now, time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), lease)) })
+
+	require.NoError(t, journal.SaveProgress(ctx, lease, datastore.NamespaceCDCProgress{
+		StreamID: "generation:table:stream", Position: []byte("dynamic"), UpdatedAt: now,
+	}))
+	require.NoError(t, journal.SaveProgress(ctx, lease, datastore.NamespaceCDCProgress{
+		StreamID: "__namespace_cdc_generation__", Position: []byte("durable"), UpdatedAt: now,
+	}))
+
+	raw := newRawSession(t)
+	defer raw.Close()
+	dynamic := map[string]any{}
+	require.NoError(t, raw.Query(
+		"SELECT TTL(position) AS ttl FROM namespace_watch_clock WHERE journal=? AND stream_id=?",
+	).Bind("namespace", "generation:table:stream").MapScan(dynamic))
+	require.NotNil(t, dynamic["ttl"])
+	durable := map[string]any{}
+	require.NoError(t, raw.Query(
+		"SELECT TTL(position) AS ttl FROM namespace_watch_clock WHERE journal=? AND stream_id=?",
+	).Bind("namespace", "__namespace_cdc_generation__").MapScan(durable))
+	require.Equal(t, 0, durable["ttl"])
+}
+
 func TestNamespaceWatchRejectsBucketLayoutMismatch(t *testing.T) {
 	first := newTestStore(t).(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
 	raw := newRawSession(t)

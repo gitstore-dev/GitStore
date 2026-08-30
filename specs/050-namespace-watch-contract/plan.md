@@ -196,9 +196,16 @@ absence, and returns `ErrRepairRequired` if cleanup cannot be verified.
 An ambiguous watch-commit LWT is resolved by rereading the marker with that
 detached context: a committed marker returns success, an uncommitted marker is
 rolled back, and an unreadable marker returns repair-required without cleanup.
+Per-stream CDC progress cells use the same fixed 14-day TTL as the source CDC
+window; active-generation writes refresh it, while completed topology
+generations expire without growing the singleton clock partition forever. The
+current-generation and published-frontier sentinels remain durable.
 Post-commit deletion cleanup follows the same bounded detached-context and
 absence-confirmation rule so request cancellation cannot strand list or name
-projections after the authoritative row is removed.
+projections after the authoritative row is removed. Ambiguous authoritative
+delete results are reread first: confirmed absence proceeds to cleanup,
+confirmed presence returns the original transport error, and an unreadable
+commit state returns repair-required without touching projections.
 
 Namespace deletion commits the authoritative `namespaces_by_uid` removal
 before changing its list and name projections. A rejected conditional delete
