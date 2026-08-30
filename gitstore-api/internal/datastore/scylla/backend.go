@@ -2091,7 +2091,7 @@ func (s *scyllaDatastore) cleanupNamespaceCreate(ctx context.Context, row *names
 		err := s.session.Query("SELECT uid FROM namespaces_by_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?", nil).
 			WithContext(ctx).Bind(namespaceBucket(row.CreationTimestamp), row.CreationTimestamp, row.UID).GetRelease(&found)
 		if err == nil {
-			confirmationErrors = append(confirmationErrors, errors.New("Namespace listing projection remains after rollback"))
+			confirmationErrors = append(confirmationErrors, errors.New("namespace listing projection remains after rollback"))
 		} else if !errors.Is(err, gocql.ErrNotFound) {
 			confirmationErrors = append(confirmationErrors, fmt.Errorf("confirm Namespace listing rollback: %w", err))
 		}
@@ -2100,7 +2100,7 @@ func (s *scyllaDatastore) cleanupNamespaceCreate(ctx context.Context, row *names
 	err := s.session.Query("SELECT name,uid FROM namespaces_by_name WHERE name=?", nil).
 		WithContext(ctx).Bind(row.Name).GetRelease(&foundName)
 	if err == nil && foundName.UID == row.UID {
-		confirmationErrors = append(confirmationErrors, errors.New("Namespace name projection remains after rollback"))
+		confirmationErrors = append(confirmationErrors, errors.New("namespace name projection remains after rollback"))
 	} else if err != nil && !errors.Is(err, gocql.ErrNotFound) {
 		confirmationErrors = append(confirmationErrors, fmt.Errorf("confirm Namespace name rollback: %w", err))
 	}
