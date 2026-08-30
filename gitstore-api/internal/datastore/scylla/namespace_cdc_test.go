@@ -263,6 +263,51 @@ func TestNamespaceCreateCommitResolutionConfirmsAmbiguousSuccess(t *testing.T) {
 	require.True(t, committed)
 }
 
+func TestNamespaceCreateInsertResolutionConfirmsStagedRow(t *testing.T) {
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+	staged := false
+
+	authoritative, err := runNamespaceCreateInsertResolution(requestCtx, "shop", context.DeadlineExceeded, func(resolveCtx context.Context) (*namespaceCreateInsertState, error) {
+		require.NoError(t, resolveCtx.Err())
+		return &namespaceCreateInsertState{Name: "shop", WatchCommitted: &staged}, nil
+	})
+
+	require.NoError(t, err)
+	require.True(t, authoritative)
+}
+
+func TestNamespaceCreateInsertResolutionDoesNotClaimAnotherRow(t *testing.T) {
+	staged := false
+	committed := true
+	tests := []*namespaceCreateInsertState{
+		nil,
+		{Name: "other", WatchCommitted: &staged},
+		{Name: "shop", WatchCommitted: &committed},
+		{Name: "shop", WatchCommitted: nil},
+	}
+	for _, state := range tests {
+		authoritative, err := runNamespaceCreateInsertResolution(context.Background(), "shop", context.DeadlineExceeded, func(context.Context) (*namespaceCreateInsertState, error) {
+			return state, nil
+		})
+		require.NoError(t, err)
+		assert.False(t, authoritative)
+	}
+}
+
+func TestNamespaceCreateInsertResolutionRequiresRepairWhenUnreadable(t *testing.T) {
+	authoritative, err := runNamespaceCreateInsertResolution(context.Background(), "shop", context.DeadlineExceeded, func(context.Context) (*namespaceCreateInsertState, error) {
+		return nil, errors.New("serial read failed")
+	})
+
+	require.False(t, authoritative)
+	require.ErrorIs(t, err, datastore.ErrRepairRequired)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	var repair *datastore.RepairRequiredError
+	require.ErrorAs(t, err, &repair)
+	assert.Equal(t, "confirm_authoritative_insert", repair.Step.Action)
+}
+
 func TestNamespaceCreateCommitResolutionRequiresRepairWhenAmbiguous(t *testing.T) {
 	committed, err := runNamespaceCreateCommitResolution(context.Background(), context.DeadlineExceeded, func(context.Context) (*bool, error) {
 		return nil, errors.New("marker read failed")

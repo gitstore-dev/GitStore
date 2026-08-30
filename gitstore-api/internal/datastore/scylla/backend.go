@@ -2002,11 +2002,16 @@ func (s *scyllaDatastore) CreateNamespace(ctx context.Context, ns *datastore.Nam
 	insertByUID, names := s.namespaceByUIDTable.Insert()
 	applied, err = s.session.Query(insertByUID+" IF NOT EXISTS", names).WithContext(ctx).
 		BindStruct(row).ExecCASRelease()
-	if err != nil || !applied {
-		primary := fmt.Errorf("%w: namespace uid %s", datastore.ErrAlreadyExists, ns.UID)
-		if err != nil {
-			primary = fmt.Errorf("scylla: create namespace by uid: %w", err)
+	if err != nil {
+		primary := fmt.Errorf("scylla: create namespace by uid: %w", err)
+		authoritative, resolveErr := s.resolveNamespaceCreateInsert(ctx, row, primary)
+		if resolveErr != nil {
+			return resolveErr
 		}
+		return s.rollbackNamespaceCreate(ctx, row, primary, authoritative, false)
+	}
+	if !applied {
+		primary := fmt.Errorf("%w: namespace uid %s", datastore.ErrAlreadyExists, ns.UID)
 		return s.rollbackNamespaceCreate(ctx, row, primary, false, false)
 	}
 
@@ -2033,6 +2038,47 @@ func (s *scyllaDatastore) CreateNamespace(ctx context.Context, ns *datastore.Nam
 			errors.New("scylla: commit namespace watch visibility: authoritative row disappeared"), true, true)
 	}
 	return nil
+}
+
+type namespaceCreateInsertState struct {
+	Name           string `db:"name"`
+	WatchCommitted *bool  `db:"watch_committed"`
+}
+
+func (s *scyllaDatastore) resolveNamespaceCreateInsert(
+	ctx context.Context,
+	row *namespaceRow,
+	primary error,
+) (bool, error) {
+	return runNamespaceCreateInsertResolution(ctx, row.Name, primary, func(resolveCtx context.Context) (*namespaceCreateInsertState, error) {
+		var state namespaceCreateInsertState
+		err := s.session.Query("SELECT name,watch_committed FROM namespaces_by_uid WHERE uid=?", nil).
+			Consistency(gocql.LocalSerial).WithContext(resolveCtx).Bind(row.UID).GetRelease(&state)
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, nil
+		}
+		return &state, err
+	})
+}
+
+func runNamespaceCreateInsertResolution(
+	ctx context.Context,
+	expectedName string,
+	primary error,
+	readState func(context.Context) (*namespaceCreateInsertState, error),
+) (bool, error) {
+	resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceProjectionCleanupTimeout)
+	defer cancel()
+	state, err := readState(resolveCtx)
+	if err != nil {
+		return false, datastore.NewRepairRequiredError(datastore.MutationStep{
+			Operation:    "create_namespace",
+			ResourceKind: "Namespace",
+			Projection:   "namespaces_by_uid",
+			Action:       "confirm_authoritative_insert",
+		}, primary, fmt.Errorf("confirm Namespace authoritative insert: %w", err))
+	}
+	return state != nil && state.Name == expectedName && state.WatchCommitted != nil && !*state.WatchCommitted, nil
 }
 
 func (s *scyllaDatastore) resolveNamespaceCreateCommit(
