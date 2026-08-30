@@ -224,6 +224,21 @@ func TestNamespaceCreateRollbackSurfacesRepairRequired(t *testing.T) {
 	assert.ErrorContains(t, repair.Compensation, "cleanup could not be confirmed")
 }
 
+func TestNamespaceDeleteCleanupDetachesFromCanceledRequest(t *testing.T) {
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+
+	called := false
+	err := runNamespaceDeleteCleanup(requestCtx, func(cleanupCtx context.Context) error {
+		called = true
+		require.NoError(t, cleanupCtx.Err())
+		return nil
+	})
+
+	require.True(t, called)
+	require.NoError(t, err)
+}
+
 func sequenceTestRequest(streamID, name string, at gocql.UUID, progressed chan<- string) namespaceCDCSequenceRequest {
 	return namespaceCDCSequenceRequest{
 		streamID: streamID,

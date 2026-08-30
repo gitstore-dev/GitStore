@@ -193,6 +193,9 @@ Deletion of a false-marker preimage identifies rollback cleanup and is
 suppressed. Creation rollback uses a bounded context detached from request
 cancellation, deletes every projection it may have staged, confirms their
 absence, and returns `ErrRepairRequired` if cleanup cannot be verified.
+Post-commit deletion cleanup follows the same bounded detached-context and
+absence-confirmation rule so request cancellation cannot strand list or name
+projections after the authoritative row is removed.
 
 Namespace deletion commits the authoritative `namespaces_by_uid` removal
 before changing its list and name projections. A rejected conditional delete
