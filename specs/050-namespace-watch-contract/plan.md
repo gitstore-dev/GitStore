@@ -193,6 +193,9 @@ Deletion of a false-marker preimage identifies rollback cleanup and is
 suppressed. Creation rollback uses a bounded context detached from request
 cancellation, deletes every projection it may have staged, confirms their
 absence, and returns `ErrRepairRequired` if cleanup cannot be verified.
+An ambiguous watch-commit LWT is resolved by rereading the marker with that
+detached context: a committed marker returns success, an uncommitted marker is
+rolled back, and an unreadable marker returns repair-required without cleanup.
 Post-commit deletion cleanup follows the same bounded detached-context and
 absence-confirmation rule so request cancellation cannot strand list or name
 projections after the authoritative row is removed.

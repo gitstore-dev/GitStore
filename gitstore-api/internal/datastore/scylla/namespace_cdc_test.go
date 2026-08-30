@@ -239,6 +239,33 @@ func TestNamespaceDeleteCleanupDetachesFromCanceledRequest(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestNamespaceCreateCommitResolutionConfirmsAmbiguousSuccess(t *testing.T) {
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+	committedValue := true
+
+	committed, err := runNamespaceCreateCommitResolution(requestCtx, context.DeadlineExceeded, func(resolveCtx context.Context) (*bool, error) {
+		require.NoError(t, resolveCtx.Err())
+		return &committedValue, nil
+	})
+
+	require.NoError(t, err)
+	require.True(t, committed)
+}
+
+func TestNamespaceCreateCommitResolutionRequiresRepairWhenAmbiguous(t *testing.T) {
+	committed, err := runNamespaceCreateCommitResolution(context.Background(), context.DeadlineExceeded, func(context.Context) (*bool, error) {
+		return nil, errors.New("marker read failed")
+	})
+
+	require.False(t, committed)
+	require.ErrorIs(t, err, datastore.ErrRepairRequired)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	var repair *datastore.RepairRequiredError
+	require.ErrorAs(t, err, &repair)
+	assert.Equal(t, "confirm_watch_commit", repair.Step.Action)
+}
+
 func sequenceTestRequest(streamID, name string, at gocql.UUID, progressed chan<- string) namespaceCDCSequenceRequest {
 	return namespaceCDCSequenceRequest{
 		streamID: streamID,

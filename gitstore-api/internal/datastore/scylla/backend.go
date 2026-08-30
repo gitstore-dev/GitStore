@@ -2017,14 +2017,59 @@ func (s *scyllaDatastore) CreateNamespace(ctx context.Context, ns *datastore.Nam
 	}
 	applied, err = s.session.Query("UPDATE namespaces_by_uid SET watch_committed=? WHERE uid=? IF EXISTS", nil).
 		WithContext(ctx).Bind(true, row.UID).ExecCASRelease()
-	if err != nil || !applied {
-		primary := errors.New("scylla: commit namespace watch visibility: authoritative row disappeared")
-		if err != nil {
-			primary = fmt.Errorf("scylla: commit namespace watch visibility: %w", err)
+	if err != nil {
+		primary := fmt.Errorf("scylla: commit namespace watch visibility: %w", err)
+		committed, resolveErr := s.resolveNamespaceCreateCommit(ctx, row, primary)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		if committed {
+			return nil
 		}
 		return s.rollbackNamespaceCreate(ctx, row, primary, true, true)
 	}
+	if !applied {
+		return s.rollbackNamespaceCreate(ctx, row,
+			errors.New("scylla: commit namespace watch visibility: authoritative row disappeared"), true, true)
+	}
 	return nil
+}
+
+func (s *scyllaDatastore) resolveNamespaceCreateCommit(
+	ctx context.Context,
+	row *namespaceRow,
+	primary error,
+) (bool, error) {
+	return runNamespaceCreateCommitResolution(ctx, primary, func(resolveCtx context.Context) (*bool, error) {
+		var state struct {
+			WatchCommitted *bool `db:"watch_committed"`
+		}
+		err := s.session.Query("SELECT watch_committed FROM namespaces_by_uid WHERE uid=?", nil).
+			WithContext(resolveCtx).Bind(row.UID).GetRelease(&state)
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, nil
+		}
+		return state.WatchCommitted, err
+	})
+}
+
+func runNamespaceCreateCommitResolution(
+	ctx context.Context,
+	primary error,
+	readMarker func(context.Context) (*bool, error),
+) (bool, error) {
+	resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceProjectionCleanupTimeout)
+	defer cancel()
+	committed, err := readMarker(resolveCtx)
+	if err != nil {
+		return false, datastore.NewRepairRequiredError(datastore.MutationStep{
+			Operation:    "create_namespace",
+			ResourceKind: "Namespace",
+			Projection:   "namespaces_by_uid.watch_committed",
+			Action:       "confirm_watch_commit",
+		}, primary, fmt.Errorf("confirm namespace watch visibility: %w", err))
+	}
+	return committed != nil && *committed, nil
 }
 
 func (s *scyllaDatastore) rollbackNamespaceCreate(
