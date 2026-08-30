@@ -198,6 +198,10 @@ detached context: a committed marker returns success, an uncommitted marker is
 rolled back, and an unreadable marker returns repair-required without cleanup.
 Commit-resolution reads use `LOCAL_SERIAL` so they complete any in-flight
 Paxos round before deciding whether compensating writes are safe.
+Point and bootstrap-list hydration treat an explicit false commit marker as
+internal staged state; legacy null markers remain visible during rolling
+upgrades. The non-versioned delete also uses an idempotent `IF EXISTS` Paxos
+boundary, making timeout resolution by `LOCAL_SERIAL` authoritative.
 Per-stream CDC progress cells use the same fixed 14-day TTL as the source CDC
 window; active-generation writes refresh it, while completed topology
 generations expire without growing the singleton clock partition forever. The

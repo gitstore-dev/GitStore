@@ -84,6 +84,33 @@ func TestNamespaceWatchBoundsPerStreamProgressAcrossGenerations(t *testing.T) {
 	require.Equal(t, 0, durable["ttl"])
 }
 
+func TestNamespaceWatchHidesStagedNamespaceFromBootstrapReads(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	namespace := &datastore.Namespace{
+		APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace", UID: newID(),
+		Name: "staged-" + newID()[:8], Title: "Staged", Tier: datastore.NamespaceTierUser,
+		ResourceVersion: "1", Generation: 1, CreationTimestamp: now, UpdateTimestamp: now,
+	}
+	require.NoError(t, store.CreateNamespace(ctx, namespace))
+
+	raw := newRawSession(t)
+	require.NoError(t, raw.Query("UPDATE namespaces_by_uid SET watch_committed=? WHERE uid=?").
+		Bind(false, namespace.UID).Exec())
+	raw.Close()
+
+	_, err := store.GetNamespace(ctx, namespace.UID)
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+	_, err = store.GetNamespaceByName(ctx, namespace.Name)
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+	listed, err := store.ListNamespaces(ctx, datastore.PageParams{First: 100})
+	require.NoError(t, err)
+	for _, item := range listed.Items {
+		require.NotEqual(t, namespace.UID, item.UID)
+	}
+}
+
 func TestNamespaceWatchRejectsBucketLayoutMismatch(t *testing.T) {
 	first := newTestStore(t).(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
 	raw := newRawSession(t)

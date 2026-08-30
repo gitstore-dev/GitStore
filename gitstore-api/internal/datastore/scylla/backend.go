@@ -2168,6 +2168,11 @@ func (s *scyllaDatastore) GetNamespace(ctx context.Context, uidString string) (*
 		}
 		return nil, fmt.Errorf("scylla: get namespace: %w", err)
 	}
+	// A false marker is an internal create-saga row, not a committed API
+	// resource. Legacy rows have a null marker and remain visible.
+	if row.WatchCommitted != nil && !*row.WatchCommitted {
+		return nil, fmt.Errorf("%w: namespace uid %s", datastore.ErrNotFound, uidString)
+	}
 	return fromNamespaceRow(&row), nil
 }
 
@@ -2318,7 +2323,9 @@ func (s *scyllaDatastore) DeleteNamespace(ctx context.Context, uidString string)
 	// Commit the authoritative delete before touching list/name projections.
 	// Failed writes must leave the bootstrap list unchanged; CDC holds the
 	// resulting DELETED event until the projection cleanup below is visible.
-	if err := s.session.Query("DELETE FROM namespaces_by_uid WHERE uid=?", nil).WithContext(ctx).Bind(uid).ExecRelease(); err != nil {
+	_, err = s.session.Query("DELETE FROM namespaces_by_uid WHERE uid=? IF EXISTS", nil).
+		WithContext(ctx).Bind(uid).ExecCASRelease()
+	if err != nil {
 		primary := fmt.Errorf("scylla: delete namespace: %w", err)
 		committed, resolveErr := s.resolveNamespaceDeleteCommit(ctx, uid, primary)
 		if resolveErr != nil {
