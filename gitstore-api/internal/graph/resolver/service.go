@@ -680,9 +680,6 @@ func (s *Service) convergeCommittedNamespace(
 				if lookupErr == nil && current.GitCommitSHA == currentHead {
 					return current, nil
 				}
-				if lookupErr == nil && current.GitCommitSHA != "" && current.GitCommitSHA != committedSHA {
-					return current, nil
-				}
 				return nil, namespaceadmission.ErrAuthoringRefSuperseded
 			}
 			targetResource = latestResource

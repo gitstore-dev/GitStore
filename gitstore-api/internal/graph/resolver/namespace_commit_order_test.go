@@ -375,7 +375,7 @@ func TestNamespaceGraphQLDescendantConvergence(t *testing.T) {
 	})
 }
 
-func TestNamespaceGraphQLDescendantSameResourceLeavesAuditToExactHeadHandler(t *testing.T) {
+func TestNamespaceGraphQLDescendantSameResourceRejectsStaleRowBeforeExactHeadAdmission(t *testing.T) {
 	ctx := context.Background()
 	seed := newTestSvc(t, &mockGitWriter{})
 	created, err := seed.CreateNamespace(ctx, createNamespaceInput("descendant-audit-same", model.NamespaceTierUser), "seed")
@@ -419,7 +419,12 @@ func TestNamespaceGraphQLDescendantSameResourceLeavesAuditToExactHeadHandler(t *
 	waitForCommitOrderPoint(t, newerStore.started, "newer exact-head mutation did not reach its datastore write")
 
 	close(writer.releaseFirstResolve)
-	require.NoError(t, waitForCommitOrderResult(t, olderDone))
+	require.Error(t, waitForCommitOrderResult(t, olderDone))
+
+	stale, err := seed.GetNamespaceByName(ctx, created.Name)
+	require.NoError(t, err)
+	assert.NotEqual(t, newerSHA, stale.GitCommitSHA)
+
 	close(newerStore.release)
 	require.NoError(t, waitForCommitOrderResult(t, newerDone))
 
