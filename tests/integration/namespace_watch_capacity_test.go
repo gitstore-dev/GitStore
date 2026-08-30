@@ -45,6 +45,7 @@ type capacityConfig struct {
 	subscribers                    int
 	replayEvents                   int
 	replaySamples                  int
+	replayCatchupTimeout           time.Duration
 	burstInterval                  time.Duration
 	burstSize                      int
 	mutationWorkers                int
@@ -73,6 +74,7 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 	replayStarted := time.Now()
 	createCapacityRange(t, client, cfg, replayPrefix, cfg.replayEvents)
 	t.Logf("prepared %d acknowledged GraphQL transitions through both replicas in %s", cfg.replayEvents, time.Since(replayStarted))
+	waitCapacityReplayCatchup(t, cfg, replayCursor, replayPrefix)
 
 	replayDurations := runCapacityReplays(t, cfg, replayCursor, replayPrefix)
 	replayP95 := percentileDuration(replayDurations, .95)
@@ -158,20 +160,21 @@ func loadCapacityConfig(t *testing.T) capacityConfig {
 	t.Helper()
 	duration := capacityEnvDuration(t, "NAMESPACE_WATCH_CAPACITY_DURATION", 60*time.Minute)
 	cfg := capacityConfig{
-		apiA:                strings.TrimSuffix(os.Getenv("NAMESPACE_WATCH_API_A"), "/"),
-		apiB:                strings.TrimSuffix(os.Getenv("NAMESPACE_WATCH_API_B"), "/"),
-		replacement:         strings.TrimSuffix(os.Getenv("NAMESPACE_WATCH_API_REPLACEMENT"), "/"),
-		token:               os.Getenv("NAMESPACE_WATCH_TOKEN"),
-		replacementTrigger:  os.Getenv("NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE"),
-		duration:            duration,
-		replacementDelay:    capacityEnvDuration(t, "NAMESPACE_WATCH_CAPACITY_REPLACEMENT_DELAY", duration/2),
-		subscribers:         capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS", 1000),
-		replayEvents:        capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS", 10000),
-		replaySamples:       capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES", 20),
-		burstInterval:       capacityEnvDuration(t, "NAMESPACE_WATCH_CAPACITY_BURST_INTERVAL", time.Minute),
-		burstSize:           capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_BURST_SIZE", 100),
-		mutationWorkers:     capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_MUTATION_WORKERS", 20),
-		allowMissingMetrics: os.Getenv("NAMESPACE_WATCH_CAPACITY_ALLOW_MISSING_METRICS") == "1",
+		apiA:                 strings.TrimSuffix(os.Getenv("NAMESPACE_WATCH_API_A"), "/"),
+		apiB:                 strings.TrimSuffix(os.Getenv("NAMESPACE_WATCH_API_B"), "/"),
+		replacement:          strings.TrimSuffix(os.Getenv("NAMESPACE_WATCH_API_REPLACEMENT"), "/"),
+		token:                os.Getenv("NAMESPACE_WATCH_TOKEN"),
+		replacementTrigger:   os.Getenv("NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE"),
+		duration:             duration,
+		replacementDelay:     capacityEnvDuration(t, "NAMESPACE_WATCH_CAPACITY_REPLACEMENT_DELAY", duration/2),
+		subscribers:          capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS", 1000),
+		replayEvents:         capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS", 10000),
+		replaySamples:        capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES", 20),
+		replayCatchupTimeout: capacityEnvDuration(t, "NAMESPACE_WATCH_CAPACITY_REPLAY_CATCHUP_TIMEOUT", 15*time.Minute),
+		burstInterval:        capacityEnvDuration(t, "NAMESPACE_WATCH_CAPACITY_BURST_INTERVAL", time.Minute),
+		burstSize:            capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_BURST_SIZE", 100),
+		mutationWorkers:      capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_MUTATION_WORKERS", 20),
+		allowMissingMetrics:  os.Getenv("NAMESPACE_WATCH_CAPACITY_ALLOW_MISSING_METRICS") == "1",
 	}
 	require.NotEmpty(t, cfg.apiA, "NAMESPACE_WATCH_API_A is required")
 	require.NotEmpty(t, cfg.apiB, "NAMESPACE_WATCH_API_B is required")
@@ -187,10 +190,47 @@ func loadCapacityConfig(t *testing.T) capacityConfig {
 	require.Positive(t, cfg.subscribers)
 	require.Positive(t, cfg.replayEvents)
 	require.Positive(t, cfg.replaySamples)
+	require.Positive(t, cfg.replayCatchupTimeout)
 	require.Positive(t, cfg.burstInterval)
 	require.Positive(t, cfg.burstSize)
 	require.Positive(t, cfg.mutationWorkers)
 	return cfg
+}
+
+func waitCapacityReplayCatchup(t *testing.T, cfg capacityConfig, cursor, prefix string) {
+	t.Helper()
+	started := time.Now()
+	deadline := started.Add(cfg.replayCatchupTimeout)
+	seen := make(map[int]struct{}, cfg.replayEvents)
+	var lastErr error
+	for time.Now().Before(deadline) && len(seen) < cfg.replayEvents {
+		attemptTimeout := min(30*time.Second, time.Until(deadline))
+		conn, err := dialCapacityWatch(cfg.apiA, cfg.token, cursor, attemptTimeout)
+		if err != nil {
+			lastErr = err
+			time.Sleep(250 * time.Millisecond)
+			continue
+		}
+		_ = conn.SetReadDeadline(deadline)
+		for len(seen) < cfg.replayEvents {
+			event, readErr := readCapacityEvent(conn)
+			if readErr != nil {
+				lastErr = readErr
+				break
+			}
+			if sequence, ok := capacitySequence(event.Name, prefix); ok {
+				seen[sequence] = struct{}{}
+			}
+		}
+		_ = conn.Close()
+		if len(seen) < cfg.replayEvents {
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+	require.Lenf(t, seen, cfg.replayEvents,
+		"durable journal did not catch up within %s before measured replay: last error: %v",
+		cfg.replayCatchupTimeout, lastErr)
+	t.Logf("durable journal caught up with %d replay transitions in %s", cfg.replayEvents, time.Since(started))
 }
 
 type capacitySubscriber struct {

@@ -326,6 +326,17 @@ Completed:
   or T061 measurement started. Parallel seeding is restored with a two-minute
   per-transition retry window and 500 ms capped backoff; measured-load
   thresholds and the 20-worker sustained/burst phase are unchanged;
+- the fresh-keyspace `d7dac82` attempt acknowledged all 10,000 GraphQL creates
+  in 15m50.95s, then failed before measured replay because only 7,292 journal
+  events had been materialized and the 2,710-event backlog caused
+  `WATCH_UNAVAILABLE/MATERIALIZER_NOT_READY`. No soak, replacement, or T061
+  measurement started. The gate now waits up to a separately bounded 15-minute
+  setup interval for those exact 10,000 names to become durably observable
+  before starting the unchanged 5-second replay measurement. The Scylla hot
+  path also avoids repeating clock initialization for every event and leaves
+  checkpoint ownership with the CDC sequencer, removing two redundant fenced
+  writes without weakening append-before-progress or published-frontier
+  ordering. A fresh production-size rerun remains required;
 - the full replacement 60-minute/1,000-subscriber deployed gate remains
   pending and T061 is intentionally open until its emitted metrics are recorded
   here;
@@ -379,5 +390,6 @@ NAMESPACE_WATCH_API_B=http://api-b:4000 \
 NAMESPACE_WATCH_API_REPLACEMENT=http://api-a:4000 \
 NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=/var/run/gitstore/watch-capacity-replace \
 NAMESPACE_WATCH_TOKEN="$TOKEN" \
+NAMESPACE_WATCH_CAPACITY_REPLAY_CATCHUP_TIMEOUT=15m \
   make test-namespace-watch-capacity
 ```
