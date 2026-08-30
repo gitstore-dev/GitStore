@@ -8,6 +8,7 @@ package resolver
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -110,12 +111,15 @@ func (r *subscriptionResolver) WatchNamespaces(ctx context.Context, selector *mo
 	if resourceVersion != nil {
 		rawCursor = *resourceVersion
 	}
-	stream, err := r.namespaceSubscriber.SubscribePath(ctx, rawCursor, "typed")
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream, err := r.namespaceSubscriber.SubscribePath(streamCtx, rawCursor, "typed")
 	if err != nil {
+		cancel()
 		return nil, namespaceWatchGraphQLError(err)
 	}
 	out := make(chan *model.NamespaceWatchEvent, r.namespaceWatch.SubscriberBuffer)
 	go func() {
+		defer cancel()
 		defer close(out)
 		events := stream.Events
 		errorsOut := stream.Errors
@@ -151,9 +155,10 @@ func (r *subscriptionResolver) WatchNamespaces(ctx context.Context, selector *mo
 					addNamespaceWatchSubscriptionError(ctx, convertErr)
 					return
 				}
-				select {
-				case out <- converted:
-				case <-ctx.Done():
+				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond); sendErr != nil {
+					if streamCtx.Err() == nil {
+						addNamespaceWatchSubscriptionError(streamCtx, namespaceWatchGraphQLError(sendErr))
+					}
 					return
 				}
 			}

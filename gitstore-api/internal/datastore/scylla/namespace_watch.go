@@ -405,9 +405,47 @@ func (s *scyllaDatastore) AcquireLease(ctx context.Context, holder string, now t
 		nil,
 	).WithContext(ctx).Bind(holder, next, expires, namespaceWatchJournalName, current.Holder, current.FencingToken, current.ExpiresAt).ExecCASRelease()
 	if err != nil {
-		return datastore.NamespaceWatchLease{}, false, fmt.Errorf("scylla: acquire Namespace materializer lease: %w", err)
+		primary := fmt.Errorf("scylla: acquire Namespace materializer lease: %w", err)
+		return s.resolveNamespaceLeaseAcquisition(ctx, holder, next, primary)
 	}
 	return datastore.NamespaceWatchLease{Holder: holder, FencingToken: uint64(next), ExpiresAt: expires}, applied, nil
+}
+
+func (s *scyllaDatastore) resolveNamespaceLeaseAcquisition(
+	ctx context.Context,
+	holder string,
+	fencingToken int64,
+	primary error,
+) (datastore.NamespaceWatchLease, bool, error) {
+	return runNamespaceLeaseAcquisitionResolution(ctx, holder, fencingToken, primary, func(resolveCtx context.Context) (namespaceWatchClockRow, error) {
+		var state namespaceWatchClockRow
+		err := s.session.Query(
+			"SELECT lease_holder,fencing_token,lease_expiration_timestamp FROM namespace_watch_clock WHERE journal=? AND stream_id=?",
+			nil,
+		).Consistency(gocql.LocalSerial).WithContext(resolveCtx).Bind(namespaceWatchJournalName, namespaceWatchClockStream).GetRelease(&state)
+		return state, err
+	})
+}
+
+func runNamespaceLeaseAcquisitionResolution(
+	ctx context.Context,
+	holder string,
+	fencingToken int64,
+	primary error,
+	readState func(context.Context) (namespaceWatchClockRow, error),
+) (datastore.NamespaceWatchLease, bool, error) {
+	resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceProjectionCleanupTimeout)
+	defer cancel()
+	state, err := readState(resolveCtx)
+	if err != nil {
+		return datastore.NamespaceWatchLease{}, false, fmt.Errorf("%w; resolve ambiguous lease acquisition: %v", primary, err)
+	}
+	if state.Holder != holder || state.FencingToken != fencingToken {
+		return datastore.NamespaceWatchLease{}, false, nil
+	}
+	return datastore.NamespaceWatchLease{
+		Holder: holder, FencingToken: uint64(fencingToken), ExpiresAt: state.ExpiresAt,
+	}, true, nil
 }
 
 func (s *scyllaDatastore) RenewLease(ctx context.Context, lease datastore.NamespaceWatchLease, now time.Time, ttl time.Duration) (datastore.NamespaceWatchLease, bool, error) {

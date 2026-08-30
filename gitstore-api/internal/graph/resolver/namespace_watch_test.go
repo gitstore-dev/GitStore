@@ -77,6 +77,14 @@ func TestTypedAndGenericNamespaceWatchShareBootstrapAndEvents(t *testing.T) {
 	assert.Nil(t, genericDeleted.Object)
 }
 
+func TestNamespaceWatchOutputUsesBoundedDelivery(t *testing.T) {
+	err := sendNamespaceWatchOutput(context.Background(), make(chan int), 1, time.Millisecond)
+	terminal, ok := watchjournal.AsTerminal(err)
+	require.True(t, ok)
+	assert.Equal(t, watchjournal.CodeExpired, terminal.Code)
+	assert.Equal(t, watchjournal.ReasonSubscriberOverflow, terminal.Reason)
+}
+
 func TestNamespaceWatchSelectorProjectsModifiedTransitions(t *testing.T) {
 	selector := &model.LabelSelectorInput{MatchLabels: map[string]any{"team": "catalog"}}
 	tests := []struct {

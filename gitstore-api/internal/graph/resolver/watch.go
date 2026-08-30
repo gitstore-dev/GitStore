@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
@@ -175,6 +176,24 @@ func addNamespaceWatchSubscriptionError(ctx context.Context, err error) {
 	transport.AddSubscriptionError(ctx, gqlErr)
 }
 
+func sendNamespaceWatchOutput[T any](ctx context.Context, out chan<- T, value T, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case out <- value:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return &watchjournal.TerminalError{
+			Code: watchjournal.CodeExpired, Reason: watchjournal.ReasonSubscriberOverflow,
+		}
+	}
+}
+
 func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.WatchEvent, error) {
 	if r.namespaceSubscriber == nil || !r.namespaceWatch.ReadersEnabled {
 		return nil, namespaceWatchGraphQLError(&watchjournal.TerminalError{Code: watchjournal.CodeUnavailable, Reason: "MATERIALIZER_NOT_READY"})
@@ -183,12 +202,15 @@ func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.
 	if resourceVersion != nil {
 		rawCursor = *resourceVersion
 	}
-	stream, err := r.namespaceSubscriber.SubscribePath(ctx, rawCursor, "generic")
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream, err := r.namespaceSubscriber.SubscribePath(streamCtx, rawCursor, "generic")
 	if err != nil {
+		cancel()
 		return nil, namespaceWatchGraphQLError(err)
 	}
 	out := make(chan *model.WatchEvent, r.namespaceWatch.SubscriberBuffer)
 	go func() {
+		defer cancel()
 		defer close(out)
 		events := stream.Events
 		errorsOut := stream.Errors
@@ -219,9 +241,10 @@ func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.
 					addNamespaceWatchSubscriptionError(ctx, convertErr)
 					return
 				}
-				select {
-				case out <- converted:
-				case <-ctx.Done():
+				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond); sendErr != nil {
+					if streamCtx.Err() == nil {
+						addNamespaceWatchSubscriptionError(streamCtx, namespaceWatchGraphQLError(sendErr))
+					}
 					return
 				}
 			}
