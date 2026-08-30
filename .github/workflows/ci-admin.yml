@@ -52,7 +52,7 @@ jobs:
 
     - name: Start core stack
       working-directory: .
-      run: docker compose --profile local -f compose.yml -f compose.local.yml up -d --wait
+      run: docker compose --profile local -f compose.yml -f compose.local.yml up -d --build --wait
 
     - name: Install Playwright browsers
       run: npx playwright install --with-deps
