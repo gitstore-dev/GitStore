@@ -35,6 +35,10 @@ var (
 	// ErrWatchRetentionExpired rejects reads whose next sequence has already
 	// expired from the retained journal.
 	ErrWatchRetentionExpired = errors.New("datastore: Namespace watch retention expired")
+	// ErrNamespaceWatchDiscontinuity stops automatic CDC restarts when global
+	// ordering can no longer be proven. Operator repair is required before a
+	// materializer may safely resume.
+	ErrNamespaceWatchDiscontinuity = errors.New("datastore: Namespace watch CDC ordering discontinuity")
 )
 
 // DefaultPageSize is used when First/Last is zero.

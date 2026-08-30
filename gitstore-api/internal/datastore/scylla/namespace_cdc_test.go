@@ -102,7 +102,33 @@ func TestNamespaceCDCSequencerRejectsNewStreamBehindPublishedFrontier(t *testing
 	require.NoError(t, sequencer.Register(ctx, "stream-b"))
 	err := sequencer.Submit(ctx, sequenceTestRequest("stream-b", "older", gocql.MinTimeUUID(base), progressed))
 	require.ErrorContains(t, err, "behind published frontier")
+	require.ErrorIs(t, err, datastore.ErrNamespaceWatchDiscontinuity)
 	require.ErrorContains(t, <-done, "behind published frontier")
+}
+
+func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{}, time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+
+	base := time.Now().UTC()
+	progressed := make(chan string, 1)
+	require.NoError(t, sequencer.Register(ctx, "stream-a"))
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("stream-a", "published", gocql.MinTimeUUID(base.Add(time.Second)), progressed)))
+	require.NoError(t, sequencer.Unregister("stream-a"))
+	require.Equal(t, "published", <-progressed)
+	require.NoError(t, sequencer.Register(ctx, "stream-b"))
+	require.Error(t, sequencer.Submit(ctx, sequenceTestRequest("stream-b", "older", gocql.MinTimeUUID(base), make(chan string, 1))))
+	require.Error(t, <-done)
+
+	factory := &namespaceCDCConsumerFactory{sequencer: sequencer}
+	consumer, err := factory.CreateChangeConsumer(ctx, scyllacdc.CreateChangeConsumerInput{ProgressReporter: &scyllacdc.ProgressReporter{}})
+	require.NoError(t, err)
+	require.NotNil(t, consumer)
+	require.Error(t, consumer.Consume(ctx, scyllacdc.Change{}))
 }
 
 func TestNamespaceCDCSequencerRejectsStreamBehindRestoredFrontier(t *testing.T) {
@@ -119,6 +145,29 @@ func TestNamespaceCDCSequencerRejectsStreamBehindRestoredFrontier(t *testing.T) 
 	err := sequencer.Submit(ctx, sequenceTestRequest("new-stream", "older", gocql.MinTimeUUID(base), make(chan string, 1)))
 	require.ErrorContains(t, err, "behind published frontier")
 	require.ErrorContains(t, <-done, "behind published frontier")
+}
+
+func TestNamespaceCDCSequencerAcceptsEmptyWindowBehindPublishedFrontier(t *testing.T) {
+	base := time.Now().UTC()
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{}, time.Millisecond)
+	sequencer.publishedThrough = gocql.MinTimeUUID(base.Add(time.Second))
+	sequencer.hasPublished = true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.Register(ctx, "new-stream"))
+	progressed := make(chan string, 1)
+	request := sequenceTestRequest("new-stream", "empty", gocql.MinTimeUUID(base), progressed)
+	request.progressOnly = true
+
+	require.NoError(t, sequencer.Submit(ctx, request))
+	require.Equal(t, "empty", <-progressed)
+	later := sequenceTestRequest("new-stream", "later-empty", gocql.MinTimeUUID(base.Add(2*time.Second)), progressed)
+	later.progressOnly = true
+	require.NoError(t, sequencer.Submit(ctx, later))
+	require.Equal(t, "later-empty", <-progressed, "sequencer must remain live after accepting the older empty window")
 }
 
 func TestNamespaceCDCSequencerSkipsUncommittedAdditionBeforeProgress(t *testing.T) {

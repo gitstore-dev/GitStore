@@ -104,11 +104,14 @@ type namespaceCDCConsumerFactory struct {
 
 func (f *namespaceCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, input scyllacdc.CreateChangeConsumerInput) (scyllacdc.ChangeConsumer, error) {
 	if f.sequencer == nil || input.ProgressReporter == nil {
-		return nil, fmt.Errorf("namespace CDC consumer is not configured")
+		return namespaceCDCFailedConsumer{err: fmt.Errorf("namespace CDC consumer is not configured")}, nil
 	}
 	streamID := encodeCDCStreamID(input.StreamID)
 	if err := f.sequencer.Register(ctx, streamID); err != nil {
-		return nil, err
+		// scylla-cdc-go v1.2.1 records a nil consumer and later dereferences it
+		// when a factory returns an error. Return a non-nil consumer that reports
+		// the initialization failure through the normal reader error path.
+		return namespaceCDCFailedConsumer{err: err}, nil
 	}
 	return &namespaceCDCConsumer{
 		sequencer:     f.sequencer,
@@ -118,6 +121,12 @@ func (f *namespaceCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, 
 		deletionReady: f.deletionReady,
 	}, nil
 }
+
+type namespaceCDCFailedConsumer struct{ err error }
+
+func (c namespaceCDCFailedConsumer) Consume(context.Context, scyllacdc.Change) error { return c.err }
+func (c namespaceCDCFailedConsumer) Empty(context.Context, gocql.UUID) error         { return c.err }
+func (namespaceCDCFailedConsumer) End() error                                        { return nil }
 
 type namespaceCDCConsumer struct {
 	sequencer     *namespaceCDCSequencer
@@ -356,13 +365,25 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 				arrivalNumber++
 				message.request.arrivalNumber = arrivalNumber
 				if previous, ok := watermarks[message.streamID]; ok && scyllacdc.CompareTimeUUID(message.request.cdcTime, previous) < 0 {
-					err := fmt.Errorf("namespace CDC stream %s moved backward from %s to %s", message.streamID, previous, message.request.cdcTime)
+					err := fmt.Errorf("%w: stream %s moved backward from %s to %s", datastore.ErrNamespaceWatchDiscontinuity, message.streamID, previous, message.request.cdcTime)
 					message.result <- err
 					return err
 				}
 				watermarks[message.streamID] = message.request.cdcTime
 				if hasPublished && scyllacdc.CompareTimeUUID(message.request.cdcTime, publishedThrough) < 0 {
-					err := fmt.Errorf("namespace CDC stream %s registered behind published frontier %s with %s", message.streamID, publishedThrough, message.request.cdcTime)
+					if message.request.progressOnly {
+						// A newly discovered stream can first report an empty query
+						// window behind the global frontier. That proves the stream
+						// contains no transition in this interval, so advance only
+						// its durable progress without regressing global ordering.
+						err := message.request.markProgress(ctx)
+						message.result <- err
+						if err != nil {
+							return err
+						}
+						continue
+					}
+					err := fmt.Errorf("%w: stream %s registered behind published frontier %s with %s", datastore.ErrNamespaceWatchDiscontinuity, message.streamID, publishedThrough, message.request.cdcTime)
 					message.result <- err
 					return err
 				}

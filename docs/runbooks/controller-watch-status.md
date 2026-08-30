@@ -141,4 +141,8 @@ Recovery by wire code:
 - `WATCH_EXPIRED`: discard the cursor and repeat the documented
   bootstrap/list/drain algorithm. For `SUBSCRIBER_OVERFLOW`, also repair the
   slow consumer before reconnecting. For `JOURNAL_DISCONTINUITY`, page the
-  datastore owner and preserve affected journal/CDC rows for diagnosis.
+  datastore owner and preserve affected journal/CDC rows for diagnosis. A
+  materializer that observes an actual CDC record behind the published
+  frontier stops automatic leadership retries; repair the ordering state
+  before restarting it. Empty CDC windows from newly discovered streams may
+  advance only that stream's progress and do not constitute a discontinuity.

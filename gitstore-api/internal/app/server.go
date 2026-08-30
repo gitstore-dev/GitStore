@@ -579,7 +579,11 @@ func (r *namespaceWatchRuntime) run(ctx context.Context) {
 		if err != nil {
 			r.log.Error("Namespace materializer lease acquisition failed", zap.Error(err))
 		} else if acquired {
-			r.runAsLeader(ctx, lease)
+			err = r.runAsLeader(ctx, lease)
+			if errors.Is(err, datastore.ErrNamespaceWatchDiscontinuity) {
+				r.log.Error("Namespace materializer stopped after an ordering discontinuity; operator repair is required", zap.Error(err))
+				return
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -589,7 +593,7 @@ func (r *namespaceWatchRuntime) run(ctx context.Context) {
 	}
 }
 
-func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datastore.NamespaceWatchLease) {
+func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datastore.NamespaceWatchLease) error {
 	ctx, cancel := context.WithCancel(parent)
 	var workers sync.WaitGroup
 	defer func() {
@@ -619,34 +623,34 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 		}()
 		select {
 		case <-parent.Done():
-			return
+			return parent.Err()
 		case err := <-errCh:
 			if err != nil && !errors.Is(err, context.Canceled) {
 				r.log.Warn("Namespace materializer failed before CDC readiness", zap.Error(err))
 			}
-			return
+			return err
 		case <-ready:
 		}
 	}
 	if _, err := r.materializer.AppendBookmark(ctx, lease); err != nil {
 		r.log.Error("Namespace materializer initial bookmark failed", zap.Error(err))
-		return
+		return err
 	}
 	bookmark := time.NewTicker(time.Duration(r.cfg.BookmarkIntervalSeconds) * time.Second)
 	defer bookmark.Stop()
 	for {
 		select {
 		case <-parent.Done():
-			return
+			return parent.Err()
 		case err := <-errCh:
 			if err != nil && !errors.Is(err, context.Canceled) {
 				r.log.Warn("Namespace materializer leadership ended", zap.Error(err))
 			}
-			return
+			return err
 		case <-bookmark.C:
 			if _, err := r.materializer.AppendBookmark(ctx, lease); err != nil {
 				r.log.Error("Namespace materializer bookmark failed", zap.Error(err))
-				return
+				return err
 			}
 		}
 	}

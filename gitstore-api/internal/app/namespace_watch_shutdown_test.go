@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+type discontinuityNamespaceCDCRunner struct{ calls atomic.Int64 }
+
+func (r *discontinuityNamespaceCDCRunner) RunNamespaceCDC(context.Context, *watchjournal.Materializer, datastore.NamespaceWatchLease, time.Duration, time.Duration, func()) error {
+	r.calls.Add(1)
+	return datastore.ErrNamespaceWatchDiscontinuity
+}
 
 func TestNamespaceWatchLeaderReleasesLeaseBeforeReturning(t *testing.T) {
 	store, err := memdb.New()
@@ -82,4 +90,33 @@ func TestServerCloseWaitsForNamespaceWatchCleanup(t *testing.T) {
 	started := time.Now()
 	server.Close()
 	require.GreaterOrEqual(t, time.Since(started), 25*time.Millisecond)
+}
+
+func TestNamespaceWatchRuntimeStopsRetryingAfterOrderingDiscontinuity(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	journal := store.(datastore.NamespaceWatchJournal)
+	metrics, err := watchjournal.NewMetrics(prometheus.NewRegistry())
+	require.NoError(t, err)
+	runner := &discontinuityNamespaceCDCRunner{}
+	runtime := &namespaceWatchRuntime{
+		journal: journal, materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour, Metrics: metrics}),
+		leaseManager: watchjournal.NewLeaseManager(journal, "leader", time.Minute, time.Second, apiruntime.SystemClock{}),
+		metrics:      metrics, runner: runner,
+		cfg: config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60, CDCRetentionSeconds: 60, CDCConfidenceWindowMillis: 1},
+		log: zap.NewNop(),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runtime.run(context.Background())
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runtime kept retrying an unrecoverable CDC discontinuity")
+	}
+	require.EqualValues(t, 1, runner.calls.Load())
 }
