@@ -305,11 +305,11 @@ Completed:
   replay preparation: 9,999 of 10,000 distinct GraphQL Namespace creates were
   acknowledged, while transition 109 returned the spec-047 retryable
   `NAMESPACE_CONFLICT` / `RESOURCE_VERSION_CONFLICT`. Replay, the 60-minute
-  soak, and replacement did not start. The deployment harness now bounds these
-  preparation retries to six attempts, alternates replicas with exponential
-  backoff, confirms ambiguous commit outcomes by querying both replicas, and
-  still fails permanent GraphQL errors immediately; focused tests cover peer
-  conflict retry, permanent-error rejection, and ambiguous-success read-back;
+  soak, and replacement did not start. The deployment harness alternates
+  replicas with capped exponential backoff, confirms ambiguous commit outcomes
+  by querying both replicas, and still fails permanent GraphQL errors
+  immediately; focused tests cover peer conflict retry, permanent-error
+  rejection, and ambiguous-success read-back;
 - the next production-size attempt ran the `cdc6711` hot-path binaries for
   3,075.40 seconds, then stopped during replay preparation when transition
   3,382 exhausted all six alternating-replica attempts with the same retryable
@@ -317,10 +317,15 @@ Completed:
   ready, the journal high-water reached 21,400, leader CDC lag was about 4.3 ms,
   append errors remained zero, and `replay_events_total` remained zero. The
   10,000-event replay, 1,000-subscriber soak, replacement, and CPU/RSS gates did
-  not start, so this is failure evidence rather than T061 completion. Replay
-  seeding is now deliberately single-writer because it creates retained
-  history rather than measuring load; the unchanged 20-worker pool remains
-  active for the measured sustained and burst phase;
+  not start, so this is failure evidence rather than T061 completion;
+- a fresh-keyspace `23bc618` attempt proved single-writer seeding avoids those
+  conflicts but was stopped after 374 seconds because it produced only 228 seed
+  events (about 36.6/minute), implying more than four hours before the gate
+  could complete. Both replicas remained ready, CDC lag was about 2.3 ms,
+  append errors and replay remained zero, and no subscribers, soak, replacement,
+  or T061 measurement started. Parallel seeding is restored with a two-minute
+  per-transition retry window and 500 ms capped backoff; measured-load
+  thresholds and the 20-worker sustained/burst phase are unchanged;
 - the full replacement 60-minute/1,000-subscriber deployed gate remains
   pending and T061 is intentionally open until its emitted metrics are recorded
   here;

@@ -609,11 +609,7 @@ func createCapacityRange(t *testing.T, client *http.Client, cfg capacityConfig, 
 	jobs := make(chan int)
 	errs := make(chan error, count)
 	var wg sync.WaitGroup
-	// Replay preparation seeds retained history; it is not the measured load
-	// phase. Serialize it so spec-047's optimistic global commit boundary is not
-	// turned into an unrelated contention test. The soak below still uses the
-	// configured worker pool for sustained and burst traffic.
-	for range capacityReplayPreparationWorkers {
+	for range cfg.mutationWorkers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -636,8 +632,8 @@ func createCapacityRange(t *testing.T, client *http.Client, cfg capacityConfig, 
 }
 
 const (
-	capacityReplayPreparationWorkers = 1
-	capacityReplayCreateAttempts     = 6
+	capacityReplayCreateTimeout    = 2 * time.Minute
+	capacityReplayCreateMaxBackoff = 500 * time.Millisecond
 )
 
 func createCapacityNamespaceForReplay(client *http.Client, cfg capacityConfig, name string, sequence int) error {
@@ -647,7 +643,8 @@ func createCapacityNamespaceForReplay(client *http.Client, cfg capacityConfig, n
 	}
 	endpoints := [2]string{primary, peer}
 	var lastErr error
-	for attempt := 0; attempt < capacityReplayCreateAttempts; attempt++ {
+	deadline := time.Now().Add(capacityReplayCreateTimeout)
+	for attempt := 0; ; attempt++ {
 		endpoint := endpoints[attempt%len(endpoints)]
 		lastErr = createCapacityNamespace(client, endpoint, cfg.token, name)
 		if lastErr == nil {
@@ -659,11 +656,13 @@ func createCapacityNamespaceForReplay(client *http.Client, cfg capacityConfig, n
 		if confirmCapacityNamespaceExists(cfg, name, 750*time.Millisecond) {
 			return nil
 		}
-		if attempt+1 < capacityReplayCreateAttempts {
-			time.Sleep(time.Duration(1<<attempt) * 25 * time.Millisecond)
+		if time.Now().After(deadline) {
+			return fmt.Errorf("create remained retryable for %s: %w", capacityReplayCreateTimeout, lastErr)
 		}
+		backoff := time.Duration(1<<min(attempt, 4)) * 25 * time.Millisecond
+		backoff = min(backoff, capacityReplayCreateMaxBackoff)
+		time.Sleep(backoff)
 	}
-	return fmt.Errorf("create remained retryable after %d attempts: %w", capacityReplayCreateAttempts, lastErr)
 }
 
 type capacityGraphQLErrors struct{ raw string }
