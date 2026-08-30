@@ -29,8 +29,14 @@ specs/
 
 # Local auth config (static-users/rbac-local) — operator-provided; must never
 # be baked into an image even if present locally and untracked by git.
-policy.yaml
-users.yaml
+# NOTE: .dockerignore patterns are matched against the full path relative to the
+# build context root and are NOT recursive, so a bare `policy.yaml` would only
+# exclude a root-level file and would silently miss `gitstore-api/policy.yaml`
+# — which `docker/*.Dockerfile`'s `COPY gitstore-api/ ./` pulls into the build.
+# The `**/` form is required. Neither file is ever needed at build time; both
+# are runtime mounts.
+**/policy.yaml
+**/users.yaml
 
 # Build artifacts (will be rebuilt in container)
 target/
