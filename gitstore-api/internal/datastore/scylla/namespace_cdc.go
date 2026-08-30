@@ -98,7 +98,7 @@ func (l zapCDCLogger) Printf(format string, values ...interface{}) {
 
 type namespaceCDCConsumerFactory struct {
 	sequencer     *namespaceCDCSequencer
-	additionReady func(context.Context, *datastore.Namespace) (bool, error)
+	additionReady func(context.Context, *datastore.Namespace, bool) (bool, error)
 	deletionReady func(context.Context, *datastore.Namespace, bool) (bool, error)
 }
 
@@ -123,13 +123,13 @@ type namespaceCDCConsumer struct {
 	sequencer     *namespaceCDCSequencer
 	streamID      string
 	reporter      *scyllacdc.ProgressReporter
-	additionReady func(context.Context, *datastore.Namespace) (bool, error)
+	additionReady func(context.Context, *datastore.Namespace, bool) (bool, error)
 	deletionReady func(context.Context, *datastore.Namespace, bool) (bool, error)
 }
 
 func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Change) error {
-	before, beforeCommitted := namespaceCDCPostimage(change.PreImage)
-	after, afterCommitted := namespaceCDCPostimage(change.PostImage)
+	before, beforeCommitted, _ := namespaceCDCPostimage(change.PreImage)
+	after, afterCommitted, afterLegacy := namespaceCDCPostimage(change.PostImage)
 	disposition := namespaceCDCDispositionFor(before, beforeCommitted, after, afterCommitted)
 	if disposition == namespaceCDCPromotedAddition {
 		// The false -> true commit-marker update is the durable proof that the
@@ -172,7 +172,7 @@ func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Cha
 		request.shouldPublish = func(context.Context) (bool, error) { return false, nil }
 	} else if before == nil && after != nil && disposition != namespaceCDCPromotedAddition && c.additionReady != nil {
 		request.shouldPublish = func(publishCtx context.Context) (bool, error) {
-			return c.additionReady(publishCtx, after)
+			return c.additionReady(publishCtx, after, afterLegacy)
 		}
 	} else if before != nil && after == nil && c.deletionReady != nil {
 		request.shouldPublish = func(publishCtx context.Context) (bool, error) {
@@ -425,7 +425,7 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 // already ordered after the durable list projection. For a legacy direct
 // addition, a missing authoritative row denotes a rolled-back create and a
 // still-present row without its projection is retried from durable progress.
-func (s *scyllaDatastore) namespaceCDCAdditionReady(ctx context.Context, namespace *datastore.Namespace) (bool, error) {
+func (s *scyllaDatastore) namespaceCDCAdditionReady(ctx context.Context, namespace *datastore.Namespace, legacy bool) (bool, error) {
 	if namespace == nil {
 		return false, nil
 	}
@@ -438,7 +438,7 @@ func (s *scyllaDatastore) namespaceCDCAdditionReady(ctx context.Context, namespa
 		return false, err
 	}
 	if !exists {
-		return false, nil
+		return namespaceCDCMissingAdditionReady(legacy)
 	}
 	if !committed {
 		return false, fmt.Errorf("namespace CDC creation is not committed")
@@ -457,6 +457,18 @@ func (s *scyllaDatastore) namespaceCDCAdditionReady(ctx context.Context, namespa
 		return false, fmt.Errorf("read Namespace CDC listing projection: %w", err)
 	}
 	return false, fmt.Errorf("namespace CDC listing projection is not committed")
+}
+
+func namespaceCDCMissingAdditionReady(legacy bool) (bool, error) {
+	if legacy {
+		// Before watch_committed existed, a missing row could mean either a
+		// successfully created Namespace that was quickly deleted or a failed
+		// create that rolled back. Publishing or suppressing ADDED would each
+		// invent one of those histories. Mixed-version rollout keeps the
+		// materializer gated; fail closed if that rule is violated.
+		return false, fmt.Errorf("legacy Namespace addition commit state is ambiguous after authoritative deletion")
+	}
+	return false, nil
 }
 
 func (s *scyllaDatastore) namespaceWatchCommitState(ctx context.Context, uid gocql.UUID) (bool, bool, error) {
@@ -538,9 +550,9 @@ func namespaceCDCFrontier(active map[string]int, watermarks map[string]gocql.UUI
 	return frontier, true
 }
 
-func namespaceCDCPostimage(rows []*scyllacdc.ChangeRow) (*datastore.Namespace, bool) {
+func namespaceCDCPostimage(rows []*scyllacdc.ChangeRow) (*datastore.Namespace, bool, bool) {
 	if len(rows) == 0 || rows[0] == nil {
-		return nil, false
+		return nil, false, false
 	}
 	row := rows[0]
 	scyllaRow := &namespaceRow{}
@@ -570,7 +582,7 @@ func namespaceCDCPostimage(rows []*scyllacdc.ChangeRow) (*datastore.Namespace, b
 	assignCDC(row, "status", &scyllaRow.Status)
 	scyllaRow.WatchCommitted = optionalCDCBool(row, "watch_committed")
 	committed := scyllaRow.WatchCommitted == nil || *scyllaRow.WatchCommitted
-	return fromNamespaceRow(scyllaRow), committed
+	return fromNamespaceRow(scyllaRow), committed, scyllaRow.WatchCommitted == nil
 }
 
 func optionalCDCBool(row *scyllacdc.ChangeRow, column string) *bool {

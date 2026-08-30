@@ -181,6 +181,16 @@ func TestNamespaceCDCDeletionSuppressesUncommittedCreateRollback(t *testing.T) {
 	assert.False(t, ready)
 }
 
+func TestNamespaceCDCMissingLegacyAdditionFailsClosed(t *testing.T) {
+	ready, err := namespaceCDCMissingAdditionReady(true)
+	require.ErrorContains(t, err, "legacy Namespace addition commit state is ambiguous")
+	assert.False(t, ready)
+
+	ready, err = namespaceCDCMissingAdditionReady(false)
+	require.NoError(t, err)
+	assert.False(t, ready)
+}
+
 func TestNamespaceCDCCommitMarkerTransitions(t *testing.T) {
 	namespace := &datastore.Namespace{Name: "catalog"}
 
