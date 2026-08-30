@@ -67,15 +67,30 @@ increasing sequence. The opaque cursor is
 `sequence / 4096` and retained for seven days.
 
 The materializer centralizes CDC records through a sequencer. Records are
-ordered by `cdc$time`, then stream ID and batch sequence for deterministic
-tie-breaking. The journal append is the public per-kind ordering
-linearization point; causally concurrent writes have no earlier externally
-observable total order.
+released only after every active stream watermark reaches them, then ordered by
+`cdc$time`, stream ID, and arrival sequence for deterministic tie-breaking. A
+newly discovered stream behind the published frontier fails closed and restarts
+from durable progress instead of appending an older record out of order. The
+published frontier is saved before per-stream progress, so the same fence is
+restored after process replacement. The
+journal append is the public per-kind ordering linearization point; causally
+concurrent writes have no earlier externally observable total order.
+
+Before publishing ADDED, the materializer verifies that the matching
+`namespaces_by_bucket` row is visible. If the authoritative row still exists
+without its list projection, progress is not advanced and CDC is retried; if
+the authoritative row has already been rolled back, the staged addition is
+acknowledged without inventing a successful event. This preserves the
+bootstrap list/watch boundary without treating a query projection as an event
+source.
 
 **Rationale**: CDC has multiple streams, so its native clustering order is only
 per stream. A global sequence gives every API replica one stable replay order.
 Bucketed event partitions prevent an unbounded hot partition while the singleton
-clock is acceptable for the declared Namespace mutation envelope.
+clock is acceptable for the declared Namespace mutation envelope. Bounds checks
+derive the first live TTL row from the current sequence bucket and advance the
+stored lower bound monotonically; empty expired buckets are skipped once, so
+cursor expiry and telemetry reflect actual retained rows.
 
 **Alternatives considered**:
 

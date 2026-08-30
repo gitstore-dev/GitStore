@@ -17,6 +17,8 @@ resourceVersion.
   consistency intersection.
 - Only the authoritative by-UID table is consumed; query projections do not
   generate duplicate logical events.
+- An ADDED event is not published until the corresponding Namespace listing
+  projection is visible; a rolled-back authoritative create produces no event.
 
 ## Classification
 
@@ -44,6 +46,8 @@ nwv1:<epoch-uuid>:<base36-sequence>
 - Cursor is opaque and kind-specific.
 - Sequence orders events inside an epoch.
 - The journal retains seven days, bucketed in groups of 4,096 events.
+- Cursor validation refreshes the stored lower bound from the first live TTL
+  row, advancing monotonically across empty expired buckets.
 - Reads return at most 256 events per query.
 - One subscription may replay at most 100,000 events.
 - Resume starts strictly after the supplied cursor.
@@ -104,6 +108,9 @@ snapshot; changes after C are queued by the registered stream.
 
 - At-least-once, never exactly-once.
 - Global deterministic order inside the Namespace journal epoch.
+- CDC publication waits for the common active-stream watermark; a newly
+  discovered stream behind the durably restored published frontier fails closed
+  and restarts.
 - No order relative to another resource kind.
 - Generic and typed Namespace subscriptions expose the same ordered rows.
 - Duplicate ADDED/MODIFIED/DELETED may occur after materializer recovery.

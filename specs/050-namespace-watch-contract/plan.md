@@ -141,7 +141,11 @@ Research is captured in [research.md](research.md). Decisions:
 - Use synchronous Scylla CDC to derive events from committed Namespace writes.
 - Use official `scylla-cdc-go v1.2.1` with durable progress.
 - Materialize CDC into a seven-day bucketed journal with one global versioned
-  cursor and deterministic sequencing.
+  cursor and deterministic watermark sequencing.
+- Gate ADDED publication on visibility of the shipped Namespace list
+  projection, without changing spec-047 mutation outcomes.
+- Derive and monotonically persist the actual first retained journal sequence
+  as TTL rows expire.
 - Append journal rows before saving CDC progress; crash recovery is
   at-least-once and may duplicate, never skip.
 - Tail the same journal from every API replica and both GraphQL entry points.
@@ -175,6 +179,12 @@ preimage/delta/postimage rows, and classifies:
 - final row delete + preimage -> DELETED;
 - no base write -> no event.
 
+An ADDED candidate crosses the journal boundary only after its matching
+`namespaces_by_bucket` row is readable. A present authoritative row with a
+missing projection causes a retry without progress advancement; an
+authoritative row already removed by create rollback suppresses the staged
+addition.
+
 Deletion marking/finalizer changes remain MODIFIED; only permanent row removal
 is DELETED.
 
@@ -183,8 +193,12 @@ is DELETED.
 A fenced LWT allocates `nwv1:<epoch>:<sequence>`. Events are stored in
 4,096-sequence buckets with seven-day TTL and read in ascending sequence. CDC
 records are normalized through one sequencer and deterministically ordered by
-write time with stream/batch tie-breakers; the journal append is the public
-per-kind ordering linearization point.
+write time with stream/arrival tie-breakers. Publication waits for the common
+active-stream watermark, and a newly registered stream behind the published
+frontier fails closed. The published frontier is persisted before per-stream
+progress and restored after restart. The journal append is the public per-kind ordering
+linearization point. Bounds checks advance the stored `oldest` value from the
+first live TTL row before validating a new subscription cursor.
 
 The materializer writes the event before saving per-stream CDC progress. A
 failure between those steps causes a duplicate after recovery. The controller

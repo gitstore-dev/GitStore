@@ -51,6 +51,35 @@ func TestNamespaceWatchLeaseFencesJournalAndProgressWrites(t *testing.T) {
 	require.Equal(t, []byte("current"), progress.Position)
 }
 
+func TestNamespaceWatchBoundsAdvanceAfterTTLExpiry(t *testing.T) {
+	store := newTestStore(t)
+	raw := newRawSession(t)
+	require.NoError(t, raw.Query("TRUNCATE namespace_watch_events").Exec())
+	require.NoError(t, raw.Query("TRUNCATE namespace_watch_clock").Exec())
+	raw.Close()
+
+	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	lease, acquired, err := journal.AcquireLease(ctx, "retention-test", now, time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	t.Cleanup(func() { _ = journal.ReleaseLease(context.Background(), lease) })
+
+	first, err := journal.Append(ctx, lease, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchBookmark}, time.Second)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		bounds, boundsErr := journal.Bounds(ctx)
+		return boundsErr == nil && bounds.Oldest == first.Sequence+1 && bounds.HighWater == first.Sequence
+	}, 10*time.Second, 100*time.Millisecond)
+
+	second, err := journal.Append(ctx, lease, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchBookmark}, time.Minute)
+	require.NoError(t, err)
+	bounds, err := journal.Bounds(ctx)
+	require.NoError(t, err)
+	require.Equal(t, second.Sequence, bounds.Oldest)
+}
+
 func TestNamespaceAuthoritativeCommitsProduceCDCButRejectedWritesDoNot(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

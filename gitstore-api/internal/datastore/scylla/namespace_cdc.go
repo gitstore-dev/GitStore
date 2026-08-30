@@ -23,6 +23,8 @@ import (
 
 const namespaceCDCGenerationProgress = "__namespace_cdc_generation__"
 
+const namespaceCDCPublishedFrontierProgress = "__namespace_cdc_published_frontier__"
+
 const namespaceCDCRegistrationQuietPeriod = 250 * time.Millisecond
 
 const namespaceCDCPendingLimit = 100000
@@ -33,13 +35,23 @@ func (s *scyllaDatastore) RunNamespaceCDC(ctx context.Context, materializer *wat
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	progress := &namespaceCDCProgressManager{journal: s, lease: lease}
+	publishedThrough, hasPublished, err := progress.PublishedFrontier(runCtx)
+	if err != nil {
+		return err
+	}
 	sequencer := newNamespaceCDCSequencer(materializer, lease, namespaceCDCRegistrationQuietPeriod)
+	sequencer.publishedThrough = publishedThrough
+	sequencer.hasPublished = hasPublished
+	sequencer.persistFrontier = progress.SavePublishedFrontier
 	sequencerErr := make(chan error, 1)
 	go func() {
 		sequencerErr <- sequencer.Run(runCtx)
 		cancel()
 	}()
-	factory := &namespaceCDCConsumerFactory{sequencer: sequencer}
+	factory := &namespaceCDCConsumerFactory{
+		sequencer:     sequencer,
+		additionReady: s.namespaceCDCAdditionReady,
+	}
 	reader, err := scyllacdc.NewReader(runCtx, &scyllacdc.ReaderConfig{
 		Session:               s.session.Session,
 		TableNames:            []string{s.keyspace + ".namespaces_by_uid"},
@@ -84,7 +96,8 @@ func (l zapCDCLogger) Printf(format string, values ...interface{}) {
 }
 
 type namespaceCDCConsumerFactory struct {
-	sequencer *namespaceCDCSequencer
+	sequencer     *namespaceCDCSequencer
+	additionReady func(context.Context, *datastore.Namespace) (bool, error)
 }
 
 func (f *namespaceCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, input scyllacdc.CreateChangeConsumerInput) (scyllacdc.ChangeConsumer, error) {
@@ -96,16 +109,18 @@ func (f *namespaceCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, 
 		return nil, err
 	}
 	return &namespaceCDCConsumer{
-		sequencer: f.sequencer,
-		streamID:  streamID,
-		reporter:  input.ProgressReporter,
+		sequencer:     f.sequencer,
+		streamID:      streamID,
+		reporter:      input.ProgressReporter,
+		additionReady: f.additionReady,
 	}, nil
 }
 
 type namespaceCDCConsumer struct {
-	sequencer *namespaceCDCSequencer
-	streamID  string
-	reporter  *scyllacdc.ProgressReporter
+	sequencer     *namespaceCDCSequencer
+	streamID      string
+	reporter      *scyllacdc.ProgressReporter
+	additionReady func(context.Context, *datastore.Namespace) (bool, error)
 }
 
 func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Change) error {
@@ -125,7 +140,7 @@ func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Cha
 	if err != nil {
 		return err
 	}
-	return c.sequencer.Submit(ctx, namespaceCDCSequenceRequest{
+	request := namespaceCDCSequenceRequest{
 		cdcTime:  change.Time,
 		streamID: c.streamID,
 		markProgress: func(markCtx context.Context) error {
@@ -140,7 +155,13 @@ func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Cha
 			After:            afterJSON,
 			At:               change.Time.Time().UTC(),
 		},
-	})
+	}
+	if before == nil && after != nil && c.additionReady != nil {
+		request.shouldPublish = func(publishCtx context.Context) (bool, error) {
+			return c.additionReady(publishCtx, after)
+		}
+	}
+	return c.sequencer.Submit(ctx, request)
 }
 
 func (c *namespaceCDCConsumer) End() error {
@@ -167,6 +188,7 @@ type namespaceCDCSequenceRequest struct {
 	streamID      string
 	progressOnly  bool
 	markProgress  func(context.Context) error
+	shouldPublish func(context.Context) (bool, error)
 	arrivalNumber uint64
 }
 
@@ -197,6 +219,9 @@ type namespaceCDCSequencer struct {
 	registrationQuietPeriod time.Duration
 	messages                chan namespaceCDCSequenceMessage
 	done                    chan struct{}
+	publishedThrough        gocql.UUID
+	hasPublished            bool
+	persistFrontier         func(context.Context, gocql.UUID) error
 }
 
 func newNamespaceCDCSequencer(materializer *watchjournal.Materializer, lease datastore.NamespaceWatchLease, quietPeriod time.Duration) *namespaceCDCSequencer {
@@ -265,6 +290,8 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 	watermarks := make(map[string]gocql.UUID)
 	pending := make([]namespaceCDCSequenceRequest, 0, 256)
 	var arrivalNumber uint64
+	publishedThrough := s.publishedThrough
+	hasPublished := s.hasPublished
 	registrationReadyAt := time.Time{}
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
@@ -293,6 +320,11 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 					return err
 				}
 				watermarks[message.streamID] = message.request.cdcTime
+				if hasPublished && scyllacdc.CompareTimeUUID(message.request.cdcTime, publishedThrough) < 0 {
+					err := fmt.Errorf("namespace CDC stream %s registered behind published frontier %s with %s", message.streamID, publishedThrough, message.request.cdcTime)
+					message.result <- err
+					return err
+				}
 				pending = append(pending, message.request)
 				if len(pending) > namespaceCDCPendingLimit {
 					err := fmt.Errorf("namespace CDC sequencer exceeded %d pending records", namespaceCDCPendingLimit)
@@ -318,9 +350,16 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 			if len(active) > 0 && scyllacdc.CompareTimeUUID(request.cdcTime, frontier) > 0 {
 				break
 			}
+			publish := true
 			var err error
-			if !request.progressOnly {
+			if request.shouldPublish != nil {
+				publish, err = request.shouldPublish(ctx)
+			}
+			if err == nil && publish && !request.progressOnly {
 				_, err = s.materializer.Process(ctx, s.lease, request.change)
+			}
+			if err == nil && s.persistFrontier != nil {
+				err = s.persistFrontier(ctx, request.cdcTime)
 			}
 			if err == nil {
 				err = request.markProgress(ctx)
@@ -328,6 +367,8 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			publishedThrough = request.cdcTime
+			hasPublished = true
 			published++
 		}
 		if published > 0 {
@@ -335,6 +376,42 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 			pending = pending[:len(pending)-published]
 		}
 	}
+}
+
+// namespaceCDCAdditionReady prevents an ADDED event from crossing the public
+// journal linearization point before the list projection is visible. A missing
+// authoritative row means the create rolled back and the staged CDC addition
+// can be acknowledged without publication; a still-present authoritative row
+// with no projection is retried by restarting from durable CDC progress.
+func (s *scyllaDatastore) namespaceCDCAdditionReady(ctx context.Context, namespace *datastore.Namespace) (bool, error) {
+	if namespace == nil {
+		return false, nil
+	}
+	uid, err := gocql.ParseUUID(namespace.UID)
+	if err != nil {
+		return false, fmt.Errorf("parse Namespace CDC addition uid: %w", err)
+	}
+	var indexRow struct {
+		UID gocql.UUID `db:"uid"`
+	}
+	err = s.session.Query(
+		"SELECT uid FROM namespaces_by_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?",
+		nil,
+	).WithContext(ctx).Bind(namespaceBucket(namespace.CreationTimestamp), namespace.CreationTimestamp, uid).GetRelease(&indexRow)
+	if err == nil {
+		return true, nil
+	}
+	if !errors.Is(err, gocql.ErrNotFound) {
+		return false, fmt.Errorf("read Namespace CDC listing projection: %w", err)
+	}
+	_, err = s.GetNamespace(ctx, namespace.UID)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read Namespace CDC authoritative row: %w", err)
+	}
+	return false, fmt.Errorf("Namespace CDC listing projection is not committed")
 }
 
 func namespaceCDCSequenceLess(left, right namespaceCDCSequenceRequest) bool {
@@ -483,6 +560,29 @@ func (m *namespaceCDCProgressManager) SaveProgress(ctx context.Context, generati
 	return m.journal.SaveProgress(ctx, m.lease, datastore.NamespaceCDCProgress{
 		StreamID:  cdcProgressKey(generation, table, streamID),
 		Position:  progress.LastProcessedRecordTime.Bytes(),
+		UpdatedAt: time.Now().UTC(),
+	})
+}
+
+func (m *namespaceCDCProgressManager) PublishedFrontier(ctx context.Context) (gocql.UUID, bool, error) {
+	progress, err := m.journal.LoadProgress(ctx, namespaceCDCPublishedFrontierProgress)
+	if errors.Is(err, datastore.ErrNotFound) {
+		return gocql.UUID{}, false, nil
+	}
+	if err != nil {
+		return gocql.UUID{}, false, fmt.Errorf("load Namespace CDC published frontier: %w", err)
+	}
+	frontier, err := gocql.UUIDFromBytes(progress.Position)
+	if err != nil {
+		return gocql.UUID{}, false, fmt.Errorf("decode Namespace CDC published frontier: %w", err)
+	}
+	return frontier, true, nil
+}
+
+func (m *namespaceCDCProgressManager) SavePublishedFrontier(ctx context.Context, frontier gocql.UUID) error {
+	return m.journal.SaveProgress(ctx, m.lease, datastore.NamespaceCDCProgress{
+		StreamID:  namespaceCDCPublishedFrontierProgress,
+		Position:  frontier.Bytes(),
 		UpdatedAt: time.Now().UTC(),
 	})
 }

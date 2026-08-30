@@ -124,6 +124,13 @@ with `scylla-cdc-go.ProgressManager`.
 Restart resumes after `lastProcessedTime`. Append-before-save permits
 duplicates but prevents loss.
 
+The sequencer maintains a watermark for every active CDC stream. It publishes
+only through their common frontier and rejects a late stream whose first record
+precedes the already-published frontier. That frontier is stored as a dedicated
+progress row before per-stream progress and restored on restart. ADDED candidates additionally require
+the corresponding list projection to be visible before append and progress
+save.
+
 ## NamespaceMaterializerLease
 
 Load-bounding leader lease.
@@ -156,6 +163,10 @@ Parsing rules:
 - sequence below oldest retained -> `WATCH_EXPIRED/RETENTION_EXPIRED`;
 - sequence above high water -> `WATCH_EXPIRED/INVALID_CURSOR`;
 - replay suffix above 100,000 -> `WATCH_EXPIRED/REPLAY_LIMIT`.
+
+Before validating a new cursor, Scylla derives `oldest` from the first live TTL
+row at or after the stored lower bound and advances the static clock value by
+LWT. Empty expired sequence buckets are skipped monotonically.
 
 The bootstrap sentinel remains private client/server coordination and is never
 persisted as a resumable cursor.

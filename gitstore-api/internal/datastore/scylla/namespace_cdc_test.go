@@ -81,6 +81,64 @@ func TestNamespaceCDCSequencerFailsClosedWhenStreamMovesBackward(t *testing.T) {
 	require.ErrorContains(t, <-done, "moved backward")
 }
 
+func TestNamespaceCDCSequencerRejectsNewStreamBehindPublishedFrontier(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{}, time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+
+	base := time.Now().UTC()
+	progressed := make(chan string, 2)
+	require.NoError(t, sequencer.Register(ctx, "stream-a"))
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("stream-a", "published", gocql.MinTimeUUID(base.Add(time.Second)), progressed)))
+	require.NoError(t, sequencer.Unregister("stream-a"))
+	assert.Equal(t, "published", <-progressed)
+
+	require.NoError(t, sequencer.Register(ctx, "stream-b"))
+	err := sequencer.Submit(ctx, sequenceTestRequest("stream-b", "older", gocql.MinTimeUUID(base), progressed))
+	require.ErrorContains(t, err, "behind published frontier")
+	require.ErrorContains(t, <-done, "behind published frontier")
+}
+
+func TestNamespaceCDCSequencerRejectsStreamBehindRestoredFrontier(t *testing.T) {
+	base := time.Now().UTC()
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{}, time.Millisecond)
+	sequencer.publishedThrough = gocql.MinTimeUUID(base.Add(time.Second))
+	sequencer.hasPublished = true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.Register(ctx, "new-stream"))
+	err := sequencer.Submit(ctx, sequenceTestRequest("new-stream", "older", gocql.MinTimeUUID(base), make(chan string, 1)))
+	require.ErrorContains(t, err, "behind published frontier")
+	require.ErrorContains(t, <-done, "behind published frontier")
+}
+
+func TestNamespaceCDCSequencerSkipsUncommittedAdditionBeforeProgress(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{}, time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.Register(ctx, "stream-a"))
+
+	progressed := make(chan string, 1)
+	request := sequenceTestRequest("stream-a", "rolled-back", gocql.MinTimeUUID(time.Now().UTC()), progressed)
+	request.shouldPublish = func(context.Context) (bool, error) { return false, nil }
+	require.NoError(t, sequencer.Submit(ctx, request))
+	require.NoError(t, sequencer.Unregister("stream-a"))
+	assert.Equal(t, "rolled-back", <-progressed)
+	store.mu.Lock()
+	assert.Empty(t, store.names)
+	store.mu.Unlock()
+	cancel()
+	assert.ErrorIs(t, <-done, context.Canceled)
+}
+
 func TestNamespaceWatchBucketUsesConfiguredSize(t *testing.T) {
 	assert.Equal(t, int64(0), namespaceWatchBucket(2, 2))
 	assert.Equal(t, int64(1), namespaceWatchBucket(3, 2))

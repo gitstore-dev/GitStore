@@ -70,21 +70,94 @@ func (s *scyllaDatastore) ensureNamespaceWatchClock(ctx context.Context) (namesp
 }
 
 func (s *scyllaDatastore) Bounds(ctx context.Context) (datastore.NamespaceWatchBounds, error) {
+	return s.namespaceWatchBounds(ctx, true)
+}
+
+func (s *scyllaDatastore) namespaceWatchBounds(ctx context.Context, refreshRetention bool) (datastore.NamespaceWatchBounds, error) {
 	var row namespaceWatchClockRow
-	err := s.session.Query(
-		"SELECT epoch,high_water,oldest,updated_at,cdc_progress_at FROM namespace_watch_clock WHERE journal=? LIMIT 1",
-		nil,
-	).WithContext(ctx).Bind(namespaceWatchJournalName).GetRelease(&row)
-	if errors.Is(err, gocql.ErrNotFound) {
-		return datastore.NamespaceWatchBounds{}, fmt.Errorf("scylla: Namespace watch materializer has not initialized the journal")
+	settled := false
+	for attempts := 0; attempts < 4; attempts++ {
+		err := s.session.Query(
+			"SELECT epoch,high_water,oldest,updated_at,cdc_progress_at FROM namespace_watch_clock WHERE journal=? LIMIT 1",
+			nil,
+		).WithContext(ctx).Bind(namespaceWatchJournalName).GetRelease(&row)
+		if errors.Is(err, gocql.ErrNotFound) {
+			return datastore.NamespaceWatchBounds{}, fmt.Errorf("scylla: Namespace watch materializer has not initialized the journal")
+		}
+		if err != nil {
+			return datastore.NamespaceWatchBounds{}, fmt.Errorf("scylla: read Namespace watch clock: %w", err)
+		}
+		if !refreshRetention {
+			settled = true
+			break
+		}
+		oldest, oldestErr := s.namespaceWatchRetainedOldest(ctx, row)
+		if oldestErr != nil {
+			return datastore.NamespaceWatchBounds{}, oldestErr
+		}
+		if oldest <= row.Oldest {
+			settled = true
+			break
+		}
+		applied, updateErr := s.session.Query(
+			"UPDATE namespace_watch_clock SET oldest=? WHERE journal=? IF epoch=? AND oldest=?",
+			nil,
+		).WithContext(ctx).Bind(oldest, namespaceWatchJournalName, row.Epoch, row.Oldest).ExecCASRelease()
+		if updateErr != nil {
+			return datastore.NamespaceWatchBounds{}, fmt.Errorf("scylla: advance Namespace watch retained lower bound: %w", updateErr)
+		}
+		if applied {
+			row.Oldest = oldest
+			settled = true
+			break
+		}
 	}
-	if err != nil {
-		return datastore.NamespaceWatchBounds{}, fmt.Errorf("scylla: read Namespace watch clock: %w", err)
+	if !settled {
+		return datastore.NamespaceWatchBounds{}, fmt.Errorf("scylla: advance Namespace watch retained lower bound: contention limit reached")
 	}
 	return datastore.NamespaceWatchBounds{
 		Epoch: row.Epoch.String(), Oldest: uint64(maxInt64(row.Oldest, 0)), HighWater: uint64(maxInt64(row.HighWater, 0)),
 		UpdatedAt: row.UpdatedAt, ProgressAt: row.CDCProgressAt,
 	}, nil
+}
+
+// namespaceWatchRetainedOldest derives the actual lower bound from live TTL
+// rows. Empty sequence buckets are skipped once and the static clock advances
+// monotonically, so cleanup work is amortized instead of repeated per caller.
+func (s *scyllaDatastore) namespaceWatchRetainedOldest(ctx context.Context, clock namespaceWatchClockRow) (int64, error) {
+	if clock.HighWater <= 0 {
+		return 0, nil
+	}
+	start := clock.Oldest
+	if start < 1 {
+		start = 1
+	}
+	bucketSize := s.namespaceWatchBucketSize
+	if bucketSize <= 0 {
+		bucketSize = int64(watchjournal.DefaultBucketSize)
+	}
+	for start <= clock.HighWater {
+		bucket := namespaceWatchBucket(uint64(start), bucketSize)
+		bucketEnd := (bucket + 1) * bucketSize
+		if bucketEnd > clock.HighWater {
+			bucketEnd = clock.HighWater
+		}
+		var retained struct {
+			Sequence int64 `db:"sequence"`
+		}
+		err := s.session.Query(
+			"SELECT sequence FROM namespace_watch_events WHERE epoch=? AND bucket=? AND sequence>=? AND sequence<=? LIMIT 1",
+			nil,
+		).WithContext(ctx).Bind(clock.Epoch, bucket, start, bucketEnd).GetRelease(&retained)
+		if err == nil {
+			return retained.Sequence, nil
+		}
+		if !errors.Is(err, gocql.ErrNotFound) {
+			return 0, fmt.Errorf("scylla: derive Namespace watch retained lower bound: %w", err)
+		}
+		start = bucketEnd + 1
+	}
+	return clock.HighWater + 1, nil
 }
 
 func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceWatchLease, event datastore.NamespaceWatchEvent, ttl time.Duration) (datastore.NamespaceWatchEvent, error) {
@@ -212,7 +285,10 @@ func (s *scyllaDatastore) namespaceWatchEvent(ctx context.Context, epoch gocql.U
 }
 
 func (s *scyllaDatastore) ReadAfter(ctx context.Context, cursor datastore.NamespaceWatchCursor, limit int) ([]datastore.NamespaceWatchEvent, error) {
-	bounds, err := s.Bounds(ctx)
+	// Retention is refreshed when a subscription validates its initial cursor
+	// through Bounds. Tail polling only needs the clock, avoiding an extra
+	// retained-row lookup for every idle subscriber poll.
+	bounds, err := s.namespaceWatchBounds(ctx, false)
 	if err != nil {
 		return nil, err
 	}
