@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
-	"sync/atomic"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -24,7 +23,9 @@ import (
 
 const namespaceCDCGenerationProgress = "__namespace_cdc_generation__"
 
-const namespaceCDCReorderDelay = 100 * time.Millisecond
+const namespaceCDCRegistrationQuietPeriod = 250 * time.Millisecond
+
+const namespaceCDCPendingLimit = 100000
 
 // RunNamespaceCDC consumes only the authoritative namespaces_by_uid CDC log.
 // The caller owns lease renewal and cancels ctx immediately on fencing loss.
@@ -32,9 +33,12 @@ func (s *scyllaDatastore) RunNamespaceCDC(ctx context.Context, materializer *wat
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	progress := &namespaceCDCProgressManager{journal: s, lease: lease}
-	sequencer := newNamespaceCDCSequencer(materializer, lease, namespaceCDCReorderDelay)
+	sequencer := newNamespaceCDCSequencer(materializer, lease, namespaceCDCRegistrationQuietPeriod)
 	sequencerErr := make(chan error, 1)
-	go func() { sequencerErr <- sequencer.Run(runCtx) }()
+	go func() {
+		sequencerErr <- sequencer.Run(runCtx)
+		cancel()
+	}()
 	factory := &namespaceCDCConsumerFactory{sequencer: sequencer}
 	reader, err := scyllacdc.NewReader(runCtx, &scyllacdc.ReaderConfig{
 		Session:               s.session.Session,
@@ -83,13 +87,17 @@ type namespaceCDCConsumerFactory struct {
 	sequencer *namespaceCDCSequencer
 }
 
-func (f *namespaceCDCConsumerFactory) CreateChangeConsumer(_ context.Context, input scyllacdc.CreateChangeConsumerInput) (scyllacdc.ChangeConsumer, error) {
+func (f *namespaceCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, input scyllacdc.CreateChangeConsumerInput) (scyllacdc.ChangeConsumer, error) {
 	if f.sequencer == nil || input.ProgressReporter == nil {
 		return nil, fmt.Errorf("namespace CDC consumer is not configured")
 	}
+	streamID := encodeCDCStreamID(input.StreamID)
+	if err := f.sequencer.Register(ctx, streamID); err != nil {
+		return nil, err
+	}
 	return &namespaceCDCConsumer{
 		sequencer: f.sequencer,
-		streamID:  encodeCDCStreamID(input.StreamID),
+		streamID:  streamID,
 		reporter:  input.ProgressReporter,
 	}, nil
 }
@@ -135,48 +143,72 @@ func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Cha
 	})
 }
 
-func (c *namespaceCDCConsumer) End() error { return nil }
+func (c *namespaceCDCConsumer) End() error {
+	return c.sequencer.Unregister(c.streamID)
+}
 
 // Empty records actual CDC query progress. This keeps shared readiness fresh
 // while the source is idle without allowing journal bookmarks to mask a stuck
 // reader.
 func (c *namespaceCDCConsumer) Empty(ctx context.Context, ackTime gocql.UUID) error {
-	return c.reporter.MarkProgress(ctx, scyllacdc.Progress{LastProcessedRecordTime: ackTime})
+	return c.sequencer.Submit(ctx, namespaceCDCSequenceRequest{
+		cdcTime:      ackTime,
+		streamID:     c.streamID,
+		progressOnly: true,
+		markProgress: func(markCtx context.Context) error {
+			return c.reporter.MarkProgress(markCtx, scyllacdc.Progress{LastProcessedRecordTime: ackTime})
+		},
+	})
 }
 
 type namespaceCDCSequenceRequest struct {
-	change       watchjournal.Change
-	cdcTime      gocql.UUID
-	streamID     string
-	markProgress func(context.Context) error
-	ordinal      uint64
-	result       chan error
+	change        watchjournal.Change
+	cdcTime       gocql.UUID
+	streamID      string
+	progressOnly  bool
+	markProgress  func(context.Context) error
+	arrivalNumber uint64
 }
+
+type namespaceCDCSequenceMessage struct {
+	kind     namespaceCDCSequenceMessageKind
+	streamID string
+	request  namespaceCDCSequenceRequest
+	result   chan error
+}
+
+type namespaceCDCSequenceMessageKind uint8
+
+const (
+	namespaceCDCRegister namespaceCDCSequenceMessageKind = iota
+	namespaceCDCUnregister
+	namespaceCDCEnqueue
+)
 
 // namespaceCDCSequencer is the single journal-entry path shared by every CDC
-// stream consumer. It coalesces concurrently delivered stream records, orders
-// them by cdc$time and stream ID, and fails closed if a stalled stream later
-// presents a record older than the already-published frontier.
+// stream consumer. Consumers enqueue without waiting for materialization so
+// each independent stream reader can advance its watermark. An event becomes
+// publishable only when every active stream has reached or passed its CDC
+// position; the sequencer then orders publishable work by cdc$time, stream ID,
+// and arrival number before the journal linearization point.
 type namespaceCDCSequencer struct {
-	materializer *watchjournal.Materializer
-	lease        datastore.NamespaceWatchLease
-	reorderDelay time.Duration
-	requests     chan namespaceCDCSequenceRequest
-	nextOrdinal  atomic.Uint64
-	lastTime     gocql.UUID
-	lastStreamID string
-	haveLast     bool
+	materializer            *watchjournal.Materializer
+	lease                   datastore.NamespaceWatchLease
+	registrationQuietPeriod time.Duration
+	messages                chan namespaceCDCSequenceMessage
+	done                    chan struct{}
 }
 
-func newNamespaceCDCSequencer(materializer *watchjournal.Materializer, lease datastore.NamespaceWatchLease, reorderDelay time.Duration) *namespaceCDCSequencer {
-	if reorderDelay <= 0 {
-		reorderDelay = namespaceCDCReorderDelay
+func newNamespaceCDCSequencer(materializer *watchjournal.Materializer, lease datastore.NamespaceWatchLease, quietPeriod time.Duration) *namespaceCDCSequencer {
+	if quietPeriod <= 0 {
+		quietPeriod = namespaceCDCRegistrationQuietPeriod
 	}
 	return &namespaceCDCSequencer{
-		materializer: materializer,
-		lease:        lease,
-		reorderDelay: reorderDelay,
-		requests:     make(chan namespaceCDCSequenceRequest, 256),
+		materializer:            materializer,
+		lease:                   lease,
+		registrationQuietPeriod: quietPeriod,
+		messages:                make(chan namespaceCDCSequenceMessage, 256),
+		done:                    make(chan struct{}),
 	}
 }
 
@@ -184,71 +216,123 @@ func (s *namespaceCDCSequencer) Submit(ctx context.Context, request namespaceCDC
 	if s == nil || s.materializer == nil || request.markProgress == nil {
 		return fmt.Errorf("namespace CDC sequencer is not configured")
 	}
-	request.ordinal = s.nextOrdinal.Add(1)
-	request.result = make(chan error, 1)
+	return s.send(ctx, namespaceCDCSequenceMessage{kind: namespaceCDCEnqueue, streamID: request.streamID, request: request})
+}
+
+func (s *namespaceCDCSequencer) Register(ctx context.Context, streamID string) error {
+	if s == nil || streamID == "" {
+		return fmt.Errorf("namespace CDC sequencer stream is not configured")
+	}
+	return s.send(ctx, namespaceCDCSequenceMessage{kind: namespaceCDCRegister, streamID: streamID})
+}
+
+func (s *namespaceCDCSequencer) Unregister(streamID string) error {
+	if s == nil || streamID == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	return s.send(ctx, namespaceCDCSequenceMessage{kind: namespaceCDCUnregister, streamID: streamID})
+}
+
+func (s *namespaceCDCSequencer) send(ctx context.Context, message namespaceCDCSequenceMessage) error {
+	message.result = make(chan error, 1)
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case s.requests <- request:
+	case <-s.done:
+		return context.Canceled
+	case s.messages <- message:
 	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case err := <-request.result:
+	case <-s.done:
+		select {
+		case err := <-message.result:
+			return err
+		default:
+			return context.Canceled
+		}
+	case err := <-message.result:
 		return err
 	}
 }
 
 func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
+	defer close(s.done)
+	active := make(map[string]int)
+	watermarks := make(map[string]gocql.UUID)
+	pending := make([]namespaceCDCSequenceRequest, 0, 256)
+	var arrivalNumber uint64
+	registrationReadyAt := time.Time{}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
 	for {
-		var first namespaceCDCSequenceRequest
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case first = <-s.requests:
-		}
-		batch := []namespaceCDCSequenceRequest{first}
-		timer := time.NewTimer(s.reorderDelay)
-	collect:
-		for {
-			select {
-			case request := <-s.requests:
-				batch = append(batch, request)
-			case <-timer.C:
-				break collect
-			case <-ctx.Done():
-				timer.Stop()
-				for _, request := range batch {
-					request.result <- ctx.Err()
+		case message := <-s.messages:
+			switch message.kind {
+			case namespaceCDCRegister:
+				active[message.streamID]++
+				registrationReadyAt = time.Now().Add(s.registrationQuietPeriod)
+			case namespaceCDCUnregister:
+				if active[message.streamID] <= 1 {
+					delete(active, message.streamID)
+					delete(watermarks, message.streamID)
+				} else {
+					active[message.streamID]--
 				}
-				return ctx.Err()
-			}
-		}
-		sort.SliceStable(batch, func(i, j int) bool { return namespaceCDCSequenceLess(batch[i], batch[j]) })
-		for index, request := range batch {
-			if s.haveLast && namespaceCDCSequenceBeforeFrontier(request, s.lastTime, s.lastStreamID) {
-				err := fmt.Errorf("namespace CDC ordering discontinuity: stream %s delivered %s behind published frontier %s/%s", request.streamID, request.cdcTime, s.lastTime, s.lastStreamID)
-				for _, pending := range batch[index:] {
-					pending.result <- err
+			case namespaceCDCEnqueue:
+				arrivalNumber++
+				message.request.arrivalNumber = arrivalNumber
+				if previous, ok := watermarks[message.streamID]; ok && scyllacdc.CompareTimeUUID(message.request.cdcTime, previous) < 0 {
+					err := fmt.Errorf("namespace CDC stream %s moved backward from %s to %s", message.streamID, previous, message.request.cdcTime)
+					message.result <- err
+					return err
 				}
-				return err
+				watermarks[message.streamID] = message.request.cdcTime
+				pending = append(pending, message.request)
+				if len(pending) > namespaceCDCPendingLimit {
+					err := fmt.Errorf("namespace CDC sequencer exceeded %d pending records", namespaceCDCPendingLimit)
+					message.result <- err
+					return err
+				}
 			}
-			_, err := s.materializer.Process(ctx, s.lease, request.change)
+			message.result <- nil
+		case <-ticker.C:
+		}
+
+		if len(pending) == 0 || (!registrationReadyAt.IsZero() && time.Now().Before(registrationReadyAt)) {
+			continue
+		}
+		frontier, ready := namespaceCDCFrontier(active, watermarks)
+		if !ready {
+			continue
+		}
+		sort.SliceStable(pending, func(i, j int) bool { return namespaceCDCSequenceLess(pending[i], pending[j]) })
+		published := 0
+		for published < len(pending) {
+			request := pending[published]
+			if len(active) > 0 && scyllacdc.CompareTimeUUID(request.cdcTime, frontier) > 0 {
+				break
+			}
+			var err error
+			if !request.progressOnly {
+				_, err = s.materializer.Process(ctx, s.lease, request.change)
+			}
 			if err == nil {
-				// The official generation-aware position advances only after the
-				// journal append and its fenced per-stream progress save complete.
 				err = request.markProgress(ctx)
 			}
-			request.result <- err
 			if err != nil {
-				for _, pending := range batch[index+1:] {
-					pending.result <- err
-				}
 				return err
 			}
-			s.lastTime = request.cdcTime
-			s.lastStreamID = request.streamID
-			s.haveLast = true
+			published++
+		}
+		if published > 0 {
+			copy(pending, pending[published:])
+			pending = pending[:len(pending)-published]
 		}
 	}
 }
@@ -260,12 +344,26 @@ func namespaceCDCSequenceLess(left, right namespaceCDCSequenceRequest) bool {
 	if left.streamID != right.streamID {
 		return left.streamID < right.streamID
 	}
-	return left.ordinal < right.ordinal
+	return left.arrivalNumber < right.arrivalNumber
 }
 
-func namespaceCDCSequenceBeforeFrontier(request namespaceCDCSequenceRequest, lastTime gocql.UUID, lastStreamID string) bool {
-	compared := scyllacdc.CompareTimeUUID(request.cdcTime, lastTime)
-	return compared < 0 || (compared == 0 && request.streamID < lastStreamID)
+func namespaceCDCFrontier(active map[string]int, watermarks map[string]gocql.UUID) (gocql.UUID, bool) {
+	if len(active) == 0 {
+		return gocql.UUID{}, true
+	}
+	var frontier gocql.UUID
+	first := true
+	for streamID := range active {
+		watermark, ok := watermarks[streamID]
+		if !ok {
+			return gocql.UUID{}, false
+		}
+		if first || scyllacdc.CompareTimeUUID(watermark, frontier) < 0 {
+			frontier = watermark
+			first = false
+		}
+	}
+	return frontier, true
 }
 
 func namespaceCDCPostimage(rows []*scyllacdc.ChangeRow) *datastore.Namespace {

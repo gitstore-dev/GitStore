@@ -42,16 +42,20 @@ func TestNamespaceCDCSequencerOrdersConcurrentStreams(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.Register(ctx, "stream-a"))
+	require.NoError(t, sequencer.Register(ctx, "stream-b"))
 
 	base := time.Now().UTC()
-	late := sequenceTestRequest("stream-b", "late", gocql.MinTimeUUID(base.Add(time.Millisecond)))
-	early := sequenceTestRequest("stream-a", "early", gocql.MinTimeUUID(base))
-	errs := make(chan error, 2)
-	go func() { errs <- sequencer.Submit(ctx, late) }()
+	progressed := make(chan string, 2)
+	late := sequenceTestRequest("stream-b", "late", gocql.MinTimeUUID(base.Add(time.Millisecond)), progressed)
+	early := sequenceTestRequest("stream-a", "early", gocql.MinTimeUUID(base), progressed)
+	require.NoError(t, sequencer.Submit(ctx, late))
 	time.Sleep(5 * time.Millisecond)
-	go func() { errs <- sequencer.Submit(ctx, early) }()
-	require.NoError(t, <-errs)
-	require.NoError(t, <-errs)
+	require.NoError(t, sequencer.Submit(ctx, early))
+	require.NoError(t, sequencer.Unregister("stream-a"))
+	require.NoError(t, sequencer.Unregister("stream-b"))
+	assert.Equal(t, "early", <-progressed)
+	assert.Equal(t, "late", <-progressed)
 
 	store.mu.Lock()
 	assert.Equal(t, []string{"early", "late"}, store.names)
@@ -60,19 +64,21 @@ func TestNamespaceCDCSequencerOrdersConcurrentStreams(t *testing.T) {
 	assert.ErrorIs(t, <-done, context.Canceled)
 }
 
-func TestNamespaceCDCSequencerFailsClosedOnLateOlderRecord(t *testing.T) {
+func TestNamespaceCDCSequencerFailsClosedWhenStreamMovesBackward(t *testing.T) {
 	store := &sequencerStore{}
 	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{}, time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 
 	base := time.Now().UTC()
-	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("stream-b", "later", gocql.MinTimeUUID(base.Add(time.Second)))))
-	err := sequencer.Submit(ctx, sequenceTestRequest("stream-a", "older", gocql.MinTimeUUID(base)))
-	require.ErrorContains(t, err, "ordering discontinuity")
-	require.ErrorContains(t, <-done, "ordering discontinuity")
+	progressed := make(chan string, 1)
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("stream-a", "later", gocql.MinTimeUUID(base.Add(time.Second)), progressed)))
+	err := sequencer.Submit(ctx, sequenceTestRequest("stream-a", "older", gocql.MinTimeUUID(base), progressed))
+	require.ErrorContains(t, err, "moved backward")
+	require.ErrorContains(t, <-done, "moved backward")
 }
 
 func TestNamespaceWatchBucketUsesConfiguredSize(t *testing.T) {
@@ -81,7 +87,7 @@ func TestNamespaceWatchBucketUsesConfiguredSize(t *testing.T) {
 	assert.Equal(t, int64(2), namespaceWatchBucket(6, 2))
 }
 
-func sequenceTestRequest(streamID, name string, at gocql.UUID) namespaceCDCSequenceRequest {
+func sequenceTestRequest(streamID, name string, at gocql.UUID, progressed chan<- string) namespaceCDCSequenceRequest {
 	return namespaceCDCSequenceRequest{
 		streamID: streamID,
 		cdcTime:  at,
@@ -89,6 +95,9 @@ func sequenceTestRequest(streamID, name string, at gocql.UUID) namespaceCDCSeque
 			StreamID: streamID, Position: at.Bytes(), DeduplicationKey: streamID + ":" + at.String(),
 			Name: name, After: []byte(`{"kind":"Namespace"}`), At: at.Time().UTC(),
 		},
-		markProgress: func(context.Context) error { return nil },
+		markProgress: func(context.Context) error {
+			progressed <- name
+			return nil
+		},
 	}
 }
