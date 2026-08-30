@@ -797,11 +797,6 @@ type ComplexityRoot struct {
 		Object   func(childComplexity int) int
 	}
 
-	User struct {
-		IsAdmin  func(childComplexity int) int
-		Username func(childComplexity int) int
-	}
-
 	VariantSummaryDefinition struct {
 		Ready       func(childComplexity int) int
 		Total       func(childComplexity int) int
@@ -4010,20 +4005,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateResourceStatusPayload.Object(childComplexity), true
 
-	case "User.isAdmin":
-		if e.ComplexityRoot.User.IsAdmin == nil {
-			break
-		}
-
-		return e.ComplexityRoot.User.IsAdmin(childComplexity), true
-
-	case "User.username":
-		if e.ComplexityRoot.User.Username == nil {
-			break
-		}
-
-		return e.ComplexityRoot.User.Username(childComplexity), true
-
 	case "VariantSummaryDefinition.ready":
 		if e.ComplexityRoot.VariantSummaryDefinition.Ready == nil {
 			break
@@ -4228,21 +4209,6 @@ func newExecutionContext(
 
 var sources = []*ast.Source{
 	{Name: "../../../../shared/schemas/auth.graphqls", Input: `# Authentication Types and Mutations
-
-"""
-Authenticated user information
-"""
-type User {
-  """
-  Username
-  """
-  username: String!
-
-  """
-  Whether the user has admin privileges
-  """
-  isAdmin: Boolean!
-}
 
 """OIDC-compatible token response."""
 type TokenResponse {

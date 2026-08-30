@@ -1365,14 +1365,6 @@ type UpdateResourceStatusPayload struct {
 	Conflict *StatusConflict `json:"conflict,omitempty"`
 }
 
-// Authenticated user information
-type User struct {
-	// Username
-	Username string `json:"username"`
-	// Whether the user has admin privileges
-	IsAdmin bool `json:"isAdmin"`
-}
-
 type VariantSummaryDefinition struct {
 	Total       int32 `json:"total"`
 	Ready       int32 `json:"ready"`
