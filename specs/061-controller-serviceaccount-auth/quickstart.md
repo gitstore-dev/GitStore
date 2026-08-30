@@ -2,7 +2,7 @@
 
 ## Test-first implementation order
 
-1. **Datastore**: failing contract tests for `CreateServiceAccount`/`GetServiceAccountBySubject`/`UpdateServiceAccountKeys`/`SetServiceAccountDisabled`/`DeleteServiceAccount` against both `memdb` and Scylla backends (mirroring `file_test.go`'s shape). Implement `entities.go`, `datastore.go`, `memdb/backend.go`, `scylla/serviceaccount.go`, `scylla/migrations/006_service_account.cql` until green.
+1. **Datastore**: failing contract tests for `CreateServiceAccount`/`GetServiceAccountBySubject`/`UpdateServiceAccountKeys`/`SetServiceAccountDisabled`/`DeleteServiceAccount` against both `memdb` and Scylla backends (mirroring `file_test.go`'s shape). Implement `entities.go`, `datastore.go`, `memdb/backend.go`, `scylla/serviceaccount.go`, `scylla/migrations/007_service_account.cql` until green.
 2. **`serviceaccount-assertion`**: failing unit tests for claim validation (typ/kid/aud/exp/jti), signature verification against enrolled keys, replay rejection, `OutcomeChallenge` vs. `OutcomeDeny`. Implement `provider.go`/`replay.go` until green.
 3. **`serviceaccount-jwt`**: failing unit tests for claim validation, multi-key overlap-window verification, disabled/deleted/UID-mismatch denial, empty `Roles`. Implement `provider.go`/`keys.go` until green.
 4. **Mutations**: failing resolver tests for `createServiceAccount` (dup rejection, zero-key rejection), `rotateServiceAccountKey` (overlap window, empty-result rejection), `deleteServiceAccount` (idempotent, cancels future auth), `issueServiceAccountToken` (subject/UID field-gate, TTL clamping). Implement `serviceaccount.resolvers.go`, `shared/schemas/serviceaccount.graphqls`, and the field-level authorizer extension until green.

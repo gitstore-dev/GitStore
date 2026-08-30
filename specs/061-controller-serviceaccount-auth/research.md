@@ -60,7 +60,17 @@
 
 **Finding**: `gitstore-api/internal/datastore/entities.go`'s `File` struct and its `Datastore` interface methods (`CreateFile`/`GetFile`/`GetFileByName`/`ListFiles`/`UpdateFile(ctx, f, expectedResourceVersion)`/`DeleteFile`/`DeleteFileWithResourceVersion`/`UpdateFileStatus`) are implemented once in `gitstore-api/internal/datastore/memdb/backend.go` (not a separate per-entity memdb file) and once in `gitstore-api/internal/datastore/scylla/file.go`, with its own numbered migration `gitstore-api/internal/datastore/scylla/migrations/004_file_resource.cql`.
 
-**Decision**: `ServiceAccount` follows this exact template: a new struct in `entities.go`, new interface methods on `Datastore`, an implementation added to the existing `memdb/backend.go` (not a new file, matching `File`'s precedent), a new `scylla/serviceaccount.go`, and a new `scylla/migrations/006_service_account.cql` (numbered immediately after `005_namespace_repository_fence.cql`, the latest existing migration as of the 2026-08-30 rebase onto spec 047 / PR #370 — note this spec originally reserved `005`, which spec 047 has since taken; re-check the highest existing migration number before creating the file).
+**Decision**: `ServiceAccount` follows this exact template: a new struct in `entities.go`, new interface methods on `Datastore`, an implementation added to the existing `memdb/backend.go` (not a new file, matching `File`'s precedent), a new `scylla/serviceaccount.go`, and a new `scylla/migrations/007_service_account.cql`.
+
+**Migration number reservation (re-checked 2026-08-30).** This number has moved twice and is contended across in-flight branches, so it MUST be re-verified immediately before the file is created rather than trusted from this document:
+
+| Number | Owner | Status |
+|---|---|---|
+| `005_namespace_repository_fence.cql` | spec 047 (PR #370) | **Landed on `main`** |
+| `006_namespace_watch_cdc.cql` | spec 050 (`050-namespace-watch-contract`) | Reserved, in flight — not yet on `main` |
+| `007_service_account.cql` | spec 061 (this spec) | Reserved |
+
+Because `006`'s owner has not merged, `ls gitstore-api/internal/datastore/scylla/migrations/` on `main` will show `005` as the highest number and wrongly suggest `006` is free. Confirm against sibling branches, not just `main`, before creating the file.
 
 **Rationale**: Doc 021 §8c already mandates that the ServiceAccount record be datastore-backed in both memdb and Scylla from the first implementation phase; `File` (spec 051, the most recently shipped new persisted entity) is the closest, most current precedent for exactly this shape of work, and reusing it avoids inventing a fourth persistence pattern alongside `File`'s, `Repository`'s (spec 045/058), and `Namespace`'s (spec 046).
 
