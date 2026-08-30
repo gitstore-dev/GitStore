@@ -151,7 +151,7 @@ func TestNamespaceWatchCapacity(t *testing.T) {
 	runtime.GC()
 	var memoryStart runtime.MemStats
 	runtime.ReadMemStats(&memoryStart)
-	cpuStart := processCPUSeconds()
+	cpuStart := processCPUSample()
 	soakStarted := time.Now()
 
 	producer := time.NewTicker(100 * time.Millisecond) // sustained 10/s
@@ -191,9 +191,8 @@ produce:
 	}
 	cancel()
 	consumers.Wait()
-	cpuSeconds := processCPUSeconds() - cpuStart
 	wallSeconds := time.Since(soakStarted).Seconds()
-	cpuPercent := 100 * cpuSeconds / (wallSeconds * float64(runtime.GOMAXPROCS(0)))
+	cpuPercent := normalizedUtilizedCPUPercent(cpuStart, processCPUSample(), wallSeconds, runtime.GOMAXPROCS(0))
 	runtime.GC()
 	var memoryEnd runtime.MemStats
 	runtime.ReadMemStats(&memoryEnd)
@@ -214,10 +213,56 @@ produce:
 	t.Logf("duration=%s subscribers=%d events=%d replay=%s p95=%s p99=%s cpu=%.2f%% heap_start=%d heap_end=%d", duration, subscriberCount, produced, replayElapsed, percentile(observed, .95), percentile(observed, .99), cpuPercent, memoryStart.HeapAlloc, memoryEnd.HeapAlloc)
 }
 
-func processCPUSeconds() float64 {
-	samples := []runtimemetrics.Sample{{Name: "/cpu/classes/total:cpu-seconds"}}
+type processCPUTime struct {
+	total float64
+	idle  float64
+}
+
+func processCPUSample() processCPUTime {
+	samples := []runtimemetrics.Sample{
+		{Name: "/cpu/classes/total:cpu-seconds"},
+		{Name: "/cpu/classes/idle:cpu-seconds"},
+	}
 	runtimemetrics.Read(samples)
-	return samples[0].Value.Float64()
+	return processCPUTime{total: samples[0].Value.Float64(), idle: samples[1].Value.Float64()}
+}
+
+func normalizedUtilizedCPUPercent(start, end processCPUTime, wallSeconds float64, gomaxprocs int) float64 {
+	if wallSeconds <= 0 || gomaxprocs <= 0 {
+		return 0
+	}
+
+	// runtime/metrics defines total as GOMAXPROCS integrated over wall time
+	// and idle as the portion of that capacity unused by Go or the runtime.
+	// Both are estimates, so clamp small under/overshoots to a percentage.
+	utilizedSeconds := (end.total - start.total) - (end.idle - start.idle)
+	percent := 100 * utilizedSeconds / (wallSeconds * float64(gomaxprocs))
+	return min(100, max(0, percent))
+}
+
+func TestNormalizedUtilizedCPUPercent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		start       processCPUTime
+		end         processCPUTime
+		wallSeconds float64
+		gomaxprocs  int
+		want        float64
+	}{
+		{name: "subtracts idle capacity", start: processCPUTime{total: 10, idle: 4}, end: processCPUTime{total: 18, idle: 10}, wallSeconds: 2, gomaxprocs: 4, want: 25},
+		{name: "clamps idle overestimate", start: processCPUTime{total: 10, idle: 4}, end: processCPUTime{total: 18, idle: 13}, wallSeconds: 2, gomaxprocs: 4, want: 0},
+		{name: "clamps capacity overestimate", start: processCPUTime{}, end: processCPUTime{total: 9}, wallSeconds: 2, gomaxprocs: 4, want: 100},
+		{name: "zero wall duration", end: processCPUTime{total: 8}, gomaxprocs: 4, want: 0},
+		{name: "zero processors", end: processCPUTime{total: 8}, wallSeconds: 2, want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, normalizedUtilizedCPUPercent(tt.start, tt.end, tt.wallSeconds, tt.gomaxprocs))
+		})
+	}
 }
 
 func percentile(values []time.Duration, p float64) time.Duration {
