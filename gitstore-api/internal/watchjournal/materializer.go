@@ -106,7 +106,34 @@ func jsonEqual(left, right json.RawMessage) bool {
 func (m *Materializer) Process(ctx context.Context, lease datastore.NamespaceWatchLease, change Change) (datastore.NamespaceWatchEvent, error) {
 	m.appendMu.Lock()
 	defer m.appendMu.Unlock()
+	appended, err := m.materializeLocked(ctx, lease, change)
+	if err != nil || appended.Type == "" {
+		return appended, err
+	}
+	progress := datastore.NamespaceCDCProgress{
+		StreamID:  change.StreamID,
+		Position:  append([]byte(nil), change.Position...),
+		UpdatedAt: appended.At,
+	}
+	if err := m.store.SaveProgress(ctx, lease, progress); err != nil {
+		return appended, fmt.Errorf("save Namespace CDC progress: %w", err)
+	}
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.ObserveCDCProgress(progress.UpdatedAt)
+	}
+	return appended, nil
+}
 
+// Materialize appends a classified change without writing a checkpoint. CDC
+// adapters that own a richer ordering checkpoint use this method, then persist
+// their frontier and source progress after the append succeeds.
+func (m *Materializer) Materialize(ctx context.Context, lease datastore.NamespaceWatchLease, change Change) (datastore.NamespaceWatchEvent, error) {
+	m.appendMu.Lock()
+	defer m.appendMu.Unlock()
+	return m.materializeLocked(ctx, lease, change)
+}
+
+func (m *Materializer) materializeLocked(ctx context.Context, lease datastore.NamespaceWatchLease, change Change) (datastore.NamespaceWatchEvent, error) {
 	event, ok := Classify(change)
 	if !ok {
 		return datastore.NamespaceWatchEvent{}, nil
@@ -127,17 +154,6 @@ func (m *Materializer) Process(ctx context.Context, lease datastore.NamespaceWat
 	}
 	if m.cfg.Metrics != nil {
 		m.cfg.Metrics.ObserveMaterialized(appended, time.Now())
-	}
-	progress := datastore.NamespaceCDCProgress{
-		StreamID:  change.StreamID,
-		Position:  append([]byte(nil), change.Position...),
-		UpdatedAt: event.At,
-	}
-	if err := m.store.SaveProgress(ctx, lease, progress); err != nil {
-		return appended, fmt.Errorf("save Namespace CDC progress: %w", err)
-	}
-	if m.cfg.Metrics != nil {
-		m.cfg.Metrics.ObserveCDCProgress(progress.UpdatedAt)
 	}
 	return appended, nil
 }

@@ -397,7 +397,7 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 				publish, err = request.shouldPublish(ctx)
 			}
 			if err == nil && publish && !request.progressOnly {
-				_, err = s.materializer.Process(ctx, s.lease, request.change)
+				_, err = s.materializer.Materialize(ctx, s.lease, request.change)
 			}
 			if err == nil && s.persistFrontier != nil {
 				err = s.persistFrontier(ctx, request.cdcTime)

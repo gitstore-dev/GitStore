@@ -62,6 +62,10 @@ func (s *scyllaDatastore) ensureNamespaceWatchClock(ctx context.Context) (namesp
 	if err != nil {
 		return namespaceWatchClockRow{}, fmt.Errorf("scylla: initialize Namespace watch clock: %w", err)
 	}
+	return s.loadNamespaceWatchClock(ctx)
+}
+
+func (s *scyllaDatastore) loadNamespaceWatchClock(ctx context.Context) (namespaceWatchClockRow, error) {
 	var row namespaceWatchClockRow
 	if err := s.session.Query(
 		"SELECT epoch,high_water,oldest,bucket_size,update_timestamp,cdc_progress_timestamp,lease_holder,fencing_token,lease_expiration_timestamp FROM namespace_watch_clock WHERE journal=? LIMIT 1",
@@ -214,7 +218,9 @@ func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceW
 		ttlSeconds = 1
 	}
 	for attempts := 0; attempts < 32; attempts++ {
-		clock, clockErr := s.ensureNamespaceWatchClock(ctx)
+		// Lease acquisition initializes the clock. Avoid repeating its
+		// INSERT-IF-NOT-EXISTS LWT for every materialized event.
+		clock, clockErr := s.loadNamespaceWatchClock(ctx)
 		if clockErr != nil {
 			return datastore.NamespaceWatchEvent{}, clockErr
 		}
@@ -271,7 +277,7 @@ func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceW
 			return datastore.NamespaceWatchEvent{}, fmt.Errorf("scylla: publish Namespace journal sequence: %w", casErr)
 		}
 		if !applied {
-			latest, latestErr := s.ensureNamespaceWatchClock(ctx)
+			latest, latestErr := s.loadNamespaceWatchClock(ctx)
 			if latestErr != nil {
 				return datastore.NamespaceWatchEvent{}, latestErr
 			}

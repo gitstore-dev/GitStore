@@ -116,6 +116,16 @@ func TestMaterializerAppendsBeforeSavingProgress(t *testing.T) {
 	assert.Equal(t, []byte("position-1"), store.progress.Position)
 }
 
+func TestMaterializeLeavesCheckpointToCDCAdapter(t *testing.T) {
+	store := &orderedMaterializerStore{}
+	m := NewMaterializer(store, MaterializerConfig{EventTTL: 7 * 24 * time.Hour})
+	change := Change{StreamID: "stream-1", Position: []byte("position-1"), DeduplicationKey: "change-1", Name: "shop", After: json.RawMessage(`{"kind":"Namespace"}`)}
+
+	_, err := m.Materialize(context.Background(), datastore.NamespaceWatchLease{}, change)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"append"}, store.calls)
+}
+
 func TestMaterializerDoesNotAdvanceProgressWhenAppendFails(t *testing.T) {
 	store := &orderedMaterializerStore{appendErr: errors.New("injected append failure")}
 	m := NewMaterializer(store, MaterializerConfig{EventTTL: 7 * 24 * time.Hour})
