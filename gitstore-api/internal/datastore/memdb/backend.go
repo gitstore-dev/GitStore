@@ -151,6 +151,7 @@ func decodeCursor(cursor string) (*datastore.PageCursor, error) {
 type memdbDatastore struct {
 	db *gomemdb.MemDB
 
+	namespaceMutationMu     sync.Mutex
 	namespaceWatchMu        sync.RWMutex
 	namespaceWatchEpoch     string
 	namespaceWatchSequence  uint64
@@ -905,6 +906,8 @@ func (m *memdbDatastore) CreateNamespace(_ context.Context, ns *datastore.Namesp
 	if ns.UID == "" {
 		return fmt.Errorf("%w: namespace uid is empty", datastore.ErrInvalidArgument)
 	}
+	m.namespaceMutationMu.Lock()
+	defer m.namespaceMutationMu.Unlock()
 	stored := normalizedNamespaceCopy(ns)
 	txn := m.db.Txn(true)
 	if raw, _ := txn.First("namespaces", "id", ns.UID); raw != nil {
@@ -965,6 +968,8 @@ func (m *memdbDatastore) UpdateNamespace(_ context.Context, ns *datastore.Namesp
 		return fmt.Errorf("%w: namespace is nil", datastore.ErrInvalidArgument)
 	}
 	datastore.NormalizeNamespaceContract(ns)
+	m.namespaceMutationMu.Lock()
+	defer m.namespaceMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("namespaces", "id", ns.UID)
 	if raw == nil {
@@ -994,6 +999,8 @@ func (m *memdbDatastore) MarkNamespaceDeletion(_ context.Context, ns *datastore.
 		return fmt.Errorf("%w: namespace is nil", datastore.ErrInvalidArgument)
 	}
 	datastore.NormalizeNamespaceContract(ns)
+	m.namespaceMutationMu.Lock()
+	defer m.namespaceMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("namespaces", "id", ns.UID)
 	if raw == nil {
@@ -1028,6 +1035,8 @@ func (m *memdbDatastore) MarkNamespaceDeletion(_ context.Context, ns *datastore.
 }
 
 func (m *memdbDatastore) DeleteNamespace(_ context.Context, uid string) error {
+	m.namespaceMutationMu.Lock()
+	defer m.namespaceMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("namespaces", "id", uid)
 	if raw == nil {
@@ -1045,6 +1054,8 @@ func (m *memdbDatastore) DeleteNamespace(_ context.Context, uid string) error {
 }
 
 func (m *memdbDatastore) DeleteNamespaceWithResourceVersion(_ context.Context, uid, expectedResourceVersion string) error {
+	m.namespaceMutationMu.Lock()
+	defer m.namespaceMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("namespaces", "id", uid)
 	if raw == nil {
