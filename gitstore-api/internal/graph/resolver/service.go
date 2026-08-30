@@ -1095,6 +1095,21 @@ func (s *Service) DeleteNamespace(ctx context.Context, ns *datastore.Namespace) 
 				fmt.Sprintf("namespace %q cannot be deleted", current.Name),
 			)
 		}
+		if errors.Is(err, datastore.ErrNamespaceNotActive) {
+			latest, reloadErr := s.store.GetNamespaceByName(ctx, current.Name)
+			if reloadErr == nil &&
+				namespaceUID(latest) == namespaceUID(current) &&
+				latest.DeletionTimestamp != nil {
+				outcome := namespaceadmission.DeletionOutcomeAlreadyTerminating
+				s.namespaceMetrics.ObserveDeletionOutcome(outcome)
+				s.logger.Info("Namespace deletion completed",
+					zap.String("operation", "delete"),
+					zap.String("namespace", latest.Name),
+					zap.String("outcome", string(outcome)),
+					zap.Int("blocker_count", 0))
+				return outcome, nil
+			}
+		}
 		if errors.Is(err, datastore.ErrConflict) {
 			conflictErr := NewNamespaceConflictError(
 				namespaceadmission.ReasonResourceVersionConflict,

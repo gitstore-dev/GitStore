@@ -92,7 +92,8 @@ schema.
 
 Deletion blockers are ordered `BOOTSTRAP_NAMESPACE`, then
 `NAMESPACE_NOT_EMPTY`. Successful deletion returns `TERMINATION_STARTED` or the
-idempotent no-write result `ALREADY_TERMINATING`.
+idempotent no-write result `ALREADY_TERMINATING`, including when another replica
+wins a concurrent deletion request.
 
 ## Metrics
 
@@ -188,6 +189,9 @@ Namespace, remove or transfer all repositories, then retry deletion.
    rather than remove the finalizer by hand.
 5. A repeated user deletion returning `ALREADY_TERMINATING` is healthy and must
    not advance `resourceVersion`.
+6. Repository create/transfer fence cleanup uses a bounded context detached from
+   request cancellation. A persistent positive pending counter therefore
+   indicates a datastore cleanup failure, not an ordinary client disconnect.
 
 ### Mutation rejected by the fence rollout gate
 

@@ -53,7 +53,10 @@ type repositoryIndexRow struct {
 	UID               gocql.UUID `db:"uid"`
 }
 
-const namespaceRepositoryFenceAttempts = 8
+const (
+	namespaceRepositoryFenceAttempts  = 8
+	namespaceRepositoryReleaseTimeout = 5 * time.Second
+)
 
 // The pending counter blocks termination while a create is in flight. The
 // monotonic epoch also detects a create that starts and finishes between the
@@ -104,8 +107,11 @@ func (s *scyllaDatastore) CreateRepositoryInActiveNamespace(ctx context.Context,
 		return datastore.ErrNamespaceNotActive
 	}
 	return executeNamespaceRepositoryReservation(
+		ctx,
 		func() error { return s.reserveNamespaceRepository(ctx, namespace.UID) },
-		func() error { return s.releaseNamespaceRepository(ctx, namespace.UID) },
+		func(releaseCtx context.Context) error {
+			return s.releaseNamespaceRepository(releaseCtx, namespace.UID)
+		},
 		func() error { return s.CreateRepository(ctx, repository) },
 		datastore.MutationStep{
 			Operation:    "create_repository",
@@ -119,7 +125,10 @@ func (s *scyllaDatastore) CreateRepositoryInActiveNamespace(ctx context.Context,
 }
 
 func executeNamespaceRepositoryReservation(
-	reserve, release, operation func() error,
+	ctx context.Context,
+	reserve func() error,
+	release func(context.Context) error,
+	operation func() error,
 	step datastore.MutationStep,
 	successDescription string,
 ) error {
@@ -127,7 +136,9 @@ func executeNamespaceRepositoryReservation(
 		return err
 	}
 	operationErr := operation()
-	releaseErr := release()
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceRepositoryReleaseTimeout)
+	defer cancel()
+	releaseErr := release(releaseCtx)
 	if releaseErr == nil {
 		return operationErr
 	}

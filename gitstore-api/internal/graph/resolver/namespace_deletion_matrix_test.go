@@ -5,6 +5,7 @@ package resolver_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,29 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+type concurrentNamespaceDeleteStore struct {
+	datastore.Datastore
+	once sync.Once
+}
+
+func (s *concurrentNamespaceDeleteStore) MarkNamespaceDeletion(
+	ctx context.Context,
+	namespace *datastore.Namespace,
+	expectedResourceVersion string,
+) error {
+	var markErr error
+	s.once.Do(func() {
+		type deletionMarker interface {
+			MarkNamespaceDeletion(context.Context, *datastore.Namespace, string) error
+		}
+		markErr = s.Datastore.(deletionMarker).MarkNamespaceDeletion(ctx, namespace, expectedResourceVersion)
+	})
+	if markErr != nil {
+		return markErr
+	}
+	return datastore.ErrNamespaceNotActive
+}
 
 func TestDeleteNamespaceBlockerMatrix(t *testing.T) {
 	t.Run("bootstrap only", func(t *testing.T) {
@@ -86,6 +110,38 @@ func TestDeleteNamespaceOutcomeMatrix(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, first.ResourceVersion, second.ResourceVersion)
 	assert.Equal(t, first.DeletionTimestamp, second.DeletionTimestamp)
+}
+
+func TestDeleteNamespaceConcurrentWinnerReturnsAlreadyTerminating(t *testing.T) {
+	ctx := context.Background()
+	base, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, base.Close()) })
+	store := &concurrentNamespaceDeleteStore{Datastore: base}
+	svc, err := resolver.NewService(resolver.ServiceDeps{
+		Store:  store,
+		Logger: zap.NewNop(),
+	})
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	namespace := &datastore.Namespace{
+		ID:                uuid.NewString(),
+		Name:              "concurrent-delete",
+		ResourceVersion:   "1",
+		Generation:        1,
+		CreationTimestamp: now,
+		UpdateTimestamp:   now,
+	}
+	namespace.UID = namespace.ID
+	require.NoError(t, base.CreateNamespace(ctx, namespace))
+
+	outcome, err := svc.DeleteNamespace(ctx, namespace)
+
+	require.NoError(t, err)
+	assert.Equal(t, namespaceadmission.DeletionOutcomeAlreadyTerminating, outcome)
+	current, err := base.GetNamespaceByName(ctx, namespace.Name)
+	require.NoError(t, err)
+	require.NotNil(t, current.DeletionTimestamp)
 }
 
 func TestDeleteNamespaceRecreatedIdentifierProtection(t *testing.T) {

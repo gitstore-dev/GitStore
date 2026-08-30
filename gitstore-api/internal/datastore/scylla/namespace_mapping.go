@@ -453,8 +453,11 @@ func (s *scyllaDatastore) TransferRepository(ctx context.Context, repositoryID, 
 		return s.transferRepositoryReserved(ctx, repositoryID, fromNamespace, toNamespace)
 	}
 	return executeNamespaceRepositoryReservation(
+		ctx,
 		func() error { return s.reserveNamespaceRepository(ctx, namespace.UID) },
-		func() error { return s.releaseNamespaceRepository(ctx, namespace.UID) },
+		func(releaseCtx context.Context) error {
+			return s.releaseNamespaceRepository(releaseCtx, namespace.UID)
+		},
 		func() error {
 			return s.transferRepositoryReserved(ctx, repositoryID, fromNamespace, toNamespace)
 		},
