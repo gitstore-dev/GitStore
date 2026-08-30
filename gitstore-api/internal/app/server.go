@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -61,6 +62,7 @@ const eventBusCapacity = 1000
 const (
 	defaultRateLimitPerSecond = 50
 	defaultRateLimitBurst     = 100
+	namespaceWatchStopTimeout = 5 * time.Second
 )
 
 // policyReloader can reload its policy from disk.
@@ -101,6 +103,7 @@ type namespaceWatchRuntime struct {
 	cfg          config.NamespaceWatchConfig
 	log          *zap.Logger
 	cancel       context.CancelFunc
+	done         chan struct{}
 }
 
 func namespaceWatchMetrics(runtime *namespaceWatchRuntime) *watchjournal.Metrics {
@@ -477,7 +480,11 @@ func (s *Server) Start() {
 	if s.namespaceWatch != nil && s.namespaceWatch.cfg.MaterializerEnabled {
 		ctx, cancel := context.WithCancel(context.Background())
 		s.namespaceWatch.cancel = cancel
-		go s.namespaceWatch.run(ctx)
+		s.namespaceWatch.done = make(chan struct{})
+		go func() {
+			defer close(s.namespaceWatch.done)
+			s.namespaceWatch.run(ctx)
+		}()
 	}
 	// Listen for SIGHUP to trigger a live policy reload on rbac-local.
 	if s.rbacReloader != nil {
@@ -540,6 +547,15 @@ func (s *Server) Shutdown(ctx context.Context) {
 func (s *Server) Close() {
 	if s.namespaceWatch != nil && s.namespaceWatch.cancel != nil {
 		s.namespaceWatch.cancel()
+		if s.namespaceWatch.done != nil {
+			timer := time.NewTimer(namespaceWatchStopTimeout)
+			defer timer.Stop()
+			select {
+			case <-s.namespaceWatch.done:
+			case <-timer.C:
+				s.log.Warn("Namespace materializer shutdown timed out")
+			}
+		}
 	}
 	for _, p := range s.providerShutdown {
 		p.Shutdown()
@@ -575,15 +591,25 @@ func (r *namespaceWatchRuntime) run(ctx context.Context) {
 
 func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datastore.NamespaceWatchLease) {
 	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
+	var workers sync.WaitGroup
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
 	r.metrics.SetLeader(true)
 	defer r.metrics.SetLeader(false)
 
 	errCh := make(chan error, 2)
-	go func() { errCh <- r.leaseManager.Maintain(ctx, lease) }()
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		errCh <- r.leaseManager.Maintain(ctx, lease)
+	}()
 	if r.runner != nil {
 		ready := make(chan struct{})
+		workers.Add(1)
 		go func() {
+			defer workers.Done()
 			errCh <- r.runner.RunNamespaceCDC(
 				ctx, r.materializer, lease,
 				time.Duration(r.cfg.CDCRetentionSeconds)*time.Second,
