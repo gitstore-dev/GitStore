@@ -190,7 +190,9 @@ mutable authoritative state. This closes the race where the initial staged CDC
 record could be consumed before the later marker write. A legacy direct ADDED
 candidate still crosses only after its matching projection is readable.
 Deletion of a false-marker preimage identifies rollback cleanup and is
-suppressed.
+suppressed. Creation rollback uses a bounded context detached from request
+cancellation, deletes every projection it may have staged, confirms their
+absence, and returns `ErrRepairRequired` if cleanup cannot be verified.
 
 Namespace deletion commits the authoritative `namespaces_by_uid` removal
 before changing its list and name projections. A rejected conditional delete

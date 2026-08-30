@@ -5,6 +5,7 @@ package scylla
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -193,6 +194,34 @@ func TestNamespaceCDCCommitMarkerTransitions(t *testing.T) {
 		"ordinary committed updates remain MODIFIED transitions")
 	assert.Equal(t, namespaceCDCRegular, namespaceCDCDispositionFor(namespace, false, nil, false),
 		"rollback deletes remain governed by the deletion readiness gate")
+}
+
+func TestNamespaceCreateRollbackDetachesFromCanceledRequest(t *testing.T) {
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+
+	called := false
+	err := runNamespaceCreateRollback(requestCtx, context.Canceled, func(rollbackCtx context.Context) error {
+		called = true
+		require.NoError(t, rollbackCtx.Err())
+		return nil
+	})
+
+	require.True(t, called)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestNamespaceCreateRollbackSurfacesRepairRequired(t *testing.T) {
+	err := runNamespaceCreateRollback(context.Background(), context.Canceled, func(context.Context) error {
+		return errors.New("cleanup could not be confirmed")
+	})
+
+	require.ErrorIs(t, err, datastore.ErrRepairRequired)
+	require.ErrorIs(t, err, context.Canceled)
+	var repair *datastore.RepairRequiredError
+	require.ErrorAs(t, err, &repair)
+	assert.Equal(t, "rollback_create", repair.Step.Action)
+	assert.ErrorContains(t, repair.Compensation, "cleanup could not be confirmed")
 }
 
 func sequenceTestRequest(streamID, name string, at gocql.UUID, progressed chan<- string) namespaceCDCSequenceRequest {

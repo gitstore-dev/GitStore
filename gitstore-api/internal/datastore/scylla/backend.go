@@ -1974,6 +1974,8 @@ func (s *scyllaDatastore) deleteProductRefProjection(ctx context.Context, row *p
 
 // ── Namespace ─────────────────────────────────────────────────────────────────
 
+const namespaceCreateRollbackTimeout = 5 * time.Second
+
 func (s *scyllaDatastore) CreateNamespace(ctx context.Context, ns *datastore.Namespace) error {
 	if ns == nil {
 		return fmt.Errorf("%w: namespace is nil", datastore.ErrInvalidArgument)
@@ -2001,33 +2003,111 @@ func (s *scyllaDatastore) CreateNamespace(ctx context.Context, ns *datastore.Nam
 	applied, err = s.session.Query(insertByUID+" IF NOT EXISTS", names).WithContext(ctx).
 		BindStruct(row).ExecCASRelease()
 	if err != nil || !applied {
-		s.releaseNamespaceName(ctx, row.Name, row.UID)
+		primary := fmt.Errorf("%w: namespace uid %s", datastore.ErrAlreadyExists, ns.UID)
 		if err != nil {
-			return fmt.Errorf("scylla: create namespace by uid: %w", err)
+			primary = fmt.Errorf("scylla: create namespace by uid: %w", err)
 		}
-		return fmt.Errorf("%w: namespace uid %s", datastore.ErrAlreadyExists, ns.UID)
+		return s.rollbackNamespaceCreate(ctx, row, primary, false, false)
 	}
 
 	const insertIndex = "INSERT INTO namespaces_by_bucket (bucket, creation_timestamp, uid) VALUES (?, ?, ?)"
 	if err := s.session.Query(insertIndex, nil).WithContext(ctx).
 		Bind(namespaceBucket(row.CreationTimestamp), row.CreationTimestamp, row.UID).ExecRelease(); err != nil {
-		_ = s.session.Query("DELETE FROM namespaces_by_uid WHERE uid=?", nil).WithContext(ctx).Bind(row.UID).ExecRelease()
-		s.releaseNamespaceName(ctx, row.Name, row.UID)
-		return fmt.Errorf("scylla: create namespace listing index: %w", err)
+		return s.rollbackNamespaceCreate(ctx, row, fmt.Errorf("scylla: create namespace listing index: %w", err), true, true)
 	}
 	applied, err = s.session.Query("UPDATE namespaces_by_uid SET watch_committed=? WHERE uid=? IF EXISTS", nil).
 		WithContext(ctx).Bind(true, row.UID).ExecCASRelease()
 	if err != nil || !applied {
-		_ = s.session.Query("DELETE FROM namespaces_by_uid WHERE uid=?", nil).WithContext(ctx).Bind(row.UID).ExecRelease()
-		_ = s.session.Query("DELETE FROM namespaces_by_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?", nil).
-			WithContext(ctx).Bind(namespaceBucket(row.CreationTimestamp), row.CreationTimestamp, row.UID).ExecRelease()
-		s.releaseNamespaceName(ctx, row.Name, row.UID)
+		primary := errors.New("scylla: commit namespace watch visibility: authoritative row disappeared")
 		if err != nil {
-			return fmt.Errorf("scylla: commit namespace watch visibility: %w", err)
+			primary = fmt.Errorf("scylla: commit namespace watch visibility: %w", err)
 		}
-		return fmt.Errorf("scylla: commit namespace watch visibility: authoritative row disappeared")
+		return s.rollbackNamespaceCreate(ctx, row, primary, true, true)
 	}
 	return nil
+}
+
+func (s *scyllaDatastore) rollbackNamespaceCreate(
+	ctx context.Context,
+	row *namespaceRow,
+	primary error,
+	authoritative, listing bool,
+) error {
+	return runNamespaceCreateRollback(ctx, primary, func(rollbackCtx context.Context) error {
+		return s.cleanupNamespaceCreate(rollbackCtx, row, authoritative, listing)
+	})
+}
+
+func runNamespaceCreateRollback(ctx context.Context, primary error, cleanup func(context.Context) error) error {
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceCreateRollbackTimeout)
+	defer cancel()
+	if err := cleanup(rollbackCtx); err != nil {
+		return datastore.NewRepairRequiredError(datastore.MutationStep{
+			Operation:    "create_namespace",
+			ResourceKind: "Namespace",
+			Projection:   "namespaces_by_uid,namespaces_by_bucket,namespaces_by_name",
+			Action:       "rollback_create",
+		}, primary, err)
+	}
+	return primary
+}
+
+func (s *scyllaDatastore) cleanupNamespaceCreate(ctx context.Context, row *namespaceRow, authoritative, listing bool) error {
+	var cleanupErrors []error
+	if authoritative {
+		if err := s.session.Query("DELETE FROM namespaces_by_uid WHERE uid=?", nil).
+			WithContext(ctx).Bind(row.UID).ExecRelease(); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete authoritative Namespace: %w", err))
+		}
+	}
+	if listing {
+		if err := s.session.Query("DELETE FROM namespaces_by_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?", nil).
+			WithContext(ctx).Bind(namespaceBucket(row.CreationTimestamp), row.CreationTimestamp, row.UID).ExecRelease(); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("delete Namespace listing projection: %w", err))
+		}
+	}
+	const releaseName = "DELETE FROM namespaces_by_name WHERE name=? IF uid=?"
+	if _, err := s.session.Query(releaseName, nil).WithContext(ctx).Bind(row.Name, row.UID).ExecCASRelease(); err != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("delete Namespace name projection: %w", err))
+	}
+
+	var confirmationErrors []error
+	if authoritative {
+		var found struct {
+			UID gocql.UUID `db:"uid"`
+		}
+		err := s.session.Query("SELECT uid FROM namespaces_by_uid WHERE uid=?", nil).
+			WithContext(ctx).Bind(row.UID).GetRelease(&found)
+		if err == nil {
+			confirmationErrors = append(confirmationErrors, errors.New("authoritative Namespace remains after rollback"))
+		} else if !errors.Is(err, gocql.ErrNotFound) {
+			confirmationErrors = append(confirmationErrors, fmt.Errorf("confirm authoritative Namespace rollback: %w", err))
+		}
+	}
+	if listing {
+		var found struct {
+			UID gocql.UUID `db:"uid"`
+		}
+		err := s.session.Query("SELECT uid FROM namespaces_by_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?", nil).
+			WithContext(ctx).Bind(namespaceBucket(row.CreationTimestamp), row.CreationTimestamp, row.UID).GetRelease(&found)
+		if err == nil {
+			confirmationErrors = append(confirmationErrors, errors.New("Namespace listing projection remains after rollback"))
+		} else if !errors.Is(err, gocql.ErrNotFound) {
+			confirmationErrors = append(confirmationErrors, fmt.Errorf("confirm Namespace listing rollback: %w", err))
+		}
+	}
+	var foundName namespaceNameRow
+	err := s.session.Query("SELECT name,uid FROM namespaces_by_name WHERE name=?", nil).
+		WithContext(ctx).Bind(row.Name).GetRelease(&foundName)
+	if err == nil && foundName.UID == row.UID {
+		confirmationErrors = append(confirmationErrors, errors.New("Namespace name projection remains after rollback"))
+	} else if err != nil && !errors.Is(err, gocql.ErrNotFound) {
+		confirmationErrors = append(confirmationErrors, fmt.Errorf("confirm Namespace name rollback: %w", err))
+	}
+	if len(confirmationErrors) == 0 {
+		return nil
+	}
+	return errors.Join(append(cleanupErrors, confirmationErrors...)...)
 }
 
 func (s *scyllaDatastore) GetNamespace(ctx context.Context, uidString string) (*datastore.Namespace, error) {
@@ -2263,11 +2343,6 @@ func (s *scyllaDatastore) deleteNamespaceIndexes(ctx context.Context, ns *datast
 		return fmt.Errorf("scylla: delete namespace indexes: %w", cleanupErr)
 	}
 	return nil
-}
-
-func (s *scyllaDatastore) releaseNamespaceName(ctx context.Context, name string, uid gocql.UUID) {
-	const statement = "DELETE FROM namespaces_by_name WHERE name=? IF uid=?"
-	_, _ = s.session.Query(statement, nil).WithContext(ctx).Bind(name, uid).ExecCASRelease()
 }
 
 // catalogTablesByRepositoryID lists every namespace-partitioned catalog table,
