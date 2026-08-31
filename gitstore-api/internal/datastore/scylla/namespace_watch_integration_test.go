@@ -96,8 +96,9 @@ func TestNamespaceWatchReadinessTracksPublishedFrontierNotPerStreamProgress(t *t
 	assert.Equal(t, older, late.UpdatedAt)
 
 	frontierAt := time.Now().UTC().Truncate(time.Millisecond)
+	frontier := gocql.MinTimeUUID(frontierAt)
 	require.NoError(t, journal.SaveProgress(ctx, lease, datastore.NamespaceCDCProgress{
-		StreamID: "__namespace_cdc_published_frontier__", Position: []byte("frontier"), UpdatedAt: frontierAt,
+		StreamID: "__namespace_cdc_published_frontier__", Position: frontier.Bytes(), UpdatedAt: frontierAt,
 	}))
 	bounds, err = journal.Bounds(ctx)
 	require.NoError(t, err)
@@ -118,7 +119,7 @@ func TestNamespaceWatchBoundsPerStreamProgressAcrossGenerations(t *testing.T) {
 		StreamID: "generation:table:stream", Position: []byte("dynamic"), UpdatedAt: now,
 	}))
 	require.NoError(t, journal.SaveProgress(ctx, lease, datastore.NamespaceCDCProgress{
-		StreamID: "__namespace_cdc_generation__", Position: []byte("durable"), UpdatedAt: now,
+		StreamID: "__namespace_cdc_generation__", Position: []byte(fmt.Sprintf("%d", now.UnixNano())), UpdatedAt: now,
 	}))
 
 	raw := newRawSession(t)

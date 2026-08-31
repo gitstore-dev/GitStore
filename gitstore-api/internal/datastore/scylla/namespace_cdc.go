@@ -25,8 +25,6 @@ const namespaceCDCGenerationProgress = "__namespace_cdc_generation__"
 
 const namespaceCDCPublishedFrontierProgress = "__namespace_cdc_published_frontier__"
 
-const namespaceCDCRegistrationQuietPeriod = 250 * time.Millisecond
-
 const namespaceCDCPendingLimit = 100000
 
 // RunNamespaceCDC consumes only the authoritative namespaces_by_uid CDC log.
@@ -39,10 +37,17 @@ func (s *scyllaDatastore) RunNamespaceCDC(ctx context.Context, materializer *wat
 	if err != nil {
 		return err
 	}
-	sequencer := newNamespaceCDCSequencer(materializer, lease, namespaceCDCRegistrationQuietPeriod)
+	sequencer := newNamespaceCDCSequencer(materializer, lease)
 	sequencer.publishedThrough = publishedThrough
 	sequencer.hasPublished = hasPublished
 	sequencer.persistFrontier = progress.SavePublishedFrontier
+	progress.beginGeneration = func(generationCtx context.Context, generation time.Time) error {
+		streams, err := s.namespaceCDCGenerationStreams(generationCtx, generation)
+		if err != nil {
+			return err
+		}
+		return sequencer.BeginGeneration(generationCtx, streams)
+	}
 	sequencerErr := make(chan error, 1)
 	go func() {
 		sequencerErr <- sequencer.Run(runCtx)
@@ -245,6 +250,7 @@ type namespaceCDCSequenceRequest struct {
 type namespaceCDCSequenceMessage struct {
 	kind     namespaceCDCSequenceMessageKind
 	streamID string
+	streams  []string
 	request  namespaceCDCSequenceRequest
 	result   chan error
 }
@@ -252,7 +258,8 @@ type namespaceCDCSequenceMessage struct {
 type namespaceCDCSequenceMessageKind uint8
 
 const (
-	namespaceCDCRegister namespaceCDCSequenceMessageKind = iota
+	namespaceCDCBeginGeneration namespaceCDCSequenceMessageKind = iota
+	namespaceCDCRegister
 	namespaceCDCUnregister
 	namespaceCDCEnqueue
 )
@@ -264,27 +271,29 @@ const (
 // position; the sequencer then orders publishable work by cdc$time, stream ID,
 // and arrival number before the journal linearization point.
 type namespaceCDCSequencer struct {
-	materializer            *watchjournal.Materializer
-	lease                   datastore.NamespaceWatchLease
-	registrationQuietPeriod time.Duration
-	messages                chan namespaceCDCSequenceMessage
-	done                    chan struct{}
-	publishedThrough        gocql.UUID
-	hasPublished            bool
-	persistFrontier         func(context.Context, gocql.UUID) error
+	materializer     *watchjournal.Materializer
+	lease            datastore.NamespaceWatchLease
+	messages         chan namespaceCDCSequenceMessage
+	done             chan struct{}
+	publishedThrough gocql.UUID
+	hasPublished     bool
+	persistFrontier  func(context.Context, gocql.UUID) error
 }
 
-func newNamespaceCDCSequencer(materializer *watchjournal.Materializer, lease datastore.NamespaceWatchLease, quietPeriod time.Duration) *namespaceCDCSequencer {
-	if quietPeriod <= 0 {
-		quietPeriod = namespaceCDCRegistrationQuietPeriod
-	}
+func newNamespaceCDCSequencer(materializer *watchjournal.Materializer, lease datastore.NamespaceWatchLease) *namespaceCDCSequencer {
 	return &namespaceCDCSequencer{
-		materializer:            materializer,
-		lease:                   lease,
-		registrationQuietPeriod: quietPeriod,
-		messages:                make(chan namespaceCDCSequenceMessage, 256),
-		done:                    make(chan struct{}),
+		materializer: materializer,
+		lease:        lease,
+		messages:     make(chan namespaceCDCSequenceMessage, 256),
+		done:         make(chan struct{}),
 	}
+}
+
+func (s *namespaceCDCSequencer) BeginGeneration(ctx context.Context, streams []string) error {
+	if s == nil || len(streams) == 0 {
+		return fmt.Errorf("namespace CDC generation has no streams")
+	}
+	return s.send(ctx, namespaceCDCSequenceMessage{kind: namespaceCDCBeginGeneration, streams: streams})
 }
 
 func (s *namespaceCDCSequencer) Submit(ctx context.Context, request namespaceCDCSequenceRequest) error {
@@ -342,7 +351,10 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 	var arrivalNumber uint64
 	publishedThrough := s.publishedThrough
 	hasPublished := s.hasPublished
-	registrationReadyAt := time.Time{}
+	expected := make(map[string]struct{})
+	registered := make(map[string]struct{})
+	generationPrepared := false
+	registrationComplete := false
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -351,9 +363,43 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 			return ctx.Err()
 		case message := <-s.messages:
 			switch message.kind {
+			case namespaceCDCBeginGeneration:
+				if len(active) != 0 || len(pending) != 0 {
+					err := fmt.Errorf("%w: CDC generation changed with %d active streams and %d pending records", datastore.ErrNamespaceWatchDiscontinuity, len(active), len(pending))
+					message.result <- err
+					return err
+				}
+				expected = make(map[string]struct{}, len(message.streams))
+				registered = make(map[string]struct{}, len(message.streams))
+				for _, streamID := range message.streams {
+					if streamID == "" {
+						err := fmt.Errorf("namespace CDC generation contains an empty stream ID")
+						message.result <- err
+						return err
+					}
+					expected[streamID] = struct{}{}
+				}
+				generationPrepared = true
+				registrationComplete = false
 			case namespaceCDCRegister:
+				if !generationPrepared {
+					err := fmt.Errorf("namespace CDC stream %s registered before generation discovery completed", message.streamID)
+					message.result <- err
+					return err
+				}
+				if _, ok := expected[message.streamID]; !ok {
+					err := fmt.Errorf("%w: unexpected CDC stream %s", datastore.ErrNamespaceWatchDiscontinuity, message.streamID)
+					message.result <- err
+					return err
+				}
+				if _, ok := registered[message.streamID]; ok {
+					err := fmt.Errorf("%w: CDC stream %s registered more than once", datastore.ErrNamespaceWatchDiscontinuity, message.streamID)
+					message.result <- err
+					return err
+				}
 				active[message.streamID]++
-				registrationReadyAt = time.Now().Add(s.registrationQuietPeriod)
+				registered[message.streamID] = struct{}{}
+				registrationComplete = len(registered) == len(expected)
 			case namespaceCDCUnregister:
 				if active[message.streamID] <= 1 {
 					delete(active, message.streamID)
@@ -398,7 +444,7 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 		case <-ticker.C:
 		}
 
-		if len(pending) == 0 || (!registrationReadyAt.IsZero() && time.Now().Before(registrationReadyAt)) {
+		if len(pending) == 0 || !registrationComplete {
 			continue
 		}
 		frontier, ready := namespaceCDCFrontier(active, watermarks)
@@ -672,10 +718,70 @@ func encodeCDCStreamID(streamID scyllacdc.StreamID) string {
 	return base64.RawURLEncoding.EncodeToString(streamID)
 }
 
+// namespaceCDCGenerationStreams reads the same generation metadata that
+// scylla-cdc-go uses before it starts a generation. Supplying the complete set
+// to the sequencer prevents any batch from publishing while another batch is
+// still being initialized, regardless of cluster size or scheduler delay.
+func (s *scyllaDatastore) namespaceCDCGenerationStreams(ctx context.Context, generation time.Time) ([]string, error) {
+	keyspaceMetadata := make(map[string]interface{})
+	err := s.session.Session.Query(
+		"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = ?",
+		s.keyspace,
+	).WithContext(ctx).Consistency(gocql.Quorum).MapScan(keyspaceMetadata)
+	if err != nil && !errors.Is(err, gocql.ErrNotFound) {
+		return nil, fmt.Errorf("detect Namespace CDC tablet topology: %w", err)
+	}
+
+	streams := make([]scyllacdc.StreamID, 0)
+	if keyspaceMetadata != nil && keyspaceMetadata["initial_tablets"] != nil {
+		iter := s.session.Session.Query(
+			"SELECT stream_id FROM system.cdc_streams WHERE keyspace_name = ? AND table_name = ? AND timestamp = ? AND stream_state = ?",
+			s.keyspace, "namespaces_by_uid", generation, 0,
+		).WithContext(ctx).Consistency(gocql.Quorum).Iter()
+		var stream scyllacdc.StreamID
+		for iter.Scan(&stream) {
+			streams = append(streams, append(scyllacdc.StreamID(nil), stream...))
+		}
+		if err := iter.Close(); err != nil {
+			return nil, fmt.Errorf("read Namespace CDC tablet generation %s: %w", generation, err)
+		}
+	} else {
+		iter := s.session.Session.Query(
+			"SELECT streams FROM system_distributed.cdc_streams_descriptions_v2 WHERE time = ?",
+			generation,
+		).WithContext(ctx).Consistency(gocql.Quorum).Iter()
+		var vnodeStreams []scyllacdc.StreamID
+		for iter.Scan(&vnodeStreams) {
+			for _, stream := range vnodeStreams {
+				streams = append(streams, append(scyllacdc.StreamID(nil), stream...))
+			}
+		}
+		if err := iter.Close(); err != nil {
+			return nil, fmt.Errorf("read Namespace CDC generation %s: %w", generation, err)
+		}
+	}
+	if len(streams) == 0 {
+		return nil, fmt.Errorf("Namespace CDC generation %s contains no streams", generation)
+	}
+
+	encoded := make([]string, 0, len(streams))
+	seen := make(map[string]struct{}, len(streams))
+	for _, stream := range streams {
+		streamID := encodeCDCStreamID(stream)
+		if _, ok := seen[streamID]; ok {
+			continue
+		}
+		seen[streamID] = struct{}{}
+		encoded = append(encoded, streamID)
+	}
+	return encoded, nil
+}
+
 type namespaceCDCProgressManager struct {
 	journal         datastore.NamespaceWatchJournal
 	lease           datastore.NamespaceWatchLease
 	observeProgress func(time.Time)
+	beginGeneration func(context.Context, time.Time) error
 }
 
 func (m *namespaceCDCProgressManager) GetCurrentGeneration(ctx context.Context) (time.Time, error) {
@@ -694,6 +800,11 @@ func (m *namespaceCDCProgressManager) GetCurrentGeneration(ctx context.Context) 
 }
 
 func (m *namespaceCDCProgressManager) StartGeneration(ctx context.Context, generation time.Time) error {
+	if m.beginGeneration != nil {
+		if err := m.beginGeneration(ctx, generation); err != nil {
+			return fmt.Errorf("prepare Namespace CDC generation: %w", err)
+		}
+	}
 	return m.journal.SaveProgress(ctx, m.lease, datastore.NamespaceCDCProgress{
 		StreamID:  namespaceCDCGenerationProgress,
 		Position:  []byte(strconv.FormatInt(generation.UnixNano(), 10)),

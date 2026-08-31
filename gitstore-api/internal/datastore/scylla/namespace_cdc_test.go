@@ -41,10 +41,11 @@ func (*sequencerStore) SaveProgress(context.Context, datastore.NamespaceWatchLea
 func TestNamespaceCDCSequencerOrdersConcurrentStreams(t *testing.T) {
 	store := &sequencerStore{}
 	materializer := watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{})
-	sequencer := newNamespaceCDCSequencer(materializer, datastore.NamespaceWatchLease{}, 20*time.Millisecond)
+	sequencer := newNamespaceCDCSequencer(materializer, datastore.NamespaceWatchLease{})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a", "stream-b"}))
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 	require.NoError(t, sequencer.Register(ctx, "stream-b"))
 
@@ -69,11 +70,12 @@ func TestNamespaceCDCSequencerOrdersConcurrentStreams(t *testing.T) {
 
 func TestNamespaceCDCSequencerFailsClosedWhenStreamMovesBackward(t *testing.T) {
 	store := &sequencerStore{}
-	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{}, time.Millisecond)
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a"}))
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 
 	base := time.Now().UTC()
@@ -86,7 +88,7 @@ func TestNamespaceCDCSequencerFailsClosedWhenStreamMovesBackward(t *testing.T) {
 
 func TestNamespaceCDCSequencerRejectsNewStreamBehindPublishedFrontier(t *testing.T) {
 	store := &sequencerStore{}
-	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{}, time.Millisecond)
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -94,11 +96,13 @@ func TestNamespaceCDCSequencerRejectsNewStreamBehindPublishedFrontier(t *testing
 
 	base := time.Now().UTC()
 	progressed := make(chan string, 2)
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a"}))
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("stream-a", "published", gocql.MinTimeUUID(base.Add(time.Second)), progressed)))
 	require.NoError(t, sequencer.Unregister("stream-a"))
 	assert.Equal(t, "published", <-progressed)
 
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-b"}))
 	require.NoError(t, sequencer.Register(ctx, "stream-b"))
 	err := sequencer.Submit(ctx, sequenceTestRequest("stream-b", "older", gocql.MinTimeUUID(base), progressed))
 	require.ErrorContains(t, err, "behind published frontier")
@@ -108,7 +112,7 @@ func TestNamespaceCDCSequencerRejectsNewStreamBehindPublishedFrontier(t *testing
 
 func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t *testing.T) {
 	store := &sequencerStore{}
-	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{}, time.Millisecond)
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -116,10 +120,12 @@ func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t
 
 	base := time.Now().UTC()
 	progressed := make(chan string, 1)
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a"}))
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("stream-a", "published", gocql.MinTimeUUID(base.Add(time.Second)), progressed)))
 	require.NoError(t, sequencer.Unregister("stream-a"))
 	require.Equal(t, "published", <-progressed)
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-b"}))
 	require.NoError(t, sequencer.Register(ctx, "stream-b"))
 	require.Error(t, sequencer.Submit(ctx, sequenceTestRequest("stream-b", "older", gocql.MinTimeUUID(base), make(chan string, 1))))
 	require.Error(t, <-done)
@@ -134,29 +140,57 @@ func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t
 func TestNamespaceCDCSequencerRejectsStreamBehindRestoredFrontier(t *testing.T) {
 	base := time.Now().UTC()
 	store := &sequencerStore{}
-	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{}, time.Millisecond)
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
 	sequencer.publishedThrough = gocql.MinTimeUUID(base.Add(time.Second))
 	sequencer.hasPublished = true
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"new-stream"}))
 	require.NoError(t, sequencer.Register(ctx, "new-stream"))
 	err := sequencer.Submit(ctx, sequenceTestRequest("new-stream", "older", gocql.MinTimeUUID(base), make(chan string, 1)))
 	require.ErrorContains(t, err, "behind published frontier")
 	require.ErrorContains(t, <-done, "behind published frontier")
 }
 
+func TestNamespaceCDCSequencerWaitsForEveryDiscoveredStream(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a", "stream-b"}))
+	require.NoError(t, sequencer.Register(ctx, "stream-a"))
+
+	progressed := make(chan string, 1)
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("stream-a", "held", gocql.MinTimeUUID(time.Now().UTC()), progressed)))
+	select {
+	case <-progressed:
+		t.Fatal("record published before all discovered streams registered")
+	case <-time.After(400 * time.Millisecond):
+	}
+
+	require.NoError(t, sequencer.Register(ctx, "stream-b"))
+	require.NoError(t, sequencer.Unregister("stream-a"))
+	require.NoError(t, sequencer.Unregister("stream-b"))
+	require.Equal(t, "held", <-progressed)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
 func TestNamespaceCDCSequencerAcceptsEmptyWindowBehindPublishedFrontier(t *testing.T) {
 	base := time.Now().UTC()
 	store := &sequencerStore{}
-	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{}, time.Millisecond)
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
 	sequencer.publishedThrough = gocql.MinTimeUUID(base.Add(time.Second))
 	sequencer.hasPublished = true
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"new-stream"}))
 	require.NoError(t, sequencer.Register(ctx, "new-stream"))
 	progressed := make(chan string, 1)
 	request := sequenceTestRequest("new-stream", "empty", gocql.MinTimeUUID(base), progressed)
@@ -172,10 +206,11 @@ func TestNamespaceCDCSequencerAcceptsEmptyWindowBehindPublishedFrontier(t *testi
 
 func TestNamespaceCDCSequencerSkipsUncommittedAdditionBeforeProgress(t *testing.T) {
 	store := &sequencerStore{}
-	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{}, time.Millisecond)
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a"}))
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 
 	progressed := make(chan string, 1)
