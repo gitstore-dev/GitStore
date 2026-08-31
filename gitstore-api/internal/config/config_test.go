@@ -188,6 +188,29 @@ func TestLoad_RejectsOversizedNamespaceReplayLimit(t *testing.T) {
 	assert.Contains(t, err.Error(), "constraint \"max\" violated")
 }
 
+func TestLoad_RejectsOversizedNamespaceWatchBucket(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE", "4097")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Config.Watch.Namespace.BucketSize")
+	assert.Contains(t, err.Error(), "constraint \"max\" violated")
+}
+
+func TestLoad_RejectsMaterializerLagAtCDCRetention(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS", "1209600")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "maximum materializer lag must be less than CDC retention")
+}
+
 func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()

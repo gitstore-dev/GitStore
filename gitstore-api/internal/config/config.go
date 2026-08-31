@@ -129,7 +129,7 @@ type NamespaceWatchConfig struct {
 	JournalRetentionSeconds      int  `mapstructure:"journal_retention_seconds" validate:"min=1"`
 	CDCRetentionSeconds          int  `mapstructure:"cdc_retention_seconds" validate:"min=1"`
 	CDCConfidenceWindowMillis    int  `mapstructure:"cdc_confidence_window_millis" validate:"min=1"`
-	BucketSize                   int  `mapstructure:"bucket_size" validate:"min=1"`
+	BucketSize                   int  `mapstructure:"bucket_size" validate:"min=1,max=4096"`
 	ReadBatchSize                int  `mapstructure:"read_batch_size" validate:"min=1"`
 	MaxReplayEvents              int  `mapstructure:"max_replay_events" validate:"min=1,max=100000"`
 	SubscriberBuffer             int  `mapstructure:"subscriber_buffer" validate:"min=1,max=256"`
@@ -349,6 +349,9 @@ func validateNamespaceWatchConfig(w *NamespaceWatchConfig) error {
 	}
 	if w.CDCRetentionSeconds < w.JournalRetentionSeconds {
 		return fmt.Errorf("invalid Namespace watch bounds: CDC retention must be at least journal retention")
+	}
+	if w.MaxMaterializerLagSeconds >= w.CDCRetentionSeconds {
+		return fmt.Errorf("invalid Namespace watch bounds: maximum materializer lag must be less than CDC retention")
 	}
 	if w.ReadBatchSize > w.BucketSize {
 		return fmt.Errorf("invalid Namespace watch bounds: read batch size must not exceed bucket size")

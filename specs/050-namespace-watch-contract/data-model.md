@@ -232,6 +232,8 @@ WatchRegistration
 ## Retention and Recovery Invariants
 
 - CDC TTL (14 days) is greater than journal TTL (7 days).
+- The configurable readiness lag ceiling remains strictly below CDC retention,
+  so a reader cannot be admitted after its recovery source has expired.
 - A materializer lag above 60 seconds degrades watch readiness; lag approaching
   seven days requires operator intervention before journal expiry.
 - Progress never advances past an event that was not durably journaled.
