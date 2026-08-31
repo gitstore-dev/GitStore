@@ -393,7 +393,7 @@ dependency per CLAUDE.md) with distinct retry classes:
   small-file reconciliation.
 
 **Local development**: MinIO in `compose.yml`/`compose.scylla.yml`
-(matching the existing `make scylla`/`make compose-scylla` pattern), File
+(matching the existing `make scylla`/`make compose DATASTORE=scylla` pattern), File
 controller reads `GITSTORE_FILE__S3_ENDPOINT` the same way the API reads its
 other backend endpoints today.
 

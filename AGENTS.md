@@ -44,15 +44,15 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `make api` — run `gitstore-api` locally in the foreground. Requires `gitstore-api/.env` or shell env for required auth secrets.
 - `make controller` — run `gitstore-controller-manager` locally in the foreground on port 5001. Requires `GITSTORE_CONTROLLER__API_URI` pointing at a running API (default: `http://localhost:4000/graphql`).
 - `make dev` — run the native git service and API together in the foreground with shutdown trapping.
-- `make compose` — run all three core services with the Docker Compose `local` profile and shared `CONFIG_FILE` (default: `./config/config.toml`) in the foreground; no service `.env` files are required.
+- `make compose` — run all three core services with the Docker Compose `local` profile and shared `CONFIG_FILE` (default: `./config/config.toml`) in the foreground using the default in-memory datastore; no service `.env` files are required.
+- `make compose DATASTORE=scylla` — run the full core stack with single-node Scylla from `compose.yml` + `compose.scylla.yml`.
+- `make compose DATASTORE=scylla PROFILE=cluster` — run the full core stack with the three-node Scylla cluster from `compose.yml` + `compose.scylla.cluster.yml`.
 - `make compose-config-check` — validate local-profile config selection, explicit binary arguments, and read-only config/policy mounts without starting services.
 - `make validate-local-config` — verify the selected `CONFIG_FILE` and local RBAC policy exist and are readable.
 - `DETACH=1 make compose` — run the core Docker Compose stack in the background.
 - `make scylla` — run only local single-node Scylla services from `compose.yml` + `compose.scylla.yml` (CI-friendly, `--smp=1`, replication factor 1).
 - `make scylla PROFILE=cluster` — run only local three-node Scylla services from `compose.yml` + `compose.scylla.cluster.yml` (replication factor 3; tune per-node shards with `SCYLLA_CLUSTER_SMP`, default `1` for Docker Desktop compatibility).
-- `make compose-scylla` — run the full core stack with single-node Scylla from `compose.yml` + `compose.scylla.yml`.
-- `make compose-scylla PROFILE=cluster` — run the full core stack with the three-node Scylla cluster from `compose.yml` + `compose.scylla.cluster.yml`.
-- `DETACH=1 make scylla` and `DETACH=1 make compose-scylla` — run those compose targets in the background.
+- `DETACH=1 make scylla` and `DETACH=1 make compose DATASTORE=scylla` — run those compose targets in the background.
 - `make ps`, `make logs`, `make stop`, `make down` — compose lifecycle helpers. Use `SERVICE=<name>` with `logs` or `stop` to scope the command; `SERVICE=scylla` includes both the single-node service and the three-node cluster services.
 - `make gen-admin-password ADMIN_PASSWORD=<password>` — generate a bcrypt hash for the given password and write `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` to `gitstore-api/.env` (creates the file if absent, updates the key if present). Run this once when setting up a fresh environment or changing the admin password.
 - `make gen-jwt-secret` — generate a random JWT secret and append `GITSTORE_AUTH__JWT__SECRET` to `gitstore-api/.env`. Run once on initial setup.

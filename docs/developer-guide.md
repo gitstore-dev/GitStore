@@ -137,16 +137,22 @@ The default is `1`, with
 `SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS=2048`, so the three-node
 topology starts reliably on Docker Desktop without requiring host AIO tuning.
 
-Start the full stack with Scylla:
+Start the full stack with the default in-memory datastore:
 
 ```bash
-make compose-scylla DETACH=1
+make compose DETACH=1
+```
+
+Start the full stack with single-node Scylla:
+
+```bash
+make compose DATASTORE=scylla DETACH=1
 ```
 
 To run the full stack against the three-node local cluster:
 
 ```bash
-make compose-scylla PROFILE=cluster DETACH=1
+make compose DATASTORE=scylla PROFILE=cluster DETACH=1
 ```
 
 Lifecycle helpers (`make ps`, `make logs`, `make stop`, and `make down`) load
