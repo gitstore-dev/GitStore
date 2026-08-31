@@ -49,6 +49,7 @@ type capacityConfig struct {
 	burstInterval                  time.Duration
 	burstSize                      int
 	mutationWorkers                int
+	mutationDrainTimeout           time.Duration
 	allowMissingMetrics            bool
 }
 
@@ -110,20 +111,36 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 	workload := runCapacityMutationWorkload(t, client, cfg, livePrefix, maxTransitions)
 	soakElapsed := time.Since(soakStarted)
 	recovery := <-recoveryResult
+	t.Logf("load accounting produced=%d enqueued=%d backpressured=%d attempted=%d admitted=%d acknowledged=%d failed=%d drain_timed_out=%t",
+		workload.produced, workload.enqueued, workload.backpressured, workload.attempted, workload.admitted,
+		workload.acknowledged.count(), workload.failed, workload.drainTimedOut)
 	require.NoError(t, recovery.err)
 	require.LessOrEqual(t, recovery.duration, 30*time.Second, "replacement endpoint must recover within 30s")
 	metricsEnd := scrapeCapacityMetrics(t, client, cfg)
 	metricsElapsed := time.Since(soakStarted)
 
 	require.Greater(t, workload.attempted, 0)
+	require.False(t, workload.drainTimedOut, "mutation workers must drain within the bounded shutdown window")
+	require.Equal(t, workload.produced, workload.sustained+workload.bursts, "all produced work must be classified")
+	require.Zero(t, workload.backpressured, "configured load must not be dropped by the bounded worker queue")
+	require.Equal(t, workload.produced, workload.enqueued, "every produced transition must enter the bounded worker queue")
+	require.Equal(t, workload.enqueued, workload.attempted, "every enqueued transition must be attempted before shutdown")
+	require.Equal(t, workload.attempted, workload.admitted+workload.failed, "every attempt must be admitted or reported failed")
+	require.Equal(t, workload.admitted, workload.acknowledged.count(), "admitted transitions must match acknowledged transitions")
 	errorRate := float64(workload.failed) / float64(workload.attempted)
 	require.Less(t, errorRate, .001, "internal GraphQL mutation error rate must remain below 0.1%%")
 	expectedSustained := int(cfg.duration/(100*time.Millisecond)) - 2
 	if expectedSustained > 0 {
 		require.GreaterOrEqual(t, workload.sustained, expectedSustained, "must schedule 10 sustained transitions/second")
 	}
-	if cfg.duration >= cfg.burstInterval {
-		require.GreaterOrEqual(t, workload.bursts, cfg.burstSize, "must execute at least one 100/s burst")
+	expectedBurstRounds := int(cfg.duration / cfg.burstInterval)
+	if cfg.duration%cfg.burstInterval == 0 && expectedBurstRounds > 0 {
+		// A tick exactly at the context deadline is not part of the measured window.
+		expectedBurstRounds--
+	}
+	if expectedBurstRounds > 0 {
+		require.GreaterOrEqual(t, workload.bursts, expectedBurstRounds*cfg.burstSize,
+			"must produce every configured 100/s burst inside the measured window")
 	}
 
 	catchupDeadline := time.Now().Add(30 * time.Second)
@@ -151,8 +168,9 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 	for err := range readerErrors {
 		require.NoError(t, err)
 	}
-	t.Logf("duration=%s load_elapsed=%s subscribers=%d attempted=%d acknowledged=%d errors=%d error_rate=%.4f%% p95=%s p99=%s replay_samples=%d replay_p95=%s recovery=%s",
-		cfg.duration, soakElapsed, cfg.subscribers, workload.attempted, workload.acknowledged.count(), workload.failed,
+	t.Logf("duration=%s load_elapsed=%s subscribers=%d produced=%d enqueued=%d backpressured=%d attempted=%d admitted=%d acknowledged=%d errors=%d error_rate=%.4f%% p95=%s p99=%s replay_samples=%d replay_p95=%s recovery=%s",
+		cfg.duration, soakElapsed, cfg.subscribers, workload.produced, workload.enqueued, workload.backpressured,
+		workload.attempted, workload.admitted, workload.acknowledged.count(), workload.failed,
 		100*errorRate, p95, p99, len(replayDurations), replayP95, recovery.duration)
 }
 
@@ -174,6 +192,7 @@ func loadCapacityConfig(t *testing.T) capacityConfig {
 		burstInterval:        capacityEnvDuration(t, "NAMESPACE_WATCH_CAPACITY_BURST_INTERVAL", time.Minute),
 		burstSize:            capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_BURST_SIZE", 100),
 		mutationWorkers:      capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_MUTATION_WORKERS", 20),
+		mutationDrainTimeout: capacityMutationDrainTimeout,
 		allowMissingMetrics:  os.Getenv("NAMESPACE_WATCH_CAPACITY_ALLOW_MISSING_METRICS") == "1",
 	}
 	require.NotEmpty(t, cfg.apiA, "NAMESPACE_WATCH_API_A is required")
@@ -548,42 +567,68 @@ type capacityMutationJob struct {
 }
 
 type capacityWorkload struct {
-	attempted, failed, sustained, bursts int
-	acknowledged                         *capacityBitset
+	produced, enqueued, backpressured              int
+	attempted, admitted, failed, sustained, bursts int
+	drainTimedOut                                  bool
+	acknowledged                                   *capacityBitset
 }
+
+const capacityMutationDrainTimeout = 30 * time.Second
 
 func runCapacityMutationWorkload(t *testing.T, client *http.Client, cfg capacityConfig, prefix string, maxTransitions int) capacityWorkload {
 	t.Helper()
-	jobs := make(chan capacityMutationJob, 2048)
+	// Keep the queue deliberately small: it absorbs scheduler jitter but cannot
+	// turn an under-capacity deployment into an unbounded post-soak drain.
+	jobs := make(chan capacityMutationJob, max(1, cfg.mutationWorkers*2))
 	acknowledged := newCapacityBitset(maxTransitions + 2)
 	var sequence atomic.Int64
-	var attempted, failed, sustained, bursts atomic.Int64
+	var produced, enqueued, backpressured atomic.Int64
+	var attempted, admitted, failed, sustained, bursts atomic.Int64
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	defer cancelWorkers()
 	var workers sync.WaitGroup
 	for range cfg.mutationWorkers {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for job := range jobs {
+			for {
+				if workerCtx.Err() != nil {
+					return
+				}
+				job, ok := <-jobs
+				if !ok {
+					return
+				}
 				attempted.Add(1)
 				primary, peer := cfg.apiA, cfg.apiB
 				if job.seq%2 == 1 {
 					primary, peer = peer, primary
 				}
 				name := capacityName(job.prefix, job.seq)
-				if err := createCapacityNamespace(client, primary, cfg.token, name); err != nil {
-					peerErr := createCapacityNamespace(client, peer, cfg.token, name)
-					if peerErr != nil && !capacityNamespaceExists(client, peer, cfg.token, name) {
+				if err := createCapacityNamespaceContext(workerCtx, client, primary, cfg.token, name); err != nil {
+					peerErr := createCapacityNamespaceContext(workerCtx, client, peer, cfg.token, name)
+					if peerErr != nil && !capacityNamespaceExistsContext(workerCtx, client, peer, cfg.token, name) {
 						failed.Add(1)
 						continue
 					}
 				}
 				acknowledged.mark(job.seq)
+				admitted.Add(1)
 			}
 		}()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.duration)
-	defer cancel()
+	ctx, cancelSchedule := context.WithTimeout(context.Background(), cfg.duration)
+	defer cancelSchedule()
+	enqueue := func(job capacityMutationJob) {
+		produced.Add(1)
+		select {
+		case jobs <- job:
+			enqueued.Add(1)
+		default:
+			backpressured.Add(1)
+		}
+	}
 	var schedulers sync.WaitGroup
 	schedulers.Add(2)
 	go func() {
@@ -596,12 +641,8 @@ func runCapacityMutationWorkload(t *testing.T, client *http.Client, cfg capacity
 				return
 			case <-ticker.C:
 				seq := int(sequence.Add(1))
-				select {
-				case jobs <- capacityMutationJob{prefix: prefix, seq: seq}:
-					sustained.Add(1)
-				case <-ctx.Done():
-					return
-				}
+				sustained.Add(1)
+				enqueue(capacityMutationJob{prefix: prefix, seq: seq})
 			}
 		}
 	}()
@@ -622,13 +663,8 @@ func runCapacityMutationWorkload(t *testing.T, client *http.Client, cfg capacity
 						return
 					case <-burstTicker.C:
 						seq := int(sequence.Add(1))
-						select {
-						case jobs <- capacityMutationJob{prefix: prefix, seq: seq}:
-							bursts.Add(1)
-						case <-ctx.Done():
-							burstTicker.Stop()
-							return
-						}
+						bursts.Add(1)
+						enqueue(capacityMutationJob{prefix: prefix, seq: seq})
 					}
 				}
 				burstTicker.Stop()
@@ -637,11 +673,121 @@ func runCapacityMutationWorkload(t *testing.T, client *http.Client, cfg capacity
 	}()
 	schedulers.Wait()
 	close(jobs)
-	workers.Wait()
+	workersDone := make(chan struct{})
+	go func() {
+		workers.Wait()
+		close(workersDone)
+	}()
+	drainTimeout := cfg.mutationDrainTimeout
+	if drainTimeout <= 0 {
+		drainTimeout = capacityMutationDrainTimeout
+	}
+	drainTimer := time.NewTimer(drainTimeout)
+	drainTimedOut := false
+	select {
+	case <-workersDone:
+		// Go 1.25 timer channels do not retain stale values after Stop. Avoid an
+		// unconditional drain here: if worker completion wins the select while
+		// expiry is concurrently becoming ready, receiving can block forever.
+		drainTimer.Stop()
+	case <-drainTimer.C:
+		drainTimedOut = true
+		cancelWorkers()
+		<-workersDone
+	}
 	return capacityWorkload{
-		attempted: int(attempted.Load()), failed: int(failed.Load()),
+		produced: int(produced.Load()), enqueued: int(enqueued.Load()), backpressured: int(backpressured.Load()),
+		attempted: int(attempted.Load()), admitted: int(admitted.Load()), failed: int(failed.Load()), drainTimedOut: drainTimedOut,
 		sustained: int(sustained.Load()), bursts: int(bursts.Load()), acknowledged: acknowledged,
 	}
+}
+
+func TestCapacityMutationWorkloadAccountsForBackpressure(t *testing.T) {
+	t.Run("keeps produced and admitted load equal when workers keep up", func(t *testing.T) {
+		server := newCapacityMutationServer(t, 0)
+		defer server.Close()
+		cfg := capacityConfig{
+			apiA: server.URL, apiB: server.URL, duration: 350 * time.Millisecond,
+			burstInterval: 200 * time.Millisecond, burstSize: 3, mutationWorkers: 4,
+		}
+
+		workload := runCapacityMutationWorkload(t, server.Client(), cfg, "fast-", 64)
+
+		require.False(t, workload.drainTimedOut)
+		require.Zero(t, workload.backpressured)
+		require.Equal(t, workload.produced, workload.enqueued)
+		require.Equal(t, workload.enqueued, workload.attempted)
+		require.Equal(t, workload.attempted, workload.admitted)
+		require.Equal(t, workload.attempted, workload.acknowledged.count())
+		require.Zero(t, workload.failed)
+		require.GreaterOrEqual(t, workload.sustained, 2)
+		require.GreaterOrEqual(t, workload.bursts, 3)
+	})
+
+	t.Run("reports queue saturation without stretching the scheduler", func(t *testing.T) {
+		server := newCapacityMutationServer(t, 300*time.Millisecond)
+		defer server.Close()
+		cfg := capacityConfig{
+			apiA: server.URL, apiB: server.URL, duration: 350 * time.Millisecond,
+			burstInterval: 100 * time.Millisecond, burstSize: 50, mutationWorkers: 1,
+		}
+		started := time.Now()
+
+		workload := runCapacityMutationWorkload(t, server.Client(), cfg, "slow-", 512)
+
+		require.Less(t, time.Since(started), 2*time.Second)
+		require.False(t, workload.drainTimedOut)
+		require.Positive(t, workload.backpressured)
+		require.Less(t, workload.enqueued, workload.produced)
+		require.Equal(t, workload.enqueued, workload.attempted)
+		require.Equal(t, workload.attempted, workload.admitted)
+	})
+
+	t.Run("cancels in-flight requests when the bounded drain expires", func(t *testing.T) {
+		releaseHandler := make(chan struct{})
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			select {
+			case <-r.Context().Done():
+			case <-releaseHandler:
+			}
+		}))
+		t.Cleanup(func() {
+			close(releaseHandler)
+			server.Close()
+		})
+		cfg := capacityConfig{
+			apiA: server.URL, apiB: server.URL, duration: 150 * time.Millisecond,
+			burstInterval: 100 * time.Millisecond, burstSize: 20, mutationWorkers: 1,
+			mutationDrainTimeout: 50 * time.Millisecond,
+		}
+		started := time.Now()
+
+		workload := runCapacityMutationWorkload(t, server.Client(), cfg, "blocked-", 128)
+
+		require.Less(t, time.Since(started), time.Second)
+		require.True(t, workload.drainTimedOut)
+		require.Positive(t, workload.attempted)
+	})
+}
+
+func newCapacityMutationServer(t *testing.T, delay time.Duration) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		var request gqlRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode mutation request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		input, _ := request.Variables["input"].(map[string]any)
+		metadata, _ := input["metadata"].(map[string]any)
+		name, _ := metadata["name"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"data":{"createNamespace":{"namespace":{"metadata":{"name":%q}}}}}`, name)
+	}))
 }
 
 func createCapacityRange(t *testing.T, client *http.Client, cfg capacityConfig, prefix string, count int) {
@@ -681,9 +827,18 @@ func createCapacityNamespaceForReplay(client *http.Client, cfg capacityConfig, n
 	if sequence%2 == 1 {
 		primary, peer = peer, primary
 	}
-	endpoints := [2]string{primary, peer}
+	retryCfg := cfg
+	retryCfg.apiA, retryCfg.apiB = primary, peer
+	return createCapacityNamespaceRetrying(client, retryCfg, name, capacityReplayCreateTimeout)
+}
+
+func createCapacityNamespaceRetrying(client *http.Client, cfg capacityConfig, name string, retryWindow time.Duration) error {
+	if retryWindow <= 0 {
+		return fmt.Errorf("create retry window expired for Namespace %q", name)
+	}
+	endpoints := [2]string{cfg.apiA, cfg.apiB}
 	var lastErr error
-	deadline := time.Now().Add(capacityReplayCreateTimeout)
+	deadline := time.Now().Add(retryWindow)
 	for attempt := 0; ; attempt++ {
 		endpoint := endpoints[attempt%len(endpoints)]
 		lastErr = createCapacityNamespace(client, endpoint, cfg.token, name)
@@ -693,15 +848,16 @@ func createCapacityNamespaceForReplay(client *http.Client, cfg capacityConfig, n
 		if !capacityCreateRetryable(lastErr) && !capacityCreateAmbiguous(lastErr) {
 			return lastErr
 		}
-		if confirmCapacityNamespaceExists(cfg, name, 750*time.Millisecond) {
+		confirmationWindow := min(750*time.Millisecond, time.Until(deadline))
+		if confirmationWindow > 0 && confirmCapacityNamespaceExists(cfg, name, confirmationWindow) {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("create remained retryable for %s: %w", capacityReplayCreateTimeout, lastErr)
+			return fmt.Errorf("create remained retryable for %s: %w", retryWindow, lastErr)
 		}
 		backoff := time.Duration(1<<min(attempt, 4)) * 25 * time.Millisecond
 		backoff = min(backoff, capacityReplayCreateMaxBackoff)
-		time.Sleep(backoff)
+		time.Sleep(min(backoff, time.Until(deadline)))
 	}
 }
 
@@ -747,6 +903,10 @@ func confirmCapacityNamespaceExists(cfg capacityConfig, name string, timeout tim
 }
 
 func createCapacityNamespace(client *http.Client, apiURL, token, name string) error {
+	return createCapacityNamespaceContext(context.Background(), client, apiURL, token, name)
+}
+
+func createCapacityNamespaceContext(ctx context.Context, client *http.Client, apiURL, token, name string) error {
 	body, err := json.Marshal(gqlRequest{
 		Query: `mutation($input: CreateNamespaceInput!) { createNamespace(input: $input) { namespace { metadata { name } } } }`,
 		Variables: map[string]any{"input": map[string]any{
@@ -758,7 +918,7 @@ func createCapacityNamespace(client *http.Client, apiURL, token, name string) er
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -799,6 +959,10 @@ func createCapacityNamespace(client *http.Client, apiURL, token, name string) er
 }
 
 func capacityNamespaceExists(client *http.Client, apiURL, token, name string) bool {
+	return capacityNamespaceExistsContext(context.Background(), client, apiURL, token, name)
+}
+
+func capacityNamespaceExistsContext(ctx context.Context, client *http.Client, apiURL, token, name string) bool {
 	body, err := json.Marshal(gqlRequest{
 		Query:     `query($name: String!) { namespace(by: {identifier: $name}) { id } }`,
 		Variables: map[string]any{"name": name},
@@ -806,7 +970,7 @@ func capacityNamespaceExists(client *http.Client, apiURL, token, name string) bo
 	if err != nil {
 		return false
 	}
-	req, err := http.NewRequest(http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
 	if err != nil {
 		return false
 	}
@@ -984,7 +1148,9 @@ func coordinateCapacityReplacement(client *http.Client, cfg capacityConfig, pref
 	defer conn.Close()
 
 	name := capacityName(prefix, sequence)
-	if err := createCapacityNamespace(client, peerEndpoint, cfg.token, name); err != nil {
+	retryCfg := cfg
+	retryCfg.apiA, retryCfg.apiB = peerEndpoint, cfg.replacement
+	if err := createCapacityNamespaceRetrying(client, retryCfg, name, time.Until(recoveryDeadline)); err != nil {
 		result.err = fmt.Errorf("create post-replacement transition: %w", err)
 		return result
 	}
