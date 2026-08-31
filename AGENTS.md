@@ -53,7 +53,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `make compose-scylla` — run the full core stack with single-node Scylla from `compose.yml` + `compose.scylla.yml`.
 - `make compose-scylla PROFILE=cluster` — run the full core stack with the three-node Scylla cluster from `compose.yml` + `compose.scylla.cluster.yml`.
 - `DETACH=1 make scylla` and `DETACH=1 make compose-scylla` — run those compose targets in the background.
-- `make ps`, `make logs`, `make stop`, `make down` — compose lifecycle helpers. Use `SERVICE=<name>` with `logs` or `stop` to scope the command.
+- `make ps`, `make logs`, `make stop`, `make down` — compose lifecycle helpers. Use `SERVICE=<name>` with `logs` or `stop` to scope the command; `SERVICE=scylla` includes both the single-node service and the three-node cluster services.
 - `make gen-admin-password ADMIN_PASSWORD=<password>` — generate a bcrypt hash for the given password and write `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` to `gitstore-api/.env` (creates the file if absent, updates the key if present). Run this once when setting up a fresh environment or changing the admin password.
 - `make gen-jwt-secret` — generate a random JWT secret and append `GITSTORE_AUTH__JWT__SECRET` to `gitstore-api/.env`. Run once on initial setup.
 - `make gen-hmac-secret` — generate a random HMAC secret and append `GITSTORE_AUTH__GRPC__HMAC_SECRET` to `gitstore-api/.env`. Required for gRPC inter-service auth (git-service ↔ API). Run once on initial setup.

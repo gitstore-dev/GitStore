@@ -13,6 +13,7 @@ API_ENV_FILE ?= $(API_DIR)/.env
 CONFIG_FILE ?= ./config/config.toml
 POLICY_FILE := ./config/policy.yaml
 LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
+LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml -f compose.admin.yml
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
 DIFF_BASE ?= origin/main
 
@@ -22,6 +23,8 @@ SCYLLA_CLUSTER_SMP ?= 1
 SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS ?= 2048
 SCYLLA_COMPOSE_FILE = $(if $(filter cluster,$(PROFILE)),compose.scylla.cluster.yml,compose.scylla.yml)
 SCYLLA_SERVICES = $(if $(filter cluster,$(PROFILE)),scylla-1 scylla-2 scylla-3 scylla-init,scylla scylla-init)
+SCYLLA_LIFECYCLE_SERVICES = scylla scylla-1 scylla-2 scylla-3 scylla-init
+COMPOSE_SERVICE = $(if $(filter scylla,$(SERVICE)),$(SCYLLA_LIFECYCLE_SERVICES),$(SERVICE))
 DETACH_FLAG := $(if $(filter 1 true yes,$(DETACH)),-d,)
 SERVICE ?=
 
@@ -70,8 +73,8 @@ help: ## Show available targets and common variables.
 	@printf "  DETACH=1                  Run compose start targets in the background\n"
 	@printf "  COMPOSE_BAKE=true         Compose build bake setting for Docker Compose\n"
 	@printf "  PROFILE=%s                Scylla profile: single or cluster\n" "$(PROFILE)"
-	@printf "  SERVICE=<name>            Limit logs/stop to one compose service\n"
-	@printf "  SCYLLA_COMPOSE_FILE=%s  Derived Scylla overlay used by scylla/compose-scylla/ps/logs/stop/down\n" "$(SCYLLA_COMPOSE_FILE)"
+	@printf "  SERVICE=<name>            Limit logs/stop to one compose service; SERVICE=scylla includes all Scylla variants\n"
+	@printf "  SCYLLA_COMPOSE_FILE=%s  Derived Scylla overlay used by scylla/compose-scylla\n" "$(SCYLLA_COMPOSE_FILE)"
 	@printf "  SCYLLA_CLUSTER_SMP=%s     CPU shards per Scylla node for PROFILE=cluster\n" "$(SCYLLA_CLUSTER_SMP)"
 	@printf "  SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS=%s  Networking AIO blocks per cluster node\n" "$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)"
 	@printf "  GIT_DATA_DIR=%s\n" "$(GIT_DATA_DIR)"
@@ -179,16 +182,16 @@ compose-scylla: validate-local-config
 	@SCYLLA_CLUSTER_SMP="$(SCYLLA_CLUSTER_SMP)" SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS="$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)" $(LOCAL_COMPOSE) -f $(SCYLLA_COMPOSE_FILE) up --build $(DETACH_FLAG)
 
 ps: ## Show compose service status.
-	@$(LOCAL_COMPOSE) -f $(SCYLLA_COMPOSE_FILE) -f compose.admin.yml ps
+	@$(LIFECYCLE_COMPOSE) ps
 
 logs: ## Follow compose logs; optionally pass SERVICE=<name>.
-	@$(LOCAL_COMPOSE) -f $(SCYLLA_COMPOSE_FILE) -f compose.admin.yml logs -f $(SERVICE)
+	@$(LIFECYCLE_COMPOSE) logs -f $(COMPOSE_SERVICE)
 
 stop: ## Stop compose services; optionally pass SERVICE=<name>.
-	@$(LOCAL_COMPOSE) -f $(SCYLLA_COMPOSE_FILE) -f compose.admin.yml stop $(SERVICE)
+	@$(LIFECYCLE_COMPOSE) stop $(COMPOSE_SERVICE)
 
 down: ## Stop and remove compose services and networks.
-	@$(LOCAL_COMPOSE) -f $(SCYLLA_COMPOSE_FILE) -f compose.admin.yml down
+	@$(LIFECYCLE_COMPOSE) down --remove-orphans
 
 build: ## Build Rust and Go services.
 	@cd "$(GIT_SERVICE_DIR)" && cargo build --verbose

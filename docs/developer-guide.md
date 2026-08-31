@@ -149,6 +149,17 @@ To run the full stack against the three-node local cluster:
 make compose-scylla PROFILE=cluster DETACH=1
 ```
 
+Lifecycle helpers (`make ps`, `make logs`, `make stop`, and `make down`) load
+both Scylla overlays so they can see services started by either profile.
+`SERVICE=scylla` is treated as a convenience alias for all Scylla variants
+(`scylla`, `scylla-1`, `scylla-2`, `scylla-3`, and `scylla-init`):
+
+```bash
+make logs SERVICE=scylla
+make stop SERVICE=scylla
+make down
+```
+
 Run Scylla-backed API datastore tests after Scylla is reachable:
 
 ```bash
