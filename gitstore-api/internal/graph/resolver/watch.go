@@ -176,7 +176,7 @@ func addNamespaceWatchSubscriptionError(ctx context.Context, err error) {
 	transport.AddSubscriptionError(ctx, gqlErr)
 }
 
-func sendNamespaceWatchOutput[T any](ctx context.Context, out chan<- T, value T, timeout time.Duration) error {
+func sendNamespaceWatchOutput[T any](ctx context.Context, out chan<- T, value T, timeout time.Duration, metrics *watchjournal.Metrics) error {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
@@ -188,6 +188,10 @@ func sendNamespaceWatchOutput[T any](ctx context.Context, out chan<- T, value T,
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-timer.C:
+		if metrics != nil {
+			metrics.IncOverflow()
+			metrics.IncExpiry(watchjournal.ReasonSubscriberOverflow)
+		}
 		return &watchjournal.TerminalError{
 			Code: watchjournal.CodeExpired, Reason: watchjournal.ReasonSubscriberOverflow,
 		}
@@ -241,7 +245,7 @@ func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.
 					addNamespaceWatchSubscriptionError(ctx, convertErr)
 					return
 				}
-				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond); sendErr != nil {
+				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond, r.namespaceMetrics); sendErr != nil {
 					if streamCtx.Err() == nil {
 						addNamespaceWatchSubscriptionError(streamCtx, namespaceWatchGraphQLError(sendErr))
 					}

@@ -32,6 +32,7 @@ type Resolver struct {
 	namespaceJournal    datastore.NamespaceWatchJournal
 	namespaceSubscriber *watchjournal.Subscriber
 	namespaceWatch      config.NamespaceWatchConfig
+	namespaceMetrics    *watchjournal.Metrics
 }
 
 // ResolverDeps contains dependencies for the root GraphQL resolver.
@@ -96,6 +97,7 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 		namespaceJournal:    deps.NamespaceJournal,
 		namespaceSubscriber: namespaceSubscriber,
 		namespaceWatch:      deps.NamespaceWatch,
+		namespaceMetrics:    deps.NamespaceMetrics,
 	}, nil
 }
 

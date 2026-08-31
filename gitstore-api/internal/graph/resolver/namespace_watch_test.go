@@ -6,6 +6,7 @@ package resolver
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -78,11 +81,22 @@ func TestTypedAndGenericNamespaceWatchShareBootstrapAndEvents(t *testing.T) {
 }
 
 func TestNamespaceWatchOutputUsesBoundedDelivery(t *testing.T) {
-	err := sendNamespaceWatchOutput(context.Background(), make(chan int), 1, time.Millisecond)
+	registry := prometheus.NewRegistry()
+	metrics, err := watchjournal.NewMetrics(registry)
+	require.NoError(t, err)
+	err = sendNamespaceWatchOutput(context.Background(), make(chan int), 1, time.Millisecond, metrics)
 	terminal, ok := watchjournal.AsTerminal(err)
 	require.True(t, ok)
 	assert.Equal(t, watchjournal.CodeExpired, terminal.Code)
 	assert.Equal(t, watchjournal.ReasonSubscriberOverflow, terminal.Reason)
+	require.NoError(t, testutil.GatherAndCompare(registry, strings.NewReader(`
+# HELP gitstore_namespace_watch_expired_total Namespace watches terminated because continuity was not provable.
+# TYPE gitstore_namespace_watch_expired_total counter
+gitstore_namespace_watch_expired_total{reason="SUBSCRIBER_OVERFLOW"} 1
+# HELP gitstore_namespace_watch_overflow_total Namespace subscriber buffer overflows.
+# TYPE gitstore_namespace_watch_overflow_total counter
+gitstore_namespace_watch_overflow_total 1
+`), "gitstore_namespace_watch_expired_total", "gitstore_namespace_watch_overflow_total"))
 }
 
 func TestNamespaceWatchSelectorProjectsModifiedTransitions(t *testing.T) {

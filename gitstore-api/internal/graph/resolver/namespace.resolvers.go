@@ -155,7 +155,7 @@ func (r *subscriptionResolver) WatchNamespaces(ctx context.Context, selector *mo
 					addNamespaceWatchSubscriptionError(ctx, convertErr)
 					return
 				}
-				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond); sendErr != nil {
+				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond, r.namespaceMetrics); sendErr != nil {
 					if streamCtx.Err() == nil {
 						addNamespaceWatchSubscriptionError(streamCtx, namespaceWatchGraphQLError(sendErr))
 					}
