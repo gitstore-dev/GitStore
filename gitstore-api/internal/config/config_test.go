@@ -176,6 +176,18 @@ func TestLoad_RejectsOversizedNamespaceSubscriberBuffer(t *testing.T) {
 	assert.Contains(t, err.Error(), "constraint \"max\" violated")
 }
 
+func TestLoad_RejectsOversizedNamespaceReplayLimit(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__MAX_REPLAY_EVENTS", "100001")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Config.Watch.Namespace.MaxReplayEvents")
+	assert.Contains(t, err.Error(), "constraint \"max\" violated")
+}
+
 func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()

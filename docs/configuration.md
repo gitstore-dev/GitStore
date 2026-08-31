@@ -148,7 +148,7 @@ All time values are integers in seconds or milliseconds as named.
 | `watch.namespace.cdc_confidence_window_millis` | `GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS` | `500` | Scylla CDC consistency window before changes become eligible for ordered materialization. |
 | `watch.namespace.bucket_size` | `GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE` | `4096` | Maximum sequences per journal partition bucket. |
 | `watch.namespace.read_batch_size` | `GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE` | `256` | Replay/poll page; must not exceed bucket size. |
-| `watch.namespace.max_replay_events` | `GITSTORE_WATCH__NAMESPACE__MAX_REPLAY_EVENTS` | `100000` | Resume ceiling before `WATCH_EXPIRED`. |
+| `watch.namespace.max_replay_events` | `GITSTORE_WATCH__NAMESPACE__MAX_REPLAY_EVENTS` | `100000` | Resume ceiling before `WATCH_EXPIRED`; accepted range is 1–100,000. |
 | `watch.namespace.subscriber_buffer` | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER` | `64` | Per-hop, per-subscription delivery buffer; accepted range is 1–256 and sustained overflow fails closed. |
 | `watch.namespace.subscriber_backpressure_millis` | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BACKPRESSURE_MILLIS` | `30000` | Maximum bounded wait for a slow subscriber before terminal `SUBSCRIBER_OVERFLOW`. |
 | `watch.namespace.poll_min_millis` | `GITSTORE_WATCH__NAMESPACE__POLL_MIN_MILLIS` | `100` | Minimum journal poll delay. |
