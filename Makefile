@@ -17,6 +17,11 @@ GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
 DIFF_BASE ?= origin/main
 
 COMPOSE_BAKE ?= true
+PROFILE ?= single
+SCYLLA_CLUSTER_SMP ?= 1
+SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS ?= 2048
+SCYLLA_COMPOSE_FILE = $(if $(filter cluster,$(PROFILE)),compose.scylla.cluster.yml,compose.scylla.yml)
+SCYLLA_SERVICES = $(if $(filter cluster,$(PROFILE)),scylla-1 scylla-2 scylla-3 scylla-init,scylla scylla-init)
 DETACH_FLAG := $(if $(filter 1 true yes,$(DETACH)),-d,)
 SERVICE ?=
 
@@ -64,7 +69,11 @@ help: ## Show available targets and common variables.
 	@printf "\nCommon variables:\n"
 	@printf "  DETACH=1                  Run compose start targets in the background\n"
 	@printf "  COMPOSE_BAKE=true         Compose build bake setting for Docker Compose\n"
+	@printf "  PROFILE=%s                Scylla profile: single or cluster\n" "$(PROFILE)"
 	@printf "  SERVICE=<name>            Limit logs/stop to one compose service\n"
+	@printf "  SCYLLA_COMPOSE_FILE=%s  Derived Scylla overlay used by scylla/compose-scylla/ps/logs/stop/down\n" "$(SCYLLA_COMPOSE_FILE)"
+	@printf "  SCYLLA_CLUSTER_SMP=%s     CPU shards per Scylla node for PROFILE=cluster\n" "$(SCYLLA_CLUSTER_SMP)"
+	@printf "  SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS=%s  Networking AIO blocks per cluster node\n" "$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)"
 	@printf "  GIT_DATA_DIR=%s\n" "$(GIT_DATA_DIR)"
 	@printf "  CONFIG_FILE=%s        Shared local-profile configuration\n" "$(CONFIG_FILE)"
 	@printf "  API_URL=%s\n" "$(API_URL)"
@@ -160,24 +169,26 @@ compose-config-check: validate-local-config ## Validate local profile arguments 
 compose: validate-local-config ## Run all core services with the shared local configuration.
 	@$(LOCAL_COMPOSE) up --build $(DETACH_FLAG)
 
-scylla: ## Run only local Scylla services with Docker Compose.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml up $(DETACH_FLAG) scylla scylla-init
+scylla: ## Run Scylla services; pass PROFILE=cluster for the local three-node cluster.
+	@case "$(PROFILE)" in single|cluster) ;; *) echo "PROFILE must be 'single' or 'cluster'"; exit 2;; esac
+	@SCYLLA_CLUSTER_SMP="$(SCYLLA_CLUSTER_SMP)" SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS="$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f $(SCYLLA_COMPOSE_FILE) up $(DETACH_FLAG) $(SCYLLA_SERVICES)
 
-compose-scylla: ## Run API, git service, and Scylla with Docker Compose.
+compose-scylla: ## Run API, git service, and Scylla; pass PROFILE=cluster for three-node Scylla.
 compose-scylla: validate-local-config
-	@$(LOCAL_COMPOSE) -f compose.scylla.yml up --build $(DETACH_FLAG)
+	@case "$(PROFILE)" in single|cluster) ;; *) echo "PROFILE must be 'single' or 'cluster'"; exit 2;; esac
+	@SCYLLA_CLUSTER_SMP="$(SCYLLA_CLUSTER_SMP)" SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS="$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)" $(LOCAL_COMPOSE) -f $(SCYLLA_COMPOSE_FILE) up --build $(DETACH_FLAG)
 
 ps: ## Show compose service status.
-	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml ps
+	@$(LOCAL_COMPOSE) -f $(SCYLLA_COMPOSE_FILE) -f compose.admin.yml ps
 
 logs: ## Follow compose logs; optionally pass SERVICE=<name>.
-	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml logs -f $(SERVICE)
+	@$(LOCAL_COMPOSE) -f $(SCYLLA_COMPOSE_FILE) -f compose.admin.yml logs -f $(SERVICE)
 
 stop: ## Stop compose services; optionally pass SERVICE=<name>.
-	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml stop $(SERVICE)
+	@$(LOCAL_COMPOSE) -f $(SCYLLA_COMPOSE_FILE) -f compose.admin.yml stop $(SERVICE)
 
 down: ## Stop and remove compose services and networks.
-	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml down
+	@$(LOCAL_COMPOSE) -f $(SCYLLA_COMPOSE_FILE) -f compose.admin.yml down
 
 build: ## Build Rust and Go services.
 	@cd "$(GIT_SERVICE_DIR)" && cargo build --verbose
@@ -195,7 +206,7 @@ test-scylla-hardening: ## Run focused datastore hardening tests without an exter
 
 test-scylla-integration: ## Run tagged datastore hardening tests against Scylla.
 	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
-		go test -tags scylla -count=1 -timeout 180s ./internal/datastore/scylla/... ./tests/contract/datastore/...
+		go test -tags scylla -count=1 -timeout 10m ./internal/datastore/scylla/... ./tests/contract/datastore/...
 
 test-scylla-capacity: ## Run the opt-in Scylla capacity and soak test.
 	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \

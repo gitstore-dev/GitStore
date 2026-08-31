@@ -121,10 +121,32 @@ Start Scylla services only:
 make scylla DETACH=1
 ```
 
+`make scylla` uses the CI-friendly single-node overlay from
+`compose.scylla.yml` (`--smp=1`, replication factor 1). For local
+multi-node validation, start the three-node overlay instead:
+
+```bash
+make scylla PROFILE=cluster DETACH=1
+```
+
+The cluster overlay uses `compose.scylla.cluster.yml`, creates three Scylla
+nodes, and initializes the `gitstore` keyspace with replication factor 3.
+Override `SCYLLA_CLUSTER_SMP` to change the CPU shard count per Scylla node,
+for example `SCYLLA_CLUSTER_SMP=2 make scylla PROFILE=cluster DETACH=1`.
+The default is `1`, with
+`SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS=2048`, so the three-node
+topology starts reliably on Docker Desktop without requiring host AIO tuning.
+
 Start the full stack with Scylla:
 
 ```bash
 make compose-scylla DETACH=1
+```
+
+To run the full stack against the three-node local cluster:
+
+```bash
+make compose-scylla PROFILE=cluster DETACH=1
 ```
 
 Run Scylla-backed API datastore tests after Scylla is reachable:
