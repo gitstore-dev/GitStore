@@ -1,14 +1,50 @@
 services:
-  scylla:
+  scylla-1:
     image: scylladb/scylla:2026.1
-    container_name: gitstore-scylla
+    container_name: gitstore-scylla-1
     ports:
       - "9042:9042"   # CQL native transport
-    command: --developer-mode=1 --overprovisioned=1 --smp=1
+    command: --developer-mode=1 --overprovisioned=1 --smp=1 --seeds=scylla-1
     volumes:
-      - scylla-data:/var/lib/scylla
+      - scylla-data-1:/var/lib/scylla
     networks:
       - gitstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  scylla-2:
+    image: scylladb/scylla:2026.1
+    container_name: gitstore-scylla-2
+    command: --developer-mode=1 --overprovisioned=1 --smp=1 --seeds=scylla-1
+    volumes:
+      - scylla-data-2:/var/lib/scylla
+    networks:
+      - gitstore-network
+    depends_on:
+      scylla-1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' 2>/dev/null || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  scylla-3:
+    image: scylladb/scylla:2026.1
+    container_name: gitstore-scylla-3
+    command: --developer-mode=1 --overprovisioned=1 --smp=1 --seeds=scylla-1
+    volumes:
+      - scylla-data-3:/var/lib/scylla
+    networks:
+      - gitstore-network
+    depends_on:
+      scylla-1:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "cqlsh -e 'describe cluster' 2>/dev/null || exit 1"]
       interval: 15s
@@ -19,15 +55,19 @@ services:
   scylla-init:
     image: scylladb/scylla:2026.1
     depends_on:
-      scylla:
+      scylla-1:
+        condition: service_healthy
+      scylla-2:
+        condition: service_healthy
+      scylla-3:
         condition: service_healthy
     networks:
       - gitstore-network
     entrypoint: []
     command: >
-      cqlsh scylla -e "
+      cqlsh scylla-1 -e "
         CREATE KEYSPACE IF NOT EXISTS gitstore
-          WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}
+          WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '3'}
           AND durable_writes = true
       "
     restart: "no"
@@ -38,7 +78,7 @@ services:
         condition: service_completed_successfully
     environment:
       - GITSTORE_DATASTORE__BACKEND=scylla
-      - GITSTORE_DATASTORE__SCYLLA__HOSTS=scylla:9042
+      - GITSTORE_DATASTORE__SCYLLA__HOSTS=scylla-1:9042,scylla-2:9042,scylla-3:9042
       - GITSTORE_DATASTORE__SCYLLA__KEYSPACE=gitstore
       - GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=enabled
       - GITSTORE_WATCH__NAMESPACE__READERS_ENABLED=true
@@ -59,5 +99,9 @@ services:
       - GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS=60
 
 volumes:
-  scylla-data:
+  scylla-data-1:
+    driver: local
+  scylla-data-2:
+    driver: local
+  scylla-data-3:
     driver: local
