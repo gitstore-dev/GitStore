@@ -222,6 +222,29 @@ func TestLoad_RejectsMaterializerLagAtCDCRetention(t *testing.T) {
 	assert.Contains(t, err.Error(), "maximum materializer lag must be less than CDC retention")
 }
 
+func TestLoad_RejectsCDCConfidenceWindowAtMaterializerLag(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS", "60000")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS", "60")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CDC confidence window must be less than maximum materializer lag")
+}
+
+func TestLoad_AcceptsCDCConfidenceWindowBelowMaterializerLag(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS", "59999")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS", "60")
+
+	_, err := Load()
+	require.NoError(t, err)
+}
+
 func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()

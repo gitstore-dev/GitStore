@@ -358,6 +358,9 @@ func validateNamespaceWatchConfig(w *NamespaceWatchConfig) error {
 	if w.MaxMaterializerLagSeconds >= w.CDCRetentionSeconds {
 		return fmt.Errorf("invalid Namespace watch bounds: maximum materializer lag must be less than CDC retention")
 	}
+	if int64(w.CDCConfidenceWindowMillis) >= int64(w.MaxMaterializerLagSeconds)*1000 {
+		return fmt.Errorf("invalid Namespace watch bounds: CDC confidence window must be less than maximum materializer lag")
+	}
 	if w.ReadBatchSize > w.BucketSize {
 		return fmt.Errorf("invalid Namespace watch bounds: read batch size must not exceed bucket size")
 	}
