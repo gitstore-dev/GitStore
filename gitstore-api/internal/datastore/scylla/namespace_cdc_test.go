@@ -229,6 +229,16 @@ func TestNamespaceCDCProgressManagerObservesEmptyQueryProgress(t *testing.T) {
 	assert.Equal(t, wantProgressAt, stored.UpdatedAt)
 }
 
+func TestAssignCDCValueAllocatesNullableTimestamp(t *testing.T) {
+	deletionAt := time.Now().UTC().Truncate(time.Millisecond)
+	var decoded *time.Time
+
+	assignCDCValue(&deletionAt, &decoded)
+
+	require.NotNil(t, decoded)
+	assert.Equal(t, deletionAt, *decoded)
+}
+
 func TestNamespaceCDCDeletionSuppressesUncommittedCreateRollback(t *testing.T) {
 	ready, err := (*scyllaDatastore)(nil).namespaceCDCDeletionReady(context.Background(), &datastore.Namespace{}, false)
 	require.NoError(t, err)

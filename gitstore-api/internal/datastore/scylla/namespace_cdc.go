@@ -630,6 +630,10 @@ func assignCDC(row *scyllacdc.ChangeRow, column string, destination any) {
 	if !ok || value == nil {
 		return
 	}
+	assignCDCValue(value, destination)
+}
+
+func assignCDCValue(value, destination any) {
 	source := reflect.ValueOf(value)
 	for source.Kind() == reflect.Pointer {
 		if source.IsNil() {
@@ -642,6 +646,12 @@ func assignCDC(row *scyllacdc.ChangeRow, column string, destination any) {
 		return
 	}
 	target = target.Elem()
+	if target.Kind() == reflect.Pointer && source.Type().AssignableTo(target.Type().Elem()) {
+		allocated := reflect.New(target.Type().Elem())
+		allocated.Elem().Set(source)
+		target.Set(allocated)
+		return
+	}
 	if source.Type().AssignableTo(target.Type()) {
 		target.Set(source)
 	}

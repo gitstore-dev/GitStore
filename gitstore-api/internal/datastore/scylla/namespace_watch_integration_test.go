@@ -361,7 +361,36 @@ func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
 				for _, next := range more {
 					require.NotEqual(t, namespace.Name, next.Name, "commit marker emitted a duplicate public transition")
 				}
+
+				current, getErr := store.GetNamespace(context.Background(), namespace.UID)
+				require.NoError(t, getErr)
+				deletionAt := time.Now().UTC().Truncate(time.Millisecond)
+				expectedResourceVersion := current.ResourceVersion
+				current.DeletionTimestamp = &deletionAt
+				datastore.AdvanceNamespaceSystemVersion(current)
+				require.NoError(t, store.MarkNamespaceDeletion(context.Background(), current, expectedResourceVersion))
+
+				deletionDeadline := time.Now().Add(75 * time.Second)
+				for time.Now().Before(deletionDeadline) {
+					modified, readErr := journal.ReadAfter(context.Background(), cursor, 256)
+					require.NoError(t, readErr)
+					for _, next := range modified {
+						cursor.Sequence = next.Sequence
+						if next.Name != namespace.Name {
+							continue
+						}
+						require.Equal(t, datastore.NamespaceWatchModified, next.Type)
+						var terminating datastore.Namespace
+						require.NoError(t, json.Unmarshal(next.Payload, &terminating))
+						require.NotNil(t, terminating.DeletionTimestamp)
+						require.Equal(t, deletionAt, *terminating.DeletionTimestamp)
+						cancel()
+						return
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
 				cancel()
+				t.Fatal("Namespace deletion timestamp was not materialized into the durable journal")
 				return
 			}
 		}
