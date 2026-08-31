@@ -1993,7 +1993,15 @@ func (s *scyllaDatastore) CreateNamespace(ctx context.Context, ns *datastore.Nam
 	applied, err := s.session.Query(reserveName, nil).WithContext(ctx).
 		Bind(row.Name, row.UID).ExecCASRelease()
 	if err != nil {
-		return fmt.Errorf("scylla: reserve namespace name: %w", err)
+		primary := fmt.Errorf("scylla: reserve namespace name: %w", err)
+		reserved, resolveErr := s.resolveNamespaceNameReservation(ctx, row, primary)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		if !reserved {
+			return primary
+		}
+		applied = true
 	}
 	if !applied {
 		return fmt.Errorf("%w: namespace name %s", datastore.ErrAlreadyExists, ns.Name)
@@ -2038,6 +2046,51 @@ func (s *scyllaDatastore) CreateNamespace(ctx context.Context, ns *datastore.Nam
 			errors.New("scylla: commit namespace watch visibility: authoritative row disappeared"), true, true)
 	}
 	return nil
+}
+
+func (s *scyllaDatastore) resolveNamespaceNameReservation(
+	ctx context.Context,
+	row *namespaceRow,
+	primary error,
+) (bool, error) {
+	return runNamespaceNameReservationResolution(ctx, row.Name, row.UID, primary, func(resolveCtx context.Context) (*gocql.UUID, error) {
+		var state struct {
+			UID gocql.UUID `db:"uid"`
+		}
+		err := s.session.Query("SELECT uid FROM namespaces_by_name WHERE name=?", nil).
+			Consistency(gocql.LocalSerial).WithContext(resolveCtx).Bind(row.Name).GetRelease(&state)
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, nil
+		}
+		return &state.UID, err
+	})
+}
+
+func runNamespaceNameReservationResolution(
+	ctx context.Context,
+	name string,
+	expectedUID gocql.UUID,
+	primary error,
+	readUID func(context.Context) (*gocql.UUID, error),
+) (bool, error) {
+	resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceProjectionCleanupTimeout)
+	defer cancel()
+	uid, err := readUID(resolveCtx)
+	if err != nil {
+		return false, datastore.NewRepairRequiredError(datastore.MutationStep{
+			Operation:    "create_namespace",
+			ResourceKind: "Namespace",
+			Projection:   "namespaces_by_name",
+			Action:       "confirm_name_reservation",
+		}, primary, fmt.Errorf("confirm Namespace name reservation: %w", err))
+	}
+	if uid == nil {
+		return false, nil
+	}
+	if *uid != expectedUID {
+		return false, fmt.Errorf("%w: namespace name %s", datastore.ErrAlreadyExists, name)
+	}
+	return true, nil
 }
 
 type namespaceCreateInsertState struct {

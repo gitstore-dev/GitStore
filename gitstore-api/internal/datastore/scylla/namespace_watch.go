@@ -544,15 +544,46 @@ func (s *scyllaDatastore) SaveProgress(ctx context.Context, lease datastore.Name
 	if progress.StreamID == "" {
 		return fmt.Errorf("%w: CDC stream id is required", datastore.ErrInvalidArgument)
 	}
-	query := "UPDATE namespace_watch_clock USING TTL ? SET position=?,progress_update_timestamp=?,cdc_progress_timestamp=? WHERE journal=? AND stream_id=? IF lease_holder=? AND fencing_token=? AND lease_expiration_timestamp>?"
-	values := []any{namespaceCDCProgressTTLSeconds, progress.Position, progress.UpdatedAt, progress.UpdatedAt, namespaceWatchJournalName, progress.StreamID, lease.Holder, int64(lease.FencingToken), time.Now().UTC()}
 	if progress.StreamID == namespaceCDCGenerationProgress || progress.StreamID == namespaceCDCPublishedFrontierProgress {
-		query = "UPDATE namespace_watch_clock SET position=?,progress_update_timestamp=? WHERE journal=? AND stream_id=? IF lease_holder=? AND fencing_token=? AND lease_expiration_timestamp>?"
-		values = []any{progress.Position, progress.UpdatedAt, namespaceWatchJournalName, progress.StreamID, lease.Holder, int64(lease.FencingToken), time.Now().UTC()}
+		applied, err := s.session.Query("UPDATE namespace_watch_clock SET position=?,progress_update_timestamp=? WHERE journal=? AND stream_id=? IF lease_holder=? AND fencing_token=? AND lease_expiration_timestamp>?", nil).
+			WithContext(ctx).Bind(progress.Position, progress.UpdatedAt, namespaceWatchJournalName, progress.StreamID, lease.Holder, int64(lease.FencingToken), time.Now().UTC()).ExecCASRelease()
+		if err != nil {
+			return fmt.Errorf("scylla: save Namespace CDC progress: %w", err)
+		}
+		if !applied {
+			return datastore.ErrStaleWatchLease
+		}
+		return nil
 	}
-	applied, err := s.session.Query(query, nil).WithContext(ctx).Bind(values...).ExecCASRelease()
+
+	// A late-discovered stream can legitimately checkpoint behind the global
+	// published frontier. Persist that stream's position without allowing its
+	// older source watermark to move the partition-static readiness timestamp
+	// backward. The fallback LWT distinguishes that case from a stale lease.
+	now := time.Now().UTC()
+	return runNamespaceCDCProgressSave(
+		func() (bool, error) {
+			return s.session.Query("UPDATE namespace_watch_clock USING TTL ? SET position=?,progress_update_timestamp=?,cdc_progress_timestamp=? WHERE journal=? AND stream_id=? IF lease_holder=? AND fencing_token=? AND lease_expiration_timestamp>? AND cdc_progress_timestamp<=?", nil).
+				WithContext(ctx).Bind(namespaceCDCProgressTTLSeconds, progress.Position, progress.UpdatedAt, progress.UpdatedAt, namespaceWatchJournalName, progress.StreamID, lease.Holder, int64(lease.FencingToken), now, progress.UpdatedAt).ExecCASRelease()
+		},
+		func() (bool, error) {
+			return s.session.Query("UPDATE namespace_watch_clock USING TTL ? SET position=?,progress_update_timestamp=? WHERE journal=? AND stream_id=? IF lease_holder=? AND fencing_token=? AND lease_expiration_timestamp>?", nil).
+				WithContext(ctx).Bind(namespaceCDCProgressTTLSeconds, progress.Position, progress.UpdatedAt, namespaceWatchJournalName, progress.StreamID, lease.Holder, int64(lease.FencingToken), now).ExecCASRelease()
+		},
+	)
+}
+
+func runNamespaceCDCProgressSave(saveWithFreshness, savePosition func() (bool, error)) error {
+	applied, err := saveWithFreshness()
 	if err != nil {
 		return fmt.Errorf("scylla: save Namespace CDC progress: %w", err)
+	}
+	if applied {
+		return nil
+	}
+	applied, err = savePosition()
+	if err != nil {
+		return fmt.Errorf("scylla: save Namespace CDC progress without regressing freshness: %w", err)
 	}
 	if !applied {
 		return datastore.ErrStaleWatchLease

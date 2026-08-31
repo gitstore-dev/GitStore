@@ -229,6 +229,29 @@ func TestNamespaceCDCProgressManagerObservesEmptyQueryProgress(t *testing.T) {
 	assert.Equal(t, wantProgressAt, stored.UpdatedAt)
 }
 
+func TestNamespaceCDCProgressSaveFallsBackWithoutRegressingFreshness(t *testing.T) {
+	positionSaved := false
+	err := runNamespaceCDCProgressSave(
+		func() (bool, error) { return false, nil },
+		func() (bool, error) {
+			positionSaved = true
+			return true, nil
+		},
+	)
+
+	require.NoError(t, err)
+	assert.True(t, positionSaved)
+}
+
+func TestNamespaceCDCProgressSaveRejectsStaleLeaseOnFallback(t *testing.T) {
+	err := runNamespaceCDCProgressSave(
+		func() (bool, error) { return false, nil },
+		func() (bool, error) { return false, nil },
+	)
+
+	require.ErrorIs(t, err, datastore.ErrStaleWatchLease)
+}
+
 func TestAssignCDCValueAllocatesNullableTimestamp(t *testing.T) {
 	deletionAt := time.Now().UTC().Truncate(time.Millisecond)
 	var decoded *time.Time
@@ -339,6 +362,45 @@ func TestNamespaceCreateInsertResolutionConfirmsStagedRow(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, authoritative)
+}
+
+func TestNamespaceNameReservationResolutionConfirmsAmbiguousSuccess(t *testing.T) {
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+	wantUID := gocql.MustRandomUUID()
+
+	reserved, err := runNamespaceNameReservationResolution(requestCtx, "shop", wantUID, context.DeadlineExceeded, func(resolveCtx context.Context) (*gocql.UUID, error) {
+		require.NoError(t, resolveCtx.Err())
+		return &wantUID, nil
+	})
+
+	require.NoError(t, err)
+	assert.True(t, reserved)
+}
+
+func TestNamespaceNameReservationResolutionRejectsAnotherUID(t *testing.T) {
+	wantUID := gocql.MustRandomUUID()
+	otherUID := gocql.MustRandomUUID()
+
+	reserved, err := runNamespaceNameReservationResolution(context.Background(), "shop", wantUID, context.DeadlineExceeded, func(context.Context) (*gocql.UUID, error) {
+		return &otherUID, nil
+	})
+
+	assert.False(t, reserved)
+	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
+}
+
+func TestNamespaceNameReservationResolutionRequiresRepairWhenUnreadable(t *testing.T) {
+	reserved, err := runNamespaceNameReservationResolution(context.Background(), "shop", gocql.MustRandomUUID(), context.DeadlineExceeded, func(context.Context) (*gocql.UUID, error) {
+		return nil, errors.New("serial read failed")
+	})
+
+	assert.False(t, reserved)
+	require.ErrorIs(t, err, datastore.ErrRepairRequired)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	var repair *datastore.RepairRequiredError
+	require.ErrorAs(t, err, &repair)
+	assert.Equal(t, "confirm_name_reservation", repair.Step.Action)
 }
 
 func TestNamespaceCreateInsertResolutionDoesNotClaimAnotherRow(t *testing.T) {

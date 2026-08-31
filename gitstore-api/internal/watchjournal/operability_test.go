@@ -44,6 +44,18 @@ func TestNamespaceWatchCDCLagAdvancesBetweenScrapes(t *testing.T) {
 	assert.Greater(t, second, first)
 }
 
+func TestNamespaceWatchCDCLagDoesNotRegressForLateStream(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewMetrics(registry)
+	require.NoError(t, err)
+	newer := time.Now().Add(-time.Second)
+
+	metrics.ObserveCDCProgress(newer)
+	metrics.ObserveCDCProgress(newer.Add(-time.Hour))
+
+	assert.Equal(t, newer.UnixNano(), metrics.cdcProgressNanos.Load())
+}
+
 func TestNamespaceWatchMissingProgressAndBookmarkAreStale(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewMetrics(registry)

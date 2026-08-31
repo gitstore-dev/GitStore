@@ -139,7 +139,13 @@ func (m *Metrics) ObserveBookmark(at time.Time) {
 // computes its age when Prometheus scrapes, so an idle or stuck reader's lag
 // continues increasing instead of freezing at the last observation.
 func (m *Metrics) ObserveCDCProgress(at time.Time) {
-	if !at.IsZero() {
-		m.cdcProgressNanos.Store(at.UnixNano())
+	if at.IsZero() {
+		return
+	}
+	next := at.UnixNano()
+	for current := m.cdcProgressNanos.Load(); next > current; current = m.cdcProgressNanos.Load() {
+		if m.cdcProgressNanos.CompareAndSwap(current, next) {
+			return
+		}
 	}
 }
