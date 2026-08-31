@@ -232,6 +232,11 @@ func TestNamespaceWatchBucketUsesConfiguredSize(t *testing.T) {
 	assert.Equal(t, int64(2), namespaceWatchBucket(6, 2))
 }
 
+func TestNamespaceCDCGenerationConsistencyMatchesReader(t *testing.T) {
+	assert.Equal(t, gocql.One, namespaceCDCConsistencyForPeerCount(0))
+	assert.Equal(t, gocql.Quorum, namespaceCDCConsistencyForPeerCount(1))
+}
+
 func TestNamespaceCDCProgressManagerObservesOnlyPublishedFrontier(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)

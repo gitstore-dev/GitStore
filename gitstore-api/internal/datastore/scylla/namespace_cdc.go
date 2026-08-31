@@ -723,21 +723,25 @@ func encodeCDCStreamID(streamID scyllacdc.StreamID) string {
 // to the sequencer prevents any batch from publishing while another batch is
 // still being initialized, regardless of cluster size or scheduler delay.
 func (s *scyllaDatastore) namespaceCDCGenerationStreams(ctx context.Context, generation time.Time) ([]string, error) {
+	consistency, err := s.namespaceCDCGenerationConsistency(ctx)
+	if err != nil {
+		return nil, err
+	}
 	keyspaceMetadata := make(map[string]interface{})
-	err := s.session.Session.Query(
+	err = s.session.Session.Query(
 		"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = ?",
 		s.keyspace,
-	).WithContext(ctx).Consistency(gocql.Quorum).MapScan(keyspaceMetadata)
+	).WithContext(ctx).Consistency(consistency).MapScan(keyspaceMetadata)
 	if err != nil && !errors.Is(err, gocql.ErrNotFound) {
 		return nil, fmt.Errorf("detect Namespace CDC tablet topology: %w", err)
 	}
 
 	streams := make([]scyllacdc.StreamID, 0)
-	if keyspaceMetadata != nil && keyspaceMetadata["initial_tablets"] != nil {
+	if keyspaceMetadata["initial_tablets"] != nil {
 		iter := s.session.Session.Query(
 			"SELECT stream_id FROM system.cdc_streams WHERE keyspace_name = ? AND table_name = ? AND timestamp = ? AND stream_state = ?",
 			s.keyspace, "namespaces_by_uid", generation, 0,
-		).WithContext(ctx).Consistency(gocql.Quorum).Iter()
+		).WithContext(ctx).Consistency(consistency).Iter()
 		var stream scyllacdc.StreamID
 		for iter.Scan(&stream) {
 			streams = append(streams, append(scyllacdc.StreamID(nil), stream...))
@@ -749,7 +753,7 @@ func (s *scyllaDatastore) namespaceCDCGenerationStreams(ctx context.Context, gen
 		iter := s.session.Session.Query(
 			"SELECT streams FROM system_distributed.cdc_streams_descriptions_v2 WHERE time = ?",
 			generation,
-		).WithContext(ctx).Consistency(gocql.Quorum).Iter()
+		).WithContext(ctx).Consistency(consistency).Iter()
 		var vnodeStreams []scyllacdc.StreamID
 		for iter.Scan(&vnodeStreams) {
 			for _, stream := range vnodeStreams {
@@ -761,7 +765,7 @@ func (s *scyllaDatastore) namespaceCDCGenerationStreams(ctx context.Context, gen
 		}
 	}
 	if len(streams) == 0 {
-		return nil, fmt.Errorf("Namespace CDC generation %s contains no streams", generation)
+		return nil, fmt.Errorf("namespace CDC generation %s contains no streams", generation)
 	}
 
 	encoded := make([]string, 0, len(streams))
@@ -775,6 +779,22 @@ func (s *scyllaDatastore) namespaceCDCGenerationStreams(ctx context.Context, gen
 		encoded = append(encoded, streamID)
 	}
 	return encoded, nil
+}
+
+func (s *scyllaDatastore) namespaceCDCGenerationConsistency(ctx context.Context) (gocql.Consistency, error) {
+	var peers int
+	if err := s.session.Session.Query("SELECT COUNT(*) FROM system.peers").
+		WithContext(ctx).Consistency(gocql.One).Scan(&peers); err != nil {
+		return 0, fmt.Errorf("count Namespace CDC topology peers: %w", err)
+	}
+	return namespaceCDCConsistencyForPeerCount(peers), nil
+}
+
+func namespaceCDCConsistencyForPeerCount(peers int) gocql.Consistency {
+	if peers > 0 {
+		return gocql.Quorum
+	}
+	return gocql.One
 }
 
 type namespaceCDCProgressManager struct {
