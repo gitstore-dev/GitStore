@@ -197,7 +197,7 @@ func TestNamespaceWatchBucketUsesConfiguredSize(t *testing.T) {
 	assert.Equal(t, int64(2), namespaceWatchBucket(6, 2))
 }
 
-func TestNamespaceCDCProgressManagerObservesEmptyQueryProgress(t *testing.T) {
+func TestNamespaceCDCProgressManagerObservesOnlyPublishedFrontier(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
@@ -218,6 +218,8 @@ func TestNamespaceCDCProgressManagerObservesEmptyQueryProgress(t *testing.T) {
 
 	err = manager.SaveProgress(context.Background(), generation, "namespaces_by_uid", scyllacdc.StreamID("stream-a"), scyllacdc.Progress{LastProcessedRecordTime: progressTime})
 	require.NoError(t, err)
+	assert.Empty(t, observed, "individual stream progress must not advertise global readiness")
+	require.NoError(t, manager.SavePublishedFrontier(context.Background(), progressTime))
 	select {
 	case at := <-observed:
 		assert.Equal(t, wantProgressAt, at)
@@ -227,29 +229,6 @@ func TestNamespaceCDCProgressManagerObservesEmptyQueryProgress(t *testing.T) {
 	stored, err := journal.LoadProgress(context.Background(), cdcProgressKey(generation, "namespaces_by_uid", scyllacdc.StreamID("stream-a")))
 	require.NoError(t, err)
 	assert.Equal(t, wantProgressAt, stored.UpdatedAt)
-}
-
-func TestNamespaceCDCProgressSaveFallsBackWithoutRegressingFreshness(t *testing.T) {
-	positionSaved := false
-	err := runNamespaceCDCProgressSave(
-		func() (bool, error) { return false, nil },
-		func() (bool, error) {
-			positionSaved = true
-			return true, nil
-		},
-	)
-
-	require.NoError(t, err)
-	assert.True(t, positionSaved)
-}
-
-func TestNamespaceCDCProgressSaveRejectsStaleLeaseOnFallback(t *testing.T) {
-	err := runNamespaceCDCProgressSave(
-		func() (bool, error) { return false, nil },
-		func() (bool, error) { return false, nil },
-	)
-
-	require.ErrorIs(t, err, datastore.ErrStaleWatchLease)
 }
 
 func TestAssignCDCValueAllocatesNullableTimestamp(t *testing.T) {

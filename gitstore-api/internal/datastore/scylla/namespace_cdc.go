@@ -717,19 +717,12 @@ func (m *namespaceCDCProgressManager) GetProgress(ctx context.Context, generatio
 }
 
 func (m *namespaceCDCProgressManager) SaveProgress(ctx context.Context, generation time.Time, table string, streamID scyllacdc.StreamID, progress scyllacdc.Progress) error {
-	// The CDC timeuuid is the source watermark, not merely an opaque resume
-	// token. Persist its timestamp so readiness and lag remain fail-closed while
-	// an otherwise healthy reader works through old retained history.
 	updatedAt := progress.LastProcessedRecordTime.Time().UTC()
-	err := m.journal.SaveProgress(ctx, m.lease, datastore.NamespaceCDCProgress{
+	return m.journal.SaveProgress(ctx, m.lease, datastore.NamespaceCDCProgress{
 		StreamID:  cdcProgressKey(generation, table, streamID),
 		Position:  progress.LastProcessedRecordTime.Bytes(),
 		UpdatedAt: updatedAt,
 	})
-	if err == nil && m.observeProgress != nil {
-		m.observeProgress(updatedAt)
-	}
-	return err
 }
 
 func (m *namespaceCDCProgressManager) PublishedFrontier(ctx context.Context) (gocql.UUID, bool, error) {
@@ -748,11 +741,16 @@ func (m *namespaceCDCProgressManager) PublishedFrontier(ctx context.Context) (go
 }
 
 func (m *namespaceCDCProgressManager) SavePublishedFrontier(ctx context.Context, frontier gocql.UUID) error {
-	return m.journal.SaveProgress(ctx, m.lease, datastore.NamespaceCDCProgress{
+	frontierAt := frontier.Time().UTC()
+	err := m.journal.SaveProgress(ctx, m.lease, datastore.NamespaceCDCProgress{
 		StreamID:  namespaceCDCPublishedFrontierProgress,
 		Position:  frontier.Bytes(),
-		UpdatedAt: time.Now().UTC(),
+		UpdatedAt: frontierAt,
 	})
+	if err == nil && m.observeProgress != nil {
+		m.observeProgress(frontierAt)
+	}
+	return err
 }
 
 func cdcProgressKey(generation time.Time, table string, streamID scyllacdc.StreamID) string {

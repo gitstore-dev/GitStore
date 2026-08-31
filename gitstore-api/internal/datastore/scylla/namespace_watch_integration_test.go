@@ -66,7 +66,7 @@ func TestNamespaceWatchLeaseFencesJournalAndProgressWrites(t *testing.T) {
 	require.Equal(t, []byte("current"), progress.Position)
 }
 
-func TestNamespaceWatchSharedProgressDoesNotRegressForLateStream(t *testing.T) {
+func TestNamespaceWatchReadinessTracksPublishedFrontierNotPerStreamProgress(t *testing.T) {
 	store := newTestStore(t)
 	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
 	ctx := context.Background()
@@ -94,6 +94,14 @@ func TestNamespaceWatchSharedProgressDoesNotRegressForLateStream(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("older"), late.Position)
 	assert.Equal(t, older, late.UpdatedAt)
+
+	frontierAt := time.Now().UTC().Truncate(time.Millisecond)
+	require.NoError(t, journal.SaveProgress(ctx, lease, datastore.NamespaceCDCProgress{
+		StreamID: "__namespace_cdc_published_frontier__", Position: []byte("frontier"), UpdatedAt: frontierAt,
+	}))
+	bounds, err = journal.Bounds(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, frontierAt, bounds.ProgressAt)
 }
 
 func TestNamespaceWatchBoundsPerStreamProgressAcrossGenerations(t *testing.T) {
