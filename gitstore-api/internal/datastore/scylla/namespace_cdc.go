@@ -707,7 +707,10 @@ func (m *namespaceCDCProgressManager) GetProgress(ctx context.Context, generatio
 }
 
 func (m *namespaceCDCProgressManager) SaveProgress(ctx context.Context, generation time.Time, table string, streamID scyllacdc.StreamID, progress scyllacdc.Progress) error {
-	updatedAt := time.Now().UTC()
+	// The CDC timeuuid is the source watermark, not merely an opaque resume
+	// token. Persist its timestamp so readiness and lag remain fail-closed while
+	// an otherwise healthy reader works through old retained history.
+	updatedAt := progress.LastProcessedRecordTime.Time().UTC()
 	err := m.journal.SaveProgress(ctx, m.lease, datastore.NamespaceCDCProgress{
 		StreamID:  cdcProgressKey(generation, table, streamID),
 		Position:  progress.LastProcessedRecordTime.Bytes(),

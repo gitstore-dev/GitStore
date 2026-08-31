@@ -212,16 +212,21 @@ func TestNamespaceCDCProgressManagerObservesEmptyQueryProgress(t *testing.T) {
 			observed <- at
 		},
 	}
-	progressTime := gocql.MinTimeUUID(time.Now().UTC())
+	progressTime := gocql.MinTimeUUID(time.Now().UTC().Add(-2 * time.Hour))
+	wantProgressAt := progressTime.Time().UTC()
+	generation := time.Now().UTC()
 
-	err = manager.SaveProgress(context.Background(), time.Now().UTC(), "namespaces_by_uid", scyllacdc.StreamID("stream-a"), scyllacdc.Progress{LastProcessedRecordTime: progressTime})
+	err = manager.SaveProgress(context.Background(), generation, "namespaces_by_uid", scyllacdc.StreamID("stream-a"), scyllacdc.Progress{LastProcessedRecordTime: progressTime})
 	require.NoError(t, err)
 	select {
 	case at := <-observed:
-		assert.False(t, at.IsZero())
+		assert.Equal(t, wantProgressAt, at)
 	case <-time.After(time.Second):
 		t.Fatal("CDC progress observation was not reported")
 	}
+	stored, err := journal.LoadProgress(context.Background(), cdcProgressKey(generation, "namespaces_by_uid", scyllacdc.StreamID("stream-a")))
+	require.NoError(t, err)
+	assert.Equal(t, wantProgressAt, stored.UpdatedAt)
 }
 
 func TestNamespaceCDCDeletionSuppressesUncommittedCreateRollback(t *testing.T) {

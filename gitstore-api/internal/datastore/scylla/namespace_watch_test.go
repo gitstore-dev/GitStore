@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,6 +46,45 @@ func TestResolveAmbiguousNamespaceLeaseAcquisition(t *testing.T) {
 				assert.Equal(t, "replica-a", lease.Holder)
 				assert.Equal(t, uint64(7), lease.FencingToken)
 				assert.Equal(t, tt.wantExpiry, lease.ExpiresAt)
+			}
+		})
+	}
+}
+
+func TestResolveAmbiguousNamespaceLeaseRenewal(t *testing.T) {
+	previousExpiry := time.Now().UTC().Add(30 * time.Second)
+	expires := previousExpiry.Add(30 * time.Second)
+	lease := datastore.NamespaceWatchLease{Holder: "replica-a", FencingToken: 7, ExpiresAt: previousExpiry}
+	primary := errors.New("write timeout")
+	tests := []struct {
+		name    string
+		state   namespaceWatchClockRow
+		readErr error
+		want    bool
+		wantErr bool
+	}{
+		{name: "matching renewal is confirmed", state: namespaceWatchClockRow{Holder: "replica-a", FencingToken: 7, ExpiresAt: expires}, want: true},
+		{name: "unchanged expiration was not renewed", state: namespaceWatchClockRow{Holder: "replica-a", FencingToken: 7, ExpiresAt: previousExpiry}},
+		{name: "different holder did not renew", state: namespaceWatchClockRow{Holder: "replica-b", FencingToken: 7, ExpiresAt: expires}},
+		{name: "different token did not renew", state: namespaceWatchClockRow{Holder: "replica-a", FencingToken: 8, ExpiresAt: expires}},
+		{name: "unreadable outcome preserves error", readErr: errors.New("read timeout"), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			renewed, ok, err := runNamespaceLeaseRenewalResolution(context.Background(), lease, expires, primary, func(context.Context) (namespaceWatchClockRow, error) {
+				return tt.state, tt.readErr
+			})
+			assert.Equal(t, tt.want, ok)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, primary)
+				return
+			}
+			require.NoError(t, err)
+			if tt.want {
+				assert.Equal(t, lease.Holder, renewed.Holder)
+				assert.Equal(t, lease.FencingToken, renewed.FencingToken)
+				assert.Equal(t, expires, renewed.ExpiresAt)
 			}
 		})
 	}

@@ -124,7 +124,7 @@ with `scylla-cdc-go.ProgressManager`.
 | oldest | bigint static | Monotonic retained lower bound |
 | bucket_size | bigint static | Immutable partition layout for this journal epoch; replicas with a different configured value fail closed |
 | update_timestamp | timestamp static | Last journal append time |
-| cdc_progress_timestamp | timestamp static | Shared lag/health signal |
+| cdc_progress_timestamp | timestamp static | Shared source-watermark timestamp used for lag/health; never local checkpoint-write time |
 | lease_holder | text static | Active materializer replica |
 | fencing_token | bigint static | Stale leader cannot advance journal or progress |
 | lease_expiration_timestamp | timestamp static | Lease validity bound |

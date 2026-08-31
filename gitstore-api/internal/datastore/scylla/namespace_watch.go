@@ -402,7 +402,10 @@ func (s *scyllaDatastore) AcquireLease(ctx context.Context, holder string, now t
 	if current.Holder != "" && now.Before(current.ExpiresAt) {
 		return datastore.NamespaceWatchLease{}, false, nil
 	}
-	expires := now.Add(ttl)
+	// Scylla timestamps have millisecond precision. Normalize before the LWT so
+	// ambiguity resolution can compare the requested and persisted expirations
+	// exactly.
+	expires := now.Add(ttl).UTC().Truncate(time.Millisecond)
 	next := current.FencingToken + 1
 	applied, err := s.session.Query(
 		"UPDATE namespace_watch_clock SET lease_holder=?,fencing_token=?,lease_expiration_timestamp=? WHERE journal=? IF lease_holder=? AND fencing_token=? AND lease_expiration_timestamp=?",
@@ -460,16 +463,53 @@ func (s *scyllaDatastore) RenewLease(ctx context.Context, lease datastore.Namesp
 	if !namespaceWatchLeaseMatches(current, lease, now) {
 		return datastore.NamespaceWatchLease{}, false, nil
 	}
-	expires := now.Add(ttl)
+	expires := now.Add(ttl).UTC().Truncate(time.Millisecond)
 	applied, err := s.session.Query(
 		"UPDATE namespace_watch_clock SET lease_expiration_timestamp=? WHERE journal=? IF lease_holder=? AND fencing_token=? AND lease_expiration_timestamp=?",
 		nil,
 	).WithContext(ctx).Bind(expires, namespaceWatchJournalName, lease.Holder, int64(lease.FencingToken), current.ExpiresAt).ExecCASRelease()
 	if err != nil {
-		return datastore.NamespaceWatchLease{}, false, fmt.Errorf("scylla: renew Namespace materializer lease: %w", err)
+		primary := fmt.Errorf("scylla: renew Namespace materializer lease: %w", err)
+		return s.resolveNamespaceLeaseRenewal(ctx, lease, expires, primary)
 	}
 	lease.ExpiresAt = expires
 	return lease, applied, nil
+}
+
+func (s *scyllaDatastore) resolveNamespaceLeaseRenewal(
+	ctx context.Context,
+	lease datastore.NamespaceWatchLease,
+	expires time.Time,
+	primary error,
+) (datastore.NamespaceWatchLease, bool, error) {
+	return runNamespaceLeaseRenewalResolution(ctx, lease, expires, primary, func(resolveCtx context.Context) (namespaceWatchClockRow, error) {
+		var state namespaceWatchClockRow
+		err := s.session.Query(
+			"SELECT lease_holder,fencing_token,lease_expiration_timestamp FROM namespace_watch_clock WHERE journal=? AND stream_id=?",
+			nil,
+		).Consistency(gocql.LocalSerial).WithContext(resolveCtx).Bind(namespaceWatchJournalName, namespaceWatchClockStream).GetRelease(&state)
+		return state, err
+	})
+}
+
+func runNamespaceLeaseRenewalResolution(
+	ctx context.Context,
+	lease datastore.NamespaceWatchLease,
+	expires time.Time,
+	primary error,
+	readState func(context.Context) (namespaceWatchClockRow, error),
+) (datastore.NamespaceWatchLease, bool, error) {
+	resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceProjectionCleanupTimeout)
+	defer cancel()
+	state, err := readState(resolveCtx)
+	if err != nil {
+		return datastore.NamespaceWatchLease{}, false, fmt.Errorf("%w; resolve ambiguous lease renewal: %v", primary, err)
+	}
+	if state.Holder != lease.Holder || uint64(state.FencingToken) != lease.FencingToken || !state.ExpiresAt.Equal(expires) {
+		return datastore.NamespaceWatchLease{}, false, nil
+	}
+	lease.ExpiresAt = state.ExpiresAt
+	return lease, true, nil
 }
 
 func (s *scyllaDatastore) ReleaseLease(ctx context.Context, lease datastore.NamespaceWatchLease) error {
