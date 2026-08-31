@@ -152,7 +152,7 @@ All time values are integers in seconds or milliseconds as named.
 | `watch.namespace.subscriber_buffer` | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER` | `64` | Per-hop, per-subscription delivery buffer; accepted range is 1–256 and sustained overflow fails closed. |
 | `watch.namespace.subscriber_backpressure_millis` | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BACKPRESSURE_MILLIS` | `30000` | Maximum bounded wait for a slow subscriber before terminal `SUBSCRIBER_OVERFLOW`. |
 | `watch.namespace.poll_min_millis` | `GITSTORE_WATCH__NAMESPACE__POLL_MIN_MILLIS` | `100` | Minimum journal poll delay. |
-| `watch.namespace.poll_max_millis` | `GITSTORE_WATCH__NAMESPACE__POLL_MAX_MILLIS` | `2000` | Maximum adaptive poll delay; must be at least poll-min. |
+| `watch.namespace.poll_max_millis` | `GITSTORE_WATCH__NAMESPACE__POLL_MAX_MILLIS` | `2000` | Maximum adaptive poll delay; must be at least poll-min and strictly below journal retention. |
 | `watch.namespace.bookmark_interval_seconds` | `GITSTORE_WATCH__NAMESPACE__BOOKMARK_INTERVAL_SECONDS` | `30` | Durable idle BOOKMARK interval. |
 | `watch.namespace.lease_ttl_seconds` | `GITSTORE_WATCH__NAMESPACE__LEASE_TTL_SECONDS` | `30` | Materializer lease TTL. |
 | `watch.namespace.lease_renew_interval_seconds` | `GITSTORE_WATCH__NAMESPACE__LEASE_RENEW_INTERVAL_SECONDS` | `10` | Renewal interval; must be less than lease TTL. |

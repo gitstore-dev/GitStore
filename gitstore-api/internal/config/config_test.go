@@ -245,6 +245,29 @@ func TestLoad_AcceptsCDCConfidenceWindowBelowMaterializerLag(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestLoad_RejectsMaximumPollIntervalAtJournalRetention(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS", "2")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__POLL_MAX_MILLIS", "2000")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "maximum poll interval must be less than journal retention")
+}
+
+func TestLoad_AcceptsMaximumPollIntervalBelowJournalRetention(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS", "2")
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__POLL_MAX_MILLIS", "1999")
+
+	_, err := Load()
+	require.NoError(t, err)
+}
+
 func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()

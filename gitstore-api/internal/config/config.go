@@ -367,6 +367,9 @@ func validateNamespaceWatchConfig(w *NamespaceWatchConfig) error {
 	if w.PollMinMillis > w.PollMaxMillis {
 		return fmt.Errorf("invalid Namespace watch bounds: minimum poll interval must not exceed maximum")
 	}
+	if int64(w.PollMaxMillis) >= int64(w.JournalRetentionSeconds)*1000 {
+		return fmt.Errorf("invalid Namespace watch bounds: maximum poll interval must be less than journal retention")
+	}
 	if w.LeaseRenewIntervalSeconds >= w.LeaseTTLSeconds {
 		return fmt.Errorf("invalid Namespace watch bounds: lease renewal interval must be less than lease TTL")
 	}
