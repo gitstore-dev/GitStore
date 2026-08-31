@@ -276,7 +276,8 @@ The deny prevents clients from observing mixed semantics.
 - CDC TTL: 14 days;
 - journal bucket: 4,096 events;
 - journal read batch: 256;
-- subscriber buffer: 64;
+- subscriber buffer: 64 by default, with a validated maximum of 256 per
+  delivery hop;
 - maximum single resume: 100,000 events;
 - journal poll: 100 ms minimum with capped 2 s backoff;
 - bookmark interval: 30 seconds;

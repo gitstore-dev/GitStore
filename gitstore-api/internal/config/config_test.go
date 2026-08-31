@@ -164,6 +164,18 @@ func TestLoad_RejectsCDCWindowDifferentFromSchema(t *testing.T) {
 	assert.Contains(t, err.Error(), "migration 006 fixes CDC retention")
 }
 
+func TestLoad_RejectsOversizedNamespaceSubscriberBuffer(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER", "257")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Config.Watch.Namespace.SubscriberBuffer")
+	assert.Contains(t, err.Error(), "constraint \"max\" violated")
+}
+
 func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()

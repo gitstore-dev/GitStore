@@ -132,7 +132,7 @@ type NamespaceWatchConfig struct {
 	BucketSize                   int  `mapstructure:"bucket_size" validate:"min=1"`
 	ReadBatchSize                int  `mapstructure:"read_batch_size" validate:"min=1"`
 	MaxReplayEvents              int  `mapstructure:"max_replay_events" validate:"min=1"`
-	SubscriberBuffer             int  `mapstructure:"subscriber_buffer" validate:"min=1"`
+	SubscriberBuffer             int  `mapstructure:"subscriber_buffer" validate:"min=1,max=256"`
 	SubscriberBackpressureMillis int  `mapstructure:"subscriber_backpressure_millis" validate:"min=1"`
 	PollMinMillis                int  `mapstructure:"poll_min_millis" validate:"min=1"`
 	PollMaxMillis                int  `mapstructure:"poll_max_millis" validate:"min=1"`

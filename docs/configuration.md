@@ -149,7 +149,7 @@ All time values are integers in seconds or milliseconds as named.
 | `watch.namespace.bucket_size` | `GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE` | `4096` | Maximum sequences per journal partition bucket. |
 | `watch.namespace.read_batch_size` | `GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE` | `256` | Replay/poll page; must not exceed bucket size. |
 | `watch.namespace.max_replay_events` | `GITSTORE_WATCH__NAMESPACE__MAX_REPLAY_EVENTS` | `100000` | Resume ceiling before `WATCH_EXPIRED`. |
-| `watch.namespace.subscriber_buffer` | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER` | `64` | Per-subscription delivery buffer; overflow fails closed. |
+| `watch.namespace.subscriber_buffer` | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER` | `64` | Per-hop, per-subscription delivery buffer; accepted range is 1–256 and sustained overflow fails closed. |
 | `watch.namespace.subscriber_backpressure_millis` | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BACKPRESSURE_MILLIS` | `30000` | Maximum bounded wait for a slow subscriber before terminal `SUBSCRIBER_OVERFLOW`. |
 | `watch.namespace.poll_min_millis` | `GITSTORE_WATCH__NAMESPACE__POLL_MIN_MILLIS` | `100` | Minimum journal poll delay. |
 | `watch.namespace.poll_max_millis` | `GITSTORE_WATCH__NAMESPACE__POLL_MAX_MILLIS` | `2000` | Maximum adaptive poll delay; must be at least poll-min. |
