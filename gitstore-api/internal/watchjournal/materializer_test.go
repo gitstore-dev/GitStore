@@ -80,7 +80,7 @@ func TestClassifyCommittedNamespaceChanges(t *testing.T) {
 		want   datastore.NamespaceWatchEventType
 		ok     bool
 	}{
-		{name: "add", change: Change{Name: "shop", After: after}, want: datastore.NamespaceWatchAdded, ok: true},
+		{name: "add", change: Change{Name: "shop", DeduplicationKey: "stream:position", After: after}, want: datastore.NamespaceWatchAdded, ok: true},
 		{name: "modify", change: Change{Name: "shop", Before: before, After: after}, want: datastore.NamespaceWatchModified, ok: true},
 		{name: "delete", change: Change{Name: "shop", Before: before}, want: datastore.NamespaceWatchDeleted, ok: true},
 		{name: "no effect", change: Change{Name: "shop"}, ok: false},
@@ -99,6 +99,7 @@ func TestClassifyCommittedNamespaceChanges(t *testing.T) {
 				if tt.want == datastore.NamespaceWatchModified {
 					assert.Equal(t, "catalog", event.PreviousSelectorLabels["team"])
 				}
+				assert.Equal(t, tt.change.DeduplicationKey, event.DeduplicationKey)
 			}
 		})
 	}

@@ -123,6 +123,10 @@ Namespace name, UID, cursor, holder ID, or replica ID):
   subscription attempts.
 - `gitstore_namespace_watch_append_errors_total` — page on any sustained
   non-zero rate because acknowledged mutations may be awaiting CDC recovery.
+- `gitstore_namespace_watch_duplicates_total` — counts a new journal cursor
+  delivered with a deduplication key already observed by this replica. Track
+  its rate during recovery and rolling replacement; duplicates are safe but
+  must remain visible rather than being mistaken for missing transitions.
 - replay and delivery histograms — alert if 10,000-event replay p95 exceeds 5
   seconds, delivery p95 exceeds 1 second, or delivery p99 exceeds 3 seconds.
 
@@ -130,8 +134,9 @@ During replacement, the old leader may finish or lose its lease;
 partition-local conditional writes stop a stale holder from
 publishing/progressing. A replacement should acquire the
 lease, resume durable CDC progress, write a BOOKMARK, and restore readiness in
-30 seconds. Duplicates after append-before-progress recovery are safe and must
-be deduplicated by cursor; missing sequences are not safe and fail closed.
+30 seconds. Duplicates after append-before-progress recovery are safe, measured
+by the duplicate counter and capacity client, and must be deduplicated by
+cursor; missing sequences are not safe and fail closed.
 
 Recovery by wire code:
 

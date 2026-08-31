@@ -164,6 +164,17 @@ func TestLoad_RejectsCDCWindowDifferentFromSchema(t *testing.T) {
 	assert.Contains(t, err.Error(), "migration 006 fixes CDC retention")
 }
 
+func TestLoad_RejectsJournalRetentionAboveTableTTL(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS", "604801")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "migration 006 limits journal retention to 604800 seconds")
+}
+
 func TestLoad_RejectsOversizedNamespaceSubscriberBuffer(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()

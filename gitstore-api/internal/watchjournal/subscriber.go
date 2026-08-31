@@ -182,7 +182,7 @@ func (s *Subscriber) run(ctx context.Context, cursor datastore.NamespaceWatchCur
 				}
 				cursor.Sequence = event.Sequence
 				if s.cfg.Metrics != nil {
-					s.cfg.Metrics.ObserveDelivery(event.At, time.Now())
+					s.cfg.Metrics.ObserveDelivery(event, time.Now())
 				}
 			case <-ctx.Done():
 				if !timer.Stop() {

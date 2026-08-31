@@ -149,6 +149,8 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 	}
 	missing := capacityMissing(subscribers, workload.acknowledged)
 	require.Zero(t, missing, "every subscriber must observe every acknowledged transition")
+	duplicateDeliveries := capacityDuplicateDeliveries(subscribers)
+	t.Logf("measured duplicate deliveries across subscribers=%d", duplicateDeliveries)
 
 	latencyMu.Lock()
 	observedLatencies := append([]time.Duration(nil), latencies...)
@@ -168,9 +170,9 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 	for err := range readerErrors {
 		require.NoError(t, err)
 	}
-	t.Logf("duration=%s load_elapsed=%s subscribers=%d produced=%d enqueued=%d backpressured=%d attempted=%d admitted=%d acknowledged=%d errors=%d error_rate=%.4f%% p95=%s p99=%s replay_samples=%d replay_p95=%s recovery=%s",
+	t.Logf("duration=%s load_elapsed=%s subscribers=%d produced=%d enqueued=%d backpressured=%d attempted=%d admitted=%d acknowledged=%d duplicates=%d errors=%d error_rate=%.4f%% p95=%s p99=%s replay_samples=%d replay_p95=%s recovery=%s",
 		cfg.duration, soakElapsed, cfg.subscribers, workload.produced, workload.enqueued, workload.backpressured,
-		workload.attempted, workload.admitted, workload.acknowledged.count(), workload.failed,
+		workload.attempted, workload.admitted, workload.acknowledged.count(), duplicateDeliveries, workload.failed,
 		100*errorRate, p95, p99, len(replayDurations), replayP95, recovery.duration)
 }
 
@@ -253,12 +255,13 @@ func waitCapacityReplayCatchup(t *testing.T, cfg capacityConfig, cursor, prefix 
 }
 
 type capacitySubscriber struct {
-	mu       sync.Mutex
-	conn     *websocket.Conn
-	endpoint string
-	token    string
-	cursor   string
-	received *capacityBitset
+	mu         sync.Mutex
+	conn       *websocket.Conn
+	endpoint   string
+	token      string
+	cursor     string
+	received   *capacityBitset
+	duplicates atomic.Int64
 }
 
 func openCapacitySubscribers(t *testing.T, cfg capacityConfig, maxTransitions int) []*capacitySubscriber {
@@ -326,7 +329,11 @@ func (s *capacitySubscriber) read(ctx context.Context, prefix string, sampleLate
 			s.setCursor(event.ResourceVersion)
 		}
 		sequence, ok := capacitySequence(event.Name, prefix)
-		if !ok || !s.received.mark(sequence) {
+		if !ok {
+			continue
+		}
+		if !s.received.mark(sequence) {
+			s.duplicates.Add(1)
 			continue
 		}
 		if sampleLatency && !event.CreatedAt.IsZero() {
@@ -1330,6 +1337,14 @@ func capacityMissing(subscribers []*capacitySubscriber, acknowledged *capacityBi
 		}
 	}
 	return missing
+}
+
+func capacityDuplicateDeliveries(subscribers []*capacitySubscriber) int64 {
+	var duplicates int64
+	for _, subscriber := range subscribers {
+		duplicates += subscriber.duplicates.Load()
+	}
+	return duplicates
 }
 
 func capacityName(prefix string, sequence int) string {

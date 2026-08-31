@@ -30,6 +30,25 @@ func TestNamespaceWatchMetricsRegisterBoundedSignals(t *testing.T) {
 	))
 }
 
+func TestNamespaceWatchDuplicateMetricCountsNewCursorOnce(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewMetrics(registry)
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	first := datastore.NamespaceWatchEvent{
+		Type: datastore.NamespaceWatchAdded, Sequence: 10, DeduplicationKey: "stream:position", At: now,
+	}
+	duplicate := first
+	duplicate.Sequence = 11
+
+	metrics.ObserveDelivery(first, now)
+	metrics.ObserveDelivery(first, now) // Another subscriber sees the same cursor.
+	metrics.ObserveDelivery(duplicate, now)
+	metrics.ObserveDelivery(duplicate, now)
+
+	assert.Equal(t, float64(1), testutil.ToFloat64(metrics.duplicates))
+}
+
 func TestNamespaceWatchCDCLagAdvancesBetweenScrapes(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	metrics, err := NewMetrics(registry)

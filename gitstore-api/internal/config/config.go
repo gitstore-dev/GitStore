@@ -144,6 +144,8 @@ type NamespaceWatchConfig struct {
 
 const namespaceWatchCDCRetentionSeconds = 14 * 24 * 60 * 60
 
+const namespaceWatchJournalRetentionSeconds = 7 * 24 * 60 * 60
+
 // LogConfig holds logger settings.
 type LogConfig struct {
 	Level  string `mapstructure:"level"`
@@ -346,6 +348,9 @@ func validateConfig(cfg *Config) error {
 func validateNamespaceWatchConfig(w *NamespaceWatchConfig) error {
 	if w.CDCRetentionSeconds != namespaceWatchCDCRetentionSeconds {
 		return fmt.Errorf("invalid Namespace watch CDC retention: migration 006 fixes CDC retention at %d seconds", namespaceWatchCDCRetentionSeconds)
+	}
+	if w.JournalRetentionSeconds > namespaceWatchJournalRetentionSeconds {
+		return fmt.Errorf("invalid Namespace watch journal retention: migration 006 limits journal retention to %d seconds", namespaceWatchJournalRetentionSeconds)
 	}
 	if w.CDCRetentionSeconds < w.JournalRetentionSeconds {
 		return fmt.Errorf("invalid Namespace watch bounds: CDC retention must be at least journal retention")
