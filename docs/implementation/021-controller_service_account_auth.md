@@ -509,6 +509,7 @@ roles:
       # Namespace reconciler
       - repository.create.any     # see note below - .own is unreachable for a machine subject
       - namespace.status.write    # completeNamespaceDeletion
+      - namespace.watch           # Namespace listwatcher's watchResources subscription (spec 050/PR #371)
     deny: []   # least privilege: no admin role, no namespace.delete.*, no repository.delete.*
 
 role_bindings:
