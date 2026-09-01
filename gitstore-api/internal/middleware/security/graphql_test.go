@@ -398,7 +398,7 @@ func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationUsesPolicy(t *testing.
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "bob", AuthMethod: "static-admin", Roles: []string{"developer"}})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "bob", AuthMethod: "static-users", Roles: []string{"developer"}})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "createNamespace"}},
@@ -425,7 +425,7 @@ func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationUsesPolicy(t *testing.
 func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationFailsWithoutAuthZ(t *testing.T) {
 	registry := auth.NewProviderRegistry(nil, nil, nil)
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "bob", AuthMethod: "static-admin"})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "createNamespace"}},
@@ -458,7 +458,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {
 		},
 	}
 	mw := NewAuthorizeWithStore(registry, store, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "bob", AuthMethod: "static-admin"})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
@@ -510,7 +510,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenialHidesDeletionDetails(t *test
 				},
 			}
 			mw := NewAuthorizeWithStore(registry, store, zap.NewNop())
-			ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "mallory", AuthMethod: "static-admin"})
+			ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "mallory", AuthMethod: "static-users"})
 			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 				Object: "Mutation",
 				Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
@@ -544,7 +544,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespacePassesAuthorizedRecord(t *testing.
 		},
 	}
 	mw := NewAuthorizeWithStore(registry, store, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "alice", AuthMethod: "static-admin"})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "alice", AuthMethod: "static-users"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
@@ -568,7 +568,7 @@ func TestGraphQLFieldAuthorizerUpdateCategoryStatusUsesPolicy(t *testing.T) {
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-admin", Roles: []string{"controller"}})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-users", Roles: []string{"controller"}})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "updateCategoryStatus"}},
@@ -596,7 +596,7 @@ func TestGraphQLFieldAuthorizerUpdateCategoryStatusDenyReturnsForbidden(t *testi
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "eve", AuthMethod: "static-admin"})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "eve", AuthMethod: "static-users"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "updateCategoryStatus"}},
@@ -624,7 +624,7 @@ func TestGraphQLFieldAuthorizerUpdateCategoryStatusDenyReturnsForbidden(t *testi
 func TestGraphQLFieldAuthorizerUpdateProductStatusUsesPolicy(t *testing.T) {
 	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
 	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller", AuthMethod: "static-admin"})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller", AuthMethod: "static-users"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Mutation", Field: graphql.CollectedField{Field: &ast.Field{Name: "updateProductStatus"}}, Args: map[string]any{
 		"input": model.UpdateProductStatusInput{Name: "phone", Namespace: "shop", ResourceVersion: "7"},
 	}})
@@ -643,7 +643,7 @@ func TestGraphQLFieldAuthorizerDeleteCategoryUsesPersistedScope(t *testing.T) {
 	}}
 	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), store, zap.NewNop())
 	id := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Category/category-uid"))
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "alice", AuthMethod: "static-admin"})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "alice", AuthMethod: "static-users"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Mutation", Field: graphql.CollectedField{Field: &ast.Field{Name: "deleteCategory"}}, Args: map[string]any{
 		"input": model.DeleteCategoryInput{ID: id},
 	}})
@@ -663,7 +663,7 @@ func TestGraphQLFieldAuthorizerUpdateResourceStatusUsesLowerCamelKindAction(t *t
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-admin", Roles: []string{"controller"}})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-users", Roles: []string{"controller"}})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "updateResourceStatus"}},

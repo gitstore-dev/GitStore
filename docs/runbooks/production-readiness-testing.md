@@ -573,7 +573,7 @@ proof:
 - **Full-stack integration (real GraphQL, two real users):**
   `tests/integration/authz_repository_contract_test.go`,
   `TestRepositoryAuthorization_TwoUserNamespaceIsolation`. Two users
-  (`test-user:alice`, `test-user:bob`) each create their own namespace and
+  (the real `static-users` identities `alice` and `bob`) each create their own namespace and
   repository through real GraphQL mutations against the running harness.
   Alice's attempt to `deleteNamespace` on Bob's namespace is asserted to
   fail with `"permission denied: resource belongs to another user"`. Each

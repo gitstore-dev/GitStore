@@ -46,7 +46,7 @@ type Decision struct {
     Reason    string    `json:"reason"`
     RequestID string    `json:"request_id"`
     At        time.Time `json:"at"`
-    // Provider that produced this decision (e.g. "static-admin", "oidc-jwt").
+    // Provider that produced this decision (e.g. "static-users", "oidc-jwt").
     Provider  string    `json:"provider"`
 }
 
@@ -73,7 +73,7 @@ type Principal struct {
     Roles      []string          `json:"roles,omitempty"`
     Scopes     []string          `json:"scopes,omitempty"`
     Claims     map[string]any    `json:"claims,omitempty"`
-    AuthMethod string            `json:"auth_method"` // e.g. "static-admin", "oidc-jwt"
+    AuthMethod string            `json:"auth_method"` // e.g. "static-users", "oidc-jwt"
     ExpiresAt  time.Time         `json:"exp,omitempty"`
 }
 
@@ -116,7 +116,7 @@ type AuthRequest struct {
 
 // AuthNProvider authenticates an inbound request and returns a Principal + Decision.
 type AuthNProvider interface {
-    // Name returns the canonical provider name (e.g. "static-admin").
+    // Name returns the canonical provider name (e.g. "static-users").
     Name() string
     // Capabilities returns the set of operations this provider can perform.
     Capabilities() Capability
@@ -330,51 +330,42 @@ func (c *ChainedAuthN) RevokeSession(ctx context.Context, jti string, expiresAt 
 
 ## 2. Provider Implementations (Phase 1 Scope)
 
-### 2a. static-admin (AuthN)
+### 2a. static-users (AuthN)
 
 ```go
-// File: gitstore-api/internal/auth/provider/staticadmin/provider.go
-package staticadmin
+// File: gitstore-api/internal/auth/provider/staticusers/provider.go
+package staticusers
 
 // Resolved config fields (loaded from Viper paths/env vars by internal/config):
-//   auth.admin.username       → GITSTORE_AUTH__ADMIN__USERNAME       (default "admin")
-//   auth.admin.password_hash  → GITSTORE_AUTH__ADMIN__PASSWORD_HASH  (required)
-//
-// These are the existing env vars — zero config migration required.
+//   auth.staticusers.users_file → GITSTORE_AUTH__STATICUSERS__USERS_FILE
+//   auth.jwt.secret              → GITSTORE_AUTH__JWT__SECRET
 
-type StaticAdminProvider struct {
-    username     string
-    passwordHash string    // bcrypt hash
+type StaticUsersProvider struct {
+    users        map[string]UserEntry
+    usersFile    string
     blacklist    *sessionBlacklist
 }
 
-func New(cfg config.AuthConfig, logger *zap.Logger) (*StaticAdminProvider, error) {
-    username := cfg.Admin.Username
-    hash := cfg.Admin.Password
-    if hash == "" {
-        return nil, errors.New("staticadmin: GITSTORE_AUTH__ADMIN__PASSWORD_HASH is required")
-    }
-    return &StaticAdminProvider{
-        username:     username,
-        passwordHash: hash,
-        blacklist:    newSessionBlacklist(),
-    }, nil
+func New(cfg config.AuthConfig, logger *zap.Logger) (*StaticUsersProvider, error) {
+    // Load usersFile as versioned YAML; each entry contains a username,
+    // bcrypt password_hash, and optional display_name/email metadata.
+    panic("not implemented")
 }
 
-func (p *StaticAdminProvider) Name() string { return "static-admin" }
+func (p *StaticUsersProvider) Name() string { return "static-users" }
 
-func (p *StaticAdminProvider) Capabilities() auth.Capability {
-    return auth.CapAuthenticate | auth.CapIssueSession | auth.CapIntrospect
+func (p *StaticUsersProvider) Capabilities() auth.Capability {
+    return auth.CapAuthenticate | auth.CapIssueSession | auth.CapIntrospect | auth.CapUserLookup
 }
 
-func (p *StaticAdminProvider) Authenticate(ctx context.Context, req auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
+func (p *StaticUsersProvider) Authenticate(ctx context.Context, req auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
     // 1. Extract Authorization: Bearer <jwt>
     // 2. Parse the JWT (golang-jwt/v5, HS256, using GITSTORE_AUTH__JWT__SECRET)
     // 3. If parse fails → OutcomeChallenge (not my token, try next provider)
     // 4. Validate issuer == cfg.GetString("auth.jwt.issuer")
     // 5. Check blacklist by jti claim
     // 6. If blacklisted → OutcomeDeny("token revoked")
-    // 7. Build Principal{Subject: claims.sub, Issuer: issuer, Roles: ["admin"], AuthMethod: "static-admin"}
+    // 7. Build Principal{Subject: claims.sub, Issuer: issuer, Roles: nil, AuthMethod: "static-users"}
     // 8. Return Allow
 
     // Also handles Basic Auth for Git smart-HTTP:
@@ -386,7 +377,7 @@ func (p *StaticAdminProvider) Authenticate(ctx context.Context, req auth.AuthReq
     panic("not implemented")
 }
 
-func (p *StaticAdminProvider) RevokeSession(ctx context.Context, jti string, expiresAt time.Time) error {
+func (p *StaticUsersProvider) RevokeSession(ctx context.Context, jti string, expiresAt time.Time) error {
     p.blacklist.add(jti, expiresAt)
     return nil
 }
@@ -764,7 +755,7 @@ Both mutations are provider-agnostic by delegating to `ChainedAuthN`:
 mutation Logout(token: String!): Boolean
   1. Parse the JWT (no signature verify, just claims) to extract jti + exp
   2. Call registry.AuthN().RevokeSession(ctx, jti, expiresAt)
-     - static-admin provider: adds jti to in-memory blacklist
+     - static-users provider: adds jti to in-memory blacklist
      - oidc-jwt provider: returns ErrNotSupported (OIDC tokens expire naturally;
        phase 2 adds RFC 7009 call to IdP revocation endpoint)
   3. Return true if any provider accepted the revocation; false + log if ErrNotSupported
@@ -775,7 +766,7 @@ mutation Logout(token: String!): Boolean
 mutation RefreshToken(token: String!): AuthPayload
   1. Call registry.AuthN().RefreshSession(ctx, oldToken)
      - Chains through providers; first non-ErrNotSupported result wins
-     - static-admin: validates old token, blacklists its jti, issues new JWT
+     - static-users: validates old token, blacklists its jti, issues new JWT
      - oidc-jwt: returns ErrNotSupported (use IdP refresh endpoint directly)
   2. Return new token + expiry
 ```
@@ -954,13 +945,12 @@ pub struct HookContext {
 ```text
 Key path (Viper)                         Env var                                    Type     Default
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-auth.authn.chain                         GITSTORE_AUTH__AUTHN__CHAIN                []string ["static-admin","anonymous"]
+auth.authn.chain                         GITSTORE_AUTH__AUTHN__CHAIN                []string ["static-users","anonymous"]
 auth.authz.provider                      GITSTORE_AUTH__AUTHZ__PROVIDER             string   "allow-all"
 auth.userdir.provider                    GITSTORE_AUTH__USERDIR__PROVIDER           string   "none"
 
-# Existing keys — unchanged
-auth.admin.username                      GITSTORE_AUTH__ADMIN__USERNAME             string   "admin"
-auth.admin.password_hash                 GITSTORE_AUTH__ADMIN__PASSWORD_HASH        string   (required)
+# Local users file
+auth.staticusers.users_file              GITSTORE_AUTH__STATICUSERS__USERS_FILE     string   "users.yaml"
 auth.jwt.secret                          GITSTORE_AUTH__JWT__SECRET                 string   (required)
 auth.jwt.duration                        GITSTORE_AUTH__JWT__DURATION               duration "24h"
 auth.jwt.issuer                          GITSTORE_AUTH__JWT__ISSUER                 string   "gitstore"
@@ -986,7 +976,7 @@ GITSTORE_AUTH__ADMIN__USERNAME=admin
 GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
 GITSTORE_AUTH__JWT__SECRET=dev-secret-change-me
 GITSTORE_AUTH__JWT__ISSUER=gitstore
-GITSTORE_AUTH__AUTHN__CHAIN=static-admin,anonymous
+GITSTORE_AUTH__AUTHN__CHAIN=static-users,anonymous
 GITSTORE_AUTH__AUTHZ__PROVIDER=allow-all
 GITSTORE_AUTH__USERDIR__PROVIDER=none
 GITSTORE_AUTH__GRPC__HMAC_SECRET=dev-grpc-secret
@@ -998,7 +988,7 @@ GITSTORE_AUTH__ADMIN__USERNAME=admin
 GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
 GITSTORE_AUTH__JWT__SECRET=local-secure-secret
 GITSTORE_AUTH__JWT__ISSUER=gitstore
-GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-admin,anonymous
+GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-users,anonymous
 GITSTORE_AUTH__AUTHZ__PROVIDER=rbac-local
 GITSTORE_AUTH__USERDIR__PROVIDER=none
 GITSTORE_AUTH__RBAC__POLICY_FILE=/etc/gitstore/policy.yaml
@@ -1016,7 +1006,7 @@ GITSTORE_AUTH__JWT__SECRET=${JWT_SECRET}
 GITSTORE_AUTH__JWT__ISSUER=gitstore
 GITSTORE_AUTH__JWT__DURATION=1h
 GITSTORE_AUTH__JWT__REFRESH_GRACE=60s
-GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-admin,anonymous
+GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-users,anonymous
 GITSTORE_AUTH__AUTHZ__PROVIDER=opa
 GITSTORE_AUTH__USERDIR__PROVIDER=none
 GITSTORE_AUTH__OIDC__ISSUER_URL=${OIDC_ISSUER_URL}
@@ -1114,11 +1104,11 @@ action-name changes. See `022-opa-data-authorization.md` §5–§9.
 
 ## 7. Rollout Phases
 
-### Phase 1 — Interface foundation and static-admin migration ✅ COMPLETE (031)
+### Phase 1 — Interface foundation and static-users migration ✅ COMPLETE (031/060)
 **Milestone:** `auth-framework-v1`
-**Deliverable:** `internal/auth/types.go`, `ProviderRegistry`, `ChainedAuthN`, `StaticAdminProvider`, `AllowAllProvider`, `RBACLocalProvider`, `AnonymousProvider`, `NoneUserDirProvider`, `DecisionLogger`. Replace `middleware.User` context with `Principal`. Wire `allow-all` as default authz; default authn chain is `["static-admin","anonymous"]`. SIGHUP triggers `rbac-local` policy reload. `GetUserFromContext` shim deleted; all callers use `auth.PrincipalFromContext` directly.
+**Deliverable:** `internal/auth/types.go`, `ProviderRegistry`, `ChainedAuthN`, `StaticUsersProvider`, `AllowAllProvider`, `RBACLocalProvider`, `AnonymousProvider`, `NoneUserDirProvider`, `DecisionLogger`. Replace `middleware.User` context with `Principal`. Wire `allow-all` as default authz; local default authn chain is `["static-users","anonymous"]`. SIGHUP reloads local users and `rbac-local` policy. `GetUserFromContext` shim deleted; all callers use `auth.PrincipalFromContext` directly.
 **Affected packages:** `gitstore-api/internal/auth/`, `gitstore-api/internal/middleware/`, `gitstore-api/internal/graph/resolver/`
-**Test strategy:** Unit tests for each provider; integration test that the static-admin path works end-to-end with existing `GITSTORE_AUTH__ADMIN__*` env vars unchanged; test that `allow-all` emits a zap warning on startup.
+**Test strategy:** Unit tests for each provider; integration coverage authenticates users from the configured static-users file and verifies role resolution remains an AuthZ concern; test that `allow-all` emits a zap warning on startup.
 **Rollback trigger:** Any existing integration test (login, createNamespace, deleteNamespace) fails.
 
 ### Phase 2 — Live isAdmin checks migrated to AuthZ + callerUsernameOrAnon fix ✅ COMPLETE (031)
@@ -1186,7 +1176,7 @@ BasicAuthenticator → RepoResolver → GitHttpAuthorizer → [PushContextInsert
 **Deliverable:** `OIDCJWTProvider`; `go-oidc/v3` added to `go.mod`; local-secure profile end-to-end tested.
 **Affected packages:** `gitstore-api/internal/auth/provider/oidcjwt/`, `go.mod`
 **Test strategy:** Unit test with a mock JWKS server; integration test with a real local IdP (e.g., Dex running in Docker Compose test profile); test key rotation forced-refresh behavior.
-**Rollback trigger:** OIDC provider causes 500s on valid tokens, or breaks the static-admin fallback in the chain.
+**Rollback trigger:** OIDC provider causes 500s on valid tokens, or breaks the static-users fallback in the chain.
 
 ### Phase 8 — OPA production AuthZ provider
 **Milestone:** `auth-framework-v3`
@@ -1216,7 +1206,7 @@ stale/invalid decision does not fail closed, or scoped Relay results expose an i
 
 ### Risk 1: JWT Clock Skew (exp validation)
 **Description:** Distributed nodes with unsynchronized clocks can cause valid tokens to be rejected (or expired tokens to be accepted) at the boundary. The research verified that RFC 7519 MAY (not MUST) apply leeway — go-oidc v3 applies 1 minute by default, but the static-admin HS256 path (golang-jwt/v5) uses no leeway by default.
-**Mitigation:** Configure `2m` clock skew leeway (`GITSTORE_AUTH__OIDC__CLOCK_SKEW=2m`) for the oidc-jwt provider. For the static-admin provider, pass `jwt.WithLeeway(2*time.Minute)` to the `jwt.ParseWithClaims` call. Enforce NTP synchronization in production deployment runbooks. Monitor token rejection rate as an alert signal for clock drift.
+**Mitigation:** Configure `2m` clock skew leeway (`GITSTORE_AUTH__OIDC__CLOCK_SKEW=2m`) for the oidc-jwt provider and the static-users JWT parser. Enforce NTP synchronization in production deployment runbooks. Monitor NTP synchronization and token rejection rate as alert signals for clock drift.
 
 ### Risk 2: JWKS Key Rotation Window
 **Description:** `RemoteKeySet` (go-oidc v3) caches JWKS and does NOT immediately propagate rotated keys. During the rotation window, tokens signed with the new key are rejected as "key not found."

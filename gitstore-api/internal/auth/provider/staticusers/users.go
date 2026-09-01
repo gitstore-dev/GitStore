@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
 package staticusers
 
 import (
@@ -52,7 +53,7 @@ func loadUsers(path string) (map[string]UserEntry, error) {
 }
 
 func usersFileError(path, problem, fix string, cause error) error {
-	message := fmt.Sprintf("startup failed: invalid static-users file %q\n\n  Problem: %s.\n\n  To fix: %s.\n\n  See specs/060-local-multiuser-authn/quickstart.md for a worked example.", path, problem, fix)
+	message := fmt.Sprintf("startup failed: invalid static-users file %q\n\n  Problem: %s\n\n  To fix: %s\n\n  See specs/060-local-multiuser-authn/quickstart.md for a worked example", path, problem, fix)
 	if cause != nil {
 		return fmt.Errorf("%s: %w", message, cause)
 	}

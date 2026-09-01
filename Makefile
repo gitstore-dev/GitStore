@@ -84,7 +84,7 @@ export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 .PHONY: help git api controller dev compose scylla ps logs stop down validate-local-config compose-config-check
 .PHONY: build test lint license-check pr-ready capacity chaos test-scylla-hardening test-scylla-integration test-scylla-capacity test-namespace-admission-capacity test-namespace-watch-capacity test-namespace-watch-recovery
 .PHONY: bootstrap bootstrap-token bootstrap-namespace bootstrap-repository git-clean-data
-.PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools gen-admin-password gen-jwt-secret gen-hmac-secret
+.PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools hash-static-user-password gen-jwt-secret gen-hmac-secret
 
 help: ## Show available targets and common variables.
 	@awk 'BEGIN {FS = ":.*##"; printf "GitStore make targets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -127,15 +127,15 @@ controller: ## Run gitstore-controller-manager locally in the foreground.
 	@cd "$(CONTROLLER_MANAGER_DIR)" && go run ./cmd/controller
 
 api: ## Run gitstore-api locally in the foreground.
-	@if [ ! -f "$(API_ENV_FILE)" ] && { [ -z "$${GITSTORE_AUTH__ADMIN__USERNAME:-}" ] || [ -z "$${GITSTORE_AUTH__ADMIN__PASSWORD_HASH:-}" ] || [ -z "$${GITSTORE_AUTH__JWT__SECRET:-}" ]; }; then \
-		echo "make api requires $(API_ENV_FILE) or shell env for GITSTORE_AUTH__ADMIN__USERNAME, GITSTORE_AUTH__ADMIN__PASSWORD_HASH, and GITSTORE_AUTH__JWT__SECRET"; \
+	@if [ ! -f "$(API_ENV_FILE)" ] && { [ -z "$${GITSTORE_AUTH__STATICUSERS__USERS_FILE:-}" ] || [ -z "$${GITSTORE_AUTH__JWT__SECRET:-}" ]; }; then \
+		echo "make api requires $(API_ENV_FILE) or shell env for GITSTORE_AUTH__STATICUSERS__USERS_FILE and GITSTORE_AUTH__JWT__SECRET"; \
 		exit 2; \
 	fi
 	@cd "$(API_DIR)" && go run ./cmd/server
 
 dev: ## Run local git service and API together in the foreground.
-	@if [ ! -f "$(API_ENV_FILE)" ] && { [ -z "$${GITSTORE_AUTH__ADMIN__USERNAME:-}" ] || [ -z "$${GITSTORE_AUTH__ADMIN__PASSWORD_HASH:-}" ] || [ -z "$${GITSTORE_AUTH__JWT__SECRET:-}" ]; }; then \
-		echo "make dev requires $(API_ENV_FILE) or shell env for GITSTORE_AUTH__ADMIN__USERNAME, GITSTORE_AUTH__ADMIN__PASSWORD_HASH, and GITSTORE_AUTH__JWT__SECRET"; \
+	@if [ ! -f "$(API_ENV_FILE)" ] && { [ -z "$${GITSTORE_AUTH__STATICUSERS__USERS_FILE:-}" ] || [ -z "$${GITSTORE_AUTH__JWT__SECRET:-}" ]; }; then \
+		echo "make dev requires $(API_ENV_FILE) or shell env for GITSTORE_AUTH__STATICUSERS__USERS_FILE and GITSTORE_AUTH__JWT__SECRET"; \
 		exit 2; \
 	fi
 	@set -u; \
@@ -332,33 +332,16 @@ bootstrap-tools:
 	@command -v curl >/dev/null 2>&1 || { echo "curl is required for bootstrap targets"; exit 127; }
 	@command -v jq >/dev/null 2>&1 || { echo "jq is required for bootstrap targets"; exit 127; }
 
-gen-admin-password: ## Generate a bcrypt hash for ADMIN_PASSWORD and write it to gitstore-api/.env.
+hash-static-user-password: ## Generate a bcrypt hash for ADMIN_PASSWORD for the static-users YAML file.
 	@if [ -z "$${ADMIN_PASSWORD:-}" ]; then \
-		echo "Usage: make gen-admin-password ADMIN_PASSWORD='<password>'"; \
+		echo "Usage: make hash-static-user-password ADMIN_PASSWORD='<password>'"; \
 		exit 2; \
 	fi
 	@hash=$$(cd "$(API_DIR)" && go run ./cmd/gitctl hash-password "$$ADMIN_PASSWORD") || { \
 		echo "Failed to generate bcrypt hash. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
-	env_file="$(API_DIR)/.env"; \
-	if [ -f "$$env_file" ]; then \
-		if grep -q 'GITSTORE_AUTH__ADMIN__PASSWORD_HASH' "$$env_file"; then \
-			if [ "$$(uname)" = "Darwin" ]; then \
-				sed -i '' "s|^GITSTORE_AUTH__ADMIN__PASSWORD_HASH=.*|GITSTORE_AUTH__ADMIN__PASSWORD_HASH='$$hash'|" "$$env_file"; \
-			else \
-				sed -i "s|^GITSTORE_AUTH__ADMIN__PASSWORD_HASH=.*|GITSTORE_AUTH__ADMIN__PASSWORD_HASH='$$hash'|" "$$env_file"; \
-			fi; \
-			echo "Updated GITSTORE_AUTH__ADMIN__PASSWORD_HASH in $$env_file"; \
-		else \
-			printf "GITSTORE_AUTH__ADMIN__PASSWORD_HASH='%s'\n" "$$hash" >> "$$env_file"; \
-			echo "Appended GITSTORE_AUTH__ADMIN__PASSWORD_HASH to $$env_file"; \
-		fi; \
-	else \
-		printf "GITSTORE_AUTH__ADMIN__PASSWORD_HASH='%s'\n" "$$hash" > "$$env_file"; \
-		echo "Created $$env_file with GITSTORE_AUTH__ADMIN__PASSWORD_HASH"; \
-	fi; \
-	echo "Hash: $$hash"
+	echo "bcrypt hash (put this in users.yaml password_hash): $$hash"
 
 gen-jwt-secret: ## Generate a JWT secret and write GITSTORE_AUTH__JWT__SECRET to gitstore-api/.env.
 	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-jwt-secret | sed -n 's/^GITSTORE_AUTH__JWT__SECRET=//p') || { \
@@ -389,12 +372,12 @@ bootstrap-token: bootstrap-tools ## Login and print/cache a bootstrap bearer tok
 	}; \
 	if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
 		echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
-		echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match the hash in gitstore-api/.env (run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate)."; \
+		echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match users.yaml (run 'make hash-static-user-password ADMIN_PASSWORD=<password>' to generate a hash)."; \
 		exit 1; \
 	fi; \
 	token=$$(echo "$$response" | jq -er '.data.login.token.accessToken // empty') || { \
 		echo "Login response did not contain a token. Check ADMIN_USERNAME, ADMIN_PASSWORD, and API_URL."; \
-		echo "Hint: run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate the password hash in gitstore-api/.env."; \
+		echo "Hint: run 'make hash-static-user-password ADMIN_PASSWORD=<password>' to generate a users.yaml password hash."; \
 		exit 1; \
 	}; \
 	printf '%s\n' "$$token"; \
@@ -418,12 +401,12 @@ bootstrap-namespace: bootstrap-tools ## Create only the bootstrap namespace.
 		}; \
 		if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
 			echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
-			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match the hash in gitstore-api/.env (run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate)."; \
+			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match users.yaml (run 'make hash-static-user-password ADMIN_PASSWORD=<password>' to generate a hash)."; \
 			exit 1; \
 		fi; \
 		token=$$(echo "$$response" | jq -er '.data.login.token.accessToken // empty') || { \
 			echo "Login response did not contain a token."; \
-			echo "Hint: run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate the password hash in gitstore-api/.env."; \
+			echo "Hint: run 'make hash-static-user-password ADMIN_PASSWORD=<password>' to generate a users.yaml password hash."; \
 			exit 1; \
 		}; \
 	fi; \
@@ -456,12 +439,12 @@ bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; n
 		}; \
 		if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
 			echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
-			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match the hash in gitstore-api/.env (run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate)."; \
+			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match users.yaml (run 'make hash-static-user-password ADMIN_PASSWORD=<password>' to generate a hash)."; \
 			exit 1; \
 		fi; \
 		token=$$(echo "$$response" | jq -er '.data.login.token.accessToken // empty') || { \
 			echo "Login response did not contain a token."; \
-			echo "Hint: run 'make gen-admin-password ADMIN_PASSWORD=<password>' to regenerate the password hash in gitstore-api/.env."; \
+			echo "Hint: run 'make hash-static-user-password ADMIN_PASSWORD=<password>' to generate a users.yaml password hash."; \
 			exit 1; \
 		}; \
 	fi; \

@@ -40,8 +40,7 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_GIT__HTTP__URI",
 		"GITSTORE_LOG__LEVEL",
 		"GITSTORE_LOG__FORMAT",
-		"GITSTORE_AUTH__ADMIN__USERNAME",
-		"GITSTORE_AUTH__ADMIN__PASSWORD_HASH",
+		"GITSTORE_AUTH__STATICUSERS__USERS_FILE",
 		"GITSTORE_AUTH__JWT__SECRET",
 		"GITSTORE_AUTH__JWT__DURATION",
 		"GITSTORE_AUTH__JWT__ISSUER",
@@ -73,8 +72,7 @@ func clearEnv(t *testing.T) func() {
 // setRequiredAuth sets the required auth env vars including the gRPC HMAC secret.
 func setRequiredAuth(t *testing.T) {
 	t.Helper()
-	os.Setenv("GITSTORE_AUTH__ADMIN__USERNAME", "admin")
-	os.Setenv("GITSTORE_AUTH__ADMIN__PASSWORD_HASH", "$2a$12$hash")
+	os.Setenv("GITSTORE_AUTH__STATICUSERS__USERS_FILE", "config/users.yaml")
 	os.Setenv("GITSTORE_AUTH__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
 	os.Setenv("GITSTORE_AUTH__GRPC__HMAC_SECRET", "ci-test-grpc-hmac-secret")
 }
@@ -350,9 +348,8 @@ func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "shared.toml")
 	content := `[api]
 port = 7111
-[auth.admin]
-username = "admin"
-password_hash = "$2a$10$hash"
+[auth.staticusers]
+users_file = "users.yaml"
 [auth.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [auth.grpc]
@@ -390,12 +387,9 @@ func TestLoad_StartupLogRedactsSensitiveFields(t *testing.T) {
 
 	// Sensitive fields must not appear in the log representation.
 	// We test via the MarshalLogObject-based redact helper indirectly:
-	// cfg.Auth.Admin.Password and cfg.Auth.JWT.Secret must be redacted.
-	assert.Equal(t, "<redacted>", redact(cfg.Auth.Admin.Password))
+	// JWT secrets must be redacted; users are loaded from a separate file.
 	assert.Equal(t, "<redacted>", redact(cfg.Auth.JWT.Secret))
-
-	// Non-sensitive field must pass through.
-	assert.Equal(t, "admin", cfg.Auth.Admin.Username)
+	assert.NotEmpty(t, cfg.Auth.StaticUsers.UsersFile)
 }
 
 // T027: .env loading tests (US3)
@@ -405,8 +399,7 @@ func TestLoad_EnvFileLoadsWithoutShellVars(t *testing.T) {
 	defer restore()
 
 	dir := t.TempDir()
-	envContent := `GITSTORE_AUTH__ADMIN__USERNAME=envfileuser
-GITSTORE_AUTH__ADMIN__PASSWORD_HASH=$2a$12$hash
+	envContent := `GITSTORE_AUTH__STATICUSERS__USERS_FILE=users-from-env.yaml
 GITSTORE_AUTH__JWT__SECRET=supersecretkey-minimum-32-chars!!
 GITSTORE_AUTH__GRPC__HMAC_SECRET=ci-test-grpc-hmac-secret
 GITSTORE_LOG__LEVEL=warn
@@ -420,7 +413,7 @@ GITSTORE_LOG__LEVEL=warn
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
-	assert.Equal(t, "envfileuser", cfg.Auth.Admin.Username)
+	assert.Equal(t, "users-from-env.yaml", cfg.Auth.StaticUsers.UsersFile)
 	assert.Equal(t, "warn", cfg.Log.Level)
 }
 
@@ -471,14 +464,13 @@ func TestLoad_MissingRequiredKeyReturnsError(t *testing.T) {
 
 	_, err := Load()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Admin.Username")
+	assert.Contains(t, err.Error(), "Grpc.HmacSecret")
 }
 
 func TestLoad_EmptyStringForRequiredKeyIsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
-	os.Setenv("GITSTORE_AUTH__ADMIN__USERNAME", "")
-	os.Setenv("GITSTORE_AUTH__ADMIN__PASSWORD_HASH", "")
+	os.Setenv("GITSTORE_AUTH__STATICUSERS__USERS_FILE", "")
 	os.Setenv("GITSTORE_AUTH__JWT__SECRET", "")
 
 	_, err := Load()
@@ -511,14 +503,14 @@ func TestLoad_InvalidLogFormatReturnsError(t *testing.T) {
 func TestLoad_MultipleValidationErrorsReportedTogether(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
+	t.Setenv("GITSTORE_AUTH__AUTHN__CHAIN", "anonymous")
 	// No auth set at all — JWT.Secret is provider-conditional and is not
-	// required while the legacy static-admin chain remains the configured default.
+	// required when the static-users provider is not selected explicitly.
 
 	_, err := Load()
 	require.Error(t, err)
 	// The always-required fields should appear in the single error string.
-	assert.Contains(t, err.Error(), "Admin.Username")
-	assert.Contains(t, err.Error(), "Admin.Password")
+	assert.Contains(t, err.Error(), "Grpc.HmacSecret")
 	assert.NotContains(t, err.Error(), "JWT.Secret")
 }
 
@@ -536,8 +528,7 @@ func TestValidateAuthChainConfig_AnonymousDoesNotRequireJWTSecret(t *testing.T) 
 func TestLoad_MissingGrpcHmacSecretReturnsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
-	os.Setenv("GITSTORE_AUTH__ADMIN__USERNAME", "admin")
-	os.Setenv("GITSTORE_AUTH__ADMIN__PASSWORD_HASH", "$2a$12$hash")
+	os.Setenv("GITSTORE_AUTH__STATICUSERS__USERS_FILE", "config/users.yaml")
 	os.Setenv("GITSTORE_AUTH__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
 	// GITSTORE_AUTH__GRPC__HMAC_SECRET intentionally absent
 

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
 package staticusers
 
 import (
@@ -215,8 +216,8 @@ func (p *StaticUsersProvider) GetBySubject(_ context.Context, s string) (*auth.U
 	}
 	return &auth.UserProfile{Subject: u.Username, DisplayName: u.DisplayName, Email: u.Email, Active: true}, nil
 }
-func (p *StaticUsersProvider) ListGroups(_ context.Context, s string) ([]string, error) {
-	if _, err := p.GetBySubject(context.Background(), s); err != nil {
+func (p *StaticUsersProvider) ListGroups(ctx context.Context, s string) ([]string, error) {
+	if _, err := p.GetBySubject(ctx, s); err != nil {
 		return nil, err
 	}
 	return []string{}, nil

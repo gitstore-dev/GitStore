@@ -513,7 +513,7 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 		if len(usernames) > 0 {
 			first = usernames[0]
 		}
-		return nil, nil, nil, fmt.Errorf("startup failed: static-users + rbac-local migration safety check\n\n  Problem: static-users is configured with %d user(s) (%s), but rbac-local's policy.yaml has no role_bindings entry for any of them. Every static-users login would authenticate successfully and then be denied every action by rbac-local's default_deny.\n\n  To fix, do ONE of the following:\n    1. Add a role_bindings entry in %s for at least one of the usernames above, e.g. role_bindings: %s: [admin]\n    2. If you don't want rbac-local enforcement yet, set GITSTORE_AUTH__AUTHZ__PROVIDER=allow-all instead.\n\n  See specs/060-local-multiuser-authn/quickstart.md for a worked example.", len(usernames), strings.Join(usernames, ", "), cfg.Auth.RBAC.PolicyFile, first)
+		return nil, nil, nil, fmt.Errorf("startup failed: static-users + rbac-local migration safety check\n\n  Problem: static-users is configured with %d user(s) (%s), but rbac-local's policy.yaml has no role_bindings entry for any of them. Every static-users login would authenticate successfully and then be denied every action by rbac-local's default_deny\n\n  To fix, do ONE of the following:\n    1. Add a role_bindings entry in %s for at least one of the usernames above, e.g. role_bindings: %s: [admin]\n    2. If you don't want rbac-local enforcement yet, set GITSTORE_AUTH__AUTHZ__PROVIDER=allow-all instead\n\n  See specs/060-local-multiuser-authn/quickstart.md for a worked example", len(usernames), strings.Join(usernames, ", "), cfg.Auth.RBAC.PolicyFile, first)
 	}
 
 	var reloaders providerReloaders

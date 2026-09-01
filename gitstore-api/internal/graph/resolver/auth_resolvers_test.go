@@ -93,7 +93,7 @@ func TestLogout_AuthenticatedBearer_ReturnsSuccess(t *testing.T) {
 	principal := &authpkg.Principal{
 		Subject:    "admin",
 		Roles:      []string{"admin"},
-		AuthMethod: "static-admin",
+		AuthMethod: "static-users",
 		ExpiresAt:  exp,
 		TokenID:    extractJTI(t, p, token),
 	}
@@ -135,7 +135,7 @@ func TestLogout_EmptyTokenID_NoOp_ReturnsSuccess(t *testing.T) {
 	principal := &authpkg.Principal{
 		Subject:    "admin",
 		Roles:      []string{"admin"},
-		AuthMethod: "static-admin",
+		AuthMethod: "static-users",
 		TokenID:    "", // empty — no jti
 	}
 	ctx := ctxWithPrincipal(principal)
@@ -311,7 +311,7 @@ func TestLogout_NilRegistry_ReturnsError(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	principal := &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin", TokenID: "some-jti"}
+	principal := &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-users", TokenID: "some-jti"}
 	ctx := ctxWithPrincipal(principal)
 	_, err = r.Logout(ctx)
 	require.Error(t, err)

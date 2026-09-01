@@ -69,7 +69,10 @@ type Principal struct {
 	TokenID string `json:"jti,omitempty"`
 }
 
-// IsAdmin returns true when the principal carries the built-in "admin" role.
+// IsAdmin reports whether AuthZ assigned the built-in "admin" role.
+// Authentication providers establish identity only; they must not grant roles.
+// In particular, static-users principals are role-free until rbac-local (or
+// another AuthZ provider) resolves their bindings.
 func (p *Principal) IsAdmin() bool {
 	for _, r := range p.Roles {
 		if r == "admin" {

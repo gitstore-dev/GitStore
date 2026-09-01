@@ -50,11 +50,11 @@ func newRBACProvider(t *testing.T, policyContent string) *RBACLocalProvider {
 }
 
 func adminPrincipal() *authpkg.Principal {
-	return &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin"}
+	return &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-users"}
 }
 
 func developerPrincipal() *authpkg.Principal {
-	return &authpkg.Principal{Subject: "dev", Roles: []string{"developer"}, AuthMethod: "static-admin"}
+	return &authpkg.Principal{Subject: "dev", Roles: []string{"developer"}, AuthMethod: "static-users"}
 }
 
 func anonPrincipal() *authpkg.Principal {
