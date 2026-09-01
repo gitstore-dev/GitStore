@@ -369,3 +369,26 @@ func TestNew_InvalidDefaultTTL_Errors(t *testing.T) {
 	_, err := New(config.ServiceAccountConfig{SigningKey: generateEd25519PEM(t), DefaultTTL: "not-a-duration"}, &stubLookup{}, zap.NewNop())
 	require.Error(t, err)
 }
+
+func TestServiceAccountJWT_AuthenticateReturnsPrincipalWithEmptyRoles(t *testing.T) {
+	pemKey := generateEd25519PEM(t)
+	sa := testServiceAccount("controllers", "manager", "uid-123")
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/manager": sa}}
+	p := newTestProvider(t, pemKey, lookup)
+
+	// Issue a token for the service account
+	token, _, err := p.IssueAccessToken(sa, "", 0)
+	require.NoError(t, err)
+
+	// Authenticate with that token
+	principal, decision, err := p.Authenticate(context.Background(), bearerRequest(token))
+	require.NoError(t, err)
+	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
+
+	// Verify that Roles is always empty, regardless of any role_bindings entry
+	// (FR-011: authorization must be resolved by rbac-local at request time,
+	// never via roles embedded in the token or principal)
+	assert.Empty(t, principal.Roles, "Principal.Roles must be empty for serviceaccount-jwt principal")
+	assert.Equal(t, "serviceaccount:controllers:manager", principal.Subject)
+	assert.Equal(t, "serviceaccount-jwt", principal.AuthMethod)
+}
