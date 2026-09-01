@@ -248,3 +248,26 @@ The controller-manager's `graphqlclient.Client.Subscribe` sends its bearer token
 - No existing GitHub issue tracks "controller-manager service-account authentication" specifically. `docs/implementation/021-controller_service_account_auth.md` itself is the tracking artifact prior to this spec; a tracking issue should be opened (or this spec linked to a new one) before `/speckit.plan`/`/speckit.tasks` work is treated as committed, matching the convention spec 058 already followed for its own untracked ADR-derived scope.
 - This spec does not modify `docs/implementation/022-opa-data-authorization.md`'s scope. That document already extends this one (doc 021) with OPA-backed service-account role resolution and the `category.list`/`category.watch`/`product.list`/`product.read.unpublished` read-path enforcement doc 021 §10a reserves but does not itself enforce; this spec ships the reserved action strings in `policy.yaml`'s example role (User Story 3) but does not implement general GraphQL read-path gating.
 - Following spec 059's precedent for `docs/implementation/020-pluggable_auth_architecture.md`, this spec adds a short addendum to that document's Phase 7 section (originally "OIDC JWT provider," which doc 021's own header already states this spec supersedes for the controller-identity use case) cross-referencing this spec, without altering Phase 7's `oidc-jwt` design for human/external-IdP use — `oidc-jwt` and `serviceaccount-jwt` remain two entirely distinct providers for two entirely distinct principal types.
+
+## Technical Debt & Architectural Notes
+
+### Authorization Checks Scattered in Resolver Layer (Not Blocking This Spec)
+
+**Issue**: Authorization enforcement in `gitstore-api` is currently split between:
+- Centralized middleware layer (`api/internal/middleware/security/graphql.go`'s `GraphQLFieldAuthorizer`) for field-level and generic action gates
+- Resolver layer (`api/internal/graph/resolver/repository_authorization.go`'s `authorizeRepositoryTenant`) for resource-specific tenant and `.own`/`.any` derivation
+
+**Current State** (as of this spec's completion):
+- `authorizeRepositoryTenant` correctly derives `.own` vs `.any` for both human and machine subjects
+- Derivation uses equality check on `principal.Subject` vs `namespace.CreationActor`, which is subject-format-agnostic
+- Works correctly for `serviceaccount:*` subjects without modification (T024a verified)
+- No blocker to this spec's completion or Phase 060 unblocking
+
+**Recommendation for Follow-On Work**:
+1. Consolidate all authorization checks into `api/internal/middleware/security/` as a unified layer
+2. Move resource-specific authorization logic (tenant checks, `.own`/`.any` derivation) into middleware before resolver execution
+3. This aligns with the principle that all AuthN/AuthZ decisions should be made in the security middleware layer, not scattered across request handlers
+
+**Follow-On Spec/Task**: Create a dedicated architectural improvement spec for "Centralize Authorization Enforcement in Middleware Layer" rather than absorbing it into this spec. This preserves focus on Spec 061's MVP (User Stories 1–3, unblocking Spec 060) and keeps the refactoring independent.
+
+**Why Not in This Spec**: FR-021 explicitly prohibits modifying authorization semantics or rbac-local behavior. Moving `authorizeRepositoryTenant` to middleware is a refactoring that could alter call sequences or error handling in subtle ways, requiring separate test coverage. This spec's scope is to verify the existing authorization logic works for machine subjects, not to restructure the authorization layer itself.
