@@ -59,6 +59,29 @@ type AuthConfig struct {
 	AuthZ       AuthZConfig       `mapstructure:"authz"`
 	UserDir     UserDirConfig     `mapstructure:"userdir"`
 	RBAC        RBACConfig        `mapstructure:"rbac"`
+
+	// ServiceAccount configures the serviceaccount-assertion/serviceaccount-jwt
+	// AuthN providers (spec 061). SigningKey is required only when one of
+	// those providers is present in AuthN.Chain (see
+	// validateAuthChainConfig), not via a struct `validate:"required"` tag.
+	ServiceAccount ServiceAccountConfig `mapstructure:"serviceaccount"`
+}
+
+// ServiceAccountConfig holds settings for GitStore-issued service-account
+// identities: JWT assertion verification (proof of possession) and
+// short-lived access-token issuance/verification.
+type ServiceAccountConfig struct {
+	Issuer            string `mapstructure:"issuer"`
+	Audience          string `mapstructure:"audience"`
+	AssertionAudience string `mapstructure:"assertion_audience"`
+	// SigningKey is a PEM-encoded Ed25519 or ECDSA P-256 private key used to
+	// sign/verify access tokens. Required only when "serviceaccount-jwt" or
+	// "serviceaccount-assertion" is chained in (FR-015c: it must never be
+	// resolvable from a config file shared across services).
+	SigningKey string `mapstructure:"signing_key"`
+	DefaultTTL string `mapstructure:"default_ttl"`
+	MaxTTL     string `mapstructure:"max_ttl"`
+	ClockSkew  string `mapstructure:"clock_skew"`
 }
 
 // GrpcAuthConfig holds inter-service gRPC authentication settings.
@@ -207,6 +230,13 @@ func load(path string) (*Config, error) {
 	v.SetDefault("auth.authz.provider", "allow-all")
 	v.SetDefault("auth.userdir.provider", "none")
 	v.SetDefault("auth.rbac.policy_file", "policy.yaml")
+	v.SetDefault("auth.serviceaccount.issuer", "gitstore")
+	v.SetDefault("auth.serviceaccount.audience", "gitstore-api")
+	v.SetDefault("auth.serviceaccount.assertion_audience", "gitstore-api/serviceaccount-token")
+	v.SetDefault("auth.serviceaccount.signing_key", "")
+	v.SetDefault("auth.serviceaccount.default_ttl", "10m")
+	v.SetDefault("auth.serviceaccount.max_ttl", "1h")
+	v.SetDefault("auth.serviceaccount.clock_skew", "2m")
 	v.SetDefault("datastore.backend", "memdb")
 	v.SetDefault("datastore.scylla.hosts", []string{"localhost:9042"})
 	v.SetDefault("datastore.scylla.keyspace", "gitstore")
@@ -248,6 +278,13 @@ func load(path string) (*Config, error) {
 		}
 	}
 
+	// Captured before AutomaticEnv is wired below, so this reflects only the
+	// config-file/default value, never an environment-variable override.
+	// Used by validateServiceAccountSigningKeySource (FR-015c) to detect key
+	// material placed in a config file shared across services, even if an
+	// env var ultimately overrides the effective value.
+	fileServiceAccountSigningKey := v.GetString("auth.serviceaccount.signing_key")
+
 	// Environment variables
 	v.SetEnvPrefix("GITSTORE")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
@@ -259,6 +296,9 @@ func load(path string) (*Config, error) {
 	}
 
 	if err := validateConfig(&cfg); err != nil {
+		return nil, err
+	}
+	if err := validateServiceAccountSigningKeySource(&cfg, path, fileServiceAccountSigningKey); err != nil {
 		return nil, err
 	}
 
@@ -276,7 +316,11 @@ func load(path string) (*Config, error) {
 		"auth.grpc.hmac_secret": true,
 		"auth.authn.chain":      true, "auth.authz.provider": true,
 		"auth.userdir.provider": true, "auth.rbac.policy_file": true,
-		"datastore.backend": true, "datastore.scylla.hosts": true,
+		"auth.serviceaccount.issuer": true, "auth.serviceaccount.audience": true,
+		"auth.serviceaccount.assertion_audience": true, "auth.serviceaccount.signing_key": true,
+		"auth.serviceaccount.default_ttl": true, "auth.serviceaccount.max_ttl": true,
+		"auth.serviceaccount.clock_skew": true,
+		"datastore.backend":              true, "datastore.scylla.hosts": true,
 		"datastore.scylla.keyspace": true, "datastore.scylla.username": true,
 		"datastore.scylla.password": true, "datastore.scylla.tls": true,
 		"datastore.scylla.disable_shard_aware_port": true, "datastore.scylla.ignore_peer_addr": true,
@@ -339,6 +383,9 @@ func validateConfig(cfg *Config) error {
 	if err := validateNamespaceWatchConfig(&cfg.Watch.Namespace); err != nil {
 		return err
 	}
+	if err := validateServiceAccountAuthChainConfig(&cfg.Auth); err != nil {
+		return err
+	}
 	return validateLogFormat(&cfg.Log)
 }
 
@@ -349,6 +396,82 @@ func validateAuthChainConfig(cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+// serviceAccountChainProviders are the auth.authn.chain entries that require
+// auth.serviceaccount.signing_key to be configured.
+var serviceAccountChainProviders = map[string]bool{
+	"serviceaccount-jwt":       true,
+	"serviceaccount-assertion": true,
+}
+
+// chainRequiresServiceAccountSigningKey reports whether chain includes a
+// service-account AuthN provider.
+func chainRequiresServiceAccountSigningKey(chain []string) bool {
+	for _, name := range chain {
+		if serviceAccountChainProviders[strings.ToLower(strings.TrimSpace(name))] {
+			return true
+		}
+	}
+	return false
+}
+
+// validateServiceAccountAuthChainConfig enforces conditional requirements driven by
+// auth.authn.chain membership, mirroring spec 060's validateAuthChainConfig
+// pattern: auth.serviceaccount.signing_key is required only when
+// "serviceaccount-jwt" or "serviceaccount-assertion" is chained in, not via
+// a struct `validate:"required"` tag (which would force every deployment to
+// set it even when no service-account provider is in use).
+func validateServiceAccountAuthChainConfig(auth *AuthConfig) error {
+	if chainRequiresServiceAccountSigningKey(auth.AuthN.Chain) && strings.TrimSpace(auth.ServiceAccount.SigningKey) == "" {
+		return errors.New(
+			"auth.serviceaccount.signing_key is required when \"serviceaccount-jwt\" or " +
+				"\"serviceaccount-assertion\" is present in auth.authn.chain",
+		)
+	}
+	return nil
+}
+
+// sharedServiceConfigMountPath is the container path GitStore's local/dev
+// compose profile (compose.local.yml) mounts a single host config file into
+// git-service, api, and controller-manager alike, read-only. Per FR-015c,
+// auth.serviceaccount.signing_key must never be resolvable from that file:
+// doing so would let any of those three services mint or forge a
+// service-account access token for the others, bypassing the
+// assertion/proof-of-possession flow and every least-privilege guarantee in
+// User Story 3.
+// A var (not const) so tests can safely override it to a temp path instead
+// of writing to the real /config directory on the host.
+var sharedServiceConfigMountPath = "/config/gitstore.toml"
+
+// validateServiceAccountSigningKeySource enforces FR-015c: refuses startup
+// if a service-account AuthN provider is chained in and its signing key was
+// sourced from fileSigningKey — the value read from the config file at path
+// before environment variables were applied. This specifically targets
+// compose.local.yml's shared /config/gitstore.toml mount; an env-var-sourced
+// key (even in a container that also mounts that shared file for other
+// settings) is unaffected, since the file itself never carries the secret.
+func validateServiceAccountSigningKeySource(cfg *Config, path, fileSigningKey string) error {
+	if !chainRequiresServiceAccountSigningKey(cfg.Auth.AuthN.Chain) {
+		return nil
+	}
+	if path != sharedServiceConfigMountPath {
+		return nil
+	}
+	if strings.TrimSpace(fileSigningKey) == "" {
+		return nil
+	}
+	return fmt.Errorf(
+		"auth.serviceaccount.signing_key must not be set in %q: this file is mounted read-only "+
+			"into git-service, api, and controller-manager alike (see compose.local.yml), so any "+
+			"of those services could forge a service-account access token; instead, mount a "+
+			"per-service file containing only the signing key (e.g. "+
+			"./config/api/serviceaccount-signing-key.toml -> /config/serviceaccount-signing-key.toml, "+
+			"mounted into the api service alone, read-only) and set "+
+			"GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY from it, or resolve it from a per-service "+
+			"secret store instead",
+		path,
+	)
 }
 
 func validateNamespaceWatchConfig(w *NamespaceWatchConfig) error {
@@ -454,6 +577,13 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddString("auth.jwt.issuer", c.Auth.JWT.Issuer)
 	enc.AddString("auth.jwt.refresh_grace", c.Auth.JWT.RefreshGrace)
 	enc.AddString("auth.grpc.hmac_secret", redact(c.Auth.Grpc.HmacSecret))
+	enc.AddString("auth.serviceaccount.issuer", c.Auth.ServiceAccount.Issuer)
+	enc.AddString("auth.serviceaccount.audience", c.Auth.ServiceAccount.Audience)
+	enc.AddString("auth.serviceaccount.assertion_audience", c.Auth.ServiceAccount.AssertionAudience)
+	enc.AddString("auth.serviceaccount.signing_key", redact(c.Auth.ServiceAccount.SigningKey))
+	enc.AddString("auth.serviceaccount.default_ttl", c.Auth.ServiceAccount.DefaultTTL)
+	enc.AddString("auth.serviceaccount.max_ttl", c.Auth.ServiceAccount.MaxTTL)
+	enc.AddString("auth.serviceaccount.clock_skew", c.Auth.ServiceAccount.ClockSkew)
 	enc.AddString("log.level", c.Log.Level)
 	enc.AddString("log.format", c.Log.Format)
 	enc.AddString("datastore.backend", c.Datastore.Backend)
