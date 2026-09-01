@@ -5,6 +5,7 @@ package datastore
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -13,6 +14,30 @@ import (
 // demand and never stored redundantly on the record itself.
 func ServiceAccountSubject(namespace, name string) string {
 	return fmt.Sprintf("serviceaccount:%s:%s", namespace, name)
+}
+
+// ParseServiceAccountSubject is the inverse of ServiceAccountSubject: it
+// splits "serviceaccount:<namespace>:<name>" back into its namespace/name
+// components. ok is false if subject does not match that exact shape (wrong
+// prefix, or not exactly three colon-separated parts) — callers (the
+// serviceaccount-jwt/serviceaccount-assertion AuthN providers) must treat a
+// false ok as "not a ServiceAccount subject," never as an empty-but-valid
+// namespace/name.
+func ParseServiceAccountSubject(subject string) (namespace, name string, ok bool) {
+	const prefix = "serviceaccount:"
+	if !strings.HasPrefix(subject, prefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(subject, prefix)
+	idx := strings.IndexByte(rest, ':')
+	if idx < 0 {
+		return "", "", false
+	}
+	namespace, name = rest[:idx], rest[idx+1:]
+	if namespace == "" || name == "" || strings.ContainsRune(name, ':') {
+		return "", "", false
+	}
+	return namespace, name, true
 }
 
 // ApplyServiceAccountKeyUpdate adds/removes public keys on sa in place,
