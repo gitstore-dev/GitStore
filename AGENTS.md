@@ -33,6 +33,8 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - No new storage or schema changes. `gitstore-api` gains no new datastore field — Product admission already carries `RepositoryID`/`Namespace`/`Name` and the `categoryRef.name` needed to identify affected categories; the eventbus itself is in-memory-only per its existing design (no durability across restart, per spec 040 research.md R2/R3, unchanged here). `gitstore-controller-manager` gains a new in-memory Product cache (mirroring the existing `CategoryTaxonomy` cache), no persistent storage. (042-product-category-count)
 - Go 1.25 (`gitstore-api`) + existing `gocqlx/v3 v3.0.4`, `gocql`, `go-memdb v1.3.5`, `go.uber.org/zap`, and `prometheus/client_golang`; no new dependency (048-scylla-query-design)
 - ScyllaDB 5.x+ query-specific denormalized tables with `go-memdb` as the development and contract-test backend (048-scylla-query-design)
+- Go 1.25 (`gitstore-api`); gqlgen v0.17.90 generated GraphQL contracts + Existing gocqlx/gocql Scylla stack, go-memdb, gqlgen WebSocket transport, zap, Prometheus client; new `github.com/scylladb/scylla-cdc-go v1.2.1` for production CDC stream/topology/progress handling (050-namespace-watch-contract)
+- Migration 006 enables full-preimage/postimage CDC with 14-day TTL on `namespaces_by_uid` and adds bounded journal clock/events, CDC progress, and materializer lease tables. Memdb uses an in-process implementation of the same journal contract for development. No spec-047 Namespace row fields change. (050-namespace-watch-contract)
 
 ## Commands
 
@@ -42,14 +44,16 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `make api` — run `gitstore-api` locally in the foreground. Requires `gitstore-api/.env` or shell env for required auth secrets.
 - `make controller` — run `gitstore-controller-manager` locally in the foreground on port 5001. Requires `GITSTORE_CONTROLLER__API_URI` pointing at a running API (default: `http://localhost:4000/graphql`).
 - `make dev` — run the native git service and API together in the foreground with shutdown trapping.
-- `make compose` — run all three core services with the Docker Compose `local` profile and shared `CONFIG_FILE` (default: `./config/config.toml`) in the foreground; no service `.env` files are required.
+- `make compose` — run all three core services with the Docker Compose `local` profile and shared `CONFIG_FILE` (default: `./config/config.toml`) in the foreground using the default in-memory datastore; no service `.env` files are required.
+- `make compose DATASTORE=scylla` — run the full core stack with single-node Scylla from `compose.yml` + `compose.scylla.yml`.
+- `make compose DATASTORE=scylla PROFILE=cluster` — run the full core stack with the three-node Scylla cluster from `compose.yml` + `compose.scylla.cluster.yml`.
 - `make compose-config-check` — validate local-profile config selection, explicit binary arguments, and read-only config/policy mounts without starting services.
 - `make validate-local-config` — verify the selected `CONFIG_FILE` and local RBAC policy exist and are readable.
 - `DETACH=1 make compose` — run the core Docker Compose stack in the background.
-- `make scylla` — run only local Scylla services from `compose.yml` + `compose.scylla.yml`.
-- `make compose-scylla` — run the full core stack with Scylla from `compose.yml` + `compose.scylla.yml`.
-- `DETACH=1 make scylla` and `DETACH=1 make compose-scylla` — run those compose targets in the background.
-- `make ps`, `make logs`, `make stop`, `make down` — compose lifecycle helpers. Use `SERVICE=<name>` with `logs` or `stop` to scope the command.
+- `make scylla` — run only local single-node Scylla services from `compose.yml` + `compose.scylla.yml` (CI-friendly, `--smp=1`, replication factor 1).
+- `make scylla PROFILE=cluster` — run only local three-node Scylla services from `compose.yml` + `compose.scylla.cluster.yml` (replication factor 3; tune per-node shards with `SCYLLA_CLUSTER_SMP`, default `1` for Docker Desktop compatibility).
+- `DETACH=1 make scylla` and `DETACH=1 make compose DATASTORE=scylla` — run those compose targets in the background.
+- `make ps`, `make logs`, `make stop`, `make down` — compose lifecycle helpers. Use `SERVICE=<name>` with `logs` or `stop` to scope the command; `SERVICE=scylla` includes both the single-node service and the three-node cluster services.
 - `make gen-admin-password ADMIN_PASSWORD=<password>` — generate a bcrypt hash for the given password and write `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` to `gitstore-api/.env` (creates the file if absent, updates the key if present). Run this once when setting up a fresh environment or changing the admin password.
 - `make gen-jwt-secret` — generate a random JWT secret and append `GITSTORE_AUTH__JWT__SECRET` to `gitstore-api/.env`. Run once on initial setup.
 - `make gen-hmac-secret` — generate a random HMAC secret and append `GITSTORE_AUTH__GRPC__HMAC_SECRET` to `gitstore-api/.env`. Required for gRPC inter-service auth (git-service ↔ API). Run once on initial setup.
@@ -62,6 +66,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `make test-scylla-integration SCYLLA_TEST_ADDR=<host:port>` — run tagged Scylla datastore contracts.
 - `make test-scylla-capacity` — run the opt-in capacity/soak test; configure `SCYLLA_CAPACITY_PRODUCTS`, `SCYLLA_CAPACITY_CONCURRENCY`, and `SCYLLA_CAPACITY_DURATION`.
 - `make test-namespace-admission-capacity` — run the opt-in two-replica 30-minute Namespace validation soak; configure `NAMESPACE_CAPACITY_DURATION` to a value of at least `30m`. The harness enforces 500 files/request, at most 50 Namespace manifests, 10 requests/second, concurrency 20, latency/error/correctness/recovery limits, and per-replica CPU, retained-memory, and goroutine thresholds.
+- `make test-namespace-watch-capacity` — run the deployment-driven Namespace watch gate against two distinct API replicas and their shared Scylla journal. Set `NAMESPACE_WATCH_API_A`, `NAMESPACE_WATCH_API_B`, `NAMESPACE_WATCH_API_REPLACEMENT` (one of A/B), `NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE`, and `NAMESPACE_WATCH_TOKEN`; an external deployment harness must watch the trigger and restart that endpoint in place. The defaults enforce 1,000 WebSocket subscribers, 60 minutes at 10 transitions/second plus 100/second bursts, 10,000-event GraphQL replay, observed outage/new-process recovery with cursor-resumed clients, latency/error/correctness limits, and mandatory per-replica GOMAXPROCS-normalized process CPU/resident-memory thresholds from `/metrics`.
 - `make admin-compose`, `make admin-stop`, `make admin-down`, `make admin-logs` — optional admin compose wrappers.
 
 Common bootstrap variables:
@@ -81,9 +86,9 @@ Common bootstrap variables:
 : Follow standard conventions
 
 ## Recent Changes
+- 050-namespace-watch-contract: Added Go 1.25 (`gitstore-api`); gqlgen v0.17.90 generated GraphQL contracts + Existing gocqlx/gocql Scylla stack, go-memdb, gqlgen WebSocket transport, zap, Prometheus client; new `github.com/scylladb/scylla-cdc-go v1.2.1` for production CDC stream/topology/progress handling
 - 042-product-category-count: Added Go 1.25 (`gitstore-api`, `gitstore-controller-manager`) + existing `gitstore-api/internal/eventbus.Bus` (spec 040, already used by `CategoryTaxonomy`'s `publishCategoryTaxonomyEvent`); existing generic `watchResources`/`WatchEvent` GraphQL subscription contract (spec 040, kind-agnostic — no schema change needed to carry `"Product"` as a `kind` value); existing `gitstore-controller-manager/internal/listwatch.ListWatcher[T]`/`Watcher[T]`/`Runner[T]` (spec 036, already implemented once for `CategoryTaxonomyListWatcher`); existing `gitstore-controller-manager/internal/cache.Cache[T]`/`EventHandler[T]` (spec 026, already used for the category→parent-category enqueue pattern); existing `gitstore-controller-manager/internal/manager.Manager.Enqueue` (spec 026); existing `gitstore-controller-manager/internal/graphqlclient.Client` (spec 039). No new dependency is introduced in either module.
 - 041-namespace-repo-finalizers: Adds real `HasRepositories`/`HasCatalogResources` existence checks to the `Datastore` interface, replacing the `hasRepositories()` stub in `gitstore-api/internal/graph/resolver/service.go` that always returned `false`; enforces `deleteNamespace`/`deleteRepository` preconditions per ADR-0002/ADR-0003 steps 1-2 only (synchronous check-then-reject, not the async `Terminating`/finalizer state machine, which is out of scope pending a `Status` field and controller neither resource has yet); adds `gitstore-system` auto-provisioning to `createNamespace`
-- 039-category-taxonomy-reconciler: Added Go 1.25 (`gitstore-controller-manager`) + existing `internal/types.Reconciler`/`ReconcileResult` (spec 026), existing `internal/status.StatusClient`/`StatusPatch` (spec 026, extended by spec 040 with `Resolved json.RawMessage`), existing `internal/listwatch.ListWatcher[T]`/`Watcher[T]`/`Runner[T]` (spec 036), existing `internal/cache.Cache[T]`/`CacheAccessor[T]`; new GraphQL client for `POST /graphql` + `graphql-transport-ws` subscriptions
 
 
 <!-- MANUAL ADDITIONS START -->
@@ -119,7 +124,7 @@ Common bootstrap variables:
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/047-namespace-admission-matrix/plan.md
+at specs/050-namespace-watch-contract/plan.md
 <!-- SPECKIT END -->
 
 ## graphify

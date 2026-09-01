@@ -133,6 +133,34 @@ For config files, admin auth keys are nested under `[auth.admin]` (for example, 
 See [Namespace admission operations](runbooks/namespace-admission.md) for the
 mandatory mixed-version ingress/AuthZ deny and rollback procedure.
 
+### Namespace watch journal
+
+The Namespace watch is enabled by default for alpha deployments. Disable the
+reader and materializer switches during migration-first rollout or rollback.
+All time values are integers in seconds or milliseconds as named.
+
+| Key | Environment variable | Default | Bound / purpose |
+|---|---|---:|---|
+| `watch.namespace.readers_enabled` | `GITSTORE_WATCH__NAMESPACE__READERS_ENABLED` | `true` | Enables typed and generic Namespace journal readers; set false as a rollback switch. |
+| `watch.namespace.materializer_enabled` | `GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED` | `true` | Allows this replica to contend for the fenced CDC materializer lease; set false as a rollback switch. |
+| `watch.namespace.journal_retention_seconds` | `GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS` | `604800` | Journal TTL; accepted range is 1–604,800 seconds because migration 006 fixes the table maximum at seven days. |
+| `watch.namespace.cdc_retention_seconds` | `GITSTORE_WATCH__NAMESPACE__CDC_RETENTION_SECONDS` | `1209600` | Fixed fourteen-day CDC TTL from migration 006; other values are rejected at startup. |
+| `watch.namespace.cdc_confidence_window_millis` | `GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS` | `500` | Scylla CDC consistency window before changes become eligible for ordered materialization; must remain below `max_materializer_lag_seconds`. |
+| `watch.namespace.bucket_size` | `GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE` | `4096` | Sequences per journal partition bucket; accepted range is 1–4,096. |
+| `watch.namespace.read_batch_size` | `GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE` | `256` | Replay/poll page; must not exceed bucket size. |
+| `watch.namespace.max_replay_events` | `GITSTORE_WATCH__NAMESPACE__MAX_REPLAY_EVENTS` | `100000` | Resume ceiling before `WATCH_EXPIRED`; accepted range is 1–100,000. |
+| `watch.namespace.subscriber_buffer` | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER` | `64` | Per-hop, per-subscription delivery buffer; accepted range is 1–256 and sustained overflow fails closed. |
+| `watch.namespace.subscriber_backpressure_millis` | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BACKPRESSURE_MILLIS` | `30000` | Maximum bounded wait for a slow subscriber before terminal `SUBSCRIBER_OVERFLOW`. |
+| `watch.namespace.poll_min_millis` | `GITSTORE_WATCH__NAMESPACE__POLL_MIN_MILLIS` | `100` | Minimum journal poll delay. |
+| `watch.namespace.poll_max_millis` | `GITSTORE_WATCH__NAMESPACE__POLL_MAX_MILLIS` | `2000` | Maximum adaptive poll delay; must be at least poll-min and strictly below journal retention. |
+| `watch.namespace.bookmark_interval_seconds` | `GITSTORE_WATCH__NAMESPACE__BOOKMARK_INTERVAL_SECONDS` | `30` | Durable idle BOOKMARK interval. |
+| `watch.namespace.lease_ttl_seconds` | `GITSTORE_WATCH__NAMESPACE__LEASE_TTL_SECONDS` | `30` | Materializer lease TTL. |
+| `watch.namespace.lease_renew_interval_seconds` | `GITSTORE_WATCH__NAMESPACE__LEASE_RENEW_INTERVAL_SECONDS` | `10` | Renewal interval; must be less than lease TTL. |
+| `watch.namespace.max_materializer_lag_seconds` | `GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS` | `60` | Reader readiness freshness ceiling; must remain below the fixed 1,209,600-second CDC retention. |
+
+See [Namespace watch contract](namespace/namespace-watch.md) and the
+[controller watch/status runbook](runbooks/controller-watch-status.md).
+
 ### Scylla projection operations
 
 `gitctl` reads the same Scylla environment variables for offline projection

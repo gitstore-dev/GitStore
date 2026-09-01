@@ -142,6 +142,10 @@ func openRootSession(addr string) (*gocql.Session, error) {
 }
 
 func newTestStore(t *testing.T) datastore.Datastore {
+	return newTestStoreWithWatchBucket(t, 0)
+}
+
+func newTestStoreWithWatchBucket(t *testing.T, watchBucketSize int) datastore.Datastore {
 	t.Helper()
 	host, portStr, splitErr := net.SplitHostPort(scyllaAddr)
 	if splitErr != nil {
@@ -156,7 +160,7 @@ func newTestStore(t *testing.T) datastore.Datastore {
 		IgnorePeerAddr:        true,
 		AddressTranslator:     contactPointTranslator(host, port),
 	}
-	store, err := scylla.New(cfg, zap.NewNop())
+	store, err := scylla.New(cfg, zap.NewNop(), watchBucketSize)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	return store

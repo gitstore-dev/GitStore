@@ -667,6 +667,15 @@ type NamespaceStatus struct {
 	Conditions          []*Condition `json:"conditions"`
 }
 
+// Strongly typed Namespace journal event. resourceVersion is an opaque durable
+// journal cursor and is distinct from namespace.metadata.resourceVersion.
+type NamespaceWatchEvent struct {
+	Type            WatchEventType `json:"type"`
+	Name            string         `json:"name"`
+	ResourceVersion string         `json:"resourceVersion"`
+	Namespace       *Namespace     `json:"namespace,omitempty"`
+}
+
 // System-managed metadata shared by core catalog resources.
 type ObjectMeta struct {
 	Name              string            `json:"name"`

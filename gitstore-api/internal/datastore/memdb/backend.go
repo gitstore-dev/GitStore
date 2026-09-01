@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/google/uuid"
 	gomemdb "github.com/hashicorp/go-memdb"
 )
 
@@ -148,15 +150,34 @@ func decodeCursor(cursor string) (*datastore.PageCursor, error) {
 // memdbDatastore implements datastore.Datastore using hashicorp/go-memdb.
 type memdbDatastore struct {
 	db *gomemdb.MemDB
+
+	namespaceMutationMu     sync.Mutex
+	namespaceWatchMu        sync.RWMutex
+	namespaceWatchEpoch     string
+	namespaceWatchSequence  uint64
+	namespaceWatchEvents    []datastore.NamespaceWatchEvent
+	namespaceWatchBookmark  time.Time
+	namespaceWatchLease     datastore.NamespaceWatchLease
+	namespaceWatchProgress  map[string]datastore.NamespaceCDCProgress
+	namespaceWatchRetention time.Duration
 }
 
 // New creates an empty in-memory datastore backed by go-memdb.
-func New() (datastore.Datastore, error) {
+func New(watchRetention ...time.Duration) (datastore.Datastore, error) {
 	db, err := gomemdb.NewMemDB(schema)
 	if err != nil {
 		return nil, fmt.Errorf("memdb: failed to initialise: %w", err)
 	}
-	return &memdbDatastore{db: db}, nil
+	retention := 7 * 24 * time.Hour
+	if len(watchRetention) > 0 && watchRetention[0] > 0 {
+		retention = watchRetention[0]
+	}
+	return &memdbDatastore{
+		db:                      db,
+		namespaceWatchEpoch:     uuid.NewString(),
+		namespaceWatchProgress:  make(map[string]datastore.NamespaceCDCProgress),
+		namespaceWatchRetention: retention,
+	}, nil
 }
 
 func (m *memdbDatastore) Close() error { return nil }
@@ -886,6 +907,8 @@ func (m *memdbDatastore) CreateNamespace(_ context.Context, ns *datastore.Namesp
 	if ns.UID == "" {
 		return fmt.Errorf("%w: namespace uid is empty", datastore.ErrInvalidArgument)
 	}
+	m.namespaceMutationMu.Lock()
+	defer m.namespaceMutationMu.Unlock()
 	stored := normalizedNamespaceCopy(ns)
 	txn := m.db.Txn(true)
 	if raw, _ := txn.First("namespaces", "id", ns.UID); raw != nil {
@@ -901,6 +924,7 @@ func (m *memdbDatastore) CreateNamespace(_ context.Context, ns *datastore.Namesp
 		return fmt.Errorf("memdb: insert namespace: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedNamespace(datastore.NamespaceWatchAdded, stored, nil)
 	return nil
 }
 
@@ -945,6 +969,8 @@ func (m *memdbDatastore) UpdateNamespace(_ context.Context, ns *datastore.Namesp
 		return fmt.Errorf("%w: namespace is nil", datastore.ErrInvalidArgument)
 	}
 	datastore.NormalizeNamespaceContract(ns)
+	m.namespaceMutationMu.Lock()
+	defer m.namespaceMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("namespaces", "id", ns.UID)
 	if raw == nil {
@@ -965,6 +991,7 @@ func (m *memdbDatastore) UpdateNamespace(_ context.Context, ns *datastore.Namesp
 		return fmt.Errorf("memdb: update namespace: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedNamespace(datastore.NamespaceWatchModified, ns, current.Labels)
 	return nil
 }
 
@@ -973,13 +1000,15 @@ func (m *memdbDatastore) MarkNamespaceDeletion(_ context.Context, ns *datastore.
 		return fmt.Errorf("%w: namespace is nil", datastore.ErrInvalidArgument)
 	}
 	datastore.NormalizeNamespaceContract(ns)
+	m.namespaceMutationMu.Lock()
+	defer m.namespaceMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("namespaces", "id", ns.UID)
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: namespace uid %s", datastore.ErrNotFound, ns.UID)
 	}
-	current := raw.(*datastore.Namespace)
+	current := normalizedNamespaceCopy(raw.(*datastore.Namespace))
 	if current.ResourceVersion != expectedResourceVersion {
 		txn.Abort()
 		return datastore.ErrConflict
@@ -1002,10 +1031,13 @@ func (m *memdbDatastore) MarkNamespaceDeletion(_ context.Context, ns *datastore.
 		return fmt.Errorf("memdb: mark namespace deletion: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedNamespace(datastore.NamespaceWatchModified, ns, current.Labels)
 	return nil
 }
 
 func (m *memdbDatastore) DeleteNamespace(_ context.Context, uid string) error {
+	m.namespaceMutationMu.Lock()
+	defer m.namespaceMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("namespaces", "id", uid)
 	if raw == nil {
@@ -1016,11 +1048,15 @@ func (m *memdbDatastore) DeleteNamespace(_ context.Context, uid string) error {
 		txn.Abort()
 		return fmt.Errorf("memdb: delete namespace: %w", err)
 	}
+	deleted := normalizedNamespaceCopy(raw.(*datastore.Namespace))
 	txn.Commit()
+	m.recordCommittedNamespace(datastore.NamespaceWatchDeleted, deleted, nil)
 	return nil
 }
 
 func (m *memdbDatastore) DeleteNamespaceWithResourceVersion(_ context.Context, uid, expectedResourceVersion string) error {
+	m.namespaceMutationMu.Lock()
+	defer m.namespaceMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("namespaces", "id", uid)
 	if raw == nil {
@@ -1036,7 +1072,9 @@ func (m *memdbDatastore) DeleteNamespaceWithResourceVersion(_ context.Context, u
 		txn.Abort()
 		return fmt.Errorf("memdb: delete namespace with resource version: %w", err)
 	}
+	deleted := normalizedNamespaceCopy(current)
 	txn.Commit()
+	m.recordCommittedNamespace(datastore.NamespaceWatchDeleted, deleted, nil)
 	return nil
 }
 

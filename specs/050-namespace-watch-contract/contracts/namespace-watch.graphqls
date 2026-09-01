@@ -1,0 +1,63 @@
+# Additive Namespace watch contract (spec 050).
+
+extend type Subscription {
+  """
+  Canonical cluster-scoped Namespace watch.
+
+  With resourceVersion omitted, the stream starts at the current high-water
+  cursor and delivers future events. A client establishing its initial view
+  uses the documented bootstrap sentinel, waits for the first BOOKMARK, keeps
+  the subscription open while querying namespaces, and then drains queued
+  events after that cursor.
+
+  A retained cursor replays only later events. An expired, incompatible,
+  overflowed, or discontinuous cursor terminates with WATCH_EXPIRED.
+  Authorization requires namespace.watch before cursor validation or replay.
+  """
+  watchNamespaces(
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): NamespaceWatchEvent!
+}
+
+"""
+Strongly typed Namespace event envelope. resourceVersion is the opaque
+Namespace journal cursor, distinct from namespace.metadata.resourceVersion.
+"""
+type NamespaceWatchEvent {
+  type: WatchEventType!
+
+  """
+  Namespace identity for ADDED/MODIFIED/DELETED; empty for BOOKMARK.
+  """
+  name: String!
+
+  """
+  Opaque durable Namespace journal cursor.
+  """
+  resourceVersion: String!
+
+  """
+  Full committed Namespace postimage for ADDED/MODIFIED.
+  Null for DELETED and BOOKMARK.
+  """
+  namespace: Namespace
+}
+
+# Existing generic compatibility path remains unchanged:
+#
+# watchResources(
+#   kind: String!
+#   namespace: String
+#   selector: LabelSelectorInput
+#   resourceVersion: String
+# ): WatchEvent!
+#
+# For kind == "Namespace":
+# - namespace argument MUST be absent/empty because Namespace is cluster-scoped;
+# - authorization action is namespace.watch;
+# - events and cursors come from the same durable journal as watchNamespaces;
+# - WatchEvent.namespace is null;
+# - WatchEvent.object is full Namespace JSON for ADDED/MODIFIED and null for
+#   DELETED/BOOKMARK.
+

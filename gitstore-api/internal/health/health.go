@@ -42,19 +42,21 @@ type Check struct {
 
 // Handler provides health check endpoints
 type Handler struct {
-	store     datastore.Datastore
-	logger    *zap.Logger
-	version   string
-	startTime time.Time
-	clock     apiruntime.Clock
+	store               datastore.Datastore
+	logger              *zap.Logger
+	version             string
+	startTime           time.Time
+	clock               apiruntime.Clock
+	namespaceWatchReady func(context.Context) error
 }
 
 // HandlerDeps contains dependencies for Handler.
 type HandlerDeps struct {
-	Store   datastore.Datastore
-	Logger  *zap.Logger
-	Version string
-	Clock   apiruntime.Clock
+	Store               datastore.Datastore
+	Logger              *zap.Logger
+	Version             string
+	Clock               apiruntime.Clock
+	NamespaceWatchReady func(context.Context) error
 }
 
 // NewHandler creates a new health check handler
@@ -68,11 +70,12 @@ func NewHandler(deps HandlerDeps) *Handler {
 		clock = apiruntime.SystemClock{}
 	}
 	return &Handler{
-		store:     deps.Store,
-		logger:    logger,
-		version:   deps.Version,
-		startTime: clock.Now(),
-		clock:     clock,
+		store:               deps.Store,
+		logger:              logger,
+		version:             deps.Version,
+		startTime:           clock.Now(),
+		clock:               clock,
+		namespaceWatchReady: deps.NamespaceWatchReady,
 	}
 }
 
@@ -134,6 +137,21 @@ func (h *Handler) performChecks(ctx context.Context) map[string]Check {
 		checks["datastore"] = check
 		mu.Unlock()
 	}()
+
+	if h.namespaceWatchReady != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			check := Check{Status: StatusHealthy, Message: "Namespace watch journal operational"}
+			if err := h.namespaceWatchReady(ctx); err != nil {
+				h.logger.Warn("Namespace watch readiness check failed", zap.Error(err))
+				check = Check{Status: StatusUnhealthy, Message: "Namespace watch materializer unavailable"}
+			}
+			mu.Lock()
+			checks["namespace_watch"] = check
+			mu.Unlock()
+		}()
+	}
 
 	wg.Add(1)
 	go func() {

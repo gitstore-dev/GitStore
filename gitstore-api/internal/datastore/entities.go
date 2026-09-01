@@ -54,6 +54,71 @@ type Namespace struct {
 	ID string
 }
 
+// NamespaceWatchEventType is the normalized durable Namespace transition.
+type NamespaceWatchEventType string
+
+const (
+	NamespaceWatchAdded    NamespaceWatchEventType = "ADDED"
+	NamespaceWatchModified NamespaceWatchEventType = "MODIFIED"
+	NamespaceWatchDeleted  NamespaceWatchEventType = "DELETED"
+	NamespaceWatchBookmark NamespaceWatchEventType = "BOOKMARK"
+)
+
+// NamespaceWatchCursor identifies one ordered event inside a journal epoch.
+// Its external encoding is owned by internal/watchjournal.
+type NamespaceWatchCursor struct {
+	Epoch    string
+	Sequence uint64
+}
+
+// NamespaceWatchEvent is the backend-neutral durable journal record. Payload
+// is a full committed Namespace postimage for ADDED/MODIFIED and nil for
+// DELETED/BOOKMARK. SelectorLabels preserves the postimage labels (or the
+// last-known labels for DELETED), while PreviousSelectorLabels preserves the
+// MODIFIED preimage labels. Together they let filtered watches express a
+// resource entering or leaving a selector without exposing deleted payloads.
+type NamespaceWatchEvent struct {
+	Epoch                  string
+	Sequence               uint64
+	Type                   NamespaceWatchEventType
+	Name                   string
+	Payload                json.RawMessage
+	SelectorLabels         map[string]string
+	PreviousSelectorLabels map[string]string
+	DeduplicationKey       string
+	FencingToken           uint64
+	At                     time.Time
+}
+
+// NamespaceWatchBounds is the retained interval in one journal epoch.
+type NamespaceWatchBounds struct {
+	Epoch     string
+	Oldest    uint64
+	HighWater uint64
+	UpdatedAt time.Time
+	// BookmarkAt is the timestamp of the latest actual durable BOOKMARK.
+	// Unlike UpdatedAt, ordinary data events do not advance it.
+	BookmarkAt time.Time
+	// ProgressAt is the last time the CDC reader consumed a change or
+	// successfully advanced an empty query window. Durable bookmarks do not
+	// advance it.
+	ProgressAt time.Time
+}
+
+// NamespaceWatchLease carries the materializer fencing token.
+type NamespaceWatchLease struct {
+	Holder       string
+	FencingToken uint64
+	ExpiresAt    time.Time
+}
+
+// NamespaceCDCProgress is saved per CDC stream only after its event append.
+type NamespaceCDCProgress struct {
+	StreamID  string
+	Position  []byte
+	UpdatedAt time.Time
+}
+
 // Product is the fully hydrated catalogue product record stored in the
 // datastore. It merges author-supplied frontmatter (APIVersion, Kind,
 // Namespace, Name, Labels, Annotations, Spec, Body) with system-assigned

@@ -13,10 +13,20 @@ API_ENV_FILE ?= $(API_DIR)/.env
 CONFIG_FILE ?= ./config/config.toml
 POLICY_FILE := ./config/policy.yaml
 LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
+LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml -f compose.admin.yml
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
 DIFF_BASE ?= origin/main
 
 COMPOSE_BAKE ?= true
+DATASTORE ?= memdb
+PROFILE ?= single
+SCYLLA_CLUSTER_SMP ?= 1
+SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS ?= 2048
+SCYLLA_COMPOSE_FILE = $(if $(filter cluster,$(PROFILE)),compose.scylla.cluster.yml,compose.scylla.yml)
+DATASTORE_COMPOSE_FILE = $(if $(filter scylla,$(DATASTORE)),-f $(SCYLLA_COMPOSE_FILE),)
+SCYLLA_SERVICES = $(if $(filter cluster,$(PROFILE)),scylla-1 scylla-2 scylla-3 scylla-init,scylla scylla-init)
+SCYLLA_LIFECYCLE_SERVICES = scylla scylla-1 scylla-2 scylla-3 scylla-init
+COMPOSE_SERVICE = $(if $(filter scylla,$(SERVICE)),$(SCYLLA_LIFECYCLE_SERVICES),$(SERVICE))
 DETACH_FLAG := $(if $(filter 1 true yes,$(DETACH)),-d,)
 SERVICE ?=
 
@@ -35,12 +45,27 @@ SCYLLA_CAPACITY_PRODUCTS ?= 5000000
 SCYLLA_CAPACITY_CONCURRENCY ?= 32
 SCYLLA_CAPACITY_DURATION ?= 10m
 NAMESPACE_CAPACITY_DURATION ?= 30m
+NAMESPACE_WATCH_CAPACITY_DURATION ?= 60m
+NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS ?= 1000
+NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS ?= 10000
+NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES ?= 20
+NAMESPACE_WATCH_CAPACITY_BURST_INTERVAL ?= 1m
+NAMESPACE_WATCH_CAPACITY_BURST_SIZE ?= 100
+NAMESPACE_WATCH_CAPACITY_MUTATION_WORKERS ?= 20
+NAMESPACE_WATCH_CAPACITY_REPLACEMENT_DELAY ?=
+NAMESPACE_WATCH_CAPACITY_ALLOW_MISSING_METRICS ?= 0
+NAMESPACE_WATCH_API_A ?= http://localhost:4000
+NAMESPACE_WATCH_API_B ?= http://localhost:4001
+NAMESPACE_WATCH_API_REPLACEMENT ?=
+NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE ?=
+NAMESPACE_WATCH_TOKEN ?=
+NAMESPACE_WATCH_OVERFLOW_TRANSITIONS ?=
 
 export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CACHE
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
-.PHONY: help git api controller dev compose scylla compose-scylla ps logs stop down validate-local-config compose-config-check
-.PHONY: build test lint license-check pr-ready test-scylla-hardening test-scylla-integration test-scylla-capacity test-namespace-admission-capacity
+.PHONY: help git api controller dev compose scylla ps logs stop down validate-local-config compose-config-check
+.PHONY: build test lint license-check pr-ready test-scylla-hardening test-scylla-integration test-scylla-capacity test-namespace-admission-capacity test-namespace-watch-capacity test-namespace-watch-recovery
 .PHONY: bootstrap bootstrap-token bootstrap-namespace bootstrap-repository git-clean-data
 .PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools gen-admin-password gen-jwt-secret gen-hmac-secret
 
@@ -48,8 +73,13 @@ help: ## Show available targets and common variables.
 	@awk 'BEGIN {FS = ":.*##"; printf "GitStore make targets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\nCommon variables:\n"
 	@printf "  DETACH=1                  Run compose start targets in the background\n"
+	@printf "  DATASTORE=%s              Compose datastore: memdb or scylla\n" "$(DATASTORE)"
 	@printf "  COMPOSE_BAKE=true         Compose build bake setting for Docker Compose\n"
-	@printf "  SERVICE=<name>            Limit logs/stop to one compose service\n"
+	@printf "  PROFILE=%s                Scylla profile: single or cluster\n" "$(PROFILE)"
+	@printf "  SERVICE=<name>            Limit logs/stop to one compose service; SERVICE=scylla includes all Scylla variants\n"
+	@printf "  SCYLLA_COMPOSE_FILE=%s  Derived Scylla overlay used by scylla and compose DATASTORE=scylla\n" "$(SCYLLA_COMPOSE_FILE)"
+	@printf "  SCYLLA_CLUSTER_SMP=%s     CPU shards per Scylla node for PROFILE=cluster\n" "$(SCYLLA_CLUSTER_SMP)"
+	@printf "  SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS=%s  Networking AIO blocks per cluster node\n" "$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)"
 	@printf "  GIT_DATA_DIR=%s\n" "$(GIT_DATA_DIR)"
 	@printf "  CONFIG_FILE=%s        Shared local-profile configuration\n" "$(CONFIG_FILE)"
 	@printf "  API_URL=%s\n" "$(API_URL)"
@@ -60,6 +90,12 @@ help: ## Show available targets and common variables.
 	@printf "  SCYLLA_CAPACITY_CONCURRENCY=%s\n" "$(SCYLLA_CAPACITY_CONCURRENCY)"
 	@printf "  SCYLLA_CAPACITY_DURATION=%s\n" "$(SCYLLA_CAPACITY_DURATION)"
 	@printf "  NAMESPACE_CAPACITY_DURATION=%s\n" "$(NAMESPACE_CAPACITY_DURATION)"
+	@printf "  NAMESPACE_WATCH_CAPACITY_DURATION=%s\n" "$(NAMESPACE_WATCH_CAPACITY_DURATION)"
+	@printf "  NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS=%s\n" "$(NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS)"
+	@printf "  NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS=%s NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES=%s\n" "$(NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS)" "$(NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES)"
+	@printf "  NAMESPACE_WATCH_API_A=%s NAMESPACE_WATCH_API_B=%s\n" "$(NAMESPACE_WATCH_API_A)" "$(NAMESPACE_WATCH_API_B)"
+	@printf "  NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=<path> Required coordination signal for an actual replica restart\n"
+	@printf "  NAMESPACE_WATCH_TOKEN=<token> Required for the cross-replica Namespace watch probe\n"
 	@printf "  BOOTSTRAP_TOKEN=<token>   Use an existing bearer token for bootstrap\n"
 	@printf "  NAMESPACE=%s REPOSITORY=%s DEFAULT_BRANCH=%s\n" "$(NAMESPACE)" "$(REPOSITORY)" "$(DEFAULT_BRANCH)"
 
@@ -136,27 +172,26 @@ validate-local-config:
 compose-config-check: validate-local-config ## Validate local profile arguments and read-only mounts.
 	@CONFIG_FILE="$(abspath $(CONFIG_FILE))" ./scripts/check-local-compose-config.sh
 
-compose: validate-local-config ## Run all core services with the shared local configuration.
-	@$(LOCAL_COMPOSE) up --build $(DETACH_FLAG)
+compose: validate-local-config ## Run all core services; pass DATASTORE=scylla and optional PROFILE=cluster for Scylla.
+	@case "$(DATASTORE)" in memdb|scylla) ;; *) echo "DATASTORE must be 'memdb' or 'scylla'"; exit 2;; esac
+	@case "$(PROFILE)" in single|cluster) ;; *) echo "PROFILE must be 'single' or 'cluster'"; exit 2;; esac
+	@SCYLLA_CLUSTER_SMP="$(SCYLLA_CLUSTER_SMP)" SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS="$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)" $(LOCAL_COMPOSE) $(DATASTORE_COMPOSE_FILE) up --build $(DETACH_FLAG)
 
-scylla: ## Run only local Scylla services with Docker Compose.
-	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.scylla.yml up $(DETACH_FLAG) scylla scylla-init
-
-compose-scylla: ## Run API, git service, and Scylla with Docker Compose.
-compose-scylla: validate-local-config
-	@$(LOCAL_COMPOSE) -f compose.scylla.yml up --build $(DETACH_FLAG)
+scylla: ## Run Scylla services; pass PROFILE=cluster for the local three-node cluster.
+	@case "$(PROFILE)" in single|cluster) ;; *) echo "PROFILE must be 'single' or 'cluster'"; exit 2;; esac
+	@SCYLLA_CLUSTER_SMP="$(SCYLLA_CLUSTER_SMP)" SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS="$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f $(SCYLLA_COMPOSE_FILE) up $(DETACH_FLAG) $(SCYLLA_SERVICES)
 
 ps: ## Show compose service status.
-	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml ps
+	@$(LIFECYCLE_COMPOSE) ps
 
 logs: ## Follow compose logs; optionally pass SERVICE=<name>.
-	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml logs -f $(SERVICE)
+	@$(LIFECYCLE_COMPOSE) logs -f $(COMPOSE_SERVICE)
 
 stop: ## Stop compose services; optionally pass SERVICE=<name>.
-	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml stop $(SERVICE)
+	@$(LIFECYCLE_COMPOSE) stop $(COMPOSE_SERVICE)
 
 down: ## Stop and remove compose services and networks.
-	@$(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.admin.yml down
+	@$(LIFECYCLE_COMPOSE) down --remove-orphans
 
 build: ## Build Rust and Go services.
 	@cd "$(GIT_SERVICE_DIR)" && cargo build --verbose
@@ -174,7 +209,7 @@ test-scylla-hardening: ## Run focused datastore hardening tests without an exter
 
 test-scylla-integration: ## Run tagged datastore hardening tests against Scylla.
 	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
-		go test -tags scylla -count=1 -timeout 180s ./internal/datastore/scylla/... ./tests/contract/datastore/...
+		go test -tags scylla -count=1 -timeout 10m ./internal/datastore/scylla/... ./tests/contract/datastore/...
 
 test-scylla-capacity: ## Run the opt-in Scylla capacity and soak test.
 	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
@@ -189,6 +224,35 @@ test-namespace-admission-capacity: ## Run the opt-in two-replica Namespace admis
 		GITSTORE_NAMESPACE_CAPACITY_DURATION="$(NAMESPACE_CAPACITY_DURATION)" \
 		GITSTORE_NAMESPACE_CAPACITY_RUN=1 \
 		go test -count=1 -timeout 0 -run '^TestNamespaceValidationCapacity$$' ./internal/cataloggrpc
+
+test-namespace-watch-capacity: ## Run the deployed two-replica 60-minute Namespace watch capacity gate.
+	@cd "$(ROOT)/tests/integration" && \
+		NAMESPACE_WATCH_API_A="$(NAMESPACE_WATCH_API_A)" \
+		NAMESPACE_WATCH_API_B="$(NAMESPACE_WATCH_API_B)" \
+		NAMESPACE_WATCH_API_REPLACEMENT="$(NAMESPACE_WATCH_API_REPLACEMENT)" \
+		NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE="$(NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE)" \
+		NAMESPACE_WATCH_TOKEN="$(NAMESPACE_WATCH_TOKEN)" \
+		NAMESPACE_WATCH_CAPACITY_DURATION="$(NAMESPACE_WATCH_CAPACITY_DURATION)" \
+		NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS="$(NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS)" \
+		NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS="$(NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS)" \
+		NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES="$(NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES)" \
+		NAMESPACE_WATCH_CAPACITY_REPLAY_CATCHUP_TIMEOUT="$(NAMESPACE_WATCH_CAPACITY_REPLAY_CATCHUP_TIMEOUT)" \
+		NAMESPACE_WATCH_CAPACITY_BURST_INTERVAL="$(NAMESPACE_WATCH_CAPACITY_BURST_INTERVAL)" \
+		NAMESPACE_WATCH_CAPACITY_BURST_SIZE="$(NAMESPACE_WATCH_CAPACITY_BURST_SIZE)" \
+		NAMESPACE_WATCH_CAPACITY_MUTATION_WORKERS="$(NAMESPACE_WATCH_CAPACITY_MUTATION_WORKERS)" \
+		NAMESPACE_WATCH_CAPACITY_REPLACEMENT_DELAY="$(NAMESPACE_WATCH_CAPACITY_REPLACEMENT_DELAY)" \
+		NAMESPACE_WATCH_CAPACITY_ALLOW_MISSING_METRICS="$(NAMESPACE_WATCH_CAPACITY_ALLOW_MISSING_METRICS)" \
+		NAMESPACE_WATCH_CAPACITY_RUN=1 \
+		go test -v -count=1 -timeout 0 -run '^TestNamespaceWatchDeploymentCapacity$$' .
+
+test-namespace-watch-recovery: ## Probe bootstrap/resume, replacement, expiry, and overflow across two API replicas.
+	@cd "$(ROOT)/tests/integration" && \
+		NAMESPACE_WATCH_API_A="$(NAMESPACE_WATCH_API_A)" \
+		NAMESPACE_WATCH_API_B="$(NAMESPACE_WATCH_API_B)" \
+		NAMESPACE_WATCH_API_REPLACEMENT="$(NAMESPACE_WATCH_API_REPLACEMENT)" \
+		NAMESPACE_WATCH_TOKEN="$(NAMESPACE_WATCH_TOKEN)" \
+		NAMESPACE_WATCH_OVERFLOW_TRANSITIONS="$(NAMESPACE_WATCH_OVERFLOW_TRANSITIONS)" \
+		go test -count=1 -run '^TestNamespaceWatch(CrossReplicaBootstrapAndResume|RecoveryProbe|DocumentedConsumer)$$' .
 
 lint: ## Run Rust formatting/clippy and Go formatting/vet/staticcheck.
 	@cd "$(GIT_SERVICE_DIR)" && cargo fmt --all -- --check

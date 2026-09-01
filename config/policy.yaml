@@ -10,6 +10,7 @@ roles:
       - "*.status.write"
       - "category.status.write"
       - "namespace.status.write"
+      - "namespace.watch"
     deny: []
 default_deny: true
 role_bindings:

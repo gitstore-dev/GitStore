@@ -73,3 +73,81 @@ A controller's `watchCategories`/`watchResources` subscription disconnects and r
 - `rate(gitstore_eventbus_watch_expired_total{kind}[5m])` returns to `0` (or the controller correctly re-lists whenever it is non-zero).
 - `rate(gitstore_eventbus_events_dropped_total{kind}[5m])` returns to `0`.
 - `rate(gitstore_status_write_conflicts_total{kind}[5m])` returns to its prior baseline (occasional, not sustained).
+
+## Namespace durable-watch rollout and recovery
+
+Namespace uses a durable Scylla CDC journal rather than the process-local event
+bus described above. Keep spec 047 deployed; do not reopen or roll back its
+Namespace lifecycle contract.
+
+Roll out in this order:
+
+1. Apply migration 006 everywhere and verify the Namespace base table has full
+   preimage/postimage CDC with the 14-day TTL plus the journal-event table and
+   partition-local clock/lease/progress table.
+2. Override both alpha-default-on Namespace watch gates to `false` while any
+   API replica lacks the new schema/code. Deny Namespace watch ingress
+   fleet-wide during mixed-version operation; an old replica cannot honor the
+   durable cursor contract.
+3. Enable `MATERIALIZER_ENABLED` on the converged fleet. Exactly one healthy
+   replica should report materializer leader `1`; wait for a durable BOOKMARK
+   and independently persisted CDC query progress below 60 seconds. A fresh
+   BOOKMARK alone does not certify CDC health.
+4. Enable `READERS_ENABLED`, restore watch ingress, and run the cross-replica
+   bootstrap/resume probe before declaring rollout complete.
+
+For rollback, first deny watch ingress and disable readers. Disable the
+materializer only after readers are drained. Migration 006 is a supported,
+additive artifact and may remain during application rollback; do not drop CDC
+or journal tables while any issued cursor could still be presented.
+
+Namespace signals have bounded labels only (`path` and `reason`; never a
+Namespace name, UID, cursor, holder ID, or replica ID):
+
+- `gitstore_namespace_watch_materializer_leader` — alert if the fleet sum is
+  zero for 30 seconds or above one for two lease TTLs.
+- `gitstore_namespace_watch_cdc_lag_seconds` and
+  `gitstore_namespace_watch_bookmark_age_seconds` — warn above 30 seconds and
+  page above the 60-second readiness bound. Both report `+Inf` until their
+  first durable observation; bookmark age advances only from an actual
+  `BOOKMARK`, not ordinary journal activity.
+- `gitstore_namespace_watch_journal_oldest_sequence` and
+  `gitstore_namespace_watch_journal_high_water_sequence` — alert if high water
+  stops advancing during acknowledged mutations or the retained span shrinks
+  unexpectedly.
+- `gitstore_namespace_watch_subscribers{path="typed|generic"}` — capacity
+  gauge; compare with the planned 1,000-subscriber envelope.
+- `gitstore_namespace_watch_expired_total{reason}` and
+  `gitstore_namespace_watch_overflow_total` — alert on any
+  `JOURNAL_DISCONTINUITY`; warn on sustained overflow or expiry above 0.1% of
+  subscription attempts.
+- `gitstore_namespace_watch_append_errors_total` — page on any sustained
+  non-zero rate because acknowledged mutations may be awaiting CDC recovery.
+- `gitstore_namespace_watch_duplicates_total` — counts a new journal cursor
+  delivered with a deduplication key already observed by this replica. Track
+  its rate during recovery and rolling replacement; duplicates are safe but
+  must remain visible rather than being mistaken for missing transitions.
+- replay and delivery histograms — alert if 10,000-event replay p95 exceeds 5
+  seconds, delivery p95 exceeds 1 second, or delivery p99 exceeds 3 seconds.
+
+During replacement, the old leader may finish or lose its lease;
+partition-local conditional writes stop a stale holder from
+publishing/progressing. A replacement should acquire the
+lease, resume durable CDC progress, write a BOOKMARK, and restore readiness in
+30 seconds. Duplicates after append-before-progress recovery are safe, measured
+by the duplicate counter and capacity client, and must be deduplicated by
+cursor; missing sequences are not safe and fail closed.
+
+Recovery by wire code:
+
+- `WATCH_UNAVAILABLE/MATERIALIZER_NOT_READY`: retain the cursor, back off, and
+  retry another ready replica. Check leader, CDC lag, bookmark age, and append
+  errors.
+- `WATCH_EXPIRED`: discard the cursor and repeat the documented
+  bootstrap/list/drain algorithm. For `SUBSCRIBER_OVERFLOW`, also repair the
+  slow consumer before reconnecting. For `JOURNAL_DISCONTINUITY`, page the
+  datastore owner and preserve affected journal/CDC rows for diagnosis. A
+  materializer that observes an actual CDC record behind the published
+  frontier stops automatic leadership retries; repair the ordering state
+  before restarting it. Empty CDC windows from newly discovered streams may
+  advance only that stream's progress and do not constitute a discontinuity.

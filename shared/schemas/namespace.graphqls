@@ -382,3 +382,26 @@ extend type Mutation {
   """
   completeNamespaceDeletion(input: CompleteNamespaceDeletionInput!): CompleteNamespaceDeletionPayload!
 }
+
+extend type Subscription {
+  """
+  Canonical cluster-scoped Namespace watch. The bootstrap sentinel establishes
+  a high-water BOOKMARK before the caller lists Namespaces. A retained cursor
+  resumes strictly after that event; continuity failures return WATCH_EXPIRED.
+  """
+  watchNamespaces(
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): NamespaceWatchEvent!
+}
+
+"""
+Strongly typed Namespace journal event. resourceVersion is an opaque durable
+journal cursor and is distinct from namespace.metadata.resourceVersion.
+"""
+type NamespaceWatchEvent {
+  type: WatchEventType!
+  name: String!
+  resourceVersion: String!
+  namespace: Namespace
+}
