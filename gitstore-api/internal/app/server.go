@@ -220,6 +220,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		NamespaceWatch:               cfg.Watch.Namespace,
 		NamespaceMetrics:             namespaceWatchMetrics(namespaceWatch),
 		NamespaceRepositoryFenceMode: namespaceRepositoryFenceMode,
+		ServiceAccountAudience:       cfg.Auth.ServiceAccount.Audience,
 		RateLimitPerSecond:           cfg.Api.RateLimitPerSecond,
 		RateLimitBurst:               cfg.Api.RateLimitBurst,
 	})
@@ -307,6 +308,9 @@ type GraphQLHandlerDeps struct {
 	NamespaceWatch               config.NamespaceWatchConfig
 	NamespaceMetrics             *watchjournal.Metrics
 	NamespaceRepositoryFenceMode resolver.NamespaceRepositoryFenceMode
+	// ServiceAccountAudience is the configured audience value that the server
+	// issues tokens for. Must be provided to the resolver (spec 061).
+	ServiceAccountAudience string
 	// RateLimitPerSecond/RateLimitBurst configure the per-client-IP token
 	// bucket guarding /graphql. A zero RateLimitPerSecond falls back to
 	// defaultRateLimitPerSecond/defaultRateLimitBurst (the same defaults
@@ -333,6 +337,7 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 		NamespaceWatch:               deps.NamespaceWatch,
 		NamespaceMetrics:             deps.NamespaceMetrics,
 		NamespaceRepositoryFenceMode: deps.NamespaceRepositoryFenceMode,
+		ServiceAccountAudience:       deps.ServiceAccountAudience,
 	})
 	if err != nil {
 		return nil, err
