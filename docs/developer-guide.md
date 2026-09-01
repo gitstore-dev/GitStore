@@ -57,6 +57,13 @@ Production paths must also define:
 - sustained Git push load and downstream backpressure behavior;
 - repeatable replica, failover, load, soak, and recovery validation.
 
+Repository-wide capacity and fault tooling is exposed through the root
+Makefile. Use `make capacity CAPACITY_PROFILE=<profile>` for k6 offered-load
+and threshold evidence, and `make chaos CHAOS_PROFILE=<profile>
+CHAOS_TARGET=<gitstore-container> CHAOS_CONFIRM=1` for bounded container fault
+injection. See [Production readiness testing](runbooks/production-readiness-testing.md)
+for profile authoring, correctness-verifier, evidence, and safety requirements.
+
 ## Local Development
 
 Start the Docker stack:

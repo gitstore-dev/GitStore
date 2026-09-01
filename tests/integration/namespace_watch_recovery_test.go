@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/websocket"
@@ -20,7 +21,7 @@ import (
 func TestNamespaceWatchRecoveryProbe(t *testing.T) {
 	apiA := os.Getenv("NAMESPACE_WATCH_API_A")
 	apiB := os.Getenv("NAMESPACE_WATCH_API_B")
-	token := os.Getenv("NAMESPACE_WATCH_TOKEN")
+	token := namespaceWatchToken(t)
 	if apiA == "" || apiB == "" || token == "" {
 		t.Skip("set NAMESPACE_WATCH_API_A, NAMESPACE_WATCH_API_B, and NAMESPACE_WATCH_TOKEN")
 	}
@@ -66,6 +67,20 @@ func TestNamespaceWatchRecoveryProbe(t *testing.T) {
 		}
 		requireNamespaceWatchWireError(t, watch, "WATCH_EXPIRED", "SUBSCRIBER_OVERFLOW")
 	})
+}
+
+func namespaceWatchToken(t *testing.T) string {
+	t.Helper()
+	if token := strings.TrimSpace(os.Getenv("NAMESPACE_WATCH_TOKEN")); token != "" {
+		return token
+	}
+	path := strings.TrimSpace(os.Getenv("NAMESPACE_WATCH_TOKEN_FILE"))
+	if path == "" {
+		return ""
+	}
+	contents, err := os.ReadFile(path)
+	require.NoError(t, err, "read NAMESPACE_WATCH_TOKEN_FILE")
+	return strings.TrimSpace(string(contents))
 }
 
 func requireNamespaceWatchWireError(t *testing.T, conn *websocket.Conn, code, reason string) {

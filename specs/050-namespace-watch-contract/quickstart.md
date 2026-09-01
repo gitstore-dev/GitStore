@@ -237,6 +237,62 @@ Pass thresholds:
 - retained-memory growth <10%;
 - no normal stream closure after overflow/discontinuity.
 
+Run offered load through the repository harness and attach sanitized effective
+configuration/environment manifests:
+
+```bash
+make capacity CAPACITY_PROFILE=namespace-admission \
+  CAPACITY_API_A=http://api-a:4000/graphql \
+  CAPACITY_API_B=http://api-b:4000/graphql \
+  CAPACITY_TOKEN_FILE=/absolute/path/to/token \
+  CAPACITY_CONFIG_MANIFEST=/absolute/path/to/effective-config.json \
+  CAPACITY_ENVIRONMENT_MANIFEST=/absolute/path/to/environment.json \
+  CAPACITY_API_REPLICAS=2 \
+  CAPACITY_SCYLLA_NODES=3 \
+  CAPACITY_SCYLLA_SMP=2 \
+  CAPACITY_GIT_SERVICE_BUILD=release
+```
+
+### Current gate status
+
+The production capacity gate remains **not passed**. Diagnostic runs found:
+
+- the former in-process load scheduler dropped 34,481 of 41,899 scheduled
+  transitions and admitted only 4,101 of 7,418 attempted transitions;
+- its external replacement watcher lacked Docker permission, so the recorded
+  replacement failure was an orchestration failure rather than valid recovery
+  evidence;
+- the reusable k6 profile passed a three-second 1 transition/s smoke with zero
+  drops and approximately 474 ms p95 mutation latency;
+- a 30-second 10 transitions/s diagnostic exhausted 120 VUs, dropped 181
+  iterations, failed all 120 issued mutations, and measured approximately
+  48.5 s p95; and
+- that environment used `target/debug/git-service`, while every GraphQL
+  Namespace mutation takes the per-repository write lock to commit into the
+  shared system repository. Debug-artifact results cannot establish production
+  capacity.
+
+The 2026-09-01 clean release-artifact attempt prepared 10,000 acknowledged
+transitions in 3m19.7s and caught the durable journal up in 1.04s. A short
+10 transitions/s gate smoke admitted 100/100 with zero conflicts, errors, or
+drops (approximately 46 ms p95 and 52 ms p99). The full 60-minute run still
+failed: of 41,899 offered transitions, 32,814 entered the bounded queue,
+31,550 were admitted and acknowledged, 1,264 attempts failed, and 9,085 were
+backpressured. Pumba successfully restarted API A; its 500 subscribers resumed,
+it reacquired the materializer lease, and observed CDC lag returned below one
+second. Five minutes later the three-node local Scylla cluster suffered gossip
+timeouts and connection resets; node 3 was OOM-killed and restarted. This is
+environment-capacity failure evidence, not support for increasing application
+timeouts or buffers.
+
+Before rerunning the unchanged 60-minute workload, provision fixed and
+explicitly recorded per-node Scylla memory/CPU, require zero OOM kills and
+unexpected datastore restarts, retain release artifacts and the clean isolated
+keyspace/Git directory, and repeat the short stepped preflight. Only after that
+environment passes should a three-repetition, one-variable-at-a-time matrix be
+used to choose application defaults. Only a clean run satisfying every
+threshold may complete task T061.
+
 ## Documentation and final gate
 
 Update:

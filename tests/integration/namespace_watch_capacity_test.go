@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -122,13 +123,13 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 	require.Greater(t, workload.attempted, 0)
 	require.False(t, workload.drainTimedOut, "mutation workers must drain within the bounded shutdown window")
 	require.Equal(t, workload.produced, workload.sustained+workload.bursts, "all produced work must be classified")
-	require.Zero(t, workload.backpressured, "configured load must not be dropped by the bounded worker queue")
-	require.Equal(t, workload.produced, workload.enqueued, "every produced transition must enter the bounded worker queue")
-	require.Equal(t, workload.enqueued, workload.attempted, "every enqueued transition must be attempted before shutdown")
-	require.Equal(t, workload.attempted, workload.admitted+workload.failed, "every attempt must be admitted or reported failed")
-	require.Equal(t, workload.admitted, workload.acknowledged.count(), "admitted transitions must match acknowledged transitions")
+	assert.Zero(t, workload.backpressured, "configured load must not be dropped by the bounded worker queue")
+	assert.Equal(t, workload.produced, workload.enqueued, "every produced transition must enter the bounded worker queue")
+	assert.Equal(t, workload.enqueued, workload.attempted, "every enqueued transition must be attempted before shutdown")
+	assert.Equal(t, workload.attempted, workload.admitted+workload.failed, "every attempt must be admitted or reported failed")
+	assert.Equal(t, workload.admitted, workload.acknowledged.count(), "admitted transitions must match acknowledged transitions")
 	errorRate := float64(workload.failed) / float64(workload.attempted)
-	require.Less(t, errorRate, .001, "internal GraphQL mutation error rate must remain below 0.1%%")
+	assert.Less(t, errorRate, .001, "internal GraphQL mutation error rate must remain below 0.1%%")
 	expectedSustained := int(cfg.duration/(100*time.Millisecond)) - 2
 	if expectedSustained > 0 {
 		require.GreaterOrEqual(t, workload.sustained, expectedSustained, "must schedule 10 sustained transitions/second")
@@ -183,7 +184,7 @@ func loadCapacityConfig(t *testing.T) capacityConfig {
 		apiA:                 strings.TrimSuffix(os.Getenv("NAMESPACE_WATCH_API_A"), "/"),
 		apiB:                 strings.TrimSuffix(os.Getenv("NAMESPACE_WATCH_API_B"), "/"),
 		replacement:          strings.TrimSuffix(os.Getenv("NAMESPACE_WATCH_API_REPLACEMENT"), "/"),
-		token:                os.Getenv("NAMESPACE_WATCH_TOKEN"),
+		token:                namespaceWatchToken(t),
 		replacementTrigger:   os.Getenv("NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE"),
 		duration:             duration,
 		replacementDelay:     capacityEnvDuration(t, "NAMESPACE_WATCH_CAPACITY_REPLACEMENT_DELAY", duration/2),
@@ -204,7 +205,7 @@ func loadCapacityConfig(t *testing.T) capacityConfig {
 	require.NotEmpty(t, cfg.replacementTrigger, "NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE is required for deployment-harness coordination")
 	_, triggerErr := os.Stat(cfg.replacementTrigger)
 	require.ErrorIs(t, triggerErr, os.ErrNotExist, "replacement trigger must not exist before the gate starts")
-	require.NotEmpty(t, cfg.token, "NAMESPACE_WATCH_TOKEN is required")
+	require.NotEmpty(t, cfg.token, "NAMESPACE_WATCH_TOKEN or NAMESPACE_WATCH_TOKEN_FILE is required")
 	require.Positive(t, cfg.duration)
 	require.Positive(t, cfg.replacementDelay)
 	require.Less(t, cfg.replacementDelay, cfg.duration)

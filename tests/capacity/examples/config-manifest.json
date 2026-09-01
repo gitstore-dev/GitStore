@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "services": {
+    "api": {
+      "replicas": 2,
+      "watch": {
+        "pollInterval": "100ms",
+        "idleBackoffMax": "2s",
+        "readBatch": 256,
+        "liveRing": 512,
+        "subscriberBuffer": 64
+      }
+    },
+    "gitService": {
+      "build": "release"
+    },
+    "scylla": {
+      "nodes": 3,
+      "smpPerNode": 2
+    }
+  }
+}

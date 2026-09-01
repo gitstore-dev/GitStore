@@ -159,6 +159,8 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX Rolling-upgrade compatibility validation
 - [ ] TXXX Multi-user AuthN/AuthZ and isolation tests
 - [ ] TXXX Sustained load/soak and backpressure validation
+- [ ] TXXX Record a passing `make capacity CAPACITY_PROFILE=<profile>` evidence bundle, including topology/dataset proof and domain-verifier result
+- [ ] TXXX Record passing declared `make chaos CHAOS_PROFILE=<profile>` recovery experiments while the capacity workload is active
 - [ ] TXXX Operational dashboards, alerts, and runbook updates
 - [ ] TXXX Run quickstart.md validation
 

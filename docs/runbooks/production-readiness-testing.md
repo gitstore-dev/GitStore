@@ -157,6 +157,81 @@ as-is for the overlap requirement.
 
 ## 2. Capacity/soak testing
 
+### Repository-wide capacity and fault harness
+
+New load-bearing specifications MUST use the repository-wide harness instead
+of adding another in-process load scheduler:
+
+```bash
+make capacity CAPACITY_PROFILE=api-readiness \
+  CAPACITY_ENV_FILE=/absolute/path/to/non-committed-capacity.env
+```
+
+The runner uses the pinned `grafana/k6:2.1.0` image unless a local `k6` binary
+or `K6_BIN` is supplied. Profiles live under `tests/capacity/profiles/`, shared
+JavaScript modules live under `tests/capacity/lib/`, and every invocation writes
+an evidence bundle under `.gitstore/capacity/<profile>/<run-id>/`. The bundle
+contains the Git revision and dirty state, tool identity, k6 log, structured
+summary, timestamps, exit code, and pass/fail status. Tokens belong in the
+untracked environment file and MUST NOT be copied into evidence.
+
+A k6 pass proves only that the declared offered load and metric thresholds
+passed. Each feature profile MUST pair it with a domain correctness verifier
+when correctness cannot be expressed by k6 checks—for example exact watch
+event coverage, cursor replay, ordering, datastore row-count proof, or
+controller convergence. A production-readiness claim requires all of:
+
+1. validated production-like topology and dataset scale;
+2. zero unintended k6 dropped iterations;
+3. passing latency, throughput, and error-rate thresholds;
+4. passing feature-specific correctness verification; and
+5. passing declared fault/recovery experiments during active load.
+
+The environment verifier MUST also prove that every datastore node stayed up
+for the full measurement window: no OOM kill, unexpected restart, or membership
+loss. A load result collected across an undeclared datastore restart is failure
+evidence, not a basis for relaxing application timeouts, buffers, or retry
+defaults. Record per-node memory limits, CPU/shard allocation, restart counts,
+and OOM state before and after the run.
+
+Capacity preflight MUST identify optimized/release service artifacts. Debug
+builds are useful for functional diagnosis but cannot produce capacity evidence;
+their lock, allocator, and instrumentation costs are not representative.
+
+Capacity evidence is also the basis for application defaults. Every gate run
+attaches a sanitized effective-config manifest and an environment manifest.
+When tuning defaults, keep workload/topology/hardware constant, vary one related
+configuration group, repeat each candidate at least three times, and select the
+smallest value that meets latency/error/recovery objectives with headroom and
+bounded overload behavior. Compare CPU, retained memory, goroutines, queue
+depth/backpressure, and datastore pressure as well as throughput. A single
+passing run MUST NOT automatically rewrite configuration defaults.
+
+When a run fails because the declared environment exhausted memory or CPU,
+repeat it with sufficient fixed datastore resources before varying application
+configuration. Do not tune application defaults to conceal an undersized or
+unstable test cluster.
+
+Container fault injection uses pinned Pumba profiles:
+
+```bash
+make chaos CHAOS_PROFILE=api-restart \
+  CHAOS_TARGET=gitstore-capacity-api-a \
+  CHAOS_CONFIRM=1
+```
+
+Profiles live under `tests/chaos/profiles/`, and evidence is written under
+`.gitstore/chaos/<profile>/<run-id>/`. The wrapper accepts one explicit
+container name beginning with `gitstore-`, verifies that it exists, and refuses
+to run without `CHAOS_CONFIRM=1`. Start with lifecycle faults (`restart` and
+bounded `pause`). Network loss/latency and CPU/memory pressure MAY be added as
+new reviewed profiles when their rollback behavior is proven on every supported
+developer runtime. Never point the wrapper at a shared or production container.
+
+The constitution intentionally specifies outcomes rather than k6 or Pumba.
+Tool pins and operating instructions belong here and in the root `Makefile`, so
+the implementation can evolve without a governance amendment.
+
 **What it verifies:** real load and soak behavior against a live backend at
 production scale — dataset size, sustained throughput, and (where the test
 measures them) error rate and partition-size ceilings — deliberately kept out
@@ -278,17 +353,12 @@ runbook can work around after the fact:
    copying `capacity_test.go`, build the row-count assertion in from the
    start rather than inheriting this gap.
 
-**Where results get recorded:** there is no separate results file or
-dashboard convention yet. The established practice (see `capacity_test.go`'s
-own `t.Logf` calls, and `docs/developer-guide.md`'s "Projection audit,
-repair, and capacity validation" section) is `t.Logf`/`go test -v` output as
-the record, captured by whoever runs it — `specs/048-scylla-query-design`'s
-own `quickstart.md` documents the *test scenarios* (cross-bucket pagination
-correctness, etc.) but does not itself define a structured results-recording
-format. If your spec's capacity run needs durable evidence beyond captured
-test-log output (e.g. for a PR description or an ADR), redirect
-`go test -v`'s stdout to a file under the spec's `specs/<NNN>/` directory and
-reference it from the spec's `tasks.md` — don't invent a new dashboard.
+**Where results get recorded:** new tests use the structured evidence bundle
+created by `make capacity`. Existing Go-only gates may retain `go test -v`
+output during migration, but MUST store it alongside equivalent metadata and
+MUST NOT claim that a bare `PASS` proves the offered workload or dataset scale.
+Specs reference the evidence bundle and summarize its thresholds and verifier
+result; evidence containing secrets is never committed.
 
 **How to apply this to a new resource:**
 

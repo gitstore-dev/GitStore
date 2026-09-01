@@ -2,6 +2,25 @@
 
 Utility scripts for GitStore development and demonstration.
 
+## run-capacity.sh
+
+Runs a named profile from `tests/capacity/profiles/` with pinned k6 and writes
+structured evidence beneath `.gitstore/capacity/`. Invoke it through the root
+Makefile:
+
+```bash
+make capacity CAPACITY_PROFILE=api-readiness CAPACITY_BASE_URL=http://localhost:4000
+```
+
+## run-chaos.sh
+
+Runs an explicitly confirmed, allowlisted Pumba fault profile against one
+GitStore container and records before/after inspection evidence:
+
+```bash
+make chaos CHAOS_PROFILE=api-pause-5s CHAOS_TARGET=gitstore-api CHAOS_CONFIRM=1
+```
+
 For normal repository checks, run the licence scripts through the root Make target:
 
 ```bash

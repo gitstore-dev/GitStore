@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "runtime": "docker",
+  "architecture": "arm64",
+  "host": {
+    "logicalCPUs": 10,
+    "memoryBytes": 17179869184
+  },
+  "topology": {
+    "apiReplicas": 2,
+    "gitServiceReplicas": 1,
+    "scyllaNodes": 3
+  }
+}

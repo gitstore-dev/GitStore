@@ -101,6 +101,8 @@
 - **PR-002 Multi-User Security**: [Define authentication, authorization, isolation, and audit behavior]
 - **PR-003 Capacity**: [Define dataset size, peak/sustained concurrency, payload shape, latency, and error objectives]
 - **PR-004 Backpressure**: [Define queue, worker, retry, timeout, and overload behavior]
+- **PR-005 Capacity Evidence**: [Name the reusable `make capacity CAPACITY_PROFILE=...` profile, required dataset/topology proof, threshold set, and domain-correctness verifier]
+- **PR-006 Fault Recovery**: [Name the reusable `make chaos CHAOS_PROFILE=...` profile(s), bounded target, steady-state hypothesis, and recovery deadline]
 - **PR-005 Recovery**: [Define convergence and data-integrity behavior after partial failure]
 
 ### Key Entities *(include if feature involves data)*
