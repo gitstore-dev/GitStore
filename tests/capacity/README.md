@@ -25,6 +25,21 @@ secret references whose names are sensitive, or raw environment dumps.
 For datastore-backed profiles, record per-node memory limits, CPU/shards,
 restart counts, OOM state, and authentication mode. A gate fails if a node is
 OOM-killed, unexpectedly restarts, or leaves cluster membership during load.
+Set `CAPACITY_DATASTORE_CONTAINERS` to the comma-separated container names. The
+runner captures sanitized `docker inspect` state before and after load and
+fails on OOM, restart, disappearance, or stopped state. Namespace admission
+gate mode additionally requires:
+
+```bash
+CAPACITY_RUNTIME_MEMORY_BYTES=17179869184
+CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=<explicit container limit>
+CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated # or password-authenticated
+CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3
+```
+
+The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
+`3g` per node. Override it explicitly when testing another resource tier and
+set `CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE` to the corresponding byte value.
 
 ## Adding a profile
 
@@ -94,3 +109,21 @@ declares at least two API replicas, three Scylla nodes with at least two shards
 each, and a release Git-service build. Use `CAPACITY_MODE=diagnostic` only for
 short bottleneck discovery; diagnostic results can never be cited as a capacity
 pass.
+
+## Namespace staged progression
+
+Keep topology, binaries, manifests, and application configuration fixed while
+progressing. Restart with a fresh keyspace and Git data directory after a
+failed stage.
+
+1. Run 10 transitions/s for 10 minutes without subscribers using the k6
+   `namespace-admission` profile in diagnostic mode.
+2. Run the deployment verifier for 10 minutes with 1,000 subscribers and set
+   the burst interval longer than the run so no burst occurs. Set
+   `NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT=1` for this diagnostic stage.
+3. Repeat the 10-minute verifier with the one-minute 100-transition burst.
+4. Run the full 60-minute verifier with the midpoint API restart.
+
+Do not lower the 1,000-subscriber acceptance target after a datastore resource
+failure. Test 2,500, 5,000, and 10,000 subscribers separately as connection
+scale tiers only after the required gate passes.

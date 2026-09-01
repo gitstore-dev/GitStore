@@ -52,6 +52,7 @@ type capacityConfig struct {
 	mutationWorkers                int
 	mutationDrainTimeout           time.Duration
 	allowMissingMetrics            bool
+	skipReplacement                bool
 }
 
 // TestNamespaceWatchDeploymentCapacity is deliberately deployment-driven. The
@@ -106,9 +107,13 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 	metricsStart := scrapeCapacityMetrics(t, client, cfg)
 	soakStarted := time.Now()
 	recoveryResult := make(chan capacityRecoveryResult, 1)
-	go func() {
-		recoveryResult <- coordinateCapacityReplacement(client, cfg, livePrefix, maxTransitions+1, soakStarted)
-	}()
+	if cfg.skipReplacement {
+		recoveryResult <- capacityRecoveryResult{}
+	} else {
+		go func() {
+			recoveryResult <- coordinateCapacityReplacement(client, cfg, livePrefix, maxTransitions+1, soakStarted)
+		}()
+	}
 	workload := runCapacityMutationWorkload(t, client, cfg, livePrefix, maxTransitions)
 	soakElapsed := time.Since(soakStarted)
 	recovery := <-recoveryResult
@@ -116,7 +121,9 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 		workload.produced, workload.enqueued, workload.backpressured, workload.attempted, workload.admitted,
 		workload.acknowledged.count(), workload.failed, workload.drainTimedOut)
 	require.NoError(t, recovery.err)
-	require.LessOrEqual(t, recovery.duration, 30*time.Second, "replacement endpoint must recover within 30s")
+	if !cfg.skipReplacement {
+		require.LessOrEqual(t, recovery.duration, 30*time.Second, "replacement endpoint must recover within 30s")
+	}
 	metricsEnd := scrapeCapacityMetrics(t, client, cfg)
 	metricsElapsed := time.Since(soakStarted)
 
@@ -197,18 +204,23 @@ func loadCapacityConfig(t *testing.T) capacityConfig {
 		mutationWorkers:      capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_MUTATION_WORKERS", 20),
 		mutationDrainTimeout: capacityMutationDrainTimeout,
 		allowMissingMetrics:  os.Getenv("NAMESPACE_WATCH_CAPACITY_ALLOW_MISSING_METRICS") == "1",
+		skipReplacement:      os.Getenv("NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT") == "1",
 	}
 	require.NotEmpty(t, cfg.apiA, "NAMESPACE_WATCH_API_A is required")
 	require.NotEmpty(t, cfg.apiB, "NAMESPACE_WATCH_API_B is required")
-	require.NotEmpty(t, cfg.replacement, "NAMESPACE_WATCH_API_REPLACEMENT is required for rolling-replacement evidence")
-	require.Contains(t, []string{cfg.apiA, cfg.apiB}, cfg.replacement, "replacement endpoint must identify one of the two loaded replicas")
-	require.NotEmpty(t, cfg.replacementTrigger, "NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE is required for deployment-harness coordination")
-	_, triggerErr := os.Stat(cfg.replacementTrigger)
-	require.ErrorIs(t, triggerErr, os.ErrNotExist, "replacement trigger must not exist before the gate starts")
+	if !cfg.skipReplacement {
+		require.NotEmpty(t, cfg.replacement, "NAMESPACE_WATCH_API_REPLACEMENT is required for rolling-replacement evidence")
+		require.Contains(t, []string{cfg.apiA, cfg.apiB}, cfg.replacement, "replacement endpoint must identify one of the two loaded replicas")
+		require.NotEmpty(t, cfg.replacementTrigger, "NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE is required for deployment-harness coordination")
+		_, triggerErr := os.Stat(cfg.replacementTrigger)
+		require.ErrorIs(t, triggerErr, os.ErrNotExist, "replacement trigger must not exist before the gate starts")
+	}
 	require.NotEmpty(t, cfg.token, "NAMESPACE_WATCH_TOKEN or NAMESPACE_WATCH_TOKEN_FILE is required")
 	require.Positive(t, cfg.duration)
-	require.Positive(t, cfg.replacementDelay)
-	require.Less(t, cfg.replacementDelay, cfg.duration)
+	if !cfg.skipReplacement {
+		require.Positive(t, cfg.replacementDelay)
+		require.Less(t, cfg.replacementDelay, cfg.duration)
+	}
 	require.Positive(t, cfg.subscribers)
 	require.Positive(t, cfg.replayEvents)
 	require.Positive(t, cfg.replaySamples)

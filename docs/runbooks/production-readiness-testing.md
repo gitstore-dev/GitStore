@@ -193,6 +193,11 @@ loss. A load result collected across an undeclared datastore restart is failure
 evidence, not a basis for relaxing application timeouts, buffers, or retry
 defaults. Record per-node memory limits, CPU/shard allocation, restart counts,
 and OOM state before and after the run.
+For Docker-backed runs, provide `CAPACITY_DATASTORE_CONTAINERS`; the repository
+runner snapshots sanitized container state and enforces this invariant. The
+Namespace admission gate also requires the runtime memory allocation, explicit
+per-node Scylla memory, and authentication mode to be declared rather than
+inferred from a developer machine.
 
 Capacity preflight MUST identify optimized/release service artifacts. Debug
 builds are useful for functional diagnosis but cannot produce capacity evidence;

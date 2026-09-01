@@ -6,6 +6,12 @@
     "logicalCPUs": 10,
     "memoryBytes": 17179869184
   },
+  "datastore": {
+    "authenticationMode": "local-unauthenticated",
+    "memoryBytesPerNode": 3221225472,
+    "requireNoUnexpectedRestarts": true,
+    "requireNoOOMKills": true
+  },
   "topology": {
     "apiReplicas": 2,
     "gitServiceReplicas": 1,

@@ -67,6 +67,11 @@ jq -n \
 export CAPACITY_EVIDENCE_DIR="${evidence_dir}"
 export CAPACITY_RUN_ID="${run_id}"
 
+container_check_status=0
+if [[ -n "${CAPACITY_DATASTORE_CONTAINERS:-}" ]]; then
+  "${repo_root}/scripts/check-capacity-containers.sh" snapshot "${evidence_dir}/datastore-before.json"
+fi
+
 preflight="${repo_root}/tests/capacity/preflight/${profile}.sh"
 if [[ -x "${preflight}" ]]; then
   "${preflight}" "${evidence_dir}" 2>&1 | tee "${evidence_dir}/preflight.log"
@@ -111,6 +116,15 @@ else
 fi
 set -e
 
+if [[ -n "${CAPACITY_DATASTORE_CONTAINERS:-}" ]]; then
+  set +e
+  "${repo_root}/scripts/check-capacity-containers.sh" verify \
+    "${evidence_dir}/datastore-before.json" "${evidence_dir}/datastore-after.json" \
+    2>&1 | tee "${evidence_dir}/datastore-verifier.log"
+  container_check_status=${PIPESTATUS[0]}
+  set -e
+fi
+
 chaos_status=0
 if [[ -n "${chaos_pid}" ]]; then
   if kill -0 "${chaos_pid}" 2>/dev/null; then
@@ -149,14 +163,18 @@ fi
 if (( status == 0 && verifier_status != 0 )); then
   status=${verifier_status}
 fi
+if (( status == 0 && container_check_status != 0 )); then
+  status=${container_check_status}
+fi
 
 jq \
   --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson exit_code "${status}" \
   --argjson chaos_exit_code "${chaos_status}" \
   --argjson verifier_exit_code "${verifier_status}" \
+  --argjson datastore_exit_code "${container_check_status}" \
   --argjson verifier_required "${verifier_required}" \
-  '. + {completedAt:$completed_at, exitCode:$exit_code, chaosExitCode:$chaos_exit_code, verifierRequired:$verifier_required, verifierExitCode:$verifier_exit_code, passed:($exit_code == 0)}' \
+  '. + {completedAt:$completed_at, exitCode:$exit_code, chaosExitCode:$chaos_exit_code, verifierRequired:$verifier_required, verifierExitCode:$verifier_exit_code, datastoreVerifierExitCode:$datastore_exit_code, passed:($exit_code == 0)}' \
   "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
 
