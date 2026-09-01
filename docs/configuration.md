@@ -99,12 +99,6 @@ The following endpoints are served on port `api.git_port` (default `5000`):
 
 For config files, admin auth keys are nested under `[auth.admin]` (for example, `username = "admin"`) and JWT keys are nested under `[auth.jwt]`.
 
-### Cache
-
-| Key         | Env Var               | Type    | Default | Required | Sensitive | Description                            |
-|-------------|-----------------------|---------|---------|----------|-----------|----------------------------------------|
-| `cache.ttl` | `GITSTORE_CACHE__TTL` | integer | `300`   | No       | No        | In-memory catalog cache TTL in seconds |
-
 ### Logging
 
 | Key          | Env Var                | Type   | Default | Required | Sensitive | Description                            |
@@ -220,9 +214,6 @@ refresh_grace = "60s"
 [log]
 level = "debug"
 format = "json"
-
-[cache]
-ttl = 300
 
 [datastore]
 backend = "memdb"
