@@ -98,6 +98,17 @@ One new key, additive:
 
 `auth.staticusers.users_file` carries **no** `validate:"required"` struct tag (FR-016) — its file is loaded, and thus validated, only inside `buildProviderRegistry`'s `case "static-users":`, which itself only runs when `"static-users"` is present in `auth.authn.chain`.
 
+The current configuration model also requires an explicit UserDir selector:
+
+| Key path | Env var | Value for this provider |
+|---|---|---|
+| `auth.userdir.provider` | `GITSTORE_AUTH__USERDIR__PROVIDER` | `static-users` |
+
+`static-users` in `auth.authn.chain` does not implicitly change
+`auth.userdir.provider`. If UserDir access is not selected, the configured
+users still authenticate normally, but UserDir lookups remain served by the
+selected provider (normally `none`).
+
 `auth.authn.chain`'s default changes from `["static-admin","anonymous"]` to `["static-users","anonymous"]`.
 
 ## Config validation changes (`gitstore-api/internal/config/config.go`)

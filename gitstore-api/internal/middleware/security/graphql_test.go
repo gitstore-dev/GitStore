@@ -49,7 +49,7 @@ func TestGraphQLAuthenticatorValidBearerInjectsPrincipal(t *testing.T) {
 	require.Nil(t, resp.Errors)
 	require.NotNil(t, principal)
 	assert.Equal(t, "admin", principal.Subject)
-	assert.Equal(t, "static-admin", principal.AuthMethod)
+	assert.Equal(t, "static-users", principal.AuthMethod)
 }
 
 func TestGraphQLAuthenticatorInvalidBearerReturnsGraphQLError(t *testing.T) {

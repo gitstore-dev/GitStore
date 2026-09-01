@@ -377,7 +377,7 @@ curl -s http://localhost:4000/graphql \
 Use GraphQL mutations for authentication, namespaces, and repositories. The Make bootstrap targets wrap these calls for the common local workflow.
 
 GitStore delegates OAuth2/OIDC federation to external identity providers. The GraphQL
-`login(input:)` mutation is a convenience flow for local providers (for example `static-admin`).
+`login(input:)` mutation is a convenience flow for local providers (for example `static-users`).
 
 Login:
 

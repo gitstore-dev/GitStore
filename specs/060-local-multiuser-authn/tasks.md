@@ -15,8 +15,8 @@
 
 **Purpose**: Establish the new provider package before removing the old one.
 
-- [ ] T001 Create the `gitstore-api/internal/auth/provider/staticusers/` package skeleton (`provider.go`, `users.go`, `errors.go` stubs)
-- [ ] T002 [P] Move `jti.go`'s `generateJTI` from `staticadmin/` to `staticusers/` (unchanged content, new package name)
+- [X] T001 Create the `gitstore-api/internal/auth/provider/staticusers/` package skeleton (`provider.go`, `users.go`, `errors.go` stubs)
+- [X] T002 [P] Move `jti.go`'s `generateJTI` from `staticadmin/` to `staticusers/` (unchanged content, new package name)
 
 ---
 
@@ -27,13 +27,13 @@
 **Checkpoint**: `users.yaml` can be loaded/validated/reloaded; UserDir reads work; `rbac-local` can report role_binding coverage; config validation is chain-aware. US1-US4 can proceed.
 
 - [ ] T003 [P] Add failing tests for `loadUsers`/`Reload` (missing file, malformed YAML, wrong `version`, duplicate username, empty `password_hash`) in `gitstore-api/internal/auth/provider/staticusers/staticusers_test.go`, including an assertion that each error's message names the configured file path and includes a remediation hint (per FR-013a), not just the wrapped underlying error
-- [ ] T004 Implement `UserList`/`UserEntry` (including `display_name`/`email`) and `loadUsers`/`validateUsers` in `gitstore-api/internal/auth/provider/staticusers/users.go` until T003 is green, wrapping the underlying `os.ReadFile`/`yaml.Unmarshal`/schema error with `%w` (per `contracts/static-users-provider.md`'s Config-validation contract section) while prepending the problem/fix/quickstart-pointer structure required by FR-013a
+- [X] T004 Implement `UserList`/`UserEntry` (including `display_name`/`email`) and `loadUsers`/`validateUsers` in `gitstore-api/internal/auth/provider/staticusers/users.go` until T003 is green, wrapping the underlying `os.ReadFile`/`yaml.Unmarshal`/schema error with `%w` (per `contracts/static-users-provider.md`'s Config-validation contract section) while prepending the problem/fix/quickstart-pointer structure required by FR-013a
 - [ ] T005 [P] Add failing tests for `GetBySubject`/`ListGroups`/`SearchUsers` (known user, unknown user → `ErrUserNotFound`, case-insensitive substring search) in `gitstore-api/internal/auth/provider/staticusers/staticusers_test.go`
-- [ ] T006 Implement `ErrUserNotFound` in `errors.go` and the `UserDirProvider` methods in `provider.go` until T005 is green
+- [X] T006 Implement `ErrUserNotFound` in `errors.go` and the `UserDirProvider` methods in `provider.go` until T005 is green
 - [ ] T007 [P] Add a failing test for `RBACLocalProvider.HasAnyRoleBindingFor([]string) bool` in `gitstore-api/internal/auth/provider/rbaclocal/rbaclocal_test.go`, confirming `Authorize`'s existing tests are unaffected
-- [ ] T008 Implement `HasAnyRoleBindingFor` as an additive, read-only method in `gitstore-api/internal/auth/provider/rbaclocal/provider.go` until T007 is green
+- [X] T008 Implement `HasAnyRoleBindingFor` as an additive, read-only method in `gitstore-api/internal/auth/provider/rbaclocal/provider.go` until T007 is green
 - [ ] T009 [P] Add failing tests for `validateAuthChainConfig` (static-users in chain + empty JWT secret → error; static-users absent + empty JWT secret → no error; empty gRPC HMAC secret → error regardless of chain) in `gitstore-api/internal/config/config_test.go`, including an assertion that the JWT-secret error's message contains the numbered remediation steps and `quickstart.md` pointer required by FR-013a/`contracts/static-users-provider.md`
-- [ ] T010 Remove `JWTConfig.Secret`'s `validate:"required"` struct tag and implement `validateAuthChainConfig`, called from `validateConfig`, in `gitstore-api/internal/config/config.go` until T009 is green, using the exact multi-line error format specified in `contracts/static-users-provider.md`'s Config-validation contract section
+- [X] T010 Remove `JWTConfig.Secret`'s `validate:"required"` struct tag and implement `validateAuthChainConfig`, called from `validateConfig`, in `gitstore-api/internal/config/config.go` until T009 is green, using the exact multi-line error format specified in `contracts/static-users-provider.md`'s Config-validation contract section
 
 ---
 
@@ -50,8 +50,8 @@
 
 ### Implementation for User Story 1
 
-- [ ] T013 [US1] Implement `StaticUsersProvider.Authenticate` (Basic Auth + Bearer verification against `auth.jwt.secret`/`issuer`) in `gitstore-api/internal/auth/provider/staticusers/provider.go` until T011 is green
-- [ ] T014 [US1] Implement `StaticUsersProvider.IssueSession`/`RevokeSession`/`RefreshSession` and its own `sessionBlacklist` until T012 is green
+- [X] T013 [US1] Implement `StaticUsersProvider.Authenticate` (Basic Auth + Bearer verification against `auth.jwt.secret`/`issuer`) in `gitstore-api/internal/auth/provider/staticusers/provider.go` until T011 is green
+- [X] T014 [US1] Implement `StaticUsersProvider.IssueSession`/`RevokeSession`/`RefreshSession` and its own `sessionBlacklist` until T012 is green
 
 **Checkpoint**: A single- or multi-user `users.yaml` configuration works end-to-end for login — independently verifiable via `quickstart.md`'s fresh-setup steps.
 
@@ -90,9 +90,9 @@
 
 ### Implementation for User Story 3
 
-- [ ] T021 [US3] Implement the migration-safety check in `buildProviderRegistry` (`gitstore-api/internal/app/server.go`), calling `HasAnyRoleBindingFor`, using the exact multi-line error format specified in `contracts/static-users-provider.md`'s `buildProviderRegistry` wiring contract section, until T019/T020 are green
+- [X] T021 [US3] Implement the migration-safety check in `buildProviderRegistry` (`gitstore-api/internal/app/server.go`), calling `HasAnyRoleBindingFor`, using the exact multi-line error format specified in `contracts/static-users-provider.md`'s `buildProviderRegistry` wiring contract section, until T019/T020 are green
 - [ ] T022 [US3] Remove `AuthConfig.Admin`/`UserConfig` (type and field) and add `AuthConfig.StaticUsers` in `gitstore-api/internal/config/config.go`; update `auth.authn.chain`'s default (config.go and server.go), defaults/known-keys map, and `MarshalLogObject`
-- [ ] T023 [US3] Replace `buildProviderRegistry`'s `case "static-admin":` with `case "static-users":` (including wiring `static-users` as the `UserDirProvider` when active) in `gitstore-api/internal/app/server.go`; extend the existing SIGHUP reload handler
+- [X] T023 [US3] Replace `buildProviderRegistry`'s `case "static-admin":` with `case "static-users":` in `gitstore-api/internal/app/server.go`; add `static-users` as a valid `auth.userdir.provider` selector and pass the already-constructed instance to UserDir only when that selector is chosen; extend the existing SIGHUP reload handler
 
 **Checkpoint**: An operator cannot migrate into a silent lockout — verified by test, not merely documented.
 
@@ -138,8 +138,8 @@
 
 - [ ] T037 [P] Replace `Makefile`'s `gen-admin-password` target with `hash-static-user-password`; update `bootstrap-token`/`bootstrap-namespace`/`bootstrap-repository` hint text (keep `ADMIN_USERNAME`/`ADMIN_PASSWORD` variable names unchanged)
 - [ ] T038 [P] Update `gitstore-api/.env.example` (remove `GITSTORE_AUTH__ADMIN__*` lines, update the chain example, document `GITSTORE_AUTH__STATICUSERS__USERS_FILE`)
-- [ ] T038a **[BLOCKING — local Compose profile fails to start without this]** Update `config/config.toml` (committed by #410, mounted read-only into `git-service`/`api`/`controller-manager` by `compose.local.yml`): change `[auth.authn] chain = ["static-admin", "anonymous"]` to the `static-users` chain, and replace the `[auth.admin]` section (`username`, `password_hash`) with the `static-users` users-file key. Deleting the provider without editing this file makes `validateAuthChainConfig` reject the committed dev config, so `docker compose --profile local` fails at startup for every developer. This file did not exist when this spec was written
-- [ ] T038b Add `config/users.yaml` as a tracked development-only fixture mirroring `config/policy.yaml`'s existing precedent and its `# DEVELOPMENT ONLY` header, with a placeholder bcrypt hash for the documented dev password, and mount it read-only into the `api` service in `compose.local.yml`. Add a `!config/users.yaml` negation to `.gitignore` alongside the `!config/policy.yaml` one, so the unanchored `users.yaml` rule does not shadow it. **Decision to confirm before implementing**: this tracks a dev-only credential fixture in Git, which is the same posture `config/config.toml` already takes (it ships `auth.admin.password_hash` for `admin123`) — if that is not acceptable, the alternative is generating the fixture at compose-up time instead, and this task changes shape
+- [X] T038a **[BLOCKING — local Compose profile fails to start without this]** Update `config/config.toml` (committed by #410, mounted read-only into `git-service`/`api`/`controller-manager` by `compose.local.yml`): change `[auth.authn] chain = ["static-admin", "anonymous"]` to the `static-users` chain, add `[auth.userdir] provider = "static-users"`, and replace the `[auth.admin]` section (`username`, `password_hash`) with the `static-users` users-file key. Deleting the provider without editing this file makes `validateAuthChainConfig` reject the committed dev config, so `docker compose --profile local` fails at startup for every developer. This file did not exist when this spec was written
+- [X] T038b Add `config/users.yaml` as a tracked development-only fixture mirroring `config/policy.yaml`'s existing precedent and its `# DEVELOPMENT ONLY` header, with a placeholder bcrypt hash for the documented dev password, and mount it read-only into the `api` service in `compose.local.yml` only. The file must not be mounted into `git-service` or `controller-manager`, because the current shared `config/config.toml` is consumed by all three services but user credentials are API-only. Add a `!config/users.yaml` negation to `.gitignore` alongside the `!config/policy.yaml` one, so the unanchored `users.yaml` rule does not shadow it. **Decision to confirm before implementing**: this tracks a dev-only credential fixture in Git, which is the same posture `config/config.toml` already takes (it ships `auth.admin.password_hash` for `admin123`) — if that is not acceptable, the alternative is generating the fixture at compose-up time instead, and this task changes shape
 - [ ] T038c Update `scripts/check-local-compose-config.sh` for any mount added by T038b — it asserts exact counts (`-eq 1` for `/config/policy.yaml`, `-ge 4` for `read_only: true`) and will fail once a `users.yaml` mount is introduced
 - [ ] T038d Add a CI guard proving operator auth config cannot reach a build context or image: build the API image with a decoy `gitstore-api/policy.yaml` and `gitstore-api/users.yaml` present, and assert neither appears in the build context or the final image. This has already regressed once — the original `.dockerignore` used bare `policy.yaml`/`users.yaml` patterns which, unlike `.gitignore`, match only the context root and therefore never excluded `gitstore-api/policy.yaml`, the exact path `docker/*.Dockerfile`'s `COPY gitstore-api/ ./` copies. Verified by build on 2026-08-30 and fixed with the `**/` form; this guard is what keeps it fixed
 - [X] T039 [P] Add `gitstore-api/users.yaml.example` documenting the schema from `data-model.md`, and `gitstore-api/policy.yaml.example` documenting `rbac-local`'s existing schema including the `role_bindings` entries this spec makes load-bearing (both delivered; real `users.yaml`/`policy.yaml` added to `.gitignore`, all `*.example` added to `.dockerignore`, so operator config can never be committed or baked into an image)

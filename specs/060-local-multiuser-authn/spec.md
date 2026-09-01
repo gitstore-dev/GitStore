@@ -2,7 +2,7 @@
 
 **Feature Branch**: `060-local-multiuser-authn`
 
-**Created**: 2026-08-29 (revised 2026-08-29)
+**Created**: 2026-08-29 (revised 2026-09-01)
 **Status**: Draft
 **Input**: User description: "GitStore's `rbac-local` AuthZ provider already supports mapping multiple subjects to roles via `role_bindings`, but no real AuthN provider today can authenticate more than one distinct human identity — `static-admin` structurally supports exactly one hardcoded admin credential. Ship a new AuthN provider that authenticates against a config-driven list of username + bcrypt password-hash pairs. **Revision**: don't add it as a sibling to `static-admin` — remove `static-admin` entirely and have the new provider (`static-users`) replace it fully. 'Admin' becomes just a role grantable to one or many users via the already-existing `role_bindings` mechanism, no new admin-specific code path. `static-users` implements both AuthN and UserDir, since real multiple users make user metadata (email/display name) worth giving a real home. Work through, and show the reasoning for: the migration path for existing `static-admin` deployments (automatic env-var fallback vs. a documented clean breaking change, given this project's pre-stable alpha phase); re-verifying that `static-admin`'s traced hardcoded-admin-role bypass disappears with it, meaning post-migration admin access flows exclusively through a real `role_bindings` entry — and making sure the migration story doesn't let someone migrate and silently lose admin access; the full removal scope (every reference to `staticadmin`/`static-admin`, including the `make gen-admin-password` Makefile target); and whether the previously-planned `ChainedAuthN.IssueSessionFor` registry addition is still needed once `static-admin` no longer coexists in the chain. Separately, and found from direct operator experience: some auth env vars (JWT secret, admin password hash, and a third one) cause an unconditional startup failure today regardless of whether the corresponding provider is even chained in — fix this as part of the same config-validation surface this spec already touches, scoping the fix precisely to which env vars are actually provider-specific vs. genuinely always required."
 
@@ -23,6 +23,22 @@
 - Q: Should `static-users` implement `UserDirProvider`, and does anything need to consume it? → A: Implement the read half (`GetBySubject`, `ListGroups`, `SearchUsers`) now, backed by two new optional `users.yaml` fields (`display_name`, `email`) — real multiple users make this metadata worth a home, even before a consumer exists. Investigated whether anything should consume it today (`createdBy`/`updatedBy` on `Repository`/`Namespace` are the natural candidates): found they are plain `String!` fields with no richer type to resolve into, and decided *not* to change that schema in this spec — it's a separate, additive GraphQL design decision for whichever future spec actually needs richer author display. See research.md Decisions 10–11.
 - Q: What's the exact removal scope? → A: Enumerated exhaustively by grep, categorized, and disposed of file-by-file in research.md Decision 7 — the provider package itself, production wiring (`server.go`, `config.go`), every test that imports/constructs `staticadmin`, every test that merely uses the string `"static-admin"` as a label (relabeled for hygiene), generated code (explicitly left alone, per this project's own "never hand-edit generated files" convention), and documentation both in- and out-of-scope for this spec (this spec's own docs vs. a flagged, not-edited-here impact on spec 021's still-unimplemented premise).
 - Q: Separately reported from direct operator experience — do any auth env vars cause an unconditional startup failure regardless of which AuthN provider is chained in? → A: Yes, confirmed by reading `gitstore-api/internal/config/config.go`'s validation code directly: `auth.jwt.secret` (tied specifically to the local credential provider — `static-admin` today, `static-users` after this spec) and `auth.admin.username`/`auth.admin.password_hash` (moot once `static-admin`'s config is deleted) are both unconditionally `validate:"required"` today, regardless of `auth.authn.chain`'s contents. The suspected "third one," `auth.grpc.hmac_secret`, is also unconditionally required today, but *correctly* so — it protects API↔git-service gRPC trust, unrelated to end-user AuthN provider choice — and is explicitly ruled out of this fix. See FR-014/FR-015 and research.md Decision 12.
+
+### Baseline update 2026-09-01
+
+The implementation baseline has moved since this specification was first
+written. `main` now has an explicit `auth.userdir.provider` configuration
+selector, explicit configuration-file loading for the local Compose profile,
+and the durable Namespace watch contract (including the `namespace.watch`
+authorization action). This specification therefore treats UserDir selection
+as an explicit provider choice: `static-users` becomes a valid
+`auth.userdir.provider` value and must be configured alongside the AuthN chain
+when UserDir lookups are desired. It must not silently override an explicitly
+selected UserDir provider. The shared `config/config.toml` and read-only local
+Compose mounts are current deployment inputs; the migration tasks update that
+file and add the API-only `users.yaml` mount accordingly. Namespace-watch
+behavior remains out of scope, but existing policy actions such as
+`namespace.watch` must be preserved when updating role bindings.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -152,7 +168,7 @@ The two-user namespace-isolation integration test (`tests/integration/authz_repo
 
 ## Assumptions
 
-- `static-users` is scoped to HTTP Basic Auth authentication (username + password) plus the resulting bearer-token session lifecycle (issue/refresh/revoke) and read-only user-directory lookups. It is not an OIDC provider and makes no changes to `oidc-jwt`/spec 059.
+- `static-users` is scoped to HTTP Basic Auth authentication (username + password) plus the resulting bearer-token session lifecycle (issue/refresh/revoke) and read-only user-directory lookups. It is not an OIDC provider and makes no changes to `oidc-jwt`/spec 059. UserDir activation is explicit through `auth.userdir.provider=static-users`; merely placing `static-users` in the AuthN chain does not change the selected UserDir provider.
 - User self-registration, a management UI, or GraphQL mutations for creating/updating/removing users remain explicitly out of scope for v1 — the user list is config-file-driven only, matching `rbac-local`'s own file-driven simplicity. `UserDirProvider`'s write methods (`UpsertProfile`/`Deactivate`) remain unimplemented for the same reason.
 - This spec does not introduce a persistent, cross-instance session store. `static-users`' revocation/refresh state is in-memory per instance, exactly matching `static-admin`'s existing, documented single-instance limitation.
 - No `createdBy`/`updatedBy` GraphQL schema change is made in this spec — those fields remain plain `String!`. Wiring `UserDirProvider` into richer author display is explicitly deferred to a future spec that has a concrete requirement driving the shape of that change (research.md Decision 11).

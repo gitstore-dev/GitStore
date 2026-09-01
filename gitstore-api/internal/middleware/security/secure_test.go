@@ -8,13 +8,15 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
-	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
@@ -25,16 +27,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-func newTestRegistry(t *testing.T) (*auth.ProviderRegistry, *staticadmin.StaticAdminProvider) {
+func newTestRegistry(t *testing.T) (*auth.ProviderRegistry, *staticusers.StaticUsersProvider) {
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.MinCost)
 	require.NoError(t, err)
 
+	usersFile := filepath.Join(t.TempDir(), "users.yaml")
+	require.NoError(t, os.WriteFile(usersFile, []byte("version: v1\nusers:\n  - username: admin\n    password_hash: \""+string(hash)+"\"\n"), 0600))
 	cfg := config.AuthConfig{
-		Admin: config.UserConfig{
-			Username: "admin",
-			Password: string(hash),
-		},
+		StaticUsers: config.StaticUsersConfig{UsersFile: usersFile},
 		JWT: config.JWTConfig{
 			Secret:   "dev-secret-change-in-production",
 			Issuer:   "gitstore",
@@ -42,21 +43,21 @@ func newTestRegistry(t *testing.T) (*auth.ProviderRegistry, *staticadmin.StaticA
 		},
 	}
 
-	staticAdmin, err := staticadmin.New(cfg, zap.NewNop())
+	staticUsers, err := staticusers.New(cfg, zap.NewNop())
 	require.NoError(t, err)
-	t.Cleanup(staticAdmin.Shutdown)
+	t.Cleanup(staticUsers.Shutdown)
 
 	registry := auth.NewProviderRegistry(
-		auth.NewChainedAuthN(staticAdmin, anonymous.New()),
+		auth.NewChainedAuthN(staticUsers, anonymous.New()),
 		nil,
 		nil,
 	)
-	return registry, staticAdmin
+	return registry, staticUsers
 }
 
 func TestAuthenticatorValidBearerSetsPrincipal(t *testing.T) {
-	registry, staticAdmin := newTestRegistry(t)
-	token, _, err := staticAdmin.IssueSession(t.Context(), "admin")
+	registry, staticUsers := newTestRegistry(t)
+	token, _, err := staticUsers.IssueSession(t.Context(), "admin")
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
@@ -73,8 +74,8 @@ func TestAuthenticatorValidBearerSetsPrincipal(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.NotNil(t, captured)
 	assert.Equal(t, "admin", captured.Subject)
-	assert.Equal(t, "static-admin", captured.AuthMethod)
-	assert.True(t, captured.IsAdmin())
+	assert.Equal(t, "static-users", captured.AuthMethod)
+	assert.False(t, captured.IsAdmin())
 	assert.NotEmpty(t, captured.TokenID)
 }
 
@@ -194,7 +195,7 @@ func TestPushContextInserter(t *testing.T) {
 
 	const repoID = "01960000-0000-7000-8000-000000000001"
 	const nsID = "01960000-0000-7000-8000-000000000010"
-	principal := &auth.Principal{Subject: "admin", Issuer: "static-admin", AuthMethod: "basic", Roles: []string{"admin"}}
+	principal := &auth.Principal{Subject: "admin", Issuer: "static-users", AuthMethod: "basic", Roles: []string{"admin"}}
 
 	store := &testutil.StubStore{
 		GetRepositoryFunc: func(_ context.Context, id string) (*datastore.Repository, error) {

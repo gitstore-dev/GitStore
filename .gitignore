@@ -11,6 +11,7 @@
 # #410's tracked development fixtures under config/ unaffected.
 /gitstore-api/policy.yaml
 /gitstore-api/users.yaml
+!config/users.yaml
 
 # Rust
 target/

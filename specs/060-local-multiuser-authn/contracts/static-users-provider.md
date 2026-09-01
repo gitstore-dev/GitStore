@@ -42,7 +42,13 @@ case "static-users":
     shutdowns = append(shutdowns, p)          // blacklist-pruning goroutine, mirrors static-admin's former shutdown
 ```
 
-`buildProviderRegistry` also wires `static-users` as the `UserDirProvider` when it is active (replacing the unconditional `userdirnone.New()` call): if `"static-users"` is in the chain, the same constructed `*staticusers.StaticUsersProvider` instance is passed as the `UserDirProvider` to `auth.NewProviderRegistry`; otherwise `userdirnone.New()` remains the default (e.g., for an `anonymous`-only or future `oidc-jwt`-only chain with no local user list to serve directory lookups from).
+`buildProviderRegistry` respects `AuthConfig.UserDir.Provider`, which is an
+explicit selector on the current `main` baseline. `"static-users"` is added
+as a valid UserDir provider value. When that selector is chosen, the same
+constructed `*staticusers.StaticUsersProvider` instance is passed as the
+`UserDirProvider`; when it is `"none"` or empty, `userdirnone.New()` remains
+the default. Membership of `"static-users"` in the AuthN chain alone does not
+silently override an explicit UserDir selection.
 
 The default chain literal changes from `[]string{"static-admin", "anonymous"}` to `[]string{"static-users", "anonymous"}` — both the inline fallback in `buildProviderRegistry` and `config.go`'s `v.SetDefault("auth.authn.chain", ...)`.
 

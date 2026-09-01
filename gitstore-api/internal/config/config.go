@@ -52,13 +52,14 @@ type GitEndpointConfig struct {
 
 // AuthConfig holds authentication and JWT settings.
 type AuthConfig struct {
-	Admin   UserConfig     `mapstructure:"admin"`
-	JWT     JWTConfig      `mapstructure:"jwt"`
-	Grpc    GrpcAuthConfig `mapstructure:"grpc"`
-	AuthN   AuthNConfig    `mapstructure:"authn"`
-	AuthZ   AuthZConfig    `mapstructure:"authz"`
-	UserDir UserDirConfig  `mapstructure:"userdir"`
-	RBAC    RBACConfig     `mapstructure:"rbac"`
+	Admin       UserConfig        `mapstructure:"admin"`
+	StaticUsers StaticUsersConfig `mapstructure:"staticusers"`
+	JWT         JWTConfig         `mapstructure:"jwt"`
+	Grpc        GrpcAuthConfig    `mapstructure:"grpc"`
+	AuthN       AuthNConfig       `mapstructure:"authn"`
+	AuthZ       AuthZConfig       `mapstructure:"authz"`
+	UserDir     UserDirConfig     `mapstructure:"userdir"`
+	RBAC        RBACConfig        `mapstructure:"rbac"`
 }
 
 // GrpcAuthConfig holds inter-service gRPC authentication settings.
@@ -92,7 +93,7 @@ type RBACConfig struct {
 
 // JWTConfig holds JWT token settings.
 type JWTConfig struct {
-	Secret       string `mapstructure:"secret"   validate:"required"`
+	Secret       string `mapstructure:"secret"`
 	Duration     string `mapstructure:"duration"`
 	Issuer       string `mapstructure:"issuer"`
 	RefreshGrace string `mapstructure:"refresh_grace"`
@@ -104,6 +105,10 @@ type UserConfig struct {
 	Password string `mapstructure:"password_hash" validate:"required"`
 }
 
+// StaticUsersConfig configures the file-backed local user list.
+type StaticUsersConfig struct {
+	UsersFile string `mapstructure:"users_file"`
+}
 // FeatureConfig holds staged rollout gates.
 type FeatureConfig struct {
 	NamespaceRepositoryFence string `mapstructure:"namespace_repository_fence"`
@@ -200,6 +205,7 @@ func load(path string) (*Config, error) {
 	v.SetDefault("log.format", "json")
 	v.SetDefault("auth.admin.username", "")
 	v.SetDefault("auth.admin.password_hash", "")
+	v.SetDefault("auth.staticusers.users_file", "users.yaml")
 	v.SetDefault("auth.jwt.secret", "")
 	v.SetDefault("auth.jwt.duration", "24h")
 	v.SetDefault("auth.jwt.issuer", "gitstore")
@@ -274,7 +280,8 @@ func load(path string) (*Config, error) {
 		"git.grpc.uri": true,
 		"log.level":    true, "log.format": true,
 		"auth.admin.username": true, "auth.admin.password_hash": true,
-		"auth.jwt.secret": true, "auth.jwt.duration": true, "auth.jwt.issuer": true, "auth.jwt.refresh_grace": true,
+		"auth.staticusers.users_file": true,
+		"auth.jwt.secret":             true, "auth.jwt.duration": true, "auth.jwt.issuer": true, "auth.jwt.refresh_grace": true,
 		"auth.grpc.hmac_secret": true,
 		"auth.authn.chain":      true, "auth.authz.provider": true,
 		"auth.userdir.provider": true, "auth.rbac.policy_file": true,
@@ -335,10 +342,22 @@ func validateConfig(cfg *Config) error {
 	if err := validateFeatureConfig(&cfg.Features); err != nil {
 		return err
 	}
+	if err := validateAuthChainConfig(cfg); err != nil {
+		return err
+	}
 	if err := validateNamespaceWatchConfig(&cfg.Watch.Namespace); err != nil {
 		return err
 	}
 	return validateLogFormat(&cfg.Log)
+}
+
+func validateAuthChainConfig(cfg *Config) error {
+	for _, provider := range cfg.Auth.AuthN.Chain {
+		if strings.EqualFold(strings.TrimSpace(provider), "static-users") && cfg.Auth.JWT.Secret == "" {
+			return errors.New("auth.jwt.secret is required when static-users is present in auth.authn.chain; set GITSTORE_AUTH__JWT__SECRET or remove static-users from the chain (see specs/060-local-multiuser-authn/quickstart.md)")
+		}
+	}
+	return nil
 }
 
 func validateNamespaceWatchConfig(w *NamespaceWatchConfig) error {
@@ -440,6 +459,7 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddString("git.grpc.uri", c.Git.Grpc.Uri)
 	enc.AddString("auth.admin.username", c.Auth.Admin.Username)
 	enc.AddString("auth.admin.password_hash", redact(c.Auth.Admin.Password))
+	enc.AddString("auth.staticusers.users_file", c.Auth.StaticUsers.UsersFile)
 	enc.AddString("auth.jwt.secret", redact(c.Auth.JWT.Secret))
 	enc.AddString("auth.jwt.duration", c.Auth.JWT.Duration)
 	enc.AddString("auth.jwt.issuer", c.Auth.JWT.Issuer)

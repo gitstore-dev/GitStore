@@ -26,7 +26,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
-	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/userdirnone"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
@@ -68,6 +68,17 @@ const (
 // policyReloader can reload its policy from disk.
 type policyReloader interface {
 	Reload() error
+}
+
+type providerReloaders []policyReloader
+
+func (r providerReloaders) Reload() error {
+	for _, reloader := range r {
+		if err := reloader.Reload(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // providerShutdowner is implemented by auth providers that own background goroutines.
@@ -435,18 +446,20 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 	// Build AuthN providers in chain order.
 	chain := cfg.Auth.AuthN.Chain
 	if len(chain) == 0 {
-		chain = []string{"static-admin", "anonymous"}
+		chain = []string{"static-users", "anonymous"}
 	}
 
 	var authnProviders []auth.AuthNProvider
 	var shutdowns []providerShutdowner
+	var staticUsersProvider *staticusers.StaticUsersProvider
 	for _, name := range chain {
 		switch name {
-		case "static-admin":
-			p, err := staticadmin.New(cfg.Auth, log)
+		case "static-users":
+			p, err := staticusers.New(cfg.Auth, log)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("init static-admin provider: %w", err)
+				return nil, nil, nil, fmt.Errorf("init static-users provider: %w", err)
 			}
+			staticUsersProvider = p
 			authnProviders = append(authnProviders, p)
 			shutdowns = append(shutdowns, p)
 		case "anonymous":
@@ -459,6 +472,7 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 	// Build AuthZ provider.
 	var authzProvider auth.AuthZProvider
 	var reloader policyReloader
+	var rbacProvider *rbaclocal.RBACLocalProvider
 	switch cfg.Auth.AuthZ.Provider {
 	case "rbac-local":
 		p, err := rbaclocal.New(cfg.Auth.RBAC, log)
@@ -466,6 +480,7 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 			return nil, nil, nil, fmt.Errorf("init rbac-local authz provider: %w", err)
 		}
 		authzProvider = p
+		rbacProvider = p
 		reloader = p
 	case "allow-all", "":
 		// Default to allow-all so existing deployments without explicit config are unaffected.
@@ -482,11 +497,31 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 	switch cfg.Auth.UserDir.Provider {
 	case "none", "":
 		userdirProvider = userdirnone.New()
+	case "static-users":
+		if staticUsersProvider == nil {
+			return nil, nil, nil, errors.New("auth.userdir.provider=static-users requires static-users in auth.authn.chain")
+		}
+		userdirProvider = staticUsersProvider
 	default:
 		return nil, nil, nil, fmt.Errorf("unknown userdir provider %q", cfg.Auth.UserDir.Provider)
 	}
 
-	return auth.NewProviderRegistry(auth.NewChainedAuthN(authnProviders...), authzProvider, userdirProvider), reloader, shutdowns, nil
+	if staticUsersProvider != nil && rbacProvider != nil && !rbacProvider.HasAnyRoleBindingFor(staticUsersProvider.Usernames()) {
+		return nil, nil, nil, fmt.Errorf("static-users + rbac-local migration safety check failed: no configured static-users username has a role_bindings entry in %q; add a binding in the policy file or use allow-all (see specs/060-local-multiuser-authn/quickstart.md)", cfg.Auth.RBAC.PolicyFile)
+	}
+
+	var reloaders providerReloaders
+	if reloader != nil {
+		reloaders = append(reloaders, reloader)
+	}
+	if staticUsersProvider != nil {
+		reloaders = append(reloaders, staticUsersProvider)
+	}
+	var combined policyReloader
+	if len(reloaders) > 0 {
+		combined = reloaders
+	}
+	return auth.NewProviderRegistry(auth.NewChainedAuthN(authnProviders...), authzProvider, userdirProvider), combined, shutdowns, nil
 }
 
 // Start starts all servers in background goroutines.

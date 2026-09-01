@@ -40,6 +40,7 @@ EOF
 cat >> .env <<'EOF'
 GITSTORE_AUTH__AUTHN__CHAIN=static-users,anonymous
 GITSTORE_AUTH__AUTHZ__PROVIDER=rbac-local
+GITSTORE_AUTH__USERDIR__PROVIDER=static-users
 GITSTORE_AUTH__STATICUSERS__USERS_FILE=users.yaml
 EOF
 # Note: GITSTORE_AUTH__JWT__SECRET is still required here — static-users is in the chain.
@@ -80,6 +81,7 @@ EOF
 #    - GITSTORE_AUTH__AUTHN__CHAIN=static-users,anonymous   (was: static-admin,anonymous)
 #    - remove GITSTORE_AUTH__ADMIN__USERNAME / GITSTORE_AUTH__ADMIN__PASSWORD_HASH (now unused)
 #    - GITSTORE_AUTH__JWT__SECRET stays as-is — static-users reuses it unchanged
+#    - GITSTORE_AUTH__USERDIR__PROVIDER=static-users (explicitly selects the same users file for UserDir)
 #    - GITSTORE_AUTH__STATICUSERS__USERS_FILE=users.yaml
 
 # 5. Start the stack. If step 3 was skipped, the server fails fast with an error naming

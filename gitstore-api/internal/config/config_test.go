@@ -511,14 +511,25 @@ func TestLoad_InvalidLogFormatReturnsError(t *testing.T) {
 func TestLoad_MultipleValidationErrorsReportedTogether(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
-	// No auth set at all — should report all three required fields
+	// No auth set at all — JWT.Secret is provider-conditional and is not
+	// required while the legacy static-admin chain remains the configured default.
 
 	_, err := Load()
 	require.Error(t, err)
-	// All three required fields should appear in the single error string
+	// The always-required fields should appear in the single error string.
 	assert.Contains(t, err.Error(), "Admin.Username")
 	assert.Contains(t, err.Error(), "Admin.Password")
-	assert.Contains(t, err.Error(), "JWT.Secret")
+	assert.NotContains(t, err.Error(), "JWT.Secret")
+}
+
+func TestValidateAuthChainConfig_StaticUsersRequiresJWTSecret(t *testing.T) {
+	err := validateAuthChainConfig(&Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"static-users"}}}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth.jwt.secret")
+}
+
+func TestValidateAuthChainConfig_AnonymousDoesNotRequireJWTSecret(t *testing.T) {
+	require.NoError(t, validateAuthChainConfig(&Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"anonymous"}}}}))
 }
 
 // T028: missing HMAC secret causes startup failure

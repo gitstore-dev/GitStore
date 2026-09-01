@@ -1,6 +1,6 @@
 # Implementation Plan: Local Multi-User AuthN + UserDir Provider (`static-users`)
 
-**Branch**: `060-local-multiuser-authn` | **Date**: 2026-08-29 (revised 2026-08-29) | **Spec**: [spec.md](spec.md)
+**Branch**: `060-local-multiuser-authn` | **Date**: 2026-09-01 (revised 2026-09-01) | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `/specs/060-local-multiuser-authn/spec.md`
 
 ## Summary
@@ -8,6 +8,11 @@
 Remove `static-admin` entirely and replace it with `static-users`, a new `AuthNProvider` **and** `UserDirProvider` in `gitstore-api` that authenticates HTTP Basic Auth credentials against a config-driven `users.yaml` file listing `{username, bcrypt password_hash, display_name?, email?}` entries. "Admin" stops being a distinct code concept — it becomes purely an `rbac-local` role name, granted through the existing, unmodified `role_bindings` mechanism. Because `static-admin`'s hardcoded role assignment disappears with it, this plan adds a startup safety check that fails fast if `static-users` + `rbac-local` are both active but no configured username has any `role_bindings` entry, preventing a silent, migration-induced lockout. The migration itself is a documented, operator-run, breaking change (justified against this project's pre-stable alpha-phase precedent), not a runtime env-var fallback. A previously-planned registry-level `IssueSessionFor` addition is dropped as no longer necessary once `static-admin` is gone. Along the way, this plan fixes a confirmed, pre-existing config-validation bug: `auth.jwt.secret` was unconditionally required regardless of whether any local credential provider was even chained in; it becomes conditional on `static-users`' presence in `auth.authn.chain`, while `auth.grpc.hmac_secret` (unrelated to AuthN provider choice) is confirmed correctly unconditional and left untouched.
 
 ## Technical Context
+
+The current `main` baseline exposes an explicit `auth.userdir.provider`
+selector, explicit config-file loading for the local Compose profile, and the
+durable Namespace watch contract. These are deployment and authorization
+inputs for this feature, not additional 060 implementation scope.
 
 **Language/Version**: Go 1.25 (`gitstore-api`). No Rust (`gitstore-git-service`) or `gitstore-controller-manager` change — the latter is deliberate, not an oversight: the controller-manager's post-`static-admin` credential path is owned by spec 061 (`061-controller-serviceaccount-auth`, PR #409), per spec.md's Dependencies section (DEP-001/003).
 **Primary Dependencies**: `golang.org/x/crypto/bcrypt`, `github.com/golang-jwt/jwt/v5`, `gopkg.in/yaml.v3`, `go.uber.org/zap`, `github.com/spf13/viper` — all already in `go.mod`. No new dependency.
@@ -87,7 +92,7 @@ gitstore-api/
 │   ├── config/
 │   │   └── config.go                          # Admin/UserConfig fields+type deleted; JWTConfig.Secret loses `validate:"required"`; new StaticUsersConfig; new validateAuthChainConfig; defaults/known-keys/log-marshaling updated
 │   └── app/
-│       └── server.go                          # buildProviderRegistry: "static-admin" case removed, "static-users" case added (also wires UserDirProvider); default chain literal updated; migration-safety check (FR-013) added; SIGHUP reload extended
+│       └── server.go                          # buildProviderRegistry: "static-admin" case removed, "static-users" case added; explicit auth.userdir.provider="static-users" selects the same instance for UserDir; default chain literal updated; migration-safety check (FR-013) added; SIGHUP reload extended
 ├── users.yaml.example                         # NEW, documents the schema from data-model.md
 └── .env.example                               # ADMIN__USERNAME/PASSWORD_HASH lines removed; chain example updated
 
@@ -154,7 +159,7 @@ All technical unknowns are resolved; no `NEEDS CLARIFICATION` remains.
 3. Add a failing unit test for `RBACLocalProvider.HasAnyRoleBindingFor`. Implement it as a pure, additive, read-only method until green — confirm `Authorize`'s existing tests are unaffected.
 4. Add a failing unit test for `validateAuthChainConfig` (both directions: `static-users` in chain + empty secret fails; `static-users` absent + empty secret succeeds; `auth.grpc.hmac_secret` empty always fails regardless of chain). Implement it, and remove `JWTConfig.Secret`'s struct tag, until green.
 5. Add a failing test for `buildProviderRegistry`'s migration-safety check (FR-013): `static-users` + `rbac-local` + zero matching `role_bindings` fails with an actionable error; the same with `allow-all` succeeds; the same with at least one matching `role_bindings` entry succeeds. Implement the check until green.
-6. Remove `AuthConfig.Admin`/`UserConfig`, add `AuthConfig.StaticUsers`, update defaults/known-keys/`MarshalLogObject`, replace `buildProviderRegistry`'s `"static-admin"` case with `"static-users"` (including UserDir wiring), update the default chain literal in both `config.go` and `server.go`.
+6. Remove `AuthConfig.Admin`/`UserConfig`, add `AuthConfig.StaticUsers`, update defaults/known-keys/`MarshalLogObject`, replace `buildProviderRegistry`'s `"static-admin"` case with `"static-users"`, add `"static-users"` as a valid explicit `auth.userdir.provider` value, and pass the same instance to UserDir only when that selector is chosen. Update the default AuthN chain literal in both `config.go` and `server.go`.
 7. Delete `gitstore-api/internal/auth/provider/staticadmin/` entirely. Fix the resulting compile errors in `gitstore-api/cmd/server/main_test.go`, `gitstore-api/internal/middleware/security/secure_test.go`, `gitstore-api/internal/graph/resolver/auth_resolvers_test.go` by switching their `staticadmin.New(...)` calls to `staticusers.New(...)`.
 8. Relabel the cosmetic `"static-admin"` `AuthMethod` string literals in `gitstore-api/internal/middleware/security/{graphql_test.go,graphql_file_status_test.go}`, `gitstore-api/internal/auth/provider/rbaclocal/rbaclocal_test.go`, `gitstore-api/internal/auth/provider/allowall/allowall_test.go` to `"static-users"`.
 9. Migrate `tests/integration/namespace_contract_test.go` (backdoor removal, `staticadmin`→`staticusers` bootstrap migration, `namespaceOwnerAuthZ` fix) and `tests/integration/authz_repository_contract_test.go` per `contracts/backdoor-retirement.md`. Confirm `grep -rn "test-user:\|staticadmin\|static-admin" tests/integration/` returns zero matches.
