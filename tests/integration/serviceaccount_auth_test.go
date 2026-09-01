@@ -5,7 +5,6 @@ package integration
 
 import (
 	"bytes"
-	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
@@ -19,9 +18,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 // generateEd25519PEM returns a fresh Ed25519 private key PEM-encoded as PKCS#8.
@@ -434,7 +431,7 @@ role_bindings:
 
 	// The query should succeed because the service account subject is bound to the controller role
 	// which includes namespace.read
-	data, ok := result["data"].(map[string]any)
+	_, ok := result["data"].(map[string]any)
 	require.True(t, ok, "rbac-local should correctly resolve serviceaccount:* subject format")
 
 	t.Log("T024: rbac-local correctly handles serviceaccount:* subject format")
