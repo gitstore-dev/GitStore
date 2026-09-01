@@ -121,6 +121,21 @@ The pre-existing `watchResources(kind: "Namespace")` path remains compatible
 and uses the same cursor stream and error contract, but typed
 `watchNamespaces` is recommended.
 
+## Replica-local fan-out
+
+Each API process tails the shared durable journal once and fans live events out
+through a bounded in-memory ring. This keeps steady Scylla polling proportional
+to API replica count rather than WebSocket count. The ring is not a source of
+truth: initial resume, process replacement, and any subscriber that falls
+behind the ring read the missing bounded range from Scylla before rejoining
+live delivery. Replay-to-live registration captures a high-water under the
+same tailer lock, so events cannot fall into a handoff gap.
+
+A slow socket retains its independent output buffer and backpressure deadline;
+it cannot stall the shared tailer or healthy peers. If continuity can no longer
+be proven within the configured replay/buffer bounds, only that subscription
+terminates with the documented `WATCH_EXPIRED` reason.
+
 ## Non-goals
 
 This contract does not change Namespace mutation/admission semantics from spec

@@ -93,6 +93,36 @@ type descendantCommitGitWriter struct {
 	resolveOnce         sync.Once
 }
 
+// advancingAfterAdmissionGitWriter models unrelated commits continuously
+// landing after this request's exact-head pre-write check. Requiring the head
+// to remain unchanged after the conditional datastore write makes progress
+// impossible under that otherwise-safe traffic.
+type advancingAfterAdmissionGitWriter struct {
+	*commitOrderGitWriter
+	resolveCount int
+}
+
+func (w *advancingAfterAdmissionGitWriter) ResolveRefForRepo(
+	ctx context.Context,
+	repositoryID, ref string,
+) (string, error) {
+	w.mu.Lock()
+	w.resolveCount++
+	resolveCount := w.resolveCount
+	if resolveCount >= 3 {
+		sha := string(rune('a'+resolveCount)) + "000000000000000000000000000000000000000"
+		tree := cloneCommitTree(w.trees[w.current])
+		tree["namespaces/unrelated-"+sha[:1]+".md"] = namespaceManifestForGraphQL(
+			"unrelated-"+sha[:1], "Unrelated", model.NamespaceTierUser,
+		)
+		w.trees[sha] = tree
+		w.current = sha
+	}
+	current := w.current
+	w.mu.Unlock()
+	return current, nil
+}
+
 func newDescendantCommitGitWriter(current string, commits ...string) *descendantCommitGitWriter {
 	return &descendantCommitGitWriter{
 		commitOrderGitWriter: newCommitOrderGitWriter(current, commits...),
@@ -373,6 +403,30 @@ func TestNamespaceGraphQLDescendantConvergence(t *testing.T) {
 		assert.Equal(t, newerSHA, persisted.GitCommitSHA)
 		assertNamespaceAdmissionRevision(t, persisted, "main@sha1:"+newerSHA)
 	})
+}
+
+func TestNamespaceGraphQLReturnsAfterExactHeadAdmissionDespiteLaterDisjointCommits(t *testing.T) {
+	seed := newTestSvc(t, &mockGitWriter{})
+	base := newCommitOrderGitWriter(
+		"deadbeef",
+		"9999999999999999999999999999999999999999",
+	)
+	writer := &advancingAfterAdmissionGitWriter{commitOrderGitWriter: base}
+	service := newCommitOrderService(t, seed.Store(), writer)
+
+	created, err := service.CreateNamespace(
+		context.Background(),
+		createNamespaceInput("post-admission-progress", model.NamespaceTierUser),
+		"alice",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "post-admission-progress", created.Name)
+	assert.Equal(t, 3, writer.resolveCount,
+		"an unchanged file at the post-write descendant head must finish without chasing further commits")
+
+	persisted, err := seed.GetNamespaceByName(context.Background(), created.Name)
+	require.NoError(t, err)
+	assert.Equal(t, created.GitCommitSHA, persisted.GitCommitSHA)
 }
 
 func TestNamespaceGraphQLDescendantSameResourceRejectsStaleRowBeforeExactHeadAdmission(t *testing.T) {

@@ -59,13 +59,30 @@ NAMESPACE_WATCH_API_B ?= http://localhost:4001
 NAMESPACE_WATCH_API_REPLACEMENT ?=
 NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE ?=
 NAMESPACE_WATCH_TOKEN ?=
+NAMESPACE_WATCH_TOKEN_FILE ?=
 NAMESPACE_WATCH_OVERFLOW_TRANSITIONS ?=
+CAPACITY_PROFILE ?= api-readiness
+CAPACITY_EVIDENCE_DIR ?= $(ROOT)/.gitstore/capacity
+CAPACITY_ENV_FILE ?=
+CAPACITY_TOKEN_FILE ?=
+CAPACITY_CONFIG_MANIFEST ?=
+CAPACITY_ENVIRONMENT_MANIFEST ?=
+K6_IMAGE ?= grafana/k6:2.1.0
+CHAOS_PROFILE ?= api-restart
+CHAOS_TARGET ?=
+CHAOS_CONFIRM ?= 0
+CHAOS_EVIDENCE_DIR ?= $(ROOT)/.gitstore/chaos
+PUMBA_IMAGE ?= ghcr.io/alexei-led/pumba:1.1.7
+CAPACITY_CHAOS_PROFILE ?=
+CAPACITY_CHAOS_TARGET ?=
+CAPACITY_CHAOS_DELAY ?=30s
+CAPACITY_CHAOS_CONFIRM ?=0
 
 export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CACHE
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
 .PHONY: help git api controller dev compose scylla ps logs stop down validate-local-config compose-config-check
-.PHONY: build test lint license-check pr-ready test-scylla-hardening test-scylla-integration test-scylla-capacity test-namespace-admission-capacity test-namespace-watch-capacity test-namespace-watch-recovery
+.PHONY: build test lint license-check pr-ready capacity chaos test-scylla-hardening test-scylla-integration test-scylla-capacity test-namespace-admission-capacity test-namespace-watch-capacity test-namespace-watch-recovery
 .PHONY: bootstrap bootstrap-token bootstrap-namespace bootstrap-repository git-clean-data
 .PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools gen-admin-password gen-jwt-secret gen-hmac-secret
 
@@ -93,6 +110,9 @@ help: ## Show available targets and common variables.
 	@printf "  NAMESPACE_WATCH_CAPACITY_DURATION=%s\n" "$(NAMESPACE_WATCH_CAPACITY_DURATION)"
 	@printf "  NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS=%s\n" "$(NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS)"
 	@printf "  NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS=%s NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES=%s\n" "$(NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS)" "$(NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES)"
+	@printf "  CAPACITY_PROFILE=%s        Reusable k6 capacity profile\n" "$(CAPACITY_PROFILE)"
+	@printf "  CHAOS_PROFILE=%s           Reusable Pumba fault profile\n" "$(CHAOS_PROFILE)"
+	@printf "  CHAOS_TARGET=<name>        Explicit GitStore container targeted by chaos\n"
 	@printf "  NAMESPACE_WATCH_API_A=%s NAMESPACE_WATCH_API_B=%s\n" "$(NAMESPACE_WATCH_API_A)" "$(NAMESPACE_WATCH_API_B)"
 	@printf "  NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=<path> Required coordination signal for an actual replica restart\n"
 	@printf "  NAMESPACE_WATCH_TOKEN=<token> Required for the cross-replica Namespace watch probe\n"
@@ -204,6 +224,28 @@ test: ## Run Rust and Go test suites.
 	@cd "$(API_DIR)" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 	@cd "$(CONTROLLER_MANAGER_DIR)" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
 
+capacity: ## Run a reusable k6 capacity profile and retain structured evidence.
+	@CAPACITY_PROFILE="$(CAPACITY_PROFILE)" \
+		CAPACITY_EVIDENCE_DIR="$(CAPACITY_EVIDENCE_DIR)" \
+		CAPACITY_ENV_FILE="$(CAPACITY_ENV_FILE)" \
+		CAPACITY_TOKEN_FILE="$(CAPACITY_TOKEN_FILE)" \
+		CAPACITY_CONFIG_MANIFEST="$(CAPACITY_CONFIG_MANIFEST)" \
+		CAPACITY_ENVIRONMENT_MANIFEST="$(CAPACITY_ENVIRONMENT_MANIFEST)" \
+		CAPACITY_CHAOS_PROFILE="$(CAPACITY_CHAOS_PROFILE)" \
+		CAPACITY_CHAOS_TARGET="$(CAPACITY_CHAOS_TARGET)" \
+		CAPACITY_CHAOS_DELAY="$(CAPACITY_CHAOS_DELAY)" \
+		CAPACITY_CHAOS_CONFIRM="$(CAPACITY_CHAOS_CONFIRM)" \
+		K6_IMAGE="$(K6_IMAGE)" \
+		./scripts/run-capacity.sh "$(CAPACITY_PROFILE)"
+
+chaos: ## Inject an opt-in container fault and retain structured evidence.
+	@CHAOS_PROFILE="$(CHAOS_PROFILE)" \
+		CHAOS_TARGET="$(CHAOS_TARGET)" \
+		CHAOS_CONFIRM="$(CHAOS_CONFIRM)" \
+		CHAOS_EVIDENCE_DIR="$(CHAOS_EVIDENCE_DIR)" \
+		PUMBA_IMAGE="$(PUMBA_IMAGE)" \
+		./scripts/run-chaos.sh "$(CHAOS_PROFILE)"
+
 test-scylla-hardening: ## Run focused datastore hardening tests without an external Scylla instance.
 	@cd "$(API_DIR)" && go test -count=1 ./internal/datastore/... ./tests/contract/datastore/...
 
@@ -232,6 +274,7 @@ test-namespace-watch-capacity: ## Run the deployed two-replica 60-minute Namespa
 		NAMESPACE_WATCH_API_REPLACEMENT="$(NAMESPACE_WATCH_API_REPLACEMENT)" \
 		NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE="$(NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE)" \
 		NAMESPACE_WATCH_TOKEN="$(NAMESPACE_WATCH_TOKEN)" \
+		NAMESPACE_WATCH_TOKEN_FILE="$(NAMESPACE_WATCH_TOKEN_FILE)" \
 		NAMESPACE_WATCH_CAPACITY_DURATION="$(NAMESPACE_WATCH_CAPACITY_DURATION)" \
 		NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS="$(NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS)" \
 		NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS="$(NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS)" \
@@ -251,6 +294,7 @@ test-namespace-watch-recovery: ## Probe bootstrap/resume, replacement, expiry, a
 		NAMESPACE_WATCH_API_B="$(NAMESPACE_WATCH_API_B)" \
 		NAMESPACE_WATCH_API_REPLACEMENT="$(NAMESPACE_WATCH_API_REPLACEMENT)" \
 		NAMESPACE_WATCH_TOKEN="$(NAMESPACE_WATCH_TOKEN)" \
+		NAMESPACE_WATCH_TOKEN_FILE="$(NAMESPACE_WATCH_TOKEN_FILE)" \
 		NAMESPACE_WATCH_OVERFLOW_TRANSITIONS="$(NAMESPACE_WATCH_OVERFLOW_TRANSITIONS)" \
 		go test -count=1 -run '^TestNamespaceWatch(CrossReplicaBootstrapAndResume|RecoveryProbe|DocumentedConsumer)$$' .
 

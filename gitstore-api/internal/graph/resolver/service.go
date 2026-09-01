@@ -727,6 +727,17 @@ func (s *Service) convergeCommittedNamespace(
 			return nil, fmt.Errorf("%w: %v", namespaceadmission.ErrAuthoringRefCheck, resolveErr)
 		}
 		if currentHead != targetSHA {
+			latestContent, readErr := s.gitWriter.ReadFileForRepo(ctx, repositoryID, path, currentHead)
+			if readErr != nil {
+				return nil, fmt.Errorf("%w: read descendant Namespace manifest: %v", namespaceadmission.ErrAuthoringRefCheck, readErr)
+			}
+			// The exact-head check before the conditional datastore write is
+			// sufficient when later commits leave this Namespace unchanged. Only
+			// a same-path descendant requires another convergence attempt; chasing
+			// every unrelated commit starves admission on the shared repository.
+			if bytes.Equal(latestContent, committedContent) {
+				return namespace, nil
+			}
 			targetOperation = ""
 			targetPreflight = namespaceadmission.Preflight{}
 			continue

@@ -29,6 +29,8 @@
 **Replica/Scaling Model**: [affected core services, state ownership, coordination, failover, and autoscaling behavior or N/A]
 **Authentication/Authorization**: [user/service identities, policy enforcement points, and isolation impact or N/A]
 **Load/Backpressure Model**: [peak and sustained workload, queue/concurrency bounds, timeouts, retries, and soak target or N/A]
+**Capacity Profile**: [`tests/capacity/profiles/<profile>.js`, declared thresholds, correctness verifier, evidence location, or N/A with justification]
+**Fault Profile**: [`tests/chaos/profiles/<profile>.json`, target boundary, steady-state/recovery assertions, or N/A with justification]
 
 ## Constitution Check
 
@@ -40,6 +42,7 @@
 - **Replica Safety**: Core-service changes remain correct with at least two replicas and rolling upgrades.
 - **Multi-User Security**: AuthN/AuthZ enforcement and namespace/repository isolation are explicit.
 - **Production Capacity**: Plans address 5,000,000-product scale and sustained Git push load where applicable.
+- **Repeatable Evidence**: Load-bearing plans use `make capacity` for offered-load evidence and `make chaos` for declared failure/recovery scenarios; a tool exit code alone never substitutes for domain correctness verification.
 - **Bounded Work**: Queries, queues, workers, retries, payloads, and partitions have explicit bounds.
 - **Observability**: Logs, metrics, readiness, saturation, and recovery signals are designed.
 - **Incremental Delivery**: Slices can deploy independently across mixed-version replicas.

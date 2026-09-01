@@ -215,6 +215,8 @@ func load(path string) (*Config, error) {
 	v.SetDefault("datastore.scylla.username", "")
 	v.SetDefault("datastore.scylla.password", "")
 	v.SetDefault("datastore.scylla.tls", false)
+	v.SetDefault("datastore.scylla.disable_shard_aware_port", false)
+	v.SetDefault("datastore.scylla.ignore_peer_addr", false)
 	v.SetDefault("features.namespace_repository_fence", "auto")
 	v.SetDefault("watch.namespace.readers_enabled", true)
 	v.SetDefault("watch.namespace.materializer_enabled", true)
@@ -279,6 +281,7 @@ func load(path string) (*Config, error) {
 		"datastore.backend": true, "datastore.scylla.hosts": true,
 		"datastore.scylla.keyspace": true, "datastore.scylla.username": true,
 		"datastore.scylla.password": true, "datastore.scylla.tls": true,
+		"datastore.scylla.disable_shard_aware_port": true, "datastore.scylla.ignore_peer_addr": true,
 		"features.namespace_repository_fence": true,
 		"watch.namespace.readers_enabled":     true, "watch.namespace.materializer_enabled": true,
 		"watch.namespace.journal_retention_seconds": true, "watch.namespace.cdc_retention_seconds": true,
