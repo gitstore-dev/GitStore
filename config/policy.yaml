@@ -11,6 +11,7 @@ roles:
       - "category.status.write"
       - "namespace.status.write"
       - "namespace.watch"
+      - "repository.create.any"
     deny: []
 default_deny: true
 role_bindings:
@@ -18,3 +19,4 @@ role_bindings:
     - admin
   controller:
     - controller
+    - serviceaccount:controllers:gitstore-controller-manager

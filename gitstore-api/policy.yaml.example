@@ -13,6 +13,15 @@ roles:
       - "*"                  # wildcard: all actions
     deny: []
 
+  controller:
+    allow:
+      - "*.status.write"
+      - "category.status.write"
+      - "namespace.status.write"
+      - "namespace.watch"
+      - "repository.create.any"
+    deny: []
+
   namespace-owner:
     allow:
       - namespace.read
@@ -50,11 +59,16 @@ roles:
 default_deny: true
 
 # role_bindings maps subject (username from your AuthN provider, e.g. a
-# static-users entry) -> list of roles. Every configured static-users
-# identity that should be able to log in MUST have an entry here, or every
-# login from that identity will be denied by default_deny.
+# static-users entry, or service account subject) -> list of roles. Every
+# configured static-users identity and service account that should be able
+# to access the API MUST have an entry here, or every request from that
+# identity will be denied by default_deny.
+#
+# Service account subjects use the format: serviceaccount:<namespace>:<name>
 role_bindings:
   "alice":
     - admin
   "bob":
     - developer
+  "serviceaccount:controllers:gitstore-controller-manager":
+    - controller
