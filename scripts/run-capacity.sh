@@ -57,7 +57,7 @@ jq -n \
   --arg run_id "${run_id}" \
   --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg git_revision "$(git -C "${repo_root}" rev-parse HEAD)" \
-  --arg git_dirty "$(if git -C "${repo_root}" diff --quiet && git -C "${repo_root}" diff --cached --quiet; then echo false; else echo true; fi)" \
+  --arg git_dirty "$(if [[ -z "$(git -C "${repo_root}" status --porcelain --untracked-files=normal)" ]]; then echo false; else echo true; fi)" \
   --arg k6_image "${k6_image}" \
   --arg config_digest "$(if [[ -f "${evidence_dir}/config.json" ]]; then shasum -a 256 "${evidence_dir}/config.json" | awk '{print $1}'; fi)" \
   --arg environment_digest "$(if [[ -f "${evidence_dir}/environment.json" ]]; then shasum -a 256 "${evidence_dir}/environment.json" | awk '{print $1}'; fi)" \
@@ -126,13 +126,21 @@ if [[ -n "${chaos_pid}" ]]; then
   fi
 fi
 
-verifier_status=0
 verifier="${repo_root}/tests/capacity/verifiers/${profile}.sh"
+verifier_required=false
+if [[ "${profile}" != "api-readiness" && "${CAPACITY_MODE:-gate}" == "gate" ]]; then
+  verifier_required=true
+fi
+
+verifier_status=0
 if [[ -x "${verifier}" ]]; then
   set +e
   "${verifier}" "${evidence_dir}" 2>&1 | tee "${evidence_dir}/verifier.log"
   verifier_status=${PIPESTATUS[0]}
   set -e
+elif [[ "${verifier_required}" == "true" ]]; then
+  echo "gate profile requires an executable domain verifier: ${verifier}" | tee "${evidence_dir}/verifier.log" >&2
+  verifier_status=2
 fi
 
 if (( status == 0 && chaos_status != 0 )); then
@@ -147,7 +155,8 @@ jq \
   --argjson exit_code "${status}" \
   --argjson chaos_exit_code "${chaos_status}" \
   --argjson verifier_exit_code "${verifier_status}" \
-  '. + {completedAt:$completed_at, exitCode:$exit_code, chaosExitCode:$chaos_exit_code, verifierExitCode:$verifier_exit_code, passed:($exit_code == 0)}' \
+  --argjson verifier_required "${verifier_required}" \
+  '. + {completedAt:$completed_at, exitCode:$exit_code, chaosExitCode:$chaos_exit_code, verifierRequired:$verifier_required, verifierExitCode:$verifier_exit_code, passed:($exit_code == 0)}' \
   "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
 

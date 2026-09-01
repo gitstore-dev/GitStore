@@ -44,7 +44,8 @@ An executable `preflight/<profile>.sh` runs before k6 and must fail when the
 declared topology or dataset scale is absent. An executable
 `verifiers/<profile>.sh` runs after k6 and decides domain correctness. Both
 receive the evidence directory as their first argument and store structured
-results there.
+results there. Gate-mode profiles other than the non-mutating `api-readiness`
+smoke test fail closed when their verifier is absent or not executable.
 
 To inject a reviewed fault during load, configure the integrated runner:
 
@@ -84,7 +85,9 @@ a default.
   GraphQL errors, or latency/error threshold violations. It is the offered-load
   component of Namespace capacity validation; the existing Go watch verifier
   remains authoritative for replay, completeness, duplicates, and cursor
-  recovery until its external-load mode is completed.
+  recovery until its external-load mode is completed. Consequently, this
+  profile cannot produce passing gate evidence until that verifier is wired in;
+  use `CAPACITY_MODE=diagnostic` for offered-load-only investigation.
 
 The Namespace profile defaults to gate mode and refuses to run unless evidence
 declares at least two API replicas, three Scylla nodes with at least two shards

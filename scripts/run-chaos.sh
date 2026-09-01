@@ -34,7 +34,45 @@ evidence_root="${CHAOS_EVIDENCE_DIR:-${repo_root}/.gitstore/chaos}"
 evidence_dir="${evidence_root}/${profile}/${run_id}"
 mkdir -p "${evidence_dir}"
 
-docker inspect "${target}" >"${evidence_dir}/target-before.json"
+record_target_state() {
+  local output_file="$1"
+
+  docker inspect "${target}" | jq '[.[] | {
+    Id,
+    Name,
+    Image,
+    Created,
+    RestartCount,
+    Config: {Image: .Config.Image},
+    HostConfig: {
+      Memory: .HostConfig.Memory,
+      NanoCpus: .HostConfig.NanoCpus,
+      CpuPeriod: .HostConfig.CpuPeriod,
+      CpuQuota: .HostConfig.CpuQuota,
+      CpusetCpus: .HostConfig.CpusetCpus,
+      PidsLimit: .HostConfig.PidsLimit,
+      RestartPolicy: .HostConfig.RestartPolicy
+    },
+    State: {
+      Status: .State.Status,
+      Running: .State.Running,
+      Paused: .State.Paused,
+      Restarting: .State.Restarting,
+      OOMKilled: .State.OOMKilled,
+      Dead: .State.Dead,
+      ExitCode: .State.ExitCode,
+      Error: .State.Error,
+      StartedAt: .State.StartedAt,
+      FinishedAt: .State.FinishedAt,
+      Health: (if .State.Health == null then null else {
+        Status: .State.Health.Status,
+        FailingStreak: .State.Health.FailingStreak
+      } end)
+    }
+  }]' >"${output_file}"
+}
+
+record_target_state "${evidence_dir}/target-before.json"
 jq -n --arg profile "${profile}" --arg target "${target}" --arg action "${action}" \
   --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg image "${pumba_image}" \
   '{schemaVersion:1, profile:$profile, target:$target, action:$action, startedAt:$started_at, injector:{name:"pumba", image:$image}}' \
@@ -59,7 +97,7 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "${pumba_image}" --
 status=${PIPESTATUS[0]}
 set -e
 
-docker inspect "${target}" >"${evidence_dir}/target-after.json" 2>/dev/null || true
+record_target_state "${evidence_dir}/target-after.json" 2>/dev/null || true
 jq --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson exit_code "${status}" \
   '. + {completedAt:$completed_at, exitCode:$exit_code, injected:($exit_code == 0)}' \
   "${evidence_dir}/metadata.json" >"${evidence_dir}/metadata.json.tmp"
