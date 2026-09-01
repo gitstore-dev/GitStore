@@ -110,7 +110,7 @@ func (s *ServiceAccountSource) Current(ctx context.Context) (string, error) {
 	defer s.mu.Unlock()
 
 	// Check if we have a valid token that doesn't need renewal
-	if s.token != "" && time.Now().Before(s.expiresAt.Add(-30*time.Second)) {
+	if s.token != "" && !s.expiresAt.IsZero() && time.Now().Before(s.expiresAt.Add(-30*time.Second)) {
 		return s.token, nil
 	}
 
@@ -141,7 +141,7 @@ func (s *ServiceAccountSource) Current(ctx context.Context) (string, error) {
 // Must be called with s.mu held.
 func (s *ServiceAccountSource) issueToken(ctx context.Context) (string, time.Time, error) {
 	// Sign a client assertion
-	_, err := s.signer.SignAssertion(ctx, s.namespace, s.name, s.defaultTTL, "gitstore-api")
+	assertion, err := s.signer.SignAssertion(ctx, s.namespace, s.name, s.defaultTTL, "gitstore-api")
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("sign assertion: %w", err)
 	}
@@ -149,6 +149,8 @@ func (s *ServiceAccountSource) issueToken(ctx context.Context) (string, time.Tim
 	// Exchange assertion for access token via issueServiceAccountToken mutation
 	// (This is a placeholder; actual mutation call will be wired in the real signer)
 	// For now, return a structured error that indicates what's needed
+	// TODO(T029a): Wire assertion exchange with Client.IssueServiceAccountToken mutation
+	_ = assertion // assertion will be used in T029a when wiring the exchange
 	return "", time.Time{}, fmt.Errorf("token issuance not yet implemented; requires Client mutation support")
 }
 
