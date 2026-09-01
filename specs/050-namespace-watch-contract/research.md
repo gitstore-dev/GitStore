@@ -147,25 +147,31 @@ cross-table transactions.
   at-least-once and cross-partition dedup/sequence transactions add complexity
   without improving controller correctness.
 
-## R5: Tail the durable journal from every API replica
+## R5: Tail the durable journal once per API replica
 
 **Decision**: Replace direct Namespace subscriptions to the local event bus with
 a `WatchJournal` interface. Each subscription captures the journal high-water
-cursor atomically, optionally replays after a supplied cursor, then tails
-bounded batches from the shared journal. All API replicas read the same cursor
-space. The existing local event bus remains unchanged for other resource kinds
-until their own migration specifications.
+cursor atomically and optionally replays after a supplied cursor. One shared,
+bounded tailer per API replica reads later batches from the durable journal and
+fans them out to local subscriptions; a subscriber that falls behind the
+tailer's bounded ring catches up from the durable journal before continuing.
+All API replicas read the same cursor space. The existing local event bus
+remains unchanged for other resource kinds until their own migration
+specifications.
 
 **Rationale**: This limits infrastructure expansion to Namespace as requested,
-allows a cursor issued by replica A to resume through replica B, and avoids
-reopening Category/Product/File contracts.
+allows a cursor issued by replica A to resume through replica B, keeps Scylla
+as the source of truth across process replacement, bounds local memory, and
+reduces steady journal polling from O(subscribers) to O(API replicas). It also
+avoids reopening Category/Product/File contracts.
 
 **Alternatives considered**:
 
 - Replace every resource watch in feature 050: rejected as unrelated scope.
-- One shared API-level consumer that fans out locally: rejected because a new
-  replica still needs durable replay and local fan-out is not the source of
-  truth.
+- Use only an ephemeral API-level consumer/event bus: rejected because a new
+  replica still needs durable replay and local fan-out cannot be the source of
+  truth. The selected shared tailer is only a bounded read optimization over
+  the durable journal, never a replacement for it.
 
 ## R6: Use bootstrap bookmark, then list, then drain
 

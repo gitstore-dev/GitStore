@@ -29,9 +29,9 @@ and mutation outcomes are inputs and are not reopened.
 **Performance Goals**: 10 sustained Namespace transitions/s with 100/s bursts and 1,000 concurrent subscriptions across two API replicas; event visibility p95 ≤1 s and p99 ≤3 s; 10,000-event replay p95 ≤5 s; recovery after replica replacement ≤30 s; internal errors <0.1%; zero missing acknowledged transitions  
 **Constraints**: Additive GraphQL evolution; preserve generic path; seven-day bounded journal; 14-day CDC TTL; at-least-once/idempotent delivery; one per-kind order; no cross-kind order; explicit `WATCH_EXPIRED` on continuity loss; `FORBIDDEN` before cursor disclosure; no change to spec-047 mutation behavior  
 **Scale/Scope**: Cluster-scoped Namespace stream only. Product/category/file watches retain their current backends pending their own migration specs. Namespace volume is low relative to the 5,000,000-product catalogue, but infrastructure is tested under sustained push/admission traffic and 1,000 subscribers.  
-**Replica/Scaling Model**: Every API replica reads one shared journal epoch/cursor space. A Scylla-LWT lease/fencing token bounds CDC materialization to one active writer; overlap may duplicate but cannot lose events or permit stale progress. Any replica can register/replay a subscription.  
+**Replica/Scaling Model**: Every API replica reads one shared journal epoch/cursor space. A Scylla-LWT lease/fencing token bounds CDC materialization to one active writer; overlap may duplicate but cannot lose events or permit stale progress. Any replica can register/replay a subscription. Live delivery uses one bounded durable-journal tailer per API replica, so datastore polling scales with replicas rather than WebSocket count.
 **Authentication/Authorization**: Both typed and generic Namespace watches require cluster-scoped `namespace.watch` before cursor parsing, journal reads, or replay. Existing pluggable AuthN/AuthZ providers and decision logging remain the enforcement boundary.  
-**Load/Backpressure Model**: Journal buckets 4,096 events; read batches 256; subscriber channel 64; maximum resume 100,000 events; bounded 30 s delivery backpressure; 100 ms journal poll with capped 2 s idle backoff; 30 s durable bookmark; 30 s materializer lease renewed every 10 s; sustained overflow/retention/discontinuity fail closed.
+**Load/Backpressure Model**: Journal buckets 4,096 events; read batches 256; a bounded 512-event default shared live ring; subscriber channel 64; maximum resume 100,000 events; bounded 30 s delivery backpressure; one 100 ms journal poll per API replica with capped 2 s idle backoff; 30 s durable bookmark; 30 s materializer lease renewed every 10 s; lagging subscribers catch up durably and sustained overflow/retention/discontinuity fail closed.
 
 ## Constitution Check
 
@@ -261,8 +261,11 @@ BOOKMARK at captured high water before the client lists. The client holds the
 subscription open, pages Namespaces, replaces its local snapshot, then drains
 queued rows after the cursor.
 
-A subscriber reads at most 256 rows per query, buffers 64 events with bounded
-delivery backpressure, and replays at most 100,000. Any condition that prevents continuity returns `WATCH_EXPIRED`
+A subscriber replays or catches up at most 256 durable rows per query, buffers
+64 output events with bounded delivery backpressure, and replays at most
+100,000. Live subscribers share one bounded journal tailer per API replica;
+healthy sockets drain its recent-event ring without issuing their own Scylla
+polls. Any condition that prevents continuity returns `WATCH_EXPIRED`
 with a bounded reason; infrastructure unavailable before registration returns
 `WATCH_UNAVAILABLE`.
 
