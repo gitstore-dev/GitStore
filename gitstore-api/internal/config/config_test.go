@@ -561,6 +561,21 @@ func TestLoad_UnknownKeyInConfigFileDoesNotAbortStartup(t *testing.T) {
 	require.NotNil(t, cfg)
 }
 
+func TestLoad_ScyllaDockerAddressOptionsAreKnown(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "[datastore.scylla]\ndisable_shard_aware_port = true\nignore_peer_addr = true\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	assert.True(t, cfg.Datastore.Scylla.DisableShardAwarePort)
+	assert.True(t, cfg.Datastore.Scylla.IgnorePeerAddr)
+}
+
 // T009: datastore backend config validation tests
 
 func TestLoad_DatastoreBackendDefaultsToMemdb(t *testing.T) {
