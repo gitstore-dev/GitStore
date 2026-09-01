@@ -885,7 +885,9 @@ func capacityCreateRetryable(err error) bool {
 		return false
 	}
 	return strings.Contains(graphqlErr.raw, `"code":"NAMESPACE_CONFLICT"`) ||
-		strings.Contains(graphqlErr.raw, `"reason":"RESOURCE_VERSION_CONFLICT"`)
+		strings.Contains(graphqlErr.raw, `"reason":"RESOURCE_VERSION_CONFLICT"`) ||
+		(strings.Contains(graphqlErr.raw, "Cannot achieve consistency level") &&
+			strings.Contains(graphqlErr.raw, "potentially executed: false"))
 }
 
 func capacityCreateAmbiguous(err error) bool {
@@ -1033,6 +1035,11 @@ func TestCapacityReplayCreateRetriesOnlyConflicts(t *testing.T) {
 		require.NoError(t, err)
 		require.EqualValues(t, 1, primaryCalls.Load())
 		require.EqualValues(t, 1, peerCalls.Load())
+	})
+
+	t.Run("non-executed serial quorum error is retryable", func(t *testing.T) {
+		err := &capacityGraphQLErrors{raw: `{"message":"Cannot achieve consistency level for cl SERIAL. Requires 2, alive 1 (potentially executed: false)"}`}
+		require.True(t, capacityCreateRetryable(err))
 	})
 
 	t.Run("permanent GraphQL error is not retried", func(t *testing.T) {
