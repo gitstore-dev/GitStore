@@ -281,6 +281,107 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 				Extensions: map[string]any{"code": "FORBIDDEN"},
 			}
 		}
+	case "issueServiceAccountToken":
+		// Hard gate: service account assertions can ONLY issue tokens for themselves
+		if principal.AuthMethod == "serviceaccount-assertion" {
+			namespace, _ := nestedStringPath(fc.Args, "input", "metadata", "namespace")
+			name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
+			expectedSubject := datastore.ServiceAccountSubject(namespace, name)
+			if principal.Subject != expectedSubject {
+				return nil, &gqlerror.Error{
+					Message:    "service account can only issue tokens for itself",
+					Extensions: map[string]any{"code": "FORBIDDEN"},
+				}
+			}
+		}
+		// RBAC authorization for token issuance
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
+		}
+		namespace, _ := nestedStringPath(fc.Args, "input", "metadata", "namespace")
+		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
+		decision, err := authz.Authorize(ctx, principal, "serviceaccount.token.issue", auth.ResourceContext{
+			Kind: "serviceAccount",
+			Name: datastore.ServiceAccountSubject(namespace, name),
+		})
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return nil, &gqlerror.Error{
+				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
+				Extensions: map[string]any{"code": "FORBIDDEN"},
+			}
+		}
+	case "createServiceAccount":
+		// Service account assertions cannot create service accounts
+		if principal.AuthMethod == "serviceaccount-assertion" {
+			return nil, &gqlerror.Error{
+				Message:    "service account assertions cannot create service accounts",
+				Extensions: map[string]any{"code": "FORBIDDEN"},
+			}
+		}
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
+		}
+		decision, err := authz.Authorize(ctx, principal, "serviceaccount.create", auth.ResourceContext{
+			Kind: "serviceAccount",
+		})
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return nil, &gqlerror.Error{
+				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
+				Extensions: map[string]any{"code": "FORBIDDEN"},
+			}
+		}
+	case "rotateServiceAccountKey":
+		// Service account assertions cannot rotate other accounts' keys
+		if principal.AuthMethod == "serviceaccount-assertion" {
+			return nil, &gqlerror.Error{
+				Message:    "service account assertions cannot rotate keys",
+				Extensions: map[string]any{"code": "FORBIDDEN"},
+			}
+		}
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
+		}
+		decision, err := authz.Authorize(ctx, principal, "serviceaccount.key.rotate", auth.ResourceContext{
+			Kind: "serviceAccount",
+		})
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return nil, &gqlerror.Error{
+				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
+				Extensions: map[string]any{"code": "FORBIDDEN"},
+			}
+		}
+	case "deleteServiceAccount":
+		// Service account assertions cannot delete accounts
+		if principal.AuthMethod == "serviceaccount-assertion" {
+			return nil, &gqlerror.Error{
+				Message:    "service account assertions cannot delete service accounts",
+				Extensions: map[string]any{"code": "FORBIDDEN"},
+			}
+		}
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
+		}
+		decision, err := authz.Authorize(ctx, principal, "serviceaccount.delete", auth.ResourceContext{
+			Kind: "serviceAccount",
+		})
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return nil, &gqlerror.Error{
+				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
+				Extensions: map[string]any{"code": "FORBIDDEN"},
+			}
+		}
 	}
 
 	return next(ctx)
