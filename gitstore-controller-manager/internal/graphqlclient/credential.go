@@ -46,14 +46,14 @@ func (s *StaticToken) Current(ctx context.Context) (string, error) {
 // jittered backoff on failure.
 type ServiceAccountSource struct {
 	// Configuration
-	client       *Client
-	namespace    string
-	name         string
-	keyID        string
-	signer       TokenSigner
-	defaultTTL   time.Duration
-	maxTTL       time.Duration
-	maxBackoff   time.Duration
+	client     *Client
+	namespace  string
+	name       string
+	keyID      string
+	signer     TokenSigner
+	defaultTTL time.Duration
+	maxTTL     time.Duration
+	maxBackoff time.Duration
 
 	// State
 	mu           sync.Mutex
