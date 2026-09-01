@@ -26,10 +26,10 @@ import (
 // Client issues GraphQL query/mutation requests over HTTP and opens
 // graphql-transport-ws subscriptions against a single gitstore-api base URL.
 type Client struct {
-	baseURL string
-	token   string
-	http    *http.Client
-	dialer  *websocket.Dialer
+	baseURL     string
+	credentials CredentialSource
+	http        *http.Client
+	dialer      *websocket.Dialer
 
 	subIDs atomic.Uint64
 }
@@ -37,12 +37,16 @@ type Client struct {
 // New returns a Client targeting baseURL (e.g. "http://localhost:4000/graphql"
 // or "ws://localhost:4000/graphql" for a dedicated subscription dialer —
 // Subscribe rewrites an http(s) baseURL to ws(s) automatically).
-func New(baseURL, token string) *Client {
+// credentials must not be nil; use NewStaticToken(token) for FR-014 compatibility.
+func New(baseURL string, credentials CredentialSource) *Client {
+	if credentials == nil {
+		panic("graphqlclient.New: credentials must not be nil")
+	}
 	return &Client{
-		baseURL: baseURL,
-		token:   token,
-		http:    http.DefaultClient,
-		dialer:  websocket.DefaultDialer,
+		baseURL:     baseURL,
+		credentials: credentials,
+		http:        http.DefaultClient,
+		dialer:      websocket.DefaultDialer,
 	}
 }
 
@@ -86,13 +90,18 @@ func (c *Client) do(ctx context.Context, doc string, vars map[string]any, out an
 		return fmt.Errorf("graphqlclient: marshal request: %w", err)
 	}
 
+	token, err := c.credentials.Current(ctx)
+	if err != nil {
+		return fmt.Errorf("graphqlclient: acquire credentials: %w", err)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("graphqlclient: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := c.http.Do(req)
@@ -180,6 +189,11 @@ type subscribePayload struct {
 // streams "next" payloads until Stop is called or the server closes the
 // stream (via "complete" or "error").
 func (c *Client) Subscribe(ctx context.Context, subscriptionDoc string, vars map[string]any) (Subscription, error) {
+	token, err := c.credentials.Current(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("graphqlclient: acquire credentials: %w", err)
+	}
+
 	wsURL := toWebsocketURL(c.baseURL)
 
 	header := http.Header{}
@@ -191,8 +205,8 @@ func (c *Client) Subscribe(ctx context.Context, subscriptionDoc string, vars map
 	}
 
 	initPayload := map[string]any{}
-	if c.token != "" {
-		initPayload["Authorization"] = "Bearer " + c.token
+	if token != "" {
+		initPayload["Authorization"] = "Bearer " + token
 	}
 	initPayloadJSON, err := json.Marshal(initPayload)
 	if err != nil {

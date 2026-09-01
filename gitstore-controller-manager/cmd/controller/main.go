@@ -127,7 +127,7 @@ func parseConfigFile(args []string) (string, error) {
 // registerNamespace wires Namespace list/watch, repository provisioning,
 // status writeback, and foreground-deletion reconciliation into mgr.
 func registerNamespace(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger) (*listwatch.Runner[namespacecontroller.Namespace], error) {
-	client := graphqlclient.New(cfg.Controller.ApiURI, cfg.Controller.ApiToken)
+	client := graphqlclient.New(cfg.Controller.ApiURI, graphqlclient.NewStaticToken(cfg.Controller.ApiToken))
 	namespaceCache := cache.New[namespacecontroller.Namespace]()
 	runner := &listwatch.Runner[namespacecontroller.Namespace]{
 		Kind:        "Namespace",
@@ -186,7 +186,7 @@ func buildMux(mgr *manager.Manager) http.Handler {
 // and the CategoryTaxonomy reconciler into mgr, then starts its
 // listwatch.Runner on a background goroutine. Per specs/039-category-taxonomy-reconciler/quickstart.md.
 func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, onRelatedSuccess func(types.WorkItemKey)) (*listwatch.Runner[categorytaxonomy.CategoryTaxonomy], error) {
-	client := graphqlclient.New(cfg.Controller.ApiURI, cfg.Controller.ApiToken)
+	client := graphqlclient.New(cfg.Controller.ApiURI, graphqlclient.NewStaticToken(cfg.Controller.ApiToken))
 	listWatcher := listwatch.NewCategoryTaxonomyListWatcher(client)
 	statusClient := status.NewGraphQLStatusClient(client)
 
@@ -271,7 +271,7 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 // already-registered "CategoryTaxonomy" kind via mgr.Enqueue whenever a
 // Product's categoryRef appears, disappears, or changes.
 func registerProductWatch(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger) *listwatch.Runner[categorytaxonomy.Product] {
-	client := graphqlclient.New(cfg.Controller.ApiURI, cfg.Controller.ApiToken)
+	client := graphqlclient.New(cfg.Controller.ApiURI, graphqlclient.NewStaticToken(cfg.Controller.ApiToken))
 	listWatcher := listwatch.NewProductListWatcher(client)
 
 	productCache := cache.New[categorytaxonomy.Product]()

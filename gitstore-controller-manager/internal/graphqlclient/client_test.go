@@ -36,7 +36,7 @@ func TestQuery_SendsPostWithBearerAndDecodesData(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := graphqlclient.New(srv.URL, "test-token")
+	c := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	var out struct {
 		Categories struct {
 			TotalCount int `json:"totalCount"`
@@ -63,7 +63,7 @@ func TestMutate_DecodesData(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := graphqlclient.New(srv.URL, "test-token")
+	c := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	var out struct {
 		UpdateCategoryStatus struct {
 			Category struct {
@@ -88,7 +88,7 @@ func TestQuery_GraphQLErrorSurfacesExtensionsCode(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := graphqlclient.New(srv.URL, "test-token")
+	c := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	var out struct{}
 	err := c.Query(context.Background(), `query { category(by: {}) { id } }`, nil, &out)
 	if err == nil {
@@ -112,7 +112,7 @@ func TestQuery_HTTPErrorStatusReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := graphqlclient.New(srv.URL, "test-token")
+	c := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	var out struct{}
 	if err := c.Query(context.Background(), `query { categories(namespace: "acme") { totalCount } }`, nil, &out); err == nil {
 		t.Fatal("expected error for HTTP 500, got nil")
@@ -128,7 +128,7 @@ func TestQuery_VariablesSentInRequestBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := graphqlclient.New(srv.URL, "test-token")
+	c := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	var out struct{}
 	if err := c.Query(context.Background(), `query($ns: String!) { categories(namespace: $ns) { totalCount } }`, map[string]any{"ns": "acme"}, &out); err != nil {
 		t.Fatalf("Query failed: %v", err)
@@ -204,7 +204,7 @@ func TestSubscribe_HandshakeAndNextMessages(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	c := graphqlclient.New(wsURL, "test-token")
+	c := graphqlclient.New(wsURL, graphqlclient.NewStaticToken("test-token"))
 	sub, err := c.Subscribe(context.Background(), `subscription { watchCategories { name } }`, nil)
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
@@ -231,7 +231,7 @@ func TestSubscribe_StopClosesChannel(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	c := graphqlclient.New(wsURL, "test-token")
+	c := graphqlclient.New(wsURL, graphqlclient.NewStaticToken("test-token"))
 	sub, err := c.Subscribe(context.Background(), `subscription { watchCategories { name } }`, nil)
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
@@ -256,7 +256,7 @@ func TestSubscribe_ServerErrorSurfacedViaErr(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	c := graphqlclient.New(wsURL, "test-token")
+	c := graphqlclient.New(wsURL, graphqlclient.NewStaticToken("test-token"))
 	sub, err := c.Subscribe(context.Background(), `subscription { watchCategories { name } }`, nil)
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)
@@ -301,7 +301,7 @@ func TestSubscribe_NextMessageWithErrorsSurfacedViaErr(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	c := graphqlclient.New(wsURL, "test-token")
+	c := graphqlclient.New(wsURL, graphqlclient.NewStaticToken("test-token"))
 	sub, err := c.Subscribe(context.Background(), `subscription { watchCategories { name } }`, nil)
 	if err != nil {
 		t.Fatalf("Subscribe failed: %v", err)

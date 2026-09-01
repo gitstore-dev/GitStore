@@ -113,7 +113,7 @@ func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := graphqlclient.New(srv.URL, "test-token")
+	client := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	lw := listwatch.NewProductListWatcher(client)
 
 	resp, err := lw.List(context.Background())
@@ -149,7 +149,7 @@ func TestProductList_EmptyDatasetReturnsNonEmptySentinelResourceVersion(t *testi
 	}))
 	defer srv.Close()
 
-	client := graphqlclient.New(srv.URL, "test-token")
+	client := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	lw := listwatch.NewProductListWatcher(client)
 
 	resp, err := lw.List(context.Background())

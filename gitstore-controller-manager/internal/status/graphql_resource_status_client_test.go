@@ -26,7 +26,7 @@ func TestResourceStatusApplySendsKindAwareMutation(t *testing.T) {
 	defer srv.Close()
 
 	generation := int64(2)
-	client := status.NewGraphQLResourceStatusClient(graphqlclient.New(srv.URL, "token"))
+	client := status.NewGraphQLResourceStatusClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	err := client.Apply(context.Background(), types.WorkItemKey{Kind: "Namespace", Name: "acme"}, &status.StatusPatch{
 		ResourceVersion:    "2",
 		ObservedGeneration: &generation,
@@ -57,7 +57,7 @@ func TestResourceStatusApplyConflictMapsToErrConflict(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := status.NewGraphQLResourceStatusClient(graphqlclient.New(srv.URL, "token"))
+	client := status.NewGraphQLResourceStatusClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	err := client.Apply(context.Background(), types.WorkItemKey{Kind: "Namespace", Name: "acme"}, &status.StatusPatch{ResourceVersion: "3"})
 	if !errors.Is(err, types.ErrConflict) {
 		t.Fatalf("Apply error = %v, want types.ErrConflict", err)
@@ -71,7 +71,7 @@ func TestResourceStatusApplyNotFoundMapsToErrNotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := status.NewGraphQLResourceStatusClient(graphqlclient.New(srv.URL, "token"))
+	client := status.NewGraphQLResourceStatusClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	err := client.Apply(context.Background(), types.WorkItemKey{Kind: "Namespace", Name: "acme"}, &status.StatusPatch{ResourceVersion: "3"})
 	if !errors.Is(err, types.ErrNotFound) {
 		t.Fatalf("Apply error = %v, want types.ErrNotFound", err)
