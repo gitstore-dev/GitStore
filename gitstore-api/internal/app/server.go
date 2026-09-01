@@ -378,7 +378,13 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 	authzProvider = auth.NewDecisionLogger(authzProvider, log)
 
 	// Build UserDir provider.
-	userdirProvider := userdirnone.New()
+	var userdirProvider auth.UserDirProvider
+	switch cfg.Auth.UserDir.Provider {
+	case "none", "":
+		userdirProvider = userdirnone.New()
+	default:
+		return nil, nil, nil, fmt.Errorf("unknown userdir provider %q", cfg.Auth.UserDir.Provider)
+	}
 
 	return auth.NewProviderRegistry(auth.NewChainedAuthN(authnProviders...), authzProvider, userdirProvider), reloader, shutdowns, nil
 }

@@ -20,7 +20,6 @@ type Config struct {
 	Api       ApiConfig       `mapstructure:"api"`
 	Git       GitConfig       `mapstructure:"git"`
 	Auth      AuthConfig      `mapstructure:"auth"`
-	Cache     CacheConfig     `mapstructure:"cache"`
 	Datastore DatastoreConfig `mapstructure:"datastore"`
 	Features  FeatureConfig   `mapstructure:"features"`
 	Log       LogConfig       `mapstructure:"log"`
@@ -104,11 +103,6 @@ type UserConfig struct {
 	Password string `mapstructure:"password_hash" validate:"required"`
 }
 
-// CacheConfig holds cache settings.
-type CacheConfig struct {
-	TTL int `mapstructure:"ttl"`
-}
-
 // FeatureConfig holds staged rollout gates.
 type FeatureConfig struct {
 	NamespaceRepositoryFence string `mapstructure:"namespace_repository_fence"`
@@ -170,7 +164,6 @@ func load(path string) (*Config, error) {
 	v.SetDefault("api.rate_limit_per_second", 50)
 	v.SetDefault("api.rate_limit_burst", 100)
 	v.SetDefault("git.grpc.uri", "dns:///localhost:50051")
-	v.SetDefault("cache.ttl", 300)
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("auth.admin.username", "")
@@ -229,7 +222,7 @@ func load(path string) (*Config, error) {
 		"api.port": true, "api.git_port": true, "api.grpc_port": true,
 		"api.rate_limit_per_second": true, "api.rate_limit_burst": true,
 		"git.grpc.uri": true,
-		"cache.ttl":    true, "log.level": true, "log.format": true,
+		"log.level":    true, "log.format": true,
 		"auth.admin.username": true, "auth.admin.password_hash": true,
 		"auth.jwt.secret": true, "auth.jwt.duration": true, "auth.jwt.issuer": true, "auth.jwt.refresh_grace": true,
 		"auth.grpc.hmac_secret": true,
@@ -358,7 +351,6 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddString("auth.jwt.issuer", c.Auth.JWT.Issuer)
 	enc.AddString("auth.jwt.refresh_grace", c.Auth.JWT.RefreshGrace)
 	enc.AddString("auth.grpc.hmac_secret", redact(c.Auth.Grpc.HmacSecret))
-	enc.AddInt("cache.ttl", c.Cache.TTL)
 	enc.AddString("log.level", c.Log.Level)
 	enc.AddString("log.format", c.Log.Format)
 	enc.AddString("datastore.backend", c.Datastore.Backend)

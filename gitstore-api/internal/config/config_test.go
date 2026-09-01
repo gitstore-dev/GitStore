@@ -23,7 +23,6 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_GIT__GRPC__URI",
 		"GITSTORE_GIT__WS__URI",
 		"GITSTORE_GIT__HTTP__URI",
-		"GITSTORE_CACHE__TTL",
 		"GITSTORE_LOG__LEVEL",
 		"GITSTORE_LOG__FORMAT",
 		"GITSTORE_AUTH__ADMIN__USERNAME",
@@ -81,7 +80,6 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	assert.Equal(t, float64(50), cfg.Api.RateLimitPerSecond)
 	assert.Equal(t, 100, cfg.Api.RateLimitBurst)
 	assert.Equal(t, "dns:///localhost:50051", cfg.Git.Grpc.Uri)
-	assert.Equal(t, 300, cfg.Cache.TTL)
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.Equal(t, "json", cfg.Log.Format)
 	assert.Equal(t, "24h", cfg.Auth.JWT.Duration)
@@ -125,9 +123,6 @@ format = "text"
 [api]
 port = 7777
 
-[cache]
-ttl = 600
-
 [auth.jwt]
 refresh_grace = "45s"
 `
@@ -143,7 +138,6 @@ refresh_grace = "45s"
 	require.NotNil(t, cfg)
 
 	assert.Equal(t, 7777, cfg.Api.Port)
-	assert.Equal(t, 600, cfg.Cache.TTL)
 	assert.Equal(t, "warn", cfg.Log.Level)
 	assert.Equal(t, "text", cfg.Log.Format)
 	assert.Equal(t, "45s", cfg.Auth.JWT.RefreshGrace)

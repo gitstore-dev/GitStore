@@ -40,9 +40,6 @@ rate_limit_burst = 100
 [git.grpc]
 uri = "dns:///git-service:50051"
 
-[cache]
-ttl = 300
-
 [datastore]
 backend = "memdb"
 
