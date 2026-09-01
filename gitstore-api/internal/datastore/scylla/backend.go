@@ -55,6 +55,9 @@ type scyllaDatastore struct {
 	repositoryByBucketTable           *table.Table
 	namespaceMappingTable             *table.Table
 	namespaceMappingByRepositoryTable *table.Table
+	serviceAccountByNamespaceTable    *table.Table
+	serviceAccountByNameTable         *table.Table
+	serviceAccountByUIDTable          *table.Table
 	mutations                         *mutationExecutor
 	namespaceWatchBucketSize          int64
 }
@@ -352,6 +355,9 @@ func New(cfg config.ScyllaConfig, log *zap.Logger, watchBucketSize ...int) (data
 		repositoryByBucketTable:           RepositoryByBucket,
 		namespaceMappingTable:             NamespaceMapping,
 		namespaceMappingByRepositoryTable: NamespaceMappingByRepository,
+		serviceAccountByNamespaceTable:    ServiceAccountByNamespace,
+		serviceAccountByNameTable:         ServiceAccountByName,
+		serviceAccountByUIDTable:          ServiceAccountByUID,
 		mutations:                         newMutationExecutor(nil),
 	}, nil
 }

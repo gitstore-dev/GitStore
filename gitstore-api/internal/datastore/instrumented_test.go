@@ -209,6 +209,29 @@ func (s *stubDatastore) TransferRepository(_ context.Context, _, _, _ string) er
 func (s *stubDatastore) DeleteNamespaceMapping(_ context.Context, _, _ string) error {
 	return s.getProductErr
 }
+
+func (s *stubDatastore) CreateServiceAccount(_ context.Context, _ *datastore.ServiceAccount) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) GetServiceAccountByUID(_ context.Context, _ string) (*datastore.ServiceAccount, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) GetServiceAccountBySubject(_ context.Context, _, _ string) (*datastore.ServiceAccount, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) ListServiceAccounts(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.ServiceAccount], error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) UpdateServiceAccountKeys(_ context.Context, _ string, _ []datastore.ServiceAccountPublicKey, _ []string, _ string) (*datastore.ServiceAccount, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) SetServiceAccountDisabled(_ context.Context, _ string, _ bool) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) DeleteServiceAccount(_ context.Context, _ string) error {
+	return s.getProductErr
+}
+
 func (s *stubDatastore) Close() error { return nil }
 
 // newTestInstrumented creates an InstrumentedDatastore with an observer logger

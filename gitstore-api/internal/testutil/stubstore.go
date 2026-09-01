@@ -194,4 +194,25 @@ func (s *StubStore) LookupNamespaceByRepoID(_ context.Context, _ string) (*datas
 func (s *StubStore) RenameRepository(_ context.Context, _, _, _ string) error    { return nil }
 func (s *StubStore) TransferRepository(_ context.Context, _, _, _ string) error  { return nil }
 func (s *StubStore) DeleteNamespaceMapping(_ context.Context, _, _ string) error { return nil }
-func (s *StubStore) Close() error                                                { return nil }
+
+func (s *StubStore) CreateServiceAccount(_ context.Context, _ *datastore.ServiceAccount) error {
+	return nil
+}
+func (s *StubStore) GetServiceAccountByUID(_ context.Context, _ string) (*datastore.ServiceAccount, error) {
+	return nil, datastore.ErrNotFound
+}
+func (s *StubStore) GetServiceAccountBySubject(_ context.Context, _, _ string) (*datastore.ServiceAccount, error) {
+	return nil, datastore.ErrNotFound
+}
+func (s *StubStore) ListServiceAccounts(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.ServiceAccount], error) {
+	return &datastore.PageResult[datastore.ServiceAccount]{}, nil
+}
+func (s *StubStore) UpdateServiceAccountKeys(_ context.Context, _ string, _ []datastore.ServiceAccountPublicKey, _ []string, _ string) (*datastore.ServiceAccount, error) {
+	return nil, datastore.ErrNotFound
+}
+func (s *StubStore) SetServiceAccountDisabled(_ context.Context, _ string, _ bool) error {
+	return nil
+}
+func (s *StubStore) DeleteServiceAccount(_ context.Context, _ string) error { return nil }
+
+func (s *StubStore) Close() error { return nil }

@@ -136,6 +136,7 @@ func TestScyllaSchemaIncludesOwnerReferenceProjectionMigration(t *testing.T) {
 		"005_namespace_repository_fence.cql",
 		"006_namespace_watch_cdc.cql",
 		"007_auth_session_revocations.cql",
+		"008_service_account.cql",
 	}, names)
 }
 

@@ -197,8 +197,62 @@ func TestRunMigrations_HasNoRepositorySecondaryIndexes(t *testing.T) {
 	for iter.Scan(&index) {
 		assert.NotContains(t, index, "repositories")
 		assert.NotContains(t, index, "mappings")
+		assert.NotContains(t, index, "service_accounts")
 	}
 	require.NoError(t, iter.Close())
+}
+
+// TestRunMigrations_ServiceAccountSchemaMatchesEnvelopeConventions asserts
+// spec 061's service_accounts_* tables (a) create no secondary index and
+// (b) use the canonical envelope column names/types established by 002's
+// query-first pattern (creation_timestamp/update_timestamp/deletion_timestamp,
+// creation_actor/update_actor, generation bigint, resource_version text, and
+// uid typed uuid rather than text) — the existing index test above is scoped
+// to repositories/mappings names only, so it would not have caught a
+// service_accounts index on its own.
+func TestRunMigrations_ServiceAccountSchemaMatchesEnvelopeConventions(t *testing.T) {
+	session := newRawSession(t)
+	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), zap.NewNop()))
+
+	iter := session.Query(
+		`SELECT index_name FROM system_schema.indexes WHERE keyspace_name = ? AND table_name LIKE 'service_accounts%' ALLOW FILTERING`,
+		scyllaKeyspace,
+	).Iter()
+	var index string
+	count := 0
+	for iter.Scan(&index) {
+		count++
+	}
+	require.NoError(t, iter.Close())
+	assert.Zero(t, count, "service_accounts_* tables must have zero secondary indexes (query-first pattern)")
+
+	wantColumnTypes := map[string]string{
+		"creation_timestamp": "timestamp",
+		"update_timestamp":   "timestamp",
+		"deletion_timestamp": "timestamp",
+		"creation_actor":     "text",
+		"update_actor":       "text",
+		"generation":         "bigint",
+		"resource_version":   "text",
+		"uid":                "uuid",
+	}
+
+	iter = session.Query(
+		`SELECT column_name, type FROM system_schema.columns WHERE keyspace_name = ? AND table_name = ?`,
+		scyllaKeyspace, "service_accounts_by_namespace",
+	).Iter()
+	var columnName, columnType string
+	seen := map[string]string{}
+	for iter.Scan(&columnName, &columnType) {
+		seen[columnName] = columnType
+	}
+	require.NoError(t, iter.Close())
+
+	for column, wantType := range wantColumnTypes {
+		gotType, ok := seen[column]
+		require.Truef(t, ok, "expected column %q on service_accounts_by_namespace", column)
+		assert.Equalf(t, wantType, gotType, "column %q type mismatch", column)
+	}
 }
 
 func TestRunMigrations_DoesNotMaterializeProductLabelSelectors(t *testing.T) {
@@ -290,7 +344,18 @@ func TestRunMigrations_SupportedRollbackArtifactRetainsForwardMigrationSet(t *te
 	)
 	require.ErrorContains(t, err, "database is ahead")
 
-	supportedRollbackMigrations := migrationSetThrough(t, "007_auth_session_revocations.cql")
+	preServiceAccountBinaryMigrations := migrationSetThrough(t, "006_namespace_watch_cdc.cql")
+	err = scylla.RunMigrationsWithFS(
+		ctx,
+		session,
+		scyllaKeyspace,
+		uuid.New().String(),
+		log,
+		preServiceAccountBinaryMigrations,
+	)
+	require.ErrorContains(t, err, "database is ahead")
+
+	supportedRollbackMigrations := migrationSetThrough(t, "008_service_account.cql")
 	require.NoError(t, scylla.RunMigrationsWithFS(
 		ctx,
 		session,

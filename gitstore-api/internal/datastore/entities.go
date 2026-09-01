@@ -397,3 +397,39 @@ type NamespaceMapping struct {
 	NamespaceID string
 	RepoID      string
 }
+
+// ServiceAccount is the persistent, namespaced, non-human identity record
+// backing the serviceaccount-assertion/serviceaccount-jwt AuthN providers
+// (spec 061). Datastore-backed (memdb + Scylla) from the first implementation
+// phase — unlike the assertion-replay cache and WebSocket connection
+// registry, which are intentionally in-memory-only (single-instance scope).
+type ServiceAccount struct {
+	// Identity (primary key: Namespace + Name; subject string is derived as
+	// "serviceaccount:<Namespace>:<Name>", never stored redundantly)
+	UID       string // stable, survives Disabled toggles; changes only on delete+recreate
+	Namespace string // convention string, e.g. "controllers" — not GitStore's Namespace resource
+	Name      string // e.g. "gitstore-controller-manager" — names the *process*, not one of its reconcilers
+
+	Disabled bool // true blocks new assertion exchange and new access-token authentication immediately
+
+	Generation      int64  // advances only on PublicKeys change (author-controlled state)
+	ResourceVersion string // advances on every persisted change, including Disabled toggles
+
+	CreationTimestamp time.Time
+	CreationActor     string // subject of the admin principal that created this record
+	UpdateTimestamp   time.Time
+	UpdateActor       string
+
+	PublicKeys []ServiceAccountPublicKey
+
+	DeletionTimestamp *time.Time // set on deleteServiceAccount; hard-delete is immediate in Phase 1 (no finalizer/Terminating lifecycle)
+}
+
+// ServiceAccountPublicKey is one enrolled public key, supporting an overlap
+// window during rotation (multiple entries may be simultaneously valid).
+type ServiceAccountPublicKey struct {
+	KeyID      string // "kid" — protected-header value an assertion's kid must match
+	Algorithm  string // "Ed25519" (preferred) or "ECDSA-P256"
+	PublicKey  []byte // raw public key bytes (PEM-decoded at load, stored decoded)
+	EnrolledAt time.Time
+}

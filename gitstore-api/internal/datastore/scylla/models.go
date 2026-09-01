@@ -191,4 +191,30 @@ var (
 		Columns: []string{"repository_id", "namespace", "name"},
 		PartKey: []string{"repository_id"},
 	})
+
+	// ServiceAccount (spec 061) is not a git-backed catalog resource, so it
+	// does not use resourceColumns()/authoritativeColumns() — it has its own,
+	// smaller envelope (no api_version/kind/labels/annotations/owner
+	// references/finalizers/repository_id/spec/body/status).
+	ServiceAccountByNamespace = table.New(table.Metadata{
+		Name: "service_accounts_by_namespace",
+		Columns: []string{
+			"namespace", "creation_timestamp", "uid", "name",
+			"generation", "resource_version",
+			"creation_actor", "update_timestamp", "update_actor",
+			"deletion_timestamp", "disabled", "public_keys",
+		},
+		PartKey: []string{"namespace"},
+		SortKey: []string{"creation_timestamp", "uid"},
+	})
+	ServiceAccountByName = table.New(table.Metadata{
+		Name:    "service_accounts_by_name",
+		Columns: []string{"namespace", "name", "uid", "creation_timestamp"},
+		PartKey: []string{"namespace"}, SortKey: []string{"name"},
+	})
+	ServiceAccountByUID = table.New(table.Metadata{
+		Name:    "service_accounts_by_uid",
+		Columns: []string{"uid", "namespace", "creation_timestamp"},
+		PartKey: []string{"uid"},
+	})
 )

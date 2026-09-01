@@ -18,6 +18,7 @@ var schema = &memdb.DBSchema{
 			"ancestor_path": optionalStringIndex("ancestor_path", "AncestorPath"),
 			"repository_id": optionalStringIndex("repository_id", "RepositoryID"),
 		}),
+		"service_account": resourceTableSchema("service_account", map[string]*memdb.IndexSchema{}),
 		"owner_reference": {
 			Name: "owner_reference",
 			Indexes: map[string]*memdb.IndexSchema{

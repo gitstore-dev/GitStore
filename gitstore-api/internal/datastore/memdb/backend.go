@@ -1617,3 +1617,124 @@ func cloneTimePointer(value *time.Time) *time.Time {
 	clone := *value
 	return &clone
 }
+
+// ── ServiceAccount ───────────────────────────────────────────────────────────
+
+func (m *memdbDatastore) CreateServiceAccount(_ context.Context, sa *datastore.ServiceAccount) error {
+	if sa == nil {
+		return fmt.Errorf("%w: service account is nil", datastore.ErrInvalidArgument)
+	}
+	txn := m.db.Txn(true)
+	if raw, _ := txn.First("service_account", "id", sa.UID); raw != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: service account uid %s", datastore.ErrAlreadyExists, sa.UID)
+	}
+	if raw, _ := txn.First("service_account", "name_namespace", sa.Namespace, sa.Name); raw != nil {
+		txn.Abort()
+		return fmt.Errorf("%w: service account %s/%s", datastore.ErrAlreadyExists, sa.Namespace, sa.Name)
+	}
+	if err := txn.Insert("service_account", cloneServiceAccount(sa)); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: insert service account: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) GetServiceAccountByUID(_ context.Context, uid string) (*datastore.ServiceAccount, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("service_account", "id", uid)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return cloneServiceAccount(raw.(*datastore.ServiceAccount)), nil
+}
+
+func (m *memdbDatastore) GetServiceAccountBySubject(_ context.Context, namespace, name string) (*datastore.ServiceAccount, error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	raw, err := txn.First("service_account", "name_namespace", namespace, name)
+	if err != nil || raw == nil {
+		return nil, notFoundOrErr(err)
+	}
+	return cloneServiceAccount(raw.(*datastore.ServiceAccount)), nil
+}
+
+func (m *memdbDatastore) ListServiceAccounts(_ context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.ServiceAccount], error) {
+	txn := m.db.Txn(false)
+	defer txn.Abort()
+	it, err := txn.Get("service_account", "id")
+	if err != nil {
+		return nil, fmt.Errorf("memdb: list service accounts: %w", err)
+	}
+	var all []*datastore.ServiceAccount
+	for obj := it.Next(); obj != nil; obj = it.Next() {
+		all = append(all, cloneServiceAccount(obj.(*datastore.ServiceAccount)))
+	}
+	return paginateSlice(all, page, func(sa *datastore.ServiceAccount) (time.Time, string) { return sa.CreationTimestamp, sa.UID }), nil
+}
+
+func (m *memdbDatastore) UpdateServiceAccountKeys(_ context.Context, uid string, add []datastore.ServiceAccountPublicKey, removeKeyIDs []string, expectedResourceVersion string) (*datastore.ServiceAccount, error) {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("service_account", "id", uid)
+	if raw == nil {
+		txn.Abort()
+		return nil, fmt.Errorf("%w: service account uid %s", datastore.ErrNotFound, uid)
+	}
+	updated := cloneServiceAccount(raw.(*datastore.ServiceAccount))
+	if err := datastore.ApplyServiceAccountKeyUpdate(updated, add, removeKeyIDs, expectedResourceVersion); err != nil {
+		txn.Abort()
+		return nil, err
+	}
+	if err := txn.Insert("service_account", updated); err != nil {
+		txn.Abort()
+		return nil, fmt.Errorf("memdb: update service account keys: %w", err)
+	}
+	txn.Commit()
+	return cloneServiceAccount(updated), nil
+}
+
+func (m *memdbDatastore) SetServiceAccountDisabled(_ context.Context, uid string, disabled bool) error {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("service_account", "id", uid)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: service account uid %s", datastore.ErrNotFound, uid)
+	}
+	updated := cloneServiceAccount(raw.(*datastore.ServiceAccount))
+	updated.Disabled = disabled
+	datastore.AdvanceServiceAccountSystemVersion(updated)
+	updated.UpdateTimestamp = time.Now().UTC()
+	if err := txn.Insert("service_account", updated); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: set service account disabled: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
+func (m *memdbDatastore) DeleteServiceAccount(_ context.Context, uid string) error {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("service_account", "id", uid)
+	if raw == nil {
+		txn.Abort()
+		return fmt.Errorf("%w: service account uid %s", datastore.ErrNotFound, uid)
+	}
+	if err := txn.Delete("service_account", raw); err != nil {
+		txn.Abort()
+		return fmt.Errorf("memdb: delete service account: %w", err)
+	}
+	txn.Commit()
+	return nil
+}
+
+func cloneServiceAccount(sa *datastore.ServiceAccount) *datastore.ServiceAccount {
+	if sa == nil {
+		return nil
+	}
+	clone := *sa
+	clone.PublicKeys = append([]datastore.ServiceAccountPublicKey(nil), sa.PublicKeys...)
+	clone.DeletionTimestamp = cloneTimePointer(sa.DeletionTimestamp)
+	return &clone
+}

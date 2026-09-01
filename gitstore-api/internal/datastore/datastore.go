@@ -436,6 +436,21 @@ type Datastore interface {
 	TransferRepository(ctx context.Context, repositoryID, fromNamespace, toNamespace string) error
 	DeleteNamespaceMapping(ctx context.Context, namespace, name string) error
 
+	// ServiceAccount operations (spec 061)
+	CreateServiceAccount(ctx context.Context, sa *ServiceAccount) error
+	GetServiceAccountByUID(ctx context.Context, uid string) (*ServiceAccount, error)
+	GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*ServiceAccount, error)
+	ListServiceAccounts(ctx context.Context, page PageParams) (*PageResult[ServiceAccount], error)
+	// UpdateServiceAccountKeys adds/removes public keys and advances
+	// Generation; fails with ErrConflict if expectedResourceVersion is stale
+	// (optimistic concurrency, matching UpdateFile/UpdateRepository's
+	// existing contract).
+	UpdateServiceAccountKeys(ctx context.Context, uid string, add []ServiceAccountPublicKey, removeKeyIDs []string, expectedResourceVersion string) (*ServiceAccount, error)
+	// SetServiceAccountDisabled toggles Disabled without touching PublicKeys
+	// or Generation.
+	SetServiceAccountDisabled(ctx context.Context, uid string, disabled bool) error
+	DeleteServiceAccount(ctx context.Context, uid string) error
+
 	// Close lifecycle function
 	Close() error
 }
