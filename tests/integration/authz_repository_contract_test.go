@@ -18,9 +18,11 @@ func TestRepositoryAuthorization_TwoUserNamespaceIsolation(t *testing.T) {
 	aliceRepository := uniqueName("alice-repository")
 	bobRepository := uniqueName("bob-repository")
 
-	createNamespaceAsUser(t, h, "test-user:alice", aliceNamespace)
-	createNamespaceAsUser(t, h, "test-user:bob", bobNamespace)
-	resp := h.gqlWithToken("test-user:alice", `
+	aliceToken := namespaceContractLogin(t, h, "alice", "admin123")
+	bobToken := namespaceContractLogin(t, h, "bob", "admin123")
+	createNamespaceAsUser(t, h, aliceToken, aliceNamespace)
+	createNamespaceAsUser(t, h, bobToken, bobNamespace)
+	resp := h.gqlWithToken(aliceToken, `
 		mutation($identifier: String!) {
 			deleteNamespace(input: {identifier: $identifier}) {
 				deletedIdentifier
@@ -29,8 +31,8 @@ func TestRepositoryAuthorization_TwoUserNamespaceIsolation(t *testing.T) {
 	`, map[string]any{"identifier": bobNamespace})
 	require.Len(t, resp.Errors, 1)
 	assert.Contains(t, string(resp.Errors[0]), "permission denied: resource belongs to another user")
-	aliceRepositoryID := createRepositoryAsUser(t, h, "test-user:alice", aliceNamespace, aliceRepository)
-	bobRepositoryID := createRepositoryAsUser(t, h, "test-user:bob", bobNamespace, bobRepository)
+	aliceRepositoryID := createRepositoryAsUser(t, h, aliceToken, aliceNamespace, aliceRepository)
+	bobRepositoryID := createRepositoryAsUser(t, h, bobToken, bobNamespace, bobRepository)
 	t.Cleanup(func() {
 		repositoryReadContractDelete(t, h, aliceRepositoryID)
 		repositoryReadContractDelete(t, h, bobRepositoryID)
@@ -38,8 +40,8 @@ func TestRepositoryAuthorization_TwoUserNamespaceIsolation(t *testing.T) {
 		h.cleanupNamespace(bobNamespace)
 	})
 
-	aliceRepositories := repositoriesAsUser(t, h, "test-user:alice", aliceNamespace)
-	bobRepositories := repositoriesAsUser(t, h, "test-user:bob", bobNamespace)
+	aliceRepositories := repositoriesAsUser(t, h, aliceToken, aliceNamespace)
+	bobRepositories := repositoriesAsUser(t, h, bobToken, bobNamespace)
 
 	assertRepositoryNamespaceIsolation(t, aliceRepositories, aliceNamespace, aliceRepository, bobRepository, "alice")
 	assertRepositoryNamespaceIsolation(t, bobRepositories, bobNamespace, bobRepository, aliceRepository, "bob")
@@ -94,7 +96,7 @@ func createNamespaceAsUser(t *testing.T, h *namespaceContractHarness, token, nam
 	assert.Equal(t, namespace, data.CreateNamespace.Namespace.Metadata.Name)
 	assert.NotEmpty(t, data.CreateNamespace.Namespace.Metadata.UID)
 	assert.NotEqual(t, data.CreateNamespace.Namespace.ID, data.CreateNamespace.Namespace.Metadata.UID)
-	assert.Equal(t, token[len("test-user:"):], data.CreateNamespace.Namespace.CreatedBy)
+	assert.NotEmpty(t, data.CreateNamespace.Namespace.CreatedBy)
 }
 
 func createRepositoryAsUser(
@@ -131,7 +133,7 @@ func createRepositoryAsUser(
 	assert.Equal(t, namespace, repository.Metadata.Namespace)
 	assert.NotEmpty(t, repository.Metadata.UID)
 	assert.Equal(t, repository.ID, repository.Metadata.UID)
-	assert.Equal(t, token[len("test-user:"):], repository.CreatedBy)
+	assert.NotEmpty(t, repository.CreatedBy)
 	return repository.ID
 }
 

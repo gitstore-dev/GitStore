@@ -170,14 +170,13 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/app"
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
-	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
@@ -191,8 +190,6 @@ type mockGitWriter struct {
 	mu sync.Mutex
 }
 
-type testUserAuthN struct{}
-
 type namespaceOwnerAuthZ struct{}
 
 func (*namespaceOwnerAuthZ) Name() string { return "namespace-owner-test" }
@@ -203,40 +200,13 @@ func (*namespaceOwnerAuthZ) Authorize(
 	_ string,
 	resource authpkg.ResourceContext,
 ) (authpkg.Decision, error) {
-	if principal.IsAdmin() {
+	if principal.Subject == "admin" {
 		return authpkg.Allow("namespace-owner-test", "administrator"), nil
 	}
 	if resource.OwnerSub != "" && resource.OwnerSub != principal.Subject {
 		return authpkg.Deny("namespace-owner-test", "resource belongs to another user"), nil
 	}
 	return authpkg.Allow("namespace-owner-test", "owner or unowned resource"), nil
-}
-
-func (*testUserAuthN) Name() string { return "integration-users" }
-func (*testUserAuthN) Capabilities() authpkg.Capability { return authpkg.CapAuthenticate }
-func (*testUserAuthN) Authenticate(_ context.Context, req authpkg.AuthRequest) (*authpkg.Principal, authpkg.Decision, error) {
-	const prefix = "Bearer test-user:"
-	authorization := req.Header.Get("Authorization")
-	if !strings.HasPrefix(authorization, prefix) {
-		return nil, authpkg.Challenge("integration-users", "not an integration user token"), nil
-	}
-	subject := strings.TrimSpace(strings.TrimPrefix(authorization, prefix))
-	if subject == "" {
-		return nil, authpkg.Deny("integration-users", "empty integration user"), nil
-	}
-	return &authpkg.Principal{
-		Subject: subject,
-		Issuer: "integration",
-		Roles: []string{"developer"},
-		AuthMethod: "integration-test",
-	}, authpkg.Allow("integration-users", "integration user authenticated"), nil
-}
-func (*testUserAuthN) RevokeSession(context.Context, string, time.Time) error { return authpkg.ErrNotSupported }
-func (*testUserAuthN) RefreshSession(context.Context, string) (string, time.Time, error) {
-	return "", time.Time{}, authpkg.ErrNotSupported
-}
-func (*testUserAuthN) IssueSession(context.Context, string) (string, time.Time, error) {
-	return "", time.Time{}, authpkg.ErrNotSupported
 }
 
 func (m *mockGitWriter) CommitFile(_ context.Context, _ gitclient.CommitFileParams) (string, error) {
@@ -276,25 +246,31 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	usersFile := filepath.Join(os.TempDir(), fmt.Sprintf("gitstore-namespace-contract-users-%d.yaml", os.Getpid()))
+	userHash := string(hash)
+	usersYAML := "version: v1\nusers:\n" +
+		"  - username: admin\n    password_hash: \"" + userHash + "\"\n" +
+		"  - username: alice\n    password_hash: \"" + userHash + "\"\n" +
+		"  - username: bob\n    password_hash: \"" + userHash + "\"\n"
+	if err := os.WriteFile(usersFile, []byte(usersYAML), 0600); err != nil {
+		panic(err)
+	}
 	cfg := config.AuthConfig{
-		Admin: config.UserConfig{
-			Username: "admin",
-			Password: string(hash),
-		},
+		StaticUsers: config.StaticUsersConfig{UsersFile: usersFile},
 		JWT: config.JWTConfig{
 			Secret:   "namespace-contract-secret",
 			Issuer:   "gitstore",
 			Duration: "2h",
 		},
 	}
-	staticAdmin, err := staticadmin.New(cfg, zap.NewNop())
+	staticUsers, err := staticusers.New(cfg, zap.NewNop())
 	if err != nil {
 		panic(err)
 	}
-	defer staticAdmin.Shutdown()
+	defer staticUsers.Shutdown()
 
 	registry := authpkg.NewProviderRegistry(
-		authpkg.NewChainedAuthN(&testUserAuthN{}, staticAdmin, anonymous.New()),
+		authpkg.NewChainedAuthN(staticUsers, anonymous.New()),
 		&namespaceOwnerAuthZ{},
 		nil,
 	)
@@ -467,6 +443,16 @@ func namespaceContractFreePort(t *testing.T) int {
 
 func namespaceContractBootstrapToken(t *testing.T, apiURL string) string {
 	t.Helper()
+	return namespaceContractLoginURL(t, apiURL, "admin", "admin123")
+}
+
+func namespaceContractLogin(t *testing.T, h *namespaceContractHarness, username, password string) string {
+	t.Helper()
+	return namespaceContractLoginURL(t, h.apiURL, username, password)
+}
+
+func namespaceContractLoginURL(t *testing.T, apiURL, username, password string) string {
+	t.Helper()
 	resp := gqlQueryWithURL(t, apiURL, "", `
 		mutation($input: LoginInput!) {
 			login(input: $input) {
@@ -477,8 +463,8 @@ func namespaceContractBootstrapToken(t *testing.T, apiURL string) string {
 			}
 		}
 	`, map[string]any{"input": map[string]any{
-		"username": "admin",
-		"password": "admin123",
+		"username": username,
+		"password": password,
 	}})
 	if len(resp.Errors) > 0 {
 		t.Fatalf("graphql login errors: %s", namespaceContractErrors(resp.Errors))

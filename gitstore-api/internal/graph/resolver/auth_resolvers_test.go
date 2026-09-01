@@ -8,11 +8,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
-	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
@@ -36,10 +38,11 @@ func mustBcrypt(t *testing.T, password string) string {
 func newTestConfig(t *testing.T, duration string) config.AuthConfig {
 	t.Helper()
 	return config.AuthConfig{
-		Admin: config.UserConfig{
-			Username: "admin",
-			Password: mustBcrypt(t, "testpass"),
-		},
+		StaticUsers: config.StaticUsersConfig{UsersFile: func() string {
+			path := filepath.Join(t.TempDir(), "users.yaml")
+			require.NoError(t, os.WriteFile(path, []byte("version: v1\nusers:\n  - username: admin\n    password_hash: \""+mustBcrypt(t, "testpass")+"\"\n"), 0600))
+			return path
+		}()},
 		JWT: config.JWTConfig{
 			Secret:       "test-secret",
 			Issuer:       "gitstore",
@@ -49,9 +52,9 @@ func newTestConfig(t *testing.T, duration string) config.AuthConfig {
 	}
 }
 
-func newTestRegistry(t *testing.T, cfg config.AuthConfig) (*authpkg.ProviderRegistry, *staticadmin.StaticAdminProvider) {
+func newTestRegistry(t *testing.T, cfg config.AuthConfig) (*authpkg.ProviderRegistry, *staticusers.StaticUsersProvider) {
 	t.Helper()
-	p, err := staticadmin.New(cfg, zap.NewNop())
+	p, err := staticusers.New(cfg, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(p.Shutdown)
 	chain := authpkg.NewChainedAuthN(p)
@@ -331,7 +334,7 @@ func TestRefreshToken_NilRegistry_ReturnsError(t *testing.T) {
 // --- helpers ---
 
 // extractJTI issues a new token and parses its jti by authenticating.
-func extractJTI(t *testing.T, p *staticadmin.StaticAdminProvider, token string) string {
+func extractJTI(t *testing.T, p *staticusers.StaticUsersProvider, token string) string {
 	t.Helper()
 	req := authpkg.AuthRequest{Header: http.Header{"Authorization": []string{"Bearer " + token}}}
 	principal, _, err := p.Authenticate(context.Background(), req)

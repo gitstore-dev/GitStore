@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -19,7 +20,7 @@ import (
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
-	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticadmin"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
@@ -130,11 +131,10 @@ func newTestGraphQLRegistry(t *testing.T) *authpkg.ProviderRegistry {
 	hash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.MinCost)
 	require.NoError(t, err)
 
+	usersFile := filepath.Join(t.TempDir(), "users.yaml")
+	require.NoError(t, os.WriteFile(usersFile, []byte("version: v1\nusers:\n  - username: admin\n    password_hash: \""+string(hash)+"\"\n"), 0600))
 	cfg := config.AuthConfig{
-		Admin: config.UserConfig{
-			Username: "admin",
-			Password: string(hash),
-		},
+		StaticUsers: config.StaticUsersConfig{UsersFile: usersFile},
 		JWT: config.JWTConfig{
 			Secret:   "dev-secret",
 			Issuer:   "gitstore",
@@ -142,7 +142,7 @@ func newTestGraphQLRegistry(t *testing.T) *authpkg.ProviderRegistry {
 		},
 	}
 
-	staticAdmin, err := staticadmin.New(cfg, zap.NewNop())
+	staticAdmin, err := staticusers.New(cfg, zap.NewNop())
 	require.NoError(t, err)
 	t.Cleanup(staticAdmin.Shutdown)
 
