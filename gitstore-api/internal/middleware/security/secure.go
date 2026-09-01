@@ -26,6 +26,12 @@ type Authenticate struct {
 	registry   *auth.ProviderRegistry
 	logger     *zap.Logger
 	authCounts *prometheus.CounterVec
+	// apiAuthnCounts backs gitstore_api_authn_requests_total{provider,outcome}
+	// (spec 061 T013) — a per-provider, per-outcome counter for the generic
+	// bearer-token AuthN path (GraphQL and other non-git-http API traffic),
+	// distinct from authCounts' git-smart-HTTP-specific {outcome,service}
+	// shape above.
+	apiAuthnCounts *prometheus.CounterVec
 }
 
 type Authorize struct {
@@ -60,6 +66,7 @@ type authenticatorFunc func(*gin.Context, auth.AuthRequest, *Authenticate) (cont
 // Pass nil to skip metric registration (useful in tests that don't need counters).
 func NewAuthenticate(registry *auth.ProviderRegistry, logger *zap.Logger, opts ...prometheus.Registerer) Authenticate {
 	var counts *prometheus.CounterVec
+	var apiCounts *prometheus.CounterVec
 	if len(opts) > 0 && opts[0] != nil {
 		counts = prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "gitstore_git_http_auth_requests_total",
@@ -72,11 +79,22 @@ func NewAuthenticate(registry *auth.ProviderRegistry, logger *zap.Logger, opts .
 				counts = are.ExistingCollector.(*prometheus.CounterVec)
 			}
 		}
+		apiCounts = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gitstore_api_authn_requests_total",
+			Help: "Total bearer-token API authentication requests by provider and outcome.",
+		}, []string{"provider", "outcome"})
+		if err := opts[0].Register(apiCounts); err != nil {
+			var are prometheus.AlreadyRegisteredError
+			if errors.As(err, &are) {
+				apiCounts = are.ExistingCollector.(*prometheus.CounterVec)
+			}
+		}
 	}
 	return Authenticate{
-		registry:   registry,
-		logger:     logger,
-		authCounts: counts,
+		registry:       registry,
+		logger:         logger,
+		authCounts:     counts,
+		apiAuthnCounts: apiCounts,
 	}
 }
 
@@ -151,13 +169,16 @@ func bearerAuth(c *gin.Context, req auth.AuthRequest, a *Authenticate) (context.
 	principal, decision, err := a.registry.AuthN().Authenticate(ctx, req)
 	if err != nil {
 		a.logger.Warn("auth chain error", zap.Error(err))
+		a.recordAPIAuthN(decision.Provider, "error")
 		c.AbortWithStatus(http.StatusUnauthorized)
 		return ctx, principal, c.IsAborted()
 	}
 	if decision.Outcome == auth.OutcomeDeny {
+		a.recordAPIAuthN(decision.Provider, "deny")
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"Unauthorized": decision.Reason})
 		return ctx, principal, c.IsAborted()
 	}
+	a.recordAPIAuthN(decision.Provider, "allow")
 	return ctx, principal, c.IsAborted()
 }
 
@@ -208,6 +229,18 @@ func (a *Authenticate) recordAuthService(outcome, service string) {
 		return
 	}
 	a.authCounts.WithLabelValues(outcome, service).Inc()
+}
+
+// recordAPIAuthN increments gitstore_api_authn_requests_total{provider,outcome}
+// if metrics are configured (spec 061 T013). provider is the Decision's
+// Provider field — the name of the specific AuthNProvider that produced the
+// terminal outcome, or "chain" when every provider in the chain returned
+// Challenge (see ChainedAuthN.Authenticate's doc comment).
+func (a *Authenticate) recordAPIAuthN(provider, outcome string) {
+	if a.apiAuthnCounts == nil {
+		return
+	}
+	a.apiAuthnCounts.WithLabelValues(provider, outcome).Inc()
 }
 
 // Authenticator authenticates a request through the active provider chain.

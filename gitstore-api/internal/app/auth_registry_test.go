@@ -50,7 +50,7 @@ func TestProviderRegistryReloadPreservesUsableBindingInvariant(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 	revocations := store.(staticusers.RevocationStore)
-	registry, reloader, shutdowns, err := buildProviderRegistry(cfg, zap.NewNop(), revocations)
+	registry, reloader, shutdowns, err := buildProviderRegistry(cfg, store, zap.NewNop(), revocations)
 	require.NoError(t, err)
 	for _, shutdown := range shutdowns {
 		t.Cleanup(shutdown.Shutdown)

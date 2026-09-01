@@ -27,6 +27,8 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountassertion"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountjwt"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/userdirnone"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
@@ -185,7 +187,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("datastore does not implement shared session revocations")
 	}
-	registry, authReloader, providerShutdowns, err := buildProviderRegistry(cfg, log, revocations)
+	registry, authReloader, providerShutdowns, err := buildProviderRegistry(cfg, store, log, revocations)
 	if err != nil {
 		_ = gitClient.Close()
 		_ = store.Close()
@@ -433,17 +435,27 @@ func namespaceWatchReadiness(ctx context.Context, runtime *namespaceWatchRuntime
 	return nil
 }
 
+// serviceAccountLookup is the narrow datastore seam shared by
+// serviceaccountassertion.New and serviceaccountjwt.New — both providers
+// declare their own identically-shaped ServiceAccountLookup interface (so
+// each provider package depends only on the one method it uses, without
+// coupling to each other), and *datastore.InstrumentedDatastore already
+// satisfies this shape.
+type serviceAccountLookup interface {
+	GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*datastore.ServiceAccount, error)
+}
+
 // buildProviderRegistry constructs a ProviderRegistry from the application config.
 // It reads authn chain, authz provider, and userdir provider from the resolved config.
 // The second return value validates and atomically swaps the complete auth set on
 // SIGHUP. The third return value lists resources that must be shut down with the server.
-func buildProviderRegistry(cfg *config.Config, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, authReloader, []providerShutdowner, error) {
-	registry, shutdowns, err := constructProviderRegistry(cfg, log, revocations)
+func buildProviderRegistry(cfg *config.Config, store serviceAccountLookup, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, authReloader, []providerShutdowner, error) {
+	registry, shutdowns, err := constructProviderRegistry(cfg, store, log, revocations)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	runtime := &providerRegistryRuntime{
-		cfg: cfg, log: log, revocations: revocations, registry: registry, shutdowns: shutdowns,
+		cfg: cfg, store: store, log: log, revocations: revocations, registry: registry, shutdowns: shutdowns,
 	}
 	return registry, runtime, []providerShutdowner{runtime}, nil
 }
@@ -451,6 +463,7 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger, revocations stat
 type providerRegistryRuntime struct {
 	mu          sync.Mutex
 	cfg         *config.Config
+	store       serviceAccountLookup
 	log         *zap.Logger
 	revocations staticusers.RevocationStore
 	registry    *auth.ProviderRegistry
@@ -464,7 +477,7 @@ func (r *providerRegistryRuntime) Reload() error {
 	if r.closed {
 		return errors.New("auth provider registry is closed")
 	}
-	newRegistry, newShutdowns, err := constructProviderRegistry(r.cfg, r.log, r.revocations)
+	newRegistry, newShutdowns, err := constructProviderRegistry(r.cfg, r.store, r.log, r.revocations)
 	if err != nil {
 		return err
 	}
@@ -492,7 +505,7 @@ func (r *providerRegistryRuntime) Shutdown() {
 	}
 }
 
-func constructProviderRegistry(cfg *config.Config, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, []providerShutdowner, error) {
+func constructProviderRegistry(cfg *config.Config, store serviceAccountLookup, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, []providerShutdowner, error) {
 	// Build AuthN providers in chain order.
 	chain := cfg.Auth.AuthN.Chain
 	if len(chain) == 0 {
@@ -520,6 +533,22 @@ func constructProviderRegistry(cfg *config.Config, log *zap.Logger, revocations 
 			shutdowns = append(shutdowns, p)
 		case "anonymous":
 			authnProviders = append(authnProviders, anonymous.New())
+		case "serviceaccount-assertion":
+			p, err := serviceaccountassertion.New(cfg.Auth.ServiceAccount, store, log)
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("init serviceaccount-assertion provider: %w", err)
+			}
+			authnProviders = append(authnProviders, p)
+			shutdowns = append(shutdowns, p)
+		case "serviceaccount-jwt":
+			p, err := serviceaccountjwt.New(cfg.Auth.ServiceAccount, store, log)
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("init serviceaccount-jwt provider: %w", err)
+			}
+			authnProviders = append(authnProviders, p)
+			shutdowns = append(shutdowns, p)
 		default:
 			cleanup()
 			return nil, nil, fmt.Errorf("unknown authn provider %q", name)
