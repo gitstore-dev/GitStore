@@ -67,7 +67,7 @@ The API gateway (`gitstore-api`) and the Git server (`gitstore-git-service`) com
 
 `gitstore-api` serves two ports:
 - Port `4000` — GraphQL API
-- Port `5000` — Git smart HTTP (`git clone`, `git fetch`, `git push`)
+- Port `9000` — Git smart HTTP (`git clone`, `git fetch`, `git push`)
 
 `gitstore-git-service` serves one port:
 - Port `50051` — gRPC only
@@ -83,7 +83,7 @@ Key environment variables:
 | Service                | Variable                   | Purpose                                                          |
 |------------------------|----------------------------|------------------------------------------------------------------|
 | `gitstore-api`         | `GITSTORE_GIT__GRPC__URI`  | gRPC address of git-service (e.g. `dns:///git-service:50051`)    |
-| `gitstore-api`         | `GITSTORE_API__GIT_PORT`   | Port the Git smart HTTP server binds on (default `5000`)         |
+| `gitstore-api`         | `GITSTORE_API__GIT_PORT`   | Port the Git smart HTTP server binds on (default `9000`)         |
 | `gitstore-git-service` | `GITSTORE_GRPC__PORT`      | Port the gRPC server binds on (default `50051`)                  |
 | `gitstore-git-service` | `GITSTORE_GIT__DATA_DIR`   | Path to the bare repository directory                            |
 

@@ -164,6 +164,31 @@ func TestGraphQLAuthorizerAllowsRefreshTokenMutationForAnonymous(t *testing.T) {
 	assert.True(t, called)
 }
 
+func TestGraphQLResponseAuthorizerPreservesPayloadForCompletedAndIncompleteDecisions(t *testing.T) {
+	mw := NewAuthorize(nil, zap.NewNop())
+	for _, test := range []struct {
+		name      string
+		completed bool
+	}{
+		{name: "completed protected field", completed: true},
+		{name: "incomplete protected field", completed: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ledger := &authorizationLedger{}
+			finish := ledger.begin()
+			if test.completed {
+				finish(true)
+			}
+			ctx := context.WithValue(context.Background(), authorizationLedgerContextKey{}, ledger)
+			expected := &graphql.Response{Data: []byte(`{"repository":{"name":"catalog"}}`), Errors: gqlerror.List{gqlerror.Errorf("partial field error")}}
+			actual := mw.GraphQLResponseAuthorizer(ctx, func(context.Context) *graphql.Response { return expected })
+			assert.Same(t, expected, actual)
+			assert.Equal(t, expected.Data, actual.Data)
+			assert.Equal(t, expected.Errors, actual.Errors)
+		})
+	}
+}
+
 func TestGraphQLAuthorizerAllowsLoginMutationWithRootTypenameForAnonymous(t *testing.T) {
 	registry, _ := newTestRegistry(t)
 	opCtx := &graphql.OperationContext{
@@ -743,4 +768,33 @@ func TestGraphQLFieldAuthorizerRequiresAssertionForTokenIssuance(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, called)
 	assert.Contains(t, err.Error(), "assertion authentication is required")
+}
+
+func TestGraphQLFieldAuthorizerUsesPolicyForServiceAccountMutations(t *testing.T) {
+	for _, test := range []struct {
+		field  string
+		action string
+	}{
+		{field: "createServiceAccount", action: "serviceaccount.create"},
+		{field: "rotateServiceAccountKey", action: "serviceaccount.key.rotate"},
+		{field: "deleteServiceAccount", action: "serviceaccount.delete"},
+	} {
+		t.Run(test.field, func(t *testing.T) {
+			authz := &stubAuthZProvider{decision: auth.Deny("stub-authz", "test deny")}
+			mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
+			ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "admin", AuthMethod: "static-admin"})
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+				Object: "Mutation",
+				Field:  graphql.CollectedField{Field: &ast.Field{Name: test.field}},
+			})
+			called := false
+			_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+				called = true
+				return "ok", nil
+			})
+			require.Error(t, err)
+			assert.False(t, called)
+			assert.Equal(t, test.action, authz.action)
+		})
+	}
 }

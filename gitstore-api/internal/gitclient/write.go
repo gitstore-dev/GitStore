@@ -38,9 +38,14 @@ type CreateTagParams struct {
 // CreateRepository provisions a new repository on the git service.
 // Returns the storage path reported by gitstore-git-service.
 func (c *Client) CreateRepository(ctx context.Context, repositoryID, storageClass string) (string, error) {
+	authorization, err := RequestAuthorization(ctx, "repository.create.any", repositoryID)
+	if err != nil {
+		return "", err
+	}
 	resp, err := c.Git.CreateRepository(ctx, &gitv1.CreateRepositoryRequest{
-		RepositoryId: repositoryID,
-		StorageClass: storageClass,
+		RepositoryId:  repositoryID,
+		StorageClass:  storageClass,
+		Authorization: authorization,
 	})
 	if err != nil {
 		return "", err
@@ -50,8 +55,13 @@ func (c *Client) CreateRepository(ctx context.Context, repositoryID, storageClas
 
 // DeleteRepository removes a repository from the git service.
 func (c *Client) DeleteRepository(ctx context.Context, repositoryID string) error {
-	_, err := c.Git.DeleteRepository(ctx, &gitv1.DeleteRepositoryRequest{
-		RepositoryId: repositoryID,
+	authorization, err := RequestAuthorization(ctx, "repository.delete.any", repositoryID)
+	if err != nil {
+		return err
+	}
+	_, err = c.Git.DeleteRepository(ctx, &gitv1.DeleteRepositoryRequest{
+		RepositoryId:  repositoryID,
+		Authorization: authorization,
 	})
 	return err
 }
@@ -64,6 +74,10 @@ func (c *Client) CommitFile(ctx context.Context, p CommitFileParams) (string, er
 
 // CommitFileForRepo writes a single file to an explicitly selected repository.
 func (c *Client) CommitFileForRepo(ctx context.Context, repositoryID string, p CommitFileParams) (string, error) {
+	authorization, err := RequestAuthorization(ctx, "repository.write.any", repositoryID)
+	if err != nil {
+		return "", err
+	}
 	resp, err := c.Git.CommitFile(ctx, &gitv1.CommitFileRequest{
 		RepositoryId:  repositoryID,
 		Path:          p.Path,
@@ -71,6 +85,7 @@ func (c *Client) CommitFileForRepo(ctx context.Context, repositoryID string, p C
 		CommitMessage: p.CommitMessage,
 		AuthorName:    p.AuthorName,
 		AuthorEmail:   p.AuthorEmail,
+		Authorization: authorization,
 	})
 	if err != nil {
 		return "", err
@@ -81,12 +96,17 @@ func (c *Client) CommitFileForRepo(ctx context.Context, repositoryID string, p C
 // DeleteFile removes a file and commits the deletion to the default branch.
 // Returns the new commit SHA on success.
 func (c *Client) DeleteFile(ctx context.Context, p DeleteFileParams) (string, error) {
+	authorization, err := RequestAuthorization(ctx, "repository.write.any", c.RepositoryID)
+	if err != nil {
+		return "", err
+	}
 	resp, err := c.Git.DeleteFile(ctx, &gitv1.DeleteFileRequest{
 		RepositoryId:  c.RepositoryID,
 		Path:          p.Path,
 		CommitMessage: p.CommitMessage,
 		AuthorName:    p.AuthorName,
 		AuthorEmail:   p.AuthorEmail,
+		Authorization: authorization,
 	})
 	if err != nil {
 		return "", err
@@ -97,11 +117,16 @@ func (c *Client) DeleteFile(ctx context.Context, p DeleteFileParams) (string, er
 // CreateTag creates an annotated tag on HEAD (or the specified commit SHA).
 // Returns the tag object SHA on success.
 func (c *Client) CreateTag(ctx context.Context, p CreateTagParams) (string, error) {
+	authorization, err := RequestAuthorization(ctx, "repository.write.any", c.RepositoryID)
+	if err != nil {
+		return "", err
+	}
 	resp, err := c.Git.CreateTag(ctx, &gitv1.CreateTagRequest{
 		RepositoryId:    c.RepositoryID,
 		TagName:         p.Name,
 		Message:         p.Message,
 		TargetCommitSha: p.TargetCommitSha,
+		Authorization:   authorization,
 	})
 	if err != nil {
 		return "", err

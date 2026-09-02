@@ -28,9 +28,9 @@ func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.Create
 	if len(input.PublicKeys) == 0 {
 		return nil, gqlerror.Errorf("at least one public key is required")
 	}
-	principal, err := r.authorizeServiceAccountAction(ctx, "serviceaccount.create", "")
-	if err != nil {
-		return nil, err
+	principal := auth.PrincipalFromContext(ctx)
+	if principal == nil || principal.Subject == "" {
+		return nil, gqlerror.Errorf("authenticated principal is required")
 	}
 
 	namespace := input.Metadata.Namespace
@@ -99,10 +99,6 @@ func (r *Resolver) RotateServiceAccountKey(ctx context.Context, input *model.Rot
 	if input == nil || input.Metadata == nil {
 		return nil, gqlerror.Errorf("metadata is required")
 	}
-	if _, err := r.authorizeServiceAccountAction(ctx, "serviceaccount.key.rotate", ""); err != nil {
-		return nil, err
-	}
-
 	namespace := input.Metadata.Namespace
 	name := input.Metadata.Name
 
@@ -157,10 +153,6 @@ func (r *Resolver) DeleteServiceAccount(ctx context.Context, input *model.Delete
 	if input == nil || input.Metadata == nil {
 		return nil, gqlerror.Errorf("metadata is required")
 	}
-	if _, err := r.authorizeServiceAccountAction(ctx, "serviceaccount.delete", ""); err != nil {
-		return nil, err
-	}
-
 	namespace := input.Metadata.Namespace
 	name := input.Metadata.Name
 
@@ -240,10 +232,6 @@ func (r *Resolver) IssueServiceAccountToken(ctx context.Context, input *model.Is
 	if principal.ServiceAccountUID != sa.UID {
 		return nil, gqlerror.Errorf("service account identity does not match the current service account")
 	}
-	if _, err := r.authorizeServiceAccountAction(ctx, "serviceaccount.token.issue", expectedSubject); err != nil {
-		return nil, err
-	}
-
 	// Determine audience: use input or configured default
 	audience := r.serviceAccountAudience
 	if input.Spec.Audience != nil && *input.Spec.Audience != "" {
@@ -282,27 +270,6 @@ func (r *Resolver) IssueServiceAccountToken(ctx context.Context, input *model.Is
 			ExpiresAt: expiresAt,
 		},
 	}, nil
-}
-
-func (r *Resolver) authorizeServiceAccountAction(ctx context.Context, action, name string) (*auth.Principal, error) {
-	principal := auth.PrincipalFromContext(ctx)
-	if principal == nil || principal.Subject == "" || principal.AuthMethod == "" || principal.AuthMethod == "none" {
-		return nil, gqlerror.Errorf("authenticated principal is required")
-	}
-	if r.registry == nil || r.registry.AuthZ() == nil {
-		return nil, gqlerror.Errorf("authorization service unavailable")
-	}
-	decision, err := r.registry.AuthZ().Authorize(ctx, principal, action, auth.ResourceContext{
-		Kind: "serviceAccount",
-		Name: name,
-	})
-	if err != nil {
-		return nil, gqlerror.Errorf("authorization error")
-	}
-	if decision.Outcome != auth.OutcomeAllow {
-		return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
-	}
-	return principal, nil
 }
 
 func normalizeServiceAccountPublicKey(input *model.ServiceAccountPublicKeyInput) (datastore.ServiceAccountPublicKey, error) {

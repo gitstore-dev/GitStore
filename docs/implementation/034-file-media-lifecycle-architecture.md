@@ -1,8 +1,8 @@
 # File and Media Resource Lifecycle: Architecture Decision Document
 
-**Status**: 🟡️ Proposed (not yet implemented)
-**Date**: 2026-08-09
-**Audience**: GitStore API, controller-manager, and catalog authors.
+**Status**: 🟡️ Proposed (not yet implemented)  
+**Date**: 2026-08-09  
+**Audience**: GitStore API, controller-manager, and catalog authors.  
 **Feeds**: ADR-0008 (finalize), GH#79, GH#127, GH#192, GH#194, GH#195, GH#244, GH#283, GH#304, GH#316.
 
 This document reconciles GH#79 (File resource shape), GH#127 (LFS/S3 storage

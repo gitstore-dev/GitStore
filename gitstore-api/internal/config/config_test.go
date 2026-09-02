@@ -89,7 +89,7 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	require.NotNil(t, cfg)
 
 	assert.Equal(t, 4000, cfg.Api.Port)
-	assert.Equal(t, 5000, cfg.Api.GitPort)
+	assert.Equal(t, 9000, cfg.Api.GitPort)
 	assert.Equal(t, float64(50), cfg.Api.RateLimitPerSecond)
 	assert.Equal(t, 100, cfg.Api.RateLimitBurst)
 	assert.Equal(t, "dns:///localhost:50051", cfg.Git.Grpc.Uri)

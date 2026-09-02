@@ -11,7 +11,7 @@ graph TD
     Storefront["Storefront"]
 
     Admin["gitstore-admin\nAstro / React\nport 3000"]
-    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 5000\nCatalogService gRPC: 6000"]
+    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 9000 (host)\nCatalogService gRPC: 6000"]
     GitService["gitstore-git-service\ngRPC: 50051"]
     Controller["gitstore-controller-manager\nhealth/metrics/API: 5001"]
     Datastore["memdb / ScyllaDB"]
@@ -34,7 +34,7 @@ graph TD
 - Admin is a client of `gitstore-api`.
 - Admin uses `GITSTORE_GRAPHQL_URL` to reach the GraphQL endpoint.
 - Admin never talks directly to `gitstore-git-service`.
-- Git clone, fetch, and push traffic enters through `gitstore-api` on Git Smart HTTP port `5000`.
+- Git clone, fetch, and push traffic enters through `gitstore-api` on Git Smart HTTP host port `9000`.
 - `gitstore-git-service` remains gRPC-only from the perspective of the compose network.
 - Catalogue admission is owned by the API and Git service hook callout flow, not by the admin process.
 
@@ -44,7 +44,7 @@ When started with `compose.admin.yml`, the services share `gitstore-network`:
 
 ```text
 gitstore-network
-├── gitstore-api                 ports 4000, 5000, 6000
+├── gitstore-api                 ports 4000, 9000, 6000
 ├── gitstore-git-service         port 50051
 ├── gitstore-controller-manager  port 5001
 └── gitstore-admin               port 3000

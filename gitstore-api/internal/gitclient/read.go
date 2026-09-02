@@ -32,10 +32,15 @@ func (c *Client) ReadFile(ctx context.Context, path, ref string) ([]byte, error)
 // ReadFileForRepo fetches the raw bytes of a single file at the given ref for
 // the specified repository. Safe for concurrent calls with different repository IDs.
 func (c *Client) ReadFileForRepo(ctx context.Context, repositoryID, path, ref string) ([]byte, error) {
+	authorization, err := RequestAuthorization(ctx, "repository.read.any", repositoryID)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := c.Git.GetFile(ctx, &gitv1.GetFileRequest{
-		RepositoryId: repositoryID,
-		Path:         path,
-		Ref:          ref,
+		RepositoryId:  repositoryID,
+		Path:          path,
+		Ref:           ref,
+		Authorization: authorization,
 	})
 	if err != nil {
 		return nil, err
@@ -64,10 +69,15 @@ func (c *Client) ListFilesForRepo(ctx context.Context, repositoryID, prefix, ref
 // ref_commit_sha field is populated before the file walk, so this is safe and
 // avoids transferring the full tree over gRPC on every staleness check.
 func (c *Client) ResolveRefForRepo(ctx context.Context, repositoryID, ref string) (string, error) {
+	authorization, err := RequestAuthorization(ctx, "repository.read.any", repositoryID)
+	if err != nil {
+		return "", err
+	}
 	resp, err := c.Git.ListFiles(ctx, &gitv1.ListFilesRequest{
-		RepositoryId: repositoryID,
-		Ref:          ref,
-		Recursive:    false,
+		RepositoryId:  repositoryID,
+		Ref:           ref,
+		Recursive:     false,
+		Authorization: authorization,
 	})
 	if err != nil {
 		return "", err
@@ -79,20 +89,30 @@ func (c *Client) ResolveRefForRepo(ctx context.Context, repositoryID, ref string
 }
 
 func (c *Client) listFilesForRepo(ctx context.Context, repositoryID, prefix, ref string) (*gitv1.ListFilesResponse, error) {
+	authorization, err := RequestAuthorization(ctx, "repository.read.any", repositoryID)
+	if err != nil {
+		return nil, err
+	}
 	return c.Git.ListFiles(ctx, &gitv1.ListFilesRequest{
-		RepositoryId: repositoryID,
-		Ref:          ref,
-		PathPrefix:   prefix,
-		Recursive:    true,
+		RepositoryId:  repositoryID,
+		Ref:           ref,
+		PathPrefix:    prefix,
+		Recursive:     true,
+		Authorization: authorization,
 	})
 }
 
 // GetLatestTag returns the latest semver release tag.
 // Returns an error (wrapping codes.NotFound) if no tags exist.
 func (c *Client) GetLatestTag(ctx context.Context) (*gitv1.TagEntry, error) {
+	authorization, err := RequestAuthorization(ctx, "repository.read.any", c.RepositoryID)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := c.Git.GetLatestTag(ctx, &gitv1.GetLatestTagRequest{
-		RepositoryId: c.RepositoryID,
-		Prefix:       "v",
+		RepositoryId:  c.RepositoryID,
+		Prefix:        "v",
+		Authorization: authorization,
 	})
 	if err != nil {
 		return nil, err
@@ -108,9 +128,14 @@ func (c *Client) GetLatestTag(ctx context.Context) (*gitv1.TagEntry, error) {
 
 // ListTags enumerates tags with an optional prefix filter.
 func (c *Client) ListTags(ctx context.Context, prefix string) ([]*gitv1.TagEntry, error) {
+	authorization, err := RequestAuthorization(ctx, "repository.read.any", c.RepositoryID)
+	if err != nil {
+		return nil, err
+	}
 	resp, err := c.Git.ListTags(ctx, &gitv1.ListTagsRequest{
-		RepositoryId: c.RepositoryID,
-		Prefix:       prefix,
+		RepositoryId:  c.RepositoryID,
+		Prefix:        prefix,
+		Authorization: authorization,
 	})
 	if err != nil {
 		return nil, err

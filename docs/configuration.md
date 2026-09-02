@@ -63,7 +63,7 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 | Key             | Env Var                   | Type    | Default | Required | Sensitive | Description                                             |
 |-----------------|---------------------------|---------|---------|----------|-----------|---------------------------------------------------------|
 | `api.port`      | `GITSTORE_API__PORT`      | integer | `4000`  | No       | No        | HTTP port the GraphQL API server listens on (1–65535)   |
-| `api.git_port`  | `GITSTORE_API__GIT_PORT`  | integer | `5000`  | No       | No        | Git Smart HTTP port the API server listens on (1–65535) |
+| `api.git_port`  | `GITSTORE_API__GIT_PORT`  | integer | `9000`  | No       | No        | Git Smart HTTP port the API server listens on (1–65535) |
 | `api.grpc_port` | `GITSTORE_API__GRPC_PORT` | integer | `6000`  | No       | No        | CatalogService gRPC port called by gitstore-git-service |
 | `api.rate_limit_per_second` | `GITSTORE_API__RATE_LIMIT_PER_SECOND` | float | `50` | No | No | Sustained per-client-IP request rate allowed on `/graphql` |
 | `api.rate_limit_burst` | `GITSTORE_API__RATE_LIMIT_BURST` | integer | `100` | No | No | Per-client-IP token-bucket burst size on top of `api.rate_limit_per_second` |
@@ -76,7 +76,7 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 
 ### Git Smart HTTP Endpoints
 
-The following endpoints are served on port `api.git_port` (default `5000`):
+The following endpoints are served on port `api.git_port` (default `9000`):
 
 | Method | Path                                                              | Description                                       |
 |--------|-------------------------------------------------------------------|---------------------------------------------------|
@@ -102,9 +102,15 @@ The root operator helpers target the local Compose files in `config/` by default
 
 ```bash
 make add-user USERNAME=alice PASSWORD='secret' EMAIL=alice@example.com DISPLAY_NAME='Alice Doe'
-make add-role ROLE=developer ALLOW='repository.read,repository.write'
+make add-role ROLE=developer ALLOW='repository.read.own,repository.write.own'
 make assign-role SUBJECT=alice ROLE=developer
 ```
+
+Background API work uses the explicit `system:api` subject. Production RBAC
+policies must bind that subject only to the repository actions required by the
+deployment; the development policy provides the `api-internal` role as the
+minimal example. It is carried to GitService as an authorization envelope and
+is not a substitute for the API-to-Git-service HMAC.
 
 Set `AUTH_CONFIG_DIR=gitstore-api` for native-development files, or override
 `USERS_FILE` and `POLICY_FILE` separately. These commands validate and atomically
@@ -237,7 +243,7 @@ Resource UIDs and names belong in structured logs, never metric labels. See
 ```toml
 [api]
 port = 4000
-git_port = 5000
+git_port = 9000
 grpc_port = 6000
 
 [git.grpc]

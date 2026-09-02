@@ -14,9 +14,15 @@ roles:
       - "repository.create.any"
       - "serviceaccount.token.issue"
     deny: []
+  api-internal:
+    allow:
+      - "repository.*.any"
+    deny: []
 default_deny: true
 role_bindings:
   admin:
     - admin
   serviceaccount:controllers:gitstore-controller-manager:
     - controller
+  system:api:
+    - api-internal

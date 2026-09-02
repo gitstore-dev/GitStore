@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -24,6 +25,37 @@ import (
 
 type remoteAddrContextKey struct{}
 type authorizedNamespaceDeleteContextKey struct{}
+type authorizationLedgerContextKey struct{}
+
+// authorizationLedger is deliberately operation-scoped. gqlgen can execute
+// sibling fields concurrently, while a subscription invokes the response hook
+// once per payload.
+type authorizationLedger struct {
+	mu        sync.Mutex
+	expected  int
+	completed int
+	denied    int
+}
+
+func (l *authorizationLedger) begin() func(allowed bool) {
+	l.mu.Lock()
+	l.expected++
+	l.mu.Unlock()
+	return func(allowed bool) {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.completed++
+		if !allowed {
+			l.denied++
+		}
+	}
+}
+
+func (l *authorizationLedger) snapshot() (expected, completed, denied int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.expected, l.completed, l.denied
+}
 
 // ContextWithRemoteAddr stores the caller IP/remote address so GraphQL auth
 // middleware can pass it to providers without depending on Gin internals.
@@ -117,7 +149,42 @@ func (a *Authorize) GraphQLAuthorizer(ctx context.Context, next graphql.Operatio
 		return graphql.OneShot(graphql.ErrorResponse(ctx, "authentication required"))
 	}
 
-	return next(ctx)
+	return next(context.WithValue(ctx, authorizationLedgerContextKey{}, &authorizationLedger{}))
+}
+
+// GraphQLResponseAuthorizer is the final GraphQL security boundary. Field
+// middleware has already made the policy decision before a resolver can
+// produce protected data; this hook records the terminal outcome for ordinary
+// responses and every subscription payload without reshaping response data.
+func (a *Authorize) GraphQLResponseAuthorizer(ctx context.Context, next graphql.ResponseHandler) *graphql.Response {
+	response := next(ctx)
+	if a.logger == nil {
+		a.logger = zap.NewNop()
+	}
+	principal := auth.PrincipalFromContext(ctx)
+	subject := "anonymous"
+	if principal != nil && principal.Subject != "" {
+		subject = principal.Subject
+	}
+	expected, completed, denied := 0, 0, 0
+	if ledger, ok := ctx.Value(authorizationLedgerContextKey{}).(*authorizationLedger); ok && ledger != nil {
+		expected, completed, denied = ledger.snapshot()
+	}
+	fieldsComplete := expected == completed
+	if !fieldsComplete {
+		a.logger.Error("graphql response has incomplete authorization decisions",
+			zap.Int("expected_protected_fields", expected),
+			zap.Int("completed_protected_fields", completed),
+		)
+	}
+	a.logger.Debug("graphql response authorization complete",
+		zap.String("subject", subject),
+		zap.Int("protected_fields", expected),
+		zap.Int("denied_fields", denied),
+		zap.Bool("protected_fields_complete", fieldsComplete),
+		zap.Bool("has_errors", response != nil && len(response.Errors) != 0),
+	)
+	return response
 }
 
 // GraphQLFieldAuthorizer runs fine-grained GraphQL authorization checks for
@@ -129,6 +196,15 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	fc := graphql.GetFieldContext(ctx)
 	if fc == nil {
 		return next(ctx)
+	}
+	var finishDecision func(bool)
+	if ledger, ok := ctx.Value(authorizationLedgerContextKey{}).(*authorizationLedger); ok && ledger != nil && graphqlFieldRequiresAuthorization(fc) {
+		finishDecision = ledger.begin()
+		defer func() {
+			if finishDecision != nil {
+				finishDecision(false)
+			}
+		}()
 	}
 
 	principal := auth.PrincipalFromContext(ctx)
@@ -143,7 +219,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			Extensions: map[string]any{"code": "FORBIDDEN"},
 		}
 	}
-	if fc.Object != "Mutation" && fc.Object != "Subscription" {
+	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isRepositoryQueryField(fc) {
 		return next(ctx)
 	}
 	var authz auth.AuthZProvider
@@ -151,7 +227,15 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		authz = a.registry.AuthZ()
 	}
 	if fc.Object == "Subscription" {
-		return a.authorizeSubscription(ctx, next, fc, principal, authz)
+		return a.authorizeSubscription(ctx, next, fc, principal, authz, func() {
+			if finishDecision != nil {
+				finishDecision(true)
+				finishDecision = nil
+			}
+		})
+	}
+	if err := a.authorizeRepositoryField(ctx, fc, principal); err != nil {
+		return nil, err
 	}
 
 	switch fc.Field.Name {
@@ -404,7 +488,201 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		}
 	}
 
+	if finishDecision != nil {
+		finishDecision(true)
+		finishDecision = nil
+	}
 	return next(ctx)
+}
+
+func isRepositoryQueryField(fc *graphql.FieldContext) bool {
+	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node")
+}
+
+func graphqlFieldRequiresAuthorization(fc *graphql.FieldContext) bool {
+	if fc == nil {
+		return false
+	}
+	switch fc.Object {
+	case "Query":
+		return fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node"
+	case "Mutation":
+		switch fc.Field.Name {
+		case "createRepository", "renameRepository", "transferRepository", "deleteRepository", "deleteNamespace", "completeNamespaceDeletion", "updateCategoryStatus", "updateProductStatus", "deleteCategory", "updateResourceStatus", "issueServiceAccountToken", "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount":
+			return true
+		case "createNamespace":
+			tier, ok := nestedStringPath(fc.Args, "input", "spec", "tier")
+			return ok && tier == "ORGANIZATION"
+		}
+	case "Subscription":
+		return fc.Field.Name == "watchFiles" || fc.Field.Name == "watchNamespaces" || fc.Field.Name == "watchResources"
+	}
+	return false
+}
+
+func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal) error {
+	if fc == nil || a.store == nil {
+		return nil
+	}
+	var operation string
+	var namespaces []*datastore.Namespace
+	var repo *datastore.Repository
+
+	loadRepository := func(encodedID string) error {
+		rawID, err := decodeGlobalIDAs("Repository", encodedID)
+		if err != nil {
+			return err
+		}
+		repo, err = a.store.GetRepository(ctx, rawID)
+		if err != nil {
+			return err
+		}
+		ns, err := a.store.GetNamespaceByName(ctx, repo.Namespace)
+		if err != nil {
+			return err
+		}
+		namespaces = append(namespaces, ns)
+		return nil
+	}
+
+	switch fc.Object + "." + fc.Field.Name {
+	case "Mutation.createRepository":
+		name, nameOK := nestedStringArg(fc.Args, "input", "name")
+		namespace, namespaceOK := nestedStringArg(fc.Args, "input", "namespace")
+		if !nameOK || !namespaceOK {
+			return nil
+		}
+		ns, err := a.store.GetNamespaceByName(ctx, namespace)
+		if err != nil {
+			return err
+		}
+		operation, namespaces, repo = "create", []*datastore.Namespace{ns}, &datastore.Repository{Name: name}
+	case "Mutation.renameRepository", "Mutation.deleteRepository":
+		encodedID, ok := nestedStringArg(fc.Args, "input", "repositoryID")
+		if !ok {
+			return nil
+		}
+		if err := loadRepository(encodedID); err != nil {
+			return err
+		}
+		if fc.Field.Name == "renameRepository" {
+			operation = "rename"
+		} else {
+			operation = "delete"
+		}
+	case "Mutation.transferRepository":
+		encodedRepositoryID, repositoryOK := nestedStringArg(fc.Args, "input", "repositoryID")
+		encodedNamespaceID, namespaceOK := nestedStringArg(fc.Args, "input", "targetNamespaceID")
+		if !repositoryOK || !namespaceOK {
+			return nil
+		}
+		if err := loadRepository(encodedRepositoryID); err != nil {
+			return err
+		}
+		targetID, err := decodeGlobalIDAs("Namespace", encodedNamespaceID)
+		if err != nil {
+			return err
+		}
+		target, err := a.store.GetNamespace(ctx, targetID)
+		if err != nil {
+			return err
+		}
+		operation, namespaces = "transfer", append(namespaces, target)
+	case "Query.repository":
+		if encodedID, ok := nestedStringPath(fc.Args, "by", "id"); ok && encodedID != "" {
+			if err := loadRepository(encodedID); err != nil {
+				return err
+			}
+		} else {
+			namespace, namespaceOK := nestedStringPath(fc.Args, "by", "namespacePath", "namespace")
+			name, nameOK := nestedStringPath(fc.Args, "by", "namespacePath", "name")
+			if !namespaceOK || !nameOK {
+				return nil
+			}
+			ns, err := a.store.GetNamespaceByName(ctx, namespace)
+			if err != nil {
+				return err
+			}
+			mapping, err := a.store.LookupRepository(ctx, ns.Name, name)
+			if err != nil {
+				return err
+			}
+			repo, err = a.store.GetRepository(ctx, mapping.RepositoryID)
+			if err != nil {
+				return err
+			}
+			namespaces = []*datastore.Namespace{ns}
+		}
+		operation = "read"
+	case "Query.repositories":
+		namespace, ok := directStringArg(fc.Args, "namespace")
+		if !ok {
+			return nil
+		}
+		ns, err := a.store.GetNamespaceByName(ctx, namespace)
+		if err != nil {
+			return err
+		}
+		operation, namespaces, repo = "read", []*datastore.Namespace{ns}, &datastore.Repository{Name: namespace}
+	case "Query.node":
+		encodedID, ok := directStringArg(fc.Args, "id")
+		if !ok {
+			return nil
+		}
+		kind, _, err := decodeGlobalID(encodedID)
+		if err != nil || kind != "Repository" {
+			return err
+		}
+		if err := loadRepository(encodedID); err != nil {
+			return err
+		}
+		operation = "read"
+	default:
+		return nil
+	}
+
+	if operation == "" || repo == nil || len(namespaces) == 0 {
+		return nil
+	}
+	if _, err := a.authorizeRepositoryTenant(ctx, principal, operation, repo, namespaces...); err != nil {
+		return gqlerror.Errorf("%v", err)
+	}
+	return nil
+}
+
+func decodeGlobalIDAs(expectedKind, encoded string) (string, error) {
+	kind, rawID, err := decodeGlobalID(encoded)
+	if err != nil {
+		return "", gqlerror.Errorf("invalid global ID: %v", err)
+	}
+	if kind != expectedKind {
+		return "", gqlerror.Errorf("invalid global ID kind: expected %s, got %s", expectedKind, kind)
+	}
+	return rawID, nil
+}
+
+func decodeGlobalID(encoded string) (kind, rawID string, err error) {
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", "", err
+	}
+	u, err := url.Parse(string(decoded))
+	if err != nil || u.Scheme != "gid" || u.Host != "GitStore" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", "", fmt.Errorf("invalid global ID")
+	}
+	parts := strings.SplitN(strings.TrimPrefix(u.EscapedPath(), "/"), "/", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("global ID must include kind and raw ID")
+	}
+	kind, err = url.PathUnescape(parts[0])
+	if err != nil {
+		return "", "", err
+	}
+	rawID, err = url.PathUnescape(parts[1])
+	if err != nil || kind == "" || rawID == "" {
+		return "", "", fmt.Errorf("invalid global ID")
+	}
+	return kind, rawID, nil
 }
 
 func (a *Authorize) authorizeSubscription(
@@ -413,6 +691,7 @@ func (a *Authorize) authorizeSubscription(
 	fc *graphql.FieldContext,
 	principal *auth.Principal,
 	authz auth.AuthZProvider,
+	onAllowed func(),
 ) (any, error) {
 	var kind string
 	switch fc.Field.Name {
@@ -449,6 +728,9 @@ func (a *Authorize) authorizeSubscription(
 			Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
 			Extensions: map[string]any{"code": "FORBIDDEN"},
 		}
+	}
+	if onAllowed != nil {
+		onAllowed()
 	}
 	return next(ctx)
 }

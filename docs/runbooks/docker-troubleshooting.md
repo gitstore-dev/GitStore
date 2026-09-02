@@ -8,7 +8,7 @@ The core compose stack includes:
 
 | Service | Container | Ports |
 |---|---|---|
-| API | `gitstore-api` | `4000`, `5000`, `6000` |
+| API | `gitstore-api` | `4000`, `9000` (Git HTTP host), `6000` |
 | Git service | `gitstore-git-service` | `50051` |
 | Controller manager | `gitstore-controller-manager` | `5001` |
 
@@ -18,7 +18,7 @@ The optional admin compose override adds:
 |---|---|---|
 | Admin | `gitstore-admin` | `3000` |
 
-Git clients connect to the API on Git Smart HTTP port `5000`. The Git service is internal gRPC storage/transport and stores bare repositories in the `git-repo-data-root` volume.
+Git clients connect to the API on Git Smart HTTP port `9000`. The Git service is internal gRPC storage/transport and stores bare repositories in the `git-repo-data-root` volume.
 
 Core services are enabled by the `local` profile. Use the root Make targets so
 the profile and `compose.local.yml` are applied consistently. They validate the
@@ -66,7 +66,7 @@ make bootstrap ADMIN_PASSWORD=<admin-password>
 The command prints a clone URL:
 
 ```text
-http://localhost:5000/gitstore-test/catalog.git
+http://localhost:9000/gitstore-test/catalog.git
 ```
 
 If bootstrap fails, get a token explicitly:
@@ -145,7 +145,7 @@ curl -s http://localhost:4000/graphql \
 Use the API-fronted clone URL with the `.git` suffix:
 
 ```text
-http://localhost:5000/gitstore-test/catalog.git
+http://localhost:9000/gitstore-test/catalog.git
 ```
 
 ### Push rejected with validation errors

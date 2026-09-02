@@ -379,6 +379,7 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	gqlServer.AroundOperations(authenticateMiddleware.GraphQLAuthenticator)
 	gqlServer.AroundOperations(authorizeMiddleware.GraphQLAuthorizer)
 	gqlServer.AroundFields(authorizeMiddleware.GraphQLFieldAuthorizer)
+	gqlServer.AroundResponses(authorizeMiddleware.GraphQLResponseAuthorizer)
 
 	gqlHandler := gin.HandlerFunc(func(c *gin.Context) {
 		ctx := security.ContextWithRemoteAddr(c.Request.Context(), c.RemoteIP())

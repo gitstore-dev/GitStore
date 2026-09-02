@@ -25,7 +25,7 @@ The core stack exposes:
 |---|---|
 | GraphQL API | http://localhost:4000/graphql |
 | GraphQL Playground | http://localhost:4000/playground |
-| Git Smart HTTP | http://localhost:5000 |
+| Git Smart HTTP | http://localhost:9000 |
 | Controller manager health | http://localhost:5001/health |
 
 ## Bootstrap A Repository
@@ -58,13 +58,13 @@ make bootstrap \
 The command prints a clone URL like:
 
 ```text
-http://localhost:5000/gitstore-test/catalog.git
+http://localhost:9000/gitstore-test/catalog.git
 ```
 
 Clone it:
 
 ```bash
-git clone http://localhost:5000/gitstore-test/catalog.git catalog-work
+git clone http://localhost:9000/gitstore-test/catalog.git catalog-work
 cd catalog-work
 ```
 
@@ -456,7 +456,7 @@ Bootstrap is create-oriented. If a namespace or repository already exists, eithe
 Use the clone URL printed by `make bootstrap`. It should include the namespace, repository name, and `.git` suffix:
 
 ```text
-http://localhost:5000/gitstore-test/catalog.git
+http://localhost:9000/gitstore-test/catalog.git
 ```
 
 Verify the repository exists:
