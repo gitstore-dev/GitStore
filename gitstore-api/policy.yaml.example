@@ -1,0 +1,60 @@
+# policy.yaml.example — rbac-local policy file
+#
+# Copy this file to `policy.yaml` (or any path referenced by
+# GITSTORE_AUTH__RBAC__POLICY_FILE) when GITSTORE_AUTH__AUTHZ__PROVIDER=rbac-local.
+#
+# `version` must be "v1".
+version: v1
+
+# roles maps role name -> permissions.
+roles:
+  admin:
+    allow:
+      - "*"                  # wildcard: all actions
+    deny: []
+
+  namespace-owner:
+    allow:
+      - namespace.read
+      - namespace.update
+      - namespace.delete.own     # only own namespaces
+      - repository.read
+      - repository.write
+      - repository.create.own
+      - repository.rename.own
+      - repository.transfer.own
+      - repository.delete.own
+      - repository.read.own
+    deny:
+      - namespace.delete.any     # cannot delete other owners' namespaces
+
+  developer:
+    allow:
+      - namespace.read
+      - repository.read
+      - repository.write
+      - repository.read.any
+    deny: []
+
+  anonymous:
+    allow:
+      - namespace.read
+      - repository.read
+      - repository.read.any
+    deny:
+      - repository.write
+      - namespace.create
+      - namespace.delete.any
+
+# default_deny applies when no role rule matches. Defaults to true if omitted.
+default_deny: true
+
+# role_bindings maps subject (username from your AuthN provider, e.g. a
+# static-users entry) -> list of roles. Every configured static-users
+# identity that should be able to log in MUST have an entry here, or every
+# login from that identity will be denied by default_deny.
+role_bindings:
+  "alice":
+    - admin
+  "bob":
+    - developer

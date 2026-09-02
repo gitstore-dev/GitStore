@@ -290,7 +290,7 @@ func TestRunMigrations_SupportedRollbackArtifactRetainsForwardMigrationSet(t *te
 	)
 	require.ErrorContains(t, err, "database is ahead")
 
-	supportedRollbackMigrations := migrationSetThrough(t, "006_namespace_watch_cdc.cql")
+	supportedRollbackMigrations := migrationSetThrough(t, "007_auth_session_revocations.cql")
 	require.NoError(t, scylla.RunMigrationsWithFS(
 		ctx,
 		session,

@@ -11,6 +11,7 @@ services:
     volumes:
       - ${CONFIG_FILE:-./config/config.toml}:/config/gitstore.toml:ro
       - ./config/policy.yaml:/config/policy.yaml:ro
+      - ./config/users.yaml:/config/users.yaml:ro
 
   controller-manager:
     profiles: [local]

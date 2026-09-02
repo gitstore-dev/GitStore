@@ -22,7 +22,7 @@ Authorization: Bearer <token>
 ```
 
 GitStore delegates OAuth2/OIDC federation to external identity providers. The GraphQL `login`
-mutation is a local-provider convenience (for example `static-admin`) and returns an OIDC-style
+mutation is a local-provider convenience (for example `static-users`) and returns an OIDC-style
 token payload. External providers such as `oidc-jwt` are expected to authenticate out-of-band and
 present a token to GitStore for verification.
 

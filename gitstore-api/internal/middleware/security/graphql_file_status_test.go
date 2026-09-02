@@ -35,7 +35,7 @@ func TestGraphQLFieldAuthorizerUpdateResourceStatusFileUsesFileStatusWriteAction
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-admin", Roles: []string{"controller"}})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-users", Roles: []string{"controller"}})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "updateResourceStatus"}},
@@ -71,7 +71,7 @@ func TestGraphQLFieldAuthorizerUpdateResourceStatusFileDenyReturnsForbidden(t *t
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "eve", AuthMethod: "static-admin"})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "eve", AuthMethod: "static-users"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "updateResourceStatus"}},

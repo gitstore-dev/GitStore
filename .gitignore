@@ -4,6 +4,15 @@
 .env*
 !.env.example
 
+# Local auth config (static-users/rbac-local) — operator-provided, must never be
+# committed or built into an image; only the tracked *.example templates are.
+# Anchored to gitstore-api/ so a stray file there can never enter a CI build
+# context (docker/*.Dockerfile does `COPY gitstore-api/ ./`), while leaving
+# #410's tracked development fixtures under config/ unaffected.
+/gitstore-api/policy.yaml
+/gitstore-api/users.yaml
+!config/users.yaml
+
 # Rust
 target/
 **/*.rs.bk

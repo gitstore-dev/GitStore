@@ -160,6 +160,8 @@ type memdbDatastore struct {
 	namespaceWatchLease     datastore.NamespaceWatchLease
 	namespaceWatchProgress  map[string]datastore.NamespaceCDCProgress
 	namespaceWatchRetention time.Duration
+	sessionRevocationMu     sync.RWMutex
+	sessionRevocations      map[string]time.Time
 }
 
 // New creates an empty in-memory datastore backed by go-memdb.
@@ -177,7 +179,44 @@ func New(watchRetention ...time.Duration) (datastore.Datastore, error) {
 		namespaceWatchEpoch:     uuid.NewString(),
 		namespaceWatchProgress:  make(map[string]datastore.NamespaceCDCProgress),
 		namespaceWatchRetention: retention,
+		sessionRevocations:      make(map[string]time.Time),
 	}, nil
+}
+
+// RevokeSession records a revoked JTI until the caller-provided expiry.
+func (m *memdbDatastore) RevokeSession(_ context.Context, jti string, expiresAt time.Time) error {
+	m.sessionRevocationMu.Lock()
+	m.sessionRevocations[jti] = expiresAt
+	m.sessionRevocationMu.Unlock()
+	return nil
+}
+
+// IsSessionRevoked reports live revocations and lazily removes expired rows.
+func (m *memdbDatastore) IsSessionRevoked(_ context.Context, jti string) (bool, error) {
+	m.sessionRevocationMu.RLock()
+	expiresAt, ok := m.sessionRevocations[jti]
+	m.sessionRevocationMu.RUnlock()
+	if !ok {
+		return false, nil
+	}
+	if time.Now().After(expiresAt) {
+		m.sessionRevocationMu.Lock()
+		delete(m.sessionRevocations, jti)
+		m.sessionRevocationMu.Unlock()
+		return false, nil
+	}
+	return true, nil
+}
+
+// ConsumeSession atomically revokes a JTI only if no live revocation exists.
+func (m *memdbDatastore) ConsumeSession(_ context.Context, jti string, expiresAt time.Time) (bool, error) {
+	m.sessionRevocationMu.Lock()
+	defer m.sessionRevocationMu.Unlock()
+	if current, ok := m.sessionRevocations[jti]; ok && time.Now().Before(current) {
+		return false, nil
+	}
+	m.sessionRevocations[jti] = expiresAt
+	return true, nil
 }
 
 func (m *memdbDatastore) Close() error { return nil }

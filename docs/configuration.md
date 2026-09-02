@@ -90,14 +90,27 @@ The following endpoints are served on port `api.git_port` (default `5000`):
 
 | Key                        | Env Var                               | Type     | Default    | Required | Sensitive | Description                                                 |
 |----------------------------|---------------------------------------|----------|------------|----------|-----------|-------------------------------------------------------------|
-| `auth.admin.username`      | `GITSTORE_AUTH__ADMIN__USERNAME`      | string   | —          | **Yes**  | No        | Admin portal username                                       |
-| `auth.admin.password_hash` | `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | string   | —          | **Yes**  | **Yes**   | bcrypt hash of the admin password                           |
-| `auth.jwt.secret`          | `GITSTORE_AUTH__JWT__SECRET`          | string   | —          | **Yes**  | **Yes**   | JWT signing key (minimum 32 characters)                     |
+| `auth.staticusers.users_file` | `GITSTORE_AUTH__STATICUSERS__USERS_FILE` | string | users.yaml | When selected | No | YAML file containing local users |
+| `auth.jwt.secret`          | `GITSTORE_AUTH__JWT__SECRET`          | string   | —          | When `static-users` is selected | **Yes** | JWT signing key (minimum 32 characters)                  |
 | `auth.jwt.duration`        | `GITSTORE_AUTH__JWT__DURATION`        | duration | `24h`      | No       | No        | JWT token validity (e.g. `12h`, `30m`)                      |
 | `auth.jwt.issuer`          | `GITSTORE_AUTH__JWT__ISSUER`          | string   | `gitstore` | No       | No        | JWT `iss` claim value                                       |
 | `auth.jwt.refresh_grace`   | `GITSTORE_AUTH__JWT__REFRESH_GRACE`   | duration | `60s`      | No       | No        | Window after expiry during which `refreshToken` is accepted |
 
-For config files, admin auth keys are nested under `[auth.admin]` (for example, `username = "admin"`) and JWT keys are nested under `[auth.jwt]`.
+For config files, local users are selected with `[auth.staticusers]` and `users_file = "users.yaml"`; JWT keys remain nested under `[auth.jwt]`.
+
+The root operator helpers target the local Compose files in `config/` by default:
+
+```bash
+make add-user USERNAME=alice PASSWORD='secret' EMAIL=alice@example.com DISPLAY_NAME='Alice Doe'
+make add-role ROLE=developer ALLOW='repository.read,repository.write'
+make assign-role SUBJECT=alice ROLE=developer
+```
+
+Set `AUTH_CONFIG_DIR=gitstore-api` for native-development files, or override
+`USERS_FILE` and `POLICY_FILE` separately. These commands validate and atomically
+replace one YAML file at a time; `add-user` never changes authorization policy.
+
+`static-users` always appends `/static-users` to the configured issuer base when minting tokens, while accepting the exact configured base for legacy sessions during rolling upgrades. Logout and refresh rotation require the shared ScyllaDB revocation table in production; migration 007 creates it automatically.
 
 ### Logging
 
@@ -224,7 +237,7 @@ keyspace = "gitstore"
 tls = false
 ```
 
-Secrets (`auth.admin.password_hash`, `auth.jwt.secret`) must remain in environment variables or `.env`, never in `config.toml`.
+Secrets in the users file and `auth.jwt.secret` must remain outside committed operator configuration, never in `config.toml`.
 
 ## gitstore-git-service
 

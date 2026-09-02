@@ -377,7 +377,7 @@ curl -s http://localhost:4000/graphql \
 Use GraphQL mutations for authentication, namespaces, and repositories. The Make bootstrap targets wrap these calls for the common local workflow.
 
 GitStore delegates OAuth2/OIDC federation to external identity providers. The GraphQL
-`login(input:)` mutation is a convenience flow for local providers (for example `static-admin`).
+`login(input:)` mutation is a convenience flow for local providers (for example `static-users`).
 
 Login:
 
@@ -438,7 +438,7 @@ make logs SERVICE=git-service
 make logs SERVICE=controller-manager
 ```
 
-If required auth environment variables are missing, the API will not become healthy. Set `GITSTORE_AUTH__ADMIN__USERNAME`, `GITSTORE_AUTH__ADMIN__PASSWORD_HASH`, and `GITSTORE_AUTH__JWT__SECRET`, or use the provided compose defaults for local development.
+If required auth configuration is missing, the API will not become healthy. Set `GITSTORE_AUTH__STATICUSERS__USERS_FILE` and `GITSTORE_AUTH__JWT__SECRET`, or use the provided compose defaults for local development.
 
 ### Bootstrap Fails
 

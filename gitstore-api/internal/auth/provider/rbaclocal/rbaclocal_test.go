@@ -50,11 +50,11 @@ func newRBACProvider(t *testing.T, policyContent string) *RBACLocalProvider {
 }
 
 func adminPrincipal() *authpkg.Principal {
-	return &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-admin"}
+	return &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-users"}
 }
 
 func developerPrincipal() *authpkg.Principal {
-	return &authpkg.Principal{Subject: "dev", Roles: []string{"developer"}, AuthMethod: "static-admin"}
+	return &authpkg.Principal{Subject: "dev", Roles: []string{"developer"}, AuthMethod: "static-users"}
 }
 
 func anonPrincipal() *authpkg.Principal {
@@ -193,4 +193,78 @@ role_bindings:
 	d, err = p.Authorize(context.Background(), bob, "namespace.create.user", authpkg.ResourceContext{})
 	require.NoError(t, err)
 	assert.Equal(t, authpkg.OutcomeDeny, d.Outcome)
+}
+
+func TestRBACLocal_HasAnyRoleBindingForRequiresUsableRole(t *testing.T) {
+	p := newRBACProvider(t, `version: v1
+default_deny: true
+roles:
+  observer:
+    deny: ["namespace.delete.any"]
+  developer:
+    allow: ["namespace.read"]
+role_bindings:
+  alice: [observer]
+  bob: [developer]
+`)
+
+	assert.False(t, p.HasAnyRoleBindingFor([]string{"alice"}))
+	assert.True(t, p.HasAnyRoleBindingFor([]string{"bob"}))
+}
+
+func TestRBACLocal_HasAnyRoleBindingForAppliesAllExplicitDenies(t *testing.T) {
+	p := newRBACProvider(t, `version: v1
+default_deny: true
+roles:
+  self-denied-wildcard:
+    allow: ["*"]
+    deny: ["*"]
+  self-denied-exact:
+    allow: ["namespace.read"]
+    deny: ["namespace.read"]
+  reader:
+    allow: ["namespace.read"]
+  deny-all:
+    deny: ["*"]
+  broad-with-one-deny:
+    allow: ["*"]
+    deny: ["namespace.delete.any"]
+role_bindings:
+  alice: [self-denied-wildcard]
+  bob: [self-denied-exact]
+  carol: [reader, deny-all]
+  dave: [broad-with-one-deny]
+`)
+
+	assert.False(t, p.HasAnyRoleBindingFor([]string{"alice"}))
+	assert.False(t, p.HasAnyRoleBindingFor([]string{"bob"}))
+	assert.False(t, p.HasAnyRoleBindingFor([]string{"carol"}))
+	assert.True(t, p.HasAnyRoleBindingFor([]string{"dave"}))
+}
+
+func TestRBACLocalRejectsEmptyAndUndefinedRoleBindings(t *testing.T) {
+	tests := map[string]string{
+		"empty": `version: v1
+roles:
+  admin:
+    allow: ["*"]
+role_bindings:
+  alice: []
+`,
+		"undefined": `version: v1
+roles:
+  admin:
+    allow: ["*"]
+role_bindings:
+  alice: [admn]
+`,
+	}
+	for name, policy := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "policy.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(policy), 0600))
+			_, err := New(config.RBACConfig{PolicyFile: path}, zap.NewNop())
+			require.Error(t, err)
+		})
+	}
 }

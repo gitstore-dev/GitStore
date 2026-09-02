@@ -35,6 +35,42 @@ func New(cfg config.RBACConfig, logger *zap.Logger) (*RBACLocalProvider, error) 
 
 func (p *RBACLocalProvider) Name() string { return "rbac-local" }
 
+// HasAnyRoleBindingFor reports whether at least one subject's complete bound
+// role set permits any action after explicit denies are applied. It is a
+// read-only snapshot helper used by startup and reload migration validation.
+func (p *RBACLocalProvider) HasAnyRoleBindingFor(subjects []string) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, subject := range subjects {
+		allows := make(map[string]struct{})
+		denies := make(map[string]struct{})
+		for _, roleName := range p.policy.RoleBindings[subject] {
+			role, ok := p.policy.Roles[roleName]
+			if !ok {
+				continue
+			}
+			for _, action := range role.Allow {
+				allows[action] = struct{}{}
+			}
+			for _, action := range role.Deny {
+				denies[action] = struct{}{}
+			}
+		}
+		if _, deniesAll := denies["*"]; deniesAll {
+			continue
+		}
+		if _, allowsAll := allows["*"]; allowsAll {
+			return true
+		}
+		for action := range allows {
+			if _, denied := denies[action]; !denied {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Reload re-reads and validates the policy file atomically. Safe to call from a
 // SIGHUP handler.
 func (p *RBACLocalProvider) Reload() error {
