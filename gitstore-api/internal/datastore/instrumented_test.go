@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -19,9 +20,10 @@ import (
 
 // stubDatastore is a minimal Datastore stub for decorator tests.
 type stubDatastore struct {
-	getProductErr     error
-	getProductVal     *datastore.Product
-	getProductFinding *datastore.ProjectionFinding
+	getProductErr          error
+	getProductVal          *datastore.Product
+	getProductFinding      *datastore.ProjectionFinding
+	consumeAssertionResult bool
 }
 
 func (s *stubDatastore) CreateFile(_ context.Context, _ *datastore.File) error {
@@ -209,6 +211,32 @@ func (s *stubDatastore) TransferRepository(_ context.Context, _, _, _ string) er
 func (s *stubDatastore) DeleteNamespaceMapping(_ context.Context, _, _ string) error {
 	return s.getProductErr
 }
+
+func (s *stubDatastore) CreateServiceAccount(_ context.Context, _ *datastore.ServiceAccount) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) GetServiceAccountByUID(_ context.Context, _ string) (*datastore.ServiceAccount, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) GetServiceAccountBySubject(_ context.Context, _, _ string) (*datastore.ServiceAccount, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) ListServiceAccounts(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.ServiceAccount], error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) UpdateServiceAccountKeys(_ context.Context, _ string, _ []datastore.ServiceAccountPublicKey, _ []string, _ string) (*datastore.ServiceAccount, error) {
+	return nil, s.getProductErr
+}
+func (s *stubDatastore) SetServiceAccountDisabled(_ context.Context, _ string, _ bool) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) DeleteServiceAccount(_ context.Context, _ string) error {
+	return s.getProductErr
+}
+func (s *stubDatastore) TryConsumeServiceAccountAssertion(_ context.Context, _ string, _ time.Time) (bool, error) {
+	return s.consumeAssertionResult, s.getProductErr
+}
+
 func (s *stubDatastore) Close() error { return nil }
 
 // newTestInstrumented creates an InstrumentedDatastore with an observer logger
@@ -310,6 +338,16 @@ func TestInstrumentedDatastore_HistogramObservedOnSuccess(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, uint64(1), histogramObservationCount(t, reg, "GetProduct", "test-backend"))
+}
+
+func TestInstrumentedDatastore_ConsumesServiceAccountAssertion(t *testing.T) {
+	stub := &stubDatastore{consumeAssertionResult: true}
+	inst, _, reg := newTestInstrumented(t, stub)
+
+	consumed, err := inst.TryConsumeServiceAccountAssertion(context.Background(), "digest", time.Now().Add(time.Minute))
+	require.NoError(t, err)
+	assert.True(t, consumed)
+	assert.Equal(t, uint64(1), histogramObservationCount(t, reg, "TryConsumeServiceAccountAssertion", "test-backend"))
 }
 
 func TestInstrumentedDatastore_HistogramObservedOnError(t *testing.T) {

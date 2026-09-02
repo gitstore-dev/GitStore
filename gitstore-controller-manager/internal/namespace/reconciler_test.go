@@ -181,7 +181,7 @@ func TestReconcileFreshNamespaceProvisionsSystemRepositoryViaRealClient(t *testi
 		},
 	}
 	sc := &fakeStatusClient{}
-	repos := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, "token"))
+	repos := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	r := NewReconciler(seedNamespaceCache(t, current), sc, repos, &fakeDeletionClient{})
 
 	result := r.Reconcile(context.Background(), namespaceKey("acme"))

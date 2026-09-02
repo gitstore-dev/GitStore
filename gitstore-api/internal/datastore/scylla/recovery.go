@@ -541,6 +541,8 @@ func resourceKindForProjection(tableName string) string {
 		return "ProductVariant"
 	case "namespace_mappings":
 		return "Repository"
+	case "service_accounts_by_name", "service_accounts_by_uid", "service_accounts_by_namespace":
+		return "ServiceAccount"
 	default:
 		return "Unknown"
 	}

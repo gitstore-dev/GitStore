@@ -32,3 +32,14 @@ func AdvanceProductSystemVersion(product *Product) {
 	}
 	product.ResourceVersion = nextResourceVersion(product.ResourceVersion)
 }
+
+// AdvanceServiceAccountSystemVersion advances a ServiceAccount's
+// ResourceVersion for a mutation (e.g. SetServiceAccountDisabled) that does
+// not touch PublicKeys/Generation and so does not route through
+// ApplyServiceAccountKeyUpdate.
+func AdvanceServiceAccountSystemVersion(sa *ServiceAccount) {
+	if sa == nil {
+		return
+	}
+	sa.ResourceVersion = nextResourceVersion(sa.ResourceVersion)
+}

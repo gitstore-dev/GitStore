@@ -692,3 +692,185 @@ func TestLoad_DatastoreScyllaPasswordLoadedAndRedactable(t *testing.T) {
 	// And redact() must mask it in logs
 	assert.Equal(t, "<redacted>", redact(cfg.Datastore.Scylla.Password))
 }
+
+// T007: ServiceAccountConfig defaults and validation
+
+func TestLoad_ServiceAccountDefaultsApplied(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "gitstore", cfg.Auth.ServiceAccount.Issuer)
+	assert.Equal(t, "gitstore-api", cfg.Auth.ServiceAccount.Audience)
+	assert.Equal(t, "gitstore-api/serviceaccount-token", cfg.Auth.ServiceAccount.AssertionAudience)
+	assert.Equal(t, "", cfg.Auth.ServiceAccount.SigningKey)
+	assert.Equal(t, "10m", cfg.Auth.ServiceAccount.DefaultTTL)
+	assert.Equal(t, "1h", cfg.Auth.ServiceAccount.MaxTTL)
+	assert.Equal(t, "2m", cfg.Auth.ServiceAccount.ClockSkew)
+}
+
+func TestLoad_ServiceAccountSigningKeyNotRequiredWhenProviderNotChained(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	// Default chain is ["static-users", "anonymous"] — no service-account provider.
+
+	_, err := Load()
+	require.NoError(t, err)
+}
+
+func TestLoad_ServiceAccountSigningKeyRequiredWhenJWTProviderChained(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	path := filepath.Join(t.TempDir(), "gitstore.toml")
+	content := `[auth.staticusers]
+users_file = "users.yaml"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[auth.authn]
+chain = ["static-users", "serviceaccount-jwt", "anonymous"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	_, err := LoadFrom(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth.serviceaccount.signing_key is required")
+	assert.Contains(t, err.Error(), "serviceaccount-jwt")
+}
+
+func TestLoad_ServiceAccountSigningKeyRequiredWhenAssertionProviderChained(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	path := filepath.Join(t.TempDir(), "gitstore.toml")
+	content := `[auth.staticusers]
+users_file = "users.yaml"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[auth.authn]
+chain = ["static-users", "serviceaccount-assertion", "anonymous"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	_, err := LoadFrom(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth.serviceaccount.signing_key is required")
+}
+
+func TestLoad_ServiceAccountSigningKeySatisfiesRequirementWhenChained(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	path := filepath.Join(t.TempDir(), "gitstore.toml")
+	content := `[auth.staticusers]
+users_file = "users.yaml"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[auth.authn]
+chain = ["static-users", "serviceaccount-jwt", "anonymous"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+	os.Setenv("GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY", "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----")
+
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	assert.NotEmpty(t, cfg.Auth.ServiceAccount.SigningKey)
+}
+
+func TestLoad_ServiceAccountSigningKeyRedactedInStartupLog(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	setRequiredAuth(t)
+	os.Setenv("GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY", "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, "<redacted>", redact(cfg.Auth.ServiceAccount.SigningKey))
+}
+
+// T007a: FR-015c — signing key must not be sourced from a shared config file.
+
+// withTempSharedServiceConfigMountPath overrides sharedServiceConfigMountPath
+// to a path under t.TempDir() for the duration of the test, so these tests
+// never touch the real /config directory on the host.
+func withTempSharedServiceConfigMountPath(t *testing.T) string {
+	t.Helper()
+	original := sharedServiceConfigMountPath
+	path := filepath.Join(t.TempDir(), "gitstore.toml")
+	sharedServiceConfigMountPath = path
+	t.Cleanup(func() { sharedServiceConfigMountPath = original })
+	return path
+}
+
+func TestLoadFrom_RefusesServiceAccountSigningKeyFromSharedMountPath(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	path := withTempSharedServiceConfigMountPath(t)
+
+	content := `[auth.staticusers]
+users_file = "users.yaml"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[auth.authn]
+chain = ["static-users", "serviceaccount-jwt", "anonymous"]
+[auth.serviceaccount]
+signing_key = "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----"
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	_, err := LoadFrom(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must not be set in")
+	assert.Contains(t, err.Error(), path)
+	assert.Contains(t, err.Error(), "per-service")
+}
+
+func TestLoadFrom_AllowsServiceAccountSigningKeyFromEnvVarEvenAtSharedMountPath(t *testing.T) {
+	restore := clearEnv(t)
+	defer restore()
+	path := withTempSharedServiceConfigMountPath(t)
+
+	content := `[auth.staticusers]
+users_file = "users.yaml"
+[auth.jwt]
+secret = "explicit-file-secret-at-least-32-characters"
+[auth.grpc]
+hmac_secret = "explicit-hmac"
+[auth.authn]
+chain = ["static-users", "serviceaccount-jwt", "anonymous"]
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+
+	os.Setenv("GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY", "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----")
+
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	assert.NotEmpty(t, cfg.Auth.ServiceAccount.SigningKey)
+}
+
+func TestValidateServiceAccountSigningKeySource_IgnoresNonSharedPath(t *testing.T) {
+	cfg := &Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"serviceaccount-jwt"}}}}
+	err := validateServiceAccountSigningKeySource(cfg, "/some/other/path.toml", "signing-key-material")
+	assert.NoError(t, err)
+}
+
+func TestValidateServiceAccountSigningKeySource_IgnoresWhenProviderNotChained(t *testing.T) {
+	cfg := &Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"static-users", "anonymous"}}}}
+	err := validateServiceAccountSigningKeySource(cfg, sharedServiceConfigMountPath, "signing-key-material")
+	assert.NoError(t, err)
+}
+
+func TestValidateServiceAccountSigningKeySource_RejectsSharedPathWithKeyMaterial(t *testing.T) {
+	cfg := &Config{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"serviceaccount-jwt"}}}}
+	err := validateServiceAccountSigningKeySource(cfg, sharedServiceConfigMountPath, "signing-key-material")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), sharedServiceConfigMountPath)
+}

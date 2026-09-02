@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,6 +59,23 @@ func newCollection() *datastore.Collection {
 		Name:       "coll-" + newID()[:8],
 		APIVersion: "catalog.gitstore.dev/v1beta1",
 		Kind:       "Collection",
+	}
+}
+
+func newServiceAccount() *datastore.ServiceAccount {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	return &datastore.ServiceAccount{
+		UID:               newID(),
+		Namespace:         "controllers",
+		Name:              "sa-" + newID()[:8],
+		ResourceVersion:   "1",
+		CreationTimestamp: now,
+		CreationActor:     "test-admin",
+		UpdateTimestamp:   now,
+		UpdateActor:       "test-admin",
+		PublicKeys: []datastore.ServiceAccountPublicKey{
+			{KeyID: "key-1", Algorithm: "Ed25519", PublicKey: []byte("stub-public-key-bytes"), EnrolledAt: now},
+		},
 	}
 }
 
@@ -1048,5 +1066,198 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 		has, err = ds.HasCatalogResources(ctx, repo.UID)
 		require.NoError(t, err)
 		assert.False(t, has)
+	})
+
+	// ── ServiceAccount (spec 061) ──────────────────────────────────────────────
+
+	t.Run("ServiceAccount/CreateAndGetByUID", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		got, err := ds.GetServiceAccountByUID(ctx, sa.UID)
+		require.NoError(t, err)
+		assert.Equal(t, sa.UID, got.UID)
+		assert.Equal(t, sa.Namespace, got.Namespace)
+		assert.Equal(t, sa.Name, got.Name)
+		require.Len(t, got.PublicKeys, 1)
+		assert.Equal(t, sa.PublicKeys[0].KeyID, got.PublicKeys[0].KeyID)
+	})
+
+	t.Run("ServiceAccount/GetByUIDNotFound", func(t *testing.T) {
+		_, err := ds.GetServiceAccountByUID(ctx, newID())
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	t.Run("ServiceAccount/GetBySubject", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		got, err := ds.GetServiceAccountBySubject(ctx, sa.Namespace, sa.Name)
+		require.NoError(t, err)
+		assert.Equal(t, sa.UID, got.UID)
+	})
+
+	t.Run("ServiceAccount/GetBySubjectNotFound", func(t *testing.T) {
+		_, err := ds.GetServiceAccountBySubject(ctx, "controllers", "does-not-exist-"+newID()[:8])
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	t.Run("ServiceAccount/DuplicateUIDReturnsAlreadyExists", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+		err := ds.CreateServiceAccount(ctx, sa)
+		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
+	})
+
+	t.Run("ServiceAccount/DuplicateSubjectReturnsAlreadyExists", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		sa2 := newServiceAccount()
+		sa2.Namespace = sa.Namespace
+		sa2.Name = sa.Name // same namespace+name, different UID
+		err := ds.CreateServiceAccount(ctx, sa2)
+		assert.ErrorIs(t, err, datastore.ErrAlreadyExists)
+	})
+
+	t.Run("ServiceAccount/UpdateKeysAddAndRemove", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		add := []datastore.ServiceAccountPublicKey{
+			{KeyID: "key-2", Algorithm: "Ed25519", PublicKey: []byte("second-key"), EnrolledAt: time.Now().UTC()},
+		}
+		updated, err := ds.UpdateServiceAccountKeys(ctx, sa.UID, add, []string{"key-1"}, sa.ResourceVersion)
+		require.NoError(t, err)
+		require.Len(t, updated.PublicKeys, 1)
+		assert.Equal(t, "key-2", updated.PublicKeys[0].KeyID)
+		assert.NotEqual(t, sa.ResourceVersion, updated.ResourceVersion)
+
+		got, err := ds.GetServiceAccountByUID(ctx, sa.UID)
+		require.NoError(t, err)
+		require.Len(t, got.PublicKeys, 1)
+		assert.Equal(t, "key-2", got.PublicKeys[0].KeyID)
+	})
+
+	t.Run("ServiceAccount/UpdateKeysStaleResourceVersionReturnsConflict", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		_, err := ds.UpdateServiceAccountKeys(ctx, sa.UID, nil, nil, "stale-version")
+		assert.ErrorIs(t, err, datastore.ErrConflict)
+	})
+
+	t.Run("ServiceAccount/UpdateKeysEmptyResultReturnsInvalidArgument", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		_, err := ds.UpdateServiceAccountKeys(ctx, sa.UID, nil, []string{"key-1"}, sa.ResourceVersion)
+		assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
+	})
+
+	t.Run("ServiceAccount/SetDisabled", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		require.NoError(t, ds.SetServiceAccountDisabled(ctx, sa.UID, true))
+		got, err := ds.GetServiceAccountByUID(ctx, sa.UID)
+		require.NoError(t, err)
+		assert.True(t, got.Disabled)
+		assert.NotEqual(t, sa.ResourceVersion, got.ResourceVersion)
+		assert.Equal(t, sa.UID, got.UID) // UID survives Disabled toggle
+
+		require.NoError(t, ds.SetServiceAccountDisabled(ctx, sa.UID, false))
+		got, err = ds.GetServiceAccountByUID(ctx, sa.UID)
+		require.NoError(t, err)
+		assert.False(t, got.Disabled)
+	})
+
+	t.Run("ServiceAccount/SetDisabledNotFound", func(t *testing.T) {
+		err := ds.SetServiceAccountDisabled(ctx, newID(), true)
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	t.Run("ServiceAccount/Delete", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+		require.NoError(t, ds.DeleteServiceAccount(ctx, sa.UID))
+
+		_, err := ds.GetServiceAccountByUID(ctx, sa.UID)
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+		_, err = ds.GetServiceAccountBySubject(ctx, sa.Namespace, sa.Name)
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	t.Run("ServiceAccount/DeleteNotFound", func(t *testing.T) {
+		err := ds.DeleteServiceAccount(ctx, newID())
+		assert.ErrorIs(t, err, datastore.ErrNotFound)
+	})
+
+	t.Run("ServiceAccount/DeleteThenNameIsReusable", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+		require.NoError(t, ds.DeleteServiceAccount(ctx, sa.UID))
+
+		recreated := newServiceAccount()
+		recreated.Namespace = sa.Namespace
+		recreated.Name = sa.Name
+		require.NoError(t, ds.CreateServiceAccount(ctx, recreated))
+		assert.NotEqual(t, sa.UID, recreated.UID)
+	})
+
+	t.Run("ServiceAccount/ListIncludesCreated", func(t *testing.T) {
+		sa := newServiceAccount()
+		require.NoError(t, ds.CreateServiceAccount(ctx, sa))
+
+		page, err := ds.ListServiceAccounts(ctx, datastore.PageParams{})
+		require.NoError(t, err)
+		found := false
+		for _, item := range page.Items {
+			if item.UID == sa.UID {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "expected created service account %s to be present in ListServiceAccounts", sa.UID)
+	})
+
+	t.Run("ServiceAccount/AssertionReplayConsumesAtomically", func(t *testing.T) {
+		const consumers = 8
+		jtiDigest := "replay-" + newID()
+		expiresAt := time.Now().Add(time.Minute)
+		results := make(chan bool, consumers)
+		errors := make(chan error, consumers)
+		var wg sync.WaitGroup
+		wg.Add(consumers)
+		for range consumers {
+			go func() {
+				defer wg.Done()
+				consumed, err := ds.TryConsumeServiceAccountAssertion(ctx, jtiDigest, expiresAt)
+				if err != nil {
+					errors <- err
+					return
+				}
+				results <- consumed
+			}()
+		}
+		wg.Wait()
+		close(results)
+		close(errors)
+
+		for err := range errors {
+			require.NoError(t, err)
+		}
+		consumed := 0
+		for result := range results {
+			if result {
+				consumed++
+			}
+		}
+		assert.Equal(t, 1, consumed)
+	})
+
+	t.Run("ServiceAccount/AssertionReplayRejectsExpiredWindow", func(t *testing.T) {
+		_, err := ds.TryConsumeServiceAccountAssertion(ctx, "expired-"+newID(), time.Now().Add(-time.Second))
+		assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
 	})
 }

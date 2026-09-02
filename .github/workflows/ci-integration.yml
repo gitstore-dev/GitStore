@@ -97,20 +97,6 @@ jobs:
     - name: Wait for CatalogService gRPC to be ready
       run: timeout 30 sh -c 'until nc -z localhost 6000; do sleep 1; done'
 
-    - name: Mint controller-manager bearer token and restart it with credentials
-      # The CI JWT secret overrides the local fixture's signing secret, so mint
-      # a matching token and recreate just the controller container with it.
-      run: |
-        token_json=$(curl -sf -H 'Content-Type: application/json' \
-          --data '{"query":"mutation($username: String!, $password: String!) { login(input: { username: $username, password: $password }) { token { accessToken } } }","variables":{"username":"admin","password":"admin123"}}' \
-          http://localhost:4000/graphql)
-        token=$(echo "$token_json" | jq -er '.data.login.token.accessToken')
-        echo "::add-mask::$token"
-        echo "GITSTORE_CONTROLLER__API_TOKEN=$token" >> "$GITHUB_ENV"
-
-    - name: Recreate controller-manager with its bearer token
-      run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml up -d --no-deps controller-manager
-
     - name: Wait for controller-manager to be healthy
       run: timeout 30 sh -c 'until curl -sf http://localhost:5001/health; do sleep 1; done'
 
@@ -216,20 +202,6 @@ jobs:
 
       - name: Wait for CatalogService gRPC to be ready
         run: timeout 30 sh -c 'until nc -z localhost 6000; do sleep 1; done'
-
-      - name: Mint controller-manager bearer token and restart it with credentials
-        # The CI JWT secret overrides the local fixture's signing secret, so the
-        # controller needs a matching token.
-        run: |
-          token_json=$(curl -sf -H 'Content-Type: application/json' \
-            --data '{"query":"mutation($username: String!, $password: String!) { login(input: { username: $username, password: $password }) { token { accessToken } } }","variables":{"username":"admin","password":"admin123"}}' \
-            http://localhost:4000/graphql)
-          token=$(echo "$token_json" | jq -er '.data.login.token.accessToken')
-          echo "::add-mask::$token"
-          echo "GITSTORE_CONTROLLER__API_TOKEN=$token" >> "$GITHUB_ENV"
-
-      - name: Recreate controller-manager with its bearer token
-        run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml -f compose.scylla.yml up -d --no-deps controller-manager
 
       - name: Wait for controller-manager to be healthy
         run: timeout 30 sh -c 'until curl -sf http://localhost:5001/health; do sleep 1; done'

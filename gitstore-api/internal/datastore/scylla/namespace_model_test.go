@@ -25,6 +25,8 @@ func TestNamespaceTablesMatchQueryAccessPatterns(t *testing.T) {
 	assert.Equal(t, []string{"creation_timestamp", "uid"}, RepositoryByNamespace.Metadata().SortKey)
 	assert.Equal(t, []string{"bucket"}, RepositoryByBucket.Metadata().PartKey)
 	assert.Equal(t, []string{"creation_timestamp", "uid"}, RepositoryByBucket.Metadata().SortKey)
+	assert.Equal(t, []string{"bucket"}, ServiceAccountByBucket.Metadata().PartKey)
+	assert.Equal(t, []string{"creation_timestamp", "uid"}, ServiceAccountByBucket.Metadata().SortKey)
 }
 
 func TestAuthoritativeTablesUseCanonicalResourceEnvelope(t *testing.T) {
@@ -92,6 +94,46 @@ func TestNamespaceBucketsForPage(t *testing.T) {
 	assert.False(t, cursorInNamespaceBucket(cursor, "2026-03"))
 }
 
+func TestServiceAccountBucketsForPage(t *testing.T) {
+	now := time.Date(2026, time.April, 18, 0, 0, 0, 0, time.UTC)
+	cursor := encodeKeysetCursor(
+		time.Date(2026, time.February, 10, 0, 0, 0, 0, time.UTC),
+		"00000000-0000-7000-8000-000000000001",
+	)
+
+	assert.Equal(t,
+		[]string{"2026-05", "2026-04", "2026-03", "2026-02", "2026-01"},
+		serviceAccountBucketsForPage(datastore.PageParams{First: 10}, now),
+	)
+	assert.Equal(t,
+		[]string{"2026-02", "2026-03", "2026-04", "2026-05"},
+		serviceAccountBucketsForPage(datastore.PageParams{Last: 10, Before: cursor}, now),
+	)
+}
+
+func TestServiceAccountListingUsesBoundedCursorQuery(t *testing.T) {
+	cursor := encodeKeysetCursor(
+		time.Date(2026, time.February, 10, 0, 0, 0, 0, time.UTC),
+		"00000000-0000-7000-8000-000000000001",
+	)
+	query := buildPaginatedSelect(
+		ServiceAccountByBucket,
+		datastore.PageParams{First: 2, After: cursor},
+		"bucket",
+		"2026-02",
+		serviceAccountClusterKeys,
+		nil,
+		nil,
+	)
+
+	assert.Contains(t, query.Stmt, "FROM service_accounts_by_bucket")
+	assert.Contains(t, query.Stmt, "bucket = ?")
+	assert.Contains(t, query.Stmt, "(creation_timestamp, uid) < (?, ?)")
+	assert.Contains(t, query.Stmt, "ORDER BY creation_timestamp DESC, uid DESC LIMIT 3")
+	assert.NotContains(t, query.Stmt, "ALLOW FILTERING")
+	assert.Len(t, query.Args, 3)
+}
+
 func TestInitialSchemaUsesQueryFirstNamespaceTables(t *testing.T) {
 	content, err := migrations.Files.ReadFile("001_initial_schema.cql")
 	require.NoError(t, err)
@@ -136,6 +178,9 @@ func TestScyllaSchemaIncludesOwnerReferenceProjectionMigration(t *testing.T) {
 		"005_namespace_repository_fence.cql",
 		"006_namespace_watch_cdc.cql",
 		"007_auth_session_revocations.cql",
+		"008_service_account.cql",
+		"009_service_account_assertion_replay.cql",
+		"010_service_account_listing.cql",
 	}, names)
 }
 

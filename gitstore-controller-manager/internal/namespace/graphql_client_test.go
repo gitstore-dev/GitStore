@@ -34,7 +34,7 @@ func TestGraphQLRepositoryClientCreatesMissingSystemRepository(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, "token"))
+	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	if err := client.EnsureSystemRepository(context.Background(), "acme"); err != nil {
 		t.Fatalf("EnsureSystemRepository failed: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestGraphQLRepositoryClientCreatesSystemRepositoryOnNotFoundError(t *testin
 	}))
 	defer srv.Close()
 
-	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, "token"))
+	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	if err := client.EnsureSystemRepository(context.Background(), "acme"); err != nil {
 		t.Fatalf("EnsureSystemRepository failed: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestGraphQLRepositoryClientCreatesSystemRepositoryOnLegacyNotFoundMessage(t
 	}))
 	defer srv.Close()
 
-	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, "token"))
+	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	if err := client.EnsureSystemRepository(context.Background(), "acme"); err != nil {
 		t.Fatalf("EnsureSystemRepository failed: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestGraphQLRepositoryClientPropagatesGenuineQueryErrors(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, "token"))
+	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	err := client.EnsureSystemRepository(context.Background(), "acme")
 	if err == nil {
 		t.Fatal("EnsureSystemRepository succeeded, want error for a genuine (non-not-found) failure")
@@ -159,7 +159,7 @@ func TestGraphQLRepositoryClientTreatsExistingSystemRepositoryAsReady(t *testing
 	}))
 	defer srv.Close()
 
-	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, "token"))
+	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	if err := client.EnsureSystemRepository(context.Background(), "acme"); err != nil {
 		t.Fatalf("EnsureSystemRepository failed: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestGraphQLRepositoryClientReportsRepositoryPresence(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, "token"))
+	client := NewGraphQLRepositoryClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	hasRepositories, err := client.HasRepositories(context.Background(), "acme")
 	if err != nil {
 		t.Fatalf("HasRepositories failed: %v", err)
@@ -192,7 +192,7 @@ func TestGraphQLDeletionClientCompletesDeletion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, "token"))
+	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	if err := client.CompleteDeletion(context.Background(), "acme", "9"); err != nil {
 		t.Fatalf("CompleteDeletion failed: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestGraphQLDeletionClientReturnsConflict(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, "token"))
+	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	err := client.CompleteDeletion(context.Background(), "acme", "9")
 	if !errors.Is(err, types.ErrConflict) {
 		t.Fatalf("CompleteDeletion error = %v, want conflict", err)

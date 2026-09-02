@@ -69,7 +69,7 @@ func TestList_DecodesCategoryLifecycleMetadata(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	response, err := listwatch.NewCategoryTaxonomyListWatcher(graphqlclient.New(srv.URL, "test-token")).List(context.Background())
+	response, err := listwatch.NewCategoryTaxonomyListWatcher(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))).List(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestList_PaginatesToCompletionAndReturnsHighestResourceVersion(t *testing.T
 	}))
 	defer srv.Close()
 
-	client := graphqlclient.New(srv.URL, "test-token")
+	client := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	lw := listwatch.NewCategoryTaxonomyListWatcher(client)
 
 	resp, err := lw.List(context.Background())
@@ -172,7 +172,7 @@ func TestList_EmptyDatasetReturnsNonEmptySentinelResourceVersion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := graphqlclient.New(srv.URL, "test-token")
+	client := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	lw := listwatch.NewCategoryTaxonomyListWatcher(client)
 
 	resp, err := lw.List(context.Background())
@@ -193,7 +193,7 @@ func TestList_HTTPErrorReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := graphqlclient.New(srv.URL, "test-token")
+	client := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	lw := listwatch.NewCategoryTaxonomyListWatcher(client)
 
 	if _, err := lw.List(context.Background()); err == nil {
@@ -254,7 +254,7 @@ func TestWatch_MapsAddedModifiedDeletedEvents(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	client := graphqlclient.New(wsURL, "test-token")
+	client := graphqlclient.New(wsURL, graphqlclient.NewStaticToken("test-token"))
 	lw := listwatch.NewCategoryTaxonomyListWatcher(client)
 
 	watcher, err := lw.Watch(context.Background(), "")
@@ -289,7 +289,7 @@ func TestWatch_ExpiredCursorMapsToErrWatchExpired(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	client := graphqlclient.New(wsURL, "test-token")
+	client := graphqlclient.New(wsURL, graphqlclient.NewStaticToken("test-token"))
 	lw := listwatch.NewCategoryTaxonomyListWatcher(client)
 
 	watcher, err := lw.Watch(context.Background(), "999")

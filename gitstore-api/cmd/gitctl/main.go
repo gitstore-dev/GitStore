@@ -83,6 +83,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "scylla-projection-repair":
 		return runProjectionRepair(args[1:], stdout, stderr)
 
+	case "enroll-serviceaccount":
+		return runEnrollServiceAccount(args[1:], stdout, stderr)
+
+	case "generate-serviceaccount-key":
+		return runGenerateServiceAccountKey(args[1:], stdout, stderr)
+
 	default:
 		fmt.Fprintf(stderr, "Unknown subcommand: %s\n", args[0])
 		printUsage(stderr)
@@ -101,6 +107,8 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "  gen-hmac-secret")
 	fmt.Fprintln(output, "  scylla-projection-audit [Scylla flags]")
 	fmt.Fprintln(output, "  scylla-projection-repair (--dry-run | --confirm) [Scylla flags]")
+	fmt.Fprintln(output, "  enroll-serviceaccount --api-url <url> --admin-token <token> --namespace <namespace> --name <name> --key-id <id> --private-key-path <path> [--replace-existing-key]")
+	fmt.Fprintln(output, "  generate-serviceaccount-key --private-key-path <path>")
 }
 
 type actionList []string

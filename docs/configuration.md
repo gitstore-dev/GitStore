@@ -112,6 +112,30 @@ replace one YAML file at a time; `add-user` never changes authorization policy.
 
 `static-users` always appends `/static-users` to the configured issuer base when minting tokens, while accepting the exact configured base for legacy sessions during rolling upgrades. Logout and refresh rotation require the shared ScyllaDB revocation table in production; migration 007 creates it automatically.
 
+### Service-account authentication
+
+Service-account authentication is enabled only when
+`auth.authn.chain` contains `serviceaccount-assertion` and
+`serviceaccount-jwt`. The API issues and verifies the controller's
+short-lived access tokens; the controller proves possession of a separately
+mounted private key to obtain them.
+
+| Key | Env Var | Type | Default | Required | Sensitive | Description |
+|-----|---------|------|---------|----------|-----------|-------------|
+| `auth.authn.chain` | `GITSTORE_AUTH__AUTHN__CHAIN` | list of strings | `["static-users","anonymous"]` | No | No | Ordered AuthN providers; include both service-account providers to enable this flow |
+| `auth.serviceaccount.issuer` | `GITSTORE_AUTH__SERVICEACCOUNT__ISSUER` | string | `gitstore` | No | No | Issuer for service-account access tokens |
+| `auth.serviceaccount.audience` | `GITSTORE_AUTH__SERVICEACCOUNT__AUDIENCE` | string | `gitstore-api` | No | No | Required audience for service-account access tokens |
+| `auth.serviceaccount.assertion_audience` | `GITSTORE_AUTH__SERVICEACCOUNT__ASSERTION_AUDIENCE` | string | `gitstore-api/serviceaccount-token` | No | No | Required audience for controller assertions at the token-exchange endpoint |
+| `auth.serviceaccount.signing_key` | `GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY` | PEM private key | (empty) | **Yes, when a service-account provider is chained** | **Yes** | API-only Ed25519 or ECDSA P-256 access-token signing key |
+| `auth.serviceaccount.default_ttl` | `GITSTORE_AUTH__SERVICEACCOUNT__DEFAULT_TTL` | duration | `10m` | No | No | Requested default access-token lifetime |
+| `auth.serviceaccount.max_ttl` | `GITSTORE_AUTH__SERVICEACCOUNT__MAX_TTL` | duration | `1h` | No | No | Maximum permitted access-token lifetime |
+| `auth.serviceaccount.clock_skew` | `GITSTORE_AUTH__SERVICEACCOUNT__CLOCK_SKEW` | duration | `2m` | No | No | Allowed JWT clock skew during validation |
+
+Never put `auth.serviceaccount.signing_key` in a configuration file mounted by
+multiple services. Supply it through an API-only secret mount or environment
+injection instead. It is the API issuer key, not the controller's enrollment
+key; the controller private key is configured through its `SecretRef` below.
+
 ### Logging
 
 | Key          | Env Var                | Type   | Default | Required | Sensitive | Description                            |
@@ -338,7 +362,18 @@ uri = "http://localhost:6000"
 |--------------------------------------|------------------------------------------------|----------|---------------------------------|----------|-----------|-------------------------------------------------------------|
 | `controller.port`                    | `GITSTORE_CONTROLLER__PORT`                    | integer  | `5001`                          | No       | No        | HTTP port for `/health`, `/metrics`, and `/controller/v1/*` |
 | `controller.api_uri`                 | `GITSTORE_CONTROLLER__API_URI`                 | string   | `http://localhost:4000/graphql` | No       | No        | GraphQL API URI used by reconcilers                         |
-| `controller.api_token`               | `GITSTORE_CONTROLLER__API_TOKEN`               | string   | (empty)                         | No       | Yes       | Bearer token presented to `gitstore-api` on every GraphQL query/mutation/subscription |
+| `controller.serviceaccount_namespace` | `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE` | string | (empty) | **Yes** | No | Enrolled ServiceAccount namespace |
+| `controller.serviceaccount_name` | `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME` | string | `gitstore-controller-manager` | **Yes** | No | Enrolled ServiceAccount name |
+| `controller.serviceaccount_key_id` | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID` | string | (empty) | **Yes** | No | Enrolled public-key ID (`kid`) for controller assertions |
+| `controller.serviceaccount_uid` | `GITSTORE_CONTROLLER__SERVICEACCOUNT__UID` | string | (empty) | **Yes** | No | Enrolled ServiceAccount UID; prevents identity reuse after deletion |
+| `controller.serviceaccount_key_ref.kind` | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND` | string | (empty) | **Yes** | No | Must be `SecretRef` |
+| `controller.serviceaccount_key_ref.name` | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME` | string | (empty) | **Yes** | No | Logical bootstrap-secret name, not a filesystem path |
+| `controller.serviceaccount_key_ref.key` | `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY` | string | (empty) | **Yes** | No | Logical key name in the bootstrap secret |
+| `controller.serviceaccount_assertion_audience` | `GITSTORE_CONTROLLER__SERVICEACCOUNT__ASSERTION_AUDIENCE` | string | `gitstore-api/serviceaccount-token` | **Yes** | No | Audience for the signed assertion used to exchange a token |
+| `controller.serviceaccount_access_token_audience` | `GITSTORE_CONTROLLER__SERVICEACCOUNT__ACCESS_TOKEN_AUDIENCE` | string | `gitstore-api` | **Yes** | No | Audience requested for the exchanged access token |
+| `controller.secret_provider_bootstrap.type` | `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__TYPE` | string | `file` | No | No | Bootstrap resolver type: `file` or `env` |
+| `controller.secret_provider_bootstrap.base_path` | `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH` | string | `/run/secrets` | With `type=file` | No | Directory containing controller-only mounted bootstrap secrets |
+| `controller.secret_provider_bootstrap.env_prefix` | `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__ENV_PREFIX` | string | `GITSTORE_SECRET__` | With `type=env` | No | Prefix used to resolve bootstrap-secret environment variables |
 | `controller.default_max_attempts`    | `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`    | integer  | `5`                             | No       | No        | Retry limit before quarantine                               |
 | `controller.default_stall_threshold` | `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | duration | `5m`                            | No       | No        | Worker stall threshold                                      |
 | `controller.checkpoint_dir`          | `GITSTORE_CONTROLLER__CHECKPOINT_DIR`          | string   | `.gitstore/checkpoints`         | No       | No        | Directory for the filesystem checkpoint store (one file per kind) |
@@ -353,16 +388,43 @@ Example:
 [controller]
 port = 5001
 api_uri = "http://localhost:4000/graphql"
+serviceaccount_namespace = "controllers"
+serviceaccount_name = "gitstore-controller-manager"
+serviceaccount_key_id = "controller-2026-09"
+serviceaccount_uid = "<enrolled-service-account-uid>"
+serviceaccount_assertion_audience = "gitstore-api/serviceaccount-token"
+serviceaccount_access_token_audience = "gitstore-api"
 default_max_attempts = 5
 default_stall_threshold = "5m"
 checkpoint_dir = ".gitstore/checkpoints"
 checkpoint_flush_interval_events = 100
 max_watch_backoff = "30s"
 
+[controller.serviceaccount_key_ref]
+kind = "SecretRef"
+name = "controller-manager"
+key = "privateKey"
+
+[controller.secret_provider_bootstrap]
+type = "file"
+base_path = "/run/secrets"
+
 [log]
 level = "info"
 format = "json"
 ```
+
+This is the required controller configuration. For the `file` provider, the example `SecretRef`
+resolves `/run/secrets/controller-manager/privateKey`; mount that directory
+read-only into `controller-manager` only. The key must be a single PKCS#8 PEM
+Ed25519 or ECDSA P-256 private key. Do not place a private-key value in TOML,
+in the shared `/config/gitstore.toml` file, in Git, or in a log. The `env`
+provider is supported for deployment platforms that inject secret values, but
+a controller-only read-only mount is preferred where available.
+
+Static controller API tokens are not supported. See [Controller
+authentication](runbooks/controller-auth.md) for enrollment, rotation,
+readiness, and recovery procedures.
 
 List-then-watch bootstrap, restart resume, and expired-watch-cursor recovery for registered
 resource kinds (spec 036) persist a per-kind restart checkpoint under `checkpoint_dir`. Each

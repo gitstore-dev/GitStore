@@ -78,7 +78,7 @@ Derived from the objective, the decision standard, and confirmed external mechan
 
 ### 4c. In-cluster vs. out-of-cluster implications
 
-- **In-cluster (optional, future):** gitstore-api could add an `oidc-jwt`-style AuthN provider that trusts a specific cluster's ServiceAccount-token issuer (audience must include `gitstore-api`; issuer must be on an explicit allowlist; JWKS fetched from that cluster's discovery endpoint; subject taken from `system:serviceaccount:<ns>:<name>` and mapped into GitStore's own `Principal.Subject`). Kubernetes RBAC (who can `create pods` with that ServiceAccount) stays entirely inside the cluster and is irrelevant to GitStore's own `AuthZProvider` decision — GitStore RBAC (`rbac-local`/OPA policy) is a completely separate binding from the *GitStore* subject string to GitStore actions. Multiple clusters/issuers require an explicit per-issuer JWKS+audience+namespace-trust allowlist to prevent subject collisions (two different clusters both minting `system:serviceaccount:controllers:category-taxonomy`).
+- **In-cluster (optional, future):** gitstore-api could add an `oidc-jwt`-style AuthN provider that trusts a specific cluster's ServiceAccount-token issuer (audience must include `gitstore-api`; issuer must be on an explicit allowlist; JWKS fetched from that cluster's discovery endpoint; subject taken from `system:serviceaccount:<ns>:<name>` and mapped into GitStore's own `Principal.Subject`). Kubernetes RBAC (who can `create pods` with that ServiceAccount) stays entirely inside the cluster and is irrelevant to GitStore's own `AuthZProvider` decision — GitStore RBAC (`rbac-local`/OPA policy) is a completely separate binding from the *GitStore* subject string to GitStore actions. Multiple clusters/issuers require an explicit per-issuer JWKS+audience+namespace-trust allowlist to prevent subject collisions (two different clusters both minting `system:serviceaccount:controllers:gitstore-controller-manager`).
 - **Out-of-cluster (native process, Docker Compose, CI, non-K8s installs):** there is no Kubernetes issuer or kubelet credential projector to trust. GitStore's own issuer (§9) is the only option. Deployment tooling generates or supplies the controller private key, registers the public key and ServiceAccount record through an authenticated installation operation, and thereafter the controller can obtain tokens without a live administrator or a still-valid previous token.
 
 **Conclusion:** the Kubernetes-issued-token path is a legitimate optional *addition* once GitStore has in-cluster deployments with a clear operational need for it — but it cannot be the primary design, because it does not cover native/Compose/CI. Kubernetes workloads do **not** require an administrator to copy a bootstrap token into each Pod: an operator declares the ServiceAccount/RBAC/workload, and the control plane plus kubelet deliver and rotate the credential automatically. GitStore should preserve that separation. Its installation process enrolls identity and public trust material; its controller performs automatic token acquisition and renewal. GitStore can therefore adapt the properties of the modern Kubernetes ServiceAccount model without pretending it has Kubernetes' universal kubelet machinery.
@@ -109,7 +109,7 @@ flowchart TB
         Registry["Persistent ServiceAccount registry<br/>namespace, name, UID, disabled, public keys"]
         Issue["IssueServiceAccountToken<br/>verify short-lived client assertion<br/>mint short-TTL access JWT"]
         AuthN["serviceaccount-jwt AuthNProvider<br/>verify iss / aud / exp / sub<br/>against signing key and SA registry"]
-        AuthZ["rbac-local AuthZProvider<br/>role binding: serviceaccount:ctrl:category-taxonomy<br/>→ controller"]
+        AuthZ["rbac-local AuthZProvider<br/>role binding: serviceaccount:controllers:gitstore-controller-manager<br/>→ controller"]
         WS["WebSocket InitFunc + connection registry<br/>deadline at token exp<br/>cancel on SA disable/delete"]
 
         CRUD --> Registry --> Issue --> AuthN --> AuthZ
@@ -405,9 +405,15 @@ auth.serviceaccount.clock_skew         GITSTORE_AUTH__SERVICEACCOUNT__CLOCK_SKEW
 
 controller.api_token                   GITSTORE_CONTROLLER__API_TOKEN          # DEPRECATED dev/CI compatibility only (§11)
 controller.serviceaccount_namespace    GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE  ""   # e.g. "controllers"
-controller.serviceaccount_name         GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME       "category-taxonomy"
+controller.serviceaccount_name         GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME       "gitstore-controller-manager"
 controller.serviceaccount_key_id       GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID      ""
-controller.serviceaccount_private_key_file GITSTORE_CONTROLLER__SERVICEACCOUNT__PRIVATE_KEY_FILE ""
+# Signing key is an ADR 0001 SecretRef resolved through a bootstrap-tier
+# SecretResolver (ADR 0009 §3) — NOT a raw filesystem path. The earlier
+# controller.serviceaccount_private_key_file draft is superseded.
+controller.serviceaccount_key_ref.name GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME ""
+controller.serviceaccount_key_ref.key  GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY  "privateKey"
+controller.secret_provider_bootstrap.type      GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__TYPE      "file"
+controller.secret_provider_bootstrap.base_path GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH "/etc/gitstore/secrets"
 ```
 
 The ServiceAccount record is a datastore-only authentication-runtime resource. Its namespace/name, UID, disabled state, and enrolled public keys must be implemented through `datastore.Datastore` in both `go-memdb` and ScyllaDB from the first implementation phase. An in-memory record is not an acceptable starting point because API restart would erase the trust anchor and force re-enrollment. An assertion `jti` replay cache and the active-WebSocket index may remain in memory for the initial single-instance profile; multi-replica deployment requires a shared replay store and a revocation broadcast mechanism.
@@ -482,21 +488,47 @@ the same server-owned SDL/middleware pattern for future Category list/watch enfo
 
 ### 10b. Controller role (`rbac-local` `policy.yaml` fragment)
 
+> **Corrected 2026-08-30 (spec 061, on rebase onto spec 047 / PR #370).** An earlier revision of this
+> section scoped the role to the CategoryTaxonomy reconciler alone and asserted `no namespace.*, no
+> repository.*`. That is wrong for the shipped binary: `gitstore-controller-manager`'s
+> `cmd/controller/main.go` registers three workloads (`registerNamespace`, `registerCategoryTaxonomy`,
+> `registerProductWatch`) that share **one** credential source and therefore **one** service account.
+> The role below is the union of all three workloads' required actions.
+
 ```yaml
 roles:
-  category-taxonomy-controller:
+  gitstore-controller-manager:
     allow:
+      # CategoryTaxonomy reconciler
       - category.list
       - category.watch
       - product.list
       - product.read.unpublished
       - category.status.write
-    deny: []   # least privilege: no admin, no namespace.*, no repository.*
+      - category.delete
+      # Namespace reconciler
+      - repository.create.any     # see note below - .own is unreachable for a machine subject
+      - namespace.status.write    # completeNamespaceDeletion
+      - namespace.watch           # Namespace listwatcher's watchResources subscription (spec 050/PR #371)
+    deny: []   # least privilege: no admin role, no namespace.delete.*, no repository.delete.*
 
 role_bindings:
-  "serviceaccount:controllers:category-taxonomy":
-    - category-taxonomy-controller
+  "serviceaccount:controllers:gitstore-controller-manager":
+    - gitstore-controller-manager
 ```
+
+**Why `repository.create.any` rather than `repository.create.own`.**
+`Resolver.authorizeRepositoryTenant` (`gitstore-api/internal/graph/resolver/repository_authorization.go`)
+picks the `.own`/`.any` suffix by comparing the target namespace's `CreationActor` to
+`principal.Subject`, and falls back to `.any` whenever they differ. A controller's subject
+(`serviceaccount:controllers:...`) never equals a human-created namespace's `CreationActor`, so
+system-repository provisioning **always** requests `repository.create.any`. Granting only
+`repository.create.own` would deny every provisioning call. Spec 047 (PR #370) makes this
+load-bearing rather than theoretical, since system-repository provisioning is now on the enforced
+namespace-admission path. Narrowing this grant — for example a resource-context predicate limiting
+it to the reserved system-repository name, or an explicit machine-actor scope rule — requires an
+`rbac-local` policy-semantics change and is deliberately out of scope for spec 061 (its FR-021
+forbids changing `rbac-local` decision semantics). It is recorded there as a follow-on concern.
 
 `product.read.unpublished` is required because the controller's product counter reconciles the
 complete admitted catalog, not the storefront/public projection. Under 022, `product.list` supplies
@@ -562,7 +594,7 @@ At every phase, `static-admin` login and the existing `ChainedAuthN` short-circu
 | 2                    | Idempotent `gitctl` identity enrollment and deployment integration; public key registered, private key stored through the deployment secret mechanism; no bearer bootstrap file   | Any supported deployment cannot enroll without copying an access token into controller configuration |
 | 3                    | `graphqlclient.CredentialSource`, assertion exchange, proactive renewal, recovery after expiry, and WS reconnect with `resourceVersion` resume                                    | Controller cannot recover after access-token expiry or reconnect cleanly                             |
 | 4                    | WebSocket `InitFunc`, expiry-bound contexts, live connection registry, and cancellation on ServiceAccount disable/delete                                                          | A connection survives expiry/revocation or existing subscription tests regress                       |
-| 5                    | `policy.yaml` ships the `category-taxonomy-controller` role/binding; production defaults include both providers; static API token documented as deprecated dev/CI compatibility   | Any supported profile loses a working auth path or required controller action returns `OutcomeDeny`  |
+| 5                    | `policy.yaml` ships the `gitstore-controller-manager` role/binding; production defaults include both providers; static API token documented as deprecated dev/CI compatibility   | Any supported profile loses a working auth path or required controller action returns `OutcomeDeny`  |
 | 6 (future, optional) | In-cluster `oidc-jwt`-style provider trusting Kubernetes-issued tokens, gated by explicit issuer allowlist config, as an additional chain entry                                   | N/A — purely additive; disabled by default                                                           |
 
 ---

@@ -15,6 +15,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
+	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
 	"go.uber.org/zap"
 )
 
@@ -22,17 +23,19 @@ var errMissingLogger = errors.New("resolver: logger is required")
 
 // Resolver is the root GraphQL resolver
 type Resolver struct {
-	logger              *zap.Logger
-	store               datastore.Datastore
-	service             *Service
-	registry            *auth.ProviderRegistry
-	storageDataDir      string // data_dir used to build storagePath in responses; defaults to "/data"
-	clock               apiruntime.Clock
-	eventBus            *eventbus.Bus
-	namespaceJournal    datastore.NamespaceWatchJournal
-	namespaceSubscriber *watchjournal.Subscriber
-	namespaceWatch      config.NamespaceWatchConfig
-	namespaceMetrics    *watchjournal.Metrics
+	logger                 *zap.Logger
+	store                  datastore.Datastore
+	service                *Service
+	registry               *auth.ProviderRegistry
+	storageDataDir         string // data_dir used to build storagePath in responses; defaults to "/data"
+	clock                  apiruntime.Clock
+	eventBus               *eventbus.Bus
+	namespaceJournal       datastore.NamespaceWatchJournal
+	namespaceSubscriber    *watchjournal.Subscriber
+	namespaceWatch         config.NamespaceWatchConfig
+	namespaceMetrics       *watchjournal.Metrics
+	serviceAccountAudience string
+	connectionRegistry     *wsregistry.Registry
 }
 
 // ResolverDeps contains dependencies for the root GraphQL resolver.
@@ -50,6 +53,10 @@ type ResolverDeps struct {
 	NamespaceJournal datastore.NamespaceWatchJournal
 	NamespaceWatch   config.NamespaceWatchConfig
 	NamespaceMetrics *watchjournal.Metrics
+	// ServiceAccountAudience is the configured audience value for service
+	// account token issuance (spec 061).
+	ServiceAccountAudience string
+	ConnectionRegistry     *wsregistry.Registry
 }
 
 // NewResolver creates a new GraphQL resolver.
@@ -87,17 +94,19 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 		clock = apiruntime.SystemClock{}
 	}
 	return &Resolver{
-		logger:              deps.Logger,
-		store:               deps.Store,
-		service:             svc,
-		registry:            deps.Registry,
-		storageDataDir:      "/data",
-		clock:               clock,
-		eventBus:            deps.EventBus,
-		namespaceJournal:    deps.NamespaceJournal,
-		namespaceSubscriber: namespaceSubscriber,
-		namespaceWatch:      deps.NamespaceWatch,
-		namespaceMetrics:    deps.NamespaceMetrics,
+		logger:                 deps.Logger,
+		store:                  deps.Store,
+		service:                svc,
+		registry:               deps.Registry,
+		storageDataDir:         "/data",
+		clock:                  clock,
+		eventBus:               deps.EventBus,
+		namespaceJournal:       deps.NamespaceJournal,
+		namespaceSubscriber:    namespaceSubscriber,
+		namespaceWatch:         deps.NamespaceWatch,
+		namespaceMetrics:       deps.NamespaceMetrics,
+		serviceAccountAudience: deps.ServiceAccountAudience,
+		connectionRegistry:     deps.ConnectionRegistry,
 	}, nil
 }
 

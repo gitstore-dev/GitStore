@@ -73,7 +73,7 @@ func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lw := listwatch.NewNamespaceListWatcher(graphqlclient.New(srv.URL, "token"))
+	lw := listwatch.NewNamespaceListWatcher(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
 	resp, err := lw.List(context.Background())
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
@@ -122,7 +122,7 @@ func TestNamespaceListWatcherMapsGenericWatchEvents(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lw := listwatch.NewNamespaceListWatcher(graphqlclient.New("ws"+strings.TrimPrefix(srv.URL, "http"), "token"))
+	lw := listwatch.NewNamespaceListWatcher(graphqlclient.New("ws"+strings.TrimPrefix(srv.URL, "http"), graphqlclient.NewStaticToken("token")))
 	watcher, err := lw.Watch(context.Background(), "8")
 	if err != nil {
 		t.Fatalf("Watch failed: %v", err)

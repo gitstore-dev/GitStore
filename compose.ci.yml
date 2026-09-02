@@ -9,7 +9,3 @@ services:
       GITSTORE_AUTH__ADMIN__PASSWORD_HASH: ${GITSTORE_AUTH__ADMIN__PASSWORD_HASH:?CI admin password hash is required}
       GITSTORE_AUTH__JWT__SECRET: ${GITSTORE_AUTH__JWT__SECRET:?CI JWT secret is required}
       GITSTORE_AUTH__GRPC__HMAC_SECRET: ${GITSTORE_AUTH__GRPC__HMAC_SECRET:?CI gRPC HMAC secret is required}
-
-  controller-manager:
-    environment:
-      GITSTORE_CONTROLLER__API_TOKEN: ${GITSTORE_CONTROLLER__API_TOKEN:-}

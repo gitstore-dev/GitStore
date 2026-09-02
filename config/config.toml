@@ -1,5 +1,8 @@
 # Development-only shared configuration for the Docker Compose local profile.
 # Do not reuse these credentials outside an isolated developer workstation.
+# This file is mounted into git-service, api, and controller-manager, so it
+# must never contain service-account key material. The local Compose profile
+# mounts the API issuer key and controller private key separately.
 
 [grpc]
 port = 50051
@@ -56,7 +59,13 @@ refresh_grace = "60s"
 hmac_secret = "local-development-grpc-hmac-secret"
 
 [auth.authn]
-chain = ["static-users", "anonymous"]
+chain = ["static-users", "serviceaccount-assertion", "serviceaccount-jwt", "anonymous"]
+
+[auth.serviceaccount]
+issuer = "gitstore"
+audience = "gitstore-api"
+assertion_audience = "gitstore-api/serviceaccount-token"
+# The API issuer key is injected from its API-only /run/secrets mount.
 
 [auth.authz]
 provider = "rbac-local"
@@ -70,8 +79,14 @@ policy_file = "/config/policy.yaml"
 [controller]
 port = 5001
 api_uri = "http://api:4000/graphql"
-# Development-only controller JWT, valid through 2099, signed by auth.jwt.secret.
-api_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJjb250cm9sbGVyIiwiaXNzIjoiZ2l0c3RvcmUiLCJpYXQiOjE3NjcyMjU2MDAsImV4cCI6NDEwMjQ0NDgwMCwianRpIjoibG9jYWwtY29udHJvbGxlci10b2tlbiJ9.U6etHyprdZxvC-dYsnoByBNRRhFQR6pE4TLXbeb6tN4"
+# The UID is provisioned by the Compose enrollment job into a controller-only mount.
+serviceaccount_namespace = "controllers"
+serviceaccount_name = "gitstore-controller-manager"
+serviceaccount_key_id = "controller-key"
+serviceaccount_key_ref = { kind = "SecretRef", name = "gitstore-controller-manager-signing-key", key = "privateKey" }
+serviceaccount_assertion_audience = "gitstore-api/serviceaccount-token"
+serviceaccount_access_token_audience = "gitstore-api"
+secret_provider_bootstrap = { type = "file", base_path = "/run/secrets" }
 default_max_attempts = 5
 default_stall_threshold = "5m"
 checkpoint_dir = "/data/checkpoints"

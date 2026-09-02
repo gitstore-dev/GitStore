@@ -1179,6 +1179,19 @@ BasicAuthenticator → RepoResolver → GitHttpAuthorizer → [PushContextInsert
 **Test strategy:** Unit test with a mock JWKS server; integration test with a real local IdP (e.g., Dex running in Docker Compose test profile); test key rotation forced-refresh behavior.
 **Rollback trigger:** OIDC provider causes 500s on valid tokens, or breaks the static-users fallback in the chain.
 
+**Addendum — controller/machine identity (spec 061):** `OIDCJWTProvider` remains exactly as
+specified above — a Relying Party for **human** identities authenticated through an external/bring-your-own
+OIDC issuer (see also spec 059's own addendum immediately above, for the optional first-party
+Hydra+Kratos reference issuer). It is not, and does not become, the mechanism for authenticating
+`gitstore-controller-manager` or other non-human callers. `specs/061-controller-serviceaccount-auth/`
+adds two new, distinct AuthN providers — `serviceaccount-assertion` (proof-of-possession issuance) and
+`serviceaccount-jwt` (access-token verification) — implementing a GitStore-issued, Kubernetes-ServiceAccount-inspired
+identity plane for machine callers, formalizing `docs/implementation/021-controller_service_account_auth.md`'s
+already-decided design. This is the deferred Phase 7 "OIDC JWT provider" slot's originally-intended
+controller-identity use case, now served by a purpose-built machine-identity mechanism instead of a
+human-oriented OIDC Relying Party; `oidc-jwt` and `serviceaccount-jwt` remain two entirely separate
+providers for two entirely separate principal types, and neither changes the other's design.
+
 ### Phase 8 — OPA production AuthZ provider
 **Milestone:** `auth-framework-v3`
 **Authoritative design:** `022-opa-data-authorization.md`.

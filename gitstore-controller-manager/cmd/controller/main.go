@@ -24,6 +24,7 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/version"
@@ -67,13 +68,19 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if _, err = registerNamespace(ctx, mgr, checkpointStore, cfg, log); err != nil {
+	credentials, err := buildCredentialSource(ctx, cfg, log)
+	if err != nil {
+		log.Fatal("failed to build credential source", zap.Error(err))
+	}
+	client := graphqlclient.New(cfg.Controller.ApiURI, credentials)
+
+	if _, err = registerNamespace(ctx, mgr, checkpointStore, cfg, log, client); err != nil {
 		log.Fatal("failed to register Namespace reconciler", zap.Error(err))
 	}
 
 	var productRunnerMu sync.RWMutex
 	var productRunner *listwatch.Runner[categorytaxonomy.Product]
-	_, err = registerCategoryTaxonomy(ctx, mgr, checkpointStore, cfg, log, func(key types.WorkItemKey) {
+	_, err = registerCategoryTaxonomy(ctx, mgr, checkpointStore, cfg, log, client, func(key types.WorkItemKey) {
 		productRunnerMu.RLock()
 		runner := productRunner
 		productRunnerMu.RUnlock()
@@ -86,13 +93,13 @@ func main() {
 	}
 
 	productRunnerMu.Lock()
-	productRunner = registerProductWatch(ctx, mgr, checkpointStore, cfg, log)
+	productRunner = registerProductWatch(ctx, mgr, checkpointStore, cfg, log, client)
 	productRunnerMu.Unlock()
 
 	addr := fmt.Sprintf(":%d", cfg.Controller.Port)
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: buildMux(mgr),
+		Handler: buildMux(mgr, credentialReadiness(credentials)),
 	}
 
 	go func() {
@@ -124,10 +131,48 @@ func parseConfigFile(args []string) (string, error) {
 	return *path, nil
 }
 
+func buildCredentialSource(ctx context.Context, cfg *config.Config, log *zap.Logger) (graphqlclient.CredentialSource, error) {
+	controller := cfg.Controller
+	if controller.ServiceAccountKeyRef.Name == "" {
+		return nil, fmt.Errorf("configure controller.serviceaccount_key_ref")
+	}
+
+	resolver, err := secret.NewBootstrapResolver(controller.SecretProviderBootstrap, log)
+	if err != nil {
+		return nil, fmt.Errorf("create bootstrap secret resolver: %w", err)
+	}
+	privateKey, err := resolver.Resolve(ctx, controller.ServiceAccountKeyRef)
+	if err != nil {
+		return nil, fmt.Errorf("resolve service account signing key: %w", err)
+	}
+	signer, err := graphqlclient.NewPrivateKeyTokenSigner(
+		privateKey,
+		controller.ServiceAccountKeyID,
+		controller.ServiceAccountUID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create service account signer: %w", err)
+	}
+	return graphqlclient.NewServiceAccountSource(
+		controller.ApiURI,
+		controller.ServiceAccountNamespace,
+		controller.ServiceAccountName,
+		signer,
+		controller.ServiceAccountAssertionAudience,
+		controller.ServiceAccountAccessTokenAudience,
+		10*time.Minute,
+		time.Hour,
+	), nil
+}
+
+func credentialReadiness(source graphqlclient.CredentialSource) health.CredentialReadiness {
+	readiness, _ := source.(health.CredentialReadiness)
+	return readiness
+}
+
 // registerNamespace wires Namespace list/watch, repository provisioning,
 // status writeback, and foreground-deletion reconciliation into mgr.
-func registerNamespace(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger) (*listwatch.Runner[namespacecontroller.Namespace], error) {
-	client := graphqlclient.New(cfg.Controller.ApiURI, cfg.Controller.ApiToken)
+func registerNamespace(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client) (*listwatch.Runner[namespacecontroller.Namespace], error) {
 	namespaceCache := cache.New[namespacecontroller.Namespace]()
 	runner := &listwatch.Runner[namespacecontroller.Namespace]{
 		Kind:        "Namespace",
@@ -172,9 +217,9 @@ func registerNamespace(ctx context.Context, mgr *manager.Manager, checkpointStor
 }
 
 // buildMux returns the HTTP handler for the health/metrics and management surface.
-func buildMux(mgr *manager.Manager) http.Handler {
+func buildMux(mgr *manager.Manager, credentialReadiness ...health.CredentialReadiness) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /health", health.NewHandler(mgr, version.Version))
+	mux.Handle("GET /health", health.NewHandler(mgr, version.Version, credentialReadiness...))
 	mux.Handle("GET /metrics", health.NewMetricsHandler(mgr))
 	mux.HandleFunc("GET /controller/v1/poison/{kind}", api.ListPoisonHandler(mgr))
 	mux.HandleFunc("POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue", api.RequeuePoisonHandler(mgr))
@@ -185,8 +230,7 @@ func buildMux(mgr *manager.Manager) http.Handler {
 // list-then-watch adapters (spec 040's client side, deferred to spec 039),
 // and the CategoryTaxonomy reconciler into mgr, then starts its
 // listwatch.Runner on a background goroutine. Per specs/039-category-taxonomy-reconciler/quickstart.md.
-func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, onRelatedSuccess func(types.WorkItemKey)) (*listwatch.Runner[categorytaxonomy.CategoryTaxonomy], error) {
-	client := graphqlclient.New(cfg.Controller.ApiURI, cfg.Controller.ApiToken)
+func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client, onRelatedSuccess func(types.WorkItemKey)) (*listwatch.Runner[categorytaxonomy.CategoryTaxonomy], error) {
 	listWatcher := listwatch.NewCategoryTaxonomyListWatcher(client)
 	statusClient := status.NewGraphQLStatusClient(client)
 
@@ -270,8 +314,7 @@ func registerCategoryTaxonomy(ctx context.Context, mgr *manager.Manager, checkpo
 // (research.md R1, spec 042). Its cache event handlers enqueue the
 // already-registered "CategoryTaxonomy" kind via mgr.Enqueue whenever a
 // Product's categoryRef appears, disappears, or changes.
-func registerProductWatch(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger) *listwatch.Runner[categorytaxonomy.Product] {
-	client := graphqlclient.New(cfg.Controller.ApiURI, cfg.Controller.ApiToken)
+func registerProductWatch(ctx context.Context, mgr *manager.Manager, checkpointStore *checkpoint.FilesystemStore, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client) *listwatch.Runner[categorytaxonomy.Product] {
 	listWatcher := listwatch.NewProductListWatcher(client)
 
 	productCache := cache.New[categorytaxonomy.Product]()

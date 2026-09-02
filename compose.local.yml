@@ -7,18 +7,96 @@ services:
 
   api:
     profiles: [local]
-    command: ["/app/api", "--config-file", "/config/gitstore.toml"]
+    # The API issuer key is intentionally read from this API-only mount. The
+    # shared gitstore.toml must never contain auth.serviceaccount.signing_key.
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if [ -f /run/secrets/serviceaccount-signing-key ]; then
+          export GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat /run/secrets/serviceaccount-signing-key)"
+        fi
+        exec /app/api --config-file /config/gitstore.toml
     volumes:
       - ${CONFIG_FILE:-./config/config.toml}:/config/gitstore.toml:ro
       - ./config/policy.yaml:/config/policy.yaml:ro
       - ./config/users.yaml:/config/users.yaml:ro
+      - api-serviceaccount-issuer-key:/run/secrets:ro
+    depends_on:
+      credential-bootstrap:
+        condition: service_completed_successfully
 
   controller-manager:
     profiles: [local]
-    command: ["/app/controller-manager", "--config-file", "/config/gitstore.toml"]
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        serviceaccount_uid="$$(sed -n 's/^GITSTORE_CONTROLLER__SERVICEACCOUNT__UID=//p' /run/controller-bootstrap/serviceaccount.env)"
+        test -n "$$serviceaccount_uid"
+        export GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$serviceaccount_uid"
+        exec /app/controller-manager --config-file /config/gitstore.toml
     volumes:
       - ${CONFIG_FILE:-./config/config.toml}:/config/gitstore.toml:ro
       - controller-checkpoints:/data/checkpoints
+      - controller-serviceaccount-secrets:/run/secrets:ro
+      - controller-serviceaccount-identity:/run/controller-bootstrap:ro
+    depends_on:
+      serviceaccount-enrollment:
+        condition: service_completed_successfully
+
+  credential-bootstrap:
+    profiles: [local]
+    image: ghcr.io/gitstore-dev/api
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /run/controller-secrets/gitstore-controller-manager-signing-key
+        rm -f /run/controller-bootstrap/serviceaccount.env
+        /app/gitctl generate-serviceaccount-key --private-key-path /run/api-issuer/serviceaccount-signing-key
+        /app/gitctl generate-serviceaccount-key --private-key-path /run/controller-secrets/gitstore-controller-manager-signing-key/privateKey
+    volumes:
+      - api-serviceaccount-issuer-key:/run/api-issuer
+      - controller-serviceaccount-secrets:/run/controller-secrets
+      - controller-serviceaccount-identity:/run/controller-bootstrap
+
+  serviceaccount-enrollment:
+    profiles: [local]
+    image: ghcr.io/gitstore-dev/api
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment:
+      GITSTORE_BOOTSTRAP_ADMIN_USERNAME: ${GITSTORE_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      GITSTORE_BOOTSTRAP_ADMIN_PASSWORD: ${GITSTORE_BOOTSTRAP_ADMIN_PASSWORD:-admin123}
+    command:
+      - /app/gitctl
+      - enroll-serviceaccount
+      - --api-url
+      - http://api:4000/graphql
+      - --namespace
+      - controllers
+      - --name
+      - gitstore-controller-manager
+      - --key-id
+      - controller-key
+      - --replace-existing-key
+      - --private-key-path
+      - /run/controller-secrets/gitstore-controller-manager-signing-key/privateKey
+      - --identity-output-path
+      - /run/controller-bootstrap/serviceaccount.env
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - gitstore-network
+    volumes:
+      - controller-serviceaccount-secrets:/run/controller-secrets
+      - controller-serviceaccount-identity:/run/controller-bootstrap
 
 volumes:
   controller-checkpoints:

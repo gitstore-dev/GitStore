@@ -46,7 +46,7 @@ func TestApply_SendsUpdateCategoryStatusMutation(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := graphqlclient.New(srv.URL, "test-token")
+	client := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	sc := status.NewGraphQLStatusClient(client)
 	patch := testPatch()
 
@@ -103,7 +103,7 @@ func TestApply_NonNullConflictMapsToErrConflict(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := graphqlclient.New(srv.URL, "test-token")
+	client := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	sc := status.NewGraphQLStatusClient(client)
 
 	err := sc.Apply(context.Background(), testKey(), testPatch())
@@ -119,7 +119,7 @@ func TestApply_NotFoundExtensionMapsToErrNotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := graphqlclient.New(srv.URL, "test-token")
+	client := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	sc := status.NewGraphQLStatusClient(client)
 
 	err := sc.Apply(context.Background(), testKey(), testPatch())
@@ -135,7 +135,7 @@ func TestApply_ForbiddenExtensionReturnsPlainWrappedError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := graphqlclient.New(srv.URL, "test-token")
+	client := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	sc := status.NewGraphQLStatusClient(client)
 
 	err := sc.Apply(context.Background(), testKey(), testPatch())

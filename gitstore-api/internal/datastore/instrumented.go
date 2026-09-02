@@ -623,6 +623,57 @@ func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Con
 	return v, err
 }
 
+// ── ServiceAccount ─────────────────────────────────────────────────────────
+
+func (d *InstrumentedDatastore) CreateServiceAccount(ctx context.Context, sa *ServiceAccount) error {
+	start := time.Now()
+	err := d.next.CreateServiceAccount(d.withFindingObserver(ctx), sa)
+	d.observe("CreateServiceAccount", start, err)
+	return err
+}
+func (d *InstrumentedDatastore) GetServiceAccountByUID(ctx context.Context, uid string) (*ServiceAccount, error) {
+	start := time.Now()
+	v, err := d.next.GetServiceAccountByUID(d.withFindingObserver(ctx), uid)
+	d.observe("GetServiceAccountByUID", start, err)
+	return v, err
+}
+func (d *InstrumentedDatastore) GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*ServiceAccount, error) {
+	start := time.Now()
+	v, err := d.next.GetServiceAccountBySubject(d.withFindingObserver(ctx), namespace, name)
+	d.observe("GetServiceAccountBySubject", start, err)
+	return v, err
+}
+func (d *InstrumentedDatastore) ListServiceAccounts(ctx context.Context, page PageParams) (*PageResult[ServiceAccount], error) {
+	start := time.Now()
+	v, err := d.next.ListServiceAccounts(d.withFindingObserver(ctx), page)
+	d.observe("ListServiceAccounts", start, err)
+	return v, err
+}
+func (d *InstrumentedDatastore) UpdateServiceAccountKeys(ctx context.Context, uid string, add []ServiceAccountPublicKey, removeKeyIDs []string, expectedResourceVersion string) (*ServiceAccount, error) {
+	start := time.Now()
+	v, err := d.next.UpdateServiceAccountKeys(d.withFindingObserver(ctx), uid, add, removeKeyIDs, expectedResourceVersion)
+	d.observe("UpdateServiceAccountKeys", start, err)
+	return v, err
+}
+func (d *InstrumentedDatastore) SetServiceAccountDisabled(ctx context.Context, uid string, disabled bool) error {
+	start := time.Now()
+	err := d.next.SetServiceAccountDisabled(d.withFindingObserver(ctx), uid, disabled)
+	d.observe("SetServiceAccountDisabled", start, err)
+	return err
+}
+func (d *InstrumentedDatastore) DeleteServiceAccount(ctx context.Context, uid string) error {
+	start := time.Now()
+	err := d.next.DeleteServiceAccount(d.withFindingObserver(ctx), uid)
+	d.observe("DeleteServiceAccount", start, err)
+	return err
+}
+func (d *InstrumentedDatastore) TryConsumeServiceAccountAssertion(ctx context.Context, jtiDigest string, expiresAt time.Time) (bool, error) {
+	start := time.Now()
+	v, err := d.next.TryConsumeServiceAccountAssertion(d.withFindingObserver(ctx), jtiDigest, expiresAt)
+	d.observe("TryConsumeServiceAccountAssertion", start, err)
+	return v, err
+}
+
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 
 func (d *InstrumentedDatastore) Close() error {

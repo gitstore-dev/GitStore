@@ -325,6 +325,24 @@ type CreateRepositoryPayload struct {
 	Repository *Repository `json:"repository"`
 }
 
+// createServiceAccount mutation input (Relay pattern).
+type CreateServiceAccountInput struct {
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Metadata   *ObjectMetaInput `json:"metadata"`
+	// At least one enrolled public key is required.
+	PublicKeys []*ServiceAccountPublicKeyInput `json:"publicKeys"`
+}
+
+// createServiceAccount/rotateServiceAccountKey mutation payload (Relay pattern).
+type CreateServiceAccountPayload struct {
+	APIVersion string                    `json:"apiVersion"`
+	Kind       string                    `json:"kind"`
+	Metadata   *ServiceAccountObjectMeta `json:"metadata"`
+	KeyIDs     []string                  `json:"keyIDs"`
+	Disabled   bool                      `json:"disabled"`
+}
+
 // Input for deleting a category
 type DeleteCategoryInput struct {
 	// Category ID to delete
@@ -369,6 +387,20 @@ type DeleteRepositoryInput struct {
 
 type DeleteRepositoryPayload struct {
 	DeletedRepositoryID string `json:"deletedRepositoryId"`
+}
+
+// deleteServiceAccount mutation input (Relay pattern).
+type DeleteServiceAccountInput struct {
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Metadata   *ObjectMetaInput `json:"metadata"`
+}
+
+// deleteServiceAccount mutation payload (Relay pattern).
+type DeleteServiceAccountPayload struct {
+	APIVersion string                    `json:"apiVersion"`
+	Kind       string                    `json:"kind"`
+	Metadata   *ServiceAccountObjectMeta `json:"metadata"`
 }
 
 // Gate that controls when a price template is eligible.
@@ -462,6 +494,22 @@ type InventoryDefinition struct {
 	// References to stock location resources. Stored as-is when managed is false;
 	// actively evaluated when managed is true.
 	StockLocationRefs []*CatalogObjectReference `json:"stockLocationRefs"`
+}
+
+// issueServiceAccountToken mutation input (Relay pattern).
+type IssueServiceAccountTokenInput struct {
+	APIVersion string            `json:"apiVersion"`
+	Kind       string            `json:"kind"`
+	Metadata   *ObjectMetaInput  `json:"metadata"`
+	Spec       *TokenRequestSpec `json:"spec"`
+}
+
+// issueServiceAccountToken mutation payload (Relay pattern).
+type IssueServiceAccountTokenPayload struct {
+	APIVersion string                    `json:"apiVersion"`
+	Kind       string                    `json:"kind"`
+	Metadata   *ServiceAccountObjectMeta `json:"metadata"`
+	Status     *TokenRequestStatus       `json:"status"`
 }
 
 // A key-value pair for label maps.
@@ -690,6 +738,16 @@ type ObjectMeta struct {
 	OwnerReferences   []*OwnerReference `json:"ownerReferences"`
 	Finalizers        []string          `json:"finalizers"`
 	DeletionTimestamp *time.Time        `json:"deletionTimestamp,omitempty"`
+}
+
+// Identity metadata for a ServiceAccount create/rotate/delete request
+// (Relay-style input, not the full ObjectMeta envelope used by catalog
+// resources — a ServiceAccount is identified purely by namespace/name).
+type ObjectMetaInput struct {
+	// Convention string grouping related service accounts, e.g. "controllers". Not a GitStore Namespace resource.
+	Namespace string `json:"namespace"`
+	// Names the process/identity, e.g. "gitstore-controller-manager".
+	Name string `json:"name"`
 }
 
 type OwnerReference struct {
@@ -1196,6 +1254,15 @@ type ResolvedRepositoryDefinition struct {
 	StorageClass string `json:"storageClass"`
 }
 
+// rotateServiceAccountKey mutation input (Relay pattern). add and removeKids
+// may both be non-empty in the same call to support an overlap window during
+// rotation.
+type RotateServiceAccountKeyInput struct {
+	Metadata   *ObjectMetaInput                `json:"metadata"`
+	Add        []*ServiceAccountPublicKeyInput `json:"add"`
+	RemoveKids []string                        `json:"removeKids"`
+}
+
 type SchemaValidationDefaults struct {
 	Phase          *string `json:"phase,omitempty"`
 	TimeoutSeconds *int32  `json:"timeoutSeconds,omitempty"`
@@ -1216,6 +1283,24 @@ type SelectedOptionDefinition struct {
 	Value string `json:"value"`
 }
 
+// System-managed identity metadata returned for a ServiceAccount.
+type ServiceAccountObjectMeta struct {
+	Namespace         string    `json:"namespace"`
+	Name              string    `json:"name"`
+	UID               string    `json:"uid"`
+	CreationTimestamp time.Time `json:"creationTimestamp"`
+}
+
+// Enrolled public key supplied on create/rotate.
+type ServiceAccountPublicKeyInput struct {
+	// Key ID an assertion's protected header "kid" must match.
+	Kid string `json:"kid"`
+	// "Ed25519" (preferred) or "ECDSA-P256".
+	Algorithm string `json:"algorithm"`
+	// PEM-encoded public key.
+	PublicKeyPem string `json:"publicKeyPEM"`
+}
+
 // Optimistic-concurrency conflict payload shared by all status-write
 // mutations (per-kind and generic).
 type StatusConflict struct {
@@ -1230,6 +1315,20 @@ type StrategyDefinition struct {
 }
 
 type Subscription struct {
+}
+
+// Requested parameters for a ServiceAccount access token.
+type TokenRequestSpec struct {
+	// Requested audience. Defaults to auth.serviceaccount.audience (typically "gitstore-api") when omitted.
+	Audience *string `json:"audience,omitempty"`
+	// Requested token lifetime in seconds. Clamped to auth.serviceaccount.max_ttl regardless of the requested value.
+	TTLSeconds *int32 `json:"ttlSeconds,omitempty"`
+}
+
+// Issued access token result.
+type TokenRequestStatus struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expiresAt"`
 }
 
 // OIDC-compatible token response.

@@ -27,6 +27,8 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountassertion"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountjwt"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/userdirnone"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
@@ -43,6 +45,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
+	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -185,7 +188,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("datastore does not implement shared session revocations")
 	}
-	registry, authReloader, providerShutdowns, err := buildProviderRegistry(cfg, log, revocations)
+	registry, authReloader, providerShutdowns, err := buildProviderRegistry(cfg, store, log, revocations)
 	if err != nil {
 		_ = gitClient.Close()
 		_ = store.Close()
@@ -218,6 +221,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		NamespaceWatch:               cfg.Watch.Namespace,
 		NamespaceMetrics:             namespaceWatchMetrics(namespaceWatch),
 		NamespaceRepositoryFenceMode: namespaceRepositoryFenceMode,
+		ServiceAccountAudience:       cfg.Auth.ServiceAccount.Audience,
 		RateLimitPerSecond:           cfg.Api.RateLimitPerSecond,
 		RateLimitBurst:               cfg.Api.RateLimitBurst,
 	})
@@ -305,6 +309,9 @@ type GraphQLHandlerDeps struct {
 	NamespaceWatch               config.NamespaceWatchConfig
 	NamespaceMetrics             *watchjournal.Metrics
 	NamespaceRepositoryFenceMode resolver.NamespaceRepositoryFenceMode
+	// ServiceAccountAudience is the configured audience value that the server
+	// issues tokens for. Must be provided to the resolver (spec 061).
+	ServiceAccountAudience string
 	// RateLimitPerSecond/RateLimitBurst configure the per-client-IP token
 	// bucket guarding /graphql. A zero RateLimitPerSecond falls back to
 	// defaultRateLimitPerSecond/defaultRateLimitBurst (the same defaults
@@ -312,12 +319,19 @@ type GraphQLHandlerDeps struct {
 	// tests) keep working unchanged.
 	RateLimitPerSecond float64
 	RateLimitBurst     int
+	// ConnectionRegistry tracks authenticated ServiceAccount WebSockets for
+	// immediate local revocation. A fresh registry is created when omitted.
+	ConnectionRegistry *wsregistry.Registry
 }
 
 // NewGraphQLHandler builds a GraphQL HTTP handler.
 func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	if deps.Registry == nil || deps.Registry.AuthN() == nil || deps.Registry.AuthZ() == nil {
 		return nil, fmt.Errorf("app: authn and authz provider registry is required")
+	}
+	connectionRegistry := deps.ConnectionRegistry
+	if connectionRegistry == nil {
+		connectionRegistry = wsregistry.New()
 	}
 	rootResolver, err := resolver.NewResolver(resolver.ResolverDeps{
 		Store:                        deps.Store,
@@ -331,6 +345,8 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 		NamespaceWatch:               deps.NamespaceWatch,
 		NamespaceMetrics:             deps.NamespaceMetrics,
 		NamespaceRepositoryFenceMode: deps.NamespaceRepositoryFenceMode,
+		ServiceAccountAudience:       deps.ServiceAccountAudience,
+		ConnectionRegistry:           connectionRegistry,
 	})
 	if err != nil {
 		return nil, err
@@ -340,6 +356,11 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 
 	gqlServer.AddTransport(transport.Websocket{
 		KeepAlivePingInterval: 10 * time.Second,
+		InitFunc:              webSocketInitFunc(deps.Registry, connectionRegistry, deps.Store),
+		CloseFunc: func(ctx context.Context, _ int) {
+			cancelWebSocketLifetime(ctx)
+			connectionRegistry.Unregister(ctx)
+		},
 	})
 	gqlServer.AddTransport(transport.Options{})
 	gqlServer.AddTransport(transport.GET{})
@@ -391,6 +412,68 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 	return r, nil
 }
 
+type webSocketLifetimeCancelContextKey struct{}
+
+func webSocketInitFunc(registry *auth.ProviderRegistry, connectionRegistry *wsregistry.Registry, store datastore.Datastore) transport.WebsocketInitFunc {
+	return func(ctx context.Context, initPayload transport.InitPayload) (context.Context, *transport.InitPayload, error) {
+		if registry == nil || registry.AuthN() == nil {
+			return nil, nil, errors.New("unauthorized")
+		}
+		authorization := initPayload.Authorization()
+		if authorization == "" {
+			return nil, nil, errors.New("unauthorized")
+		}
+		headers := make(http.Header)
+		headers.Set("Authorization", authorization)
+
+		authCtx := ctx
+		if bearer, ok := strings.CutPrefix(authorization, "Bearer "); ok {
+			authCtx = auth.ContextWithRawToken(authCtx, bearer)
+		}
+		principal, decision, err := registry.AuthN().Authenticate(authCtx, auth.AuthRequest{
+			Header:     headers,
+			RemoteAddr: security.RemoteAddrFromContext(authCtx),
+		})
+		if err != nil || decision.Outcome != auth.OutcomeAllow || principal == nil || principal.AuthMethod == "none" {
+			return nil, nil, errors.New("unauthorized")
+		}
+		if !principal.ExpiresAt.IsZero() && !principal.ExpiresAt.After(time.Now()) {
+			return nil, nil, errors.New("unauthorized")
+		}
+
+		if principal.ServiceAccountUID != "" {
+			var cancel context.CancelFunc
+			if principal.ExpiresAt.IsZero() {
+				authCtx, cancel = context.WithCancel(authCtx)
+			} else {
+				authCtx, cancel = context.WithDeadline(authCtx, principal.ExpiresAt)
+			}
+			authCtx = context.WithValue(authCtx, webSocketLifetimeCancelContextKey{}, cancel)
+			authCtx = connectionRegistry.Register(authCtx, principal.ServiceAccountUID, cancel)
+		}
+		if principal.ServiceAccountUID != "" {
+			if store == nil {
+				cancelWebSocketLifetime(authCtx)
+				connectionRegistry.Unregister(authCtx)
+				return nil, nil, errors.New("unauthorized")
+			}
+			account, err := store.GetServiceAccountByUID(authCtx, principal.ServiceAccountUID)
+			if err != nil || account == nil || account.Disabled || account.DeletionTimestamp != nil {
+				cancelWebSocketLifetime(authCtx)
+				connectionRegistry.Unregister(authCtx)
+				return nil, nil, errors.New("unauthorized")
+			}
+		}
+		return auth.ContextWithPrincipal(authCtx, principal), nil, nil
+	}
+}
+
+func cancelWebSocketLifetime(ctx context.Context) {
+	if cancel, ok := ctx.Value(webSocketLifetimeCancelContextKey{}).(context.CancelFunc); ok {
+		cancel()
+	}
+}
+
 func playgroundHandler(c *gin.Context) {
 	h := playground.Handler("GraphQL Playground", "/graphql")
 	h.ServeHTTP(c.Writer, c.Request)
@@ -433,17 +516,25 @@ func namespaceWatchReadiness(ctx context.Context, runtime *namespaceWatchRuntime
 	return nil
 }
 
+// serviceAccountStore is the narrow datastore seam shared by the
+// ServiceAccount AuthN providers. Assertion authentication additionally needs
+// the durable replay operation while JWT authentication uses only the lookup.
+type serviceAccountStore interface {
+	GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*datastore.ServiceAccount, error)
+	TryConsumeServiceAccountAssertion(ctx context.Context, jtiDigest string, expiresAt time.Time) (bool, error)
+}
+
 // buildProviderRegistry constructs a ProviderRegistry from the application config.
 // It reads authn chain, authz provider, and userdir provider from the resolved config.
 // The second return value validates and atomically swaps the complete auth set on
 // SIGHUP. The third return value lists resources that must be shut down with the server.
-func buildProviderRegistry(cfg *config.Config, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, authReloader, []providerShutdowner, error) {
-	registry, shutdowns, err := constructProviderRegistry(cfg, log, revocations)
+func buildProviderRegistry(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, authReloader, []providerShutdowner, error) {
+	registry, shutdowns, err := constructProviderRegistry(cfg, store, log, revocations)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	runtime := &providerRegistryRuntime{
-		cfg: cfg, log: log, revocations: revocations, registry: registry, shutdowns: shutdowns,
+		cfg: cfg, store: store, log: log, revocations: revocations, registry: registry, shutdowns: shutdowns,
 	}
 	return registry, runtime, []providerShutdowner{runtime}, nil
 }
@@ -451,6 +542,7 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger, revocations stat
 type providerRegistryRuntime struct {
 	mu          sync.Mutex
 	cfg         *config.Config
+	store       serviceAccountStore
 	log         *zap.Logger
 	revocations staticusers.RevocationStore
 	registry    *auth.ProviderRegistry
@@ -464,7 +556,7 @@ func (r *providerRegistryRuntime) Reload() error {
 	if r.closed {
 		return errors.New("auth provider registry is closed")
 	}
-	newRegistry, newShutdowns, err := constructProviderRegistry(r.cfg, r.log, r.revocations)
+	newRegistry, newShutdowns, err := constructProviderRegistry(r.cfg, r.store, r.log, r.revocations)
 	if err != nil {
 		return err
 	}
@@ -492,7 +584,7 @@ func (r *providerRegistryRuntime) Shutdown() {
 	}
 }
 
-func constructProviderRegistry(cfg *config.Config, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, []providerShutdowner, error) {
+func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, []providerShutdowner, error) {
 	// Build AuthN providers in chain order.
 	chain := cfg.Auth.AuthN.Chain
 	if len(chain) == 0 {
@@ -520,6 +612,21 @@ func constructProviderRegistry(cfg *config.Config, log *zap.Logger, revocations 
 			shutdowns = append(shutdowns, p)
 		case "anonymous":
 			authnProviders = append(authnProviders, anonymous.New())
+		case "serviceaccount-assertion":
+			p, err := serviceaccountassertion.New(cfg.Auth.ServiceAccount, store, log)
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("init serviceaccount-assertion provider: %w", err)
+			}
+			authnProviders = append(authnProviders, p)
+		case "serviceaccount-jwt":
+			p, err := serviceaccountjwt.New(cfg.Auth.ServiceAccount, store, log)
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("init serviceaccount-jwt provider: %w", err)
+			}
+			authnProviders = append(authnProviders, p)
+			shutdowns = append(shutdowns, p)
 		default:
 			cleanup()
 			return nil, nil, fmt.Errorf("unknown authn provider %q", name)
