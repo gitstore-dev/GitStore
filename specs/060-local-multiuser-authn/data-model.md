@@ -61,7 +61,7 @@ type StaticUsersProvider struct {
     jwtIssuer    string
     jwtDuration  time.Duration
     refreshGrace time.Duration
-    blacklist    *sessionBlacklist   // same shape as staticadmin's former sessionBlacklist
+    revocations  RevocationStore    // shared across production API replicas
     logger       *zap.Logger
 }
 ```
@@ -130,7 +130,7 @@ The same new function also implements the migration-safety check (FR-013): given
 | Field | Value |
 |---|---|
 | `Subject` | The authenticated `username`, verbatim. |
-| `Issuer` | `auth.jwt.issuer`'s configured value. |
+| `Issuer` | `<auth.jwt.issuer>/static-users` for newly minted tokens; the legacy unsuffixed value remains accepted during rollout. |
 | `Roles` | **Always empty** (`nil`/`[]string{}`) — FR-004. Never populated from anywhere, including `role_bindings` (which is applied transiently inside `RBACLocalProvider.Authorize`, never written back). |
 | `AuthMethod` | `"static-users"` |
 | `TokenID` | The bearer token's `jti` claim (Basic Auth sessions carry no `TokenID`, mirroring `static-admin`'s prior behavior). |
@@ -149,7 +149,9 @@ The same new function also implements the migration-safety check (FR-013): given
 
 ## State transitions
 
-Per configured user: **active** (listed in `users.yaml`, can authenticate, mint new tokens, and be looked up via UserDir) → **removed from file + reload** (can no longer authenticate, mint new tokens, or be found by UserDir; already-issued unexpired tokens remain valid until natural expiry or explicit revocation). No third state (e.g., "disabled but not removed") exists in v1, matching the unchanged Assumption that user management has no mutation API.
+Per configured user: **active** (listed in `users.yaml`, can authenticate, mint or refresh tokens, and be looked up via UserDir) → **removed from file + reload** (can no longer authenticate, mint or refresh tokens, or be found by UserDir; already-issued access tokens remain valid only until natural expiry or explicit revocation). No third state (e.g., "disabled but not removed") exists in v1.
+
+New tokens use issuer `<auth.jwt.issuer>/static-users`. During rolling upgrades, upgraded replicas also verify the legacy unsuffixed issuer, but only the suffixed domain is minted. Revoked JTIs are retained through token expiry plus the two-minute verifier leeway; Scylla TTL bounds storage automatically.
 
 ## Relationship to `rbac-local`'s `policy.yaml` (existing, unmodified) — now load-bearing
 

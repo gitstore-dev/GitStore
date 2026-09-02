@@ -66,23 +66,12 @@ const (
 	namespaceWatchStopTimeout = 5 * time.Second
 )
 
-// policyReloader can reload its policy from disk.
-type policyReloader interface {
+// authReloader validates and reloads the complete configured auth provider set.
+type authReloader interface {
 	Reload() error
 }
 
-type providerReloaders []policyReloader
-
-func (r providerReloaders) Reload() error {
-	for _, reloader := range r {
-		if err := reloader.Reload(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// providerShutdowner is implemented by auth providers that own background goroutines.
+// providerShutdowner is implemented by auth providers and runtimes that own resources.
 type providerShutdowner interface {
 	Shutdown()
 }
@@ -97,7 +86,7 @@ type Server struct {
 	gitServer        *http.Server
 	grpcServer       *grpc.Server
 	grpcListener     net.Listener
-	rbacReloader     policyReloader
+	authReloader     authReloader
 	providerShutdown []providerShutdowner
 	namespaceWatch   *namespaceWatchRuntime
 }
@@ -190,7 +179,13 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("bootstrap resources: %w", err)
 	}
-	registry, rbacReloader, providerShutdowns, err := buildProviderRegistry(cfg, log)
+	revocations, ok := rawStore.(staticusers.RevocationStore)
+	if !ok {
+		_ = gitClient.Close()
+		_ = store.Close()
+		return nil, fmt.Errorf("datastore does not implement shared session revocations")
+	}
+	registry, authReloader, providerShutdowns, err := buildProviderRegistry(cfg, log, revocations)
 	if err != nil {
 		_ = gitClient.Close()
 		_ = store.Close()
@@ -289,7 +284,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		gitServer:        gitHttpServer,
 		grpcServer:       grpcServer,
 		grpcListener:     grpcListener,
-		rbacReloader:     rbacReloader,
+		authReloader:     authReloader,
 		providerShutdown: providerShutdowns,
 		namespaceWatch:   namespaceWatch,
 	}, nil
@@ -440,10 +435,64 @@ func namespaceWatchReadiness(ctx context.Context, runtime *namespaceWatchRuntime
 
 // buildProviderRegistry constructs a ProviderRegistry from the application config.
 // It reads authn chain, authz provider, and userdir provider from the resolved config.
-// The second return value is non-nil when rbac-local is active — callers may use it
-// for SIGHUP-triggered policy reloads. The third return value lists providers that
-// own background goroutines and must be shut down when the server stops.
-func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderRegistry, policyReloader, []providerShutdowner, error) {
+// The second return value validates and atomically swaps the complete auth set on
+// SIGHUP. The third return value lists resources that must be shut down with the server.
+func buildProviderRegistry(cfg *config.Config, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, authReloader, []providerShutdowner, error) {
+	registry, shutdowns, err := constructProviderRegistry(cfg, log, revocations)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	runtime := &providerRegistryRuntime{
+		cfg: cfg, log: log, revocations: revocations, registry: registry, shutdowns: shutdowns,
+	}
+	return registry, runtime, []providerShutdowner{runtime}, nil
+}
+
+type providerRegistryRuntime struct {
+	mu          sync.Mutex
+	cfg         *config.Config
+	log         *zap.Logger
+	revocations staticusers.RevocationStore
+	registry    *auth.ProviderRegistry
+	shutdowns   []providerShutdowner
+	closed      bool
+}
+
+func (r *providerRegistryRuntime) Reload() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errors.New("auth provider registry is closed")
+	}
+	newRegistry, newShutdowns, err := constructProviderRegistry(r.cfg, r.log, r.revocations)
+	if err != nil {
+		return err
+	}
+	oldShutdowns := r.shutdowns
+	r.registry.Swap(newRegistry.AuthN(), newRegistry.AuthZ(), newRegistry.UserDir())
+	r.shutdowns = newShutdowns
+	for _, provider := range oldShutdowns {
+		provider.Shutdown()
+	}
+	return nil
+}
+
+func (r *providerRegistryRuntime) Shutdown() {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return
+	}
+	r.closed = true
+	shutdowns := r.shutdowns
+	r.shutdowns = nil
+	r.mu.Unlock()
+	for _, provider := range shutdowns {
+		provider.Shutdown()
+	}
+}
+
+func constructProviderRegistry(cfg *config.Config, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, []providerShutdowner, error) {
 	// Build AuthN providers in chain order.
 	chain := cfg.Auth.AuthN.Chain
 	if len(chain) == 0 {
@@ -452,13 +501,19 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 
 	var authnProviders []auth.AuthNProvider
 	var shutdowns []providerShutdowner
+	cleanup := func() {
+		for _, provider := range shutdowns {
+			provider.Shutdown()
+		}
+	}
 	var staticUsersProvider *staticusers.StaticUsersProvider
 	for _, name := range chain {
 		switch name {
 		case "static-users":
-			p, err := staticusers.New(cfg.Auth, log)
+			p, err := staticusers.NewWithRevocationStore(cfg.Auth, log, revocations)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("init static-users provider: %w", err)
+				cleanup()
+				return nil, nil, fmt.Errorf("init static-users provider: %w", err)
 			}
 			staticUsersProvider = p
 			authnProviders = append(authnProviders, p)
@@ -466,28 +521,29 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 		case "anonymous":
 			authnProviders = append(authnProviders, anonymous.New())
 		default:
-			return nil, nil, nil, fmt.Errorf("unknown authn provider %q", name)
+			cleanup()
+			return nil, nil, fmt.Errorf("unknown authn provider %q", name)
 		}
 	}
 
 	// Build AuthZ provider.
 	var authzProvider auth.AuthZProvider
-	var reloader policyReloader
 	var rbacProvider *rbaclocal.RBACLocalProvider
 	switch cfg.Auth.AuthZ.Provider {
 	case "rbac-local":
 		p, err := rbaclocal.New(cfg.Auth.RBAC, log)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("init rbac-local authz provider: %w", err)
+			cleanup()
+			return nil, nil, fmt.Errorf("init rbac-local authz provider: %w", err)
 		}
 		authzProvider = p
 		rbacProvider = p
-		reloader = p
 	case "allow-all", "":
 		// Default to allow-all so existing deployments without explicit config are unaffected.
 		authzProvider = allowall.New(log)
 	default:
-		return nil, nil, nil, fmt.Errorf("unknown authz provider %q", cfg.Auth.AuthZ.Provider)
+		cleanup()
+		return nil, nil, fmt.Errorf("unknown authz provider %q", cfg.Auth.AuthZ.Provider)
 	}
 	// DecisionLogger is the required middleware that keeps every AuthZ decision
 	// consistent with the pluggable auth architecture audit contract.
@@ -500,11 +556,13 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 		userdirProvider = userdirnone.New()
 	case "static-users":
 		if staticUsersProvider == nil {
-			return nil, nil, nil, errors.New("auth.userdir.provider=static-users requires static-users in auth.authn.chain")
+			cleanup()
+			return nil, nil, errors.New("auth.userdir.provider=static-users requires static-users in auth.authn.chain")
 		}
 		userdirProvider = staticUsersProvider
 	default:
-		return nil, nil, nil, fmt.Errorf("unknown userdir provider %q", cfg.Auth.UserDir.Provider)
+		cleanup()
+		return nil, nil, fmt.Errorf("unknown userdir provider %q", cfg.Auth.UserDir.Provider)
 	}
 
 	if staticUsersProvider != nil && rbacProvider != nil && !rbacProvider.HasAnyRoleBindingFor(staticUsersProvider.Usernames()) {
@@ -513,21 +571,10 @@ func buildProviderRegistry(cfg *config.Config, log *zap.Logger) (*auth.ProviderR
 		if len(usernames) > 0 {
 			first = usernames[0]
 		}
-		return nil, nil, nil, fmt.Errorf("startup failed: static-users + rbac-local migration safety check\n\n  Problem: static-users is configured with %d user(s) (%s), but rbac-local's policy.yaml has no role_bindings entry for any of them. Every static-users login would authenticate successfully and then be denied every action by rbac-local's default_deny\n\n  To fix, do ONE of the following:\n    1. Add a role_bindings entry in %s for at least one of the usernames above, e.g. role_bindings: %s: [admin]\n    2. If you don't want rbac-local enforcement yet, set GITSTORE_AUTH__AUTHZ__PROVIDER=allow-all instead\n\n  See specs/060-local-multiuser-authn/quickstart.md for a worked example", len(usernames), strings.Join(usernames, ", "), cfg.Auth.RBAC.PolicyFile, first)
+		cleanup()
+		return nil, nil, fmt.Errorf("startup failed: static-users + rbac-local migration safety check\n\n  Problem: static-users is configured with %d user(s) (%s), but rbac-local's policy.yaml has no usable role_bindings entry for any of them. A usable binding names a defined role with at least one allowed action\n\n  To fix, do ONE of the following:\n    1. Add a role_bindings entry in %s for at least one of the usernames above, e.g. role_bindings: %s: [admin]\n    2. If you don't want rbac-local enforcement yet, set GITSTORE_AUTH__AUTHZ__PROVIDER=allow-all instead\n\n  See specs/060-local-multiuser-authn/quickstart.md for a worked example", len(usernames), strings.Join(usernames, ", "), cfg.Auth.RBAC.PolicyFile, first)
 	}
-
-	var reloaders providerReloaders
-	if reloader != nil {
-		reloaders = append(reloaders, reloader)
-	}
-	if staticUsersProvider != nil {
-		reloaders = append(reloaders, staticUsersProvider)
-	}
-	var combined policyReloader
-	if len(reloaders) > 0 {
-		combined = reloaders
-	}
-	return auth.NewProviderRegistry(auth.NewChainedAuthN(authnProviders...), authzProvider, userdirProvider), combined, shutdowns, nil
+	return auth.NewProviderRegistry(auth.NewChainedAuthN(authnProviders...), authzProvider, userdirProvider), shutdowns, nil
 }
 
 // Start starts all servers in background goroutines.
@@ -541,16 +588,16 @@ func (s *Server) Start() {
 			s.namespaceWatch.run(ctx)
 		}()
 	}
-	// Listen for SIGHUP to trigger a live policy reload on rbac-local.
-	if s.rbacReloader != nil {
+	// Listen for SIGHUP to validate and atomically swap the complete auth set.
+	if s.authReloader != nil {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGHUP)
 		go func() {
 			for range sigCh {
-				if err := s.rbacReloader.Reload(); err != nil {
-					s.log.Error("rbac-local policy reload failed", zap.Error(err))
+				if err := s.authReloader.Reload(); err != nil {
+					s.log.Error("auth provider reload failed; previous configuration remains active", zap.Error(err))
 				} else {
-					s.log.Info("rbac-local policy reloaded")
+					s.log.Info("auth providers reloaded atomically")
 				}
 			}
 		}()

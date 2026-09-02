@@ -21,7 +21,7 @@ func TestNamespaceWatchMigrationIsAdditiveRollbackArtifact(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	require.Equal(t, "006_namespace_watch_cdc.cql", names[len(names)-1])
+	require.Contains(t, names, "006_namespace_watch_cdc.cql")
 
 	raw, err := migrations.Files.ReadFile("006_namespace_watch_cdc.cql")
 	require.NoError(t, err)
@@ -35,7 +35,7 @@ func TestNamespaceWatchMigrationIsAdditiveRollbackArtifact(t *testing.T) {
 	// Application rollback is supported by leaving migration 006 installed:
 	// pre-050 binaries ignore these additive tables and CDC metadata while the
 	// fleet-wide watch ingress deny prevents them from serving weaker streams.
-	for _, prior := range names[:len(names)-1] {
+	for _, prior := range names {
 		_, err := migrations.Files.ReadFile(prior)
 		require.NoErrorf(t, err, "prior migration %s must remain embedded", prior)
 	}

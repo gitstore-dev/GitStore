@@ -72,5 +72,18 @@ func validatePolicy(p *Policy) error {
 			}
 		}
 	}
+	for subject, roleNames := range p.RoleBindings {
+		if subject == "" {
+			return errors.New("role binding subject must be non-empty")
+		}
+		if len(roleNames) == 0 {
+			return fmt.Errorf("role binding for %q must name at least one role", subject)
+		}
+		for _, roleName := range roleNames {
+			if _, ok := p.Roles[roleName]; !ok {
+				return fmt.Errorf("role binding for %q references undefined role %q", subject, roleName)
+			}
+		}
+	}
 	return nil
 }

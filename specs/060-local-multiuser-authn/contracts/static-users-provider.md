@@ -8,10 +8,10 @@
 |---|---|
 | `Name()` | Returns `"static-users"`. |
 | `Capabilities()` | `CapAuthenticate \| CapIssueSession \| CapIntrospect \| CapUserLookup` — the last flag is new relative to `static-admin`'s former set, reflecting the new `UserDirProvider` implementation below. |
-| `Authenticate` | Basic Auth: look up `username` in the loaded user map; `bcrypt.CompareHashAndPassword` against the stored hash; on match, return `Allow` with a `Principal` per `data-model.md`'s Principal shape (no hardcoded roles — FR-004). Bearer: verify signature with `auth.jwt.secret` and `jwt.WithIssuer(auth.jwt.issuer)`; on success, check the provider's own blacklist by `jti`. Unknown username, wrong password, or unrecognized scheme → `Challenge`, mirroring `static-admin.authenticateBasic`'s former behavior exactly (falls through the chain rather than hard-failing). |
-| `RevokeSession` | Adds `jti` to `static-users`' own in-memory blacklist (structurally identical to `staticadmin`'s former `sessionBlacklist`). |
-| `RefreshSession` | Parses `oldToken` with `static-users`' secret/issuer, honoring the same expired-within-leeway (`jwt.WithLeeway(2*time.Minute)`) and refresh-grace-window semantics `static-admin.RefreshSession` used. |
-| `IssueSession` | Mints a new HS256 JWT for the given `subject`, signed with `auth.jwt.secret`/`issuer`, generating a fresh `jti`. Since `static-users` is the only provider in any currently-designed chain that supports `IssueSession` (research.md Decision 8), `ChainedAuthN.IssueSession`'s existing "first supporter wins" resolution is unambiguous — no registry-level change is needed for this method's correctness. |
+| `Authenticate` | Basic Auth checks the loaded bcrypt credential. Bearer verifies HS256, accepts the new suffixed issuer or the legacy issuer during rollout, and fails closed if shared revocation state cannot be read. Unknown username, wrong password, or an unowned token → `Challenge`. |
+| `RevokeSession` | Persists `jti` in the shared revocation store through token expiry plus verifier leeway, so every API replica rejects it. |
+| `RefreshSession` | Accepts the suffixed or legacy issuer during rollout, rejects removed subjects, and atomically consumes the old JTI before minting a replacement. Exactly one concurrent refresh succeeds across replicas. |
+| `IssueSession` | Mints a new HS256 JWT with issuer `<auth.jwt.issuer>/static-users`, a fresh `jti`, and the configured duration. The distinct issuer makes old `static-admin` replicas reject newly minted user tokens. |
 
 ## `UserDirProvider` interface compliance (new)
 
@@ -52,7 +52,7 @@ silently override an explicit UserDir selection.
 
 The default chain literal changes from `[]string{"static-admin", "anonymous"}` to `[]string{"static-users", "anonymous"}` — both the inline fallback in `buildProviderRegistry` and `config.go`'s `v.SetDefault("auth.authn.chain", ...)`.
 
-`static-users` also implements the same `policyReloader`-shaped `Reload() error` method `rbac-local` exposes, so the existing SIGHUP handler in `Start()` is extended (additive change, existing `rbac-local` SIGHUP wiring untouched) to also reload any active `static-users` provider.
+The SIGHUP handler constructs a complete replacement AuthN/AuthZ/UserDir set from both files, validates the usable-binding invariant, then swaps the registry under one lock. Any read, parse, or invariant failure leaves the previous set active.
 
 ## Migration-safety check placement (FR-013)
 

@@ -35,14 +35,18 @@ func New(cfg config.RBACConfig, logger *zap.Logger) (*RBACLocalProvider, error) 
 
 func (p *RBACLocalProvider) Name() string { return "rbac-local" }
 
-// HasAnyRoleBindingFor reports whether at least one subject is bound to a role.
-// It is a read-only snapshot helper used by startup migration validation.
+// HasAnyRoleBindingFor reports whether at least one subject is bound to a
+// defined role that grants at least one action. It is a read-only snapshot
+// helper used by startup and reload migration validation.
 func (p *RBACLocalProvider) HasAnyRoleBindingFor(subjects []string) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for _, subject := range subjects {
-		if _, ok := p.policy.RoleBindings[subject]; ok {
-			return true
+		for _, roleName := range p.policy.RoleBindings[subject] {
+			role, ok := p.policy.Roles[roleName]
+			if ok && len(role.Allow) > 0 {
+				return true
+			}
 		}
 	}
 	return false

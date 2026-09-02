@@ -135,7 +135,17 @@ func TestScyllaSchemaIncludesOwnerReferenceProjectionMigration(t *testing.T) {
 		"004_file_resource.cql",
 		"005_namespace_repository_fence.cql",
 		"006_namespace_watch_cdc.cql",
+		"007_auth_session_revocations.cql",
 	}, names)
+}
+
+func TestAuthSessionRevocationMigration(t *testing.T) {
+	content, err := migrations.Files.ReadFile("007_auth_session_revocations.cql")
+	require.NoError(t, err)
+	schema := string(content)
+	assert.Contains(t, schema, "CREATE TABLE IF NOT EXISTS auth_session_revocations")
+	assert.Contains(t, schema, "jti text PRIMARY KEY")
+	assert.Contains(t, schema, "expires_at timestamp")
 }
 
 func TestNamespaceRepositoryFenceMigration(t *testing.T) {

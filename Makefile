@@ -127,17 +127,9 @@ controller: ## Run gitstore-controller-manager locally in the foreground.
 	@cd "$(CONTROLLER_MANAGER_DIR)" && go run ./cmd/controller
 
 api: ## Run gitstore-api locally in the foreground.
-	@if [ ! -f "$(API_ENV_FILE)" ] && { [ -z "$${GITSTORE_AUTH__STATICUSERS__USERS_FILE:-}" ] || [ -z "$${GITSTORE_AUTH__JWT__SECRET:-}" ]; }; then \
-		echo "make api requires $(API_ENV_FILE) or shell env for GITSTORE_AUTH__STATICUSERS__USERS_FILE and GITSTORE_AUTH__JWT__SECRET"; \
-		exit 2; \
-	fi
 	@cd "$(API_DIR)" && go run ./cmd/server
 
 dev: ## Run local git service and API together in the foreground.
-	@if [ ! -f "$(API_ENV_FILE)" ] && { [ -z "$${GITSTORE_AUTH__STATICUSERS__USERS_FILE:-}" ] || [ -z "$${GITSTORE_AUTH__JWT__SECRET:-}" ]; }; then \
-		echo "make dev requires $(API_ENV_FILE) or shell env for GITSTORE_AUTH__STATICUSERS__USERS_FILE and GITSTORE_AUTH__JWT__SECRET"; \
-		exit 2; \
-	fi
 	@set -u; \
 	mkdir -p "$(GIT_DATA_DIR)"; \
 	tmp=$$(mktemp -d); \

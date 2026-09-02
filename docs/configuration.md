@@ -91,12 +91,14 @@ The following endpoints are served on port `api.git_port` (default `5000`):
 | Key                        | Env Var                               | Type     | Default    | Required | Sensitive | Description                                                 |
 |----------------------------|---------------------------------------|----------|------------|----------|-----------|-------------------------------------------------------------|
 | `auth.staticusers.users_file` | `GITSTORE_AUTH__STATICUSERS__USERS_FILE` | string | users.yaml | When selected | No | YAML file containing local users |
-| `auth.jwt.secret`          | `GITSTORE_AUTH__JWT__SECRET`          | string   | —          | **Yes**  | **Yes**   | JWT signing key (minimum 32 characters)                     |
+| `auth.jwt.secret`          | `GITSTORE_AUTH__JWT__SECRET`          | string   | —          | When `static-users` is selected | **Yes** | JWT signing key (minimum 32 characters)                  |
 | `auth.jwt.duration`        | `GITSTORE_AUTH__JWT__DURATION`        | duration | `24h`      | No       | No        | JWT token validity (e.g. `12h`, `30m`)                      |
 | `auth.jwt.issuer`          | `GITSTORE_AUTH__JWT__ISSUER`          | string   | `gitstore` | No       | No        | JWT `iss` claim value                                       |
 | `auth.jwt.refresh_grace`   | `GITSTORE_AUTH__JWT__REFRESH_GRACE`   | duration | `60s`      | No       | No        | Window after expiry during which `refreshToken` is accepted |
 
 For config files, local users are selected with `[auth.staticusers]` and `users_file = "users.yaml"`; JWT keys remain nested under `[auth.jwt]`.
+
+`static-users` mints tokens with `<auth.jwt.issuer>/static-users` while accepting the legacy unsuffixed issuer during rolling upgrades. Logout and refresh rotation require the shared ScyllaDB revocation table in production; migration 007 creates it automatically.
 
 ### Logging
 

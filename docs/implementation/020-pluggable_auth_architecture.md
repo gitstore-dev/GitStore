@@ -343,7 +343,7 @@ package staticusers
 type StaticUsersProvider struct {
     users        map[string]UserEntry
     usersFile    string
-    blacklist    *sessionBlacklist
+    revocations  RevocationStore
 }
 
 func New(cfg config.AuthConfig, logger *zap.Logger) (*StaticUsersProvider, error) {
@@ -362,7 +362,8 @@ func (p *StaticUsersProvider) Authenticate(ctx context.Context, req auth.AuthReq
     // 1. Extract Authorization: Bearer <jwt>
     // 2. Parse the JWT (golang-jwt/v5, HS256, using GITSTORE_AUTH__JWT__SECRET)
     // 3. If parse fails → OutcomeChallenge (not my token, try next provider)
-    // 4. Validate issuer == cfg.GetString("auth.jwt.issuer")
+    // 4. Validate issuer == cfg.GetString("auth.jwt.issuer") + "/static-users"
+    //    or the legacy unsuffixed issuer during rolling upgrade
     // 5. Check blacklist by jti claim
     // 6. If blacklisted → OutcomeDeny("token revoked")
     // 7. Build Principal{Subject: claims.sub, Issuer: issuer, Roles: nil, AuthMethod: "static-users"}
@@ -389,7 +390,7 @@ func (p *StaticAdminProvider) RefreshSession(ctx context.Context, oldToken strin
 }
 ```
 
-`sessionBlacklist` is an in-memory `sync.Map` keyed by `jti → expiresAt`. A background goroutine prunes expired entries every 5 minutes. This is adequate for single-instance deployment; a Redis or ScyllaDB backend replaces it in production once multi-instance deployment is required.
+Session revocations are stored in the shared ScyllaDB `auth_session_revocations` table with per-JTI TTL through token expiry plus verifier leeway. Refresh uses an `IF NOT EXISTS` consume operation so only one replica can rotate a token. The memdb backend implements the same contract in process for development.
 
 ### 2b. oidc-jwt (AuthN)
 
@@ -755,7 +756,7 @@ Both mutations are provider-agnostic by delegating to `ChainedAuthN`:
 mutation Logout(token: String!): Boolean
   1. Parse the JWT (no signature verify, just claims) to extract jti + exp
   2. Call registry.AuthN().RevokeSession(ctx, jti, expiresAt)
-     - static-users provider: adds jti to in-memory blacklist
+     - static-users provider: writes jti to the shared revocation store
      - oidc-jwt provider: returns ErrNotSupported (OIDC tokens expire naturally;
        phase 2 adds RFC 7009 call to IdP revocation endpoint)
   3. Return true if any provider accepted the revocation; false + log if ErrNotSupported
@@ -771,7 +772,7 @@ mutation RefreshToken(token: String!): AuthPayload
   2. Return new token + expiry
 ```
 
-The **token blacklist** lives inside the `StaticAdminProvider.blacklist` (`sync.Map[jti → expiresAt]`). It is in-process memory, which is correct for single-instance deployment. Multi-instance deployment (phase 3+) requires extracting the blacklist into a Redis or ScyllaDB-backed store behind a `SessionStore` interface — this is an additive change that does not alter the `AuthNProvider` interface.
+The **token revocation store** is shared by API replicas. ScyllaDB persists JTIs with bounded TTL, while memdb provides the development implementation. Refresh consumes a JTI atomically so concurrent replica requests cannot both rotate it.
 
 ---
 
@@ -1122,7 +1123,7 @@ action-name changes. See `022-opa-data-authorization.md` §5–§9.
 **Milestone:** `auth-framework-v1`
 **Deliverable:** `Logout` mutation calls `ChainedAuthN.RevokeSession`; `RefreshToken` mutation calls `ChainedAuthN.RefreshSession`; `StaticAdminProvider` blacklist is functional. `Login` resolver migrated away from legacy `authMiddleware` stubs — `user.isAdmin` and `user.username` now derived from `Principal`. `IssueSession` added to `AuthNProvider` interface. `Principal.TokenID` carries JWT `jti`. `ContextWithRawToken`/`RawTokenFromContext` store the raw Bearer string for refresh. `GITSTORE_AUTH__JWT__REFRESH_GRACE` (default `60s`) bounds the refresh window.
 **Affected packages:** `gitstore-api/internal/auth/types.go`, `gitstore-api/internal/auth/context.go`, `gitstore-api/internal/auth/registry.go`, `gitstore-api/internal/auth/provider/staticadmin/`, `gitstore-api/internal/auth/provider/anonymous/`, `gitstore-api/internal/middleware/auth.go`, `gitstore-api/internal/graph/resolver/`
-**Known limitation:** The in-process session blacklist (`sync.Map[jti → expiresAt]` inside `StaticAdminProvider`) is **lost on server restart**. Any token revoked via `logout` or `refreshToken` becomes valid again after a restart if it has not yet expired. This is acceptable for single-instance deployments. Persistent blacklist storage (Redis or ScyllaDB behind a `SessionStore` interface) is deferred to a future phase.
+**Session lifecycle:** Production revocation state survives API restart in ScyllaDB and is shared across replicas. Rows expire automatically after the token's natural expiry plus verifier leeway.
 **Test strategy:** Unit tests for all three mutations (logout, refreshToken, login) in `tests/unit/resolver/auth_resolvers_test.go`; grace-window and TokenID population tests in `tests/unit/auth/staticadmin_test.go`.
 **Rollback trigger:** Logout or RefreshToken returns 500 or leaves token valid after revocation; login returns wrong `isAdmin` or `username`.
 

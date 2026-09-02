@@ -171,6 +171,32 @@ func newTestStores(t *testing.T) (datastore.Datastore, datastore.Datastore) {
 	return newTestStore(t), newTestStore(t)
 }
 
+type sessionRevocationStore interface {
+	RevokeSession(context.Context, string, time.Time) error
+	IsSessionRevoked(context.Context, string) (bool, error)
+	ConsumeSession(context.Context, string, time.Time) (bool, error)
+}
+
+func TestSessionRevocationsAreSharedAcrossReplicas(t *testing.T) {
+	firstStore, secondStore := newTestStores(t)
+	first := firstStore.(sessionRevocationStore)
+	second := secondStore.(sessionRevocationStore)
+	ctx := context.Background()
+	jti := "logout-" + newID()
+	require.NoError(t, first.RevokeSession(ctx, jti, time.Now().Add(time.Hour)))
+	revoked, err := second.IsSessionRevoked(ctx, jti)
+	require.NoError(t, err)
+	assert.True(t, revoked)
+
+	refreshJTI := "refresh-" + newID()
+	consumed, err := first.ConsumeSession(ctx, refreshJTI, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	assert.True(t, consumed)
+	consumed, err = second.ConsumeSession(ctx, refreshJTI, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	assert.False(t, consumed)
+}
+
 func newID() string { return uuid.New().String() }
 
 func newProduct(namespace, name string) *datastore.Product {

@@ -7,14 +7,16 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/golang-jwt/jwt/v5"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
-	"strings"
-	"sync"
-	"time"
 )
 
 type refreshClaims struct{ jwt.RegisteredClaims }
@@ -32,12 +34,26 @@ type StaticUsersProvider struct {
 	path                      string
 	jwtSecret                 []byte
 	jwtIssuer                 string
+	legacyJWTIssuer           string
 	jwtDuration, refreshGrace time.Duration
-	blacklist                 *sessionBlacklist
+	revocations               RevocationStore
 	logger                    *zap.Logger
 }
 
+// RevocationStore is the shared session-revocation contract used by every API
+// replica. Production wires the Scylla implementation; tests and the memdb
+// backend use an in-process implementation.
+type RevocationStore interface {
+	RevokeSession(ctx context.Context, jti string, expiresAt time.Time) error
+	IsSessionRevoked(ctx context.Context, jti string) (bool, error)
+	ConsumeSession(ctx context.Context, jti string, expiresAt time.Time) (bool, error)
+}
+
 func New(cfg config.AuthConfig, logger *zap.Logger) (*StaticUsersProvider, error) {
+	return NewWithRevocationStore(cfg, logger, newMemoryRevocationStore())
+}
+
+func NewWithRevocationStore(cfg config.AuthConfig, logger *zap.Logger, revocations RevocationStore) (*StaticUsersProvider, error) {
 	path := cfg.StaticUsers.UsersFile
 	if path == "" {
 		path = "users.yaml"
@@ -53,6 +69,10 @@ func New(cfg config.AuthConfig, logger *zap.Logger) (*StaticUsersProvider, error
 	if issuer == "" {
 		issuer = "gitstore"
 	}
+	legacyIssuer := issuer
+	if !strings.HasSuffix(issuer, "/static-users") {
+		issuer = strings.TrimSuffix(issuer, "/") + "/static-users"
+	}
 	duration := 24 * time.Hour
 	if cfg.JWT.Duration != "" {
 		duration, err = time.ParseDuration(cfg.JWT.Duration)
@@ -67,12 +87,13 @@ func New(cfg config.AuthConfig, logger *zap.Logger) (*StaticUsersProvider, error
 			return nil, fmt.Errorf("staticusers: invalid refresh_grace %q: %w", cfg.JWT.RefreshGrace, err)
 		}
 	}
-	bl := newSessionBlacklist()
-	go bl.pruneLoop()
-	return &StaticUsersProvider{users: users, path: path, jwtSecret: []byte(cfg.JWT.Secret), jwtIssuer: issuer, jwtDuration: duration, refreshGrace: grace, blacklist: bl, logger: logger}, nil
+	if revocations == nil {
+		return nil, errors.New("staticusers: revocation store is required")
+	}
+	return &StaticUsersProvider{users: users, path: path, jwtSecret: []byte(cfg.JWT.Secret), jwtIssuer: issuer, legacyJWTIssuer: legacyIssuer, jwtDuration: duration, refreshGrace: grace, revocations: revocations, logger: logger}, nil
 }
 func (p *StaticUsersProvider) Name() string { return "static-users" }
-func (p *StaticUsersProvider) Shutdown()    { p.blacklist.shutdown() }
+func (p *StaticUsersProvider) Shutdown()    {}
 func (p *StaticUsersProvider) Capabilities() auth.Capability {
 	return auth.CapAuthenticate | auth.CapIssueSession | auth.CapIntrospect | auth.CapUserLookup
 }
@@ -96,15 +117,16 @@ func (p *StaticUsersProvider) Usernames() []string {
 	for name := range p.users {
 		out = append(out, name)
 	}
+	sort.Strings(out)
 	return out
 }
-func (p *StaticUsersProvider) Authenticate(_ context.Context, req auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
+func (p *StaticUsersProvider) Authenticate(ctx context.Context, req auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
 	h := req.Header.Get("Authorization")
 	if h == "" {
 		return nil, auth.Challenge(p.Name(), "no authorization header"), nil
 	}
 	if token, ok := strings.CutPrefix(h, "Bearer "); ok {
-		return p.authenticateBearer(token)
+		return p.authenticateBearer(ctx, token)
 	}
 	if basic, ok := strings.CutPrefix(h, "Basic "); ok {
 		return p.authenticateBasic(basic)
@@ -131,14 +153,14 @@ func (p *StaticUsersProvider) authenticateBasic(encoded string) (*auth.Principal
 	}
 	return &auth.Principal{Subject: u.Username, Issuer: p.jwtIssuer, AuthMethod: p.Name()}, auth.Allow(p.Name(), "valid basic auth"), nil
 }
-func (p *StaticUsersProvider) authenticateBearer(token string) (*auth.Principal, auth.Decision, error) {
+func (p *StaticUsersProvider) authenticateBearer(ctx context.Context, token string) (*auth.Principal, auth.Decision, error) {
 	claims := &jwt.RegisteredClaims{}
 	parsed, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+		if t.Method != jwt.SigningMethodHS256 {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return p.jwtSecret, nil
-	}, jwt.WithLeeway(2*time.Minute), jwt.WithIssuer(p.jwtIssuer))
+	}, jwt.WithLeeway(2*time.Minute), jwt.WithExpirationRequired())
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			return nil, auth.Deny(p.Name(), "token has expired"), nil
@@ -148,8 +170,17 @@ func (p *StaticUsersProvider) authenticateBearer(token string) (*auth.Principal,
 	if !parsed.Valid {
 		return nil, auth.Challenge(p.Name(), "jwt invalid"), nil
 	}
-	if claims.ID != "" && p.blacklist.isRevoked(claims.ID) {
-		return nil, auth.Deny(p.Name(), "token has been revoked"), nil
+	if !p.acceptedIssuer(claims.Issuer) {
+		return nil, auth.Challenge(p.Name(), "jwt issuer is not accepted"), nil
+	}
+	if claims.ID != "" {
+		revoked, revokeErr := p.revocations.IsSessionRevoked(ctx, claims.ID)
+		if revokeErr != nil {
+			return nil, auth.Deny(p.Name(), "session revocation state unavailable"), fmt.Errorf("staticusers: check session revocation: %w", revokeErr)
+		}
+		if revoked {
+			return nil, auth.Deny(p.Name(), "token has been revoked"), nil
+		}
 	}
 	pr := &auth.Principal{Subject: claims.Subject, Issuer: claims.Issuer, AuthMethod: p.Name(), TokenID: claims.ID}
 	if claims.ExpiresAt != nil {
@@ -164,6 +195,12 @@ func (p *StaticUsersProvider) IssueToken(subject string) (string, time.Time, err
 	return p.issueToken(subject)
 }
 func (p *StaticUsersProvider) issueToken(subject string) (string, time.Time, error) {
+	p.mu.RLock()
+	_, active := p.users[subject]
+	p.mu.RUnlock()
+	if !active {
+		return "", time.Time{}, fmt.Errorf("staticusers: subject %q is not active: %w", subject, ErrUserNotFound)
+	}
 	now := time.Now()
 	exp := now.Add(p.jwtDuration)
 	jti, err := generateJTI()
@@ -177,35 +214,66 @@ func (p *StaticUsersProvider) issueToken(subject string) (string, time.Time, err
 	}
 	return signed, exp, nil
 }
-func (p *StaticUsersProvider) RevokeSession(_ context.Context, jti string, expiresAt time.Time) error {
+func (p *StaticUsersProvider) RevokeSession(ctx context.Context, jti string, expiresAt time.Time) error {
 	until := expiresAt.Add(2 * time.Minute)
 	if until.Before(time.Now()) {
 		until = time.Now().Add(2 * time.Minute)
 	}
-	p.blacklist.add(jti, until)
-	return nil
+	return p.revocations.RevokeSession(ctx, jti, until)
 }
-func (p *StaticUsersProvider) RefreshSession(_ context.Context, old string) (string, time.Time, error) {
+func (p *StaticUsersProvider) RefreshSession(ctx context.Context, old string) (string, time.Time, error) {
 	c := &refreshClaims{}
 	_, err := jwt.ParseWithClaims(old, c, func(t *jwt.Token) (any, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+		if t.Method != jwt.SigningMethodHS256 {
 			return nil, errors.New("unexpected signing method")
 		}
 		return p.jwtSecret, nil
-	}, jwt.WithLeeway(2*time.Minute), jwt.WithIssuer(p.jwtIssuer), jwt.WithExpirationRequired())
+	}, jwt.WithLeeway(2*time.Minute), jwt.WithExpirationRequired())
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("staticusers: refresh: %w", auth.ErrInvalidToken)
+	}
+	if !p.acceptedIssuer(c.Issuer) {
+		return "", time.Time{}, fmt.Errorf("staticusers: refresh: %w", auth.ErrInvalidToken)
+	}
+	if c.ID == "" {
+		return "", time.Time{}, fmt.Errorf("staticusers: refresh token has no jti: %w", auth.ErrInvalidToken)
 	}
 	if c.ExpiresAt != nil && time.Now().After(c.ExpiresAt.Time.Add(p.refreshGrace)) {
 		return "", time.Time{}, fmt.Errorf("staticusers: refresh: %w", auth.ErrTokenTooOld)
 	}
-	if c.ID != "" && p.blacklist.isRevoked(c.ID) {
-		return "", time.Time{}, fmt.Errorf("staticusers: refresh: %w", auth.ErrTokenRevoked)
+	if c.ID != "" {
+		revoked, revokeErr := p.revocations.IsSessionRevoked(ctx, c.ID)
+		if revokeErr != nil {
+			return "", time.Time{}, fmt.Errorf("staticusers: refresh revocation check: %w", revokeErr)
+		}
+		if revoked {
+			return "", time.Time{}, fmt.Errorf("staticusers: refresh: %w", auth.ErrTokenRevoked)
+		}
+	}
+	p.mu.RLock()
+	_, active := p.users[c.Subject]
+	p.mu.RUnlock()
+	if !active {
+		return "", time.Time{}, fmt.Errorf("staticusers: refresh subject is no longer active: %w", auth.ErrInvalidToken)
 	}
 	if c.ID != "" {
-		p.blacklist.add(c.ID, time.Now().Add(2*time.Minute))
+		revokeUntil := time.Now().Add(2 * time.Minute)
+		if c.ExpiresAt != nil && c.ExpiresAt.Time.Add(2*time.Minute).After(revokeUntil) {
+			revokeUntil = c.ExpiresAt.Time.Add(2 * time.Minute)
+		}
+		consumed, revokeErr := p.revocations.ConsumeSession(ctx, c.ID, revokeUntil)
+		if revokeErr != nil {
+			return "", time.Time{}, fmt.Errorf("staticusers: refresh revoke old session: %w", revokeErr)
+		}
+		if !consumed {
+			return "", time.Time{}, fmt.Errorf("staticusers: refresh: %w", auth.ErrTokenRevoked)
+		}
 	}
 	return p.issueToken(c.Subject)
+}
+
+func (p *StaticUsersProvider) acceptedIssuer(issuer string) bool {
+	return issuer == p.jwtIssuer || issuer == p.legacyJWTIssuer
 }
 func (p *StaticUsersProvider) GetBySubject(_ context.Context, s string) (*auth.UserProfile, error) {
 	p.mu.RLock()
@@ -220,14 +288,20 @@ func (p *StaticUsersProvider) ListGroups(ctx context.Context, s string) ([]strin
 	if _, err := p.GetBySubject(ctx, s); err != nil {
 		return nil, err
 	}
-	return []string{}, nil
+	return nil, nil
 }
 func (p *StaticUsersProvider) SearchUsers(_ context.Context, q string, limit int) ([]*auth.UserProfile, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	q = strings.ToLower(q)
 	out := make([]*auth.UserProfile, 0)
-	for _, u := range p.users {
+	usernames := make([]string, 0, len(p.users))
+	for username := range p.users {
+		usernames = append(usernames, username)
+	}
+	sort.Strings(usernames)
+	for _, username := range usernames {
+		u := p.users[username]
 		if q == "" || strings.Contains(strings.ToLower(u.Username), q) || strings.Contains(strings.ToLower(u.DisplayName), q) || strings.Contains(strings.ToLower(u.Email), q) {
 			out = append(out, &auth.UserProfile{Subject: u.Username, DisplayName: u.DisplayName, Email: u.Email, Active: true})
 			if limit > 0 && len(out) >= limit {
@@ -242,50 +316,45 @@ func (p *StaticUsersProvider) UpsertProfile(context.Context, *auth.UserProfile) 
 }
 func (p *StaticUsersProvider) Deactivate(context.Context, string) error { return auth.ErrNotSupported }
 
-type sessionBlacklist struct {
+type memoryRevocationStore struct {
 	mu      sync.RWMutex
 	entries map[string]time.Time
-	stop    chan struct{}
 }
 
-func newSessionBlacklist() *sessionBlacklist {
-	return &sessionBlacklist{entries: map[string]time.Time{}, stop: make(chan struct{})}
+func newMemoryRevocationStore() *memoryRevocationStore {
+	return &memoryRevocationStore{entries: map[string]time.Time{}}
 }
-func (b *sessionBlacklist) add(j string, e time.Time) { b.mu.Lock(); b.entries[j] = e; b.mu.Unlock() }
-func (b *sessionBlacklist) isRevoked(j string) bool {
-	b.mu.RLock()
-	_, ok := b.entries[j]
-	b.mu.RUnlock()
-	return ok
-}
-func (b *sessionBlacklist) pruneLoop() {
-	t := time.NewTicker(5 * time.Minute)
-	defer t.Stop()
-	for {
-		select {
-		case <-t.C:
-			b.prune()
-		case <-b.stop:
-			return
-		}
-	}
-}
-func (b *sessionBlacklist) prune() {
-	now := time.Now()
+func (b *memoryRevocationStore) RevokeSession(_ context.Context, j string, e time.Time) error {
 	b.mu.Lock()
-	for j, e := range b.entries {
-		if now.After(e) {
-			delete(b.entries, j)
-		}
-	}
+	b.entries[j] = e
 	b.mu.Unlock()
+	return nil
 }
-func (b *sessionBlacklist) shutdown() {
-	select {
-	case <-b.stop:
-	default:
-		close(b.stop)
+func (b *memoryRevocationStore) IsSessionRevoked(_ context.Context, j string) (bool, error) {
+	now := time.Now()
+	b.mu.RLock()
+	expiresAt, ok := b.entries[j]
+	b.mu.RUnlock()
+	if !ok {
+		return false, nil
 	}
+	if now.After(expiresAt) {
+		b.mu.Lock()
+		delete(b.entries, j)
+		b.mu.Unlock()
+		return false, nil
+	}
+	return true, nil
+}
+
+func (b *memoryRevocationStore) ConsumeSession(_ context.Context, j string, expiresAt time.Time) (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if current, ok := b.entries[j]; ok && time.Now().Before(current) {
+		return false, nil
+	}
+	b.entries[j] = expiresAt
+	return true, nil
 }
 
 var _ auth.AuthNProvider = (*StaticUsersProvider)(nil)

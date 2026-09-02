@@ -51,7 +51,7 @@
 ### Implementation for User Story 1
 
 - [X] T013 [US1] Implement `StaticUsersProvider.Authenticate` (Basic Auth + Bearer verification against `auth.jwt.secret`/`issuer`) in `gitstore-api/internal/auth/provider/staticusers/provider.go` until T011 is green
-- [X] T014 [US1] Implement `StaticUsersProvider.IssueSession`/`RevokeSession`/`RefreshSession` and its own `sessionBlacklist` until T012 is green
+- [X] T014 [US1] Implement `StaticUsersProvider.IssueSession`/`RevokeSession`/`RefreshSession` with shared revocation storage until T012 is green
 
 **Checkpoint**: A single- or multi-user `users.yaml` configuration works end-to-end for login — independently verifiable via `quickstart.md`'s fresh-setup steps.
 
@@ -85,13 +85,15 @@
 
 ### Tests for User Story 3
 
-- [ ] T019 [P] [US3] Add a failing test for `buildProviderRegistry` asserting construction fails when `static-users` + `rbac-local` are configured and zero configured usernames have a `role_bindings` entry, in `gitstore-api/internal/app/server_test.go`, including an assertion that the error message contains: the configured usernames, the `policy.yaml` path, the two numbered fix options, and the `quickstart.md` pointer (FR-013a)
-- [ ] T020 [P] [US3] Add failing tests for the same function asserting construction succeeds when (a) `authz.provider` is `allow-all` under the same user/policy configuration, and (b) at least one configured username has a `role_bindings` entry
+- [X] T019 [P] [US3] Add a failing test for `buildProviderRegistry` asserting construction fails when `static-users` + `rbac-local` are configured and zero configured usernames have a `role_bindings` entry, in `gitstore-api/internal/app/server_test.go`, including an assertion that the error message contains: the configured usernames, the `policy.yaml` path, the two numbered fix options, and the `quickstart.md` pointer (FR-013a)
+- [X] T020 [P] [US3] Add failing tests for the same function asserting construction succeeds when (a) `authz.provider` is `allow-all` under the same user/policy configuration, and (b) at least one configured username has a `role_bindings` entry
 
 ### Implementation for User Story 3
 
 - [X] T021 [US3] Implement the migration-safety check in `buildProviderRegistry` (`gitstore-api/internal/app/server.go`), calling `HasAnyRoleBindingFor`, using the exact multi-line error format specified in `contracts/static-users-provider.md`'s `buildProviderRegistry` wiring contract section, until T019/T020 are green
-- [ ] T022 [US3] Remove `AuthConfig.Admin`/`UserConfig` (type and field) and add `AuthConfig.StaticUsers` in `gitstore-api/internal/config/config.go`; update `auth.authn.chain`'s default (config.go and server.go), defaults/known-keys map, and `MarshalLogObject`
+- [X] T022 [US3] Remove `AuthConfig.Admin`/`UserConfig` (type and field) and add `AuthConfig.StaticUsers` in `gitstore-api/internal/config/config.go`; update `auth.authn.chain`'s default (config.go and server.go), defaults/known-keys map, and `MarshalLogObject`
+
+- [X] T044 Add distinct rolling-upgrade token issuer coverage, shared replica-safe revocation storage, one-time refresh consumption, removed-user refresh rejection, and lockout-safe atomic SIGHUP registry replacement.
 - [X] T023 [US3] Replace `buildProviderRegistry`'s `case "static-admin":` with `case "static-users":` in `gitstore-api/internal/app/server.go`; add `static-users` as a valid `auth.userdir.provider` selector and pass the already-constructed instance to UserDir only when that selector is chosen; extend the existing SIGHUP reload handler
 
 **Checkpoint**: An operator cannot migrate into a silent lockout — verified by test, not merely documented.
