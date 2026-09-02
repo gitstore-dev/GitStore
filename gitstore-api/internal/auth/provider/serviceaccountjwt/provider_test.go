@@ -5,9 +5,13 @@ package serviceaccountjwt
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"net/http"
 	"testing"
@@ -102,6 +106,64 @@ func TestServiceAccountJWT_RoundTrip_Allow(t *testing.T) {
 	assert.Equal(t, "serviceaccount:controllers:gitstore-controller-manager", principal.Subject)
 	assert.Equal(t, providerName, principal.AuthMethod)
 	assert.Empty(t, principal.Roles, "roles must never be embedded — resolved exclusively by rbac-local")
+}
+
+func TestKidFromPublicKeyUsesCanonicalDER(t *testing.T) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	require.NoError(t, err)
+	reparsed, err := x509.ParsePKIXPublicKey(der)
+	require.NoError(t, err)
+	sum := sha256.Sum256(der)
+	want := base64.RawURLEncoding.EncodeToString(sum[:16])
+
+	got, err := kidFromPublicKey(&privateKey.PublicKey)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	reparsedKID, err := kidFromPublicKey(reparsed)
+	require.NoError(t, err)
+	assert.Equal(t, got, reparsedKID)
+
+	edPublic, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	edDER, err := x509.MarshalPKIXPublicKey(edPublic)
+	require.NoError(t, err)
+	reparsedEdPublic, err := x509.ParsePKIXPublicKey(edDER)
+	require.NoError(t, err)
+	edKID, err := kidFromPublicKey(edPublic)
+	require.NoError(t, err)
+	reparsedEdKID, err := kidFromPublicKey(reparsedEdPublic)
+	require.NoError(t, err)
+	assert.Equal(t, edKID, reparsedEdKID)
+}
+
+func TestNewRejectsNonpositiveTokenTTLs(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		field string
+		value string
+	}{
+		{name: "zero default TTL", field: "default_ttl", value: "0s"},
+		{name: "negative default TTL", field: "default_ttl", value: "-1s"},
+		{name: "zero maximum TTL", field: "max_ttl", value: "0s"},
+		{name: "negative maximum TTL", field: "max_ttl", value: "-1s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.ServiceAccountConfig{
+				SigningKey: generateEd25519PEM(t),
+				DefaultTTL: "10m",
+				MaxTTL:     "1h",
+			}
+			if tc.field == "default_ttl" {
+				cfg.DefaultTTL = tc.value
+			} else {
+				cfg.MaxTTL = tc.value
+			}
+			_, err := New(cfg, &stubLookup{}, zap.NewNop())
+			require.ErrorContains(t, err, tc.field+" must be positive")
+		})
+	}
 }
 
 func TestServiceAccountJWT_NoBearerToken_Challenge(t *testing.T) {

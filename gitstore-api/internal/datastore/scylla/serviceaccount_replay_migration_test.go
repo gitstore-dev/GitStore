@@ -26,11 +26,26 @@ func TestServiceAccountAssertionReplayMigrationIsAdditiveRollbackArtifact(t *tes
 	}
 	require.Contains(t, names, migration)
 	require.Contains(t, names, "008_service_account.cql")
+	require.Contains(t, names, "010_service_account_listing.cql")
 
 	raw, err := migrations.Files.ReadFile(migration)
 	require.NoError(t, err)
 	cql := strings.ToUpper(string(raw))
 	assert.Contains(t, cql, "CREATE TABLE IF NOT EXISTS SERVICE_ACCOUNT_ASSERTION_REPLAYS")
+	assert.NotContains(t, cql, "DROP TABLE")
+	assert.NotContains(t, cql, "DROP COLUMN")
+	assert.NotContains(t, cql, "TRUNCATE")
+}
+
+func TestServiceAccountListingMigrationIsAdditiveQueryFirstArtifact(t *testing.T) {
+	const migration = "010_service_account_listing.cql"
+	raw, err := migrations.Files.ReadFile(migration)
+	require.NoError(t, err)
+
+	cql := strings.ToUpper(string(raw))
+	assert.Contains(t, cql, "CREATE TABLE IF NOT EXISTS SERVICE_ACCOUNTS_BY_BUCKET")
+	assert.Contains(t, cql, "PRIMARY KEY ((BUCKET), CREATION_TIMESTAMP, UID)")
+	assert.NotContains(t, cql, "ALLOW FILTERING")
 	assert.NotContains(t, cql, "DROP TABLE")
 	assert.NotContains(t, cql, "DROP COLUMN")
 	assert.NotContains(t, cql, "TRUNCATE")

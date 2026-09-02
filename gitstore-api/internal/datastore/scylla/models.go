@@ -217,4 +217,10 @@ var (
 		Columns: []string{"uid", "namespace", "creation_timestamp"},
 		PartKey: []string{"uid"},
 	})
+	ServiceAccountByBucket = table.New(table.Metadata{
+		Name:    "service_accounts_by_bucket",
+		Columns: []string{"bucket", "creation_timestamp", "uid", "namespace"},
+		PartKey: []string{"bucket"},
+		SortKey: []string{"creation_timestamp", "uid"},
+	})
 )

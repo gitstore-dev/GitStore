@@ -41,6 +41,13 @@ type serviceAccountIndexRow struct {
 	CreationTimestamp time.Time  `db:"creation_timestamp"`
 }
 
+type serviceAccountListingRow struct {
+	Bucket            string     `db:"bucket"`
+	Namespace         string     `db:"namespace"`
+	UID               gocql.UUID `db:"uid"`
+	CreationTimestamp time.Time  `db:"creation_timestamp"`
+}
+
 func toServiceAccountRow(sa *datastore.ServiceAccount) (*serviceAccountRow, error) {
 	keys, err := json.Marshal(sa.PublicKeys)
 	if err != nil {
@@ -112,6 +119,12 @@ func (s *scyllaDatastore) CreateServiceAccount(ctx context.Context, sa *datastor
 		return err
 	}
 	if err := s.reserveUID(ctx, "ServiceAccount", "service_accounts_by_uid", row.Namespace, uid, row.CreationTimestamp); err != nil {
+		_ = s.releaseName(ctx, "service_accounts_by_name", row.Namespace, row.Name, uid)
+		_ = s.deleteServiceAccountAuthoritative(ctx, row, row.ResourceVersion)
+		return err
+	}
+	if err := s.insertServiceAccountListingProjection(ctx, row); err != nil {
+		_ = s.releaseUID(ctx, "service_accounts_by_uid", row.Namespace, uid, row.CreationTimestamp)
 		_ = s.releaseName(ctx, "service_accounts_by_name", row.Namespace, row.Name, uid)
 		_ = s.deleteServiceAccountAuthoritative(ctx, row, row.ResourceVersion)
 		return err
@@ -197,21 +210,35 @@ func (s *scyllaDatastore) getServiceAccountByKey(ctx context.Context, namespace 
 }
 
 func (s *scyllaDatastore) ListServiceAccounts(ctx context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.ServiceAccount], error) {
-	// No dedicated "list all namespaces" partition scan exists for
-	// ServiceAccount (query-first, per 002_secondary_indexes.cql's rule);
-	// the expected namespace count is small (one convention string per
-	// controller class today), so a full-table scan via ALLOW FILTERING is
-	// avoided by instead scanning service_accounts_by_uid, whose partition
-	// key is uid — every row lives in its own partition, so this is a
-	// full-table read regardless of predicate. Acceptable for an
-	// admin-only, low-cardinality listing operation; revisit if
-	// ServiceAccount count ever approaches catalog scale.
-	var idxRows []serviceAccountIndexRow
-	if err := s.session.Query("SELECT uid,namespace,creation_timestamp FROM service_accounts_by_uid", nil).WithContext(ctx).SelectRelease(&idxRows); err != nil {
-		return nil, err
+	limit := page.Limit()
+	backward := page.Last > 0
+	rows := make([]serviceAccountListingRow, 0, limit+1)
+	for _, bucket := range serviceAccountBucketsForPage(page, time.Now().UTC()) {
+		bucketPage := page
+		if page.After != "" && !cursorInNamespaceBucket(page.After, bucket) {
+			bucketPage.After = ""
+		}
+		if page.Before != "" && !cursorInNamespaceBucket(page.Before, bucket) {
+			bucketPage.Before = ""
+		}
+
+		pq := buildPaginatedSelect(s.serviceAccountByBucketTable, bucketPage, "bucket", bucket, serviceAccountClusterKeys, nil, nil)
+		var bucketRows []serviceAccountListingRow
+		if err := s.session.Query(pq.Stmt, nil).WithContext(ctx).Bind(pq.Args...).SelectRelease(&bucketRows); err != nil {
+			return nil, fmt.Errorf("scylla: list service accounts bucket %s: %w", bucket, err)
+		}
+		rows = append(rows, bucketRows...)
+		if len(rows) >= limit+1 {
+			rows = rows[:limit+1]
+			break
+		}
 	}
-	items := make([]*datastore.ServiceAccount, 0, len(idxRows))
-	for _, idx := range idxRows {
+	if backward {
+		reverseRows(rows)
+	}
+
+	items := make([]*datastore.ServiceAccount, 0, len(rows))
+	for _, idx := range rows {
 		sa, err := s.getServiceAccountByKey(ctx, idx.Namespace, idx.CreationTimestamp, idx.UID)
 		if err != nil {
 			if errors.Is(err, datastore.ErrNotFound) {
@@ -221,7 +248,7 @@ func (s *scyllaDatastore) ListServiceAccounts(ctx context.Context, page datastor
 		}
 		items = append(items, sa)
 	}
-	return buildPageResult(items, page.Limit(), page), nil
+	return buildPageResult(items, limit, page), nil
 }
 
 func (s *scyllaDatastore) UpdateServiceAccountKeys(ctx context.Context, uid string, add []datastore.ServiceAccountPublicKey, removeKeyIDs []string, expectedResourceVersion string) (*datastore.ServiceAccount, error) {
@@ -271,8 +298,29 @@ func (s *scyllaDatastore) DeleteServiceAccount(ctx context.Context, uid string) 
 		return err
 	}
 	parsed := mustParseUUID(sa.UID)
+	_ = s.deleteServiceAccountListingProjection(ctx, row)
 	_ = s.releaseName(ctx, "service_accounts_by_name", sa.Namespace, sa.Name, parsed)
 	_ = s.releaseUID(ctx, "service_accounts_by_uid", sa.Namespace, parsed, sa.CreationTimestamp)
+	return nil
+}
+
+func (s *scyllaDatastore) insertServiceAccountListingProjection(ctx context.Context, row *serviceAccountRow) error {
+	if err := s.session.Query(
+		"INSERT INTO service_accounts_by_bucket (bucket, creation_timestamp, uid, namespace) VALUES (?, ?, ?, ?)",
+		nil,
+	).WithContext(ctx).Bind(namespaceBucket(row.CreationTimestamp), row.CreationTimestamp, row.UID, row.Namespace).ExecRelease(); err != nil {
+		return fmt.Errorf("scylla: insert service account listing projection: %w", err)
+	}
+	return nil
+}
+
+func (s *scyllaDatastore) deleteServiceAccountListingProjection(ctx context.Context, row *serviceAccountRow) error {
+	if err := s.session.Query(
+		"DELETE FROM service_accounts_by_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?",
+		nil,
+	).WithContext(ctx).Bind(namespaceBucket(row.CreationTimestamp), row.CreationTimestamp, row.UID).ExecRelease(); err != nil {
+		return fmt.Errorf("scylla: delete service account listing projection: %w", err)
+	}
 	return nil
 }
 

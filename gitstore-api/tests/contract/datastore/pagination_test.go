@@ -575,6 +575,67 @@ func RunPaginationSuite(t *testing.T, ds datastore.Datastore) {
 			)
 		}
 	})
+
+	t.Run("ServiceAccounts/CursorPagination", func(t *testing.T) {
+		ctx := context.Background()
+		base := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Millisecond)
+		accounts := make([]*datastore.ServiceAccount, 5)
+		for i := range accounts {
+			accounts[i] = newServiceAccount()
+			accounts[i].Namespace = "pagination-" + newID()[:8]
+			accounts[i].CreationTimestamp = base.Add(time.Duration(i) * time.Second)
+			accounts[i].UpdateTimestamp = accounts[i].CreationTimestamp
+			require.NoError(t, ds.CreateServiceAccount(ctx, accounts[i]))
+		}
+
+		page1, err := ds.ListServiceAccounts(ctx, datastore.PageParams{First: 2})
+		require.NoError(t, err)
+		require.Len(t, page1.Items, 2)
+		assert.Equal(t, accounts[4].UID, page1.Items[0].UID)
+		assert.Equal(t, accounts[3].UID, page1.Items[1].UID)
+		assert.True(t, page1.HasNext)
+		assert.False(t, page1.HasPrevious)
+
+		page2, err := ds.ListServiceAccounts(ctx, datastore.PageParams{
+			First: 2,
+			After: encodeCursor(page1.Items[1].CreationTimestamp, page1.Items[1].UID),
+		})
+		require.NoError(t, err)
+		require.Len(t, page2.Items, 2)
+		assert.Equal(t, accounts[2].UID, page2.Items[0].UID)
+		assert.Equal(t, accounts[1].UID, page2.Items[1].UID)
+		assert.True(t, page2.HasNext)
+		assert.True(t, page2.HasPrevious)
+
+		page3, err := ds.ListServiceAccounts(ctx, datastore.PageParams{
+			First: 2,
+			After: encodeCursor(page2.Items[1].CreationTimestamp, page2.Items[1].UID),
+		})
+		require.NoError(t, err)
+		require.Len(t, page3.Items, 1)
+		assert.Equal(t, accounts[0].UID, page3.Items[0].UID)
+		assert.False(t, page3.HasNext)
+		assert.True(t, page3.HasPrevious)
+
+		backward, err := ds.ListServiceAccounts(ctx, datastore.PageParams{Last: 2})
+		require.NoError(t, err)
+		require.Len(t, backward.Items, 2)
+		assert.Equal(t, accounts[1].UID, backward.Items[0].UID)
+		assert.Equal(t, accounts[0].UID, backward.Items[1].UID)
+		assert.False(t, backward.HasNext)
+		assert.True(t, backward.HasPrevious)
+
+		before, err := ds.ListServiceAccounts(ctx, datastore.PageParams{
+			Last:   2,
+			Before: encodeCursor(page2.Items[0].CreationTimestamp, page2.Items[0].UID),
+		})
+		require.NoError(t, err)
+		require.Len(t, before.Items, 2)
+		assert.Equal(t, accounts[4].UID, before.Items[0].UID)
+		assert.Equal(t, accounts[3].UID, before.Items[1].UID)
+		assert.True(t, before.HasNext)
+		assert.False(t, before.HasPrevious)
+	})
 }
 
 func newProductInNS(ns string) *datastore.Product {

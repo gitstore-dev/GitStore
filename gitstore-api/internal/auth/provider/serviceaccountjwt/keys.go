@@ -7,6 +7,7 @@ import (
 	"crypto"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
@@ -94,8 +95,12 @@ func parsePrivateKeyBlock(block *pem.Block) (*signingKey, error) {
 			return nil, fmt.Errorf("serviceaccountjwt: unsupported Ed25519 key implementation %T", edKey)
 		}
 		pub := priv.Public().(ed25519.PublicKey)
+		kid, err := kidFromPublicKey(pub)
+		if err != nil {
+			return nil, err
+		}
 		return &signingKey{
-			kid:        kidFromPublicKey(pub),
+			kid:        kid,
 			method:     jwt.SigningMethodEdDSA,
 			privateKey: priv,
 			publicKey:  pub,
@@ -107,8 +112,12 @@ func parsePrivateKeyBlock(block *pem.Block) (*signingKey, error) {
 			return nil, fmt.Errorf("serviceaccountjwt: unsupported ECDSA curve %q; only P-256 is supported", ecKey.Curve.Params().Name)
 		}
 		pub := &ecKey.PublicKey
+		kid, err := kidFromPublicKey(pub)
+		if err != nil {
+			return nil, err
+		}
 		return &signingKey{
-			kid:        kidFromPublicKey(pub),
+			kid:        kid,
 			method:     jwt.SigningMethodES256,
 			privateKey: ecKey,
 			publicKey:  pub,
@@ -118,15 +127,15 @@ func parsePrivateKeyBlock(block *pem.Block) (*signingKey, error) {
 	return nil, errors.New("serviceaccountjwt: PEM block is neither a valid Ed25519 nor ECDSA P-256 private key")
 }
 
-// kidFromPublicKey derives a stable key ID from the public key's ASN.1-ish
-// representation. We use a lightweight fmt-based encoding rather than
-// x509.MarshalPKIXPublicKey to avoid an extra failure mode in a function
-// that must never itself error; any distinguishing, stable byte
-// representation is sufficient since this is only ever compared for
-// equality, never parsed back.
-func kidFromPublicKey(pub any) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%v", pub)))
-	return base64.RawURLEncoding.EncodeToString(sum[:16])
+// kidFromPublicKey derives a stable key ID from canonical SubjectPublicKeyInfo
+// bytes, so every API replica derives the same ID for an issuer key.
+func kidFromPublicKey(pub crypto.PublicKey) (string, error) {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return "", fmt.Errorf("serviceaccountjwt: encode public key for kid: %w", err)
+	}
+	sum := sha256.Sum256(der)
+	return base64.RawURLEncoding.EncodeToString(sum[:16]), nil
 }
 
 // lookup returns the trusted verification key for kid, or false if kid is

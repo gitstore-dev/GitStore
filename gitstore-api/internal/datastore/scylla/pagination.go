@@ -57,6 +57,7 @@ type clusterKeys struct {
 var namespaceClusterKeys = clusterKeys{TimestampCol: "creation_timestamp", IDCol: "uid"}
 var productClusterKeys = clusterKeys{TimestampCol: "creation_timestamp", IDCol: "uid"}
 var collectionClusterKeys = clusterKeys{TimestampCol: "creation_timestamp", IDCol: "uid"}
+var serviceAccountClusterKeys = clusterKeys{TimestampCol: "creation_timestamp", IDCol: "uid"}
 
 const namespaceBucketLayout = "2006-01"
 
@@ -107,6 +108,12 @@ func namespaceBucketsForPage(page datastore.PageParams, now time.Time) []string 
 		buckets = append(buckets, namespaceBucket(month))
 	}
 	return buckets
+}
+
+func serviceAccountBucketsForPage(page datastore.PageParams, now time.Time) []string {
+	// Include the adjacent future bucket for accepted clock-skewed creation
+	// timestamps, matching the global repository listing.
+	return namespaceBucketsForPage(page, now.AddDate(0, 1, 0))
 }
 
 func monthStart(timestamp time.Time) time.Time {

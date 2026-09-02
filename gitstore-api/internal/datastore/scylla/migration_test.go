@@ -73,6 +73,7 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 		"repositories_by_bucket",
 		"namespace_mappings_by_repository",
 		"service_account_assertion_replays",
+		"service_accounts_by_bucket",
 	} {
 		var tblName string
 		err = session.Query(
@@ -356,7 +357,7 @@ func TestRunMigrations_SupportedRollbackArtifactRetainsForwardMigrationSet(t *te
 	)
 	require.ErrorContains(t, err, "database is ahead")
 
-	supportedRollbackMigrations := migrationSetThrough(t, "009_service_account_assertion_replay.cql")
+	supportedRollbackMigrations := migrationSetThrough(t, "010_service_account_listing.cql")
 	require.NoError(t, scylla.RunMigrationsWithFS(
 		ctx,
 		session,

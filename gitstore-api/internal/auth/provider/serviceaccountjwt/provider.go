@@ -84,9 +84,15 @@ func New(cfg config.ServiceAccountConfig, lookup ServiceAccountLookup, logger *z
 	if err != nil {
 		return nil, err
 	}
+	if ttl <= 0 {
+		return nil, fmt.Errorf("serviceaccountjwt: default_ttl must be positive")
+	}
 	maxTTL, err := parseDurationOrDefault(cfg.MaxTTL, defaultMaxTTL, "max_ttl")
 	if err != nil {
 		return nil, err
+	}
+	if maxTTL <= 0 {
+		return nil, fmt.Errorf("serviceaccountjwt: max_ttl must be positive")
 	}
 	skew, err := parseDurationOrDefault(cfg.ClockSkew, defaultSkew, "clock_skew")
 	if err != nil {
