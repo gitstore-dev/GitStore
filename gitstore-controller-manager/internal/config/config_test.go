@@ -18,7 +18,13 @@ func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
 	content := `[controller]
 port = 6111
 api_uri = "http://api:4000/graphql"
-api_token = "file-token"
+serviceaccount_namespace = "controllers"
+serviceaccount_name = "gitstore-controller-manager"
+serviceaccount_key_id = "key-1"
+serviceaccount_uid = "sa-uid-1"
+serviceaccount_key_ref = { kind = "SecretRef", name = "controller-manager", key = "privateKey" }
+serviceaccount_assertion_audience = "controller-token-exchange"
+serviceaccount_access_token_audience = "controller-api"
 [api]
 port = 4000
 [grpc]
@@ -38,6 +44,12 @@ format = "json"
 	if cfg.Controller.Port != 6222 {
 		t.Fatalf("Port = %d, want 6222", cfg.Controller.Port)
 	}
+	if cfg.Controller.ServiceAccountAssertionAudience != "controller-token-exchange" {
+		t.Fatalf("ServiceAccountAssertionAudience = %q", cfg.Controller.ServiceAccountAssertionAudience)
+	}
+	if cfg.Controller.ServiceAccountAccessTokenAudience != "controller-api" {
+		t.Fatalf("ServiceAccountAccessTokenAudience = %q", cfg.Controller.ServiceAccountAccessTokenAudience)
+	}
 }
 
 func TestLoadFrom_MissingExplicitFileFails(t *testing.T) {
@@ -49,14 +61,20 @@ func TestLoadFrom_MissingExplicitFileFails(t *testing.T) {
 // setenv sets environment variables for a test and clears them on cleanup.
 func setenv(t *testing.T, pairs ...string) {
 	t.Helper()
-	t.Setenv("GITSTORE_CONTROLLER__API_TOKEN", "test-token")
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE", "controllers")
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME", "gitstore-controller-manager")
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID", "key-1")
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "sa-uid-1")
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND", "SecretRef")
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME", "controller-manager")
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY", "privateKey")
 	for i := 0; i+1 < len(pairs); i += 2 {
 		t.Setenv(pairs[i], pairs[i+1])
 	}
 }
 
 func TestLoad_Defaults(t *testing.T) {
-	t.Setenv("GITSTORE_CONTROLLER__API_TOKEN", "test-token")
+	setenv(t)
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
@@ -67,9 +85,6 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 	if cfg.Controller.ApiURI != "http://localhost:4000/graphql" {
 		t.Errorf("ApiURI = %q, want http://localhost:4000/graphql", cfg.Controller.ApiURI)
-	}
-	if cfg.Controller.ApiToken != "test-token" {
-		t.Errorf("ApiToken = %q, want test-token", cfg.Controller.ApiToken)
 	}
 	if cfg.Controller.DefaultMaxAttempts != 5 {
 		t.Errorf("DefaultMaxAttempts = %d, want 5", cfg.Controller.DefaultMaxAttempts)
@@ -98,12 +113,13 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	setenv(t,
 		"GITSTORE_CONTROLLER__PORT", "8080",
 		"GITSTORE_CONTROLLER__API_URI", "http://api.example.com/graphql",
-		"GITSTORE_CONTROLLER__API_TOKEN", "test-token",
 		"GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS", "10",
 		"GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD", "2m",
 		"GITSTORE_CONTROLLER__CHECKPOINT_DIR", "/tmp/checkpoints",
 		"GITSTORE_CONTROLLER__CHECKPOINT_FLUSH_INTERVAL_EVENTS", "50",
 		"GITSTORE_CONTROLLER__MAX_WATCH_BACKOFF", "1m",
+		"GITSTORE_CONTROLLER__SERVICEACCOUNT__ASSERTION_AUDIENCE", "controller-token-exchange",
+		"GITSTORE_CONTROLLER__SERVICEACCOUNT__ACCESS_TOKEN_AUDIENCE", "controller-api",
 		"GITSTORE_LOG__LEVEL", "debug",
 		"GITSTORE_LOG__FORMAT", "text",
 	)
@@ -119,9 +135,6 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	if cfg.Controller.ApiURI != "http://api.example.com/graphql" {
 		t.Errorf("ApiURI = %q", cfg.Controller.ApiURI)
 	}
-	if cfg.Controller.ApiToken != "test-token" {
-		t.Errorf("ApiToken = %q, want test-token", cfg.Controller.ApiToken)
-	}
 	if cfg.Controller.DefaultMaxAttempts != 10 {
 		t.Errorf("DefaultMaxAttempts = %d, want 10", cfg.Controller.DefaultMaxAttempts)
 	}
@@ -136,6 +149,12 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	}
 	if cfg.Controller.MaxWatchBackoff != time.Minute {
 		t.Errorf("MaxWatchBackoff = %v, want 1m", cfg.Controller.MaxWatchBackoff)
+	}
+	if cfg.Controller.ServiceAccountAssertionAudience != "controller-token-exchange" {
+		t.Errorf("ServiceAccountAssertionAudience = %q", cfg.Controller.ServiceAccountAssertionAudience)
+	}
+	if cfg.Controller.ServiceAccountAccessTokenAudience != "controller-api" {
+		t.Errorf("ServiceAccountAccessTokenAudience = %q", cfg.Controller.ServiceAccountAccessTokenAudience)
 	}
 	if cfg.Log.Level != "debug" {
 		t.Errorf("Log.Level = %q, want debug", cfg.Log.Level)
@@ -262,5 +281,54 @@ func TestLoad_ValidationErrors(t *testing.T) {
 				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestLoad_ServiceAccountCredentialMode(t *testing.T) {
+	setenv(t)
+	t.Setenv("GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__TYPE", "env")
+	t.Setenv("GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__ENV_PREFIX", "TEST_SECRET__")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Controller.ServiceAccountKeyRef.Name != "controller-manager" {
+		t.Errorf("ServiceAccountKeyRef.Name = %q, want controller-manager", cfg.Controller.ServiceAccountKeyRef.Name)
+	}
+	if cfg.Controller.SecretProviderBootstrap.Type != "env" {
+		t.Errorf("SecretProviderBootstrap.Type = %q, want env", cfg.Controller.SecretProviderBootstrap.Type)
+	}
+	if cfg.Controller.ServiceAccountAssertionAudience != "gitstore-api/serviceaccount-token" {
+		t.Errorf("ServiceAccountAssertionAudience = %q", cfg.Controller.ServiceAccountAssertionAudience)
+	}
+	if cfg.Controller.ServiceAccountAccessTokenAudience != "gitstore-api" {
+		t.Errorf("ServiceAccountAccessTokenAudience = %q", cfg.Controller.ServiceAccountAccessTokenAudience)
+	}
+}
+
+func TestLoad_ServiceAccountCredentialModeRequiresCompleteIdentity(t *testing.T) {
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND", "SecretRef")
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME", "controller-manager")
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY", "privateKey")
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load() error = nil")
+	}
+	if !strings.Contains(err.Error(), "controller.serviceaccount_namespace") {
+		t.Errorf("Load() error = %q, want missing namespace", err)
+	}
+}
+
+func TestLoad_RejectsStaticTokenOnlyConfiguration(t *testing.T) {
+	t.Setenv("GITSTORE_CONTROLLER__API_TOKEN", "legacy-token")
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load() error = nil")
+	}
+	if !strings.Contains(err.Error(), "controller.serviceaccount_key_ref") {
+		t.Errorf("Load() error = %q, want service account key reference error", err)
 	}
 }

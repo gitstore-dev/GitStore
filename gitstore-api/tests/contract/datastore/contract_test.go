@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -1218,5 +1219,45 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 			}
 		}
 		assert.True(t, found, "expected created service account %s to be present in ListServiceAccounts", sa.UID)
+	})
+
+	t.Run("ServiceAccount/AssertionReplayConsumesAtomically", func(t *testing.T) {
+		const consumers = 8
+		jtiDigest := "replay-" + newID()
+		expiresAt := time.Now().Add(time.Minute)
+		results := make(chan bool, consumers)
+		errors := make(chan error, consumers)
+		var wg sync.WaitGroup
+		wg.Add(consumers)
+		for range consumers {
+			go func() {
+				defer wg.Done()
+				consumed, err := ds.TryConsumeServiceAccountAssertion(ctx, jtiDigest, expiresAt)
+				if err != nil {
+					errors <- err
+					return
+				}
+				results <- consumed
+			}()
+		}
+		wg.Wait()
+		close(results)
+		close(errors)
+
+		for err := range errors {
+			require.NoError(t, err)
+		}
+		consumed := 0
+		for result := range results {
+			if result {
+				consumed++
+			}
+		}
+		assert.Equal(t, 1, consumed)
+	})
+
+	t.Run("ServiceAccount/AssertionReplayRejectsExpiredWindow", func(t *testing.T) {
+		_, err := ds.TryConsumeServiceAccountAssertion(ctx, "expired-"+newID(), time.Now().Add(-time.Second))
+		assert.ErrorIs(t, err, datastore.ErrInvalidArgument)
 	})
 }

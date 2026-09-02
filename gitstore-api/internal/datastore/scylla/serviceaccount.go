@@ -147,6 +147,42 @@ func (s *scyllaDatastore) GetServiceAccountBySubject(ctx context.Context, namesp
 	return s.getServiceAccountByKey(ctx, idx.Namespace, idx.CreationTimestamp, idx.UID)
 }
 
+const maxServiceAccountAssertionReplayTTL = int64(2_147_483_647)
+
+// TryConsumeServiceAccountAssertion conditionally writes the opaque JTI digest
+// with a TTL ending at the assertion's replay-window expiry. Scylla LWT makes
+// the first consume globally authoritative across API replicas.
+func (s *scyllaDatastore) TryConsumeServiceAccountAssertion(ctx context.Context, jtiDigest string, expiresAt time.Time) (bool, error) {
+	if jtiDigest == "" {
+		return false, fmt.Errorf("%w: assertion JTI digest is required", datastore.ErrInvalidArgument)
+	}
+	ttl, err := serviceAccountAssertionReplayTTL(time.Now().UTC(), expiresAt)
+	if err != nil {
+		return false, err
+	}
+	const stmt = "INSERT INTO service_account_assertion_replays (jti_digest, consumed_at) VALUES (?, ?) IF NOT EXISTS USING TTL ?"
+	applied, err := s.session.Query(stmt, nil).WithContext(ctx).Bind(jtiDigest, time.Now().UTC(), ttl).ExecCASRelease()
+	if err != nil {
+		return false, err
+	}
+	return applied, nil
+}
+
+func serviceAccountAssertionReplayTTL(now, expiresAt time.Time) (int, error) {
+	remaining := expiresAt.Sub(now)
+	if remaining <= 0 {
+		return 0, fmt.Errorf("%w: assertion replay expiry must be in the future", datastore.ErrInvalidArgument)
+	}
+	seconds := int64(remaining / time.Second)
+	if remaining%time.Second != 0 {
+		seconds++
+	}
+	if seconds > maxServiceAccountAssertionReplayTTL {
+		return 0, fmt.Errorf("%w: assertion replay expiry exceeds maximum TTL", datastore.ErrInvalidArgument)
+	}
+	return int(seconds), nil
+}
+
 func (s *scyllaDatastore) getServiceAccountByKey(ctx context.Context, namespace string, created time.Time, uid gocql.UUID) (*datastore.ServiceAccount, error) {
 	stmt := "SELECT namespace,creation_timestamp,uid,name,generation,resource_version,creation_actor,update_timestamp,update_actor,deletion_timestamp,disabled,public_keys " +
 		"FROM service_accounts_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=?"

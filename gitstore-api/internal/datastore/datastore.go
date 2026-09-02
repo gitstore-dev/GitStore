@@ -450,6 +450,10 @@ type Datastore interface {
 	// or Generation.
 	SetServiceAccountDisabled(ctx context.Context, uid string, disabled bool) error
 	DeleteServiceAccount(ctx context.Context, uid string) error
+	// TryConsumeServiceAccountAssertion atomically records an assertion JTI
+	// digest until expiresAt. It returns true exactly once for a digest and
+	// false on every replay before expiry.
+	TryConsumeServiceAccountAssertion(ctx context.Context, jtiDigest string, expiresAt time.Time) (bool, error)
 
 	// Close lifecycle function
 	Close() error

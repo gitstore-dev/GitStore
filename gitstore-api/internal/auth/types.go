@@ -66,7 +66,8 @@ type Principal struct {
 	ExpiresAt  time.Time      `json:"exp,omitempty"`
 	// TokenID is the JWT jti claim — unique per-token identifier used for revocation.
 	// Empty for Basic Auth sessions and anonymous principals.
-	TokenID string `json:"jti,omitempty"`
+	TokenID           string `json:"jti,omitempty"`
+	ServiceAccountUID string `json:"service_account_uid,omitempty"`
 }
 
 // IsAdmin reports whether AuthZ assigned the built-in "admin" role.

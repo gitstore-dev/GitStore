@@ -84,7 +84,7 @@ export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CAC
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
 .PHONY: help git api controller dev compose scylla ps logs stop down validate-local-config compose-config-check
-.PHONY: build test lint license-check pr-ready capacity chaos test-scylla-hardening test-scylla-integration test-scylla-capacity test-namespace-admission-capacity test-namespace-watch-capacity test-namespace-watch-recovery
+.PHONY: build test lint license-check credential-output-check credential-leakage-check pr-ready capacity chaos test-scylla-hardening test-scylla-integration test-scylla-capacity test-namespace-admission-capacity test-namespace-watch-capacity test-namespace-watch-recovery
 .PHONY: bootstrap bootstrap-token bootstrap-namespace bootstrap-repository git-clean-data
 .PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools add-user add-role assign-role hash-user-password gen-jwt-secret gen-hmac-secret
 
@@ -318,7 +318,13 @@ license-check: ## Run Go, Rust, and JS/TS license header checks.
 	@./scripts/check-js-license-headers.sh --all
 	@./scripts/check-js-license-headers.sh --diff-base "$(DIFF_BASE)"
 
-pr-ready: lint build test license-check ## Run the full PR readiness workflow.
+credential-output-check: ## Verify enrollment CLI never writes credential material to output.
+	@./scripts/check-enroll-serviceaccount-output.sh
+
+credential-leakage-check: ## Check service-account code does not log raw credentials.
+	@./scripts/check-credential-log-leakage.sh
+
+pr-ready: lint build test license-check credential-output-check credential-leakage-check ## Run the full PR readiness workflow.
 
 bootstrap: bootstrap-namespace bootstrap-repository ## Create the default namespace and repository through the API.
 

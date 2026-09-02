@@ -6,6 +6,7 @@ package testutil
 
 import (
 	"context"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -214,5 +215,8 @@ func (s *StubStore) SetServiceAccountDisabled(_ context.Context, _ string, _ boo
 	return nil
 }
 func (s *StubStore) DeleteServiceAccount(_ context.Context, _ string) error { return nil }
+func (s *StubStore) TryConsumeServiceAccountAssertion(_ context.Context, _ string, _ time.Time) (bool, error) {
+	return true, nil
+}
 
 func (s *StubStore) Close() error { return nil }

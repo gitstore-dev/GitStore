@@ -57,6 +57,12 @@ services:
 volumes:
   git-repo-data-root:
     driver: local
+  api-serviceaccount-issuer-key:
+    driver: local
+  controller-serviceaccount-secrets:
+    driver: local
+  controller-serviceaccount-identity:
+    driver: local
 
 networks:
   gitstore-network:

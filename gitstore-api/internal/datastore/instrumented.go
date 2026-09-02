@@ -667,6 +667,12 @@ func (d *InstrumentedDatastore) DeleteServiceAccount(ctx context.Context, uid st
 	d.observe("DeleteServiceAccount", start, err)
 	return err
 }
+func (d *InstrumentedDatastore) TryConsumeServiceAccountAssertion(ctx context.Context, jtiDigest string, expiresAt time.Time) (bool, error) {
+	start := time.Now()
+	v, err := d.next.TryConsumeServiceAccountAssertion(d.withFindingObserver(ctx), jtiDigest, expiresAt)
+	d.observe("TryConsumeServiceAccountAssertion", start, err)
+	return v, err
+}
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 

@@ -29,6 +29,18 @@ make license-check
 
 Use the scripts directly only when you need a narrower mode such as `--staged`.
 
+## check-credential-log-leakage.sh
+
+Checks the service-account assertion and access-token providers plus the
+controller GraphQL client for Zap fields that could carry raw tokens,
+assertions, or private keys. Run it through the root Makefile:
+
+```bash
+make credential-leakage-check
+```
+
+The check excludes test files and is required by the main CI workflow.
+
 ## check-go-license-headers.sh
 
 Validates that Go files include the required AGPL header and that changed files include the current year in their copyright line.

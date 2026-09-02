@@ -19,6 +19,21 @@ var schema = &memdb.DBSchema{
 			"repository_id": optionalStringIndex("repository_id", "RepositoryID"),
 		}),
 		"service_account": resourceTableSchema("service_account", map[string]*memdb.IndexSchema{}),
+		"service_account_assertion_replay": {
+			Name: "service_account_assertion_replay",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {
+					Name:    "id",
+					Unique:  true,
+					Indexer: &memdb.StringFieldIndex{Field: "JTIDigest"},
+				},
+				"expires_at": {
+					Name:    "expires_at",
+					Unique:  false,
+					Indexer: &memdb.StringFieldIndex{Field: "ExpiresAtIndex"},
+				},
+			},
+		},
 		"owner_reference": {
 			Name: "owner_reference",
 			Indexes: map[string]*memdb.IndexSchema{

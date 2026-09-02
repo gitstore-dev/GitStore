@@ -70,10 +70,10 @@
 
 ### Tests for User Story 2
 
-- [ ] T014 [P] [US2] Add failing resolver tests for `createServiceAccount` (success, duplicate rejection, zero-key rejection, authorization denial) in `gitstore-api/internal/graph/resolver/serviceaccount_service_test.go`
-- [ ] T015 [P] [US2] Add failing resolver tests for `rotateServiceAccountKey` (add+remove overlap window, empty-result-after-removal rejection, authorization denial) in the same test file
-- [ ] T016 [P] [US2] Add failing resolver tests for `deleteServiceAccount` (idempotent delete, subsequent-auth denial, authorization denial) in the same test file
-- [ ] T017 [P] [US2] Add failing resolver tests for `issueServiceAccountToken` (success, wrong-subject/UID-mismatch denial, TTL clamping to `max_ttl`) in the same test file
+- [X] T014 [P] [US2] Add failing resolver tests for `createServiceAccount` (success, duplicate rejection, zero-key rejection, authorization denial) in `gitstore-api/internal/graph/resolver/serviceaccount_service_test.go`
+- [X] T015 [P] [US2] Add failing resolver tests for `rotateServiceAccountKey` (add+remove overlap window, empty-result-after-removal rejection, authorization denial) in the same test file
+- [X] T016 [P] [US2] Add failing resolver tests for `deleteServiceAccount` (idempotent delete, subsequent-auth denial, authorization denial) in the same test file
+- [X] T017 [P] [US2] Add failing resolver tests for `issueServiceAccountToken` (success, wrong-subject/UID-mismatch denial, TTL clamping to `max_ttl`) in the same test file
 
 ### Implementation for User Story 2
 
@@ -128,23 +128,23 @@
 
 ### Tests for User Story 4
 
-- [X] T026 [P] [US4] Add failing unit tests for `StaticToken` (unchanged, always returns the configured string) in `gitstore-controller-manager/internal/graphqlclient/credential_test.go`
-  - **Completed**: Three unit tests verify StaticToken returns token, handles empty token, and maintains consistency across calls. All tests pass ✓.
+- [X] T026 [P] [US4] Add failing unit tests for `CredentialSource` test doubles and `ServiceAccountSource` in `gitstore-controller-manager/internal/graphqlclient/credential_test.go`
+  - **Completed**: `StaticToken` remains an isolated test double; controller runtime configuration accepts only service-account credentials.
 - [X] T027 [P] [US4] Add failing unit tests for `ServiceAccountSource` (sign+exchange on first `Current`, cache reuse before expiry, proactive renewal before expiry, singleflight under concurrent callers, jittered backoff on exchange failure) in the same test file
   - **Completed**: Five unit tests verify interface contract, error tracking, backoff on failure, and singleflight under concurrency. Note: full token issuance (T028) remains a placeholder until T029a bootstrap resolver is wired. All tests pass ✓.
 
 ### Implementation for User Story 4
 
-- [X] T028 [US4] Implement `Credential`/`CredentialSource`/`StaticToken`/`ServiceAccountSource` in `gitstore-controller-manager/internal/graphqlclient/credential.go` until T026-T027 are green
-  - **Completed**: `CredentialSource` interface abstracts static vs dynamic token acquisition. `StaticToken` implements the FR-014 deprecated path (always returns configured string). `ServiceAccountSource` implements automatic renewal with singleflight, jittered backoff, and renewal windows. `TokenSigner` interface abstracts signing (will be implemented by T029a bootstrap resolver). All 7 credential tests pass ✓.
+- [X] T028 [US4] Implement `CredentialSource`/`ServiceAccountSource` in `gitstore-controller-manager/internal/graphqlclient/credential.go` until T026-T027 are green
+  - **Completed**: `ServiceAccountSource` implements automatic renewal with singleflight, jittered backoff, configured audiences, bounded exchange timeout, and cancellation-aware waiting. `StaticToken` remains available only as an isolated test double.
 - [X] T029 [US4] Rewire `Client.token string` → `Client.credentials CredentialSource` in `gitstore-controller-manager/internal/graphqlclient/client.go`'s `do()`/`Subscribe()`
-  - **Completed**: Client.New now takes CredentialSource instead of string token. All call sites wrapped with NewStaticToken for backward compat. Both do() and Subscribe() acquire credentials at request time. All 900+ controller-manager tests pass, zero regressions ✓.
-- [ ] T029a [US4] Add a minimal bootstrap-tier `SecretResolver` (ADR 0009 §3) in `gitstore-controller-manager/internal/secret/`: the `Ref`/`BootstrapProviderConfig` types, a `file` provider, and an `env` provider, with ADR 0001's error classes (`InvalidRef`/`NotFound`/`MissingKey`/`Forbidden`/`ProviderUnavailable`) and fail-closed semantics. Prerequisite for T030/T031 — no component may read the private key via `os.ReadFile` (FR-015a)
-- [ ] T030 [US4] Add `ServiceAccountNamespace`/`ServiceAccountName`/`ServiceAccountKeyID`/`ServiceAccountKeyRef`/`SecretProviderBootstrap` to `ControllerConfig` in `gitstore-controller-manager/internal/config/config.go`; make `ApiToken`'s required-check conditional on no signer being configured (mirroring T007's API-side pattern). Note: `ServiceAccountKeyRef` is an ADR 0001 `SecretRef`, **not** a filesystem path — the previously-drafted `ServiceAccountPrivateKeyFile` key is deliberately not introduced (FR-015a). Add keys via #410's `load(path)` (not the old inline `Load` body), preserving `LoadFrom`'s required-file semantics. Per FR-015c the controller's private key MUST resolve from a source mounted into `controller-manager` alone, never from the shared `/config/gitstore.toml`
-- [ ] T030a [US4] Update `compose.local.yml` to mount per-service key material for the service-account flow (API signing key; controller private key) as separate, single-service, read-only mounts, and update `scripts/check-local-compose-config.sh` accordingly — it currently asserts exact counts (`-eq 3` for `/config/gitstore.toml`, `-eq 1` for `/config/policy.yaml`, `-ge 4` for `read_only: true`) and will fail as soon as mounts are added. Extend it to also assert that no single file is mounted into more than one service when it holds service-account key material (FR-015c)
-- [ ] T031 [US4] Consolidate `cmd/controller/main.go`'s three independent `graphqlclient.New(...)` call sites (`registerNamespace`/`registerCategoryTaxonomy`/`registerProductWatch`) into one shared `buildCredentialSource`+client construction in `main()`, passed into all three (research.md Decision 3 — do not leave three independently-renewing sources)
-- [ ] T031a [P] [US4] **Naming consistency — deliberately deferred, do not rename in this spec.** `registerProductWatch` is inconsistent with its `registerNamespace`/`registerCategoryTaxonomy` siblings, but the suffix encodes a real distinction: it registers a watch/cache feeding another reconciler's queue, not a reconciler of its own (it returns only a `Runner`, with no `NewReconciler` call). That distinction disappears once Product/ProductVariant gain their own reconcilers, at which point the right name is settled by what the function actually does rather than guessed at now. Revisit in the future Product/ProductVariant spec and rename all three together. This task exists only so T031 — which rewrites all three signatures to take a shared client — does not silently "tidy" the name mid-flight; keep the existing name in that diff
-- [ ] T032 [US4] Wire `ServiceAccountSource`'s exchange-failure path to the existing `internal/health` readiness handler so "not ready" is reported until a credential is obtained
+  - **Completed**: Both request and subscription paths acquire credentials at request time; the controller passes one shared renewable source to every production client.
+- [X] T029a [US4] Add a minimal bootstrap-tier `SecretResolver` (ADR 0009 §3) in `gitstore-controller-manager/internal/secret/`: the `Ref`/`BootstrapProviderConfig` types, a `file` provider, and an `env` provider, with ADR 0001's error classes (`InvalidRef`/`NotFound`/`MissingKey`/`Forbidden`/`ProviderUnavailable`) and fail-closed semantics. Prerequisite for T030/T031 — no component may read the private key via `os.ReadFile` (FR-015a)
+- [X] T030 [US4] Add `ServiceAccountNamespace`/`ServiceAccountName`/`ServiceAccountKeyID`/`ServiceAccountKeyRef`/`SecretProviderBootstrap` to `ControllerConfig` in `gitstore-controller-manager/internal/config/config.go`; require the ServiceAccount signer and preserve `LoadFrom`'s required-file semantics.
+- [X] T030a [US4] Update `compose.local.yml` to mount per-service key material for the service-account flow (API signing key; controller private key) as separate, single-service, read-only mounts, and update `scripts/check-local-compose-config.sh` accordingly.
+- [X] T031 [US4] Consolidate `cmd/controller/main.go`'s three independent `graphqlclient.New(...)` call sites (`registerNamespace`/`registerCategoryTaxonomy`/`registerProductWatch`) into one shared `buildCredentialSource`+client construction in `main()`, passed into all three (research.md Decision 3 — do not leave three independently-renewing sources)
+- [X] T031a [P] [US4] Preserve `registerProductWatch` naming while passing the shared client; its watch/cache role remains distinct from a reconciler registration.
+- [X] T032 [US4] Wire `ServiceAccountSource`'s exchange-failure path to the existing `internal/health` readiness handler so "not ready" is reported until a credential is obtained
 
 **Checkpoint**: Controller-manager operates with zero manual token refresh and zero `GITSTORE_CONTROLLER__API_TOKEN`; SC-004 satisfied.
 
@@ -158,12 +158,12 @@
 
 ### Tests for User Story 5
 
-- [ ] T033 [P] [US5] Add a failing idempotency test for the new `gitctl enroll-serviceaccount` subcommand in `gitstore-api/cmd/gitctl/enroll_serviceaccount_test.go`
+- [X] T033 [P] [US5] Add a failing idempotency test for the new `gitctl enroll-serviceaccount` subcommand in `gitstore-api/cmd/gitctl/enroll_serviceaccount_test.go`
 
 ### Implementation for User Story 5
 
-- [ ] T034 [US5] Implement `enroll-serviceaccount` in `gitstore-api/cmd/gitctl/main.go`: generate or accept a private key, call `createServiceAccount`/`rotateServiceAccountKey` using an already-authenticated administrative session, write only the private key (restrictive permissions) locally
-- [ ] T035 [US5] Add a grep-based CI check (or extend the existing credential-logging check, FR-020/SC-007) confirming no bearer/access token value appears in `enroll-serviceaccount`'s output or logs
+- [X] T034 [US5] Implement `enroll-serviceaccount` in `gitstore-api/cmd/gitctl/main.go`: generate or accept a private key, call `createServiceAccount`/`rotateServiceAccountKey` using an already-authenticated administrative session, write only the private key (restrictive permissions) locally
+- [X] T035 [US5] Add a grep-based CI check (or extend the existing credential-logging check, FR-020/SC-007) confirming no bearer/access token value appears in `enroll-serviceaccount`'s output or logs
 
 **Checkpoint**: SC-007-adjacent tooling hygiene confirmed; enrollment no longer requires hand-signing assertions.
 
@@ -177,14 +177,14 @@
 
 ### Tests for User Story 6
 
-- [ ] T036 [P] [US6] Add failing tests for `transport.Websocket.InitFunc` accept/reject (valid token, expired token, malformed payload, disabled account) in `gitstore-api/internal/app/server_websocket_test.go`
-- [ ] T037 [P] [US6] Add a failing test confirming an open connection is cancelled immediately when its `ServiceAccount` is disabled/deleted, in the same test file
+- [X] T036 [P] [US6] Add failing tests for `transport.Websocket.InitFunc` accept/reject (valid token, expired token, malformed payload, disabled account) in `gitstore-api/internal/app/server_websocket_test.go`
+- [X] T037 [P] [US6] Add a failing test confirming an open connection is cancelled immediately when its `ServiceAccount` is disabled/deleted, in the same test file
 
 ### Implementation for User Story 6
 
-- [ ] T038 [US6] Implement the in-memory, single-instance-scoped connection registry (UID → cancel functions) in `gitstore-api/internal/app/` (or a new `internal/wsregistry` package)
-- [ ] T039 [US6] Add `transport.Websocket.InitFunc`/`CloseFunc` to `gqlServer.AddTransport` in `gitstore-api/internal/app/server.go` per `contracts/controller-credential-source.md`
-- [ ] T040 [US6] Call `connectionRegistry.CancelAll(uid)` synchronously from `deleteServiceAccount`'s resolver and from the disable path, satisfying FR-019 within the single-instance profile
+- [X] T038 [US6] Implement the in-memory, single-instance-scoped connection registry (UID → cancel functions) in `gitstore-api/internal/app/` (or a new `internal/wsregistry` package)
+- [X] T039 [US6] Add `transport.Websocket.InitFunc`/`CloseFunc` to `gqlServer.AddTransport` in `gitstore-api/internal/app/server.go` per `contracts/controller-credential-source.md`
+- [X] T040 [US6] Call `connectionRegistry.CancelAll(uid)` synchronously from `deleteServiceAccount`'s resolver and from the disable path, satisfying FR-019 within the single-instance profile
 
 **Checkpoint**: SC-006 satisfied.
 
@@ -192,12 +192,12 @@
 
 ## Phase 9: Polish & Documentation
 
-- [ ] T041 [P] Add the end-to-end integration test `tests/integration/serviceaccount_auth_test.go` covering create → enroll → assert → issue → authenticate → rotate → disable/delete → WebSocket revoke
-- [ ] T042 [P] Add the "Addendum — controller/machine identity (spec 061)" paragraph beneath Phase 7 in `docs/implementation/020-pluggable_auth_architecture.md`, mirroring spec 059's existing addendum pattern exactly
-- [ ] T043 [P] Update configuration documentation with the new `auth.serviceaccount.*`/`controller.serviceaccount_*` keys and `GITSTORE_CONTROLLER__API_TOKEN`'s deprecated-fallback status
-- [ ] T044 [P] Add `docs/runbooks/controller-auth.md` (doc 021 §13): signing-key rotation with zero downtime, controller key re-enrollment, diagnosing "stuck in backoff," recovering from accidental `ServiceAccount` deletion
-- [ ] T045 [P] Add a grep-based CI check asserting no `zap` call in `serviceaccountassertion`/`serviceaccountjwt`/`gitstore-controller-manager/internal/graphqlclient` logs a raw token/assertion/private-key value (FR-020, SC-007)
-- [ ] T046 Run `make build`, `make test`, `make pr-ready`; confirm zero regressions in existing `rbaclocal`/`staticadmin`/`allowall`/`anonymous` provider test suites
+- [X] T041 [P] Add the end-to-end integration test `tests/integration/serviceaccount_auth_test.go` covering create → enroll → assert → issue → authenticate → rotate → disable/delete → WebSocket revoke
+- [X] T042 [P] Add the "Addendum — controller/machine identity (spec 061)" paragraph beneath Phase 7 in `docs/implementation/020-pluggable_auth_architecture.md`, mirroring spec 059's existing addendum pattern exactly
+- [X] T043 [P] Update configuration documentation with the new `auth.serviceaccount.*`/`controller.serviceaccount_*` keys and remove the static controller token configuration path
+- [X] T044 [P] Add `docs/runbooks/controller-auth.md` (doc 021 §13): signing-key rotation with zero downtime, controller key re-enrollment, diagnosing "stuck in backoff," recovering from accidental `ServiceAccount` deletion
+- [X] T045 [P] Add a grep-based CI check asserting no `zap` call in `serviceaccountassertion`/`serviceaccountjwt`/`gitstore-controller-manager/internal/graphqlclient` logs a raw token/assertion/private-key value (FR-020, SC-007)
+- [X] T046 Run `make build`, `make test`, `make pr-ready`; confirm zero regressions in existing `rbaclocal`/`staticadmin`/`allowall`/`anonymous` provider test suites
 
 ## Dependencies & Execution Order
 

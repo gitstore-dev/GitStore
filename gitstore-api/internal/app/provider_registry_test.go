@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
@@ -23,13 +24,17 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// stubServiceAccountLookup is a no-op serviceAccountLookup test double —
+// stubServiceAccountLookup is a no-op serviceAccountStore test double —
 // buildProviderRegistry only needs it to satisfy the constructor signature;
 // none of these tests exercise actual lookups.
 type stubServiceAccountLookup struct{}
 
 func (stubServiceAccountLookup) GetServiceAccountBySubject(_ context.Context, _, _ string) (*datastore.ServiceAccount, error) {
 	return nil, datastore.ErrNotFound
+}
+
+func (stubServiceAccountLookup) TryConsumeServiceAccountAssertion(_ context.Context, _ string, _ time.Time) (bool, error) {
+	return true, nil
 }
 
 func TestBuildProviderRegistry_DefaultChain_Unchanged(t *testing.T) {
@@ -64,8 +69,8 @@ func TestBuildProviderRegistry_ServiceAccountProvidersChainedIn(t *testing.T) {
 	registry, _, shutdowns, err := buildProviderRegistry(cfg, stubServiceAccountLookup{}, zap.NewNop(), nil)
 	require.NoError(t, err)
 	require.NotNil(t, registry)
-	// The registry runtime owns and shuts down both serviceaccount providers'
-	// background replay/revocation pruners as one server-level shutdown entry.
+	// The registry runtime owns the serviceaccount-jwt revocation-pruner
+	// shutdown; assertion replay protection is datastore-owned.
 	assert.Len(t, shutdowns, 1)
 	for _, s := range shutdowns {
 		s.Shutdown()

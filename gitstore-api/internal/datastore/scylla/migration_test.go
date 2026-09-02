@@ -72,6 +72,7 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 		"repositories_by_namespace",
 		"repositories_by_bucket",
 		"namespace_mappings_by_repository",
+		"service_account_assertion_replays",
 	} {
 		var tblName string
 		err = session.Query(

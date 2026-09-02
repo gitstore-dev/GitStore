@@ -165,6 +165,10 @@ func startNamespaceContractAPIServer(t *testing.T) (string, *exec.Cmd, *bytes.Bu
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -178,11 +182,14 @@ import (
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountassertion"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountjwt"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -243,6 +250,14 @@ func (m *mockGitWriter) DeleteRepository(_ context.Context, _ string) error {
 }
 
 func main() {
+	_, signingKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	signingKeyDER, err := x509.MarshalPKCS8PrivateKey(signingKey)
+	if err != nil {
+		panic(err)
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte("admin123"), bcrypt.MinCost)
 	if err != nil {
 		panic(err)
@@ -263,6 +278,10 @@ func main() {
 			Issuer:   "gitstore",
 			Duration: "2h",
 		},
+		ServiceAccount: config.ServiceAccountConfig{
+			Audience:   "gitstore-api",
+			SigningKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: signingKeyDER})),
+		},
 	}
 	staticUsers, err := staticusers.New(cfg, zap.NewNop())
 	if err != nil {
@@ -270,15 +289,24 @@ func main() {
 	}
 	defer staticUsers.Shutdown()
 
-	registry := authpkg.NewProviderRegistry(
-		authpkg.NewChainedAuthN(staticUsers, anonymous.New()),
-		&namespaceOwnerAuthZ{},
-		nil,
-	)
 	store, err := memdb.New()
 	if err != nil {
 		panic(err)
 	}
+	assertionProvider, err := serviceaccountassertion.New(cfg.ServiceAccount, store, zap.NewNop())
+	if err != nil {
+		panic(err)
+	}
+	accessTokenProvider, err := serviceaccountjwt.New(cfg.ServiceAccount, store, zap.NewNop())
+	if err != nil {
+		panic(err)
+	}
+	defer accessTokenProvider.Shutdown()
+	registry := authpkg.NewProviderRegistry(
+		authpkg.NewChainedAuthN(staticUsers, assertionProvider, accessTokenProvider, anonymous.New()),
+		&namespaceOwnerAuthZ{},
+		nil,
+	)
 	ids := apiruntime.NewSequenceIDGenerator()
 	now := time.Now().UTC()
 	systemNamespace := &datastore.Namespace{
@@ -321,6 +349,8 @@ func main() {
 		Logger:    zap.NewNop(),
 		Registry:  registry,
 		IDs:       ids,
+		ServiceAccountAudience: cfg.ServiceAccount.Audience,
+		ConnectionRegistry: wsregistry.New(),
 	})
 	if err != nil {
 		panic(err)

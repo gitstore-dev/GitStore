@@ -14,10 +14,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
 
@@ -92,8 +94,9 @@ func (h *serviceAccountAuthHarness) createServiceAccount(namespace, name, public
 			},
 			"publicKeys": []map[string]any{
 				{
-					"algorithm": "Ed25519",
-					"publicKey": publicKeyPEM,
+					"kid":          "key-1",
+					"algorithm":    "Ed25519",
+					"publicKeyPEM": publicKeyPEM,
 				},
 			},
 		},
@@ -106,7 +109,7 @@ func (h *serviceAccountAuthHarness) createServiceAccount(namespace, name, public
 	bodyJSON, err := json.Marshal(body)
 	require.NoError(h.t, err)
 
-	req, err := http.NewRequest("POST", h.apiURL, bytes.NewReader(bodyJSON))
+	req, err := http.NewRequest("POST", h.apiURL+"/graphql", bytes.NewReader(bodyJSON))
 	require.NoError(h.t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+h.token)
@@ -137,17 +140,19 @@ func (h *serviceAccountAuthHarness) createServiceAccount(namespace, name, public
 }
 
 // issueServiceAccountToken calls the issueServiceAccountToken mutation with a signed assertion.
-func (h *serviceAccountAuthHarness) issueServiceAccountToken(namespace, name string, privPEM string) string {
+func (h *serviceAccountAuthHarness) issueServiceAccountToken(namespace, name, uid string, privPEM string) string {
 	h.t.Helper()
 
 	// Sign a client assertion with the private key
-	assertion := h.signClientAssertion(namespace, name, privPEM)
+	assertion := h.signClientAssertion(namespace, name, uid, privPEM)
 
 	mutation := `
 		mutation IssueServiceAccountToken($input: IssueServiceAccountTokenInput!) {
 			issueServiceAccountToken(input: $input) {
-				token
-				expiresAt
+				status {
+					token
+					expiresAt
+				}
 			}
 		}
 	`
@@ -175,7 +180,7 @@ func (h *serviceAccountAuthHarness) issueServiceAccountToken(namespace, name str
 	require.NoError(h.t, err)
 
 	// Issue the token with the assertion bearer
-	req, err := http.NewRequest("POST", h.apiURL, bytes.NewReader(bodyJSON))
+	req, err := http.NewRequest("POST", h.apiURL+"/graphql", bytes.NewReader(bodyJSON))
 	require.NoError(h.t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+assertion)
@@ -190,7 +195,9 @@ func (h *serviceAccountAuthHarness) issueServiceAccountToken(namespace, name str
 	var result struct {
 		Data struct {
 			IssueServiceAccountToken struct {
-				Token string `json:"token"`
+				Status struct {
+					Token string `json:"token"`
+				} `json:"status"`
 			} `json:"issueServiceAccountToken"`
 		} `json:"data"`
 		Errors []map[string]any `json:"errors"`
@@ -198,13 +205,17 @@ func (h *serviceAccountAuthHarness) issueServiceAccountToken(namespace, name str
 	err = json.NewDecoder(resp.Body).Decode(&result)
 	require.NoError(h.t, err)
 	require.Empty(h.t, result.Errors, "GraphQL errors: %v", result.Errors)
-	require.NotEmpty(h.t, result.Data.IssueServiceAccountToken.Token)
+	require.NotEmpty(h.t, result.Data.IssueServiceAccountToken.Status.Token)
 
-	return result.Data.IssueServiceAccountToken.Token
+	return result.Data.IssueServiceAccountToken.Status.Token
 }
 
 // signClientAssertion creates a client assertion JWT signed with the private key.
-func (h *serviceAccountAuthHarness) signClientAssertion(namespace, name string, privPEM string) string {
+func (h *serviceAccountAuthHarness) signClientAssertion(namespace, name, uid string, privPEM string) string {
+	return h.signClientAssertionWithKeyID(namespace, name, uid, "key-1", privPEM)
+}
+
+func (h *serviceAccountAuthHarness) signClientAssertionWithKeyID(namespace, name, uid, keyID, privPEM string) string {
 	h.t.Helper()
 
 	block, _ := pem.Decode([]byte(privPEM))
@@ -220,10 +231,12 @@ func (h *serviceAccountAuthHarness) signClientAssertion(namespace, name string, 
 		"iat":    time.Now().Unix(),
 		"exp":    time.Now().Add(60 * time.Second).Unix(),
 		"jti":    fmt.Sprintf("jti-%d", time.Now().UnixNano()),
-		"sa_uid": "",
+		"sa_uid": uid,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	token.Header["typ"] = "gitstore-sa-assertion+jwt"
+	token.Header["kid"] = keyID
 	signed, err := token.SignedString(priv.(ed25519.PrivateKey))
 	require.NoError(h.t, err)
 
@@ -240,7 +253,7 @@ func (h *serviceAccountAuthHarness) queryWithToken(query string, token string) (
 	bodyJSON, err := json.Marshal(body)
 	require.NoError(h.t, err)
 
-	req, err := http.NewRequest("POST", h.apiURL, bytes.NewReader(bodyJSON))
+	req, err := http.NewRequest("POST", h.apiURL+"/graphql", bytes.NewReader(bodyJSON))
 	require.NoError(h.t, err)
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
@@ -269,15 +282,14 @@ func TestServiceAccountAuth_ControllerHasLimitedPrivilege_T022(t *testing.T) {
 	}
 
 	h := newServiceAccountAuthHarness(t)
-	defer releaseNamespaceContractAPI(t)
 
 	// Create a service account
 	privPEM := generateEd25519PEM(t)
 	pubPEM := extractPublicKeyPEM(t, privPEM)
-	_ = h.createServiceAccount("controllers", "gitstore-controller-manager", pubPEM)
+	uid := h.createServiceAccount("controllers", "gitstore-controller-manager", pubPEM)
 
 	// Issue an access token
-	accessToken := h.issueServiceAccountToken("controllers", "gitstore-controller-manager", privPEM)
+	accessToken := h.issueServiceAccountToken("controllers", "gitstore-controller-manager", uid, privPEM)
 
 	// Try to perform an admin-only action with limited service account token
 	// An admin-only action would be something like updating namespace status with
@@ -327,15 +339,14 @@ func TestServiceAccountAuth_NamespaceReconcilerActions_T022a(t *testing.T) {
 	}
 
 	h := newServiceAccountAuthHarness(t)
-	defer releaseNamespaceContractAPI(t)
 
 	// Create a service account
 	privPEM := generateEd25519PEM(t)
 	pubPEM := extractPublicKeyPEM(t, privPEM)
-	_ = h.createServiceAccount("controllers", "gitstore-controller-manager", pubPEM)
+	uid := h.createServiceAccount("controllers", "gitstore-controller-manager", pubPEM)
 
 	// Issue an access token
-	accessToken := h.issueServiceAccountToken("controllers", "gitstore-controller-manager", privPEM)
+	accessToken := h.issueServiceAccountToken("controllers", "gitstore-controller-manager", uid, privPEM)
 
 	// Verify the service account can read namespaces (repository.create.any, namespace.watch, etc.)
 	query := `query {
@@ -398,7 +409,6 @@ role_bindings:
 
 	// Create a harness with custom policy
 	apiURL := acquireNamespaceContractAPI(t)
-	defer releaseNamespaceContractAPI(t)
 
 	h := &serviceAccountAuthHarness{
 		t:      t,
@@ -409,10 +419,10 @@ role_bindings:
 	// Create a service account
 	privPEM := generateEd25519PEM(t)
 	pubPEM := extractPublicKeyPEM(t, privPEM)
-	_ = h.createServiceAccount("controllers", "gitstore-controller-manager", pubPEM)
+	uid := h.createServiceAccount("controllers", "gitstore-controller-manager", pubPEM)
 
 	// Issue a token and verify it works
-	accessToken := h.issueServiceAccountToken("controllers", "gitstore-controller-manager", privPEM)
+	accessToken := h.issueServiceAccountToken("controllers", "gitstore-controller-manager", uid, privPEM)
 
 	query := `query {
 		namespaces(first: 1) {
@@ -435,4 +445,116 @@ role_bindings:
 	require.True(t, ok, "rbac-local should correctly resolve serviceaccount:* subject format")
 
 	t.Log("T024: rbac-local correctly handles serviceaccount:* subject format")
+}
+
+func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	h := newServiceAccountAuthHarness(t)
+	const namespace, name = "controllers", "e2e-controller"
+	privateKey := generateEd25519PEM(t)
+	uid := h.createServiceAccount(namespace, name, extractPublicKeyPEM(t, privateKey))
+	accessToken := h.issueServiceAccountToken(namespace, name, uid, privateKey)
+
+	authorized, err := h.queryWithToken(`query { namespaces(first: 1) { edges { node { metadata { name } } } } }`, accessToken)
+	require.NoError(t, err)
+	require.Empty(t, authorized["errors"])
+
+	issueMutation := `mutation Issue($input: IssueServiceAccountTokenInput!) {
+		issueServiceAccountToken(input: $input) { status { token } }
+	}`
+	issueInput := map[string]any{
+		"input": map[string]any{
+			"apiVersion": "gitstore.dev/v1beta1",
+			"kind":       "TokenRequest",
+			"metadata":   map[string]any{"namespace": namespace, "name": name},
+			"spec":       map[string]any{"audience": "gitstore-api", "ttlSeconds": 3600},
+		},
+	}
+	for _, assertion := range []string{
+		h.signClientAssertion(namespace, "other", uid, privateKey),
+		h.signClientAssertion(namespace, name, "different-uid", privateKey),
+	} {
+		response := gqlQueryWithURL(t, h.apiURL, assertion, issueMutation, issueInput)
+		require.NotEmpty(t, response.Errors, "incorrect assertion subject or UID must be denied")
+	}
+
+	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}
+	conn, response, err := dialer.Dial(strings.Replace(h.apiURL, "http", "ws", 1)+"/graphql", nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	if response != nil {
+		t.Cleanup(func() { _ = response.Body.Close() })
+	}
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	require.NoError(t, conn.WriteJSON(map[string]any{
+		"type":    "connection_init",
+		"payload": map[string]any{"Authorization": "Bearer " + accessToken},
+	}))
+	var acknowledgement map[string]any
+	require.NoError(t, conn.ReadJSON(&acknowledgement))
+	require.Equal(t, "connection_ack", acknowledgement["type"])
+
+	replacementPrivateKey := generateEd25519PEM(t)
+	rotateMutation := `mutation Rotate($input: RotateServiceAccountKeyInput!) {
+		rotateServiceAccountKey(input: $input) { keyIDs }
+	}`
+	rotated := gqlQueryWithURL(t, h.apiURL, h.token, rotateMutation, map[string]any{
+		"input": map[string]any{
+			"metadata": map[string]any{"namespace": namespace, "name": name},
+			"add": []map[string]any{{
+				"kid":          "key-2",
+				"algorithm":    "Ed25519",
+				"publicKeyPEM": extractPublicKeyPEM(t, replacementPrivateKey),
+			}},
+			"removeKids": []string{"key-1"},
+		},
+	})
+	require.Empty(t, rotated.Errors, "rotation must retain a valid key set")
+	var rotateData struct {
+		RotateServiceAccountKey struct {
+			KeyIDs []string `json:"keyIDs"`
+		} `json:"rotateServiceAccountKey"`
+	}
+	require.NoError(t, json.Unmarshal(rotated.Data, &rotateData))
+	require.Equal(t, []string{"key-2"}, rotateData.RotateServiceAccountKey.KeyIDs)
+
+	oldAssertion := h.signClientAssertion(namespace, name, uid, privateKey)
+	require.NotEmpty(t, gqlQueryWithURL(t, h.apiURL, oldAssertion, issueMutation, issueInput).Errors,
+		"an assertion signed by the removed key must be denied")
+	replacementAssertion := h.signClientAssertionWithKeyID(namespace, name, uid, "key-2", replacementPrivateKey)
+	require.Empty(t, gqlQueryWithURL(t, h.apiURL, replacementAssertion, issueMutation, issueInput).Errors,
+		"an assertion signed by the replacement key must be accepted")
+
+	deleteMutation := `mutation Delete($input: DeleteServiceAccountInput!) {
+		deleteServiceAccount(input: $input) { metadata { uid } }
+	}`
+	deleted := gqlQueryWithURL(t, h.apiURL, h.token, deleteMutation, map[string]any{
+		"input": map[string]any{
+			"apiVersion": "gitstore.dev/v1beta1",
+			"kind":       "ServiceAccount",
+			"metadata":   map[string]any{"namespace": namespace, "name": name},
+		},
+	})
+	require.Empty(t, deleted.Errors)
+
+	_, _, err = conn.ReadMessage()
+	var closeErr *websocket.CloseError
+	require.ErrorAs(t, err, &closeErr)
+	require.Equal(t, websocket.CloseNormalClosure, closeErr.Code)
+
+	deniedAfterDelete, err := h.queryWithToken(`query { namespaces(first: 1) { edges { node { metadata { name } } } } }`, accessToken)
+	require.NoError(t, err)
+	require.NotEmpty(t, deniedAfterDelete["errors"], "deleted service account token must be rejected")
+
+	idempotentDelete := gqlQueryWithURL(t, h.apiURL, h.token, deleteMutation, map[string]any{
+		"input": map[string]any{
+			"apiVersion": "gitstore.dev/v1beta1",
+			"kind":       "ServiceAccount",
+			"metadata":   map[string]any{"namespace": namespace, "name": name},
+		},
+	})
+	require.Empty(t, idempotentDelete.Errors, "deleting an absent ServiceAccount must be a no-op")
 }

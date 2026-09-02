@@ -12,11 +12,11 @@ roles:
       - "namespace.status.write"
       - "namespace.watch"
       - "repository.create.any"
+      - "serviceaccount.token.issue"
     deny: []
 default_deny: true
 role_bindings:
   admin:
     - admin
-  controller:
+  serviceaccount:controllers:gitstore-controller-manager:
     - controller
-    - serviceaccount:controllers:gitstore-controller-manager

@@ -15,6 +15,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
+	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
 	"go.uber.org/zap"
 )
 
@@ -34,6 +35,7 @@ type Resolver struct {
 	namespaceWatch         config.NamespaceWatchConfig
 	namespaceMetrics       *watchjournal.Metrics
 	serviceAccountAudience string
+	connectionRegistry     *wsregistry.Registry
 }
 
 // ResolverDeps contains dependencies for the root GraphQL resolver.
@@ -54,6 +56,7 @@ type ResolverDeps struct {
 	// ServiceAccountAudience is the configured audience value for service
 	// account token issuance (spec 061).
 	ServiceAccountAudience string
+	ConnectionRegistry     *wsregistry.Registry
 }
 
 // NewResolver creates a new GraphQL resolver.
@@ -103,6 +106,7 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 		namespaceWatch:         deps.NamespaceWatch,
 		namespaceMetrics:       deps.NamespaceMetrics,
 		serviceAccountAudience: deps.ServiceAccountAudience,
+		connectionRegistry:     deps.ConnectionRegistry,
 	}, nil
 }
 

@@ -31,7 +31,9 @@ func ContextWithRemoteAddr(ctx context.Context, remoteAddr string) context.Conte
 	return context.WithValue(ctx, remoteAddrContextKey{}, remoteAddr)
 }
 
-func remoteAddrFromContext(ctx context.Context) string {
+// RemoteAddrFromContext retrieves the caller address stored by
+// ContextWithRemoteAddr.
+func RemoteAddrFromContext(ctx context.Context) string {
 	remoteAddr, _ := ctx.Value(remoteAddrContextKey{}).(string)
 	return remoteAddr
 }
@@ -52,6 +54,13 @@ func (a *Authenticate) GraphQLAuthenticator(ctx context.Context, next graphql.Op
 	if a.registry == nil || a.registry.AuthN() == nil {
 		return graphql.OneShot(graphql.ErrorResponse(ctx, "authentication service unavailable"))
 	}
+	// transport.Websocket authenticates connection_init before accepting a
+	// subscription and stores its verified principal in the connection context.
+	// Re-authenticating here would discard that credential because gqlgen keeps
+	// connection_init headers separate from operation headers.
+	if auth.PrincipalFromContext(ctx) != nil {
+		return next(ctx)
+	}
 
 	opCtx := graphql.GetOperationContext(ctx)
 	if opCtx == nil {
@@ -60,7 +69,7 @@ func (a *Authenticate) GraphQLAuthenticator(ctx context.Context, next graphql.Op
 
 	req := auth.AuthRequest{
 		Header:     opCtx.Headers,
-		RemoteAddr: remoteAddrFromContext(ctx),
+		RemoteAddr: RemoteAddrFromContext(ctx),
 	}
 	if req.Header == nil {
 		req.Header = http.Header{}
@@ -112,20 +121,30 @@ func (a *Authorize) GraphQLAuthorizer(ctx context.Context, next graphql.Operatio
 }
 
 // GraphQLFieldAuthorizer runs fine-grained GraphQL authorization checks for
-// mutation and subscription fields that require policy evaluation against
-// resource context.
+// root fields that require policy evaluation against resource context.
 func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Resolver) (any, error) {
 	if a.logger == nil {
 		a.logger = zap.NewNop()
 	}
 	fc := graphql.GetFieldContext(ctx)
-	if fc == nil || (fc.Object != "Mutation" && fc.Object != "Subscription") {
+	if fc == nil {
 		return next(ctx)
 	}
 
 	principal := auth.PrincipalFromContext(ctx)
 	if principal == nil {
 		principal = auth.Anonymous()
+	}
+	if (fc.Object == "Query" || fc.Object == "Mutation" || fc.Object == "Subscription") &&
+		principal.AuthMethod == "serviceaccount-assertion" &&
+		(fc.Object != "Mutation" || fc.Field.Name != "issueServiceAccountToken") {
+		return nil, &gqlerror.Error{
+			Message:    "service account assertions may only issue access tokens",
+			Extensions: map[string]any{"code": "FORBIDDEN"},
+		}
+	}
+	if fc.Object != "Mutation" && fc.Object != "Subscription" {
+		return next(ctx)
 	}
 	var authz auth.AuthZProvider
 	if a.registry != nil {
@@ -282,24 +301,25 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			}
 		}
 	case "issueServiceAccountToken":
-		// Hard gate: service account assertions can ONLY issue tokens for themselves
-		if principal.AuthMethod == "serviceaccount-assertion" {
-			namespace, _ := nestedStringPath(fc.Args, "input", "metadata", "namespace")
-			name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
-			expectedSubject := datastore.ServiceAccountSubject(namespace, name)
-			if principal.Subject != expectedSubject {
-				return nil, &gqlerror.Error{
-					Message:    "service account can only issue tokens for itself",
-					Extensions: map[string]any{"code": "FORBIDDEN"},
-				}
+		if principal.AuthMethod != "serviceaccount-assertion" {
+			return nil, &gqlerror.Error{
+				Message:    "service account assertion authentication is required",
+				Extensions: map[string]any{"code": "FORBIDDEN"},
+			}
+		}
+		namespace, _ := nestedStringPath(fc.Args, "input", "metadata", "namespace")
+		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
+		expectedSubject := datastore.ServiceAccountSubject(namespace, name)
+		if principal.Subject != expectedSubject {
+			return nil, &gqlerror.Error{
+				Message:    "service account can only issue tokens for itself",
+				Extensions: map[string]any{"code": "FORBIDDEN"},
 			}
 		}
 		// RBAC authorization for token issuance
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
-		namespace, _ := nestedStringPath(fc.Args, "input", "metadata", "namespace")
-		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
 		decision, err := authz.Authorize(ctx, principal, "serviceaccount.token.issue", auth.ResourceContext{
 			Kind: "serviceAccount",
 			Name: datastore.ServiceAccountSubject(namespace, name),

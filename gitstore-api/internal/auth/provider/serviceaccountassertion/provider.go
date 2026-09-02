@@ -57,6 +57,14 @@ type ServiceAccountLookup interface {
 	GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*datastore.ServiceAccount, error)
 }
 
+// ServiceAccountStore is the narrow datastore seam this provider needs. The
+// replay consume operation is durable and atomic so a single assertion cannot
+// be accepted by more than one API replica.
+type ServiceAccountStore interface {
+	ServiceAccountLookup
+	TryConsumeServiceAccountAssertion(ctx context.Context, jtiDigest string, expiresAt time.Time) (bool, error)
+}
+
 // assertionClaims mirrors data-model.md §3's client-assertion claim set.
 type assertionClaims struct {
 	jwt.RegisteredClaims
@@ -68,13 +76,15 @@ type assertionClaims struct {
 type Provider struct {
 	assertionAudience string
 	clockSkew         time.Duration
-	lookup            ServiceAccountLookup
-	replay            *replayCache
+	store             ServiceAccountStore
 	logger            *zap.Logger
 }
 
 // New constructs a Provider from the resolved ServiceAccountConfig.
-func New(cfg config.ServiceAccountConfig, lookup ServiceAccountLookup, logger *zap.Logger) (*Provider, error) {
+func New(cfg config.ServiceAccountConfig, store ServiceAccountStore, logger *zap.Logger) (*Provider, error) {
+	if store == nil {
+		return nil, errors.New("serviceaccountassertion: service account store is required")
+	}
 	audience := strings.TrimSpace(cfg.AssertionAudience)
 	if audience == "" {
 		audience = defaultAssertionAudience
@@ -88,23 +98,15 @@ func New(cfg config.ServiceAccountConfig, lookup ServiceAccountLookup, logger *z
 		skew = d
 	}
 
-	replay := newReplayCache()
-	go replay.pruneLoop()
-
 	return &Provider{
 		assertionAudience: audience,
 		clockSkew:         skew,
-		lookup:            lookup,
-		replay:            replay,
+		store:             store,
 		logger:            logger,
 	}, nil
 }
 
 func (p *Provider) Name() string { return providerName }
-
-// Shutdown stops the background replay-cache pruning goroutine. Must be
-// called on server shutdown or SIGHUP-triggered provider replacement.
-func (p *Provider) Shutdown() { p.replay.shutdown() }
 
 func (p *Provider) Capabilities() auth.Capability {
 	return auth.CapAuthenticate
@@ -139,7 +141,7 @@ func (p *Provider) Authenticate(ctx context.Context, req auth.AuthRequest) (*aut
 	if !ok {
 		return nil, auth.Deny(providerName, "subject is not a serviceaccount identifier"), nil
 	}
-	sa, err := p.lookup.GetServiceAccountBySubject(ctx, namespace, name)
+	sa, err := p.store.GetServiceAccountBySubject(ctx, namespace, name)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
 			return nil, auth.Deny(providerName, "service account not found"), nil
@@ -184,7 +186,7 @@ func (p *Provider) Authenticate(ctx context.Context, req auth.AuthRequest) (*aut
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return pubKey, nil
-	}, jwt.WithLeeway(p.clockSkew), jwt.WithIssuer(expectedSubject), jwt.WithAudience(p.assertionAudience))
+	}, jwt.WithLeeway(p.clockSkew), jwt.WithIssuedAt(), jwt.WithIssuer(expectedSubject), jwt.WithAudience(p.assertionAudience))
 	if err != nil {
 		return nil, auth.Deny(providerName, "assertion verification failed: "+err.Error()), nil
 	}
@@ -204,23 +206,31 @@ func (p *Provider) Authenticate(ctx context.Context, req auth.AuthRequest) (*aut
 		return nil, auth.Deny(providerName, "assertion lifetime exceeds 60s bound"), nil
 	}
 
-	// Step 6: single-use enforcement — this IS the authoritative replay
-	// control for this provider (unlike serviceaccountjwt's revocation
-	// list, which is defense-in-depth only).
+	// Step 6: single-use enforcement is a shared datastore LWT/transaction,
+	// not a process-local cache, so it remains authoritative across replicas.
 	if claims.ID == "" {
 		return nil, auth.Deny(providerName, "assertion missing jti"), nil
 	}
-	if !p.replay.TryConsume(claims.ID, claims.ExpiresAt.Time.Add(p.clockSkew)) {
+	consumed, err := p.store.TryConsumeServiceAccountAssertion(
+		ctx,
+		assertionReplayDigest(claims.ID),
+		claims.ExpiresAt.Time.Add(p.clockSkew),
+	)
+	if err != nil {
+		return nil, auth.Deny(providerName, "assertion replay check failed"), err
+	}
+	if !consumed {
 		return nil, auth.Deny(providerName, "assertion jti already used"), nil
 	}
 
 	principal := &auth.Principal{
-		Subject:    claims.Subject,
-		Issuer:     claims.Issuer,
-		Roles:      nil, // resolved exclusively by rbac-local — never embedded (FR-011)
-		AuthMethod: providerName,
-		TokenID:    claims.ID,
-		ExpiresAt:  claims.ExpiresAt.Time,
+		Subject:           claims.Subject,
+		Issuer:            claims.Issuer,
+		Roles:             nil, // resolved exclusively by rbac-local — never embedded (FR-011)
+		AuthMethod:        providerName,
+		TokenID:           claims.ID,
+		ExpiresAt:         claims.ExpiresAt.Time,
+		ServiceAccountUID: sa.UID,
 	}
 	return principal, auth.Allow(providerName, "valid single-use client assertion"), nil
 }
@@ -267,8 +277,8 @@ func parseEnrolledPublicKey(key datastore.ServiceAccountPublicKey) (any, jwt.Sig
 	}
 }
 
-// RevokeSession is not supported: assertions are single-use by
-// construction (replay cache), not a revocable session.
+// RevokeSession is not supported: assertions are single-use by construction,
+// not a revocable session.
 func (p *Provider) RevokeSession(_ context.Context, _ string, _ time.Time) error {
 	return auth.ErrNotSupported
 }

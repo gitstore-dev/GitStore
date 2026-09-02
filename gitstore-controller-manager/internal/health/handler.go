@@ -15,6 +15,12 @@ type ManagerStats interface {
 	KindStats() map[string]KindStat
 }
 
+// CredentialReadiness reports whether the controller has a usable credential
+// without exposing credential material or the underlying failure.
+type CredentialReadiness interface {
+	Ready() bool
+}
+
 // KindStat is a snapshot of per-kind operational state.
 type KindStat struct {
 	ActiveWorkers int64 `json:"activeWorkers"`
@@ -25,18 +31,28 @@ type KindStat struct {
 }
 
 type healthResponse struct {
-	Status  string              `json:"status"`
-	Version string              `json:"version"`
-	Kinds   map[string]KindStat `json:"kinds"`
+	Status          string              `json:"status"`
+	Version         string              `json:"version"`
+	Kinds           map[string]KindStat `json:"kinds"`
+	CredentialReady *bool               `json:"credentialReady,omitempty"`
 }
 
 // NewHandler returns an http.Handler for GET /health.
-func NewHandler(mgr ManagerStats, version string) http.Handler {
+func NewHandler(mgr ManagerStats, version string, credentialReadiness ...CredentialReadiness) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		kinds := mgr.KindStats()
 
 		status := "ok"
 		httpStatus := http.StatusOK
+		var credentialReady *bool
+		if len(credentialReadiness) > 0 && credentialReadiness[0] != nil {
+			ready := credentialReadiness[0].Ready()
+			credentialReady = &ready
+			if !ready {
+				status = "degraded"
+				httpStatus = http.StatusServiceUnavailable
+			}
+		}
 		for _, s := range kinds {
 			if s.Stalled || s.PoisonItems > 0 {
 				status = "degraded"
@@ -47,7 +63,12 @@ func NewHandler(mgr ManagerStats, version string) http.Handler {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(httpStatus)
-		_ = json.NewEncoder(w).Encode(healthResponse{Status: status, Version: version, Kinds: kinds})
+		_ = json.NewEncoder(w).Encode(healthResponse{
+			Status:          status,
+			Version:         version,
+			Kinds:           kinds,
+			CredentialReady: credentialReady,
+		})
 	})
 }
 

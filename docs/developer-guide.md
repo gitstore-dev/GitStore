@@ -364,6 +364,7 @@ Operations runbooks:
 | [`controller-lag`](runbooks/controller-lag.md) | Queue depth growing, reconciles falling behind |
 | [`controller-replay-window-exceeded`](runbooks/controller-replay-window-exceeded.md) | Watch cursor expired / relist triggered |
 | [`controller-poisoned-item`](runbooks/controller-poisoned-item.md) | A resource repeatedly fails reconciliation |
+| [`controller-auth`](runbooks/controller-auth.md) | Controller credential enrollment, renewal, or revocation failure |
 
 ### `gitstore-admin`
 
@@ -439,6 +440,7 @@ make build
 make test
 make lint
 make license-check
+make credential-leakage-check
 make pr-ready
 ```
 
@@ -465,6 +467,7 @@ Use Conventional Commits.
 | `GITSTORE_AUTH__ADMIN__USERNAME`      | unset                    | Admin login username     |
 | `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | unset                    | bcrypt password hash     |
 | `GITSTORE_AUTH__JWT__SECRET`          | unset                    | JWT signing secret       |
+| `GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY` | unset | API-only service-account access-token signing key; required when service-account providers are enabled |
 
 ### Git Service
 
@@ -486,6 +489,18 @@ Use Conventional Commits.
 | `GITSTORE_CONTROLLER__CHECKPOINT_DIR`          | `.gitstore/checkpoints`         | Filesystem checkpoint store directory (one file per kind) |
 | `GITSTORE_CONTROLLER__CHECKPOINT_FLUSH_INTERVAL_EVENTS` | `100`                  | Watch events between checkpoint persists |
 | `GITSTORE_CONTROLLER__MAX_WATCH_BACKOFF`       | `30s`                           | Cap on watch-reconnect exponential backoff |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE` | unset | Enrolled service-account namespace |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME` | `gitstore-controller-manager` | Enrolled service-account name |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID` | unset | Enrolled public-key ID |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__UID` | unset | Enrolled service-account UID |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND` | unset | Must be `SecretRef` |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME` | unset | Logical controller-only secret name |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY` | unset | Logical private-key entry |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__ASSERTION_AUDIENCE` | `gitstore-api/serviceaccount-token` | Signed assertion audience |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__ACCESS_TOKEN_AUDIENCE` | `gitstore-api` | Exchanged access-token audience |
+| `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__TYPE` | `file` | Bootstrap secret provider |
+| `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH` | `/run/secrets` | Controller-only secret directory |
+| `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__ENV_PREFIX` | `GITSTORE_SECRET__` | Bootstrap environment-secret prefix |
 
 See [configuration.md](configuration.md) for the operator reference.
 

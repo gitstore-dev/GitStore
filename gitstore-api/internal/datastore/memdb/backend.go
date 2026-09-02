@@ -1729,6 +1729,77 @@ func (m *memdbDatastore) DeleteServiceAccount(_ context.Context, uid string) err
 	return nil
 }
 
+const serviceAccountAssertionReplayPruneLimit = 256
+
+type serviceAccountAssertionReplay struct {
+	JTIDigest      string
+	ExpiresAt      time.Time
+	ExpiresAtIndex string
+}
+
+// TryConsumeServiceAccountAssertion atomically consumes a JTI digest until its
+// expiry. Expired rows are reclaimed in bounded batches on each write so the
+// development backend has the same finite replay window as Scylla's TTL rows.
+func (m *memdbDatastore) TryConsumeServiceAccountAssertion(_ context.Context, jtiDigest string, expiresAt time.Time) (bool, error) {
+	if jtiDigest == "" {
+		return false, fmt.Errorf("%w: assertion JTI digest is required", datastore.ErrInvalidArgument)
+	}
+	now := time.Now().UTC()
+	if !expiresAt.After(now) {
+		return false, fmt.Errorf("%w: assertion replay expiry must be in the future", datastore.ErrInvalidArgument)
+	}
+
+	txn := m.db.Txn(true)
+	defer txn.Abort()
+	if err := pruneServiceAccountAssertionReplays(txn, now); err != nil {
+		return false, err
+	}
+	if raw, _ := txn.First("service_account_assertion_replay", "id", jtiDigest); raw != nil {
+		replay := raw.(*serviceAccountAssertionReplay)
+		if replay.ExpiresAt.After(now) {
+			return false, nil
+		}
+		if err := txn.Delete("service_account_assertion_replay", replay); err != nil {
+			return false, fmt.Errorf("memdb: delete expired assertion replay: %w", err)
+		}
+	}
+	replay := &serviceAccountAssertionReplay{
+		JTIDigest:      jtiDigest,
+		ExpiresAt:      expiresAt.UTC(),
+		ExpiresAtIndex: assertionReplayExpirationIndex(expiresAt),
+	}
+	if err := txn.Insert("service_account_assertion_replay", replay); err != nil {
+		return false, fmt.Errorf("memdb: consume assertion replay: %w", err)
+	}
+	txn.Commit()
+	return true, nil
+}
+
+func pruneServiceAccountAssertionReplays(txn *gomemdb.Txn, now time.Time) error {
+	it, err := txn.LowerBound("service_account_assertion_replay", "expires_at", "")
+	if err != nil {
+		return fmt.Errorf("memdb: list expired assertion replays: %w", err)
+	}
+	for deleted := 0; deleted < serviceAccountAssertionReplayPruneLimit; deleted++ {
+		raw := it.Next()
+		if raw == nil {
+			return nil
+		}
+		replay := raw.(*serviceAccountAssertionReplay)
+		if replay.ExpiresAt.After(now) {
+			return nil
+		}
+		if err := txn.Delete("service_account_assertion_replay", replay); err != nil {
+			return fmt.Errorf("memdb: delete expired assertion replay: %w", err)
+		}
+	}
+	return nil
+}
+
+func assertionReplayExpirationIndex(expiresAt time.Time) string {
+	return fmt.Sprintf("%020d", expiresAt.UTC().UnixNano())
+}
+
 func cloneServiceAccount(sa *datastore.ServiceAccount) *datastore.ServiceAccount {
 	if sa == nil {
 		return nil

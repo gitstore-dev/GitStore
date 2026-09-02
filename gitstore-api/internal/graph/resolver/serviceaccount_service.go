@@ -5,9 +5,15 @@ package resolver
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/google/uuid"
@@ -21,6 +27,10 @@ func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.Create
 	}
 	if len(input.PublicKeys) == 0 {
 		return nil, gqlerror.Errorf("at least one public key is required")
+	}
+	principal, err := r.authorizeServiceAccountAction(ctx, "serviceaccount.create", "")
+	if err != nil {
+		return nil, err
 	}
 
 	namespace := input.Metadata.Namespace
@@ -38,11 +48,11 @@ func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.Create
 	// Convert public keys
 	pubKeys := make([]datastore.ServiceAccountPublicKey, len(input.PublicKeys))
 	for i, pk := range input.PublicKeys {
-		pubKeys[i] = datastore.ServiceAccountPublicKey{
-			KeyID:     pk.Kid,
-			Algorithm: pk.Algorithm,
-			PublicKey: []byte(pk.PublicKeyPem),
+		key, err := normalizeServiceAccountPublicKey(pk)
+		if err != nil {
+			return nil, gqlerror.Errorf("invalid public key: %s", err)
 		}
+		pubKeys[i] = key
 	}
 
 	// Create the service account
@@ -54,9 +64,9 @@ func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.Create
 		Generation:        1,
 		ResourceVersion:   "1",
 		CreationTimestamp: now,
-		CreationActor:     "serviceaccount", // Principal.Subject from context
+		CreationActor:     principal.Subject,
 		UpdateTimestamp:   now,
-		UpdateActor:       "serviceaccount",
+		UpdateActor:       principal.Subject,
 		PublicKeys:        pubKeys,
 	}
 
@@ -89,6 +99,9 @@ func (r *Resolver) RotateServiceAccountKey(ctx context.Context, input *model.Rot
 	if input == nil || input.Metadata == nil {
 		return nil, gqlerror.Errorf("metadata is required")
 	}
+	if _, err := r.authorizeServiceAccountAction(ctx, "serviceaccount.key.rotate", ""); err != nil {
+		return nil, err
+	}
 
 	namespace := input.Metadata.Namespace
 	name := input.Metadata.Name
@@ -102,11 +115,11 @@ func (r *Resolver) RotateServiceAccountKey(ctx context.Context, input *model.Rot
 	// Convert new keys for addition
 	addKeys := make([]datastore.ServiceAccountPublicKey, len(input.Add))
 	for i, pk := range input.Add {
-		addKeys[i] = datastore.ServiceAccountPublicKey{
-			KeyID:     pk.Kid,
-			Algorithm: pk.Algorithm,
-			PublicKey: []byte(pk.PublicKeyPem),
+		key, err := normalizeServiceAccountPublicKey(pk)
+		if err != nil {
+			return nil, gqlerror.Errorf("invalid public key: %s", err)
 		}
+		addKeys[i] = key
 	}
 
 	// Update service account keys
@@ -144,6 +157,9 @@ func (r *Resolver) DeleteServiceAccount(ctx context.Context, input *model.Delete
 	if input == nil || input.Metadata == nil {
 		return nil, gqlerror.Errorf("metadata is required")
 	}
+	if _, err := r.authorizeServiceAccountAction(ctx, "serviceaccount.delete", ""); err != nil {
+		return nil, err
+	}
 
 	namespace := input.Metadata.Namespace
 	name := input.Metadata.Name
@@ -169,6 +185,9 @@ func (r *Resolver) DeleteServiceAccount(ctx context.Context, input *model.Delete
 	if err != nil {
 		return nil, err
 	}
+	if r.connectionRegistry != nil {
+		r.connectionRegistry.CancelAll(sa.UID)
+	}
 
 	return &model.DeleteServiceAccountPayload{
 		APIVersion: "v1",
@@ -182,6 +201,21 @@ func (r *Resolver) DeleteServiceAccount(ctx context.Context, input *model.Delete
 	}, nil
 }
 
+// SetServiceAccountDisabled applies the ServiceAccount disabled state and
+// synchronously revokes all of its process-local WebSocket connections.
+func (r *Resolver) SetServiceAccountDisabled(ctx context.Context, uid string, disabled bool) error {
+	if err := r.store.SetServiceAccountDisabled(ctx, uid, disabled); err != nil {
+		return err
+	}
+	if r.connectionRegistry == nil {
+		return nil
+	}
+	if disabled {
+		r.connectionRegistry.CancelAll(uid)
+	}
+	return nil
+}
+
 // IssueServiceAccountToken issues a short-lived access token for a service account.
 func (r *Resolver) IssueServiceAccountToken(ctx context.Context, input *model.IssueServiceAccountTokenInput) (*model.IssueServiceAccountTokenPayload, error) {
 	if input == nil || input.Metadata == nil || input.Spec == nil {
@@ -190,12 +224,24 @@ func (r *Resolver) IssueServiceAccountToken(ctx context.Context, input *model.Is
 
 	namespace := input.Metadata.Namespace
 	name := input.Metadata.Name
+	principal := auth.PrincipalFromContext(ctx)
+	if principal == nil || principal.AuthMethod != "serviceaccount-assertion" {
+		return nil, gqlerror.Errorf("service account assertion authentication is required")
+	}
+	expectedSubject := datastore.ServiceAccountSubject(namespace, name)
+	if principal.Subject != expectedSubject {
+		return nil, gqlerror.Errorf("service account can only issue tokens for itself")
+	}
 
-	// The caller must already be authenticated as this service account (field-level gate ensures this)
-	// Get the service account to pass to provider
 	sa, err := r.store.GetServiceAccountBySubject(ctx, namespace, name)
 	if err != nil {
 		return nil, fmt.Errorf("could not find service account: %w", err)
+	}
+	if principal.ServiceAccountUID != sa.UID {
+		return nil, gqlerror.Errorf("service account identity does not match the current service account")
+	}
+	if _, err := r.authorizeServiceAccountAction(ctx, "serviceaccount.token.issue", expectedSubject); err != nil {
+		return nil, err
 	}
 
 	// Determine audience: use input or configured default
@@ -235,5 +281,69 @@ func (r *Resolver) IssueServiceAccountToken(ctx context.Context, input *model.Is
 			Token:     token,
 			ExpiresAt: expiresAt,
 		},
+	}, nil
+}
+
+func (r *Resolver) authorizeServiceAccountAction(ctx context.Context, action, name string) (*auth.Principal, error) {
+	principal := auth.PrincipalFromContext(ctx)
+	if principal == nil || principal.Subject == "" || principal.AuthMethod == "" || principal.AuthMethod == "none" {
+		return nil, gqlerror.Errorf("authenticated principal is required")
+	}
+	if r.registry == nil || r.registry.AuthZ() == nil {
+		return nil, gqlerror.Errorf("authorization service unavailable")
+	}
+	decision, err := r.registry.AuthZ().Authorize(ctx, principal, action, auth.ResourceContext{
+		Kind: "serviceAccount",
+		Name: name,
+	})
+	if err != nil {
+		return nil, gqlerror.Errorf("authorization error")
+	}
+	if decision.Outcome != auth.OutcomeAllow {
+		return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
+	}
+	return principal, nil
+}
+
+func normalizeServiceAccountPublicKey(input *model.ServiceAccountPublicKeyInput) (datastore.ServiceAccountPublicKey, error) {
+	if input == nil {
+		return datastore.ServiceAccountPublicKey{}, fmt.Errorf("key is required")
+	}
+	if strings.TrimSpace(input.Kid) == "" {
+		return datastore.ServiceAccountPublicKey{}, fmt.Errorf("kid is required")
+	}
+
+	block, rest := pem.Decode([]byte(input.PublicKeyPem))
+	if block == nil {
+		return datastore.ServiceAccountPublicKey{}, fmt.Errorf("publicKeyPEM is not PEM encoded")
+	}
+	if len(strings.TrimSpace(string(rest))) != 0 {
+		return datastore.ServiceAccountPublicKey{}, fmt.Errorf("publicKeyPEM must contain exactly one PEM block")
+	}
+	publicKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return datastore.ServiceAccountPublicKey{}, fmt.Errorf("parse public key: %w", err)
+	}
+
+	switch key := publicKey.(type) {
+	case ed25519.PublicKey:
+		if input.Algorithm != "Ed25519" {
+			return datastore.ServiceAccountPublicKey{}, fmt.Errorf("Ed25519 key requires algorithm Ed25519")
+		}
+	case *ecdsa.PublicKey:
+		if input.Algorithm != "ECDSA-P256" {
+			return datastore.ServiceAccountPublicKey{}, fmt.Errorf("ECDSA P-256 key requires algorithm ECDSA-P256")
+		}
+		if key.Curve.Params().Name != "P-256" {
+			return datastore.ServiceAccountPublicKey{}, fmt.Errorf("unsupported ECDSA curve %q", key.Curve.Params().Name)
+		}
+	default:
+		return datastore.ServiceAccountPublicKey{}, fmt.Errorf("unsupported public key type %T", publicKey)
+	}
+
+	return datastore.ServiceAccountPublicKey{
+		KeyID:     input.Kid,
+		Algorithm: input.Algorithm,
+		PublicKey: block.Bytes,
 	}, nil
 }

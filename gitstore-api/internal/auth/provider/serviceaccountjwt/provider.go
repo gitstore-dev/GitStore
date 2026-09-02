@@ -150,8 +150,8 @@ func (p *Provider) Authenticate(ctx context.Context, req auth.AuthRequest) (*aut
 	if _, _, err := jwt.NewParser().ParseUnverified(bearer, &peek); err != nil {
 		return nil, auth.Challenge(providerName, "jwt parse failed: "+err.Error()), nil
 	}
-	if peek.Issuer != p.issuer {
-		return nil, auth.Challenge(providerName, "issuer mismatch"), nil
+	if peek.Issuer != p.issuer || !strings.HasPrefix(peek.Subject, "serviceaccount:") {
+		return nil, auth.Challenge(providerName, "not a service account token"), nil
 	}
 
 	// Step 2-4: verify signature (against the kid-selected trusted key),
@@ -205,11 +205,12 @@ func (p *Provider) Authenticate(ctx context.Context, req auth.AuthRequest) (*aut
 	}
 
 	principal := &auth.Principal{
-		Subject:    claims.Subject,
-		Issuer:     claims.Issuer,
-		Roles:      nil, // roles are resolved exclusively by rbac-local's role_bindings (FR-011) — never embedded here
-		AuthMethod: providerName,
-		TokenID:    claims.ID,
+		Subject:           claims.Subject,
+		Issuer:            claims.Issuer,
+		Roles:             nil, // roles are resolved exclusively by rbac-local's role_bindings (FR-011) — never embedded here
+		AuthMethod:        providerName,
+		TokenID:           claims.ID,
+		ServiceAccountUID: sa.UID,
 	}
 	if claims.ExpiresAt != nil {
 		principal.ExpiresAt = claims.ExpiresAt.Time

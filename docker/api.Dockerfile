@@ -22,6 +22,9 @@ COPY shared/schemas /build/shared/schemas
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=linux go build -o api ./cmd/server
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -o gitctl ./cmd/gitctl
 
 # Runtime stage
 FROM alpine:3.23.3
@@ -32,6 +35,7 @@ WORKDIR /app
 
 # Copy binary and schemas
 COPY --from=builder /build/api /app/api
+COPY --from=builder /build/gitctl /app/gitctl
 COPY --from=builder /build/shared/schemas /app/schemas
 
 # Expose GraphQL API port

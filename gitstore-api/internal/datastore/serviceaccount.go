@@ -70,6 +70,13 @@ func ApplyServiceAccountKeyUpdate(sa *ServiceAccount, add []ServiceAccountPublic
 	if len(kept) == 0 {
 		return fmt.Errorf("%w: service account %s/%s would have zero enrolled keys", ErrInvalidArgument, sa.Namespace, sa.Name)
 	}
+	keyIDs := make(map[string]struct{}, len(kept))
+	for _, key := range kept {
+		if _, exists := keyIDs[key.KeyID]; exists {
+			return fmt.Errorf("%w: service account %s/%s has duplicate key ID %q", ErrInvalidArgument, sa.Namespace, sa.Name, key.KeyID)
+		}
+		keyIDs[key.KeyID] = struct{}{}
+	}
 
 	sa.PublicKeys = kept
 	sa.Generation++

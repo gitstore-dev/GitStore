@@ -20,6 +20,7 @@ roles:
       - "namespace.status.write"
       - "namespace.watch"
       - "repository.create.any"
+      - "serviceaccount.token.issue"
     deny: []
 
   namespace-owner:

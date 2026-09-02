@@ -11,12 +11,14 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,8 +47,11 @@ func generateECDSAP256Keypair(t *testing.T) (*ecdsa.PrivateKey, []byte) {
 }
 
 type stubLookup struct {
-	accounts map[string]*datastore.ServiceAccount // keyed by "namespace/name"
-	err      error
+	accounts     map[string]*datastore.ServiceAccount // keyed by "namespace/name"
+	err          error
+	replayErr    error
+	replayMu     sync.Mutex
+	replayedJTIs map[string]time.Time
 }
 
 func (s *stubLookup) GetServiceAccountBySubject(_ context.Context, namespace, name string) (*datastore.ServiceAccount, error) {
@@ -60,14 +65,29 @@ func (s *stubLookup) GetServiceAccountBySubject(_ context.Context, namespace, na
 	return sa, nil
 }
 
-func newTestProvider(t *testing.T, lookup ServiceAccountLookup) *Provider {
+func (s *stubLookup) TryConsumeServiceAccountAssertion(_ context.Context, jtiDigest string, expiresAt time.Time) (bool, error) {
+	if s.replayErr != nil {
+		return false, s.replayErr
+	}
+	s.replayMu.Lock()
+	defer s.replayMu.Unlock()
+	if s.replayedJTIs == nil {
+		s.replayedJTIs = make(map[string]time.Time)
+	}
+	if previousExpiry, replayed := s.replayedJTIs[jtiDigest]; replayed && previousExpiry.After(time.Now()) {
+		return false, nil
+	}
+	s.replayedJTIs[jtiDigest] = expiresAt
+	return true, nil
+}
+
+func newTestProvider(t *testing.T, store ServiceAccountStore) *Provider {
 	t.Helper()
 	p, err := New(config.ServiceAccountConfig{
 		AssertionAudience: "gitstore-api/serviceaccount-token",
 		ClockSkew:         "2m",
-	}, lookup, zap.NewNop())
+	}, store, zap.NewNop())
 	require.NoError(t, err)
-	t.Cleanup(p.Shutdown)
 	return p
 }
 
@@ -352,6 +372,23 @@ func TestServiceAccountAssertion_LifetimeExceeds60s_Deny(t *testing.T) {
 	assert.Equal(t, auth.OutcomeDeny, decision.Outcome)
 }
 
+func TestServiceAccountAssertion_IssuedAtBeyondClockSkew_Deny(t *testing.T) {
+	priv, pubDER := generateEd25519Keypair(t)
+	subject := datastore.ServiceAccountSubject("controllers", "x")
+	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	p := newTestProvider(t, lookup)
+
+	claims := validAssertionClaims(subject, "uid-1")
+	claims.IssuedAt = jwt.NewNumericDate(time.Now().Add(3 * time.Minute))
+	claims.ExpiresAt = jwt.NewNumericDate(claims.IssuedAt.Time.Add(30 * time.Second))
+	token := signAssertion(t, priv, "key-1", assertionTyp, claims)
+
+	_, decision, err := p.Authenticate(context.Background(), bearerRequest(token))
+	require.NoError(t, err)
+	assert.Equal(t, auth.OutcomeDeny, decision.Outcome)
+}
+
 func TestServiceAccountAssertion_MissingJTI_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
 	subject := datastore.ServiceAccountSubject("controllers", "x")
@@ -386,6 +423,48 @@ func TestServiceAccountAssertion_ReplayedJTI_Deny(t *testing.T) {
 	_, decision, err = p.Authenticate(context.Background(), bearerRequest(token))
 	require.NoError(t, err)
 	assert.Equal(t, auth.OutcomeDeny, decision.Outcome)
+}
+
+func TestServiceAccountAssertion_ReplayAcrossProvidersSharingDatastore_Deny(t *testing.T) {
+	priv, pubDER := generateEd25519Keypair(t)
+	subject := datastore.ServiceAccountSubject("controllers", "gitstore-controller-manager")
+	const serviceAccountUID = "00000000-0000-0000-0000-000000000002"
+	sa := testServiceAccount("controllers", "gitstore-controller-manager", serviceAccountUID, "key-1", pubDER)
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(t, store.CreateServiceAccount(context.Background(), sa))
+
+	first := newTestProvider(t, store)
+	second := newTestProvider(t, store)
+	token := signAssertion(t, priv, "key-1", assertionTyp, validAssertionClaims(subject, serviceAccountUID))
+
+	type result struct {
+		decision auth.Decision
+		err      error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for _, provider := range []*Provider{first, second} {
+		go func(p *Provider) {
+			<-start
+			_, decision, err := p.Authenticate(context.Background(), bearerRequest(token))
+			results <- result{decision: decision, err: err}
+		}(provider)
+	}
+	close(start)
+
+	allows := 0
+	for range 2 {
+		result := <-results
+		require.NoError(t, result.err)
+		if result.decision.Outcome == auth.OutcomeAllow {
+			allows++
+			continue
+		}
+		assert.Equal(t, auth.OutcomeDeny, result.decision.Outcome)
+	}
+	assert.Equal(t, 1, allows, "exactly one provider may consume a shared assertion")
 }
 
 func TestServiceAccountAssertion_ECDSAP256_RoundTrip_Allow(t *testing.T) {

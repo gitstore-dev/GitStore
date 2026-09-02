@@ -37,7 +37,7 @@ type Client struct {
 // New returns a Client targeting baseURL (e.g. "http://localhost:4000/graphql"
 // or "ws://localhost:4000/graphql" for a dedicated subscription dialer —
 // Subscribe rewrites an http(s) baseURL to ws(s) automatically).
-// credentials must not be nil; use NewStaticToken(token) for FR-014 compatibility.
+// credentials must not be nil. NewStaticToken is available for isolated tests.
 func New(baseURL string, credentials CredentialSource) *Client {
 	if credentials == nil {
 		panic("graphqlclient.New: credentials must not be nil")

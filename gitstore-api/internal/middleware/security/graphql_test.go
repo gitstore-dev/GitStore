@@ -683,3 +683,64 @@ func TestGraphQLFieldAuthorizerUpdateResourceStatusUsesLowerCamelKindAction(t *t
 	require.NoError(t, err)
 	assert.Equal(t, "backfillJob.status.write", authz.action)
 }
+
+func TestGraphQLFieldAuthorizerConfinesAssertionPrincipalToTokenIssuance(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	registry := auth.NewProviderRegistry(nil, authz, nil)
+	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
+	principal := &auth.Principal{
+		Subject:    datastore.ServiceAccountSubject("controllers", "manager"),
+		AuthMethod: "serviceaccount-assertion",
+	}
+
+	for _, root := range []struct {
+		object string
+		field  string
+	}{
+		{object: "Query", field: "namespaces"},
+		{object: "Mutation", field: "createRepository"},
+		{object: "Subscription", field: "watchNamespaces"},
+	} {
+		t.Run(root.object+"_"+root.field, func(t *testing.T) {
+			ctx := auth.ContextWithPrincipal(context.Background(), principal)
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+				Object: root.object,
+				Field:  graphql.CollectedField{Field: &ast.Field{Name: root.field}},
+			})
+			called := false
+			_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+				called = true
+				return "ok", nil
+			})
+			require.Error(t, err)
+			assert.False(t, called)
+			assert.Contains(t, err.Error(), "may only issue access tokens")
+		})
+	}
+}
+
+func TestGraphQLFieldAuthorizerRequiresAssertionForTokenIssuance(t *testing.T) {
+	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	registry := auth.NewProviderRegistry(nil, authz, nil)
+	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
+		Subject:    "admin",
+		AuthMethod: "static-admin",
+	})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Mutation",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "issueServiceAccountToken"}},
+		Args: map[string]any{"input": map[string]any{"metadata": map[string]any{
+			"namespace": "controllers",
+			"name":      "manager",
+		}}},
+	})
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+		called = true
+		return "ok", nil
+	})
+	require.Error(t, err)
+	assert.False(t, called)
+	assert.Contains(t, err.Error(), "assertion authentication is required")
+}
