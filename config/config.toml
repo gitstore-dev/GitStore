@@ -46,11 +46,6 @@ uri = "dns:///git-service:50051"
 [datastore]
 backend = "memdb"
 
-[auth.admin]
-username = "admin"
-# bcrypt hash for the development password: admin123
-password_hash = "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
-
 [auth.staticusers]
 users_file = "/config/users.yaml"
 
