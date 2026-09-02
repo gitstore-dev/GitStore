@@ -71,7 +71,7 @@ assertion_audience = "gitstore-api/serviceaccount-token"
 provider = "rbac-local"
 
 [auth.userdir]
-provider = "none"
+provider = "static-users"
 
 [auth.rbac]
 policy_file = "/config/policy.yaml"
