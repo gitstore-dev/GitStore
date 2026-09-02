@@ -21,7 +21,7 @@ inputs for this feature, not additional 060 implementation scope.
 **Target Platform**: Linux server and Darwin development hosts already supported by `gitstore-api`.
 **Project Type**: Single-service, replacement-in-place feature within `gitstore-api`'s existing pluggable AuthN/AuthZ architecture.
 **Performance Goals**: Not on any hot path beyond what `static-admin` already cost per request (one bcrypt compare on Basic Auth, one HMAC verify on Bearer) — no new performance target.
-**Constraints**: MUST NOT modify `rbac-local`'s `Authorize`/`Policy` decision semantics (only an additive, read-only helper method is added). MUST NOT modify `oidc-jwt`/spec 059. MUST NOT introduce a `users.yaml`/`policy.yaml` mutation API (v1 remains config-file-driven, hand-edited). MUST NOT auto-migrate legacy `GITSTORE_AUTH__ADMIN__*` env vars at runtime. MUST NOT document creating a `static-users` (human-shaped) credential for `gitstore-controller-manager` — that path belongs to spec 061's `serviceaccount-jwt` provider (spec.md DEP-002).
+**Constraints**: MUST NOT modify `rbac-local`'s `Authorize`/`Policy` decision semantics. MUST NOT modify `oidc-jwt`/spec 059. Operator CLI helpers may perform explicit, validated, atomic config-file edits, but no runtime mutation API is introduced. MUST NOT auto-migrate legacy `GITSTORE_AUTH__ADMIN__*` env vars at runtime. MUST NOT document creating a `static-users` (human-shaped) credential for `gitstore-controller-manager` — that path belongs to spec 061's `serviceaccount-jwt` provider (spec.md DEP-002).
 **Scale/Scope**: Config-file-driven user counts (tens, not thousands) — the lightweight/testing/small-deployment path, not a scaled multi-tenant identity store.
 
 ## Constitution Check
@@ -108,7 +108,7 @@ gitstore-api/internal/middleware/security/graphql_file_status_test.go  # same
 gitstore-api/internal/auth/provider/rbaclocal/rbaclocal_test.go   # same
 gitstore-api/internal/auth/provider/allowall/allowall_test.go     # same
 
-Makefile                                       # gen-admin-password target replaced by hash-static-user-password; bootstrap-token/bootstrap-namespace/bootstrap-repository hint text updated (ADMIN_USERNAME/ADMIN_PASSWORD variable names kept unchanged)
+Makefile                                       # add-user/add-role/assign-role and hash-user-password operator helpers; bootstrap hints updated
 
 docs/
 ├── implementation/020-pluggable_auth_architecture.md   # §2a rewritten (static-users, not static-admin); §5a config keys updated; §7 Phase 1 language updated
@@ -129,7 +129,7 @@ Research decisions are recorded in [research.md](research.md):
 3. `Principal.IsAdmin()` is no longer reliable for `static-users` principals; confirmed dead on every live (non-test) code path already; doc-comment updated; the one real test-double caller (`namespaceOwnerAuthZ`) is fixed as part of the harness migration.
 4. Migration path: clean breaking change, no runtime env-var fallback — justified by this project's own pre-stable-alpha precedent (spec 030, spec 046, `cmd/gitctl` replacing `cmd/hashpw`) and by a structural reason (an auto-migrated credential would still need a matching `role_bindings` entry in a separately-owned config file, which a runtime auto-write would have to reach into).
 5. The role_bindings safety net: a fail-fast startup check when `static-users` + `rbac-local` are active but no configured username has any `role_bindings` entry — closes the exact "migrated and silently lost admin access" hazard.
-6. Migration tooling: `gitctl hash-password` (unchanged) plus a renamed Makefile convenience wrapper that prints a reminder, no auto-writing of either YAML file.
+6. Migration tooling: `gitctl hash-password` remains the hashing primitive; explicit `users add`, `rbac role add`, and `rbac binding add` commands perform validated atomic file updates without cross-file side effects.
 7. Removal scope enumerated exhaustively by grep and categorized (provider package, production wiring, tests importing the package, tests using it only as a string label, generated code, in-scope docs, flagged-but-out-of-scope docs).
 8. `ChainedAuthN.IssueSessionFor` (planned in the first draft) is dropped — its motivating problem (two coexisting local, token-minting providers) no longer exists once `static-admin` is removed.
 9. `rbac-local` sufficiency re-confirmed unchanged.
@@ -163,7 +163,7 @@ All technical unknowns are resolved; no `NEEDS CLARIFICATION` remains.
 7. Delete `gitstore-api/internal/auth/provider/staticadmin/` entirely. Fix the resulting compile errors in `gitstore-api/cmd/server/main_test.go`, `gitstore-api/internal/middleware/security/secure_test.go`, `gitstore-api/internal/graph/resolver/auth_resolvers_test.go` by switching their `staticadmin.New(...)` calls to `staticusers.New(...)`.
 8. Relabel the cosmetic `"static-admin"` `AuthMethod` string literals in `gitstore-api/internal/middleware/security/{graphql_test.go,graphql_file_status_test.go}`, `gitstore-api/internal/auth/provider/rbaclocal/rbaclocal_test.go`, `gitstore-api/internal/auth/provider/allowall/allowall_test.go` to `"static-users"`.
 9. Migrate `tests/integration/namespace_contract_test.go` (backdoor removal, `staticadmin`→`staticusers` bootstrap migration, `namespaceOwnerAuthZ` fix) and `tests/integration/authz_repository_contract_test.go` per `contracts/backdoor-retirement.md`. Confirm `grep -rn "test-user:\|staticadmin\|static-admin" tests/integration/` returns zero matches.
-10. Update `Makefile` (`gen-admin-password` → `hash-static-user-password`, hint text in `bootstrap-token`/`bootstrap-namespace`/`bootstrap-repository`), `gitstore-api/.env.example`, `docs/implementation/020-pluggable_auth_architecture.md` (§2a/§5a/§7), `docs/user-guide.md`, `docs/api-reference.md`. Note `docs/implementation/021-controller_service_account_auth.md`'s stale premise as a flagged, not-performed-here follow-up (mirroring how the first draft flagged `docs/runbooks/production-readiness-testing.md`). Run targeted tests, `make build`, `make test`, `make pr-ready`.
+10. Update `Makefile` operator helpers and bootstrap hints, `gitstore-api/.env.example`, `docs/implementation/020-pluggable_auth_architecture.md` (§2a/§5a/§7), `docs/user-guide.md`, `docs/api-reference.md`. Note `docs/implementation/021-controller_service_account_auth.md`'s stale premise as a flagged, not-performed-here follow-up (mirroring how the first draft flagged `docs/runbooks/production-readiness-testing.md`). Run targeted tests, `make build`, `make test`, `make pr-ready`.
 
 ## Complexity Tracking
 

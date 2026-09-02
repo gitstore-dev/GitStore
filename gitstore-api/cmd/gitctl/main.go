@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
 	"golang.org/x/crypto/bcrypt"
@@ -62,6 +65,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, string(hash))
 		return 0
 
+	case "users":
+		return runUsers(args[1:], stdin, stdout, stderr)
+
+	case "rbac":
+		return runRBAC(args[1:], stdout, stderr)
+
 	case "gen-jwt-secret":
 		return printSecret(stdout, stderr, "GITSTORE_AUTH__JWT__SECRET")
 
@@ -85,10 +94,129 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "Usage: gitctl <subcommand> [args]")
 	fmt.Fprintln(output, "Subcommands:")
 	fmt.Fprintln(output, "  hash-password <password>")
+	fmt.Fprintln(output, "  users add --file <users.yaml> --username <name> --password-stdin [--email <email>] [--display-name <name>]")
+	fmt.Fprintln(output, "  rbac role add --file <policy.yaml> --name <role> [--allow <action>] [--deny <action>]")
+	fmt.Fprintln(output, "  rbac binding add --file <policy.yaml> --subject <subject> --role <role>")
 	fmt.Fprintln(output, "  gen-jwt-secret")
 	fmt.Fprintln(output, "  gen-hmac-secret")
 	fmt.Fprintln(output, "  scylla-projection-audit [Scylla flags]")
 	fmt.Fprintln(output, "  scylla-projection-repair (--dry-run | --confirm) [Scylla flags]")
+}
+
+type actionList []string
+
+func (a *actionList) String() string { return strings.Join(*a, ",") }
+func (a *actionList) Set(value string) error {
+	for _, action := range strings.Split(value, ",") {
+		action = strings.TrimSpace(action)
+		if action == "" {
+			return errors.New("action must not be empty")
+		}
+		*a = append(*a, action)
+	}
+	return nil
+}
+
+func runRBAC(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 2 {
+		fmt.Fprintln(stderr, "Usage: gitctl rbac (role add | binding add) [flags]")
+		return 2
+	}
+	switch strings.Join(args[:2], " ") {
+	case "role add":
+		flags := flag.NewFlagSet("rbac role add", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		path := flags.String("file", "", "path to policy.yaml")
+		name := flags.String("name", "", "new role name")
+		var allow, deny actionList
+		flags.Var(&allow, "allow", "allowed action; repeat or use commas")
+		flags.Var(&deny, "deny", "denied action; repeat or use commas")
+		if err := flags.Parse(args[2:]); err != nil {
+			return 2
+		}
+		if *path == "" || strings.TrimSpace(*name) == "" {
+			fmt.Fprintln(stderr, "rbac role add requires --file and --name")
+			return 2
+		}
+		if err := rbaclocal.AddRole(*path, *name, rbaclocal.RolePolicy{Allow: allow, Deny: deny}); err != nil {
+			fmt.Fprintf(stderr, "Error adding role: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Added role %q to %s\n", *name, *path)
+		return 0
+	case "binding add":
+		flags := flag.NewFlagSet("rbac binding add", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		path := flags.String("file", "", "path to policy.yaml")
+		subject := flags.String("subject", "", "identity subject")
+		role := flags.String("role", "", "existing role name")
+		if err := flags.Parse(args[2:]); err != nil {
+			return 2
+		}
+		if *path == "" || strings.TrimSpace(*subject) == "" || strings.TrimSpace(*role) == "" {
+			fmt.Fprintln(stderr, "rbac binding add requires --file, --subject, and --role")
+			return 2
+		}
+		added, err := rbaclocal.AssignRole(*path, *subject, *role)
+		if err != nil {
+			fmt.Fprintf(stderr, "Error assigning role: %v\n", err)
+			return 1
+		}
+		if added {
+			fmt.Fprintf(stdout, "Assigned role %q to %q in %s\n", *role, *subject, *path)
+		} else {
+			fmt.Fprintf(stdout, "Role %q is already assigned to %q in %s\n", *role, *subject, *path)
+		}
+		return 0
+	default:
+		fmt.Fprintln(stderr, "Usage: gitctl rbac (role add | binding add) [flags]")
+		return 2
+	}
+}
+
+func runUsers(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "add" {
+		fmt.Fprintln(stderr, "Usage: gitctl users add --file <users.yaml> --username <name> --password-stdin [--email <email>] [--display-name <name>]")
+		return 2
+	}
+	flags := flag.NewFlagSet("users add", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	path := flags.String("file", "", "path to users.yaml")
+	username := flags.String("username", "", "unique username")
+	email := flags.String("email", "", "optional email address")
+	displayName := flags.String("display-name", "", "optional display name")
+	passwordStdin := flags.Bool("password-stdin", false, "read the password from stdin")
+	if err := flags.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if *path == "" || strings.TrimSpace(*username) == "" || !*passwordStdin {
+		fmt.Fprintln(stderr, "users add requires --file, --username, and --password-stdin")
+		return 2
+	}
+	password, err := io.ReadAll(stdin)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error reading password from stdin: %v\n", err)
+		return 1
+	}
+	plain := strings.TrimSuffix(strings.TrimSuffix(string(password), "\n"), "\r")
+	if plain == "" {
+		fmt.Fprintln(stderr, "Password must not be empty")
+		return 2
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(plain), bcrypt.DefaultCost)
+	if err != nil {
+		fmt.Fprintf(stderr, "Error generating hash: %v\n", err)
+		return 1
+	}
+	if err := staticusers.AddUser(*path, staticusers.UserEntry{
+		Username: *username, PasswordHash: string(hash), DisplayName: *displayName, Email: *email,
+	}); err != nil {
+		fmt.Fprintf(stderr, "Error adding user: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Added user %q to %s\n", *username, *path)
+	fmt.Fprintln(stdout, "Reminder: add a role_bindings entry in policy.yaml before reloading the API.")
+	return 0
 }
 
 func printSecret(stdout, stderr io.Writer, key string) int {

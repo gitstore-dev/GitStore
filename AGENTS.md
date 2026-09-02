@@ -54,7 +54,10 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `make scylla PROFILE=cluster` — run only local three-node Scylla services from `compose.yml` + `compose.scylla.cluster.yml` (replication factor 3; tune per-node shards with `SCYLLA_CLUSTER_SMP`, default `1` for Docker Desktop compatibility).
 - `DETACH=1 make scylla` and `DETACH=1 make compose DATASTORE=scylla` — run those compose targets in the background.
 - `make ps`, `make logs`, `make stop`, `make down` — compose lifecycle helpers. Use `SERVICE=<name>` with `logs` or `stop` to scope the command; `SERVICE=scylla` includes both the single-node service and the three-node cluster services.
-- `make gen-admin-password ADMIN_PASSWORD=<password>` — generate a bcrypt hash for the given password and write `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` to `gitstore-api/.env` (creates the file if absent, updates the key if present). Run this once when setting up a fresh environment or changing the admin password.
+- `make add-user USERNAME=<user> PASSWORD=<password> [EMAIL=<email>] [DISPLAY_NAME=<name>] [USERS_FILE=<path>]` — add a local human identity to `users.yaml` using an atomic YAML-aware write; fails if the username already exists and reminds you to add its `policy.yaml` role binding.
+- `make hash-user-password PASSWORD=<password>` — print a bcrypt hash for manual `users.yaml` maintenance.
+- `make add-role ROLE=<role> ALLOW=<actions> [DENY=<actions>] [POLICY_FILE=<path>]` — add an RBAC role through an atomic YAML-aware write; comma-separate multiple actions.
+- `make assign-role SUBJECT=<subject> ROLE=<role> [POLICY_FILE=<path>]` — idempotently bind an existing role to any authentication subject.
 - `make gen-jwt-secret` — generate a random JWT secret and append `GITSTORE_AUTH__JWT__SECRET` to `gitstore-api/.env`. Run once on initial setup.
 - `make gen-hmac-secret` — generate a random HMAC secret and append `GITSTORE_AUTH__GRPC__HMAC_SECRET` to `gitstore-api/.env`. Required for gRPC inter-service auth (git-service ↔ API). Run once on initial setup.
 - `make bootstrap-token ADMIN_PASSWORD=<password>` — authenticate against GraphQL and print/cache a bootstrap bearer token. Prints a remediation hint if the password is wrong.

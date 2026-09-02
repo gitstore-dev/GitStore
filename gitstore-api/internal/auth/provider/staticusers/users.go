@@ -26,6 +26,10 @@ func loadUsers(path string) (map[string]UserEntry, error) {
 	if err != nil {
 		return nil, usersFileError(path, "the users file could not be read", "create it from gitstore-api/users.yaml.example", err)
 	}
+	return parseUsers(path, b)
+}
+
+func parseUsers(path string, b []byte) (map[string]UserEntry, error) {
 	var list UserList
 	if err := yaml.Unmarshal(b, &list); err != nil {
 		return nil, usersFileError(path, "the YAML is malformed", "fix the YAML syntax and keep the version: v1 header", err)

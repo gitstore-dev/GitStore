@@ -98,6 +98,18 @@ The following endpoints are served on port `api.git_port` (default `5000`):
 
 For config files, local users are selected with `[auth.staticusers]` and `users_file = "users.yaml"`; JWT keys remain nested under `[auth.jwt]`.
 
+The root operator helpers target the local Compose files in `config/` by default:
+
+```bash
+make add-user USERNAME=alice PASSWORD='secret' EMAIL=alice@example.com DISPLAY_NAME='Alice Doe'
+make add-role ROLE=developer ALLOW='repository.read,repository.write'
+make assign-role SUBJECT=alice ROLE=developer
+```
+
+Set `AUTH_CONFIG_DIR=gitstore-api` for native-development files, or override
+`USERS_FILE` and `POLICY_FILE` separately. These commands validate and atomically
+replace one YAML file at a time; `add-user` never changes authorization policy.
+
 `static-users` mints tokens with `<auth.jwt.issuer>/static-users` while accepting the legacy unsuffixed issuer during rolling upgrades. Logout and refresh rotation require the shared ScyllaDB revocation table in production; migration 007 creates it automatically.
 
 ### Logging

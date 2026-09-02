@@ -101,13 +101,33 @@ make dev
 > (DEP-001/002). If spec 061 has not yet landed in your deployment's release, this is a
 > known gap tracked by that spec — not a reason to mint a human credential for a machine.
 
-## Regenerating a hash for the Makefile-based bootstrap flow
+## Adding a local user
 
 ```bash
-# Replaces the removed `make gen-admin-password`:
-make hash-static-user-password PASSWORD='a-new-password'
-# Prints the bcrypt hash, plus a reminder to add it to users.yaml and add/confirm the
-# matching role_bindings entry in policy.yaml. `make bootstrap-token`/`bootstrap-namespace`/
-# `bootstrap-repository` keep using the ADMIN_USERNAME/ADMIN_PASSWORD Makefile variables
-# unchanged — they now describe whichever static-users identity is used to bootstrap.
+make add-user USERNAME=alice PASSWORD='a-new-password' \
+  EMAIL=alice@example.com DISPLAY_NAME='Alice Doe'
+# The command safely appends alice to config/users.yaml and reminds you to add the
+# matching role_bindings entry in policy.yaml. Override USERS_FILE for another path.
 ```
+
+`make add-user` is intentionally create-only and fails if the username already exists;
+it never rotates an existing credential by accident. `make hash-user-password`
+remains available for manual password updates.
+
+The root Makefile targets the local Compose configuration under `config/` by default.
+Use `AUTH_CONFIG_DIR=gitstore-api` to operate on native-development files instead, or
+override `USERS_FILE`/`POLICY_FILE` individually.
+
+## Adding and assigning a local RBAC role
+
+```bash
+make add-role ROLE=developer \
+  ALLOW='namespace.read,repository.read,repository.write' \
+  DENY='repository.delete.any'
+
+make assign-role SUBJECT=alice ROLE=developer
+```
+
+`add-role` fails if the role already exists. `assign-role` first verifies that the role
+exists and is idempotent when the exact binding is already present. `SUBJECT` is
+provider-neutral, so the same command works for local, OIDC, and service-account subjects.

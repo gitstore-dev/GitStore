@@ -11,7 +11,9 @@ GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR)
 
 API_ENV_FILE ?= $(API_DIR)/.env
 CONFIG_FILE ?= ./config/config.toml
-POLICY_FILE := ./config/policy.yaml
+AUTH_CONFIG_DIR ?= $(ROOT)/config
+POLICY_FILE ?= $(AUTH_CONFIG_DIR)/policy.yaml
+USERS_FILE ?= $(AUTH_CONFIG_DIR)/users.yaml
 LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
 LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml -f compose.admin.yml
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
@@ -84,7 +86,7 @@ export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 .PHONY: help git api controller dev compose scylla ps logs stop down validate-local-config compose-config-check
 .PHONY: build test lint license-check pr-ready capacity chaos test-scylla-hardening test-scylla-integration test-scylla-capacity test-namespace-admission-capacity test-namespace-watch-capacity test-namespace-watch-recovery
 .PHONY: bootstrap bootstrap-token bootstrap-namespace bootstrap-repository git-clean-data
-.PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools hash-static-user-password gen-jwt-secret gen-hmac-secret
+.PHONY: admin-compose admin-down admin-stop admin-logs bootstrap-tools add-user add-role assign-role hash-user-password gen-jwt-secret gen-hmac-secret
 
 help: ## Show available targets and common variables.
 	@awk 'BEGIN {FS = ":.*##"; printf "GitStore make targets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -324,16 +326,49 @@ bootstrap-tools:
 	@command -v curl >/dev/null 2>&1 || { echo "curl is required for bootstrap targets"; exit 127; }
 	@command -v jq >/dev/null 2>&1 || { echo "jq is required for bootstrap targets"; exit 127; }
 
-hash-static-user-password: ## Generate a bcrypt hash for ADMIN_PASSWORD for the static-users YAML file.
-	@if [ -z "$${ADMIN_PASSWORD:-}" ]; then \
-		echo "Usage: make hash-static-user-password ADMIN_PASSWORD='<password>'"; \
+hash-user-password: ## Generate a bcrypt hash for PASSWORD for manual users.yaml maintenance.
+	@if [ -z "$${PASSWORD:-}" ]; then \
+		echo "Usage: make hash-user-password PASSWORD='<password>'"; \
 		exit 2; \
 	fi
-	@hash=$$(cd "$(API_DIR)" && go run ./cmd/gitctl hash-password "$$ADMIN_PASSWORD") || { \
+	@hash=$$(printf '%s\n' "$$PASSWORD" | (cd "$(API_DIR)" && go run ./cmd/gitctl hash-password)) || { \
 		echo "Failed to generate bcrypt hash. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
 	echo "bcrypt hash (put this in users.yaml password_hash): $$hash"
+
+add-user: ## Add a local user to USERS_FILE; requires USERNAME and PASSWORD.
+	@if [ -z "$${USERNAME:-}" ] || [ -z "$${PASSWORD:-}" ]; then \
+		echo "Usage: make add-user USERNAME=<user> PASSWORD='<password>' [EMAIL=<email>] [DISPLAY_NAME='<name>'] [USERS_FILE=<path>]"; \
+		exit 2; \
+	fi
+	@printf '%s\n' "$$PASSWORD" | (cd "$(API_DIR)" && go run ./cmd/gitctl users add \
+		--file "$(abspath $(USERS_FILE))" \
+		--username "$$USERNAME" \
+		--email "$${EMAIL:-}" \
+		--display-name "$${DISPLAY_NAME:-}" \
+		--password-stdin)
+
+add-role: ## Add a role to POLICY_FILE; requires ROLE and ALLOW and/or DENY.
+	@if [ -z "$${ROLE:-}" ] || { [ -z "$${ALLOW:-}" ] && [ -z "$${DENY:-}" ]; }; then \
+		echo "Usage: make add-role ROLE=<role> [ALLOW='action,action'] [DENY='action,action'] [POLICY_FILE=<path>]"; \
+		exit 2; \
+	fi
+	@cd "$(API_DIR)" && go run ./cmd/gitctl rbac role add \
+		--file "$(abspath $(POLICY_FILE))" \
+		--name "$$ROLE" \
+		$${ALLOW:+--allow "$$ALLOW"} \
+		$${DENY:+--deny "$$DENY"}
+
+assign-role: ## Assign an existing role to a subject in POLICY_FILE.
+	@if [ -z "$${SUBJECT:-}" ] || [ -z "$${ROLE:-}" ]; then \
+		echo "Usage: make assign-role SUBJECT=<subject> ROLE=<role> [POLICY_FILE=<path>]"; \
+		exit 2; \
+	fi
+	@cd "$(API_DIR)" && go run ./cmd/gitctl rbac binding add \
+		--file "$(abspath $(POLICY_FILE))" \
+		--subject "$$SUBJECT" \
+		--role "$$ROLE"
 
 gen-jwt-secret: ## Generate a JWT secret and write GITSTORE_AUTH__JWT__SECRET to gitstore-api/.env.
 	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-jwt-secret | sed -n 's/^GITSTORE_AUTH__JWT__SECRET=//p') || { \
@@ -364,12 +399,12 @@ bootstrap-token: bootstrap-tools ## Login and print/cache a bootstrap bearer tok
 	}; \
 	if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
 		echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
-		echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match users.yaml (run 'make hash-static-user-password ADMIN_PASSWORD=<password>' to generate a hash)."; \
+		echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match users.yaml (run 'make hash-user-password PASSWORD=<password>' to generate a hash)."; \
 		exit 1; \
 	fi; \
 	token=$$(echo "$$response" | jq -er '.data.login.token.accessToken // empty') || { \
 		echo "Login response did not contain a token. Check ADMIN_USERNAME, ADMIN_PASSWORD, and API_URL."; \
-		echo "Hint: run 'make hash-static-user-password ADMIN_PASSWORD=<password>' to generate a users.yaml password hash."; \
+		echo "Hint: run 'make hash-user-password PASSWORD=<password>' to generate a users.yaml password hash."; \
 		exit 1; \
 	}; \
 	printf '%s\n' "$$token"; \
@@ -393,12 +428,12 @@ bootstrap-namespace: bootstrap-tools ## Create only the bootstrap namespace.
 		}; \
 		if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
 			echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
-			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match users.yaml (run 'make hash-static-user-password ADMIN_PASSWORD=<password>' to generate a hash)."; \
+			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match users.yaml (run 'make hash-user-password PASSWORD=<password>' to generate a hash)."; \
 			exit 1; \
 		fi; \
 		token=$$(echo "$$response" | jq -er '.data.login.token.accessToken // empty') || { \
 			echo "Login response did not contain a token."; \
-			echo "Hint: run 'make hash-static-user-password ADMIN_PASSWORD=<password>' to generate a users.yaml password hash."; \
+			echo "Hint: run 'make hash-user-password PASSWORD=<password>' to generate a users.yaml password hash."; \
 			exit 1; \
 		}; \
 	fi; \
@@ -431,12 +466,12 @@ bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; n
 		}; \
 		if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
 			echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
-			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match users.yaml (run 'make hash-static-user-password ADMIN_PASSWORD=<password>' to generate a hash)."; \
+			echo "Hint: verify ADMIN_USERNAME and ADMIN_PASSWORD match users.yaml (run 'make hash-user-password PASSWORD=<password>' to generate a hash)."; \
 			exit 1; \
 		fi; \
 		token=$$(echo "$$response" | jq -er '.data.login.token.accessToken // empty') || { \
 			echo "Login response did not contain a token."; \
-			echo "Hint: run 'make hash-static-user-password ADMIN_PASSWORD=<password>' to generate a users.yaml password hash."; \
+			echo "Hint: run 'make hash-user-password PASSWORD=<password>' to generate a users.yaml password hash."; \
 			exit 1; \
 		}; \
 	fi; \

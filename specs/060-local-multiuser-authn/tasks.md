@@ -94,6 +94,7 @@
 - [X] T022 [US3] Remove `AuthConfig.Admin`/`UserConfig` (type and field) and add `AuthConfig.StaticUsers` in `gitstore-api/internal/config/config.go`; update `auth.authn.chain`'s default (config.go and server.go), defaults/known-keys map, and `MarshalLogObject`
 
 - [X] T044 Add distinct rolling-upgrade token issuer coverage, shared replica-safe revocation storage, one-time refresh consumption, removed-user refresh rejection, and lockout-safe atomic SIGHUP registry replacement.
+- [X] T045 Add strict `gitctl users add` / `make add-user`, strict `rbac role add` / `make add-role`, and idempotent `rbac binding add` / `make assign-role` tooling with validated atomic YAML writes, duplicate/concurrency protection, tests, and operator documentation.
 - [X] T023 [US3] Replace `buildProviderRegistry`'s `case "static-admin":` with `case "static-users":` in `gitstore-api/internal/app/server.go`; add `static-users` as a valid `auth.userdir.provider` selector and pass the already-constructed instance to UserDir only when that selector is chosen; extend the existing SIGHUP reload handler
 
 **Checkpoint**: An operator cannot migrate into a silent lockout — verified by test, not merely documented.
@@ -138,7 +139,7 @@
 
 ## Phase 8: Polish & Documentation
 
-- [X] T037 [P] Replace the password helper with `hash-static-user-password` and update bootstrap hints
+- [X] T037 [P] Replace the password helper with `hash-user-password` and update bootstrap hints
 - [X] T038 [P] Update `gitstore-api/.env.example` for static-users configuration
 - [X] T038a **[BLOCKING — local Compose profile fails to start without this]** Update `config/config.toml` (committed by #410, mounted read-only into `git-service`/`api`/`controller-manager` by `compose.local.yml`): change `[auth.authn] chain = ["static-admin", "anonymous"]` to the `static-users` chain, add `[auth.userdir] provider = "static-users"`, and replace the `[auth.admin]` section (`username`, `password_hash`) with the `static-users` users-file key. Deleting the provider without editing this file makes `validateAuthChainConfig` reject the committed dev config, so `docker compose --profile local` fails at startup for every developer. This file did not exist when this spec was written
 - [X] T038b Add `config/users.yaml` as a tracked development-only fixture mirroring `config/policy.yaml`'s existing precedent and its `# DEVELOPMENT ONLY` header, with a placeholder bcrypt hash for the documented dev password, and mount it read-only into the `api` service in `compose.local.yml` only. The file must not be mounted into `git-service` or `controller-manager`, because the current shared `config/config.toml` is consumed by all three services but user credentials are API-only. Add a `!config/users.yaml` negation to `.gitignore` alongside the `!config/policy.yaml` one, so the unanchored `users.yaml` rule does not shadow it. **Decision to confirm before implementing**: this tracks a dev-only credential fixture in Git, which is the same posture `config/config.toml` already takes (it ships `auth.admin.password_hash` for `admin123`) — if that is not acceptable, the alternative is generating the fixture at compose-up time instead, and this task changes shape

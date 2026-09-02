@@ -4,4 +4,7 @@ package staticusers
 
 import "errors"
 
-var ErrUserNotFound = errors.New("staticusers: user not found")
+var (
+	ErrUserNotFound = errors.New("staticusers: user not found")
+	ErrUserExists   = errors.New("staticusers: user already exists")
+)

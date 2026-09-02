@@ -6,12 +6,102 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
+	"golang.org/x/crypto/bcrypt"
+	"gopkg.in/yaml.v3"
 )
+
+func TestUsersAddCreatesFileWithHashedPassword(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.yaml")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"users", "add", "--file", path, "--username", "alice",
+		"--email", "alice@example.com", "--display-name", "Alice Doe", "--password-stdin",
+	}, strings.NewReader("secret\n"), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run() code = %d, stderr = %q", code, stderr.String())
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list staticusers.UserList
+	if err := yaml.Unmarshal(b, &list); err != nil {
+		t.Fatal(err)
+	}
+	if list.Version != "v1" || len(list.Users) != 1 {
+		t.Fatalf("user list = %#v", list)
+	}
+	user := list.Users[0]
+	if user.Username != "alice" || user.Email != "alice@example.com" || user.DisplayName != "Alice Doe" {
+		t.Fatalf("user = %#v", user)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte("secret")); err != nil {
+		t.Fatalf("stored password hash does not match: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "role_bindings") {
+		t.Fatalf("stdout = %q, want role binding reminder", stdout.String())
+	}
+}
+
+func TestUsersAddRejectsDuplicateWithoutChangingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.yaml")
+	original := []byte("version: v1\nusers:\n  - username: alice\n    password_hash: old\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"users", "add", "--file", path, "--username", "alice", "--password-stdin",
+	}, strings.NewReader("new-secret\n"), &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "already exists") {
+		t.Fatalf("run() code = %d, stderr = %q", code, stderr.String())
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("duplicate add changed file:\n%s", got)
+	}
+}
+
+func TestRBACRoleAddAndBindingAdd(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"rbac", "role", "add", "--file", path, "--name", "developer",
+		"--allow", "repository.read,repository.write", "--deny", "repository.delete.any",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("role add code = %d, stderr = %q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{
+		"rbac", "binding", "add", "--file", path, "--subject", "alice", "--role", "developer",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("binding add code = %d, stderr = %q", code, stderr.String())
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(b)
+	for _, want := range []string{"developer:", "repository.read", "repository.write", "repository.delete.any", "alice:"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("policy missing %q:\n%s", want, text)
+		}
+	}
+}
 
 func TestProjectionRepairRequiresExplicitConfirmation(t *testing.T) {
 	original := openProjectionRepair

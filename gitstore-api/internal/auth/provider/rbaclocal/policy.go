@@ -30,7 +30,10 @@ func loadPolicy(path string) (*Policy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("rbaclocal: read policy file %q: %w", path, err)
 	}
+	return parsePolicy(path, data)
+}
 
+func parsePolicy(path string, data []byte) (*Policy, error) {
 	var p Policy
 	if err := yaml.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("rbaclocal: parse policy file %q: %w", path, err)
