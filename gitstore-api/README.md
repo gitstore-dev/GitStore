@@ -44,7 +44,7 @@ Post-receive admission is operation-aware for current Git-backed catalog resourc
 gitstore-api/
 ├── cmd/
 │   ├── server/       # API server entrypoint
-│   └── hashpw/       # bcrypt password hash helper
+│   └── gitctl/       # operator CLI: auth config, secrets, and datastore repair
 ├── gen/              # Generated protobuf Go code
 ├── internal/
 │   ├── app/          # Runtime composition
@@ -75,8 +75,7 @@ Required for local API startup unless provided by `.env`:
 
 | Variable                              | Default                  | Purpose                  |
 |---------------------------------------|--------------------------|--------------------------|
-| `GITSTORE_AUTH__ADMIN__USERNAME`      | unset                    | Admin username           |
-| `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | unset                    | bcrypt password hash     |
+| `GITSTORE_AUTH__STATICUSERS__USERS_FILE` | `users.yaml`          | Local users YAML         |
 | `GITSTORE_AUTH__JWT__SECRET`          | unset                    | JWT signing secret       |
 | `GITSTORE_API__PORT`                  | `4000`                   | GraphQL HTTP port        |
 | `GITSTORE_API__GIT_PORT`              | `5000`                   | Git Smart HTTP port      |
@@ -91,6 +90,7 @@ Copy the example file for local development:
 
 ```bash
 cp gitstore-api/.env.example gitstore-api/.env
+# The sample points at the tracked development fixture in config/users.yaml.
 ```
 
 ## Commands
@@ -109,7 +109,7 @@ From this module:
 ```bash
 go test ./...
 go generate ./...
-go run ./cmd/hashpw <password>
+go run ./cmd/gitctl hash-password <password>
 ```
 
 Scylla-backed tests:

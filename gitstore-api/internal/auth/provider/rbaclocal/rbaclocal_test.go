@@ -212,6 +212,36 @@ role_bindings:
 	assert.True(t, p.HasAnyRoleBindingFor([]string{"bob"}))
 }
 
+func TestRBACLocal_HasAnyRoleBindingForAppliesAllExplicitDenies(t *testing.T) {
+	p := newRBACProvider(t, `version: v1
+default_deny: true
+roles:
+  self-denied-wildcard:
+    allow: ["*"]
+    deny: ["*"]
+  self-denied-exact:
+    allow: ["namespace.read"]
+    deny: ["namespace.read"]
+  reader:
+    allow: ["namespace.read"]
+  deny-all:
+    deny: ["*"]
+  broad-with-one-deny:
+    allow: ["*"]
+    deny: ["namespace.delete.any"]
+role_bindings:
+  alice: [self-denied-wildcard]
+  bob: [self-denied-exact]
+  carol: [reader, deny-all]
+  dave: [broad-with-one-deny]
+`)
+
+	assert.False(t, p.HasAnyRoleBindingFor([]string{"alice"}))
+	assert.False(t, p.HasAnyRoleBindingFor([]string{"bob"}))
+	assert.False(t, p.HasAnyRoleBindingFor([]string{"carol"}))
+	assert.True(t, p.HasAnyRoleBindingFor([]string{"dave"}))
+}
+
 func TestRBACLocalRejectsEmptyAndUndefinedRoleBindings(t *testing.T) {
 	tests := map[string]string{
 		"empty": `version: v1

@@ -110,7 +110,7 @@ Set `AUTH_CONFIG_DIR=gitstore-api` for native-development files, or override
 `USERS_FILE` and `POLICY_FILE` separately. These commands validate and atomically
 replace one YAML file at a time; `add-user` never changes authorization policy.
 
-`static-users` mints tokens with `<auth.jwt.issuer>/static-users` while accepting the legacy unsuffixed issuer during rolling upgrades. Logout and refresh rotation require the shared ScyllaDB revocation table in production; migration 007 creates it automatically.
+`static-users` always appends `/static-users` to the configured issuer base when minting tokens, while accepting the exact configured base for legacy sessions during rolling upgrades. Logout and refresh rotation require the shared ScyllaDB revocation table in production; migration 007 creates it automatically.
 
 ### Logging
 

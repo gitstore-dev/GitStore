@@ -70,9 +70,7 @@ func NewWithRevocationStore(cfg config.AuthConfig, logger *zap.Logger, revocatio
 		issuer = "gitstore"
 	}
 	legacyIssuer := issuer
-	if !strings.HasSuffix(issuer, "/static-users") {
-		issuer = strings.TrimSuffix(issuer, "/") + "/static-users"
-	}
+	issuer = strings.TrimSuffix(issuer, "/") + "/static-users"
 	duration := 24 * time.Hour
 	if cfg.JWT.Duration != "" {
 		duration, err = time.ParseDuration(cfg.JWT.Duration)

@@ -362,8 +362,8 @@ func (p *StaticUsersProvider) Authenticate(ctx context.Context, req auth.AuthReq
     // 1. Extract Authorization: Bearer <jwt>
     // 2. Parse the JWT (golang-jwt/v5, HS256, using GITSTORE_AUTH__JWT__SECRET)
     // 3. If parse fails → OutcomeChallenge (not my token, try next provider)
-    // 4. Validate issuer == cfg.GetString("auth.jwt.issuer") + "/static-users"
-    //    or the legacy unsuffixed issuer during rolling upgrade
+    // 4. Validate issuer == configured base + "/static-users" (always appended)
+    //    or the exact legacy configured base during rolling upgrade
     // 5. Check blacklist by jti claim
     // 6. If blacklisted → OutcomeDeny("token revoked")
     // 7. Build Principal{Subject: claims.sub, Issuer: issuer, Roles: nil, AuthMethod: "static-users"}

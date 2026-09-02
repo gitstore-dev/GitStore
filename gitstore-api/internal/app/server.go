@@ -572,7 +572,7 @@ func constructProviderRegistry(cfg *config.Config, log *zap.Logger, revocations 
 			first = usernames[0]
 		}
 		cleanup()
-		return nil, nil, fmt.Errorf("startup failed: static-users + rbac-local migration safety check\n\n  Problem: static-users is configured with %d user(s) (%s), but rbac-local's policy.yaml has no usable role_bindings entry for any of them. A usable binding names a defined role with at least one allowed action\n\n  To fix, do ONE of the following:\n    1. Add a role_bindings entry in %s for at least one of the usernames above, e.g. role_bindings: %s: [admin]\n    2. If you don't want rbac-local enforcement yet, set GITSTORE_AUTH__AUTHZ__PROVIDER=allow-all instead\n\n  See specs/060-local-multiuser-authn/quickstart.md for a worked example", len(usernames), strings.Join(usernames, ", "), cfg.Auth.RBAC.PolicyFile, first)
+		return nil, nil, fmt.Errorf("startup failed: static-users + rbac-local migration safety check\n\n  Problem: static-users is configured with %d user(s) (%s), but rbac-local's policy.yaml has no usable role_bindings entry for any of them. A usable binding's complete role set leaves at least one allowed action after explicit denies are applied\n\n  To fix, do ONE of the following:\n    1. Add a role_bindings entry in %s for at least one of the usernames above, e.g. role_bindings: %s: [admin]\n    2. If you don't want rbac-local enforcement yet, set GITSTORE_AUTH__AUTHZ__PROVIDER=allow-all instead\n\n  See specs/060-local-multiuser-authn/quickstart.md for a worked example", len(usernames), strings.Join(usernames, ", "), cfg.Auth.RBAC.PolicyFile, first)
 	}
 	return auth.NewProviderRegistry(auth.NewChainedAuthN(authnProviders...), authzProvider, userdirProvider), shutdowns, nil
 }

@@ -33,6 +33,9 @@ func TestProviderRegistryReloadPreservesUsableBindingInvariant(t *testing.T) {
 	writePolicy := func(username string) {
 		require.NoError(t, os.WriteFile(policyPath, []byte("version: v1\ndefault_deny: true\nroles:\n  admin:\n    allow: [\"*\"]\nrole_bindings:\n  "+username+": [admin]\n"), 0600))
 	}
+	writeFullyDeniedPolicy := func(username string) {
+		require.NoError(t, os.WriteFile(policyPath, []byte("version: v1\ndefault_deny: true\nroles:\n  admin:\n    allow: [\"*\"]\n    deny: [\"*\"]\nrole_bindings:\n  "+username+": [admin]\n"), 0600))
+	}
 	writeUsers("alice")
 	writePolicy("alice")
 
@@ -54,6 +57,11 @@ func TestProviderRegistryReloadPreservesUsableBindingInvariant(t *testing.T) {
 	}
 
 	writeUsers("bob")
+	require.Error(t, reloader.Reload())
+	assertLoginDecision(t, registry, "alice", auth.OutcomeAllow)
+	assertLoginDecision(t, registry, "bob", auth.OutcomeDeny)
+
+	writeFullyDeniedPolicy("bob")
 	require.Error(t, reloader.Reload())
 	assertLoginDecision(t, registry, "alice", auth.OutcomeAllow)
 	assertLoginDecision(t, registry, "bob", auth.OutcomeDeny)

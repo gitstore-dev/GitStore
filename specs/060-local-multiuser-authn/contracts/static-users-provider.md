@@ -11,7 +11,7 @@
 | `Authenticate` | Basic Auth checks the loaded bcrypt credential. Bearer verifies HS256, accepts the new suffixed issuer or the legacy issuer during rollout, and fails closed if shared revocation state cannot be read. Unknown username, wrong password, or an unowned token → `Challenge`. |
 | `RevokeSession` | Persists `jti` in the shared revocation store through token expiry plus verifier leeway, so every API replica rejects it. |
 | `RefreshSession` | Accepts the suffixed or legacy issuer during rollout, rejects removed subjects, and atomically consumes the old JTI before minting a replacement. Exactly one concurrent refresh succeeds across replicas. |
-| `IssueSession` | Mints a new HS256 JWT with issuer `<auth.jwt.issuer>/static-users`, a fresh `jti`, and the configured duration. The distinct issuer makes old `static-admin` replicas reject newly minted user tokens. |
+| `IssueSession` | Mints a new HS256 JWT with issuer `<configured auth.jwt.issuer base>/static-users`, a fresh `jti`, and the configured duration. The suffix is appended unconditionally so even a colliding configured base produces a domain old `static-admin` replicas reject. |
 
 ## `UserDirProvider` interface compliance (new)
 

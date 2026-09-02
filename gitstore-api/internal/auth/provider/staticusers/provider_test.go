@@ -95,6 +95,28 @@ func TestStaticUsersAcceptsLegacyIssuerDuringRollingUpgrade(t *testing.T) {
 	assert.Equal(t, "alice", principal.Subject)
 }
 
+func TestStaticUsersAlwaysAppendsTokenDomainWhenConfiguredIssuerAlreadyHasSuffix(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "users.yaml")
+	hash, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.MinCost)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte("version: v1\nusers:\n  - username: alice\n    password_hash: "+string(hash)+"\n"), 0600))
+	p, err := New(config.AuthConfig{
+		StaticUsers: config.StaticUsersConfig{UsersFile: path},
+		JWT:         config.JWTConfig{Secret: "secret", Issuer: "gitstore/static-users", Duration: "1h"},
+	}, zap.NewNop())
+	require.NoError(t, err)
+
+	token, _, err := p.IssueSession(context.Background(), "alice")
+	require.NoError(t, err)
+	claims := &jwt.RegisteredClaims{}
+	_, err = jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (any, error) {
+		return []byte("secret"), nil
+	}, jwt.WithIssuer("gitstore/static-users"))
+	require.Error(t, err, "legacy verifier must reject the new provider token")
+	assert.Equal(t, "gitstore/static-users/static-users", claims.Issuer)
+}
+
 func TestStaticUsersRevocationIsSharedAcrossProviders(t *testing.T) {
 	store := newMemoryRevocationStore()
 	dir := t.TempDir()
