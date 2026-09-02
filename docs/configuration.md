@@ -122,7 +122,7 @@ mounted private key to obtain them.
 
 | Key | Env Var | Type | Default | Required | Sensitive | Description |
 |-----|---------|------|---------|----------|-----------|-------------|
-| `auth.authn.chain` | `GITSTORE_AUTH__AUTHN__CHAIN` | list of strings | `["static-admin","anonymous"]` | No | No | Ordered AuthN providers; include both service-account providers to enable this flow |
+| `auth.authn.chain` | `GITSTORE_AUTH__AUTHN__CHAIN` | list of strings | `["static-users","anonymous"]` | No | No | Ordered AuthN providers; include both service-account providers to enable this flow |
 | `auth.serviceaccount.issuer` | `GITSTORE_AUTH__SERVICEACCOUNT__ISSUER` | string | `gitstore` | No | No | Issuer for service-account access tokens |
 | `auth.serviceaccount.audience` | `GITSTORE_AUTH__SERVICEACCOUNT__AUDIENCE` | string | `gitstore-api` | No | No | Required audience for service-account access tokens |
 | `auth.serviceaccount.assertion_audience` | `GITSTORE_AUTH__SERVICEACCOUNT__ASSERTION_AUDIENCE` | string | `gitstore-api/serviceaccount-token` | No | No | Required audience for controller assertions at the token-exchange endpoint |

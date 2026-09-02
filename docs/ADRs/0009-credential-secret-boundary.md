@@ -198,9 +198,9 @@ Both tiers and both consumers inherit ADR 0001's rules without modification:
   The live counter-example is `compose.local.yml` (#410), which mounts a single
   `config/config.toml` read-only into `git-service`, `api`, **and**
   `controller-manager` at `/config/gitstore.toml`. That file already carries
-  `auth.jwt.secret`, `auth.grpc.hmac_secret`, `auth.admin.password_hash`, and
-  `controller.api_token`. It is a legitimate developer-convenience profile and
-  is labelled development-only, but it is structurally unable to hold
+  `auth.jwt.secret` and `auth.grpc.hmac_secret`. It is a legitimate
+  developer-convenience profile and is labelled development-only, but it is
+  structurally unable to hold
   service-account key material: an API access-token signing key placed there is
   readable by the very controller whose privileges it bounds, letting that
   controller mint a token for any subject. Deployments that adopt the shared
