@@ -375,17 +375,6 @@ func TestHandler_UnknownRepo_Returns404(t *testing.T) {
 	}
 }
 
-// stubAuthZProvider is a minimal AuthZProvider for tests.
-type stubAuthZProvider struct {
-	decision auth.Decision
-	err      error
-}
-
-func (s *stubAuthZProvider) Name() string { return "stub-authz" }
-func (s *stubAuthZProvider) Authorize(_ context.Context, _ *auth.Principal, _ string, _ auth.ResourceContext) (auth.Decision, error) {
-	return s.decision, s.err
-}
-
 // T021: RepoResolver returns 404 pkt-line for unknown namespace/repo.
 func TestRepoResolverNotFound(t *testing.T) {
 	store := &testutil.StubStore{} // both lookups return ErrNotFound by default
@@ -442,7 +431,7 @@ func TestRepoResolverSetsContext(t *testing.T) {
 			principal: &auth.Principal{Subject: "reader", AuthMethod: "basic"},
 			decision:  auth.Allow("stub-authn", "authenticated"),
 		}),
-		&stubAuthZProvider{decision: auth.Allow("stub-authz", "read granted")},
+		testutil.NewAllowAllAuthZ(),
 		nil,
 	)
 
@@ -475,7 +464,7 @@ func TestRepoResolverSetsContext(t *testing.T) {
 func TestGitHttpAuthorizerReadOnly(t *testing.T) {
 	readOnlyPrincipal := &auth.Principal{Subject: "reader", AuthMethod: "basic", Roles: []string{"reader"}}
 	stubAuthN := &stubAuthNProviderWithPrincipal{principal: readOnlyPrincipal, decision: auth.Allow("stub", "ok")}
-	stubAuthZ := &stubAuthZProvider{decision: auth.Deny("stub-authz", "no write permission"), err: nil}
+	stubAuthZ := testutil.NewDenyAllAuthZ(t)
 
 	registry := auth.NewProviderRegistry(
 		auth.NewChainedAuthN(stubAuthN),
@@ -518,7 +507,7 @@ func TestGitHttpAuthorizerReadOnly(t *testing.T) {
 func TestGitHttpAuthorizerAnonymousDenyChallengesForCredentials(t *testing.T) {
 	registry := auth.NewProviderRegistry(
 		auth.NewChainedAuthN(anonymous.New()),
-		&stubAuthZProvider{decision: auth.Deny("stub-authz", "authentication required")},
+		testutil.NewDenyAllAuthZ(t),
 		nil,
 	)
 
@@ -558,7 +547,7 @@ func TestGitHttpAuthorizerAnonymousDenyChallengesForCredentials(t *testing.T) {
 func TestGitHttpAuthorizerAnonymousReceivePackDiscoveryChallengesForCredentials(t *testing.T) {
 	registry := auth.NewProviderRegistry(
 		auth.NewChainedAuthN(anonymous.New()),
-		&stubAuthZProvider{decision: auth.Deny("stub-authz", "authentication required")},
+		testutil.NewDenyAllAuthZ(t),
 		nil,
 	)
 
@@ -589,7 +578,7 @@ func TestGitHttpAuthorizerAnonymousReceivePackDiscoveryChallengesForCredentials(
 func TestGitHttpAuthorizerMarksPolicyApprovedAnonymousRead(t *testing.T) {
 	registry := auth.NewProviderRegistry(
 		auth.NewChainedAuthN(anonymous.New()),
-		&stubAuthZProvider{decision: auth.Allow("stub-authz", "public read")},
+		testutil.NewAllowAllAuthZ(),
 		nil,
 	)
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
@@ -633,7 +622,7 @@ func TestGitHttpAuthorizerMarksPolicyApprovedAnonymousRead(t *testing.T) {
 func TestGitHttpAuthorizerAllowAllAnonymousWriteChallengesForCredentials(t *testing.T) {
 	registry := auth.NewProviderRegistry(
 		auth.NewChainedAuthN(anonymous.New()),
-		&stubAuthZProvider{decision: auth.Allow("allow-all", "allow-all provider permits everything")},
+		testutil.NewAllowAllAuthZ(),
 		nil,
 	)
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
@@ -678,7 +667,7 @@ func TestGitHttpAuthorizerAllowAllAnonymousWriteChallengesForCredentials(t *test
 func TestGitHttpAuthorizerWriteAllowed(t *testing.T) {
 	writePrincipal := &auth.Principal{Subject: "writer", AuthMethod: "basic", Roles: []string{"writer"}}
 	stubAuthN := &stubAuthNProviderWithPrincipal{principal: writePrincipal, decision: auth.Allow("stub", "ok")}
-	stubAuthZ := &stubAuthZProvider{decision: auth.Allow("stub-authz", "write granted"), err: nil}
+	stubAuthZ := testutil.NewAllowAllAuthZ()
 
 	registry := auth.NewProviderRegistry(
 		auth.NewChainedAuthN(stubAuthN),
@@ -727,7 +716,7 @@ func TestGitHttpAuthorizerWriteAllowed(t *testing.T) {
 // T025: GitHttpAuthorizer without RepoResolver having run returns 500.
 // This test exercises the middleware directly without RepoResolver in chain.
 func TestGitHttpAuthorizerMissingContext(t *testing.T) {
-	stubAuthZ := &stubAuthZProvider{decision: auth.Allow("stub-authz", "ok"), err: nil}
+	stubAuthZ := testutil.NewAllowAllAuthZ()
 	registry := auth.NewProviderRegistry(
 		auth.NewChainedAuthN(anonymous.New()),
 		stubAuthZ,
@@ -805,7 +794,7 @@ func TestReceivePackAttachesPushContext(t *testing.T) {
 
 	writePrincipal := &auth.Principal{Subject: "writer", AuthMethod: "basic", Roles: []string{"writer"}}
 	stubAuthN := &stubAuthNProviderWithPrincipal{principal: writePrincipal, decision: auth.Allow("stub", "ok")}
-	stubAuthZ := &stubAuthZProvider{decision: auth.Allow("stub-authz", "write ok"), err: nil}
+	stubAuthZ := testutil.NewAllowAllAuthZ()
 
 	registry := auth.NewProviderRegistry(
 		auth.NewChainedAuthN(stubAuthN),
