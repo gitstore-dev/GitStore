@@ -313,9 +313,10 @@ const approvedRepositoryActionKey = "approvedRepositoryAction"
 
 // GitHttpAuthorizer authorizes a Git Smart HTTP request after RepoResolver has run.
 // Requires repoIDKey to be set in the gin context (abort 500 if missing).
-// Determines required action from route path:
-//   - /info/refs and /git-upload-pack → "repository.read"
-//   - /git-receive-pack              → "repository.write"
+// Determines required action from route path (and, for /info/refs, the
+// ?service= query param since that endpoint is shared by both services):
+//   - /git-upload-pack, or /info/refs?service=git-upload-pack   → "repository.read"
+//   - /git-receive-pack, or /info/refs?service=git-receive-pack → "repository.write"
 //
 // Aborts with 401 on an anonymous deny so Git credential helpers can retry,
 // and with 403 when an authenticated principal lacks permission.
@@ -342,8 +343,17 @@ func (a *Authorize) GitHttpAuthorizer(c *gin.Context) {
 		principal = auth.Anonymous()
 	}
 
+	// /info/refs is shared by both upload-pack and receive-pack discovery;
+	// the actual service is disambiguated by the ?service= query param, not
+	// the path, so a receive-pack discovery request must be treated as a
+	// write to correctly reject anonymous access with a 401 (prompting Git
+	// to retry with credentials) instead of falling through to a deeper
+	// rejection that surfaces as a generic 503.
 	operation := "read"
-	if strings.HasSuffix(c.FullPath(), "/git-receive-pack") {
+	switch {
+	case strings.HasSuffix(c.FullPath(), "/git-receive-pack"):
+		operation = "write"
+	case strings.HasSuffix(c.FullPath(), "/info/refs") && c.Query("service") == "git-receive-pack":
 		operation = "write"
 	}
 

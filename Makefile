@@ -17,6 +17,7 @@ USERS_FILE ?= $(AUTH_CONFIG_DIR)/users.yaml
 LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
 LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml -f compose.admin.yml
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
+GIT_GRPC_PORT ?= 50051
 CONTROLLER_CHECKPOINT_DIR ?= $(ROOT)/.gitstore/checkpoints
 CONTROLLER_SECRET_DIR ?= $(ROOT)/.gitstore/secrets
 CONTROLLER_SECRET_NAME ?= controller-manager
@@ -190,6 +191,18 @@ dev: ## Run local git service and API together in the foreground.
 	) & git_pid=$$!; \
 	( set +e; \
 		cd "$(API_DIR)" || { printf 'api 1\n' > "$$fifo"; exit 0; }; \
+		echo "api: waiting for git-service grpc on 127.0.0.1:$(GIT_GRPC_PORT)..."; \
+		waited=0; \
+		until (exec 3<>/dev/tcp/127.0.0.1/$(GIT_GRPC_PORT)) 2>/dev/null; do \
+			waited=$$((waited + 1)); \
+			if [ "$$waited" -ge 120 ]; then \
+				echo "api: timed out waiting for git-service grpc on 127.0.0.1:$(GIT_GRPC_PORT)" >&2; \
+				break; \
+			fi; \
+			sleep 0.5; \
+		done; \
+		exec 3<&- 2>/dev/null || true; \
+		exec 3>&- 2>/dev/null || true; \
 		go run ./cmd/server & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
 		wait "$$child"; status=$$?; \

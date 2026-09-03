@@ -546,6 +546,46 @@ func TestGitHttpAuthorizerAnonymousDenyChallengesForCredentials(t *testing.T) {
 	assert.Equal(t, `Basic realm="GitStore"`, w.Header().Get("WWW-Authenticate"))
 }
 
+// TestGitHttpAuthorizerAnonymousReceivePackDiscoveryChallengesForCredentials
+// covers the info/refs discovery request for git-receive-pack (used by
+// `git push` before the actual push), which is disambiguated from
+// git-upload-pack discovery by the ?service= query param rather than the
+// URL path. An anonymous request must be classified as a write and receive
+// a 401 (so Git retries with embedded credentials), never a 503 — a
+// regression previously missed because existing coverage only exercised
+// anonymous-deny for the upload-pack (?service=git-upload-pack) discovery
+// path and the standalone infoRefsHandler in isolation from the authorizer.
+func TestGitHttpAuthorizerAnonymousReceivePackDiscoveryChallengesForCredentials(t *testing.T) {
+	registry := auth.NewProviderRegistry(
+		auth.NewChainedAuthN(anonymous.New()),
+		&stubAuthZProvider{decision: auth.Deny("stub-authz", "authentication required")},
+		nil,
+	)
+
+	store := &testutil.StubStore{
+		GetRepositoryFunc: func(_ context.Context, id string) (*datastore.Repository, error) {
+			return &datastore.Repository{UID: id, Name: "catalog", Namespace: "gitstore"}, nil
+		},
+		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
+			return &datastore.Namespace{UID: "ns-id-1", Name: id}, nil
+		},
+		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
+			return &datastore.NamespaceMapping{RepositoryID: "01960000-0000-7000-8000-000000000001"}, nil
+		},
+	}
+
+	router := NewMuxWithStore(SmartHttpDeps{
+		GitClient: &mockGitClient{}, Store: store, Logger: zap.NewNop(),
+		Ids: apiruntime.NewSequenceIDGenerator(), Registry: registry,
+	})
+	req := httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Equal(t, `Basic realm="GitStore"`, w.Header().Get("WWW-Authenticate"))
+}
+
 func TestGitHttpAuthorizerMarksPolicyApprovedAnonymousRead(t *testing.T) {
 	registry := auth.NewProviderRegistry(
 		auth.NewChainedAuthN(anonymous.New()),
@@ -578,6 +618,60 @@ func TestGitHttpAuthorizerMarksPolicyApprovedAnonymousRead(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-upload-pack", nil))
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// TestGitHttpAuthorizerAllowAllAnonymousWriteChallengesForCredentials reproduces
+// the scenario where the configured AuthZ provider is misconfigured (or
+// intentionally permissive, e.g. "allow-all" in local dev) and approves an
+// anonymous write at the GitHttpAuthorizer layer. gitclient.RequestAuthorization
+// enforces a defense-in-depth invariant that anonymous principals are never
+// approved for a write action regardless of that upstream decision, and the
+// resulting error must surface as 401 (prompting Git to retry with
+// credentials) rather than a blanket 503, or a plain `git push` against a
+// dev stack with an over-permissive AuthZ provider hangs on a 503 that Git
+// cannot recover from.
+func TestGitHttpAuthorizerAllowAllAnonymousWriteChallengesForCredentials(t *testing.T) {
+	registry := auth.NewProviderRegistry(
+		auth.NewChainedAuthN(anonymous.New()),
+		&stubAuthZProvider{decision: auth.Allow("allow-all", "allow-all provider permits everything")},
+		nil,
+	)
+	const wantRepoID = "01960000-0000-7000-8000-000000000001"
+	store := &testutil.StubStore{
+		GetRepositoryFunc: func(_ context.Context, id string) (*datastore.Repository, error) {
+			return &datastore.Repository{UID: id, Name: "catalog", Namespace: "gitstore"}, nil
+		},
+		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
+			return &datastore.Namespace{UID: "ns-id-1", Name: id}, nil
+		},
+		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
+			return &datastore.NamespaceMapping{RepositoryID: wantRepoID}, nil
+		},
+	}
+	// Calls the real gitclient.RequestAuthorization so this test exercises the
+	// actual defense-in-depth invariant rather than a stubbed-out approximation.
+	client := &mockGitClient{
+		infoRefsFunc: func(ctx context.Context, repoID string, service gitv1.Service) ([]byte, gitv1.Service, error) {
+			action := "repository.read.any"
+			if service == gitv1.Service_SERVICE_GIT_RECEIVE_PACK {
+				action = "repository.write.any"
+			}
+			if _, err := gitclient.RequestAuthorization(ctx, action, repoID); err != nil {
+				return nil, gitv1.Service_SERVICE_UNSPECIFIED, err
+			}
+			return []byte("001e# service=git-receive-pack\n0000"), gitv1.Service_SERVICE_GIT_RECEIVE_PACK, nil
+		},
+	}
+	router := NewMuxWithStore(SmartHttpDeps{
+		GitClient: client, Store: store, Logger: zap.NewNop(),
+		Ids: apiruntime.NewSequenceIDGenerator(), Registry: registry,
+	})
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-receive-pack", nil))
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Equal(t, `Basic realm="GitStore"`, w.Header().Get("WWW-Authenticate"))
 }
 
 // T024: write-capable principal on receive-pack passes through.
