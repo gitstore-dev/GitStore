@@ -151,7 +151,7 @@ fn validate_request_authorization(
         .actor
         .as_ref()
         .ok_or_else(|| Status::invalid_argument("request authorization actor is required"))?;
-    if actor.subject.is_empty() || actor.auth_method.is_empty() || actor.auth_method == "none" {
+    if actor.subject.is_empty() || actor.auth_method.is_empty() {
         return Err(Status::invalid_argument(
             "request authorization actor is malformed",
         ));
@@ -167,6 +167,13 @@ fn validate_request_authorization(
     {
         return Err(Status::permission_denied(
             "request authorization action is not valid for this RPC",
+        ));
+    }
+    if actor.auth_method == "none"
+        && (actor.subject != "anon" || authorization.action != "repository.read.any")
+    {
+        return Err(Status::permission_denied(
+            "anonymous actors may only use repository.read.any",
         ));
     }
     info!(repo_id = %repository_id, subject = %actor.subject, action = %authorization.action, "request authorization accepted");
@@ -1783,6 +1790,57 @@ mod tests {
             resource_name: String::new(),
             repository_id: repo_id.to_string(),
         })
+    }
+
+    #[test]
+    fn anonymous_read_authorization_is_accepted() {
+        let authorization = RequestAuthorization {
+            actor: Some(AuthContext {
+                subject: "anon".to_string(),
+                issuer: "gitstore".to_string(),
+                auth_method: "none".to_string(),
+                roles: vec![],
+                groups: vec![],
+                scopes: vec![],
+            }),
+            action: "repository.read.any".to_string(),
+            resource_kind: "repository".to_string(),
+            resource_name: String::new(),
+            repository_id: TEST_REPO_A.to_string(),
+        };
+
+        assert!(validate_request_authorization(
+            Some(&authorization),
+            TEST_REPO_A,
+            &["repository.read.any"],
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn anonymous_write_authorization_is_rejected() {
+        let authorization = RequestAuthorization {
+            actor: Some(AuthContext {
+                subject: "anon".to_string(),
+                issuer: "gitstore".to_string(),
+                auth_method: "none".to_string(),
+                roles: vec![],
+                groups: vec![],
+                scopes: vec![],
+            }),
+            action: "repository.write.any".to_string(),
+            resource_kind: "repository".to_string(),
+            resource_name: String::new(),
+            repository_id: TEST_REPO_A.to_string(),
+        };
+
+        let error = validate_request_authorization(
+            Some(&authorization),
+            TEST_REPO_A,
+            &["repository.write.any"],
+        )
+        .expect_err("anonymous writes must be rejected");
+        assert_eq!(error.code(), tonic::Code::PermissionDenied);
     }
 
     fn make_create_req(id: &str) -> Request<CreateRepositoryRequest> {

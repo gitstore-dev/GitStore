@@ -209,6 +209,11 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 			object: "Query", field: "node", args: map[string]any{"id": h.repositoryNodeID},
 		},
 		{
+			name:   "read through batched nodes",
+			action: "repository.read.any",
+			object: "Query", field: "nodes", args: map[string]any{"ids": []string{h.repositoryNodeID}},
+		},
+		{
 			name:   "list namespace repositories",
 			action: "repository.read.any",
 			object: "Query", field: "repositories", args: map[string]any{"namespace": h.sourceNamespace.Name, "first": &first},

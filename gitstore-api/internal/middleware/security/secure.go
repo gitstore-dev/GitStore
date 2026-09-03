@@ -398,6 +398,9 @@ func (a *Authorize) GitHttpAuthorizer(c *gin.Context) {
 		return
 	}
 	c.Set(approvedRepositoryActionKey, action)
+	if principal.AuthMethod == "none" {
+		c.Request = c.Request.WithContext(auth.ContextWithAuthorizedAnonymous(c.Request.Context()))
+	}
 	c.Next()
 }
 

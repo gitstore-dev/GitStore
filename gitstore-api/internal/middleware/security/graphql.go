@@ -496,7 +496,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 }
 
 func isRepositoryQueryField(fc *graphql.FieldContext) bool {
-	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node")
+	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node" || fc.Field.Name == "nodes")
 }
 
 func graphqlFieldRequiresAuthorization(fc *graphql.FieldContext) bool {
@@ -505,7 +505,7 @@ func graphqlFieldRequiresAuthorization(fc *graphql.FieldContext) bool {
 	}
 	switch fc.Object {
 	case "Query":
-		return fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node"
+		return fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node" || fc.Field.Name == "nodes"
 	case "Mutation":
 		switch fc.Field.Name {
 		case "createRepository", "renameRepository", "transferRepository", "deleteRepository", "deleteNamespace", "completeNamespaceDeletion", "updateCategoryStatus", "updateProductStatus", "deleteCategory", "updateResourceStatus", "issueServiceAccountToken", "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount":
@@ -637,6 +637,29 @@ func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.Fi
 			return err
 		}
 		operation = "read"
+	case "Query.nodes":
+		encodedIDs, ok := directStringsArg(fc.Args, "ids")
+		if !ok {
+			return nil
+		}
+		for _, encodedID := range encodedIDs {
+			kind, _, err := decodeGlobalID(encodedID)
+			if err != nil || kind != "Repository" {
+				// Match the resolver's node semantics for malformed and non-repository
+				// IDs. Only repository objects need repository authorization here.
+				continue
+			}
+			if err := loadRepository(encodedID); err != nil {
+				if errors.Is(err, datastore.ErrNotFound) {
+					continue
+				}
+				return err
+			}
+			if _, err := a.authorizeRepositoryTenant(ctx, principal, "read", repo, namespaces[len(namespaces)-1]); err != nil {
+				return gqlerror.Errorf("%v", err)
+			}
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -806,6 +829,38 @@ func directStringArg(args map[string]any, key string) (string, bool) {
 		return "", false
 	}
 	return rv.String(), true
+}
+
+func directStringsArg(args map[string]any, key string) ([]string, bool) {
+	value, ok := args[key]
+	if !ok || value == nil {
+		return nil, false
+	}
+	rv := reflect.ValueOf(value)
+	for rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return nil, false
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
+		return nil, false
+	}
+	values := make([]string, 0, rv.Len())
+	for i := range rv.Len() {
+		item := rv.Index(i)
+		for item.Kind() == reflect.Interface || item.Kind() == reflect.Pointer {
+			if item.IsNil() {
+				return nil, false
+			}
+			item = item.Elem()
+		}
+		if item.Kind() != reflect.String {
+			return nil, false
+		}
+		values = append(values, item.String())
+	}
+	return values, true
 }
 
 func nestedStringPath(args map[string]any, path ...string) (string, bool) {

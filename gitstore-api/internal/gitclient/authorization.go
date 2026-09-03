@@ -23,8 +23,12 @@ func RequestAuthorization(ctx context.Context, action, repositoryID string) (*gi
 	if principal == nil {
 		principal = &auth.Principal{Subject: "system:api", Issuer: "gitstore-api", AuthMethod: "internal"}
 	}
-	if principal.Subject == "" || principal.AuthMethod == "" || principal.AuthMethod == "none" {
+	approvedAnonymous := principal.AuthMethod == "none" && auth.AuthorizedAnonymousFromContext(ctx)
+	if principal.Subject == "" || principal.AuthMethod == "" || (principal.AuthMethod == "none" && !approvedAnonymous) {
 		return nil, fmt.Errorf("git service request authorization requires an authenticated principal")
+	}
+	if approvedAnonymous && action != "repository.read.any" {
+		return nil, fmt.Errorf("git service request authorization permits anonymous actors only for repository.read.any")
 	}
 	if action == "" || repositoryID == "" {
 		return nil, fmt.Errorf("git service request authorization requires action and repository ID")
