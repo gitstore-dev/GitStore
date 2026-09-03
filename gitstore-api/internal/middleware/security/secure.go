@@ -6,6 +6,7 @@ package security
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -44,7 +45,54 @@ type Authorize struct {
 type datastoreGetter interface {
 	GetRepository(ctx context.Context, id string) (*datastore.Repository, error)
 	GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error)
+	GetNamespace(ctx context.Context, id string) (*datastore.Namespace, error)
+	LookupRepository(ctx context.Context, namespace, name string) (*datastore.NamespaceMapping, error)
 	GetCategoryTaxonomy(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error)
+}
+
+// authorizeRepositoryTenant is the common repository policy decision used by
+// GraphQL and Git smart-HTTP. Ownership is deliberately derived from the
+// stable principal subject rather than provider-specific roles.
+func (a *Authorize) authorizeRepositoryTenant(ctx context.Context, principal *auth.Principal, operation string, repository *datastore.Repository, namespaces ...*datastore.Namespace) (string, error) {
+	if a.registry == nil || a.registry.AuthZ() == nil {
+		return "", errors.New("authorization service unavailable")
+	}
+	if principal == nil {
+		principal = auth.Anonymous()
+	}
+	if repository == nil || len(namespaces) == 0 {
+		return "", errors.New("repository authorization context is incomplete")
+	}
+
+	scope := "own"
+	attrs := make(map[string]any, len(namespaces))
+	owner := ""
+	for index, namespace := range namespaces {
+		if namespace == nil {
+			return "", errors.New("repository authorization namespace is missing")
+		}
+		if index == 0 {
+			owner = namespace.CreationActor
+			attrs["namespace"] = namespace.Name
+		} else {
+			attrs["targetNamespace"] = namespace.Name
+			attrs["targetOwnerSub"] = namespace.CreationActor
+		}
+		if namespace.CreationActor == "" || namespace.CreationActor != principal.Subject {
+			scope = "any"
+		}
+	}
+	action := "repository." + operation + "." + scope
+	decision, err := a.registry.AuthZ().Authorize(ctx, principal, action, auth.ResourceContext{
+		Kind: "repository", Name: repository.Name, OwnerSub: owner, Attrs: attrs,
+	})
+	if err != nil {
+		return "", err
+	}
+	if decision.Outcome != auth.OutcomeAllow {
+		return "", fmt.Errorf("permission denied: %s", decision.Reason)
+	}
+	return action, nil
 }
 
 type RateLimit struct {
@@ -261,6 +309,7 @@ func (a *Authenticate) BasicAuthenticator(c *gin.Context) {
 // repoIDKey matches the constant defined in githttp/resolver.go.
 // Duplicated here to avoid an import cycle; both must be kept in sync.
 const repoIDKey = "repoID"
+const approvedRepositoryActionKey = "approvedRepositoryAction"
 
 // GitHttpAuthorizer authorizes a Git Smart HTTP request after RepoResolver has run.
 // Requires repoIDKey to be set in the gin context (abort 500 if missing).
@@ -293,28 +342,53 @@ func (a *Authorize) GitHttpAuthorizer(c *gin.Context) {
 		principal = auth.Anonymous()
 	}
 
-	action := "repository.read"
+	operation := "read"
 	if strings.HasSuffix(c.FullPath(), "/git-receive-pack") {
-		action = "repository.write"
+		operation = "write"
 	}
 
-	authz := a.registry.AuthZ()
-	if authz == nil {
-		c.Next()
+	if a.store == nil {
+		// Legacy test/embedding callers do not provide a datastore. Preserve the
+		// historical unsuffixed action there; production wiring always supplies a
+		// store and therefore uses the tenant-aware contract below.
+		authorize := a.registry.AuthZ()
+		if authorize == nil {
+			c.Next()
+			return
+		}
+		decision, err := authorize.Authorize(c.Request.Context(), principal, "repository."+operation, auth.ResourceContext{Kind: "repository", Name: repoID})
+		if err != nil {
+			a.logger.Error("authz error", zap.Error(err))
+			c.AbortWithStatus(http.StatusServiceUnavailable)
+			return
+		}
+		if decision.Outcome == auth.OutcomeAllow {
+			c.Next()
+			return
+		}
+		if principal.AuthMethod == "none" {
+			c.Header("WWW-Authenticate", `Basic realm="GitStore"`)
+			c.AbortWithStatus(http.StatusUnauthorized)
+		} else {
+			c.AbortWithStatus(http.StatusForbidden)
+		}
 		return
 	}
-
-	decision, err := authz.Authorize(c.Request.Context(), principal, action, auth.ResourceContext{
-		Kind: "repository",
-		Name: repoID,
-	})
+	repository, err := a.store.GetRepository(c.Request.Context(), repoID)
 	if err != nil {
-		a.logger.Error("authz error", zap.Error(err))
-		c.AbortWithStatus(http.StatusServiceUnavailable)
+		a.logger.Error("GitHttpAuthorizer: resolve repository", zap.Error(err))
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
-	if decision.Outcome == auth.OutcomeDeny {
-		a.logger.Warn("authz denied", zap.String("action", action), zap.String("reason", decision.Reason))
+	namespace, err := a.store.GetNamespaceByName(c.Request.Context(), repository.Namespace)
+	if err != nil {
+		a.logger.Error("GitHttpAuthorizer: resolve namespace", zap.Error(err))
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	action, err := a.authorizeRepositoryTenant(c.Request.Context(), principal, operation, repository, namespace)
+	if err != nil {
+		a.logger.Warn("authz denied", zap.String("action", action), zap.Error(err))
 		if principal.AuthMethod == "none" {
 			c.Header("WWW-Authenticate", `Basic realm="GitStore"`)
 			c.AbortWithStatus(http.StatusUnauthorized)
@@ -322,6 +396,10 @@ func (a *Authorize) GitHttpAuthorizer(c *gin.Context) {
 		}
 		c.AbortWithStatus(http.StatusForbidden)
 		return
+	}
+	c.Set(approvedRepositoryActionKey, action)
+	if principal.AuthMethod == "none" {
+		c.Request = c.Request.WithContext(auth.ContextWithAuthorizedAnonymous(c.Request.Context()))
 	}
 	c.Next()
 }
@@ -364,19 +442,25 @@ func (a *Authorize) PushContextInserter(c *gin.Context) {
 	if principal == nil {
 		principal = auth.Anonymous()
 	}
+	action, exists := c.Get(approvedRepositoryActionKey)
+	approvedAction, isString := action.(string)
+	if !exists || !isString || approvedAction == "" {
+		a.logger.Error("PushContextInserter: approved repository action missing")
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
 
 	pc := &gitv1.PushContext{
 		RepositoryId:          repoID,
 		Namespace:             strings.TrimSuffix(c.Param("namespace"), ".git"),
 		RepositoryName:        repo.Name,
 		ConfigResourceVersion: repo.UpdateTimestamp.UTC().Format(time.RFC3339Nano),
-		Actor: &gitv1.AuthContext{
-			Subject:    principal.Subject,
-			Issuer:     principal.Issuer,
-			AuthMethod: principal.AuthMethod,
-			Roles:      principal.Roles,
-			Groups:     principal.Groups,
-			Scopes:     principal.Scopes,
+		Authorization: &gitv1.RequestAuthorization{
+			Actor: &gitv1.AuthContext{
+				Subject: principal.Subject, Issuer: principal.Issuer, AuthMethod: principal.AuthMethod,
+				Roles: principal.Roles, Groups: principal.Groups, Scopes: principal.Scopes,
+			},
+			Action: approvedAction, ResourceKind: "repository", ResourceName: repo.Name, RepositoryId: repoID,
 		},
 		Policy: &gitv1.PushPolicy{
 			MaxPackSizeBytes: repo.MaxPackSizeBytes,

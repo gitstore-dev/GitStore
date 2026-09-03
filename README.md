@@ -25,7 +25,7 @@ graph TD
     OtherClients["Other GraphQL clients"]
     Controller["gitstore-controller-manager"]
 
-    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 5000\nCatalogService gRPC: 6000"]
+    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 9000 (host)\nCatalogService gRPC: 6000"]
     GitService["gitstore-git-service\ngRPC Git storage/transport: 50051"]
     Datastore["Datastore\nmemdb / ScyllaDB"]
     Repos["Bare Git repositories\nlocal filesystem"]
@@ -88,7 +88,7 @@ make bootstrap ADMIN_PASSWORD=<admin-password>
 The bootstrap command prints a clone URL similar to:
 
 ```text
-http://localhost:5000/gitstore-test/catalog.git
+http://localhost:9000/gitstore-test/catalog.git
 ```
 
 See the [user guide](docs/user-guide.md) for the complete Docker workflow, catalogue push examples, GraphQL queries, and troubleshooting.

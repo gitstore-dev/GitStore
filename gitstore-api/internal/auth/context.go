@@ -7,6 +7,7 @@ import "context"
 
 type principalContextKey struct{}
 type rawTokenContextKey struct{}
+type authorizedAnonymousContextKey struct{}
 
 // ContextWithPrincipal stores p in ctx under the package-private principalContextKey.
 func ContextWithPrincipal(ctx context.Context, p *Principal) context.Context {
@@ -31,4 +32,18 @@ func ContextWithRawToken(ctx context.Context, rawToken string) context.Context {
 func RawTokenFromContext(ctx context.Context) string {
 	s, _ := ctx.Value(rawTokenContextKey{}).(string)
 	return s
+}
+
+// ContextWithAuthorizedAnonymous records that the API's AuthZ middleware has
+// explicitly approved an anonymous request. It is intentionally separate from
+// the anonymous principal: AuthN alone must never authorize a GitService RPC.
+func ContextWithAuthorizedAnonymous(ctx context.Context) context.Context {
+	return context.WithValue(ctx, authorizedAnonymousContextKey{}, true)
+}
+
+// AuthorizedAnonymousFromContext reports whether AuthZ explicitly approved an
+// anonymous request for the current API operation.
+func AuthorizedAnonymousFromContext(ctx context.Context) bool {
+	approved, _ := ctx.Value(authorizedAnonymousContextKey{}).(bool)
+	return approved
 }

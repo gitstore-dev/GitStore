@@ -418,6 +418,9 @@ func TestRepoResolverSetsContext(t *testing.T) {
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
 	var capturedNamespace string
 	store := &testutil.StubStore{
+		GetRepositoryFunc: func(_ context.Context, id string) (*datastore.Repository, error) {
+			return &datastore.Repository{UID: id, Name: "catalog", Namespace: "gitstore"}, nil
+		},
 		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
 			return &datastore.Namespace{UID: "ns-id-1", Name: id}, nil
 		},
@@ -434,6 +437,14 @@ func TestRepoResolverSetsContext(t *testing.T) {
 			return []byte("001e# service=git-upload-pack\n0000"), gitv1.Service_SERVICE_GIT_UPLOAD_PACK, nil
 		},
 	}
+	registry := auth.NewProviderRegistry(
+		auth.NewChainedAuthN(&stubAuthNProviderWithPrincipal{
+			principal: &auth.Principal{Subject: "reader", AuthMethod: "basic"},
+			decision:  auth.Allow("stub-authn", "authenticated"),
+		}),
+		&stubAuthZProvider{decision: auth.Allow("stub-authz", "read granted")},
+		nil,
+	)
 
 	router := NewMuxWithStore(SmartHttpDeps{
 		GitClient:        client,
@@ -441,10 +452,11 @@ func TestRepoResolverSetsContext(t *testing.T) {
 		Store:            store,
 		Logger:           zap.NewNop(),
 		Ids:              apiruntime.NewSequenceIDGenerator(),
-		Registry:         newTestRegistry(t),
+		Registry:         registry,
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-upload-pack", nil)
+	req.SetBasicAuth("reader", "password")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -473,6 +485,9 @@ func TestGitHttpAuthorizerReadOnly(t *testing.T) {
 
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
 	store := &testutil.StubStore{
+		GetRepositoryFunc: func(_ context.Context, id string) (*datastore.Repository, error) {
+			return &datastore.Repository{UID: id, Name: "catalog", Namespace: "gitstore"}, nil
+		},
 		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
 			return &datastore.Namespace{UID: "ns-id-1", Name: id}, nil
 		},
@@ -508,6 +523,9 @@ func TestGitHttpAuthorizerAnonymousDenyChallengesForCredentials(t *testing.T) {
 	)
 
 	store := &testutil.StubStore{
+		GetRepositoryFunc: func(_ context.Context, id string) (*datastore.Repository, error) {
+			return &datastore.Repository{UID: id, Name: "catalog", Namespace: "gitstore"}, nil
+		},
 		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
 			return &datastore.Namespace{UID: "ns-id-1", Name: id}, nil
 		},
@@ -528,6 +546,40 @@ func TestGitHttpAuthorizerAnonymousDenyChallengesForCredentials(t *testing.T) {
 	assert.Equal(t, `Basic realm="GitStore"`, w.Header().Get("WWW-Authenticate"))
 }
 
+func TestGitHttpAuthorizerMarksPolicyApprovedAnonymousRead(t *testing.T) {
+	registry := auth.NewProviderRegistry(
+		auth.NewChainedAuthN(anonymous.New()),
+		&stubAuthZProvider{decision: auth.Allow("stub-authz", "public read")},
+		nil,
+	)
+	const wantRepoID = "01960000-0000-7000-8000-000000000001"
+	store := &testutil.StubStore{
+		GetRepositoryFunc: func(_ context.Context, id string) (*datastore.Repository, error) {
+			return &datastore.Repository{UID: id, Name: "catalog", Namespace: "gitstore"}, nil
+		},
+		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
+			return &datastore.Namespace{UID: "ns-id-1", Name: id}, nil
+		},
+		LookupRepositoryFunc: func(_ context.Context, _, _ string) (*datastore.NamespaceMapping, error) {
+			return &datastore.NamespaceMapping{RepositoryID: wantRepoID}, nil
+		},
+	}
+	client := &mockGitClient{
+		infoRefsFunc: func(ctx context.Context, _ string, _ gitv1.Service) ([]byte, gitv1.Service, error) {
+			assert.True(t, auth.AuthorizedAnonymousFromContext(ctx))
+			return []byte("001e# service=git-upload-pack\n0000"), gitv1.Service_SERVICE_GIT_UPLOAD_PACK, nil
+		},
+	}
+	router := NewMuxWithStore(SmartHttpDeps{
+		GitClient: client, Store: store, Logger: zap.NewNop(),
+		Ids: apiruntime.NewSequenceIDGenerator(), Registry: registry,
+	})
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/gitstore/catalog/info/refs?service=git-upload-pack", nil))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
 // T024: write-capable principal on receive-pack passes through.
 func TestGitHttpAuthorizerWriteAllowed(t *testing.T) {
 	writePrincipal := &auth.Principal{Subject: "writer", AuthMethod: "basic", Roles: []string{"writer"}}
@@ -542,6 +594,9 @@ func TestGitHttpAuthorizerWriteAllowed(t *testing.T) {
 
 	const wantRepoID = "01960000-0000-7000-8000-000000000001"
 	store := &testutil.StubStore{
+		GetRepositoryFunc: func(_ context.Context, id string) (*datastore.Repository, error) {
+			return &datastore.Repository{UID: id, Name: "catalog", Namespace: "gitstore"}, nil
+		},
 		GetNamespaceByNameFunc: func(_ context.Context, id string) (*datastore.Namespace, error) {
 			return &datastore.Namespace{UID: "ns-id-1", Name: id}, nil
 		},
@@ -685,7 +740,9 @@ func TestReceivePackAttachesPushContext(t *testing.T) {
 	pc := gitclient.PushContextFromContext(capturedCtx)
 	require.NotNil(t, pc, "PushContext must be in context passed to ReceivePack")
 	assert.Equal(t, repoID, pc.RepositoryId)
-	assert.Equal(t, "writer", pc.Actor.Subject)
+	require.NotNil(t, pc.Authorization)
+	require.NotNil(t, pc.Authorization.Actor)
+	assert.Equal(t, "writer", pc.Authorization.Actor.Subject)
 	assert.Equal(t, int64(52428800), pc.Policy.MaxPackSizeBytes)
 }
 

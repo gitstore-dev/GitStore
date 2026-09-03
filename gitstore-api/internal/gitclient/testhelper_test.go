@@ -47,5 +47,7 @@ func startBufconn(t *testing.T, svc gitv1.GitServiceServer) *gitclient.Client {
 	require.NoError(t, err)
 	t.Cleanup(func() { conn.Close() })
 
-	return gitclient.NewClientFromConn(conn)
+	client := gitclient.NewClientFromConn(conn)
+	client.RepositoryID = "01960000-0000-7000-8000-000000000001"
+	return client
 }

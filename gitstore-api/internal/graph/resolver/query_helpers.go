@@ -50,9 +50,6 @@ func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (mo
 		if err != nil {
 			return nil, nil
 		}
-		if err := r.authorizeRepositoryTenant(ctx, "read", repo.Name, ns); err != nil {
-			return nil, err
-		}
 		return datastoreRepositoryToModel(repo, ns, r.storageDataDir), nil
 	default:
 		return nil, nil

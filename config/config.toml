@@ -35,7 +35,7 @@ uri = "http://api:6000"
 
 [api]
 port = 4000
-git_port = 5000
+git_port = 9000
 grpc_port = 6000
 rate_limit_per_second = 50
 rate_limit_burst = 100

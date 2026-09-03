@@ -229,6 +229,7 @@ func TestPushContextInserter(t *testing.T) {
 			ctx := auth.ContextWithPrincipal(c.Request.Context(), principal)
 			c.Request = c.Request.WithContext(ctx)
 			c.Set(repoIDKey, repoID)
+			c.Set(approvedRepositoryActionKey, "repository.write.any")
 			c.Next()
 		},
 		authorizeMiddleware.PushContextInserter,
@@ -248,7 +249,9 @@ func TestPushContextInserter(t *testing.T) {
 	pc := gitclient.PushContextFromContext(capturedCtx)
 	require.NotNil(t, pc, "PushContext must be set in request context")
 	assert.Equal(t, repoID, pc.RepositoryId)
-	assert.Equal(t, "admin", pc.Actor.Subject)
+	require.NotNil(t, pc.Authorization)
+	require.NotNil(t, pc.Authorization.Actor)
+	assert.Equal(t, "admin", pc.Authorization.Actor.Subject)
 	assert.Equal(t, int64(52428800), pc.Policy.MaxPackSizeBytes)
 	assert.Equal(t, int64(10485760), pc.Policy.MaxFileSizeBytes)
 }

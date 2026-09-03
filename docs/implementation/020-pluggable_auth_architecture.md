@@ -582,8 +582,10 @@ role_bindings:
 
 Repository GraphQL control-plane operations use
 `repository.<operation>.own` when the caller owns every affected namespace and
-`repository.<operation>.any` for cross-tenant access. `repository.read` and
-`repository.write` remain the Git smart-HTTP actions.
+`repository.<operation>.any` for cross-tenant access. Git smart HTTP uses the
+same `repository.read.own|any` and `repository.write.own|any` vocabulary; the
+API passes the approved action and repository scope to GitService in a
+non-secret authorization envelope.
 
 ### 2e. anonymous (AuthN)
 
@@ -1154,7 +1156,7 @@ BasicAuthenticator → RepoResolver → GitHttpAuthorizer → [PushContextInsert
 - 401 + `WWW-Authenticate: Basic realm="GitStore"` on credential rejection.
 - 503 on transient auth errors (chain returns `err != nil`).
 - 404 pkt-line on unknown namespace/repository.
-- 403 on insufficient permissions (`repository.read` required for upload-pack, `repository.write` for receive-pack).
+- 403 on insufficient permissions (`repository.read.own|any` required for upload-pack, `repository.write.own|any` for receive-pack).
 - `resource_exhausted` gRPC status when `max_pack_size_bytes` or `max_file_size_bytes` exceeded.
 - `invalid_argument` gRPC status when `push_context` is missing or inconsistent.
 

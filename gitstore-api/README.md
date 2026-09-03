@@ -20,7 +20,7 @@ Post-receive admission is operation-aware for current Git-backed catalog resourc
 ## Boundaries
 
 - Clients send GraphQL traffic to this service on port `4000`.
-- Git clients send Smart HTTP traffic to this service on port `5000`.
+- Git clients use this service's Smart HTTP port `9000` in the default Compose deployment.
 - `gitstore-git-service` calls this service's CatalogService gRPC endpoint on port `6000`.
 - This service calls `gitstore-git-service` through GitService gRPC on port `50051`.
 - This service owns datastore persistence for control-plane records and admitted catalogue projections.

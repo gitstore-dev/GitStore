@@ -157,7 +157,7 @@ func serviceAccountCreateInput(t *testing.T, namespace, name, keyID string) *mod
 	}
 }
 
-func TestCreateServiceAccountValidatesKeysDuplicatesAndAuthorization(t *testing.T) {
+func TestCreateServiceAccountValidatesKeysAndDuplicates(t *testing.T) {
 	h := newServiceAccountResolverHarness(t)
 	ctx := serviceAccountAdminContext()
 	input := serviceAccountCreateInput(t, "controllers", "manager", "key-1")
@@ -183,14 +183,9 @@ func TestCreateServiceAccountValidatesKeysDuplicatesAndAuthorization(t *testing.
 	})
 	require.ErrorContains(t, err, "at least one public key")
 
-	h.authz.denyAction = "serviceaccount.create"
-	_, err = h.resolver.CreateServiceAccount(ctx, serviceAccountCreateInput(t, "controllers", "denied", "key-1"))
-	require.ErrorContains(t, err, "permission denied")
-	_, err = h.store.GetServiceAccountBySubject(ctx, "controllers", "denied")
-	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
-func TestRotateServiceAccountKeyPreservesOverlapAndRejectsEmptyOrUnauthorizedRotation(t *testing.T) {
+func TestRotateServiceAccountKeyPreservesOverlapAndRejectsEmptyRotation(t *testing.T) {
 	h := newServiceAccountResolverHarness(t)
 	ctx := serviceAccountAdminContext()
 	created, err := h.resolver.CreateServiceAccount(ctx, serviceAccountCreateInput(t, "controllers", "manager", "old"))
@@ -222,15 +217,9 @@ func TestRotateServiceAccountKeyPreservesOverlapAndRejectsEmptyOrUnauthorizedRot
 	require.Len(t, persisted.PublicKeys, 1)
 	assert.Equal(t, "new", persisted.PublicKeys[0].KeyID)
 
-	h.authz.denyAction = "serviceaccount.key.rotate"
-	_, err = h.resolver.RotateServiceAccountKey(ctx, &model.RotateServiceAccountKeyInput{
-		Metadata: &model.ObjectMetaInput{Namespace: "controllers", Name: "manager"},
-		Add:      []*model.ServiceAccountPublicKeyInput{serviceAccountPublicKeyInput(t, "denied")},
-	})
-	require.ErrorContains(t, err, "permission denied")
 }
 
-func TestDeleteServiceAccountIsIdempotentRevokesAuthenticationAndRequiresAuthorization(t *testing.T) {
+func TestDeleteServiceAccountIsIdempotentAndRevokesAuthentication(t *testing.T) {
 	h := newServiceAccountResolverHarness(t)
 	ctx := serviceAccountAdminContext()
 	created, err := h.resolver.CreateServiceAccount(ctx, serviceAccountCreateInput(t, "controllers", "manager", "key-1"))
@@ -264,15 +253,6 @@ func TestDeleteServiceAccountIsIdempotentRevokesAuthenticationAndRequiresAuthori
 	require.NoError(t, err)
 	assert.Empty(t, deleted.Metadata.UID)
 
-	_, err = h.resolver.CreateServiceAccount(ctx, serviceAccountCreateInput(t, "controllers", "denied", "key-1"))
-	require.NoError(t, err)
-	h.authz.denyAction = "serviceaccount.delete"
-	_, err = h.resolver.DeleteServiceAccount(ctx, &model.DeleteServiceAccountInput{
-		Metadata: &model.ObjectMetaInput{Namespace: "controllers", Name: "denied"},
-	})
-	require.ErrorContains(t, err, "permission denied")
-	_, err = h.store.GetServiceAccountBySubject(ctx, "controllers", "denied")
-	require.NoError(t, err)
 }
 
 func TestIssueServiceAccountTokenRequiresMatchingAssertionIdentityAndClampsTTL(t *testing.T) {

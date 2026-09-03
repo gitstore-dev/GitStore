@@ -22,6 +22,23 @@ pub struct AuthContext {
     #[prost(string, repeated, tag="6")]
     pub scopes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+/// RequestAuthorization is the API-approved, non-secret authorization decision
+/// for a single GitService call. Git service validates that the action and scope
+/// are compatible with the RPC before any Git effect, but does not reevaluate
+/// the API's pluggable authorization policy.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RequestAuthorization {
+    #[prost(message, optional, tag="1")]
+    pub actor: ::core::option::Option<AuthContext>,
+    #[prost(string, tag="2")]
+    pub action: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub resource_kind: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub resource_name: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub repository_id: ::prost::alloc::string::String,
+}
 /// PushPolicy carries per-repository push limits resolved from the Repository
 /// datastore record. A zero value for any limit field means "no limit enforced".
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -47,10 +64,13 @@ pub struct PushContext {
     /// opaque audit tag; not interpreted by git-service
     #[prost(string, tag="4")]
     pub config_resource_version: ::prost::alloc::string::String,
+    #[deprecated]
     #[prost(message, optional, tag="5")]
     pub actor: ::core::option::Option<AuthContext>,
     #[prost(message, optional, tag="6")]
     pub policy: ::core::option::Option<PushPolicy>,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InfoRefsRequest {
@@ -60,6 +80,8 @@ pub struct InfoRefsRequest {
     /// service identifies whether this is an upload-pack or receive-pack advertisement.
     #[prost(enumeration="Service", tag="1")]
     pub service: i32,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InfoRefsResponse {
@@ -126,6 +148,8 @@ pub struct UploadPackRequest {
     /// body is the complete pkt-line payload (want/have lines + flush) from the git client.
     #[prost(bytes="vec", tag="1")]
     pub body: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 /// UploadPackResponse is one chunk of the server-streaming PACK response.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -146,6 +170,8 @@ pub struct CreateRepositoryRequest {
     pub repository_id: ::prost::alloc::string::String,
     #[prost(string, tag="2")]
     pub storage_class: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateRepositoryResponse {
@@ -158,6 +184,8 @@ pub struct CreateRepositoryResponse {
 pub struct DeleteRepositoryRequest {
     #[prost(string, tag="1")]
     pub repository_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteRepositoryResponse {
@@ -174,6 +202,8 @@ pub struct GetFileRequest {
     pub path: ::prost::alloc::string::String,
     #[prost(string, tag="2")]
     pub r#ref: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetFileResponse {
@@ -194,6 +224,8 @@ pub struct GetFileStreamRequest {
     pub path: ::prost::alloc::string::String,
     #[prost(string, tag="2")]
     pub r#ref: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetFileStreamResponse {
@@ -214,6 +246,8 @@ pub struct ListFilesRequest {
     pub path_prefix: ::prost::alloc::string::String,
     #[prost(bool, tag="3")]
     pub recursive: bool,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListFilesResponse {
@@ -247,6 +281,8 @@ pub struct CommitFileRequest {
     pub author_name: ::prost::alloc::string::String,
     #[prost(string, tag="5")]
     pub author_email: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommitFileResponse {
@@ -267,6 +303,8 @@ pub struct DeleteFileRequest {
     pub author_name: ::prost::alloc::string::String,
     #[prost(string, tag="4")]
     pub author_email: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteFileResponse {
@@ -285,6 +323,8 @@ pub struct CreateTagRequest {
     pub message: ::prost::alloc::string::String,
     #[prost(string, tag="3")]
     pub target_commit_sha: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateTagResponse {
@@ -299,6 +339,8 @@ pub struct ListTagsRequest {
     pub repository_id: ::prost::alloc::string::String,
     #[prost(string, tag="1")]
     pub prefix: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListTagsResponse {
@@ -311,6 +353,8 @@ pub struct GetLatestTagRequest {
     pub repository_id: ::prost::alloc::string::String,
     #[prost(string, tag="1")]
     pub prefix: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetLatestTagResponse {

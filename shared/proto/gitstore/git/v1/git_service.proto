@@ -47,6 +47,18 @@ message AuthContext {
   repeated string scopes = 6;
 }
 
+// RequestAuthorization is the API-approved, non-secret authorization decision
+// for a single GitService call. Git service validates that the action and scope
+// are compatible with the RPC before any Git effect, but does not reevaluate
+// the API's pluggable authorization policy.
+message RequestAuthorization {
+  AuthContext actor = 1;
+  string action = 2;
+  string resource_kind = 3;
+  string resource_name = 4;
+  string repository_id = 5;
+}
+
 // PushPolicy carries per-repository push limits resolved from the Repository
 // datastore record. A zero value for any limit field means "no limit enforced".
 message PushPolicy {
@@ -61,8 +73,9 @@ message PushContext {
   string repository_name         = 2;
   string repository_id           = 3; // MUST match the repository_id field on the enclosing chunk
   string config_resource_version = 4; // opaque audit tag; not interpreted by git-service
-  AuthContext actor              = 5;
+  AuthContext actor              = 5 [deprecated = true];
   PushPolicy  policy             = 6;
+  RequestAuthorization authorization = 14;
 }
 
 // GitService provides raw git primitive operations over gRPC.
@@ -141,6 +154,7 @@ message InfoRefsRequest {
 
   // service identifies whether this is an upload-pack or receive-pack advertisement.
   Service service = 1;
+  RequestAuthorization authorization = 14;
 }
 
 message InfoRefsResponse {
@@ -197,6 +211,7 @@ message UploadPackRequest {
 
   // body is the complete pkt-line payload (want/have lines + flush) from the git client.
   bytes body = 1;
+  RequestAuthorization authorization = 14;
 }
 
 // UploadPackResponse is one chunk of the server-streaming PACK response.
@@ -212,6 +227,7 @@ message UploadPackResponse {
 message CreateRepositoryRequest {
   string repository_id = 1;
   string storage_class = 2;
+  RequestAuthorization authorization = 14;
 }
 
 message CreateRepositoryResponse {
@@ -221,6 +237,7 @@ message CreateRepositoryResponse {
 
 message DeleteRepositoryRequest {
   string repository_id = 1;
+  RequestAuthorization authorization = 14;
 }
 
 message DeleteRepositoryResponse {
@@ -233,6 +250,7 @@ message GetFileRequest {
   string repository_id = 15;
   string path = 1;
   string ref  = 2;
+  RequestAuthorization authorization = 14;
 }
 
 message GetFileResponse {
@@ -246,6 +264,7 @@ message GetFileStreamRequest {
   string repository_id = 15;
   string path = 1;
   string ref  = 2;
+  RequestAuthorization authorization = 14;
 }
 
 message GetFileStreamResponse {
@@ -259,6 +278,7 @@ message ListFilesRequest {
   string ref         = 1;
   string path_prefix = 2;
   bool   recursive   = 3;
+  RequestAuthorization authorization = 14;
 }
 
 message ListFilesResponse {
@@ -281,6 +301,7 @@ message CommitFileRequest {
   string commit_message = 3;
   string author_name    = 4;
   string author_email   = 5;
+  RequestAuthorization authorization = 14;
 }
 
 message CommitFileResponse {
@@ -294,6 +315,7 @@ message DeleteFileRequest {
   string commit_message = 2;
   string author_name    = 3;
   string author_email   = 4;
+  RequestAuthorization authorization = 14;
 }
 
 message DeleteFileResponse {
@@ -307,6 +329,7 @@ message CreateTagRequest {
   string tag_name          = 1;
   string message           = 2;
   string target_commit_sha = 3;
+  RequestAuthorization authorization = 14;
 }
 
 message CreateTagResponse {
@@ -317,6 +340,7 @@ message CreateTagResponse {
 message ListTagsRequest {
   string repository_id = 15;
   string prefix = 1;
+  RequestAuthorization authorization = 14;
 }
 
 message ListTagsResponse {
@@ -326,6 +350,7 @@ message ListTagsResponse {
 message GetLatestTagRequest {
   string repository_id = 15;
   string prefix = 1;
+  RequestAuthorization authorization = 14;
 }
 
 message GetLatestTagResponse {

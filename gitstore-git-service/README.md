@@ -13,7 +13,7 @@ Rust Git storage and transport service for GitStore. It is gRPC-only and owns ba
 - Receive hook phases.
 - CatalogService callouts to the API for validation and admission.
 
-It does not expose public Git HTTP endpoints. Git clients enter through `gitstore-api` on Git Smart HTTP port `5000`.
+It does not expose public Git HTTP endpoints. In the default Compose deployment, Git clients enter through `gitstore-api` on Git Smart HTTP host port `9000`.
 
 ## Boundaries
 

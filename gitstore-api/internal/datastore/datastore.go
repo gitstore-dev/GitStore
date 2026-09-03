@@ -327,12 +327,8 @@ func ApplyCategoryTaxonomyStatusPatch(c *CategoryTaxonomy, patch CategoryTaxonom
 	return nil
 }
 
-// Datastore is the persistence contract for all backends.
-//
-// All implementations must be safe for concurrent use.
-// The abstraction never retries or reconnects internally; storage errors are
-// propagated immediately to callers (FR-007a).
-type Datastore interface {
+// FileStore persists File resources.
+type FileStore interface {
 	// File operations
 	CreateFile(ctx context.Context, f *File) error
 	GetFile(ctx context.Context, uid string) (*File, error)
@@ -344,8 +340,12 @@ type Datastore interface {
 	DeleteFile(ctx context.Context, uid string) error
 	DeleteFileWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 
-	// Product operations
+	// UpdateFileStatus applies a partial status update.
 	UpdateFileStatus(ctx context.Context, namespace, name string, patch FileStatusPatch) (*File, error)
+}
+
+// ProductStore persists Product resources.
+type ProductStore interface {
 	CreateProduct(ctx context.Context, p *Product) error
 	GetProduct(ctx context.Context, uid string) (*Product, error)
 	GetProductByName(ctx context.Context, namespace, name string) (*Product, error)
@@ -353,8 +353,10 @@ type Datastore interface {
 	UpdateProduct(ctx context.Context, p *Product) error
 	DeleteProduct(ctx context.Context, uid string) error
 	DeleteProductWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
+}
 
-	// CategoryTaxonomy operations
+// CategoryTaxonomyStore persists CategoryTaxonomy resources.
+type CategoryTaxonomyStore interface {
 	CreateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error
 	GetCategoryTaxonomy(ctx context.Context, uid string) (*CategoryTaxonomy, error)
 	GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*CategoryTaxonomy, error)
@@ -368,8 +370,10 @@ type Datastore interface {
 	// ErrNotFound if no resource matches namespace/name (spec 040 FR-009,
 	// FR-010, FR-012; research.md R6).
 	UpdateCategoryTaxonomyStatus(ctx context.Context, namespace, name string, patch CategoryTaxonomyStatusPatch) (*CategoryTaxonomy, error)
+}
 
-	// ProductVariant operations
+// ProductVariantStore persists ProductVariant resources.
+type ProductVariantStore interface {
 	CreateProductVariant(ctx context.Context, v *ProductVariant) error
 	GetProductVariant(ctx context.Context, uid string) (*ProductVariant, error)
 	GetProductVariantByName(ctx context.Context, namespace, name string) (*ProductVariant, error)
@@ -379,8 +383,10 @@ type Datastore interface {
 	UpdateProductVariant(ctx context.Context, v *ProductVariant) error
 	DeleteProductVariant(ctx context.Context, uid string) error
 	DeleteProductVariantWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
+}
 
-	// Collection operations
+// CollectionStore persists Collection resources and product selector queries.
+type CollectionStore interface {
 	CreateCollection(ctx context.Context, c *Collection) error
 	GetCollection(ctx context.Context, uid string) (*Collection, error)
 	GetCollectionByName(ctx context.Context, namespace, name string) (*Collection, error)
@@ -389,8 +395,10 @@ type Datastore interface {
 	DeleteCollection(ctx context.Context, uid string) error
 	DeleteCollectionWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 	ListProductsByLabelSelector(ctx context.Context, namespace string, selector catalog.LabelSelector) ([]*Product, error)
+}
 
-	// Namespace operations
+// NamespaceStore persists Namespace resources.
+type NamespaceStore interface {
 	CreateNamespace(ctx context.Context, ns *Namespace) error
 	GetNamespace(ctx context.Context, uid string) (*Namespace, error)
 	GetNamespaceByName(ctx context.Context, name string) (*Namespace, error)
@@ -406,8 +414,12 @@ type Datastore interface {
 	// enforce FR-001 (reject deletion while repositories remain). Must be
 	// an existence check (LIMIT 1 / equivalent), not a full count.
 	HasRepositories(ctx context.Context, namespace string) (bool, error)
+}
 
-	// Repository operations
+// RepositoryStore persists Repository resources. Repository routing is kept
+// separate because it is the (namespace, name) <-> repository identity relation,
+// rather than Namespace lifecycle state.
+type RepositoryStore interface {
 	CreateRepository(ctx context.Context, r *Repository) error
 	// CreateRepositoryInActiveNamespace atomically or conditionally proves the
 	// owning Namespace is active before the repository can commit.
@@ -425,8 +437,10 @@ type Datastore interface {
 	// (reject deletion while catalog resources remain). Must be an
 	// existence check (LIMIT 1 / equivalent), not a full count.
 	HasCatalogResources(ctx context.Context, repositoryID string) (bool, error)
+}
 
-	// NamespaceMapping operations (lookup contract)
+// RepositoryRoutingStore resolves and maintains the repository routing relation.
+type RepositoryRoutingStore interface {
 	CreateNamespaceMapping(ctx context.Context, m *NamespaceMapping) error
 	LookupRepository(ctx context.Context, namespace, name string) (*NamespaceMapping, error)
 	LookupNamespaceByRepoID(ctx context.Context, repositoryID string) (*NamespaceMapping, error)
@@ -435,8 +449,10 @@ type Datastore interface {
 	// after durably reserving an active target Namespace.
 	TransferRepository(ctx context.Context, repositoryID, fromNamespace, toNamespace string) error
 	DeleteNamespaceMapping(ctx context.Context, namespace, name string) error
+}
 
-	// ServiceAccount operations (spec 061)
+// ServiceAccountStore persists non-human ServiceAccount identities.
+type ServiceAccountStore interface {
 	CreateServiceAccount(ctx context.Context, sa *ServiceAccount) error
 	GetServiceAccountByUID(ctx context.Context, uid string) (*ServiceAccount, error)
 	GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*ServiceAccount, error)
@@ -454,7 +470,28 @@ type Datastore interface {
 	// digest until expiresAt. It returns true exactly once for a digest and
 	// false on every replay before expiry.
 	TryConsumeServiceAccountAssertion(ctx context.Context, jtiDigest string, expiresAt time.Time) (bool, error)
+}
 
-	// Close lifecycle function
+// Closer releases backend resources.
+type Closer interface {
 	Close() error
+}
+
+// Datastore is the aggregate persistence contract used only for backend
+// construction and application wiring. Consumers should depend on the smallest
+// focused contract above.
+//
+// All implementations must be safe for concurrent use. The abstraction never
+// retries or reconnects internally; storage errors are propagated immediately.
+type Datastore interface {
+	FileStore
+	ProductStore
+	CategoryTaxonomyStore
+	ProductVariantStore
+	CollectionStore
+	NamespaceStore
+	RepositoryStore
+	RepositoryRoutingStore
+	ServiceAccountStore
+	Closer
 }

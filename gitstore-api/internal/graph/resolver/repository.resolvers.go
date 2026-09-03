@@ -21,9 +21,6 @@ func (r *mutationResolver) CreateRepository(ctx context.Context, input model.Cre
 	if err != nil {
 		return nil, err
 	}
-	if err := r.authorizeRepositoryTenant(ctx, "create", input.Name, ns); err != nil {
-		return nil, err
-	}
 	defaultBranch := "main"
 	if input.DefaultBranch != nil && *input.DefaultBranch != "" {
 		defaultBranch = *input.DefaultBranch
@@ -60,9 +57,6 @@ func (r *mutationResolver) RenameRepository(ctx context.Context, input model.Ren
 	if err != nil {
 		return nil, err
 	}
-	if err := r.authorizeRepositoryTenant(ctx, "rename", repo.Name, ns); err != nil {
-		return nil, err
-	}
 	repo, err = r.service.RenameRepository(ctx, repoID, input.NewName, callerUsernameOrAnon(ctx, r))
 	if err != nil {
 		return nil, err
@@ -94,18 +88,7 @@ func (r *mutationResolver) TransferRepository(ctx context.Context, input model.T
 	if err != nil {
 		return nil, err
 	}
-	repo, err := r.service.GetRepository(ctx, repoID)
-	if err != nil {
-		return nil, err
-	}
-	sourceNS, err := r.service.GetNamespaceByName(ctx, repo.Namespace)
-	if err != nil {
-		return nil, err
-	}
-	if err := r.authorizeRepositoryTenant(ctx, "transfer", repo.Name, sourceNS, ns); err != nil {
-		return nil, err
-	}
-	repo, err = r.service.TransferRepository(ctx, repoID, ns.Name, callerUsernameOrAnon(ctx, r))
+	repo, err := r.service.TransferRepository(ctx, repoID, ns.Name, callerUsernameOrAnon(ctx, r))
 	if err != nil {
 		return nil, err
 	}
@@ -126,17 +109,6 @@ func (r *mutationResolver) TransferRepository(ctx context.Context, input model.T
 func (r *mutationResolver) DeleteRepository(ctx context.Context, input model.DeleteRepositoryInput) (*model.DeleteRepositoryPayload, error) {
 	repoID, err := decodeNodeIDAs(nodeKindRepository, input.RepositoryID)
 	if err != nil {
-		return nil, err
-	}
-	repo, err := r.service.GetRepository(ctx, repoID)
-	if err != nil {
-		return nil, err
-	}
-	ns, err := r.service.GetNamespaceByName(ctx, repo.Namespace)
-	if err != nil {
-		return nil, err
-	}
-	if err := r.authorizeRepositoryTenant(ctx, "delete", repo.Name, ns); err != nil {
 		return nil, err
 	}
 	if err := r.service.DeleteRepository(ctx, repoID, callerUsernameOrAnon(ctx, r)); err != nil {
@@ -161,9 +133,6 @@ func (r *queryResolver) Repository(ctx context.Context, by model.RepositoryBy) (
 		}
 		ns, err := r.service.GetNamespaceByName(ctx, repo.Namespace)
 		if err != nil {
-			return nil, err
-		}
-		if err := r.authorizeRepositoryTenant(ctx, "read", repo.Name, ns); err != nil {
 			return nil, err
 		}
 		r.logger.Info("lookup repository", zap.String("repo_id", repoID))
@@ -192,9 +161,6 @@ func (r *queryResolver) Repository(ctx context.Context, by model.RepositoryBy) (
 		if err != nil {
 			return nil, err
 		}
-		if err := r.authorizeRepositoryTenant(ctx, "read", repo.Name, ns); err != nil {
-			return nil, err
-		}
 		r.logger.Info("lookup repository",
 			zap.String("namespace", ns.Name),
 			zap.String("name", by.NamespacePath.Name),
@@ -213,9 +179,6 @@ func (r *queryResolver) Repository(ctx context.Context, by model.RepositoryBy) (
 func (r *queryResolver) Repositories(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.RepositoryConnection, error) {
 	ns, err := r.service.GetNamespaceByName(ctx, namespace)
 	if err != nil {
-		return nil, err
-	}
-	if err := r.authorizeRepositoryTenant(ctx, "read", namespace, ns); err != nil {
 		return nil, err
 	}
 	params := toPageParams(first, after, last, before)

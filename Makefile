@@ -505,7 +505,7 @@ bootstrap-repository: bootstrap-tools ## Create only the bootstrap repository; n
 		echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
 		exit 1; \
 	fi; \
-	echo "$$response" | jq -r '.data.createRepository.repository | "Created repository \(.namespace.metadata.name)/\(.name) (\(.id))\nClone URL: http://localhost:5000/\(.namespace.metadata.name)/\(.name).git"'
+	echo "$$response" | jq -r '.data.createRepository.repository | "Created repository \(.namespace.metadata.name)/\(.name) (\(.id))\nClone URL: http://localhost:9000/\(.namespace.metadata.name)/\(.name).git"'
 
 git-clean-data: ## Remove native local git-service repository data; requires CONFIRM=1.
 	@if [ "$(CONFIRM)" != "1" ]; then \

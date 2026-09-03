@@ -213,7 +213,7 @@ func load(path string) (*Config, error) {
 	// Defaults — all known keys must have a default so AutomaticEnv populates them
 	// during Unmarshal, even if the default is an empty string.
 	v.SetDefault("api.port", 4000)
-	v.SetDefault("api.git_port", 5000)
+	v.SetDefault("api.git_port", 9000)
 	v.SetDefault("api.grpc_port", 6000)
 	v.SetDefault("api.rate_limit_per_second", 50)
 	v.SetDefault("api.rate_limit_burst", 100)

@@ -21,10 +21,28 @@ fn make_service() -> (GitServiceImpl, TempDir) {
     (svc, dir)
 }
 
+fn test_authorization(repository_id: &str, action: &str) -> Option<proto::RequestAuthorization> {
+    Some(proto::RequestAuthorization {
+        actor: Some(proto::AuthContext {
+            subject: "system:api".to_string(),
+            issuer: "integration-test".to_string(),
+            auth_method: "internal".to_string(),
+            roles: vec![],
+            groups: vec![],
+            scopes: vec![],
+        }),
+        action: action.to_string(),
+        resource_kind: "repository".to_string(),
+        resource_name: String::new(),
+        repository_id: repository_id.to_string(),
+    })
+}
+
 fn create_req(id: &str) -> Request<proto::CreateRepositoryRequest> {
     Request::new(proto::CreateRepositoryRequest {
         repository_id: id.to_string(),
         storage_class: String::new(),
+        authorization: test_authorization(id, "repository.create.any"),
     })
 }
 
@@ -47,6 +65,7 @@ async fn test_create_commit_list_delete() {
         commit_message: "Initial commit".to_string(),
         author_name: "Test".to_string(),
         author_email: "test@example.com".to_string(),
+        authorization: test_authorization(INT_REPO_1, "repository.write.any"),
     }))
     .await
     .expect("commit_file");
@@ -58,6 +77,7 @@ async fn test_create_commit_list_delete() {
             r#ref: String::new(),
             path_prefix: String::new(),
             recursive: true,
+            authorization: test_authorization(INT_REPO_1, "repository.read.any"),
         }))
         .await
         .expect("list_files");
@@ -72,6 +92,7 @@ async fn test_create_commit_list_delete() {
     svc.list_tags(Request::new(proto::ListTagsRequest {
         repository_id: INT_REPO_1.to_string(),
         prefix: String::new(),
+        authorization: test_authorization(INT_REPO_1, "repository.read.any"),
     }))
     .await
     .expect("list_tags");
@@ -79,6 +100,7 @@ async fn test_create_commit_list_delete() {
     // 5. Delete repository
     svc.delete_repository(Request::new(proto::DeleteRepositoryRequest {
         repository_id: INT_REPO_1.to_string(),
+        authorization: test_authorization(INT_REPO_1, "repository.delete.any"),
     }))
     .await
     .expect("delete_repository");
@@ -89,6 +111,7 @@ async fn test_create_commit_list_delete() {
             repository_id: INT_REPO_1.to_string(),
             path: "README.md".to_string(),
             r#ref: String::new(),
+            authorization: test_authorization(INT_REPO_1, "repository.read.any"),
         }))
         .await
         .expect_err("expected NOT_FOUND after delete");
@@ -115,6 +138,7 @@ async fn test_concurrent_repos_are_isolated() {
         commit_message: "add file-a".to_string(),
         author_name: "Test".to_string(),
         author_email: "test@example.com".to_string(),
+        authorization: test_authorization(INT_REPO_A, "repository.write.any"),
     }))
     .await
     .expect("commit to repo-a");
@@ -126,6 +150,7 @@ async fn test_concurrent_repos_are_isolated() {
         commit_message: "add file-b".to_string(),
         author_name: "Test".to_string(),
         author_email: "test@example.com".to_string(),
+        authorization: test_authorization(INT_REPO_B, "repository.write.any"),
     }))
     .await
     .expect("commit to repo-b");
@@ -137,6 +162,7 @@ async fn test_concurrent_repos_are_isolated() {
             r#ref: String::new(),
             path_prefix: String::new(),
             recursive: true,
+            authorization: test_authorization(INT_REPO_B, "repository.read.any"),
         }))
         .await
         .expect("list_files repo-b")
@@ -155,6 +181,7 @@ async fn test_concurrent_repos_are_isolated() {
             r#ref: String::new(),
             path_prefix: String::new(),
             recursive: true,
+            authorization: test_authorization(INT_REPO_A, "repository.read.any"),
         }))
         .await
         .expect("list_files repo-a")
@@ -180,6 +207,7 @@ async fn test_delete_unknown_repo_returns_not_found() {
     let err = svc
         .delete_repository(Request::new(proto::DeleteRepositoryRequest {
             repository_id: INT_REPO_1.to_string(),
+            authorization: test_authorization(INT_REPO_1, "repository.delete.any"),
         }))
         .await
         .expect_err("expected NOT_FOUND");
@@ -196,6 +224,7 @@ async fn test_invalid_repo_id_rejected_on_create() {
             .create_repository(Request::new(proto::CreateRepositoryRequest {
                 repository_id: bad_id.to_string(),
                 storage_class: String::new(),
+                authorization: test_authorization(bad_id, "repository.create.any"),
             }))
             .await
             .expect_err(&format!("expected INVALID_ARGUMENT for {bad_id:?}"));

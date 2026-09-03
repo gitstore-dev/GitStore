@@ -9,13 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/99designs/gqlgen/graphql"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
+	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/ast"
 	"go.uber.org/zap"
 )
 
@@ -61,7 +64,8 @@ func (a *tenantOwnershipAuthz) callsSnapshot() []repositoryAuthzCall {
 }
 
 type repositoryAuthzHarness struct {
-	root             *resolver.Resolver
+	store            datastore.Datastore
+	registry         *auth.ProviderRegistry
 	authz            *tenantOwnershipAuthz
 	sourceNamespace  *datastore.Namespace
 	targetNamespace  *datastore.Namespace
@@ -110,23 +114,30 @@ func newRepositoryAuthzHarness(t *testing.T) *repositoryAuthzHarness {
 	}))
 
 	authz := &tenantOwnershipAuthz{}
-	root, err := resolver.NewResolver(resolver.ResolverDeps{
-		Store:    store,
-		Registry: auth.NewProviderRegistry(nil, authz, nil),
-		Logger:   zap.NewNop(),
-	})
-	require.NoError(t, err)
+	registry := auth.NewProviderRegistry(nil, authz, nil)
 	repositoryNodeID, err := resolver.EncodeNodeID("Repository", repo.UID)
 	require.NoError(t, err)
 
 	return &repositoryAuthzHarness{
-		root:             root,
+		store:            store,
+		registry:         registry,
 		authz:            authz,
 		sourceNamespace:  source,
 		targetNamespace:  target,
 		repository:       repo,
 		repositoryNodeID: repositoryNodeID,
 	}
+}
+
+func (h *repositoryAuthzHarness) authorizeField(ctx context.Context, object, field string, args map[string]any) error {
+	middleware := security.NewAuthorizeWithStore(h.registry, h.store, zap.NewNop())
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: object,
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: field}},
+		Args:   args,
+	})
+	_, err := middleware.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { return nil, nil })
+	return err
 }
 
 func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing.T) {
@@ -142,87 +153,70 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 	tests := []struct {
 		name   string
 		action string
-		call   func() error
+		object string
+		field  string
+		args   map[string]any
 	}{
 		{
 			name:   "create",
 			action: "repository.create.any",
-			call: func() error {
-				_, err := h.root.Mutation().CreateRepository(ctx, model.CreateRepositoryInput{
-					Namespace: h.sourceNamespace.Name,
-					Name:      "new-catalog",
-				})
-				return err
-			},
+			object: "Mutation", field: "createRepository", args: map[string]any{"input": model.CreateRepositoryInput{
+				Namespace: h.sourceNamespace.Name,
+				Name:      "new-catalog",
+			}},
 		},
 		{
 			name:   "rename",
 			action: "repository.rename.any",
-			call: func() error {
-				_, err := h.root.Mutation().RenameRepository(ctx, model.RenameRepositoryInput{
-					RepositoryID: h.repositoryNodeID,
-					NewName:      "renamed-catalog",
-				})
-				return err
-			},
+			object: "Mutation", field: "renameRepository", args: map[string]any{"input": model.RenameRepositoryInput{
+				RepositoryID: h.repositoryNodeID,
+				NewName:      "renamed-catalog",
+			}},
 		},
 		{
 			name:   "transfer",
 			action: "repository.transfer.any",
-			call: func() error {
-				_, err := h.root.Mutation().TransferRepository(ctx, model.TransferRepositoryInput{
-					RepositoryID:      h.repositoryNodeID,
-					TargetNamespaceID: targetNamespaceNodeID,
-				})
-				return err
-			},
+			object: "Mutation", field: "transferRepository", args: map[string]any{"input": model.TransferRepositoryInput{
+				RepositoryID:      h.repositoryNodeID,
+				TargetNamespaceID: targetNamespaceNodeID,
+			}},
 		},
 		{
 			name:   "delete",
 			action: "repository.delete.any",
-			call: func() error {
-				_, err := h.root.Mutation().DeleteRepository(ctx, model.DeleteRepositoryInput{
-					RepositoryID: h.repositoryNodeID,
-				})
-				return err
-			},
+			object: "Mutation", field: "deleteRepository", args: map[string]any{"input": model.DeleteRepositoryInput{
+				RepositoryID: h.repositoryNodeID,
+			}},
 		},
 		{
 			name:   "read by ID",
 			action: "repository.read.any",
-			call: func() error {
-				_, err := h.root.Query().Repository(ctx, model.RepositoryBy{ID: &h.repositoryNodeID})
-				return err
-			},
+			object: "Query", field: "repository", args: map[string]any{"by": model.RepositoryBy{ID: &h.repositoryNodeID}},
 		},
 		{
 			name:   "read by namespace path",
 			action: "repository.read.any",
-			call: func() error {
-				_, err := h.root.Query().Repository(ctx, model.RepositoryBy{
-					NamespacePath: &model.RepositoryNamespacePath{
-						Namespace: h.sourceNamespace.Name,
-						Name:      h.repository.Name,
-					},
-				})
-				return err
-			},
+			object: "Query", field: "repository", args: map[string]any{"by": model.RepositoryBy{
+				NamespacePath: &model.RepositoryNamespacePath{
+					Namespace: h.sourceNamespace.Name,
+					Name:      h.repository.Name,
+				},
+			}},
 		},
 		{
 			name:   "read through node",
 			action: "repository.read.any",
-			call: func() error {
-				_, err := h.root.Query().Node(ctx, h.repositoryNodeID)
-				return err
-			},
+			object: "Query", field: "node", args: map[string]any{"id": h.repositoryNodeID},
+		},
+		{
+			name:   "read through batched nodes",
+			action: "repository.read.any",
+			object: "Query", field: "nodes", args: map[string]any{"ids": []string{h.repositoryNodeID}},
 		},
 		{
 			name:   "list namespace repositories",
 			action: "repository.read.any",
-			call: func() error {
-				_, err := h.root.Query().Repositories(ctx, h.sourceNamespace.Name, &first, nil, nil, nil)
-				return err
-			},
+			object: "Query", field: "repositories", args: map[string]any{"namespace": h.sourceNamespace.Name, "first": &first},
 		},
 	}
 
@@ -230,7 +224,7 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			h.authz.reset()
 
-			err := test.call()
+			err := h.authorizeField(ctx, test.object, test.field, test.args)
 
 			require.EqualError(t, err, "input: permission denied: cross-tenant access denied")
 			calls := h.authz.callsSnapshot()
@@ -247,17 +241,16 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 	}
 }
 
-func TestRepositoryResolverUsesOwnActionForTenantOwner(t *testing.T) {
+func TestRepositoryFieldAuthorizerUsesOwnActionForTenantOwner(t *testing.T) {
 	h := newRepositoryAuthzHarness(t)
 	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
 		Subject:    "alice",
 		AuthMethod: "test",
 	})
 
-	repository, err := h.root.Query().Repository(ctx, model.RepositoryBy{ID: &h.repositoryNodeID})
+	err := h.authorizeField(ctx, "Query", "repository", map[string]any{"by": model.RepositoryBy{ID: &h.repositoryNodeID}})
 
 	require.NoError(t, err)
-	require.NotNil(t, repository)
 	calls := h.authz.callsSnapshot()
 	require.Len(t, calls, 1)
 	assert.Equal(t, "repository.read.own", calls[0].action)

@@ -15,7 +15,7 @@ graph TD
     GraphQLClient["GraphQL clients\nstorefront / admin / scripts"]
     Controller["gitstore-controller-manager\nport 5001"]
 
-    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 5000\nCatalogService gRPC: 6000"]
+    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 9000 (host)\nCatalogService gRPC: 6000"]
     GitService["gitstore-git-service\nGitService gRPC: 50051"]
     Datastore["Datastore\nmemdb or ScyllaDB"]
     Repos["Bare repositories\nlocal filesystem"]
@@ -35,7 +35,7 @@ graph TD
 | Service                       |    Port | Purpose                                                |
 |-------------------------------|--------:|--------------------------------------------------------|
 | `gitstore-api`                |  `4000` | GraphQL, Playground, `/health`, `/ready`, login helper |
-| `gitstore-api`                |  `5000` | Git Smart HTTP front door                              |
+| `gitstore-api`                |  `9000` | Git Smart HTTP front door (host port)                  |
 | `gitstore-api`                |  `6000` | CatalogService gRPC called by the Git service          |
 | `gitstore-git-service`        | `50051` | GitService gRPC storage and transport                  |
 | `gitstore-controller-manager` |  `5001` | `/health`, `/metrics`, poison-item API                 |
@@ -222,7 +222,7 @@ limits, sustained projection mutation, and two independent clients. Add
 
 The API is the Git Smart HTTP front door. The Rust Git service is gRPC-only storage and transport.
 
-1. A Git client clones, fetches, or pushes to `http://localhost:5000/{namespace}/{repo}.git`.
+1. A Git client clones, fetches, or pushes to `http://localhost:9000/{namespace}/{repo}.git`.
 2. `gitstore-api` resolves `{namespace}/{repo}` to the stable repository ID stored in the datastore.
 3. `gitstore-api` forwards Git transport work to `gitstore-git-service` through `GitService` gRPC.
 4. During receive-pack, `gitstore-git-service` stages objects in quarantine and runs enabled hook phases.
@@ -459,7 +459,7 @@ Use Conventional Commits.
 | Env var                               | Default                  | Purpose                  |
 |---------------------------------------|--------------------------|--------------------------|
 | `GITSTORE_API__PORT`                  | `4000`                   | GraphQL HTTP port        |
-| `GITSTORE_API__GIT_PORT`              | `5000`                   | Git Smart HTTP port      |
+| `GITSTORE_API__GIT_PORT`              | `9000`                   | Git Smart HTTP port      |
 | `GITSTORE_API__GRPC_PORT`             | `6000`                   | CatalogService gRPC port |
 | `GITSTORE_GIT__GRPC__URI`             | `dns:///localhost:50051` | GitService gRPC target   |
 | `GITSTORE_DATASTORE__BACKEND`         | `memdb`                  | `memdb` or `scylla`      |

@@ -14,7 +14,7 @@ make ps
 The core services should include:
 
 ```text
-gitstore-api                 4000, 5000, 6000
+gitstore-api                 4000, 9000 (Git HTTP host), 6000
 gitstore-git-service         50051
 gitstore-controller-manager  5001
 ```
