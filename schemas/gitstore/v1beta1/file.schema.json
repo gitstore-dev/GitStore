@@ -62,8 +62,8 @@
       "additionalProperties": false,
       "required": ["algorithm", "value"],
       "properties": {
-        "algorithm": { "type": "string", "description": "Required. e.g. \"sha256\"." },
-        "value": { "type": "string", "description": "Required. Hex-encoded digest." }
+        "algorithm": { "type": "string", "minLength": 1, "description": "Required. e.g. \"sha256\"." },
+        "value": { "type": "string", "minLength": 1, "description": "Required. Hex-encoded digest." }
       }
     },
     "SecretRef": {
@@ -72,8 +72,8 @@
       "additionalProperties": false,
       "required": ["kind", "name"],
       "properties": {
-        "kind": { "type": "string", "description": "Required. Kind of the secret-holding resource." },
-        "name": { "type": "string", "description": "Required. Name of the secret-holding resource." },
+        "kind": { "type": "string", "minLength": 1, "description": "Required. Kind of the secret-holding resource." },
+        "name": { "type": "string", "minLength": 1, "description": "Required. Name of the secret-holding resource." },
         "key": { "type": "string", "description": "Optional key within the referenced secret." },
         "namespace": { "type": "string", "description": "Optional. Must match this File's own namespace if set." }
       }
@@ -89,7 +89,7 @@
           "enum": ["git", "lfs", "s3", "gcs"],
           "description": "Required. Source backend type."
         },
-        "uri": { "type": "string", "description": "Required. Location of the content, interpreted according to type." },
+        "uri": { "type": "string", "minLength": 1, "description": "Required. Location of the content, interpreted according to type." },
         "checksum": { "$ref": "#/$defs/ChecksumDefinition" },
         "credentialsRef": { "$ref": "#/$defs/SecretRef" }
       }
@@ -100,7 +100,7 @@
       "additionalProperties": false,
       "required": ["name"],
       "properties": {
-        "name": { "type": "string", "description": "Required. Identifier for this variant, unique within processing.image.variants." }
+        "name": { "type": "string", "minLength": 1, "description": "Required. Identifier for this variant, unique within processing.image.variants." }
       }
     },
     "FileImageProcessing": {
@@ -128,7 +128,7 @@
       "additionalProperties": false,
       "required": ["contentType", "source"],
       "properties": {
-        "contentType": { "type": "string", "description": "Required. MIME type of the content, e.g. \"image/png\"." },
+        "contentType": { "type": "string", "minLength": 1, "description": "Required. MIME type of the content, e.g. \"image/png\"." },
         "type": { "type": "string", "description": "Optional logical file type/category, distinct from contentType." },
         "source": { "$ref": "#/$defs/FileSourceDefinition" },
         "processing": { "$ref": "#/$defs/FileProcessingDefinition" }

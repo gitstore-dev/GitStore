@@ -64,7 +64,7 @@
       "properties": {
         "apiVersion": { "type": "string" },
         "kind": { "type": "string" },
-        "name": { "type": "string", "description": "Required. Name of the referenced resource." },
+        "name": { "type": "string", "minLength": 1, "description": "Required. Name of the referenced resource." },
         "namespace": { "type": "string" },
         "uid": { "type": "string" },
         "resourceVersion": { "type": "string" },
@@ -77,8 +77,8 @@
       "additionalProperties": false,
       "required": ["name", "kind"],
       "properties": {
-        "name": { "type": "string", "description": "Required — the name of the referenced File resource, even when optional is true." },
-        "kind": { "type": "string", "description": "Required. Typically \"File\"." },
+        "name": { "type": "string", "minLength": 1, "description": "Required — the name of the referenced File resource, even when optional is true." },
+        "kind": { "type": "string", "minLength": 1, "description": "Required. Typically \"File\"." },
         "optional": { "type": "boolean", "description": "When true, admission succeeds even if the referenced File is absent." }
       }
     },
@@ -97,7 +97,7 @@
       "additionalProperties": false,
       "required": ["key", "operator"],
       "properties": {
-        "key": { "type": "string", "description": "Required. Label key to match against." },
+        "key": { "type": "string", "minLength": 1, "description": "Required. Label key to match against." },
         "operator": {
           "type": "string",
           "enum": ["In", "NotIn", "Exists", "DoesNotExist"],
@@ -133,6 +133,7 @@
       "properties": {
         "title": {
           "type": "string",
+          "minLength": 1,
           "maxLength": 200,
           "description": "Required. Human-readable display title. Max 200 characters."
         },
