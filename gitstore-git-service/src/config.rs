@@ -205,7 +205,7 @@ fn default_toml() -> String {
 port = 50051
 
 [git]
-data_dir = "/data/repos"
+data_dir = "/var/lib/gitstore/repos"
 
 [git.repo]
 max_file_size = 52428800
@@ -284,7 +284,7 @@ mod tests {
         clear_env();
         let cfg = load_config_from(None).expect("load_config failed");
         assert_eq!(cfg.grpc.port, 50051);
-        assert_eq!(cfg.git.data_dir, "/data/repos");
+        assert_eq!(cfg.git.data_dir, "/var/lib/gitstore/repos");
         assert_eq!(cfg.log.level, "info");
         assert_eq!(cfg.log.format, "json");
         assert_eq!(cfg.git.repo.max_file_size, 52428800);

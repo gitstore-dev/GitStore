@@ -404,22 +404,8 @@ func assertAnonymousOperationRejected(t *testing.T, opCtx *graphql.OperationCont
 	assert.Contains(t, resp.Errors[0].Message, "authentication required")
 }
 
-type stubAuthZProvider struct {
-	decision auth.Decision
-	err      error
-	action   string
-	resource auth.ResourceContext
-}
-
-func (s *stubAuthZProvider) Name() string { return "stub-authz" }
-func (s *stubAuthZProvider) Authorize(_ context.Context, _ *auth.Principal, action string, resource auth.ResourceContext) (auth.Decision, error) {
-	s.action = action
-	s.resource = resource
-	return s.decision, s.err
-}
-
 func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationUsesPolicy(t *testing.T) {
-	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	authz := testutil.NewAllowAllAuthZ()
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
@@ -444,7 +430,7 @@ func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationUsesPolicy(t *testing.
 	})
 	require.NoError(t, err)
 	assert.True(t, called)
-	assert.Equal(t, "namespace.create.organization", authz.action)
+	assert.Equal(t, "namespace.create.organization", authz.Action)
 }
 
 func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationFailsWithoutAuthZ(t *testing.T) {
@@ -475,7 +461,7 @@ func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationFailsWithoutAuthZ(t *t
 }
 
 func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {
-	authz := &stubAuthZProvider{decision: auth.Deny("stub-authz", "no access")}
+	authz := testutil.NewDenyAllAuthZ(t)
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 	store := &testutil.StubStore{
 		GetNamespaceByNameFunc: func(_ context.Context, name string) (*datastore.Namespace, error) {
@@ -500,7 +486,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, called)
 	assert.Contains(t, err.Error(), "permission denied")
-	assert.Equal(t, "namespace.delete.any", authz.action)
+	assert.Equal(t, "namespace.delete.any", authz.Action)
 }
 
 func TestGraphQLFieldAuthorizerDeleteNamespaceDenialHidesDeletionDetails(t *testing.T) {
@@ -527,7 +513,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenialHidesDeletionDetails(t *test
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			authz := &stubAuthZProvider{decision: auth.Deny("stub-authz", "no access")}
+			authz := testutil.NewDenyAllAuthZ(t)
 			registry := auth.NewProviderRegistry(nil, authz, nil)
 			store := &testutil.StubStore{
 				GetNamespaceByNameFunc: func(_ context.Context, _ string) (*datastore.Namespace, error) {
@@ -560,7 +546,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenialHidesDeletionDetails(t *test
 }
 
 func TestGraphQLFieldAuthorizerDeleteNamespacePassesAuthorizedRecord(t *testing.T) {
-	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	authz := testutil.NewAllowAllAuthZ()
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 	authorized := &datastore.Namespace{ID: "namespace-id", Name: "acme", CreationActor: "alice"}
 	store := &testutil.StubStore{
@@ -585,11 +571,11 @@ func TestGraphQLFieldAuthorizerDeleteNamespacePassesAuthorizedRecord(t *testing.
 		return "ok", nil
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "namespace.delete.own", authz.action)
+	assert.Equal(t, "namespace.delete.own", authz.Action)
 }
 
 func TestGraphQLFieldAuthorizerUpdateCategoryStatusUsesPolicy(t *testing.T) {
-	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	authz := testutil.NewAllowAllAuthZ()
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
@@ -613,11 +599,11 @@ func TestGraphQLFieldAuthorizerUpdateCategoryStatusUsesPolicy(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, called)
-	assert.Equal(t, "category.status.write", authz.action)
+	assert.Equal(t, "category.status.write", authz.Action)
 }
 
 func TestGraphQLFieldAuthorizerUpdateCategoryStatusDenyReturnsForbidden(t *testing.T) {
-	authz := &stubAuthZProvider{decision: auth.Deny("stub-authz", "no controller role")}
+	authz := testutil.NewDenyAllAuthZ(t)
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
@@ -647,7 +633,7 @@ func TestGraphQLFieldAuthorizerUpdateCategoryStatusDenyReturnsForbidden(t *testi
 }
 
 func TestGraphQLFieldAuthorizerUpdateProductStatusUsesPolicy(t *testing.T) {
-	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	authz := testutil.NewAllowAllAuthZ()
 	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
 	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller", AuthMethod: "static-users"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Mutation", Field: graphql.CollectedField{Field: &ast.Field{Name: "updateProductStatus"}}, Args: map[string]any{
@@ -657,11 +643,11 @@ func TestGraphQLFieldAuthorizerUpdateProductStatusUsesPolicy(t *testing.T) {
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return "ok", nil })
 	require.NoError(t, err)
 	assert.True(t, called)
-	assert.Equal(t, "product.status.write", authz.action)
+	assert.Equal(t, "product.status.write", authz.Action)
 }
 
 func TestGraphQLFieldAuthorizerDeleteCategoryUsesPersistedScope(t *testing.T) {
-	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	authz := testutil.NewAllowAllAuthZ()
 	store := &testutil.StubStore{GetCategoryTaxonomyFunc: func(_ context.Context, uid string) (*datastore.CategoryTaxonomy, error) {
 		assert.Equal(t, "category-uid", uid)
 		return &datastore.CategoryTaxonomy{UID: uid, Name: "phones", Namespace: "shop", RepositoryID: "catalog-repo", CreationActor: "alice"}, nil
@@ -676,15 +662,15 @@ func TestGraphQLFieldAuthorizerDeleteCategoryUsesPersistedScope(t *testing.T) {
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return "ok", nil })
 	require.NoError(t, err)
 	assert.True(t, called)
-	assert.Equal(t, "category.delete", authz.action)
-	assert.Equal(t, "phones", authz.resource.Name)
-	assert.Equal(t, "alice", authz.resource.OwnerSub)
-	assert.Equal(t, "shop", authz.resource.Attrs["namespace"])
-	assert.Equal(t, "catalog-repo", authz.resource.Attrs["repositoryID"])
+	assert.Equal(t, "category.delete", authz.Action)
+	assert.Equal(t, "phones", authz.Resource.Name)
+	assert.Equal(t, "alice", authz.Resource.OwnerSub)
+	assert.Equal(t, "shop", authz.Resource.Attrs["namespace"])
+	assert.Equal(t, "catalog-repo", authz.Resource.Attrs["repositoryID"])
 }
 
 func TestGraphQLFieldAuthorizerUpdateResourceStatusUsesLowerCamelKindAction(t *testing.T) {
-	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	authz := testutil.NewAllowAllAuthZ()
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
@@ -706,11 +692,11 @@ func TestGraphQLFieldAuthorizerUpdateResourceStatusUsesLowerCamelKindAction(t *t
 		return "ok", nil
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "backfillJob.status.write", authz.action)
+	assert.Equal(t, "backfillJob.status.write", authz.Action)
 }
 
 func TestGraphQLFieldAuthorizerConfinesAssertionPrincipalToTokenIssuance(t *testing.T) {
-	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	authz := testutil.NewAllowAllAuthZ()
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
 	principal := &auth.Principal{
@@ -745,7 +731,7 @@ func TestGraphQLFieldAuthorizerConfinesAssertionPrincipalToTokenIssuance(t *test
 }
 
 func TestGraphQLFieldAuthorizerRequiresAssertionForTokenIssuance(t *testing.T) {
-	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "allowed")}
+	authz := testutil.NewAllowAllAuthZ()
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
 	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
@@ -780,7 +766,7 @@ func TestGraphQLFieldAuthorizerUsesPolicyForServiceAccountMutations(t *testing.T
 		{field: "deleteServiceAccount", action: "serviceaccount.delete"},
 	} {
 		t.Run(test.field, func(t *testing.T) {
-			authz := &stubAuthZProvider{decision: auth.Deny("stub-authz", "test deny")}
+			authz := testutil.NewDenyAllAuthZ(t)
 			mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
 			ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "admin", AuthMethod: "static-admin"})
 			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
@@ -794,7 +780,7 @@ func TestGraphQLFieldAuthorizerUsesPolicyForServiceAccountMutations(t *testing.T
 			})
 			require.Error(t, err)
 			assert.False(t, called)
-			assert.Equal(t, test.action, authz.action)
+			assert.Equal(t, test.action, authz.Action)
 		})
 	}
 }

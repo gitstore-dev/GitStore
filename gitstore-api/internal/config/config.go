@@ -305,50 +305,6 @@ func load(path string) (*Config, error) {
 	logger, _ := zap.NewProduction()
 	defer logger.Sync() //nolint:errcheck
 
-	// Warn about keys present in the config file that are not in the known schema.
-	knownKeys := map[string]bool{
-		"api.port": true, "api.git_port": true, "api.grpc_port": true,
-		"api.rate_limit_per_second": true, "api.rate_limit_burst": true,
-		"git.grpc.uri": true,
-		"log.level":    true, "log.format": true,
-		"auth.staticusers.users_file": true,
-		"auth.jwt.secret":             true, "auth.jwt.duration": true, "auth.jwt.issuer": true, "auth.jwt.refresh_grace": true,
-		"auth.grpc.hmac_secret": true,
-		"auth.authn.chain":      true, "auth.authz.provider": true,
-		"auth.userdir.provider": true, "auth.rbac.policy_file": true,
-		"auth.serviceaccount.issuer": true, "auth.serviceaccount.audience": true,
-		"auth.serviceaccount.assertion_audience": true, "auth.serviceaccount.signing_key": true,
-		"auth.serviceaccount.default_ttl": true, "auth.serviceaccount.max_ttl": true,
-		"auth.serviceaccount.clock_skew": true,
-		"datastore.backend":              true, "datastore.scylla.hosts": true,
-		"datastore.scylla.keyspace": true, "datastore.scylla.username": true,
-		"datastore.scylla.password": true, "datastore.scylla.tls": true,
-		"datastore.scylla.disable_shard_aware_port": true, "datastore.scylla.ignore_peer_addr": true,
-		"features.namespace_repository_fence": true,
-		"watch.namespace.readers_enabled":     true, "watch.namespace.materializer_enabled": true,
-		"watch.namespace.journal_retention_seconds": true, "watch.namespace.cdc_retention_seconds": true,
-		"watch.namespace.cdc_confidence_window_millis": true,
-		"watch.namespace.bucket_size":                  true, "watch.namespace.read_batch_size": true,
-		"watch.namespace.max_replay_events": true, "watch.namespace.subscriber_buffer": true,
-		"watch.namespace.subscriber_backpressure_millis": true,
-		"watch.namespace.poll_min_millis":                true, "watch.namespace.poll_max_millis": true,
-		"watch.namespace.bookmark_interval_seconds": true, "watch.namespace.lease_ttl_seconds": true,
-		"watch.namespace.lease_renew_interval_seconds": true, "watch.namespace.max_materializer_lag_seconds": true,
-	}
-	sharedServiceKey := func(k string) bool {
-		for _, prefix := range []string{"controller.", "grpc.", "hooks.", "schema_validation.", "admission_control.", "catalog_service."} {
-			if strings.HasPrefix(k, prefix) {
-				return true
-			}
-		}
-		return strings.HasPrefix(k, "git.") && !strings.HasPrefix(k, "git.grpc.")
-	}
-	for _, k := range v.AllKeys() {
-		if !knownKeys[k] && !sharedServiceKey(k) {
-			logger.Warn("unknown configuration key", zap.String("key", k))
-		}
-	}
-
 	logger.Info("Configuration loaded", zap.Object("config", &cfg))
 
 	return &cfg, nil
@@ -442,15 +398,16 @@ func validateServiceAccountAuthChainConfig(auth *AuthConfig) error {
 // User Story 3.
 // A var (not const) so tests can safely override it to a temp path instead
 // of writing to the real /config directory on the host.
-var sharedServiceConfigMountPath = "/config/gitstore.toml"
+var sharedServiceConfigMountPath = "/etc/gitstore/gitstore.toml"
 
 // validateServiceAccountSigningKeySource enforces FR-015c: refuses startup
 // if a service-account AuthN provider is chained in and its signing key was
 // sourced from fileSigningKey — the value read from the config file at path
 // before environment variables were applied. This specifically targets
-// compose.local.yml's shared /config/gitstore.toml mount; an env-var-sourced
-// key (even in a container that also mounts that shared file for other
-// settings) is unaffected, since the file itself never carries the secret.
+// compose.local.yml's shared /etc/gitstore/gitstore.toml mount; an
+// env-var-sourced key (even in a container that also mounts that shared file
+// for other settings) is unaffected, since the file itself never carries the
+// secret.
 func validateServiceAccountSigningKeySource(cfg *Config, path, fileSigningKey string) error {
 	if !chainRequiresServiceAccountSigningKey(cfg.Auth.AuthN.Chain) {
 		return nil

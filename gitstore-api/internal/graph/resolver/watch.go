@@ -59,6 +59,8 @@ func toWatchEventType(t eventbus.EventType) model.WatchEventType {
 		return model.WatchEventTypeModified
 	case eventbus.Deleted:
 		return model.WatchEventTypeDeleted
+	case eventbus.Bookmark:
+		return model.WatchEventTypeBookmark
 	default:
 		return model.WatchEventTypeBookmark
 	}

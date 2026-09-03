@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.gitstore.dev/gitstore/v1beta1/repository.schema.json",
+  "title": "GitStore Repository",
+  "description": "IMPORTANT: unlike Product, ProductVariant, CategoryTaxonomy, Collection, File, and Namespace, a Repository is NOT currently created by pushing a Markdown+frontmatter manifest through git — the git-push markdown/frontmatter parser has no case for kind \"Repository\" today. Repositories are created via the GraphQL `createRepository` mutation (inputs: namespace, name, defaultBranch). This schema models the declarative envelope of a Repository as it is read back from the API today (e.g. via a `repository` query), for documentation/tooling purposes, and anticipates a possible future git-authored form. Do not expect a file matching this schema to be accepted by `git push` yet.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "gitstore.dev/v1beta1",
+      "description": "Must be exactly \"gitstore.dev/v1beta1\"."
+    },
+    "kind": {
+      "const": "Repository",
+      "description": "Must be exactly \"Repository\" (case-sensitive)."
+    },
+    "metadata": {
+      "$ref": "#/$defs/ObjectMeta"
+    },
+    "spec": {
+      "$ref": "#/$defs/RepositorySpec"
+    }
+  },
+  "$defs": {
+    "ObjectMeta": {
+      "type": "object",
+      "description": "Resource metadata. Unlike git-authored resources, namespace is REQUIRED here — there is no git push context from which to infer it, since Repository is created directly via the createRepository GraphQL mutation. Do not set uid, resourceVersion, generation, creationTimestamp, revision, ownerReferences, or finalizers — those fields are system-managed.",
+      "additionalProperties": false,
+      "required": ["name", "namespace"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "maxLength": 63,
+          "description": "DNS label format: lowercase alphanumeric and hyphens, 1-63 characters, no leading/trailing hyphen. Identifies this Repository uniquely within its namespace."
+        },
+        "namespace": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Required. The namespace that owns this repository — must reference an existing Namespace."
+        },
+        "labels": {
+          "type": "object",
+          "description": "Optional key/value labels. Keys may use an optional \"prefix/name\" form; prefix ≤ 253 chars, name segment ≤ 63 chars. Values ≤ 63 chars.",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 63
+          }
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Optional key/value annotations. No length restriction.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "PushPolicy": {
+      "type": "object",
+      "description": "Effective, system-derived push policy for this repository (resolved from namespace defaults). Read-only in practice today — provided here for documentation of the shape returned by the API, not as author-writable input.",
+      "additionalProperties": false,
+      "properties": {
+        "maxPackSizeBytes": {
+          "type": "integer",
+          "description": "Maximum accepted git push pack size, in bytes."
+        },
+        "maxFileSizeBytes": {
+          "type": "integer",
+          "description": "Maximum accepted individual file size within a push, in bytes."
+        }
+      }
+    },
+    "RepositorySpec": {
+      "type": "object",
+      "description": "Declarative specification for a repository. defaultBranch and visibility mirror the createRepository mutation's inputs (visibility is currently always \"PRIVATE\" regardless of request); pushPolicy is fully system-derived from the owning namespace's pushPolicyDefaults and is not directly author-settable.",
+      "additionalProperties": false,
+      "properties": {
+        "defaultBranch": {
+          "type": "string",
+          "description": "Default branch name for this repository, e.g. \"main\". Optional at creation time; server applies a default when omitted."
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["PUBLIC", "PRIVATE", "INTERNAL"],
+          "description": "Repository visibility. Today the server always resolves this to \"PRIVATE\" regardless of requested value."
+        },
+        "pushPolicy": {
+          "$ref": "#/$defs/PushPolicy",
+          "description": "System-derived; reflects the owning namespace's pushPolicyDefaults at the time of resolution."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "apiVersion": "gitstore.dev/v1beta1",
+      "kind": "Repository",
+      "metadata": {
+        "name": "catalog",
+        "namespace": "acme-store"
+      },
+      "spec": {
+        "defaultBranch": "main",
+        "visibility": "PRIVATE",
+        "pushPolicy": {
+          "maxPackSizeBytes": 536870912,
+          "maxFileSizeBytes": 104857600
+        }
+      }
+    }
+  ]
+}

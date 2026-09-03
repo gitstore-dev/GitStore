@@ -20,6 +20,13 @@ const (
 	Added EventType = iota
 	Modified
 	Deleted
+	// Bookmark marks a synthetic cursor-only event with no real resource
+	// change (e.g. the bootstrap cursor SubscribeWithCursor returns before
+	// any real events exist). It must not be the enum's zero value —
+	// EventType's zero value is Added — otherwise a caller that forgets to
+	// set Type on a synthetic Event would silently be treated as a real
+	// Added event by any switch keyed on EventType.
+	Bookmark
 )
 
 // Event is a single change notification published after a successful

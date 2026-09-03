@@ -28,7 +28,7 @@ func TestNamespaceWatchAuthorizationRunsBeforeResolverForBothEntryPoints(t *test
 		{name: "generic", field: "watchResources", args: map[string]any{"kind": "Namespace", "resourceVersion": "revealing-invalid-cursor"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			authz := &stubAuthZProvider{decision: auth.Deny("stub-authz", "denied")}
+			authz := testutil.NewDenyAllAuthZ(t)
 			registry := auth.NewProviderRegistry(nil, authz, nil)
 			mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
 			ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "denied", AuthMethod: "bearer"})
@@ -45,10 +45,10 @@ func TestNamespaceWatchAuthorizationRunsBeforeResolverForBothEntryPoints(t *test
 			})
 			require.Error(t, err)
 			assert.False(t, called)
-			assert.Equal(t, "namespace.watch", authz.action)
-			assert.Equal(t, "Namespace", authz.resource.Kind)
-			assert.Empty(t, authz.resource.Name)
-			assert.Empty(t, authz.resource.Attrs)
+			assert.Equal(t, "namespace.watch", authz.Action)
+			assert.Equal(t, "Namespace", authz.Resource.Kind)
+			assert.Empty(t, authz.Resource.Name)
+			assert.Empty(t, authz.Resource.Attrs)
 			var gqlErr *gqlerror.Error
 			require.ErrorAs(t, err, &gqlErr)
 			assert.Equal(t, "FORBIDDEN", gqlErr.Extensions["code"])
@@ -58,7 +58,7 @@ func TestNamespaceWatchAuthorizationRunsBeforeResolverForBothEntryPoints(t *test
 }
 
 func TestNamespaceWatchAuthorizationAllowsPluggableProviderDecision(t *testing.T) {
-	authz := &stubAuthZProvider{decision: auth.Allow("stub-authz", "controller role")}
+	authz := testutil.NewAllowAllAuthZ()
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
 	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller", AuthMethod: "bearer"})
@@ -71,5 +71,5 @@ func TestNamespaceWatchAuthorizationAllowsPluggableProviderDecision(t *testing.T
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return "ok", nil })
 	require.NoError(t, err)
 	assert.True(t, called)
-	assert.Equal(t, "namespace.watch", authz.action)
+	assert.Equal(t, "namespace.watch", authz.Action)
 }

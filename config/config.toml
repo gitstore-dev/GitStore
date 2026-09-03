@@ -8,7 +8,7 @@
 port = 50051
 
 [git]
-data_dir = "/data/repos"
+data_dir = "/var/lib/gitstore/repos"
 
 [git.repo]
 max_file_size = 52428800
@@ -47,7 +47,7 @@ uri = "dns:///git-service:50051"
 backend = "memdb"
 
 [auth.staticusers]
-users_file = "/config/users.yaml"
+users_file = "/etc/gitstore/users.yaml"
 
 [auth.jwt]
 secret = "local-development-jwt-secret-at-least-32-characters"
@@ -74,7 +74,7 @@ provider = "rbac-local"
 provider = "static-users"
 
 [auth.rbac]
-policy_file = "/config/policy.yaml"
+policy_file = "/etc/gitstore/policy.yaml"
 
 [controller]
 port = 5001
@@ -89,7 +89,7 @@ serviceaccount_access_token_audience = "gitstore-api"
 secret_provider_bootstrap = { type = "file", base_path = "/run/secrets" }
 default_max_attempts = 5
 default_stall_threshold = "5m"
-checkpoint_dir = "/data/checkpoints"
+checkpoint_dir = "/var/lib/gitstore/checkpoints"
 checkpoint_flush_interval_events = 100
 max_watch_backoff = "30s"
 

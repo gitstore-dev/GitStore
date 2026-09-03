@@ -44,11 +44,11 @@ count_source() {
 for service in git-service api controller-manager; do
   service_config=$(printf '%s\n' "$output" | service_block "$service")
   printf '%s\n' "$service_config" | grep -q -- '--config-file'
-  printf '%s\n' "$service_config" | grep -q 'target: /config/gitstore.toml'
+  printf '%s\n' "$service_config" | grep -q 'target: /etc/gitstore/gitstore.toml'
 done
 
-test "$(printf '%s\n' "$output" | grep -c 'target: /config/gitstore.toml')" -eq 3
-test "$(printf '%s\n' "$output" | grep -c 'target: /config/policy.yaml')" -eq 1
+test "$(printf '%s\n' "$output" | grep -c 'target: /etc/gitstore/gitstore.toml')" -eq 3
+test "$(printf '%s\n' "$output" | grep -c 'target: /etc/gitstore/policy.yaml')" -eq 1
 test "$(printf '%s\n' "$output" | grep -c 'read_only: true')" -ge 7
 printf '%s\n' "$output" | grep -q "source: $(cd "$(dirname "$config_file")" && pwd)/$(basename "$config_file")"
 

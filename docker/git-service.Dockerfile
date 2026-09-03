@@ -76,7 +76,7 @@ FROM alpine:3
 RUN apk add --no-cache \
     ca-certificates \
     libgcc && \
-    mkdir -p /data/repos
+    mkdir -p /var/lib/gitstore/repos
 
 WORKDIR /app
 

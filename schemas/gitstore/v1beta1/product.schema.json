@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.gitstore.dev/gitstore/v1beta1/product.schema.json",
+  "title": "GitStore Product",
+  "description": "YAML frontmatter for a GitStore Product resource. A Product resource is a Markdown file: this schema validates only the frontmatter object between the opening and closing '---' delimiters. The remaining Markdown content is the free-form product description body and is not covered by this schema. See docs/products/product-spec.md for the full authoring contract.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "catalog.gitstore.dev/v1beta1",
+      "description": "Must be exactly \"catalog.gitstore.dev/v1beta1\"."
+    },
+    "kind": {
+      "const": "Product",
+      "description": "Must be exactly \"Product\" (case-sensitive)."
+    },
+    "metadata": {
+      "$ref": "#/$defs/ObjectMeta"
+    },
+    "spec": {
+      "$ref": "#/$defs/ProductSpec"
+    }
+  },
+  "$defs": {
+    "ObjectMeta": {
+      "type": "object",
+      "description": "Author-writable resource metadata. Do not set uid, resourceVersion, generation, creationTimestamp, revision, ownerReferences, or finalizers — those fields are system-managed and any of them present in an authored file causes the push to be rejected.",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "maxLength": 63,
+          "description": "DNS label format: lowercase alphanumeric and hyphens, 1-63 characters, no leading/trailing hyphen. Identifies this Product uniquely within its namespace."
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Optional. When omitted, the namespace is inferred from the owning repository at push time. When present, it is validated to match the inferred namespace — it does not select a different namespace."
+        },
+        "labels": {
+          "type": "object",
+          "description": "Optional key/value labels. Keys may use an optional \"prefix/name\" form; prefix ≤ 253 chars, name segment ≤ 63 chars. Values ≤ 63 chars.",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 63
+          }
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Optional key/value annotations. No length restriction.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ObjectReference": {
+      "type": "object",
+      "description": "A pointer to another catalogue resource.",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "apiVersion": { "type": "string" },
+        "kind": { "type": "string" },
+        "name": { "type": "string", "minLength": 1, "description": "Required. Name of the referenced resource." },
+        "namespace": { "type": "string" },
+        "uid": { "type": "string" },
+        "resourceVersion": { "type": "string" },
+        "fieldPath": { "type": "string" }
+      }
+    },
+    "FileReference": {
+      "type": "object",
+      "description": "Identifies a File resource by name and kind.",
+      "additionalProperties": false,
+      "required": ["name", "kind"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "Required — the name of the referenced File resource, even when optional is true." },
+        "kind": { "type": "string", "minLength": 1, "description": "Required. Typically \"File\"." },
+        "optional": { "type": "boolean", "description": "When true, admission succeeds even if the referenced File is absent." }
+      }
+    },
+    "MediaDefinition": {
+      "type": "object",
+      "description": "A product media slot referencing a File resource.",
+      "additionalProperties": false,
+      "required": ["fileRef"],
+      "properties": {
+        "fileRef": { "$ref": "#/$defs/FileReference" }
+      }
+    },
+    "ProductOptionDefinition": {
+      "type": "object",
+      "description": "A variant dimension (e.g. Colour, Size). \"name\" must be unique within the enclosing spec.options list.",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "Required. Must be unique within spec.options." },
+        "title": { "type": "string" },
+        "values": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "ProductSpec": {
+      "type": "object",
+      "description": "Author-controlled declarative specification for a product. All fields are individually optional; spec may be an empty object.",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Human-readable display title. Max 200 characters."
+        },
+        "categoryRef": {
+          "$ref": "#/$defs/ObjectReference",
+          "description": "Reference to the parent CategoryTaxonomy. If present, categoryRef.name is required."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Free-form tag list. No per-tag length constraint."
+        },
+        "media": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/MediaDefinition" }
+        },
+        "options": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ProductOptionDefinition" },
+          "description": "Variant dimensions (e.g. colour, size). Each entry's name must be unique within this list."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "apiVersion": "catalog.gitstore.dev/v1beta1",
+      "kind": "Product",
+      "metadata": {
+        "name": "macbook-pro-m4-max",
+        "namespace": "acme-store",
+        "labels": {
+          "gitstore.dev/brand": "Apple",
+          "gitstore.dev/tier": "premium"
+        },
+        "annotations": {
+          "gitstore.dev/notes": "flagship laptop"
+        }
+      },
+      "spec": {
+        "title": "MacBook Pro M4 Max",
+        "categoryRef": {
+          "kind": "CategoryTaxonomy",
+          "name": "personal-computers"
+        },
+        "tags": ["laptop", "apple-silicon", "pro"],
+        "options": [
+          { "name": "color", "title": "Colour", "values": ["silver", "space-black"] },
+          { "name": "ram", "title": "RAM", "values": ["36GB", "64GB", "128GB"] },
+          { "name": "storage", "title": "Storage", "values": ["1TB", "2TB", "4TB"] }
+        ],
+        "media": [
+          { "fileRef": { "kind": "File", "name": "hero-image" } }
+        ]
+      }
+    }
+  ]
+}

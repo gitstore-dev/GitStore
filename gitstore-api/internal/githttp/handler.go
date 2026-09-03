@@ -5,6 +5,7 @@ package githttp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
@@ -56,6 +58,22 @@ func (h *handler) gitPktLineError(w http.ResponseWriter, status int, msg string)
 	}
 }
 
+// writeGitClientError maps an error returned by the GitClient into an HTTP
+// response. A gitclient.ErrAuthorizationDenied means RequestAuthorization
+// rejected the request on its own invariants (e.g. anonymous principals are
+// never approved for a write action); that must surface as 401 with
+// WWW-Authenticate so Git retries the request with credentials instead of
+// giving up. Any other error is a genuine transport/service failure and is
+// reported as 503.
+func (h *handler) writeGitClientError(c *gin.Context, err error) {
+	if errors.Is(err, gitclient.ErrAuthorizationDenied) {
+		c.Header("WWW-Authenticate", `Basic realm="GitStore"`)
+		h.gitPktLineError(c.Writer, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	h.gitPktLineError(c.Writer, http.StatusServiceUnavailable, "service unavailable")
+}
+
 // infoRefsHandler handles GET /{namespace}/{repo}/info/refs?service=git-*
 func (h *handler) infoRefsHandler(c *gin.Context) {
 	svcParam := c.Query("service")
@@ -81,7 +99,7 @@ func (h *handler) infoRefsHandler(c *gin.Context) {
 	advertisement, _, err := h.git.InfoRefs(c.Request.Context(), repoID, service)
 	if err != nil {
 		h.log.Error("info_refs: git service error", zap.Error(err))
-		h.gitPktLineError(c.Writer, http.StatusServiceUnavailable, "service unavailable")
+		h.writeGitClientError(c, err)
 		return
 	}
 
@@ -107,7 +125,7 @@ func (h *handler) uploadPackHandler(c *gin.Context) {
 	reader, err := h.git.UploadPack(c.Request.Context(), repoID, body)
 	if err != nil {
 		h.log.Error("upload_pack: git service error", zap.Error(err))
-		h.gitPktLineError(c.Writer, http.StatusServiceUnavailable, "service unavailable")
+		h.writeGitClientError(c, err)
 		return
 	}
 
@@ -133,7 +151,7 @@ func (h *handler) receivePackHandler(c *gin.Context) {
 	reportStatus, err := h.git.ReceivePack(c.Request.Context(), repoID, c.Request.Body)
 	if err != nil {
 		h.log.Error("receive_pack: git service error", zap.Error(err))
-		h.gitPktLineError(c.Writer, http.StatusServiceUnavailable, "service unavailable")
+		h.writeGitClientError(c, err)
 		return
 	}
 

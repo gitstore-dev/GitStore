@@ -311,9 +311,9 @@ func preParseChecks(fmRaw []byte) error {
 		return fmt.Errorf("validate: spec is required")
 	}
 
-	// Status is ignored for Namespace to preserve system ownership while
-	// allowing declarative clients to round-trip a full resource envelope.
-	if _, ok := raw["status"]; ok && raw["kind"] != "Namespace" {
+	// Status is system-managed and written only through the status path; it
+	// must never appear in an author-controlled Git manifest.
+	if _, ok := raw["status"]; ok {
 		return fmt.Errorf("validate: status is system-managed and must not be set by authors")
 	}
 

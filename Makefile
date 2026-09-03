@@ -17,6 +17,33 @@ USERS_FILE ?= $(AUTH_CONFIG_DIR)/users.yaml
 LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
 LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml -f compose.admin.yml
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
+GIT_GRPC_PORT ?= 50051
+CONTROLLER_CHECKPOINT_DIR ?= $(ROOT)/.gitstore/checkpoints
+CONTROLLER_SECRET_DIR ?= $(ROOT)/.gitstore/secrets
+CONTROLLER_SECRET_NAME ?= controller-manager
+CONTROLLER_SECRET_KEY ?= privateKey
+# API_SERVICEACCOUNT_SIGNING_KEY_PATH is the API's own ServiceAccount token
+# issuer/verifier key (distinct from the controller-manager's enrollment
+# key above). Required whenever auth.authn.chain includes
+# serviceaccount-jwt/serviceaccount-assertion (see gitstore-api's
+# validateServiceAccountSigningKeySource) — it must be supplied via the
+# GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY env var, never via config.toml.
+API_SERVICEACCOUNT_SIGNING_KEY_PATH ?= $(ROOT)/.gitstore/secrets/api-issuer/privateKey
+CONTROLLER_SERVICEACCOUNT_NAMESPACE ?= controllers
+CONTROLLER_SERVICEACCOUNT_NAME ?= gitstore-controller-manager
+CONTROLLER_SERVICEACCOUNT_KEY_ID ?= controller-key
+# CONTROLLER_SERVICEACCOUNT_UID is intentionally left unset by default: the
+# real UID is assigned by the API at enrollment time (see the `dev`/`controller`
+# targets' auto-enrollment step) and is not a value operators should hardcode.
+CONTROLLER_SERVICEACCOUNT_UID ?=
+# DEV_ADMIN_USERNAME/DEV_ADMIN_PASSWORD are used only to auto-enroll the
+# controller-manager's ServiceAccount against a locally running API in the
+# `dev`/`controller` targets. They default to the admin fixture already
+# checked into config/users.yaml for local development and must not be used
+# against any non-local environment (use ADMIN_USERNAME/ADMIN_PASSWORD with
+# the bootstrap-* targets for that).
+DEV_ADMIN_USERNAME ?= admin
+DEV_ADMIN_PASSWORD ?= admin123
 DIFF_BASE ?= origin/main
 
 COMPOSE_BAKE ?= true
@@ -33,6 +60,7 @@ DETACH_FLAG := $(if $(filter 1 true yes,$(DETACH)),-d,)
 SERVICE ?=
 
 API_URL ?= http://localhost:4000/graphql
+API_HEALTH_URL ?= $(patsubst %/graphql,%/health,$(API_URL))
 ADMIN_USERNAME ?= admin
 ADMIN_PASSWORD ?=
 BOOTSTRAP_TOKEN ?=
@@ -100,6 +128,8 @@ help: ## Show available targets and common variables.
 	@printf "  SCYLLA_CLUSTER_SMP=%s     CPU shards per Scylla node for PROFILE=cluster\n" "$(SCYLLA_CLUSTER_SMP)"
 	@printf "  SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS=%s  Networking AIO blocks per cluster node\n" "$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)"
 	@printf "  GIT_DATA_DIR=%s\n" "$(GIT_DATA_DIR)"
+	@printf "  CONTROLLER_CHECKPOINT_DIR=%s\n" "$(CONTROLLER_CHECKPOINT_DIR)"
+	@printf "  CONTROLLER_SECRET_DIR=%s\n" "$(CONTROLLER_SECRET_DIR)"
 	@printf "  CONFIG_FILE=%s        Shared local-profile configuration\n" "$(CONFIG_FILE)"
 	@printf "  API_URL=%s\n" "$(API_URL)"
 	@printf "  ADMIN_USERNAME=%s\n" "$(ADMIN_USERNAME)"
@@ -125,18 +155,83 @@ git: ## Run gitstore-git-service locally in the foreground.
 	@mkdir -p "$(GIT_DATA_DIR)"
 	@cd "$(GIT_SERVICE_DIR)" && GITSTORE_GIT__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service
 
+# enroll-controller-serviceaccount registers the controller-manager's signing
+# key with a running API and resolves the real, API-assigned ServiceAccount
+# UID (there is no valid hardcoded default for this value — it is created by
+# the enrollment mutation). Safe to re-run: --replace-existing-key makes it
+# idempotent. Requires the API to already be listening on API_URL's host:port.
+CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE ?= $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/serviceaccount.env
+
+enroll-controller-serviceaccount:
+	@mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"
+	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
+		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		echo "Generate one with: cd $(API_DIR) && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		exit 2; \
+	}
+	@cd "$(API_DIR)" && go run ./cmd/gitctl enroll-serviceaccount \
+		--api-url "$(API_URL)" \
+		--admin-username "$(DEV_ADMIN_USERNAME)" \
+		--admin-password "$(DEV_ADMIN_PASSWORD)" \
+		--namespace "$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
+		--name "$(CONTROLLER_SERVICEACCOUNT_NAME)" \
+		--key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
+		--replace-existing-key \
+		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
+		--identity-output-path "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)"
+
 controller: ## Run gitstore-controller-manager locally in the foreground.
-	@cd "$(CONTROLLER_MANAGER_DIR)" && go run ./cmd/controller
+	@mkdir -p "$(CONTROLLER_CHECKPOINT_DIR)"
+	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
+		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		echo "Generate one with: cd $(API_DIR) && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		exit 2; \
+	}
+	@set -u; \
+	resolved_uid="$(CONTROLLER_SERVICEACCOUNT_UID)"; \
+	if [ -z "$$resolved_uid" ]; then \
+		test -f "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)" || { \
+			echo "No enrolled ServiceAccount UID found. Run: make enroll-controller-serviceaccount"; \
+			exit 2; \
+		}; \
+		resolved_uid=$$(sed -n 's/^GITSTORE_CONTROLLER__SERVICEACCOUNT__UID=//p' "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)"); \
+		test -n "$$resolved_uid" || { echo "Enrolled ServiceAccount identity file is missing a UID."; exit 2; }; \
+	fi; \
+	cd "$(CONTROLLER_MANAGER_DIR)" && \
+		GITSTORE_CONTROLLER__CHECKPOINT_DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID="$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$resolved_uid" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME="$(CONTROLLER_SECRET_NAME)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY="$(CONTROLLER_SECRET_KEY)" \
+		GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
+		go run ./cmd/controller
 
 api: ## Run gitstore-api locally in the foreground.
-	@cd "$(API_DIR)" && go run ./cmd/server
+	@mkdir -p "$$(dirname "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")"
+	@test -f "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" || \
+		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" )
+	@cd "$(API_DIR)" && \
+		GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
+		go run ./cmd/server
 
 dev: ## Run local git service and API together in the foreground.
 	@set -u; \
 	mkdir -p "$(GIT_DATA_DIR)"; \
+	mkdir -p "$(CONTROLLER_CHECKPOINT_DIR)"; \
 	tmp=$$(mktemp -d); \
 	fifo="$$tmp/done"; \
 	mkfifo "$$fifo"; \
+	if [ ! -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ]; then \
+		mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"; \
+		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ); \
+	fi; \
+	if [ ! -f "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ]; then \
+		mkdir -p "$$(dirname "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")"; \
+		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ); \
+	fi; \
 	cleanup() { \
 		trap - INT TERM EXIT; \
 		[ -n "$${git_pid:-}" ] && kill "$$git_pid" 2>/dev/null || true; \
@@ -159,13 +254,64 @@ dev: ## Run local git service and API together in the foreground.
 	) & git_pid=$$!; \
 	( set +e; \
 		cd "$(API_DIR)" || { printf 'api 1\n' > "$$fifo"; exit 0; }; \
+		echo "api: waiting for git-service grpc on 127.0.0.1:$(GIT_GRPC_PORT)..."; \
+		waited=0; \
+		until (exec 3<>/dev/tcp/127.0.0.1/$(GIT_GRPC_PORT)) 2>/dev/null; do \
+			waited=$$((waited + 1)); \
+			if [ "$$waited" -ge 120 ]; then \
+				echo "api: timed out waiting for git-service grpc on 127.0.0.1:$(GIT_GRPC_PORT)" >&2; \
+				break; \
+			fi; \
+			sleep 0.5; \
+		done; \
+		exec 3<&- 2>/dev/null || true; \
+		exec 3>&- 2>/dev/null || true; \
+		GITSTORE_AUTH__AUTHN__CHAIN="static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous" \
+		GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
 		go run ./cmd/server & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
 		wait "$$child"; status=$$?; \
 		printf 'api %s\n' "$$status" > "$$fifo"; \
 	) & api_pid=$$!; \
+	echo "controller: waiting for API health at $(API_HEALTH_URL)..."; \
+	waited=0; \
+	until curl --silent --fail --output /dev/null "$(API_HEALTH_URL)" 2>/dev/null; do \
+		waited=$$((waited + 1)); \
+		if [ "$$waited" -ge 120 ]; then \
+			echo "controller: timed out waiting for API health at $(API_HEALTH_URL)" >&2; \
+			break; \
+		fi; \
+		sleep 0.5; \
+	done; \
+	resolved_uid="$(CONTROLLER_SERVICEACCOUNT_UID)"; \
+	if [ -z "$$resolved_uid" ]; then \
+		echo "controller: enrolling ServiceAccount with the API..."; \
+		if ( cd "$(API_DIR)" && go run ./cmd/gitctl enroll-serviceaccount \
+			--api-url "$(API_URL)" \
+			--admin-username "$(DEV_ADMIN_USERNAME)" \
+			--admin-password "$(DEV_ADMIN_PASSWORD)" \
+			--namespace "$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
+			--name "$(CONTROLLER_SERVICEACCOUNT_NAME)" \
+			--key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
+			--replace-existing-key \
+			--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
+			--identity-output-path "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)" ); then \
+			resolved_uid=$$(sed -n 's/^GITSTORE_CONTROLLER__SERVICEACCOUNT__UID=//p' "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)"); \
+		else \
+			echo "controller: enrollment failed; the controller-manager will not be able to authenticate" >&2; \
+		fi; \
+	fi; \
 	( set +e; \
 		cd "$(CONTROLLER_MANAGER_DIR)" || { printf 'controller 1\n' > "$$fifo"; exit 0; }; \
+		GITSTORE_CONTROLLER__CHECKPOINT_DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID="$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$resolved_uid" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME="$(CONTROLLER_SECRET_NAME)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY="$(CONTROLLER_SECRET_KEY)" \
+		GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
 		go run ./cmd/controller & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
 		wait "$$child"; status=$$?; \

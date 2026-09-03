@@ -235,6 +235,10 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		})
 	}
 	if err := a.authorizeRepositoryField(ctx, fc, principal); err != nil {
+		var notFound *authFieldNotFoundError
+		if errors.As(err, &notFound) {
+			return nil, notFound.render()
+		}
 		return nil, err
 	}
 
@@ -520,6 +524,60 @@ func graphqlFieldRequiresAuthorization(fc *graphql.FieldContext) bool {
 	return false
 }
 
+// repositoryNotFoundError mirrors the resolver-layer convention (see
+// queryResolver.Repository in graph/resolver/repository.resolvers.go) so
+// that GraphQL clients — including gitstore-controller-manager's
+// isNotFoundError probe used by EnsureSystemRepository — see the same
+// "repository not found"/NOT_FOUND shape regardless of whether the
+// not-found outcome is detected here (at the authorization layer, before
+// the resolver runs) or inside the resolver itself. Without this, a raw
+// datastore.ErrNotFound ("datastore: not found") leaked straight past
+// authorization, which callers could not recognize as a normal not-found
+// response.
+func repositoryNotFoundError() *gqlerror.Error {
+	return &gqlerror.Error{
+		Message:    "repository not found",
+		Extensions: map[string]any{"code": "NOT_FOUND"},
+	}
+}
+
+// namespaceNotFoundError mirrors resolver.Service.GetNamespaceByName's
+// not-found shape (graph/resolver/service.go) for the same reason as
+// repositoryNotFoundError above.
+func namespaceNotFoundError(name string) *gqlerror.Error {
+	return &gqlerror.Error{
+		Message:    fmt.Sprintf("namespace %q not found", name),
+		Extensions: map[string]any{"code": "NOT_FOUND"},
+	}
+}
+
+// authFieldNotFoundError marks a datastore.ErrNotFound observed while
+// authorizing a GraphQL field, carrying the resolver-equivalent GraphQL
+// error shape to render once authorization finishes. Unwrap keeps
+// errors.Is(err, datastore.ErrNotFound) working for existing in-function
+// callers (e.g. the Query.nodes loop below) that need to distinguish
+// not-found from other failures before authorizeRepositoryField returns.
+type authFieldNotFoundError struct {
+	cause  error
+	render func() *gqlerror.Error
+}
+
+func (e *authFieldNotFoundError) Error() string { return e.cause.Error() }
+func (e *authFieldNotFoundError) Unwrap() error { return e.cause }
+
+// asAuthorizeFieldError normalizes a datastore.ErrNotFound into an
+// authFieldNotFoundError carrying the resolver-equivalent gqlerror shape;
+// any other error is returned unchanged.
+func asAuthorizeFieldError(err error, notFound func() *gqlerror.Error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, datastore.ErrNotFound) {
+		return &authFieldNotFoundError{cause: err, render: notFound}
+	}
+	return err
+}
+
 func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal) error {
 	if fc == nil || a.store == nil {
 		return nil
@@ -535,11 +593,11 @@ func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.Fi
 		}
 		repo, err = a.store.GetRepository(ctx, rawID)
 		if err != nil {
-			return err
+			return asAuthorizeFieldError(err, repositoryNotFoundError)
 		}
 		ns, err := a.store.GetNamespaceByName(ctx, repo.Namespace)
 		if err != nil {
-			return err
+			return asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(repo.Namespace) })
 		}
 		namespaces = append(namespaces, ns)
 		return nil
@@ -554,7 +612,7 @@ func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.Fi
 		}
 		ns, err := a.store.GetNamespaceByName(ctx, namespace)
 		if err != nil {
-			return err
+			return asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(namespace) })
 		}
 		operation, namespaces, repo = "create", []*datastore.Namespace{ns}, &datastore.Repository{Name: name}
 	case "Mutation.renameRepository", "Mutation.deleteRepository":
@@ -585,7 +643,7 @@ func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.Fi
 		}
 		target, err := a.store.GetNamespace(ctx, targetID)
 		if err != nil {
-			return err
+			return asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(targetID) })
 		}
 		operation, namespaces = "transfer", append(namespaces, target)
 	case "Query.repository":
@@ -601,15 +659,15 @@ func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.Fi
 			}
 			ns, err := a.store.GetNamespaceByName(ctx, namespace)
 			if err != nil {
-				return err
+				return asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(namespace) })
 			}
 			mapping, err := a.store.LookupRepository(ctx, ns.Name, name)
 			if err != nil {
-				return err
+				return asAuthorizeFieldError(err, repositoryNotFoundError)
 			}
 			repo, err = a.store.GetRepository(ctx, mapping.RepositoryID)
 			if err != nil {
-				return err
+				return asAuthorizeFieldError(err, repositoryNotFoundError)
 			}
 			namespaces = []*datastore.Namespace{ns}
 		}
@@ -621,7 +679,7 @@ func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.Fi
 		}
 		ns, err := a.store.GetNamespaceByName(ctx, namespace)
 		if err != nil {
-			return err
+			return asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(namespace) })
 		}
 		operation, namespaces, repo = "read", []*datastore.Namespace{ns}, &datastore.Repository{Name: namespace}
 	case "Query.node":

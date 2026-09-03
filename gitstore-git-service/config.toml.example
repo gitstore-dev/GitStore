@@ -1,0 +1,40 @@
+# gitstore-git-service example config
+# Copy to /etc/gitstore/gitstore-git-service.toml and adjust for your deployment.
+# This is the production-friendly file layout: one service-specific TOML file,
+# with a conventional runtime data directory under /var/lib/gitstore.
+
+[grpc]
+port = 50051
+
+[git]
+data_dir = "/var/lib/gitstore/repos"
+
+[git.repo]
+max_file_size = 52428800
+max_pack_size_bytes = 52428800
+
+[log]
+level = "info"
+format = "json"
+
+[hooks.git_receive_pack]
+pre_receive = { enabled = true }
+update = { enabled = false }
+post_receive = { enabled = true }
+proc_receive = { enabled = false }
+post_update = { enabled = false }
+reference_transaction = { enabled = false }
+
+[schema_validation]
+phase = "pre-receive"
+timeout_secs = 10
+
+[admission_control]
+phase = "post-receive"
+branch_pattern = "^refs/heads/main$"
+
+[catalog_service]
+uri = "http://localhost:6000"
+
+[auth.grpc]
+hmac_secret = "replace-with-shared-hmac-secret"

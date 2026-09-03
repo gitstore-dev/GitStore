@@ -70,9 +70,9 @@ spec:
 ```
 
 Omitted nested defaults mean that the Namespace supplies no override. Authors must omit `metadata.uid`, `metadata.resourceVersion`, `metadata.generation`,
-`metadata.creationTimestamp`, `metadata.revision`,
-`metadata.ownerReferences`, and `metadata.finalizers`. An authored top-level
-`status` block is ignored for Namespace manifests and never persisted.
+`metadata.creationTimestamp`, `metadata.revision`, `metadata.ownerReferences`,
+`metadata.finalizers`, and `status`. Status is controller/system-owned and is
+written only through the status path.
 
 ## Ownership and mutability
 

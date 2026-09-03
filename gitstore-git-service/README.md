@@ -25,15 +25,15 @@ It does not expose public Git HTTP endpoints. In the default Compose deployment,
 
 ## Configuration Highlights
 
-| Variable                                  | Default                 | Purpose                     |
-|-------------------------------------------|-------------------------|-----------------------------|
-| `GITSTORE_GRPC__PORT`                     | `50051`                 | GitService gRPC listen port |
-| `GITSTORE_GIT__DATA_DIR`                  | `/data/repos`           | Bare repository root        |
-| `GITSTORE_GIT__REPO__MAX_FILE_SIZE`       | `52428800`              | Per-file size limit         |
-| `GITSTORE_GIT__REPO__MAX_PACK_SIZE_BYTES` | `52428800`              | Pack size limit             |
-| `GITSTORE_CATALOG_SERVICE__URI`           | `http://localhost:6000` | API CatalogService target   |
-| `GITSTORE_LOG__LEVEL`                     | `info`                  | Log level                   |
-| `GITSTORE_LOG__FORMAT`                    | `json`                  | `json` or `text`            |
+| Variable                                  | Default                   | Purpose                     |
+|-------------------------------------------|---------------------------|-----------------------------|
+| `GITSTORE_GRPC__PORT`                     | `50051`                   | GitService gRPC listen port |
+| `GITSTORE_GIT__DATA_DIR`                  | `/var/lib/gitstore/repos` | Bare repository root        |
+| `GITSTORE_GIT__REPO__MAX_FILE_SIZE`       | `52428800`                | Per-file size limit         |
+| `GITSTORE_GIT__REPO__MAX_PACK_SIZE_BYTES` | `52428800`                | Pack size limit             |
+| `GITSTORE_CATALOG_SERVICE__URI`           | `http://localhost:6000`   | API CatalogService target   |
+| `GITSTORE_LOG__LEVEL`                     | `info`                    | Log level                   |
+| `GITSTORE_LOG__FORMAT`                    | `json`                    | `json` or `text`            |
 
 Hook and admission settings are loaded from defaults, optional `gitstore.toml`, and environment variables. See [docs/configuration.md](../docs/configuration.md).
 

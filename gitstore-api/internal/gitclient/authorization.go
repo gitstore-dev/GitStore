@@ -5,11 +5,20 @@ package gitclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 )
+
+// ErrAuthorizationDenied wraps every rejection RequestAuthorization makes on
+// its own defense-in-depth invariants (e.g. anonymous principals are never
+// approved for a write action, regardless of what the configured AuthZ
+// provider decided upstream). Callers use errors.Is against this sentinel to
+// distinguish an authorization denial — which should surface as 401 so Git
+// can prompt for credentials — from a genuine transport/service failure.
+var ErrAuthorizationDenied = errors.New("git service request authorization denied")
 
 // RequestAuthorization builds the non-secret authorization envelope carried by
 // GitService RPCs. Authentication credentials remain exclusively in gRPC
@@ -25,10 +34,10 @@ func RequestAuthorization(ctx context.Context, action, repositoryID string) (*gi
 	}
 	approvedAnonymous := principal.AuthMethod == "none" && auth.AuthorizedAnonymousFromContext(ctx)
 	if principal.Subject == "" || principal.AuthMethod == "" || (principal.AuthMethod == "none" && !approvedAnonymous) {
-		return nil, fmt.Errorf("git service request authorization requires an authenticated principal")
+		return nil, fmt.Errorf("%w: requires an authenticated principal", ErrAuthorizationDenied)
 	}
 	if approvedAnonymous && action != "repository.read.any" {
-		return nil, fmt.Errorf("git service request authorization permits anonymous actors only for repository.read.any")
+		return nil, fmt.Errorf("%w: permits anonymous actors only for repository.read.any", ErrAuthorizationDenied)
 	}
 	if action == "" || repositoryID == "" {
 		return nil, fmt.Errorf("git service request authorization requires action and repository ID")

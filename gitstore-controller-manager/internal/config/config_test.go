@@ -92,8 +92,8 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Controller.DefaultStallThreshold != 5*time.Minute {
 		t.Errorf("DefaultStallThreshold = %v, want 5m", cfg.Controller.DefaultStallThreshold)
 	}
-	if cfg.Controller.CheckpointDir != ".gitstore/checkpoints" {
-		t.Errorf("CheckpointDir = %q, want .gitstore/checkpoints", cfg.Controller.CheckpointDir)
+	if cfg.Controller.CheckpointDir != "/var/lib/gitstore/checkpoints" {
+		t.Errorf("CheckpointDir = %q, want /var/lib/gitstore/checkpoints", cfg.Controller.CheckpointDir)
 	}
 	if cfg.Controller.CheckpointFlushIntervalEvents != 100 {
 		t.Errorf("CheckpointFlushIntervalEvents = %d, want 100", cfg.Controller.CheckpointFlushIntervalEvents)
