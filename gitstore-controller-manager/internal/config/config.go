@@ -112,7 +112,7 @@ func load(path string) (*Config, error) {
 	v.SetDefault("controller.secret_provider_bootstrap.env_prefix", "GITSTORE_SECRET__")
 	v.SetDefault("controller.default_max_attempts", 5)
 	v.SetDefault("controller.default_stall_threshold", "5m")
-	v.SetDefault("controller.checkpoint_dir", ".gitstore/checkpoints")
+	v.SetDefault("controller.checkpoint_dir", "/var/lib/gitstore/checkpoints")
 	v.SetDefault("controller.checkpoint_flush_interval_events", 100)
 	v.SetDefault("controller.max_watch_backoff", "30s")
 	v.SetDefault("log.level", "info")

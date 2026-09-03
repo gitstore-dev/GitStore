@@ -1,9 +1,9 @@
 services:
   git-service:
     profiles: [local]
-    command: ["/app/git-service", "--config-file", "/config/gitstore.toml"]
+    command: ["/app/git-service", "--config-file", "/etc/gitstore/gitstore.toml"]
     volumes:
-      - ${CONFIG_FILE:-./config/config.toml}:/config/gitstore.toml:ro
+      - ${CONFIG_FILE:-./config/config.toml}:/etc/gitstore/gitstore.toml:ro
 
   api:
     profiles: [local]
@@ -16,11 +16,11 @@ services:
         if [ -f /run/secrets/serviceaccount-signing-key ]; then
           export GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat /run/secrets/serviceaccount-signing-key)"
         fi
-        exec /app/api --config-file /config/gitstore.toml
+        exec /app/api --config-file /etc/gitstore/gitstore.toml
     volumes:
-      - ${CONFIG_FILE:-./config/config.toml}:/config/gitstore.toml:ro
-      - ./config/policy.yaml:/config/policy.yaml:ro
-      - ./config/users.yaml:/config/users.yaml:ro
+      - ${CONFIG_FILE:-./config/config.toml}:/etc/gitstore/gitstore.toml:ro
+      - ./config/policy.yaml:/etc/gitstore/policy.yaml:ro
+      - ./config/users.yaml:/etc/gitstore/users.yaml:ro
       - api-serviceaccount-issuer-key:/run/secrets:ro
     depends_on:
       credential-bootstrap:
@@ -35,10 +35,10 @@ services:
         serviceaccount_uid="$$(sed -n 's/^GITSTORE_CONTROLLER__SERVICEACCOUNT__UID=//p' /run/controller-bootstrap/serviceaccount.env)"
         test -n "$$serviceaccount_uid"
         export GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$serviceaccount_uid"
-        exec /app/controller-manager --config-file /config/gitstore.toml
+        exec /app/controller-manager --config-file /etc/gitstore/gitstore.toml
     volumes:
-      - ${CONFIG_FILE:-./config/config.toml}:/config/gitstore.toml:ro
-      - controller-checkpoints:/data/checkpoints
+      - ${CONFIG_FILE:-./config/config.toml}:/etc/gitstore/gitstore.toml:ro
+      - controller-checkpoints:/var/lib/gitstore/checkpoints
       - controller-serviceaccount-secrets:/run/secrets:ro
       - controller-serviceaccount-identity:/run/controller-bootstrap:ro
     depends_on:

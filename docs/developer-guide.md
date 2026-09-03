@@ -474,33 +474,33 @@ Use Conventional Commits.
 | Env var                             | Default                 | Purpose                   |
 |-------------------------------------|-------------------------|---------------------------|
 | `GITSTORE_GRPC__PORT`               | `50051`                 | GitService gRPC port      |
-| `GITSTORE_GIT__DATA_DIR`            | `/data/repos`           | Bare repository root      |
+| `GITSTORE_GIT__DATA_DIR`            | `/var/lib/gitstore/repos` | Bare repository root    |
 | `GITSTORE_GIT__REPO__MAX_FILE_SIZE` | `52428800`              | Per-file limit            |
 | `GITSTORE_CATALOG_SERVICE__URI`     | `http://localhost:6000` | API CatalogService target |
 
 ### Controller Manager
 
-| Env var                                        | Default                         | Purpose                         |
-|------------------------------------------------|---------------------------------|---------------------------------|
-| `GITSTORE_CONTROLLER__PORT`                    | `5001`                          | HTTP management port            |
-| `GITSTORE_CONTROLLER__API_URI`                 | `http://localhost:4000/graphql` | API endpoint for reconciliation |
-| `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`    | `5`                             | Retry limit before quarantine   |
-| `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD` | `5m`                            | Worker stall threshold          |
-| `GITSTORE_CONTROLLER__CHECKPOINT_DIR`          | `.gitstore/checkpoints`         | Filesystem checkpoint store directory (one file per kind) |
-| `GITSTORE_CONTROLLER__CHECKPOINT_FLUSH_INTERVAL_EVENTS` | `100`                  | Watch events between checkpoint persists |
-| `GITSTORE_CONTROLLER__MAX_WATCH_BACKOFF`       | `30s`                           | Cap on watch-reconnect exponential backoff |
-| `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE` | unset | Enrolled service-account namespace |
-| `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME` | `gitstore-controller-manager` | Enrolled service-account name |
-| `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID` | unset | Enrolled public-key ID |
-| `GITSTORE_CONTROLLER__SERVICEACCOUNT__UID` | unset | Enrolled service-account UID |
-| `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND` | unset | Must be `SecretRef` |
-| `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME` | unset | Logical controller-only secret name |
-| `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY` | unset | Logical private-key entry |
-| `GITSTORE_CONTROLLER__SERVICEACCOUNT__ASSERTION_AUDIENCE` | `gitstore-api/serviceaccount-token` | Signed assertion audience |
-| `GITSTORE_CONTROLLER__SERVICEACCOUNT__ACCESS_TOKEN_AUDIENCE` | `gitstore-api` | Exchanged access-token audience |
-| `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__TYPE` | `file` | Bootstrap secret provider |
-| `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH` | `/run/secrets` | Controller-only secret directory |
-| `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__ENV_PREFIX` | `GITSTORE_SECRET__` | Bootstrap environment-secret prefix |
+| Env var                                                      | Default                             | Purpose                                                   |
+|--------------------------------------------------------------|-------------------------------------|-----------------------------------------------------------|
+| `GITSTORE_CONTROLLER__PORT`                                  | `5001`                              | HTTP management port                                      |
+| `GITSTORE_CONTROLLER__API_URI`                               | `http://localhost:4000/graphql`     | API endpoint for reconciliation                           |
+| `GITSTORE_CONTROLLER__DEFAULT_MAX_ATTEMPTS`                  | `5`                                 | Retry limit before quarantine                             |
+| `GITSTORE_CONTROLLER__DEFAULT_STALL_THRESHOLD`               | `5m`                                | Worker stall threshold                                    |
+| `GITSTORE_CONTROLLER__CHECKPOINT_DIR`                        | `/var/lib/gitstore/checkpoints`     | Filesystem checkpoint store directory (one file per kind) |
+| `GITSTORE_CONTROLLER__CHECKPOINT_FLUSH_INTERVAL_EVENTS`      | `100`                               | Watch events between checkpoint persists                  |
+| `GITSTORE_CONTROLLER__MAX_WATCH_BACKOFF`                     | `30s`                               | Cap on watch-reconnect exponential backoff                |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE`             | unset                               | Enrolled service-account namespace                        |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME`                  | `gitstore-controller-manager`       | Enrolled service-account name                             |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID`                | unset                               | Enrolled public-key ID                                    |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__UID`                   | unset                               | Enrolled service-account UID                              |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND`         | unset                               | Must be `SecretRef`                                       |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME`         | unset                               | Logical controller-only secret name                       |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY`          | unset                               | Logical private-key entry                                 |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__ASSERTION_AUDIENCE`    | `gitstore-api/serviceaccount-token` | Signed assertion audience                                 |
+| `GITSTORE_CONTROLLER__SERVICEACCOUNT__ACCESS_TOKEN_AUDIENCE` | `gitstore-api`                      | Exchanged access-token audience                           |
+| `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__TYPE`       | `file`                              | Bootstrap secret provider                                 |
+| `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH`  | `/run/secrets`                      | Controller-only secret directory                          |
+| `GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__ENV_PREFIX` | `GITSTORE_SECRET__`                 | Bootstrap environment-secret prefix                       |
 
 See [configuration.md](configuration.md) for the operator reference.
 

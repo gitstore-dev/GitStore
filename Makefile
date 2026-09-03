@@ -17,6 +17,14 @@ USERS_FILE ?= $(AUTH_CONFIG_DIR)/users.yaml
 LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
 LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml -f compose.admin.yml
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
+CONTROLLER_CHECKPOINT_DIR ?= $(ROOT)/.gitstore/checkpoints
+CONTROLLER_SECRET_DIR ?= $(ROOT)/.gitstore/secrets
+CONTROLLER_SECRET_NAME ?= controller-manager
+CONTROLLER_SECRET_KEY ?= privateKey
+CONTROLLER_SERVICEACCOUNT_NAMESPACE ?= controllers
+CONTROLLER_SERVICEACCOUNT_NAME ?= gitstore-controller-manager
+CONTROLLER_SERVICEACCOUNT_KEY_ID ?= controller-key
+CONTROLLER_SERVICEACCOUNT_UID ?= local-controller
 DIFF_BASE ?= origin/main
 
 COMPOSE_BAKE ?= true
@@ -100,6 +108,8 @@ help: ## Show available targets and common variables.
 	@printf "  SCYLLA_CLUSTER_SMP=%s     CPU shards per Scylla node for PROFILE=cluster\n" "$(SCYLLA_CLUSTER_SMP)"
 	@printf "  SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS=%s  Networking AIO blocks per cluster node\n" "$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)"
 	@printf "  GIT_DATA_DIR=%s\n" "$(GIT_DATA_DIR)"
+	@printf "  CONTROLLER_CHECKPOINT_DIR=%s\n" "$(CONTROLLER_CHECKPOINT_DIR)"
+	@printf "  CONTROLLER_SECRET_DIR=%s\n" "$(CONTROLLER_SECRET_DIR)"
 	@printf "  CONFIG_FILE=%s        Shared local-profile configuration\n" "$(CONFIG_FILE)"
 	@printf "  API_URL=%s\n" "$(API_URL)"
 	@printf "  ADMIN_USERNAME=%s\n" "$(ADMIN_USERNAME)"
@@ -126,7 +136,23 @@ git: ## Run gitstore-git-service locally in the foreground.
 	@cd "$(GIT_SERVICE_DIR)" && GITSTORE_GIT__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service
 
 controller: ## Run gitstore-controller-manager locally in the foreground.
-	@cd "$(CONTROLLER_MANAGER_DIR)" && go run ./cmd/controller
+	@mkdir -p "$(CONTROLLER_CHECKPOINT_DIR)"
+	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
+		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		echo "Generate one with: cd $(API_DIR) && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		exit 2; \
+	}
+	@cd "$(CONTROLLER_MANAGER_DIR)" && \
+		GITSTORE_CONTROLLER__CHECKPOINT_DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID="$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$(CONTROLLER_SERVICEACCOUNT_UID)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME="$(CONTROLLER_SECRET_NAME)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY="$(CONTROLLER_SECRET_KEY)" \
+		GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
+		go run ./cmd/controller
 
 api: ## Run gitstore-api locally in the foreground.
 	@cd "$(API_DIR)" && go run ./cmd/server
@@ -134,9 +160,14 @@ api: ## Run gitstore-api locally in the foreground.
 dev: ## Run local git service and API together in the foreground.
 	@set -u; \
 	mkdir -p "$(GIT_DATA_DIR)"; \
+	mkdir -p "$(CONTROLLER_CHECKPOINT_DIR)"; \
 	tmp=$$(mktemp -d); \
 	fifo="$$tmp/done"; \
 	mkfifo "$$fifo"; \
+	if [ ! -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ]; then \
+		mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"; \
+		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ); \
+	fi; \
 	cleanup() { \
 		trap - INT TERM EXIT; \
 		[ -n "$${git_pid:-}" ] && kill "$$git_pid" 2>/dev/null || true; \
@@ -166,6 +197,15 @@ dev: ## Run local git service and API together in the foreground.
 	) & api_pid=$$!; \
 	( set +e; \
 		cd "$(CONTROLLER_MANAGER_DIR)" || { printf 'controller 1\n' > "$$fifo"; exit 0; }; \
+		GITSTORE_CONTROLLER__CHECKPOINT_DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_ID="$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$(CONTROLLER_SERVICEACCOUNT_UID)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__NAME="$(CONTROLLER_SECRET_NAME)" \
+		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KEY="$(CONTROLLER_SECRET_KEY)" \
+		GITSTORE_CONTROLLER__SECRET_PROVIDER_BOOTSTRAP__BASE_PATH="$(CONTROLLER_SECRET_DIR)" \
 		go run ./cmd/controller & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
 		wait "$$child"; status=$$?; \

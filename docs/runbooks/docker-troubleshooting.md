@@ -87,7 +87,7 @@ docker inspect gitstore-git-service | jq '.[0].Mounts'
 List repository data inside the Git service container:
 
 ```bash
-docker compose exec git-service ls -la /data/repos
+docker compose exec git-service ls -la /var/lib/gitstore/repos
 ```
 
 The exact repository storage path is generated from the repository identity and is exposed on the `Repository.storagePath` GraphQL field:
