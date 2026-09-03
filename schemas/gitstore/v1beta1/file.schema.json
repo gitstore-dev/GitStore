@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.gitstore.dev/gitstore/v1beta1/file.schema.json",
+  "title": "GitStore File",
+  "description": "YAML frontmatter for a GitStore File resource. A File resource is a Markdown file: this schema validates only the frontmatter object between the opening and closing '---' delimiters. The remaining Markdown content is free-form notes about the file and is not covered by this schema. A File resource describes a piece of external or repository-tracked binary content (e.g. an image) that other resources reference via fileRef. Note: apiVersion for File is a distinct API group (\"storage.gitstore.dev\") from the catalog resources (\"catalog.gitstore.dev\").",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {
+      "const": "storage.gitstore.dev/v1beta1",
+      "description": "Must be exactly \"storage.gitstore.dev/v1beta1\"."
+    },
+    "kind": {
+      "const": "File",
+      "description": "Must be exactly \"File\" (case-sensitive)."
+    },
+    "metadata": {
+      "$ref": "#/$defs/ObjectMeta"
+    },
+    "spec": {
+      "$ref": "#/$defs/FileSpec"
+    }
+  },
+  "$defs": {
+    "ObjectMeta": {
+      "type": "object",
+      "description": "Author-writable resource metadata. Do not set uid, resourceVersion, generation, creationTimestamp, revision, ownerReferences, or finalizers — those fields are system-managed and any of them present in an authored file causes the push to be rejected.",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+          "maxLength": 63,
+          "description": "DNS label format: lowercase alphanumeric and hyphens, 1-63 characters, no leading/trailing hyphen. Identifies this File uniquely within its namespace."
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Optional. When omitted, the namespace is inferred from the owning repository at push time. When present, it is validated to match the inferred namespace."
+        },
+        "labels": {
+          "type": "object",
+          "description": "Optional key/value labels. Keys may use an optional \"prefix/name\" form; prefix ≤ 253 chars, name segment ≤ 63 chars. Values ≤ 63 chars.",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 63
+          }
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Optional key/value annotations. No length restriction.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ChecksumDefinition": {
+      "type": "object",
+      "description": "Content checksum used to verify integrity of the source content.",
+      "additionalProperties": false,
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": { "type": "string", "description": "Required. e.g. \"sha256\"." },
+        "value": { "type": "string", "description": "Required. Hex-encoded digest." }
+      }
+    },
+    "SecretRef": {
+      "type": "object",
+      "description": "Reference to credentials used to fetch the source content. If namespace is set, it must match this resource's own namespace.",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": { "type": "string", "description": "Required. Kind of the secret-holding resource." },
+        "name": { "type": "string", "description": "Required. Name of the secret-holding resource." },
+        "key": { "type": "string", "description": "Optional key within the referenced secret." },
+        "namespace": { "type": "string", "description": "Optional. Must match this File's own namespace if set." }
+      }
+    },
+    "FileSourceDefinition": {
+      "type": "object",
+      "description": "Where the file content is fetched from.",
+      "additionalProperties": false,
+      "required": ["type", "uri"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["git", "lfs", "s3", "gcs"],
+          "description": "Required. Source backend type."
+        },
+        "uri": { "type": "string", "description": "Required. Location of the content, interpreted according to type." },
+        "checksum": { "$ref": "#/$defs/ChecksumDefinition" },
+        "credentialsRef": { "$ref": "#/$defs/SecretRef" }
+      }
+    },
+    "FileVariantRequest": {
+      "type": "object",
+      "description": "A single derived image variant to generate (e.g. a thumbnail).",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "description": "Required. Identifier for this variant, unique within processing.image.variants." }
+      }
+    },
+    "FileImageProcessing": {
+      "type": "object",
+      "description": "Image-specific processing options.",
+      "additionalProperties": false,
+      "properties": {
+        "variants": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/FileVariantRequest" }
+        }
+      }
+    },
+    "FileProcessingDefinition": {
+      "type": "object",
+      "description": "Optional post-fetch processing configuration.",
+      "additionalProperties": false,
+      "properties": {
+        "image": { "$ref": "#/$defs/FileImageProcessing" }
+      }
+    },
+    "FileSpec": {
+      "type": "object",
+      "description": "Author-controlled declarative specification for a File.",
+      "additionalProperties": false,
+      "required": ["contentType", "source"],
+      "properties": {
+        "contentType": { "type": "string", "description": "Required. MIME type of the content, e.g. \"image/png\"." },
+        "type": { "type": "string", "description": "Optional logical file type/category, distinct from contentType." },
+        "source": { "$ref": "#/$defs/FileSourceDefinition" },
+        "processing": { "$ref": "#/$defs/FileProcessingDefinition" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "apiVersion": "storage.gitstore.dev/v1beta1",
+      "kind": "File",
+      "metadata": {
+        "name": "hero-image",
+        "namespace": "acme-store"
+      },
+      "spec": {
+        "contentType": "image/png",
+        "source": {
+          "type": "git",
+          "uri": "assets/hero-image.png",
+          "checksum": {
+            "algorithm": "sha256",
+            "value": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+          }
+        },
+        "processing": {
+          "image": {
+            "variants": [
+              { "name": "thumbnail" },
+              { "name": "large" }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
