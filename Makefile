@@ -266,6 +266,7 @@ dev: ## Run local git service and API together in the foreground.
 		done; \
 		exec 3<&- 2>/dev/null || true; \
 		exec 3>&- 2>/dev/null || true; \
+		GITSTORE_AUTH__AUTHN__CHAIN="static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous" \
 		GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
 		go run ./cmd/server & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \

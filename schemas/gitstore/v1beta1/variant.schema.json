@@ -64,7 +64,7 @@
       "properties": {
         "apiVersion": { "type": "string" },
         "kind": { "type": "string" },
-        "name": { "type": "string", "description": "Required. Name of the referenced resource." },
+        "name": { "type": "string", "minLength": 1, "description": "Required. Name of the referenced resource." },
         "namespace": { "type": "string" },
         "uid": { "type": "string" },
         "resourceVersion": { "type": "string" },
@@ -77,8 +77,8 @@
       "additionalProperties": false,
       "required": ["name", "kind"],
       "properties": {
-        "name": { "type": "string", "description": "Required — the name of the referenced File resource, even when optional is true." },
-        "kind": { "type": "string", "description": "Required. Typically \"File\"." },
+        "name": { "type": "string", "minLength": 1, "description": "Required — the name of the referenced File resource, even when optional is true." },
+        "kind": { "type": "string", "minLength": 1, "description": "Required. Typically \"File\"." },
         "optional": { "type": "boolean", "description": "When true, admission succeeds even if the referenced File is absent." }
       }
     },
@@ -97,8 +97,8 @@
       "additionalProperties": false,
       "required": ["name", "value"],
       "properties": {
-        "name": { "type": "string", "description": "Required. Must exist on the parent product's spec.options." },
-        "value": { "type": "string", "description": "Required. Must be one of the parent option's values." }
+        "name": { "type": "string", "minLength": 1, "description": "Required. Must exist on the parent product's spec.options." },
+        "value": { "type": "string", "minLength": 1, "description": "Required. Must be one of the parent option's values." }
       }
     },
     "QuantityDefinition": {
@@ -130,7 +130,7 @@
       "required": ["expression"],
       "properties": {
         "name": { "type": "string", "description": "Optional human-readable name for documentation." },
-        "expression": { "type": "string", "description": "Required. Must be a syntactically valid CEL expression." }
+        "expression": { "type": "string", "minLength": 1, "description": "Required. Must be a syntactically valid CEL expression." }
       }
     },
     "EligibilityDefinition": {
@@ -160,8 +160,8 @@
         "validFromTime": { "type": "string", "format": "date-time", "description": "RFC 3339 timestamp; must be before validUntilTime if both are set." },
         "validUntilTime": { "type": "string", "format": "date-time", "description": "RFC 3339 timestamp; must be after validFromTime if both are set." },
         "quantity": { "$ref": "#/$defs/QuantityDefinition" },
-        "currencyCode": { "type": "string", "description": "Required. ISO 4217 currency code (e.g. USD, EUR)." },
-        "amount": { "type": "string", "description": "Required. Decimal amount as a string (e.g. \"9.99\"), to preserve precision." },
+        "currencyCode": { "type": "string", "minLength": 1, "description": "Required. ISO 4217 currency code (e.g. USD, EUR)." },
+        "amount": { "type": "string", "minLength": 1, "description": "Required. Decimal amount as a string (e.g. \"9.99\"), to preserve precision." },
         "strategy": { "$ref": "#/$defs/StrategyDefinition" },
         "priority": { "type": "integer", "description": "Evaluation priority. Lower values are evaluated first." },
         "eligibility": { "$ref": "#/$defs/EligibilityDefinition" }
@@ -173,7 +173,7 @@
       "additionalProperties": false,
       "required": ["name"],
       "properties": {
-        "name": { "type": "string", "description": "Required. Identifier for this price set, unique within the variant spec." },
+        "name": { "type": "string", "minLength": 1, "description": "Required. Identifier for this price set, unique within the variant spec." },
         "prices": {
           "type": "array",
           "items": { "$ref": "#/$defs/PriceTemplate" },
@@ -213,8 +213,8 @@
       "additionalProperties": false,
       "required": ["title", "sku", "productRef"],
       "properties": {
-        "title": { "type": "string", "maxLength": 200, "description": "Required. Human-readable display title. Max 200 characters." },
-        "sku": { "type": "string", "description": "Required. Stock-keeping unit; unique per namespace. Duplicate SKU admissions are skipped and leave the existing variant unchanged." },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200, "description": "Required. Human-readable display title. Max 200 characters." },
+        "sku": { "type": "string", "minLength": 1, "description": "Required. Stock-keeping unit; unique per namespace. Duplicate SKU admissions are skipped and leave the existing variant unchanged." },
         "productRef": {
           "allOf": [{ "$ref": "#/$defs/ObjectReference" }],
           "description": "Required. Reference to the parent Product this variant belongs to (name is required; kind defaults to \"Product\" if omitted)."
