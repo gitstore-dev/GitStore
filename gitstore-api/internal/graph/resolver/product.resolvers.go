@@ -162,7 +162,7 @@ func (r *subscriptionResolver) WatchProducts(ctx context.Context, namespace *str
 		defer close(out)
 		defer unsubscribe()
 		if bootstrap {
-			bookmark := toProductWatchEvent(eventbus.Event{Kind: "Product", Cursor: startCursor})
+			bookmark := toProductWatchEvent(eventbus.Event{Kind: "Product", Type: eventbus.Bookmark, Cursor: startCursor})
 			select {
 			case out <- bookmark:
 			case <-ctx.Done():
