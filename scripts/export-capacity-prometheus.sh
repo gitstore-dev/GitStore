@@ -21,25 +21,35 @@ if [[ ! "${lookback}" =~ ^[1-9][0-9]*[smhdwy]$ ]]; then
 fi
 output_dir="${evidence_dir}/prometheus"
 mkdir -p "${output_dir}"
+capacity_target="$(jq -r '[.target, (.scenario // .profile)] | join("/")' "${metadata}")"
 
 names=(
   api_targets_up
-  namespace_admission_stage_p95
-  namespace_datastore_operation_p95
-  namespace_datastore_errors
-  namespace_cdc_discovery_p95
-  namespace_materializer_stage_p95
-  namespace_delivery_p95
 )
 queries=(
   'up{job="gitstore-api-capacity"}'
-  "histogram_quantile(0.95, sum by (le,stage,instance) (increase(gitstore_namespace_admission_stage_duration_seconds_bucket[${lookback}])))"
-  "histogram_quantile(0.95, sum by (le,operation,backend,instance) (increase(gitstore_datastore_operation_duration_seconds_bucket{operation=~\"CreateNamespace|UpdateNamespace\"}[${lookback}])))"
-  "sum by (operation,backend,instance) (increase(gitstore_datastore_operation_errors_total{operation=~\"CreateNamespace|UpdateNamespace\"}[${lookback}])) or on() vector(0)"
-  "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_namespace_watch_cdc_discovery_seconds_bucket[${lookback}])))"
-  "histogram_quantile(0.95, sum by (le,stage,instance) (increase(gitstore_namespace_watch_materializer_stage_duration_seconds_bucket[${lookback}])))"
-  "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_namespace_watch_delivery_latency_seconds_bucket[${lookback}])))"
 )
+
+case "${capacity_target}" in
+  namespace/admission|namespace/watch|namespace/recovery)
+    names+=(namespace_admission_stage_p95 namespace_datastore_operation_p95 namespace_datastore_errors)
+    queries+=(
+      "histogram_quantile(0.95, sum by (le,stage,instance) (increase(gitstore_namespace_admission_stage_duration_seconds_bucket[${lookback}])))"
+      "histogram_quantile(0.95, sum by (le,operation,backend,instance) (increase(gitstore_datastore_operation_duration_seconds_bucket{operation=~\"CreateNamespace|UpdateNamespace\"}[${lookback}])))"
+      "sum by (operation,backend,instance) (increase(gitstore_datastore_operation_errors_total{operation=~\"CreateNamespace|UpdateNamespace\"}[${lookback}])) or on() vector(0)"
+    )
+    ;;
+esac
+case "${capacity_target}" in
+  namespace/watch|namespace/recovery)
+    names+=(namespace_cdc_discovery_p95 namespace_materializer_stage_p95 namespace_delivery_p95)
+    queries+=(
+      "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_namespace_watch_cdc_discovery_seconds_bucket[${lookback}])))"
+      "histogram_quantile(0.95, sum by (le,stage,instance) (increase(gitstore_namespace_watch_materializer_stage_duration_seconds_bucket[${lookback}])))"
+      "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_namespace_watch_delivery_latency_seconds_bucket[${lookback}])))"
+    )
+    ;;
+esac
 
 for index in "${!names[@]}"; do
   response="${output_dir}/${names[index]}.json"
@@ -60,11 +70,12 @@ done
 jq -n \
   --arg collected_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg source "${prometheus_url%/}" \
+  --arg capacity_target "${capacity_target}" \
   --arg lookback "${lookback}" \
   --arg started_at "$(jq -r '.startedAt' "${metadata}")" \
   --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson queries "$(for index in "${!names[@]}"; do jq -n --arg name "${names[index]}" --arg query "${queries[index]}" '{name:$name,query:$query}'; done | jq -s .)" \
-  '{schemaVersion:1,collectedAt:$collected_at,source:$source,runStartedAt:$started_at,runCompletedAt:$completed_at,lookback:$lookback,queries:$queries}' \
+  '{schemaVersion:1,collectedAt:$collected_at,source:$source,capacityTarget:$capacity_target,runStartedAt:$started_at,runCompletedAt:$completed_at,lookback:$lookback,queries:$queries}' \
   >"${output_dir}/manifest.json"
 
 echo "Prometheus capacity evidence: ${output_dir}"

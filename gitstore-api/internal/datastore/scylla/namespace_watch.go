@@ -4,9 +4,11 @@
 package scylla
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -264,10 +266,14 @@ func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceW
 			}
 			if existing.DeduplicationKey != "" && existing.DeduplicationKey == candidate.DeduplicationKey {
 				published, publishErr := s.publishNamespaceWatchSequence(ctx, clock, lease, next, existing.Type, existing.At)
-				if publishErr != nil {
-					return datastore.NamespaceWatchEvent{}, publishErr
-				}
 				if published {
+					return existing, nil
+				}
+				resolved, resolveErr := s.resolveNamespaceWatchPublishedRange(ctx, clock, lease, []datastore.NamespaceWatchEvent{existing}, publishErr)
+				if resolveErr != nil {
+					return datastore.NamespaceWatchEvent{}, resolveErr
+				}
+				if resolved {
 					return existing, nil
 				}
 			}
@@ -275,25 +281,13 @@ func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceW
 		}
 
 		applied, casErr := s.publishNamespaceWatchSequence(ctx, clock, lease, next, candidate.Type, candidate.At)
-		if casErr != nil {
-			return datastore.NamespaceWatchEvent{}, fmt.Errorf("scylla: publish Namespace journal sequence: %w", casErr)
-		}
-		if !applied {
-			latest, latestErr := s.loadNamespaceWatchClock(ctx)
-			if latestErr != nil {
-				return datastore.NamespaceWatchEvent{}, latestErr
+		if !applied || casErr != nil {
+			resolved, resolveErr := s.resolveNamespaceWatchPublishedRange(ctx, clock, lease, []datastore.NamespaceWatchEvent{candidate}, casErr)
+			if resolveErr != nil {
+				return datastore.NamespaceWatchEvent{}, resolveErr
 			}
-			if !namespaceWatchLeaseMatches(latest, lease, time.Now()) {
-				return datastore.NamespaceWatchEvent{}, datastore.ErrStaleWatchLease
-			}
-			if latest.Epoch == clock.Epoch && latest.HighWater >= next {
-				existing, loadErr := s.namespaceWatchEvent(ctx, clock.Epoch, bucket, next)
-				if loadErr != nil {
-					return datastore.NamespaceWatchEvent{}, loadErr
-				}
-				if existing.DeduplicationKey == candidate.DeduplicationKey {
-					return existing, nil
-				}
+			if resolved {
+				return candidate, nil
 			}
 			continue
 		}
@@ -348,6 +342,19 @@ func (s *scyllaDatastore) AppendBatch(ctx context.Context, lease datastore.Names
 				events = events[count:]
 				continue
 			}
+			resolved, resolveErr := s.resolveNamespaceWatchPublishedRange(ctx, clock, lease, candidates, publishErr)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			if resolved {
+				if first == 1 {
+					_ = s.session.Query("UPDATE namespace_watch_clock SET oldest=? WHERE journal=?", nil).
+						WithContext(ctx).Bind(int64(1), namespaceWatchJournalName).ExecRelease()
+				}
+				appended = append(appended, candidates...)
+				events = events[count:]
+				continue
+			}
 		}
 		// The conditional batch is atomic. If it was already present, or if
 		// publishing its range was ambiguous, the established per-event path
@@ -365,6 +372,84 @@ func (s *scyllaDatastore) AppendBatch(ctx context.Context, lease datastore.Names
 		events = events[count:]
 	}
 	return appended, nil
+}
+
+func (s *scyllaDatastore) resolveNamespaceWatchPublishedRange(
+	ctx context.Context,
+	clock namespaceWatchClockRow,
+	lease datastore.NamespaceWatchLease,
+	candidates []datastore.NamespaceWatchEvent,
+	primary error,
+) (bool, error) {
+	return runNamespaceWatchPublicationResolution(ctx, clock, lease, candidates, primary,
+		func(resolveCtx context.Context) (namespaceWatchClockRow, error) {
+			var state namespaceWatchClockRow
+			err := s.session.Query(
+				"SELECT epoch,high_water,lease_holder,fencing_token,lease_expiration_timestamp FROM namespace_watch_clock WHERE journal=? AND stream_id=?",
+				nil,
+			).Consistency(gocql.LocalSerial).WithContext(resolveCtx).Bind(namespaceWatchJournalName, namespaceWatchClockStream).GetRelease(&state)
+			return state, err
+		},
+		func(resolveCtx context.Context, candidate datastore.NamespaceWatchEvent) (datastore.NamespaceWatchEvent, error) {
+			bucket := namespaceWatchBucket(candidate.Sequence, s.namespaceWatchBucketSize)
+			return s.namespaceWatchEvent(resolveCtx, clock.Epoch, bucket, int64(candidate.Sequence))
+		},
+	)
+}
+
+func runNamespaceWatchPublicationResolution(
+	ctx context.Context,
+	clock namespaceWatchClockRow,
+	lease datastore.NamespaceWatchLease,
+	candidates []datastore.NamespaceWatchEvent,
+	primary error,
+	readClock func(context.Context) (namespaceWatchClockRow, error),
+	readEvent func(context.Context, datastore.NamespaceWatchEvent) (datastore.NamespaceWatchEvent, error),
+) (bool, error) {
+	resolveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceProjectionCleanupTimeout)
+	defer cancel()
+	latest, err := readClock(resolveCtx)
+	if err != nil {
+		if primary != nil {
+			return false, fmt.Errorf("%w; resolve ambiguous Namespace journal publication: %v", primary, err)
+		}
+		return false, fmt.Errorf("scylla: resolve Namespace journal publication: %w", err)
+	}
+	if len(candidates) == 0 {
+		return false, fmt.Errorf("scylla: resolve Namespace journal publication: empty candidate range")
+	}
+	last := int64(candidates[len(candidates)-1].Sequence)
+	if latest.Epoch != clock.Epoch {
+		return false, datastore.ErrStaleWatchLease
+	}
+	if latest.HighWater < last {
+		if latest.Holder != lease.Holder || uint64(latest.FencingToken) != lease.FencingToken {
+			return false, datastore.ErrStaleWatchLease
+		}
+		return false, nil
+	}
+	for _, candidate := range candidates {
+		existing, readErr := readEvent(resolveCtx, candidate)
+		if readErr != nil {
+			return false, fmt.Errorf("scylla: resolve Namespace journal publication at sequence %d: %w", candidate.Sequence, readErr)
+		}
+		if !namespaceWatchEventsEqual(existing, candidate) {
+			return false, fmt.Errorf("scylla: Namespace journal sequence %d was published with a different event", candidate.Sequence)
+		}
+	}
+	return true, nil
+}
+
+func namespaceWatchEventsEqual(left, right datastore.NamespaceWatchEvent) bool {
+	return left.Epoch == right.Epoch &&
+		left.Sequence == right.Sequence &&
+		left.Type == right.Type &&
+		left.Name == right.Name &&
+		bytes.Equal(left.Payload, right.Payload) &&
+		maps.Equal(left.SelectorLabels, right.SelectorLabels) &&
+		maps.Equal(left.PreviousSelectorLabels, right.PreviousSelectorLabels) &&
+		left.DeduplicationKey == right.DeduplicationKey &&
+		left.FencingToken == right.FencingToken
 }
 
 func (s *scyllaDatastore) namespaceWatchEventBatch(clock namespaceWatchClockRow, lease datastore.NamespaceWatchLease, bucket int64, events []datastore.NamespaceWatchEvent, ttl time.Duration) (*gocqlx.Batch, []datastore.NamespaceWatchEvent, int) {

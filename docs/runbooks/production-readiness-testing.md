@@ -197,6 +197,10 @@ previous experiment from contaminating the result. The
 API `git_commit` stage is the Prometheus boundary for Git-service latency;
 marker-lock waits and optimistic-reference retries remain structured Rust log
 fields because the legacy Axum metrics surface has been removed.
+Query requirements follow the selected profile: `api/readiness` requires only
+healthy scrape targets, Namespace admission adds admission/datastore signals,
+and watch/recovery add CDC, materializer, and delivery signals. A missing lazy
+datastore-error series is recorded as zero rather than treated as scrape loss.
 Namespace watch capacity uses a bounded 50-resource update pool by default, so
 the watch gate measures transition delivery instead of unbounded Git-tree
 growth. Change `NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL` only for a declared

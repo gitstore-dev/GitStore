@@ -109,8 +109,9 @@ make capacity TARGET=namespace PROFILE=watch MODE=alpha \
   CAPACITY_PROMETHEUS_TARGETS=api-a.internal:4000,api-b.internal:4000
 ```
 
-PromQL snapshots for admission, CDC discovery, journal materialization, and
-subscriber delivery are stored in the evidence bundle. The API `git_commit`
+PromQL snapshots are selected by profile: readiness records scrape health,
+admission adds admission/datastore signals, and watch/recovery add CDC,
+materialization, and delivery signals. The API `git_commit`
 stage isolates the Git-service boundary; finer Git marker-lock and reference
 retry timing is emitted as bounded structured Git-service log fields without
 reintroducing the removed Axum HTTP stack.
