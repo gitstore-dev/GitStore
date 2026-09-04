@@ -255,6 +255,10 @@ Namespace recovery requires a fresh
 selected endpoint when the file appears. The verifier records an actual
 outage, requires a changed `process_start_time_seconds`, and resumes delivery
 from the pre-replacement cursor.
+The materializer persists each appended batch's frontier together with its
+per-stream resume positions before it advances source checkpoints. A new
+leader reconciles lagging checkpoints from that bounded manifest, closing the
+crash window without admitting unseen records behind the ordered frontier.
 Namespace watch and recovery runs must also provide every declared API replica
 in `CAPACITY_API_ENDPOINTS`. Preflight scrapes and retains each process start
 time, maps each endpoint to the corresponding unique container ID, and requires

@@ -27,6 +27,8 @@ const namespaceCDCPublishedFrontierProgress = "__namespace_cdc_published_frontie
 
 const namespaceCDCPendingLimit = 100000
 
+const namespaceCDCPublishedManifestLimit = 1 << 20
+
 // Coalesce records briefly enough to amortize Scylla's conditional journal
 // publication without consuming a material portion of the one-second
 // visibility SLO.
@@ -51,7 +53,7 @@ func (s *scyllaDatastore) RunNamespaceCDC(ctx context.Context, materializer *wat
 		if err != nil {
 			return err
 		}
-		return sequencer.BeginGeneration(generationCtx, streams)
+		return sequencer.BeginGeneration(generationCtx, generation, streams)
 	}
 	sequencerErr := make(chan error, 1)
 	go func() {
@@ -253,11 +255,12 @@ type namespaceCDCSequenceRequest struct {
 }
 
 type namespaceCDCSequenceMessage struct {
-	kind     namespaceCDCSequenceMessageKind
-	streamID string
-	streams  []string
-	request  namespaceCDCSequenceRequest
-	result   chan error
+	kind       namespaceCDCSequenceMessageKind
+	generation time.Time
+	streamID   string
+	streams    []string
+	request    namespaceCDCSequenceRequest
+	result     chan error
 }
 
 type namespaceCDCSequenceMessageKind uint8
@@ -282,7 +285,13 @@ type namespaceCDCSequencer struct {
 	done             chan struct{}
 	publishedThrough gocql.UUID
 	hasPublished     bool
-	persistFrontier  func(context.Context, gocql.UUID) error
+	persistFrontier  func(context.Context, namespaceCDCPublishedBatch) error
+}
+
+type namespaceCDCPublishedBatch struct {
+	Frontier   gocql.UUID
+	Generation time.Time
+	Progress   map[string]gocql.UUID
 }
 
 func newNamespaceCDCSequencer(materializer *watchjournal.Materializer, lease datastore.NamespaceWatchLease) *namespaceCDCSequencer {
@@ -294,11 +303,11 @@ func newNamespaceCDCSequencer(materializer *watchjournal.Materializer, lease dat
 	}
 }
 
-func (s *namespaceCDCSequencer) BeginGeneration(ctx context.Context, streams []string) error {
-	if s == nil || len(streams) == 0 {
+func (s *namespaceCDCSequencer) BeginGeneration(ctx context.Context, generation time.Time, streams []string) error {
+	if s == nil || generation.IsZero() || len(streams) == 0 {
 		return fmt.Errorf("namespace CDC generation has no streams")
 	}
-	return s.send(ctx, namespaceCDCSequenceMessage{kind: namespaceCDCBeginGeneration, streams: streams})
+	return s.send(ctx, namespaceCDCSequenceMessage{kind: namespaceCDCBeginGeneration, generation: generation, streams: streams})
 }
 
 func (s *namespaceCDCSequencer) Submit(ctx context.Context, request namespaceCDCSequenceRequest) error {
@@ -360,6 +369,7 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 	registered := make(map[string]struct{})
 	generationPrepared := false
 	registrationComplete := false
+	var currentGeneration time.Time
 	ticker := time.NewTicker(namespaceCDCFlushInterval)
 	defer ticker.Stop()
 	for {
@@ -386,6 +396,7 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 				}
 				generationPrepared = true
 				registrationComplete = false
+				currentGeneration = message.generation
 			case namespaceCDCRegister:
 				if !generationPrepared {
 					err := fmt.Errorf("namespace CDC stream %s registered before generation discovery completed", message.streamID)
@@ -496,11 +507,17 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 			// Journal appends are idempotent by CDC position. Persist the global
 			// published frontier before advancing any source checkpoint so a crash
 			// cannot restore a frontier older than records whose source positions
-			// have already moved past them. A crash after the frontier write can
-			// replay the batch, but the restored frontier makes that replay fail
-			// closed instead of assigning an older transition a newer sequence.
+			// have already moved past them. The same durable record retains the
+			// latest position for each stream in this batch, allowing a new leader
+			// to reconcile checkpoints after a crash in the following write loop.
 			if s.persistFrontier != nil {
-				if err := s.persistFrontier(ctx, batchFrontier); err != nil {
+				progress := make(map[string]gocql.UUID, len(latestProgress))
+				for streamID, request := range latestProgress {
+					progress[cdcProgressKeyEncoded(currentGeneration, "namespaces_by_uid", streamID)] = request.cdcTime
+				}
+				if err := s.persistFrontier(ctx, namespaceCDCPublishedBatch{
+					Frontier: batchFrontier, Generation: currentGeneration, Progress: progress,
+				}); err != nil {
 					return err
 				}
 			}
@@ -847,6 +864,7 @@ type namespaceCDCProgressManager struct {
 	lease           datastore.NamespaceWatchLease
 	observeProgress func(time.Time)
 	beginGeneration func(context.Context, time.Time) error
+	recovery        namespaceCDCPublishedBatch
 }
 
 func (m *namespaceCDCProgressManager) GetCurrentGeneration(ctx context.Context) (time.Time, error) {
@@ -878,16 +896,27 @@ func (m *namespaceCDCProgressManager) StartGeneration(ctx context.Context, gener
 }
 
 func (m *namespaceCDCProgressManager) GetProgress(ctx context.Context, generation time.Time, table string, streamID scyllacdc.StreamID) (scyllacdc.Progress, error) {
-	progress, err := m.journal.LoadProgress(ctx, cdcProgressKey(generation, table, streamID))
+	key := cdcProgressKey(generation, table, streamID)
+	progress, err := m.journal.LoadProgress(ctx, key)
 	if errors.Is(err, datastore.ErrNotFound) {
-		return scyllacdc.Progress{}, nil
-	}
-	if err != nil {
+		progress = datastore.NamespaceCDCProgress{}
+	} else if err != nil {
 		return scyllacdc.Progress{}, err
 	}
-	position, err := gocql.UUIDFromBytes(progress.Position)
-	if err != nil {
-		return scyllacdc.Progress{}, fmt.Errorf("decode Namespace CDC progress: %w", err)
+	var position gocql.UUID
+	if len(progress.Position) > 0 {
+		position, err = gocql.UUIDFromBytes(progress.Position)
+		if err != nil {
+			return scyllacdc.Progress{}, fmt.Errorf("decode Namespace CDC progress: %w", err)
+		}
+	}
+	recovered, ok := m.recovery.Progress[key]
+	if ok && (position == (gocql.UUID{}) || scyllacdc.CompareTimeUUID(recovered, position) > 0) {
+		progress = datastore.NamespaceCDCProgress{StreamID: key, Position: recovered.Bytes(), UpdatedAt: recovered.Time().UTC()}
+		if err := m.journal.SaveProgress(ctx, m.lease, progress); err != nil {
+			return scyllacdc.Progress{}, fmt.Errorf("reconcile Namespace CDC progress from published frontier: %w", err)
+		}
+		position = recovered
 	}
 	return scyllacdc.Progress{LastProcessedRecordTime: position}, nil
 }
@@ -910,17 +939,60 @@ func (m *namespaceCDCProgressManager) PublishedFrontier(ctx context.Context) (go
 		return gocql.UUID{}, false, fmt.Errorf("load Namespace CDC published frontier: %w", err)
 	}
 	frontier, err := gocql.UUIDFromBytes(progress.Position)
+	if err == nil {
+		return frontier, true, nil
+	}
+	var record struct {
+		Version    int               `json:"version"`
+		Frontier   string            `json:"frontier"`
+		Generation int64             `json:"generation"`
+		Progress   map[string]string `json:"progress"`
+	}
+	if jsonErr := json.Unmarshal(progress.Position, &record); jsonErr != nil {
+		return gocql.UUID{}, false, fmt.Errorf("decode Namespace CDC published frontier manifest: %w", jsonErr)
+	}
+	if record.Version != 1 || record.Generation == 0 || len(record.Progress) == 0 {
+		return gocql.UUID{}, false, fmt.Errorf("decode Namespace CDC published frontier manifest: invalid version, generation, or progress")
+	}
+	frontier, err = gocql.ParseUUID(record.Frontier)
 	if err != nil {
-		return gocql.UUID{}, false, fmt.Errorf("decode Namespace CDC published frontier: %w", err)
+		return gocql.UUID{}, false, fmt.Errorf("decode Namespace CDC published frontier UUID: %w", err)
+	}
+	m.recovery = namespaceCDCPublishedBatch{Frontier: frontier, Generation: time.Unix(0, record.Generation).UTC(), Progress: make(map[string]gocql.UUID, len(record.Progress))}
+	for streamID, value := range record.Progress {
+		position, parseErr := gocql.ParseUUID(value)
+		if parseErr != nil {
+			return gocql.UUID{}, false, fmt.Errorf("decode Namespace CDC published progress for %s: %w", streamID, parseErr)
+		}
+		m.recovery.Progress[streamID] = position
 	}
 	return frontier, true, nil
 }
 
-func (m *namespaceCDCProgressManager) SavePublishedFrontier(ctx context.Context, frontier gocql.UUID) error {
-	frontierAt := frontier.Time().UTC()
-	err := m.journal.SaveProgress(ctx, m.lease, datastore.NamespaceCDCProgress{
+func (m *namespaceCDCProgressManager) SavePublishedFrontier(ctx context.Context, batch namespaceCDCPublishedBatch) error {
+	if batch.Frontier == (gocql.UUID{}) || batch.Generation.IsZero() || len(batch.Progress) == 0 {
+		return fmt.Errorf("encode Namespace CDC published frontier: frontier, generation, and progress are required")
+	}
+	record := struct {
+		Version    int               `json:"version"`
+		Frontier   string            `json:"frontier"`
+		Generation int64             `json:"generation"`
+		Progress   map[string]string `json:"progress"`
+	}{Version: 1, Frontier: batch.Frontier.String(), Generation: batch.Generation.UnixNano(), Progress: make(map[string]string, len(batch.Progress))}
+	for streamID, position := range batch.Progress {
+		record.Progress[streamID] = position.String()
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("encode Namespace CDC published frontier: %w", err)
+	}
+	if len(encoded) > namespaceCDCPublishedManifestLimit {
+		return fmt.Errorf("encode Namespace CDC published frontier: recovery manifest exceeds %d bytes", namespaceCDCPublishedManifestLimit)
+	}
+	frontierAt := batch.Frontier.Time().UTC()
+	err = m.journal.SaveProgress(ctx, m.lease, datastore.NamespaceCDCProgress{
 		StreamID:  namespaceCDCPublishedFrontierProgress,
-		Position:  frontier.Bytes(),
+		Position:  encoded,
 		UpdatedAt: frontierAt,
 	})
 	if err == nil && m.observeProgress != nil {
@@ -930,5 +1002,9 @@ func (m *namespaceCDCProgressManager) SavePublishedFrontier(ctx context.Context,
 }
 
 func cdcProgressKey(generation time.Time, table string, streamID scyllacdc.StreamID) string {
-	return strconv.FormatInt(generation.UnixNano(), 36) + ":" + table + ":" + encodeCDCStreamID(streamID)
+	return cdcProgressKeyEncoded(generation, table, encodeCDCStreamID(streamID))
+}
+
+func cdcProgressKeyEncoded(generation time.Time, table, streamID string) string {
+	return strconv.FormatInt(generation.UnixNano(), 36) + ":" + table + ":" + streamID
 }

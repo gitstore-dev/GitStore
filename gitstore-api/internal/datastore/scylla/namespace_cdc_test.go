@@ -47,7 +47,8 @@ func TestNamespaceCDCSequencerOrdersConcurrentStreams(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a", "stream-b"}))
+	generation := time.Now().UTC()
+	require.NoError(t, sequencer.BeginGeneration(ctx, generation, []string{"stream-a", "stream-b"}))
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 	require.NoError(t, sequencer.Register(ctx, "stream-b"))
 
@@ -77,7 +78,7 @@ func TestNamespaceCDCSequencerFlushesPendingTailBeforeNextGeneration(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"old-stream"}))
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"old-stream"})
 	require.NoError(t, sequencer.Register(ctx, "old-stream"))
 	progressed := make(chan string, 1)
 	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest(
@@ -85,7 +86,7 @@ func TestNamespaceCDCSequencerFlushesPendingTailBeforeNextGeneration(t *testing.
 	)))
 	require.NoError(t, sequencer.Unregister("old-stream"))
 	require.Equal(t, "tail", <-progressed)
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"new-stream"}))
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"new-stream"})
 	require.NoError(t, sequencer.Register(ctx, "new-stream"))
 	require.NoError(t, sequencer.Unregister("new-stream"))
 	cancel()
@@ -99,7 +100,8 @@ func TestNamespaceCDCSequencerPersistsFrontierBeforeBatchedProgress(t *testing.T
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a", "stream-b"}))
+	generation := time.Now().UTC()
+	require.NoError(t, sequencer.BeginGeneration(ctx, generation, []string{"stream-a", "stream-b"}))
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 	require.NoError(t, sequencer.Register(ctx, "stream-b"))
 
@@ -108,7 +110,9 @@ func TestNamespaceCDCSequencerPersistsFrontierBeforeBatchedProgress(t *testing.T
 	first := sequenceTestRequest("stream-a", "a-first", gocql.MinTimeUUID(base), progressed)
 	latest := sequenceTestRequest("stream-a", "a-latest", gocql.MinTimeUUID(base.Add(time.Millisecond)), progressed)
 	peer := sequenceTestRequest("stream-b", "b-peer", gocql.MinTimeUUID(base.Add(time.Millisecond)), progressed)
-	sequencer.persistFrontier = func(context.Context, gocql.UUID) error {
+	persisted := make(chan namespaceCDCPublishedBatch, 1)
+	sequencer.persistFrontier = func(_ context.Context, batch namespaceCDCPublishedBatch) error {
+		persisted <- batch
 		progressed <- "frontier"
 		return nil
 	}
@@ -121,6 +125,10 @@ func TestNamespaceCDCSequencerPersistsFrontierBeforeBatchedProgress(t *testing.T
 
 	assert.Equal(t, "frontier", <-progressed, "global frontier must precede every per-stream checkpoint")
 	assert.ElementsMatch(t, []string{"a-latest", "b-peer"}, []string{<-progressed, <-progressed})
+	batch := <-persisted
+	assert.Equal(t, generation, batch.Generation)
+	assert.Equal(t, latest.cdcTime, batch.Progress[cdcProgressKeyEncoded(generation, "namespaces_by_uid", "stream-a")])
+	assert.Equal(t, peer.cdcTime, batch.Progress[cdcProgressKeyEncoded(generation, "namespaces_by_uid", "stream-b")])
 	select {
 	case unexpected := <-progressed:
 		t.Fatalf("superseded per-stream checkpoint was written: %s", unexpected)
@@ -156,14 +164,14 @@ func TestRetainUnpublishedCDCRequestsClearsDiscardedBackingSlots(t *testing.T) {
 func TestNamespaceCDCSequencerDoesNotCheckpointWhenFrontierPersistenceFails(t *testing.T) {
 	store := &sequencerStore{}
 	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
-	sequencer.persistFrontier = func(context.Context, gocql.UUID) error {
+	sequencer.persistFrontier = func(context.Context, namespaceCDCPublishedBatch) error {
 		return errors.New("frontier failed")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a"}))
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"stream-a"})
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 
 	checkpointed := false
@@ -187,7 +195,7 @@ func TestNamespaceCDCSequencerFailsClosedWhenStreamMovesBackward(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a"}))
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"stream-a"})
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 
 	base := time.Now().UTC()
@@ -208,13 +216,13 @@ func TestNamespaceCDCSequencerRejectsNewStreamBehindPublishedFrontier(t *testing
 
 	base := time.Now().UTC()
 	progressed := make(chan string, 2)
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a"}))
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"stream-a"})
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("stream-a", "published", gocql.MinTimeUUID(base.Add(time.Second)), progressed)))
 	require.NoError(t, sequencer.Unregister("stream-a"))
 	assert.Equal(t, "published", <-progressed)
 
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-b"}))
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"stream-b"})
 	require.NoError(t, sequencer.Register(ctx, "stream-b"))
 	err := sequencer.Submit(ctx, sequenceTestRequest("stream-b", "older", gocql.MinTimeUUID(base), progressed))
 	require.ErrorContains(t, err, "behind published frontier")
@@ -232,12 +240,12 @@ func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t
 
 	base := time.Now().UTC()
 	progressed := make(chan string, 1)
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a"}))
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"stream-a"})
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("stream-a", "published", gocql.MinTimeUUID(base.Add(time.Second)), progressed)))
 	require.NoError(t, sequencer.Unregister("stream-a"))
 	require.Equal(t, "published", <-progressed)
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-b"}))
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"stream-b"})
 	require.NoError(t, sequencer.Register(ctx, "stream-b"))
 	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("stream-b", "later", gocql.MinTimeUUID(base.Add(2*time.Second)), make(chan string, 1))))
 	require.Error(t, sequencer.Submit(ctx, sequenceTestRequest("stream-b", "older", gocql.MinTimeUUID(base), make(chan string, 1))))
@@ -260,7 +268,7 @@ func TestNamespaceCDCSequencerRejectsStreamBehindRestoredFrontier(t *testing.T) 
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"new-stream"}))
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"new-stream"})
 	require.NoError(t, sequencer.Register(ctx, "new-stream"))
 	err := sequencer.Submit(ctx, sequenceTestRequest("new-stream", "older", gocql.MinTimeUUID(base), make(chan string, 1)))
 	require.ErrorContains(t, err, "behind published frontier")
@@ -274,7 +282,7 @@ func TestNamespaceCDCSequencerWaitsForEveryDiscoveredStream(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a", "stream-b"}))
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"stream-a", "stream-b"})
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 
 	progressed := make(chan string, 1)
@@ -303,7 +311,7 @@ func TestNamespaceCDCSequencerAcceptsEmptyWindowBehindPublishedFrontier(t *testi
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"new-stream"}))
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"new-stream"})
 	require.NoError(t, sequencer.Register(ctx, "new-stream"))
 	progressed := make(chan string, 1)
 	request := sequenceTestRequest("new-stream", "empty", gocql.MinTimeUUID(base), progressed)
@@ -323,7 +331,7 @@ func TestNamespaceCDCSequencerSkipsUncommittedAdditionBeforeProgress(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- sequencer.Run(ctx) }()
-	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a"}))
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"stream-a"})
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 
 	progressed := make(chan string, 1)
@@ -366,19 +374,34 @@ func TestNamespaceCDCProgressManagerObservesOnlyPublishedFrontier(t *testing.T) 
 		},
 	}
 	progressTime := gocql.MinTimeUUID(time.Now().UTC().Add(-2 * time.Hour))
+	previousTime := gocql.MinTimeUUID(progressTime.Time().UTC().Add(-time.Hour))
 	wantProgressAt := progressTime.Time().UTC()
 	generation := time.Now().UTC()
 
-	err = manager.SaveProgress(context.Background(), generation, "namespaces_by_uid", scyllacdc.StreamID("stream-a"), scyllacdc.Progress{LastProcessedRecordTime: progressTime})
+	err = manager.SaveProgress(context.Background(), generation, "namespaces_by_uid", scyllacdc.StreamID("stream-a"), scyllacdc.Progress{LastProcessedRecordTime: previousTime})
 	require.NoError(t, err)
 	assert.Empty(t, observed, "individual stream progress must not advertise global readiness")
-	require.NoError(t, manager.SavePublishedFrontier(context.Background(), progressTime))
+	require.NoError(t, manager.SavePublishedFrontier(context.Background(), namespaceCDCPublishedBatch{
+		Frontier: progressTime, Generation: generation,
+		Progress: map[string]gocql.UUID{cdcProgressKey(generation, "namespaces_by_uid", scyllacdc.StreamID("stream-a")): progressTime},
+	}))
 	select {
 	case at := <-observed:
 		assert.Equal(t, wantProgressAt, at)
 	case <-time.After(time.Second):
 		t.Fatal("CDC progress observation was not reported")
 	}
+	restarted := &namespaceCDCProgressManager{journal: journal, lease: lease}
+	frontier, found, err := restarted.PublishedFrontier(context.Background())
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, progressTime, frontier)
+	recovered, err := restarted.GetProgress(context.Background(), generation, "namespaces_by_uid", scyllacdc.StreamID("stream-a"))
+	require.NoError(t, err)
+	assert.Equal(t, progressTime, recovered.LastProcessedRecordTime)
+	unrelated, err := restarted.GetProgress(context.Background(), generation.Add(time.Hour), "namespaces_by_uid", scyllacdc.StreamID("stream-a"))
+	require.NoError(t, err)
+	assert.Equal(t, gocql.UUID{}, unrelated.LastProcessedRecordTime, "a published batch must not advance a different CDC generation")
 	stored, err := journal.LoadProgress(context.Background(), cdcProgressKey(generation, "namespaces_by_uid", scyllacdc.StreamID("stream-a")))
 	require.NoError(t, err)
 	assert.Equal(t, wantProgressAt, stored.UpdatedAt)
@@ -618,4 +641,9 @@ func sequenceTestRequest(streamID, name string, at gocql.UUID, progressed chan<-
 			return nil
 		},
 	}
+}
+
+func beginSequenceTestGeneration(t *testing.T, sequencer *namespaceCDCSequencer, ctx context.Context, streams []string) {
+	t.Helper()
+	require.NoError(t, sequencer.BeginGeneration(ctx, time.Now().UTC(), streams))
 }
