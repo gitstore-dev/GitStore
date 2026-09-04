@@ -35,18 +35,27 @@ if CAPACITY_DRY_RUN=1 "${dispatcher}" namespace watch gate >/dev/null 2>&1; then
 fi
 
 mkdir -p "${test_dir}/bin" "${test_dir}/readiness-valid" "${test_dir}/readiness-missing"
-printf '#!/usr/bin/env bash\ncase "$*" in *api-a*|*api-alias*) printf "process_start_time_seconds 100\\n" ;; *api-b*) printf "process_start_time_seconds 200\\n" ;; *) exit 1 ;; esac\n' >"${test_dir}/bin/curl"
+printf '#!/usr/bin/env bash\ncase "$*" in *api-a*|*api-alias*) printf "process_start_time_seconds 100\\n" ;; *api-b*) if [[ "${MOCK_SAME_START:-0}" == 1 ]]; then printf "process_start_time_seconds 100\\n"; else printf "process_start_time_seconds 200\\n"; fi ;; *) exit 1 ;; esac\n' >"${test_dir}/bin/curl"
 chmod +x "${test_dir}/bin/curl"
+jq -n '[
+  {Id:"api-id-1",Name:"/api-1",State:{Running:true}},
+  {Id:"api-id-2",Name:"/api-2",State:{Running:true}}
+]' >"${test_dir}/readiness-containers.json"
+printf '#!/usr/bin/env bash\nif [[ "$1" == exec ]]; then case "$2" in api-1) printf "process_start_time_seconds 100\\n" ;; api-2) if [[ "${MOCK_SAME_START:-0}" == 1 ]]; then printf "process_start_time_seconds 100\\n"; else printf "process_start_time_seconds 200\\n"; fi ;; *) exit 1 ;; esac; else cat "${MOCK_READINESS_CONTAINERS_FILE}"; fi\n' >"${test_dir}/bin/docker"
+chmod +x "${test_dir}/bin/docker"
+export MOCK_READINESS_CONTAINERS_FILE="${test_dir}/readiness-containers.json"
 cp "${repo_root}/tests/capacity/examples/config-manifest.json" "${test_dir}/readiness-valid/config.json"
 cp "${repo_root}/tests/capacity/examples/environment-manifest.json" "${test_dir}/readiness-valid/environment.json"
 PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api.internal \
   CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
+  CAPACITY_API_CONTAINERS=api-1,api-2 \
   CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
   "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid"
 jq -e '.passed == true and .topology.apiReplicas == 2 and (.topology.liveReplicas | length) == 2 and .resources.runtimeMemoryBytes == 17179869184' \
   "${test_dir}/readiness-valid/preflight-environment.json" >/dev/null
 if PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api.internal \
   CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
+  CAPACITY_API_CONTAINERS=api-1,api-2 \
   CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
   "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-missing" >/dev/null 2>&1; then
   echo "production API readiness unexpectedly passed without deployment manifests" >&2
@@ -54,11 +63,16 @@ if PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api.i
 fi
 if PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api.internal \
   CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-a.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
+  CAPACITY_API_CONTAINERS=api-1,api-2 \
   CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
   "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid" >/dev/null 2>&1; then
   echo "production API readiness unexpectedly accepted one live process twice" >&2
   exit 1
 fi
+MOCK_SAME_START=1 PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api.internal \
+  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
+  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
+  "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid"
 
 make_output="$(make --no-print-directory -C "${repo_root}" capacity TARGET=namespace PROFILE=watch MODE=alpha CAPACITY_DRY_RUN=1)"
 [[ "${make_output}" == *"target=namespace profile=watch mode=alpha"* ]]
@@ -72,17 +86,18 @@ done
 
 mkdir -p "${test_dir}/evidence"
 printf '#!/usr/bin/env bash\necho "mock capacity command: $*"\n[[ "${FAIL_MAKE:-0}" != "1" ]]\n' >"${test_dir}/bin/make"
-printf '#!/usr/bin/env bash\nif [[ "$1" == exec ]]; then case "$2" in api-1) printf "process_start_time_seconds 100\\n" ;; api-2) printf "process_start_time_seconds 200\\n" ;; *) if [[ "${MOCK_SCYLLA_BAD_MEMBERSHIP:-0}" == 1 ]]; then printf "UN node-1\\n"; else printf "UN node-1\\nUN node-2\\nUN node-3\\n"; fi ;; esac; exit 0; fi\nif [[ "$*" == *api-1* ]]; then cat "${MOCK_SERVICE_CONTAINERS_FILE}"; else cat "${MOCK_SCYLLA_CONTAINERS_FILE}"; fi\n' >"${test_dir}/bin/docker"
+printf '#!/usr/bin/env bash\nif [[ "$1" == exec ]]; then case "$2" in api-1) printf "process_start_time_seconds 100\\n" ;; api-2) if [[ "${MOCK_SAME_START:-0}" == 1 ]]; then printf "process_start_time_seconds 100\\n"; else printf "process_start_time_seconds 200\\n"; fi ;; *) if [[ "${MOCK_SCYLLA_BAD_MEMBERSHIP:-0}" == 1 ]]; then printf "UN node-1\\n"; else printf "UN node-1\\nUN node-2\\nUN node-3\\n"; fi ;; esac; exit 0; fi\nif [[ "$*" == *api-1* ]]; then cat "${MOCK_SERVICE_CONTAINERS_FILE}"; else cat "${MOCK_SCYLLA_CONTAINERS_FILE}"; fi\n' >"${test_dir}/bin/docker"
 chmod +x "${test_dir}/bin/make"
 chmod +x "${test_dir}/bin/docker"
 source_revision="$(git -C "${repo_root}" rev-parse HEAD)"
 image_digest="$(printf 'a%.0s' {1..64})"
 jq -n --arg revision "${source_revision}" --arg digest "${image_digest}" '[
-  {Name:"/api-1",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
-  {Name:"/api-2",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
-  {Name:"/git-1",Image:("sha256:"+$digest),Path:"/app/git-service",Config:{Image:("ghcr.io/gitstore-dev/git-service@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}}
+  {Id:"api-id-1",Name:"/api-1",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
+  {Id:"api-id-2",Name:"/api-2",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
+  {Id:"git-id-1",Name:"/git-1",Image:("sha256:"+$digest),Path:"/app/git-service",Config:{Image:("ghcr.io/gitstore-dev/git-service@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}}
 ]' >"${test_dir}/service-containers.json"
 jq '.[0].Config.Image = "ghcr.io/gitstore-dev/api:latest"' "${test_dir}/service-containers.json" >"${test_dir}/unverified-service-containers.json"
+jq '.[1].Id = .[0].Id' "${test_dir}/service-containers.json" >"${test_dir}/duplicate-service-containers.json"
 jq -n '[range(1;4) as $i | {Id:("scylla-id-"+($i|tostring)),Name:("/scylla-"+($i|tostring)),Config:{Image:"scylla",Cmd:["--smp=2"]},RestartCount:0,HostConfig:{Memory:3221225472,NanoCpus:0,CpusetCpus:""},State:{Running:true,OOMKilled:false,StartedAt:"start"}}]' >"${test_dir}/scylla-containers.json"
 jq '[.[0], .[0], .[0]]' "${test_dir}/scylla-containers.json" >"${test_dir}/duplicate-scylla-containers.json"
 export MOCK_SCYLLA_CONTAINERS_FILE="${test_dir}/scylla-containers.json"
@@ -108,7 +123,7 @@ jq -e '
   (.configDigest | length) == 64 and (.environmentDigest | length) == 64
 ' "${metadata}" >/dev/null
 
-PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=deployed-run \
+MOCK_SAME_START=1 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=deployed-run \
   CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
   CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
   CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
@@ -151,6 +166,21 @@ if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" C
   CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
   "${dispatcher}" namespace watch alpha >/dev/null 2>&1; then
   echo "alpha namespace watch evidence unexpectedly accepted an unverified service image" >&2
+  exit 1
+fi
+
+if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=duplicate-service-run \
+  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
+  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
+  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
+  NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-b.internal \
+  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINER=git-1 \
+  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/duplicate-service-containers.json" \
+  CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
+  CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
+  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
+  "${dispatcher}" namespace watch alpha >/dev/null 2>&1; then
+  echo "alpha namespace watch evidence unexpectedly accepted duplicate service container identities" >&2
   exit 1
 fi
 

@@ -92,7 +92,7 @@ func TestNamespaceCDCSequencerFlushesPendingTailBeforeNextGeneration(t *testing.
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
-func TestNamespaceCDCSequencerBatchesProgressAfterOrderedAppends(t *testing.T) {
+func TestNamespaceCDCSequencerPersistsFrontierBeforeBatchedProgress(t *testing.T) {
 	store := &sequencerStore{}
 	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -119,8 +119,8 @@ func TestNamespaceCDCSequencerBatchesProgressAfterOrderedAppends(t *testing.T) {
 	require.NoError(t, sequencer.Unregister("stream-a"))
 	require.NoError(t, sequencer.Unregister("stream-b"))
 
+	assert.Equal(t, "frontier", <-progressed, "global frontier must precede every per-stream checkpoint")
 	assert.ElementsMatch(t, []string{"a-latest", "b-peer"}, []string{<-progressed, <-progressed})
-	assert.Equal(t, "frontier", <-progressed, "global frontier must follow every per-stream checkpoint")
 	select {
 	case unexpected := <-progressed:
 		t.Fatalf("superseded per-stream checkpoint was written: %s", unexpected)
@@ -153,13 +153,11 @@ func TestRetainUnpublishedCDCRequestsClearsDiscardedBackingSlots(t *testing.T) {
 	}
 }
 
-func TestNamespaceCDCSequencerDoesNotPublishFrontierBeforeStreamCheckpoint(t *testing.T) {
+func TestNamespaceCDCSequencerDoesNotCheckpointWhenFrontierPersistenceFails(t *testing.T) {
 	store := &sequencerStore{}
 	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
-	frontierPublished := false
 	sequencer.persistFrontier = func(context.Context, gocql.UUID) error {
-		frontierPublished = true
-		return nil
+		return errors.New("frontier failed")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -168,11 +166,15 @@ func TestNamespaceCDCSequencerDoesNotPublishFrontierBeforeStreamCheckpoint(t *te
 	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a"}))
 	require.NoError(t, sequencer.Register(ctx, "stream-a"))
 
+	checkpointed := false
 	request := sequenceTestRequest("stream-a", "appended", gocql.MinTimeUUID(time.Now().UTC()), make(chan string, 1))
-	request.markProgress = func(context.Context) error { return errors.New("checkpoint failed") }
+	request.markProgress = func(context.Context) error {
+		checkpointed = true
+		return nil
+	}
 	require.NoError(t, sequencer.Submit(ctx, request))
-	require.ErrorContains(t, <-done, "checkpoint failed")
-	assert.False(t, frontierPublished)
+	require.ErrorContains(t, <-done, "frontier failed")
+	assert.False(t, checkpointed)
 	store.mu.Lock()
 	assert.Equal(t, []string{"appended"}, store.names, "journal append remains safely replayable")
 	store.mu.Unlock()

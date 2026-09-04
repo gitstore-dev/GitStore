@@ -493,11 +493,17 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 			if _, err := s.materializer.MaterializeBatch(ctx, s.lease, changes); err != nil {
 				return err
 			}
-			// Journal appends are idempotent by CDC position, so a crash before
-			// these checkpoints safely replays the batch. Advance each stream only
-			// to its latest materialized position, then publish the global frontier
-			// once every source checkpoint is durable. This removes two hot-partition
-			// LWTs per event without allowing readiness to move ahead of a stream.
+			// Journal appends are idempotent by CDC position. Persist the global
+			// published frontier before advancing any source checkpoint so a crash
+			// cannot restore a frontier older than records whose source positions
+			// have already moved past them. A crash after the frontier write can
+			// replay the batch, but the restored frontier makes that replay fail
+			// closed instead of assigning an older transition a newer sequence.
+			if s.persistFrontier != nil {
+				if err := s.persistFrontier(ctx, batchFrontier); err != nil {
+					return err
+				}
+			}
 			for index := 0; index < published; index++ {
 				request := pending[index]
 				latest := latestProgress[request.streamID]
@@ -505,11 +511,6 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 					continue
 				}
 				if err := request.markProgress(ctx); err != nil {
-					return err
-				}
-			}
-			if s.persistFrontier != nil {
-				if err := s.persistFrontier(ctx, batchFrontier); err != nil {
 					return err
 				}
 			}

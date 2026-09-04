@@ -245,9 +245,11 @@ the declared node count.
 API readiness alpha/production runs require config and environment manifests,
 at least two declared API replicas, a release API build, and explicit replica
 and host-memory values matching those manifests. Provide every replica in
-`CAPACITY_API_ENDPOINTS`; preflight scrapes each `/metrics` endpoint and
-requires distinct `process_start_time_seconds` values. A single development
-API remains diagnostic-only.
+`CAPACITY_API_ENDPOINTS` and its corresponding running container in the same
+position in `CAPACITY_API_CONTAINERS`. Preflight requires unique container IDs
+and matches each external `/metrics` process start time to the internal
+container scrape. Legitimate same-tick process starts therefore remain valid,
+while aliases of one endpoint cannot satisfy the topology.
 Namespace recovery requires a fresh
 `NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE`; the deployment harness replaces the
 selected endpoint when the file appears. The verifier records an actual
@@ -255,8 +257,8 @@ outage, requires a changed `process_start_time_seconds`, and resumes delivery
 from the pre-replacement cursor.
 Namespace watch and recovery runs must also provide every declared API replica
 in `CAPACITY_API_ENDPOINTS`. Preflight scrapes and retains each process start
-time, rejects aliases that resolve to one process, and requires the two watch
-endpoints to belong to that verified live set.
+time, maps each endpoint to the corresponding unique container ID, and requires
+the two watch endpoints to belong to that verified live set.
 Set `CAPACITY_API_CONTAINERS` and `CAPACITY_GIT_SERVICE_CONTAINER` to the
 corresponding running containers. Preflight rejects mutable image tags,
 requires OCI revision labels matching the tested Git checkout and the release

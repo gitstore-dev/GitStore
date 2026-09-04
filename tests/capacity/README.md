@@ -60,8 +60,8 @@ domain verifier; deployed Scylla-backed profiles additionally require the
 before/after container-health evidence above.
 Non-diagnostic `watch` and `recovery` runs also require
 `CAPACITY_API_ENDPOINTS` containing every declared replica. Preflight retains
-each endpoint's `process_start_time_seconds`, requires distinct live process
-identities, and requires `NAMESPACE_WATCH_API_A` and
+each endpoint's `process_start_time_seconds`, maps it positionally to the
+corresponding unique container ID in `CAPACITY_API_CONTAINERS`, and requires `NAMESPACE_WATCH_API_A` and
 `NAMESPACE_WATCH_API_B` to be members of that verified set.
 Provide the matching running containers in `CAPACITY_API_CONTAINERS` and
 `CAPACITY_GIT_SERVICE_CONTAINER`. Preflight requires digest-pinned images with
@@ -76,10 +76,11 @@ cursor-resumed delivery through the replacement before it passes.
 Non-diagnostic API readiness also requires both manifests plus
 `CAPACITY_API_REPLICAS`, `CAPACITY_API_BUILD=release`,
 `CAPACITY_RUNTIME_MEMORY_BYTES`, `CAPACITY_BASE_URL`, and a comma-separated
-`CAPACITY_API_ENDPOINTS` containing every replica. The preflight scrapes
-`process_start_time_seconds` from each endpoint and requires distinct live
-process identities matching the declared replica count, so a single
-development process cannot produce production readiness evidence.
+`CAPACITY_API_ENDPOINTS` containing every replica. Provide the corresponding
+containers in the same order through `CAPACITY_API_CONTAINERS`. The preflight
+requires unique live container IDs and matches every external endpoint to its
+container's internal `process_start_time_seconds`, so timestamp collisions
+between legitimately concurrent starts are safe while endpoint aliases fail.
 
 The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
 `3g` per node. Override it explicitly when testing another resource tier and

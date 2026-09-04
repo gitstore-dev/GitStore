@@ -65,14 +65,11 @@ validate_api_deployment() {
     live_api_replicas="$(jq -c --arg endpoint "${endpoint%/}" --arg process_start "${process_start}" \
       '. + [{endpoint:$endpoint,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${live_api_replicas}")"
   done
-  [[ "$(jq '[.[].processStartTimeSeconds] | unique | length' <<<"${live_api_replicas}")" == "${expected_replicas}" ]] || {
-    echo "CAPACITY_API_ENDPOINTS must identify distinct live API processes" >&2
-    exit 1
-  }
 }
 
 validate_release_service_containers() {
   local expected_replicas="$1" source_revision inspection api_names_json container metrics process_start
+  local endpoint_start container_start container_id index
   [[ -n "${CAPACITY_API_CONTAINERS:-}" && -n "${CAPACITY_GIT_SERVICE_CONTAINER:-}" ]] || {
     echo "${target}/${profile} evidence requires CAPACITY_API_CONTAINERS and CAPACITY_GIT_SERVICE_CONTAINER" >&2
     exit 2
@@ -99,7 +96,8 @@ validate_release_service_containers() {
     --arg revision "${source_revision}" '
       [.[] |
         (.Name | ltrimstr("/")) as $name |
-        {name:$name,
+        {id:.Id,
+         name:$name,
          role:(if ($api_names | index($name)) != null then "api" elif $name == $git_name then "git-service" else "unknown" end),
          imageReference:.Config.Image,
          imageID:.Image,
@@ -109,6 +107,7 @@ validate_release_service_containers() {
     ' <<<"${inspection}")"
   jq -e --argjson expected_replicas "${expected_replicas}" --arg revision "${source_revision}" '
     length == ($expected_replicas + 1) and
+    ([.[].id] | unique | length) == length and
     ([.[].name] | unique | length) == length and
     ([.[] | select(.role == "api")] | length) == $expected_replicas and
     ([.[] | select(.role == "git-service")] | length) == 1 and
@@ -136,12 +135,17 @@ validate_release_service_containers() {
     container_identities="$(jq -c --arg name "${container}" --arg process_start "${process_start}" \
       '. + [{name:$name,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${container_identities}")"
   done
-  jq -e --argjson containers "${container_identities}" '
-    ([.[].processStartTimeSeconds] | sort) == ([$containers[].processStartTimeSeconds] | sort)
-  ' <<<"${live_api_replicas}" >/dev/null || {
-    echo "verified API endpoints do not map to the inspected release containers" >&2
-    exit 1
-  }
+  for index in "${!api_containers[@]}"; do
+    endpoint_start="$(jq -r --argjson index "${index}" '.[$index].processStartTimeSeconds' <<<"${live_api_replicas}")"
+    container_start="$(jq -r --argjson index "${index}" '.[$index].processStartTimeSeconds' <<<"${container_identities}")"
+    [[ "${endpoint_start}" == "${container_start}" ]] || {
+      echo "API endpoint ${api_endpoints[$index]} does not map to container ${api_containers[$index]}" >&2
+      exit 1
+    }
+    container_id="$(jq -r --arg name "${api_containers[$index]}" '.[] | select(.name == $name) | .id' <<<"${release_service_containers}")"
+    live_api_replicas="$(jq -c --argjson index "${index}" --arg container "${api_containers[$index]}" --arg id "${container_id}" \
+      '.[$index] += {container:$container,containerID:$id}' <<<"${live_api_replicas}")"
+  done
   release_service_containers="$(jq -c --argjson identities "${container_identities}" '
     map(if .role == "api" then . as $service | . + {processStartTimeSeconds:($identities[] | select(.name == $service.name) | .processStartTimeSeconds)} else . end)
   ' <<<"${release_service_containers}")"

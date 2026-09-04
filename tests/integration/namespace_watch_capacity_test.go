@@ -88,9 +88,12 @@ func parseCapacityMode(value string) (capacityMode, error) {
 	}
 }
 
-func validateCapacityReplacementMode(mode capacityMode, skipReplacement bool) error {
+func validateCapacityOverrides(mode capacityMode, skipReplacement, allowMissingMetrics bool) error {
 	if skipReplacement && mode != capacityModeDiagnostic {
 		return fmt.Errorf("NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT is only valid in diagnostic mode")
+	}
+	if allowMissingMetrics && mode != capacityModeDiagnostic {
+		return fmt.Errorf("NAMESPACE_WATCH_CAPACITY_ALLOW_MISSING_METRICS is only valid in diagnostic mode")
 	}
 	return nil
 }
@@ -342,7 +345,7 @@ func loadCapacityConfig(t *testing.T) capacityConfig {
 		skipReplacement:     os.Getenv("NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT") == "1",
 		mode:                mode,
 	}
-	require.NoError(t, validateCapacityReplacementMode(cfg.mode, cfg.skipReplacement))
+	require.NoError(t, validateCapacityOverrides(cfg.mode, cfg.skipReplacement, cfg.allowMissingMetrics))
 	require.NoError(t, validateCapacityWorkloadScale(cfg))
 	require.NotEmpty(t, cfg.apiA, "NAMESPACE_WATCH_API_A is required")
 	require.NotEmpty(t, cfg.apiB, "NAMESPACE_WATCH_API_B is required")
@@ -386,10 +389,12 @@ func TestCapacityVisibilityPolicy(t *testing.T) {
 	}
 	_, err := parseCapacityMode("gate")
 	require.Error(t, err)
-	require.NoError(t, validateCapacityReplacementMode(capacityModeDiagnostic, true))
-	require.NoError(t, validateCapacityReplacementMode(capacityModeProduction, false))
-	require.Error(t, validateCapacityReplacementMode(capacityModeAlpha, true))
-	require.Error(t, validateCapacityReplacementMode(capacityModeProduction, true))
+	require.NoError(t, validateCapacityOverrides(capacityModeDiagnostic, true, true))
+	require.NoError(t, validateCapacityOverrides(capacityModeProduction, false, false))
+	require.Error(t, validateCapacityOverrides(capacityModeAlpha, true, false))
+	require.Error(t, validateCapacityOverrides(capacityModeProduction, true, false))
+	require.Error(t, validateCapacityOverrides(capacityModeAlpha, false, true))
+	require.Error(t, validateCapacityOverrides(capacityModeProduction, false, true))
 
 	minimum := capacityConfig{
 		mode:          capacityModeProduction,

@@ -21,6 +21,7 @@ environment="${evidence_dir}/environment.json"
 [[ -r "${environment}" ]] || { echo "${mode} API readiness evidence requires CAPACITY_ENVIRONMENT_MANIFEST" >&2; exit 2; }
 [[ -n "${CAPACITY_BASE_URL:-}" ]] || { echo "${mode} API readiness evidence requires CAPACITY_BASE_URL" >&2; exit 2; }
 [[ -n "${CAPACITY_API_ENDPOINTS:-}" ]] || { echo "${mode} API readiness evidence requires CAPACITY_API_ENDPOINTS" >&2; exit 2; }
+[[ -n "${CAPACITY_API_CONTAINERS:-}" ]] || { echo "${mode} API readiness evidence requires CAPACITY_API_CONTAINERS" >&2; exit 2; }
 
 config_replicas="$(jq -er '.services.api.replicas | select(type == "number" and . >= 2)' "${config}")" || {
   echo "${mode} API readiness config must declare at least two API replicas" >&2
@@ -62,12 +63,35 @@ jq -e '
 }
 
 IFS=',' read -r -a api_endpoints <<<"${CAPACITY_API_ENDPOINTS}"
+IFS=',' read -r -a api_containers <<<"${CAPACITY_API_CONTAINERS}"
 (( ${#api_endpoints[@]} == config_replicas )) || {
   echo "CAPACITY_API_ENDPOINTS count must match the declared API replicas" >&2
   exit 2
 }
+(( ${#api_containers[@]} == config_replicas )) || {
+  echo "CAPACITY_API_CONTAINERS count must match the declared API replicas" >&2
+  exit 2
+}
+for container in "${api_containers[@]}"; do
+  [[ "${container}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || { echo "invalid API container name: ${container}" >&2; exit 2; }
+done
+inspection="$(docker inspect "${api_containers[@]}")" || {
+  echo "cannot inspect live API containers" >&2
+  exit 1
+}
+container_json="$(jq -c '[.[] | {id:.Id,name:(.Name | ltrimstr("/")),running:.State.Running}]' <<<"${inspection}")"
+jq -e --argjson expected "${config_replicas}" '
+  length == $expected and all(.[]; .running) and
+  ([.[].id] | unique | length) == length and
+  ([.[].name] | unique | length) == length
+' <<<"${container_json}" >/dev/null || {
+  echo "CAPACITY_API_CONTAINERS must identify distinct running containers" >&2
+  exit 1
+}
 identity_json='[]'
-for endpoint in "${api_endpoints[@]}"; do
+for index in "${!api_endpoints[@]}"; do
+  endpoint="${api_endpoints[$index]}"
+  container="${api_containers[$index]}"
   [[ "${endpoint}" =~ ^https?://[^[:space:],]+$ ]] || { echo "invalid live API endpoint: ${endpoint}" >&2; exit 2; }
   metrics="$(curl -fsS --max-time 5 "${endpoint%/}/metrics")" || {
     echo "cannot scrape live API endpoint: ${endpoint}" >&2
@@ -78,13 +102,20 @@ for endpoint in "${api_endpoints[@]}"; do
     echo "live API endpoint does not expose process_start_time_seconds: ${endpoint}" >&2
     exit 1
   }
+  container_metrics="$(docker exec "${container}" wget -qO- http://127.0.0.1:4000/metrics)" || {
+    echo "cannot scrape API metrics inside container: ${container}" >&2
+    exit 1
+  }
+  container_start="$(awk '$1 == "process_start_time_seconds" { print $2; exit }' <<<"${container_metrics}")"
+  [[ "${process_start}" == "${container_start}" ]] || {
+    echo "API endpoint ${endpoint} does not map to container ${container}" >&2
+    exit 1
+  }
+  container_id="$(jq -r --arg name "${container}" '.[] | select(.name == $name) | .id' <<<"${container_json}")"
   identity_json="$(jq -c --arg endpoint "${endpoint%/}" --arg process_start "${process_start}" \
-    '. + [{endpoint:$endpoint,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${identity_json}")"
+    --arg container "${container}" --arg container_id "${container_id}" \
+    '. + [{endpoint:$endpoint,container:$container,containerID:$container_id,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${identity_json}")"
 done
-[[ "$(jq '[.[].processStartTimeSeconds] | unique | length' <<<"${identity_json}")" == "${config_replicas}" ]] || {
-  echo "CAPACITY_API_ENDPOINTS must identify distinct live API processes" >&2
-  exit 1
-}
 
 jq -n \
   --arg mode "${mode}" --arg base_url "${CAPACITY_BASE_URL}" --arg api_build "${config_build}" \
