@@ -79,13 +79,20 @@ inspection="$(docker inspect "${api_containers[@]}")" || {
   echo "cannot inspect live API containers" >&2
   exit 1
 }
-container_json="$(jq -c '[.[] | {id:.Id,name:(.Name | ltrimstr("/")),running:.State.Running}]' <<<"${inspection}")"
-jq -e --argjson expected "${config_replicas}" '
+source_revision="$(git rev-parse HEAD)"
+container_json="$(jq -c '[.[] | {
+  id:.Id,name:(.Name | ltrimstr("/")),running:.State.Running,
+  imageReference:.Config.Image,imageID:.Image,revision:(.Config.Labels["org.opencontainers.image.revision"] // ""),executable:.Path
+}]' <<<"${inspection}")"
+jq -e --argjson expected "${config_replicas}" --arg revision "${source_revision}" '
   length == $expected and all(.[]; .running) and
   ([.[].id] | unique | length) == length and
-  ([.[].name] | unique | length) == length
+  ([.[].name] | unique | length) == length and
+  all(.[];
+    .revision == $revision and .executable == "/app/api" and
+    (.imageReference | test("@sha256:[0-9a-f]{64}$")))
 ' <<<"${container_json}" >/dev/null || {
-  echo "CAPACITY_API_CONTAINERS must identify distinct running containers" >&2
+  echo "CAPACITY_API_CONTAINERS must identify distinct running digest-pinned release containers for the tested revision" >&2
   exit 1
 }
 identity_json='[]'
@@ -116,11 +123,16 @@ for index in "${!api_endpoints[@]}"; do
     --arg container "${container}" --arg container_id "${container_id}" \
     '. + [{endpoint:$endpoint,container:$container,containerID:$container_id,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${identity_json}")"
 done
+base_url="${CAPACITY_BASE_URL%/}"
+jq -e --arg base_url "${base_url}" '([.[].endpoint] | index($base_url)) != null' <<<"${identity_json}" >/dev/null || {
+  echo "CAPACITY_BASE_URL must identify one of the verified CAPACITY_API_ENDPOINTS" >&2
+  exit 2
+}
 
 jq -n \
-  --arg mode "${mode}" --arg base_url "${CAPACITY_BASE_URL}" --arg api_build "${config_build}" \
+  --arg mode "${mode}" --arg base_url "${base_url}" --arg api_build "${config_build}" \
   --argjson api_replicas "${config_replicas}" --argjson runtime_memory_bytes "${environment_memory}" \
-  --argjson live_replicas "${identity_json}" \
+  --argjson live_replicas "${identity_json}" --argjson api_containers "${container_json}" \
   --slurpfile config "${config}" --slurpfile environment "${environment}" \
-  '{schemaVersion:1,mode:$mode,passed:true,baseURL:$base_url,topology:{apiReplicas:$api_replicas,liveReplicas:$live_replicas},resources:{runtimeMemoryBytes:$runtime_memory_bytes},builds:{api:$api_build},config:$config[0],environment:$environment[0]}' \
+  '{schemaVersion:1,mode:$mode,passed:true,baseURL:$base_url,topology:{apiReplicas:$api_replicas,liveReplicas:$live_replicas},resources:{runtimeMemoryBytes:$runtime_memory_bytes},builds:{api:$api_build},artifacts:{apiContainers:$api_containers},config:$config[0],environment:$environment[0]}' \
   >"${output}"

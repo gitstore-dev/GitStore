@@ -249,7 +249,10 @@ and host-memory values matching those manifests. Provide every replica in
 position in `CAPACITY_API_CONTAINERS`. Preflight requires unique container IDs
 and matches each external `/metrics` process start time to the internal
 container scrape. Legitimate same-tick process starts therefore remain valid,
-while aliases of one endpoint cannot satisfy the topology.
+while aliases of one endpoint cannot satisfy the topology. The workload
+`CAPACITY_BASE_URL` must be one of those verified endpoints, and every live API
+container must have a digest-pinned image, `/app/api` executable, and OCI
+revision matching the tested checkout.
 Namespace recovery requires a fresh
 `NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE`; the deployment harness replaces the
 selected endpoint when the file appears. The verifier records an actual

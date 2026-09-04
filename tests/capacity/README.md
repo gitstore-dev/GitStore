@@ -81,6 +81,9 @@ containers in the same order through `CAPACITY_API_CONTAINERS`. The preflight
 requires unique live container IDs and matches every external endpoint to its
 container's internal `process_start_time_seconds`, so timestamp collisions
 between legitimately concurrent starts are safe while endpoint aliases fail.
+`CAPACITY_BASE_URL` must be one of those verified endpoints. Every live
+container must also use a digest-pinned image, the `/app/api` release
+executable, and an OCI revision matching the tested checkout.
 
 The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
 `3g` per node. Override it explicitly when testing another resource tier and
