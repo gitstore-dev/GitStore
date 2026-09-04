@@ -23,6 +23,7 @@ output_dir="${evidence_dir}/prometheus"
 mkdir -p "${output_dir}"
 
 names=(
+  api_targets_up
   namespace_admission_stage_p95
   namespace_datastore_operation_p95
   namespace_datastore_errors
@@ -31,9 +32,10 @@ names=(
   namespace_delivery_p95
 )
 queries=(
+  'up{job="gitstore-api-capacity"}'
   "histogram_quantile(0.95, sum by (le,stage,instance) (increase(gitstore_namespace_admission_stage_duration_seconds_bucket[${lookback}])))"
   "histogram_quantile(0.95, sum by (le,operation,backend,instance) (increase(gitstore_datastore_operation_duration_seconds_bucket{operation=~\"CreateNamespace|UpdateNamespace\"}[${lookback}])))"
-  "sum by (operation,backend,instance) (increase(gitstore_datastore_operation_errors_total{operation=~\"CreateNamespace|UpdateNamespace\"}[${lookback}]))"
+  "sum by (operation,backend,instance) (increase(gitstore_datastore_operation_errors_total{operation=~\"CreateNamespace|UpdateNamespace\"}[${lookback}])) or on() vector(0)"
   "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_namespace_watch_cdc_discovery_seconds_bucket[${lookback}])))"
   "histogram_quantile(0.95, sum by (le,stage,instance) (increase(gitstore_namespace_watch_materializer_stage_duration_seconds_bucket[${lookback}])))"
   "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_namespace_watch_delivery_latency_seconds_bucket[${lookback}])))"
@@ -47,6 +49,12 @@ for index in "${!names[@]}"; do
     echo "Prometheus query ${names[index]} returned no samples" >&2
     exit 1
   }
+  if [[ "${names[index]}" == "api_targets_up" ]]; then
+    jq -e 'all(.data.result[]; .value[1] == "1")' "${response}" >/dev/null || {
+      echo "one or more configured API scrape targets are down" >&2
+      exit 1
+    }
+  fi
 done
 
 jq -n \

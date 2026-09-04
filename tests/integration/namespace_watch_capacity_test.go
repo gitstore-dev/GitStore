@@ -88,6 +88,13 @@ func parseCapacityMode(value string) (capacityMode, error) {
 	}
 }
 
+func validateCapacityReplacementMode(mode capacityMode, skipReplacement bool) error {
+	if skipReplacement && mode != capacityModeDiagnostic {
+		return fmt.Errorf("NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT is only valid in diagnostic mode")
+	}
+	return nil
+}
+
 func (m capacityMode) visibilityLimits() (time.Duration, time.Duration, bool) {
 	switch m {
 	case capacityModeDiagnostic:
@@ -313,6 +320,7 @@ func loadCapacityConfig(t *testing.T) capacityConfig {
 		skipReplacement:     os.Getenv("NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT") == "1",
 		mode:                mode,
 	}
+	require.NoError(t, validateCapacityReplacementMode(cfg.mode, cfg.skipReplacement))
 	require.NotEmpty(t, cfg.apiA, "NAMESPACE_WATCH_API_A is required")
 	require.NotEmpty(t, cfg.apiB, "NAMESPACE_WATCH_API_B is required")
 	if !cfg.skipReplacement {
@@ -355,6 +363,10 @@ func TestCapacityVisibilityPolicy(t *testing.T) {
 	}
 	_, err := parseCapacityMode("gate")
 	require.Error(t, err)
+	require.NoError(t, validateCapacityReplacementMode(capacityModeDiagnostic, true))
+	require.NoError(t, validateCapacityReplacementMode(capacityModeProduction, false))
+	require.Error(t, validateCapacityReplacementMode(capacityModeAlpha, true))
+	require.Error(t, validateCapacityReplacementMode(capacityModeProduction, true))
 }
 
 func waitCapacityReplayCatchup(t *testing.T, cfg capacityConfig, cursor, prefix string) {

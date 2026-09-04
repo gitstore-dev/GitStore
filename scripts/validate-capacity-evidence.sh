@@ -76,6 +76,10 @@ case "${target}/${profile}" in
     }
     ;;
   namespace/watch|namespace/recovery)
+    if [[ "${profile}" == "watch" && "${NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT:-0}" == "1" ]]; then
+      echo "NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT is only valid in diagnostic mode" >&2
+      exit 2
+    fi
     jq -e '
       .schemaVersion == 1 and
       (.services.api.replicas | numbers) >= 2 and
