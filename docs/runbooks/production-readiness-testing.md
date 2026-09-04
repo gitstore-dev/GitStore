@@ -195,6 +195,11 @@ so a post-load settling interval does not erase phase evidence. The
 API `git_commit` stage is the Prometheus boundary for Git-service latency;
 marker-lock waits and optimistic-reference retries remain structured Rust log
 fields because the legacy Axum metrics surface has been removed.
+Namespace watch capacity uses a bounded 50-resource update pool by default, so
+the watch gate measures transition delivery instead of unbounded Git-tree
+growth. Change `NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL` only for a declared
+resource-cardinality experiment; it does not replace the 1,000-subscriber or
+sustained/burst transition targets.
 
 A k6 pass proves only that the declared offered load and metric thresholds
 passed. Each feature profile MUST pair it with a domain correctness verifier

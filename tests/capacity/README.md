@@ -108,6 +108,11 @@ subscriber delivery are stored in the evidence bundle. The API `git_commit`
 stage isolates the Git-service boundary; finer Git marker-lock and reference
 retry timing is emitted as bounded structured Git-service log fields without
 reintroducing the removed Axum HTTP stack.
+The Namespace watch harness seeds a bounded pool of 50 resources by default and
+applies uniquely tagged updates to that pool. Override
+`NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL` only when resource cardinality is an
+explicit experiment dimension; subscriber count, transition rate, bursts,
+replay size, and duration remain independent acceptance dimensions.
 The exporter defaults `CAPACITY_PROMETHEUS_LOOKBACK` to `90m`, covering the
 load and stabilization windows instead of sampling only the quiet tail. Set a
 longer Prometheus duration when the complete run exceeds 90 minutes.

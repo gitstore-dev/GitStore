@@ -83,7 +83,7 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=builder /build/git-service /app/git-service
 
-# Expose git protocol and websocket ports
-EXPOSE 9418 8080
+# The Git service exposes only its gRPC API.
+EXPOSE 50051
 
 CMD ["/app/git-service"]

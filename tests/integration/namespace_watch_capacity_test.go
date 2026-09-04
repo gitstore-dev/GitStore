@@ -35,9 +35,14 @@ const capacitySubscription = `subscription($cursor: String) {
     type
     name
     resourceVersion
-    namespace { metadata { name creationTimestamp } }
+    namespace {
+      metadata { name creationTimestamp annotations }
+      spec { title }
+    }
   }
 }`
+
+const capacitySentAtAnnotation = "capacity.gitstore.dev/sent-at"
 
 type capacityConfig struct {
 	apiA, apiB, replacement, token string
@@ -46,6 +51,7 @@ type capacityConfig struct {
 	replacementDelay               time.Duration
 	subscribers                    int
 	replayEvents                   int
+	resourcePool                   int
 	replaySamples                  int
 	replayCatchupTimeout           time.Duration
 	burstInterval                  time.Duration
@@ -126,12 +132,16 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	runID := strconv.FormatInt(time.Now().UnixNano(), 36)
+	poolPrefix := "nwcp-" + runID + "-"
 	replayPrefix := "nwcr-" + runID + "-"
 	livePrefix := "nwcl-" + runID + "-"
 
+	seedStarted := time.Now()
+	createCapacityRange(t, client, cfg, poolPrefix, cfg.resourcePool)
+	t.Logf("prepared bounded pool of %d Namespace resources in %s", cfg.resourcePool, time.Since(seedStarted))
 	replayCursor := capacityBootstrapCursor(t, cfg.apiA, cfg.token)
 	replayStarted := time.Now()
-	createCapacityRange(t, client, cfg, replayPrefix, cfg.replayEvents)
+	updateCapacityRange(t, client, cfg, poolPrefix, replayPrefix, cfg.replayEvents)
 	t.Logf("prepared %d acknowledged GraphQL transitions through both replicas in %s", cfg.replayEvents, time.Since(replayStarted))
 	waitCapacityReplayCatchup(t, cfg, replayCursor, replayPrefix)
 
@@ -166,7 +176,7 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 	warmupCfg := cfg
 	warmupCfg.duration = 10 * time.Second
 	warmupCfg.burstInterval = time.Minute
-	warmup := runCapacityMutationWorkload(t, client, warmupCfg, "nwcw-"+runID+"-", 256)
+	warmup := runCapacityMutationWorkload(t, client, warmupCfg, poolPrefix, "nwcw-"+runID+"-", 256)
 	require.Zero(t, warmup.backpressured, "subscriber warm-up must not drop work")
 	require.Zero(t, warmup.failed, "subscriber warm-up mutations must succeed")
 	require.False(t, warmup.drainTimedOut, "subscriber warm-up must drain")
@@ -179,10 +189,10 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 		recoveryResult <- capacityRecoveryResult{}
 	} else {
 		go func() {
-			recoveryResult <- coordinateCapacityReplacement(client, cfg, livePrefix, maxTransitions+1, soakStarted)
+			recoveryResult <- coordinateCapacityReplacement(client, cfg, poolPrefix, livePrefix, maxTransitions+1, soakStarted)
 		}()
 	}
-	workload := runCapacityMutationWorkload(t, client, cfg, livePrefix, maxTransitions)
+	workload := runCapacityMutationWorkload(t, client, cfg, poolPrefix, livePrefix, maxTransitions)
 	soakElapsed := time.Since(soakStarted)
 	recovery := <-recoveryResult
 	t.Logf("load accounting produced=%d enqueued=%d backpressured=%d attempted=%d admitted=%d acknowledged=%d failed=%d drain_timed_out=%t",
@@ -193,6 +203,9 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 	}
 	require.NoError(t, recovery.err)
 	if !cfg.skipReplacement {
+		t.Logf("replacement recovery endpoint=%s duration=%s before_stop_at=%s after_start_at=%s process_start_before=%.0f process_start_after=%.0f",
+			cfg.replacement, recovery.duration, recovery.beforeStopAt, recovery.afterStartAt,
+			recovery.beforeStop.processStart, recovery.afterStart.processStart)
 		require.LessOrEqual(t, recovery.duration, 30*time.Second, "replacement endpoint must recover within 30s")
 	}
 	metricsEnd := scrapeCapacityMetrics(t, client, cfg)
@@ -201,8 +214,8 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 	assertCapacityMetrics(t, metricsStart, metricsEnd, metricsElapsed, recovery, cfg.allowMissingMetrics)
 
 	require.Greater(t, workload.attempted, 0)
-	require.False(t, workload.drainTimedOut, "mutation workers must drain within the bounded shutdown window")
-	require.Equal(t, workload.produced, workload.sustained+workload.bursts, "all produced work must be classified")
+	assert.False(t, workload.drainTimedOut, "mutation workers must drain within the bounded shutdown window")
+	assert.Equal(t, workload.produced, workload.sustained+workload.bursts, "all produced work must be classified")
 	assert.Zero(t, workload.backpressured, "configured load must not be dropped by the bounded worker queue")
 	assert.Equal(t, workload.produced, workload.enqueued, "every produced transition must enter the bounded worker queue")
 	assert.Equal(t, workload.enqueued, workload.attempted, "every enqueued transition must be attempted before shutdown")
@@ -212,7 +225,7 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 	assert.Less(t, errorRate, .001, "internal GraphQL mutation error rate must remain below 0.1%%")
 	expectedSustained := int(cfg.duration/(100*time.Millisecond)) - 2
 	if expectedSustained > 0 {
-		require.GreaterOrEqual(t, workload.sustained, expectedSustained, "must schedule 10 sustained transitions/second")
+		assert.GreaterOrEqual(t, workload.sustained, expectedSustained, "must schedule 10 sustained transitions/second")
 	}
 	expectedBurstRounds := int(cfg.duration / cfg.burstInterval)
 	if cfg.duration%cfg.burstInterval == 0 && expectedBurstRounds > 0 {
@@ -220,7 +233,7 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 		expectedBurstRounds--
 	}
 	if expectedBurstRounds > 0 {
-		require.GreaterOrEqual(t, workload.bursts, expectedBurstRounds*cfg.burstSize,
+		assert.GreaterOrEqual(t, workload.bursts, expectedBurstRounds*cfg.burstSize,
 			"must produce every configured 100/s burst inside the measured window")
 	}
 
@@ -229,7 +242,7 @@ func TestNamespaceWatchDeploymentCapacity(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	missing := capacityMissing(subscribers, workload.acknowledged)
-	require.Zero(t, missing, "every subscriber must observe every acknowledged transition")
+	assert.Zero(t, missing, "every subscriber must observe every acknowledged transition")
 	duplicateDeliveries := capacityDuplicateDeliveries(subscribers)
 	t.Logf("measured duplicate deliveries across subscribers=%d", duplicateDeliveries)
 
@@ -283,6 +296,7 @@ func loadCapacityConfig(t *testing.T) capacityConfig {
 		replacementDelay:     capacityEnvDuration(t, "NAMESPACE_WATCH_CAPACITY_REPLACEMENT_DELAY", duration/2),
 		subscribers:          capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS", 1000),
 		replayEvents:         capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS", 10000),
+		resourcePool:         capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL", 50),
 		replaySamples:        capacityEnvInt(t, "NAMESPACE_WATCH_CAPACITY_REPLAY_SAMPLES", 20),
 		replayCatchupTimeout: capacityEnvDuration(t, "NAMESPACE_WATCH_CAPACITY_REPLAY_CATCHUP_TIMEOUT", 15*time.Minute),
 		burstInterval:        capacityEnvDuration(t, "NAMESPACE_WATCH_CAPACITY_BURST_INTERVAL", time.Minute),
@@ -316,6 +330,7 @@ func loadCapacityConfig(t *testing.T) capacityConfig {
 	}
 	require.Positive(t, cfg.subscribers)
 	require.Positive(t, cfg.replayEvents)
+	require.Positive(t, cfg.resourcePool)
 	require.Positive(t, cfg.replaySamples)
 	require.Positive(t, cfg.replayCatchupTimeout)
 	require.Positive(t, cfg.burstInterval)
@@ -628,8 +643,12 @@ func readCapacityEvent(conn *websocket.Conn) (capacityWireEvent, error) {
 						ResourceVersion string `json:"resourceVersion"`
 						Namespace       *struct {
 							Metadata struct {
-								CreationTimestamp time.Time `json:"creationTimestamp"`
+								CreationTimestamp time.Time      `json:"creationTimestamp"`
+								Annotations       map[string]any `json:"annotations"`
 							} `json:"metadata"`
+							Spec struct {
+								Title *string `json:"title"`
+							} `json:"spec"`
 						} `json:"namespace"`
 					} `json:"watchNamespaces"`
 				} `json:"data"`
@@ -646,7 +665,16 @@ func readCapacityEvent(conn *websocket.Conn) (capacityWireEvent, error) {
 				ResourceVersion: payload.Data.Watch.ResourceVersion,
 			}
 			if payload.Data.Watch.Namespace != nil {
-				event.CreatedAt = payload.Data.Watch.Namespace.Metadata.CreationTimestamp
+				namespace := payload.Data.Watch.Namespace
+				if namespace.Spec.Title != nil && *namespace.Spec.Title != "" {
+					event.Name = *namespace.Spec.Title
+				}
+				event.CreatedAt = namespace.Metadata.CreationTimestamp
+				if raw, ok := namespace.Metadata.Annotations[capacitySentAtAnnotation].(string); ok {
+					if sentAt, parseErr := time.Parse(time.RFC3339Nano, raw); parseErr == nil {
+						event.CreatedAt = sentAt
+					}
+				}
 			}
 			return event, nil
 		}
@@ -720,8 +748,9 @@ func runCapacityReplays(t *testing.T, cfg capacityConfig, cursor, prefix string)
 }
 
 type capacityMutationJob struct {
-	prefix string
-	seq    int
+	resourcePrefix string
+	eventPrefix    string
+	seq            int
 }
 
 type capacityWorkload struct {
@@ -734,7 +763,7 @@ type capacityWorkload struct {
 
 const capacityMutationDrainTimeout = 30 * time.Second
 
-func runCapacityMutationWorkload(t *testing.T, client *http.Client, cfg capacityConfig, prefix string, maxTransitions int) capacityWorkload {
+func runCapacityMutationWorkload(t *testing.T, client *http.Client, cfg capacityConfig, resourcePrefix, eventPrefix string, maxTransitions int) capacityWorkload {
 	t.Helper()
 	// Bound the queue by the amount of sustained work that may legally drain
 	// after scheduling ends. This absorbs transient datastore/host jitter while
@@ -766,14 +795,15 @@ func runCapacityMutationWorkload(t *testing.T, client *http.Client, cfg capacity
 				if job.seq%2 == 1 {
 					primary, peer = peer, primary
 				}
-				name := capacityName(job.prefix, job.seq)
+				name := capacityPoolName(job.resourcePrefix, job.seq, cfg.resourcePool)
+				title := capacityName(job.eventPrefix, job.seq)
 				retryCfg := cfg
 				retryCfg.apiA, retryCfg.apiB = primary, peer
 				retryWindow := cfg.mutationDrainTimeout
 				if retryWindow <= 0 {
 					retryWindow = capacityMutationDrainTimeout
 				}
-				if err := createCapacityNamespaceRetryingContext(workerCtx, client, retryCfg, name, retryWindow); err != nil {
+				if err := updateCapacityNamespaceRetryingContext(workerCtx, client, retryCfg, name, title, retryWindow); err != nil {
 					firstFailureOnce.Do(func() { firstFailure = err })
 					failed.Add(1)
 					continue
@@ -808,7 +838,7 @@ func runCapacityMutationWorkload(t *testing.T, client *http.Client, cfg capacity
 			case <-ticker.C:
 				seq := int(sequence.Add(1))
 				sustained.Add(1)
-				enqueue(capacityMutationJob{prefix: prefix, seq: seq})
+				enqueue(capacityMutationJob{resourcePrefix: resourcePrefix, eventPrefix: eventPrefix, seq: seq})
 			}
 		}
 	}()
@@ -830,7 +860,7 @@ func runCapacityMutationWorkload(t *testing.T, client *http.Client, cfg capacity
 					case <-burstTicker.C:
 						seq := int(sequence.Add(1))
 						bursts.Add(1)
-						enqueue(capacityMutationJob{prefix: prefix, seq: seq})
+						enqueue(capacityMutationJob{resourcePrefix: resourcePrefix, eventPrefix: eventPrefix, seq: seq})
 					}
 				}
 				burstTicker.Stop()
@@ -883,10 +913,10 @@ func TestCapacityMutationWorkloadAccountsForBackpressure(t *testing.T) {
 		defer server.Close()
 		cfg := capacityConfig{
 			apiA: server.URL, apiB: server.URL, duration: 350 * time.Millisecond,
-			burstInterval: 200 * time.Millisecond, burstSize: 3, mutationWorkers: 4,
+			burstInterval: 200 * time.Millisecond, burstSize: 3, mutationWorkers: 4, resourcePool: 16,
 		}
 
-		workload := runCapacityMutationWorkload(t, server.Client(), cfg, "fast-", 64)
+		workload := runCapacityMutationWorkload(t, server.Client(), cfg, "pool-", "fast-", 64)
 
 		require.False(t, workload.drainTimedOut)
 		require.Zero(t, workload.backpressured)
@@ -905,11 +935,11 @@ func TestCapacityMutationWorkloadAccountsForBackpressure(t *testing.T) {
 		cfg := capacityConfig{
 			apiA: server.URL, apiB: server.URL, duration: 350 * time.Millisecond,
 			burstInterval: 100 * time.Millisecond, burstSize: 50, mutationWorkers: 1,
-			mutationDrainTimeout: 500 * time.Millisecond,
+			mutationDrainTimeout: 500 * time.Millisecond, resourcePool: 16,
 		}
 		started := time.Now()
 
-		workload := runCapacityMutationWorkload(t, server.Client(), cfg, "slow-", 512)
+		workload := runCapacityMutationWorkload(t, server.Client(), cfg, "pool-", "slow-", 512)
 
 		require.Less(t, time.Since(started), 2*time.Second)
 		require.False(t, workload.drainTimedOut)
@@ -934,11 +964,11 @@ func TestCapacityMutationWorkloadAccountsForBackpressure(t *testing.T) {
 		cfg := capacityConfig{
 			apiA: server.URL, apiB: server.URL, duration: 150 * time.Millisecond,
 			burstInterval: 100 * time.Millisecond, burstSize: 20, mutationWorkers: 1,
-			mutationDrainTimeout: 50 * time.Millisecond,
+			mutationDrainTimeout: 50 * time.Millisecond, resourcePool: 16,
 		}
 		started := time.Now()
 
-		workload := runCapacityMutationWorkload(t, server.Client(), cfg, "blocked-", 128)
+		workload := runCapacityMutationWorkload(t, server.Client(), cfg, "pool-", "blocked-", 128)
 
 		require.Less(t, time.Since(started), time.Second)
 		require.True(t, workload.drainTimedOut)
@@ -968,8 +998,10 @@ func newCapacityMutationServer(t *testing.T, delay time.Duration) *httptest.Serv
 		input, _ := request.Variables["input"].(map[string]any)
 		metadata, _ := input["metadata"].(map[string]any)
 		name, _ := metadata["name"].(string)
+		spec, _ := input["spec"].(map[string]any)
+		title, _ := spec["title"].(string)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"data":{"createNamespace":{"namespace":{"metadata":{"name":%q}}}}}`, name)
+		_, _ = fmt.Fprintf(w, `{"data":{"updateNamespace":{"namespace":{"metadata":{"name":%q},"spec":{"title":%q}}}}}`, name, title)
 	}))
 }
 
@@ -1000,6 +1032,35 @@ func createCapacityRange(t *testing.T, client *http.Client, cfg capacityConfig, 
 	}
 }
 
+func updateCapacityRange(t *testing.T, client *http.Client, cfg capacityConfig, resourcePrefix, eventPrefix string, count int) {
+	t.Helper()
+	jobs := make(chan int)
+	errs := make(chan error, count)
+	var wg sync.WaitGroup
+	for range cfg.mutationWorkers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for sequence := range jobs {
+				name := capacityPoolName(resourcePrefix, sequence, cfg.resourcePool)
+				title := capacityName(eventPrefix, sequence)
+				if err := updateCapacityNamespaceForReplay(client, cfg, name, title, sequence); err != nil {
+					errs <- fmt.Errorf("transition %d: %w", sequence, err)
+				}
+			}
+		}()
+	}
+	for sequence := 1; sequence <= count; sequence++ {
+		jobs <- sequence
+	}
+	close(jobs)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err, "all replay preparation transitions must be acknowledged")
+	}
+}
+
 const (
 	capacityReplayCreateTimeout    = 2 * time.Minute
 	capacityReplayCreateMaxBackoff = 500 * time.Millisecond
@@ -1013,6 +1074,50 @@ func createCapacityNamespaceForReplay(client *http.Client, cfg capacityConfig, n
 	retryCfg := cfg
 	retryCfg.apiA, retryCfg.apiB = primary, peer
 	return createCapacityNamespaceRetrying(client, retryCfg, name, capacityReplayCreateTimeout)
+}
+
+func updateCapacityNamespaceForReplay(client *http.Client, cfg capacityConfig, name, title string, sequence int) error {
+	primary, peer := cfg.apiA, cfg.apiB
+	if sequence%2 == 1 {
+		primary, peer = peer, primary
+	}
+	retryCfg := cfg
+	retryCfg.apiA, retryCfg.apiB = primary, peer
+	return updateCapacityNamespaceRetryingContext(context.Background(), client, retryCfg, name, title, capacityReplayCreateTimeout)
+}
+
+func updateCapacityNamespaceRetryingContext(ctx context.Context, client *http.Client, cfg capacityConfig, name, title string, retryWindow time.Duration) error {
+	if retryWindow <= 0 {
+		return fmt.Errorf("update retry window expired for Namespace %q", name)
+	}
+	endpoints := [2]string{cfg.apiA, cfg.apiB}
+	deadline := time.Now().Add(retryWindow)
+	sentAt := time.Now().UTC()
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		lastErr = updateCapacityNamespaceContext(ctx, client, endpoints[attempt%len(endpoints)], cfg.token, name, title, sentAt)
+		if lastErr == nil {
+			return nil
+		}
+		if !capacityCreateRetryable(lastErr) && !capacityCreateAmbiguous(lastErr) {
+			return lastErr
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("update remained retryable for %s: %w", retryWindow, lastErr)
+		}
+		backoff := time.Duration(1<<min(attempt, 4)) * 25 * time.Millisecond
+		backoff = min(backoff, capacityReplayCreateMaxBackoff)
+		timer := time.NewTimer(min(backoff, time.Until(deadline)))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func createCapacityNamespaceRetrying(client *http.Client, cfg capacityConfig, name string, retryWindow time.Duration) error {
@@ -1170,6 +1275,65 @@ func createCapacityNamespaceContext(ctx context.Context, client *http.Client, ap
 	}
 	if data.CreateNamespace == nil || data.CreateNamespace.Namespace.Metadata.Name != name {
 		return fmt.Errorf("GraphQL mutation did not acknowledge Namespace %q", name)
+	}
+	return nil
+}
+
+func updateCapacityNamespaceContext(ctx context.Context, client *http.Client, apiURL, token, name, title string, sentAt time.Time) error {
+	body, err := json.Marshal(gqlRequest{
+		Query: `mutation($input: UpdateNamespaceInput!) { updateNamespace(input: $input) { namespace { metadata { name } spec { title } } } }`,
+		Variables: map[string]any{"input": map[string]any{
+			"apiVersion": "gitstore.dev/v1beta1", "kind": "Namespace",
+			"metadata": map[string]any{
+				"name":        name,
+				"annotations": map[string]any{capacitySentAtAnnotation: sentAt.Format(time.RFC3339Nano)},
+			},
+			"spec": map[string]any{"title": title, "tier": "USER"},
+		}},
+	})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	response, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode/100 != 2 {
+		contents, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return &capacityHTTPStatusError{status: response.StatusCode, body: string(contents)}
+	}
+	var result gqlResponse
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return err
+	}
+	if len(result.Errors) != 0 {
+		return &capacityGraphQLErrors{raw: namespaceContractErrors(result.Errors)}
+	}
+	var data struct {
+		UpdateNamespace *struct {
+			Namespace struct {
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+				Spec struct {
+					Title *string `json:"title"`
+				} `json:"spec"`
+			} `json:"namespace"`
+		} `json:"updateNamespace"`
+	}
+	if err := json.Unmarshal(result.Data, &data); err != nil {
+		return err
+	}
+	if data.UpdateNamespace == nil || data.UpdateNamespace.Namespace.Metadata.Name != name ||
+		data.UpdateNamespace.Namespace.Spec.Title == nil || *data.UpdateNamespace.Namespace.Spec.Title != title {
+		return fmt.Errorf("GraphQL mutation did not acknowledge Namespace %q transition %q", name, title)
 	}
 	return nil
 }
@@ -1345,7 +1509,7 @@ type capacityRecoveryResult struct {
 	err                    error
 }
 
-func coordinateCapacityReplacement(client *http.Client, cfg capacityConfig, prefix string, sequence int, soakStarted time.Time) capacityRecoveryResult {
+func coordinateCapacityReplacement(client *http.Client, cfg capacityConfig, resourcePrefix, eventPrefix string, sequence int, soakStarted time.Time) capacityRecoveryResult {
 	peerEndpoint := cfg.apiA
 	label := "api_b"
 	if cfg.replacement == cfg.apiA {
@@ -1406,11 +1570,12 @@ func coordinateCapacityReplacement(client *http.Client, cfg capacityConfig, pref
 	}
 	defer conn.Close()
 
-	name := capacityName(prefix, sequence)
+	name := capacityPoolName(resourcePrefix, sequence, cfg.resourcePool)
+	title := capacityName(eventPrefix, sequence)
 	retryCfg := cfg
 	retryCfg.apiA, retryCfg.apiB = peerEndpoint, cfg.replacement
-	if err := createCapacityNamespaceRetrying(client, retryCfg, name, time.Until(recoveryDeadline)); err != nil {
-		result.err = fmt.Errorf("create post-replacement transition: %w", err)
+	if err := updateCapacityNamespaceRetryingContext(context.Background(), client, retryCfg, name, title, time.Until(recoveryDeadline)); err != nil {
+		result.err = fmt.Errorf("update post-replacement transition: %w", err)
 		return result
 	}
 	_ = conn.SetReadDeadline(outageStarted.Add(30 * time.Second))
@@ -1420,7 +1585,7 @@ func coordinateCapacityReplacement(client *http.Client, cfg capacityConfig, pref
 			result.err = fmt.Errorf("read post-replacement transition: %w", readErr)
 			return result
 		}
-		if event.Name == name {
+		if event.Name == title {
 			result.duration = time.Since(outageStarted)
 			return result
 		}
@@ -1767,6 +1932,10 @@ func capacityDuplicateDeliveries(subscribers []*capacitySubscriber) int64 {
 
 func capacityName(prefix string, sequence int) string {
 	return fmt.Sprintf("%s%08d", prefix, sequence)
+}
+
+func capacityPoolName(prefix string, sequence, poolSize int) string {
+	return capacityName(prefix, (sequence-1)%poolSize+1)
 }
 
 func capacitySequence(name, prefix string) (int, bool) {

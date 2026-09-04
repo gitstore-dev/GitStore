@@ -535,16 +535,40 @@ Completed:
   errors, backpressure, missing events, duplicate delivery, or drain timeout.
   Normalized CPU was 4.40%/3.39% and retained RSS growth after five minutes of
   stabilization was 4.86%/3.87%. The stage still failed only the visibility
-  SLO: p50 655ms, p95 1.448s, p99 1.908s, maximum 2.406s. Per-endpoint
-  diagnostics subsequently showed comparable latency on A and B, ruling out a
-  single slow subscriber tailer. Server delivery histograms place more than
-  95% of journal-to-subscriber deliveries below one second, so the remaining
-  tail is before journal append in the Scylla admission/CDC path. Experiments
-  with a 250ms CDC confidence window and parallel independent Paxos
-  reservations did not satisfy p95 and were not retained;
-- the full replacement 60-minute/1,000-subscriber deployed gate remains
-  pending and T061 is intentionally open until its emitted metrics are recorded
-  here;
+  SLO: p50 655ms, p95 1.448s, p99 1.908s, maximum 2.406s;
+- the first complete 60-minute deployment run exposed a harness-cardinality
+  defect: creating a new Namespace for every transition continuously enlarged
+  the Git tree and measured resource creation rather than watch delivery. It
+  still exercised replacement and resource gates, but only 16,390 of 41,900
+  produced transitions were acknowledged before the bounded drain expired.
+  The harness now seeds a bounded Namespace pool and applies uniquely tagged
+  updates to it for replay, sustained traffic, bursts, and recovery. The
+  default is 50 resources, making resource cardinality explicit and bounded
+  while leaving the 1,000-subscriber, transition rate, burst, replay, and
+  duration requirements unchanged;
+- controlled bounded-pool preflights isolated the CDC confidence window and
+  workload cardinality. A fresh 50-resource, 1,000-subscriber, two-minute run
+  at an explicit 250ms confidence window acknowledged 1,300/1,300 transitions
+  with zero failures, backpressure, missing events, or duplicates; visibility
+  was p95 899.985ms and p99 1.085108s, normalized CPU 4.48%/4.26%, and retained
+  RSS growth 0.54%/3.42%. The checked-in 500ms confidence default is retained:
+  one short pass is not the required repeated fixed-topology matrix for an
+  application-default change;
+- production evidence
+  `production-pool50-60m-20260904` ran two API processes against a fresh
+  three-node Scylla 2026.1 cluster, a release Git-service image, a 250ms
+  explicitly configured confidence window, 1,000 WebSocket subscribers, a
+  10,000-event replay, 60 minutes at 10 transitions/second with 100-transition
+  bursts, and a real API-A midpoint restart. Replay preparation completed in
+  3m02.292s and journal catch-up in 544ms. All 41,900 produced transitions were
+  enqueued, attempted, admitted, and acknowledged with zero backpressure,
+  failures, drain timeout, missing events, or duplicate deliveries. API-A
+  returned with a new process identity in 3.002s. Normalized CPU was 5.70% and
+  5.40%; retained RSS growth was 7.01% and 4.17%. Visibility p99 passed at
+  1.739540s, but p95 was 1.308777s and failed the unchanged 1s production SLO.
+  Prometheus phase evidence was exported successfully. T061 therefore remains
+  intentionally open; neither the threshold nor the task is weakened to turn
+  this otherwise-clean failure evidence into a pass;
 - `make pr-ready` across Go, Rust, static analysis, formatting, and license
   checks;
 - `graphify update .` followed by a query that surfaced the Namespace CDC
@@ -581,11 +605,12 @@ graphify update .
 graphify query "How does Namespace CDC flow through the durable watch journal materializer to typed and generic GraphQL subscriptions, including readiness and cursors?"
 ```
 
-Run the still-pending PR-003/T061 gate before production rollout against two
-distinct API processes backed by the same Scylla deployment. The deployment
-harness must watch `NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE` and restart the
-process addressed by `NAMESPACE_WATCH_API_REPLACEMENT` in place after the test
-writes that file. The gate must observe both the outage and a changed
+Repeat the still-pending PR-003/T061 gate after reducing measured p95 below one
+second without weakening correctness or the threshold. Use two distinct API
+processes backed by the same fresh Scylla deployment. The deployment harness
+must watch `NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE` and restart the process
+addressed by `NAMESPACE_WATCH_API_REPLACEMENT` in place after the test writes
+that file. The gate must observe both the outage and a changed
 `process_start_time_seconds`; merely pointing at an already-live endpoint is
 not replacement evidence:
 
@@ -596,5 +621,6 @@ NAMESPACE_WATCH_API_REPLACEMENT=http://api-a:4000 \
 NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=/var/run/gitstore/watch-capacity-replace \
 NAMESPACE_WATCH_TOKEN="$TOKEN" \
 NAMESPACE_WATCH_CAPACITY_REPLAY_CATCHUP_TIMEOUT=15m \
+NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL=50 \
   make capacity TARGET=namespace PROFILE=watch MODE=production
 ```
