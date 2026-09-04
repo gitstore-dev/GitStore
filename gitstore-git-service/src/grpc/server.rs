@@ -6,6 +6,8 @@
 #![allow(clippy::result_large_err)]
 
 use dashmap::DashMap;
+use std::fs::{File, OpenOptions};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -120,6 +122,37 @@ fn get_or_insert_lock(repo_locks: &DashMap<String, Arc<RwLock<()>>>, id: &str) -
         .entry(id.to_string())
         .or_insert_with(|| Arc::new(RwLock::new(())))
         .clone()
+}
+
+/// Acquire an advisory lock whose ownership is tied to the open file
+/// descriptor. The file itself is intentionally persistent: the operating
+/// system releases the lock if a service process exits or is killed, so a
+/// leftover path never wedges later writers.
+fn acquire_repository_commit_lock(path: &Path, timeout: std::time::Duration) -> io::Result<File> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    let deadline = std::time::Instant::now() + timeout;
+    let mut backoff = std::time::Duration::from_millis(1);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "timed out acquiring repository commit lock",
+                    ));
+                }
+                std::thread::sleep(backoff);
+                backoff = std::cmp::min(backoff * 2, std::time::Duration::from_millis(100));
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error),
+        }
+    }
 }
 
 fn is_reference_content_conflict(message: &str) -> bool {
@@ -599,13 +632,13 @@ impl GitService for GitServiceImpl {
             validate_file_path(&req.path)?;
 
             // The async lock above coordinates this service instance. This
-            // repository-local marker extends the same critical section to
-            // other Git-service processes sharing the bare repository.
+            // repository-local advisory lock extends the same critical section
+            // to other Git-service processes sharing the bare repository. Its
+            // OS-owned lifetime makes it recoverable after a process crash.
             let marker_lock_started = std::time::Instant::now();
-            let marker_lock_result = gix::lock::Marker::acquire_to_hold_resource(
-                repo_path.join("gitstore-commit"),
-                gix::lock::acquire::Fail::AfterDurationWithBackoff(COMMIT_FILE_LOCK_TIMEOUT),
-                None,
+            let marker_lock_result = acquire_repository_commit_lock(
+                &repo_path.join("gitstore-commit.lock"),
+                COMMIT_FILE_LOCK_TIMEOUT,
             );
             debug!(
                 marker_lock_wait_seconds = marker_lock_started.elapsed().as_secs_f64(),
@@ -2175,6 +2208,25 @@ mod tests {
             .unwrap()
             .detach();
         find_blob_in_tree(&repo, tree_id, "products/new.md").unwrap();
+    }
+
+    #[test]
+    fn test_repository_commit_lock_recovers_when_owner_releases_descriptor() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("gitstore-commit.lock");
+        let owner =
+            acquire_repository_commit_lock(&path, std::time::Duration::from_millis(10)).unwrap();
+
+        let error =
+            acquire_repository_commit_lock(&path, std::time::Duration::from_millis(5)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+
+        // Process termination closes its descriptors without unlinking this
+        // file. Dropping the owner models that OS cleanup: the persistent path
+        // must immediately be reusable by a replacement service process.
+        drop(owner);
+        assert!(path.exists());
+        acquire_repository_commit_lock(&path, std::time::Duration::from_millis(10)).unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

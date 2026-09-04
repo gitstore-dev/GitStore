@@ -195,8 +195,10 @@ the Prometheus container. Each run uses an ephemeral TSDB and derives its
 default query window from the evidence start time, preventing samples from a
 previous experiment from contaminating the result. The
 API `git_commit` stage is the Prometheus boundary for Git-service latency;
-marker-lock waits and optimistic-reference retries remain structured Rust log
-fields because the legacy Axum metrics surface has been removed.
+advisory-lock waits and optimistic-reference retries remain structured Rust
+log fields because the legacy Axum metrics surface has been removed. Advisory
+lock ownership is released by the OS on process termination, so a stale lock
+file does not block replacement replicas.
 Query requirements follow the selected profile: `api/readiness` requires only
 healthy scrape targets, Namespace admission adds admission/datastore signals,
 and watch/recovery add CDC, materializer, and delivery signals. A missing lazy
@@ -206,6 +208,10 @@ the watch gate measures transition delivery instead of unbounded Git-tree
 growth. Change `NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL` only for a declared
 resource-cardinality experiment; it does not replace the 1,000-subscriber or
 sustained/burst transition targets.
+Alpha and production watch evidence requires a run of at least 60 minutes,
+1,000 subscribers, 10,000 replay events, bursts of at least 100 transitions,
+and a burst interval shorter than the run. Use diagnostic mode for smaller
+experiments.
 
 A k6 pass proves only that the declared offered load and metric thresholds
 passed. Each feature profile MUST pair it with a domain correctness verifier
@@ -229,7 +235,13 @@ For Docker-backed runs, provide `CAPACITY_DATASTORE_CONTAINERS`; the repository
 runner snapshots sanitized container state and enforces this invariant. The
 Namespace admission gate also requires the runtime memory allocation, explicit
 per-node Scylla memory, and authentication mode to be declared rather than
-inferred from a developer machine.
+inferred from a developer machine. The snapshot parses each running Scylla
+container's command and rejects a runtime `--smp` value that differs from the
+config manifest.
+API readiness alpha/production runs require config and environment manifests,
+at least two declared API replicas, a release API build, and explicit replica
+and host-memory values matching those manifests. A single development API
+remains diagnostic-only.
 The dispatcher enforces the same manifest preflight for Go-based capacity
 profiles. It records their focused Go test as the domain verifier and, for
 deployed Scylla-backed profiles, refuses alpha or production evidence without

@@ -79,12 +79,22 @@ export CAPACITY_RUN_ID="${run_id}"
 
 container_check_status=0
 if [[ -n "${CAPACITY_DATASTORE_CONTAINERS:-}" ]]; then
+  if [[ -r "${evidence_dir}/environment.json" ]]; then
+    export CAPACITY_DATASTORE_EXPECTED_COUNT="$(jq -r '.topology.scyllaNodes // 0' "${evidence_dir}/environment.json")"
+    export CAPACITY_DATASTORE_EXPECTED_MEMORY_BYTES="$(jq -r '.datastore.memoryBytesPerNode // 0' "${evidence_dir}/environment.json")"
+  fi
+  if [[ -r "${evidence_dir}/config.json" ]]; then
+    export CAPACITY_DATASTORE_EXPECTED_SMP="$(jq -r '.services.scylla.smpPerNode // 0' "${evidence_dir}/config.json")"
+  fi
   "${repo_root}/scripts/check-capacity-containers.sh" snapshot "${evidence_dir}/datastore-before.json"
 fi
 
 preflight="${repo_root}/tests/capacity/preflight/${profile}.sh"
 if [[ -x "${preflight}" ]]; then
   "${preflight}" "${evidence_dir}" 2>&1 | tee "${evidence_dir}/preflight.log"
+elif [[ "${mode}" != "diagnostic" ]]; then
+  echo "gate profile requires an executable environment preflight: ${preflight}" >&2
+  exit 2
 fi
 
 chaos_pid=""

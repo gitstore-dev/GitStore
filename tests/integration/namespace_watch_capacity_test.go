@@ -95,6 +95,28 @@ func validateCapacityReplacementMode(mode capacityMode, skipReplacement bool) er
 	return nil
 }
 
+func validateCapacityWorkloadScale(cfg capacityConfig) error {
+	if cfg.mode == capacityModeDiagnostic {
+		return nil
+	}
+	if cfg.duration < 60*time.Minute {
+		return fmt.Errorf("%s evidence requires NAMESPACE_WATCH_CAPACITY_DURATION>=60m", cfg.mode)
+	}
+	if cfg.subscribers < 1000 {
+		return fmt.Errorf("%s evidence requires NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS>=1000", cfg.mode)
+	}
+	if cfg.replayEvents < 10000 {
+		return fmt.Errorf("%s evidence requires NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS>=10000", cfg.mode)
+	}
+	if cfg.burstSize < 100 {
+		return fmt.Errorf("%s evidence requires NAMESPACE_WATCH_CAPACITY_BURST_SIZE>=100", cfg.mode)
+	}
+	if cfg.burstInterval <= 0 || cfg.burstInterval >= cfg.duration {
+		return fmt.Errorf("%s evidence requires a positive NAMESPACE_WATCH_CAPACITY_BURST_INTERVAL shorter than the run duration", cfg.mode)
+	}
+	return nil
+}
+
 func (m capacityMode) visibilityLimits() (time.Duration, time.Duration, bool) {
 	switch m {
 	case capacityModeDiagnostic:
@@ -321,6 +343,7 @@ func loadCapacityConfig(t *testing.T) capacityConfig {
 		mode:                mode,
 	}
 	require.NoError(t, validateCapacityReplacementMode(cfg.mode, cfg.skipReplacement))
+	require.NoError(t, validateCapacityWorkloadScale(cfg))
 	require.NotEmpty(t, cfg.apiA, "NAMESPACE_WATCH_API_A is required")
 	require.NotEmpty(t, cfg.apiB, "NAMESPACE_WATCH_API_B is required")
 	if !cfg.skipReplacement {
@@ -367,6 +390,37 @@ func TestCapacityVisibilityPolicy(t *testing.T) {
 	require.NoError(t, validateCapacityReplacementMode(capacityModeProduction, false))
 	require.Error(t, validateCapacityReplacementMode(capacityModeAlpha, true))
 	require.Error(t, validateCapacityReplacementMode(capacityModeProduction, true))
+
+	minimum := capacityConfig{
+		mode:          capacityModeProduction,
+		duration:      60 * time.Minute,
+		subscribers:   1000,
+		replayEvents:  10000,
+		burstInterval: time.Minute,
+		burstSize:     100,
+	}
+	require.NoError(t, validateCapacityWorkloadScale(minimum))
+	for name, mutate := range map[string]func(*capacityConfig){
+		"duration":       func(cfg *capacityConfig) { cfg.duration = time.Second },
+		"subscribers":    func(cfg *capacityConfig) { cfg.subscribers = 1 },
+		"replay events":  func(cfg *capacityConfig) { cfg.replayEvents = 1 },
+		"burst size":     func(cfg *capacityConfig) { cfg.burstSize = 1 },
+		"burst interval": func(cfg *capacityConfig) { cfg.burstInterval = cfg.duration },
+	} {
+		t.Run("rejects undersized "+name, func(t *testing.T) {
+			cfg := minimum
+			mutate(&cfg)
+			require.Error(t, validateCapacityWorkloadScale(cfg))
+		})
+	}
+	diagnostic := minimum
+	diagnostic.mode = capacityModeDiagnostic
+	diagnostic.duration = time.Second
+	diagnostic.subscribers = 1
+	diagnostic.replayEvents = 1
+	diagnostic.burstInterval = time.Second
+	diagnostic.burstSize = 1
+	require.NoError(t, validateCapacityWorkloadScale(diagnostic))
 }
 
 func waitCapacityReplayCatchup(t *testing.T, cfg capacityConfig, cursor, prefix string) {

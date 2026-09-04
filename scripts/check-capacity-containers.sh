@@ -10,6 +10,7 @@ after_file="${3:-}"
 targets_csv="${CAPACITY_DATASTORE_CONTAINERS:-}"
 expected_count="${CAPACITY_DATASTORE_EXPECTED_COUNT:-0}"
 expected_memory="${CAPACITY_DATASTORE_EXPECTED_MEMORY_BYTES:-0}"
+expected_smp="${CAPACITY_DATASTORE_EXPECTED_SMP:-0}"
 
 if [[ -z "${targets_csv}" ]]; then
   echo "CAPACITY_DATASTORE_CONTAINERS is required" >&2
@@ -25,23 +26,29 @@ done
 
 snapshot() {
   local output_file="$1"
-  docker inspect "${targets[@]}" | jq '[.[] | {
-    name:(.Name | ltrimstr("/")),
-    image:.Config.Image,
-    restartCount:.RestartCount,
-    memoryLimitBytes:.HostConfig.Memory,
-    nanoCPUs:.HostConfig.NanoCpus,
-    cpusetCPUs:.HostConfig.CpusetCpus,
-    state:{running:.State.Running, oomKilled:.State.OOMKilled, startedAt:.State.StartedAt}
-  }] | sort_by(.name)' >"${output_file}"
-  jq -e --argjson expected_count "${expected_count}" --argjson expected_memory "${expected_memory}" '
+  docker inspect "${targets[@]}" | jq '[.[] |
+    (((.Config.Entrypoint // []) + (.Config.Cmd // [])) | map(tostring) | join(" ")) as $command |
+    {
+      name:(.Name | ltrimstr("/")),
+      image:.Config.Image,
+      command:$command,
+      smpPerNode:(try ($command | capture("(?:^|[[:space:]])--smp(?:=|[[:space:]])(?<smp>[1-9][0-9]*)(?:$|[[:space:]])").smp | tonumber) catch null),
+      restartCount:.RestartCount,
+      memoryLimitBytes:.HostConfig.Memory,
+      nanoCPUs:.HostConfig.NanoCpus,
+      cpusetCPUs:.HostConfig.CpusetCpus,
+      state:{running:.State.Running, oomKilled:.State.OOMKilled, startedAt:.State.StartedAt}
+    }
+  ] | sort_by(.name)' >"${output_file}"
+  jq -e --argjson expected_count "${expected_count}" --argjson expected_memory "${expected_memory}" --argjson expected_smp "${expected_smp}" '
     ($expected_count == 0 or length == $expected_count) and
     all(.[];
       .state.running and (.state.oomKilled | not) and
-      ($expected_memory == 0 or .memoryLimitBytes == $expected_memory)
+      ($expected_memory == 0 or .memoryLimitBytes == $expected_memory) and
+      ($expected_smp == 0 or .smpPerNode == $expected_smp)
     )
   ' "${output_file}" >/dev/null || {
-    echo "datastore container count, health, or memory limit does not match the declared environment" >&2
+    echo "datastore container count, health, memory limit, or runtime Scylla SMP does not match the declared environment" >&2
     exit 1
   }
 }

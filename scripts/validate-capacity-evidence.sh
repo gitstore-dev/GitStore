@@ -83,6 +83,7 @@ case "${target}/${profile}" in
     jq -e '
       .schemaVersion == 1 and
       (.services.api.replicas | numbers) >= 2 and
+      .services.api.build == "release" and
       (.services.scylla.nodes | numbers) >= 3 and
       (.services.scylla.smpPerNode | numbers) >= 2 and
       (.services.gitService.build == "release")
@@ -105,6 +106,7 @@ case "${target}/${profile}" in
     environment_api_replicas="$(jq -r '.topology.apiReplicas' "${environment}")"
     (( config_api_replicas == environment_api_replicas )) || { echo "API replica counts differ between manifests" >&2; exit 2; }
     require_declared_integer CAPACITY_API_REPLICAS "${config_api_replicas}"
+    [[ "${CAPACITY_API_BUILD:-}" == "release" ]] || { echo "CAPACITY_API_BUILD=release is required" >&2; exit 2; }
     [[ "${CAPACITY_GIT_SERVICE_BUILD:-}" == "release" ]] || { echo "CAPACITY_GIT_SERVICE_BUILD=release is required" >&2; exit 2; }
     validate_scylla_deployment
     if [[ "${profile}" == "recovery" ]]; then

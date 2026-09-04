@@ -146,6 +146,9 @@ if (( preflight_status == 0 )) && [[ -n "${CAPACITY_DATASTORE_CONTAINERS:-}" ]];
     export CAPACITY_DATASTORE_EXPECTED_COUNT="$(jq -r '.topology.scyllaNodes // 0' "${evidence_dir}/environment.json")"
     export CAPACITY_DATASTORE_EXPECTED_MEMORY_BYTES="$(jq -r '.datastore.memoryBytesPerNode // 0' "${evidence_dir}/environment.json")"
   fi
+  if [[ -r "${evidence_dir}/config.json" ]]; then
+    export CAPACITY_DATASTORE_EXPECTED_SMP="$(jq -r '.services.scylla.smpPerNode // 0' "${evidence_dir}/config.json")"
+  fi
   set +e
   "${repo_root}/scripts/check-capacity-containers.sh" snapshot "${evidence_dir}/datastore-before.json" \
     2>&1 | tee "${evidence_dir}/datastore-snapshot.log"

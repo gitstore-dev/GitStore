@@ -41,11 +41,13 @@ restart counts, OOM state, and authentication mode. A gate fails if a node is
 OOM-killed, unexpectedly restarts, or leaves cluster membership during load.
 Set `CAPACITY_DATASTORE_CONTAINERS` to the comma-separated container names. The
 runner captures sanitized `docker inspect` state before and after load and
-fails on OOM, restart, disappearance, or stopped state. Namespace admission
+fails on OOM, restart, disappearance, stopped state, or a runtime `--smp`
+value that differs from the config manifest. Namespace admission
 alpha and production modes additionally require:
 
 ```bash
 CAPACITY_RUNTIME_MEMORY_BYTES=17179869184
+CAPACITY_API_BUILD=release
 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=<explicit container limit>
 CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated # or password-authenticated
 CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3
@@ -55,6 +57,13 @@ The same manifest contract applies to the Go-based `validation`, `watch`,
 `recovery`, and `soak` profiles. Their focused Go test is recorded as the
 domain verifier; deployed Scylla-backed profiles additionally require the
 before/after container-health evidence above.
+
+Non-diagnostic API readiness also requires both manifests plus
+`CAPACITY_API_REPLICAS`, `CAPACITY_API_BUILD=release`,
+`CAPACITY_RUNTIME_MEMORY_BYTES`, and
+`CAPACITY_BASE_URL`. The replica and memory values must match the captured
+deployment declarations, so a single development process cannot produce
+production readiness evidence.
 
 The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
 `3g` per node. Override it explicitly when testing another resource tier and
@@ -78,9 +87,9 @@ An executable `preflight/<profile>.sh` runs before k6 and must fail when the
 declared topology or dataset scale is absent. An executable
 `verifiers/<profile>.sh` runs after k6 and decides domain correctness. Both
 receive the evidence directory as their first argument and store structured
-results there. Alpha/production profiles other than the non-mutating
-`api-readiness` smoke test fail closed when their verifier is absent or not
-executable.
+results there. Every alpha/production k6 profile requires an environment
+preflight. Profiles other than the non-mutating `api-readiness` smoke test also
+fail closed when their domain verifier is absent or not executable.
 
 To inject a reviewed fault during load, configure the integrated runner:
 
@@ -112,14 +121,18 @@ make capacity TARGET=namespace PROFILE=watch MODE=alpha \
 PromQL snapshots are selected by profile: readiness records scrape health,
 admission adds admission/datastore signals, and watch/recovery add CDC,
 materialization, and delivery signals. The API `git_commit`
-stage isolates the Git-service boundary; finer Git marker-lock and reference
+stage isolates the Git-service boundary; finer Git advisory-lock and reference
 retry timing is emitted as bounded structured Git-service log fields without
-reintroducing the removed Axum HTTP stack.
+reintroducing the removed Axum HTTP stack. The repository lock is OS-owned and
+automatically released when a Git-service process exits or crashes.
 The Namespace watch harness seeds a bounded pool of 50 resources by default and
 applies uniquely tagged updates to that pool. Override
 `NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL` only when resource cardinality is an
 explicit experiment dimension; subscriber count, transition rate, bursts,
 replay size, and duration remain independent acceptance dimensions.
+Alpha and production watch evidence enforces at least 60 minutes, 1,000
+subscribers, 10,000 replay events, 100 transitions per burst, and a burst
+interval shorter than the run. Smaller experiments must use diagnostic mode.
 The dispatcher writes those configurable scrape targets into the evidence
 bundle and gives every run an ephemeral Prometheus TSDB. The exporter derives
 its default PromQL lookback from the recorded run start time plus a small

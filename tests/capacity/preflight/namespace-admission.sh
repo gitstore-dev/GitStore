@@ -7,6 +7,7 @@ set -euo pipefail
 evidence_dir="$1"
 mode="${MODE:-diagnostic}"
 api_replicas="${CAPACITY_API_REPLICAS:-0}"
+api_build="${CAPACITY_API_BUILD:-unknown}"
 scylla_nodes="${CAPACITY_SCYLLA_NODES:-0}"
 scylla_smp="${CAPACITY_SCYLLA_SMP:-0}"
 git_build="${CAPACITY_GIT_SERVICE_BUILD:-unknown}"
@@ -22,6 +23,7 @@ if [[ "${mode}" != "diagnostic" ]]; then
   [[ -n "${CAPACITY_CONFIG_MANIFEST:-}" ]] || { echo "${mode} capacity evidence requires CAPACITY_CONFIG_MANIFEST" >&2; exit 2; }
   [[ -n "${CAPACITY_ENVIRONMENT_MANIFEST:-}" ]] || { echo "${mode} capacity evidence requires CAPACITY_ENVIRONMENT_MANIFEST" >&2; exit 2; }
   (( api_replicas >= 2 )) || { echo "${mode} capacity evidence requires CAPACITY_API_REPLICAS>=2" >&2; exit 2; }
+  [[ "${api_build}" == "release" ]] || { echo "${mode} capacity evidence requires CAPACITY_API_BUILD=release" >&2; exit 2; }
   (( scylla_nodes >= 3 )) || { echo "${mode} capacity evidence requires CAPACITY_SCYLLA_NODES>=3" >&2; exit 2; }
   (( scylla_smp >= 2 )) || { echo "${mode} capacity evidence requires CAPACITY_SCYLLA_SMP>=2" >&2; exit 2; }
   [[ "${git_build}" == "release" ]] || { echo "${mode} capacity evidence requires CAPACITY_GIT_SERVICE_BUILD=release" >&2; exit 2; }
@@ -35,13 +37,14 @@ preflight_file="${evidence_dir}/preflight-environment.json"
 jq -n \
   --arg mode "${mode}" \
   --argjson api_replicas "${api_replicas}" \
+  --arg api_build "${api_build}" \
   --argjson scylla_nodes "${scylla_nodes}" \
   --argjson scylla_smp "${scylla_smp}" \
   --arg git_service_build "${git_build}" \
   --argjson runtime_memory_bytes "${runtime_memory}" \
   --argjson scylla_memory_bytes_per_node "${scylla_memory}" \
   --arg scylla_auth_mode "${scylla_auth}" \
-  '{schemaVersion:1, mode:$mode, topology:{apiReplicas:$api_replicas, scyllaNodes:$scylla_nodes, scyllaSmpPerNode:$scylla_smp}, resources:{runtimeMemoryBytes:$runtime_memory_bytes, scyllaMemoryBytesPerNode:$scylla_memory_bytes_per_node}, datastore:{authenticationMode:$scylla_auth_mode}, builds:{gitService:$git_service_build}}' \
+  '{schemaVersion:1, mode:$mode, topology:{apiReplicas:$api_replicas, scyllaNodes:$scylla_nodes, scyllaSmpPerNode:$scylla_smp}, resources:{runtimeMemoryBytes:$runtime_memory_bytes, scyllaMemoryBytesPerNode:$scylla_memory_bytes_per_node}, datastore:{authenticationMode:$scylla_auth_mode}, builds:{api:$api_build,gitService:$git_service_build}}' \
   >"${preflight_file}"
 
 if [[ "${mode}" == "diagnostic" ]]; then
