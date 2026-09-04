@@ -29,6 +29,17 @@ type namespaceWatchBatchAppender interface {
 }
 
 func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *testing.T) {
+	raw := newRawSession(t)
+	require.NoError(t, raw.Query("TRUNCATE namespace_watch_events").Exec())
+	require.NoError(t, raw.Query("TRUNCATE namespace_watch_clock").Exec())
+	raw.Close()
+	t.Cleanup(func() {
+		cleanup := newRawSession(t)
+		defer cleanup.Close()
+		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_events").Exec())
+		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_clock").Exec())
+	})
+
 	store := newTestStoreWithWatchBucket(t, 3)
 	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
 	batcher := journal.(namespaceWatchBatchAppender)

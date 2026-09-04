@@ -102,7 +102,7 @@ jobs:
 
     - name: Bootstrap namespace and repository
       # admin123 is the plaintext for the stub bcrypt hash set in GITSTORE_AUTH__ADMIN__PASSWORD_HASH above
-      run: make bootstrap ADMIN_PASSWORD=admin123 NAMESPACE=gitci NAMESPACE_DISPLAY_NAME=CI NAMESPACE_TIER=USER REPOSITORY=catalog
+      run: make bootstrap TARGET=all ADMIN_PASSWORD=admin123 NAMESPACE=gitci NAMESPACE_DISPLAY_NAME=CI NAMESPACE_TIER=USER REPOSITORY=catalog
 
     - name: Seed repository with initial commit
       run: |
@@ -207,7 +207,7 @@ jobs:
         run: timeout 30 sh -c 'until curl -sf http://localhost:5001/health; do sleep 1; done'
 
       - name: Bootstrap namespace and repository
-        run: make bootstrap ADMIN_PASSWORD=admin123 NAMESPACE=gitci NAMESPACE_DISPLAY_NAME=CI NAMESPACE_TIER=USER REPOSITORY=catalog
+        run: make bootstrap TARGET=all ADMIN_PASSWORD=admin123 NAMESPACE=gitci NAMESPACE_DISPLAY_NAME=CI NAMESPACE_TIER=USER REPOSITORY=catalog
 
       - name: Seed repository with initial commit
         run: |

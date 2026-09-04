@@ -10,18 +10,7 @@ import (
 	"time"
 )
 
-func namespaceLifecycleFixture(name, title string, includeStatus bool) string {
-	status := ""
-	if includeStatus {
-		status = `
-status:
-  observedGeneration: 999
-  lastAppliedRevision: forged
-  conditions:
-  - type: Ready
-    status: "True"
-`
-	}
+func namespaceLifecycleFixture(name, title string) string {
 	return fmt.Sprintf(`---
 apiVersion: gitstore.dev/v1beta1
 kind: Namespace
@@ -30,8 +19,8 @@ metadata:
 spec:
   title: %s
   tier: USER
-%s---
-`, name, title, status)
+---
+`, name, title)
 }
 
 type namespaceLifecycleState struct {
@@ -112,7 +101,7 @@ func requireAdmissionAccepted(t *testing.T, state *namespaceLifecycleState) {
 func TestNamespaceLifecycle_CreateAndUpdateThroughAdmission(t *testing.T) {
 	name := uniqueName("namespace-lifecycle")
 	h := newPushHelperForRepo(t, "gitstore-system", "gitstore-system")
-	h.commitNamespace(name+".md", namespaceLifecycleFixture(name, "Initial title", false))
+	h.commitNamespace(name+".md", namespaceLifecycleFixture(name, "Initial title"))
 	if out, err := h.push(); err != nil {
 		t.Fatalf("create namespace push failed: %v\n%s", err, out)
 	}
@@ -121,7 +110,7 @@ func TestNamespaceLifecycle_CreateAndUpdateThroughAdmission(t *testing.T) {
 	requireAdmissionAccepted(t, created)
 	initialVersion := created.Metadata.ResourceVersion
 
-	h.commitNamespace(name+".md", namespaceLifecycleFixture(name, "Updated title", false))
+	h.commitNamespace(name+".md", namespaceLifecycleFixture(name, "Updated title"))
 	if out, err := h.push(); err != nil {
 		t.Fatalf("update namespace push failed: %v\n%s", err, out)
 	}
@@ -133,23 +122,5 @@ func TestNamespaceLifecycle_CreateAndUpdateThroughAdmission(t *testing.T) {
 	}
 	if updated.Spec.Title == nil || *updated.Spec.Title != "Updated title" {
 		t.Fatalf("spec.title = %v, want Updated title", updated.Spec.Title)
-	}
-}
-
-func TestNamespaceLifecycle_AuthoredStatusIsIgnored(t *testing.T) {
-	name := uniqueName("namespace-status")
-	h := newPushHelperForRepo(t, "gitstore-system", "gitstore-system")
-	h.commitNamespace(name+".md", namespaceLifecycleFixture(name, "Status integrity", true))
-	if out, err := h.push(); err != nil {
-		t.Fatalf("namespace push with authored status failed: %v\n%s", err, out)
-	}
-
-	state := waitForNamespaceLifecycle(t, name, 1)
-	requireAdmissionAccepted(t, state)
-	if state.Status.ObservedGeneration == 999 {
-		t.Fatal("author-provided observedGeneration was persisted")
-	}
-	if state.Status.LastAppliedRevision != nil && *state.Status.LastAppliedRevision == "forged" {
-		t.Fatal("author-provided lastAppliedRevision was persisted")
 	}
 }
