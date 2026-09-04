@@ -33,7 +33,7 @@ The core stack exposes:
 Create the default namespace and repository:
 
 ```bash
-make bootstrap ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
 ```
 
 By default this creates:
@@ -48,6 +48,7 @@ Common overrides:
 
 ```bash
 make bootstrap \
+  TARGET=all \
   ADMIN_PASSWORD=<admin-password> \
   NAMESPACE=my-store \
   NAMESPACE_DISPLAY_NAME="My Store" \
@@ -442,11 +443,11 @@ If required auth configuration is missing, the API will not become healthy. Set 
 
 ### Bootstrap Fails
 
-`make bootstrap` needs a valid admin password unless you provide `BOOTSTRAP_TOKEN` or have a cached token.
+`make bootstrap TARGET=all` needs a valid admin password unless you provide `BOOTSTRAP_TOKEN` or have a cached token.
 
 ```bash
-make bootstrap-token ADMIN_PASSWORD=<admin-password>
-make bootstrap BOOTSTRAP_TOKEN=<token>
+make bootstrap TARGET=token ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all BOOTSTRAP_TOKEN=<token>
 ```
 
 Bootstrap is create-oriented. If a namespace or repository already exists, either use different `NAMESPACE` / `REPOSITORY` values or keep the existing resources.

@@ -14,7 +14,10 @@ type Metrics struct {
 	deletionRejections   *prometheus.CounterVec
 	deletionOutcomes     *prometheus.CounterVec
 	validationDuration   *prometheus.HistogramVec
+	admissionDuration    *prometheus.HistogramVec
 }
+
+var capacityLatencyBuckets = []float64{.001, .005, .01, .025, .05, .1, .25, .5, .75, 1, 1.5, 2, 3, 5}
 
 var defaultMetrics = NewMetrics(prometheus.DefaultRegisterer)
 
@@ -47,16 +50,31 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Subsystem: "namespace",
 			Name:      "validation_duration_seconds",
 			Help:      "Namespace validation latency by phase.",
-			Buckets:   prometheus.DefBuckets,
+			Buckets:   capacityLatencyBuckets,
 		}, []string{"phase"}),
+		admissionDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "gitstore",
+			Subsystem: "namespace",
+			Name:      "admission_stage_duration_seconds",
+			Help:      "Namespace GraphQL admission latency at bounded internal stages.",
+			Buckets:   capacityLatencyBuckets,
+		}, []string{"stage"}),
 	}
 	reg.MustRegister(
 		metrics.validationRejections,
 		metrics.deletionRejections,
 		metrics.deletionOutcomes,
 		metrics.validationDuration,
+		metrics.admissionDuration,
 	)
 	return metrics
+}
+
+func (m *Metrics) ObserveAdmissionStage(stage string, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	m.admissionDuration.WithLabelValues(stage).Observe(duration.Seconds())
 }
 
 func (m *Metrics) ObserveRejection(phase Phase, reason Reason) {

@@ -154,6 +154,18 @@
 
 ---
 
+## Phase 7: Lower-Priority Make Interface Consolidation
+
+**Purpose**: Reduce the public Make surface after the capacity gate is complete. This phase is non-blocking for feature 050 and must not delay T061.
+
+- [X] T064 Consolidate validation entry points behind `make check TARGET=<all|config|compose|licenses|credentials>`, while retaining `make pr-ready` as the CI-equivalent aggregate
+- [X] T065 Consolidate destructive cleanup behind `make clean TARGET=<git-data|controller-checkpoints> CONFIRM=1`, with exact-scope validation and output for every target
+- [X] T066 Consolidate bootstrap entry points behind `make bootstrap TARGET=<all|token|namespace|repository>` and preserve dependency/precondition behavior
+- [X] T067 Replace security-secret `make gen-*` entry points with `make secret TARGET=<jwt|grpc-hmac>`; reserve `make generate` for generated source and schema artifacts
+- [X] T068 Add dispatcher tests and update `make help`, `AGENTS.md`, and operator documentation for the consolidated check, clean, bootstrap, and secret interfaces
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies

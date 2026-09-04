@@ -184,7 +184,7 @@ func TestNamespaceCapacityLoadConfigurationUsesActiveWorkers(t *testing.T) {
 
 func TestNamespaceValidationCapacity(t *testing.T) {
 	if os.Getenv("GITSTORE_NAMESPACE_CAPACITY_RUN") != "1" {
-		t.Skip("set GITSTORE_NAMESPACE_CAPACITY_RUN=1 or run make test-namespace-admission-capacity")
+		t.Skip("set GITSTORE_NAMESPACE_CAPACITY_RUN=1 or run make capacity TARGET=namespace PROFILE=validation MODE=production")
 	}
 	duration := namespaceCapacityDuration(t)
 	if duration < namespaceCapacityMinimumDuration {

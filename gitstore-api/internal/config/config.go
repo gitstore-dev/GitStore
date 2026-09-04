@@ -348,7 +348,7 @@ func validateConfig(cfg *Config) error {
 func validateAuthChainConfig(cfg *Config) error {
 	for _, provider := range cfg.Auth.AuthN.Chain {
 		if strings.EqualFold(strings.TrimSpace(provider), "static-users") && cfg.Auth.JWT.Secret == "" {
-			return errors.New("startup failed: auth.jwt.secret is required\n\n  Problem: static-users is present in auth.authn.chain, but auth.jwt.secret (env: GITSTORE_AUTH__JWT__SECRET) is empty. static-users cannot issue or verify session tokens without it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_AUTH__JWT__SECRET to a random string (32+ chars). You can generate one with: make gen-jwt-secret\n    2. If you don't intend to use static-users, remove it from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)\n\n  See specs/060-local-multiuser-authn/quickstart.md, step 4, for a worked example")
+			return errors.New("startup failed: auth.jwt.secret is required\n\n  Problem: static-users is present in auth.authn.chain, but auth.jwt.secret (env: GITSTORE_AUTH__JWT__SECRET) is empty. static-users cannot issue or verify session tokens without it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_AUTH__JWT__SECRET to a random string (32+ chars). You can generate one with: make secret TARGET=jwt\n    2. If you don't intend to use static-users, remove it from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)\n\n  See specs/060-local-multiuser-authn/quickstart.md, step 4, for a worked example")
 		}
 	}
 	return nil

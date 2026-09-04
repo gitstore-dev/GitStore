@@ -40,6 +40,10 @@ type Materializer struct {
 	appendMu sync.Mutex
 }
 
+type batchMaterializerStore interface {
+	AppendBatch(context.Context, datastore.NamespaceWatchLease, []datastore.NamespaceWatchEvent, time.Duration) ([]datastore.NamespaceWatchEvent, error)
+}
+
 func NewMaterializer(store MaterializerStore, cfg MaterializerConfig) *Materializer {
 	if cfg.EventTTL <= 0 {
 		cfg.EventTTL = 7 * 24 * time.Hour
@@ -131,6 +135,74 @@ func (m *Materializer) Materialize(ctx context.Context, lease datastore.Namespac
 	m.appendMu.Lock()
 	defer m.appendMu.Unlock()
 	return m.materializeLocked(ctx, lease, change)
+}
+
+// MaterializeBatch classifies an ordered group and lets capable durable stores
+// amortize journal linearization across the group. Stores without a batch path
+// retain the single-event behavior, which keeps development/test backends and
+// rolling upgrades compatible.
+func (m *Materializer) MaterializeBatch(ctx context.Context, lease datastore.NamespaceWatchLease, changes []Change) ([]datastore.NamespaceWatchEvent, error) {
+	materializeStarted := time.Now()
+	if m.cfg.Metrics != nil {
+		for _, change := range changes {
+			m.cfg.Metrics.ObserveCDCDiscovery(change.At, materializeStarted)
+		}
+		defer func() { m.cfg.Metrics.ObserveMaterializerStage("total", time.Since(materializeStarted)) }()
+	}
+	m.appendMu.Lock()
+	defer m.appendMu.Unlock()
+	events := make([]datastore.NamespaceWatchEvent, 0, len(changes))
+	for _, change := range changes {
+		event, ok := Classify(change)
+		if !ok {
+			continue
+		}
+		if event.At.IsZero() {
+			if m.cfg.Clock != nil {
+				event.At = m.cfg.Clock.Now()
+			} else {
+				event.At = time.Now().UTC()
+			}
+		}
+		events = append(events, event)
+	}
+	if len(events) == 0 {
+		return nil, nil
+	}
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.ObserveMaterializerBatchSize(len(events))
+	}
+	var appended []datastore.NamespaceWatchEvent
+	var err error
+	appendStarted := time.Now()
+	if store, ok := m.store.(batchMaterializerStore); ok {
+		appended, err = store.AppendBatch(ctx, lease, events, m.cfg.EventTTL)
+	} else {
+		appended = make([]datastore.NamespaceWatchEvent, 0, len(events))
+		for _, event := range events {
+			var result datastore.NamespaceWatchEvent
+			result, err = m.store.Append(ctx, lease, event, m.cfg.EventTTL)
+			if err != nil {
+				break
+			}
+			appended = append(appended, result)
+		}
+	}
+	if m.cfg.Metrics != nil {
+		m.cfg.Metrics.ObserveMaterializerStage("journal_append", time.Since(appendStarted))
+	}
+	if err != nil {
+		if m.cfg.Metrics != nil {
+			m.cfg.Metrics.IncAppendError()
+		}
+		return nil, fmt.Errorf("append Namespace journal event batch: %w", err)
+	}
+	if m.cfg.Metrics != nil {
+		for _, event := range appended {
+			m.cfg.Metrics.ObserveMaterialized(event, time.Now())
+		}
+	}
+	return appended, nil
 }
 
 func (m *Materializer) materializeLocked(ctx context.Context, lease datastore.NamespaceWatchLease, change Change) (datastore.NamespaceWatchEvent, error) {

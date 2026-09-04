@@ -452,6 +452,7 @@ func (s *Service) UpdateCollection(ctx context.Context, uid string, input map[st
 // Authorization is enforced in GraphQL middleware before this method is called.
 func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespaceInput, callerUsername string) (*datastore.Namespace, error) {
 	started := time.Now()
+	defer func() { s.namespaceMetrics.ObserveAdmissionStage("total", time.Since(started)) }()
 	resource, err := namespaceResourceFromCreateInput(input)
 	var content []byte
 	if err == nil {
@@ -473,6 +474,7 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 // UpdateNamespace commits and admits a replacement Namespace spec.
 func (s *Service) UpdateNamespace(ctx context.Context, input model.UpdateNamespaceInput, callerUsername string) (*datastore.Namespace, error) {
 	started := time.Now()
+	defer func() { s.namespaceMetrics.ObserveAdmissionStage("total", time.Since(started)) }()
 	resource, err := namespaceResourceFromUpdateInput(input)
 	var content []byte
 	if err == nil {
@@ -592,16 +594,19 @@ func (s *Service) commitAndAdmitNamespace(
 			return nil, err
 		}
 	}
+	commitStarted := time.Now()
 	sha, err := s.gitWriter.CommitFileForRepo(ctx, mapping.RepositoryID, gitclient.CommitFileParams{
 		Path:          path,
 		Content:       content,
 		CommitMessage: fmt.Sprintf("%s Namespace %s", verb, resource.Metadata.Name),
 		AuthorName:    callerUsername,
 	})
+	s.namespaceMetrics.ObserveAdmissionStage("git_commit", time.Since(commitStarted))
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to commit Namespace manifest: %v", err)
 	}
 	now := s.clock.Now().UTC()
+	convergenceStarted := time.Now()
 	namespace, err := s.convergeCommittedNamespace(
 		ctx,
 		mapping.RepositoryID,
@@ -615,6 +620,7 @@ func (s *Service) commitAndAdmitNamespace(
 		namespaceAdmissionOperation(create),
 		preflight,
 	)
+	s.namespaceMetrics.ObserveAdmissionStage("admission_convergence", time.Since(convergenceStarted))
 	if err != nil {
 		var mapped error
 		switch {
@@ -710,7 +716,17 @@ func (s *Service) convergeCommittedNamespace(
 					if resolveErr != nil {
 						return false, fmt.Errorf("%w: %v", namespaceadmission.ErrAuthoringRefCheck, resolveErr)
 					}
-					return head == targetSHA, nil
+					if head == targetSHA {
+						return true, nil
+					}
+					latestContent, readErr := s.gitWriter.ReadFileForRepo(checkCtx, repositoryID, path, head)
+					if readErr != nil {
+						return false, nil
+					}
+					// A later commit to another Namespace does not supersede this
+					// manifest. Requiring an exact shared-repository head here makes
+					// otherwise independent creates starve under sustained traffic.
+					return bytes.Equal(latestContent, committedContent), nil
 				},
 			},
 		)

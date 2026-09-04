@@ -30,6 +30,9 @@ type Metrics struct {
 	bookmarkAge      prometheus.GaugeFunc
 	bookmarkNanos    atomic.Int64
 	deliveryLatency  prometheus.Histogram
+	cdcDiscovery     prometheus.Histogram
+	materialize      *prometheus.HistogramVec
+	batchSize        prometheus.Histogram
 	duplicateMu      sync.Mutex
 	duplicateSeen    map[deliveryIdentity]struct{}
 	duplicateKeys    map[string]int
@@ -46,6 +49,8 @@ type deliveryIdentity struct {
 
 const duplicateTrackingLimit = 100000
 
+var capacityLatencyBuckets = []float64{.001, .005, .01, .025, .05, .1, .25, .5, .75, 1, 1.5, 2, 3, 5}
+
 func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 	m := &Metrics{
 		leader:          prometheus.NewGauge(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_materializer_leader", Help: "Whether this replica owns the fenced Namespace CDC materializer lease."}),
@@ -57,8 +62,13 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 		appendErrors:    prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_namespace_watch_append_errors_total", Help: "Namespace journal append failures."}),
 		duplicates:      prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_namespace_watch_duplicates_total", Help: "Distinct Namespace journal cursors delivered with a previously observed deduplication key."}),
 		replayEvents:    prometheus.NewCounter(prometheus.CounterOpts{Name: "gitstore_namespace_watch_replay_events_total", Help: "Namespace journal events replayed."}),
-		replayLatency:   prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_namespace_watch_replay_duration_seconds", Help: "Namespace journal replay duration."}),
-		deliveryLatency: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_namespace_watch_delivery_latency_seconds", Help: "Namespace CDC-to-subscriber delivery latency."}),
+		replayLatency:   prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_namespace_watch_replay_duration_seconds", Help: "Namespace journal replay duration.", Buckets: capacityLatencyBuckets}),
+		deliveryLatency: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_namespace_watch_delivery_latency_seconds", Help: "Namespace CDC-to-subscriber delivery latency.", Buckets: capacityLatencyBuckets}),
+		cdcDiscovery:    prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_namespace_watch_cdc_discovery_seconds", Help: "Time from the authoritative CDC timestamp until materialization begins.", Buckets: capacityLatencyBuckets}),
+		materialize: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name: "gitstore_namespace_watch_materializer_stage_duration_seconds", Help: "Namespace materializer latency at bounded stages.", Buckets: capacityLatencyBuckets,
+		}, []string{"stage"}),
+		batchSize: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "gitstore_namespace_watch_materializer_batch_size", Help: "Number of public Namespace events in each materializer batch.", Buckets: []float64{1, 2, 4, 8, 16, 32, 64, 128, 256}}),
 	}
 	m.cdcLag = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "gitstore_namespace_watch_cdc_lag_seconds", Help: "Age of the latest observed Namespace CDC position."}, func() float64 {
 		nanos := m.cdcProgressNanos.Load()
@@ -85,7 +95,7 @@ func NewMetrics(registerer prometheus.Registerer) (*Metrics, error) {
 	m.duplicateSeen = make(map[deliveryIdentity]struct{}, duplicateTrackingLimit)
 	m.duplicateKeys = make(map[string]int, duplicateTrackingLimit)
 	m.duplicateOrder = make([]deliveryIdentity, 0, duplicateTrackingLimit)
-	m.collectors = []prometheus.Collector{m.leader, m.cdcLag, m.journalOldest, m.journalHigh, m.subscribers, m.expired, m.overflow, m.appendErrors, m.duplicates, m.replayEvents, m.replayLatency, m.bookmarkAge, m.deliveryLatency}
+	m.collectors = []prometheus.Collector{m.leader, m.cdcLag, m.journalOldest, m.journalHigh, m.subscribers, m.expired, m.overflow, m.appendErrors, m.duplicates, m.replayEvents, m.replayLatency, m.bookmarkAge, m.deliveryLatency, m.cdcDiscovery, m.materialize, m.batchSize}
 	for _, collector := range m.collectors {
 		if err := registerer.Register(collector); err != nil {
 			return nil, err
@@ -122,6 +132,17 @@ func (m *Metrics) IncAppendError()            { m.appendErrors.Inc() }
 func (m *Metrics) ObserveReplay(events int, elapsed time.Duration) {
 	m.replayEvents.Add(float64(events))
 	m.replayLatency.Observe(elapsed.Seconds())
+}
+func (m *Metrics) ObserveCDCDiscovery(at, now time.Time) {
+	if !at.IsZero() && !now.Before(at) {
+		m.cdcDiscovery.Observe(now.Sub(at).Seconds())
+	}
+}
+func (m *Metrics) ObserveMaterializerStage(stage string, elapsed time.Duration) {
+	m.materialize.WithLabelValues(stage).Observe(elapsed.Seconds())
+}
+func (m *Metrics) ObserveMaterializerBatchSize(size int) {
+	m.batchSize.Observe(float64(size))
 }
 func (m *Metrics) ObserveDelivery(event datastore.NamespaceWatchEvent, now time.Time) {
 	if !event.At.IsZero() && !now.Before(event.At) {

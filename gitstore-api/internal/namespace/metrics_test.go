@@ -22,6 +22,7 @@ func TestNamespaceMetricsUseOnlyBoundedLabels(t *testing.T) {
 	metrics.ObserveDeletionBlocked(namespaceadmission.ReasonNamespaceNotEmpty)
 	metrics.ObserveDeletionOutcome(namespaceadmission.DeletionOutcomeAlreadyTerminating)
 	metrics.ObserveValidationDuration(namespaceadmission.PhasePolicy, 25*time.Millisecond)
+	metrics.ObserveAdmissionStage("git_commit", 100*time.Millisecond)
 
 	families, err := registry.Gather()
 	require.NoError(t, err)
@@ -29,6 +30,7 @@ func TestNamespaceMetricsUseOnlyBoundedLabels(t *testing.T) {
 	assert.Equal(t, []string{"reason"}, labelNames(metricFamily(t, families, "gitstore_namespace_deletion_rejections_total")))
 	assert.Equal(t, []string{"outcome"}, labelNames(metricFamily(t, families, "gitstore_namespace_deletion_outcomes_total")))
 	assert.Equal(t, []string{"phase"}, labelNames(metricFamily(t, families, "gitstore_namespace_validation_duration_seconds")))
+	assert.Equal(t, []string{"stage"}, labelNames(metricFamily(t, families, "gitstore_namespace_admission_stage_duration_seconds")))
 }
 
 func metricFamily(t *testing.T, families []*dto.MetricFamily, name string) *dto.MetricFamily {

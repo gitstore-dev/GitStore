@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 GitStore contributors
+
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: gitstore-api-capacity
+    static_configs:
+      - targets:
+          - gitstore-capacity-api-a-rebased:4000
+          - gitstore-capacity-api-b-rebased:4000

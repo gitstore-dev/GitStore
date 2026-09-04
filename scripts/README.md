@@ -9,7 +9,7 @@ structured evidence beneath `.gitstore/capacity/`. Invoke it through the root
 Makefile:
 
 ```bash
-make capacity CAPACITY_PROFILE=api-readiness CAPACITY_BASE_URL=http://localhost:4000
+make capacity TARGET=api PROFILE=readiness MODE=diagnostic CAPACITY_BASE_URL=http://localhost:4000
 ```
 
 ## run-chaos.sh
@@ -24,7 +24,7 @@ make chaos CHAOS_PROFILE=api-pause-5s CHAOS_TARGET=gitstore-api CHAOS_CONFIRM=1
 For normal repository checks, run the licence scripts through the root Make target:
 
 ```bash
-make license-check
+make check TARGET=licenses
 ```
 
 Use the scripts directly only when you need a narrower mode such as `--staged`.
@@ -36,7 +36,7 @@ controller GraphQL client for Zap fields that could carry raw tokens,
 assertions, or private keys. Run it through the root Makefile:
 
 ```bash
-make credential-leakage-check
+make check TARGET=credentials
 ```
 
 The check excludes test files and is required by the main CI workflow.

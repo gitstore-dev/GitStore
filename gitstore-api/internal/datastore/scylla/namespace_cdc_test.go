@@ -5,7 +5,9 @@ package scylla
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -68,6 +70,114 @@ func TestNamespaceCDCSequencerOrdersConcurrentStreams(t *testing.T) {
 	assert.ErrorIs(t, <-done, context.Canceled)
 }
 
+func TestNamespaceCDCSequencerFlushesPendingTailBeforeNextGeneration(t *testing.T) {
+	store := &sequencerStore{}
+	materializer := watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{})
+	sequencer := newNamespaceCDCSequencer(materializer, datastore.NamespaceWatchLease{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"old-stream"}))
+	require.NoError(t, sequencer.Register(ctx, "old-stream"))
+	progressed := make(chan string, 1)
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest(
+		"old-stream", "tail", gocql.MinTimeUUID(time.Now().UTC()), progressed,
+	)))
+	require.NoError(t, sequencer.Unregister("old-stream"))
+	require.Equal(t, "tail", <-progressed)
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"new-stream"}))
+	require.NoError(t, sequencer.Register(ctx, "new-stream"))
+	require.NoError(t, sequencer.Unregister("new-stream"))
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestNamespaceCDCSequencerBatchesProgressAfterOrderedAppends(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a", "stream-b"}))
+	require.NoError(t, sequencer.Register(ctx, "stream-a"))
+	require.NoError(t, sequencer.Register(ctx, "stream-b"))
+
+	base := time.Now().UTC()
+	progressed := make(chan string, 10)
+	first := sequenceTestRequest("stream-a", "a-first", gocql.MinTimeUUID(base), progressed)
+	latest := sequenceTestRequest("stream-a", "a-latest", gocql.MinTimeUUID(base.Add(time.Millisecond)), progressed)
+	peer := sequenceTestRequest("stream-b", "b-peer", gocql.MinTimeUUID(base.Add(time.Millisecond)), progressed)
+	sequencer.persistFrontier = func(context.Context, gocql.UUID) error {
+		progressed <- "frontier"
+		return nil
+	}
+
+	require.NoError(t, sequencer.Submit(ctx, first))
+	require.NoError(t, sequencer.Submit(ctx, latest))
+	require.NoError(t, sequencer.Submit(ctx, peer))
+	require.NoError(t, sequencer.Unregister("stream-a"))
+	require.NoError(t, sequencer.Unregister("stream-b"))
+
+	assert.ElementsMatch(t, []string{"a-latest", "b-peer"}, []string{<-progressed, <-progressed})
+	assert.Equal(t, "frontier", <-progressed, "global frontier must follow every per-stream checkpoint")
+	select {
+	case unexpected := <-progressed:
+		t.Fatalf("superseded per-stream checkpoint was written: %s", unexpected)
+	case <-time.After(50 * time.Millisecond):
+	}
+	store.mu.Lock()
+	assert.Equal(t, []string{"a-first", "a-latest", "b-peer"}, store.names)
+	store.mu.Unlock()
+}
+
+func TestRetainUnpublishedCDCRequestsClearsDiscardedBackingSlots(t *testing.T) {
+	pending := make([]namespaceCDCSequenceRequest, 3, 4)
+	for index := range pending {
+		pending[index] = namespaceCDCSequenceRequest{
+			streamID:     fmt.Sprintf("stream-%d", index),
+			change:       watchjournal.Change{After: json.RawMessage(`{"retained":true}`)},
+			markProgress: func(context.Context) error { return nil },
+		}
+	}
+	backing := pending[:cap(pending)]
+
+	pending = retainUnpublishedCDCRequests(pending, 2)
+
+	require.Len(t, pending, 1)
+	require.Equal(t, "stream-2", pending[0].streamID)
+	for _, discarded := range backing[1:] {
+		require.Empty(t, discarded.streamID)
+		require.Nil(t, discarded.change.After)
+		require.Nil(t, discarded.markProgress)
+	}
+}
+
+func TestNamespaceCDCSequencerDoesNotPublishFrontierBeforeStreamCheckpoint(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
+	frontierPublished := false
+	sequencer.persistFrontier = func(context.Context, gocql.UUID) error {
+		frontierPublished = true
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-a"}))
+	require.NoError(t, sequencer.Register(ctx, "stream-a"))
+
+	request := sequenceTestRequest("stream-a", "appended", gocql.MinTimeUUID(time.Now().UTC()), make(chan string, 1))
+	request.markProgress = func(context.Context) error { return errors.New("checkpoint failed") }
+	require.NoError(t, sequencer.Submit(ctx, request))
+	require.ErrorContains(t, <-done, "checkpoint failed")
+	assert.False(t, frontierPublished)
+	store.mu.Lock()
+	assert.Equal(t, []string{"appended"}, store.names, "journal append remains safely replayable")
+	store.mu.Unlock()
+}
+
 func TestNamespaceCDCSequencerFailsClosedWhenStreamMovesBackward(t *testing.T) {
 	store := &sequencerStore{}
 	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
@@ -127,6 +237,7 @@ func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t
 	require.Equal(t, "published", <-progressed)
 	require.NoError(t, sequencer.BeginGeneration(ctx, []string{"stream-b"}))
 	require.NoError(t, sequencer.Register(ctx, "stream-b"))
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("stream-b", "later", gocql.MinTimeUUID(base.Add(2*time.Second)), make(chan string, 1))))
 	require.Error(t, sequencer.Submit(ctx, sequenceTestRequest("stream-b", "older", gocql.MinTimeUUID(base), make(chan string, 1))))
 	require.Error(t, <-done)
 

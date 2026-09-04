@@ -33,6 +33,21 @@ and mutation outcomes are inputs and are not reopened.
 **Authentication/Authorization**: Both typed and generic Namespace watches require cluster-scoped `namespace.watch` before cursor parsing, journal reads, or replay. Existing pluggable AuthN/AuthZ providers and decision logging remain the enforcement boundary.  
 **Load/Backpressure Model**: Journal buckets 4,096 events; read batches 256; a bounded 512-event default shared live ring; subscriber channel 64; maximum resume 100,000 events; bounded 30 s delivery backpressure; one 100 ms journal poll per API replica with capped 2 s idle backoff; 30 s durable bookmark; 30 s materializer lease renewed every 10 s; lagging subscribers catch up durably and sustained overflow/retention/discontinuity fail closed.
 
+**Capacity Evidence Policy**: `MODE` separates evidence classification
+from workload selection. Production preserves visibility p95 ≤1 s and p99 ≤3
+s. Alpha permits p95 ≤2 s and p99 ≤3 s for early local-environment readiness,
+warns above the production target, and retains all non-latency gates.
+Diagnostic mode records evidence but cannot pass. The canonical command is
+`make capacity TARGET=<target> PROFILE=<scenario> MODE=<mode>`.
+
+**Latency Attribution**: Purpose-built Prometheus buckets cover GraphQL
+Namespace admission total, Git commit boundary, admission convergence, CDC
+discovery, materializer total/journal append, batch size, and durable
+journal-to-subscriber delivery. Prometheus scrapes the two API replicas and
+exports selected PromQL results into each evidence bundle. Rust marker-lock
+wait and optimistic-reference retry observations use structured tracing fields;
+the removed legacy Axum metrics surface is not restored.
+
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*

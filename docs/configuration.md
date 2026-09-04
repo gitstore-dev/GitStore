@@ -458,7 +458,7 @@ exposed on the existing `/metrics` endpoint as `gitstore_controller_checkpoint_l
 
 All Go services automatically load a `.env` file from the current working directory at startup. The Git service loads `.env` in its binary entrypoint before resolving layered configuration. Shell environment variables always override `.env` values.
 
-For the shared gRPC HMAC secret, `make gen-hmac-secret` writes the same `GITSTORE_AUTH__GRPC__HMAC_SECRET` value to both `gitstore-api/.env` and `gitstore-git-service/.env` so local API and git-service runs stay in sync.
+For the shared gRPC HMAC secret, `make secret TARGET=grpc-hmac` writes the same `GITSTORE_AUTH__GRPC__HMAC_SECRET` value to both `gitstore-api/.env` and `gitstore-git-service/.env` so local API and git-service runs stay in sync. Use `make secret TARGET=jwt` for the API session-signing secret; `make generate` is reserved for generated source and schema artifacts.
 
 Copy the example file and fill in the required values:
 

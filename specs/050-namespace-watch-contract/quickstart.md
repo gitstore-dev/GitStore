@@ -237,11 +237,19 @@ Pass thresholds:
 - retained-memory growth <10%;
 - no normal stream closure after overflow/discontinuity.
 
+These remain the production objectives. Early-alpha local-environment runs use
+`MODE=alpha`, with a provisional hard visibility ceiling of p95 ≤2
+seconds and p99 ≤3 seconds and a warning whenever p95 exceeds the unchanged
+1-second production target. Diagnostic runs never produce passing gate
+evidence. Correctness, error, recovery, CPU, and retained-memory checks remain
+hard in every mode. Require five clean fixed-topology 10-minute repetitions
+before reconsidering either latency policy.
+
 Run offered load through the repository harness and attach sanitized effective
 configuration/environment manifests:
 
 ```bash
-make capacity CAPACITY_PROFILE=namespace-admission \
+make capacity TARGET=namespace PROFILE=admission MODE=alpha \
   CAPACITY_API_A=http://api-a:4000/graphql \
   CAPACITY_API_B=http://api-b:4000/graphql \
   CAPACITY_TOKEN_FILE=/absolute/path/to/token \
@@ -255,7 +263,37 @@ make capacity CAPACITY_PROFILE=namespace-admission \
 
 ### Current gate status
 
-The production capacity gate remains **not passed**. Diagnostic runs found:
+The production capacity gate remains **not passed**. Five fixed-topology
+10-minute **alpha** repetitions passed on 2026-09-04 after the fail-closed CDC
+frontier and retained-batch-memory fixes. Every qualifying bundle records the
+same dirty source-state fingerprint
+`8e6e6b5f9c82489c0e1d1965680027c8cf7e20c17e26ba3ef30a70be05e9aeba`:
+
+| Run | Transitions | Visibility p95 / p99 | Replay p95 | CPU A / B | Retained RSS A / B |
+|---|---:|---:|---:|---:|---:|
+| `alpha-final-01-20260904T0709Z` | 6,900 / 6,900 | 1.438s / 1.638s | 302ms | 3.21% / 2.91% | 5.48% / 5.17% |
+| `alpha-final-02-20260904T0738Z` | 6,900 / 6,900 | 1.600s / 2.100s | 185ms | 3.18% / 2.83% | 6.29% / 3.91% |
+| `alpha-final-03-20260904T0807Z` | 6,899 / 6,899 | 1.529s / 1.985s | 189ms | 2.88% / 3.15% | 4.03% / 0.99% |
+| `alpha-final-05-20260904T0908Z` | 6,899 / 6,899 | 1.493s / 1.897s | 140ms | 3.25% / 3.10% | 2.76% / 4.47% |
+| `alpha-final-06-20260904T0936Z` | 6,899 / 6,899 | 1.506s / 1.953s | 161ms | 3.04% / 2.89% | 5.68% / 5.88% |
+
+All five qualifying runs used 1,000 subscribers and 1,000 replay-preparation
+events, reported zero failures, backpressure, missing acknowledged transitions,
+duplicates, or drain timeouts, and stayed below the alpha CPU/RSS and p95 ≤2s /
+p99 ≤3s limits. A separate preserved attempt,
+`alpha-final-04-20260904T0837Z`, failed retained RSS on API B at 12.20% and is
+not counted. These results satisfy the provisional alpha repetition rule only:
+every qualifying p95 remains above the production 1-second target, and the
+60-minute midpoint-replacement gate was not run.
+
+Earlier diagnostic runs found:
+
+- the best clean 10-minute two-replica/1,000-subscriber stage prepared 1,000
+  replay events in 15.143s, caught the journal up in 630ms, admitted and
+  delivered all 6,899 transitions without failures, backpressure, missing
+  events, or duplicates, and stayed below CPU/RSS limits; visibility was p50
+  655ms, p95 1.448s, and p99 1.908s, so only the production p95 ≤1s assertion
+  failed;
 
 - the former in-process load scheduler dropped 34,481 of 41,899 scheduled
   transitions and admitted only 4,101 of 7,418 attempted transitions;
@@ -393,6 +431,117 @@ Completed:
   checkpoint ownership with the CDC sequencer, removing two redundant fenced
   writes without weakening append-before-progress or published-frontier
   ordering. A fresh production-size rerun remains required;
+- the 2026-09-01 staged rerun used Docker Desktop with 17,775,386,624 bytes,
+  three fresh Scylla 2026.1 nodes at 3,221,225,472 bytes and two shards each,
+  RF=3, two exact-`c3f4f4f` API replicas, and the exact-head release Git
+  service. The 10-minute offered-load diagnostic acknowledged 6,001 Namespace
+  creates at 10/s with zero GraphQL or HTTP errors, zero dropped iterations,
+  mutation p99 71.12 ms, and stable Scylla container verification. Two earlier
+  setup-only attempts were retained as failure evidence (an expired token and
+  base URL supplied where the k6 profile required `/graphql`); neither offered
+  load or mutated the datastore;
+- the following 10-minute/1,000-subscriber diagnostic stopped before opening
+  subscribers or measuring replay. It acknowledged all 10,000 setup creates
+  through both replicas in 6m09.09s, but the journal high-water stalled near
+  11,209, CDC lag continued increasing, and none of the 10,000 run-specific
+  transitions became replay-visible within the separate 15-minute catch-up
+  bound. The terminal error was
+  `WATCH_UNAVAILABLE/MATERIALIZER_NOT_READY`; append errors remained zero and
+  all three Scylla nodes finished running with zero OOM kills or restarts.
+  Post-run durable-state inspection found the published frontier fixed at
+  16:54:42Z and stale-lease termination on both replicas. Lease renewal,
+  journal high-water publication, the global frontier, and per-stream CDC
+  checkpoints all issue LWTs in the same `namespace_watch_clock` partition;
+  catch-up traffic starved the 30-second lease renewal and fenced each leader
+  before the backlog drained.
+  Burst and full replacement stages were not run, so this is failure evidence
+  and not a capacity pass;
+- after batching idempotent journal appends ahead of one checkpoint per stream
+  and one global-frontier publication per CDC batch, a fresh RF=3 rerun
+  acknowledged all 10,000 setup transitions in 3m51.82s and made the complete
+  run-specific journal window replay-visible 748ms later. The subsequent
+  10-minute diagnostic admitted and acknowledged 6,000/6,000 transitions with
+  zero failures, backpressure, missing events, or duplicate deliveries while
+  serving 1,000 subscribers. The materializer retained leadership, reported
+  zero append errors and sub-second leader lag at completion, and all three
+  Scylla containers passed the no-OOM/no-restart stability comparison. This
+  confirms the stale-lease catch-up regression is fixed under the staged
+  workload;
+- that batching-fix diagnostic still failed the independent retained-memory
+  threshold: API A grew 38.06% against the required less-than-10% bound. Burst
+  and full replacement stages were therefore not run. This remains partial
+  failure evidence rather than a production capacity pass;
+- follow-up runtime metrics showed that API A's RSS fell from 158.1 MB at the
+  immediate post-load sample to 83.6 MB in the same process, with 22.2 MB of
+  live Go heap, 102.3 MB released to the operating system, zero restarts, and
+  zero OOM kills. The deployment harness now measures retained memory as the
+  lowest RSS from a bounded five-minute post-load stabilization window while
+  preserving the immediate load-end CPU counter and elapsed time; focused
+  tests cover the RSS floor, allow sub-second process-start collector jitter,
+  and reject real process identity changes. CPU/RSS evidence is asserted before
+  fail-fast latency checks so independent gate results are not lost;
+- a fresh-keyspace validation of that harness change again acknowledged all
+  10,000 setup transitions (4m20.64s) and caught the durable journal up in
+  641ms, but failed independent load gates before its memory assertion: 78 of
+  5,998 mutation attempts failed and visibility p95 was 2.714s. API logs tied
+  the failures to a transient Scylla quorum loss (`SERIAL` required two live
+  replicas but observed one); all three containers retained zero restarts and
+  OOM kills and later reported Up/Normal. This is datastore-environment failure
+  evidence, so burst and full replacement stages remain blocked;
+- the transient quorum loss was simultaneous across all three nodes: each
+  gossip failure detector marked both peers down for roughly 0.1-1.4 seconds,
+  then restored them without a container restart. The supposedly fresh-keyspace
+  run had reused Scylla volumes and was concurrently performing tablet cleanup
+  for the previous keyspace, with roughly 8.5 GiB block I/O per node. Repeating
+  on empty volumes removed the quorum failure and passed the 10-minute
+  functional workload: 5,999/5,999 acknowledged, zero errors/backpressure/
+  missing/duplicates, visibility p95 841ms and p99 936ms, replay p95 2.302s,
+  sub-second CDC lag, and zero append errors. Metrics were skipped in that
+  repetition because exact floating-point process-start comparison rejected
+  collector jitter, which the harness now tolerates;
+- a required-metrics empty-volume repetition passed 6,000/6,000 functional
+  transitions with zero errors or backpressure but proved two minutes was too
+  short for Go scavenging: API A reported 47.18% RSS growth at the assertion,
+  then fell from 161.1 MB to 95.6 MB without restart one additional idle minute
+  later as released heap rose to 70.3 MB. The stabilization bound is therefore
+  five minutes. A following empty-volume repetition was not a stage pass: it
+  acknowledged 5,837/5,837 attempted mutations with zero mutation errors but
+  backpressured 163 of 6,000 produced transitions and measured 1.705s visibility
+  p95. Scylla again had zero OOM kills or restarts. Stage 2 is not yet
+  repeatably passing, so burst and full replacement stages remain blocked;
+- a later full-duration attempt is retained as invalid environment evidence:
+  only 116 MiB remained on the Docker disk, 6,598 of 41,897 produced
+  transitions were backpressured, and 1,277 mutation attempts failed. Its API
+  A replacement-memory comparison also used the replacement process's
+  immediate ready-state RSS instead of the warmed pre-load baseline, producing
+  a false 208% growth result. The harness now applies the same warmed baseline
+  to both process segments and has focused coverage for that calculation;
+- cross-replica GraphQL writes then exposed two independent Git ordering
+  defects. Namespace admission treated every intervening disjoint manifest
+  commit as superseding the requested commit, and `CommitFile` relied only on
+  a process-local repository lock. Admission now accepts a newer head when the
+  target path still contains the committed bytes. The Git service now holds a
+  repository-local marker lock across `CommitFile` so separate processes
+  sharing a bare repository cannot lose sibling updates, and it retries
+  bounded optimistic-reference conflicts from writers outside that convention
+  after reopening at the latest head. A two-service-instance regression test,
+  stress-repeated ten times, verifies that all concurrent disjoint files
+  survive. Successful per-RPC authorization logging was moved to debug to keep
+  the storage hot path bounded;
+- after reclaiming the failed-run data and recreating all three Scylla volumes
+  plus the Git directory, a 10-minute/1,000-subscriber required-metrics stage
+  prepared 1,000 replay transitions in 15.14s and caught the journal up in
+  630ms. It admitted and acknowledged 6,899/6,899 loaded transitions with zero
+  errors, backpressure, missing events, duplicate delivery, or drain timeout.
+  Normalized CPU was 4.40%/3.39% and retained RSS growth after five minutes of
+  stabilization was 4.86%/3.87%. The stage still failed only the visibility
+  SLO: p50 655ms, p95 1.448s, p99 1.908s, maximum 2.406s. Per-endpoint
+  diagnostics subsequently showed comparable latency on A and B, ruling out a
+  single slow subscriber tailer. Server delivery histograms place more than
+  95% of journal-to-subscriber deliveries below one second, so the remaining
+  tail is before journal append in the Scylla admission/CDC path. Experiments
+  with a 250ms CDC confidence window and parallel independent Paxos
+  reservations did not satisfy p95 and were not retained;
 - the full replacement 60-minute/1,000-subscriber deployed gate remains
   pending and T061 is intentionally open until its emitted metrics are recorded
   here;
@@ -412,13 +561,13 @@ NAMESPACE_WATCH_API_B=http://127.0.0.1:4101 \
 NAMESPACE_WATCH_API_REPLACEMENT=http://127.0.0.1:4100 \
 NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=/private/tmp/gitstore-watch-smoke-replace \
 NAMESPACE_WATCH_TOKEN="$TOKEN" \
-  make test-namespace-watch-recovery
+  make capacity TARGET=namespace PROFILE=recovery MODE=diagnostic
 NAMESPACE_WATCH_API_A=http://127.0.0.1:4100 \
 NAMESPACE_WATCH_API_B=http://127.0.0.1:4101 \
 NAMESPACE_WATCH_API_REPLACEMENT=http://127.0.0.1:4100 \
 NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=/private/tmp/gitstore-watch-capacity-smoke-replace \
 NAMESPACE_WATCH_TOKEN="$TOKEN" \
-  make test-namespace-watch-capacity \
+  make capacity TARGET=namespace PROFILE=watch MODE=diagnostic \
     NAMESPACE_WATCH_CAPACITY_DURATION=12s \
     NAMESPACE_WATCH_CAPACITY_SUBSCRIBERS=20 \
     NAMESPACE_WATCH_CAPACITY_REPLAY_EVENTS=50 \
@@ -447,5 +596,5 @@ NAMESPACE_WATCH_API_REPLACEMENT=http://api-a:4000 \
 NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=/var/run/gitstore/watch-capacity-replace \
 NAMESPACE_WATCH_TOKEN="$TOKEN" \
 NAMESPACE_WATCH_CAPACITY_REPLAY_CATCHUP_TIMEOUT=15m \
-  make test-namespace-watch-capacity
+  make capacity TARGET=namespace PROFILE=watch MODE=production
 ```

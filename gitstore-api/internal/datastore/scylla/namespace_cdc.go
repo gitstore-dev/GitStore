@@ -27,6 +27,11 @@ const namespaceCDCPublishedFrontierProgress = "__namespace_cdc_published_frontie
 
 const namespaceCDCPendingLimit = 100000
 
+// Coalesce records briefly enough to amortize Scylla's conditional journal
+// publication without consuming a material portion of the one-second
+// visibility SLO.
+const namespaceCDCFlushInterval = 25 * time.Millisecond
+
 // RunNamespaceCDC consumes only the authoritative namespaces_by_uid CDC log.
 // The caller owns lease renewal and cancels ctx immediately on fencing loss.
 func (s *scyllaDatastore) RunNamespaceCDC(ctx context.Context, materializer *watchjournal.Materializer, lease datastore.NamespaceWatchLease, changeAgeLimit, confidenceWindow time.Duration, ready func()) error {
@@ -355,7 +360,7 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 	registered := make(map[string]struct{})
 	generationPrepared := false
 	registrationComplete := false
-	ticker := time.NewTicker(25 * time.Millisecond)
+	ticker := time.NewTicker(namespaceCDCFlushInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -441,6 +446,14 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 				}
 			}
 			message.result <- nil
+			if message.kind != namespaceCDCUnregister {
+				// CDC consumers only wait for ordered admission into pending work.
+				// Flush on the bounded ticker so burst arrivals share the store's
+				// conditional event batch instead of degenerating to one LWT pair
+				// per message. Stream shutdown is the exception: drain its pending
+				// tail before the reader begins the next tablet generation.
+				continue
+			}
 		case <-ticker.C:
 		}
 
@@ -453,6 +466,9 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 		}
 		sort.SliceStable(pending, func(i, j int) bool { return namespaceCDCSequenceLess(pending[i], pending[j]) })
 		published := 0
+		latestProgress := make(map[string]namespaceCDCSequenceRequest, len(active))
+		changes := make([]watchjournal.Change, 0, len(pending))
+		var batchFrontier gocql.UUID
 		for published < len(pending) {
 			request := pending[published]
 			if len(active) > 0 && scyllacdc.CompareTimeUUID(request.cdcTime, frontier) > 0 {
@@ -463,27 +479,55 @@ func (s *namespaceCDCSequencer) Run(ctx context.Context) error {
 			if request.shouldPublish != nil {
 				publish, err = request.shouldPublish(ctx)
 			}
-			if err == nil && publish && !request.progressOnly {
-				_, err = s.materializer.Materialize(ctx, s.lease, request.change)
-			}
-			if err == nil && s.persistFrontier != nil {
-				err = s.persistFrontier(ctx, request.cdcTime)
-			}
-			if err == nil {
-				err = request.markProgress(ctx)
-			}
 			if err != nil {
 				return err
 			}
-			publishedThrough = request.cdcTime
-			hasPublished = true
+			if publish && !request.progressOnly {
+				changes = append(changes, request.change)
+			}
+			latestProgress[request.streamID] = request
+			batchFrontier = request.cdcTime
 			published++
 		}
 		if published > 0 {
-			copy(pending, pending[published:])
-			pending = pending[:len(pending)-published]
+			if _, err := s.materializer.MaterializeBatch(ctx, s.lease, changes); err != nil {
+				return err
+			}
+			// Journal appends are idempotent by CDC position, so a crash before
+			// these checkpoints safely replays the batch. Advance each stream only
+			// to its latest materialized position, then publish the global frontier
+			// once every source checkpoint is durable. This removes two hot-partition
+			// LWTs per event without allowing readiness to move ahead of a stream.
+			for index := 0; index < published; index++ {
+				request := pending[index]
+				latest := latestProgress[request.streamID]
+				if request.arrivalNumber != latest.arrivalNumber {
+					continue
+				}
+				if err := request.markProgress(ctx); err != nil {
+					return err
+				}
+			}
+			if s.persistFrontier != nil {
+				if err := s.persistFrontier(ctx, batchFrontier); err != nil {
+					return err
+				}
+			}
+			publishedThrough = batchFrontier
+			hasPublished = true
+			pending = retainUnpublishedCDCRequests(pending, published)
 		}
 	}
+}
+
+func retainUnpublishedCDCRequests(pending []namespaceCDCSequenceRequest, published int) []namespaceCDCSequenceRequest {
+	remaining := len(pending) - published
+	copy(pending[:remaining], pending[published:])
+	// The GC scans the backing array, not only the live slice prefix. Clear the
+	// discarded requests so their Namespace payloads and callback closures do
+	// not remain retained at the leader's peak pending capacity.
+	clear(pending[remaining:])
+	return pending[:remaining]
 }
 
 // namespaceCDCAdditionReady protects direct additions from an older binary

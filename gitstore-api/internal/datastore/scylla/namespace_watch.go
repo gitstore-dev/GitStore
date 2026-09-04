@@ -12,6 +12,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gocql/gocql"
+	"github.com/scylladb/gocqlx/v3"
 )
 
 const (
@@ -303,6 +304,87 @@ func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceW
 		return candidate, nil
 	}
 	return datastore.NamespaceWatchEvent{}, fmt.Errorf("scylla: append Namespace journal event: contention limit reached")
+}
+
+// AppendBatch amortizes the two journal LWTs across each ordered group that
+// fits in one event bucket. The conditional event batch remains fenced against
+// a stale leader; the clock CAS publishes the entire contiguous range only
+// after every row is durable. Any ambiguous/contended path falls back to the
+// single-event recovery logic, which is idempotent by deduplication key.
+func (s *scyllaDatastore) AppendBatch(ctx context.Context, lease datastore.NamespaceWatchLease, events []datastore.NamespaceWatchEvent, ttl time.Duration) ([]datastore.NamespaceWatchEvent, error) {
+	appended := make([]datastore.NamespaceWatchEvent, 0, len(events))
+	for len(events) > 0 {
+		clock, err := s.loadNamespaceWatchClock(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !namespaceWatchLeaseMatches(clock, lease, time.Now()) {
+			return nil, datastore.ErrStaleWatchLease
+		}
+		first := clock.HighWater + 1
+		bucket := namespaceWatchBucket(uint64(first), s.namespaceWatchBucketSize)
+		count := 0
+		for count < len(events) && namespaceWatchBucket(uint64(first+int64(count)), s.namespaceWatchBucketSize) == bucket {
+			count++
+		}
+		chunk := events[:count]
+		batch, candidates, ttlSeconds := s.namespaceWatchEventBatch(clock, lease, bucket, chunk, ttl)
+		batch.Batch = batch.Batch.WithContext(ctx)
+		applied, iter, batchErr := s.session.MapExecuteBatchCAS(batch, make(map[string]any))
+		if iter != nil {
+			if closeErr := iter.Close(); batchErr == nil {
+				batchErr = closeErr
+			}
+		}
+		if batchErr == nil && applied {
+			last := first + int64(count) - 1
+			published, publishErr := s.publishNamespaceWatchSequence(ctx, clock, lease, last, candidates[len(candidates)-1].Type, candidates[len(candidates)-1].At)
+			if publishErr == nil && published {
+				if first == 1 {
+					_ = s.session.Query("UPDATE namespace_watch_clock SET oldest=? WHERE journal=?", nil).
+						WithContext(ctx).Bind(int64(1), namespaceWatchJournalName).ExecRelease()
+				}
+				appended = append(appended, candidates...)
+				events = events[count:]
+				continue
+			}
+		}
+		// The conditional batch is atomic. If it was already present, or if
+		// publishing its range was ambiguous, the established per-event path
+		// identifies matching rows and advances the clock without gaps.
+		for _, event := range chunk {
+			result, appendErr := s.Append(ctx, lease, event, time.Duration(ttlSeconds)*time.Second)
+			if appendErr != nil {
+				if batchErr != nil {
+					return nil, fmt.Errorf("scylla: batch append failed (%v), recovery failed: %w", batchErr, appendErr)
+				}
+				return nil, appendErr
+			}
+			appended = append(appended, result)
+		}
+		events = events[count:]
+	}
+	return appended, nil
+}
+
+func (s *scyllaDatastore) namespaceWatchEventBatch(clock namespaceWatchClockRow, lease datastore.NamespaceWatchLease, bucket int64, events []datastore.NamespaceWatchEvent, ttl time.Duration) (*gocqlx.Batch, []datastore.NamespaceWatchEvent, int) {
+	ttlSeconds := max(1, int(ttl/time.Second))
+	batch := s.session.Batch(gocql.LoggedBatch)
+	candidates := make([]datastore.NamespaceWatchEvent, 0, len(events))
+	for index, event := range events {
+		if event.At.IsZero() {
+			event.At = time.Now().UTC()
+		}
+		event.Epoch = clock.Epoch.String()
+		event.Sequence = uint64(clock.HighWater + 1 + int64(index))
+		event.FencingToken = lease.FencingToken
+		batch.Entries = append(batch.Entries, gocql.BatchEntry{
+			Stmt: "INSERT INTO namespace_watch_events (epoch,bucket,sequence,event_type,name,payload,labels,previous_labels,deduplication_key,fencing_token,event_timestamp) VALUES (?,?,?,?,?,?,?,?,?,?,?) IF NOT EXISTS USING TTL ?",
+			Args: []any{clock.Epoch, bucket, int64(event.Sequence), string(event.Type), event.Name, string(event.Payload), event.SelectorLabels, event.PreviousSelectorLabels, event.DeduplicationKey, int64(lease.FencingToken), event.At, ttlSeconds},
+		})
+		candidates = append(candidates, event)
+	}
+	return batch, candidates, ttlSeconds
 }
 
 func (s *scyllaDatastore) publishNamespaceWatchSequence(ctx context.Context, clock namespaceWatchClockRow, lease datastore.NamespaceWatchLease, next int64, eventType datastore.NamespaceWatchEventType, at time.Time) (bool, error) {

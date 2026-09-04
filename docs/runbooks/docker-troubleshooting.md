@@ -60,7 +60,7 @@ Repositories are created through the API, not by manually placing a default repo
 Create the default namespace and repository:
 
 ```bash
-make bootstrap ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
 ```
 
 The command prints a clone URL:
@@ -72,8 +72,8 @@ http://localhost:9000/gitstore-test/catalog.git
 If bootstrap fails, get a token explicitly:
 
 ```bash
-make bootstrap-token ADMIN_PASSWORD=<admin-password>
-make bootstrap BOOTSTRAP_TOKEN=<token>
+make bootstrap TARGET=token ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all BOOTSTRAP_TOKEN=<token>
 ```
 
 ## Volume Debugging
@@ -115,7 +115,7 @@ query Repository {
 With `make compose`, first validate the shared fixture and resolved mounts:
 
 ```bash
-make validate-local-config
+make check TARGET=config
 CONFIG_FILE=./config/config.toml docker compose --profile local \
   -f compose.yml -f compose.local.yml config
 ```
@@ -224,5 +224,5 @@ Start again:
 
 ```bash
 make compose DETACH=1
-make bootstrap ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
 ```
