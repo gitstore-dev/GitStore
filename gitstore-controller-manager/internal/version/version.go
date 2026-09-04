@@ -7,4 +7,4 @@ package version
 
 // Version is the resolved release version, kept in sync by release-please's
 // generic extra-files marker mechanism.
-const Version = "0.1.0-alpha.2" // x-release-please-version
+const Version = "0.1.0-alpha.3" // x-release-please-version
