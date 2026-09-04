@@ -109,20 +109,30 @@ for index in "${!api_endpoints[@]}"; do
     echo "live API endpoint does not expose process_start_time_seconds: ${endpoint}" >&2
     exit 1
   }
+  instance_id="$(sed -n 's/^gitstore_api_process_instance_info{instance_id="\([^"]*\)"} [01]$/\1/p' <<<"${metrics}" | head -1)"
+  [[ -n "${instance_id}" ]] || {
+    echo "live API endpoint does not expose gitstore_api_process_instance_info: ${endpoint}" >&2
+    exit 1
+  }
   container_metrics="$(docker exec "${container}" wget -qO- http://127.0.0.1:4000/metrics)" || {
     echo "cannot scrape API metrics inside container: ${container}" >&2
     exit 1
   }
   container_start="$(awk '$1 == "process_start_time_seconds" { print $2; exit }' <<<"${container_metrics}")"
-  [[ "${process_start}" == "${container_start}" ]] || {
+  container_instance="$(sed -n 's/^gitstore_api_process_instance_info{instance_id="\([^"]*\)"} [01]$/\1/p' <<<"${container_metrics}" | head -1)"
+  [[ "${process_start}" == "${container_start}" && "${instance_id}" == "${container_instance}" ]] || {
     echo "API endpoint ${endpoint} does not map to container ${container}" >&2
     exit 1
   }
   container_id="$(jq -r --arg name "${container}" '.[] | select(.name == $name) | .id' <<<"${container_json}")"
   identity_json="$(jq -c --arg endpoint "${endpoint%/}" --arg process_start "${process_start}" \
-    --arg container "${container}" --arg container_id "${container_id}" \
-    '. + [{endpoint:$endpoint,container:$container,containerID:$container_id,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${identity_json}")"
+    --arg instance_id "${instance_id}" --arg container "${container}" --arg container_id "${container_id}" \
+    '. + [{endpoint:$endpoint,instanceID:$instance_id,container:$container,containerID:$container_id,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${identity_json}")"
 done
+[[ "$(jq '[.[].instanceID] | unique | length' <<<"${identity_json}")" == "${config_replicas}" ]] || {
+  echo "CAPACITY_API_ENDPOINTS must identify distinct live API process instances" >&2
+  exit 1
+}
 base_url="${CAPACITY_BASE_URL%/}"
 jq -e --arg base_url "${base_url}" '([.[].endpoint] | index($base_url)) != null' <<<"${identity_json}" >/dev/null || {
   echo "CAPACITY_BASE_URL must identify one of the verified CAPACITY_API_ENDPOINTS" >&2

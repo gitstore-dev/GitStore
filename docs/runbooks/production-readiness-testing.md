@@ -247,9 +247,10 @@ at least two declared API replicas, a release API build, and explicit replica
 and host-memory values matching those manifests. Provide every replica in
 `CAPACITY_API_ENDPOINTS` and its corresponding running container in the same
 position in `CAPACITY_API_CONTAINERS`. Preflight requires unique container IDs
-and matches each external `/metrics` process start time to the internal
-container scrape. Legitimate same-tick process starts therefore remain valid,
-while aliases of one endpoint cannot satisfy the topology. The workload
+and matches each external `/metrics` `gitstore_api_process_instance_info` UUID
+to the internal container scrape. Start time remains the replacement signal;
+legitimate same-tick starts remain valid while aliases cannot satisfy the
+topology. The workload
 `CAPACITY_BASE_URL` must be one of those verified endpoints, and every live API
 container must have a digest-pinned image, `/app/api` executable, and OCI
 revision matching the tested checkout.
@@ -265,7 +266,8 @@ crash window without admitting unseen records behind the ordered frontier.
 Namespace watch and recovery runs must also provide every declared API replica
 in `CAPACITY_API_ENDPOINTS`. Preflight scrapes and retains each process start
 time, maps each endpoint to the corresponding unique container ID, and requires
-the two watch endpoints to belong to that verified live set.
+the endpoint-exposed process-instance UUID to match the internal container
+scrape. The two watch endpoints must belong to that verified live set.
 Set `CAPACITY_API_CONTAINERS` and `CAPACITY_GIT_SERVICE_CONTAINER` to the
 corresponding running containers. Preflight rejects mutable image tags,
 requires OCI revision labels matching the tested Git checkout and the release

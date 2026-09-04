@@ -41,7 +41,7 @@ require_declared_integer() {
 live_api_replicas='[]'
 release_service_containers='[]'
 validate_api_deployment() {
-  local expected_replicas="$1" endpoint metrics process_start
+  local expected_replicas="$1" endpoint metrics process_start instance_id
   [[ -n "${CAPACITY_API_ENDPOINTS:-}" ]] || {
     echo "${target}/${profile} evidence requires CAPACITY_API_ENDPOINTS" >&2
     exit 2
@@ -62,14 +62,23 @@ validate_api_deployment() {
       echo "live API endpoint does not expose process_start_time_seconds: ${endpoint}" >&2
       exit 1
     }
-    live_api_replicas="$(jq -c --arg endpoint "${endpoint%/}" --arg process_start "${process_start}" \
-      '. + [{endpoint:$endpoint,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${live_api_replicas}")"
+    instance_id="$(sed -n 's/^gitstore_api_process_instance_info{instance_id="\([^"]*\)"} [01]$/\1/p' <<<"${metrics}" | head -1)"
+    [[ -n "${instance_id}" ]] || {
+      echo "live API endpoint does not expose gitstore_api_process_instance_info: ${endpoint}" >&2
+      exit 1
+    }
+    live_api_replicas="$(jq -c --arg endpoint "${endpoint%/}" --arg process_start "${process_start}" --arg instance_id "${instance_id}" \
+      '. + [{endpoint:$endpoint,instanceID:$instance_id,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${live_api_replicas}")"
   done
+  [[ "$(jq '[.[].instanceID] | unique | length' <<<"${live_api_replicas}")" == "${expected_replicas}" ]] || {
+    echo "CAPACITY_API_ENDPOINTS must identify distinct live API process instances" >&2
+    exit 1
+  }
 }
 
 validate_release_service_containers() {
-  local expected_replicas="$1" source_revision inspection api_names_json container metrics process_start
-  local endpoint_start container_start container_id index
+  local expected_replicas="$1" source_revision inspection api_names_json container metrics process_start instance_id
+  local endpoint_start endpoint_instance container_start container_instance container_id index
   [[ -n "${CAPACITY_API_CONTAINERS:-}" && -n "${CAPACITY_GIT_SERVICE_CONTAINER:-}" ]] || {
     echo "${target}/${profile} evidence requires CAPACITY_API_CONTAINERS and CAPACITY_GIT_SERVICE_CONTAINER" >&2
     exit 2
@@ -132,13 +141,20 @@ validate_release_service_containers() {
       echo "API container does not expose process_start_time_seconds: ${container}" >&2
       exit 1
     }
-    container_identities="$(jq -c --arg name "${container}" --arg process_start "${process_start}" \
-      '. + [{name:$name,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${container_identities}")"
+    instance_id="$(sed -n 's/^gitstore_api_process_instance_info{instance_id="\([^"]*\)"} [01]$/\1/p' <<<"${metrics}" | head -1)"
+    [[ -n "${instance_id}" ]] || {
+      echo "API container does not expose gitstore_api_process_instance_info: ${container}" >&2
+      exit 1
+    }
+    container_identities="$(jq -c --arg name "${container}" --arg process_start "${process_start}" --arg instance_id "${instance_id}" \
+      '. + [{name:$name,instanceID:$instance_id,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${container_identities}")"
   done
   for index in "${!api_containers[@]}"; do
     endpoint_start="$(jq -r --argjson index "${index}" '.[$index].processStartTimeSeconds' <<<"${live_api_replicas}")"
+    endpoint_instance="$(jq -r --argjson index "${index}" '.[$index].instanceID' <<<"${live_api_replicas}")"
     container_start="$(jq -r --argjson index "${index}" '.[$index].processStartTimeSeconds' <<<"${container_identities}")"
-    [[ "${endpoint_start}" == "${container_start}" ]] || {
+    container_instance="$(jq -r --argjson index "${index}" '.[$index].instanceID' <<<"${container_identities}")"
+    [[ "${endpoint_start}" == "${container_start}" && "${endpoint_instance}" == "${container_instance}" ]] || {
       echo "API endpoint ${api_endpoints[$index]} does not map to container ${api_containers[$index]}" >&2
       exit 1
     }
@@ -147,7 +163,7 @@ validate_release_service_containers() {
       '.[$index] += {container:$container,containerID:$id}' <<<"${live_api_replicas}")"
   done
   release_service_containers="$(jq -c --argjson identities "${container_identities}" '
-    map(if .role == "api" then . as $service | . + {processStartTimeSeconds:($identities[] | select(.name == $service.name) | .processStartTimeSeconds)} else . end)
+    map(if .role == "api" then . as $service | . + ($identities[] | select(.name == $service.name) | {instanceID,processStartTimeSeconds}) else . end)
   ' <<<"${release_service_containers}")"
 }
 

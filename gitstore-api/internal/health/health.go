@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
@@ -48,6 +49,7 @@ type Handler struct {
 	startTime           time.Time
 	clock               apiruntime.Clock
 	namespaceWatchReady func(context.Context) error
+	metricsHandler      http.Handler
 }
 
 // HandlerDeps contains dependencies for Handler.
@@ -57,6 +59,7 @@ type HandlerDeps struct {
 	Version             string
 	Clock               apiruntime.Clock
 	NamespaceWatchReady func(context.Context) error
+	InstanceID          string
 }
 
 // NewHandler creates a new health check handler
@@ -69,6 +72,18 @@ func NewHandler(deps HandlerDeps) *Handler {
 	if clock == nil {
 		clock = apiruntime.SystemClock{}
 	}
+	metricsHandler := promhttp.Handler()
+	if deps.InstanceID != "" {
+		instanceRegistry := prometheus.NewRegistry()
+		instanceRegistry.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "gitstore_api_process_instance_info",
+			Help: "Static identity of this GitStore API process.",
+			ConstLabels: prometheus.Labels{
+				"instance_id": deps.InstanceID,
+			},
+		}, func() float64 { return 1 }))
+		metricsHandler = promhttp.HandlerFor(prometheus.Gatherers{prometheus.DefaultGatherer, instanceRegistry}, promhttp.HandlerOpts{})
+	}
 	return &Handler{
 		store:               deps.Store,
 		logger:              logger,
@@ -76,6 +91,7 @@ func NewHandler(deps HandlerDeps) *Handler {
 		startTime:           clock.Now(),
 		clock:               clock,
 		namespaceWatchReady: deps.NamespaceWatchReady,
+		metricsHandler:      metricsHandler,
 	}
 }
 
@@ -192,7 +208,7 @@ func (h *Handler) checkDatastore(ctx context.Context) Check {
 // Metrics serves the Prometheus metrics endpoint using the default registry.
 // All instrumented components (datastore, gRPC client, auth outcomes) are included.
 func (h *Handler) Metrics(c *gin.Context) {
-	promhttp.Handler().ServeHTTP(c.Writer, c.Request)
+	h.metricsHandler.ServeHTTP(c.Writer, c.Request)
 }
 
 func (h *Handler) checkUptime() Check {

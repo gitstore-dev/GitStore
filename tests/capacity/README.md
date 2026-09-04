@@ -61,7 +61,8 @@ before/after container-health evidence above.
 Non-diagnostic `watch` and `recovery` runs also require
 `CAPACITY_API_ENDPOINTS` containing every declared replica. Preflight retains
 each endpoint's `process_start_time_seconds`, maps it positionally to the
-corresponding unique container ID in `CAPACITY_API_CONTAINERS`, and requires `NAMESPACE_WATCH_API_A` and
+corresponding unique container ID and `gitstore_api_process_instance_info`
+UUID in `CAPACITY_API_CONTAINERS`, and requires `NAMESPACE_WATCH_API_A` and
 `NAMESPACE_WATCH_API_B` to be members of that verified set.
 Provide the matching running containers in `CAPACITY_API_CONTAINERS` and
 `CAPACITY_GIT_SERVICE_CONTAINER`. Preflight requires digest-pinned images with
@@ -79,8 +80,9 @@ Non-diagnostic API readiness also requires both manifests plus
 `CAPACITY_API_ENDPOINTS` containing every replica. Provide the corresponding
 containers in the same order through `CAPACITY_API_CONTAINERS`. The preflight
 requires unique live container IDs and matches every external endpoint to its
-container's internal `process_start_time_seconds`, so timestamp collisions
-between legitimately concurrent starts are safe while endpoint aliases fail.
+container's collision-safe process-instance UUID. Process start time remains
+available for replacement proof, while endpoint aliases fail even when
+legitimate replicas start in the same kernel tick.
 `CAPACITY_BASE_URL` must be one of those verified endpoints. Every live
 container must also use a digest-pinned image, the `/app/api` release
 executable, and an OCI revision matching the tested checkout.

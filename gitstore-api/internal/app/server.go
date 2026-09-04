@@ -126,6 +126,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, fmt.Errorf("app: logger is required")
 	}
 	clock := apiruntime.SystemClock{}
+	instanceID := uuid.NewString()
 
 	rawStore, err := dsfactory.NewDatastore(cfg.Datastore, log, cfg.Watch.Namespace)
 	if err != nil {
@@ -156,7 +157,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 			}),
 			leaseManager: watchjournal.NewLeaseManager(
 				journal,
-				uuid.NewString(),
+				instanceID,
 				time.Duration(cfg.Watch.Namespace.LeaseTTLSeconds)*time.Second,
 				time.Duration(cfg.Watch.Namespace.LeaseRenewIntervalSeconds)*time.Second,
 				clock,
@@ -231,7 +232,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, err
 	}
 
-	router := healthHandler(gqlRouter, store, log, clock, namespaceWatch)
+	router := healthHandler(gqlRouter, store, log, clock, namespaceWatch, instanceID)
 	var graphQlHandler http.Handler = router
 
 	httpServer := &http.Server{
@@ -480,7 +481,7 @@ func playgroundHandler(c *gin.Context) {
 	h.ServeHTTP(c.Writer, c.Request)
 }
 
-func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock, namespaceWatch *namespaceWatchRuntime) *gin.Engine {
+func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock, namespaceWatch *namespaceWatchRuntime, instanceID string) *gin.Engine {
 	var namespaceWatchReady func(context.Context) error
 	if namespaceWatch != nil {
 		namespaceWatchReady = func(ctx context.Context) error {
@@ -493,6 +494,7 @@ func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logge
 		Version:             version,
 		Clock:               clock,
 		NamespaceWatchReady: namespaceWatchReady,
+		InstanceID:          instanceID,
 	})
 
 	router.GET("/health", healthHandler.Health)
