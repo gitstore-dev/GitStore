@@ -33,6 +33,14 @@ func loadPolicy(path string) (*Policy, error) {
 	return parsePolicy(path, data)
 }
 
+// ValidatePolicyFile parses and validates a local RBAC policy without starting
+// the provider. It is used by repository tooling to fail fast on bad policy
+// configuration.
+func ValidatePolicyFile(path string) error {
+	_, err := loadPolicy(path)
+	return err
+}
+
 func parsePolicy(path string, data []byte) (*Policy, error) {
 	var p Policy
 	if err := yaml.Unmarshal(data, &p); err != nil {

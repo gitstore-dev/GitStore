@@ -164,6 +164,9 @@ help: ## Show available targets and common variables.
 	@printf "  CAPACITY_OBSERVABILITY=%s  Optional capacity metrics collector: none or prometheus\n" "$(CAPACITY_OBSERVABILITY)"
 	@printf "  CAPACITY_PROMETHEUS_URL=<url> Export phase queries into the evidence bundle\n"
 	@printf "  CAPACITY_PROMETHEUS_TARGETS=%s  Scrape endpoints reachable from Prometheus\n" "$(CAPACITY_PROMETHEUS_TARGETS)"
+	@printf "  CAPACITY_API_ENDPOINTS=<urls>  Comma-separated live API replica endpoints\n"
+	@printf "  CAPACITY_API_CONTAINERS=<names>  Matching digest-pinned API containers\n"
+	@printf "  CAPACITY_GIT_SERVICE_CONTAINER=<name>  Digest-pinned Git-service container\n"
 	@printf "  CHAOS_PROFILE=%s           Reusable Pumba fault profile\n" "$(CHAOS_PROFILE)"
 	@printf "  CHAOS_TARGET=<name>        Explicit GitStore container targeted by chaos\n"
 	@printf "  NAMESPACE_WATCH_API_A=%s NAMESPACE_WATCH_API_B=%s\n" "$(NAMESPACE_WATCH_API_A)" "$(NAMESPACE_WATCH_API_B)"
@@ -350,6 +353,10 @@ _check-local-config:
 	@test -r "$(CONFIG_FILE)" || { echo "CONFIG_FILE is not readable: $(CONFIG_FILE)"; exit 2; }
 	@test -f "$(POLICY_FILE)" || { echo "Local RBAC policy does not exist: $(POLICY_FILE)"; exit 2; }
 	@test -r "$(POLICY_FILE)" || { echo "Local RBAC policy is not readable: $(POLICY_FILE)"; exit 2; }
+	@cd "$(API_DIR)" && \
+		GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$${GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY:-config-validation-placeholder}" \
+		go run ./cmd/gitctl validate-local-config \
+			--config-file "$(abspath $(CONFIG_FILE))" --policy-file "$(abspath $(POLICY_FILE))"
 
 _check-compose-config: _check-local-config
 	@CONFIG_FILE="$(abspath $(CONFIG_FILE))" ./scripts/check-local-compose-config.sh

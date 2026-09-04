@@ -63,6 +63,11 @@ Non-diagnostic `watch` and `recovery` runs also require
 each endpoint's `process_start_time_seconds`, requires distinct live process
 identities, and requires `NAMESPACE_WATCH_API_A` and
 `NAMESPACE_WATCH_API_B` to be members of that verified set.
+Provide the matching running containers in `CAPACITY_API_CONTAINERS` and
+`CAPACITY_GIT_SERVICE_CONTAINER`. Preflight requires digest-pinned images with
+an OCI revision label matching the tested checkout, verifies the expected
+release executables, and maps the endpoint process identities back to the
+inspected API containers.
 Recovery also requires `NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE`. The external
 harness must replace the selected endpoint when that file appears; the probe
 requires an observed outage, a changed `process_start_time_seconds`, and

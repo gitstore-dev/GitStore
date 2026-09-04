@@ -72,9 +72,17 @@ done
 
 mkdir -p "${test_dir}/evidence"
 printf '#!/usr/bin/env bash\necho "mock capacity command: $*"\n[[ "${FAIL_MAKE:-0}" != "1" ]]\n' >"${test_dir}/bin/make"
-printf '#!/usr/bin/env bash\nif [[ "$1" == exec ]]; then if [[ "${MOCK_SCYLLA_BAD_MEMBERSHIP:-0}" == 1 ]]; then printf "UN node-1\\n"; else printf "UN node-1\\nUN node-2\\nUN node-3\\n"; fi; exit 0; fi\nprintf '\''[{"Name":"/scylla-1","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}},{"Name":"/scylla-2","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}},{"Name":"/scylla-3","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}}]'\''\n' >"${test_dir}/bin/docker"
+printf '#!/usr/bin/env bash\nif [[ "$1" == exec ]]; then case "$2" in api-1) printf "process_start_time_seconds 100\\n" ;; api-2) printf "process_start_time_seconds 200\\n" ;; *) if [[ "${MOCK_SCYLLA_BAD_MEMBERSHIP:-0}" == 1 ]]; then printf "UN node-1\\n"; else printf "UN node-1\\nUN node-2\\nUN node-3\\n"; fi ;; esac; exit 0; fi\nif [[ "$*" == *api-1* ]]; then cat "${MOCK_SERVICE_CONTAINERS_FILE}"; exit 0; fi\nprintf '\''[{"Name":"/scylla-1","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}},{"Name":"/scylla-2","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}},{"Name":"/scylla-3","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}}]'\''\n' >"${test_dir}/bin/docker"
 chmod +x "${test_dir}/bin/make"
 chmod +x "${test_dir}/bin/docker"
+source_revision="$(git -C "${repo_root}" rev-parse HEAD)"
+image_digest="$(printf 'a%.0s' {1..64})"
+jq -n --arg revision "${source_revision}" --arg digest "${image_digest}" '[
+  {Name:"/api-1",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
+  {Name:"/api-2",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
+  {Name:"/git-1",Image:("sha256:"+$digest),Path:"/app/git-service",Config:{Image:("ghcr.io/gitstore-dev/git-service@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}}
+]' >"${test_dir}/service-containers.json"
+jq '.[0].Config.Image = "ghcr.io/gitstore-dev/api:latest"' "${test_dir}/service-containers.json" >"${test_dir}/unverified-service-containers.json"
 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=test-run \
   "${dispatcher}" namespace validation diagnostic >/dev/null
 metadata="${test_dir}/evidence/namespace/validation/diagnostic/test-run/metadata.json"
@@ -102,13 +110,15 @@ PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPA
   CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
   CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
   NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-b.internal \
+  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINER=git-1 \
+  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/service-containers.json" \
   CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
   CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
   CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
   "${dispatcher}" namespace watch alpha >/dev/null
 metadata="${test_dir}/evidence/namespace/watch/alpha/deployed-run/metadata.json"
 jq -e '.passed == true and .datastoreVerifierExitCode == 0' "${metadata}" >/dev/null
-jq -e '.topology.liveApiReplicas | length == 2' \
+jq -e '(.topology.liveApiReplicas | length) == 2 and (.artifacts.releaseServiceContainers | length) == 3' \
   "${test_dir}/evidence/namespace/watch/alpha/deployed-run/preflight-environment.json" >/dev/null
 jq -e 'length == 3 and all(.[]; .memoryLimitBytes == 3221225472 and .smpPerNode == 2 and .scyllaLiveNodes == 3)' \
   "${test_dir}/evidence/namespace/watch/alpha/deployed-run/datastore-before.json" >/dev/null
@@ -123,6 +133,21 @@ if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" C
   CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
   "${dispatcher}" namespace watch alpha >/dev/null 2>&1; then
   echo "alpha namespace watch evidence unexpectedly accepted one live API process twice" >&2
+  exit 1
+fi
+
+if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=unverified-service-run \
+  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
+  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
+  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
+  NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-b.internal \
+  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINER=git-1 \
+  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/unverified-service-containers.json" \
+  CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
+  CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
+  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
+  "${dispatcher}" namespace watch alpha >/dev/null 2>&1; then
+  echo "alpha namespace watch evidence unexpectedly accepted an unverified service image" >&2
   exit 1
 fi
 

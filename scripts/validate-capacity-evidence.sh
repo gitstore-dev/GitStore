@@ -39,6 +39,7 @@ require_declared_integer() {
 }
 
 live_api_replicas='[]'
+release_service_containers='[]'
 validate_api_deployment() {
   local expected_replicas="$1" endpoint metrics process_start
   [[ -n "${CAPACITY_API_ENDPOINTS:-}" ]] || {
@@ -68,6 +69,82 @@ validate_api_deployment() {
     echo "CAPACITY_API_ENDPOINTS must identify distinct live API processes" >&2
     exit 1
   }
+}
+
+validate_release_service_containers() {
+  local expected_replicas="$1" source_revision inspection api_names_json container metrics process_start
+  [[ -n "${CAPACITY_API_CONTAINERS:-}" && -n "${CAPACITY_GIT_SERVICE_CONTAINER:-}" ]] || {
+    echo "${target}/${profile} evidence requires CAPACITY_API_CONTAINERS and CAPACITY_GIT_SERVICE_CONTAINER" >&2
+    exit 2
+  }
+  IFS=',' read -r -a api_containers <<<"${CAPACITY_API_CONTAINERS}"
+  (( ${#api_containers[@]} == expected_replicas )) || {
+    echo "CAPACITY_API_CONTAINERS count does not match the declared API topology" >&2
+    exit 2
+  }
+  for container in "${api_containers[@]}" "${CAPACITY_GIT_SERVICE_CONTAINER}"; do
+    [[ "${container}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || {
+      echo "invalid release service container name: ${container}" >&2
+      exit 2
+    }
+  done
+  api_names_json="$(printf '%s\n' "${api_containers[@]}" | jq -Rsc 'split("\n")[:-1]')"
+  source_revision="$(git rev-parse HEAD)"
+  inspection="$(docker inspect "${api_containers[@]}" "${CAPACITY_GIT_SERVICE_CONTAINER}")" || {
+    echo "cannot inspect live API and Git-service containers" >&2
+    exit 1
+  }
+  release_service_containers="$(jq -c \
+    --argjson api_names "${api_names_json}" --arg git_name "${CAPACITY_GIT_SERVICE_CONTAINER}" \
+    --arg revision "${source_revision}" '
+      [.[] |
+        (.Name | ltrimstr("/")) as $name |
+        {name:$name,
+         role:(if ($api_names | index($name)) != null then "api" elif $name == $git_name then "git-service" else "unknown" end),
+         imageReference:.Config.Image,
+         imageID:.Image,
+         executable:.Path,
+         revision:(.Config.Labels["org.opencontainers.image.revision"] // ""),
+         running:.State.Running}]
+    ' <<<"${inspection}")"
+  jq -e --argjson expected_replicas "${expected_replicas}" --arg revision "${source_revision}" '
+    length == ($expected_replicas + 1) and
+    ([.[].name] | unique | length) == length and
+    ([.[] | select(.role == "api")] | length) == $expected_replicas and
+    ([.[] | select(.role == "git-service")] | length) == 1 and
+    all(.[];
+      .running and .revision == $revision and
+      (.imageReference | test("@sha256:[0-9a-f]{64}$")) and
+      ((.role == "api" and .executable == "/app/api") or
+       (.role == "git-service" and .executable == "/app/git-service")))
+  ' <<<"${release_service_containers}" >/dev/null || {
+    echo "live API and Git-service containers must use digest-pinned release images for the tested revision" >&2
+    exit 1
+  }
+
+  container_identities='[]'
+  for container in "${api_containers[@]}"; do
+    metrics="$(docker exec "${container}" wget -qO- http://127.0.0.1:4000/metrics)" || {
+      echo "cannot scrape API metrics inside container: ${container}" >&2
+      exit 1
+    }
+    process_start="$(awk '$1 == "process_start_time_seconds" { print $2; exit }' <<<"${metrics}")"
+    [[ "${process_start}" =~ ^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$ ]] || {
+      echo "API container does not expose process_start_time_seconds: ${container}" >&2
+      exit 1
+    }
+    container_identities="$(jq -c --arg name "${container}" --arg process_start "${process_start}" \
+      '. + [{name:$name,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${container_identities}")"
+  done
+  jq -e --argjson containers "${container_identities}" '
+    ([.[].processStartTimeSeconds] | sort) == ([$containers[].processStartTimeSeconds] | sort)
+  ' <<<"${live_api_replicas}" >/dev/null || {
+    echo "verified API endpoints do not map to the inspected release containers" >&2
+    exit 1
+  }
+  release_service_containers="$(jq -c --argjson identities "${container_identities}" '
+    map(if .role == "api" then . as $service | . + {processStartTimeSeconds:($identities[] | select(.name == $service.name) | .processStartTimeSeconds)} else . end)
+  ' <<<"${release_service_containers}")"
 }
 
 validate_scylla_deployment() {
@@ -157,6 +234,7 @@ case "${target}/${profile}" in
       echo "NAMESPACE_WATCH_API_A and NAMESPACE_WATCH_API_B must be members of CAPACITY_API_ENDPOINTS" >&2
       exit 2
     }
+    validate_release_service_containers "${config_api_replicas}"
     validate_scylla_deployment
     if [[ "${profile}" == "recovery" ]]; then
       [[ -n "${NAMESPACE_WATCH_API_REPLACEMENT:-}" ]] || {
@@ -215,7 +293,8 @@ esac
 jq -n \
   --arg target "${target}" --arg profile "${profile}" --arg mode "${mode}" \
   --argjson live_api_replicas "${live_api_replicas}" \
+  --argjson release_service_containers "${release_service_containers}" \
   --slurpfile config "${config}" --slurpfile environment "${environment}" \
   '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,passed:true,config:$config[0],environment:$environment[0]} +
-   (if ($live_api_replicas | length) == 0 then {} else {topology:{liveApiReplicas:$live_api_replicas}} end)' \
+   (if ($live_api_replicas | length) == 0 then {} else {topology:{liveApiReplicas:$live_api_replicas},artifacts:{releaseServiceContainers:$release_service_containers}} end)' \
   >"${evidence_dir}/preflight-environment.json"

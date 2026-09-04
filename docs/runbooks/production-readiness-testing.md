@@ -255,6 +255,11 @@ Namespace watch and recovery runs must also provide every declared API replica
 in `CAPACITY_API_ENDPOINTS`. Preflight scrapes and retains each process start
 time, rejects aliases that resolve to one process, and requires the two watch
 endpoints to belong to that verified live set.
+Set `CAPACITY_API_CONTAINERS` and `CAPACITY_GIT_SERVICE_CONTAINER` to the
+corresponding running containers. Preflight rejects mutable image tags,
+requires OCI revision labels matching the tested Git checkout and the release
+executables from the repository Dockerfiles, and maps the externally scraped
+API process identities to those containers.
 The dispatcher enforces the same manifest preflight for Go-based capacity
 profiles. It records their focused Go test as the domain verifier and, for
 deployed Scylla-backed profiles, refuses alpha or production evidence without

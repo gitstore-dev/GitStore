@@ -57,6 +57,19 @@ for removed_target in validate-local-config compose-config-check license-check c
   fi
 done
 
+printf '[api\nport = 4000\n' >"${test_dir}/invalid-config.toml"
+if make --no-print-directory -C "${repo_root}" check TARGET=config \
+  CONFIG_FILE="${test_dir}/invalid-config.toml" POLICY_FILE="${repo_root}/config/policy.yaml" >/dev/null 2>&1; then
+  echo "config check unexpectedly accepted malformed TOML" >&2
+  exit 1
+fi
+printf 'version: v1\nroles: [\n' >"${test_dir}/invalid-policy.yaml"
+if make --no-print-directory -C "${repo_root}" check TARGET=config \
+  CONFIG_FILE="${repo_root}/config/config.toml" POLICY_FILE="${test_dir}/invalid-policy.yaml" >/dev/null 2>&1; then
+  echo "config check unexpectedly accepted malformed YAML" >&2
+  exit 1
+fi
+
 mkdir -p "${test_dir}/git-data" "${test_dir}/controller-checkpoints" "${test_dir}/preserved"
 touch "${test_dir}/git-data/repository" "${test_dir}/controller-checkpoints/cursor" "${test_dir}/preserved/sentinel"
 
