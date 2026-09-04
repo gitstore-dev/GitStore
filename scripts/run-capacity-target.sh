@@ -113,7 +113,7 @@ done
 metadata="${evidence_dir}/metadata.json"
 git_revision="$(git rev-parse HEAD)"
 worktree_dirty=false
-if [[ -n "$(git status --porcelain=v1)" ]]; then
+if [[ "${CAPACITY_TEST_FORCE_DIRTY:-0}" == "1" || -n "$(git status --porcelain=v1)" ]]; then
   worktree_dirty=true
 fi
 source_state_sha256="$({
@@ -133,12 +133,20 @@ jq -n \
   '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,evidenceClass:$mode,productionTargets:{visibilityP95Seconds:1,visibilityP99Seconds:3},runId:$run_id,startedAt:$started_at,gitRevision:$git_revision,worktreeDirty:$worktree_dirty,sourceStateSha256:$source_state_sha256,verifier:{kind:"go-test"}} + (if $config_digest == "" then {} else {configDigest:$config_digest} end) + (if $environment_digest == "" then {} else {environmentDigest:$environment_digest} end)' \
   >"${metadata}"
 
-preflight_status=0
-set +e
-"${repo_root}/scripts/validate-capacity-evidence.sh" "${evidence_dir}" "${target}" "${profile}" "${mode}" \
-  2>&1 | tee "${evidence_dir}/preflight.log"
-preflight_status=${PIPESTATUS[0]}
-set -e
+source_status=0
+if [[ "${mode}" != "diagnostic" && "${worktree_dirty}" == "true" ]]; then
+  echo "${mode} capacity evidence requires a clean verifier checkout" | tee "${evidence_dir}/source-state.log" >&2
+  source_status=2
+fi
+
+preflight_status=${source_status}
+if (( source_status == 0 )); then
+  set +e
+  "${repo_root}/scripts/validate-capacity-evidence.sh" "${evidence_dir}" "${target}" "${profile}" "${mode}" \
+    2>&1 | tee "${evidence_dir}/preflight.log"
+  preflight_status=${PIPESTATUS[0]}
+  set -e
+fi
 
 container_check_status=0
 if (( preflight_status == 0 )) && [[ -n "${CAPACITY_DATASTORE_CONTAINERS:-}" ]]; then
@@ -209,10 +217,11 @@ fi
 
 jq --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson exit_code "${status}" --argjson preflight_exit_code "${preflight_status}" \
+  --argjson source_exit_code "${source_status}" \
   --argjson verifier_exit_code "${verifier_status}" --argjson datastore_exit_code "${container_check_status}" \
   --argjson postflight_exit_code "${postflight_status}" \
   --argjson prometheus_exit_code "${prometheus_status}" \
-  '. + {completedAt:$completed_at,exitCode:$exit_code,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,postflightRequired:(.mode != "diagnostic" and .target == "namespace" and (.profile == "watch" or .profile == "recovery")),postflightExitCode:$postflight_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic")}' \
+  '. + {completedAt:$completed_at,exitCode:$exit_code,sourceStateExitCode:$source_exit_code,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,postflightRequired:(.mode != "diagnostic" and .target == "namespace" and (.profile == "watch" or .profile == "recovery")),postflightExitCode:$postflight_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic" and .worktreeDirty == false)}' \
   "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
 echo "capacity evidence: ${evidence_dir}"

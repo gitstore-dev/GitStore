@@ -264,24 +264,53 @@ case "${target}/${profile}" in
     }
     validate_release_service_containers "${config_api_replicas}"
     validate_scylla_deployment
+    [[ -n "${NAMESPACE_WATCH_API_REPLACEMENT:-}" ]] || {
+      echo "${target}/${profile} evidence requires a replacement endpoint" >&2
+      exit 2
+    }
+    replacement="${NAMESPACE_WATCH_API_REPLACEMENT%/}"
+    [[ "${replacement}" == "${api_a}" || "${replacement}" == "${api_b}" ]] || {
+      echo "${target}/${profile} replacement must identify one of the two replicas" >&2
+      exit 2
+    }
+    [[ -n "${NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE:-}" ]] || {
+      echo "${target}/${profile} requires NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE" >&2
+      exit 2
+    }
+    [[ "${phase}" == "postflight" || ! -e "${NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE}" ]] || {
+      echo "${target}/${profile} requires a fresh NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE" >&2
+      exit 2
+    }
+    if [[ "${phase}" == "postflight" ]]; then
+      preflight_file="${evidence_dir}/preflight-environment.json"
+      [[ -r "${preflight_file}" ]] || {
+        echo "postflight replacement validation requires preflight-environment.json" >&2
+        exit 2
+      }
+      jq -e --arg replacement "${replacement}" --argjson after "${live_api_replicas}" '
+        .topology.liveApiReplicas as $before |
+        ($before | length) == ($after | length) and
+        ([
+          $before[] as $old |
+          $after[] |
+          select(.endpoint == $old.endpoint and .instanceID != $old.instanceID) |
+          .endpoint
+        ] == [$replacement]) and
+        all($before[];
+          . as $old |
+          any($after[];
+            .endpoint == $old.endpoint and
+            (if .endpoint == $replacement then
+               .instanceID != $old.instanceID
+             else
+               .instanceID == $old.instanceID and .containerID == $old.containerID
+             end)))
+      ' "${preflight_file}" >/dev/null || {
+        echo "postflight must replace exactly the selected API replica and leave every other replica unchanged" >&2
+        exit 1
+      }
+    fi
     if [[ "${profile}" == "recovery" ]]; then
-      [[ -n "${NAMESPACE_WATCH_API_REPLACEMENT:-}" ]] || {
-        echo "namespace/recovery evidence requires both API endpoints and the replacement endpoint" >&2
-        exit 2
-      }
-      replacement="${NAMESPACE_WATCH_API_REPLACEMENT%/}"
-      [[ "${replacement}" == "${api_a}" || "${replacement}" == "${api_b}" ]] || {
-        echo "namespace/recovery replacement must identify one of the two replicas" >&2
-        exit 2
-      }
-      [[ -n "${NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE:-}" ]] || {
-        echo "namespace/recovery requires NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE" >&2
-        exit 2
-      }
-      [[ "${phase}" == "postflight" || ! -e "${NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE}" ]] || {
-        echo "namespace/recovery requires a fresh NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE" >&2
-        exit 2
-      }
       [[ -n "${NAMESPACE_WATCH_TOKEN:-}" || -r "${NAMESPACE_WATCH_TOKEN_FILE:-}" ]] || {
         echo "namespace/recovery evidence requires NAMESPACE_WATCH_TOKEN or a readable token file" >&2
         exit 2

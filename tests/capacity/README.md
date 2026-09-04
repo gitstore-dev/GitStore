@@ -89,7 +89,12 @@ executable, and an OCI revision matching the tested checkout.
 For `namespace/watch` and `namespace/recovery`, the dispatcher repeats this
 identity and artifact inspection after the workload. A replacement using a
 different image, executable, or revision therefore makes the evidence fail and
-is retained in `postflight-environment.json` for audit.
+is retained in `postflight-environment.json` for audit. The preflight and
+postflight identities must show that exactly `NAMESPACE_WATCH_API_REPLACEMENT`
+changed while every other replica stayed up unchanged.
+
+Alpha and production evidence requires a clean Git checkout so the recorded
+`gitRevision` identifies the exact verifier and gate scripts that produced it.
 
 The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
 `3g` per node. Override it explicitly when testing another resource tier and
