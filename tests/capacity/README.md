@@ -51,6 +51,11 @@ CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated # or password-authenticated
 CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3
 ```
 
+The same manifest contract applies to the Go-based `validation`, `watch`,
+`recovery`, and `soak` profiles. Their focused Go test is recorded as the
+domain verifier; deployed Scylla-backed profiles additionally require the
+before/after container-health evidence above.
+
 The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
 `3g` per node. Override it explicitly when testing another resource tier and
 set `CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE` to the corresponding byte value.
@@ -100,7 +105,8 @@ For internal phase evidence, start the optional API scraper and pass its URL:
 
 ```bash
 make capacity TARGET=namespace PROFILE=watch MODE=alpha \
-  CAPACITY_OBSERVABILITY=prometheus
+  CAPACITY_OBSERVABILITY=prometheus \
+  CAPACITY_PROMETHEUS_TARGETS=api-a.internal:4000,api-b.internal:4000
 ```
 
 PromQL snapshots for admission, CDC discovery, journal materialization, and
@@ -113,9 +119,12 @@ applies uniquely tagged updates to that pool. Override
 `NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL` only when resource cardinality is an
 explicit experiment dimension; subscriber count, transition rate, bursts,
 replay size, and duration remain independent acceptance dimensions.
-The exporter defaults `CAPACITY_PROMETHEUS_LOOKBACK` to `90m`, covering the
-load and stabilization windows instead of sampling only the quiet tail. Set a
-longer Prometheus duration when the complete run exceeds 90 minutes.
+The dispatcher writes those configurable scrape targets into the evidence
+bundle and gives every run an ephemeral Prometheus TSDB. The exporter derives
+its default PromQL lookback from the recorded run start time plus a small
+scrape-boundary allowance. `CAPACITY_PROMETHEUS_LOOKBACK` remains an explicit
+override for unusual collection windows, but it cannot reach a prior run's
+isolated TSDB.
 
 ## Choosing application defaults
 

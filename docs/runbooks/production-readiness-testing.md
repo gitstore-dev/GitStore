@@ -189,9 +189,11 @@ recovery, CPU, and retained-memory requirements remain hard in every mode.
 Set `CAPACITY_OBSERVABILITY=prometheus` on `make capacity` when phase
 attribution is required. The dispatcher starts and removes the optional scraper
 and retains SLO-focused API admission, CDC/materializer, and delivery queries
-in the evidence bundle. The
-exporter uses the full-run `CAPACITY_PROMETHEUS_LOOKBACK` (`90m` by default),
-so a post-load settling interval does not erase phase evidence. The
+in the evidence bundle. Set `CAPACITY_PROMETHEUS_TARGETS` to the comma-separated
+`host:port` addresses of the deployed API replicas as they are reachable from
+the Prometheus container. Each run uses an ephemeral TSDB and derives its
+default query window from the evidence start time, preventing samples from a
+previous experiment from contaminating the result. The
 API `git_commit` stage is the Prometheus boundary for Git-service latency;
 marker-lock waits and optimistic-reference retries remain structured Rust log
 fields because the legacy Axum metrics surface has been removed.
@@ -224,6 +226,10 @@ runner snapshots sanitized container state and enforces this invariant. The
 Namespace admission gate also requires the runtime memory allocation, explicit
 per-node Scylla memory, and authentication mode to be declared rather than
 inferred from a developer machine.
+The dispatcher enforces the same manifest preflight for Go-based capacity
+profiles. It records their focused Go test as the domain verifier and, for
+deployed Scylla-backed profiles, refuses alpha or production evidence without
+the before/after datastore checks.
 
 Capacity preflight MUST identify optimized/release service artifacts. Debug
 builds are useful for functional diagnosis but cannot produce capacity evidence;
@@ -308,10 +314,10 @@ Structure to copy:
   completed — the actual "soak" (sustained, hours-long) half of the test,
   opt-in on top of the opt-in.
 
-Invocation is via the canonical capacity dispatcher, never ad hoc:
+Diagnostic invocation is via the canonical capacity dispatcher, never ad hoc:
 
 ```bash
-make capacity TARGET=scylla PROFILE=soak MODE=production
+make capacity TARGET=scylla PROFILE=soak MODE=diagnostic
 ```
 
 **Known limitation, requires a code change, not a docs workaround — read
@@ -351,9 +357,10 @@ never surfaces a real count anywhere:
   otherwise — that an operator can check to confirm the claimed scale was
   actually loaded.**
 
-**Practical consequence:** it is possible to run the Scylla capacity scenario
-against a nearly-empty Scylla cluster, get a clean `PASS`, and have no way
-to detect that from the test's own output. This is a **tracked follow-up
+**Practical consequence:** the canonical dispatcher now fails closed when
+`scylla/soak` is requested in alpha or production mode; the underlying Go test
+can still pass against a nearly-empty Scylla cluster and therefore remains
+diagnostic-only. This is a **tracked follow-up
 requiring a code change to `TestScyllaCapacity` itself**, not something a
 runbook can work around after the fact:
 
@@ -366,10 +373,9 @@ runbook can work around after the fact:
    observed count and fails the test if it falls materially short of
    `cfg.Products`. Until this exists, treat this as an open item for
    whichever spec next touches `gitstore-api/internal/datastore/scylla/capacity_test.go`.
-2. Until that code fix lands, do not trust a bare `PASS` from
-   `make capacity TARGET=scylla PROFILE=soak MODE=production` as
-   evidence of a validated capacity run at
-   all. The only currently-available (weak) mitigation is fully manual and
+2. Until that code fix lands, `make capacity TARGET=scylla PROFILE=soak
+   MODE=production` intentionally refuses to produce passing evidence. The
+   only currently-available diagnostic mitigation is fully manual and
    out-of-band: independently query the preloaded table's row count via
    `cqlsh` (or equivalent) immediately before invoking `go test`, and record
    that number yourself alongside the test's `t.Logf` output — the test

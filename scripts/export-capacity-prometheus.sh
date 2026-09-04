@@ -6,9 +6,17 @@ set -euo pipefail
 
 evidence_dir="${1:?evidence directory is required}"
 prometheus_url="${2:?Prometheus URL is required}"
-lookback="${CAPACITY_PROMETHEUS_LOOKBACK:-90m}"
+metadata="${evidence_dir}/metadata.json"
+[[ -r "${metadata}" ]] || { echo "capacity metadata is required to scope Prometheus evidence" >&2; exit 2; }
+started_at="$(jq -er '.startedAt | fromdateiso8601' "${metadata}")"
+completed_at="$(date +%s)"
+scrape_slack="${CAPACITY_PROMETHEUS_SCRAPE_SLACK_SECONDS:-15}"
+[[ "${scrape_slack}" =~ ^[0-9]+$ ]] || { echo "CAPACITY_PROMETHEUS_SCRAPE_SLACK_SECONDS must be a non-negative integer" >&2; exit 2; }
+run_seconds=$(( completed_at - started_at + scrape_slack ))
+(( run_seconds > 0 )) || { echo "capacity metadata startedAt must precede Prometheus export" >&2; exit 2; }
+lookback="${CAPACITY_PROMETHEUS_LOOKBACK:-${run_seconds}s}"
 if [[ ! "${lookback}" =~ ^[1-9][0-9]*[smhdwy]$ ]]; then
-  echo "CAPACITY_PROMETHEUS_LOOKBACK must be a positive Prometheus duration such as 90m" >&2
+  echo "CAPACITY_PROMETHEUS_LOOKBACK must be a positive Prometheus duration such as 60m" >&2
   exit 2
 fi
 output_dir="${evidence_dir}/prometheus"
@@ -35,15 +43,20 @@ for index in "${!names[@]}"; do
   response="${output_dir}/${names[index]}.json"
   curl -fsS --get --data-urlencode "query=${queries[index]}" \
     "${prometheus_url%/}/api/v1/query" >"${response}"
-  jq -e '.status == "success"' "${response}" >/dev/null
+  jq -e '.status == "success" and (.data.result | length) > 0' "${response}" >/dev/null || {
+    echo "Prometheus query ${names[index]} returned no samples" >&2
+    exit 1
+  }
 done
 
 jq -n \
   --arg collected_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg source "${prometheus_url%/}" \
   --arg lookback "${lookback}" \
+  --arg started_at "$(jq -r '.startedAt' "${metadata}")" \
+  --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson queries "$(for index in "${!names[@]}"; do jq -n --arg name "${names[index]}" --arg query "${queries[index]}" '{name:$name,query:$query}'; done | jq -s .)" \
-  '{schemaVersion:1,collectedAt:$collected_at,source:$source,lookback:$lookback,queries:$queries}' \
+  '{schemaVersion:1,collectedAt:$collected_at,source:$source,runStartedAt:$started_at,runCompletedAt:$completed_at,lookback:$lookback,queries:$queries}' \
   >"${output_dir}/manifest.json"
 
 echo "Prometheus capacity evidence: ${output_dir}"

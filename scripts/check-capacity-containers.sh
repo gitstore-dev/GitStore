@@ -8,6 +8,8 @@ mode="${1:-}"
 before_file="${2:-}"
 after_file="${3:-}"
 targets_csv="${CAPACITY_DATASTORE_CONTAINERS:-}"
+expected_count="${CAPACITY_DATASTORE_EXPECTED_COUNT:-0}"
+expected_memory="${CAPACITY_DATASTORE_EXPECTED_MEMORY_BYTES:-0}"
 
 if [[ -z "${targets_csv}" ]]; then
   echo "CAPACITY_DATASTORE_CONTAINERS is required" >&2
@@ -32,6 +34,16 @@ snapshot() {
     cpusetCPUs:.HostConfig.CpusetCpus,
     state:{running:.State.Running, oomKilled:.State.OOMKilled, startedAt:.State.StartedAt}
   }] | sort_by(.name)' >"${output_file}"
+  jq -e --argjson expected_count "${expected_count}" --argjson expected_memory "${expected_memory}" '
+    ($expected_count == 0 or length == $expected_count) and
+    all(.[];
+      .state.running and (.state.oomKilled | not) and
+      ($expected_memory == 0 or .memoryLimitBytes == $expected_memory)
+    )
+  ' "${output_file}" >/dev/null || {
+    echo "datastore container count, health, or memory limit does not match the declared environment" >&2
+    exit 1
+  }
 }
 
 case "${mode}" in

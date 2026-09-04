@@ -45,12 +45,65 @@ for removed_target in capacity-observability capacity-observability-down test-sc
 done
 
 mkdir -p "${test_dir}/bin" "${test_dir}/evidence"
-printf '#!/usr/bin/env bash\necho "mock capacity command: $*"\n' >"${test_dir}/bin/make"
+printf '#!/usr/bin/env bash\necho "mock capacity command: $*"\n[[ "${FAIL_MAKE:-0}" != "1" ]]\n' >"${test_dir}/bin/make"
+printf '#!/usr/bin/env bash\nprintf '\''[{"Name":"/scylla-1","Config":{"Image":"scylla"},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}},{"Name":"/scylla-2","Config":{"Image":"scylla"},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}},{"Name":"/scylla-3","Config":{"Image":"scylla"},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}}]'\''\n' >"${test_dir}/bin/docker"
 chmod +x "${test_dir}/bin/make"
+chmod +x "${test_dir}/bin/docker"
 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=test-run \
   "${dispatcher}" namespace validation diagnostic >/dev/null
 metadata="${test_dir}/evidence/namespace/validation/diagnostic/test-run/metadata.json"
-jq -e '.target == "namespace" and .profile == "validation" and .mode == "diagnostic" and .passed == false' "${metadata}" >/dev/null
+jq -e '.target == "namespace" and .profile == "validation" and .mode == "diagnostic" and .passed == false and .verifierExitCode == 0' "${metadata}" >/dev/null
+
+if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=missing-manifests \
+  "${dispatcher}" namespace validation alpha >/dev/null 2>&1; then
+  echo "alpha non-k6 capacity evidence unexpectedly passed without manifests" >&2
+  exit 1
+fi
+
+PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=validated-run \
+  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
+  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
+  "${dispatcher}" namespace validation alpha >/dev/null
+metadata="${test_dir}/evidence/namespace/validation/alpha/validated-run/metadata.json"
+jq -e '
+  .passed == true and .preflightRequired == true and .preflightExitCode == 0 and
+  .verifierRequired == true and .verifierExitCode == 0 and
+  (.configDigest | length) == 64 and (.environmentDigest | length) == 64
+' "${metadata}" >/dev/null
+
+PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=deployed-run \
+  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
+  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
+  CAPACITY_API_REPLICAS=2 CAPACITY_GIT_SERVICE_BUILD=release \
+  CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
+  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
+  "${dispatcher}" namespace watch alpha >/dev/null
+metadata="${test_dir}/evidence/namespace/watch/alpha/deployed-run/metadata.json"
+jq -e '.passed == true and .datastoreVerifierExitCode == 0' "${metadata}" >/dev/null
+jq -e 'length == 3 and all(.[]; .memoryLimitBytes == 3221225472)' \
+  "${test_dir}/evidence/namespace/watch/alpha/deployed-run/datastore-before.json" >/dev/null
+
+if PATH="${test_dir}/bin:${PATH}" FAIL_MAKE=1 CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=failed-verifier \
+  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
+  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
+  "${dispatcher}" namespace validation alpha >/dev/null 2>&1; then
+  echo "failed non-k6 verifier unexpectedly produced passing evidence" >&2
+  exit 1
+fi
+metadata="${test_dir}/evidence/namespace/validation/alpha/failed-verifier/metadata.json"
+jq -e '.passed == false and .verifierExitCode == 1' "${metadata}" >/dev/null
+
+if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=unverified-dataset \
+  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
+  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
+  CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
+  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
+  "${dispatcher}" scylla soak production >/dev/null 2>&1; then
+  echo "Scylla production evidence unexpectedly passed without observed dataset verification" >&2
+  exit 1
+fi
+metadata="${test_dir}/evidence/scylla/soak/production/unverified-dataset/metadata.json"
+jq -e '.passed == false and .preflightExitCode == 2' "${metadata}" >/dev/null
 
 if PATH="${test_dir}/bin:${PATH}" CAPACITY_OBSERVABILITY=invalid "${dispatcher}" namespace validation diagnostic >/dev/null 2>&1; then
   echo "invalid capacity observability mode unexpectedly succeeded" >&2

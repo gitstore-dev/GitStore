@@ -16,6 +16,8 @@ services:
       - host.docker.internal:host-gateway
     volumes:
       - ./tests/capacity/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ${CAPACITY_PROMETHEUS_DATA_DIR:-./.gitstore/capacity/prometheus}:/prometheus
+      - ${CAPACITY_PROMETHEUS_TARGETS_FILE:?CAPACITY_PROMETHEUS_TARGETS_FILE is required}:/etc/prometheus/targets.json:ro
+    tmpfs:
+      - /prometheus:rw,uid=65534,gid=65534,mode=0770
     networks:
       - gitstore-network
