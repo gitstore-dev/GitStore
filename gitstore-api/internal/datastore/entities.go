@@ -112,7 +112,8 @@ type NamespaceWatchLease struct {
 	ExpiresAt    time.Time
 }
 
-// NamespaceCDCProgress is saved per CDC stream only after its event append.
+// NamespaceCDCProgress stores a source checkpoint or the published frontier's
+// bounded recovery manifest after its journal append.
 type NamespaceCDCProgress struct {
 	StreamID  string
 	Position  []byte

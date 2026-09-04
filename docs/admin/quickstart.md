@@ -22,7 +22,7 @@ gitstore-controller-manager  5001
 Bootstrap a namespace and repository if you have not already:
 
 ```bash
-make bootstrap ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
 ```
 
 ## Start Admin
@@ -116,7 +116,7 @@ Verify the API auth configuration:
 You can create or refresh a bootstrap token with:
 
 ```bash
-make bootstrap-token ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=token ADMIN_PASSWORD=<admin-password>
 ```
 
 ### Catalogue data looks empty

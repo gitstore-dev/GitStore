@@ -58,8 +58,9 @@ Production paths must also define:
 - repeatable replica, failover, load, soak, and recovery validation.
 
 Repository-wide capacity and fault tooling is exposed through the root
-Makefile. Use `make capacity CAPACITY_PROFILE=<profile>` for k6 offered-load
-and threshold evidence, and `make chaos CHAOS_PROFILE=<profile>
+Makefile. Use `make capacity TARGET=<target> PROFILE=<scenario>
+MODE=<diagnostic|alpha|production>` for offered-load and threshold
+evidence, and `make chaos CHAOS_PROFILE=<profile>
 CHAOS_TARGET=<gitstore-container> CHAOS_CONFIRM=1` for bounded container fault
 injection. See [Production readiness testing](runbooks/production-readiness-testing.md)
 for profile authoring, correctness-verifier, evidence, and safety requirements.
@@ -97,7 +98,7 @@ make dev
 Bootstrap local control-plane resources through GraphQL:
 
 ```bash
-make bootstrap ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
 ```
 
 Useful variables:
@@ -439,8 +440,8 @@ Aggregate checks:
 make build
 make test
 make lint
-make license-check
-make credential-leakage-check
+make check TARGET=licenses
+make check TARGET=credentials
 make pr-ready
 ```
 

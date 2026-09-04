@@ -124,7 +124,7 @@ jobs:
 
     - name: Check service-account credential logging
       working-directory: .
-      run: make credential-leakage-check
+      run: make check TARGET=credentials
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v7

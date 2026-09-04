@@ -101,7 +101,7 @@ From the repository root:
 make api
 make dev
 make compose DETACH=1
-make bootstrap ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
 ```
 
 From this module:

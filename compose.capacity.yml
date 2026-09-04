@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 GitStore contributors
+
+services:
+  capacity-prometheus:
+    profiles: [capacity]
+    image: prom/prometheus:v3.5.0
+    container_name: gitstore-capacity-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${CAPACITY_PROMETHEUS_RETENTION:-24h}
+    ports:
+      - "${CAPACITY_PROMETHEUS_PORT:-9090}:9090"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ./tests/capacity/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ${CAPACITY_PROMETHEUS_TARGETS_FILE:?CAPACITY_PROMETHEUS_TARGETS_FILE is required}:/etc/prometheus/targets.json:ro
+    tmpfs:
+      - /prometheus:rw,uid=65534,gid=65534,mode=0770
+    networks:
+      - gitstore-network

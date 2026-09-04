@@ -5,10 +5,12 @@ package integration
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
@@ -19,8 +21,8 @@ import (
 // API restart/rolling replacement and therefore exercises shared Scylla
 // history and materializer lease handoff rather than an in-process substitute.
 func TestNamespaceWatchRecoveryProbe(t *testing.T) {
-	apiA := os.Getenv("NAMESPACE_WATCH_API_A")
-	apiB := os.Getenv("NAMESPACE_WATCH_API_B")
+	apiA := strings.TrimSuffix(os.Getenv("NAMESPACE_WATCH_API_A"), "/")
+	apiB := strings.TrimSuffix(os.Getenv("NAMESPACE_WATCH_API_B"), "/")
 	token := namespaceWatchToken(t)
 	if apiA == "" || apiB == "" || token == "" {
 		t.Skip("set NAMESPACE_WATCH_API_A, NAMESPACE_WATCH_API_B, and NAMESPACE_WATCH_TOKEN")
@@ -45,13 +47,49 @@ func TestNamespaceWatchRecoveryProbe(t *testing.T) {
 	})
 
 	t.Run("rolling replacement and lease handoff", func(t *testing.T) {
-		replacement := os.Getenv("NAMESPACE_WATCH_API_REPLACEMENT")
-		if replacement == "" {
-			t.Skip("deployment harness must set NAMESPACE_WATCH_API_REPLACEMENT after replacing a replica")
+		replacement := strings.TrimSuffix(os.Getenv("NAMESPACE_WATCH_API_REPLACEMENT"), "/")
+		trigger := os.Getenv("NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE")
+		require.NotEmpty(t, replacement, "deployment harness must select a replacement endpoint")
+		require.NotEqual(t, apiA, apiB, "recovery endpoints must identify distinct replicas")
+		require.Contains(t, []string{apiA, apiB}, replacement, "replacement must identify one of the live replicas")
+		require.NotEmpty(t, trigger, "deployment harness must provide NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE")
+		_, statErr := os.Stat(trigger)
+		require.ErrorIs(t, statErr, os.ErrNotExist, "replacement trigger must not exist before the probe")
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		before, err := fetchCapacityMetrics(client, replacement)
+		require.NoError(t, err, "scrape replacement identity before trigger")
+		require.NoError(t, os.WriteFile(trigger, []byte("replace namespace recovery probe\n"), 0o600))
+
+		probeClient := &http.Client{Timeout: 500 * time.Millisecond}
+		outageDeadline := time.Now().Add(30 * time.Second)
+		for endpointReady(probeClient, replacement) && time.Now().Before(outageDeadline) {
+			time.Sleep(100 * time.Millisecond)
 		}
+		require.False(t, endpointReady(probeClient, replacement), "replacement trigger must produce an observed outage")
+
+		var after capacityProcessMetrics
+		recoveryDeadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(recoveryDeadline) {
+			if endpointReady(probeClient, replacement) {
+				candidate, metricsErr := fetchCapacityMetrics(client, replacement)
+				if metricsErr == nil && candidate.processStart != before.processStart {
+					after = candidate
+					break
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		require.NotZero(t, after.processStart, "replacement must return with a different process_start_time_seconds")
+		t.Logf("observed replacement endpoint=%s process_start_before=%.0f process_start_after=%.0f", replacement, before.processStart, after.processStart)
+
 		watch := openNamespaceWatch(t, replacement, token, cursor)
 		name := uniqueName("watch-handoff")
-		createNamespaceThrough(t, apiA, token, name)
+		peer := apiA
+		if replacement == apiA {
+			peer = apiB
+		}
+		createNamespaceThrough(t, peer, token, name)
 		event := readNamespaceWatchTransition(t, watch)
 		require.Equal(t, name, event.Name)
 	})
@@ -61,7 +99,9 @@ func TestNamespaceWatchRecoveryProbe(t *testing.T) {
 		if err != nil || count < 1 {
 			t.Skip("set NAMESPACE_WATCH_OVERFLOW_TRANSITIONS for the deliberately slow-consumer probe")
 		}
+		require.GreaterOrEqual(t, count, 1000, "overflow probe must exceed the maximum configured subscriber buffer with network headroom")
 		watch := openNamespaceWatch(t, apiA, token, cursor)
+		require.NoError(t, watch.SetReadDeadline(time.Now().Add(60*time.Second)))
 		for i := 0; i < count; i++ {
 			createNamespaceThrough(t, apiB, token, uniqueName("watch-overflow"))
 		}

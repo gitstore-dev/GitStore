@@ -2,6 +2,7 @@ services:
   scylla-1:
     image: scylladb/scylla:2026.1
     container_name: gitstore-scylla-1
+    mem_limit: ${SCYLLA_CLUSTER_MEMORY_LIMIT:-3g}
     ports:
       - "9042:9042"   # CQL native transport
     command: --developer-mode=1 --overprovisioned=1 --smp=${SCYLLA_CLUSTER_SMP:-1} --max-networking-io-control-blocks=${SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS:-2048} --seeds=scylla-1
@@ -19,6 +20,7 @@ services:
   scylla-2:
     image: scylladb/scylla:2026.1
     container_name: gitstore-scylla-2
+    mem_limit: ${SCYLLA_CLUSTER_MEMORY_LIMIT:-3g}
     command: --developer-mode=1 --overprovisioned=1 --smp=${SCYLLA_CLUSTER_SMP:-1} --max-networking-io-control-blocks=${SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS:-2048} --seeds=scylla-1
     volumes:
       - scylla-cluster-data-2:/var/lib/scylla
@@ -37,6 +39,7 @@ services:
   scylla-3:
     image: scylladb/scylla:2026.1
     container_name: gitstore-scylla-3
+    mem_limit: ${SCYLLA_CLUSTER_MEMORY_LIMIT:-3g}
     command: --developer-mode=1 --overprovisioned=1 --smp=${SCYLLA_CLUSTER_SMP:-1} --max-networking-io-control-blocks=${SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS:-2048} --seeds=scylla-1
     volumes:
       - scylla-cluster-data-3:/var/lib/scylla

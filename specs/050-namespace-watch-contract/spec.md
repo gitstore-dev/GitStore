@@ -112,6 +112,14 @@ Someone building a new controller or integration against Namespace watch needs e
 - **PR-001 Replica Safety**: Replace the process-local Namespace watch history with a shared durable journal sourced atomically from committed Namespace datastore changes. Tests MUST use at least two API replicas, admit through one, watch/resume through another, and replace a replica under traffic without a silent gap.
 - **PR-002 Multi-User Security**: Add explicit `namespace.watch` authorization to both Namespace watch entry points. Authentication and authorization MUST precede cursor validation, replay, and subscription registration so denial cannot disclose resource or journal state.
 - **PR-003 Capacity**: Validate 10 sustained Namespace transitions/second with bursts of 100/second and 1,000 concurrent Namespace subscriptions across two API replicas for 60 minutes. Require event visibility p95 ≤1 second and p99 ≤3 seconds, replay of 10,000 retained events in ≤5 seconds p95, internal errors <0.1%, zero missing acknowledged transitions, CPU <80%, retained-memory growth <10%, and recovery after replacing one replica within 30 seconds.
+
+  A separately labelled early-alpha local-environment qualification MAY enforce
+  a provisional visibility p95 ceiling of 2 seconds while retaining p99 ≤3
+  seconds and every correctness, error, recovery, CPU, and memory requirement.
+  It MUST warn above the 1-second production target and MUST NOT be represented
+  as PR-003 production validation. Diagnostic evidence cannot pass either gate.
+  Threshold reconsideration requires at least five clean 10-minute repetitions
+  with fixed topology and configuration.
 - **PR-004 Backpressure**: Journal fetches MUST be bounded to 256 events per batch, per-subscription delivery buffers to 64 events, and retries to capped exponential backoff. Overflow, retention overrun, or journal discontinuity MUST terminate with a typed expiry reason and increment bounded-cardinality metrics.
 - **PR-005 Recovery**: Persist CDC progress only after durable journal append. Restart may replay and duplicate the last unsaved CDC record, consistent with at-least-once delivery, but MUST NOT advance progress past an unjournaled record. Journal epoch/retention discontinuity triggers relist through `WATCH_EXPIRED`.
 - **PR-006 Rolling Upgrade**: Migration and schema rollout MUST be server-first. During the mixed-version window, Namespace subscriptions are denied fleet-wide; enable the durable backend only after CDC, journal schema, materializer health, and every API replica converge. Rollback restores the deny first and retains the forward migration/CDC schema.

@@ -24,6 +24,52 @@ type namespaceCDCTestRunner interface {
 	RunNamespaceCDC(context.Context, *watchjournal.Materializer, datastore.NamespaceWatchLease, time.Duration, time.Duration, func()) error
 }
 
+type namespaceWatchBatchAppender interface {
+	AppendBatch(context.Context, datastore.NamespaceWatchLease, []datastore.NamespaceWatchEvent, time.Duration) ([]datastore.NamespaceWatchEvent, error)
+}
+
+func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *testing.T) {
+	raw := newRawSession(t)
+	require.NoError(t, raw.Query("TRUNCATE namespace_watch_events").Exec())
+	require.NoError(t, raw.Query("TRUNCATE namespace_watch_clock").Exec())
+	raw.Close()
+	t.Cleanup(func() {
+		cleanup := newRawSession(t)
+		defer cleanup.Close()
+		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_events").Exec())
+		require.NoError(t, cleanup.Query("TRUNCATE namespace_watch_clock").Exec())
+	})
+
+	store := newTestStoreWithWatchBucket(t, 3)
+	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	batcher := journal.(namespaceWatchBatchAppender)
+	ctx := context.Background()
+	lease, acquired, err := journal.AcquireLease(ctx, "batch-replica", time.Now().UTC(), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), lease)) })
+
+	events := make([]datastore.NamespaceWatchEvent, 5)
+	for index := range events {
+		events[index] = datastore.NamespaceWatchEvent{
+			Type: datastore.NamespaceWatchAdded, Name: fmt.Sprintf("batch-%d", index+1),
+			DeduplicationKey: fmt.Sprintf("batch-key-%d", index+1), At: time.Now().UTC(),
+		}
+	}
+	appended, err := batcher.AppendBatch(ctx, lease, events, time.Hour)
+	require.NoError(t, err)
+	require.Len(t, appended, len(events))
+	for index, event := range appended {
+		require.Equal(t, uint64(index+1), event.Sequence)
+	}
+	read, err := journal.ReadAfter(ctx, datastore.NamespaceWatchCursor{Epoch: appended[0].Epoch}, 10)
+	require.NoError(t, err)
+	require.Len(t, read, len(events))
+	for index, event := range read {
+		require.Equal(t, fmt.Sprintf("batch-%d", index+1), event.Name)
+	}
+}
+
 func TestNamespaceWatchLeaseFencesJournalAndProgressWrites(t *testing.T) {
 	store := newTestStore(t)
 	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()

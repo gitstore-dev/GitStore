@@ -163,17 +163,60 @@ New load-bearing specifications MUST use the repository-wide harness instead
 of adding another in-process load scheduler:
 
 ```bash
-make capacity CAPACITY_PROFILE=api-readiness \
+make capacity TARGET=api PROFILE=readiness MODE=diagnostic \
   CAPACITY_ENV_FILE=/absolute/path/to/non-committed-capacity.env
 ```
 
 The runner uses the pinned `grafana/k6:2.1.0` image unless a local `k6` binary
 or `K6_BIN` is supplied. Profiles live under `tests/capacity/profiles/`, shared
 JavaScript modules live under `tests/capacity/lib/`, and every invocation writes
-an evidence bundle under `.gitstore/capacity/<profile>/<run-id>/`. The bundle
+an evidence bundle under
+`.gitstore/capacity/<target>/<profile>/<mode>/<run-id>/`. The bundle
 contains the Git revision and dirty state, tool identity, k6 log, structured
 summary, timestamps, exit code, and pass/fail status. Tokens belong in the
 untracked environment file and MUST NOT be copied into evidence.
+
+Valid target/profile pairs are `api/readiness`, `namespace/admission`,
+`namespace/validation`, `namespace/watch`, `namespace/recovery`, and
+`scylla/soak`. Admission is deployed k6 load; validation is the in-process
+two-replica soak. Diagnostic mode
+cannot produce passing evidence. Alpha mode is an explicitly provisional local
+environment gate: Namespace-watch visibility p95 must be ≤2 seconds and p99
+≤3 seconds, with a warning above the unchanged 1-second production p95 target.
+Production mode keeps p95 ≤1 second and p99 ≤3 seconds. Correctness, errors,
+recovery, CPU, and retained-memory requirements remain hard in every mode.
+The admission profile confirms each acknowledged Namespace through every API
+replica and records cross-replica visibility latency. Its domain verifier
+requires nonzero admissions, zero correctness-check failures, p95 visibility
+within 1 second, and p99 within 3 seconds. Readiness preflight likewise probes
+`/health` and `/ready` on every declared replica before the measured smoke load.
+
+Set `CAPACITY_OBSERVABILITY=prometheus` on `make capacity` when phase
+attribution is required. The dispatcher starts and removes the optional scraper
+and retains SLO-focused API admission, CDC/materializer, and delivery queries
+in the evidence bundle. Set `CAPACITY_PROMETHEUS_TARGETS` to the comma-separated
+`host:port` addresses of the deployed API replicas as they are reachable from
+the Prometheus container. Each run uses an ephemeral TSDB and derives its
+default query window from the evidence start time, preventing samples from a
+previous experiment from contaminating the result. The
+API `git_commit` stage is the Prometheus boundary for Git-service latency;
+advisory-lock waits and optimistic-reference retries remain structured Rust
+log fields because the legacy Axum metrics surface has been removed. Advisory
+lock ownership is released by the OS on process termination, so a stale lock
+file does not block replacement replicas.
+Query requirements follow the selected profile: `api/readiness` requires only
+healthy scrape targets, Namespace admission adds admission/datastore signals,
+and watch/recovery add CDC, materializer, and delivery signals. A missing lazy
+datastore-error series is recorded as zero rather than treated as scrape loss.
+Namespace watch capacity uses a bounded 50-resource update pool by default, so
+the watch gate measures transition delivery instead of unbounded Git-tree
+growth. Change `NAMESPACE_WATCH_CAPACITY_RESOURCE_POOL` only for a declared
+resource-cardinality experiment; it does not replace the 1,000-subscriber or
+sustained/burst transition targets.
+Alpha and production watch evidence requires a run of at least 60 minutes,
+1,000 subscribers, 10,000 replay events, bursts of at least 100 transitions,
+and a burst interval shorter than the run. Use diagnostic mode for smaller
+experiments.
 
 A k6 pass proves only that the declared offered load and metric thresholds
 passed. Each feature profile MUST pair it with a domain correctness verifier
@@ -193,6 +236,60 @@ loss. A load result collected across an undeclared datastore restart is failure
 evidence, not a basis for relaxing application timeouts, buffers, or retry
 defaults. Record per-node memory limits, CPU/shard allocation, restart counts,
 and OOM state before and after the run.
+For Docker-backed runs, provide `CAPACITY_DATASTORE_CONTAINERS`; the repository
+runner snapshots sanitized container state and enforces this invariant. The
+Namespace admission gate also requires the runtime memory allocation, explicit
+per-node Scylla memory, and authentication mode to be declared rather than
+inferred from a developer machine. The snapshot parses each running Scylla
+container's command and rejects a runtime `--smp` value that differs from the
+config manifest. It also runs `nodetool status` through every declared
+container and requires the full declared set to report `UN` before and after
+load. Container IDs and normalized names must be unique, and the same IDs must
+remain present across both snapshots; aliases of one container cannot satisfy
+the declared node count.
+API readiness alpha/production runs require config and environment manifests,
+at least two declared API replicas, a release API build, and explicit replica
+and host-memory values matching those manifests. Provide every replica in
+`CAPACITY_API_ENDPOINTS` and its corresponding running container in the same
+position in `CAPACITY_API_CONTAINERS`. Preflight requires unique container IDs
+and matches each external `/metrics` `gitstore_api_process_instance_info` UUID
+to the internal container scrape. Start time remains the replacement signal;
+legitimate same-tick starts remain valid while aliases cannot satisfy the
+topology. The workload
+`CAPACITY_BASE_URL` must be one of those verified endpoints, and every live API
+container must have a digest-pinned image, `/app/api` executable, and OCI
+revision matching the tested checkout.
+Namespace recovery requires a fresh
+`NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE`; the deployment harness replaces the
+selected endpoint when the file appears. The verifier records an actual
+outage, requires a changed `process_start_time_seconds`, and resumes delivery
+from the pre-replacement cursor.
+The materializer persists each appended batch's frontier together with its
+per-stream resume positions before it advances source checkpoints. A new
+leader reconciles lagging checkpoints from that bounded manifest, closing the
+crash window without admitting unseen records behind the ordered frontier.
+Namespace watch and recovery runs must also provide every declared API replica
+in `CAPACITY_API_ENDPOINTS`. Preflight scrapes and retains each process start
+time, maps each endpoint to the corresponding unique container ID, and requires
+the endpoint-exposed process-instance UUID to match the internal container
+scrape. The two watch endpoints must belong to that verified live set.
+Set `CAPACITY_API_CONTAINERS` and `CAPACITY_GIT_SERVICE_CONTAINER` to the
+corresponding running containers. Preflight rejects mutable image tags,
+requires OCI revision labels matching the tested Git checkout and the release
+executables from the repository Dockerfiles, and maps the externally scraped
+API process identities to those containers.
+The dispatcher enforces the same manifest preflight for Go-based capacity
+profiles. It records their focused Go test as the domain verifier and, for
+deployed Scylla-backed profiles, refuses alpha or production evidence without
+the before/after datastore checks. Namespace watch and recovery additionally
+repeat the live endpoint-to-container and release-artifact verification after
+the workload, retaining the replacement state in
+`postflight-environment.json` and rejecting stale or debug replacements. The
+identity comparison requires exactly the selected replacement endpoint to
+change and every non-selected replica to remain unchanged. Alpha and production
+runs—including k6 profiles—also require a clean verifier checkout so
+`gitRevision` is reproducible. The recovery overflow probe requires at least
+1,000 transitions and bounds the terminal-error read to 60 seconds.
 
 Capacity preflight MUST identify optimized/release service artifacts. Debug
 builds are useful for functional diagnosis but cannot produce capacity evidence;
@@ -277,17 +374,10 @@ Structure to copy:
   completed — the actual "soak" (sustained, hours-long) half of the test,
   opt-in on top of the opt-in.
 
-Invocation is via a dedicated `make` target, never ad hoc — root `Makefile`
-around line 163:
+Diagnostic invocation is via the canonical capacity dispatcher, never ad hoc:
 
-```makefile
-test-scylla-capacity: ## Run the opt-in Scylla capacity and soak test.
-	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
-		GITSTORE_SCYLLA_CAPACITY_PRODUCTS="$(SCYLLA_CAPACITY_PRODUCTS)" \
-		GITSTORE_SCYLLA_CAPACITY_CONCURRENCY="$(SCYLLA_CAPACITY_CONCURRENCY)" \
-		GITSTORE_SCYLLA_CAPACITY_SOAK_DURATION="$(SCYLLA_CAPACITY_DURATION)" \
-		GITSTORE_SCYLLA_CAPACITY_RUN=1 \
-		go test -tags scylla -count=1 -timeout 0 -run TestScyllaCapacity ./internal/datastore/scylla/...
+```bash
+make capacity TARGET=scylla PROFILE=soak MODE=diagnostic
 ```
 
 **Known limitation, requires a code change, not a docs workaround — read
@@ -327,9 +417,10 @@ never surfaces a real count anywhere:
   otherwise — that an operator can check to confirm the claimed scale was
   actually loaded.**
 
-**Practical consequence:** it is possible to run `make test-scylla-capacity`
-against a nearly-empty Scylla cluster, get a clean `PASS`, and have no way
-to detect that from the test's own output. This is a **tracked follow-up
+**Practical consequence:** the canonical dispatcher now fails closed when
+`scylla/soak` is requested in alpha or production mode; the underlying Go test
+can still pass against a nearly-empty Scylla cluster and therefore remains
+diagnostic-only. This is a **tracked follow-up
 requiring a code change to `TestScyllaCapacity` itself**, not something a
 runbook can work around after the fact:
 
@@ -342,9 +433,9 @@ runbook can work around after the fact:
    observed count and fails the test if it falls materially short of
    `cfg.Products`. Until this exists, treat this as an open item for
    whichever spec next touches `gitstore-api/internal/datastore/scylla/capacity_test.go`.
-2. Until that code fix lands, do not trust a bare `PASS` from
-   `make test-scylla-capacity` as evidence of a validated capacity run at
-   all. The only currently-available (weak) mitigation is fully manual and
+2. Until that code fix lands, `make capacity TARGET=scylla PROFILE=soak
+   MODE=production` intentionally refuses to produce passing evidence. The
+   only currently-available diagnostic mitigation is fully manual and
    out-of-band: independently query the preloaded table's row count via
    `cqlsh` (or equivalent) immediately before invoking `go test`, and record
    that number yourself alongside the test's `t.Logf` output — the test
@@ -377,10 +468,9 @@ result; evidence containing secrets is never committed.
    access pattern, not just raw throughput.
 6. Add a soak variant gated on its own duration env var, looping the same
    load function until a deadline.
-7. Add a dedicated `make test-scylla-<resource>-capacity`-style target to the
-   root `Makefile` (never document a bare `go test` invocation as the primary
-   entry point) and document required env vars in this repo's `Makefile` per
-   the "Development Guidelines" rule that root `Makefile` is canonical.
+7. Add the scenario to the root capacity dispatcher's validated target/profile
+   matrix (never document a bare `go test` invocation as the primary entry
+   point) and document required variables in the root `Makefile`.
 8. **Required, not optional:** include an explicit preload-verification
    assertion — a bounded/approximate row count on the resource's table(s),
    logged and compared against the configured scale env var — before

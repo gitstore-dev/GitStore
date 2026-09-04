@@ -114,7 +114,7 @@ rejections as server failures.
 Run the opt-in production harness:
 
 ```bash
-make test-namespace-admission-capacity
+make capacity TARGET=namespace PROFILE=validation MODE=production
 ```
 
 It uses two independent API helper processes, replaces one replica during the

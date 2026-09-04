@@ -14,6 +14,11 @@ if [[ -n "${CAPACITY_TOKEN_FILE:-}" ]]; then
   export CAPACITY_TOKEN
 fi
 profile="${1:-${CAPACITY_PROFILE:-}}"
+mode="${MODE:-diagnostic}"
+case "${mode}" in
+  diagnostic|alpha|production) ;;
+  *) echo "MODE must be diagnostic, alpha, or production" >&2; exit 2 ;;
+esac
 if [[ -z "${profile}" ]]; then
   echo "usage: make capacity CAPACITY_PROFILE=<profile>" >&2
   exit 2
@@ -32,7 +37,9 @@ fi
 k6_image="${K6_IMAGE:-grafana/k6:2.1.0}"
 run_id="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 evidence_root="${CAPACITY_EVIDENCE_DIR:-${repo_root}/.gitstore/capacity}"
-evidence_dir="${evidence_root}/${profile}/${run_id}"
+target="${CAPACITY_TARGET:-api}"
+scenario="${CAPACITY_SCENARIO:-readiness}"
+evidence_dir="${evidence_root}/${target}/${scenario}/${mode}/${run_id}"
 mkdir -p "${evidence_dir}"
 
 for manifest_kind in config environment; do
@@ -51,25 +58,57 @@ for manifest_kind in config environment; do
 done
 
 metadata="${evidence_dir}/metadata.json"
+git_dirty=false
+if [[ "${CAPACITY_TEST_FORCE_DIRTY:-0}" == "1" || -n "$(git -C "${repo_root}" status --porcelain --untracked-files=normal)" ]]; then
+  git_dirty=true
+fi
 jq -n \
   --arg schema_version "1" \
   --arg profile "${profile}" \
+  --arg target "${target}" \
+  --arg scenario "${scenario}" \
+  --arg mode "${mode}" \
   --arg run_id "${run_id}" \
   --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg git_revision "$(git -C "${repo_root}" rev-parse HEAD)" \
-  --arg git_dirty "$(if [[ -z "$(git -C "${repo_root}" status --porcelain --untracked-files=normal)" ]]; then echo false; else echo true; fi)" \
+  --argjson git_dirty "${git_dirty}" \
   --arg k6_image "${k6_image}" \
   --arg config_digest "$(if [[ -f "${evidence_dir}/config.json" ]]; then shasum -a 256 "${evidence_dir}/config.json" | awk '{print $1}'; fi)" \
   --arg environment_digest "$(if [[ -f "${evidence_dir}/environment.json" ]]; then shasum -a 256 "${evidence_dir}/environment.json" | awk '{print $1}'; fi)" \
-  '{schemaVersion:($schema_version|tonumber), profile:$profile, runId:$run_id, startedAt:$started_at, gitRevision:$git_revision, gitDirty:($git_dirty=="true"), loadGenerator:{name:"k6", image:$k6_image}} + (if $config_digest == "" then {} else {configDigest:$config_digest} end) + (if $environment_digest == "" then {} else {environmentDigest:$environment_digest} end)' \
+  '{schemaVersion:($schema_version|tonumber), target:$target, scenario:$scenario, profile:$profile, mode:$mode, evidenceClass:$mode, productionTargets:{visibilityP95Seconds:1,visibilityP99Seconds:3}, runId:$run_id, startedAt:$started_at, gitRevision:$git_revision, gitDirty:$git_dirty, loadGenerator:{name:"k6", image:$k6_image}} + (if $config_digest == "" then {} else {configDigest:$config_digest} end) + (if $environment_digest == "" then {} else {environmentDigest:$environment_digest} end)' \
   >"${metadata}"
+
+if [[ "${mode}" != "diagnostic" && "${git_dirty}" == "true" ]]; then
+  echo "${mode} capacity evidence requires a clean verifier checkout" | tee "${evidence_dir}/source-state.log" >&2
+  jq --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '. + {completedAt:$completed_at,exitCode:2,sourceStateExitCode:2,passed:false}' \
+    "${metadata}" >"${metadata}.tmp"
+  mv "${metadata}.tmp" "${metadata}"
+  echo "capacity evidence: ${evidence_dir}"
+  exit 2
+fi
 
 export CAPACITY_EVIDENCE_DIR="${evidence_dir}"
 export CAPACITY_RUN_ID="${run_id}"
 
+container_check_status=0
+if [[ -n "${CAPACITY_DATASTORE_CONTAINERS:-}" ]]; then
+  if [[ -r "${evidence_dir}/environment.json" ]]; then
+    export CAPACITY_DATASTORE_EXPECTED_COUNT="$(jq -r '.topology.scyllaNodes // 0' "${evidence_dir}/environment.json")"
+    export CAPACITY_DATASTORE_EXPECTED_MEMORY_BYTES="$(jq -r '.datastore.memoryBytesPerNode // 0' "${evidence_dir}/environment.json")"
+  fi
+  if [[ -r "${evidence_dir}/config.json" ]]; then
+    export CAPACITY_DATASTORE_EXPECTED_SMP="$(jq -r '.services.scylla.smpPerNode // 0' "${evidence_dir}/config.json")"
+  fi
+  "${repo_root}/scripts/check-capacity-containers.sh" snapshot "${evidence_dir}/datastore-before.json"
+fi
+
 preflight="${repo_root}/tests/capacity/preflight/${profile}.sh"
 if [[ -x "${preflight}" ]]; then
   "${preflight}" "${evidence_dir}" 2>&1 | tee "${evidence_dir}/preflight.log"
+elif [[ "${mode}" != "diagnostic" ]]; then
+  echo "gate profile requires an executable environment preflight: ${preflight}" >&2
+  exit 2
 fi
 
 chaos_pid=""
@@ -111,6 +150,15 @@ else
 fi
 set -e
 
+if [[ -n "${CAPACITY_DATASTORE_CONTAINERS:-}" ]]; then
+  set +e
+  "${repo_root}/scripts/check-capacity-containers.sh" verify \
+    "${evidence_dir}/datastore-before.json" "${evidence_dir}/datastore-after.json" \
+    2>&1 | tee "${evidence_dir}/datastore-verifier.log"
+  container_check_status=${PIPESTATUS[0]}
+  set -e
+fi
+
 chaos_status=0
 if [[ -n "${chaos_pid}" ]]; then
   if kill -0 "${chaos_pid}" 2>/dev/null; then
@@ -128,7 +176,7 @@ fi
 
 verifier="${repo_root}/tests/capacity/verifiers/${profile}.sh"
 verifier_required=false
-if [[ "${profile}" != "api-readiness" && "${CAPACITY_MODE:-gate}" == "gate" ]]; then
+if [[ "${profile}" != "api-readiness" && "${mode}" != "diagnostic" ]]; then
   verifier_required=true
 fi
 
@@ -143,11 +191,26 @@ elif [[ "${verifier_required}" == "true" ]]; then
   verifier_status=2
 fi
 
+prometheus_status=0
+if [[ -n "${CAPACITY_PROMETHEUS_URL:-}" ]]; then
+  set +e
+  "${repo_root}/scripts/export-capacity-prometheus.sh" "${evidence_dir}" "${CAPACITY_PROMETHEUS_URL}" \
+    2>&1 | tee "${evidence_dir}/prometheus-export.log"
+  prometheus_status=${PIPESTATUS[0]}
+  set -e
+fi
+
 if (( status == 0 && chaos_status != 0 )); then
   status=${chaos_status}
 fi
 if (( status == 0 && verifier_status != 0 )); then
   status=${verifier_status}
+fi
+if (( status == 0 && container_check_status != 0 )); then
+  status=${container_check_status}
+fi
+if (( status == 0 && prometheus_status != 0 )); then
+  status=${prometheus_status}
 fi
 
 jq \
@@ -155,8 +218,10 @@ jq \
   --argjson exit_code "${status}" \
   --argjson chaos_exit_code "${chaos_status}" \
   --argjson verifier_exit_code "${verifier_status}" \
+  --argjson datastore_exit_code "${container_check_status}" \
+  --argjson prometheus_exit_code "${prometheus_status}" \
   --argjson verifier_required "${verifier_required}" \
-  '. + {completedAt:$completed_at, exitCode:$exit_code, chaosExitCode:$chaos_exit_code, verifierRequired:$verifier_required, verifierExitCode:$verifier_exit_code, passed:($exit_code == 0)}' \
+  '. + {completedAt:$completed_at, exitCode:$exit_code, sourceStateExitCode:0, chaosExitCode:$chaos_exit_code, verifierRequired:$verifier_required, verifierExitCode:$verifier_exit_code, datastoreVerifierExitCode:$datastore_exit_code, prometheusExitCode:$prometheus_exit_code, passed:($exit_code == 0 and .mode != "diagnostic" and .gitDirty == false)}' \
   "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
 

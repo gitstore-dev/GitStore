@@ -82,7 +82,7 @@ make ps
 Use `make compose` without `DETACH=1` to keep the compose stack in the foreground. After the API is healthy, create a starter namespace and repository:
 
 ```bash
-make bootstrap ADMIN_PASSWORD=<admin-password>
+make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
 ```
 
 The bootstrap command prints a clone URL similar to:

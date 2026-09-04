@@ -51,6 +51,31 @@ func TestUsersAddCreatesFileWithHashedPassword(t *testing.T) {
 	}
 }
 
+func TestValidateLocalConfigRejectsMalformedInputs(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+	policyPath := filepath.Join(dir, "policy.yaml")
+	if err := os.WriteFile(configPath, []byte("[api\nport = 4000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyPath, []byte("version: v1\nroles: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"validate-local-config", "--config-file", configPath, "--policy-file", policyPath}, strings.NewReader(""), &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "Invalid configuration") {
+		t.Fatalf("malformed config: code = %d, stderr = %q", code, stderr.String())
+	}
+
+	validConfig := filepath.Join("..", "..", "..", "config", "config.toml")
+	stderr.Reset()
+	t.Setenv("GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY", "config-validation-placeholder")
+	code = run([]string{"validate-local-config", "--config-file", validConfig, "--policy-file", policyPath}, strings.NewReader(""), &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "Invalid RBAC policy") {
+		t.Fatalf("malformed policy: code = %d, stderr = %q", code, stderr.String())
+	}
+}
+
 func TestUsersAddRejectsDuplicateWithoutChangingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "users.yaml")
 	original := []byte("version: v1\nusers:\n  - username: alice\n    password_hash: old\n")

@@ -89,6 +89,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "generate-serviceaccount-key":
 		return runGenerateServiceAccountKey(args[1:], stdout, stderr)
 
+	case "validate-local-config":
+		return runValidateLocalConfig(args[1:], stdout, stderr)
+
 	default:
 		fmt.Fprintf(stderr, "Unknown subcommand: %s\n", args[0])
 		printUsage(stderr)
@@ -109,6 +112,31 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "  scylla-projection-repair (--dry-run | --confirm) [Scylla flags]")
 	fmt.Fprintln(output, "  enroll-serviceaccount --api-url <url> --admin-token <token> --namespace <namespace> --name <name> --key-id <id> --private-key-path <path> [--replace-existing-key]")
 	fmt.Fprintln(output, "  generate-serviceaccount-key --private-key-path <path>")
+	fmt.Fprintln(output, "  validate-local-config --config-file <config.toml> --policy-file <policy.yaml>")
+}
+
+func runValidateLocalConfig(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("validate-local-config", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	configFile := flags.String("config-file", "", "path to config.toml")
+	policyFile := flags.String("policy-file", "", "path to policy.yaml")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(*configFile) == "" || strings.TrimSpace(*policyFile) == "" {
+		fmt.Fprintln(stderr, "validate-local-config requires --config-file and --policy-file")
+		return 2
+	}
+	if _, err := config.LoadFrom(*configFile); err != nil {
+		fmt.Fprintf(stderr, "Invalid configuration: %v\n", err)
+		return 1
+	}
+	if err := rbaclocal.ValidatePolicyFile(*policyFile); err != nil {
+		fmt.Fprintf(stderr, "Invalid RBAC policy: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, "Configuration and RBAC policy are valid")
+	return 0
 }
 
 type actionList []string

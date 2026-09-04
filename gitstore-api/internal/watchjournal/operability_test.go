@@ -22,11 +22,17 @@ func TestNamespaceWatchMetricsRegisterBoundedSignals(t *testing.T) {
 	metrics.SetLeader(true)
 	metrics.SetSubscribers("typed", 2)
 	metrics.IncExpiry(ReasonRetentionExpired)
+	metrics.ObserveCDCDiscovery(time.Now().Add(-100*time.Millisecond), time.Now())
+	metrics.ObserveMaterializerStage("journal_append", 25*time.Millisecond)
+	metrics.ObserveMaterializerBatchSize(8)
 
-	assert.Equal(t, 3, testutil.CollectAndCount(metrics,
+	assert.Equal(t, 6, testutil.CollectAndCount(metrics,
 		"gitstore_namespace_watch_materializer_leader",
 		"gitstore_namespace_watch_subscribers",
 		"gitstore_namespace_watch_expired_total",
+		"gitstore_namespace_watch_cdc_discovery_seconds",
+		"gitstore_namespace_watch_materializer_stage_duration_seconds",
+		"gitstore_namespace_watch_materializer_batch_size",
 	))
 }
 

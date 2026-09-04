@@ -100,6 +100,7 @@ type descendantCommitGitWriter struct {
 type advancingAfterAdmissionGitWriter struct {
 	*commitOrderGitWriter
 	resolveCount int
+	advanceAt    int
 }
 
 func (w *advancingAfterAdmissionGitWriter) ResolveRefForRepo(
@@ -109,7 +110,11 @@ func (w *advancingAfterAdmissionGitWriter) ResolveRefForRepo(
 	w.mu.Lock()
 	w.resolveCount++
 	resolveCount := w.resolveCount
-	if resolveCount >= 3 {
+	advanceAt := w.advanceAt
+	if advanceAt == 0 {
+		advanceAt = 3
+	}
+	if resolveCount >= advanceAt {
 		sha := string(rune('a'+resolveCount)) + "000000000000000000000000000000000000000"
 		tree := cloneCommitTree(w.trees[w.current])
 		tree["namespaces/unrelated-"+sha[:1]+".md"] = namespaceManifestForGraphQL(
@@ -423,6 +428,28 @@ func TestNamespaceGraphQLReturnsAfterExactHeadAdmissionDespiteLaterDisjointCommi
 	assert.Equal(t, "post-admission-progress", created.Name)
 	assert.Equal(t, 3, writer.resolveCount,
 		"an unchanged file at the post-write descendant head must finish without chasing further commits")
+
+	persisted, err := seed.GetNamespaceByName(context.Background(), created.Name)
+	require.NoError(t, err)
+	assert.Equal(t, created.GitCommitSHA, persisted.GitCommitSHA)
+}
+
+func TestNamespaceGraphQLAdmissionProgressesWhileDisjointCommitsContinuouslyAdvanceHead(t *testing.T) {
+	seed := newTestSvc(t, &mockGitWriter{})
+	base := newCommitOrderGitWriter(
+		"deadbeef",
+		"8888888888888888888888888888888888888888",
+	)
+	writer := &advancingAfterAdmissionGitWriter{commitOrderGitWriter: base, advanceAt: 2}
+	service := newCommitOrderService(t, seed.Store(), writer)
+
+	created, err := service.CreateNamespace(
+		context.Background(),
+		createNamespaceInput("pre-admission-progress", model.NamespaceTierUser),
+		"alice",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "pre-admission-progress", created.Name)
 
 	persisted, err := seed.GetNamespaceByName(context.Background(), created.Name)
 	require.NoError(t, err)

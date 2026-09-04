@@ -62,7 +62,10 @@ func openNamespaceWatch(t *testing.T, apiURL, token, cursor string) *websocket.C
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(10*time.Second)))
-	require.NoError(t, conn.WriteJSON(map[string]any{"type": "connection_init"}))
+	require.NoError(t, conn.WriteJSON(map[string]any{
+		"type":    "connection_init",
+		"payload": map[string]any{"Authorization": "Bearer " + token},
+	}))
 	var message map[string]any
 	require.NoError(t, conn.ReadJSON(&message))
 	require.Equal(t, "connection_ack", message["type"])

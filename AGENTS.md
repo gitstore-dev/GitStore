@@ -4,7 +4,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 
 ## Active Technologies
 - API/Data stack (Go): `gqlgen v0.17.90`, `go-memdb v1.3.5` (dev), `gocqlx/v3 v3.0.4` + `gocql` (ScyllaDB prod), `go-playground/validator/v10`, `go.uber.org/zap`, `google/uuid`, `encoding/json`.
-- Git service stack (Rust): `gix 0.84.0` (+ `gix-ref 0.64.0`), `tokio 1.35`, `axum 0.8`, `tonic 0.14`, `tracing 0.1`, `anyhow 1.0`, `async-trait 0.1`, `serde 1.0`, `serde_yaml 0.9`.
+- Git service stack (Rust): `gix 0.84.0` (+ `gix-ref 0.64.0`), `tokio 1.35`, `tonic 0.14`, `tracing 0.1`, `anyhow 1.0`, `async-trait 0.1`, `serde 1.0`, `serde_yaml 0.9`.
 - Storage model: bare Git repositories on local filesystem; datastore abstraction with `go-memdb` in development and ScyllaDB 5.x+ in production.
 - Controller manager stack (Go): `golang.org/x/time` (queue rate limiting), `github.com/alitto/pond/v2 v2.7.1` (worker pools), `github.com/cenkalti/backoff/v5 v5.0.3` (retry/backoff), `github.com/prometheus/client_golang v1.23.2` (health metrics), `net/http` stdlib (health/poison API), `go.uber.org/zap`, `github.com/spf13/viper` (025-controller-manager-runtime)
 - Go 1.25 + `go.uber.org/zap`, `github.com/cenkalti/backoff/v5 v5.0.3`, `github.com/prometheus/client_golang v1.23.2`, `github.com/alitto/pond/v2 v2.7.1`, `runtime/debug` (stdlib — for stack traces) (026-reconcile-handler)
@@ -47,8 +47,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `make compose` — run all three core services with the Docker Compose `local` profile and shared `CONFIG_FILE` (default: `./config/config.toml`) in the foreground using the default in-memory datastore; no service `.env` files are required.
 - `make compose DATASTORE=scylla` — run the full core stack with single-node Scylla from `compose.yml` + `compose.scylla.yml`.
 - `make compose DATASTORE=scylla PROFILE=cluster` — run the full core stack with the three-node Scylla cluster from `compose.yml` + `compose.scylla.cluster.yml`.
-- `make compose-config-check` — validate local-profile config selection, explicit binary arguments, and read-only config/policy mounts without starting services.
-- `make validate-local-config` — verify the selected `CONFIG_FILE` and local RBAC policy exist and are readable.
+- `make check TARGET=<all|config|compose|licenses|credentials>` — run the selected validation family. `compose` validates local-profile arguments and read-only mounts; `config` validates the selected config and RBAC policy; `all` runs every check family.
 - `DETACH=1 make compose` — run the core Docker Compose stack in the background.
 - `make scylla` — run only local single-node Scylla services from `compose.yml` + `compose.scylla.yml` (CI-friendly, `--smp=1`, replication factor 1).
 - `make scylla PROFILE=cluster` — run only local three-node Scylla services from `compose.yml` + `compose.scylla.cluster.yml` (replication factor 3; tune per-node shards with `SCYLLA_CLUSTER_SMP`, default `1` for Docker Desktop compatibility).
@@ -58,18 +57,13 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `make hash-user-password PASSWORD=<password>` — print a bcrypt hash for manual `users.yaml` maintenance.
 - `make add-role ROLE=<role> ALLOW=<actions> [DENY=<actions>] [POLICY_FILE=<path>]` — add an RBAC role through an atomic YAML-aware write; comma-separate multiple actions.
 - `make assign-role SUBJECT=<subject> ROLE=<role> [POLICY_FILE=<path>]` — idempotently bind an existing role to any authentication subject.
-- `make gen-jwt-secret` — generate a random JWT secret and append `GITSTORE_AUTH__JWT__SECRET` to `gitstore-api/.env`. Run once on initial setup.
-- `make gen-hmac-secret` — generate a random HMAC secret and append `GITSTORE_AUTH__GRPC__HMAC_SECRET` to `gitstore-api/.env`. Required for gRPC inter-service auth (git-service ↔ API). Run once on initial setup.
-- `make bootstrap-token ADMIN_PASSWORD=<password>` — authenticate against GraphQL and print/cache a bootstrap bearer token. Prints a remediation hint if the password is wrong.
-- `make bootstrap ADMIN_PASSWORD=<password>` — create the default namespace and repository through the running API.
-- `make bootstrap-namespace` / `make bootstrap-repository` — create only one bootstrap resource. `bootstrap-repository` requires the namespace to exist.
-- `make git-clean-data CONFIRM=1` — remove the native local git-service repository data directory only; does not remove Docker volumes.
-- `make build`, `make test`, `make lint`, `make license-check`, `make pr-ready` — aggregate development and PR readiness checks.
+- `make secret TARGET=<jwt|grpc-hmac>` — generate local authentication material. `jwt` updates `gitstore-api/.env`; `grpc-hmac` writes the same shared secret to both service `.env` files.
+- `make bootstrap TARGET=<all|token|namespace|repository> [ADMIN_PASSWORD=<password>]` — authenticate/cache a token or create selected bootstrap resources. `repository` requires the namespace to exist.
+- `make clean TARGET=<git-data|controller-checkpoints> CONFIRM=1` — remove only the selected local runtime state; never removes Docker volumes.
+- `make build`, `make test`, `make lint`, `make check TARGET=all`, `make pr-ready` — aggregate development and PR readiness checks.
 - `make test-scylla-hardening` — run focused datastore contracts without an external Scylla instance.
 - `make test-scylla-integration SCYLLA_TEST_ADDR=<host:port>` — run tagged Scylla datastore contracts.
-- `make test-scylla-capacity` — run the opt-in capacity/soak test; configure `SCYLLA_CAPACITY_PRODUCTS`, `SCYLLA_CAPACITY_CONCURRENCY`, and `SCYLLA_CAPACITY_DURATION`.
-- `make test-namespace-admission-capacity` — run the opt-in two-replica 30-minute Namespace validation soak; configure `NAMESPACE_CAPACITY_DURATION` to a value of at least `30m`. The harness enforces 500 files/request, at most 50 Namespace manifests, 10 requests/second, concurrency 20, latency/error/correctness/recovery limits, and per-replica CPU, retained-memory, and goroutine thresholds.
-- `make test-namespace-watch-capacity` — run the deployment-driven Namespace watch gate against two distinct API replicas and their shared Scylla journal. Set `NAMESPACE_WATCH_API_A`, `NAMESPACE_WATCH_API_B`, `NAMESPACE_WATCH_API_REPLACEMENT` (one of A/B), `NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE`, and `NAMESPACE_WATCH_TOKEN`; an external deployment harness must watch the trigger and restart that endpoint in place. The defaults enforce 1,000 WebSocket subscribers, 60 minutes at 10 transitions/second plus 100/second bursts, 10,000-event GraphQL replay, observed outage/new-process recovery with cursor-resumed clients, latency/error/correctness limits, and mandatory per-replica GOMAXPROCS-normalized process CPU/resident-memory thresholds from `/metrics`.
+- `make capacity TARGET=<api|namespace|scylla> PROFILE=<scenario> MODE=<diagnostic|alpha|production>` — the only public capacity interface. Valid target/profile pairs are `api/readiness`, `namespace/admission`, `namespace/validation`, `namespace/watch`, `namespace/recovery`, and `scylla/soak`. The admission profile is deployed k6 load; validation is the in-process two-replica soak. Namespace watch uses a bounded 50-resource update pool by default while retaining its independent subscriber, transition-rate, burst, and replay targets. Diagnostic evidence cannot pass a gate; alpha Namespace-watch evidence enforces visibility p95 ≤2s and warns above the unchanged 1s production target; production enforces p95 ≤1s and p99 ≤3s. Set `CAPACITY_OBSERVABILITY=prometheus` and `CAPACITY_PROMETHEUS_TARGETS=<host:port,...>` to have the dispatcher manage an isolated scraper and export current-run API phase queries into the evidence bundle.
 - `make admin-compose`, `make admin-stop`, `make admin-down`, `make admin-logs` — optional admin compose wrappers.
 
 Common bootstrap variables:

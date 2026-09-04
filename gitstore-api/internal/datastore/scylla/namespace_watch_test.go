@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gocql/gocql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,6 +52,28 @@ func TestResolveAmbiguousNamespaceLeaseAcquisition(t *testing.T) {
 	}
 }
 
+func TestNamespaceWatchBatchCountBoundsStatementsAndBytes(t *testing.T) {
+	small := make([]datastore.NamespaceWatchEvent, namespaceWatchBatchMaxStatements+10)
+	for index := range small {
+		small[index] = datastore.NamespaceWatchEvent{Name: "namespace", Payload: []byte(`{"kind":"Namespace"}`)}
+	}
+	require.Equal(t, namespaceWatchBatchMaxStatements, namespaceWatchBatchCount(small, 1, 4096))
+
+	large := []datastore.NamespaceWatchEvent{
+		{Name: "one", Payload: make([]byte, namespaceWatchBatchMaxBytes/2)},
+		{Name: "two", Payload: make([]byte, namespaceWatchBatchMaxBytes/2)},
+	}
+	require.Equal(t, 1, namespaceWatchBatchCount(large, 1, 4096))
+
+	oversized := []datastore.NamespaceWatchEvent{{Payload: make([]byte, namespaceWatchBatchMaxBytes+1)}}
+	require.Equal(t, 1, namespaceWatchBatchCount(oversized, 1, 4096))
+}
+
+func TestNamespaceWatchBatchCountStopsAtBucketBoundary(t *testing.T) {
+	events := make([]datastore.NamespaceWatchEvent, 3)
+	require.Equal(t, 1, namespaceWatchBatchCount(events, 3, 3))
+}
+
 func TestResolveAmbiguousNamespaceLeaseRenewal(t *testing.T) {
 	previousExpiry := time.Now().UTC().Add(30 * time.Second)
 	expires := previousExpiry.Add(30 * time.Second)
@@ -88,4 +111,47 @@ func TestResolveAmbiguousNamespaceLeaseRenewal(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveAmbiguousNamespaceWatchPublication(t *testing.T) {
+	epoch := gocql.TimeUUID()
+	lease := datastore.NamespaceWatchLease{Holder: "replica-a", FencingToken: 7}
+	clock := namespaceWatchClockRow{Epoch: epoch, HighWater: 10, Holder: lease.Holder, FencingToken: int64(lease.FencingToken)}
+	candidates := []datastore.NamespaceWatchEvent{
+		{Epoch: epoch.String(), Sequence: 11, Type: datastore.NamespaceWatchAdded, Name: "one", DeduplicationKey: "key-one", FencingToken: lease.FencingToken},
+		{Epoch: epoch.String(), Sequence: 12, Type: datastore.NamespaceWatchModified, Name: "two", DeduplicationKey: "key-two", FencingToken: lease.FencingToken},
+	}
+	readMatching := func(_ context.Context, candidate datastore.NamespaceWatchEvent) (datastore.NamespaceWatchEvent, error) {
+		return candidate, nil
+	}
+
+	resolved, err := runNamespaceWatchPublicationResolution(context.Background(), clock, lease, candidates, errors.New("write timeout"),
+		func(context.Context) (namespaceWatchClockRow, error) {
+			published := clock
+			published.HighWater = 12
+			return published, nil
+		}, readMatching)
+	require.NoError(t, err)
+	require.True(t, resolved, "an ambiguously acknowledged published range must not be appended again")
+
+	resolved, err = runNamespaceWatchPublicationResolution(context.Background(), clock, lease, candidates, nil,
+		func(context.Context) (namespaceWatchClockRow, error) { return clock, nil }, readMatching)
+	require.NoError(t, err)
+	require.False(t, resolved, "an unpublished range may use the per-event recovery path")
+
+	stale := clock
+	stale.Holder = "replica-b"
+	_, err = runNamespaceWatchPublicationResolution(context.Background(), clock, lease, candidates, nil,
+		func(context.Context) (namespaceWatchClockRow, error) { return stale, nil }, readMatching)
+	require.ErrorIs(t, err, datastore.ErrStaleWatchLease)
+
+	published := clock
+	published.HighWater = 12
+	_, err = runNamespaceWatchPublicationResolution(context.Background(), clock, lease, candidates, nil,
+		func(context.Context) (namespaceWatchClockRow, error) { return published, nil },
+		func(_ context.Context, candidate datastore.NamespaceWatchEvent) (datastore.NamespaceWatchEvent, error) {
+			candidate.DeduplicationKey = "different"
+			return candidate, nil
+		})
+	require.ErrorContains(t, err, "different event")
 }

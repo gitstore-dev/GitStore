@@ -36,6 +36,18 @@ func TestMetricsEndpoint(t *testing.T) {
 		"expected text/plain content-type, got %q", ct)
 }
 
+func TestMetricsEndpointExposesProcessInstanceIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := health.NewHandler(health.HandlerDeps{InstanceID: "replica-unique-id"})
+	router := gin.New()
+	router.GET("/metrics", h.Metrics)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `gitstore_api_process_instance_info{instance_id="replica-unique-id"} 1`)
+}
+
 func TestReadyFailsClosedWhenNamespaceWatchIsNotReady(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h := health.NewHandler(health.HandlerDeps{
