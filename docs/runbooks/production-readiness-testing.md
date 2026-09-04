@@ -276,7 +276,10 @@ API process identities to those containers.
 The dispatcher enforces the same manifest preflight for Go-based capacity
 profiles. It records their focused Go test as the domain verifier and, for
 deployed Scylla-backed profiles, refuses alpha or production evidence without
-the before/after datastore checks.
+the before/after datastore checks. Namespace watch and recovery additionally
+repeat the live endpoint-to-container and release-artifact verification after
+the workload, retaining the replacement state in
+`postflight-environment.json` and rejecting stale or debug replacements.
 
 Capacity preflight MUST identify optimized/release service artifacts. Debug
 builds are useful for functional diagnosis but cannot produce capacity evidence;

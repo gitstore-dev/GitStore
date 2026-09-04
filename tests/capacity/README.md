@@ -86,6 +86,10 @@ legitimate replicas start in the same kernel tick.
 `CAPACITY_BASE_URL` must be one of those verified endpoints. Every live
 container must also use a digest-pinned image, the `/app/api` release
 executable, and an OCI revision matching the tested checkout.
+For `namespace/watch` and `namespace/recovery`, the dispatcher repeats this
+identity and artifact inspection after the workload. A replacement using a
+different image, executable, or revision therefore makes the evidence fail and
+is retained in `postflight-environment.json` for audit.
 
 The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
 `3g` per node. Override it explicitly when testing another resource tier and

@@ -164,6 +164,17 @@ if (( preflight_status == 0 && container_check_status == 0 )); then
   set -e
 fi
 
+postflight_status=0
+if (( preflight_status == 0 && container_check_status == 0 && verifier_status == 0 )) &&
+  [[ "${mode}" != "diagnostic" ]] &&
+  [[ "${target}/${profile}" == "namespace/watch" || "${target}/${profile}" == "namespace/recovery" ]]; then
+  set +e
+  "${repo_root}/scripts/validate-capacity-evidence.sh" "${evidence_dir}" "${target}" "${profile}" "${mode}" postflight \
+    2>&1 | tee "${evidence_dir}/postflight.log"
+  postflight_status=${PIPESTATUS[0]}
+  set -e
+fi
+
 if (( preflight_status == 0 && container_check_status == 0 )) && [[ -n "${CAPACITY_DATASTORE_CONTAINERS:-}" ]]; then
   set +e
   "${repo_root}/scripts/check-capacity-containers.sh" verify \
@@ -179,6 +190,9 @@ if (( status == 0 && verifier_status != 0 )); then
 fi
 if (( status == 0 && container_check_status != 0 )); then
   status=${container_check_status}
+fi
+if (( status == 0 && postflight_status != 0 )); then
+  status=${postflight_status}
 fi
 
 prometheus_status=0
@@ -196,8 +210,9 @@ fi
 jq --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson exit_code "${status}" --argjson preflight_exit_code "${preflight_status}" \
   --argjson verifier_exit_code "${verifier_status}" --argjson datastore_exit_code "${container_check_status}" \
+  --argjson postflight_exit_code "${postflight_status}" \
   --argjson prometheus_exit_code "${prometheus_status}" \
-  '. + {completedAt:$completed_at,exitCode:$exit_code,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic")}' \
+  '. + {completedAt:$completed_at,exitCode:$exit_code,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,postflightRequired:(.mode != "diagnostic" and .target == "namespace" and (.profile == "watch" or .profile == "recovery")),postflightExitCode:$postflight_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic")}' \
   "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
 echo "capacity evidence: ${evidence_dir}"

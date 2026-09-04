@@ -8,11 +8,19 @@ evidence_dir="${1:?evidence directory is required}"
 target="${2:?capacity target is required}"
 profile="${3:?capacity profile is required}"
 mode="${4:?capacity mode is required}"
+phase="${5:-preflight}"
+
+case "${phase}" in
+  preflight|postflight) ;;
+  *) echo "capacity evidence phase must be preflight or postflight" >&2; exit 2 ;;
+esac
+
+evidence_file="${evidence_dir}/${phase}-environment.json"
 
 if [[ "${mode}" == "diagnostic" ]]; then
   jq -n --arg target "${target}" --arg profile "${profile}" --arg mode "${mode}" \
     '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,passed:true}' \
-    >"${evidence_dir}/preflight-environment.json"
+    >"${evidence_file}"
   exit 0
 fi
 
@@ -266,7 +274,11 @@ case "${target}/${profile}" in
         echo "namespace/recovery replacement must identify one of the two replicas" >&2
         exit 2
       }
-      [[ -n "${NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE:-}" && ! -e "${NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE}" ]] || {
+      [[ -n "${NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE:-}" ]] || {
+        echo "namespace/recovery requires NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE" >&2
+        exit 2
+      }
+      [[ "${phase}" == "postflight" || ! -e "${NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE}" ]] || {
         echo "namespace/recovery requires a fresh NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE" >&2
         exit 2
       }
@@ -317,4 +329,4 @@ jq -n \
   --slurpfile config "${config}" --slurpfile environment "${environment}" \
   '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,passed:true,config:$config[0],environment:$environment[0]} +
    (if ($live_api_replicas | length) == 0 then {} else {topology:{liveApiReplicas:$live_api_replicas},artifacts:{releaseServiceContainers:$release_service_containers}} end)' \
-  >"${evidence_dir}/preflight-environment.json"
+  >"${evidence_file}"
