@@ -35,7 +35,7 @@ if CAPACITY_DRY_RUN=1 "${dispatcher}" namespace watch gate >/dev/null 2>&1; then
 fi
 
 mkdir -p "${test_dir}/bin" "${test_dir}/readiness-valid" "${test_dir}/readiness-missing"
-printf '#!/usr/bin/env bash\ncase "$*" in *api-a*) printf "process_start_time_seconds 100\\n" ;; *api-b*) printf "process_start_time_seconds 200\\n" ;; *) exit 1 ;; esac\n' >"${test_dir}/bin/curl"
+printf '#!/usr/bin/env bash\ncase "$*" in *api-a*|*api-alias*) printf "process_start_time_seconds 100\\n" ;; *api-b*) printf "process_start_time_seconds 200\\n" ;; *) exit 1 ;; esac\n' >"${test_dir}/bin/curl"
 chmod +x "${test_dir}/bin/curl"
 cp "${repo_root}/tests/capacity/examples/config-manifest.json" "${test_dir}/readiness-valid/config.json"
 cp "${repo_root}/tests/capacity/examples/environment-manifest.json" "${test_dir}/readiness-valid/environment.json"
@@ -116,8 +116,8 @@ jq -e 'length == 3 and all(.[]; .memoryLimitBytes == 3221225472 and .smpPerNode 
 if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=aliased-api-run \
   CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
   CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-a.internal \
-  NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-b.internal \
+  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-alias.internal \
+  NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-alias.internal \
   CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
   CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
   CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
