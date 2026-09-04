@@ -38,6 +38,38 @@ require_declared_integer() {
   (( value == expected )) || { echo "${name}=${value} does not match manifest value ${expected}" >&2; exit 2; }
 }
 
+live_api_replicas='[]'
+validate_api_deployment() {
+  local expected_replicas="$1" endpoint metrics process_start
+  [[ -n "${CAPACITY_API_ENDPOINTS:-}" ]] || {
+    echo "${target}/${profile} evidence requires CAPACITY_API_ENDPOINTS" >&2
+    exit 2
+  }
+  IFS=',' read -r -a api_endpoints <<<"${CAPACITY_API_ENDPOINTS}"
+  (( ${#api_endpoints[@]} == expected_replicas )) || {
+    echo "CAPACITY_API_ENDPOINTS count does not match the declared API topology" >&2
+    exit 2
+  }
+  for endpoint in "${api_endpoints[@]}"; do
+    [[ "${endpoint}" =~ ^https?://[^[:space:],]+$ ]] || { echo "invalid live API endpoint: ${endpoint}" >&2; exit 2; }
+    metrics="$(curl -fsS --max-time 5 "${endpoint%/}/metrics")" || {
+      echo "cannot scrape live API endpoint: ${endpoint}" >&2
+      exit 1
+    }
+    process_start="$(awk '$1 == "process_start_time_seconds" { print $2; exit }' <<<"${metrics}")"
+    [[ "${process_start}" =~ ^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$ ]] || {
+      echo "live API endpoint does not expose process_start_time_seconds: ${endpoint}" >&2
+      exit 1
+    }
+    live_api_replicas="$(jq -c --arg endpoint "${endpoint%/}" --arg process_start "${process_start}" \
+      '. + [{endpoint:$endpoint,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${live_api_replicas}")"
+  done
+  [[ "$(jq '[.[].processStartTimeSeconds] | unique | length' <<<"${live_api_replicas}")" == "${expected_replicas}" ]] || {
+    echo "CAPACITY_API_ENDPOINTS must identify distinct live API processes" >&2
+    exit 1
+  }
+}
+
 validate_scylla_deployment() {
   local config_nodes config_smp environment_nodes environment_memory environment_auth
   config_nodes="$(jq -r '.services.scylla.nodes' "${config}")"
@@ -108,18 +140,31 @@ case "${target}/${profile}" in
     require_declared_integer CAPACITY_API_REPLICAS "${config_api_replicas}"
     [[ "${CAPACITY_API_BUILD:-}" == "release" ]] || { echo "CAPACITY_API_BUILD=release is required" >&2; exit 2; }
     [[ "${CAPACITY_GIT_SERVICE_BUILD:-}" == "release" ]] || { echo "CAPACITY_GIT_SERVICE_BUILD=release is required" >&2; exit 2; }
+    validate_api_deployment "${config_api_replicas}"
+    [[ -n "${NAMESPACE_WATCH_API_A:-}" && -n "${NAMESPACE_WATCH_API_B:-}" ]] || {
+      echo "${target}/${profile} evidence requires both API endpoints" >&2
+      exit 2
+    }
+    api_a="${NAMESPACE_WATCH_API_A%/}"
+    api_b="${NAMESPACE_WATCH_API_B%/}"
+    [[ "${api_a}" != "${api_b}" ]] || {
+      echo "${target}/${profile} API endpoints must identify distinct replicas" >&2
+      exit 2
+    }
+    jq -e --arg api_a "${api_a}" --arg api_b "${api_b}" \
+      '([.[].endpoint] | index($api_a)) != null and ([.[].endpoint] | index($api_b)) != null' \
+      <<<"${live_api_replicas}" >/dev/null || {
+      echo "NAMESPACE_WATCH_API_A and NAMESPACE_WATCH_API_B must be members of CAPACITY_API_ENDPOINTS" >&2
+      exit 2
+    }
     validate_scylla_deployment
     if [[ "${profile}" == "recovery" ]]; then
-      [[ -n "${NAMESPACE_WATCH_API_A:-}" && -n "${NAMESPACE_WATCH_API_B:-}" && -n "${NAMESPACE_WATCH_API_REPLACEMENT:-}" ]] || {
+      [[ -n "${NAMESPACE_WATCH_API_REPLACEMENT:-}" ]] || {
         echo "namespace/recovery evidence requires both API endpoints and the replacement endpoint" >&2
         exit 2
       }
-      [[ "${NAMESPACE_WATCH_API_A%/}" != "${NAMESPACE_WATCH_API_B%/}" ]] || {
-        echo "namespace/recovery API endpoints must identify distinct replicas" >&2
-        exit 2
-      }
       replacement="${NAMESPACE_WATCH_API_REPLACEMENT%/}"
-      [[ "${replacement}" == "${NAMESPACE_WATCH_API_A%/}" || "${replacement}" == "${NAMESPACE_WATCH_API_B%/}" ]] || {
+      [[ "${replacement}" == "${api_a}" || "${replacement}" == "${api_b}" ]] || {
         echo "namespace/recovery replacement must identify one of the two replicas" >&2
         exit 2
       }
@@ -169,6 +214,8 @@ esac
 
 jq -n \
   --arg target "${target}" --arg profile "${profile}" --arg mode "${mode}" \
+  --argjson live_api_replicas "${live_api_replicas}" \
   --slurpfile config "${config}" --slurpfile environment "${environment}" \
-  '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,passed:true,config:$config[0],environment:$environment[0]}' \
+  '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,passed:true,config:$config[0],environment:$environment[0]} +
+   (if ($live_api_replicas | length) == 0 then {} else {topology:{liveApiReplicas:$live_api_replicas}} end)' \
   >"${evidence_dir}/preflight-environment.json"

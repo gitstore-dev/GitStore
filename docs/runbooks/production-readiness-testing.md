@@ -251,6 +251,10 @@ Namespace recovery requires a fresh
 selected endpoint when the file appears. The verifier records an actual
 outage, requires a changed `process_start_time_seconds`, and resumes delivery
 from the pre-replacement cursor.
+Namespace watch and recovery runs must also provide every declared API replica
+in `CAPACITY_API_ENDPOINTS`. Preflight scrapes and retains each process start
+time, rejects aliases that resolve to one process, and requires the two watch
+endpoints to belong to that verified live set.
 The dispatcher enforces the same manifest preflight for Go-based capacity
 profiles. It records their focused Go test as the domain verifier and, for
 deployed Scylla-backed profiles, refuses alpha or production evidence without
