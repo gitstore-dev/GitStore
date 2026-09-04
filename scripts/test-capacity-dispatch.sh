@@ -72,7 +72,7 @@ done
 
 mkdir -p "${test_dir}/evidence"
 printf '#!/usr/bin/env bash\necho "mock capacity command: $*"\n[[ "${FAIL_MAKE:-0}" != "1" ]]\n' >"${test_dir}/bin/make"
-printf '#!/usr/bin/env bash\nif [[ "$1" == exec ]]; then case "$2" in api-1) printf "process_start_time_seconds 100\\n" ;; api-2) printf "process_start_time_seconds 200\\n" ;; *) if [[ "${MOCK_SCYLLA_BAD_MEMBERSHIP:-0}" == 1 ]]; then printf "UN node-1\\n"; else printf "UN node-1\\nUN node-2\\nUN node-3\\n"; fi ;; esac; exit 0; fi\nif [[ "$*" == *api-1* ]]; then cat "${MOCK_SERVICE_CONTAINERS_FILE}"; exit 0; fi\nprintf '\''[{"Name":"/scylla-1","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}},{"Name":"/scylla-2","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}},{"Name":"/scylla-3","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}}]'\''\n' >"${test_dir}/bin/docker"
+printf '#!/usr/bin/env bash\nif [[ "$1" == exec ]]; then case "$2" in api-1) printf "process_start_time_seconds 100\\n" ;; api-2) printf "process_start_time_seconds 200\\n" ;; *) if [[ "${MOCK_SCYLLA_BAD_MEMBERSHIP:-0}" == 1 ]]; then printf "UN node-1\\n"; else printf "UN node-1\\nUN node-2\\nUN node-3\\n"; fi ;; esac; exit 0; fi\nif [[ "$*" == *api-1* ]]; then cat "${MOCK_SERVICE_CONTAINERS_FILE}"; else cat "${MOCK_SCYLLA_CONTAINERS_FILE}"; fi\n' >"${test_dir}/bin/docker"
 chmod +x "${test_dir}/bin/make"
 chmod +x "${test_dir}/bin/docker"
 source_revision="$(git -C "${repo_root}" rev-parse HEAD)"
@@ -83,6 +83,9 @@ jq -n --arg revision "${source_revision}" --arg digest "${image_digest}" '[
   {Name:"/git-1",Image:("sha256:"+$digest),Path:"/app/git-service",Config:{Image:("ghcr.io/gitstore-dev/git-service@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}}
 ]' >"${test_dir}/service-containers.json"
 jq '.[0].Config.Image = "ghcr.io/gitstore-dev/api:latest"' "${test_dir}/service-containers.json" >"${test_dir}/unverified-service-containers.json"
+jq -n '[range(1;4) as $i | {Id:("scylla-id-"+($i|tostring)),Name:("/scylla-"+($i|tostring)),Config:{Image:"scylla",Cmd:["--smp=2"]},RestartCount:0,HostConfig:{Memory:3221225472,NanoCpus:0,CpusetCpus:""},State:{Running:true,OOMKilled:false,StartedAt:"start"}}]' >"${test_dir}/scylla-containers.json"
+jq '[.[0], .[0], .[0]]' "${test_dir}/scylla-containers.json" >"${test_dir}/duplicate-scylla-containers.json"
+export MOCK_SCYLLA_CONTAINERS_FILE="${test_dir}/scylla-containers.json"
 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=test-run \
   "${dispatcher}" namespace validation diagnostic >/dev/null
 metadata="${test_dir}/evidence/namespace/validation/diagnostic/test-run/metadata.json"
@@ -163,6 +166,13 @@ if PATH="${test_dir}/bin:${PATH}" MOCK_SCYLLA_BAD_MEMBERSHIP=1 \
   CAPACITY_DATASTORE_EXPECTED_MEMORY_BYTES=3221225472 CAPACITY_DATASTORE_EXPECTED_SMP=2 \
   "${repo_root}/scripts/check-capacity-containers.sh" snapshot "${test_dir}/wrong-membership.json" >/dev/null 2>&1; then
   echo "undersized live Scylla membership unexpectedly passed" >&2
+  exit 1
+fi
+if PATH="${test_dir}/bin:${PATH}" MOCK_SCYLLA_CONTAINERS_FILE="${test_dir}/duplicate-scylla-containers.json" \
+  CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-1,scylla-1 CAPACITY_DATASTORE_EXPECTED_COUNT=3 \
+  CAPACITY_DATASTORE_EXPECTED_MEMORY_BYTES=3221225472 CAPACITY_DATASTORE_EXPECTED_SMP=2 \
+  "${repo_root}/scripts/check-capacity-containers.sh" snapshot "${test_dir}/duplicate-containers.json" >/dev/null 2>&1; then
+  echo "duplicate datastore container identities unexpectedly passed" >&2
   exit 1
 fi
 

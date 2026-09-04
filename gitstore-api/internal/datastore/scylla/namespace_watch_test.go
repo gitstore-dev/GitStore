@@ -52,6 +52,28 @@ func TestResolveAmbiguousNamespaceLeaseAcquisition(t *testing.T) {
 	}
 }
 
+func TestNamespaceWatchBatchCountBoundsStatementsAndBytes(t *testing.T) {
+	small := make([]datastore.NamespaceWatchEvent, namespaceWatchBatchMaxStatements+10)
+	for index := range small {
+		small[index] = datastore.NamespaceWatchEvent{Name: "namespace", Payload: []byte(`{"kind":"Namespace"}`)}
+	}
+	require.Equal(t, namespaceWatchBatchMaxStatements, namespaceWatchBatchCount(small, 1, 4096))
+
+	large := []datastore.NamespaceWatchEvent{
+		{Name: "one", Payload: make([]byte, namespaceWatchBatchMaxBytes/2)},
+		{Name: "two", Payload: make([]byte, namespaceWatchBatchMaxBytes/2)},
+	}
+	require.Equal(t, 1, namespaceWatchBatchCount(large, 1, 4096))
+
+	oversized := []datastore.NamespaceWatchEvent{{Payload: make([]byte, namespaceWatchBatchMaxBytes+1)}}
+	require.Equal(t, 1, namespaceWatchBatchCount(oversized, 1, 4096))
+}
+
+func TestNamespaceWatchBatchCountStopsAtBucketBoundary(t *testing.T) {
+	events := make([]datastore.NamespaceWatchEvent, 3)
+	require.Equal(t, 1, namespaceWatchBatchCount(events, 3, 3))
+}
+
 func TestResolveAmbiguousNamespaceLeaseRenewal(t *testing.T) {
 	previousExpiry := time.Now().UTC().Add(30 * time.Second)
 	expires := previousExpiry.Add(30 * time.Second)

@@ -239,7 +239,9 @@ inferred from a developer machine. The snapshot parses each running Scylla
 container's command and rejects a runtime `--smp` value that differs from the
 config manifest. It also runs `nodetool status` through every declared
 container and requires the full declared set to report `UN` before and after
-load.
+load. Container IDs and normalized names must be unique, and the same IDs must
+remain present across both snapshots; aliases of one container cannot satisfy
+the declared node count.
 API readiness alpha/production runs require config and environment manifests,
 at least two declared API replicas, a release API build, and explicit replica
 and host-memory values matching those manifests. Provide every replica in

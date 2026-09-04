@@ -196,6 +196,11 @@ All time values are integers in seconds or milliseconds as named.
 | `watch.namespace.cdc_confidence_window_millis` | `GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS` | `500` | Scylla CDC consistency window before changes become eligible for ordered materialization; must remain below `max_materializer_lag_seconds`. |
 | `watch.namespace.bucket_size` | `GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE` | `4096` | Sequences per journal partition bucket; accepted range is 1–4,096. |
 | `watch.namespace.read_batch_size` | `GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE` | `256` | Replay/poll page; must not exceed bucket size. |
+
+Scylla journal writes use logged conditional batches capped at 32 statements
+and an estimated 32 KiB of encoded event data. The caps are intentionally
+independent of the 4,096-sequence partition bucket so a lagging CDC stream
+cannot create an oversized catch-up batch.
 | `watch.namespace.max_replay_events` | `GITSTORE_WATCH__NAMESPACE__MAX_REPLAY_EVENTS` | `100000` | Resume ceiling before `WATCH_EXPIRED`; accepted range is 1–100,000. |
 | `watch.namespace.subscriber_buffer` | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER` | `64` | Per-hop, per-subscription delivery buffer; accepted range is 1–256 and sustained overflow fails closed. |
 | `watch.namespace.subscriber_backpressure_millis` | `GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BACKPRESSURE_MILLIS` | `30000` | Maximum bounded wait for a slow subscriber before terminal `SUBSCRIBER_OVERFLOW`. |

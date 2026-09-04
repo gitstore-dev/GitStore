@@ -21,6 +21,8 @@ const (
 	namespaceWatchJournalName        = "namespace"
 	namespaceWatchClockStream        = "__clock__"
 	namespaceWatchRetentionScanLimit = 32
+	namespaceWatchBatchMaxStatements = 32
+	namespaceWatchBatchMaxBytes      = 32 * 1024
 	namespaceCDCProgressTTLSeconds   = 14 * 24 * 60 * 60
 )
 
@@ -317,10 +319,7 @@ func (s *scyllaDatastore) AppendBatch(ctx context.Context, lease datastore.Names
 		}
 		first := clock.HighWater + 1
 		bucket := namespaceWatchBucket(uint64(first), s.namespaceWatchBucketSize)
-		count := 0
-		for count < len(events) && namespaceWatchBucket(uint64(first+int64(count)), s.namespaceWatchBucketSize) == bucket {
-			count++
-		}
+		count := namespaceWatchBatchCount(events, first, s.namespaceWatchBucketSize)
 		chunk := events[:count]
 		batch, candidates, ttlSeconds := s.namespaceWatchEventBatch(clock, lease, bucket, chunk, ttl)
 		batch.Batch = batch.Batch.WithContext(ctx)
@@ -372,6 +371,34 @@ func (s *scyllaDatastore) AppendBatch(ctx context.Context, lease datastore.Names
 		events = events[count:]
 	}
 	return appended, nil
+}
+
+func namespaceWatchBatchCount(events []datastore.NamespaceWatchEvent, first, bucketSize int64) int {
+	count, encodedBytes := 0, 0
+	for count < len(events) && count < namespaceWatchBatchMaxStatements &&
+		namespaceWatchBucket(uint64(first+int64(count)), bucketSize) == namespaceWatchBucket(uint64(first), bucketSize) {
+		eventBytes := namespaceWatchEventEncodedBytes(events[count])
+		if count > 0 && encodedBytes+eventBytes > namespaceWatchBatchMaxBytes {
+			break
+		}
+		encodedBytes += eventBytes
+		count++
+	}
+	return count
+}
+
+func namespaceWatchEventEncodedBytes(event datastore.NamespaceWatchEvent) int {
+	// Include fixed CQL value/framing overhead conservatively in addition to
+	// variable-width strings and maps. One oversized event is still attempted
+	// alone; the cap prevents unrelated events from amplifying that request.
+	size := 256 + len(event.Type) + len(event.Name) + len(event.Payload) + len(event.DeduplicationKey)
+	for key, value := range event.SelectorLabels {
+		size += len(key) + len(value) + 16
+	}
+	for key, value := range event.PreviousSelectorLabels {
+		size += len(key) + len(value) + 16
+	}
+	return size
 }
 
 func (s *scyllaDatastore) resolveNamespaceWatchPublishedRange(

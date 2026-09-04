@@ -29,6 +29,7 @@ snapshot() {
   docker inspect "${targets[@]}" | jq '[.[] |
     (((.Config.Entrypoint // []) + (.Config.Cmd // [])) | map(tostring) | join(" ")) as $command |
     {
+      id:.Id,
       name:(.Name | ltrimstr("/")),
       image:.Config.Image,
       command:$command,
@@ -55,6 +56,8 @@ snapshot() {
   fi
   jq -e --argjson expected_count "${expected_count}" --argjson expected_memory "${expected_memory}" --argjson expected_smp "${expected_smp}" '
     ($expected_count == 0 or length == $expected_count) and
+    ([.[].id] | unique | length) == length and
+    ([.[].name] | unique | length) == length and
     all(.[];
       .state.running and (.state.oomKilled | not) and
       ($expected_memory == 0 or .memoryLimitBytes == $expected_memory) and
@@ -62,7 +65,7 @@ snapshot() {
       ($expected_count == 0 or .scyllaLiveNodes == $expected_count)
     )
   ' "${output_file}" >/dev/null || {
-    echo "datastore container count, health, membership, memory limit, or runtime Scylla SMP does not match the declared environment" >&2
+    echo "datastore container identity, count, health, membership, memory limit, or runtime Scylla SMP does not match the declared environment" >&2
     exit 1
   }
 }
@@ -82,6 +85,7 @@ case "${mode}" in
         ($a[] | select(.name == $old.name)) as $new |
         {name:$old.name,
          passed:($new.state.running and ($new.state.oomKilled|not) and
+                 $new.id == $old.id and
                  $new.restartCount == $old.restartCount and
                  $new.state.startedAt == $old.state.startedAt),
          before:$old, after:$new}
