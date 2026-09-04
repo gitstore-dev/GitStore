@@ -282,7 +282,9 @@ the workload, retaining the replacement state in
 `postflight-environment.json` and rejecting stale or debug replacements. The
 identity comparison requires exactly the selected replacement endpoint to
 change and every non-selected replica to remain unchanged. Alpha and production
-runs also require a clean verifier checkout so `gitRevision` is reproducible.
+runs—including k6 profiles—also require a clean verifier checkout so
+`gitRevision` is reproducible. The recovery overflow probe requires at least
+1,000 transitions and bounds the terminal-error read to 60 seconds.
 
 Capacity preflight MUST identify optimized/release service artifacts. Debug
 builds are useful for functional diagnosis but cannot produce capacity evidence;

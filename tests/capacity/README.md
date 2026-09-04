@@ -95,6 +95,9 @@ changed while every other replica stayed up unchanged.
 
 Alpha and production evidence requires a clean Git checkout so the recorded
 `gitRevision` identifies the exact verifier and gate scripts that produced it.
+Recovery additionally requires at least 1,000 overflow transitions, and its
+terminal-error read is capped at 60 seconds so a misconfigured deployment fails
+promptly instead of waiting for the overall Go test timeout.
 
 The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
 `3g` per node. Override it explicitly when testing another resource tier and

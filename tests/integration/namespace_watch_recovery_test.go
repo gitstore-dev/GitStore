@@ -99,7 +99,9 @@ func TestNamespaceWatchRecoveryProbe(t *testing.T) {
 		if err != nil || count < 1 {
 			t.Skip("set NAMESPACE_WATCH_OVERFLOW_TRANSITIONS for the deliberately slow-consumer probe")
 		}
+		require.GreaterOrEqual(t, count, 1000, "overflow probe must exceed the maximum configured subscriber buffer with network headroom")
 		watch := openNamespaceWatch(t, apiA, token, cursor)
+		require.NoError(t, watch.SetReadDeadline(time.Now().Add(60*time.Second)))
 		for i := 0; i < count; i++ {
 			createNamespaceThrough(t, apiB, token, uniqueName("watch-overflow"))
 		}

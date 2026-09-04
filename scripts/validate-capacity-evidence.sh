@@ -315,8 +315,9 @@ case "${target}/${profile}" in
         echo "namespace/recovery evidence requires NAMESPACE_WATCH_TOKEN or a readable token file" >&2
         exit 2
       }
-      [[ "${NAMESPACE_WATCH_OVERFLOW_TRANSITIONS:-}" =~ ^[1-9][0-9]*$ ]] || {
-        echo "namespace/recovery evidence requires NAMESPACE_WATCH_OVERFLOW_TRANSITIONS" >&2
+      [[ "${NAMESPACE_WATCH_OVERFLOW_TRANSITIONS:-}" =~ ^[1-9][0-9]*$ ]] &&
+        (( 10#${NAMESPACE_WATCH_OVERFLOW_TRANSITIONS} >= 1000 )) || {
+        echo "namespace/recovery evidence requires NAMESPACE_WATCH_OVERFLOW_TRANSITIONS >= 1000" >&2
         exit 2
       }
     fi

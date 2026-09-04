@@ -58,6 +58,10 @@ for manifest_kind in config environment; do
 done
 
 metadata="${evidence_dir}/metadata.json"
+git_dirty=false
+if [[ "${CAPACITY_TEST_FORCE_DIRTY:-0}" == "1" || -n "$(git -C "${repo_root}" status --porcelain --untracked-files=normal)" ]]; then
+  git_dirty=true
+fi
 jq -n \
   --arg schema_version "1" \
   --arg profile "${profile}" \
@@ -67,12 +71,22 @@ jq -n \
   --arg run_id "${run_id}" \
   --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg git_revision "$(git -C "${repo_root}" rev-parse HEAD)" \
-  --arg git_dirty "$(if [[ -z "$(git -C "${repo_root}" status --porcelain --untracked-files=normal)" ]]; then echo false; else echo true; fi)" \
+  --argjson git_dirty "${git_dirty}" \
   --arg k6_image "${k6_image}" \
   --arg config_digest "$(if [[ -f "${evidence_dir}/config.json" ]]; then shasum -a 256 "${evidence_dir}/config.json" | awk '{print $1}'; fi)" \
   --arg environment_digest "$(if [[ -f "${evidence_dir}/environment.json" ]]; then shasum -a 256 "${evidence_dir}/environment.json" | awk '{print $1}'; fi)" \
-  '{schemaVersion:($schema_version|tonumber), target:$target, scenario:$scenario, profile:$profile, mode:$mode, evidenceClass:$mode, productionTargets:{visibilityP95Seconds:1,visibilityP99Seconds:3}, runId:$run_id, startedAt:$started_at, gitRevision:$git_revision, gitDirty:($git_dirty=="true"), loadGenerator:{name:"k6", image:$k6_image}} + (if $config_digest == "" then {} else {configDigest:$config_digest} end) + (if $environment_digest == "" then {} else {environmentDigest:$environment_digest} end)' \
+  '{schemaVersion:($schema_version|tonumber), target:$target, scenario:$scenario, profile:$profile, mode:$mode, evidenceClass:$mode, productionTargets:{visibilityP95Seconds:1,visibilityP99Seconds:3}, runId:$run_id, startedAt:$started_at, gitRevision:$git_revision, gitDirty:$git_dirty, loadGenerator:{name:"k6", image:$k6_image}} + (if $config_digest == "" then {} else {configDigest:$config_digest} end) + (if $environment_digest == "" then {} else {environmentDigest:$environment_digest} end)' \
   >"${metadata}"
+
+if [[ "${mode}" != "diagnostic" && "${git_dirty}" == "true" ]]; then
+  echo "${mode} capacity evidence requires a clean verifier checkout" | tee "${evidence_dir}/source-state.log" >&2
+  jq --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '. + {completedAt:$completed_at,exitCode:2,sourceStateExitCode:2,passed:false}' \
+    "${metadata}" >"${metadata}.tmp"
+  mv "${metadata}.tmp" "${metadata}"
+  echo "capacity evidence: ${evidence_dir}"
+  exit 2
+fi
 
 export CAPACITY_EVIDENCE_DIR="${evidence_dir}"
 export CAPACITY_RUN_ID="${run_id}"
@@ -207,7 +221,7 @@ jq \
   --argjson datastore_exit_code "${container_check_status}" \
   --argjson prometheus_exit_code "${prometheus_status}" \
   --argjson verifier_required "${verifier_required}" \
-  '. + {completedAt:$completed_at, exitCode:$exit_code, chaosExitCode:$chaos_exit_code, verifierRequired:$verifier_required, verifierExitCode:$verifier_exit_code, datastoreVerifierExitCode:$datastore_exit_code, prometheusExitCode:$prometheus_exit_code, passed:($exit_code == 0 and .mode != "diagnostic")}' \
+  '. + {completedAt:$completed_at, exitCode:$exit_code, sourceStateExitCode:0, chaosExitCode:$chaos_exit_code, verifierRequired:$verifier_required, verifierExitCode:$verifier_exit_code, datastoreVerifierExitCode:$datastore_exit_code, prometheusExitCode:$prometheus_exit_code, passed:($exit_code == 0 and .mode != "diagnostic" and .gitDirty == false)}' \
   "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
 

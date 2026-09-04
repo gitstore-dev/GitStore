@@ -153,6 +153,15 @@ fi
 metadata="${test_dir}/evidence/namespace/validation/alpha/dirty-verifier/metadata.json"
 jq -e '.passed == false and .worktreeDirty == true and .sourceStateExitCode == 2' "${metadata}" >/dev/null
 
+if MODE=alpha CAPACITY_TEST_FORCE_DIRTY=1 CAPACITY_TARGET=api CAPACITY_SCENARIO=readiness \
+  CAPACITY_RUN_ID=dirty-k6-verifier CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" \
+  "${repo_root}/scripts/run-capacity.sh" api-readiness >/dev/null 2>&1; then
+  echo "alpha k6 capacity evidence unexpectedly accepted a dirty verifier checkout" >&2
+  exit 1
+fi
+metadata="${test_dir}/evidence/api/readiness/alpha/dirty-k6-verifier/metadata.json"
+jq -e '.passed == false and .gitDirty == true and .sourceStateExitCode == 2' "${metadata}" >/dev/null
+
 MOCK_SAME_START=1 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=deployed-run \
   CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
   CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
@@ -309,6 +318,24 @@ if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" C
   exit 1
 fi
 metadata="${test_dir}/evidence/scylla/soak/production/unverified-dataset/metadata.json"
+jq -e '.passed == false and .preflightExitCode == 2' "${metadata}" >/dev/null
+
+if MOCK_SAME_START=1 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" \
+  CAPACITY_RUN_ID=undersized-overflow CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
+  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
+  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
+  NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-b.internal \
+  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINER=git-1 \
+  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/service-containers.json" NAMESPACE_WATCH_TOKEN=test-token \
+  NAMESPACE_WATCH_OVERFLOW_TRANSITIONS=1 CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
+  CAPACITY_GIT_SERVICE_BUILD=release CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 \
+  CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated \
+  CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
+  "${dispatcher}" namespace recovery alpha >/dev/null 2>&1; then
+  echo "namespace recovery unexpectedly accepted an undersized overflow probe" >&2
+  exit 1
+fi
+metadata="${test_dir}/evidence/namespace/recovery/alpha/undersized-overflow/metadata.json"
 jq -e '.passed == false and .preflightExitCode == 2' "${metadata}" >/dev/null
 
 if PATH="${test_dir}/bin:${PATH}" CAPACITY_OBSERVABILITY=invalid "${dispatcher}" namespace validation diagnostic >/dev/null 2>&1; then
