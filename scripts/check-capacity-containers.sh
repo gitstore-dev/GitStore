@@ -40,15 +40,29 @@ snapshot() {
       state:{running:.State.Running, oomKilled:.State.OOMKilled, startedAt:.State.StartedAt}
     }
   ] | sort_by(.name)' >"${output_file}"
+  if (( expected_count > 0 )); then
+    for target in "${targets[@]}"; do
+      membership="$(docker exec "${target}" nodetool status 2>/dev/null)" || {
+        echo "cannot inspect Scylla membership through ${target}" >&2
+        exit 1
+      }
+      live_nodes="$(awk '$1 == "UN" { count++ } END { print count + 0 }' <<<"${membership}")"
+      jq --arg name "${target}" --argjson live_nodes "${live_nodes}" \
+        'map(if .name == $name then . + {scyllaLiveNodes:$live_nodes} else . end)' \
+        "${output_file}" >"${output_file}.tmp"
+      mv "${output_file}.tmp" "${output_file}"
+    done
+  fi
   jq -e --argjson expected_count "${expected_count}" --argjson expected_memory "${expected_memory}" --argjson expected_smp "${expected_smp}" '
     ($expected_count == 0 or length == $expected_count) and
     all(.[];
       .state.running and (.state.oomKilled | not) and
       ($expected_memory == 0 or .memoryLimitBytes == $expected_memory) and
-      ($expected_smp == 0 or .smpPerNode == $expected_smp)
+      ($expected_smp == 0 or .smpPerNode == $expected_smp) and
+      ($expected_count == 0 or .scyllaLiveNodes == $expected_count)
     )
   ' "${output_file}" >/dev/null || {
-    echo "datastore container count, health, memory limit, or runtime Scylla SMP does not match the declared environment" >&2
+    echo "datastore container count, health, membership, memory limit, or runtime Scylla SMP does not match the declared environment" >&2
     exit 1
   }
 }

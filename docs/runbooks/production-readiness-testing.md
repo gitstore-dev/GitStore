@@ -237,11 +237,20 @@ Namespace admission gate also requires the runtime memory allocation, explicit
 per-node Scylla memory, and authentication mode to be declared rather than
 inferred from a developer machine. The snapshot parses each running Scylla
 container's command and rejects a runtime `--smp` value that differs from the
-config manifest.
+config manifest. It also runs `nodetool status` through every declared
+container and requires the full declared set to report `UN` before and after
+load.
 API readiness alpha/production runs require config and environment manifests,
 at least two declared API replicas, a release API build, and explicit replica
-and host-memory values matching those manifests. A single development API
-remains diagnostic-only.
+and host-memory values matching those manifests. Provide every replica in
+`CAPACITY_API_ENDPOINTS`; preflight scrapes each `/metrics` endpoint and
+requires distinct `process_start_time_seconds` values. A single development
+API remains diagnostic-only.
+Namespace recovery requires a fresh
+`NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE`; the deployment harness replaces the
+selected endpoint when the file appears. The verifier records an actual
+outage, requires a changed `process_start_time_seconds`, and resumes delivery
+from the pre-replacement cursor.
 The dispatcher enforces the same manifest preflight for Go-based capacity
 profiles. It records their focused Go test as the domain verifier and, for
 deployed Scylla-backed profiles, refuses alpha or production evidence without

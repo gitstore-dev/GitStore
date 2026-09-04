@@ -20,6 +20,7 @@ environment="${evidence_dir}/environment.json"
 [[ -r "${config}" ]] || { echo "${mode} API readiness evidence requires CAPACITY_CONFIG_MANIFEST" >&2; exit 2; }
 [[ -r "${environment}" ]] || { echo "${mode} API readiness evidence requires CAPACITY_ENVIRONMENT_MANIFEST" >&2; exit 2; }
 [[ -n "${CAPACITY_BASE_URL:-}" ]] || { echo "${mode} API readiness evidence requires CAPACITY_BASE_URL" >&2; exit 2; }
+[[ -n "${CAPACITY_API_ENDPOINTS:-}" ]] || { echo "${mode} API readiness evidence requires CAPACITY_API_ENDPOINTS" >&2; exit 2; }
 
 config_replicas="$(jq -er '.services.api.replicas | select(type == "number" and . >= 2)' "${config}")" || {
   echo "${mode} API readiness config must declare at least two API replicas" >&2
@@ -60,9 +61,35 @@ jq -e '
   exit 2
 }
 
+IFS=',' read -r -a api_endpoints <<<"${CAPACITY_API_ENDPOINTS}"
+(( ${#api_endpoints[@]} == config_replicas )) || {
+  echo "CAPACITY_API_ENDPOINTS count must match the declared API replicas" >&2
+  exit 2
+}
+identity_json='[]'
+for endpoint in "${api_endpoints[@]}"; do
+  [[ "${endpoint}" =~ ^https?://[^[:space:],]+$ ]] || { echo "invalid live API endpoint: ${endpoint}" >&2; exit 2; }
+  metrics="$(curl -fsS --max-time 5 "${endpoint%/}/metrics")" || {
+    echo "cannot scrape live API endpoint: ${endpoint}" >&2
+    exit 1
+  }
+  process_start="$(awk '$1 == "process_start_time_seconds" { print $2; exit }' <<<"${metrics}")"
+  [[ "${process_start}" =~ ^[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$ ]] || {
+    echo "live API endpoint does not expose process_start_time_seconds: ${endpoint}" >&2
+    exit 1
+  }
+  identity_json="$(jq -c --arg endpoint "${endpoint%/}" --arg process_start "${process_start}" \
+    '. + [{endpoint:$endpoint,processStartTimeSeconds:($process_start|tonumber)}]' <<<"${identity_json}")"
+done
+[[ "$(jq '[.[].processStartTimeSeconds] | unique | length' <<<"${identity_json}")" == "${config_replicas}" ]] || {
+  echo "CAPACITY_API_ENDPOINTS must identify distinct live API processes" >&2
+  exit 1
+}
+
 jq -n \
   --arg mode "${mode}" --arg base_url "${CAPACITY_BASE_URL}" --arg api_build "${config_build}" \
   --argjson api_replicas "${config_replicas}" --argjson runtime_memory_bytes "${environment_memory}" \
+  --argjson live_replicas "${identity_json}" \
   --slurpfile config "${config}" --slurpfile environment "${environment}" \
-  '{schemaVersion:1,mode:$mode,passed:true,baseURL:$base_url,topology:{apiReplicas:$api_replicas},resources:{runtimeMemoryBytes:$runtime_memory_bytes},builds:{api:$api_build},config:$config[0],environment:$environment[0]}' \
+  '{schemaVersion:1,mode:$mode,passed:true,baseURL:$base_url,topology:{apiReplicas:$api_replicas,liveReplicas:$live_replicas},resources:{runtimeMemoryBytes:$runtime_memory_bytes},builds:{api:$api_build},config:$config[0],environment:$environment[0]}' \
   >"${output}"

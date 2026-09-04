@@ -34,18 +34,29 @@ if CAPACITY_DRY_RUN=1 "${dispatcher}" namespace watch gate >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "${test_dir}/readiness-valid" "${test_dir}/readiness-missing"
+mkdir -p "${test_dir}/bin" "${test_dir}/readiness-valid" "${test_dir}/readiness-missing"
+printf '#!/usr/bin/env bash\ncase "$*" in *api-a*) printf "process_start_time_seconds 100\\n" ;; *api-b*) printf "process_start_time_seconds 200\\n" ;; *) exit 1 ;; esac\n' >"${test_dir}/bin/curl"
+chmod +x "${test_dir}/bin/curl"
 cp "${repo_root}/tests/capacity/examples/config-manifest.json" "${test_dir}/readiness-valid/config.json"
 cp "${repo_root}/tests/capacity/examples/environment-manifest.json" "${test_dir}/readiness-valid/environment.json"
-MODE=production CAPACITY_BASE_URL=http://api.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
+PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api.internal \
+  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
   CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
   "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid"
-jq -e '.passed == true and .topology.apiReplicas == 2 and .resources.runtimeMemoryBytes == 17179869184' \
+jq -e '.passed == true and .topology.apiReplicas == 2 and (.topology.liveReplicas | length) == 2 and .resources.runtimeMemoryBytes == 17179869184' \
   "${test_dir}/readiness-valid/preflight-environment.json" >/dev/null
-if MODE=production CAPACITY_BASE_URL=http://api.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
+if PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api.internal \
+  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
   CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
   "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-missing" >/dev/null 2>&1; then
   echo "production API readiness unexpectedly passed without deployment manifests" >&2
+  exit 1
+fi
+if PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api.internal \
+  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-a.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
+  CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
+  "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid" >/dev/null 2>&1; then
+  echo "production API readiness unexpectedly accepted one live process twice" >&2
   exit 1
 fi
 
@@ -59,9 +70,9 @@ for removed_target in capacity-observability capacity-observability-down test-sc
   fi
 done
 
-mkdir -p "${test_dir}/bin" "${test_dir}/evidence"
+mkdir -p "${test_dir}/evidence"
 printf '#!/usr/bin/env bash\necho "mock capacity command: $*"\n[[ "${FAIL_MAKE:-0}" != "1" ]]\n' >"${test_dir}/bin/make"
-printf '#!/usr/bin/env bash\nprintf '\''[{"Name":"/scylla-1","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}},{"Name":"/scylla-2","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}},{"Name":"/scylla-3","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}}]'\''\n' >"${test_dir}/bin/docker"
+printf '#!/usr/bin/env bash\nif [[ "$1" == exec ]]; then if [[ "${MOCK_SCYLLA_BAD_MEMBERSHIP:-0}" == 1 ]]; then printf "UN node-1\\n"; else printf "UN node-1\\nUN node-2\\nUN node-3\\n"; fi; exit 0; fi\nprintf '\''[{"Name":"/scylla-1","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}},{"Name":"/scylla-2","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}},{"Name":"/scylla-3","Config":{"Image":"scylla","Cmd":["--smp=2"]},"RestartCount":0,"HostConfig":{"Memory":3221225472,"NanoCpus":0,"CpusetCpus":""},"State":{"Running":true,"OOMKilled":false,"StartedAt":"start"}}]'\''\n' >"${test_dir}/bin/docker"
 chmod +x "${test_dir}/bin/make"
 chmod +x "${test_dir}/bin/docker"
 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=test-run \
@@ -95,7 +106,7 @@ PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPA
   "${dispatcher}" namespace watch alpha >/dev/null
 metadata="${test_dir}/evidence/namespace/watch/alpha/deployed-run/metadata.json"
 jq -e '.passed == true and .datastoreVerifierExitCode == 0' "${metadata}" >/dev/null
-jq -e 'length == 3 and all(.[]; .memoryLimitBytes == 3221225472 and .smpPerNode == 2)' \
+jq -e 'length == 3 and all(.[]; .memoryLimitBytes == 3221225472 and .smpPerNode == 2 and .scyllaLiveNodes == 3)' \
   "${test_dir}/evidence/namespace/watch/alpha/deployed-run/datastore-before.json" >/dev/null
 
 if PATH="${test_dir}/bin:${PATH}" CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
@@ -103,6 +114,13 @@ if PATH="${test_dir}/bin:${PATH}" CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-
   CAPACITY_DATASTORE_EXPECTED_SMP=3 \
   "${repo_root}/scripts/check-capacity-containers.sh" snapshot "${test_dir}/wrong-smp.json" >/dev/null 2>&1; then
   echo "runtime Scylla SMP mismatch unexpectedly passed" >&2
+  exit 1
+fi
+if PATH="${test_dir}/bin:${PATH}" MOCK_SCYLLA_BAD_MEMBERSHIP=1 \
+  CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 CAPACITY_DATASTORE_EXPECTED_COUNT=3 \
+  CAPACITY_DATASTORE_EXPECTED_MEMORY_BYTES=3221225472 CAPACITY_DATASTORE_EXPECTED_SMP=2 \
+  "${repo_root}/scripts/check-capacity-containers.sh" snapshot "${test_dir}/wrong-membership.json" >/dev/null 2>&1; then
+  echo "undersized live Scylla membership unexpectedly passed" >&2
   exit 1
 fi
 

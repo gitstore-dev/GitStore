@@ -41,8 +41,9 @@ restart counts, OOM state, and authentication mode. A gate fails if a node is
 OOM-killed, unexpectedly restarts, or leaves cluster membership during load.
 Set `CAPACITY_DATASTORE_CONTAINERS` to the comma-separated container names. The
 runner captures sanitized `docker inspect` state before and after load and
-fails on OOM, restart, disappearance, stopped state, or a runtime `--smp`
-value that differs from the config manifest. Namespace admission
+fails on OOM, restart, disappearance, stopped state, incomplete `nodetool
+status` membership, or a runtime `--smp` value that differs from the config
+manifest. Namespace admission
 alpha and production modes additionally require:
 
 ```bash
@@ -57,13 +58,18 @@ The same manifest contract applies to the Go-based `validation`, `watch`,
 `recovery`, and `soak` profiles. Their focused Go test is recorded as the
 domain verifier; deployed Scylla-backed profiles additionally require the
 before/after container-health evidence above.
+Recovery also requires `NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE`. The external
+harness must replace the selected endpoint when that file appears; the probe
+requires an observed outage, a changed `process_start_time_seconds`, and
+cursor-resumed delivery through the replacement before it passes.
 
 Non-diagnostic API readiness also requires both manifests plus
 `CAPACITY_API_REPLICAS`, `CAPACITY_API_BUILD=release`,
-`CAPACITY_RUNTIME_MEMORY_BYTES`, and
-`CAPACITY_BASE_URL`. The replica and memory values must match the captured
-deployment declarations, so a single development process cannot produce
-production readiness evidence.
+`CAPACITY_RUNTIME_MEMORY_BYTES`, `CAPACITY_BASE_URL`, and a comma-separated
+`CAPACITY_API_ENDPOINTS` containing every replica. The preflight scrapes
+`process_start_time_seconds` from each endpoint and requires distinct live
+process identities matching the declared replica count, so a single
+development process cannot produce production readiness evidence.
 
 The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
 `3g` per node. Override it explicitly when testing another resource tier and

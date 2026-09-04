@@ -114,6 +114,19 @@ case "${target}/${profile}" in
         echo "namespace/recovery evidence requires both API endpoints and the replacement endpoint" >&2
         exit 2
       }
+      [[ "${NAMESPACE_WATCH_API_A%/}" != "${NAMESPACE_WATCH_API_B%/}" ]] || {
+        echo "namespace/recovery API endpoints must identify distinct replicas" >&2
+        exit 2
+      }
+      replacement="${NAMESPACE_WATCH_API_REPLACEMENT%/}"
+      [[ "${replacement}" == "${NAMESPACE_WATCH_API_A%/}" || "${replacement}" == "${NAMESPACE_WATCH_API_B%/}" ]] || {
+        echo "namespace/recovery replacement must identify one of the two replicas" >&2
+        exit 2
+      }
+      [[ -n "${NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE:-}" && ! -e "${NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE}" ]] || {
+        echo "namespace/recovery requires a fresh NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE" >&2
+        exit 2
+      }
       [[ -n "${NAMESPACE_WATCH_TOKEN:-}" || -r "${NAMESPACE_WATCH_TOKEN_FILE:-}" ]] || {
         echo "namespace/recovery evidence requires NAMESPACE_WATCH_TOKEN or a readable token file" >&2
         exit 2
