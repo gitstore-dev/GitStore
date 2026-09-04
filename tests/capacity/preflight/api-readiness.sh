@@ -100,6 +100,14 @@ for index in "${!api_endpoints[@]}"; do
   endpoint="${api_endpoints[$index]}"
   container="${api_containers[$index]}"
   [[ "${endpoint}" =~ ^https?://[^[:space:],]+$ ]] || { echo "invalid live API endpoint: ${endpoint}" >&2; exit 2; }
+  curl -fsS --max-time 5 "${endpoint%/}/health" >/dev/null || {
+    echo "live API endpoint failed health probe: ${endpoint}" >&2
+    exit 1
+  }
+  curl -fsS --max-time 5 "${endpoint%/}/ready" >/dev/null || {
+    echo "live API endpoint failed readiness probe: ${endpoint}" >&2
+    exit 1
+  }
   metrics="$(curl -fsS --max-time 5 "${endpoint%/}/metrics")" || {
     echo "cannot scrape live API endpoint: ${endpoint}" >&2
     exit 1

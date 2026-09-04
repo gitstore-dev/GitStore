@@ -191,12 +191,11 @@ a default.
 - `api-readiness` is a non-mutating runner smoke test.
 - `namespace-admission` drives unique Namespace creates at a fixed arrival
   rate, alternates across two replicas, and fails on dropped iterations,
-  GraphQL errors, or latency/error threshold violations. It is the offered-load
-  component of Namespace capacity validation; the existing Go watch verifier
-  remains authoritative for replay, completeness, duplicates, and cursor
-  recovery until its external-load mode is completed. Consequently, this
-  profile cannot produce passing gate evidence until that verifier is wired in;
-  use `MODE=diagnostic` for offered-load-only investigation.
+  GraphQL errors, or latency/error threshold violations. Each acknowledged
+  Namespace is queried through every declared replica, and the domain verifier
+  requires nonzero admissions, zero failed checks, and cross-replica visibility
+  at p95 <= 1 second and p99 <= 3 seconds. The Go watch verifier remains
+  authoritative for replay, duplicates, cursor recovery, and replacement.
 
 Alpha and production modes refuse to run unless evidence
 declares at least two API replicas, three Scylla nodes with at least two shards

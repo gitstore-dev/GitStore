@@ -37,7 +37,7 @@ fi
 mkdir -p "${test_dir}/bin" "${test_dir}/readiness-valid" "${test_dir}/readiness-missing"
 source_revision="$(git -C "${repo_root}" rev-parse HEAD)"
 image_digest="$(printf 'a%.0s' {1..64})"
-printf '#!/usr/bin/env bash\ncase "$*" in *api-a*|*api-alias*) if [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" && -e "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}" ]]; then instance=instance-a-replacement; else instance=instance-a; fi; printf "process_start_time_seconds 100\\ngitstore_api_process_instance_info{instance_id=\\"%%s\\"} 1\\n" "$instance" ;; *api-b*) if [[ "${MOCK_SAME_START:-0}" == 1 ]]; then start=100; else start=200; fi; if [[ "${MOCK_REPLACE_ALL:-0}" == 1 && -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" && -e "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}" ]]; then instance=instance-b-replacement; else instance=instance-b; fi; printf "process_start_time_seconds %%s\\ngitstore_api_process_instance_info{instance_id=\\"%%s\\"} 1\\n" "$start" "$instance" ;; *) exit 1 ;; esac\n' >"${test_dir}/bin/curl"
+printf '#!/usr/bin/env bash\nif [[ "${MOCK_BAD_READY:-0}" == 1 && "$*" == *api-b.internal/ready* ]]; then exit 22; fi\ncase "$*" in *api-a*|*api-alias*) if [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" && -e "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}" ]]; then instance=instance-a-replacement; else instance=instance-a; fi; printf "process_start_time_seconds 100\\ngitstore_api_process_instance_info{instance_id=\\"%%s\\"} 1\\n" "$instance" ;; *api-b*) if [[ "${MOCK_SAME_START:-0}" == 1 ]]; then start=100; else start=200; fi; if [[ "${MOCK_REPLACE_ALL:-0}" == 1 && -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" && -e "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}" ]]; then instance=instance-b-replacement; else instance=instance-b; fi; printf "process_start_time_seconds %%s\\ngitstore_api_process_instance_info{instance_id=\\"%%s\\"} 1\\n" "$start" "$instance" ;; *) exit 1 ;; esac\n' >"${test_dir}/bin/curl"
 chmod +x "${test_dir}/bin/curl"
 jq -n --arg revision "${source_revision}" --arg digest "${image_digest}" '[
   {Id:"api-id-1",Name:"/api-1",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
@@ -81,6 +81,13 @@ if PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://unver
   CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
   "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid" >/dev/null 2>&1; then
   echo "production API readiness unexpectedly accepted an unrelated workload URL" >&2
+  exit 1
+fi
+if MOCK_BAD_READY=1 PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api-a.internal \
+  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
+  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
+  "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid" >/dev/null 2>&1; then
+  echo "production API readiness unexpectedly accepted an unready secondary replica" >&2
   exit 1
 fi
 if MOCK_READINESS_CONTAINERS_FILE="${test_dir}/unverified-readiness-containers.json" \
@@ -161,6 +168,13 @@ if MODE=alpha CAPACITY_TEST_FORCE_DIRTY=1 CAPACITY_TARGET=api CAPACITY_SCENARIO=
 fi
 metadata="${test_dir}/evidence/api/readiness/alpha/dirty-k6-verifier/metadata.json"
 jq -e '.passed == false and .gitDirty == true and .sourceStateExitCode == 2' "${metadata}" >/dev/null
+
+mkdir -p "${test_dir}/admission-verifier"
+jq -n '{metrics:{gitstore_namespace_admitted:{values:{count:10}},checks:{values:{fails:0}},gitstore_namespace_graphql_failed:{values:{rate:0}},gitstore_namespace_visibility_ms:{values:{"p(95)":100,"p(99)":200}}}}' \
+  >"${test_dir}/admission-verifier/summary.json"
+"${repo_root}/tests/capacity/verifiers/namespace-admission.sh" "${test_dir}/admission-verifier"
+jq -e '.passed == true and .admitted == 10 and .visibilityP99Milliseconds == 200' \
+  "${test_dir}/admission-verifier/domain-verifier.json" >/dev/null
 
 MOCK_SAME_START=1 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=deployed-run \
   CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \

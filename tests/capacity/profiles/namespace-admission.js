@@ -3,7 +3,7 @@
 
 import exec from 'k6/execution';
 import { check, sleep } from 'k6';
-import { Counter, Rate } from 'k6/metrics';
+import { Counter, Rate, Trend } from 'k6/metrics';
 import { env, integer } from '../lib/config.js';
 import { graphql } from '../lib/graphql.js';
 
@@ -27,6 +27,7 @@ const mutation = `mutation($input: CreateNamespaceInput!) {
 const admitted = new Counter('gitstore_namespace_admitted');
 const graphqlFailures = new Rate('gitstore_namespace_graphql_failed');
 const conflicts = new Counter('gitstore_namespace_conflicts');
+const visibility = new Trend('gitstore_namespace_visibility_ms', true);
 const existenceQuery = `query($name: String!) { namespace(by: {identifier: $name}) { id } }`;
 
 const scenarios = {
@@ -57,6 +58,7 @@ export const options = {
     checks: ['rate==1'],
     dropped_iterations: ['count==0'],
     gitstore_namespace_graphql_failed: ['rate<0.001'],
+    gitstore_namespace_visibility_ms: ['p(95)<=1000', 'p(99)<=3000'],
     http_req_failed: ['rate<0.001'],
     // The feature's 1s/3s objective is watch visibility after mutation
     // acknowledgement and is enforced by the domain verifier. Mutations may
@@ -124,5 +126,26 @@ export default function () {
   graphqlFailures.add(!acknowledged);
   if (acknowledged) {
     admitted.add(1);
+    const visibilityStarted = Date.now();
+    let visibleEverywhere = false;
+    while (Date.now() - visibilityStarted < 30000) {
+      visibleEverywhere = true;
+      for (const endpoint of [apiA, apiB]) {
+        const confirmation = graphql(endpoint, token, existenceQuery, { name }, { operation: 'confirmVisibility' });
+        if (!confirmation.body.data || !confirmation.body.data.namespace || !confirmation.body.data.namespace.id) {
+          visibleEverywhere = false;
+          break;
+        }
+      }
+      if (visibleEverywhere) {
+        break;
+      }
+      sleep(0.01);
+    }
+    const visibilityMillis = Date.now() - visibilityStarted;
+    visibility.add(visibilityMillis);
+    check({ visibleEverywhere }, {
+      'namespace became visible through every replica': ({ visibleEverywhere: visible }) => visible,
+    });
   }
 }

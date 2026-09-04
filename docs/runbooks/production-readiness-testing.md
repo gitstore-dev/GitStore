@@ -185,6 +185,11 @@ environment gate: Namespace-watch visibility p95 must be ≤2 seconds and p99
 ≤3 seconds, with a warning above the unchanged 1-second production p95 target.
 Production mode keeps p95 ≤1 second and p99 ≤3 seconds. Correctness, errors,
 recovery, CPU, and retained-memory requirements remain hard in every mode.
+The admission profile confirms each acknowledged Namespace through every API
+replica and records cross-replica visibility latency. Its domain verifier
+requires nonzero admissions, zero correctness-check failures, p95 visibility
+within 1 second, and p99 within 3 seconds. Readiness preflight likewise probes
+`/health` and `/ready` on every declared replica before the measured smoke load.
 
 Set `CAPACITY_OBSERVABILITY=prometheus` on `make capacity` when phase
 attribution is required. The dispatcher starts and removes the optional scraper
