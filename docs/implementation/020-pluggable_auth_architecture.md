@@ -1194,6 +1194,17 @@ controller-identity use case, now served by a purpose-built machine-identity mec
 human-oriented OIDC Relying Party; `oidc-jwt` and `serviceaccount-jwt` remain two entirely separate
 providers for two entirely separate principal types, and neither changes the other's design.
 
+**Addendum — optional first-party issuer choice (spec 059):** `OIDCJWTProvider` remains exactly as
+specified above — a generic, issuer-agnostic Relying Party that works against any standards-compliant
+OIDC issuer via `issuer_url`, with zero code change required per issuer. GitStore is "bring your own"
+for OIDC, the same as it is for `gitstore-admin` and every other optional component; operators with an
+existing IdP (Keycloak, Auth0, Okta, a homegrown issuer) point `issuer_url` at it directly. For anyone
+without one, `specs/059-optional-oidc-provider/` adds an optional, separately-deployable *reference*
+issuer — Ory Hydra + Ory Kratos, bridged by a new standalone `gitstore-oidc-bridge` service — as one
+possible value for `issuer_url` among any others an operator could bring. See that spec for the full
+architecture rationale (including why Hydra was chosen over a Dex-based alternative) and the Kratos
+identity-to-`Principal` claims mapping; nothing in it changes this Phase's Relying-Party design.
+
 ### Phase 8 — OPA production AuthZ provider
 **Milestone:** `auth-framework-v3`
 **Authoritative design:** `022-opa-data-authorization.md`.
