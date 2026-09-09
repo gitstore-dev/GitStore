@@ -168,6 +168,20 @@ func TestAuthenticateUserInfoEnrichmentWhenEmailMissing(t *testing.T) {
 	assert.Equal(t, "enriched", principal.Claims["preferred_username"])
 }
 
+func TestAuthenticateHydraStyleScpArrayClaim(t *testing.T) {
+	issuer := newMockIssuer(t)
+	p := newProvider(t, issuer, config.OIDCConfig{})
+	claims := issuer.validClaims()
+	delete(claims, "scope")
+	claims["scp"] = []string{"openid", "email"} // Hydra JWT access-token form
+	token := issuer.sign(t, claims)
+
+	principal, decision, err := p.Authenticate(context.Background(), bearerReq(token))
+	require.NoError(t, err)
+	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
+	assert.Equal(t, []string{"openid", "email"}, principal.Scopes)
+}
+
 func TestAuthenticateNoHeaderChallenges(t *testing.T) {
 	issuer := newMockIssuer(t)
 	p := newProvider(t, issuer, config.OIDCConfig{})

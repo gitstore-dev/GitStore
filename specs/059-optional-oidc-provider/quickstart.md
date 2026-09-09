@@ -36,6 +36,9 @@ open http://localhost:4455/registration
 #    a. Browser -> http://localhost:4444/oauth2/auth?client_id=gitstore&response_type=code
 #         &scope=openid+profile+email+offline_access&redirect_uri=<your redirect>&state=...
 #         &code_challenge=...&code_challenge_method=S256
+#         &audience=gitstore
+#         (the audience param matters: Hydra access tokens only carry `aud` when it is
+#         requested, and gitstore-api's oidc-jwt provider enforces aud — default: client_id)
 #    b. Hydra redirects to gitstore-oidc-bridge's /login -> bridge checks the Kratos session
 #       (from step 3, a session cookie already exists in the same browser) -> accepted automatically
 #    c. Hydra redirects to gitstore-oidc-bridge's /consent -> accepted automatically, no screen shown

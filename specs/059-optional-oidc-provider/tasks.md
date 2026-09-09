@@ -40,7 +40,7 @@
 
 ### Tests for User Story 1
 
-- [ ] T008 [P] [US1] Add a manual verification checklist entry (this is infra, not a Go unit test) confirming `make oidc` (or `docker compose -f compose.yml -f compose.oidc.yml up hydra-postgres hydra-migrate hydra`) exposes a valid discovery document and JWKS
+- [x] T008 [P] [US1] Add a manual verification checklist entry (this is infra, not a Go unit test) confirming `make oidc` (or `docker compose -f compose.yml -f compose.oidc.yml up hydra-postgres hydra-migrate hydra`) exposes a valid discovery document and JWKS
 
 ### Implementation for User Story 1
 
@@ -59,7 +59,7 @@
 
 ### Tests for User Story 2
 
-- [ ] T011 [P] [US2] Add a manual verification checklist entry confirming self-service registration against `identity.schema.json` (T002) produces an identity with both required traits populated
+- [x] T011 [P] [US2] Add a manual verification checklist entry confirming self-service registration against `identity.schema.json` (T002) produces an identity with both required traits populated
 
 ### Implementation for User Story 2
 
@@ -99,7 +99,7 @@
 
 ### Tests for User Story 4
 
-- [ ] T019 [P] [US4] Add a manual verification checklist entry decoding a real issued ID token and diff-checking its claims against `data-model.md`'s mapping table (`sub` = identity id, not email)
+- [x] T019 [P] [US4] Add a manual verification checklist entry decoding a real issued ID token and diff-checking its claims against `data-model.md`'s mapping table (`sub` = identity id, not email)
 
 ### Implementation for User Story 4
 
@@ -117,7 +117,7 @@
 
 ### Tests for User Story 5
 
-- [ ] T021 [P] [US5] Add a manual verification checklist entry running `make oidc` twice in a row and confirming the second run is a no-op with respect to Hydra client registration and Postgres data
+- [x] T021 [P] [US5] Add a manual verification checklist entry running `make oidc` twice in a row and confirming the second run is a no-op with respect to Hydra client registration and Postgres data
 
 ### Implementation for User Story 5
 

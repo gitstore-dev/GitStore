@@ -75,7 +75,7 @@ services:
     # Hydra's Admin API (container port 4445) is deliberately NOT published:
     # only gitstore-oidc-bridge may reach it, inside gitstore-network (FR-008).
     healthcheck:
-      test: ["CMD-SHELL", "hydra health ready --endpoint http://localhost:4444 || exit 1"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4444/health/ready"]
       interval: 5s
       timeout: 5s
       retries: 12
@@ -99,6 +99,7 @@ services:
           --grant-type authorization_code,refresh_token \
           --response-type code \
           --scope openid,profile,email,offline_access \
+          --audience "$${CLIENT_AUDIENCE}" \
           --redirect-uri "$${REDIRECT_URIS}" \
           --token-endpoint-auth-method client_secret_post \
           --format json
@@ -106,6 +107,11 @@ services:
       - HYDRA_ADMIN_URL=http://hydra:4445
       - CLIENT_ID=${GITSTORE_OIDC_CLIENT_ID:-gitstore}
       - CLIENT_SECRET=${GITSTORE_OIDC_CLIENT_SECRET:?set GITSTORE_OIDC_CLIENT_SECRET in .env (32+ chars)}
+      # Audience the client may request at authorize time; gitstore-api's
+      # oidc-jwt provider enforces aud (default: the client_id, matching
+      # auth.oidc.audience's default). Access tokens only carry aud when the
+      # authorize request asks for it (audience= param).
+      - CLIENT_AUDIENCE=${GITSTORE_OIDC_CLIENT_AUDIENCE:-gitstore}
       # Comma-separated callback URLs of whichever bring-your-own client
       # application drives the Authorization Code + PKCE flow.
       - REDIRECT_URIS=${GITSTORE_OIDC_REDIRECT_URIS:-http://localhost:3000/callback}

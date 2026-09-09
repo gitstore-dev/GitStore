@@ -38,6 +38,8 @@ type OIDCJWTProvider struct {
 // idTokenClaims is the claim set the provider maps onto auth.Principal.
 // Email and preferred_username follow spec 059's Kratos→claims mapping; any
 // additional claims are carried through into Principal.Claims verbatim.
+// Scope covers the RFC 6749 "scope" string form; Scp covers Hydra's
+// array-valued "scp" claim on JWT access tokens — whichever is present wins.
 type idTokenClaims struct {
 	Subject           string   `json:"sub"`
 	Issuer            string   `json:"iss"`
@@ -46,8 +48,40 @@ type idTokenClaims struct {
 	Groups            []string `json:"groups"`
 	Roles             []string `json:"roles"`
 	Scope             string   `json:"scope"`
+	Scp               []string `json:"scp"`
 	TokenID           string   `json:"jti"`
 	ExpiresAt         int64    `json:"exp"`
+}
+
+func (c *idTokenClaims) scopes() []string {
+	if len(c.Scp) > 0 {
+		return c.Scp
+	}
+	return strings.Fields(c.Scope)
+}
+
+// discover runs OIDC Discovery, tolerating the one interoperability wart we
+// know real issuers have: go-oidc requires the configured issuer URL to match
+// the discovery document's `issuer` byte-for-byte (e.g. Hydra's trailing
+// slash). On exactly that mismatch, retry with the issuer's canonical form.
+func discover(ctx context.Context, issuerURL string) (*oidc.Provider, string, error) {
+	provider, err := oidc.NewProvider(ctx, issuerURL)
+	if err == nil {
+		return provider, issuerURL, nil
+	}
+	msg := err.Error()
+	const marker = "did not match the issuer URL returned by provider (\""
+	if i := strings.Index(msg, marker); i >= 0 {
+		rest := msg[i+len(marker):]
+		if j := strings.Index(rest, "\")"); j > 0 {
+			canonical := rest[:j]
+			provider, retryErr := oidc.NewProvider(ctx, canonical)
+			if retryErr == nil {
+				return provider, canonical, nil
+			}
+		}
+	}
+	return nil, "", err
 }
 
 // New runs OIDC Discovery against cfg.IssuerURL and returns a provider whose
@@ -65,7 +99,7 @@ func New(ctx context.Context, cfg config.OIDCConfig, logger *zap.Logger) (*OIDCJ
 		}
 		skew = parsed
 	}
-	provider, err := oidc.NewProvider(ctx, cfg.IssuerURL)
+	provider, canonicalIssuer, err := discover(ctx, cfg.IssuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("oidcjwt: discovery against %q: %w", cfg.IssuerURL, err)
 	}
@@ -83,7 +117,7 @@ func New(ctx context.Context, cfg config.OIDCConfig, logger *zap.Logger) (*OIDCJ
 	return &OIDCJWTProvider{
 		provider:  provider,
 		verifier:  verifier,
-		issuerURL: strings.TrimSuffix(cfg.IssuerURL, "/"),
+		issuerURL: strings.TrimSuffix(canonicalIssuer, "/"),
 		clientID:  cfg.ClientID,
 		audience:  audience,
 		logger:    logger,
@@ -143,7 +177,7 @@ func (p *OIDCJWTProvider) Authenticate(ctx context.Context, req auth.AuthRequest
 		Issuer:     claims.Issuer,
 		Groups:     claims.Groups,
 		Roles:      claims.Roles,
-		Scopes:     strings.Fields(claims.Scope),
+		Scopes:     claims.scopes(),
 		AuthMethod: p.Name(),
 		TokenID:    claims.TokenID,
 	}
