@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 // Package config loads gitstore-oidc-bridge's GITSTORE_OIDC_BRIDGE__* configuration
 // per specs/059-optional-oidc-provider/contracts/oidc-bridge-routes.md.
 package config

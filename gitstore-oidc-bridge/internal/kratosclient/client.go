@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 // Package kratosclient is a thin wrapper over github.com/ory/client-go's Kratos
 // public (/sessions/whoami) and Admin (/admin/identities) API surfaces, exposing
 // exactly the operations gitstore-oidc-bridge's route handlers need.

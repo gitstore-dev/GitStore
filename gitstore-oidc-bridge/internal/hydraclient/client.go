@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 // Package hydraclient is a thin wrapper over github.com/ory/client-go's Hydra
 // Admin API surface, exposing exactly the operations gitstore-oidc-bridge's
 // route handlers need (see specs/059-optional-oidc-provider/contracts/oidc-bridge-routes.md).

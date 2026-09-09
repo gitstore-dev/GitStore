@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
 // Command bridge runs gitstore-oidc-bridge: the minimal standalone service
 // resolving Hydra's login/consent challenges against the current Kratos session
 // (specs/059-optional-oidc-provider).
