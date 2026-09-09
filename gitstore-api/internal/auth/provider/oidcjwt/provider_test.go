@@ -124,7 +124,25 @@ func TestNameAndCapabilities(t *testing.T) {
 	issuer := newMockIssuer(t)
 	p := newProvider(t, issuer, config.OIDCConfig{})
 	assert.Equal(t, "oidc-jwt", p.Name())
-	assert.Equal(t, auth.CapAuthenticate|auth.CapIntrospect|auth.CapGroupResolution, p.Capabilities())
+	assert.Equal(t, auth.CapAuthenticate|auth.CapIntrospect, p.Capabilities())
+}
+
+func TestAuthenticateDoesNotImportExternalRoles(t *testing.T) {
+	// Regression: a token claiming roles:["admin"] must NOT gain local admin
+	// — rbac-local seeds its effective role set from Principal.Roles, and
+	// authn providers establish identity only (020, Principal contract).
+	issuer := newMockIssuer(t)
+	p := newProvider(t, issuer, config.OIDCConfig{})
+	claims := issuer.validClaims()
+	claims["roles"] = []string{"admin"}
+	claims["groups"] = []string{"admins"}
+	token := issuer.sign(t, claims)
+
+	principal, decision, err := p.Authenticate(context.Background(), bearerReq(token))
+	require.NoError(t, err)
+	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
+	assert.Empty(t, principal.Roles)
+	assert.Empty(t, principal.Groups)
 }
 
 func TestNewRequiresIssuerURI(t *testing.T) {

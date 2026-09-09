@@ -16,7 +16,7 @@ AUTH_CONFIG_DIR ?= $(ROOT)/config
 POLICY_FILE ?= $(AUTH_CONFIG_DIR)/policy.yaml
 USERS_FILE ?= $(AUTH_CONFIG_DIR)/users.yaml
 LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
-LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml -f compose.admin.yml -f compose.oidc.yml
+LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml -f compose.admin.yml $(IDENTITY_COMPOSE_FILE)
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
 GIT_GRPC_PORT ?= 50051
 CONTROLLER_CHECKPOINT_DIR ?= $(ROOT)/.gitstore/checkpoints
@@ -145,7 +145,7 @@ help: ## Show available targets and common variables.
 	@printf "  IDENTITY=%s               Compose identity stack: none or oidc (Hydra + Kratos reference provider)\n" "$(IDENTITY)"
 	@printf "  COMPOSE_BAKE=true         Compose build bake setting for Docker Compose\n"
 	@printf "  PROFILE=%s                Scylla profile: single or cluster\n" "$(PROFILE)"
-	@printf "  SERVICE=<name>            Limit logs/stop to one compose service; SERVICE=scylla includes all Scylla variants; SERVICE=oidc covers the whole OIDC stack\n"
+	@printf "  SERVICE=<name>            Limit logs/stop to one compose service; SERVICE=scylla includes all Scylla variants; SERVICE=oidc (with IDENTITY=oidc) covers the whole OIDC stack\n"
 	@printf "  SCYLLA_COMPOSE_FILE=%s  Derived Scylla overlay used by scylla and compose DATASTORE=scylla\n" "$(SCYLLA_COMPOSE_FILE)"
 	@printf "  SCYLLA_CLUSTER_SMP=%s     CPU shards per Scylla node for PROFILE=cluster\n" "$(SCYLLA_CLUSTER_SMP)"
 	@printf "  SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS=%s  Networking AIO blocks per cluster node\n" "$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)"
@@ -421,8 +421,10 @@ test: ## Run Rust and Go test suites.
 	@./scripts/test-capacity-dispatch.sh
 	@./scripts/test-capacity-prometheus-export.sh
 	@cd "$(GIT_SERVICE_DIR)" && cargo test --verbose
-	@cd "$(API_DIR)" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-	@cd "$(CONTROLLER_MANAGER_DIR)" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+	@for dir in $(GO_MODULE_DIRS); do \
+		echo "==> go test $$dir"; \
+		( cd "$$dir" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./... ) || exit 1; \
+	done
 
 capacity: ## Run a capacity scenario; set TARGET, PROFILE, and MODE.
 	@CAPACITY_EVIDENCE_DIR="$(CAPACITY_EVIDENCE_DIR)" CAPACITY_PROMETHEUS_URL="$(CAPACITY_PROMETHEUS_URL)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" \

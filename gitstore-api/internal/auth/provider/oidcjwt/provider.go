@@ -42,16 +42,20 @@ type OIDCJWTProvider struct {
 // Scope covers the RFC 6749 "scope" string form; Scp covers Hydra's
 // array-valued "scp" claim on JWT access tokens — whichever is present wins.
 type idTokenClaims struct {
-	Subject           string   `json:"sub"`
-	Issuer            string   `json:"iss"`
-	Email             string   `json:"email"`
-	PreferredUsername string   `json:"preferred_username"`
-	Groups            []string `json:"groups"`
-	Roles             []string `json:"roles"`
-	Scope             string   `json:"scope"`
-	Scp               []string `json:"scp"`
-	TokenID           string   `json:"jti"`
-	ExpiresAt         int64    `json:"exp"`
+	Subject           string `json:"sub"`
+	Issuer            string `json:"iss"`
+	Email             string `json:"email"`
+	PreferredUsername string `json:"preferred_username"`
+	// Identity claims only. Roles/Groups are deliberately NOT mapped onto
+	// Principal.Roles/Principal.Groups: authentication providers establish
+	// identity, and rbac-local seeds its effective role set from
+	// Principal.Roles — importing an external `roles` claim would let any
+	// configured issuer mint local admin without a role_bindings entry.
+	// (Both remain visible in raw token claims if an operator needs them.)
+	Scope     string   `json:"scope"`
+	Scp       []string `json:"scp"`
+	TokenID   string   `json:"jti"`
+	ExpiresAt int64    `json:"exp"`
 }
 
 func (c *idTokenClaims) scopes() []string {
@@ -137,7 +141,7 @@ func (p *OIDCJWTProvider) Name() string { return "oidc-jwt" }
 func (p *OIDCJWTProvider) Shutdown()    {}
 
 func (p *OIDCJWTProvider) Capabilities() auth.Capability {
-	return auth.CapAuthenticate | auth.CapIntrospect | auth.CapGroupResolution
+	return auth.CapAuthenticate | auth.CapIntrospect
 }
 
 func (p *OIDCJWTProvider) Authenticate(ctx context.Context, req auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
@@ -200,8 +204,6 @@ func (p *OIDCJWTProvider) Authenticate(ctx context.Context, req auth.AuthRequest
 	principal := &auth.Principal{
 		Subject:    subject,
 		Issuer:     claims.Issuer,
-		Groups:     claims.Groups,
-		Roles:      claims.Roles,
 		Scopes:     claims.scopes(),
 		AuthMethod: p.Name(),
 		TokenID:    claims.TokenID,
@@ -235,9 +237,8 @@ func (p *OIDCJWTProvider) enrichFromUserInfo(ctx context.Context, rawToken strin
 		return
 	}
 	var extra struct {
-		Email             string   `json:"email"`
-		PreferredUsername string   `json:"preferred_username"`
-		Groups            []string `json:"groups"`
+		Email             string `json:"email"`
+		PreferredUsername string `json:"preferred_username"`
 	}
 	if err := info.Claims(&extra); err != nil {
 		p.logger.Debug("oidc userinfo claims extraction failed",
@@ -249,9 +250,6 @@ func (p *OIDCJWTProvider) enrichFromUserInfo(ctx context.Context, rawToken strin
 	}
 	if c.PreferredUsername == "" {
 		c.PreferredUsername = extra.PreferredUsername
-	}
-	if len(c.Groups) == 0 {
-		c.Groups = extra.Groups
 	}
 	var all map[string]any
 	if err := info.Claims(&all); err == nil {

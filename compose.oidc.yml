@@ -19,8 +19,11 @@ services:
       - "localhost:host-gateway"
     environment:
       - GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous
-      - GITSTORE_AUTH__OIDC__ISSUER_URI=http://localhost:4444/
+      - GITSTORE_AUTH__OIDC__ISSUER_URI=http://localhost:${GITSTORE_HOST_OIDC_ISSUER_PORT:-4444}/
       - GITSTORE_AUTH__OIDC__CLIENT_ID=${GITSTORE_OIDC_CLIENT_ID:-gitstore}
+      # Follows GITSTORE_OIDC_CLIENT_AUDIENCE so a custom registered audience
+      # is also what the api verifies.
+      - GITSTORE_AUTH__OIDC__AUDIENCE=${GITSTORE_OIDC_CLIENT_AUDIENCE:-gitstore}
 
   hydra-postgres:
     image: postgres:16-alpine
@@ -65,6 +68,12 @@ services:
       - DSN=postgres://hydra:${HYDRA_DB_PASSWORD:?set HYDRA_DB_PASSWORD in .env}@hydra-postgres:5432/hydra?sslmode=disable&max_conns=20
       - SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM:?set HYDRA_SECRETS_SYSTEM in .env (32+ chars)}
       - SECRETS_COOKIE=${HYDRA_SECRETS_COOKIE:?set HYDRA_SECRETS_COOKIE in .env (32+ chars)}
+      # Derived from the host-port overrides so a custom
+      # GITSTORE_HOST_OIDC_ISSUER_PORT/GITSTORE_HOST_OIDC_BRIDGE_PORT never
+      # diverges from the advertised issuer/login/consent URLs.
+      - URLS_SELF_ISSUER=http://localhost:${GITSTORE_HOST_OIDC_ISSUER_PORT:-4444}/
+      - URLS_LOGIN=http://localhost:${GITSTORE_HOST_OIDC_BRIDGE_PORT:-4445}/login
+      - URLS_CONSENT=http://localhost:${GITSTORE_HOST_OIDC_BRIDGE_PORT:-4445}/consent
     volumes:
       - ./config/oidc/hydra/config.yaml:/etc/config/hydra/config.yaml:ro
     depends_on:
@@ -162,6 +171,8 @@ services:
       - DSN=postgres://kratos:${KRATOS_DB_PASSWORD:?set KRATOS_DB_PASSWORD in .env}@kratos-postgres:5432/kratos?sslmode=disable&max_conns=20
       - SECRETS_COOKIE=${KRATOS_SECRETS_COOKIE:?set KRATOS_SECRETS_COOKIE in .env (32+ chars)}
       - SECRETS_DEFAULT=${KRATOS_SECRETS_DEFAULT:?set KRATOS_SECRETS_DEFAULT in .env (32+ chars)}
+      # Derived from the host-port override so the advertised base URL tracks it.
+      - SERVE_PUBLIC_BASE_URL=http://localhost:${GITSTORE_HOST_KRATOS_PUBLIC_PORT:-4433}/
     volumes:
       - ./config/oidc/kratos/kratos.yml:/etc/config/kratos/kratos.yml:ro
       - ./config/oidc/kratos/identity.schema.json:/etc/config/kratos/identity.schema.json:ro
@@ -223,11 +234,12 @@ services:
       # Server-side whoami calls use the in-network URL...
       - GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_URI=http://kratos:4433
       # ...while browser redirects to Kratos's login UI use the published URL.
-      - GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_BROWSER_URI=http://localhost:4433
+      - GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_BROWSER_URI=http://localhost:${GITSTORE_HOST_KRATOS_PUBLIC_PORT:-4433}
       - GITSTORE_OIDC_BRIDGE__KRATOS__ADMIN_URI=http://kratos:4434
       # Generic OIDC clients rarely request an audience; default the granted
       # access-token audience so aud is never empty (gitstore-api enforces it).
-      - GITSTORE_OIDC_BRIDGE__HYDRA__DEFAULT_AUDIENCE=${GITSTORE_OIDC_CLIENT_ID:-gitstore}
+      # Follows GITSTORE_OIDC_CLIENT_AUDIENCE like the api overlay does.
+      - GITSTORE_OIDC_BRIDGE__HYDRA__DEFAULT_AUDIENCE=${GITSTORE_OIDC_CLIENT_AUDIENCE:-gitstore}
     depends_on:
       hydra:
         condition: service_healthy
