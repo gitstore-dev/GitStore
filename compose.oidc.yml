@@ -186,9 +186,12 @@ services:
     ports:
       - "${GITSTORE_HOST_KRATOS_UI_PORT:-4455}:3000"
     environment:
-      - KRATOS_PUBLIC_URI=http://kratos:4433/
+      # These env names belong to Ory's selfservice-ui image, not GitStore's
+      # config convention — keep the upstream URL naming here.
+      - KRATOS_PUBLIC_URL=http://kratos:4433/
       - KRATOS_BROWSER_URL=http://localhost:4433/
       - COOKIE_SECRET=${KRATOS_UI_COOKIE_SECRET:?set KRATOS_UI_COOKIE_SECRET in .env (32+ chars)}
+      - CSRF_COOKIE_NAME=gitstore_oidc_csrf
       - CSRF_COOKIE_SECRET=${KRATOS_UI_CSRF_SECRET:?set KRATOS_UI_CSRF_SECRET in .env (32+ chars)}
       - COOKIE_SECURE=false
     depends_on:
