@@ -127,9 +127,32 @@ func TestNameAndCapabilities(t *testing.T) {
 	assert.Equal(t, auth.CapAuthenticate|auth.CapIntrospect|auth.CapGroupResolution, p.Capabilities())
 }
 
-func TestNewRequiresIssuerAndClientID(t *testing.T) {
-	_, err := New(context.Background(), config.OIDCConfig{}, zap.NewNop())
+func TestNewRequiresIssuerURI(t *testing.T) {
+	_, err := New(context.Background(), config.OIDCConfig{ClientID: "gitstore"}, zap.NewNop())
 	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "issuer_uri")
+}
+
+func TestNewRequiresAudienceOrClientID(t *testing.T) {
+	_, err := New(context.Background(), config.OIDCConfig{IssuerURI: "http://localhost:4444/"}, zap.NewNop())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "audience or client_id")
+}
+
+func TestAuthenticateWithAudienceOnlyNoClientID(t *testing.T) {
+	issuer := newMockIssuer(t)
+	// Pure resource-server mode: audience set, client_id empty.
+	p, err := New(context.Background(), config.OIDCConfig{
+		IssuerURI: issuer.server.URL,
+		Audience:  "gitstore",
+	}, zap.NewNop())
+	require.NoError(t, err)
+	token := issuer.sign(t, issuer.validClaims())
+
+	principal, decision, err := p.Authenticate(context.Background(), bearerReq(token))
+	require.NoError(t, err)
+	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
+	assert.Equal(t, "kratos-identity-uuid", principal.Subject)
 }
 
 func TestAuthenticateValidToken(t *testing.T) {

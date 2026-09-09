@@ -880,12 +880,42 @@ func TestValidateOIDCAuthChainConfig_NotChained(t *testing.T) {
 	assert.NoError(t, validateOIDCAuthChainConfig(cfg))
 }
 
-func TestValidateOIDCAuthChainConfig_RequiresIssuerAndClientID(t *testing.T) {
-	cfg := &AuthConfig{AuthN: AuthNConfig{Chain: []string{"oidc-jwt", "anonymous"}}}
+func TestValidateOIDCAuthChainConfig_RequiresIssuerURI(t *testing.T) {
+	cfg := &AuthConfig{
+		AuthN: AuthNConfig{Chain: []string{"oidc-jwt"}},
+		OIDC:  OIDCConfig{Audience: "gitstore"},
+	}
 	err := validateOIDCAuthChainConfig(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "auth.oidc.issuer_uri")
+}
+
+func TestValidateOIDCAuthChainConfig_RequiresAudienceOrClientID(t *testing.T) {
+	cfg := &AuthConfig{
+		AuthN: AuthNConfig{Chain: []string{"oidc-jwt", "anonymous"}},
+		OIDC:  OIDCConfig{IssuerURI: "http://localhost:4444/"},
+	}
+	err := validateOIDCAuthChainConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth.oidc.audience")
 	assert.Contains(t, err.Error(), "auth.oidc.client_id")
+}
+
+func TestValidateOIDCAuthChainConfig_AudienceOnlySuffices(t *testing.T) {
+	// Pure resource-server mode: no client_id configured at all.
+	cfg := &AuthConfig{
+		AuthN: AuthNConfig{Chain: []string{"oidc-jwt"}},
+		OIDC:  OIDCConfig{IssuerURI: "http://localhost:4444/", Audience: "gitstore-api"},
+	}
+	assert.NoError(t, validateOIDCAuthChainConfig(cfg))
+}
+
+func TestValidateOIDCAuthChainConfig_ClientIDOnlySuffices(t *testing.T) {
+	cfg := &AuthConfig{
+		AuthN: AuthNConfig{Chain: []string{"oidc-jwt"}},
+		OIDC:  OIDCConfig{IssuerURI: "http://localhost:4444/", ClientID: "gitstore"},
+	}
+	assert.NoError(t, validateOIDCAuthChainConfig(cfg))
 }
 
 func TestValidateOIDCAuthChainConfig_Satisfied(t *testing.T) {

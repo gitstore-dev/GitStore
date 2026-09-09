@@ -89,8 +89,15 @@ func discover(ctx context.Context, issuerURI string) (*oidc.Provider, string, er
 // verifier enforces issuer, audience (cfg.Audience, defaulting to
 // cfg.ClientID), and expiry (with cfg.ClockSkew leeway).
 func New(ctx context.Context, cfg config.OIDCConfig, logger *zap.Logger) (*OIDCJWTProvider, error) {
-	if strings.TrimSpace(cfg.IssuerURI) == "" || strings.TrimSpace(cfg.ClientID) == "" {
-		return nil, errors.New("oidcjwt: issuer_uri and client_id are required")
+	if strings.TrimSpace(cfg.IssuerURI) == "" {
+		return nil, errors.New("oidcjwt: issuer_uri is required")
+	}
+	audience := cfg.Audience
+	if audience == "" {
+		audience = cfg.ClientID
+	}
+	if strings.TrimSpace(audience) == "" {
+		return nil, errors.New("oidcjwt: audience or client_id is required")
 	}
 	skew := 2 * time.Minute
 	if cfg.ClockSkew != "" {
@@ -103,10 +110,6 @@ func New(ctx context.Context, cfg config.OIDCConfig, logger *zap.Logger) (*OIDCJ
 	provider, canonicalIssuer, err := discover(ctx, cfg.IssuerURI)
 	if err != nil {
 		return nil, fmt.Errorf("oidcjwt: discovery against %q: %w", cfg.IssuerURI, err)
-	}
-	audience := cfg.Audience
-	if audience == "" {
-		audience = cfg.ClientID
 	}
 	usernameClaim := cfg.UsernameClaim
 	if usernameClaim == "" {

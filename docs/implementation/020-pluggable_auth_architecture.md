@@ -402,8 +402,8 @@ package oidcjwt
 
 // Config keys (Viper paths → env vars):
 //   auth.oidc.issuer_uri   → GITSTORE_AUTH__OIDC__ISSUER_URI   (required)
-//   auth.oidc.client_id    → GITSTORE_AUTH__OIDC__CLIENT_ID    (required)
-//   auth.oidc.audience     → GITSTORE_AUTH__OIDC__AUDIENCE     (optional, defaults to client_id)
+//   auth.oidc.client_id    → GITSTORE_AUTH__OIDC__CLIENT_ID    (optional; audience default)
+//   auth.oidc.audience     → GITSTORE_AUTH__OIDC__AUDIENCE     (audience or client_id required)
 //   auth.oidc.clock_skew   → GITSTORE_AUTH__OIDC__CLOCK_SKEW   (default "2m")
 
 type OIDCJWTProvider struct {
@@ -960,9 +960,9 @@ auth.jwt.issuer                          GITSTORE_AUTH__JWT__ISSUER             
 auth.jwt.refresh_grace                   GITSTORE_AUTH__JWT__REFRESH_GRACE          duration "60s"
 
 # Future OIDC JWT provider (Phase 6)
-auth.oidc.issuer_uri                     GITSTORE_AUTH__OIDC__ISSUER_URI            string   ""
-auth.oidc.client_id                      GITSTORE_AUTH__OIDC__CLIENT_ID             string   ""
-auth.oidc.audience                       GITSTORE_AUTH__OIDC__AUDIENCE              string   "" (defaults to client_id)
+auth.oidc.issuer_uri                     GITSTORE_AUTH__OIDC__ISSUER_URI            string   "" (required when oidc-jwt chained)
+auth.oidc.client_id                      GITSTORE_AUTH__OIDC__CLIENT_ID             string   "" (optional; audience default — a pure resource server may set audience alone)
+auth.oidc.audience                       GITSTORE_AUTH__OIDC__AUDIENCE              string   "" (defaults to client_id; one of audience/client_id required when oidc-jwt chained)
 auth.oidc.clock_skew                     GITSTORE_AUTH__OIDC__CLOCK_SKEW            duration "2m"
 auth.oidc.username_claim                 GITSTORE_AUTH__OIDC__USERNAME_CLAIM        string   "sub" (k8s --oidc-username-claim / Spring user-name-attribute pattern; email or preferred_username give human-readable bindings at the cost of stability)
 
