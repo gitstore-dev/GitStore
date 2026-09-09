@@ -73,6 +73,17 @@ provider = "rbac-local"
 [auth.userdir]
 provider = "static-users"
 
+# Optional Phase 7 OIDC Relying Party (spec 059). Uncomment and chain "oidc-jwt"
+# into auth.authn.chain to verify bearer tokens against any standards-compliant
+# OIDC issuer — e.g. the optional reference stack (make compose IDENTITY=oidc).
+# [auth.oidc]
+# issuer_uri = "http://localhost:4444/"
+# client_id = "gitstore"
+# audience = ""        # defaults to client_id
+# clock_skew = "2m"
+# username_claim = "sub"  # claim that becomes Principal.Subject (bindings/audit);
+                          # "email" or "preferred_username" = human-readable but mutable
+
 [auth.rbac]
 policy_file = "/etc/gitstore/policy.yaml"
 

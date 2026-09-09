@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/joho/godotenv"
@@ -65,6 +66,34 @@ type AuthConfig struct {
 	// those providers is present in AuthN.Chain (see
 	// validateAuthChainConfig), not via a struct `validate:"required"` tag.
 	ServiceAccount ServiceAccountConfig `mapstructure:"serviceaccount"`
+
+	// OIDC configures the oidc-jwt AuthN provider (Phase 7, spec 059):
+	// a generic, issuer-agnostic OIDC Relying Party. IssuerURI and ClientID
+	// are required only when "oidc-jwt" is present in AuthN.Chain (see
+	// validateOIDCAuthChainConfig).
+	OIDC OIDCConfig `mapstructure:"oidc"`
+}
+
+// OIDCConfig holds settings for the oidc-jwt AuthN provider: bearer JWTs are
+// verified via OIDC Discovery + JWKS against the configured issuer.
+type OIDCConfig struct {
+	IssuerURI string `mapstructure:"issuer_uri"`
+	// ClientID is optional for a pure resource server: it only serves as the
+	// default for Audience. Operators who set Audience explicitly need not
+	// configure a client_id at all.
+	ClientID string `mapstructure:"client_id"`
+	// Audience expected in the aud claim. Defaults to ClientID when empty.
+	// At least one of Audience/ClientID is required when oidc-jwt is chained.
+	Audience  string `mapstructure:"audience"`
+	ClockSkew string `mapstructure:"clock_skew"`
+	// UsernameClaim selects which token/userinfo claim becomes
+	// Principal.Subject (the identity used for role bindings, ownership fields,
+	// and audit logs) — the Kubernetes --oidc-username-claim / Spring Security
+	// user-name-attribute pattern. Defaults to "sub" (unique and immutable per
+	// issuer); "email" or "preferred_username" give human-readable bindings at
+	// the cost of stability if the trait changes. The raw sub is always
+	// preserved in Principal.Claims["sub"].
+	UsernameClaim string `mapstructure:"username_claim"`
 }
 
 // ServiceAccountConfig holds settings for GitStore-issued service-account
@@ -237,6 +266,11 @@ func load(path string) (*Config, error) {
 	v.SetDefault("auth.serviceaccount.default_ttl", "10m")
 	v.SetDefault("auth.serviceaccount.max_ttl", "1h")
 	v.SetDefault("auth.serviceaccount.clock_skew", "2m")
+	v.SetDefault("auth.oidc.issuer_uri", "")
+	v.SetDefault("auth.oidc.client_id", "")
+	v.SetDefault("auth.oidc.audience", "")
+	v.SetDefault("auth.oidc.clock_skew", "2m")
+	v.SetDefault("auth.oidc.username_claim", "sub")
 	v.SetDefault("datastore.backend", "memdb")
 	v.SetDefault("datastore.scylla.hosts", []string{"localhost:9042"})
 	v.SetDefault("datastore.scylla.keyspace", "gitstore")
@@ -342,6 +376,9 @@ func validateConfig(cfg *Config) error {
 	if err := validateServiceAccountAuthChainConfig(&cfg.Auth); err != nil {
 		return err
 	}
+	if err := validateOIDCAuthChainConfig(&cfg.Auth); err != nil {
+		return err
+	}
 	return validateLogFormat(&cfg.Log)
 }
 
@@ -349,6 +386,35 @@ func validateAuthChainConfig(cfg *Config) error {
 	for _, provider := range cfg.Auth.AuthN.Chain {
 		if strings.EqualFold(strings.TrimSpace(provider), "static-users") && cfg.Auth.JWT.Secret == "" {
 			return errors.New("startup failed: auth.jwt.secret is required\n\n  Problem: static-users is present in auth.authn.chain, but auth.jwt.secret (env: GITSTORE_AUTH__JWT__SECRET) is empty. static-users cannot issue or verify session tokens without it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_AUTH__JWT__SECRET to a random string (32+ chars). You can generate one with: make secret TARGET=jwt\n    2. If you don't intend to use static-users, remove it from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)\n\n  See specs/060-local-multiuser-authn/quickstart.md, step 4, for a worked example")
+		}
+	}
+	return nil
+}
+
+// validateOIDCAuthChainConfig enforces that auth.oidc.issuer_uri and
+// auth.oidc.client_id are configured when "oidc-jwt" is present in
+// auth.authn.chain (Phase 7, spec 059), mirroring validateAuthChainConfig's
+// conditional-requirement pattern.
+func validateOIDCAuthChainConfig(auth *AuthConfig) error {
+	chained := false
+	for _, provider := range auth.AuthN.Chain {
+		if strings.EqualFold(strings.TrimSpace(provider), "oidc-jwt") {
+			chained = true
+			break
+		}
+	}
+	if !chained {
+		return nil
+	}
+	if strings.TrimSpace(auth.OIDC.IssuerURI) == "" {
+		return errors.New("startup failed: auth.oidc.issuer_uri is required\n\n  Problem: oidc-jwt is present in auth.authn.chain, but auth.oidc.issuer_uri (env: GITSTORE_AUTH__OIDC__ISSUER_URI) is empty. oidc-jwt cannot verify bearer tokens without an OIDC issuer to run discovery against\n\n  To fix, do ONE of the following:\n    1. Point auth.oidc.issuer_uri at any standards-compliant OIDC issuer (e.g. the optional reference stack from `make compose IDENTITY=oidc`, Keycloak, Auth0)\n    2. If you don't intend to use OIDC, remove oidc-jwt from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)\n\n  See specs/059-optional-oidc-provider/quickstart.md for a worked example")
+	}
+	if strings.TrimSpace(auth.OIDC.Audience) == "" && strings.TrimSpace(auth.OIDC.ClientID) == "" {
+		return errors.New("startup failed: auth.oidc.audience or auth.oidc.client_id is required\n\n  Problem: oidc-jwt is present in auth.authn.chain, but neither auth.oidc.audience nor auth.oidc.client_id is set. gitstore-api is a resource server: it must know which aud value to expect — set auth.oidc.audience explicitly, or set auth.oidc.client_id and the audience defaults to it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_AUTH__OIDC__AUDIENCE to the audience your clients request (e.g. gitstore)\n    2. Set GITSTORE_AUTH__OIDC__CLIENT_ID to the registered client id (audience defaults to it)\n    3. If you don't intend to use OIDC, remove oidc-jwt from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)")
+	}
+	if auth.OIDC.ClockSkew != "" {
+		if _, err := time.ParseDuration(auth.OIDC.ClockSkew); err != nil {
+			return fmt.Errorf("startup failed: auth.oidc.clock_skew %q is not a valid duration: %w", auth.OIDC.ClockSkew, err)
 		}
 	}
 	return nil

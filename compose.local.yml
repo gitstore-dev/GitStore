@@ -57,8 +57,8 @@ services:
       - |
         mkdir -p /run/controller-secrets/gitstore-controller-manager-signing-key
         rm -f /run/controller-bootstrap/serviceaccount.env
-        /app/gitctl generate-serviceaccount-key --private-key-path /run/api-issuer/serviceaccount-signing-key
-        /app/gitctl generate-serviceaccount-key --private-key-path /run/controller-secrets/gitstore-controller-manager-signing-key/privateKey
+        /app/gitctl generate-signing-key --private-key-path /run/api-issuer/serviceaccount-signing-key
+        /app/gitctl generate-signing-key --private-key-path /run/controller-secrets/gitstore-controller-manager-signing-key/privateKey
     volumes:
       - api-serviceaccount-issuer-key:/run/api-issuer
       - controller-serviceaccount-secrets:/run/controller-secrets

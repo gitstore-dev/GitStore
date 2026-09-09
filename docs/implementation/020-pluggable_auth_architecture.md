@@ -401,24 +401,24 @@ Session revocations are stored in the shared ScyllaDB `auth_session_revocations`
 package oidcjwt
 
 // Config keys (Viper paths → env vars):
-//   auth.oidc.issuer_url   → GITSTORE_AUTH__OIDC__ISSUER_URL   (required)
-//   auth.oidc.client_id    → GITSTORE_AUTH__OIDC__CLIENT_ID    (required)
-//   auth.oidc.audience     → GITSTORE_AUTH__OIDC__AUDIENCE     (optional, defaults to client_id)
+//   auth.oidc.issuer_uri   → GITSTORE_AUTH__OIDC__ISSUER_URI   (required)
+//   auth.oidc.client_id    → GITSTORE_AUTH__OIDC__CLIENT_ID    (optional; audience default)
+//   auth.oidc.audience     → GITSTORE_AUTH__OIDC__AUDIENCE     (audience or client_id required)
 //   auth.oidc.clock_skew   → GITSTORE_AUTH__OIDC__CLOCK_SKEW   (default "2m")
 
 type OIDCJWTProvider struct {
     verifier    *oidc.IDTokenVerifier
-    issuerURL   string
+    issuerURI   string
     clientID    string
     provider    *oidc.Provider
     logger      *zap.Logger
 }
 
 func New(ctx context.Context, cfg *viper.Viper, logger *zap.Logger) (*OIDCJWTProvider, error) {
-    issuerURL := cfg.GetString("auth.oidc.issuer_url")
+    issuerURI := cfg.GetString("auth.oidc.issuer_uri")
     clientID  := cfg.GetString("auth.oidc.client_id")
     // go-oidc performs OIDC Discovery (/.well-known/openid-configuration) here:
-    provider, err := oidc.NewProvider(ctx, issuerURL)
+    provider, err := oidc.NewProvider(ctx, issuerURI)
     // verifier enforces iss + aud; clock skew leeway is handled by go-oidc internally
     // through oidc.Config.Now which can be overridden in tests
     verifier := provider.Verifier(&oidc.Config{
@@ -426,7 +426,7 @@ func New(ctx context.Context, cfg *viper.Viper, logger *zap.Logger) (*OIDCJWTPro
         SkipExpiryCheck: false, // RFC 7519 §4.1.4 MUST validate exp
         // go-oidc applies a 1-minute built-in leeway; set GITSTORE_AUTH__OIDC__CLOCK_SKEW for override
     })
-    return &OIDCJWTProvider{verifier: verifier, issuerURL: issuerURL, clientID: clientID,
+    return &OIDCJWTProvider{verifier: verifier, issuerURI: issuerURI, clientID: clientID,
         provider: provider, logger: logger}, nil
 }
 
@@ -439,7 +439,7 @@ func (p *OIDCJWTProvider) Capabilities() auth.Capability {
 func (p *OIDCJWTProvider) Authenticate(ctx context.Context, req auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
     // 1. Extract bearer token from Authorization header
     // 2. Check JWT issuer claim WITHOUT verifying signature (just parse, no verify)
-    //    If issuer != p.issuerURL → return OutcomeChallenge (not my token)
+    //    If issuer != p.issuerURI → return OutcomeChallenge (not my token)
     //    This prevents passing gitstore-issued HS256 tokens to the JWKS verifier.
     // 3. verifier.Verify(ctx, rawToken):
     //    - On ErrKeyNotFound: call provider.RemoteKeySet forced refresh, retry once
@@ -960,10 +960,11 @@ auth.jwt.issuer                          GITSTORE_AUTH__JWT__ISSUER             
 auth.jwt.refresh_grace                   GITSTORE_AUTH__JWT__REFRESH_GRACE          duration "60s"
 
 # Future OIDC JWT provider (Phase 6)
-auth.oidc.issuer_url                     GITSTORE_AUTH__OIDC__ISSUER_URL            string   ""
-auth.oidc.client_id                      GITSTORE_AUTH__OIDC__CLIENT_ID             string   ""
-auth.oidc.audience                       GITSTORE_AUTH__OIDC__AUDIENCE              string   "" (defaults to client_id)
+auth.oidc.issuer_uri                     GITSTORE_AUTH__OIDC__ISSUER_URI            string   "" (required when oidc-jwt chained)
+auth.oidc.client_id                      GITSTORE_AUTH__OIDC__CLIENT_ID             string   "" (optional; audience default — a pure resource server may set audience alone)
+auth.oidc.audience                       GITSTORE_AUTH__OIDC__AUDIENCE              string   "" (defaults to client_id; one of audience/client_id required when oidc-jwt chained)
 auth.oidc.clock_skew                     GITSTORE_AUTH__OIDC__CLOCK_SKEW            duration "2m"
+auth.oidc.username_claim                 GITSTORE_AUTH__OIDC__USERNAME_CLAIM        string   "sub" (k8s --oidc-username-claim / Spring user-name-attribute pattern; email or preferred_username give human-readable bindings at the cost of stability)
 
 # RBAC local provider
 auth.rbac.policy_file                    GITSTORE_AUTH__RBAC__POLICY_FILE           string   "policy.yaml"
@@ -995,7 +996,7 @@ GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-users,anonymous
 GITSTORE_AUTH__AUTHZ__PROVIDER=rbac-local
 GITSTORE_AUTH__USERDIR__PROVIDER=none
 GITSTORE_AUTH__RBAC__POLICY_FILE=/etc/gitstore/policy.yaml
-GITSTORE_AUTH__OIDC__ISSUER_URL=http://localhost:8080/realms/gitstore
+GITSTORE_AUTH__OIDC__ISSUER_URI=http://localhost:8080/realms/gitstore
 GITSTORE_AUTH__OIDC__CLIENT_ID=gitstore-api
 GITSTORE_AUTH__OIDC__CLOCK_SKEW=2m
 GITSTORE_AUTH__GRPC__HMAC_SECRET=local-grpc-hmac-secret
@@ -1012,7 +1013,7 @@ GITSTORE_AUTH__JWT__REFRESH_GRACE=60s
 GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-users,anonymous
 GITSTORE_AUTH__AUTHZ__PROVIDER=opa
 GITSTORE_AUTH__USERDIR__PROVIDER=none
-GITSTORE_AUTH__OIDC__ISSUER_URL=${OIDC_ISSUER_URL}
+GITSTORE_AUTH__OIDC__ISSUER_URI=${OIDC_ISSUER_URI}
 GITSTORE_AUTH__OIDC__CLIENT_ID=${OIDC_CLIENT_ID}
 GITSTORE_AUTH__OIDC__AUDIENCE=${OIDC_AUDIENCE}
 GITSTORE_AUTH__OIDC__CLOCK_SKEW=2m
@@ -1193,6 +1194,17 @@ already-decided design. This is the deferred Phase 7 "OIDC JWT provider" slot's 
 controller-identity use case, now served by a purpose-built machine-identity mechanism instead of a
 human-oriented OIDC Relying Party; `oidc-jwt` and `serviceaccount-jwt` remain two entirely separate
 providers for two entirely separate principal types, and neither changes the other's design.
+
+**Addendum — optional first-party issuer choice (spec 059):** `OIDCJWTProvider` remains exactly as
+specified above — a generic, issuer-agnostic Relying Party that works against any standards-compliant
+OIDC issuer via `issuer_uri`, with zero code change required per issuer. GitStore is "bring your own"
+for OIDC, the same as it is for `gitstore-admin` and every other optional component; operators with an
+existing IdP (Keycloak, Auth0, Okta, a homegrown issuer) point `issuer_uri` at it directly. For anyone
+without one, `specs/059-optional-oidc-provider/` adds an optional, separately-deployable *reference*
+issuer — Ory Hydra + Ory Kratos, bridged by a new standalone `gitstore-oidc-bridge` service — as one
+possible value for `issuer_uri` among any others an operator could bring. See that spec for the full
+architecture rationale (including why Hydra was chosen over a Dex-based alternative) and the Kratos
+identity-to-`Principal` claims mapping; nothing in it changes this Phase's Relying-Party design.
 
 ### Phase 8 — OPA production AuthZ provider
 **Milestone:** `auth-framework-v3`

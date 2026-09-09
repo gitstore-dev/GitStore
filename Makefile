@@ -7,7 +7,8 @@ ROOT := $(CURDIR)
 API_DIR := $(ROOT)/gitstore-api
 CONTROLLER_MANAGER_DIR := $(ROOT)/gitstore-controller-manager
 GIT_SERVICE_DIR := $(ROOT)/gitstore-git-service
-GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR)
+OIDC_BRIDGE_DIR := $(ROOT)/gitstore-oidc-bridge
+GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR)
 
 API_ENV_FILE ?= $(API_DIR)/.env
 CONFIG_FILE ?= ./config/config.toml
@@ -15,7 +16,7 @@ AUTH_CONFIG_DIR ?= $(ROOT)/config
 POLICY_FILE ?= $(AUTH_CONFIG_DIR)/policy.yaml
 USERS_FILE ?= $(AUTH_CONFIG_DIR)/users.yaml
 LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
-LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml -f compose.admin.yml
+LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml -f compose.admin.yml $(IDENTITY_COMPOSE_FILE)
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
 GIT_GRPC_PORT ?= 50051
 CONTROLLER_CHECKPOINT_DIR ?= $(ROOT)/.gitstore/checkpoints
@@ -48,14 +49,17 @@ DIFF_BASE ?= origin/main
 
 COMPOSE_BAKE ?= true
 DATASTORE ?= memdb
+IDENTITY ?= none
 PROFILE ?= single
 SCYLLA_CLUSTER_SMP ?= 1
 SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS ?= 2048
 SCYLLA_COMPOSE_FILE = $(if $(filter cluster,$(PROFILE)),compose.scylla.cluster.yml,compose.scylla.yml)
 DATASTORE_COMPOSE_FILE = $(if $(filter scylla,$(DATASTORE)),-f $(SCYLLA_COMPOSE_FILE),)
+IDENTITY_COMPOSE_FILE = $(if $(filter oidc,$(IDENTITY)),-f compose.oidc.yml,)
 SCYLLA_SERVICES = $(if $(filter cluster,$(PROFILE)),scylla-1 scylla-2 scylla-3 scylla-init,scylla scylla-init)
 SCYLLA_LIFECYCLE_SERVICES = scylla scylla-1 scylla-2 scylla-3 scylla-init
-COMPOSE_SERVICE = $(if $(filter scylla,$(SERVICE)),$(SCYLLA_LIFECYCLE_SERVICES),$(SERVICE))
+OIDC_SERVICES = hydra-postgres hydra-migrate hydra hydra-client-setup kratos-postgres kratos-migrate kratos kratos-selfservice-ui mailslurper oidc-bridge
+COMPOSE_SERVICE = $(if $(filter scylla,$(SERVICE)),$(SCYLLA_LIFECYCLE_SERVICES),$(if $(filter oidc,$(SERVICE)),$(OIDC_SERVICES),$(SERVICE)))
 DETACH_FLAG := $(if $(filter 1 true yes,$(DETACH)),-d,)
 SERVICE ?=
 
@@ -129,17 +133,19 @@ export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 .PHONY: build test lint pr-ready check clean bootstrap secret capacity capacity-dispatch-test chaos test-scylla-hardening test-scylla-integration
 .PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-observability _capacity-observability-down
 .PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
-.PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac
-.PHONY: admin-compose admin-down admin-stop admin-logs add-user add-role assign-role hash-user-password
+.PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac _secret-signing-key
+.PHONY: admin-compose admin-down admin-stop admin-logs add-user add-role assign-role hash-user-password enroll-controller-serviceaccount
+.PHONY: oidc
 
 help: ## Show available targets and common variables.
 	@awk 'BEGIN {FS = ":.*##"; printf "GitStore make targets:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\nCommon variables:\n"
 	@printf "  DETACH=1                  Run compose start targets in the background\n"
 	@printf "  DATASTORE=%s              Compose datastore: memdb or scylla\n" "$(DATASTORE)"
+	@printf "  IDENTITY=%s               Compose identity stack: none or oidc (Hydra + Kratos reference provider)\n" "$(IDENTITY)"
 	@printf "  COMPOSE_BAKE=true         Compose build bake setting for Docker Compose\n"
 	@printf "  PROFILE=%s                Scylla profile: single or cluster\n" "$(PROFILE)"
-	@printf "  SERVICE=<name>            Limit logs/stop to one compose service; SERVICE=scylla includes all Scylla variants\n"
+	@printf "  SERVICE=<name>            Limit logs/stop to one compose service; SERVICE=scylla includes all Scylla variants; SERVICE=oidc (with IDENTITY=oidc) covers the whole OIDC stack\n"
 	@printf "  SCYLLA_COMPOSE_FILE=%s  Derived Scylla overlay used by scylla and compose DATASTORE=scylla\n" "$(SCYLLA_COMPOSE_FILE)"
 	@printf "  SCYLLA_CLUSTER_SMP=%s     CPU shards per Scylla node for PROFILE=cluster\n" "$(SCYLLA_CLUSTER_SMP)"
 	@printf "  SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS=%s  Networking AIO blocks per cluster node\n" "$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)"
@@ -187,7 +193,25 @@ git: ## Run gitstore-git-service locally in the foreground.
 # idempotent. Requires the API to already be listening on API_URL's host:port.
 CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE ?= $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/serviceaccount.env
 
-enroll-controller-serviceaccount:
+enroll-controller-serviceaccount: ## Enroll controller-manager's signing key with the API.
+	@mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"
+	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
+		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		echo "Generate one with: make secret TARGET=signing-key DESTINATION_PATH=$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		exit 2; \
+	}
+	@cd "$(API_DIR)" && go run ./cmd/gitctl enroll-serviceaccount \
+		--api-url "$(API_URL)" \
+		--admin-username "$(DEV_ADMIN_USERNAME)" \
+		--admin-password "$(DEV_ADMIN_PASSWORD)" \
+		--namespace "$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
+		--name "$(CONTROLLER_SERVICEACCOUNT_NAME)" \
+		--key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
+		--replace-existing-key \
+		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
+		--identity-output-path "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)"
+
+_enroll-controller-serviceaccount:
 	@mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"
 	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
 		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
@@ -209,7 +233,7 @@ controller: ## Run gitstore-controller-manager locally in the foreground.
 	@mkdir -p "$(CONTROLLER_CHECKPOINT_DIR)"
 	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
 		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
-		echo "Generate one with: cd $(API_DIR) && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		echo "Generate one with: make secret TARGET=signing-key DESTINATION_PATH=$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
 		exit 2; \
 	}
 	@set -u; \
@@ -237,7 +261,7 @@ controller: ## Run gitstore-controller-manager locally in the foreground.
 api: ## Run gitstore-api locally in the foreground.
 	@mkdir -p "$$(dirname "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")"
 	@test -f "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" || \
-		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" )
+		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" )
 	@cd "$(API_DIR)" && \
 		GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
 		go run ./cmd/server
@@ -251,11 +275,11 @@ dev: ## Run local git service and API together in the foreground.
 	mkfifo "$$fifo"; \
 	if [ ! -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ]; then \
 		mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"; \
-		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ); \
+		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ); \
 	fi; \
 	if [ ! -f "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ]; then \
 		mkdir -p "$$(dirname "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")"; \
-		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ); \
+		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ); \
 	fi; \
 	cleanup() { \
 		trap - INT TERM EXIT; \
@@ -361,14 +385,18 @@ _check-local-config:
 _check-compose-config: _check-local-config
 	@CONFIG_FILE="$(abspath $(CONFIG_FILE))" ./scripts/check-local-compose-config.sh
 
-compose: _check-local-config ## Run all core services; pass DATASTORE=scylla and optional PROFILE=cluster for Scylla.
+compose: _check-local-config ## Run all core services; pass DATASTORE=scylla (optional PROFILE=cluster) and/or IDENTITY=oidc for optional stacks.
 	@case "$(DATASTORE)" in memdb|scylla) ;; *) echo "DATASTORE must be 'memdb' or 'scylla'"; exit 2;; esac
+	@case "$(IDENTITY)" in none|oidc) ;; *) echo "IDENTITY must be 'none' or 'oidc'"; exit 2;; esac
 	@case "$(PROFILE)" in single|cluster) ;; *) echo "PROFILE must be 'single' or 'cluster'"; exit 2;; esac
-	@SCYLLA_CLUSTER_SMP="$(SCYLLA_CLUSTER_SMP)" SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS="$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)" $(LOCAL_COMPOSE) $(DATASTORE_COMPOSE_FILE) up --build $(DETACH_FLAG)
+	@SCYLLA_CLUSTER_SMP="$(SCYLLA_CLUSTER_SMP)" SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS="$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)" $(LOCAL_COMPOSE) $(DATASTORE_COMPOSE_FILE) $(IDENTITY_COMPOSE_FILE) up --build $(DETACH_FLAG)
 
 scylla: ## Run Scylla services; pass PROFILE=cluster for the local three-node cluster.
 	@case "$(PROFILE)" in single|cluster) ;; *) echo "PROFILE must be 'single' or 'cluster'"; exit 2;; esac
 	@SCYLLA_CLUSTER_SMP="$(SCYLLA_CLUSTER_SMP)" SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS="$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f $(SCYLLA_COMPOSE_FILE) up $(DETACH_FLAG) $(SCYLLA_SERVICES)
+
+oidc: ## Run only the optional reference OIDC provider stack (Hydra + Kratos + bridge).
+	@COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose -f compose.yml -f compose.oidc.yml up --build $(DETACH_FLAG) $(OIDC_SERVICES)
 
 ps: ## Show compose service status.
 	@$(LIFECYCLE_COMPOSE) ps
@@ -393,8 +421,10 @@ test: ## Run Rust and Go test suites.
 	@./scripts/test-capacity-dispatch.sh
 	@./scripts/test-capacity-prometheus-export.sh
 	@cd "$(GIT_SERVICE_DIR)" && cargo test --verbose
-	@cd "$(API_DIR)" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
-	@cd "$(CONTROLLER_MANAGER_DIR)" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+	@for dir in $(GO_MODULE_DIRS); do \
+		echo "==> go test $$dir"; \
+		( cd "$$dir" && go test -count=1 -v -race -coverprofile=coverage.txt -covermode=atomic ./... ) || exit 1; \
+	done
 
 capacity: ## Run a capacity scenario; set TARGET, PROFILE, and MODE.
 	@CAPACITY_EVIDENCE_DIR="$(CAPACITY_EVIDENCE_DIR)" CAPACITY_PROMETHEUS_URL="$(CAPACITY_PROMETHEUS_URL)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" \
@@ -598,7 +628,7 @@ assign-role: ## Assign an existing role to a subject in POLICY_FILE.
 		--subject "$$SUBJECT" \
 		--role "$$ROLE"
 
-secret: ## Generate local security material; set TARGET=jwt or grpc-hmac.
+secret: ## Generate local security material; set TARGET=jwt, grpc-hmac, or signing-key.
 	@./scripts/run-make-workflow.sh secret "$(TARGET)"
 
 _secret-jwt:
@@ -615,6 +645,16 @@ _secret-grpc-hmac:
 	}; \
 	./scripts/update-env-secret.sh GITSTORE_AUTH__GRPC__HMAC_SECRET "$$secret" "$(API_DIR)/.env" "$(GIT_SERVICE_DIR)/.env"; \
 	echo "HMAC secret updated in $(API_DIR)/.env and $(GIT_SERVICE_DIR)/.env"
+
+_secret-signing-key:
+	@if [ -z "$(DESTINATION_PATH)" ]; then \
+		echo "DESTINATION_PATH is required for make secret TARGET=signing-key"; \
+		exit 2; \
+	fi
+	@abs_path="$$(cd "$(ROOT)" && pwd)/$$(echo "$(DESTINATION_PATH)" | sed 's|^/||')"; \
+	if echo "$(DESTINATION_PATH)" | grep -q '^/'; then abs_path="$(DESTINATION_PATH)"; fi; \
+	mkdir -p "$$(dirname "$$abs_path")"; \
+	cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$$abs_path"
 
 _bootstrap-token: _bootstrap-tools
 	@if [ -z "$${ADMIN_PASSWORD:-}" ]; then \

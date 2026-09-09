@@ -297,7 +297,6 @@ make api
 cd gitstore-api
 go test ./...
 go generate ./...
-go run ./cmd/hashpw <password>
 ```
 
 ### `gitstore-git-service`
@@ -465,8 +464,6 @@ Use Conventional Commits.
 | `GITSTORE_GIT__GRPC__URI`             | `dns:///localhost:50051` | GitService gRPC target   |
 | `GITSTORE_DATASTORE__BACKEND`         | `memdb`                  | `memdb` or `scylla`      |
 | `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE` | `auto` | `auto`, `disabled`, or `enabled`; see the Namespace admission runbook |
-| `GITSTORE_AUTH__ADMIN__USERNAME`      | unset                    | Admin login username     |
-| `GITSTORE_AUTH__ADMIN__PASSWORD_HASH` | unset                    | bcrypt password hash     |
 | `GITSTORE_AUTH__JWT__SECRET`          | unset                    | JWT signing secret       |
 | `GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY` | unset | API-only service-account access-token signing key; required when service-account providers are enabled |
 

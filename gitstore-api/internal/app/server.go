@@ -26,6 +26,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/oidcjwt"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountassertion"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountjwt"
@@ -627,6 +628,14 @@ func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, lo
 			if err != nil {
 				cleanup()
 				return nil, nil, fmt.Errorf("init serviceaccount-jwt provider: %w", err)
+			}
+			authnProviders = append(authnProviders, p)
+			shutdowns = append(shutdowns, p)
+		case "oidc-jwt":
+			p, err := oidcjwt.New(context.Background(), cfg.Auth.OIDC, log)
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("init oidc-jwt provider: %w", err)
 			}
 			authnProviders = append(authnProviders, p)
 			shutdowns = append(shutdowns, p)

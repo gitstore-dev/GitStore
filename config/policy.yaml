@@ -12,6 +12,7 @@ roles:
       - "namespace.status.write"
       - "namespace.watch"
       - "repository.create.any"
+      - "repository.read.any"
       - "serviceaccount.token.issue"
     deny: []
   api-internal:
