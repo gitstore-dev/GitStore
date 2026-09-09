@@ -7159,11 +7159,11 @@ type ServiceAccountObjectMeta {
 }
 
 """
-issueServiceAccountToken mutation input (Relay pattern).
+issueServiceAccountToken mutation input.
 """
 input IssueServiceAccountTokenInput {
-  apiVersion: String!
-  kind: String!
+  apiVersion: String! = "authentication.gitstore.dev/v1beta1"
+  kind: String! = "TokenRequest"
   metadata: ObjectMetaInput!
   spec: TokenRequestSpec!
 }
@@ -7215,8 +7215,8 @@ input ServiceAccountPublicKeyInput {
 createServiceAccount mutation input (Relay pattern).
 """
 input CreateServiceAccountInput {
-  apiVersion: String!
-  kind: String!
+  apiVersion: String! = "authentication.gitstore.dev/v1beta1"
+  kind: String! = "ServiceAccount"
   metadata: ObjectMetaInput!
 
   """At least one enrolled public key is required."""
@@ -7249,8 +7249,8 @@ type CreateServiceAccountPayload {
 deleteServiceAccount mutation input (Relay pattern).
 """
 input DeleteServiceAccountInput {
-  apiVersion: String!
-  kind: String!
+  apiVersion: String! = "authentication.gitstore.dev/v1beta1"
+  kind: String! = "ServiceAccount"
   metadata: ObjectMetaInput!
 }
 

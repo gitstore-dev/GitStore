@@ -86,7 +86,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "enroll-serviceaccount":
 		return runEnrollServiceAccount(args[1:], stdout, stderr)
 
-	case "generate-serviceaccount-key":
+	case "generate-signing-key":
 		return runGenerateServiceAccountKey(args[1:], stdout, stderr)
 
 	case "validate-local-config":
@@ -111,7 +111,7 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "  scylla-projection-audit [Scylla flags]")
 	fmt.Fprintln(output, "  scylla-projection-repair (--dry-run | --confirm) [Scylla flags]")
 	fmt.Fprintln(output, "  enroll-serviceaccount --api-url <url> --admin-token <token> --namespace <namespace> --name <name> --key-id <id> --private-key-path <path> [--replace-existing-key]")
-	fmt.Fprintln(output, "  generate-serviceaccount-key --private-key-path <path>")
+	fmt.Fprintln(output, "  generate-signing-key --private-key-path <path>")
 	fmt.Fprintln(output, "  validate-local-config --config-file <config.toml> --policy-file <policy.yaml>")
 }
 

@@ -14,7 +14,7 @@ usage:
   make check TARGET=<all|config|compose|licenses|credentials>
   make clean TARGET=<git-data|controller-checkpoints> CONFIRM=1
   make bootstrap TARGET=<all|token|namespace|repository>
-  make secret TARGET=<jwt|grpc-hmac>
+  make secret TARGET=<jwt|grpc-hmac|signing-key> [DESTINATION_PATH=<path>]
 EOF
 }
 
@@ -32,6 +32,7 @@ case "${family}/${target}" in
   bootstrap/repository) command=(make --no-print-directory _bootstrap-repository) ;;
   secret/jwt) command=(make --no-print-directory _secret-jwt) ;;
   secret/grpc-hmac) command=(make --no-print-directory _secret-grpc-hmac) ;;
+  secret/signing-key) command=(make --no-print-directory _secret-signing-key) ;;
   *) usage; exit 2 ;;
 esac
 

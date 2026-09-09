@@ -496,7 +496,7 @@ type InventoryDefinition struct {
 	StockLocationRefs []*CatalogObjectReference `json:"stockLocationRefs"`
 }
 
-// issueServiceAccountToken mutation input (Relay pattern).
+// issueServiceAccountToken mutation input.
 type IssueServiceAccountTokenInput struct {
 	APIVersion string            `json:"apiVersion"`
 	Kind       string            `json:"kind"`

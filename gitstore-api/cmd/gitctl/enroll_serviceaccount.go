@@ -425,27 +425,27 @@ func serviceAccountUID(payload json.RawMessage, field string) (string, error) {
 }
 
 func runGenerateServiceAccountKey(args []string, stdout, stderr io.Writer) int {
-	flags := flag.NewFlagSet("generate-serviceaccount-key", flag.ContinueOnError)
+	flags := flag.NewFlagSet("generate-signing-key", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	path := flags.String("private-key-path", "", "explicit secure local private-key file path")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || strings.TrimSpace(*path) == "" || !filepath.IsAbs(*path) {
-		fmt.Fprintln(stderr, "generate-serviceaccount-key requires an absolute --private-key-path")
+		fmt.Fprintln(stderr, "generate-signing-key requires an absolute --private-key-path")
 		return 2
 	}
 	key, generated, err := loadOrGeneratePrivateKey(*path)
 	if err != nil {
-		fmt.Fprintln(stderr, "generate-serviceaccount-key could not use the private-key path")
+		fmt.Fprintln(stderr, "generate-signing-key could not use the private-key path")
 		return 1
 	}
 	if !generated {
-		fmt.Fprintln(stdout, "ServiceAccount key already exists; no changes made.")
+		fmt.Fprintln(stdout, "Signing key already exists; no changes made.")
 		return 0
 	}
 	privateKey, _, _, err := encodeEnrollmentKeyPair(key)
 	if err != nil || writePrivateKey(*path, privateKey) != nil {
-		fmt.Fprintln(stderr, "generate-serviceaccount-key could not securely persist the private key")
+		fmt.Fprintln(stderr, "generate-signing-key could not securely persist the private key")
 		return 1
 	}
-	fmt.Fprintln(stdout, "ServiceAccount key created.")
+	fmt.Fprintln(stdout, "Signing key created.")
 	return 0
 }

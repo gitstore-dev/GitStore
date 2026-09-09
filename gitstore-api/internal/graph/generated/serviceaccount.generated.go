@@ -494,6 +494,13 @@ func (ec *executionContext) unmarshalInputCreateServiceAccountInput(ctx context.
 		asMap[k] = v
 	}
 
+	if _, present := asMap["apiVersion"]; !present {
+		asMap["apiVersion"] = "authentication.gitstore.dev/v1beta1"
+	}
+	if _, present := asMap["kind"]; !present {
+		asMap["kind"] = "ServiceAccount"
+	}
+
 	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata", "publicKeys"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
@@ -545,6 +552,13 @@ func (ec *executionContext) unmarshalInputDeleteServiceAccountInput(ctx context.
 		asMap[k] = v
 	}
 
+	if _, present := asMap["apiVersion"]; !present {
+		asMap["apiVersion"] = "authentication.gitstore.dev/v1beta1"
+	}
+	if _, present := asMap["kind"]; !present {
+		asMap["kind"] = "ServiceAccount"
+	}
+
 	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
@@ -587,6 +601,13 @@ func (ec *executionContext) unmarshalInputIssueServiceAccountTokenInput(ctx cont
 	asMap := map[string]any{}
 	for k, v := range obj.(map[string]any) {
 		asMap[k] = v
+	}
+
+	if _, present := asMap["apiVersion"]; !present {
+		asMap["apiVersion"] = "authentication.gitstore.dev/v1beta1"
+	}
+	if _, present := asMap["kind"]; !present {
+		asMap["kind"] = "TokenRequest"
 	}
 
 	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata", "spec"}
