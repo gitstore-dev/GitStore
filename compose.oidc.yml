@@ -101,7 +101,7 @@ services:
           --scope openid,profile,email,offline_access \
           --audience "$${CLIENT_AUDIENCE}" \
           --redirect-uri "$${REDIRECT_URIS}" \
-          --token-endpoint-auth-method client_secret_post \
+          --token-endpoint-auth-method client_secret_basic \
           --format json
     environment:
       - HYDRA_ADMIN_URI=http://hydra:4445

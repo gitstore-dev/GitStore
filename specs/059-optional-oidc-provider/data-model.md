@@ -91,7 +91,7 @@ Hydra issues consent_challenge (login challenge already accepted)
 | `grant_types` | `authorization_code`, `refresh_token` |
 | `response_types` | `code` |
 | `scope` | `openid profile email offline_access` |
-| `token_endpoint_auth_method` | `client_secret_post` (matches the reference experiment; revisit if a public/PKCE-only client is needed later) |
+| `token_endpoint_auth_method` | `client_secret_basic` (the OIDC ecosystem default — most client libraries authenticate at the token endpoint via the `Authorization` header) |
 | `redirect_uris` | Configurable per deployment — whichever bring-your-own client application drives the flow supplies its own callback URL(s) |
 
 Registration is performed by a one-shot, idempotent startup step (mirroring the reference experiment's `hydra-client-setup` service): check whether the client already exists via Hydra's Admin API before attempting to create it, so a repeated `compose up` against an already-provisioned Hydra is a no-op.

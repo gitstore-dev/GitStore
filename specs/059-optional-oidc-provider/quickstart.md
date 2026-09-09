@@ -43,9 +43,10 @@ open http://localhost:4455/registration
 #       (from step 3, a session cookie already exists in the same browser) -> accepted automatically
 #    c. Hydra redirects to gitstore-oidc-bridge's /consent -> accepted automatically, no screen shown
 #    d. Hydra redirects back to your redirect_uri with an authorization `code`
-#    e. Exchange it: curl -s -X POST http://localhost:4444/oauth2/token \
+#    e. Exchange it (client_secret_basic — the secret goes in the Authorization header):
+#       curl -s -X POST http://localhost:4444/oauth2/token \
+#         -u "gitstore:<GITSTORE_OIDC_CLIENT_SECRET>" \
 #         -d grant_type=authorization_code -d code=<code> -d redirect_uri=<your redirect> \
-#         -d client_id=gitstore -d client_secret=<GITSTORE_OIDC_CLIENT_SECRET> \
 #         -d code_verifier=<your PKCE verifier>
 
 # 5. Inspect the resulting ID token's claims (decode the JWT payload) and confirm the mapping in
