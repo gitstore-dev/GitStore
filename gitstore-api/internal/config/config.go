@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/joho/godotenv"
@@ -65,6 +66,22 @@ type AuthConfig struct {
 	// those providers is present in AuthN.Chain (see
 	// validateAuthChainConfig), not via a struct `validate:"required"` tag.
 	ServiceAccount ServiceAccountConfig `mapstructure:"serviceaccount"`
+
+	// OIDC configures the oidc-jwt AuthN provider (Phase 7, spec 059):
+	// a generic, issuer-agnostic OIDC Relying Party. IssuerURL and ClientID
+	// are required only when "oidc-jwt" is present in AuthN.Chain (see
+	// validateOIDCAuthChainConfig).
+	OIDC OIDCConfig `mapstructure:"oidc"`
+}
+
+// OIDCConfig holds settings for the oidc-jwt AuthN provider: bearer JWTs are
+// verified via OIDC Discovery + JWKS against the configured issuer.
+type OIDCConfig struct {
+	IssuerURL string `mapstructure:"issuer_url"`
+	ClientID  string `mapstructure:"client_id"`
+	// Audience expected in the aud claim. Defaults to ClientID when empty.
+	Audience  string `mapstructure:"audience"`
+	ClockSkew string `mapstructure:"clock_skew"`
 }
 
 // ServiceAccountConfig holds settings for GitStore-issued service-account
@@ -237,6 +254,10 @@ func load(path string) (*Config, error) {
 	v.SetDefault("auth.serviceaccount.default_ttl", "10m")
 	v.SetDefault("auth.serviceaccount.max_ttl", "1h")
 	v.SetDefault("auth.serviceaccount.clock_skew", "2m")
+	v.SetDefault("auth.oidc.issuer_url", "")
+	v.SetDefault("auth.oidc.client_id", "")
+	v.SetDefault("auth.oidc.audience", "")
+	v.SetDefault("auth.oidc.clock_skew", "2m")
 	v.SetDefault("datastore.backend", "memdb")
 	v.SetDefault("datastore.scylla.hosts", []string{"localhost:9042"})
 	v.SetDefault("datastore.scylla.keyspace", "gitstore")
@@ -342,6 +363,9 @@ func validateConfig(cfg *Config) error {
 	if err := validateServiceAccountAuthChainConfig(&cfg.Auth); err != nil {
 		return err
 	}
+	if err := validateOIDCAuthChainConfig(&cfg.Auth); err != nil {
+		return err
+	}
 	return validateLogFormat(&cfg.Log)
 }
 
@@ -352,6 +376,46 @@ func validateAuthChainConfig(cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+// validateOIDCAuthChainConfig enforces that auth.oidc.issuer_url and
+// auth.oidc.client_id are configured when "oidc-jwt" is present in
+// auth.authn.chain (Phase 7, spec 059), mirroring validateAuthChainConfig's
+// conditional-requirement pattern.
+func validateOIDCAuthChainConfig(auth *AuthConfig) error {
+	chained := false
+	for _, provider := range auth.AuthN.Chain {
+		if strings.EqualFold(strings.TrimSpace(provider), "oidc-jwt") {
+			chained = true
+			break
+		}
+	}
+	if !chained {
+		return nil
+	}
+	var missing []string
+	if strings.TrimSpace(auth.OIDC.IssuerURL) == "" {
+		missing = append(missing, "auth.oidc.issuer_url (env: GITSTORE_AUTH__OIDC__ISSUER_URL)")
+	}
+	if strings.TrimSpace(auth.OIDC.ClientID) == "" {
+		missing = append(missing, "auth.oidc.client_id (env: GITSTORE_AUTH__OIDC__CLIENT_ID)")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("startup failed: %s required\n\n  Problem: oidc-jwt is present in auth.authn.chain, but %s empty. oidc-jwt cannot verify bearer tokens without an OIDC issuer to run discovery against\n\n  To fix, do ONE of the following:\n    1. Point auth.oidc.issuer_url at any standards-compliant OIDC issuer (e.g. the optional reference stack from `make compose IDENTITY=oidc`, Keycloak, Auth0) and set auth.oidc.client_id to the registered client\n    2. If you don't intend to use OIDC, remove oidc-jwt from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)\n\n  See specs/059-optional-oidc-provider/quickstart.md for a worked example", strings.Join(missing, " and "), missingListVerb(missing))
+	}
+	if auth.OIDC.ClockSkew != "" {
+		if _, err := time.ParseDuration(auth.OIDC.ClockSkew); err != nil {
+			return fmt.Errorf("startup failed: auth.oidc.clock_skew %q is not a valid duration: %w", auth.OIDC.ClockSkew, err)
+		}
+	}
+	return nil
+}
+
+func missingListVerb(missing []string) string {
+	if len(missing) == 1 {
+		return "it is"
+	}
+	return "they are"
 }
 
 // serviceAccountChainProviders are the auth.authn.chain entries that require

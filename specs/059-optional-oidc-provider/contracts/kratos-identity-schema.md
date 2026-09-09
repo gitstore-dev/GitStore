@@ -2,7 +2,7 @@
 
 ## Schema file
 
-New file: `deploy/oidc/kratos/identity.schema.json`, referenced from `deploy/oidc/kratos/kratos.yml`'s `identity.schemas` list as the (initially sole) GitStore user identity schema.
+New file: `config/oidc/kratos/identity.schema.json`, referenced from `config/oidc/kratos/kratos.yml`'s `identity.schemas` list as the (initially sole) GitStore user identity schema.
 
 ```json
 {
@@ -47,13 +47,13 @@ This is a standard Kratos identity schema shape (the reference experiment's `dex
 
 This schema is the authoritative source for exactly two of `Principal`'s fields when the active AuthN chain includes `oidc-jwt` pointed at this reference stack:
 
-| `Principal` field | Source | Stability |
-|---|---|---|
-| `Subject` | Kratos identity `id` (not a trait — server-generated) | Stable for the identity's lifetime |
-| `Claims["email"]` | `traits.email` | Mutable — a user can change their email via Kratos's self-service settings flow |
-| `Claims["preferred_username"]` | `traits.username` | Mutable — same self-service flow |
+| `Principal` field              | Source                                                | Stability                                                                       |
+|--------------------------------|-------------------------------------------------------|---------------------------------------------------------------------------------|
+| `Subject`                      | Kratos identity `id` (not a trait — server-generated) | Stable for the identity's lifetime                                              |
+| `Claims["email"]`              | `traits.email`                                        | Mutable — a user can change their email via Kratos's self-service settings flow |
+| `Claims["preferred_username"]` | `traits.username`                                     | Mutable — same self-service flow                                                |
 
-Any consumer relying on a GitStore identity's stable identifier (audit logs, ownership fields, authorization policy keyed by user) MUST use `Principal.Subject`, never `Claims["email"]` — this is a direct consequence of Decision 5 in `research.md` and is the same stability guarantee `Principal.Subject` already carries for the `static-admin` provider's JWT `sub` claim.
+Any consumer relying on a GitStore identity's stable identifier (audit logs, ownership fields, authorization policy keyed by user) MUST use `Principal.Subject`, never `Claims["email"]` — this is a direct consequence of Decision 5 in `research.md` and is the same stability guarantee `Principal.Subject` already carries for the `static-users` provider's JWT `sub` claim.
 
 ## Non-goals of this schema
 

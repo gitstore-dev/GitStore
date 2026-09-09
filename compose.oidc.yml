@@ -1,0 +1,240 @@
+# Optional reference OIDC provider stack (spec 059): Ory Hydra + Ory Kratos,
+# bridged by gitstore-oidc-bridge. Entirely optional — no core service depends
+# on this overlay. Secrets arrive via .env / shell environment; nothing
+# secret-bearing is committed (see the variables marked REQUIRED below).
+services:
+  # Extends the core `api` service when this overlay is layered onto the core
+  # stack (make compose IDENTITY=oidc): wires the generic oidc-jwt AuthN
+  # provider at this reference issuer by configuration alone — zero
+  # issuer-specific source changes (spec.md FR-001/FR-016). When the stack
+  # runs standalone (make oidc), this block is inert (api is not started).
+  api:
+    depends_on:
+      hydra:
+        condition: service_healthy
+    extra_hosts:
+      # Lets the api container reach the host-published Hydra issuer URL:
+      # tokens carry iss=http://localhost:4444/, so discovery must resolve
+      # that exact URL from inside the container.
+      - "localhost:host-gateway"
+    environment:
+      - GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous
+      - GITSTORE_AUTH__OIDC__ISSUER_URL=http://localhost:4444/
+      - GITSTORE_AUTH__OIDC__CLIENT_ID=${GITSTORE_OIDC_CLIENT_ID:-gitstore}
+
+  hydra-postgres:
+    image: postgres:16-alpine
+    container_name: gitstore-oidc-hydra-postgres
+    environment:
+      - POSTGRES_USER=hydra
+      - POSTGRES_PASSWORD=${HYDRA_DB_PASSWORD:?set HYDRA_DB_PASSWORD in .env}
+      - POSTGRES_DB=hydra
+    volumes:
+      - hydra-postgres-data:/var/lib/postgresql/data
+    networks:
+      - gitstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hydra -d hydra"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  hydra-migrate:
+    image: oryd/hydra:v2.3.0
+    container_name: gitstore-oidc-hydra-migrate
+    command: migrate sql up --yes -e
+    environment:
+      - DSN=postgres://hydra:${HYDRA_DB_PASSWORD:?set HYDRA_DB_PASSWORD in .env}@hydra-postgres:5432/hydra?sslmode=disable&max_conns=20
+    volumes:
+      - ./config/oidc/hydra/config.yaml:/etc/config/hydra/config.yaml:ro
+    depends_on:
+      hydra-postgres:
+        condition: service_healthy
+    networks:
+      - gitstore-network
+    restart: "no"
+
+  hydra:
+    image: oryd/hydra:v2.3.0
+    container_name: gitstore-oidc-hydra
+    # --dev permits http:// URLs for this single-node reference deployment.
+    command: serve all --config /etc/config/hydra/config.yaml --dev
+    ports:
+      - "${GITSTORE_HOST_OIDC_ISSUER_PORT:-4444}:4444"  # OIDC public API (discovery, JWKS, /oauth2/*)
+    environment:
+      - DSN=postgres://hydra:${HYDRA_DB_PASSWORD:?set HYDRA_DB_PASSWORD in .env}@hydra-postgres:5432/hydra?sslmode=disable&max_conns=20
+      - SECRETS_SYSTEM=${HYDRA_SECRETS_SYSTEM:?set HYDRA_SECRETS_SYSTEM in .env (32+ chars)}
+      - SECRETS_COOKIE=${HYDRA_SECRETS_COOKIE:?set HYDRA_SECRETS_COOKIE in .env (32+ chars)}
+    volumes:
+      - ./config/oidc/hydra/config.yaml:/etc/config/hydra/config.yaml:ro
+    depends_on:
+      hydra-migrate:
+        condition: service_completed_successfully
+    networks:
+      - gitstore-network
+    # Hydra's Admin API (container port 4445) is deliberately NOT published:
+    # only gitstore-oidc-bridge may reach it, inside gitstore-network (FR-008).
+    healthcheck:
+      test: ["CMD-SHELL", "hydra health ready --endpoint http://localhost:4444 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  hydra-client-setup:
+    image: oryd/hydra:v2.3.0
+    container_name: gitstore-oidc-hydra-client-setup
+    # Idempotent one-shot OAuth2 client registration (FR-010): a repeated
+    # `compose up` against an already-provisioned Hydra is a no-op.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if hydra get oauth2-client "$${CLIENT_ID}" --endpoint "$${HYDRA_ADMIN_URL}" > /dev/null 2>&1; then
+          echo "OAuth2 client '$${CLIENT_ID}' already registered; skipping";
+          exit 0;
+        fi;
+        hydra create oauth2-client \
+          --endpoint "$${HYDRA_ADMIN_URL}" \
+          --id "$${CLIENT_ID}" \
+          --secret "$${CLIENT_SECRET}" \
+          --grant-type authorization_code,refresh_token \
+          --response-type code \
+          --scope openid,profile,email,offline_access \
+          --redirect-uri "$${REDIRECT_URIS}" \
+          --token-endpoint-auth-method client_secret_post \
+          --format json
+    environment:
+      - HYDRA_ADMIN_URL=http://hydra:4445
+      - CLIENT_ID=${GITSTORE_OIDC_CLIENT_ID:-gitstore}
+      - CLIENT_SECRET=${GITSTORE_OIDC_CLIENT_SECRET:?set GITSTORE_OIDC_CLIENT_SECRET in .env (32+ chars)}
+      # Comma-separated callback URLs of whichever bring-your-own client
+      # application drives the Authorization Code + PKCE flow.
+      - REDIRECT_URIS=${GITSTORE_OIDC_REDIRECT_URIS:-http://localhost:3000/callback}
+    depends_on:
+      hydra:
+        condition: service_healthy
+    networks:
+      - gitstore-network
+    restart: "no"
+
+  kratos-postgres:
+    image: postgres:16-alpine
+    container_name: gitstore-oidc-kratos-postgres
+    environment:
+      - POSTGRES_USER=kratos
+      - POSTGRES_PASSWORD=${KRATOS_DB_PASSWORD:?set KRATOS_DB_PASSWORD in .env}
+      - POSTGRES_DB=kratos
+    volumes:
+      - kratos-postgres-data:/var/lib/postgresql/data
+    networks:
+      - gitstore-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kratos -d kratos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kratos-migrate:
+    image: oryd/kratos:v1.3.1
+    container_name: gitstore-oidc-kratos-migrate
+    command: migrate sql up --yes -e
+    environment:
+      - DSN=postgres://kratos:${KRATOS_DB_PASSWORD:?set KRATOS_DB_PASSWORD in .env}@kratos-postgres:5432/kratos?sslmode=disable&max_conns=20
+    depends_on:
+      kratos-postgres:
+        condition: service_healthy
+    networks:
+      - gitstore-network
+    restart: "no"
+
+  kratos:
+    image: oryd/kratos:v1.3.1
+    container_name: gitstore-oidc-kratos
+    command: serve --config /etc/config/kratos/kratos.yml --dev --watch-courier
+    ports:
+      - "${GITSTORE_HOST_KRATOS_PUBLIC_PORT:-4433}:4433"  # Kratos public API (self-service flows, whoami)
+    environment:
+      - DSN=postgres://kratos:${KRATOS_DB_PASSWORD:?set KRATOS_DB_PASSWORD in .env}@kratos-postgres:5432/kratos?sslmode=disable&max_conns=20
+      - SECRETS_COOKIE=${KRATOS_SECRETS_COOKIE:?set KRATOS_SECRETS_COOKIE in .env (32+ chars)}
+      - SECRETS_DEFAULT=${KRATOS_SECRETS_DEFAULT:?set KRATOS_SECRETS_DEFAULT in .env (32+ chars)}
+    volumes:
+      - ./config/oidc/kratos/kratos.yml:/etc/config/kratos/kratos.yml:ro
+      - ./config/oidc/kratos/identity.schema.json:/etc/config/kratos/identity.schema.json:ro
+    depends_on:
+      kratos-migrate:
+        condition: service_completed_successfully
+    networks:
+      - gitstore-network
+    # Kratos's Admin API (container port 4434) is deliberately NOT published:
+    # only gitstore-oidc-bridge may reach it, inside gitstore-network (FR-008).
+    healthcheck:
+      test: ["CMD-SHELL", "kratos remote status --endpoint http://localhost:4433 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  kratos-selfservice-ui:
+    # Ory's own reference self-service UI — part of the reference stack, so no
+    # custom registration/login UI has to be built (spec.md User Story 2).
+    image: oryd/kratos-selfservice-ui-node:v1.3.1
+    container_name: gitstore-oidc-kratos-selfservice-ui
+    ports:
+      - "${GITSTORE_HOST_KRATOS_UI_PORT:-4455}:3000"
+    environment:
+      - KRATOS_PUBLIC_URL=http://kratos:4433/
+      - KRATOS_BROWSER_URL=http://localhost:4433/
+      - COOKIE_SECRET=${KRATOS_UI_COOKIE_SECRET:?set KRATOS_UI_COOKIE_SECRET in .env (32+ chars)}
+      - CSRF_COOKIE_SECRET=${KRATOS_UI_CSRF_SECRET:?set KRATOS_UI_CSRF_SECRET in .env (32+ chars)}
+      - COOKIE_SECURE=false
+    depends_on:
+      kratos:
+        condition: service_healthy
+    networks:
+      - gitstore-network
+
+  mailslurper:
+    # Dev-only mail catcher for Kratos verification/recovery emails.
+    image: oryd/mailslurper:latest-smtps
+    container_name: gitstore-oidc-mailslurper
+    ports:
+      - "${GITSTORE_HOST_MAILSLURPER_PORT:-4436}:4436"  # mail inspection UI
+    networks:
+      - gitstore-network
+
+  oidc-bridge:
+    image: ghcr.io/gitstore-dev/oidc-bridge
+    build:
+      context: .
+      dockerfile: docker/oidc-bridge.Dockerfile
+    container_name: gitstore-oidc-bridge
+    ports:
+      - "${GITSTORE_HOST_OIDC_BRIDGE_PORT:-4445}:4445"  # /login, /consent, /health
+    environment:
+      - GITSTORE_OIDC_BRIDGE__LISTEN_PORT=4445
+      - GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URL=http://hydra:4445
+      # Server-side whoami calls use the in-network URL...
+      - GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_URL=http://kratos:4433
+      # ...while browser redirects to Kratos's login UI use the published URL.
+      - GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_BROWSER_URL=http://localhost:4433
+      - GITSTORE_OIDC_BRIDGE__KRATOS__ADMIN_URL=http://kratos:4434
+    depends_on:
+      hydra:
+        condition: service_healthy
+      kratos:
+        condition: service_healthy
+    networks:
+      - gitstore-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:4445/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  hydra-postgres-data:
+    driver: local
+  kratos-postgres-data:
+    driver: local
+
+networks:
+  gitstore-network:
+    driver: bridge

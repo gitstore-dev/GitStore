@@ -1,0 +1,46 @@
+# Hydra serve configuration for the GitStore reference OIDC provider stack.
+# Consumed by the `hydra` service in compose.oidc.yml.
+# Secrets and DSN arrive via environment variables (DSN, SECRETS_SYSTEM,
+# SECRETS_COOKIE — Ory's native env binding); only non-secret settings live here.
+
+serve:
+  public:
+    host: 0.0.0.0
+    port: 4444
+    cors:
+      enabled: true
+      allowed_origins:
+        - http://localhost:4445
+        - http://127.0.0.1:4445
+  admin:
+    host: 0.0.0.0
+    port: 4445
+
+urls:
+  self:
+    # Browser-reachable issuer URL; gitstore-api's Phase 7 `auth.oidc.issuer_url` points here.
+    issuer: http://localhost:4444/
+  # Browser redirects issued by Hydra land on gitstore-oidc-bridge's published port.
+  login: http://localhost:4445/login
+  consent: http://localhost:4445/consent
+
+strategies:
+  # JWT access tokens so the future OIDCJWTProvider can verify via JWKS without introspection.
+  access_token: jwt
+  scope: exact
+
+webfinger:
+  oidc_discovery:
+    supported_scope:
+      - openid
+      - profile
+      - email
+      - offline_access
+    supported_claims:
+      - sub
+      - email
+      - preferred_username
+
+log:
+  level: info
+  format: json

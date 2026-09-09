@@ -13,9 +13,9 @@
 
 **Purpose**: Establish the new optional service and deployment surfaces without touching any existing service.
 
-- [ ] T001 Create the `gitstore-oidc-bridge/` Go module (`go.mod`, `cmd/bridge/main.go` stub) and the `deploy/oidc/` directory layout
-- [ ] T002 [P] Add the Kratos identity schema `deploy/oidc/kratos/identity.schema.json` per `contracts/kratos-identity-schema.md`
-- [ ] T003 [P] Add Hydra serve config `deploy/oidc/hydra/config.yaml` and Kratos serve config `deploy/oidc/kratos/kratos.yml`, referencing the identity schema from T002
+- [x] T001 Create the `gitstore-oidc-bridge/` Go module (`go.mod`, `cmd/bridge/main.go` stub) and the `config/oidc/` directory layout; register the new module in the root `Makefile`'s `GO_MODULE_DIRS` so `make build`/`make test`/`make lint` cover it
+- [x] T002 [P] Add the Kratos identity schema `config/oidc/kratos/identity.schema.json` per `contracts/kratos-identity-schema.md`
+- [x] T003 [P] Add Hydra serve config `config/oidc/hydra/config.yaml` and Kratos serve config `config/oidc/kratos/kratos.yml`, referencing the identity schema from T002
 
 ---
 
@@ -23,12 +23,12 @@
 
 **Purpose**: Land the bridge's config/HTTP scaffolding and Hydra/Kratos client wrappers before route-handler work begins.
 
-**Checkpoint**: The bridge can start, serve `/healthz`, and reach both Admin APIs; US1–US5 can proceed.
+**Checkpoint**: The bridge can start, serve `/health`, and reach both Admin APIs; US1–US5 can proceed.
 
-- [ ] T004 Add `GITSTORE_OIDC_BRIDGE__*` Viper config schema in `gitstore-oidc-bridge/internal/config/config.go` per `contracts/oidc-bridge-routes.md`, with a failing startup-validation test written first
-- [ ] T005 [P] Add `github.com/ory/client-go`-based Hydra Admin API wrapper in `gitstore-oidc-bridge/internal/hydraclient/client.go`
-- [ ] T006 [P] Add `github.com/ory/client-go`-based Kratos public/admin API wrapper in `gitstore-oidc-bridge/internal/kratosclient/client.go`
-- [ ] T007 Add `GET /healthz` handler in `gitstore-oidc-bridge/internal/bridge/health.go` and wire the HTTP server in `gitstore-oidc-bridge/cmd/bridge/main.go`
+- [x] T004 Add `GITSTORE_OIDC_BRIDGE__*` Viper config schema in `gitstore-oidc-bridge/internal/config/config.go` per `contracts/oidc-bridge-routes.md`, with a failing startup-validation test written first
+- [x] T005 [P] Add `github.com/ory/client-go`-based Hydra Admin API wrapper in `gitstore-oidc-bridge/internal/hydraclient/client.go`
+- [x] T006 [P] Add `github.com/ory/client-go`-based Kratos public/admin API wrapper in `gitstore-oidc-bridge/internal/kratosclient/client.go`
+- [x] T007 Add `GET /health` handler in `gitstore-oidc-bridge/internal/bridge/health.go` and wire the HTTP server in `gitstore-oidc-bridge/cmd/bridge/main.go`
 
 ---
 
@@ -40,11 +40,11 @@
 
 ### Tests for User Story 1
 
-- [ ] T008 [P] [US1] Add a manual verification checklist entry (this is infra, not a Go unit test) confirming `docker compose -f compose.oidc.yml up hydra-postgres hydra-migrate hydra` alone exposes a valid discovery document and JWKS
+- [ ] T008 [P] [US1] Add a manual verification checklist entry (this is infra, not a Go unit test) confirming `make oidc` (or `docker compose -f compose.yml -f compose.oidc.yml up hydra-postgres hydra-migrate hydra`) exposes a valid discovery document and JWKS
 
 ### Implementation for User Story 1
 
-- [ ] T009 [US1] Add `hydra-postgres`, `hydra-migrate`, `hydra` services to `compose.oidc.yml`, publishing only Hydra's public API port (mirroring `data-model.md`'s network topology table)
+- [x] T009 [US1] Add `hydra-postgres`, `hydra-migrate`, `hydra` services to `compose.oidc.yml`, publishing only Hydra's public API port (mirroring `data-model.md`'s network topology table)
 - [ ] T010 [US1] Confirm (documentation-only change, no code) that `docs/implementation/020-pluggable_auth_architecture.md` §5a's existing `auth.oidc.issuer_url`/`client_id`/`audience`/`clock_skew` keys need no modification to point at this stack's issuer
 
 **Checkpoint**: A bare Hydra+Postgres stack exposes a working OIDC discovery document with no bridge or Kratos involvement yet.
@@ -63,7 +63,7 @@
 
 ### Implementation for User Story 2
 
-- [ ] T012 [US2] Add `kratos-postgres`, `kratos-migrate`, `kratos`, `mailslurper` services to `compose.oidc.yml`, publishing only Kratos's public API port and mailslurper's dev UI (Admin API stays internal-only per `data-model.md`)
+- [x] T012 [US2] Add `kratos-postgres`, `kratos-migrate`, `kratos`, `mailslurper` services to `compose.oidc.yml`, publishing only Kratos's public API port and mailslurper's dev UI (Admin API stays internal-only per `data-model.md`)
 
 **Checkpoint**: A user can self-register and log in via Kratos alone, independent of Hydra/the bridge.
 
@@ -77,15 +77,15 @@
 
 ### Tests for User Story 3
 
-- [ ] T013 [P] [US3] Add failing tests in `gitstore-oidc-bridge/internal/bridge/login_test.go`: valid session → accept with `subject`=identity id; no session → redirect to Kratos login with `return_to` preserved; upstream API failure → reject, no raw 500
-- [ ] T014 [P] [US3] Add failing tests in `gitstore-oidc-bridge/internal/bridge/consent_test.go`: full scope grant when requested ⊆ permitted; partial grant when requested ⊃ permitted; claims populated from looked-up identity traits; upstream API failure → reject
+- [x] T013 [P] [US3] Add failing tests in `gitstore-oidc-bridge/internal/bridge/login_test.go`: valid session → accept with `subject`=identity id; no session → redirect to Kratos login with `return_to` preserved; upstream API failure → reject, no raw 500
+- [x] T014 [P] [US3] Add failing tests in `gitstore-oidc-bridge/internal/bridge/consent_test.go`: full scope grant when requested ⊆ permitted; partial grant when requested ⊃ permitted; claims populated from looked-up identity traits; upstream API failure → reject
 
 ### Implementation for User Story 3
 
-- [ ] T015 [US3] Implement `GET /login` in `gitstore-oidc-bridge/internal/bridge/login.go` per `contracts/oidc-bridge-routes.md` until T013 is green
-- [ ] T016 [US3] Implement `GET /consent` in `gitstore-oidc-bridge/internal/bridge/consent.go` per `contracts/oidc-bridge-routes.md` until T014 is green
-- [ ] T017 [US3] Add `docker/oidc-bridge.Dockerfile` and the `oidc-bridge` service to `compose.oidc.yml`, wiring `GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URL`/`KRATOS__PUBLIC_URL`/`KRATOS__ADMIN_URL` to the internal Compose service names
-- [ ] T018 [US3] Add the idempotent `hydra-client-setup` one-shot service to `compose.oidc.yml`, registering the OAuth2 client per `data-model.md`'s registered-client table, configured with `HYDRA_LOGIN_CONSENT_URL` pointed at `oidc-bridge`'s `/login`/`/consent`
+- [x] T015 [US3] Implement `GET /login` in `gitstore-oidc-bridge/internal/bridge/login.go` per `contracts/oidc-bridge-routes.md` until T013 is green
+- [x] T016 [US3] Implement `GET /consent` in `gitstore-oidc-bridge/internal/bridge/consent.go` per `contracts/oidc-bridge-routes.md` until T014 is green
+- [x] T017 [US3] Add `docker/oidc-bridge.Dockerfile` and the `oidc-bridge` service to `compose.oidc.yml`, wiring `GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URL`/`KRATOS__PUBLIC_URL`/`KRATOS__ADMIN_URL` to the internal Compose service names
+- [x] T018 [US3] Add the idempotent `hydra-client-setup` one-shot service to `compose.oidc.yml`, registering the OAuth2 client per `data-model.md`'s registered-client table, configured with `HYDRA_LOGIN_CONSENT_URL` pointed at `oidc-bridge`'s `/login`/`/consent`
 
 **Checkpoint**: A full Authorization Code + PKCE round trip completes end-to-end (Kratos session → Hydra login/consent via the bridge → authorization code → token) per `quickstart.md`'s manual verification steps.
 
@@ -103,7 +103,7 @@
 
 ### Implementation for User Story 4
 
-- [ ] T020 [US4] Confirm (and adjust if needed) that `consent.go` (T016) populates `session.id_token.email`/`session.id_token.preferred_username` exactly as `data-model.md` specifies, with a regression test added to `consent_test.go` if any gap is found
+- [x] T020 [US4] Confirm (and adjust if needed) that `consent.go` (T016) populates `session.id_token.email`/`session.id_token.preferred_username` exactly as `data-model.md` specifies, with a regression test added to `consent_test.go` if any gap is found
 
 **Checkpoint**: Claims mapping is proven against a live token, not just asserted in docs.
 
@@ -121,18 +121,39 @@
 
 ### Implementation for User Story 5
 
-- [ ] T022 [US5] Add `oidc`, `compose-oidc`, `oidc-down`, `oidc-stop`, `oidc-logs` targets to the root `Makefile`, mirroring `scylla`/`compose-scylla`/`admin-down`/`admin-stop`/`admin-logs`'s exact body shape
-- [ ] T023 [US5] Update `make help`'s target listing and this repository's `CLAUDE.md`/`AGENTS.md` Commands section with the new targets
+- [x] T022 [US5] Consolidate OIDC into `make compose` exactly like the Scylla fold-in: `IDENTITY ?= none` + `IDENTITY_COMPOSE_FILE` selector layered into the `compose` target, a standalone `make oidc` target running only `$(OIDC_SERVICES)` (mirroring `make scylla`), `SERVICE=oidc` expansion in `COMPOSE_SERVICE` for the generic `ps`/`logs`/`stop`/`down` lifecycle targets, and `compose.oidc.yml` registered in `LIFECYCLE_COMPOSE`. (Replaces the initially-planned `compose-oidc`/`oidc-down`/`oidc-stop`/`oidc-logs` targets per the 2026-09-09 replay.)
+- [x] T023 [US5] Update `make help`'s variable listing (`IDENTITY`) and this repository's `CLAUDE.md`/`AGENTS.md` Commands section with the consolidated commands
 
-**Checkpoint**: Full operator lifecycle (`make oidc` → inspect → `make oidc-down`) works exactly like the existing optional stacks.
+**Checkpoint**: Full operator lifecycle (`make oidc` → `make ps`/`make logs SERVICE=oidc` → `make stop SERVICE=oidc`) works exactly like the existing optional stacks.
 
 ---
 
-## Phase 8: Polish & Cross-Cutting Concerns
+## Phase 8: User Story 6 - `gitstore-api` verifies tokens via the generic `oidc-jwt` provider (Priority: P1)
+
+**Goal**: Phase 7's documented `OIDCJWTProvider` design is implemented in `gitstore-api` — issuer-agnostic, config-driven — so tokens from the reference stack (or any compliant issuer) authenticate real callers.
+
+**Independent Test**: Chain `oidc-jwt` with `auth.oidc.issuer_url`/`client_id` set; present valid/expired/foreign-issuer tokens and confirm allow/deny/challenge per `spec.md` US6's acceptance scenarios.
+
+### Tests for User Story 6
+
+- [x] T026 [P] [US6] Add failing tests in `gitstore-api/internal/auth/provider/oidcjwt/provider_test.go` against a mock OIDC issuer (httptest discovery + JWKS + userinfo): valid token → principal with mapped claims; expired → deny (with clock-skew tolerance); foreign issuer → challenge; bad signature → challenge; JWKS key rotation → still verifies; userinfo enrichment fills missing email
+- [x] T027 [P] [US6] Add failing config tests in `gitstore-api/internal/config/config_test.go`: `oidc-jwt` chained without `auth.oidc.issuer_url`/`client_id` → startup validation error; not chained → no requirement; invalid `clock_skew` → error
+
+### Implementation for User Story 6
+
+- [x] T028 [US6] Add `auth.oidc.{issuer_url,client_id,audience,clock_skew}` to `gitstore-api/internal/config/config.go` with `validateOIDCAuthChainConfig`, mirroring the conditional-requirement pattern of `validateAuthChainConfig`
+- [x] T029 [US6] Implement `gitstore-api/internal/auth/provider/oidcjwt/provider.go` per 020 §2b/§7 (go-oidc/v3 discovery + JWKS, issuer pre-filter via unverified parse, userinfo fill-only-missing enrichment, `ErrNotSupported` for issue/refresh/revoke) until T026 is green
+- [x] T030 [US6] Wire `case "oidc-jwt"` into `constructProviderRegistry` in `gitstore-api/internal/app/server.go`
+
+**Checkpoint**: A token issued by the reference stack (or any compliant issuer) authenticates against `gitstore-api` with config alone.
+
+---
+
+## Phase 9: Polish & Cross-Cutting Concerns
 
 **Purpose**: Close the loop with Phase 7's documentation and confirm zero regressions elsewhere.
 
-- [ ] T024 [P] Add the additive cross-reference addendum to `docs/implementation/020-pluggable_auth_architecture.md` §7, per `plan.md`'s Implementation sequence step 7 — no change to Phase 7's existing Relying-Party description
+- [x] T024 [P] Add the additive cross-reference addendum to `docs/implementation/020-pluggable_auth_architecture.md` §7, per `plan.md`'s Implementation sequence step 7 — no change to Phase 7's existing Relying-Party description *(landed with the spec commit itself; verified present at §7 alongside spec 061's addendum during the 2026-09-04 replay)*
 - [ ] T025 Run `make build`, `make test`, `make lint`, `make pr-ready` and confirm zero regressions in `gitstore-api`, `gitstore-git-service`, `gitstore-controller-manager`
 
 ---

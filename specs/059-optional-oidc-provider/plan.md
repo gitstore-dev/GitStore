@@ -1,6 +1,6 @@
 # Implementation Plan: Optional Reference OIDC Provider (Ory Hydra + Ory Kratos)
 
-**Branch**: `059-optional-oidc-provider` | **Date**: 2026-08-29 | **Spec**: [spec.md](spec.md)
+**Branch**: `059-optional-oidc-provider` | **Date**: 2026-08-29 (replayed against `main` 2026-09-04) | **Spec**: [spec.md](spec.md)
 **Input**: Feature specification from `/specs/059-optional-oidc-provider/spec.md`
 
 ## Summary
@@ -9,12 +9,12 @@ Ship an optional, separately-deployable reference OIDC provider stack — Ory Hy
 
 ## Technical Context
 
-**Language/Version**: Go 1.25 (new `gitstore-oidc-bridge` service, matching `gitstore-api`'s stack); YAML (Hydra/Kratos serve config, Docker Compose overlay); no Rust or new frontend-language surface.
-**Primary Dependencies**: `github.com/ory/client-go` (official Ory SDK, for both Hydra's Admin API and Kratos's public/admin APIs — see `research.md` Decision 4); `net/http`/`github.com/gin-gonic/gin` for the bridge's own two routes plus `/healthz` (matching the HTTP-framework choice already in use for `gitstore-api`'s smart-HTTP surface); `go.uber.org/zap` (structured logging, matching every other Go service); `github.com/spf13/viper` (config, matching `gitstore-api`/`gitstore-controller-manager`'s existing pattern). Docker images: `oryd/hydra`, `oryd/kratos`, `postgres` (each Hydra/Kratos instance owns its own Postgres — see `research.md` Decision 8). No new dependency is added to `gitstore-api`, `gitstore-git-service`, or `gitstore-controller-manager`'s existing `go.mod`/`Cargo.toml`.
+**Language/Version**: Go 1.25/1.26 (`gitstore-api` gains the RP-side provider; new `gitstore-oidc-bridge` service); YAML (Hydra/Kratos serve config, Docker Compose overlay); no Rust or new frontend-language surface.
+**Primary Dependencies**: `github.com/coreos/go-oidc/v3` (new `gitstore-api` dependency for OIDC Discovery + JWKS verification — Phase 7's documented choice, per 020 §2b's dependency justification); `golang.org/x/oauth2` (userinfo calls, transitive via go-oidc); `github.com/ory/client-go` (official Ory SDK, for both Hydra's Admin API and Kratos's public/admin APIs — see `research.md` Decision 4); `github.com/gin-gonic/gin` for the bridge's routes plus `/health` (matching `gitstore-api`'s smart-HTTP framework choice); `go.uber.org/zap`; `github.com/spf13/viper`. Docker images: `oryd/hydra`, `oryd/kratos`, `oryd/kratos-selfservice-ui-node`, `oryd/mailslurper`, `postgres` (each Hydra/Kratos instance owns its own Postgres — see `research.md` Decision 8). No new dependency is added to `gitstore-git-service` or `gitstore-controller-manager`.
 **Storage**: None in GitStore's own `datastore.Datastore` abstraction. Hydra and Kratos each persist to their own dedicated Postgres instance within `compose.oidc.yml`, entirely outside GitStore's `go-memdb`/ScyllaDB storage model.
 **Testing**: Go unit tests for `gitstore-oidc-bridge`'s route handlers (`login.go`, `consent.go`) against a mocked Hydra Admin API and mocked Kratos API (no live containers required); an opt-in, Compose-backed integration test/manual verification flow (mirroring the existing `make test-scylla-integration`'s "requires an external instance" pattern) that exercises a real Authorization Code + PKCE round trip against a running `compose.oidc.yml` stack. No changes to any existing Go/Rust test suite in `gitstore-api`, `gitstore-git-service`, or `gitstore-controller-manager`.
 **Target Platform**: Linux server and Darwin development hosts already supported by every other GitStore service; Docker Compose for the reference stack itself.
-**Project Type**: New optional service (`gitstore-oidc-bridge`) plus new optional deployment configuration (`compose.oidc.yml`, `deploy/oidc/**`, `docker/oidc-bridge.Dockerfile`, new `Makefile` targets). No changes to `gitstore-api`, `gitstore-git-service`, or `gitstore-controller-manager` source.
+**Project Type**: New optional service (`gitstore-oidc-bridge`) plus new optional deployment configuration (`compose.oidc.yml`, `config/oidc/**`, `docker/oidc-bridge.Dockerfile`, new `Makefile` targets). No changes to `gitstore-api`, `gitstore-git-service`, or `gitstore-controller-manager` source.
 **Performance Goals**: Not on any hot path — Hydra/Kratos/the bridge are only involved during a login/consent/token-refresh round trip driven by whichever client application performs the Authorization Code flow, never during `gitstore-api`'s own per-GraphQL-request token verification (which remains local, JWKS-cache-backed verification, unchanged by this plan). No new performance target is introduced beyond "does not alter the latency of Phase 7's existing token-verification path."
 **Constraints**: MUST NOT modify `gitstore-api`, `gitstore-git-service`, or `gitstore-controller-manager` source; the reference stack MUST remain entirely optional (no default `make`/compose path depends on it); Hydra's and Kratos's Admin APIs MUST stay off any browser/public-reachable network; secrets follow the existing `.env`-driven, never-committed convention already used by `compose.scylla.yml`/`compose.admin.yml`; OAuth2 client registration MUST be idempotent on repeated startup.
 **Scale/Scope**: Single-node reference deployment; not designed for HA/multi-region Hydra/Kratos topologies (out of scope per `spec.md`'s Assumptions).
@@ -58,7 +58,7 @@ specs/059-optional-oidc-provider/
 ├── data-model.md
 ├── quickstart.md
 ├── contracts/
-│   ├── oidc-bridge-routes.md        # /login, /consent, /healthz contract against Hydra + Kratos Admin APIs
+│   ├── oidc-bridge-routes.md        # /login, /consent, /health contract against Hydra + Kratos Admin APIs
 │   └── kratos-identity-schema.md    # traits schema + claims mapping onto gitstore-api's Principal
 ├── checklists/
 │   └── requirements.md
@@ -68,6 +68,16 @@ specs/059-optional-oidc-provider/
 ### Source Code (repository root)
 
 ```text
+gitstore-api/                                # RP-side provider implementation (Phase 7's pre-existing design;
+│                                             #   implementation moved into this spec per the 2026-09-09 clarification)
+├── internal/auth/provider/oidcjwt/
+│   ├── provider.go                           # OIDCJWTProvider: Discovery+JWKS verify, userinfo enrichment,
+│   │                                         #   ErrNotSupported for issue/refresh/revoke (Phase 3d boundary)
+│   └── provider_test.go                      # mock-issuer tests: discovery, JWKS rotation, userinfo, clock skew
+├── internal/config/config.go                 # auth.oidc.{issuer_url,client_id,audience,clock_skew} +
+│                                             #   validateOIDCAuthChainConfig (conditional requirement)
+└── internal/app/server.go                    # "oidc-jwt" case in constructProviderRegistry
+
 gitstore-oidc-bridge/                       # NEW standalone Go service
 ├── cmd/bridge/main.go                       # HTTP server wiring, Viper config load, zap logger init
 ├── internal/
@@ -79,15 +89,17 @@ gitstore-oidc-bridge/                       # NEW standalone Go service
 │       ├── login_test.go
 │       ├── consent.go                        # GET /consent handler
 │       ├── consent_test.go
-│       └── health.go                         # GET /healthz handler
+│       ├── health.go                         # GET /health handler
+│       └── health_test.go
 └── go.mod                                    # new module; own dependency set, no coupling to gitstore-api's go.mod
 
-deploy/oidc/
+config/oidc/
 ├── hydra/
 │   └── config.yaml                           # Hydra serve config: urls.self.issuer, login/consent bridge URLs, secrets via env
-└── kratos/
-    ├── kratos.yml                             # Kratos serve config: identity.schemas, selfservice flows, courier (dev mailslurper)
-    └── identity.schema.json                   # contracts/kratos-identity-schema.md, verbatim
+├── kratos/
+│   ├── kratos.yml                             # Kratos serve config: identity.schemas, selfservice flows, courier (dev mailslurper)
+│   └── identity.schema.json                   # contracts/kratos-identity-schema.md, verbatim
+└── oidc.env.example                           # documented non-secret template for the stack's required secrets
 
 docker/
 └── oidc-bridge.Dockerfile                     # NEW, mirrors docker/admin.Dockerfile's per-service Dockerfile convention
@@ -95,20 +107,33 @@ docker/
 compose.oidc.yml                              # NEW optional overlay (mirrors compose.scylla.yml/compose.admin.yml):
                                                 #   hydra-postgres, hydra-migrate, hydra, hydra-client-setup (one-shot,
                                                 #   idempotent client registration), kratos-postgres, kratos-migrate,
-                                                #   kratos, mailslurper (dev-only mail catcher for Kratos self-service
+                                                #   kratos, kratos-selfservice-ui (Ory's own reference self-service UI —
+                                                #   "no custom UI beyond what the reference stack provides"), mailslurper
+                                                #   (dev-only mail catcher for Kratos self-service
                                                 #   flows), oidc-bridge — all on the existing gitstore-network, with
                                                 #   Hydra/Kratos Admin APIs published to no host port (internal-network
                                                 #   only, per data-model.md's network topology table)
 
-Makefile                                       # NEW targets, mirroring the scylla/admin naming convention:
-                                                #   oidc            — run only Hydra/Kratos/bridge services
-                                                #   compose-oidc    — run the core stack + oidc stack together
-                                                #   oidc-down/-stop/-logs — lifecycle helpers, mirroring admin-down/-stop/-logs
+Makefile                                       # Consolidated under `make compose`, mirroring the Scylla fold-in:
+                                                #   IDENTITY ?= none; IDENTITY=oidc layers compose.oidc.yml onto the
+                                                #   core stack (like DATASTORE=scylla layers compose.scylla.yml)
+                                                #   oidc — standalone target running only the OIDC services
+                                                #   (mirrors `scylla`)
+                                                #   lifecycle via the generic ps/logs/stop/down targets; SERVICE=oidc
+                                                #   expands to all OIDC services (like SERVICE=scylla)
+                                                # `GO_MODULE_DIRS` gains `gitstore-oidc-bridge` so `make build`/`make test`/
+                                                #   `make lint` cover the new module.
 
 docs/implementation/
 └── 020-pluggable_auth_architecture.md         # §7 gains a short, additive cross-reference addendum only —
-                                                #   no change to Phase 7's existing Relying-Party description
+                                                #   no change to Phase 7's existing Relying-Party description.
+                                                #   (Landed with the spec commit itself; spec 061's addendum now
+                                                #   sits alongside it, mirroring the same pattern.)
 ```
+
+**Replay notes (2026-09-04, against current `main`)**: since this plan was first written, (a) #410 introduced the shared local compose profile — the core stack now runs via `docker compose --profile local -f compose.yml -f compose.local.yml` with a shared `CONFIG_FILE` and a `_check-local-config` validation prerequisite, which the new `oidc` targets reuse rather than re-inventing; (b) spec 060 (#405) replaced the `static-admin` AuthN provider with `static-users` — docs references updated, no design impact; (c) spec 061 (#409) + ADR 0009 landed the controller-manager service-account identity plane and already cross-references this spec's addendum — no interaction, since machine identity and this human-identity reference stack are separate planes.
+
+**Replay notes (2026-09-09, scope change)**: (a) Phase 7's `OIDCJWTProvider` implementation moved into this spec (user directive) — `gitstore-api` gains `internal/auth/provider/oidcjwt/`, the `auth.oidc.*` config keys, conditional chain validation, and the `"oidc-jwt"` registry case, all per 020 §7's unchanged design; (b) the stack's config files live under `config/oidc/`, not `deploy/oidc/` (`config/` is the repo's config home); (c) the bridge's health route is `/health`, matching the other services; (d) `make` targets consolidate under `make compose IDENTITY=oidc` + standalone `make oidc`, exactly like the Scylla fold-in, dropping the initially-planned `compose-oidc`/`oidc-down`/`oidc-stop`/`oidc-logs` targets in favor of the generic lifecycle targets; (e) `compose.oidc.yml` extends the core `api` service so the combined stack is turn-key: the `oidc-jwt` chain entry, issuer URL, and client ID are wired by environment, with `extra_hosts: localhost:host-gateway` so the containerized api can run discovery against the host-published issuer URL that tokens carry as `iss`.
 
 **Structure Decision**: A new, independent optional service (`gitstore-oidc-bridge`) plus new optional deployment configuration, following the exact precedent `gitstore-admin`/`compose.admin.yml` already set for "an optional reference component gets its own top-level directory, its own Dockerfile, its own compose overlay, its own `make` targets." No existing core-service source is touched.
 
@@ -142,18 +167,18 @@ All technical unknowns are resolved; no `NEEDS CLARIFICATION` remains.
 
 ### Interface contracts
 
-- [contracts/oidc-bridge-routes.md](contracts/oidc-bridge-routes.md): the `GET /login`, `GET /consent`, and `GET /healthz` contract, including error handling and the bridge's own config schema (`GITSTORE_OIDC_BRIDGE__*`).
+- [contracts/oidc-bridge-routes.md](contracts/oidc-bridge-routes.md): the `GET /login`, `GET /consent`, and `GET /health` contract, including error handling and the bridge's own config schema (`GITSTORE_OIDC_BRIDGE__*`).
 - [contracts/kratos-identity-schema.md](contracts/kratos-identity-schema.md): the identity JSON Schema itself, plus the stability contract for `Principal.Subject` vs. mutable trait-derived claims, plus this schema's explicit non-goals.
 - [quickstart.md](quickstart.md): test-first implementation order, plus manual end-to-end verification steps (bring up the stack, register via Kratos, complete an Authorization Code + PKCE round trip, inspect the resulting token's claims).
 
 ### Implementation sequence
 
-1. Add the Kratos identity schema and Hydra/Kratos serve config files under `deploy/oidc/`; verify both images boot against them via a manual `docker compose -f compose.oidc.yml up` before writing any Go code.
-2. Scaffold the `gitstore-oidc-bridge` Go module (`go.mod`, `cmd/bridge/main.go`, `internal/config`), wired to load `GITSTORE_OIDC_BRIDGE__*` config and start an HTTP server with a `/healthz` route only.
+1. Add the Kratos identity schema and Hydra/Kratos serve config files under `config/oidc/`; verify both images boot against them via a manual `docker compose -f compose.oidc.yml up` before writing any Go code.
+2. Scaffold the `gitstore-oidc-bridge` Go module (`go.mod`, `cmd/bridge/main.go`, `internal/config`), wired to load `GITSTORE_OIDC_BRIDGE__*` config and start an HTTP server with a `/health` route only.
 3. Add failing unit tests for `GET /login` against a mocked Hydra Admin API + mocked Kratos `/sessions/whoami` (valid session → accept; no session → redirect to Kratos login); implement `login.go` until green.
 4. Add failing unit tests for `GET /consent` against a mocked Hydra Admin API + mocked Kratos Admin API identity lookup (scope intersection, claims population, no-consent-screen accept path); implement `consent.go` until green.
 5. Add `docker/oidc-bridge.Dockerfile`, the `hydra-client-setup` one-shot idempotent registration service, and assemble `compose.oidc.yml` end-to-end; verify a full Authorization Code + PKCE round trip manually per `quickstart.md`.
-6. Add the new `Makefile` targets (`oidc`, `compose-oidc`, `oidc-down`, `oidc-stop`, `oidc-logs`), mirroring the existing `scylla`/`admin` target bodies exactly.
+6. Consolidate the OIDC stack into `make compose` (`IDENTITY=oidc` selector + standalone `make oidc` + generic lifecycle targets with `SERVICE=oidc`), mirroring the existing Scylla fold-in exactly.
 7. Add the Phase 7 addendum to `docs/implementation/020-pluggable_auth_architecture.md` §7, cross-referencing this spec; update `docs/` per the repository's standing "after implementing a feature, update `docs/`" guideline.
 8. Run `make build`, `make test`, `make lint`, `make pr-ready` to confirm zero regressions in any existing service.
 

@@ -4,7 +4,7 @@ None of this spec's entities live in `gitstore-api`'s `datastore.Datastore` abst
 
 ## Kratos identity schema (`traits`)
 
-New file: `deploy/oidc/kratos/identity.schema.json` (a Kratos identity JSON Schema, referenced from `kratos.yml`'s `identity.schemas` list).
+New file: `config/oidc/kratos/identity.schema.json` (a Kratos identity JSON Schema, referenced from `kratos.yml`'s `identity.schemas` list).
 
 | Trait | Type | Constraints | Purpose |
 |---|---|---|---|
@@ -100,14 +100,16 @@ Registration is performed by a one-shot, idempotent startup step (mirroring the 
 
 Mirrors the reference experiment's `public`/`internal` network split, adapted to GitStore's existing `gitstore-network` (all core services already share one bridge network per `compose.yml`):
 
-| Component | Reachable from browser/public | Reachable from `gitstore-network` (internal) |
-|---|---|---|
-| Hydra public API (`/oauth2/*`, `/.well-known/*`) | Yes (published port) | Yes |
-| Hydra Admin API (`/admin/*`) | **No** | Yes — `gitstore-oidc-bridge` only |
-| Kratos public API (`/self-service/*`, `/sessions/whoami`) | Yes (published port) | Yes |
-| Kratos Admin API (`/admin/identities/*`) | **No** | Yes — `gitstore-oidc-bridge` only |
-| `gitstore-oidc-bridge` (`/login`, `/consent`, `/healthz`) | Only via Hydra's redirects (browser is redirected *to* it, but it makes outbound Admin API calls itself — see `contracts/oidc-bridge-routes.md`) | Yes |
-| Hydra/Kratos Postgres | **No** | Yes — Hydra/Kratos and their own migration jobs only |
+| Component                                                  | Reachable from browser/public                                                                                                                    | Reachable from `gitstore-network` (internal)          |
+|------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------|
+| Hydra public API (`/oauth2/*`, `/.well-known/*`)           | Yes (published port)                                                                                                                             | Yes                                                   |
+| Hydra Admin API (`/admin/*`)                               | **No**                                                                                                                                           | Yes — `gitstore-oidc-bridge` only                     |
+| Kratos public API (`/self-service/*`, `/sessions/whoami`)  | Yes (published port)                                                                                                                             | Yes                                                   |
+| Kratos Admin API (`/admin/identities/*`)                   | **No**                                                                                                                                           | Yes — `gitstore-oidc-bridge` only                     |
+| Kratos reference self-service UI (`kratos-selfservice-ui`) | Yes (published port 4455 — Ory's own reference UI, so no custom registration/login UI is built)                                                  | Yes                                                   |
+| mailslurper (dev mail catcher UI)                          | Yes (published port 4436, dev-only)                                                                                                              | Yes (Kratos courier reaches its SMTP port in-network) |
+| `gitstore-oidc-bridge` (`/login`, `/consent`, `/health`)   | Only via Hydra's redirects (browser is redirected *to* it, but it makes outbound Admin API calls itself — see `contracts/oidc-bridge-routes.md`) | Yes                                                   |
+| Hydra/Kratos Postgres                                      | **No**                                                                                                                                           | Yes — Hydra/Kratos and their own migration jobs only  |
 
 ## Relationship to Phase 7 (`docs/implementation/020-pluggable_auth_architecture.md` §7)
 

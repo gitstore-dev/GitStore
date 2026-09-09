@@ -2,28 +2,32 @@
 
 ## Test-first implementation order
 
-1. **Config/deploy files** (`deploy/oidc/`): add the Kratos identity schema and Hydra/Kratos serve config. Verify both images boot against them with a manual `docker compose -f compose.oidc.yml up hydra-postgres hydra-migrate hydra kratos-postgres kratos-migrate kratos` before any Go code exists.
-2. **`gitstore-oidc-bridge` scaffold**: add the new Go module, config loader, and a `/healthz`-only HTTP server. Add a failing config-validation test (missing required `GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URL`/`KRATOS__PUBLIC_URL`/`KRATOS__ADMIN_URL` fails startup) and implement until green.
+1. **Config files** (`config/oidc/`): add the Kratos identity schema and Hydra/Kratos serve config. Verify both images boot against them with a manual `docker compose -f compose.yml -f compose.oidc.yml up hydra-postgres hydra-migrate hydra kratos-postgres kratos-migrate kratos` before any Go code exists.
+2. **`gitstore-oidc-bridge` scaffold**: add the new Go module, config loader, and a `/health`-only HTTP server. Add a failing config-validation test (missing required `GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URL`/`KRATOS__PUBLIC_URL`/`KRATOS__ADMIN_URL` fails startup) and implement until green.
 3. **`GET /login`**: add failing tests — valid Kratos session → login challenge accepted with `subject` = Kratos identity id; no session → redirect to Kratos's self-service login URL with `return_to` preserved; Hydra/Kratos API failure → login challenge rejected, no raw 500. Implement `login.go` until green.
 4. **`GET /consent`**: add failing tests — requested scopes fully within the registered client's permitted set → accepted with `email`/`preferred_username` claims populated from the looked-up identity; a requested scope outside the permitted set → only the permitted subset is granted; Hydra/Kratos API failure → consent challenge rejected. Implement `consent.go` until green.
 5. **Compose assembly**: add `docker/oidc-bridge.Dockerfile` and `compose.oidc.yml` (all services from `plan.md`'s Project Structure), including the idempotent `hydra-client-setup` one-shot registration service. Verify a full manual Authorization Code + PKCE round trip (see "Manual verification" below).
-6. **`Makefile` targets**: add `oidc`, `compose-oidc`, `oidc-down`, `oidc-stop`, `oidc-logs`, mirroring `scylla`/`compose-scylla`/`admin-down`/`admin-stop`/`admin-logs` exactly. Verify `make oidc` then `make oidc` again is a no-op with respect to already-provisioned Hydra client registration.
+6. **`Makefile` targets**: consolidate under `make compose` exactly like Scylla — `IDENTITY=oidc` layers `compose.oidc.yml` onto the core stack (mirroring `DATASTORE=scylla`), a standalone `make oidc` runs just the OIDC services (mirroring `make scylla`), and lifecycle goes through the generic `make ps`/`make logs`/`make stop`/`make down` with `SERVICE=oidc` covering the whole stack. Verify `make oidc` then `make oidc` again is a no-op with respect to already-provisioned Hydra client registration.
 7. **Docs**: add the Phase 7 addendum to `docs/implementation/020-pluggable_auth_architecture.md` §7.
 8. **Full verification**: `make build`, `make test`, `make lint`, `make pr-ready` — confirm zero regressions in `gitstore-api`, `gitstore-git-service`, `gitstore-controller-manager`.
 
 ## Manual verification
 
 ```bash
+# 0. Provide secrets (one-time): copy config/oidc/oidc.env.example to the repo-root .env
+#    and replace every change-me value with `openssl rand -hex 32` output.
+cp config/oidc/oidc.env.example .env  # then edit .env
+
 # 1. Start the reference OIDC stack (does not touch the core api/git-service/controller-manager stack)
 make oidc
-# or, to run everything together:
-# make compose-oidc
+# or, to run everything together — with the api's oidc-jwt provider auto-wired at this issuer:
+# make compose IDENTITY=oidc
 
 # 2. Confirm the issuer is reachable
 curl -s http://localhost:4444/.well-known/openid-configuration | jq '.issuer, .authorization_endpoint, .token_endpoint'
 
-# 3. Register a new Kratos identity via self-service registration (browser flow)
-open http://localhost:4433/self-service/registration/browser
+# 3. Register a new Kratos identity via self-service registration (Ory's reference UI)
+open http://localhost:4455/registration
 # ...complete the form with an email + username; mailslurper (http://localhost:4436) catches any
 # verification/recovery email in dev, since no real SMTP is configured.
 
@@ -45,16 +49,16 @@ open http://localhost:4433/self-service/registration/browser
 #    data-model.md: `sub` = the Kratos identity's own id (not its email), `email`/`preferred_username`
 #    match the traits entered at registration.
 
-# 6. Point gitstore-api's (future) OIDCJWTProvider at this issuer and confirm token verification —
-#    no gitstore-api code change required:
+# 6. With the combined stack up (make compose IDENTITY=oidc), the api's oidc-jwt provider is
+#    already wired at this issuer — present the access token from step 4e as a bearer credential
+#    against the GraphQL endpoint. Running the api outside compose instead? Point the provider
+#    at the issuer manually — no code change required:
 #    GITSTORE_AUTH__OIDC__ISSUER_URL=http://localhost:4444
 #    GITSTORE_AUTH__OIDC__CLIENT_ID=gitstore
-#    GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-admin,anonymous
-#    (present the access token from step 4e as `Authorization: Bearer <token>` against gitstore-api's
-#    GraphQL endpoint once Phase 7 ships; this spec only guarantees the token side of this contract.)
+#    GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-users,anonymous
 
-# 7. Tear down
-make oidc-down
+# 7. Tear down (generic lifecycle targets; SERVICE=oidc covers the whole stack)
+make stop SERVICE=oidc   # or: make down
 ```
 
 ## Expected token claims shape (post-login, decoded ID token payload)

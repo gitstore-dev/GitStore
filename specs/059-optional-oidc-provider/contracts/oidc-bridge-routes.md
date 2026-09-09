@@ -31,22 +31,23 @@ Hydra redirects the browser here with a `consent_challenge` query parameter afte
 
 **Error handling**: same shape as `/login` — any failure results in `PUT .../consent/reject`, never a raw 500 once a `consent_challenge` has been accepted for processing.
 
-## `GET /healthz`
+## `GET /health`
 
 Returns `200 OK` once the bridge can reach both Hydra's and Kratos's Admin APIs (a lightweight upstream check, not a full request replay). Used by `compose.oidc.yml`'s `healthcheck` for the `oidc-bridge` service, mirroring the `wget --spider` healthcheck pattern already used by `api`, `controller-manager`, and `admin` in the existing compose files.
 
 ## Network exposure
 
-Only the bridge's own listen port (`/login`, `/consent`, `/healthz`) is reachable from outside `gitstore-network` (needed because Hydra issues browser redirects to it). The bridge's *outbound* calls (to Hydra's and Kratos's Admin APIs) stay entirely within `gitstore-network` — see `data-model.md`'s network topology table.
+Only the bridge's own listen port (`/login`, `/consent`, `/health`) is reachable from outside `gitstore-network` (needed because Hydra issues browser redirects to it). The bridge's *outbound* calls (to Hydra's and Kratos's Admin APIs) stay entirely within `gitstore-network` — see `data-model.md`'s network topology table.
 
 ## Configuration (Viper, mirroring `gitstore-api`'s config pattern)
 
-| Key path | Env var | Required |
-|---|---|---|
-| `bridge.listen_port` | `GITSTORE_OIDC_BRIDGE__LISTEN_PORT` | No (default `4445`, matching the reference experiment's Hydra Admin port for familiarity — not a collision since it's the bridge's own listen port, not Hydra's) |
-| `bridge.hydra.admin_url` | `GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URL` | Yes |
-| `bridge.hydra.oauth2_client_scope` | `GITSTORE_OIDC_BRIDGE__HYDRA__OAUTH2_CLIENT_SCOPE` | No (default `openid profile email offline_access`) |
-| `bridge.kratos.public_url` | `GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_URL` | Yes |
-| `bridge.kratos.admin_url` | `GITSTORE_OIDC_BRIDGE__KRATOS__ADMIN_URL` | Yes |
+| Key path                           | Env var                                            | Required                                                                                                                                                                                 |
+|------------------------------------|----------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `bridge.listen_port`               | `GITSTORE_OIDC_BRIDGE__LISTEN_PORT`                | No (default `4445`, matching the reference experiment's Hydra Admin port for familiarity — not a collision since it's the bridge's own listen port, not Hydra's)                         |
+| `bridge.hydra.admin_url`           | `GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URL`           | Yes                                                                                                                                                                                      |
+| `bridge.hydra.oauth2_client_scope` | `GITSTORE_OIDC_BRIDGE__HYDRA__OAUTH2_CLIENT_SCOPE` | No (default `openid profile email offline_access`)                                                                                                                                       |
+| `bridge.kratos.public_url`         | `GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_URL`         | Yes                                                                                                                                                                                      |
+| `bridge.kratos.public_browser_url` | `GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_BROWSER_URL` | No (default: `bridge.kratos.public_url`; set it when the in-network Kratos URL differs from the browser-reachable one, e.g. `http://kratos:4433` vs. `http://localhost:4433` in Compose) |
+| `bridge.kratos.admin_url`          | `GITSTORE_OIDC_BRIDGE__KRATOS__ADMIN_URL`          | Yes                                                                                                                                                                                      |
 
 This config namespace (`GITSTORE_OIDC_BRIDGE__...`) is entirely new and additive — it does not touch `gitstore-api`'s existing `GITSTORE_AUTH__...` schema (§5a of the auth architecture doc), since the bridge is not part of `gitstore-api`.
