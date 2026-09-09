@@ -18,6 +18,12 @@ type Config struct {
 	// OAuth2ClientScope is the space-separated permitted scope set for the
 	// registered first-party OAuth2 client; consent grants are intersected with it.
 	OAuth2ClientScope []string
+	// DefaultAudience is granted as the access-token audience when the client's
+	// authorize request asks for none. Generic OIDC clients typically don't send
+	// an audience/resource parameter, which would leave aud empty — and
+	// gitstore-api's oidc-jwt provider enforces aud. Optional; empty keeps
+	// requested-audience-only behavior.
+	DefaultAudience string
 	// KratosPublicURI is Kratos's public API base URL, used for server-side
 	// /sessions/whoami calls from within the deployment network.
 	KratosPublicURI string
@@ -43,11 +49,13 @@ func Load() (*Config, error) {
 
 	v.SetDefault("listen_port", 4445)
 	v.SetDefault("hydra.oauth2_client_scope", defaultClientScope)
+	v.SetDefault("hydra.default_audience", "")
 
 	cfg := &Config{
 		ListenPort:             v.GetInt("listen_port"),
 		HydraAdminURI:          strings.TrimRight(v.GetString("hydra.admin_uri"), "/"),
 		OAuth2ClientScope:      strings.Fields(v.GetString("hydra.oauth2_client_scope")),
+		DefaultAudience:        v.GetString("hydra.default_audience"),
 		KratosPublicURI:        strings.TrimRight(v.GetString("kratos.public_uri"), "/"),
 		KratosPublicBrowserURI: strings.TrimRight(v.GetString("kratos.public_browser_uri"), "/"),
 		KratosAdminURI:         strings.TrimRight(v.GetString("kratos.admin_uri"), "/"),

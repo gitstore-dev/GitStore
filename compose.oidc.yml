@@ -225,6 +225,9 @@ services:
       # ...while browser redirects to Kratos's login UI use the published URL.
       - GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_BROWSER_URI=http://localhost:4433
       - GITSTORE_OIDC_BRIDGE__KRATOS__ADMIN_URI=http://kratos:4434
+      # Generic OIDC clients rarely request an audience; default the granted
+      # access-token audience so aud is never empty (gitstore-api enforces it).
+      - GITSTORE_OIDC_BRIDGE__HYDRA__DEFAULT_AUDIENCE=${GITSTORE_OIDC_CLIENT_ID:-gitstore}
     depends_on:
       hydra:
         condition: service_healthy

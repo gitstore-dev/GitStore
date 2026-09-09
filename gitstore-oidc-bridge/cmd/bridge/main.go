@@ -44,7 +44,7 @@ func main() {
 	}
 
 	login := bridge.NewLoginHandler(hydra, kratos, cfg.KratosPublicBrowserURI, log)
-	consent := bridge.NewConsentHandler(hydra, kratos, cfg.OAuth2ClientScope, log)
+	consent := bridge.NewConsentHandler(hydra, kratos, cfg.OAuth2ClientScope, cfg.DefaultAudience, log)
 	health := bridge.NewHealthHandler(cfg.HydraAdminURI, cfg.KratosAdminURI)
 
 	r.GET("/login", login.Handle)

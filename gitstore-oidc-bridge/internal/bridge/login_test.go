@@ -28,13 +28,14 @@ type fakeHydra struct {
 	rejectTo         string
 	rejectErr        error
 
-	acceptedLoginSubject  string
-	acceptLoginCalled     bool
-	rejectLoginCalled     bool
-	acceptedConsentScope  []string
-	acceptedConsentClaims map[string]interface{}
-	acceptConsentCalled   bool
-	rejectConsentCalled   bool
+	acceptedLoginSubject    string
+	acceptLoginCalled       bool
+	rejectLoginCalled       bool
+	acceptedConsentScope    []string
+	acceptedConsentAudience []string
+	acceptedConsentClaims   map[string]interface{}
+	acceptConsentCalled     bool
+	rejectConsentCalled     bool
 }
 
 func (f *fakeHydra) GetLoginRequest(_ context.Context, challenge string) (*hydraclient.LoginRequest, error) {
@@ -71,6 +72,7 @@ func (f *fakeHydra) GetConsentRequest(_ context.Context, challenge string) (*hyd
 func (f *fakeHydra) AcceptConsentRequest(_ context.Context, challenge string, grantScope, grantAudience []string, idTokenClaims map[string]interface{}) (string, error) {
 	f.acceptConsentCalled = true
 	f.acceptedConsentScope = grantScope
+	f.acceptedConsentAudience = grantAudience
 	f.acceptedConsentClaims = idTokenClaims
 	if f.acceptConsentErr != nil {
 		return "", f.acceptConsentErr

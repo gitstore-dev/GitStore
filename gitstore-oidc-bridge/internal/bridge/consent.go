@@ -16,14 +16,15 @@ import (
 // the intersection of requested and permitted scopes and populating ID token
 // claims from the Kratos identity's traits.
 type ConsentHandler struct {
-	hydra          hydraclient.Client
-	kratos         kratosclient.Client
-	permittedScope []string
-	log            *zap.Logger
+	hydra           hydraclient.Client
+	kratos          kratosclient.Client
+	permittedScope  []string
+	defaultAudience string
+	log             *zap.Logger
 }
 
-func NewConsentHandler(hydra hydraclient.Client, kratos kratosclient.Client, permittedScope []string, log *zap.Logger) *ConsentHandler {
-	return &ConsentHandler{hydra: hydra, kratos: kratos, permittedScope: permittedScope, log: log}
+func NewConsentHandler(hydra hydraclient.Client, kratos kratosclient.Client, permittedScope []string, defaultAudience string, log *zap.Logger) *ConsentHandler {
+	return &ConsentHandler{hydra: hydra, kratos: kratos, permittedScope: permittedScope, defaultAudience: defaultAudience, log: log}
 }
 
 func (h *ConsentHandler) Handle(c *gin.Context) {
@@ -49,11 +50,18 @@ func (h *ConsentHandler) Handle(c *gin.Context) {
 	}
 
 	grantScope := intersectScope(req.RequestedScope, h.permittedScope)
+	grantAudience := req.RequestedAudience
+	if len(grantAudience) == 0 && h.defaultAudience != "" {
+		// Generic OIDC clients rarely send an audience/resource parameter;
+		// without one the access token's aud would be empty and rejected by
+		// gitstore-api's aud-enforcing oidc-jwt provider.
+		grantAudience = []string{h.defaultAudience}
+	}
 	claims := map[string]interface{}{
 		"email":              identity.Email,
 		"preferred_username": identity.Username,
 	}
-	redirectTo, err := h.hydra.AcceptConsentRequest(c.Request.Context(), challenge, grantScope, req.RequestedAudience, claims)
+	redirectTo, err := h.hydra.AcceptConsentRequest(c.Request.Context(), challenge, grantScope, grantAudience, claims)
 	if err != nil {
 		log.Error("hydra consent accept failed", zap.Error(err))
 		h.reject(c, challenge, "server_error", "consent accept failed")

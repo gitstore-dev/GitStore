@@ -16,9 +16,13 @@ import (
 var testPermittedScope = []string{"openid", "profile", "email", "offline_access"}
 
 func newConsentRouter(hydra *fakeHydra, kratos *fakeKratos) *gin.Engine {
+	return newConsentRouterWithAudience(hydra, kratos, "")
+}
+
+func newConsentRouterWithAudience(hydra *fakeHydra, kratos *fakeKratos, defaultAudience string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h := NewConsentHandler(hydra, kratos, testPermittedScope, zap.NewNop())
+	h := NewConsentHandler(hydra, kratos, testPermittedScope, defaultAudience, zap.NewNop())
 	r.GET("/consent", h.Handle)
 	return r
 }
@@ -93,6 +97,53 @@ func TestConsentPartialGrantWhenRequestedExceedsPermitted(t *testing.T) {
 	got := hydra.acceptedConsentScope
 	if len(got) != 2 || got[0] != "openid" || got[1] != "email" {
 		t.Errorf("grant_scope = %v, want [openid email] — 'admin' must not be silently granted", got)
+	}
+}
+
+func TestConsentDefaultAudienceWhenNoneRequested(t *testing.T) {
+	hydra := &fakeHydra{
+		consentReq: &hydraclient.ConsentRequest{
+			Challenge:      "ch",
+			Subject:        "id-1",
+			RequestedScope: []string{"openid"},
+			// RequestedAudience empty — generic clients don't send one.
+		},
+		acceptConsentTo: "http://hydra:4444/continue",
+	}
+	kratos := &fakeKratos{identity: &kratosclient.Identity{ID: "id-1", Email: "u@example.com", Username: "exampleuser"}}
+	r := newConsentRouterWithAudience(hydra, kratos, "gitstore")
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/consent?consent_challenge=ch", nil)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want 302", w.Code)
+	}
+	if len(hydra.acceptedConsentAudience) != 1 || hydra.acceptedConsentAudience[0] != "gitstore" {
+		t.Errorf("grant_audience = %v, want [gitstore]", hydra.acceptedConsentAudience)
+	}
+}
+
+func TestConsentRequestedAudiencePreservedOverDefault(t *testing.T) {
+	hydra := &fakeHydra{
+		consentReq: &hydraclient.ConsentRequest{
+			Challenge:         "ch",
+			Subject:           "id-1",
+			RequestedScope:    []string{"openid"},
+			RequestedAudience: []string{"other-api"},
+		},
+		acceptConsentTo: "http://hydra:4444/continue",
+	}
+	kratos := &fakeKratos{identity: &kratosclient.Identity{ID: "id-1", Email: "u@example.com", Username: "exampleuser"}}
+	r := newConsentRouterWithAudience(hydra, kratos, "gitstore")
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/consent?consent_challenge=ch", nil)
+	r.ServeHTTP(w, req)
+
+	if len(hydra.acceptedConsentAudience) != 1 || hydra.acceptedConsentAudience[0] != "other-api" {
+		t.Errorf("grant_audience = %v, want [other-api] (requested wins over default)", hydra.acceptedConsentAudience)
 	}
 }
 
