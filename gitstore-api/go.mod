@@ -27,7 +27,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/vektah/gqlparser/v2 v2.5.33
 	go.uber.org/zap v1.28.0
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/time v0.15.0
 	google.golang.org/grpc v1.83.1
