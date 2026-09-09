@@ -68,7 +68,7 @@ type AuthConfig struct {
 	ServiceAccount ServiceAccountConfig `mapstructure:"serviceaccount"`
 
 	// OIDC configures the oidc-jwt AuthN provider (Phase 7, spec 059):
-	// a generic, issuer-agnostic OIDC Relying Party. IssuerURL and ClientID
+	// a generic, issuer-agnostic OIDC Relying Party. IssuerURI and ClientID
 	// are required only when "oidc-jwt" is present in AuthN.Chain (see
 	// validateOIDCAuthChainConfig).
 	OIDC OIDCConfig `mapstructure:"oidc"`
@@ -77,7 +77,7 @@ type AuthConfig struct {
 // OIDCConfig holds settings for the oidc-jwt AuthN provider: bearer JWTs are
 // verified via OIDC Discovery + JWKS against the configured issuer.
 type OIDCConfig struct {
-	IssuerURL string `mapstructure:"issuer_url"`
+	IssuerURI string `mapstructure:"issuer_uri"`
 	ClientID  string `mapstructure:"client_id"`
 	// Audience expected in the aud claim. Defaults to ClientID when empty.
 	Audience  string `mapstructure:"audience"`
@@ -254,7 +254,7 @@ func load(path string) (*Config, error) {
 	v.SetDefault("auth.serviceaccount.default_ttl", "10m")
 	v.SetDefault("auth.serviceaccount.max_ttl", "1h")
 	v.SetDefault("auth.serviceaccount.clock_skew", "2m")
-	v.SetDefault("auth.oidc.issuer_url", "")
+	v.SetDefault("auth.oidc.issuer_uri", "")
 	v.SetDefault("auth.oidc.client_id", "")
 	v.SetDefault("auth.oidc.audience", "")
 	v.SetDefault("auth.oidc.clock_skew", "2m")
@@ -378,7 +378,7 @@ func validateAuthChainConfig(cfg *Config) error {
 	return nil
 }
 
-// validateOIDCAuthChainConfig enforces that auth.oidc.issuer_url and
+// validateOIDCAuthChainConfig enforces that auth.oidc.issuer_uri and
 // auth.oidc.client_id are configured when "oidc-jwt" is present in
 // auth.authn.chain (Phase 7, spec 059), mirroring validateAuthChainConfig's
 // conditional-requirement pattern.
@@ -394,14 +394,14 @@ func validateOIDCAuthChainConfig(auth *AuthConfig) error {
 		return nil
 	}
 	var missing []string
-	if strings.TrimSpace(auth.OIDC.IssuerURL) == "" {
-		missing = append(missing, "auth.oidc.issuer_url (env: GITSTORE_AUTH__OIDC__ISSUER_URL)")
+	if strings.TrimSpace(auth.OIDC.IssuerURI) == "" {
+		missing = append(missing, "auth.oidc.issuer_uri (env: GITSTORE_AUTH__OIDC__ISSUER_URI)")
 	}
 	if strings.TrimSpace(auth.OIDC.ClientID) == "" {
 		missing = append(missing, "auth.oidc.client_id (env: GITSTORE_AUTH__OIDC__CLIENT_ID)")
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("startup failed: %s required\n\n  Problem: oidc-jwt is present in auth.authn.chain, but %s empty. oidc-jwt cannot verify bearer tokens without an OIDC issuer to run discovery against\n\n  To fix, do ONE of the following:\n    1. Point auth.oidc.issuer_url at any standards-compliant OIDC issuer (e.g. the optional reference stack from `make compose IDENTITY=oidc`, Keycloak, Auth0) and set auth.oidc.client_id to the registered client\n    2. If you don't intend to use OIDC, remove oidc-jwt from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)\n\n  See specs/059-optional-oidc-provider/quickstart.md for a worked example", strings.Join(missing, " and "), missingListVerb(missing))
+		return fmt.Errorf("startup failed: %s required\n\n  Problem: oidc-jwt is present in auth.authn.chain, but %s empty. oidc-jwt cannot verify bearer tokens without an OIDC issuer to run discovery against\n\n  To fix, do ONE of the following:\n    1. Point auth.oidc.issuer_uri at any standards-compliant OIDC issuer (e.g. the optional reference stack from `make compose IDENTITY=oidc`, Keycloak, Auth0) and set auth.oidc.client_id to the registered client\n    2. If you don't intend to use OIDC, remove oidc-jwt from auth.authn.chain (GITSTORE_AUTH__AUTHN__CHAIN)\n\n  See specs/059-optional-oidc-provider/quickstart.md for a worked example", strings.Join(missing, " and "), missingListVerb(missing))
 	}
 	if auth.OIDC.ClockSkew != "" {
 		if _, err := time.ParseDuration(auth.OIDC.ClockSkew); err != nil {

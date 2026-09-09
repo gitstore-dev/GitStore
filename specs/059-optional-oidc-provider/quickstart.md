@@ -3,7 +3,7 @@
 ## Test-first implementation order
 
 1. **Config files** (`config/oidc/`): add the Kratos identity schema and Hydra/Kratos serve config. Verify both images boot against them with a manual `docker compose -f compose.yml -f compose.oidc.yml up hydra-postgres hydra-migrate hydra kratos-postgres kratos-migrate kratos` before any Go code exists.
-2. **`gitstore-oidc-bridge` scaffold**: add the new Go module, config loader, and a `/health`-only HTTP server. Add a failing config-validation test (missing required `GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URL`/`KRATOS__PUBLIC_URL`/`KRATOS__ADMIN_URL` fails startup) and implement until green.
+2. **`gitstore-oidc-bridge` scaffold**: add the new Go module, config loader, and a `/health`-only HTTP server. Add a failing config-validation test (missing required `GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URI`/`KRATOS__PUBLIC_URI`/`KRATOS__ADMIN_URI` fails startup) and implement until green.
 3. **`GET /login`**: add failing tests — valid Kratos session → login challenge accepted with `subject` = Kratos identity id; no session → redirect to Kratos's self-service login URL with `return_to` preserved; Hydra/Kratos API failure → login challenge rejected, no raw 500. Implement `login.go` until green.
 4. **`GET /consent`**: add failing tests — requested scopes fully within the registered client's permitted set → accepted with `email`/`preferred_username` claims populated from the looked-up identity; a requested scope outside the permitted set → only the permitted subset is granted; Hydra/Kratos API failure → consent challenge rejected. Implement `consent.go` until green.
 5. **Compose assembly**: add `docker/oidc-bridge.Dockerfile` and `compose.oidc.yml` (all services from `plan.md`'s Project Structure), including the idempotent `hydra-client-setup` one-shot registration service. Verify a full manual Authorization Code + PKCE round trip (see "Manual verification" below).
@@ -56,7 +56,7 @@ open http://localhost:4455/registration
 #    already wired at this issuer — present the access token from step 4e as a bearer credential
 #    against the GraphQL endpoint. Running the api outside compose instead? Point the provider
 #    at the issuer manually — no code change required:
-#    GITSTORE_AUTH__OIDC__ISSUER_URL=http://localhost:4444
+#    GITSTORE_AUTH__OIDC__ISSUER_URI=http://localhost:4444
 #    GITSTORE_AUTH__OIDC__CLIENT_ID=gitstore
 #    GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-users,anonymous
 

@@ -33,8 +33,8 @@ func main() {
 		log.Fatal("config load failed", zap.Error(err))
 	}
 
-	hydra := hydraclient.New(cfg.HydraAdminURL)
-	kratos := kratosclient.New(cfg.KratosPublicURL, cfg.KratosAdminURL)
+	hydra := hydraclient.New(cfg.HydraAdminURI)
+	kratos := kratosclient.New(cfg.KratosPublicURI, cfg.KratosAdminURI)
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -43,9 +43,9 @@ func main() {
 		log.Fatal("trusted proxies setup failed", zap.Error(err))
 	}
 
-	login := bridge.NewLoginHandler(hydra, kratos, cfg.KratosPublicBrowserURL, log)
+	login := bridge.NewLoginHandler(hydra, kratos, cfg.KratosPublicBrowserURI, log)
 	consent := bridge.NewConsentHandler(hydra, kratos, cfg.OAuth2ClientScope, log)
-	health := bridge.NewHealthHandler(cfg.HydraAdminURL, cfg.KratosAdminURL)
+	health := bridge.NewHealthHandler(cfg.HydraAdminURI, cfg.KratosAdminURI)
 
 	r.GET("/login", login.Handle)
 	r.GET("/consent", consent.Handle)

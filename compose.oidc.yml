@@ -19,7 +19,7 @@ services:
       - "localhost:host-gateway"
     environment:
       - GITSTORE_AUTH__AUTHN__CHAIN=oidc-jwt,static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous
-      - GITSTORE_AUTH__OIDC__ISSUER_URL=http://localhost:4444/
+      - GITSTORE_AUTH__OIDC__ISSUER_URI=http://localhost:4444/
       - GITSTORE_AUTH__OIDC__CLIENT_ID=${GITSTORE_OIDC_CLIENT_ID:-gitstore}
 
   hydra-postgres:
@@ -88,12 +88,12 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        if hydra get oauth2-client "$${CLIENT_ID}" --endpoint "$${HYDRA_ADMIN_URL}" > /dev/null 2>&1; then
+        if hydra get oauth2-client "$${CLIENT_ID}" --endpoint "$${HYDRA_ADMIN_URI}" > /dev/null 2>&1; then
           echo "OAuth2 client '$${CLIENT_ID}' already registered; skipping";
           exit 0;
         fi;
         hydra create oauth2-client \
-          --endpoint "$${HYDRA_ADMIN_URL}" \
+          --endpoint "$${HYDRA_ADMIN_URI}" \
           --id "$${CLIENT_ID}" \
           --secret "$${CLIENT_SECRET}" \
           --grant-type authorization_code,refresh_token \
@@ -104,7 +104,7 @@ services:
           --token-endpoint-auth-method client_secret_post \
           --format json
     environment:
-      - HYDRA_ADMIN_URL=http://hydra:4445
+      - HYDRA_ADMIN_URI=http://hydra:4445
       - CLIENT_ID=${GITSTORE_OIDC_CLIENT_ID:-gitstore}
       - CLIENT_SECRET=${GITSTORE_OIDC_CLIENT_SECRET:?set GITSTORE_OIDC_CLIENT_SECRET in .env (32+ chars)}
       # Audience the client may request at authorize time; gitstore-api's
@@ -186,7 +186,7 @@ services:
     ports:
       - "${GITSTORE_HOST_KRATOS_UI_PORT:-4455}:3000"
     environment:
-      - KRATOS_PUBLIC_URL=http://kratos:4433/
+      - KRATOS_PUBLIC_URI=http://kratos:4433/
       - KRATOS_BROWSER_URL=http://localhost:4433/
       - COOKIE_SECRET=${KRATOS_UI_COOKIE_SECRET:?set KRATOS_UI_COOKIE_SECRET in .env (32+ chars)}
       - CSRF_COOKIE_SECRET=${KRATOS_UI_CSRF_SECRET:?set KRATOS_UI_CSRF_SECRET in .env (32+ chars)}
@@ -216,12 +216,12 @@ services:
       - "${GITSTORE_HOST_OIDC_BRIDGE_PORT:-4445}:4445"  # /login, /consent, /health
     environment:
       - GITSTORE_OIDC_BRIDGE__LISTEN_PORT=4445
-      - GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URL=http://hydra:4445
+      - GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URI=http://hydra:4445
       # Server-side whoami calls use the in-network URL...
-      - GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_URL=http://kratos:4433
+      - GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_URI=http://kratos:4433
       # ...while browser redirects to Kratos's login UI use the published URL.
-      - GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_BROWSER_URL=http://localhost:4433
-      - GITSTORE_OIDC_BRIDGE__KRATOS__ADMIN_URL=http://kratos:4434
+      - GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_BROWSER_URI=http://localhost:4433
+      - GITSTORE_OIDC_BRIDGE__KRATOS__ADMIN_URI=http://kratos:4434
     depends_on:
       hydra:
         condition: service_healthy

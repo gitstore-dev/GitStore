@@ -4,7 +4,7 @@
 // Package oidcjwt implements the Phase 7 `oidc-jwt` AuthN provider
 // (docs/implementation/020-pluggable_auth_architecture.md §7): a generic,
 // issuer-agnostic OIDC Relying Party that verifies bearer JWTs via OIDC
-// Discovery + JWKS against whatever issuer_url an operator configures —
+// Discovery + JWKS against whatever issuer_uri an operator configures —
 // including the optional first-party Hydra+Kratos reference stack
 // (specs/059-optional-oidc-provider).
 package oidcjwt
@@ -29,7 +29,7 @@ import (
 type OIDCJWTProvider struct {
 	provider  *oidc.Provider
 	verifier  *oidc.IDTokenVerifier
-	issuerURL string
+	issuerURI string
 	clientID  string
 	audience  string
 	logger    *zap.Logger
@@ -64,10 +64,10 @@ func (c *idTokenClaims) scopes() []string {
 // know real issuers have: go-oidc requires the configured issuer URL to match
 // the discovery document's `issuer` byte-for-byte (e.g. Hydra's trailing
 // slash). On exactly that mismatch, retry with the issuer's canonical form.
-func discover(ctx context.Context, issuerURL string) (*oidc.Provider, string, error) {
-	provider, err := oidc.NewProvider(ctx, issuerURL)
+func discover(ctx context.Context, issuerURI string) (*oidc.Provider, string, error) {
+	provider, err := oidc.NewProvider(ctx, issuerURI)
 	if err == nil {
-		return provider, issuerURL, nil
+		return provider, issuerURI, nil
 	}
 	msg := err.Error()
 	const marker = "did not match the issuer URL returned by provider (\""
@@ -84,12 +84,12 @@ func discover(ctx context.Context, issuerURL string) (*oidc.Provider, string, er
 	return nil, "", err
 }
 
-// New runs OIDC Discovery against cfg.IssuerURL and returns a provider whose
+// New runs OIDC Discovery against cfg.IssuerURI and returns a provider whose
 // verifier enforces issuer, audience (cfg.Audience, defaulting to
 // cfg.ClientID), and expiry (with cfg.ClockSkew leeway).
 func New(ctx context.Context, cfg config.OIDCConfig, logger *zap.Logger) (*OIDCJWTProvider, error) {
-	if strings.TrimSpace(cfg.IssuerURL) == "" || strings.TrimSpace(cfg.ClientID) == "" {
-		return nil, errors.New("oidcjwt: issuer_url and client_id are required")
+	if strings.TrimSpace(cfg.IssuerURI) == "" || strings.TrimSpace(cfg.ClientID) == "" {
+		return nil, errors.New("oidcjwt: issuer_uri and client_id are required")
 	}
 	skew := 2 * time.Minute
 	if cfg.ClockSkew != "" {
@@ -99,9 +99,9 @@ func New(ctx context.Context, cfg config.OIDCConfig, logger *zap.Logger) (*OIDCJ
 		}
 		skew = parsed
 	}
-	provider, canonicalIssuer, err := discover(ctx, cfg.IssuerURL)
+	provider, canonicalIssuer, err := discover(ctx, cfg.IssuerURI)
 	if err != nil {
-		return nil, fmt.Errorf("oidcjwt: discovery against %q: %w", cfg.IssuerURL, err)
+		return nil, fmt.Errorf("oidcjwt: discovery against %q: %w", cfg.IssuerURI, err)
 	}
 	audience := cfg.Audience
 	if audience == "" {
@@ -117,7 +117,7 @@ func New(ctx context.Context, cfg config.OIDCConfig, logger *zap.Logger) (*OIDCJ
 	return &OIDCJWTProvider{
 		provider:  provider,
 		verifier:  verifier,
-		issuerURL: strings.TrimSuffix(canonicalIssuer, "/"),
+		issuerURI: strings.TrimSuffix(canonicalIssuer, "/"),
 		clientID:  cfg.ClientID,
 		audience:  audience,
 		logger:    logger,
@@ -148,7 +148,7 @@ func (p *OIDCJWTProvider) Authenticate(ctx context.Context, req auth.AuthRequest
 	if _, _, err := jwt.NewParser().ParseUnverified(raw, &unverified); err != nil {
 		return nil, auth.Challenge(p.Name(), "not a jwt: "+err.Error()), nil
 	}
-	if !sameIssuer(unverified.Issuer, p.issuerURL) {
+	if !sameIssuer(unverified.Issuer, p.issuerURI) {
 		return nil, auth.Challenge(p.Name(), "issuer not handled by this provider"), nil
 	}
 
@@ -207,7 +207,7 @@ func (p *OIDCJWTProvider) enrichFromUserInfo(ctx context.Context, rawToken strin
 	}))
 	if err != nil {
 		p.logger.Debug("oidc userinfo enrichment unavailable",
-			zap.String("issuer", p.issuerURL), zap.Error(err))
+			zap.String("issuer", p.issuerURI), zap.Error(err))
 		return
 	}
 	var extra struct {
@@ -217,7 +217,7 @@ func (p *OIDCJWTProvider) enrichFromUserInfo(ctx context.Context, rawToken strin
 	}
 	if err := info.Claims(&extra); err != nil {
 		p.logger.Debug("oidc userinfo claims extraction failed",
-			zap.String("issuer", p.issuerURL), zap.Error(err))
+			zap.String("issuer", p.issuerURI), zap.Error(err))
 		return
 	}
 	if c.Email == "" {

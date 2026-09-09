@@ -77,7 +77,7 @@ provider = "static-users"
 # into auth.authn.chain to verify bearer tokens against any standards-compliant
 # OIDC issuer — e.g. the optional reference stack (make compose IDENTITY=oidc).
 # [auth.oidc]
-# issuer_url = "http://localhost:4444/"
+# issuer_uri = "http://localhost:4444/"
 # client_id = "gitstore"
 # audience = ""        # defaults to client_id
 # clock_skew = "2m"

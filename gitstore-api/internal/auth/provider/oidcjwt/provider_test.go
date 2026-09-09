@@ -103,8 +103,8 @@ func (m *mockIssuer) validClaims() jwt.MapClaims {
 
 func newProvider(t *testing.T, issuer *mockIssuer, cfg config.OIDCConfig) *OIDCJWTProvider {
 	t.Helper()
-	if cfg.IssuerURL == "" {
-		cfg.IssuerURL = issuer.server.URL
+	if cfg.IssuerURI == "" {
+		cfg.IssuerURI = issuer.server.URL
 	}
 	if cfg.ClientID == "" {
 		cfg.ClientID = "gitstore"

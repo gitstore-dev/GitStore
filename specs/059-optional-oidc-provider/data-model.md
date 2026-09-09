@@ -113,6 +113,6 @@ Mirrors the reference experiment's `public`/`internal` network split, adapted to
 
 ## Relationship to Phase 7 (`docs/implementation/020-pluggable_auth_architecture.md` §7)
 
-- Phase 7's `OIDCJWTProvider` config schema (§5a) already reserves `auth.oidc.issuer_url`, `auth.oidc.client_id`, `auth.oidc.audience`, `auth.oidc.clock_skew` — unchanged by this spec. This spec's Hydra issuer is simply one concrete value an operator may set `GITSTORE_AUTH__OIDC__ISSUER_URL` to.
+- Phase 7's `OIDCJWTProvider` config schema (§5a) already reserves `auth.oidc.issuer_uri`, `auth.oidc.client_id`, `auth.oidc.audience`, `auth.oidc.clock_skew` — unchanged by this spec. This spec's Hydra issuer is simply one concrete value an operator may set `GITSTORE_AUTH__OIDC__ISSUER_URI` to.
 - Phase 7's Risk 1 (clock skew) and Risk 2 (JWKS rotation window) mitigations are unchanged and apply identically regardless of which issuer is configured, including this one.
 - This spec introduces no new fields, methods, or config keys on the `gitstore-api` side — every entity in this document is external to `gitstore-api`'s own data model.

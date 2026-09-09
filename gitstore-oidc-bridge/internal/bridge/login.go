@@ -22,11 +22,11 @@ type LoginHandler struct {
 	log                 *zap.Logger
 }
 
-func NewLoginHandler(hydra hydraclient.Client, kratos kratosclient.Client, kratosPublicBrowserURL string, log *zap.Logger) *LoginHandler {
+func NewLoginHandler(hydra hydraclient.Client, kratos kratosclient.Client, kratosPublicBrowserURI string, log *zap.Logger) *LoginHandler {
 	return &LoginHandler{
 		hydra:               hydra,
 		kratos:              kratos,
-		kratosPublicBrowser: kratosPublicBrowserURL,
+		kratosPublicBrowser: kratosPublicBrowserURI,
 		log:                 log,
 	}
 }

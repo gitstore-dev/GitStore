@@ -18,7 +18,7 @@ serve:
 
 urls:
   self:
-    # Browser-reachable issuer URL; gitstore-api's Phase 7 `auth.oidc.issuer_url` points here.
+    # Browser-reachable issuer URL; gitstore-api's Phase 7 `auth.oidc.issuer_uri` points here.
     issuer: http://localhost:4444/
   # Browser redirects issued by Hydra land on gitstore-oidc-bridge's published port.
   login: http://localhost:4445/login

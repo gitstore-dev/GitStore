@@ -9,7 +9,7 @@ package oidcjwt
 // `make test-scylla-integration`'s "requires an external instance" pattern.
 // Usage (with the reference stack running per spec 059's quickstart):
 //
-//	OIDC_INTEGRATION_ISSUER_URL=http://localhost:4444 \
+//	OIDC_INTEGRATION_ISSUER_URI=http://localhost:4444 \
 //	OIDC_INTEGRATION_CLIENT_ID=gitstore \
 //	OIDC_INTEGRATION_ACCESS_TOKEN=<token from the Authorization Code + PKCE flow> \
 //	go test -tags oidcintegration -run TestIntegration -v ./internal/auth/provider/oidcjwt/
@@ -29,15 +29,15 @@ import (
 )
 
 func TestIntegrationLiveIssuerVerifiesAccessToken(t *testing.T) {
-	issuerURL := os.Getenv("OIDC_INTEGRATION_ISSUER_URL")
+	issuerURI := os.Getenv("OIDC_INTEGRATION_ISSUER_URI")
 	clientID := os.Getenv("OIDC_INTEGRATION_CLIENT_ID")
 	token := os.Getenv("OIDC_INTEGRATION_ACCESS_TOKEN")
-	if issuerURL == "" || clientID == "" || token == "" {
-		t.Skip("set OIDC_INTEGRATION_ISSUER_URL, OIDC_INTEGRATION_CLIENT_ID, OIDC_INTEGRATION_ACCESS_TOKEN")
+	if issuerURI == "" || clientID == "" || token == "" {
+		t.Skip("set OIDC_INTEGRATION_ISSUER_URI, OIDC_INTEGRATION_CLIENT_ID, OIDC_INTEGRATION_ACCESS_TOKEN")
 	}
 
 	p, err := New(context.Background(), config.OIDCConfig{
-		IssuerURL: issuerURL,
+		IssuerURI: issuerURI,
 		ClientID:  clientID,
 	}, zap.NewNop())
 	require.NoError(t, err)

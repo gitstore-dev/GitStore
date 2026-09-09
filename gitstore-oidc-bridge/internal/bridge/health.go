@@ -15,11 +15,11 @@ type HealthHandler struct {
 	client    *http.Client
 }
 
-func NewHealthHandler(hydraAdminURL, kratosAdminURL string) *HealthHandler {
+func NewHealthHandler(hydraAdminURI, kratosAdminURI string) *HealthHandler {
 	return &HealthHandler{
 		upstreams: map[string]string{
-			"hydra":  hydraAdminURL + "/health/ready",
-			"kratos": kratosAdminURL + "/health/ready",
+			"hydra":  hydraAdminURI + "/health/ready",
+			"kratos": kratosAdminURI + "/health/ready",
 		},
 		client: &http.Client{Timeout: 3 * time.Second},
 	}

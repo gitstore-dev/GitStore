@@ -6,21 +6,21 @@ import (
 
 func setRequiredEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URL", "http://hydra:4445/")
-	t.Setenv("GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_URL", "http://kratos:4433/")
-	t.Setenv("GITSTORE_OIDC_BRIDGE__KRATOS__ADMIN_URL", "http://kratos:4434/")
+	t.Setenv("GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URI", "http://hydra:4445/")
+	t.Setenv("GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_URI", "http://kratos:4433/")
+	t.Setenv("GITSTORE_OIDC_BRIDGE__KRATOS__ADMIN_URI", "http://kratos:4434/")
 }
 
-func TestLoadRequiresHydraAdminURL(t *testing.T) {
-	t.Setenv("GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_URL", "http://kratos:4433")
-	t.Setenv("GITSTORE_OIDC_BRIDGE__KRATOS__ADMIN_URL", "http://kratos:4434")
+func TestLoadRequiresHydraAdminURI(t *testing.T) {
+	t.Setenv("GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_URI", "http://kratos:4433")
+	t.Setenv("GITSTORE_OIDC_BRIDGE__KRATOS__ADMIN_URI", "http://kratos:4434")
 	if _, err := Load(); err == nil {
-		t.Fatal("expected error when GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URL is unset")
+		t.Fatal("expected error when GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URI is unset")
 	}
 }
 
 func TestLoadRequiresKratosURLs(t *testing.T) {
-	t.Setenv("GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URL", "http://hydra:4445")
+	t.Setenv("GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URI", "http://hydra:4445")
 	if _, err := Load(); err == nil {
 		t.Fatal("expected error when Kratos URLs are unset")
 	}
@@ -45,24 +45,24 @@ func TestLoadDefaults(t *testing.T) {
 		}
 	}
 	// Trailing slashes are trimmed.
-	if cfg.HydraAdminURL != "http://hydra:4445" {
-		t.Errorf("HydraAdminURL = %q, want trailing slash trimmed", cfg.HydraAdminURL)
+	if cfg.HydraAdminURI != "http://hydra:4445" {
+		t.Errorf("HydraAdminURI = %q, want trailing slash trimmed", cfg.HydraAdminURI)
 	}
 	// Browser URL defaults to the server-side public URL.
-	if cfg.KratosPublicBrowserURL != "http://kratos:4433" {
-		t.Errorf("KratosPublicBrowserURL = %q, want default to KratosPublicURL", cfg.KratosPublicBrowserURL)
+	if cfg.KratosPublicBrowserURI != "http://kratos:4433" {
+		t.Errorf("KratosPublicBrowserURI = %q, want default to KratosPublicURI", cfg.KratosPublicBrowserURI)
 	}
 }
 
 func TestLoadExplicitBrowserURL(t *testing.T) {
 	setRequiredEnv(t)
-	t.Setenv("GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_BROWSER_URL", "http://localhost:4433")
+	t.Setenv("GITSTORE_OIDC_BRIDGE__KRATOS__PUBLIC_BROWSER_URI", "http://localhost:4433")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.KratosPublicBrowserURL != "http://localhost:4433" {
-		t.Errorf("KratosPublicBrowserURL = %q", cfg.KratosPublicBrowserURL)
+	if cfg.KratosPublicBrowserURI != "http://localhost:4433" {
+		t.Errorf("KratosPublicBrowserURI = %q", cfg.KratosPublicBrowserURI)
 	}
 }
 

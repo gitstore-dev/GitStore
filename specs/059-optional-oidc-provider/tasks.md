@@ -45,7 +45,7 @@
 ### Implementation for User Story 1
 
 - [x] T009 [US1] Add `hydra-postgres`, `hydra-migrate`, `hydra` services to `compose.oidc.yml`, publishing only Hydra's public API port (mirroring `data-model.md`'s network topology table)
-- [ ] T010 [US1] Confirm (documentation-only change, no code) that `docs/implementation/020-pluggable_auth_architecture.md` §5a's existing `auth.oidc.issuer_url`/`client_id`/`audience`/`clock_skew` keys need no modification to point at this stack's issuer
+- [ ] T010 [US1] Confirm (documentation-only change, no code) that `docs/implementation/020-pluggable_auth_architecture.md` §5a's existing `auth.oidc.issuer_uri`/`client_id`/`audience`/`clock_skew` keys need no modification to point at this stack's issuer
 
 **Checkpoint**: A bare Hydra+Postgres stack exposes a working OIDC discovery document with no bridge or Kratos involvement yet.
 
@@ -84,7 +84,7 @@
 
 - [x] T015 [US3] Implement `GET /login` in `gitstore-oidc-bridge/internal/bridge/login.go` per `contracts/oidc-bridge-routes.md` until T013 is green
 - [x] T016 [US3] Implement `GET /consent` in `gitstore-oidc-bridge/internal/bridge/consent.go` per `contracts/oidc-bridge-routes.md` until T014 is green
-- [x] T017 [US3] Add `docker/oidc-bridge.Dockerfile` and the `oidc-bridge` service to `compose.oidc.yml`, wiring `GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URL`/`KRATOS__PUBLIC_URL`/`KRATOS__ADMIN_URL` to the internal Compose service names
+- [x] T017 [US3] Add `docker/oidc-bridge.Dockerfile` and the `oidc-bridge` service to `compose.oidc.yml`, wiring `GITSTORE_OIDC_BRIDGE__HYDRA__ADMIN_URI`/`KRATOS__PUBLIC_URI`/`KRATOS__ADMIN_URI` to the internal Compose service names
 - [x] T018 [US3] Add the idempotent `hydra-client-setup` one-shot service to `compose.oidc.yml`, registering the OAuth2 client per `data-model.md`'s registered-client table, configured with `HYDRA_LOGIN_CONSENT_URL` pointed at `oidc-bridge`'s `/login`/`/consent`
 
 **Checkpoint**: A full Authorization Code + PKCE round trip completes end-to-end (Kratos session → Hydra login/consent via the bridge → authorization code → token) per `quickstart.md`'s manual verification steps.
@@ -132,16 +132,16 @@
 
 **Goal**: Phase 7's documented `OIDCJWTProvider` design is implemented in `gitstore-api` — issuer-agnostic, config-driven — so tokens from the reference stack (or any compliant issuer) authenticate real callers.
 
-**Independent Test**: Chain `oidc-jwt` with `auth.oidc.issuer_url`/`client_id` set; present valid/expired/foreign-issuer tokens and confirm allow/deny/challenge per `spec.md` US6's acceptance scenarios.
+**Independent Test**: Chain `oidc-jwt` with `auth.oidc.issuer_uri`/`client_id` set; present valid/expired/foreign-issuer tokens and confirm allow/deny/challenge per `spec.md` US6's acceptance scenarios.
 
 ### Tests for User Story 6
 
 - [x] T026 [P] [US6] Add failing tests in `gitstore-api/internal/auth/provider/oidcjwt/provider_test.go` against a mock OIDC issuer (httptest discovery + JWKS + userinfo): valid token → principal with mapped claims; expired → deny (with clock-skew tolerance); foreign issuer → challenge; bad signature → challenge; JWKS key rotation → still verifies; userinfo enrichment fills missing email
-- [x] T027 [P] [US6] Add failing config tests in `gitstore-api/internal/config/config_test.go`: `oidc-jwt` chained without `auth.oidc.issuer_url`/`client_id` → startup validation error; not chained → no requirement; invalid `clock_skew` → error
+- [x] T027 [P] [US6] Add failing config tests in `gitstore-api/internal/config/config_test.go`: `oidc-jwt` chained without `auth.oidc.issuer_uri`/`client_id` → startup validation error; not chained → no requirement; invalid `clock_skew` → error
 
 ### Implementation for User Story 6
 
-- [x] T028 [US6] Add `auth.oidc.{issuer_url,client_id,audience,clock_skew}` to `gitstore-api/internal/config/config.go` with `validateOIDCAuthChainConfig`, mirroring the conditional-requirement pattern of `validateAuthChainConfig`
+- [x] T028 [US6] Add `auth.oidc.{issuer_uri,client_id,audience,clock_skew}` to `gitstore-api/internal/config/config.go` with `validateOIDCAuthChainConfig`, mirroring the conditional-requirement pattern of `validateAuthChainConfig`
 - [x] T029 [US6] Implement `gitstore-api/internal/auth/provider/oidcjwt/provider.go` per 020 §2b/§7 (go-oidc/v3 discovery + JWKS, issuer pre-filter via unverified parse, userinfo fill-only-missing enrichment, `ErrNotSupported` for issue/refresh/revoke) until T026 is green
 - [x] T030 [US6] Wire `case "oidc-jwt"` into `constructProviderRegistry` in `gitstore-api/internal/app/server.go`
 

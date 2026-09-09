@@ -10,7 +10,7 @@
 
 ### Session 2026-08-29
 
-- Q: Does this spec change or re-scope Phase 7's `OIDCJWTProvider` (the OIDC Relying Party in `gitstore-api`)? → A: No. Phase 7 (`docs/implementation/020-pluggable_auth_architecture.md` §7) stays exactly as documented: a generic, issuer-agnostic Relying Party that verifies bearer JWTs via OIDC Discovery + JWKS (`go-oidc/v3`) against whatever `issuer_url` an operator configures. This spec adds one additional, optional choice of issuer — it makes zero changes to Phase 7's RP-side code, interface, or config schema.
+- Q: Does this spec change or re-scope Phase 7's `OIDCJWTProvider` (the OIDC Relying Party in `gitstore-api`)? → A: No. Phase 7 (`docs/implementation/020-pluggable_auth_architecture.md` §7) stays exactly as documented: a generic, issuer-agnostic Relying Party that verifies bearer JWTs via OIDC Discovery + JWKS (`go-oidc/v3`) against whatever `issuer_uri` an operator configures. This spec adds one additional, optional choice of issuer — it makes zero changes to Phase 7's RP-side code, interface, or config schema.
 - Q: Which architecture does the optional reference provider use — Dex+Oathkeeper+Kratos ("Approach A") or Ory Hydra+Kratos ("Approach B")? → A: Approach B (Hydra + Kratos). Confirmed by a side-by-side experiment (`juliuskrah/experiments` PR #1, `oidc/specs/COMPARISON.md`): Dex's `authproxy` connector cannot issue a real OAuth2 `refresh_token` — a confirmed architectural limitation of the connector (it never implements `connector.RefreshConnector`), not a configuration gap — and compensates via a heavier "silent re-authorization" workaround. Hydra issues real, standards-compliant refresh tokens. This matters specifically for GitStore because `gitstore-api`'s own `refreshToken` mutation already returns `ErrNotSupported` for OIDC-authenticated sessions (Phase 3d) — GitStore has no independent session layer to compensate for a weak IdP refresh story, so the IdP's own refresh capability carries more weight here than in a system that manages its own sessions independently. Full rationale, including the counter-consideration explicitly weighed and deferred, is recorded in `research.md` Decision 1.
 - Q: Where does the Hydra `/login` + `/consent` bridge code live — a new standalone service, or folded into `gitstore-admin`? → A: A new standalone minimal service, `gitstore-oidc-bridge`. `gitstore-admin` is itself an optional, bring-your-own reference component, and per project history is paused and drifted, with a framework rewrite still only a future consideration — coupling infrastructure the reference OIDC stack cannot function without to a frontend of uncertain near-term shape was rejected. Full rationale in `research.md` Decision 2.
 - Q: Does this spec cover federating identity from directories other than Kratos (LDAP, GitHub, Google, a homegrown directory, etc.)? → A: No. Kratos is the first-class supported directory for this spec; other directories are explicitly deferred to future specs based on user demand. Dex's connector-federation model was considered and is noted as the point at which this architecture choice should be revisited, not as an oversight — see `research.md` Decision 1's counter-consideration.
@@ -32,7 +32,7 @@
 
 ### User Story 1 - An operator without their own OIDC IdP can stand up a working identity provider in one step (Priority: P1)
 
-An operator evaluating or running GitStore has no existing OIDC identity provider and does not want to stand up and operate Keycloak, Auth0, Okta, or a homegrown IdP just to exercise `gitstore-api`'s OIDC authentication path. They deploy GitStore's optional reference OIDC provider stack, point `gitstore-api`'s existing (or forthcoming) `OIDCJWTProvider` `issuer_url` configuration at it, and authentication works — with no different treatment than pointing that same configuration at any other standards-compliant issuer.
+An operator evaluating or running GitStore has no existing OIDC identity provider and does not want to stand up and operate Keycloak, Auth0, Okta, or a homegrown IdP just to exercise `gitstore-api`'s OIDC authentication path. They deploy GitStore's optional reference OIDC provider stack, point `gitstore-api`'s existing (or forthcoming) `OIDCJWTProvider` `issuer_uri` configuration at it, and authentication works — with no different treatment than pointing that same configuration at any other standards-compliant issuer.
 
 **Why this priority**: This is the entire reason this spec exists — the "just works" default for anyone who cannot or does not want to bring their own IdP. Without this, GitStore's OIDC story is theoretically complete (Phase 7) but practically unusable for anyone starting from zero.
 
@@ -41,7 +41,7 @@ An operator evaluating or running GitStore has no existing OIDC identity provide
 **Acceptance Scenarios**:
 
 1. **Given** a fresh checkout with no existing identity infrastructure, **When** the operator brings up the optional reference OIDC provider stack, **Then** a standards-compliant OIDC discovery document and JWKS endpoint become reachable at a well-known issuer URL.
-2. **Given** the reference stack is running, **When** `gitstore-api` is configured with `issuer_url` pointed at that stack's issuer, **Then** no code change is required in `gitstore-api`, `gitstore-git-service`, or `gitstore-controller-manager` for token verification to work.
+2. **Given** the reference stack is running, **When** `gitstore-api` is configured with `issuer_uri` pointed at that stack's issuer, **Then** no code change is required in `gitstore-api`, `gitstore-git-service`, or `gitstore-controller-manager` for token verification to work.
 3. **Given** the reference stack is running and a caller has completed its standard login flow, **When** the resulting token is presented as a bearer credential, **Then** it is accepted on the same terms Phase 7 already defines for any compliant issuer (valid signature, issuer, audience, expiry, with configured clock-skew leeway).
 
 ---
@@ -115,7 +115,7 @@ A caller holding a token issued by the reference stack (or any standards-complia
 
 **Why this priority**: Without the RP-side provider, the reference stack's tokens have no consumer inside GitStore — the "just works" story ends at token issuance. Implementing Phase 7's already-documented design here gives the stack a real verifier and closes the loop end-to-end.
 
-**Independent Test**: Can be fully tested by configuring `auth.authn.chain` with `oidc-jwt` and `auth.oidc.issuer_url` pointed at any compliant issuer, then presenting a token from that issuer: valid tokens authenticate with `Principal.Subject`/`Issuer`/`Claims`/`Scopes` populated per the claims-mapping contract; expired tokens are denied; foreign-issuer tokens fall through to the next provider in the chain.
+**Independent Test**: Can be fully tested by configuring `auth.authn.chain` with `oidc-jwt` and `auth.oidc.issuer_uri` pointed at any compliant issuer, then presenting a token from that issuer: valid tokens authenticate with `Principal.Subject`/`Issuer`/`Claims`/`Scopes` populated per the claims-mapping contract; expired tokens are denied; foreign-issuer tokens fall through to the next provider in the chain.
 
 **Acceptance Scenarios**:
 
@@ -133,7 +133,7 @@ A caller holding a token issued by the reference stack (or any standards-complia
 - What happens when Hydra's refresh-token grant succeeds but the underlying Kratos session has since ended? (Out of scope for `gitstore-api` to detect or care about directly — Phase 3d already establishes that `gitstore-api` never attempts to refresh OIDC sessions itself. Any refresh-time re-validation against Kratos is the responsibility of whichever client application performs the token refresh, consistent with the reference experiment's own finding that a Hydra refresh grant does not, by itself, prove the Kratos session is still valid.)
 - What happens if the reference stack's Hydra or Kratos Admin API were reachable from outside the deployment? (This must never be the default configuration — Admin APIs are reachable only by `gitstore-oidc-bridge` and other in-network components, never by a browser or the public network.)
 - What happens on a completely fresh deployment (empty Hydra/Kratos databases, no OAuth2 client registered yet)? (Stack startup registers the necessary OAuth2 client(s) automatically and idempotently before the stack is considered ready; no manual `hydra create oauth2-client`-equivalent step is required.)
-- What happens when an operator deploys this stack alongside their own separate, unrelated OIDC IdP? (Unsupported combination for a single `gitstore-api` deployment — `OIDCJWTProvider` is configured with exactly one `issuer_url` at a time, per Phase 7's existing design; this spec does not change that.)
+- What happens when an operator deploys this stack alongside their own separate, unrelated OIDC IdP? (Unsupported combination for a single `gitstore-api` deployment — `OIDCJWTProvider` is configured with exactly one `issuer_uri` at a time, per Phase 7's existing design; this spec does not change that.)
 - What happens to a user's Kratos identity if the reference stack is decommissioned in favor of a different OIDC IdP later? (Out of scope — migrating identities between IdPs, including to a different bring-your-own IdP, is not addressed by this spec.)
 
 ## Requirements *(mandatory)*
@@ -141,7 +141,7 @@ A caller holding a token issued by the reference stack (or any standards-complia
 ### Functional Requirements
 
 - **FR-001**: The system MUST provide an optional, separately-deployable reference OIDC provider stack (Ory Hydra as the OAuth2/OIDC provider, Ory Kratos as the identity/session source of truth) that can be deployed without any issuer-specific change to `gitstore-api`, `gitstore-git-service`, or `gitstore-controller-manager` source code — the generic `oidc-jwt` provider (FR-016) consumes it by configuration alone.
-- **FR-002**: The reference stack MUST expose a standards-compliant OIDC issuer — discovery document and JWKS — reachable at a configurable issuer URL, suitable for `gitstore-api`'s Phase 7 `OIDCJWTProvider` `issuer_url` configuration with no Relying-Party-side code change.
+- **FR-002**: The reference stack MUST expose a standards-compliant OIDC issuer — discovery document and JWKS — reachable at a configurable issuer URL, suitable for `gitstore-api`'s Phase 7 `OIDCJWTProvider` `issuer_uri` configuration with no Relying-Party-side code change.
 - **FR-003**: The system MUST provide a minimal, standalone bridge service (`gitstore-oidc-bridge`) that resolves Hydra's login and consent challenges by checking the current Kratos session.
 - **FR-004**: The bridge MUST accept a Hydra login challenge automatically, using the Kratos identity's stable identifier as the resulting subject, whenever a valid, current Kratos session exists for the requesting browser.
 - **FR-005**: The bridge MUST redirect to Kratos's self-service login UI, deferring resolution of the corresponding login challenge, whenever no valid Kratos session exists for the requesting browser.
@@ -158,11 +158,11 @@ A caller holding a token issued by the reference stack (or any standards-complia
 - **FR-016**: The system MUST provide an `oidc-jwt` AuthN provider in `gitstore-api` implementing Phase 7's documented `OIDCJWTProvider` design: bearer JWTs verified via OIDC Discovery + JWKS, enforcing issuer, audience, and expiry with configurable clock-skew leeway, and chained via `auth.authn.chain` like every other provider.
 - **FR-017**: The `oidc-jwt` provider MUST map token claims onto `Principal` per `data-model.md`'s claims-mapping table (`sub`→`Subject`, `iss`→`Issuer`, `scope`→`Scopes`, `jti`→`TokenID`, `email`/`preferred_username`→`Claims`), and MUST enrich from the issuer's userinfo endpoint — on a fill-only-missing basis — when the presented access token lacks profile claims; it MUST NOT use token introspection (RFC 7662) on the hot path.
 - **FR-018**: The `oidc-jwt` provider MUST return `ErrNotSupported` for session issuance, refresh, and revocation (Phase 3d boundary: GitStore has no independent session layer for OIDC principals; refresh is between the client application and the issuer).
-- **FR-019**: `auth.oidc.issuer_url` and `auth.oidc.client_id` MUST be required at startup when and only when `oidc-jwt` is present in `auth.authn.chain`, with an actionable error message otherwise (same conditional-requirement pattern as `static-users`' JWT secret).
+- **FR-019**: `auth.oidc.issuer_uri` and `auth.oidc.client_id` MUST be required at startup when and only when `oidc-jwt` is present in `auth.authn.chain`, with an actionable error message otherwise (same conditional-requirement pattern as `static-users`' JWT secret).
 
 ### Key Entities
 
-- **Reference OIDC provider stack**: The optional, separately-deployable set of components (Hydra, Kratos, `gitstore-oidc-bridge`, and their backing datastores) that together act as one possible `issuer_url` choice for `gitstore-api`'s Phase 7 `OIDCJWTProvider` — one option among any standards-compliant issuer an operator could bring instead.
+- **Reference OIDC provider stack**: The optional, separately-deployable set of components (Hydra, Kratos, `gitstore-oidc-bridge`, and their backing datastores) that together act as one possible `issuer_uri` choice for `gitstore-api`'s Phase 7 `OIDCJWTProvider` — one option among any standards-compliant issuer an operator could bring instead.
 - **`gitstore-oidc-bridge`**: The new standalone service implementing Hydra's login/consent challenge-resolution contract against the current Kratos session; it renders no end-user UI of its own beyond redirects.
 - **Kratos identity**: A GitStore user's identity and traits (email, username) as held by Kratos, the sole identity/session source of truth for the reference stack.
 - **Login challenge / consent challenge**: Hydra's own OAuth2/OIDC state objects representing "who is this?" and "does this identity authorize this client for these scopes?", resolved exclusively by `gitstore-oidc-bridge` against Kratos.
@@ -172,7 +172,7 @@ A caller holding a token issued by the reference stack (or any standards-complia
 
 ### Measurable Outcomes
 
-- **SC-001**: 100% of tokens issued by the reference stack for a valid login are accepted by `gitstore-api`'s `oidc-jwt` provider with zero issuer-specific code — configuration (`issuer_url`, `client_id`) only.
+- **SC-001**: 100% of tokens issued by the reference stack for a valid login are accepted by `gitstore-api`'s `oidc-jwt` provider with zero issuer-specific code — configuration (`issuer_uri`, `client_id`) only.
 - **SC-002**: 100% of login attempts presenting a valid, current Kratos session complete without ever displaying a user-facing consent screen.
 - **SC-003**: 100% of login attempts with no Kratos session are redirected to Kratos's login UI before any login challenge is resolved, with zero instances of a login challenge being accepted without a validated session.
 - **SC-004**: 100% of default deployments leave both Hydra's and Kratos's Admin APIs unreachable from outside the deployment's internal network boundary.

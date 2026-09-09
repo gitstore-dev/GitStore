@@ -5,7 +5,7 @@
 
 ## Summary
 
-Ship an optional, separately-deployable reference OIDC provider stack — Ory Hydra (OAuth2/OIDC provider) + Ory Kratos (identity/session source of truth) — as GitStore's "bring your own, but we also ship a usable default" answer for OIDC, mirroring the pattern already established for `gitstore-admin`. A new minimal standalone service, `gitstore-oidc-bridge`, implements Hydra's `/login` and `/consent` challenge-resolution routes against the current Kratos session. The stack is wired up via a new optional `compose.oidc.yml` overlay (mirroring `compose.scylla.yml`/`compose.admin.yml`) and new `make` targets, and is documented as one possible `issuer_url` choice for `gitstore-api`'s Phase 7 `OIDCJWTProvider` — this plan makes zero changes to that provider's Relying-Party-side design, interface, or config schema. `docs/implementation/020-pluggable_auth_architecture.md` §7 gains a short, additive cross-reference addendum only.
+Ship an optional, separately-deployable reference OIDC provider stack — Ory Hydra (OAuth2/OIDC provider) + Ory Kratos (identity/session source of truth) — as GitStore's "bring your own, but we also ship a usable default" answer for OIDC, mirroring the pattern already established for `gitstore-admin`. A new minimal standalone service, `gitstore-oidc-bridge`, implements Hydra's `/login` and `/consent` challenge-resolution routes against the current Kratos session. The stack is wired up via a new optional `compose.oidc.yml` overlay (mirroring `compose.scylla.yml`/`compose.admin.yml`) and new `make` targets, and is documented as one possible `issuer_uri` choice for `gitstore-api`'s Phase 7 `OIDCJWTProvider` — this plan makes zero changes to that provider's Relying-Party-side design, interface, or config schema. `docs/implementation/020-pluggable_auth_architecture.md` §7 gains a short, additive cross-reference addendum only.
 
 ## Technical Context
 
@@ -74,7 +74,7 @@ gitstore-api/                                # RP-side provider implementation (
 │   ├── provider.go                           # OIDCJWTProvider: Discovery+JWKS verify, userinfo enrichment,
 │   │                                         #   ErrNotSupported for issue/refresh/revoke (Phase 3d boundary)
 │   └── provider_test.go                      # mock-issuer tests: discovery, JWKS rotation, userinfo, clock skew
-├── internal/config/config.go                 # auth.oidc.{issuer_url,client_id,audience,clock_skew} +
+├── internal/config/config.go                 # auth.oidc.{issuer_uri,client_id,audience,clock_skew} +
 │                                             #   validateOIDCAuthChainConfig (conditional requirement)
 └── internal/app/server.go                    # "oidc-jwt" case in constructProviderRegistry
 
