@@ -88,6 +88,7 @@ demo-catalogue/
 catalog-work/
 catalogue-work/
 /gitstore-controller-manager/controller
+*/coverage.txt
 /out/
 .claude/
 
