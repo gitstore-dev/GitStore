@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.0-alpha.4](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.3...v0.1.0-alpha.4) (2026-09-09)
+
+
+### Features
+
+* **auth:** add oidc-jwt provider and optional Hydra/Kratos reference OIDC stack (spec 059) ([#401](https://github.com/gitstore-dev/GitStore/issues/401)) ([0d6041f](https://github.com/gitstore-dev/GitStore/commit/0d6041fa3d75d03e336b37f07800c1b413e09e71))
+
 ## [0.1.0-alpha.3](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.2...v0.1.0-alpha.3) (2026-09-04)
 
 
