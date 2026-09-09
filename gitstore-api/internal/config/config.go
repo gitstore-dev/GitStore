@@ -82,6 +82,14 @@ type OIDCConfig struct {
 	// Audience expected in the aud claim. Defaults to ClientID when empty.
 	Audience  string `mapstructure:"audience"`
 	ClockSkew string `mapstructure:"clock_skew"`
+	// UsernameClaim selects which token/userinfo claim becomes
+	// Principal.Subject (the identity used for role bindings, ownership fields,
+	// and audit logs) — the Kubernetes --oidc-username-claim / Spring Security
+	// user-name-attribute pattern. Defaults to "sub" (unique and immutable per
+	// issuer); "email" or "preferred_username" give human-readable bindings at
+	// the cost of stability if the trait changes. The raw sub is always
+	// preserved in Principal.Claims["sub"].
+	UsernameClaim string `mapstructure:"username_claim"`
 }
 
 // ServiceAccountConfig holds settings for GitStore-issued service-account
@@ -258,6 +266,7 @@ func load(path string) (*Config, error) {
 	v.SetDefault("auth.oidc.client_id", "")
 	v.SetDefault("auth.oidc.audience", "")
 	v.SetDefault("auth.oidc.clock_skew", "2m")
+	v.SetDefault("auth.oidc.username_claim", "sub")
 	v.SetDefault("datastore.backend", "memdb")
 	v.SetDefault("datastore.scylla.hosts", []string{"localhost:9042"})
 	v.SetDefault("datastore.scylla.keyspace", "gitstore")

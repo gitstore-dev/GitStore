@@ -21,6 +21,7 @@
 - Q: Where do the stack's config files live? → A: `config/oidc/` (the `config/` tree is the repo's config home; the earlier `deploy/oidc/` layout predated that convention and was removed).
 - Q: The bridge's health route? → A: `/health`, matching every other GitStore service (`/healthz` dropped).
 - Q: How are the stack's `make` targets organized? → A: Consolidated under `make compose`, mirroring how `scylla-compose` folded in: an `IDENTITY=oidc` selector layers `compose.oidc.yml` onto the core stack (see plan.md "Replay notes" and tasks.md Phase 7).
+- Q: Which claim becomes `Principal.Subject` for OIDC principals? → A: Operator-configurable via `auth.oidc.username_claim` (default `sub`), following the Kubernetes `--oidc-username-claim` / Spring Security `user-name-attribute` / oauth2-proxy `--user-id-claim` pattern — every major consumer keeps `sub` as default and lets the operator pick a human-readable claim. The raw `sub` is always preserved in `Principal.Claims["sub"]`, and userinfo is consulted (fill-only-missing) when the configured claim is absent from the token, so Hydra access tokens resolve it too. Caveat recorded for the reference stack: Kratos enforces uniqueness of `email` (a credential identifier) but NOT `username`, so `email` is the safe human-readable binding key; `preferred_username` is suitable for display/logs when collision risk is acceptable locally.
 
 ### Session 2026-09-04 (replay against current `main`)
 

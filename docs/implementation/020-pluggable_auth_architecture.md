@@ -964,6 +964,7 @@ auth.oidc.issuer_uri                     GITSTORE_AUTH__OIDC__ISSUER_URI        
 auth.oidc.client_id                      GITSTORE_AUTH__OIDC__CLIENT_ID             string   ""
 auth.oidc.audience                       GITSTORE_AUTH__OIDC__AUDIENCE              string   "" (defaults to client_id)
 auth.oidc.clock_skew                     GITSTORE_AUTH__OIDC__CLOCK_SKEW            duration "2m"
+auth.oidc.username_claim                 GITSTORE_AUTH__OIDC__USERNAME_CLAIM        string   "sub" (k8s --oidc-username-claim / Spring user-name-attribute pattern; email or preferred_username give human-readable bindings at the cost of stability)
 
 # RBAC local provider
 auth.rbac.policy_file                    GITSTORE_AUTH__RBAC__POLICY_FILE           string   "policy.yaml"

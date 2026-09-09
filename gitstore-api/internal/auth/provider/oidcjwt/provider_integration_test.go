@@ -37,8 +37,9 @@ func TestIntegrationLiveIssuerVerifiesAccessToken(t *testing.T) {
 	}
 
 	p, err := New(context.Background(), config.OIDCConfig{
-		IssuerURI: issuerURI,
-		ClientID:  clientID,
+		IssuerURI:     issuerURI,
+		ClientID:      clientID,
+		UsernameClaim: os.Getenv("OIDC_INTEGRATION_USERNAME_CLAIM"),
 	}, zap.NewNop())
 	require.NoError(t, err)
 

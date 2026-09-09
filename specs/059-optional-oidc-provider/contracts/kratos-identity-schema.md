@@ -53,7 +53,7 @@ This schema is the authoritative source for exactly two of `Principal`'s fields 
 | `Claims["email"]`              | `traits.email`                                        | Mutable — a user can change their email via Kratos's self-service settings flow |
 | `Claims["preferred_username"]` | `traits.username`                                     | Mutable — same self-service flow                                                |
 
-Any consumer relying on a GitStore identity's stable identifier (audit logs, ownership fields, authorization policy keyed by user) MUST use `Principal.Subject`, never `Claims["email"]` — this is a direct consequence of Decision 5 in `research.md` and is the same stability guarantee `Principal.Subject` already carries for the `static-users` provider's JWT `sub` claim.
+Any consumer relying on a GitStore identity's stable identifier (audit logs, ownership fields, authorization policy keyed by user) MUST use the raw `sub` (available verbatim in `Principal.Claims["sub"]`), never `Claims["email"]` — this is a direct consequence of Decision 5 in `research.md` and is the same stability guarantee the `sub` claim already carries for the `static-users` provider's JWTs. Note that `Principal.Subject` itself is operator-configurable via `auth.oidc.username_claim` (default `sub` — the Kubernetes `--oidc-username-claim`/Spring Security `user-name-attribute` pattern): operators who prefer human-readable role bindings may set it to `email` (unique per Kratos identity, since it is a credential identifier) — `preferred_username` also works but Kratos does NOT enforce its uniqueness, so it is recommended for display/logging rather than as a binding key.
 
 ## Non-goals of this schema
 

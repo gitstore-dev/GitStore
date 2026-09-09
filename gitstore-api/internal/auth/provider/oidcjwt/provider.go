@@ -27,12 +27,13 @@ import (
 
 // OIDCJWTProvider verifies OIDC-issued bearer JWTs against a discovered JWKS.
 type OIDCJWTProvider struct {
-	provider  *oidc.Provider
-	verifier  *oidc.IDTokenVerifier
-	issuerURI string
-	clientID  string
-	audience  string
-	logger    *zap.Logger
+	provider      *oidc.Provider
+	verifier      *oidc.IDTokenVerifier
+	issuerURI     string
+	clientID      string
+	audience      string
+	usernameClaim string
+	logger        *zap.Logger
 }
 
 // idTokenClaims is the claim set the provider maps onto auth.Principal.
@@ -107,6 +108,10 @@ func New(ctx context.Context, cfg config.OIDCConfig, logger *zap.Logger) (*OIDCJ
 	if audience == "" {
 		audience = cfg.ClientID
 	}
+	usernameClaim := cfg.UsernameClaim
+	if usernameClaim == "" {
+		usernameClaim = "sub"
+	}
 	verifier := provider.Verifier(&oidc.Config{
 		ClientID: audience,
 		// go-oidc has no explicit leeway knob beyond its built-in 1 minute;
@@ -115,12 +120,13 @@ func New(ctx context.Context, cfg config.OIDCConfig, logger *zap.Logger) (*OIDCJ
 		Now: func() time.Time { return time.Now().Add(-skew) },
 	})
 	return &OIDCJWTProvider{
-		provider:  provider,
-		verifier:  verifier,
-		issuerURI: strings.TrimSuffix(canonicalIssuer, "/"),
-		clientID:  cfg.ClientID,
-		audience:  audience,
-		logger:    logger,
+		provider:      provider,
+		verifier:      verifier,
+		issuerURI:     strings.TrimSuffix(canonicalIssuer, "/"),
+		clientID:      cfg.ClientID,
+		audience:      audience,
+		usernameClaim: usernameClaim,
+		logger:        logger,
 	}, nil
 }
 
@@ -164,16 +170,32 @@ func (p *OIDCJWTProvider) Authenticate(ctx context.Context, req auth.AuthRequest
 	if err := token.Claims(&claims); err != nil {
 		return nil, auth.Deny(p.Name(), "claims extraction failed"), fmt.Errorf("oidcjwt: extract claims: %w", err)
 	}
+	var rawClaims map[string]any
+	if err := token.Claims(&rawClaims); err != nil {
+		return nil, auth.Deny(p.Name(), "claims extraction failed"), fmt.Errorf("oidcjwt: extract raw claims: %w", err)
+	}
 
 	// UserInfo enrichment: JWT access tokens (e.g. Hydra's) may not carry
-	// profile claims the ID token has; when email is absent and the issuer
-	// exposes a userinfo endpoint, merge its claims (spec 059 claims mapping).
-	if claims.Email == "" {
-		p.enrichFromUserInfo(ctx, raw, &claims)
+	// profile claims the ID token has. When email or the configured username
+	// claim is absent and the issuer exposes a userinfo endpoint, merge its
+	// claims on a fill-only-missing basis (spec 059 claims mapping).
+	if claims.Email == "" || (p.usernameClaim != "sub" && rawString(rawClaims, p.usernameClaim) == "") {
+		p.enrichFromUserInfo(ctx, raw, &claims, rawClaims)
+	}
+
+	// Principal.Subject comes from the configured username claim (Kubernetes
+	// --oidc-username-claim / Spring user-name-attribute pattern), falling
+	// back to sub when the claim is absent. The raw sub is always preserved
+	// in Claims for stability-sensitive consumers.
+	subject := claims.Subject
+	if p.usernameClaim != "sub" {
+		if v := rawString(rawClaims, p.usernameClaim); v != "" {
+			subject = v
+		}
 	}
 
 	principal := &auth.Principal{
-		Subject:    claims.Subject,
+		Subject:    subject,
 		Issuer:     claims.Issuer,
 		Groups:     claims.Groups,
 		Roles:      claims.Roles,
@@ -181,15 +203,12 @@ func (p *OIDCJWTProvider) Authenticate(ctx context.Context, req auth.AuthRequest
 		AuthMethod: p.Name(),
 		TokenID:    claims.TokenID,
 	}
-	principal.Claims = map[string]any{}
+	principal.Claims = map[string]any{"sub": claims.Subject}
 	if claims.Email != "" {
 		principal.Claims["email"] = claims.Email
 	}
 	if claims.PreferredUsername != "" {
 		principal.Claims["preferred_username"] = claims.PreferredUsername
-	}
-	if len(principal.Claims) == 0 {
-		principal.Claims = nil
 	}
 	if claims.ExpiresAt != 0 {
 		principal.ExpiresAt = time.Unix(claims.ExpiresAt, 0)
@@ -197,10 +216,12 @@ func (p *OIDCJWTProvider) Authenticate(ctx context.Context, req auth.AuthRequest
 	return principal, auth.Allow(p.Name(), "valid oidc jwt"), nil
 }
 
-// enrichFromUserInfo merges userinfo-endpoint claims into c on a
-// fill-only-missing basis. Failures are logged and non-fatal — the verified
-// token's own claims remain authoritative.
-func (p *OIDCJWTProvider) enrichFromUserInfo(ctx context.Context, rawToken string, c *idTokenClaims) {
+// enrichFromUserInfo merges userinfo-endpoint claims on a fill-only-missing
+// basis: typed fields on c, and any absent keys on raw (so an arbitrary
+// configured username claim sourced only from userinfo still resolves).
+// Failures are logged and non-fatal — the verified token's own claims remain
+// authoritative.
+func (p *OIDCJWTProvider) enrichFromUserInfo(ctx context.Context, rawToken string, c *idTokenClaims, raw map[string]any) {
 	info, err := p.provider.UserInfo(ctx, oauth2.StaticTokenSource(&oauth2.Token{
 		AccessToken: rawToken,
 		TokenType:   "Bearer",
@@ -229,6 +250,21 @@ func (p *OIDCJWTProvider) enrichFromUserInfo(ctx context.Context, rawToken strin
 	if len(c.Groups) == 0 {
 		c.Groups = extra.Groups
 	}
+	var all map[string]any
+	if err := info.Claims(&all); err == nil {
+		for k, v := range all {
+			if _, ok := raw[k]; !ok {
+				raw[k] = v
+			}
+		}
+	}
+}
+
+func rawString(claims map[string]any, key string) string {
+	if s, ok := claims[key].(string); ok {
+		return s
+	}
+	return ""
 }
 
 // RevokeSession is not supported: OIDC tokens are stateless; revocation

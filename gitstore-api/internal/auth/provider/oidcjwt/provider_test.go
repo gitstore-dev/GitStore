@@ -270,6 +270,47 @@ func TestAuthenticateKeyRotation(t *testing.T) {
 	assert.Equal(t, "kratos-identity-uuid", principal.Subject)
 }
 
+func TestAuthenticateUsernameClaimPreferredUsername(t *testing.T) {
+	issuer := newMockIssuer(t)
+	p := newProvider(t, issuer, config.OIDCConfig{UsernameClaim: "preferred_username"})
+	token := issuer.sign(t, issuer.validClaims())
+
+	principal, decision, err := p.Authenticate(context.Background(), bearerReq(token))
+	require.NoError(t, err)
+	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
+	assert.Equal(t, "exampleuser", principal.Subject, "Subject should come from the configured username claim")
+	assert.Equal(t, "kratos-identity-uuid", principal.Claims["sub"], "raw sub must survive in Claims")
+}
+
+func TestAuthenticateUsernameClaimFallsBackToSub(t *testing.T) {
+	issuer := newMockIssuer(t)
+	p := newProvider(t, issuer, config.OIDCConfig{UsernameClaim: "department"})
+	token := issuer.sign(t, issuer.validClaims())
+
+	principal, decision, err := p.Authenticate(context.Background(), bearerReq(token))
+	require.NoError(t, err)
+	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
+	assert.Equal(t, "kratos-identity-uuid", principal.Subject, "absent username claim must fall back to sub")
+}
+
+func TestAuthenticateUsernameClaimResolvedViaUserInfo(t *testing.T) {
+	issuer := newMockIssuer(t)
+	issuer.userinfo = map[string]any{"email": "u@example.com", "preferred_username": "from-userinfo"}
+	p := newProvider(t, issuer, config.OIDCConfig{UsernameClaim: "preferred_username"})
+	claims := issuer.validClaims()
+	// Access-token shape: no preferred_username in the token, but email IS
+	// present — the email-only enrichment gate would not fire here.
+	delete(claims, "preferred_username")
+	token := issuer.sign(t, claims)
+
+	principal, decision, err := p.Authenticate(context.Background(), bearerReq(token))
+	require.NoError(t, err)
+	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
+	assert.True(t, issuer.userinfoHit, "userinfo must be consulted when the username claim is missing, even if email is present")
+	assert.Equal(t, "from-userinfo", principal.Subject)
+	assert.Equal(t, "kratos-identity-uuid", principal.Claims["sub"])
+}
+
 func TestRefreshIssueRevokeUnsupported(t *testing.T) {
 	issuer := newMockIssuer(t)
 	p := newProvider(t, issuer, config.OIDCConfig{})

@@ -21,7 +21,7 @@ Deliberately excluded from `traits` in this spec: roles, groups, tenant/namespac
 
 | Kratos source | OIDC ID token claim | `Principal` field | Notes |
 |---|---|---|---|
-| Identity `id` (UUID) | `sub` | `Subject` | Set by the bridge as the Hydra login challenge's `subject`; Hydra places it in `sub` verbatim. Stable — never the mutable `email` trait. |
+| Identity `id` (UUID) | `sub` | `Subject` (default) / `Claims["sub"]` | Set by the bridge as the Hydra login challenge's `subject`; Hydra places it in `sub` verbatim. Stable — never the mutable `email` trait. The operator-facing `Principal.Subject` comes from the configured `auth.oidc.username_claim` (default `sub`; k8s/Spring pattern); the raw `sub` is always preserved in `Claims["sub"]` regardless. |
 | Reference stack's Hydra issuer URL | `iss` | `Issuer` | Standard OIDC discovery-derived value; identical in shape to any other issuer Phase 7 already supports. |
 | `traits.email` | `email` | `Claims["email"]` | Populated by the bridge's consent-challenge `session.id_token` payload from a Kratos Admin API identity lookup. |
 | `traits.username` | `preferred_username` | `Claims["preferred_username"]` | Same source as above. |
