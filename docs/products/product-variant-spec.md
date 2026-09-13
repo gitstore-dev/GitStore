@@ -53,11 +53,11 @@ All spec fields are individually optional unless noted otherwise. Constraints ap
 
 ### Product Reference
 
-| Field                 | Type   | Required | Constraint                      |
-|----------------------|--------|----------|---------------------------------|
-| `productRef.name`    | string | yes      | Name of the parent `Product`    |
-| `productRef.kind`    | string | no       | Defaults to `Product`           |
-| `productRef.optional`| bool   | no       | Present for parity only; ignored |
+| Field                 | Type   | Required | Constraint                       |
+|-----------------------|--------|----------|----------------------------------|
+| `productRef.name`     | string | yes      | Name of the parent `Product`     |
+| `productRef.kind`     | string | no       | Defaults to `Product`            |
+| `productRef.optional` | bool   | no       | Present for parity only; ignored |
 
 ### Selected Options
 
@@ -230,13 +230,13 @@ File paths are not resource identity. Moving a variant file while keeping the sa
 
 Errors follow the pattern `validate: <field-path> <violation>`.
 
-| Condition                             | Error message pattern                               |
-|---------------------------------------|------------------------------------------------------|
+| Condition                             | Error message pattern                                         |
+|---------------------------------------|---------------------------------------------------------------|
 | Wrong `apiVersion`                    | `validate: apiVersion must be "catalog.gitstore.dev/v1beta1"` |
-| Wrong `kind`                          | `validate: kind must be "ProductVariant"`           |
-| Missing `metadata.name`               | `validate: metadata.name is required`               |
-| Missing `spec.title`                  | `validate: spec.title is required`                  |
-| Missing `spec.productRef.name`        | `validate: spec.productRef.name is required`        |
-| Media `fileRef.name` missing or empty | `validate: spec.media[N].fileRef.name is required`  |
-| Media `fileRef.kind` missing or empty | `validate: spec.media[N].fileRef.kind is required`  |
-| `status` key present                  | `validate: "status" is a system-managed field`      |
+| Wrong `kind`                          | `validate: kind must be "ProductVariant"`                     |
+| Missing `metadata.name`               | `validate: metadata.name is required`                         |
+| Missing `spec.title`                  | `validate: spec.title is required`                            |
+| Missing `spec.productRef.name`        | `validate: spec.productRef.name is required`                  |
+| Media `fileRef.name` missing or empty | `validate: spec.media[N].fileRef.name is required`            |
+| Media `fileRef.kind` missing or empty | `validate: spec.media[N].fileRef.kind is required`            |
+| `status` key present                  | `validate: "status" is a system-managed field`                |

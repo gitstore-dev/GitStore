@@ -555,12 +555,20 @@ new scope.
 Authorization answers **which catalog view the principal may request**. Publication answers **which
 resources belong in the public view**. These decisions must remain separate.
 
-[GH#314](https://github.com/gitstore-dev/GitStore/issues/314) owns the release/publication lifecycle,
-including tags, commit reachability, schedules, selectors, active windows, and materialization strategy.
-OPA does not recreate those rules. It selects `PUBLIC` or `MANAGEMENT`; the datastore/query layer reads
-the corresponding materialized view.
+[Product and Variant Publication Lifecycle](../products/publication-lifecycle.md)
+implements the GH#314 release/publication contract: protected tags, admitted
+commit evidence, schedules, retirement, immutable snapshots, and target-specific
+public projections. OPA does not recreate those rules. It selects `PUBLIC` or
+`MANAGEMENT`; the datastore/query layer reads the corresponding materialized view.
 
-Until GH#314 replaces it, Product public eligibility is:
+The final publication contract does **not** use a mutable Product `Published`
+condition as its public source of truth. `PUBLIC` reads select the active
+target-specific release snapshot; `MANAGEMENT` reads select current admitted
+rows. The target is validated independently of the OPA decision. Every access
+path, including global nodes, relationship fields, counts, and subscriptions,
+must select its physical scope and target projection before pagination.
+
+Until the publication-lifecycle implementation ships, Product public eligibility is:
 
 ```text
 status.conditions contains:
@@ -580,10 +588,10 @@ ProductVariant public eligibility requires both:
 2. a publicly eligible parent Product matching the resolved parent reference.
 
 The current ProductVariant GraphQL status enum has no `PUBLISHED` condition. Public ProductVariant reads
-therefore remain fail closed until GH#314 defines and materializes that signal (whether as a condition,
-publication record, or public projection). `READY=True` is not a substitute for publication. GH#314 may
-later require current-generation `Ready=True` and an active effective window in addition to publication
-without changing the `catalog.visibility` authorization scope.
+therefore remain fail closed until the publication snapshot projection ships.
+`READY=True` is not a substitute for publication. The final contract requires a
+published variant and its published parent Product in the same active target
+snapshot, without changing the `catalog.visibility` authorization scope.
 
 ## 12. ScyllaDB and memdb Query Design
 
@@ -593,16 +601,17 @@ Every authorized access pattern has a physical or indexed query path for both sc
 
 | GraphQL access | `PUBLIC` | `MANAGEMENT` |
 |---|---|---|
-| Product list by namespace | public Product namespace projection | existing complete Product namespace table |
-| Product by name/UID | public Product name/UID lookup | existing complete name/UID lookup |
-| Category/Collection Products | public relationship projection | complete relationship projection |
-| ProductVariant list by namespace | public variant namespace projection | existing complete variant namespace table |
-| ProductVariant by name/UID/SKU | public variant lookup projections | existing complete lookup projections |
-| Product.productVariants | public variants-by-product projection | complete variants-by-product projection |
+| Product list by namespace | target-specific public Product projection | existing complete Product namespace table |
+| Product by name/UID | target-specific public Product lookup | existing complete name/UID lookup |
+| Category/Collection Products | target-specific public relationship projection | complete relationship projection |
+| ProductVariant list by namespace | target-specific public variant projection | existing complete variant namespace table |
+| ProductVariant by name/UID/SKU | target-specific public variant lookup projections | existing complete lookup projections |
+| Product.productVariants | target-specific public variants-by-product projection | complete variants-by-product projection |
 
 Concrete table names and migration ordering belong to the implementation specification. The naming
-convention should make public tables unmistakable, for example `products_public_by_namespace` and
-`product_variants_public_by_product`.
+convention should make public tables and their target partition unmistakable, for
+example `products_public_by_target_namespace` and
+`product_variants_public_by_target_product`.
 
 All projections for one catalog write are updated with the consistency mechanism selected by the
 catalog-publication design. The safety invariant is one-way: a resource may temporarily disappear from

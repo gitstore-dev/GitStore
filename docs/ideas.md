@@ -186,7 +186,7 @@ Platform ecosystem, AI-driven features, and deep customisation.
 
 - **CI/CD: GitStore Actions** — Workflow canvas for catalogue build/test/deploy
 - **Namespaces** — Define multiple stores for a single tenant (Kubernetes-style, Git-declared)
-- **Custom Workflows** — Event-driven automation with custom product lifecycles
+- [**Custom Workflows**](implementation/037-custom-commerce-workflows.md) — Event-driven seller/release and buyer/order workflows, composed through immutable release and order snapshots
 
 ---
 

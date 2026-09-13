@@ -6,7 +6,7 @@ status when reading the resource.
 
 ## Create manifest
 
-```yaml
+```markdown
 ---
 apiVersion: gitstore.dev/v1beta1
 kind: Namespace
@@ -16,7 +16,7 @@ metadata:
     gitstore.dev/owner: platform
 spec:
   title: Acme Store
-  tier: USER
+  tier: ORGANIZATION
   repositoryDefaults:
     visibility: PRIVATE
     defaultBranch: main
@@ -47,7 +47,7 @@ spec:
 
 ## Update manifest
 
-```yaml
+```markdown
 ---
 apiVersion: gitstore.dev/v1beta1
 kind: Namespace
@@ -57,7 +57,7 @@ metadata:
     gitstore.dev/owner: commerce-platform
 spec:
   title: Acme Commerce
-  tier: USER
+  tier: ORGANIZATION
   repositoryDefaults:
     visibility: INTERNAL
     defaultBranch: trunk
@@ -76,15 +76,15 @@ written only through the status path.
 
 ## Ownership and mutability
 
-| Field group | Owner | Mutability |
-|---|---|---|
-| `apiVersion`, `kind` | Contract | Immutable |
-| `metadata.name` | Author | Immutable after creation |
-| `metadata.labels`, `metadata.annotations` | Author | Mutable through Git |
-| `metadata.uid`, `metadata.creationTimestamp` | System | Immutable |
-| Remaining metadata | System | Read-only |
-| `spec` | Author | Mutable through Git |
-| `status` | System | Status-write path only |
+| Field group                                  | Owner    | Mutability               |
+|----------------------------------------------|----------|--------------------------|
+| `apiVersion`, `kind`                         | Contract | Immutable                |
+| `metadata.name`                              | Author   | Immutable after creation |
+| `metadata.labels`, `metadata.annotations`    | Author   | Mutable through Git      |
+| `metadata.uid`, `metadata.creationTimestamp` | System   | Immutable                |
+| Remaining metadata                           | System   | Read-only                |
+| `spec`                                       | Author   | Mutable through Git      |
+| `status`                                     | System   | Status-write path only   |
 
 Accepted writes persist the complete authored envelope, labels, annotations,
 full `spec`, and Markdown body. Any authored change advances both `generation`
@@ -115,7 +115,7 @@ metadata:
   finalizers: []
 spec:
   title: Acme Store
-  tier: USER
+  tier: ORGANIZATION
   repositoryDefaults:
     visibility: PRIVATE
     defaultBranch: main
@@ -155,12 +155,12 @@ sets the deletion timestamp/finalizer and exposes `Terminating`.
 
 ## Admission and deletion phase matrix
 
-| Operation | Structural/pre-receive phase | Stateful policy phase | Successful result |
-|---|---|---|---|
-| Create | Validates the envelope, API version/kind, identifier, reserved names, required spec, tier, authoring target, and duplicate request identity. | Rejects bootstrap targets and an existing Namespace with the same name. | Persists generation 1 with `AdmissionAccepted=True`. |
-| Update | Applies the create checks and rejects a same-path `metadata.name` change as immutable. | Requires an existing active Namespace and rejects bootstrap targets, tier demotion, and terminating targets. | Conditionally advances generation and writes `AdmissionAccepted=True` for that generation. |
-| Delete | Validates the identifier and authorized UID/name continuity. | Returns an idempotent outcome for an already-terminating Namespace; otherwise evaluates bootstrap and non-empty blockers together. | Marks an eligible Namespace for foreground deletion. |
-| Reconcile | Not a request-time validation phase. | Waits for accepted admission before provisioning the system repository. | Updates `SystemRepoReady` and `Ready` without replacing `AdmissionAccepted`. |
+| Operation | Structural/pre-receive phase                                                                                                                 | Stateful policy phase                                                                                                              | Successful result                                                                          |
+|-----------|----------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------|
+| Create    | Validates the envelope, API version/kind, identifier, reserved names, required spec, tier, authoring target, and duplicate request identity. | Rejects bootstrap targets and an existing Namespace with the same name.                                                            | Persists generation 1 with `AdmissionAccepted=True`.                                       |
+| Update    | Applies the create checks and rejects a same-path `metadata.name` change as immutable.                                                       | Requires an existing active Namespace and rejects bootstrap targets, tier demotion, and terminating targets.                       | Conditionally advances generation and writes `AdmissionAccepted=True` for that generation. |
+| Delete    | Validates the identifier and authorized UID/name continuity.                                                                                 | Returns an idempotent outcome for an already-terminating Namespace; otherwise evaluates bootstrap and non-empty blockers together. | Marks an eligible Namespace for foreground deletion.                                       |
+| Reconcile | Not a request-time validation phase.                                                                                                         | Waits for accepted admission before provisioning the system repository.                                                            | Updates `SystemRepoReady` and `Ready` without replacing `AdmissionAccepted`.               |
 
 Any structural failure short-circuits the request before stateful policy
 evaluation. Rejected creates and updates do not persist the rejected manifest.
@@ -171,13 +171,13 @@ In particular, a rejected update leaves the last accepted generation,
 
 GraphQL errors use stable category codes and reason extensions:
 
-| Category code | Stable reasons |
-|---|---|
+| Category code                            | Stable reasons                                                                                                                    |
+|------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
 | `NAMESPACE_STRUCTURAL_VALIDATION_FAILED` | `INVALID_ENVELOPE`, `INVALID_IDENTIFIER`, `RESERVED_IDENTIFIER`, `INVALID_TIER`, `INVALID_AUTHORING_TARGET`, `DUPLICATE_IDENTITY` |
-| `NAMESPACE_IMMUTABLE_FIELD` | `IMMUTABLE_NAME` |
-| `NAMESPACE_POLICY_REJECTED` | `BOOTSTRAP_NAMESPACE`, `NAMESPACE_ALREADY_EXISTS`, `NAMESPACE_NOT_FOUND`, `TIER_DEMOTION`, `NAMESPACE_TERMINATING` |
-| `NAMESPACE_CONFLICT` | `RESOURCE_VERSION_CONFLICT` |
-| `NAMESPACE_DELETION_BLOCKED` | `BOOTSTRAP_NAMESPACE`, `NAMESPACE_NOT_EMPTY` |
+| `NAMESPACE_IMMUTABLE_FIELD`              | `IMMUTABLE_NAME`                                                                                                                  |
+| `NAMESPACE_POLICY_REJECTED`              | `BOOTSTRAP_NAMESPACE`, `NAMESPACE_ALREADY_EXISTS`, `NAMESPACE_NOT_FOUND`, `TIER_DEMOTION`, `NAMESPACE_TERMINATING`                |
+| `NAMESPACE_CONFLICT`                     | `RESOURCE_VERSION_CONFLICT`                                                                                                       |
+| `NAMESPACE_DELETION_BLOCKED`             | `BOOTSTRAP_NAMESPACE`, `NAMESPACE_NOT_EMPTY`                                                                                      |
 
 Git pre-receive validation keeps the existing protobuf shape. Structural
 failures use their concrete `constraint`, immutable name changes use
@@ -213,13 +213,13 @@ replicas. Repository creation against a terminating Namespace is rejected.
 
 ## Status ownership
 
-| Status field or condition | Owner | Contract |
-|---|---|---|
-| `AdmissionAccepted` | Namespace admission path | Persisted only after an accepted create/update; `True` and tied to the accepted generation. |
-| `status.observedGeneration` and `lastAppliedRevision` | Namespace admission path | Identify the most recently accepted generation and Git revision. Rejected updates leave both unchanged. |
-| `SystemRepoReady` | Namespace controller | Reports per-Namespace system repository provisioning. |
-| `Ready` | Namespace controller | Reports the conjunction of admission acceptance and system repository readiness. |
-| `Terminating` | GraphQL read projection from lifecycle metadata | Derived separately from the deletion timestamp; it does not replace or reinterpret `AdmissionAccepted`. |
+| Status field or condition                             | Owner                                           | Contract                                                                                                |
+|-------------------------------------------------------|-------------------------------------------------|---------------------------------------------------------------------------------------------------------|
+| `AdmissionAccepted`                                   | Namespace admission path                        | Persisted only after an accepted create/update; `True` and tied to the accepted generation.             |
+| `status.observedGeneration` and `lastAppliedRevision` | Namespace admission path                        | Identify the most recently accepted generation and Git revision. Rejected updates leave both unchanged. |
+| `SystemRepoReady`                                     | Namespace controller                            | Reports per-Namespace system repository provisioning.                                                   |
+| `Ready`                                               | Namespace controller                            | Reports the conjunction of admission acceptance and system repository readiness.                        |
+| `Terminating`                                         | GraphQL read projection from lifecycle metadata | Derived separately from the deletion timestamp; it does not replace or reinterpret `AdmissionAccepted`. |
 
 Controller status updates merge their owned conditions with existing status and
 must preserve `AdmissionAccepted` and the admission revision.
