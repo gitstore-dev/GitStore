@@ -126,16 +126,16 @@ Extends the vocabulary documented in `docs/repository/repository-spec.md` (curre
 
 ```graphql
 input CreateRepositoryInput {
-  apiVersion: String!
-  kind: String!
-  metadata: RepositoryMetadataInput!
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Repository"
+  metadata: MetadataInput!
   spec: RepositorySpecInput!
 }
 
 input UpdateRepositoryInput {
-  apiVersion: String!
-  kind: String!
-  metadata: RepositoryMetadataInput!
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Repository"
+  metadata: MetadataInput!
   spec: RepositorySpecInput!
 }
 

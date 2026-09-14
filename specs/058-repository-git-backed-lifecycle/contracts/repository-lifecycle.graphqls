@@ -6,9 +6,9 @@
 # declarative resource shape that matches the existing `apiVersion` / `kind` /
 # `metadata` / `spec` envelope used for Git-backed Repository manifests,
 # rather than createRepository's current legacy flat namespace/name/
-# defaultBranch input fields. The required request keys are explicit:
-#   - apiVersion: String!
-#   - kind: String!  (must be "Repository")
+# defaultBranch input fields. The envelope defaults its contract keys:
+#   - apiVersion: String! = "gitstore.dev/v1beta1"
+#   - kind: String! = "Repository"
 #   - metadata: { name: String!, namespace: String! ... }
 #   - spec: RepositorySpecInput!
 #
@@ -28,7 +28,10 @@
 # changes internally to a finalizer-marking write instead of a synchronous
 # hard delete.
 
-input RepositoryMetadataInput {
+"""
+Author-controlled resource metadata shared by declarative mutation envelopes.
+"""
+input MetadataInput {
   name: String!
   namespace: String!
   labels: JSON
@@ -45,19 +48,19 @@ input CreateRepositoryInput {
   """
   API version of the Repository resource contract.
   """
-  apiVersion: String!
+  apiVersion: String! = "gitstore.dev/v1beta1"
 
   """
   Resource kind discriminator. Must be `Repository`.
   """
-  kind: String!
+  kind: String! = "Repository"
 
   """
   Repository identity metadata. metadata.name is the repository identifier;
   metadata.namespace is the owning namespace. Neither may target the
   reserved bootstrap name `gitstore-system`.
   """
-  metadata: RepositoryMetadataInput!
+  metadata: MetadataInput!
 
   """
   Author-controlled desired state.
@@ -69,19 +72,19 @@ input UpdateRepositoryInput {
   """
   API version of the Repository resource contract.
   """
-  apiVersion: String!
+  apiVersion: String! = "gitstore.dev/v1beta1"
 
   """
   Resource kind discriminator. Must be `Repository`.
   """
-  kind: String!
+  kind: String! = "Repository"
 
   """
   Repository identity metadata. metadata.name/metadata.namespace identify the
   repository to update and are immutable — a change to either is rejected at
   admission. Must not target the bootstrap repository (gitstore-system).
   """
-  metadata: RepositoryMetadataInput!
+  metadata: MetadataInput!
 
   """
   Author-controlled desired state. Only spec.defaultBranch, spec.visibility,

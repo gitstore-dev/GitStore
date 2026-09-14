@@ -40,7 +40,8 @@ A caller using the GraphQL API (an administrator, the admin console, or an autom
 1. **Given** a `createRepository` call for a new, non-bootstrap repository in an existing, non-`Terminating` namespace, **When** it is submitted, **Then** the API commits the equivalent manifest to that namespace's `gitstore-system`, waits for that commit to be admitted, and returns the resulting repository.
 2. **Given** an `updateRepository` call for an existing repository changing only mutable fields, **When** it is submitted, **Then** the API commits an updated manifest to the owning namespace's `gitstore-system`, waits for admission, and returns the repository with its new spec values and advanced generation.
 3. **Given** a `createRepository` or `updateRepository` call whose manifest would be rejected by pre-receive or admission validation (e.g., a malformed name, an attempted immutable-field change, or a target namespace that does not exist or is `Terminating`), **When** it is submitted, **Then** the mutation itself is rejected with a reason equivalent to the underlying validation or admission failure — the caller never receives a partially-applied result.
-4. **Given** a `createRepository` or `updateRepository` call targeting the bootstrap `gitstore-system` repository name within any namespace, **When** it is submitted, **Then** it is rejected, since bootstrap repositories are managed only by namespace provisioning, not through this mutation path.
+4. **Given** a `createRepository` or `updateRepository` call that omits `apiVersion` and/or `kind`, **When** it is submitted, **Then** GraphQL supplies `gitstore.dev/v1beta1` and `Repository`, respectively, and the API commits a manifest with those values; a supplied value that differs from either constant is rejected.
+5. **Given** a `createRepository` or `updateRepository` call targeting the bootstrap `gitstore-system` repository name within any namespace, **When** it is submitted, **Then** it is rejected, since bootstrap repositories are managed only by namespace provisioning, not through this mutation path.
 
 ---
 
@@ -117,7 +118,7 @@ A repository's system-computed status — its conditions, observed generation, a
 - **FR-004**: The system MUST admit a `Repository` manifest pushed for an existing non-bootstrap repository by updating only its mutable fields (`spec.visibility`, `spec.defaultBranch`, `spec.storageClass` upgrade-only) and advancing its generation, and MUST reject a manifest that attempts to change an immutable field (`metadata.name`, `metadata.namespace`) or downgrade `spec.storageClass`, using a reason distinguishable from other admission failures.
 - **FR-005**: The system MUST reject admission of any `Repository` manifest targeting the reserved bootstrap name `gitstore-system`.
 - **FR-006**: The system MUST reject admission of a `Repository` manifest whose owning namespace does not exist or is `Terminating`.
-- **FR-007**: The `createRepository` and `updateRepository` GraphQL mutations MUST, for any non-bootstrap repository, commit the equivalent manifest to the owning namespace's `gitstore-system` on the caller's behalf and MUST NOT return a result until that commit has been admitted (successfully or as a rejection the caller can act on).
+- **FR-007**: The `createRepository` and `updateRepository` GraphQL mutations MUST, for any non-bootstrap repository, commit the equivalent manifest to the owning namespace's `gitstore-system` on the caller's behalf and MUST NOT return a result until that commit has been admitted (successfully or as a rejection the caller can act on). Their input-envelope `apiVersion` and `kind` fields MUST default to `gitstore.dev/v1beta1` and `Repository`, respectively, when omitted; explicitly supplied values remain subject to the same contract validation as Git-authored manifests.
 - **FR-008**: The `createRepository` and `updateRepository` GraphQL mutations MUST reject any request targeting the bootstrap `gitstore-system` repository name.
 - **FR-009**: The system MUST ignore any `status` content included in an author-submitted `Repository` manifest — status is never set by an authored manifest, only by the system's own admission and reconciliation.
 - **FR-010**: The `renameRepository` and `transferRepository` GraphQL mutations MUST return an `Unimplemented` error and MUST NOT create, update, or otherwise mutate any repository record or Git manifest, reversing their current direct-datastore-write behavior and matching ADR-0003's Phase 1 recommendation. In addition, both mutation fields MUST be marked `@deprecated` in the GraphQL schema, with a reason citing ADR-0003's Phase 2 deferral of a dedicated rename/transfer design — the runtime `Unimplemented` error is the enforcement half of this requirement; the `@deprecated` directive is the advance-notice half, and both MUST ship together, not independently. This FR deliberately supersedes spec 045's Acceptance Scenario #4 and SC-003 for these two mutations specifically (see User Story 4's Breaking change / supersession note) — an intentional, ADR-0003-directed regression against a prior spec's stated invariant, not an oversight.
@@ -143,23 +144,23 @@ A repository's system-computed status — its conditions, observed generation, a
 
 ```graphql
 input CreateRepositoryInput {
-  apiVersion: String!
-  kind: String!
-  metadata: RepositoryMetadataInput!
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Repository"
+  metadata: MetadataInput!
   spec: RepositorySpecInput!
 }
 
 input UpdateRepositoryInput {
-  apiVersion: String!
-  kind: String!
-  metadata: RepositoryMetadataInput!
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Repository"
+  metadata: MetadataInput!
   spec: RepositorySpecInput!
 }
 ```
 
 The required fields are intentionally aligned to the manifest schema:
-- `apiVersion`: resource contract version for the `Repository` kind
-- `kind`: must be `Repository`
+- `apiVersion`: defaults to `gitstore.dev/v1beta1`; an explicitly supplied value must be that resource contract version
+- `kind`: defaults to `Repository`; an explicitly supplied value must be `Repository`
 - `metadata.name`: repository identifier; the bootstrap name `gitstore-system` is rejected
 - `metadata.namespace`: owning namespace identifier; immutable after creation for `updateRepository`
 - `spec`: author-controlled desired state (`defaultBranch`, `visibility`, `storageClass` upgrade-only)
