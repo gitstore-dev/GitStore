@@ -38,14 +38,28 @@ delete/re-add receives a new UID.
 
 ## Control Plane
 
-| Resource         | Scope         | Summary                                                             | Initial spec shape                                                   |
-|------------------|---------------|---------------------------------------------------------------------|----------------------------------------------------------------------|
-| `Namespace`      | Core          | Tenant or account boundary for repositories and commerce resources. | `spec: {displayName, tier, defaults, limits}`                        |
-| `Repository`     | Core          | Git repository declaration for catalog or configuration storage.    | `spec: {name, defaultBranch, visibility, storageClass, description}` |
-| `Environment`    | Core          | Deployment or runtime environment such as dev, staging, prod.       | `spec: {type, branchRef, promotionPolicy, variablesRef}`             |
-| `CatalogRelease` | Core          | Immutable publication marker for a catalog Git revision.            | `spec: {repositoryRef, gitRef, gitCommitSHA, notes}`                 |
-| `Publication`    | Core          | Maps a release or branch to a market/channel/storefront target.     | `spec: {releaseRef, targetRef, effectiveFromTime, rollbackRef}`      |
-| `WorkflowPolicy` | Extension/CRD | Review, approval, and automation policy for Git-backed changes.     | `spec: {resourceSelector, requiredApprovals, checks, autoMerge}`     |
+| Resource         | Scope         | Summary                                                                        | Initial spec shape                                                   |
+|------------------|---------------|--------------------------------------------------------------------------------|----------------------------------------------------------------------|
+| `Namespace`      | Core          | Tenant or account boundary for repositories and commerce resources.            | `spec: {displayName, tier, defaults, limits}`                        |
+| `Repository`     | Core          | Git repository declaration for catalog or configuration storage.               | `spec: {name, defaultBranch, visibility, storageClass, description}` |
+| `Environment`    | Core          | Deployment or runtime environment such as dev, staging, prod.                  | `spec: {type, branchRef, promotionPolicy, variablesRef}`             |
+| `CatalogRelease` | Core          | Declarative release intent that pins a source ref and ensures a protected tag. | `spec: {repositoryRef, sourceRef, tagRef, selection, notes}`         |
+| `Publication`    | Core          | Schedules one prepared release for a market/channel storefront target.         | `spec: {releaseRef, target, effectiveFromTime, effectiveUntilTime}`  |
+| `WorkflowPolicy` | Extension/CRD | Review, approval, and automation policy for Git-backed changes.                | `spec: {resourceSelector, requiredApprovals, checks, autoMerge}`     |
+| `WorkflowDefinition` | Extension/CRD | Constrained seller-release, buyer-order, or buyer-return state-machine definition. | `spec: {scope, contract, states, transitions}`                    |
+| `WorkflowProfile` | Extension/CRD | Versioned composition of seller/buyer definitions and commercial policy references. | `spec: {sellerWorkflowRef, buyerOrderWorkflowRef, policyRefs}`   |
+| `CategoryCluster` | Extension/CRD | Reusable category/label group used to select a commerce workflow.              | `spec: {categoryRoots, includeDescendants, selectors}`             |
+| `WorkflowBinding` | Extension/CRD | Deterministic target- and selector-scoped binding to a workflow profile.       | `spec: {target, clusterRef, selector, profileRef, priority}`       |
+| `WorkflowBundle` | Extension/CRD | Digest-locked imported categories, workflows, schemas, UI metadata, and actions. | `spec: {source, digest, publisher, capabilities}`                 |
+
+`CatalogRelease` and `Publication` are declarative release intent, not mutable
+storefront state. Their system-managed status and the immutable public snapshot
+are datastore records; see [Product and Variant Publication Lifecycle](../products/publication-lifecycle.md).
+
+`WorkflowDefinition`, `WorkflowProfile`, `CategoryCluster`, `WorkflowBinding`,
+and `WorkflowBundle` are Git-backed configuration. Their executions, tasks,
+transitions, action attempts, and buyer/order snapshots are datastore-only; see
+[Custom Seller and Buyer Workflows](../implementation/037-custom-commerce-workflows.md).
 
 Example:
 
@@ -56,8 +70,8 @@ kind: Namespace
 metadata:
   name: acme-store
 spec:
-  displayName: Acme Store
-  tier: organisation
+  title: Acme Store
+  tier: ORGANIZATION
 ---
 
 Primary namespace for Acme commerce resources.
@@ -65,21 +79,21 @@ Primary namespace for Acme commerce resources.
 
 ## Catalog And Merchandising
 
-| Resource              | Scope         | Summary                                                                                   | Initial spec shape                                                           |
-|-----------------------|---------------|-------------------------------------------------------------------------------------------|------------------------------------------------------------------------------|
-| `Product`             | Core          | Non-sellable product descriptor with copy, classification, options, and media references. | `spec: {title, categoryRef, tags, media, options}`                           |
-| `ProductVariant`      | Core          | Purchasable SKU with selected options, pricing rules, inventory policy, and media.        | `spec: {title, sku, productRef, selectedOptions, pricing, inventory, media}` |
-| `CategoryTaxonomy`    | Core          | Hierarchical category node. Products belong to exactly one category in the current model. | `spec: {title, parentRef, media}`                                            |
-| `Collection`          | Core          | Selector-driven product grouping for merchandising.                                       | `spec: {title, targetRef, selector, media}`                                  |
-| `Bundle`              | Extension/CRD | Sellable or merchandised group of variants with bundle-level pricing and rules.           | `spec: {title, componentRefs, pricing, inventoryPolicy, media}`              |
-| `Kit`                 | Extension/CRD | Operational kit assembled from required components, often fulfilled as one unit.          | `spec: {title, componentRefs, assemblyPolicy, fulfillmentPolicy}`            |
-| `Brand`               | Core          | Brand identity, display metadata, and brand-level media.                                  | `spec: {title, slug, media, websiteURL}`                                     |
-| `Vendor`              | Core          | Commercial vendor or supplier shown in catalog data.                                      | `spec: {displayName, accountRef, contact, termsRef}`                         |
-| `Manufacturer`        | Extension/CRD | Manufacturer metadata distinct from vendor/seller.                                        | `spec: {displayName, countryCode, identifiers, contact}`                     |
-| `ProductType`         | Core          | Product type taxonomy used for validation, facets, and default attributes.                | `spec: {title, attributeRefs, optionSetRefs, facetRefs}`                     |
-| `AttributeDefinition` | Core          | Typed product or variant attribute definition.                                            | `spec: {title, dataType, allowedValues, unit, validation}`                   |
-| `OptionSet`           | Core          | Reusable product option names and allowed values.                                         | `spec: {options}`                                                            |
-| `FacetDefinition`     | Core          | Search/filter facet declaration for storefront discovery.                                 | `spec: {fieldPath, title, type, display, sort}`                              |
+| Resource              | Scope         | Summary                                                                                   | Initial spec shape                                                                      |
+|-----------------------|---------------|-------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------|
+| `Product`             | Core          | Non-sellable product descriptor with copy, classification, options, and media references. | `spec: {title, categoryRef, tags, media, options, lifecycle}`                           |
+| `ProductVariant`      | Core          | Purchasable SKU with selected options, pricing rules, inventory policy, and media.        | `spec: {title, sku, productRef, selectedOptions, pricing, inventory, media, lifecycle}` |
+| `CategoryTaxonomy`    | Core          | Hierarchical category node. Products belong to exactly one category in the current model. | `spec: {title, parentRef, media}`                                                       |
+| `Collection`          | Core          | Selector-driven product grouping for merchandising.                                       | `spec: {title, targetRef, selector, media}`                                             |
+| `Bundle`              | Extension/CRD | Sellable or merchandised group of variants with bundle-level pricing and rules.           | `spec: {title, componentRefs, pricing, inventoryPolicy, media}`                         |
+| `Kit`                 | Extension/CRD | Operational kit assembled from required components, often fulfilled as one unit.          | `spec: {title, componentRefs, assemblyPolicy, fulfillmentPolicy}`                       |
+| `Brand`               | Core          | Brand identity, display metadata, and brand-level media.                                  | `spec: {title, slug, media, websiteURL}`                                                |
+| `Vendor`              | Core          | Commercial vendor or supplier shown in catalog data.                                      | `spec: {displayName, accountRef, contact, termsRef}`                                    |
+| `Manufacturer`        | Extension/CRD | Manufacturer metadata distinct from vendor/seller.                                        | `spec: {displayName, countryCode, identifiers, contact}`                                |
+| `ProductType`         | Core          | Product type taxonomy used for validation, facets, and default attributes.                | `spec: {title, attributeRefs, optionSetRefs, facetRefs}`                                |
+| `AttributeDefinition` | Core          | Typed product or variant attribute definition.                                            | `spec: {title, dataType, allowedValues, unit, validation}`                              |
+| `OptionSet`           | Core          | Reusable product option names and allowed values.                                         | `spec: {options}`                                                                       |
+| `FacetDefinition`     | Core          | Search/filter facet declaration for storefront discovery.                                 | `spec: {fieldPath, title, type, display, sort}`                                         |
 
 Example:
 

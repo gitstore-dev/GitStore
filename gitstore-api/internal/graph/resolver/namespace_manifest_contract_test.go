@@ -27,9 +27,10 @@ func TestNamespaceDocumentationManifestContract(t *testing.T) {
 		assert.Contains(t, text, "`"+conditionType+"`")
 	}
 
-	blocks := fencedYAMLBlocks(text)
-	require.GreaterOrEqual(t, len(blocks), 2, "documentation must contain create and update YAML examples")
-	for _, block := range blocks[:2] {
+	for _, section := range []string{"Create manifest", "Update manifest"} {
+		block, ok := firstFencedCodeBlockInSection(text, section)
+		require.Truef(t, ok, "documentation must contain a manifest example in the %q section", section)
+
 		var manifest struct {
 			APIVersion string `yaml:"apiVersion"`
 			Kind       string `yaml:"kind"`
@@ -44,7 +45,7 @@ func TestNamespaceDocumentationManifestContract(t *testing.T) {
 			} `yaml:"spec"`
 			Status any `yaml:"status"`
 		}
-		require.NoError(t, yaml.Unmarshal([]byte(block), &manifest))
+		require.NoError(t, yaml.Unmarshal([]byte(block), &manifest), "%s manifest example must be valid YAML", section)
 		assert.Equal(t, "gitstore.dev/v1beta1", manifest.APIVersion)
 		assert.Equal(t, "Namespace", manifest.Kind)
 		assert.NotEmpty(t, manifest.Metadata.Name)
@@ -68,15 +69,29 @@ func TestNamespaceDeletionOutcomeSchemaContract(t *testing.T) {
 	assert.Regexp(t, `(?s)type DeleteNamespacePayload\s*\{.*outcome:\s*NamespaceDeletionOutcome!`, text)
 }
 
-func fencedYAMLBlocks(markdown string) []string {
-	parts := strings.Split(markdown, "```yaml")
-	blocks := make([]string, 0, len(parts)-1)
-	for _, part := range parts[1:] {
-		end := strings.Index(part, "```")
-		if end < 0 {
-			continue
-		}
-		blocks = append(blocks, strings.TrimSpace(strings.TrimPrefix(part[:end], "---")))
+func firstFencedCodeBlockInSection(markdown, heading string) (string, bool) {
+	sectionStart := strings.Index(markdown, "## "+heading+"\n")
+	if sectionStart < 0 {
+		return "", false
 	}
-	return blocks
+
+	section := markdown[sectionStart+len("## "+heading):]
+	if nextSection := strings.Index(section, "\n## "); nextSection >= 0 {
+		section = section[:nextSection]
+	}
+
+	blockStart := strings.Index(section, "```")
+	if blockStart < 0 {
+		return "", false
+	}
+	block := section[blockStart+len("```"):]
+	if newline := strings.IndexByte(block, '\n'); newline >= 0 {
+		block = block[newline+1:]
+	}
+	blockEnd := strings.Index(block, "```")
+	if blockEnd < 0 {
+		return "", false
+	}
+
+	return strings.TrimSpace(strings.TrimPrefix(block[:blockEnd], "---")), true
 }
