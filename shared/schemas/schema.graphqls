@@ -64,7 +64,7 @@ type Query {
 
   """
   Get current catalog version (release tag)
-  TODO: Remove. It is unclear which repository this belongs to and it is not used in the UI.
+  TODO(Remove): It is unclear which repository this belongs to and it is not used in the UI.
   """
   catalogVersion: CatalogVersion!
 }
@@ -76,9 +76,22 @@ type Query {
 type Mutation {
   """
   Publish changes (commit + push + create release tag)
-  TODO: Remove. It is unclear which repository we're are publishing to.
+  TODO(Remove): It is unclear which repository we're are publishing to.
   """
   publishCatalog(input: PublishCatalogInput!): PublishCatalogPayload!
+
+  """
+  Generic status-subresource write for CRD-defined kinds that have no
+  compile-time-known `resolved` shape. Core kinds SHOULD use their
+  dedicated per-kind mutation (e.g. updateCategoryStatus) instead —
+  this field exists so a kind unknown to the schema at build time can
+  still write status (FR-006, SC-005). Semantics (partial-merge,
+  resourceVersion precondition, spec-write rejection by construction,
+  controller authorization) are identical to the per-kind mutations.
+  """
+  updateResourceStatus(
+    input: UpdateResourceStatusInput!
+  ): UpdateResourceStatusPayload!
 }
 
 # ============================================================================
@@ -169,25 +182,6 @@ input LabelSelectorRequirementInput {
   values: [String!]
 }
 
-# ============================================================================
-# Status Subresource API (spec 040)
-# ============================================================================
-
-extend type Mutation {
-  """
-  Generic status-subresource write for CRD-defined kinds that have no
-  compile-time-known `resolved` shape. Core kinds SHOULD use their
-  dedicated per-kind mutation (e.g. updateCategoryStatus) instead —
-  this field exists so a kind unknown to the schema at build time can
-  still write status (FR-006, SC-005). Semantics (partial-merge,
-  resourceVersion precondition, spec-write rejection by construction,
-  controller authorization) are identical to the per-kind mutations.
-  """
-  updateResourceStatus(
-    input: UpdateResourceStatusInput!
-  ): UpdateResourceStatusPayload!
-}
-
 input UpdateResourceStatusInput {
   kind: String!
   name: String!
@@ -205,10 +199,8 @@ input UpdateResourceStatusInput {
 }
 
 type UpdateResourceStatusPayload {
-  """JSON-boxed current resource state; null when the write failed."""
+  """JSON-boxed current resource state."""
   object: JSON
-
-  conflict: StatusConflict
 }
 
 """
@@ -222,15 +214,6 @@ input ConditionInput {
   lastTransitionTime: DateTime!
   reason: String
   message: String
-}
-
-"""
-Optimistic-concurrency conflict payload shared by all status-write
-mutations (per-kind and generic).
-"""
-type StatusConflict {
-  """The resource's actual current resourceVersion, for retry."""
-  currentResourceVersion: String!
 }
 
 # ============================================================================
@@ -375,6 +358,7 @@ input ProductVariantNamespacePath {
 }
 
 """
+TODO(REMOVE): Was added for demo
 Product inventory status
 """
 enum InventoryStatus {
@@ -383,12 +367,3 @@ enum InventoryStatus {
   PREORDER
   DISCONTINUED
 }
-
-
-# ============================================================================
-# Include entity type definitions
-# ============================================================================
-
-# Product types defined in product.graphql
-# Category types defined in category.graphql
-# Collection types defined in collection.graphql

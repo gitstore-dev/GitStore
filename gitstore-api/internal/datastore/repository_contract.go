@@ -11,6 +11,10 @@ import (
 const (
 	RepositoryInitialGeneration      int64  = 1
 	RepositoryInitialResourceVersion string = "1"
+	// RepositoryForegroundDeletionFinalizer prevents the record from being
+	// garbage-collected until the Repository controller has removed its bare
+	// Git storage and the catalog-resource drain check still passes.
+	RepositoryForegroundDeletionFinalizer = "gitstore.dev/foreground-deletion"
 )
 
 var repositoryInitialStatus = json.RawMessage(`{"observedGeneration":0,"conditions":[]}`)

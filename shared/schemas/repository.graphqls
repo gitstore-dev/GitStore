@@ -176,38 +176,140 @@ input RepositoryNamespacePath {
 }
 
 # ============================================================================
+# Subscription additions
+# ============================================================================
+
+extend type Subscription {
+  """
+  Global Repository watch. Omit namespace for the controller's fleet-wide
+  stream; provide it only to filter a tenant-scoped consumer. A Repository
+  event cursor is opaque and distinct from Repository.metadata.resourceVersion.
+  """
+  watchRepositories(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): RepositoryWatchEvent!
+}
+
+"""
+Strongly typed Repository lifecycle event. ADDED and MODIFIED events carry a
+Repository; DELETED and BOOKMARK events carry no repository payload.
+"""
+type RepositoryWatchEvent {
+  type: WatchEventType!
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+  repository: Repository
+}
+
+# ============================================================================
 # Mutation additions
 # ============================================================================
 
 extend type Mutation {
   """
-  Create a new repository within a namespace.
+  Create a new repository by committing its manifest to the owning namespace's
+  gitstore-system repository and awaiting admission.
   """
   createRepository(input: CreateRepositoryInput!): CreateRepositoryPayload!
+
+  """Update an admitted Repository's author-controlled specification."""
+  updateRepository(input: UpdateRepositoryInput!): UpdateRepositoryPayload!
+
+  """Write controller-owned Repository status with optimistic concurrency."""
+  updateRepositoryStatus(input: UpdateRepositoryStatusInput!): UpdateRepositoryStatusPayload!
+
+  """Controller-only, idempotent provisioning of an admitted Repository's bare Git storage."""
+  provisionRepositoryStorage(input: ProvisionRepositoryStorageInput!): ProvisionRepositoryStoragePayload!
 
   """
   Rename a repository within its namespace. Does not move storage.
   """
   renameRepository(input: RenameRepositoryInput!): RenameRepositoryPayload!
+    @deprecated(reason: "Not supported in Repository lifecycle Phase 1; see docs/ADRs/0003-repository-lifecycle.md.")
 
   """
   Transfer a repository to a different namespace. Does not move storage.
   """
   transferRepository(input: TransferRepositoryInput!): TransferRepositoryPayload!
+    @deprecated(reason: "Not supported in Repository lifecycle Phase 1; see docs/ADRs/0003-repository-lifecycle.md.")
 
   """
-  Delete a repository and its storage. Deletion is blocked when the repository contains catalog resources.
+  Start foreground deletion of a repository. Deletion is blocked when the
+  repository contains catalog resources; storage removal and record GC happen
+  asynchronously after controller finalizer completion.
   """
   deleteRepository(input: DeleteRepositoryInput!): DeleteRepositoryPayload!
+
+  """Controller-only completion of a terminating Repository deletion."""
+  completeRepositoryDeletion(input: CompleteRepositoryDeletionInput!): CompleteRepositoryDeletionPayload!
+}
+
+"""Author-controlled metadata shared by declarative resource mutations."""
+input MetadataInput {
+  name: String!
+  namespace: String!
+  labels: JSON
+  annotations: JSON
+}
+
+input RepositorySpecInput {
+  defaultBranch: String
+  visibility: RepositoryVisibility
+  storageClass: String
+}
+
+"""Identifies an admitted, non-bootstrap Repository for controller provisioning."""
+input ProvisionRepositoryStorageInput {
+  namespace: String!
+  name: String!
+}
+
+type ProvisionRepositoryStoragePayload {
+  repository: Repository!
 }
 
 input CreateRepositoryInput {
-  namespace: String!
-  name: String!
-  defaultBranch: String
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Repository"
+  metadata: MetadataInput!
+  spec: RepositorySpecInput!
 }
 
 type CreateRepositoryPayload {
+  repository: Repository!
+}
+
+input UpdateRepositoryInput {
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Repository"
+  metadata: MetadataInput!
+  spec: RepositorySpecInput!
+}
+
+type UpdateRepositoryPayload {
+  repository: Repository
+}
+
+input UpdateRepositoryStatusInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [ConditionInput!]
+  resolved: RepositoryResolvedStatusInput
+}
+
+"""System-computed Repository storage state written only by its controller."""
+input RepositoryResolvedStatusInput {
+  storagePath: String!
+  storageClass: String!
+}
+
+type UpdateRepositoryStatusPayload {
   repository: Repository!
 }
 
@@ -244,4 +346,14 @@ input DeleteRepositoryInput {
 
 type DeleteRepositoryPayload {
   deletedRepositoryId: ID!
+}
+
+input CompleteRepositoryDeletionInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+}
+
+type CompleteRepositoryDeletionPayload {
+  deletedRepositoryId: ID
 }

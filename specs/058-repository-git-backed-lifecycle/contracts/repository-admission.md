@@ -14,11 +14,11 @@ matching ADR-0003's documented convention, e.g. `repositories/catalog.md` inside
 
 ## Manifest shape
 
-Unchanged from `docs/repository/repository-spec.md`'s hydrated representation and ADR-0003's example — `apiVersion`, `kind: Repository`, `metadata.{name,namespace}`, `spec.{defaultBranch,visibility,storageClass,settings.pushPolicy}`. Authors omit `metadata.uid`/`resourceVersion`/`generation`/`creationTimestamp`/`revision`/`ownerReferences`/`finalizers` and `status` entirely; any submitted `status` content is ignored (FR-009).
+Unchanged from `docs/repository/repository-spec.md`'s hydrated representation and ADR-0003's example — `apiVersion`, `kind: Repository`, `metadata.{name,namespace}`, `spec.{defaultBranch,visibility,storageClass,settings.pushPolicy}`. Authors omit `metadata.uid`/`resourceVersion`/`generation`/`creationTimestamp`/`revision`/`ownerReferences`/`finalizers` and `status` entirely. Submitted `status` or `metadata.ownerReferences` content is an admission failure (FR-009, FR-029). Admission resolves the owning Namespace and persists exactly one system-owned, blocking Namespace owner reference; it is not deferred to an owner-reference backfill.
 
 ```markdown
 ---
-apiVersion: core.gitstore.dev/v1beta1
+apiVersion: gitstore.dev/v1beta1
 kind: Repository
 metadata:
   name: catalog
@@ -34,24 +34,24 @@ Long-form repository description.
 
 ## Pre-receive rules (new)
 
-| Check | Outcome on failure |
-|---|---|
-| `kind == "Repository"` implies the push repository is `<metadata.namespace>/gitstore-system` | Push rejected; no commit reaches admission |
+| Check                                                                                        | Outcome on failure                                                                                                                    |
+|----------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------|
+| `kind == "Repository"` implies the push repository is `<metadata.namespace>/gitstore-system` | Push rejected; no commit reaches admission                                                                                            |
 | `metadata.namespace` matches the namespace that owns the target `gitstore-system` repository | Push rejected; no commit reaches admission (prevents a manifest declaring a different namespace than the repository it was pushed to) |
 
 All other pre-receive structural rules (envelope validity, `metadata.name` format, `spec.defaultBranch` ref-name validity) follow the future "Repository Validation and Admission Matrix" spec's rule catalogue (out of scope here; see spec.md Assumptions).
 
 ## Admission outcomes
 
-| Scenario | Outcome |
-|---|---|
-| New name, valid manifest, correct namespace-scoped repository, namespace exists and is not `Terminating` | Repository record created; `AdmissionAccepted=True`; `Generation=1`, `ResourceVersion="1"` on first admission. |
-| Existing name, valid manifest changing only mutable fields, correct namespace-scoped repository | Repository record updated to the manifest's mutable spec values; `Generation` and `ResourceVersion` both advance. |
-| Existing name, manifest attempts to change `metadata.name` or `metadata.namespace` | Rejected; no record change. Reason is distinguishable from other admission failures. |
-| Existing name, manifest attempts to downgrade `spec.storageClass` | Rejected; no record change. Reason is distinguishable from other admission failures. |
-| Manifest targets the reserved bootstrap name `gitstore-system` | Rejected; no record change. |
-| Manifest's owning namespace does not exist, or is `Terminating` | Rejected; no record change. |
-| Manifest is structurally invalid per the future validation-matrix spec's rules | Rejected at the appropriate phase (pre-receive or admission), out of scope for this contract to fully enumerate. |
+| Scenario                                                                                                 | Outcome                                                                                                           |
+|----------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|
+| New name, valid manifest, correct namespace-scoped repository, namespace exists and is not `Terminating` | Repository record created; `AdmissionAccepted=True`; `Generation=1`, `ResourceVersion="1"` on first admission.    |
+| Existing name, valid manifest changing only mutable fields, correct namespace-scoped repository          | Repository record updated to the manifest's mutable spec values; `Generation` and `ResourceVersion` both advance. |
+| Existing name, manifest attempts to change `metadata.name` or `metadata.namespace`                       | Rejected; no record change. Reason is distinguishable from other admission failures.                              |
+| Existing name, manifest attempts to downgrade `spec.storageClass`                                        | Rejected; no record change. Reason is distinguishable from other admission failures.                              |
+| Manifest targets the reserved bootstrap name `gitstore-system`                                           | Rejected; no record change.                                                                                       |
+| Manifest's owning namespace does not exist, or is `Terminating`                                          | Rejected; no record change.                                                                                       |
+| Manifest is structurally invalid per the future validation-matrix spec's rules                           | Rejected at the appropriate phase (pre-receive or admission), out of scope for this contract to fully enumerate.  |
 
 ## Mutation delegation contract
 
@@ -60,7 +60,7 @@ All other pre-receive structural rules (envelope validity, `metadata.name` forma
 ```graphql
 mutation {
   createRepository(input: {
-    apiVersion: "core.gitstore.dev/v1beta1"
+    apiVersion: "gitstore.dev/v1beta1"
     kind: "Repository"
     metadata: { name: "catalog", namespace: "acme-store" }
     spec: { defaultBranch: "main", visibility: PRIVATE, storageClass: "standard" }
@@ -82,4 +82,4 @@ The resolver then:
 
 `renameRepository`/`transferRepository`: unconditionally return `Unimplemented`; no manifest is constructed, no commit is attempted, no datastore record is touched. Both field definitions in `shared/schemas/repository.graphqls` additionally carry a `@deprecated(reason: "...")` directive citing ADR-0003's Phase 2 deferral, so schema introspection surfaces the phase-out independent of whether a caller ever invokes either mutation. **This intentionally supersedes spec 045's Acceptance Scenario #4/SC-003** ("`createRepository`, `renameRepository`, `transferRepository`, and `deleteRepository` continue to succeed and fail under exactly the same conditions as before") for these two mutations only — spec 045's invariant held for its own read-schema-only change; it is deliberately not preserved here, per ADR-0003's binding Phase 1 recommendation. `createRepository`/`deleteRepository` are unaffected.
 
-`deleteRepository`: unchanged trigger (GraphQL mutation, not a manifest deletion), but now sets `DeletionTimestamp`/`Finalizers` instead of hard-deleting synchronously, per the deletion state machine in `data-model.md`.
+`deleteRepository`: unchanged trigger (GraphQL mutation, not a manifest deletion), but now sets `DeletionTimestamp`/`Finalizers` instead of hard-deleting synchronously, per the deletion state machine in `data-model.md`. `DeletionTimestamp` is the durable termination marker; background GC may hard-delete only after the controller has cleared every finalizer. GC never cascades catalog resources, so a non-empty Repository remains rejected rather than becoming a background cascade.

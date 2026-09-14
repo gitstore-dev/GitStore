@@ -33,7 +33,7 @@ func TestTypedAndGenericNamespaceWatchShareBootstrapAndEvents(t *testing.T) {
 	require.NoError(t, err)
 
 	r, err := NewResolver(ResolverDeps{
-		Store: store, Logger: zap.NewNop(), NamespaceJournal: journal,
+		Store: store, Logger: zap.NewNop(), ResourceJournal: journal,
 		NamespaceWatch: config.NamespaceWatchConfig{ReadersEnabled: true, ReadBatchSize: 256, MaxReplayEvents: 100000, SubscriberBuffer: 64, SubscriberBackpressureMillis: 1000, PollMinMillis: 10, PollMaxMillis: 20, MaxMaterializerLagSeconds: 60},
 	})
 	require.NoError(t, err)
@@ -128,6 +128,12 @@ func TestNamespaceWatchSelectorProjectsModifiedTransitions(t *testing.T) {
 			assert.Equal(t, tt.payload, len(event.Payload) > 0)
 		})
 	}
+}
+
+func TestNamespaceJournalProjectionRejectsOtherResourceKinds(t *testing.T) {
+	assert.True(t, namespaceJournalEventMatchesKind(datastore.ResourceWatchEvent{Type: datastore.ResourceWatchBookmark}))
+	assert.True(t, namespaceJournalEventMatchesKind(datastore.ResourceWatchEvent{Type: datastore.ResourceWatchAdded, Kind: "Namespace"}))
+	assert.False(t, namespaceJournalEventMatchesKind(datastore.ResourceWatchEvent{Type: datastore.ResourceWatchAdded, Kind: "Repository"}))
 }
 
 func receiveTypedNamespaceEvent(t *testing.T, events <-chan *model.NamespaceWatchEvent) *model.NamespaceWatchEvent {

@@ -427,6 +427,10 @@ func TestDeleteNamespace_afterRepositoriesRemoved_succeeds(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, svc.DeleteRepository(ctx, repo.ID, "alice"))
+	terminatingRepo, err := svc.GetRepository(ctx, repo.ID)
+	require.NoError(t, err)
+	_, err = svc.CompleteRepositoryDeletion(ctx, terminatingRepo.Namespace, terminatingRepo.Name, terminatingRepo.ResourceVersion)
+	require.NoError(t, err)
 
 	_, err = svc.DeleteNamespace(ctx, ns)
 	require.NoError(t, err)

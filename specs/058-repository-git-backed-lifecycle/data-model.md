@@ -4,23 +4,24 @@
 
 No new fields. Extends the entity exactly as it exists today (`gitstore-api/internal/datastore/entities.go`, added by spec 045):
 
-| Field | Type | Ownership | Notes |
-|---|---|---|---|
-| `UID` | `string` | System | Unchanged. |
-| `Namespace` | `string` | Author (via Git, create-only) | Maps to `metadata.namespace`. Immutable after creation — a manifest attempting to change it is rejected at admission (there is no `transferRepository` path once this spec ships; see Decision 8, research.md). |
-| `Name` | `string` | Author (via Git, create-only) | Maps to `metadata.name`. Immutable after creation — a manifest attempting to change it is rejected at admission (there is no `renameRepository` path once this spec ships). |
-| `Generation` | `int64` | System | Already exists (spec 045). Starts at `1` on admission. Advances only on author-controlled spec changes (create/update manifest admitted). |
-| `ResourceVersion` | `string` | System | Already exists (spec 045). Starts at `"1"`. Advances on every successful write (spec admission, status/condition change, deletion-marker set). |
-| `Revision` | `string` | System | Already exists (spec 045). Git revision the current spec was admitted from. |
-| `CreationTimestamp`, `CreationActor`, `UpdateTimestamp`, `UpdateActor` | system audit fields | System | Unchanged. |
-| `Labels`, `Annotations`, `OwnerReferences` | manifest metadata | Author (via Git) | Unchanged shape; already round-tripped through admission for other kinds. |
-| `Finalizers` | `[]string` | System | Already exists (spec 045), currently always empty in practice. Gains real meaning here: contains `"gitstore.dev/foreground-deletion"` once deletion is accepted, removed by the controller once both drain conditions (§ Admission and deletion state machines) clear. |
-| `DeletionTimestamp` | `*time.Time` | System | Already exists (spec 045), currently always nil in practice. Gains real meaning here: nil for an active repository, set once an eligible deletion request is accepted. |
-| `RepositoryID`, `SourcePath`, `GitCommitSHA`, `GitRef` | system/admission bookkeeping | System | Unchanged; `SourcePath`/`GitCommitSHA`/`GitRef` are populated from the admitted manifest's push, exactly as for every other git-backed kind. |
-| `Spec`, `Body` | manifest content | Author (via Git) | Unchanged shape (`Spec` holds the marshaled `RepositorySpec`-equivalent manifest spec; `Body` holds the Markdown description). |
-| `Status` | `json.RawMessage` | System | Already exists (spec 045), currently always the deterministic placeholder `{"observedGeneration":0,"conditions":[]}`. Gains real meaning here: holds the real `conditions` (`AdmissionAccepted`, `StorageProvisioned`, `Ready`, `Terminating`) and `observedGeneration`. |
-| `DefaultBranch`, `StorageClass` | manifest content | Author (via Git, `StorageClass` upgrade-only) | `DefaultBranch` fully mutable; `StorageClass` mutable only as an upgrade, never a downgrade (ADR-0003 §"Update"). |
-| `MaxPackSizeBytes`, `MaxFileSizeBytes` | push policy limits | Unchanged | Not addressed by this spec; remain whatever spec 035's push-policy resolution already sets. |
+| Field                                                                  | Type                         | Ownership                                     | Notes                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|------------------------------------------------------------------------|------------------------------|-----------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `UID`                                                                  | `string`                     | System                                        | Unchanged internal persistence UID. At the GraphQL boundary, it is encoded as a `Repository` Relay global ID; `Repository.metadata.uid` MUST equal `Repository.id` exactly and neither field may expose this raw value.                                                                                                                                                                                                        |
+| `Namespace`                                                            | `string`                     | Author (via Git, create-only)                 | Maps to `metadata.namespace`. Immutable after creation — a manifest attempting to change it is rejected at admission (there is no `transferRepository` path once this spec ships; see Decision 8, research.md).                                                                                                                                                                                                                |
+| `Name`                                                                 | `string`                     | Author (via Git, create-only)                 | Maps to `metadata.name`. Immutable after creation — a manifest attempting to change it is rejected at admission (there is no `renameRepository` path once this spec ships).                                                                                                                                                                                                                                                    |
+| `Generation`                                                           | `int64`                      | System                                        | Already exists (spec 045). Starts at `1` on admission. Advances only on author-controlled spec changes (create/update manifest admitted).                                                                                                                                                                                                                                                                                      |
+| `ResourceVersion`                                                      | `string`                     | System                                        | Already exists (spec 045). Starts at `"1"`. Advances on every successful write (spec admission, status/condition change, deletion-marker set).                                                                                                                                                                                                                                                                                 |
+| `Revision`                                                             | `string`                     | System                                        | Already exists (spec 045). Git revision the current spec was admitted from.                                                                                                                                                                                                                                                                                                                                                    |
+| `CreationTimestamp`, `CreationActor`, `UpdateTimestamp`, `UpdateActor` | system audit fields          | System                                        | Unchanged.                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `Labels`, `Annotations`                                                | manifest metadata            | Author (via Git)                              | Unchanged shape; already round-tripped through admission for other kinds.                                                                                                                                                                                                                                                                                                                                                      |
+| `OwnerReferences`                                                      | `json.RawMessage`            | System                                        | Written at Repository admission, never by the author: exactly one Namespace owner reference `{apiVersion: "gitstore.dev/v1beta1", kind: "Namespace", name: metadata.namespace, uid: <Namespace persistent UID>, blockOwnerDeletion: true}`. This closes Namespace→Repository ownership for newly admitted rows; a later backfill repairs legacy rows only. Namespace deletion retains its existing repository-existence fence. |
+| `Finalizers`                                                           | `[]string`                   | System                                        | Already exists (spec 045), currently always empty in practice. Gains real meaning here: contains `"gitstore.dev/foreground-deletion"` once deletion is accepted, removed by the controller once both drain conditions (§ Admission and deletion state machines) clear.                                                                                                                                                         |
+| `DeletionTimestamp`                                                    | `*time.Time`                 | System                                        | Already exists (spec 045), currently always nil in practice. Gains real meaning here: nil for an active repository, set once an eligible deletion request is accepted; it is the durable termination/GC eligibility marker, never author writable.                                                                                                                                                                             |
+| `RepositoryID`, `SourcePath`, `GitCommitSHA`, `GitRef`                 | system/admission bookkeeping | System                                        | Unchanged; `SourcePath`/`GitCommitSHA`/`GitRef` are populated from the admitted manifest's push, exactly as for every other git-backed kind.                                                                                                                                                                                                                                                                                   |
+| `Spec`, `Body`                                                         | manifest content             | Author (via Git)                              | Unchanged shape (`Spec` holds the marshaled `RepositorySpec`-equivalent manifest spec; `Body` holds the Markdown description).                                                                                                                                                                                                                                                                                                 |
+| `Status`                                                               | `json.RawMessage`            | System                                        | Already exists (spec 045), currently always the deterministic placeholder `{"observedGeneration":0,"conditions":[]}`. Gains real meaning here: holds the real `conditions` (`AdmissionAccepted`, `StorageProvisioned`, `Ready`, `Terminating`) and `observedGeneration`.                                                                                                                                                       |
+| `DefaultBranch`, `StorageClass`                                        | manifest content             | Author (via Git, `StorageClass` upgrade-only) | `DefaultBranch` fully mutable; `StorageClass` mutable only as an upgrade, never a downgrade (ADR-0003 §"Update").                                                                                                                                                                                                                                                                                                              |
+| `MaxPackSizeBytes`, `MaxFileSizeBytes`                                 | push policy limits           | Unchanged                                     | Not addressed by this spec; remain whatever spec 035's push-policy resolution already sets.                                                                                                                                                                                                                                                                                                                                    |
 
 `GetRepository`/`LookupRepository`/`ListRepositoriesByNamespace` return rows carrying these fields unchanged in shape; only their *values* for `Status`/`Finalizers`/`DeletionTimestamp` become meaningful once this spec ships.
 
@@ -36,13 +37,13 @@ No changes to this file are required.
 
 ## Bootstrap vs. Git-backed repository
 
-| Property | Bootstrap (`gitstore-system`, one per namespace) | Git-backed (every other repository in that namespace) |
-|---|---|---|
-| Created by | Namespace creation, direct datastore write (spec 041, unchanged by this spec) | `Repository` manifest admitted from `<namespace>/gitstore-system` at `repositories/<name>.md` |
-| Updated by | Never (no update path defined for the bootstrap repository) | New manifest pushed/committed to `<namespace>/gitstore-system` |
-| Deletable | Never while its namespace exists (FR-012) | Yes, once empty of catalog resources (spec 041) and its bare Git repository is confirmed removable, and not already `Terminating` |
-| `createRepository`/`updateRepository` mutation behavior | Rejected outright (FR-008) | Commits manifest, waits for admission |
-| `renameRepository`/`transferRepository` mutation behavior | `Unimplemented` (unconditional) + `@deprecated` schema annotation, same as every other repository | `Unimplemented` (unconditional) + `@deprecated` schema annotation (FR-010) |
+| Property                                                  | Bootstrap (`gitstore-system`, one per namespace)                                                  | Git-backed (every other repository in that namespace)                                                                             |
+|-----------------------------------------------------------|---------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
+| Created by                                                | Namespace creation, direct datastore write (spec 041, unchanged by this spec)                     | `Repository` manifest admitted from `<namespace>/gitstore-system` at `repositories/<name>.md`                                     |
+| Updated by                                                | Never (no update path defined for the bootstrap repository)                                       | New manifest pushed/committed to `<namespace>/gitstore-system`                                                                    |
+| Deletable                                                 | Never while its namespace exists (FR-012)                                                         | Yes, once empty of catalog resources (spec 041) and its bare Git repository is confirmed removable, and not already `Terminating` |
+| `createRepository`/`updateRepository` mutation behavior   | Rejected outright (FR-008)                                                                        | Commits manifest, waits for admission                                                                                             |
+| `renameRepository`/`transferRepository` mutation behavior | `Unimplemented` (unconditional) + `@deprecated` schema annotation, same as every other repository | `Unimplemented` (unconditional) + `@deprecated` schema annotation (FR-010)                                                        |
 
 ## Admission state machine
 
@@ -50,16 +51,16 @@ No changes to this file are required.
                  push/commit to <namespace>/gitstore-system
                                    │
                                    ▼
-                    ┌─────────────────────────┐
+                    ┌──────────────────────────┐
                     │  pre-receive: kind and   │──reject (wrong repo, bad kind)──▶ push rejected, no record touched
                     │  per-namespace repo check│
-                    └────────────┬─────────────┘
+                    └──────────────┬───────────┘
                                    │ accepted
                                    ▼
-                    ┌─────────────────────────┐
-                    │  post-receive admission  │──reject (bootstrap name, immutable-field change,
+                    ┌────────────────────────────┐
+                    │  post-receive admission    │──reject (bootstrap name, immutable-field change,
                     │  (cataloggrpc "Repository")│    storageClass downgrade, namespace Terminating/missing,
-                    └────────────┬─────────────┘    structural)──▶ push accepted in git, admission
+                    └──────────────┬─────────────┘    structural)──▶ push accepted in git, admission
                                    │ accepted            error surfaced to mutation caller
                                    ▼
               record created/updated; AdmissionAccepted=True; Generation/ResourceVersion advanced
@@ -93,32 +94,50 @@ deleteRepository / manifest deletion
         │                                                                     (retries with backoff otherwise —
         │                                                                      ADR-0003 "git-service unreachable")
         ▼
-  record hard-deleted
+  background GC hard-deletes record only after every finalizer is absent
+  (never cascades catalog resources)
 ```
 
 ## Status condition vocabulary
 
 Extends the vocabulary documented in `docs/repository/repository-spec.md` (currently empty — "no Repository controller, reconciler, status mutation, or condition-producing writer") with the four conditions ADR-0003 already names:
 
-| Condition | Meaning | Set by |
-|---|---|---|
-| `AdmissionAccepted` | The repository's current spec was successfully admitted from a manifest (or is the bootstrap repository). | Admission (`cataloggrpc`) |
-| `StorageProvisioned` | The repository's bare Git repository exists on the git-service filesystem. | Controller reconciler |
-| `Ready` | The repository is fully operational (`AdmissionAccepted=True` and `StorageProvisioned=True`). | Controller reconciler |
-| `Terminating` | `DeletionTimestamp` is set and the `foreground-deletion` finalizer is present. | Read-time derivation from `DeletionTimestamp`/`Finalizers` (not a separately-stored condition — see below) |
+| Condition            | Meaning                                                                                                   | Set by                                                                                                     |
+|----------------------|-----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------|
+| `AdmissionAccepted`  | The repository's current spec was successfully admitted from a manifest (or is the bootstrap repository). | Admission (`cataloggrpc`)                                                                                  |
+| `StorageProvisioned` | The repository's bare Git repository exists on the git-service filesystem.                                | Controller reconciler                                                                                      |
+| `Ready`              | The repository is fully operational (`AdmissionAccepted=True` and `StorageProvisioned=True`).             | Controller reconciler                                                                                      |
+| `Terminating`        | `DeletionTimestamp` is set and the `foreground-deletion` finalizer is present.                            | Read-time derivation from `DeletionTimestamp`/`Finalizers` (not a separately-stored condition — see below) |
 
 `Terminating` is exposed as a condition for read convenience, but its source of truth is `DeletionTimestamp`/`Finalizers`, not an independent flag — this avoids the two ever disagreeing, exactly as spec 046 established for Namespace. `Suspended` (ADR-0003's operator-set push-rejection condition) is explicitly out of scope for this spec (see spec.md Assumptions) and is not part of this vocabulary yet.
 
+## Repository watch event and durable stream
+
+Repository adopts spec 050's durable-journal architecture as a namespaced, per-kind stream. It does not reuse Namespace cursors or order; it reuses the same bounded CDC-to-journal, fenced-materializer, replay/tail, and fail-closed continuity model.
+
+| Field             | Type             | Rules                                                                                    |
+|-------------------|------------------|------------------------------------------------------------------------------------------|
+| `type`            | `WatchEventType` | `ADDED`, `MODIFIED`, `DELETED`, or `BOOKMARK`                                            |
+| `namespace`       | `String!`        | Owning namespace for data events; empty for `BOOKMARK`                                   |
+| `name`            | `String!`        | Repository name for data events; empty for `BOOKMARK`                                    |
+| `resourceVersion` | `String!`        | Opaque durable Repository-journal cursor, never the row's optimistic-concurrency version |
+| `repository`      | `Repository`     | Full committed postimage for `ADDED`/`MODIFIED`; null for `DELETED`/`BOOKMARK`           |
+
+The authoritative Repository row is the sole event source. A committed create is `ADDED`; admitted spec, status, deletion-marker, and finalizer updates are `MODIFIED`; only permanent row removal is `DELETED`; idle intervals produce durable `BOOKMARK`s. Rejected, conflicted, rolled-back, and no-op writes produce no event. The journal appends before CDC progress advances, so restart may redeliver but cannot skip an acknowledged transition. Repository list projections must be visible before the corresponding `ADDED` is published.
+
+Repository cursors use a Repository-specific versioned prefix and epoch, have seven-day journal retention backed by CDC retention longer than that window, and are accepted by any healthy API replica. Replay is strictly after the cursor. Retention expiry, epoch mismatch, invalid/future cursor, replay-limit breach, overflow, materializer discontinuity, or readiness loss terminates with `WATCH_EXPIRED` or `WATCH_UNAVAILABLE`; consumers discard their cache and perform the bootstrap/list/drain sequence again.
+
 ## Immutable vs. mutable field matrix (update / manifest re-push)
 
-| Field | Mutability | Rejection behavior if violated |
-|---|---|---|
-| `metadata.name` | Immutable after creation | Admission rejects the manifest; existing record unchanged |
-| `metadata.namespace` | Immutable after creation | Admission rejects the manifest; existing record unchanged |
-| `spec.defaultBranch` | Mutable | N/A |
-| `spec.visibility` | Mutable | N/A |
-| `spec.storageClass` | Mutable, upgrade only (never downgrade) | Admission rejects a downgrade attempt; existing record unchanged |
-| `status` (any submitted block) | Not author-writable | Silently ignored, never applied |
+| Field                          | Mutability                              | Rejection behavior if violated                                                       |
+|--------------------------------|-----------------------------------------|--------------------------------------------------------------------------------------|
+| `metadata.name`                | Immutable after creation                | Admission rejects the manifest; existing record unchanged                            |
+| `metadata.namespace`           | Immutable after creation                | Admission rejects the manifest; existing record unchanged                            |
+| `spec.defaultBranch`           | Mutable                                 | N/A                                                                                  |
+| `spec.visibility`              | Mutable                                 | N/A                                                                                  |
+| `spec.storageClass`            | Mutable, upgrade only (never downgrade) | Admission rejects a downgrade attempt; existing record unchanged                     |
+| `status` (any submitted block) | Not author-writable                     | Admission rejects the manifest; controller status writes are the only permitted path |
+| `metadata.ownerReferences` | Not author-writable | Admission rejects the manifest, then writes the canonical system Namespace owner reference |
 
 ## GraphQL surface (resource-envelope shape, changed/added behavior)
 
@@ -155,12 +174,12 @@ The required fields are:
 
 ### Status condition matrix
 
-| Condition | System-owned source | Mutation/manifest input effect |
-|---|---|---|
-| `AdmissionAccepted` | admitted manifest outcome | ignored if author attempts to set it in Git or GraphQL input |
-| `StorageProvisioned` | controller reconciliation | ignored if author attempts to set it in Git or GraphQL input |
-| `Ready` | controller reconciliation | ignored if author attempts to set it in Git or GraphQL input |
-| `Terminating` | deletion marker + finalizer state | derived from system deletion flow; never writable by callers |
+| Condition            | System-owned source               | Mutation/manifest input effect                                                                            |
+|----------------------|-----------------------------------|-----------------------------------------------------------------------------------------------------------|
+| `AdmissionAccepted`  | admitted manifest outcome         | Authors cannot supply it: a Git `status` block is rejected and mutation envelopes expose no status fields |
+| `StorageProvisioned` | controller reconciliation         | Authors cannot supply it: a Git `status` block is rejected and mutation envelopes expose no status fields |
+| `Ready`              | controller reconciliation         | Authors cannot supply it: a Git `status` block is rejected and mutation envelopes expose no status fields |
+| `Terminating`        | deletion marker + finalizer state | Authors cannot supply it: derived solely from the system deletion flow                                    |
 
 ## Relationship to specs 041, 045, 046, 048, and future 047/GH#174 analogs
 
@@ -168,5 +187,5 @@ The required fields are:
 - **Spec 045** (`Repository` contract): the `Generation`/`ResourceVersion`/`Status`/`Finalizers`/`DeletionTimestamp` fields and their contract-helper functions are reused verbatim; this spec is the first to give them real values. **Explicit supersession**: this spec deliberately breaks spec 045's Acceptance Scenario #4/SC-003 ("`createRepository`, `renameRepository`, `transferRepository`, and `deleteRepository` ... continue to succeed and fail under exactly the same conditions as before") for `renameRepository`/`transferRepository` only — both now unconditionally return `Unimplemented` instead of succeeding via datastore write, and are marked `@deprecated`. Spec 045's invariant was correct for its own read-schema-only scope; it is intentionally not preserved here for these two mutations, per ADR-0003's Phase 1 recommendation. `createRepository`/`deleteRepository` are unaffected by this supersession.
 - **Spec 046** (Namespace API Semantics): the admission-dispatch-case pattern, the finalizer/`Terminating` state machine shape, the controller-manager reconciler pattern, and the declarative mutation envelope shape are all copied for Repository, one tier down the ownership chain.
 - **Spec 048** (Scylla query design): Repository's query-first Scylla projections and `UpdateRepository`'s `IF resource_version=?` LWT are reused unchanged; no new access pattern is introduced.
+- **Spec 050** (Namespace watch contract): Repository reuses its durable, replica-safe journal architecture, including the CDC materializer, fencing lease, append-before-progress recovery, bounded replay/tail, bookmarks, readiness, authorization-before-cursor-disclosure, and migration-first rollout. This spec adds the Repository-specific authoritative-row CDC source, journal partition/cursor, typed subscription, and controller `ListWatcher`; it neither changes Namespace semantics nor shares Namespace cursor/order space.
 - **Future "Repository Validation and Admission Matrix"** (mirrors spec 047): owns the full structural-vs-policy validation rule catalogue beyond what this spec's admission state machine already specifies.
-- **Future "Repository Watch Contract"** (mirrors GH#174's `watchNamespaces`): owns watch/subscription semantics for Repository; out of scope here.

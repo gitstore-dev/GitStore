@@ -14,6 +14,11 @@ import (
 
 func (m *memdbDatastore) NamespaceWatchJournal() datastore.NamespaceWatchJournal { return m }
 
+// ResourceWatchJournal exposes the shared durable journal. The storage field
+// names are intentionally retained during the alpha migration; their contents
+// now carry a Kind/Namespace envelope and are no longer Namespace-only.
+func (m *memdbDatastore) ResourceWatchJournal() datastore.ResourceWatchJournal { return m }
+
 func (m *memdbDatastore) Bounds(context.Context) (datastore.NamespaceWatchBounds, error) {
 	m.namespaceWatchMu.RLock()
 	defer m.namespaceWatchMu.RUnlock()
@@ -186,10 +191,37 @@ func (m *memdbDatastore) recordCommittedNamespace(eventType datastore.NamespaceW
 	m.namespaceWatchSequence++
 	m.namespaceWatchEvents = append(m.namespaceWatchEvents, datastore.NamespaceWatchEvent{
 		Epoch: m.namespaceWatchEpoch, Sequence: m.namespaceWatchSequence,
-		Type: eventType, Name: namespace.Name, Payload: payload,
+		Type: eventType, Kind: "Namespace", Name: namespace.Name, Payload: payload,
 		SelectorLabels:         cloneStringMap(namespace.Labels),
 		PreviousSelectorLabels: cloneStringMap(previousLabels),
 		DeduplicationKey:       fmt.Sprintf("memdb:%s:%s:%d", eventType, namespace.UID, m.namespaceWatchSequence),
+		At:                     now,
+	})
+}
+
+// recordCommittedRepository is the development-backend equivalent of the
+// Repository authoritative-table CDC source.  It is deliberately invoked only
+// after the memdb transaction commits, so a rejected optimistic write cannot
+// leak a watch transition.
+func (m *memdbDatastore) recordCommittedRepository(eventType datastore.ResourceWatchEventType, repository *datastore.Repository, previousLabels map[string]string) {
+	if repository == nil {
+		return
+	}
+	now := time.Now().UTC()
+	var payload []byte
+	if eventType == datastore.ResourceWatchAdded || eventType == datastore.ResourceWatchModified {
+		payload, _ = json.Marshal(normalizedRepositoryCopy(repository))
+	}
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	m.pruneLocked(now.Add(-m.namespaceWatchRetention))
+	m.namespaceWatchSequence++
+	m.namespaceWatchEvents = append(m.namespaceWatchEvents, datastore.ResourceWatchEvent{
+		Epoch: m.namespaceWatchEpoch, Sequence: m.namespaceWatchSequence,
+		Type: eventType, Kind: "Repository", Namespace: repository.Namespace, Name: repository.Name, Payload: payload,
+		SelectorLabels:         cloneStringMap(repository.Labels),
+		PreviousSelectorLabels: cloneStringMap(previousLabels),
+		DeduplicationKey:       fmt.Sprintf("memdb:%s:%s:%d", eventType, repository.UID, m.namespaceWatchSequence),
 		At:                     now,
 	})
 }

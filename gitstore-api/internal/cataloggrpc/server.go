@@ -403,6 +403,9 @@ func (s *Server) validateResourceBlobs(ctx context.Context, repositoryID string,
 		if err == nil && parsed != nil && parsed.Namespace != nil {
 			err = s.validateNamespaceAuthoringTarget(ctx, repositoryID, blob.Path, parsed.Namespace.Metadata.Name)
 		}
+		if err == nil && parsed != nil && parsed.Repository != nil {
+			err = s.validateRepositoryAuthoringTarget(ctx, repositoryID, blob.Path, parsed.Repository.Metadata.Namespace, parsed.Repository.Metadata.Name)
+		}
 		if err == nil && parsed != nil && parsed.CategoryTaxonomy != nil {
 			category := parsed.CategoryTaxonomy
 			if category.Spec.ParentRef != nil && category.Spec.ParentRef.Name != "" {
@@ -500,6 +503,26 @@ func (s *Server) validateImmutableResourceChanges(oldBlobs, proposedBlobs []*cat
 		})
 		s.namespaceMetrics.ObserveRejection(namespaceadmission.PhaseStructural, namespaceadmission.ReasonImmutableName)
 	}
+	oldRepositoriesByPath := repositoryEntriesByPath(s.parser, oldBlobs)
+	proposedRepositoriesByPath := repositoryEntriesByPath(s.parser, proposedBlobs)
+	for path, proposed := range proposedRepositoriesByPath {
+		old, found := oldRepositoriesByPath[path]
+		if !found {
+			continue
+		}
+		if old.parsed.Repository.Metadata.Name != proposed.parsed.Repository.Metadata.Name {
+			errorsOut = append(errorsOut, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.name", Constraint: "immutable",
+				Message: "validate: metadata.name is immutable at the same repository path",
+			})
+		}
+		if old.parsed.Repository.Metadata.Namespace != proposed.parsed.Repository.Metadata.Namespace {
+			errorsOut = append(errorsOut, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.namespace", Constraint: "immutable",
+				Message: "validate: metadata.namespace is immutable at the same repository path",
+			})
+		}
+	}
 
 	oldEntries := immutableEntries(s.parser, oldBlobs)
 	proposedEntries := immutableEntries(s.parser, proposedBlobs)
@@ -513,6 +536,21 @@ func (s *Server) validateImmutableResourceChanges(oldBlobs, proposedBlobs []*cat
 		}
 	}
 	return errorsOut
+}
+
+func repositoryEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
+	entries := make(map[string]*parsedEntry, len(blobs))
+	for _, blob := range blobs {
+		parsed, body, err := parser.ParseResource(bytes.NewReader(blob.GetContent()))
+		if err != nil || parsed == nil || parsed.Repository == nil {
+			continue
+		}
+		entry, ok, err := newParsedEntry(blob.GetPath(), parsed, body, "")
+		if err == nil && ok {
+			entries[blob.GetPath()] = entry
+		}
+	}
+	return entries
 }
 
 func namespaceEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
@@ -736,6 +774,22 @@ func (s *Server) validateNamespaceAuthoringTarget(ctx context.Context, repositor
 	expectedPath := fmt.Sprintf("namespaces/%s.md", name)
 	if sourcePath != expectedPath {
 		return fmt.Errorf("validate: Namespace %q must be stored at %s", name, expectedPath)
+	}
+	return nil
+}
+
+func (s *Server) validateRepositoryAuthoringTarget(ctx context.Context, repositoryID, sourcePath, namespaceName, name string) error {
+	repository, err := s.store.GetRepository(ctx, repositoryID)
+	if err != nil {
+		return fmt.Errorf("validate: Repository manifests require the namespace gitstore-system repository: %w", err)
+	}
+	datastore.NormalizeRepositoryContract(repository)
+	if repository.Name != "gitstore-system" || repository.Namespace != namespaceName {
+		return fmt.Errorf("validate: Repository manifests are accepted only in %s/gitstore-system", namespaceName)
+	}
+	expectedPath := fmt.Sprintf("repositories/%s.md", name)
+	if sourcePath != expectedPath {
+		return fmt.Errorf("validate: Repository %q must be stored at %s", name, expectedPath)
 	}
 	return nil
 }
@@ -991,6 +1045,13 @@ func (s *Server) AdmitResources(
 		if !s.isAdmissionCommitCurrent(ctx, req.RepositoryId, req.RefName, effectiveCommit) {
 			continue
 		}
+		if immutablePaths := repositoryImmutablePathChanges(oldEntries, newEntries); len(immutablePaths) > 0 {
+			s.log.Warn("admit_resources: Repository immutable identity change rejected",
+				zap.Strings("paths", immutablePaths),
+				zap.String("repository_id", req.RepositoryId),
+				zap.String("commit_sha", effectiveCommit))
+			return nil, grpcstatus.Errorf(codes.FailedPrecondition, "Repository metadata.name and metadata.namespace are immutable at %s", immutablePaths[0])
+		}
 		ops := deriveResourceAdmissionOperations(oldEntries, newEntries, changedPaths)
 		if convergeNamespacesOnly {
 			ops = namespaceConvergenceOperations(ops, requestedEntries)
@@ -1225,6 +1286,8 @@ func (s *Server) admitParsedEntries(
 			s.admitNamespace(ctx, e.parsed.Namespace, e.body, admCtx, e.path, op, existing)
 		case "File":
 			s.admitFile(ctx, e.parsed.File, e.body, admCtx, e.path, op, existing)
+		case "Repository":
+			s.admitRepository(ctx, e.parsed.Repository, e.body, admCtx, e.path, op, existing)
 		}
 	}
 	return nil
@@ -1276,9 +1339,79 @@ func (s *Server) lookupResourceByIdentity(ctx context.Context, id resourceIdenti
 		return s.store.GetNamespaceByName(ctx, id.Name)
 	case "File":
 		return s.store.GetFileByName(ctx, id.Namespace, id.Name)
+	case "Repository":
+		mapping, err := s.store.LookupRepository(ctx, id.Namespace, id.Name)
+		if err != nil {
+			return nil, err
+		}
+		return s.store.GetRepository(ctx, mapping.RepositoryID)
 	default:
 		return nil, datastore.ErrNotFound
 	}
+}
+
+// admitRepository is deliberately the only Git-admission write path for
+// non-bootstrap Repository records. The Namespace reference is resolved here,
+// rather than accepted from the author, so every new Repository owns exactly
+// one blocking Namespace reference from its first durable row.
+func (s *Server) admitRepository(ctx context.Context, resource *catalog.RepositoryResource, body []byte, admCtx AdmissionContext, sourcePath string, op admission.Operation, rawExisting any) {
+	if resource == nil || resource.Metadata.Name == "" || resource.Metadata.Namespace == "" || resource.Metadata.Name == "gitstore-system" {
+		return
+	}
+	namespace, err := s.store.GetNamespaceByName(ctx, resource.Metadata.Namespace)
+	if err != nil || namespace.DeletionTimestamp != nil {
+		return
+	}
+	existing, _ := rawExisting.(*datastore.Repository)
+	if op == admission.OperationUpdate && existing == nil {
+		return
+	}
+	if existing != nil && (existing.Name != resource.Metadata.Name || existing.Namespace != resource.Metadata.Namespace) {
+		return
+	}
+	specJSON, err := json.Marshal(resource.Spec)
+	if err != nil {
+		return
+	}
+	ownerReferences, err := json.Marshal([]catalog.OwnerReference{{APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace", Name: namespace.Name, UID: namespace.UID, BlockOwnerDeletion: true}})
+	if err != nil {
+		return
+	}
+	if existing == nil {
+		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
+		if !ok {
+			return
+		}
+		repo := &datastore.Repository{APIVersion: resource.APIVersion, Kind: resource.Kind, UID: uid, ID: uid, RepositoryID: uid, Namespace: namespace.Name, NamespaceID: namespace.Name, Name: resource.Metadata.Name, Labels: cloneStringMap(resource.Metadata.Labels), Annotations: cloneStringMap(resource.Metadata.Annotations), OwnerReferences: ownerReferences, Finalizers: []string{}, Revision: admCtx.Revision, CreationTimestamp: admCtx.Now, CreationActor: admCtx.ActorSubject, UpdateTimestamp: admCtx.Now, UpdateActor: admCtx.ActorSubject, SourcePath: sourcePath, GitCommitSHA: admCtx.CommitSHA, GitRef: admCtx.RefName, Spec: specJSON, Body: string(body), DefaultBranch: resource.Spec.DefaultBranch, StorageClass: resource.Spec.StorageClass}
+		datastore.NormalizeRepositoryContract(repo)
+		repo.Status = admissionAcceptedStatus(repo.Generation, admCtx.Revision, admCtx.Now)
+		if s.store.CreateRepositoryInActiveNamespace(ctx, repo) != nil {
+			return
+		}
+		_ = s.store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: namespace.Name, Name: repo.Name, RepositoryID: uid})
+		return
+	}
+	if isRepositoryStorageClassDowngrade(existing.StorageClass, resource.Spec.StorageClass) {
+		return
+	}
+	expected := existing.ResourceVersion
+	existing.Labels, existing.Annotations, existing.OwnerReferences = cloneStringMap(resource.Metadata.Labels), cloneStringMap(resource.Metadata.Annotations), ownerReferences
+	existing.Spec, existing.Body, existing.DefaultBranch, existing.StorageClass = specJSON, string(body), resource.Spec.DefaultBranch, resource.Spec.StorageClass
+	existing.Revision, existing.UpdateTimestamp, existing.UpdateActor, existing.SourcePath, existing.GitCommitSHA, existing.GitRef = admCtx.Revision, admCtx.Now, admCtx.ActorSubject, sourcePath, admCtx.CommitSHA, admCtx.RefName
+	datastore.AdvanceRepositorySpecVersion(existing)
+	existing.Status = admissionAcceptedStatus(existing.Generation, admCtx.Revision, admCtx.Now)
+	_ = s.store.UpdateRepository(ctx, existing, expected)
+}
+
+// isRepositoryStorageClassDowngrade recognizes the currently documented
+// storage tiers. Unknown classes deliberately remain for the later validation
+// matrix; treating arbitrary strings lexicographically made unrelated class
+// names appear to be upgrades or downgrades.
+func isRepositoryStorageClassDowngrade(current, proposed string) bool {
+	ranks := map[string]int{"standard": 1, "premium": 2}
+	currentRank, knownCurrent := ranks[strings.ToLower(current)]
+	proposedRank, knownProposed := ranks[strings.ToLower(proposed)]
+	return knownCurrent && knownProposed && proposedRank < currentRank
 }
 
 var errCategoryDeletionBlocked = errors.New("category deletion blocked by child categories")

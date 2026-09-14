@@ -150,6 +150,23 @@ type NamespaceStatus struct {
 	Conditions          []Condition `json:"conditions"`
 }
 
+// RepositoryStatus is the system-written state for a Repository. Never stored
+// in git.
+type RepositoryStatus struct {
+	ObservedGeneration  int64                         `json:"observedGeneration"`
+	LastAppliedRevision string                        `json:"lastAppliedRevision"`
+	Conditions          []Condition                   `json:"conditions"`
+	Resolved            *ResolvedRepositoryDefinition `json:"resolved,omitempty"`
+}
+
+// ResolvedRepositoryDefinition holds controller-computed Repository storage
+// state. It is deliberately distinct from RepositorySpec, which is author
+// controlled.
+type ResolvedRepositoryDefinition struct {
+	StoragePath  string `json:"storagePath"`
+	StorageClass string `json:"storageClass"`
+}
+
 // ResolvedCategoryTaxonomy holds system-computed hierarchy aggregates for a category.
 type ResolvedCategoryTaxonomy struct {
 	Depth int8 `json:"depth"`

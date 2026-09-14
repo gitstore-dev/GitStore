@@ -88,11 +88,11 @@ This decision explicitly supersedes spec 045's Acceptance Scenario #4 ("the curr
 **Alternatives considered**:
 - *Support update only via direct `git push`, with no GraphQL mutation*. Rejected — this would make Repository's mutation surface inconsistent with Namespace's (spec 046 added both `createNamespace` and `updateNamespace`), and would force every API caller wanting to update a repository's mutable fields to become a Git client, which is exactly what spec 046's User Story 2 established should not be required.
 
-## 10. Consistency with future specs (Repository Validation and Admission Matrix, Repository Watch Contract)
+## 10. Consistency with spec 050 and future Repository validation work
 
-**Decision**: This spec owns only the lifecycle *behavior* (bootstrap-repository-name rejection, per-namespace repository restriction, mutation delegation, finalizer/`Terminating` state machine, reconciliation, rename/transfer disposition). A future "Repository Validation and Admission Matrix" spec (mirroring spec 047 for Namespace) owns the full structural-vs-policy validation rule catalogue and condition-outcome documentation; a future "Repository Watch Contract" spec (mirroring GH#174's `watchNamespaces` pattern) owns watch/subscription semantics. Both are explicitly out of scope here and depend on this spec landing first.
+**Decision**: This spec owns Repository lifecycle and the Repository-specific adoption of spec 050's shipped durable watch architecture. It adds a typed `watchRepositories` subscription, generic compatibility routing, a Repository-specific CDC journal/cursor, controller bootstrap/list/drain, cross-replica resume, bounded replay/backpressure, and migration-first rollout. The future "Repository Validation and Admission Matrix" still owns the broader structural-vs-policy catalogue.
 
-**Rationale**: This is the same ownership split spec 046 recorded relative to spec 047 for Namespace — avoiding duplicate ownership of the same rules across specs while keeping this spec's scope bounded to what ADR-0003's Phase 1 already fully specifies.
+**Rationale**: Spec 050 made durable watch correctness a prerequisite for a reliable controller rather than a follow-on convenience: process-local history, polling, and non-resumable subscriptions cannot safely drive reconciliation across replicas or restart. Because this spec creates the Repository controller, deferring its event source would recreate the architecture spec 050 replaced. Repository reuses that substrate per kind; it does not reopen Namespace watch semantics or share its cursor/order space.
 
 ## 11. No `NEEDS CLARIFICATION` remains
 

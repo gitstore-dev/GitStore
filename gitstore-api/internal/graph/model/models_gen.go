@@ -248,8 +248,17 @@ type CompleteNamespaceDeletionInput struct {
 }
 
 type CompleteNamespaceDeletionPayload struct {
-	DeletedIdentifier *string         `json:"deletedIdentifier,omitempty"`
-	Conflict          *StatusConflict `json:"conflict,omitempty"`
+	DeletedIdentifier *string `json:"deletedIdentifier,omitempty"`
+}
+
+type CompleteRepositoryDeletionInput struct {
+	Namespace       string `json:"namespace"`
+	Name            string `json:"name"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type CompleteRepositoryDeletionPayload struct {
+	DeletedRepositoryID *string `json:"deletedRepositoryId,omitempty"`
 }
 
 // A named status condition shared by core catalog resources.
@@ -316,9 +325,10 @@ type CreateNamespacePayload struct {
 }
 
 type CreateRepositoryInput struct {
-	Namespace     string  `json:"namespace"`
-	Name          string  `json:"name"`
-	DefaultBranch *string `json:"defaultBranch,omitempty"`
+	APIVersion string               `json:"apiVersion"`
+	Kind       string               `json:"kind"`
+	Metadata   *MetadataInput       `json:"metadata"`
+	Spec       *RepositorySpecInput `json:"spec"`
 }
 
 type CreateRepositoryPayload struct {
@@ -577,6 +587,14 @@ type LogoutPayload struct {
 
 type MediaDefinition struct {
 	FileRef *FileReference `json:"fileRef"`
+}
+
+// Author-controlled metadata shared by declarative resource mutations.
+type MetadataInput struct {
+	Name        string         `json:"name"`
+	Namespace   string         `json:"namespace"`
+	Labels      map[string]any `json:"labels,omitempty"`
+	Annotations map[string]any `json:"annotations,omitempty"`
 }
 
 type Mutation struct {
@@ -987,6 +1005,28 @@ type ProductWatchEvent struct {
 	Product *Product `json:"product,omitempty"`
 }
 
+// Controller-only bootstrap operation. Ensures the system-managed
+// `gitstore-system` repository exists for an admitted Namespace. It is separate
+// from createRepository because bootstrap repositories are not author-managed
+// declarative Repository resources.
+type ProvisionNamespaceSystemRepositoryInput struct {
+	Namespace string `json:"namespace"`
+}
+
+type ProvisionNamespaceSystemRepositoryPayload struct {
+	Repository *Repository `json:"repository"`
+}
+
+// Identifies an admitted, non-bootstrap Repository for controller provisioning.
+type ProvisionRepositoryStorageInput struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+type ProvisionRepositoryStoragePayload struct {
+	Repository *Repository `json:"repository"`
+}
+
 type PublishCatalogInput struct {
 	Version string `json:"version"`
 	Message string `json:"message"`
@@ -1132,12 +1172,24 @@ type RepositoryPushPolicy struct {
 	AdmissionControl *AdmissionControlDefaults `json:"admissionControl,omitempty"`
 }
 
+// System-computed Repository storage state written only by its controller.
+type RepositoryResolvedStatusInput struct {
+	StoragePath  string `json:"storagePath"`
+	StorageClass string `json:"storageClass"`
+}
+
 // Declarative desired-state projection for a Repository. In this feature,
 // visibility is reserved and projects PRIVATE until write semantics are added.
 type RepositorySpec struct {
 	DefaultBranch string                `json:"defaultBranch"`
 	Visibility    RepositoryVisibility  `json:"visibility"`
 	PushPolicy    *RepositoryPushPolicy `json:"pushPolicy"`
+}
+
+type RepositorySpecInput struct {
+	DefaultBranch *string               `json:"defaultBranch,omitempty"`
+	Visibility    *RepositoryVisibility `json:"visibility,omitempty"`
+	StorageClass  *string               `json:"storageClass,omitempty"`
 }
 
 // System-owned observed state for a Repository.
@@ -1148,6 +1200,16 @@ type RepositoryStatus struct {
 	// condition-producing writer or Repository-specific condition vocabulary exists.
 	Conditions []*Condition                  `json:"conditions"`
 	Resolved   *ResolvedRepositoryDefinition `json:"resolved"`
+}
+
+// Strongly typed Repository lifecycle event. ADDED and MODIFIED events carry a
+// Repository; DELETED and BOOKMARK events carry no repository payload.
+type RepositoryWatchEvent struct {
+	Type            WatchEventType `json:"type"`
+	Namespace       string         `json:"namespace"`
+	Name            string         `json:"name"`
+	ResourceVersion string         `json:"resourceVersion"`
+	Repository      *Repository    `json:"repository,omitempty"`
 }
 
 type ResolvedCategoryDefinition struct {
@@ -1301,13 +1363,6 @@ type ServiceAccountPublicKeyInput struct {
 	PublicKeyPem string `json:"publicKeyPEM"`
 }
 
-// Optimistic-concurrency conflict payload shared by all status-write
-// mutations (per-kind and generic).
-type StatusConflict struct {
-	// The resource's actual current resourceVersion, for retry.
-	CurrentResourceVersion string `json:"currentResourceVersion"`
-}
-
 // Pricing strategy applied when this price template is selected.
 type StrategyDefinition struct {
 	// Strategy identifier (e.g. fixed, percentage_discount, cost_plus).
@@ -1412,10 +1467,8 @@ type UpdateCategoryStatusInput struct {
 }
 
 type UpdateCategoryStatusPayload struct {
-	// Null when the write failed (conflict or not-found).
+	// The updated CategoryTaxonomy.
 	Category *Category `json:"category,omitempty"`
-	// Non-null only when the resourceVersion precondition failed.
-	Conflict *StatusConflict `json:"conflict,omitempty"`
 	// True when another bounded Product page remains to be processed.
 	HasMoreProductDependents bool `json:"hasMoreProductDependents"`
 }
@@ -1450,8 +1503,32 @@ type UpdateProductStatusInput struct {
 }
 
 type UpdateProductStatusPayload struct {
-	Product  *Product        `json:"product,omitempty"`
-	Conflict *StatusConflict `json:"conflict,omitempty"`
+	Product *Product `json:"product,omitempty"`
+}
+
+type UpdateRepositoryInput struct {
+	APIVersion string               `json:"apiVersion"`
+	Kind       string               `json:"kind"`
+	Metadata   *MetadataInput       `json:"metadata"`
+	Spec       *RepositorySpecInput `json:"spec"`
+}
+
+type UpdateRepositoryPayload struct {
+	Repository *Repository `json:"repository,omitempty"`
+}
+
+type UpdateRepositoryStatusInput struct {
+	Namespace           string                         `json:"namespace"`
+	Name                string                         `json:"name"`
+	ResourceVersion     string                         `json:"resourceVersion"`
+	ObservedGeneration  *int32                         `json:"observedGeneration,omitempty"`
+	LastAppliedRevision *string                        `json:"lastAppliedRevision,omitempty"`
+	Conditions          []*ConditionInput              `json:"conditions,omitempty"`
+	Resolved            *RepositoryResolvedStatusInput `json:"resolved,omitempty"`
+}
+
+type UpdateRepositoryStatusPayload struct {
+	Repository *Repository `json:"repository"`
 }
 
 type UpdateResourceStatusInput struct {
@@ -1468,9 +1545,8 @@ type UpdateResourceStatusInput struct {
 }
 
 type UpdateResourceStatusPayload struct {
-	// JSON-boxed current resource state; null when the write failed.
-	Object   map[string]any  `json:"object,omitempty"`
-	Conflict *StatusConflict `json:"conflict,omitempty"`
+	// JSON-boxed current resource state.
+	Object map[string]any `json:"object,omitempty"`
 }
 
 type VariantSummaryDefinition struct {
@@ -1667,6 +1743,7 @@ func (e InventoryPolicy) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// TODO(REMOVE): Was added for demo
 // Product inventory status
 type InventoryStatus string
 

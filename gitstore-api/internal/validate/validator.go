@@ -45,6 +45,7 @@ type ParsedResource struct {
 	ProductVariant   *catalog.ProductVariantResource
 	Namespace        *catalog.NamespaceResource
 	File             *catalog.FileResource
+	Repository       *catalog.RepositoryResource
 }
 
 // ParseResource reads a Markdown document, extracts YAML frontmatter,
@@ -189,6 +190,27 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 			return nil, nil, errors.Join(errs...)
 		}
 		return &ParsedResource{Kind: "Namespace", Namespace: &res}, body, nil
+
+	case "Repository":
+		var res catalog.RepositoryResource
+		body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
+		}
+		var errs []error
+		if err := p.validator().Struct(res); err != nil {
+			errs = append(errs, toFriendlyError(err))
+		}
+		if res.Metadata.Namespace == "" {
+			errs = append(errs, fmt.Errorf("validate: metadata.namespace is required for Repository resources"))
+		}
+		if err := validateLabels(res.Metadata.Labels); err != nil {
+			errs = append(errs, err)
+		}
+		if len(errs) > 0 {
+			return nil, nil, errors.Join(errs...)
+		}
+		return &ParsedResource{Kind: "Repository", Repository: &res}, body, nil
 
 	case "File":
 		var res catalog.FileResource

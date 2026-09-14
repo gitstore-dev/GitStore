@@ -15,6 +15,20 @@ import (
 	"go.uber.org/zap"
 )
 
+func statusConflictError(kind, namespace, name, currentResourceVersion string) error {
+	identifier := name
+	if namespace != "" {
+		identifier = namespace + "/" + name
+	}
+	return &gqlerror.Error{
+		Message: fmt.Sprintf("%s %s status update conflict", kind, identifier),
+		Extensions: map[string]any{
+			"code":            "RESOURCE_VERSION_CONFLICT",
+			"resourceVersion": currentResourceVersion,
+		},
+	}
+}
+
 // updateCategoryTaxonomyStatusGeneric backs updateResourceStatus for
 // kind "CategoryTaxonomy", reusing the same datastore write path as the
 // dedicated updateCategoryStatus mutation.
@@ -46,9 +60,7 @@ func (r *mutationResolver) updateCategoryTaxonomyStatusGeneric(ctx context.Conte
 			if getErr != nil {
 				return nil, gqlerror.Errorf("status update conflict, and could not re-fetch current version: %v", getErr)
 			}
-			return &model.UpdateResourceStatusPayload{
-				Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion},
-			}, nil
+			return nil, statusConflictError(input.Kind, input.Namespace, input.Name, current.ResourceVersion)
 		}
 		if errors.Is(err, datastore.ErrNotFound) {
 			return nil, &gqlerror.Error{
@@ -86,9 +98,7 @@ func (r *mutationResolver) updateNamespaceStatusGeneric(ctx context.Context, inp
 	}
 	if err := datastore.ApplyNamespaceStatusPatch(namespace, patch); err != nil {
 		if errors.Is(err, datastore.ErrConflict) {
-			return &model.UpdateResourceStatusPayload{
-				Conflict: &model.StatusConflict{CurrentResourceVersion: namespace.ResourceVersion},
-			}, nil
+			return nil, statusConflictError(input.Kind, input.Namespace, input.Name, namespace.ResourceVersion)
 		}
 		return nil, gqlerror.Errorf("update resource status: %v", err)
 	}
@@ -98,9 +108,7 @@ func (r *mutationResolver) updateNamespaceStatusGeneric(ctx context.Context, inp
 			if getErr != nil {
 				return nil, gqlerror.Errorf("status update conflict, and could not re-fetch current version: %v", getErr)
 			}
-			return &model.UpdateResourceStatusPayload{
-				Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion},
-			}, nil
+			return nil, statusConflictError(input.Kind, input.Namespace, input.Name, current.ResourceVersion)
 		}
 		return nil, gqlerror.Errorf("update resource status: %v", err)
 	}
@@ -126,7 +134,7 @@ func (r *mutationResolver) updateFileStatusGeneric(ctx context.Context, input mo
 			if getErr != nil {
 				return nil, gqlerror.Errorf("status update conflict: %v", getErr)
 			}
-			return &model.UpdateResourceStatusPayload{Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion}}, nil
+			return nil, statusConflictError(input.Kind, input.Namespace, input.Name, current.ResourceVersion)
 		}
 		if errors.Is(err, datastore.ErrNotFound) {
 			return nil, &gqlerror.Error{Message: fmt.Sprintf("File %s/%s not found", input.Namespace, input.Name), Extensions: map[string]any{"code": "NOT_FOUND"}}

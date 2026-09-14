@@ -107,6 +107,9 @@ func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, 
 		}
 		return r.watchNamespaceResources(ctx, selector, resourceVersion)
 	}
+	if kind == "Repository" {
+		return r.watchRepositoryResources(ctx, namespace, selector, resourceVersion)
+	}
 	if r.eventBus == nil {
 		return nil, gqlerror.Errorf("watch subscriptions are not available")
 	}
@@ -143,7 +146,7 @@ func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, 
 				if !ok {
 					return
 				}
-				if !categoryEventMatchesFilters(ev, namespace) || !categoryEventMatchesSelector(ev, selector) {
+				if !categoryEventMatchesFilters(ev, namespace) || !watchEventMatchesSelector(kind, ev, selector) {
 					continue
 				}
 				select {

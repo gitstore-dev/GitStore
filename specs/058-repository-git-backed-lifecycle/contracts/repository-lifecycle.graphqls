@@ -27,6 +27,10 @@
 # not an oversight. deleteRepository is unchanged in shape; its behavior
 # changes internally to a finalizer-marking write instead of a synchronous
 # hard delete.
+#
+# Repository output identity invariant: metadata.uid is the same canonical
+# Relay global ID as Repository.id (both encode the internal Repository UID
+# with the Repository node kind). The raw datastore UID is never public.
 
 """
 Author-controlled resource metadata shared by declarative mutation envelopes.
@@ -98,6 +102,20 @@ type UpdateRepositoryPayload {
   repository: Repository
 }
 
+input UpdateRepositoryStatusInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [ConditionInput!]
+  resolved: JSON
+}
+
+type UpdateRepositoryStatusPayload {
+  repository: Repository!
+}
+
 extend type Mutation {
   """
   Update an existing non-bootstrap repository's mutable spec fields by
@@ -105,6 +123,7 @@ extend type Mutation {
   repository on the caller's behalf and awaiting admission before returning.
   """
   updateRepository(input: UpdateRepositoryInput!): UpdateRepositoryPayload!
+  updateRepositoryStatus(input: UpdateRepositoryStatusInput!): UpdateRepositoryStatusPayload!
 }
 
 # renameRepository and transferRepository are intentionally NOT redefined

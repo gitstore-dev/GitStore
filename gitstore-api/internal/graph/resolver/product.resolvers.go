@@ -35,9 +35,7 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 		return nil, gqlerror.Errorf("retrieve product status: %v", err)
 	}
 	if product.ResourceVersion != input.ResourceVersion {
-		return &model.UpdateProductStatusPayload{
-			Conflict: &model.StatusConflict{CurrentResourceVersion: product.ResourceVersion},
-		}, nil
+		return nil, statusConflictError("Product", input.Namespace, input.Name, product.ResourceVersion)
 	}
 	if input.RemoveOwnerUID != nil {
 		var refs []catalog.OwnerReference
@@ -77,9 +75,7 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 		if errors.Is(err, datastore.ErrConflict) {
 			current, getErr := r.store.GetProductByName(ctx, input.Namespace, input.Name)
 			if getErr == nil {
-				return &model.UpdateProductStatusPayload{
-					Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion},
-				}, nil
+				return nil, statusConflictError("Product", input.Namespace, input.Name, current.ResourceVersion)
 			}
 		}
 		return nil, gqlerror.Errorf("update product status: %v", err)

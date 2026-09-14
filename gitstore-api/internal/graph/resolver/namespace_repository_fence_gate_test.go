@@ -24,7 +24,8 @@ func TestNamespaceRepositoryFenceRolloutGateRejectsUnsafeMutations(t *testing.T)
 	assertNamespaceRepositoryFenceGateError(t, err, "CREATE_REPOSITORY")
 
 	_, err = svc.TransferRepository(ctx, "01960000-0000-7000-8000-000000000099", namespace.Name, "alice")
-	assertNamespaceRepositoryFenceGateError(t, err, "TRANSFER_REPOSITORY")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unimplemented")
 
 	_, err = svc.DeleteNamespace(ctx, namespace)
 	assertNamespaceRepositoryFenceGateError(t, err, "DELETE_NAMESPACE")

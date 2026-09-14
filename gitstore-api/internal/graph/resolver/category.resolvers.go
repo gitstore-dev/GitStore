@@ -80,9 +80,7 @@ func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model
 			if getErr != nil {
 				return nil, gqlerror.Errorf("decouple Products conflict, and could not re-fetch current version: %v", getErr)
 			}
-			return &model.UpdateCategoryStatusPayload{
-				Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion},
-			}, nil
+			return nil, statusConflictError("CategoryTaxonomy", input.Namespace, input.Name, current.ResourceVersion)
 		}
 		if err != nil {
 			return nil, err
@@ -104,9 +102,10 @@ func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model
 	if input.CompleteDeletion != nil && *input.CompleteDeletion {
 		deleted, err := r.service.CompleteCategoryDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)
 		if errors.Is(err, datastore.ErrConflict) {
-			return &model.UpdateCategoryStatusPayload{
-				Conflict: &model.StatusConflict{CurrentResourceVersion: deleted.ResourceVersion},
-			}, nil
+			if deleted == nil {
+				return nil, gqlerror.Errorf("complete category deletion conflict, and current version could not be read")
+			}
+			return nil, statusConflictError("CategoryTaxonomy", input.Namespace, input.Name, deleted.ResourceVersion)
 		}
 		if err != nil {
 			return nil, err
@@ -129,9 +128,7 @@ func (r *mutationResolver) UpdateCategoryStatus(ctx context.Context, input model
 			if getErr != nil {
 				return nil, gqlerror.Errorf("status update conflict, and could not re-fetch current version: %v", getErr)
 			}
-			return &model.UpdateCategoryStatusPayload{
-				Conflict: &model.StatusConflict{CurrentResourceVersion: current.ResourceVersion},
-			}, nil
+			return nil, statusConflictError("CategoryTaxonomy", input.Namespace, input.Name, current.ResourceVersion)
 		}
 		if errors.Is(err, datastore.ErrNotFound) {
 			return nil, &gqlerror.Error{

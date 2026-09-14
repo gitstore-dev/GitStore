@@ -1698,38 +1698,6 @@ func (ec *executionContext) fieldContext_UpdateProductStatusPayload_product(_ co
 	return fc, nil
 }
 
-func (ec *executionContext) _UpdateProductStatusPayload_conflict(ctx context.Context, field graphql.CollectedField, obj *model.UpdateProductStatusPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_UpdateProductStatusPayload_conflict(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Conflict, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.StatusConflict) graphql.Marshaler {
-			return ec.marshalOStatusConflict2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐStatusConflict(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_UpdateProductStatusPayload_conflict(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "UpdateProductStatusPayload",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_StatusConflict(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _VariantSummaryDefinition_total(ctx context.Context, field graphql.CollectedField, obj *model.VariantSummaryDefinition) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2671,8 +2639,6 @@ func (ec *executionContext) _UpdateProductStatusPayload(ctx context.Context, sel
 			out.Values[i] = graphql.MarshalString("UpdateProductStatusPayload")
 		case "product":
 			out.Values[i] = ec._UpdateProductStatusPayload_product(ctx, field, obj)
-		case "conflict":
-			out.Values[i] = ec._UpdateProductStatusPayload_conflict(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

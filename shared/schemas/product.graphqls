@@ -98,7 +98,6 @@ input UpdateProductStatusInput {
 
 type UpdateProductStatusPayload {
   product: Product
-  conflict: StatusConflict
 }
 
 """A pointer to another catalogue resource."""

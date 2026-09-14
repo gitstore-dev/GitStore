@@ -23,6 +23,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/playground"
 	"github.com/gin-gonic/gin"
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
@@ -99,16 +100,24 @@ type namespaceCDCRunner interface {
 	RunNamespaceCDC(context.Context, *watchjournal.Materializer, datastore.NamespaceWatchLease, time.Duration, time.Duration, func()) error
 }
 
+// repositoryCDCRunner is optional during the rolling upgrade: older
+// datastores continue serving Namespace CDC, while Scylla implementations
+// with the Repository authoritative source join the same lease and journal.
+type repositoryCDCRunner interface {
+	RunRepositoryCDC(context.Context, *watchjournal.Materializer, datastore.ResourceWatchLease, time.Duration, time.Duration, func()) error
+}
+
 type namespaceWatchRuntime struct {
-	journal      datastore.NamespaceWatchJournal
-	materializer *watchjournal.Materializer
-	leaseManager *watchjournal.LeaseManager
-	metrics      *watchjournal.Metrics
-	runner       namespaceCDCRunner
-	cfg          config.NamespaceWatchConfig
-	log          *zap.Logger
-	cancel       context.CancelFunc
-	done         chan struct{}
+	journal          datastore.NamespaceWatchJournal
+	materializer     *watchjournal.Materializer
+	leaseManager     *watchjournal.LeaseManager
+	metrics          *watchjournal.Metrics
+	runner           namespaceCDCRunner
+	repositoryRunner repositoryCDCRunner
+	cfg              config.NamespaceWatchConfig
+	log              *zap.Logger
+	cancel           context.CancelFunc
+	done             chan struct{}
 }
 
 func namespaceWatchMetrics(runtime *namespaceWatchRuntime) *watchjournal.Metrics {
@@ -134,14 +143,14 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, fmt.Errorf("create datastore: %w", err)
 	}
 	var namespaceWatch *namespaceWatchRuntime
-	var namespaceJournal datastore.NamespaceWatchJournal
+	var resourceJournal datastore.ResourceWatchJournal
 	if cfg.Watch.Namespace.ReadersEnabled || cfg.Watch.Namespace.MaterializerEnabled {
-		journal, journalErr := dsfactory.NamespaceWatchJournal(rawStore)
+		journal, journalErr := dsfactory.ResourceWatchJournal(rawStore)
 		if journalErr != nil {
 			_ = rawStore.Close()
 			return nil, fmt.Errorf("create Namespace watch journal: %w", journalErr)
 		}
-		namespaceJournal = journal
+		resourceJournal = journal
 		metrics, metricsErr := watchjournal.NewMetrics(prometheus.DefaultRegisterer)
 		if metricsErr != nil {
 			_ = rawStore.Close()
@@ -169,6 +178,9 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		}
 		if runner, ok := rawStore.(namespaceCDCRunner); ok {
 			namespaceWatch.runner = runner
+		}
+		if runner, ok := rawStore.(repositoryCDCRunner); ok {
+			namespaceWatch.repositoryRunner = runner
 		}
 	}
 	store := datastore.NewInstrumentedDatastore(rawStore, cfg.Datastore.Backend, log)
@@ -206,6 +218,21 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	// subscriptions (spec 040). Shared between the gRPC admission path
 	// (publisher) and the GraphQL resolvers (subscribers).
 	eventBus := eventbus.New(eventBusCapacity)
+	// The same admission runtime serves post-receive batches and synchronous
+	// GraphQL committed-manifest convergence. Build it before the GraphQL schema
+	// so resolvers never acquire a datastore-only authoring path.
+	catalogServer, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
+		Store:     store,
+		GitClient: gitClient,
+		Logger:    log,
+		Clock:     clock,
+		EventBus:  eventBus,
+	})
+	if err != nil {
+		_ = gitClient.Close()
+		_ = store.Close()
+		return nil, err
+	}
 	namespaceRepositoryFenceMode := resolver.NamespaceRepositoryFenceDisabled
 	if cfg.NamespaceRepositoryFenceEnabled() {
 		namespaceRepositoryFenceMode = resolver.NamespaceRepositoryFenceEnabled
@@ -218,8 +245,9 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		Registry:                     registry,
 		Clock:                        clock,
 		IDs:                          ids,
+		CommittedManifestAdmitter:    catalogServer,
 		EventBus:                     eventBus,
-		NamespaceJournal:             namespaceJournal,
+		ResourceJournal:              resourceJournal,
 		NamespaceWatch:               cfg.Watch.Namespace,
 		NamespaceMetrics:             namespaceWatchMetrics(namespaceWatch),
 		NamespaceRepositoryFenceMode: namespaceRepositoryFenceMode,
@@ -266,19 +294,6 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, fmt.Errorf("listen on catalog gRPC port %d: %w", cfg.Api.GrpcPort, err)
 	}
 	grpcServer := grpc.NewServer()
-	catalogServer, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
-		Store:     store,
-		GitClient: gitClient,
-		Logger:    log,
-		Clock:     clock,
-		EventBus:  eventBus,
-	})
-	if err != nil {
-		_ = grpcListener.Close()
-		_ = gitClient.Close()
-		_ = store.Close()
-		return nil, err
-	}
 	catalogv1.RegisterCatalogServiceServer(grpcServer, catalogServer)
 
 	return &Server{
@@ -298,16 +313,17 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 
 // GraphQLHandlerDeps are the dependencies for NewGraphQLHandler.
 type GraphQLHandlerDeps struct {
-	Store     datastore.Datastore
-	GitWriter resolver.GitWriter
-	Logger    *zap.Logger
-	Registry  *auth.ProviderRegistry
-	Clock     apiruntime.Clock
-	IDs       apiruntime.IDGenerator
+	Store                     datastore.Datastore
+	GitWriter                 resolver.GitWriter
+	Logger                    *zap.Logger
+	Registry                  *auth.ProviderRegistry
+	Clock                     apiruntime.Clock
+	IDs                       apiruntime.IDGenerator
+	CommittedManifestAdmitter admission.CommittedManifestAdmitter
 	// EventBus backs the watchCategories/watchResources subscription
 	// resolvers (spec 040). Optional — nil disables watch subscriptions.
 	EventBus                     *eventbus.Bus
-	NamespaceJournal             datastore.NamespaceWatchJournal
+	ResourceJournal              datastore.ResourceWatchJournal
 	NamespaceWatch               config.NamespaceWatchConfig
 	NamespaceMetrics             *watchjournal.Metrics
 	NamespaceRepositoryFenceMode resolver.NamespaceRepositoryFenceMode
@@ -342,8 +358,9 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 		Logger:                       deps.Logger,
 		Clock:                        deps.Clock,
 		IDGenerator:                  deps.IDs,
+		CommittedManifestAdmitter:    deps.CommittedManifestAdmitter,
 		EventBus:                     deps.EventBus,
-		NamespaceJournal:             deps.NamespaceJournal,
+		ResourceJournal:              deps.ResourceJournal,
 		NamespaceWatch:               deps.NamespaceWatch,
 		NamespaceMetrics:             deps.NamespaceMetrics,
 		NamespaceRepositoryFenceMode: deps.NamespaceRepositoryFenceMode,
@@ -824,33 +841,52 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 	r.metrics.SetLeader(true)
 	defer r.metrics.SetLeader(false)
 
-	errCh := make(chan error, 2)
+	errCh := make(chan error, 3)
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
 		errCh <- r.leaseManager.Maintain(ctx, lease)
 	}()
-	if r.runner != nil {
-		ready := make(chan struct{})
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			errCh <- r.runner.RunNamespaceCDC(
-				ctx, r.materializer, lease,
-				time.Duration(r.cfg.CDCRetentionSeconds)*time.Second,
-				time.Duration(r.cfg.CDCConfidenceWindowMillis)*time.Millisecond,
-				func() { close(ready) },
-			)
-		}()
-		select {
-		case <-parent.Done():
-			return parent.Err()
-		case err := <-errCh:
-			if err != nil && !errors.Is(err, context.Canceled) {
-				r.log.Warn("Namespace materializer failed before CDC readiness", zap.Error(err))
+	if r.runner != nil || r.repositoryRunner != nil {
+		ready := make(chan struct{}, 2)
+		readyCount := 0
+		if r.runner != nil {
+			readyCount++
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				errCh <- r.runner.RunNamespaceCDC(
+					ctx, r.materializer, lease,
+					time.Duration(r.cfg.CDCRetentionSeconds)*time.Second,
+					time.Duration(r.cfg.CDCConfidenceWindowMillis)*time.Millisecond,
+					func() { ready <- struct{}{} },
+				)
+			}()
+		}
+		if r.repositoryRunner != nil {
+			readyCount++
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				errCh <- r.repositoryRunner.RunRepositoryCDC(
+					ctx, r.materializer, lease,
+					time.Duration(r.cfg.CDCRetentionSeconds)*time.Second,
+					time.Duration(r.cfg.CDCConfidenceWindowMillis)*time.Millisecond,
+					func() { ready <- struct{}{} },
+				)
+			}()
+		}
+		for range readyCount {
+			select {
+			case <-parent.Done():
+				return parent.Err()
+			case err := <-errCh:
+				if err != nil && !errors.Is(err, context.Canceled) {
+					r.log.Warn("Namespace materializer failed before CDC readiness", zap.Error(err))
+				}
+				return err
+			case <-ready:
 			}
-			return err
-		case <-ready:
 		}
 	}
 	if _, err := r.materializer.AppendBookmark(ctx, lease); err != nil {

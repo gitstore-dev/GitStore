@@ -765,6 +765,28 @@ body
 	assert.Contains(t, err.Error(), "not a recognized")
 }
 
+func TestParseResource_Repository(t *testing.T) {
+	doc := `---
+apiVersion: gitstore.dev/v1beta1
+kind: Repository
+metadata:
+  name: catalog
+  namespace: acme
+spec:
+  defaultBranch: main
+  visibility: PRIVATE
+  storageClass: standard
+---
+Repository description.
+`
+	parsed, body, err := validate.NewParser().ParseResource(strings.NewReader(doc))
+	require.NoError(t, err)
+	require.NotNil(t, parsed.Repository)
+	assert.Equal(t, "catalog", parsed.Repository.Metadata.Name)
+	assert.Equal(t, "acme", parsed.Repository.Metadata.Namespace)
+	assert.Equal(t, "Repository description.\n", string(body))
+}
+
 func TestParseResource_CategoryTaxonomy_SelfReference(t *testing.T) {
 	doc := `---
 apiVersion: catalog.gitstore.dev/v1beta1

@@ -21,9 +21,9 @@ type TerminalError struct {
 
 func (e *TerminalError) Error() string {
 	if e.Code == CodeUnavailable {
-		return "namespace watch is temporarily unavailable"
+		return "resource watch is temporarily unavailable"
 	}
-	return "namespace watch continuity cannot be guaranteed; re-list"
+	return "resource watch continuity cannot be guaranteed; re-list"
 }
 
 func (e *TerminalError) Unwrap() error { return e.Cause }
