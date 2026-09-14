@@ -141,11 +141,89 @@ a cluster that varies by market/channel. It gives a brand a reusable way to say
 "these are made-to-order food items" or "these are regulated devices" without
 misclassifying the catalog.
 
-### Definition and profile example
+### Seller and buyer definition examples
 
-This condensed example shows the important separation: a definition declares
-states, typed events, guards, and permitted action *names*. It does not contain
-credentials, executable shell commands, or arbitrary database access.
+A definition declares states, typed events, gates, and permitted action *names*.
+It does not contain credentials, executable shell commands, or arbitrary
+database access. Gates have one unambiguous combination rule: `allOf` requires
+every contained gate; `anyOf` and `noneOf` are explicit when needed. A gate is
+one of the following:
+
+- `requiredFields`, `expression`, and `coreCondition` are pure, synchronous API
+  checks over the command input or an immutable snapshot.
+- `approval` creates or verifies a durable approval for a named gate. It names
+  a policy, expiry, and separation-of-duties rule; it is not a raw permission
+  string embedded in a transition.
+- `externalAttestation` checks a persisted, authenticated result from an
+  asynchronous integration action. It never executes a plugin during an API
+  transition.
+
+The seller definition owns catalog completeness and release-review gates. Thus a
+missing product title or description is found before an offer is published, not
+when a shopper attempts checkout.
+
+```markdown
+---
+apiVersion: workflow.gitstore.dev/v1beta1
+kind: WorkflowDefinition
+metadata:
+  name: food-menu-release
+  namespace: acme-store
+spec:
+  version: 1.0.0
+  scope: SELLER_RELEASE
+  contract: RELEASE_ELIGIBILITY
+  states: [DRAFT, CONTENT_REVIEW, COMPLIANCE_REVIEW, APPROVED, REJECTED]
+  initialState: DRAFT
+  transitions:
+  - from: DRAFT
+    event: SUBMIT_FOR_REVIEW
+    to: CONTENT_REVIEW
+    gates:
+      allOf:
+      - kind: requiredFields
+        subject: releaseCandidate
+        paths:
+        - product.title
+        - product.description
+        - variant.sku
+        - variant.pricing
+        - variant.allergenDisclosure
+  - from: CONTENT_REVIEW
+    event: CONTENT_APPROVED
+    to: COMPLIANCE_REVIEW
+    gates:
+      allOf:
+      - kind: approval
+        gateID: menu-content-review
+        policyRef:
+          name: food-content-review
+        minimumApprovals: 1
+        prohibitSubmitter: true
+        expiresAfter: P7D
+  - from: COMPLIANCE_REVIEW
+    event: COMPLIANCE_APPROVED
+    to: APPROVED
+    gates:
+      allOf:
+      - kind: approval
+        gateID: food-safety-review
+        policyRef:
+          name: food-safety-review
+        minimumApprovals: 1
+        prohibitSubmitter: true
+      - kind: coreCondition
+        condition: targetEligibility
+        equals: ELIGIBLE
+---
+
+Seller release gates for prepared-food offers.
+```
+
+The buyer definition then deals only in facts a buyer, kitchen, payment gateway,
+or fulfillment integration can actually establish. The action is asynchronous:
+the controller delivers it through an outbox and an authenticated kitchen result
+is stored as an attestation before it can advance the order.
 
 ```markdown
 ---
@@ -158,33 +236,40 @@ spec:
   version: 1.0.0
   scope: BUYER_ORDER
   contract: ORDER_AHEAD
-  states: [AWAITING_SLOT, PLACED, IN_PREPARATION, READY_FOR_PICKUP, HANDED_OVER, CANCELLED]
+  states: [AWAITING_SLOT, AWAITING_KITCHEN_ACCEPTANCE, IN_PREPARATION, READY_FOR_PICKUP, HANDED_OVER, CANCELLED]
   initialState: AWAITING_SLOT
   transitions:
   - from: AWAITING_SLOT
-    event: SLOT_CONFIRMED
-    to: PLACED
-    guard:
-    - matchCondition:
-      operator: All
-      constraints:
-      - expression: cart.fulfillmentSlot != null
-      - expression: payment.authorization != null
-    - requiredFields:
-      - cart.title
-      - cart.description
-  - from: PLACED
+    event: ORDER_SUBMITTED
+    to: AWAITING_KITCHEN_ACCEPTANCE
+    gates:
+      allOf:
+      - kind: requiredFields
+        subject: checkout
+        paths: [fulfillmentSlot, contactDetails]
+      - kind: coreCondition
+        condition: paymentAuthorization
+        equals: ACTIVE
+    actions:
+    - capability: kitchen.order.submit
+  - from: AWAITING_KITCHEN_ACCEPTANCE
     event: KITCHEN_ACCEPTED
     to: IN_PREPARATION
+    gates:
+      allOf:
+      - kind: externalAttestation
+        attestationType: kitchen.orderAccepted
+        integrationRef:
+          name: restaurant-kitchen
   - from: IN_PREPARATION
-    event: READY
+    event: KITCHEN_READY
     to: READY_FOR_PICKUP
-    guard:
-    - approval:
-      minApprovals: 1
-      permissions: [cart.approve.pickup]
-    - plugin:
-      ref: registry.gitstore.dev/kitchen-orderReadyCheck@v1.0.0
+    gates:
+      allOf:
+      - kind: externalAttestation
+        attestationType: kitchen.orderReady
+        integrationRef:
+          name: restaurant-kitchen
   - from: READY_FOR_PICKUP
     event: HANDOVER_CONFIRMED
     to: HANDED_OVER
@@ -202,11 +287,14 @@ metadata:
   namespace: acme-store
 spec:
   sellerWorkflowRef:
-    name: food-menu-release@1.0.0
+    name: food-menu-release
+    version: 1.0.0
   buyerOrderWorkflowRef:
-    name: quick-service-order@v1.0.0
+    name: quick-service-order
+    version: 1.0.0
   buyerReturnWorkflowRef:
-    name: quick-service-refund@v1.0.0
+    name: quick-service-refund
+    version: 1.0.0
   checkoutEntrypoints: [ORDER_AHEAD]
   policyRefs:
     fulfillmentPolicyRef: restaurant-pickup-and-delivery
@@ -217,9 +305,10 @@ spec:
 Shared contract for prepared-food offers.
 ```
 
-Definitions are immutable by content digest once referenced by a release or an
-execution. An edit creates a new `metadata.name` or versioned generation with a
-new digest; it never changes how an existing order is interpreted.
+At profile admission, each `{name, version}` reference resolves to a resource
+UID, generation, and content digest. Definitions are immutable by that digest
+once referenced by a release or execution. A new semantic version or generation
+creates a new digest; it never changes how an existing order is interpreted.
 
 ### Binding and deterministic resolution
 
@@ -290,7 +379,7 @@ vehicle reservation just because both were put in a browser basket.
 ## Extension boundary and non-negotiable invariants
 
 Most customization should be declarative: states, typed events, CEL-like pure
-guards, required human tasks, notification templates, and a registry of
+gates, required human tasks, notification templates, and a registry of
 capability-named actions. This is inspectable in Git, testable at admission,
 and usable from an Admin UI without requiring authors to write code.
 
@@ -408,7 +497,7 @@ Delivery should be phased:
 
 1. Implement profile/binding resolution, snapshotting, standard seller gates,
    and the standard buyer checkout/return contract without custom code.
-2. Add declarative definitions, task queues, guards, event/outbox processing,
+2. Add declarative definitions, task queues, gates, event/outbox processing,
    Admin UI forms, and bundle preview/import.
 3. Add constrained WASI actions only after its capability model, multi-replica
    replay tests, limits, and operational audit trail are proven.
