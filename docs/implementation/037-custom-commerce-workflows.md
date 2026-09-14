@@ -75,10 +75,14 @@ AUTHORING -> REVIEW -> APPROVED -> RELEASE_ELIGIBLE
 
 `REVIEW` can have any named sub-states a definition needs, such as
 `NUTRITION_CHECK`, `HOMOLOGATION`, `MARKET_REGISTRATION`, or `MEDIA_QA`. The
-core only relies on an approved certificate for the exact resource UID,
-generation, workflow-definition digest, and release target. A new product
-generation invalidates an approval whose definition declares that the changed
-fields are material.
+core relies on an approved certificate for the resource UID, the approval
+gate's material-input digest, the workflow-definition digest, and the release
+target. The definition declares the material field paths for each approval gate;
+the API canonicalizes those values from the release candidate and hashes them.
+An authored generation that changes a material input changes the digest and
+invalidates the approval. A non-material generation may carry it forward only
+when the digest is unchanged. The certificate retains the reviewed generation
+as audit provenance, but generation alone is not its eligibility key.
 
 The publication controller remains responsible for its existing release work:
 pinning the source revision, ensuring the immutable release tag, preparing the
@@ -152,8 +156,8 @@ one of the following:
 - `requiredFields`, `expression`, and `coreCondition` are pure, synchronous API
   checks over the command input or an immutable snapshot.
 - `approval` creates or verifies a durable approval for a named gate. It names
-  a policy, expiry, and separation-of-duties rule; it is not a raw permission
-  string embedded in a transition.
+  a policy, material input paths, expiry, and separation-of-duties rule; it is
+  not a raw permission string embedded in a transition.
 - `externalAttestation` checks a persisted, authenticated result from an
   asynchronous integration action. It never executes a plugin during an API
   transition.
@@ -198,6 +202,11 @@ spec:
         gateID: menu-content-review
         policyRef:
           name: food-content-review
+        materialPaths:
+        - product.title
+        - product.description
+        - variant.sku
+        - variant.pricing
         minimumApprovals: 1
         prohibitSubmitter: true
         expiresAfter: P7D
@@ -210,6 +219,10 @@ spec:
         gateID: food-safety-review
         policyRef:
           name: food-safety-review
+        materialPaths:
+        - variant.allergenDisclosure
+        - variant.ingredients
+        - variant.nutrition
         minimumApprovals: 1
         prohibitSubmitter: true
       - kind: coreCondition

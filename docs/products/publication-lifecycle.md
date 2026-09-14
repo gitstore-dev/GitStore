@@ -202,15 +202,51 @@ spec:
 
 The target key is `(namespace, channel, market)`. The first implementation
 allows at most one active publication per target. A candidate is rejected when
-its activation window overlaps another publication for the same target. This
-prevents unspecified merge ordering and means a campaign release is a complete
-replacement snapshot for its target. Future overlay semantics, if needed, must
-declare a deterministic precedence and atomic composition contract rather than
-reusing this field implicitly.
+its activation window overlaps another publication for the same target, unless
+it explicitly supersedes that publication. This prevents unspecified merge
+ordering and means a campaign release is a complete replacement snapshot for
+its target.
+
+### Atomic replacement and rollback
+
+An authorized replacement uses an explicit predecessor reference rather than
+shortening the predecessor in a separate edit:
+
+```markdown
+spec:
+  releaseRef:
+    name: corrected-black-friday-2026
+  target:
+    channel: web
+    market: eu
+  effectiveFromTime: "2026-11-27T12:00:00Z"
+  supersedesRef:
+    name: web-eu-black-friday-2026
+```
+
+`supersedesRef` is allowed only when the named predecessor has the identical
+target key and is the target's current active or scheduled publication at
+admission. Its overlap is a replacement interval, never an overlay: the API
+records the predecessor's immutable identity and rejects a stale, already
+superseded, or differently targeted predecessor. The controller may prepare the
+replacement beforehand, but at `effectiveFromTime` it asks the API to perform a
+fenced compare-and-swap on the target's public-snapshot pointer. The API changes
+that one pointer, marks the predecessor `Superseded`, and records both snapshot
+IDs in one durable operation. It does not deactivate the old snapshot before a
+replacement is ready; on a failed replacement the old snapshot remains served.
+
+This permits an immediate retirement, correction, or rollback without a
+storefront gap. It does not permit a general pair of simultaneously active
+publications. A rollback is simply a new, validated publication whose prepared
+release contains the earlier desired catalog state and whose `supersedesRef`
+names the active publication. Future overlay semantics, if needed, must declare
+a deterministic precedence and atomic composition contract rather than reusing
+this field implicitly.
 
 `Publication.status` records `ReleaseReady`, `Scheduled`, `Active`, `Expired`,
-or `Failed`, the immutable snapshot ID, the activation version/fencing token,
-and diagnostics. These are controller/API-owned status fields.
+`Superseded`, or `Failed`, the immutable snapshot ID, the activation
+version/fencing token, predecessor/replacement identity where applicable, and
+diagnostics. These are controller/API-owned status fields.
 
 ## Service responsibilities
 
