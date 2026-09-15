@@ -173,12 +173,12 @@ func TestNamespaceWatchBoundsPerStreamProgressAcrossGenerations(t *testing.T) {
 	dynamic := map[string]any{}
 	require.NoError(t, raw.Query(
 		"SELECT TTL(position) AS ttl FROM namespace_watch_clock WHERE journal=? AND stream_id=?",
-	).Bind("namespace", "generation:table:stream").MapScan(dynamic))
+	).Bind("resource", "generation:table:stream").MapScan(dynamic))
 	require.NotNil(t, dynamic["ttl"])
 	durable := map[string]any{}
 	require.NoError(t, raw.Query(
 		"SELECT TTL(position) AS ttl FROM namespace_watch_clock WHERE journal=? AND stream_id=?",
-	).Bind("namespace", "__namespace_cdc_generation__").MapScan(durable))
+	).Bind("resource", "__namespace_cdc_generation__").MapScan(durable))
 	require.Equal(t, 0, durable["ttl"])
 }
 
@@ -247,7 +247,7 @@ func TestNamespaceWatchInitializesBucketLayoutForMigrationFirstClock(t *testing.
 	zeroExpiry := time.Unix(0, 0).UTC()
 	require.NoError(t, raw.Query(
 		"INSERT INTO namespace_watch_clock (journal,stream_id,epoch,high_water,oldest,update_timestamp,cdc_progress_timestamp,lease_holder,fencing_token,lease_expiration_timestamp) VALUES (?,?,?,?,?,?,?,?,?,?)",
-	).Bind("namespace", "__clock__", epoch, int64(0), int64(0), time.Now().UTC(), zeroExpiry, "", int64(0), zeroExpiry).Exec())
+	).Bind("resource", "__clock__", epoch, int64(0), int64(0), time.Now().UTC(), zeroExpiry, "", int64(0), zeroExpiry).Exec())
 	raw.Close()
 
 	lease, acquired, err := journal.AcquireLease(context.Background(), "new-replica", time.Now().UTC(), time.Minute)
@@ -258,7 +258,7 @@ func TestNamespaceWatchInitializesBucketLayoutForMigrationFirstClock(t *testing.
 	verify := newRawSession(t)
 	defer verify.Close()
 	var bucketSize int64
-	require.NoError(t, verify.Query("SELECT bucket_size FROM namespace_watch_clock WHERE journal=? LIMIT 1").Bind("namespace").Scan(&bucketSize))
+	require.NoError(t, verify.Query("SELECT bucket_size FROM namespace_watch_clock WHERE journal=? LIMIT 1").Bind("resource").Scan(&bucketSize))
 	require.Equal(t, int64(watchjournal.DefaultBucketSize), bucketSize)
 }
 

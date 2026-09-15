@@ -362,7 +362,7 @@ func runRepositoryCapacityBatch(t *testing.T, client *http.Client, cfg repositor
 func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, poolPrefix, eventPrefix string, maxTransitions int) repositoryCapacityLoadResult {
 	t.Helper()
 	result := repositoryCapacityLoadResult{acknowledged: newCapacityBitset(maxTransitions + 1)}
-	jobs := make(chan int, cfg.mutationWorkers*4)
+	jobs := make(chan int, repositoryCapacityQueueDepth(cfg.mutationWorkers, cfg.burstSize))
 	locks := make([]sync.Mutex, cfg.resourcePool)
 	var wg sync.WaitGroup
 	var produced, admitted, failed, backpressured atomic.Int64
@@ -418,6 +418,17 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 	result.produced, result.admitted, result.failed, result.backpressured = produced.Load(), admitted.Load(), failed.Load(), backpressured.Load()
 	result.maxSequence = sequence
 	return result
+}
+
+func repositoryCapacityQueueDepth(workers, burstSize int) int {
+	// Retain the bounded steady-state backlog while guaranteeing that one
+	// required burst can be offered atomically without client-side shedding.
+	return workers*4 + burstSize
+}
+
+func TestRepositoryCapacityQueueDepthIncludesOneFullBurst(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, 180, repositoryCapacityQueueDepth(20, 100))
 }
 
 func repositoryCapacityMutation(ctx context.Context, client *http.Client, endpoint, token string, create bool, namespace, name, prefix string, sequence int, padding string) error {

@@ -814,17 +814,24 @@ _bootstrap-repository: _bootstrap-tools
 		echo "Namespace \"$${NAMESPACE}\" was not found. Run make bootstrap TARGET=namespace first."; \
 		exit 1; \
 	}; \
-	query='mutation CreateRepository($$namespace: String!, $$name: String!, $$defaultBranch: String!) { createRepository(input: { namespace: $$namespace, name: $$name, defaultBranch: $$defaultBranch }) { repository { id name defaultBranch storagePath namespace { metadata { name } } } } }'; \
-	payload=$$(jq -n --arg query "$$query" --arg namespace "$${NAMESPACE}" --arg name "$${REPOSITORY}" --arg defaultBranch "$${DEFAULT_BRANCH}" '{query: $$query, variables: {namespace: $$namespace, name: $$name, defaultBranch: $$defaultBranch}}'); \
-	response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
-		echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
-		exit 1; \
-	}; \
-	if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
+	query='mutation CreateRepository($$input: CreateRepositoryInput!) { createRepository(input: $$input) { repository { id metadata { name namespace } spec { defaultBranch } status { resolved { storagePath } } } } }'; \
+	payload=$$(jq -n --arg query "$$query" --arg namespace "$${NAMESPACE}" --arg name "$${REPOSITORY}" --arg defaultBranch "$${DEFAULT_BRANCH}" '{query: $$query, variables: {input: {apiVersion: "gitstore.dev/v1beta1", kind: "Repository", metadata: {namespace: $$namespace, name: $$name}, spec: {defaultBranch: $$defaultBranch, visibility: "PRIVATE", storageClass: "standard"}}}}'); \
+	attempt=0; \
+	while :; do \
+		response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
+			echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
+			exit 1; \
+		}; \
+		if ! echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then break; fi; \
+		if [ "$$attempt" -lt 60 ] && echo "$$response" | jq -e 'any(.errors[]?; .message | contains("namespace system repository is unavailable"))' >/dev/null; then \
+			attempt=$$((attempt + 1)); \
+			sleep 1; \
+			continue; \
+		fi; \
 		echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
 		exit 1; \
-	fi; \
-	echo "$$response" | jq -r '.data.createRepository.repository | "Created repository \(.namespace.metadata.name)/\(.name) (\(.id))\nClone URL: http://localhost:9000/\(.namespace.metadata.name)/\(.name).git"'
+	done; \
+	echo "$$response" | jq -r '.data.createRepository.repository | "Created repository \(.metadata.namespace)/\(.metadata.name) (\(.id))\nClone URL: http://localhost:9000/\(.metadata.namespace)/\(.metadata.name).git"'
 
 clean: ## Remove scoped local runtime state; set TARGET and CONFIRM=1.
 	@./scripts/run-make-workflow.sh clean "$(TARGET)"
