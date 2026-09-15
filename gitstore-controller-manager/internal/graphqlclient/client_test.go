@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -121,15 +123,28 @@ func TestQuery_HTTPErrorStatusReturnsError(t *testing.T) {
 }
 
 func TestQuery_RateLimitStatusReturnsRetryableSentinel(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var connections atomic.Int32
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"rate limit exceeded"}`))
 	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			connections.Add(1)
+		}
+	}
+	srv.Start()
 	defer srv.Close()
 
 	c := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
-	err := c.Query(context.Background(), `query { categories(namespace: "acme") { totalCount } }`, nil, &struct{}{})
-	if !errors.Is(err, types.ErrRateLimited) {
-		t.Fatalf("Query error = %v, want errors.Is(..., types.ErrRateLimited)", err)
+	for attempt := 0; attempt < 2; attempt++ {
+		err := c.Query(context.Background(), `query { categories(namespace: "acme") { totalCount } }`, nil, &struct{}{})
+		if !errors.Is(err, types.ErrRateLimited) {
+			t.Fatalf("Query error = %v, want errors.Is(..., types.ErrRateLimited)", err)
+		}
+	}
+	if got := connections.Load(); got != 1 {
+		t.Fatalf("HTTP connections = %d, want 1 reused connection", got)
 	}
 }
 
