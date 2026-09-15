@@ -4,8 +4,14 @@
 package integration
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,22 +35,28 @@ type repositoryAdmissionResource struct {
 func TestRepositoryLifecycle_PushAdmissionReadIdentity(t *testing.T) {
 	namespace := getEnv("NAMESPACE", "gitstore-test")
 	name := uniqueName("repository-push-admission")
-	h := newPushHelper(t)
+	token := namespaceContractBootstrapToken(t, apiURL)
+	// Repository manifests are valid only in the owning namespace's bootstrap
+	// gitstore-system repository.  Using the general integration REPOSITORY
+	// target here would exercise (and correctly fail) the authoring-target
+	// guard instead of the production admission path this probe is intended to
+	// verify.
+	h := newPushHelperForRepo(t, namespace, "gitstore-system")
 	h.commitRepository(name+".md", validRepositoryFixture(name, namespace))
 	if out, err := h.push(); err != nil {
 		t.Fatalf("push Repository manifest: %v\n%s", err, out)
 	}
 
-	byPath := waitForAdmittedRepository(t, namespace, name)
+	byPath := waitForAdmittedRepository(t, token, namespace, name)
 	require.NotEmpty(t, byPath.ID)
 	assert.Equal(t, byPath.ID, byPath.Metadata.UID, "metadata.uid must use the Repository Relay encoding")
 	assert.Equal(t, name, byPath.Metadata.Name)
 	assert.Equal(t, namespace, byPath.Metadata.Namespace)
 
-	byNode := repositoryAdmissionQueryNode(t, byPath.ID)
+	byNode := repositoryAdmissionQueryNode(t, token, byPath.ID)
 	assert.Equal(t, byPath, byNode, "node(id:) must return the admitted Repository envelope")
 
-	listed := repositoryAdmissionQueryConnection(t, namespace)
+	listed := repositoryAdmissionQueryConnection(t, token, namespace)
 	var fromConnection *repositoryAdmissionResource
 	for _, repository := range listed {
 		if repository.Metadata.Name == name {
@@ -54,6 +66,39 @@ func TestRepositoryLifecycle_PushAdmissionReadIdentity(t *testing.T) {
 	}
 	require.NotNil(t, fromConnection, "admitted Repository must appear in its namespace connection")
 	assert.Equal(t, byPath, fromConnection, "connection must preserve the Repository Relay identity")
+}
+
+// TestRepositoryLifecycle_DualControllerRegistrationAndReconcile is a
+// deployment probe, not an in-process substitute. Each endpoint must identify
+// a separately running controller-manager with independent queues, caches, and
+// checkpoints. The counter deltas prove both registrations consumed work from
+// the live Repository watch after the push.
+func TestRepositoryLifecycle_DualControllerRegistrationAndReconcile(t *testing.T) {
+	controllerA := strings.TrimSuffix(os.Getenv("REPOSITORY_CONTROLLER_A"), "/")
+	controllerB := strings.TrimSuffix(os.Getenv("REPOSITORY_CONTROLLER_B"), "/")
+	if controllerA == "" || controllerB == "" {
+		t.Skip("set REPOSITORY_CONTROLLER_A and REPOSITORY_CONTROLLER_B to distinct deployed controller-manager endpoints")
+	}
+	require.NotEqual(t, controllerA, controllerB)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	beforeA := requireRepositoryController(t, client, controllerA)
+	beforeB := requireRepositoryController(t, client, controllerB)
+
+	namespace := getEnv("NAMESPACE", "gitstore-test")
+	name := uniqueName("repository-dual-controller")
+	h := newPushHelperForRepo(t, namespace, "gitstore-system")
+	h.commitRepository(name+".md", validRepositoryFixture(name, namespace))
+	if out, err := h.push(); err != nil {
+		t.Fatalf("push Repository manifest: %v\n%s", err, out)
+	}
+
+	token := namespaceContractBootstrapToken(t, apiURL)
+	waitForRepositoryReady(t, token, namespace, name)
+	waitForRepositoryControllerAdvance(t, client, controllerA, beforeA)
+	waitForRepositoryControllerAdvance(t, client, controllerB, beforeB)
+	require.Empty(t, repositoryControllerPoison(t, client, controllerA))
+	require.Empty(t, repositoryControllerPoison(t, client, controllerB))
 }
 
 func validRepositoryFixture(name, namespace string) string {
@@ -71,11 +116,11 @@ spec:
 `, name, namespace)
 }
 
-func waitForAdmittedRepository(t *testing.T, namespace, name string) *repositoryAdmissionResource {
+func waitForAdmittedRepository(t *testing.T, token, namespace, name string) *repositoryAdmissionResource {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		response := gqlQuery(t, `query($namespace: String!, $name: String!) {
+		response := gqlQueryWithURL(t, apiURL, token, `query($namespace: String!, $name: String!) {
 			repository(by: {namespacePath: {namespace: $namespace, name: $name}}) {
 				id
 				metadata { name namespace uid }
@@ -95,9 +140,112 @@ func waitForAdmittedRepository(t *testing.T, namespace, name string) *repository
 	}
 }
 
-func repositoryAdmissionQueryNode(t *testing.T, id string) *repositoryAdmissionResource {
+func waitForRepositoryReady(t *testing.T, token, namespace, name string) {
 	t.Helper()
-	response := gqlQuery(t, `query($id: ID!) {
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		response := gqlQueryWithURL(t, apiURL, token, `query($namespace: String!, $name: String!) {
+			repository(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+				status { conditions { type status } }
+			}
+		}`, map[string]any{"namespace": namespace, "name": name})
+		require.Empty(t, response.Errors, "repository readiness GraphQL errors: %s", response.Errors)
+		var data struct {
+			Repository *struct {
+				Status struct {
+					Conditions []struct {
+						Type   string `json:"type"`
+						Status string `json:"status"`
+					} `json:"conditions"`
+				} `json:"status"`
+			} `json:"repository"`
+		}
+		require.NoError(t, json.Unmarshal(response.Data, &data))
+		if data.Repository != nil {
+			ready := false
+			storage := false
+			for _, condition := range data.Repository.Status.Conditions {
+				ready = ready || condition.Type == "Ready" && condition.Status == "TRUE"
+				storage = storage || condition.Type == "StorageProvisioned" && condition.Status == "TRUE"
+			}
+			if ready && storage {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Repository %s/%s did not become StorageProvisioned=True and Ready=True", namespace, name)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func requireRepositoryController(t *testing.T, client *http.Client, endpoint string) float64 {
+	t.Helper()
+	response, err := client.Get(endpoint + "/health")
+	require.NoError(t, err)
+	defer response.Body.Close()
+	contents, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.Contains(t, []int{http.StatusOK, http.StatusServiceUnavailable}, response.StatusCode, string(contents))
+	var health struct {
+		Kinds map[string]struct {
+			Registered bool `json:"registered"`
+		} `json:"kinds"`
+		CredentialReady bool `json:"credentialReady"`
+	}
+	require.NoError(t, json.Unmarshal(contents, &health))
+	require.True(t, health.CredentialReady, "%s credential source is not ready", endpoint)
+	require.True(t, health.Kinds["Repository"].Registered, "%s has no Repository registration", endpoint)
+	return repositoryControllerSuccessMetric(t, client, endpoint)
+}
+
+func repositoryControllerSuccessMetric(t *testing.T, client *http.Client, endpoint string) float64 {
+	t.Helper()
+	response, err := client.Get(endpoint + "/metrics")
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	scanner := bufio.NewScanner(response.Body)
+	const prefix = `gitstore_controller_reconcile_total{kind="Repository",result="success"} `
+	for scanner.Scan() {
+		if strings.HasPrefix(scanner.Text(), prefix) {
+			value, parseErr := strconv.ParseFloat(strings.TrimPrefix(scanner.Text(), prefix), 64)
+			require.NoError(t, parseErr)
+			return value
+		}
+	}
+	require.NoError(t, scanner.Err())
+	return 0
+}
+
+func waitForRepositoryControllerAdvance(t *testing.T, client *http.Client, endpoint string, before float64) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if repositoryControllerSuccessMetric(t, client, endpoint) > before {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s did not record a successful Repository reconciliation after the push", endpoint)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func repositoryControllerPoison(t *testing.T, client *http.Client, endpoint string) []json.RawMessage {
+	t.Helper()
+	response, err := client.Get(endpoint + "/controller/v1/poison/Repository")
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	var items []json.RawMessage
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&items))
+	return items
+}
+
+func repositoryAdmissionQueryNode(t *testing.T, token, id string) *repositoryAdmissionResource {
+	t.Helper()
+	response := gqlQueryWithURL(t, apiURL, token, `query($id: ID!) {
 		node(id: $id) {
 			... on Repository {
 				id
@@ -114,9 +262,9 @@ func repositoryAdmissionQueryNode(t *testing.T, id string) *repositoryAdmissionR
 	return data.Node
 }
 
-func repositoryAdmissionQueryConnection(t *testing.T, namespace string) []*repositoryAdmissionResource {
+func repositoryAdmissionQueryConnection(t *testing.T, token, namespace string) []*repositoryAdmissionResource {
 	t.Helper()
-	response := gqlQuery(t, `query($namespace: String!) {
+	response := gqlQueryWithURL(t, apiURL, token, `query($namespace: String!) {
 		repositories(namespace: $namespace, first: 100) {
 			edges { node { id metadata { name namespace uid } } }
 		}

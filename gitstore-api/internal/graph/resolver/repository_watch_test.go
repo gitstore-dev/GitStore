@@ -34,6 +34,14 @@ func TestRepositoryWatchSchemaIsTypedWithOptionalNamespaceFilter(t *testing.T) {
 	assert.Equal(t, "String", field.Arguments.ForName("resourceVersion").Type.String())
 }
 
+func TestTypedWatchBootstrapCursorsNormalizeToSharedJournalSentinel(t *testing.T) {
+	for _, cursor := range []string{"__namespace_watch_bootstrap__", "__repository_watch_bootstrap__"} {
+		assert.Equal(t, watchjournal.BootstrapCursor, normalizeResourceWatchCursor(cursor))
+	}
+	ordinary := "rwv1:00000000-0000-4000-8000-000000000001:1"
+	assert.Equal(t, ordinary, normalizeResourceWatchCursor(ordinary))
+}
+
 func TestTypedAndGenericRepositoryWatchShareNamespaceProjection(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)

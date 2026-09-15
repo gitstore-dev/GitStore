@@ -1382,7 +1382,7 @@ func (s *Service) ProvisionRepositoryStorage(ctx context.Context, namespace, nam
 	if s.gitWriter == nil {
 		return nil, gqlerror.Errorf("repository storage provisioning is unavailable")
 	}
-	if _, err := s.gitWriter.CreateRepository(ctx, repository.UID, repository.StorageClass); err != nil {
+	if _, err := s.gitWriter.CreateRepository(ctx, repository.UID, repository.StorageClass); err != nil && status.Code(err) != codes.AlreadyExists {
 		s.logger.Error("gRPC CreateRepository failed",
 			zap.String("repo_id", repository.UID),
 			zap.String("rpc", "CreateRepository"),

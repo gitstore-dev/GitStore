@@ -149,7 +149,7 @@ func (r *Resolver) watchRepositoryResources(ctx context.Context, namespace *stri
 	}
 	rawCursor := ""
 	if resourceVersion != nil {
-		rawCursor = *resourceVersion
+		rawCursor = normalizeResourceWatchCursor(*resourceVersion)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream, err := r.namespaceSubscriber.SubscribePath(streamCtx, rawCursor, "generic")

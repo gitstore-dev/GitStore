@@ -17,7 +17,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestStatusConflictsAreGraphQLErrorsForNamespaceAndProduct(t *testing.T) {
+func TestStatusConflictsAreGraphQLErrorsForNamespaceRepositoryAndProduct(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
@@ -28,6 +28,11 @@ func TestStatusConflictsAreGraphQLErrorsForNamespaceAndProduct(t *testing.T) {
 	require.NoError(t, store.CreateProduct(ctx, &datastore.Product{
 		UID: uuid.NewString(), APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "Product", Namespace: "acme", Name: "widget", ResourceVersion: "1",
 	}))
+	repositoryID := uuid.NewString()
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{
+		UID: repositoryID, ID: repositoryID, RepositoryID: repositoryID, Namespace: "acme", NamespaceID: "acme", Name: "catalog", ResourceVersion: "1",
+	}))
+	require.NoError(t, store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "acme", NamespaceID: "acme", Name: "catalog", RepositoryID: repositoryID, RepoID: repositoryID}))
 	r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop()})
 	require.NoError(t, err)
 	mutation := &mutationResolver{Resolver: r}
@@ -35,6 +40,10 @@ func TestStatusConflictsAreGraphQLErrorsForNamespaceAndProduct(t *testing.T) {
 	for _, update := range []func() error{
 		func() error {
 			_, err := mutation.UpdateResourceStatus(ctx, model.UpdateResourceStatusInput{Kind: "Namespace", Name: "acme", ResourceVersion: "stale"})
+			return err
+		},
+		func() error {
+			_, err := mutation.UpdateResourceStatus(ctx, model.UpdateResourceStatusInput{Kind: "Repository", Namespace: "acme", Name: "catalog", ResourceVersion: "stale"})
 			return err
 		},
 		func() error {

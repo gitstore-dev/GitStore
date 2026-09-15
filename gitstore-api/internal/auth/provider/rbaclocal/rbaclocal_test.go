@@ -139,15 +139,17 @@ roles:
 	}
 }
 
-func TestDevelopmentControllerPolicyAllowsNamespaceWatch(t *testing.T) {
+func TestDevelopmentControllerPolicyAllowsLifecycleWatchAndStatusActions(t *testing.T) {
 	policyPath := filepath.Join("..", "..", "..", "..", "..", "config", "policy.yaml")
 	p, err := New(config.RBACConfig{PolicyFile: policyPath}, zap.NewNop())
 	require.NoError(t, err)
 
 	principal := &authpkg.Principal{Subject: "controller", Roles: []string{"controller"}, AuthMethod: "static-token"}
-	decision, err := p.Authorize(context.Background(), principal, "namespace.watch", authpkg.ResourceContext{})
-	require.NoError(t, err)
-	assert.Equal(t, authpkg.OutcomeAllow, decision.Outcome)
+	for _, action := range []string{"namespace.watch", "repository.watch", "repository.status.write"} {
+		decision, err := p.Authorize(context.Background(), principal, action, authpkg.ResourceContext{})
+		require.NoError(t, err)
+		assert.Equal(t, authpkg.OutcomeAllow, decision.Outcome, "action %q", action)
+	}
 }
 
 func TestRBACLocal_DefaultDenyAbsent_DefaultsToTrue(t *testing.T) {

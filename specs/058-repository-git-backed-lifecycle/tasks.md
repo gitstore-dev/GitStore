@@ -23,7 +23,7 @@
 
 **Independent Test**: A manifest pushed to its namespace system repository creates or updates only that repository.
 
-- [ ] T011 [US1] Add push-to-admission contract coverage, including direct lookup, connection, and `node(id:)` identity regression cases asserting `metadata.uid == id`, in `tests/integration/repository_lifecycle_test.go`.
+- [X] T011 [US1] Add push-to-admission contract coverage, including direct lookup, connection, and `node(id:)` identity regression cases asserting `metadata.uid == id`, in `tests/integration/repository_lifecycle_test.go`.
 - [X] T012 [US1] Implement Repository manifest parsing and immutable/mutable validation in `gitstore-api/internal/cataloggrpc/server.go`.
 - [X] T013 [US1] Add admission status and version-transition coverage in `gitstore-api/internal/graph/resolver/repository_lifecycle_test.go`.
 
@@ -73,14 +73,14 @@
 - [X] T036 [P] Add authorization and namespace-isolation coverage in `gitstore-api/internal/graph/resolver/repository_authorization_test.go`.
 - [ ] T037 [P] Add bounded-load, replay, overflow, rolling-replacement, and recovery validation to `tests/integration/repository_lifecycle_test.go`.
 - [X] T038 Update Repository lifecycle/watch documentation in `docs/repository/repository-spec.md`, `docs/repository/repository-watch.md`, and `docs/ADRs/0003-repository-lifecycle.md`.
-- [ ] T039 Validate `specs/058-repository-git-backed-lifecycle/quickstart.md`, run focused Repository watch tests, `make build`, `make test`, and `make pr-ready`.
+- [X] T039 Validate `specs/058-repository-git-backed-lifecycle/quickstart.md`, run focused Repository watch tests, `make build`, `make test`, and `make pr-ready`.
 - [X] T040 Replace `StatusConflict` payload outcomes with stable GraphQL conflict errors for CategoryTaxonomy, Namespace, File, and Product status writes in `shared/schemas/` and `gitstore-api/internal/graph/resolver/`.
 - [X] T041 Add retry and null-data compatibility tests for status-write GraphQL errors in `gitstore-api/internal/graph/resolver/` and `tests/integration/`.
 
 ## Follow-up: controller provisioning reuse
 
 - [X] T042 Replace `UpdateRepositoryStatusInput.resolved: JSON` with a typed Repository resolved-status input, persist the partial field in Repository status, regenerate gqlgen, and add merge/GraphQL tests.
-- [ ] T043 Reuse the Namespace controller's existing GraphQL repository-provisioning client for Repository reconciliation, activate `registerRepository` in `gitstore-controller-manager/cmd/controller/main.go`, and add idempotency, authorization, retry, and two-replica registration coverage.
+- [X] T043 Reuse the Namespace controller's existing GraphQL repository-provisioning client for Repository reconciliation, activate `registerRepository` in `gitstore-controller-manager/cmd/controller/main.go`, and add idempotency, authorization, retry, and two-replica registration coverage.
 - [X] T044 Replace the Namespace controller's legacy `createRepository` bootstrap call with a dedicated, controller-only Namespace bootstrap-repository ensure path. It must preserve the bootstrap exception and never route `gitstore-system` through normal Repository admission or reconciliation.
 
 ## Dependencies

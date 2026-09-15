@@ -26,7 +26,7 @@ cd /tmp/gs-acme-system
 mkdir -p repositories
 cat > repositories/catalog.md <<'EOF'
 ---
-apiVersion: core.gitstore.dev/v1beta1
+apiVersion: gitstore.dev/v1beta1
 kind: Repository
 metadata:
   name: catalog
@@ -47,7 +47,7 @@ git push
 # 5. Create a repository via mutation instead (no manual git push)
 # mutation {
 #   createRepository(input: {
-#     apiVersion: "core.gitstore.dev/v1beta1"
+#     apiVersion: "gitstore.dev/v1beta1"
 #     kind: "Repository"
 #     metadata: { name: "media", namespace: "acme-store" }
 #     spec: { defaultBranch: "main", visibility: PRIVATE, storageClass: "standard" }
@@ -59,7 +59,7 @@ git push
 # 6. Update a repository's mutable fields via mutation
 # mutation {
 #   updateRepository(input: {
-#     apiVersion: "core.gitstore.dev/v1beta1"
+#     apiVersion: "gitstore.dev/v1beta1"
 #     kind: "Repository"
 #     metadata: { name: "media", namespace: "acme-store" }
 #     spec: { defaultBranch: "main", visibility: PRIVATE, storageClass: "premium" }

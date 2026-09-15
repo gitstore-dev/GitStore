@@ -68,7 +68,11 @@ func TestRepositoryRunnerBootstrapDrainDeduplicatesListedWatchState(t *testing.T
 	w := &repositoryTestWatch{ch: make(chan WatchEvent[repository.Repository], 2)}
 	w.ch <- WatchEvent[repository.Repository]{Type: Modified, Object: repo("1"), ResourceVersion: "2"}
 	close(w.ch)
-	lw := &repositoryTestListWatch{lists: []ListResponse[repository.Repository]{{Items: []repository.Repository{repo("1")}, ResourceVersion: "1"}}, watches: []*repositoryTestWatch{w}}
+	// A cleanly closed stream is transient and the production Runner reconnects.
+	// Keep the second stream open until context cancellation so this test does
+	// not race its one-element fake watch sequence.
+	idle := &repositoryTestWatch{ch: make(chan WatchEvent[repository.Repository])}
+	lw := &repositoryTestListWatch{lists: []ListResponse[repository.Repository]{{Items: []repository.Repository{repo("1")}, ResourceVersion: "1"}}, watches: []*repositoryTestWatch{w, idle}}
 	var enqueued []types.WorkItemKey
 	r := repositoryRunner(t, lw, checkpoint.NewMemoryStore(), &enqueued)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

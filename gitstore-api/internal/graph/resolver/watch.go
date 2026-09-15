@@ -18,6 +18,23 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
+const (
+	namespaceWatchBootstrapCursor  = "__namespace_watch_bootstrap__"
+	repositoryWatchBootstrapCursor = "__repository_watch_bootstrap__"
+)
+
+// normalizeResourceWatchCursor preserves the private typed-watch bootstrap
+// sentinels while the Namespace and Repository projections share one generic
+// durable journal. Ordinary opaque cursors are returned unchanged.
+func normalizeResourceWatchCursor(raw string) string {
+	switch raw {
+	case namespaceWatchBootstrapCursor, repositoryWatchBootstrapCursor:
+		return watchjournal.BootstrapCursor
+	default:
+		return raw
+	}
+}
+
 // publishCategoryTaxonomyStatusEvent fans out a Modified event after a
 // successful status write, so a watcher observing the resource also sees
 // controller-driven status changes, not only spec-pipeline admissions
@@ -216,7 +233,7 @@ func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.
 	}
 	rawCursor := ""
 	if resourceVersion != nil {
-		rawCursor = *resourceVersion
+		rawCursor = normalizeResourceWatchCursor(*resourceVersion)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream, err := r.namespaceSubscriber.SubscribePath(streamCtx, rawCursor, "generic")

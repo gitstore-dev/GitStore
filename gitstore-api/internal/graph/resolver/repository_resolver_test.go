@@ -14,6 +14,8 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -135,6 +137,22 @@ func TestProvisionRepositoryStorage_onlyProvisionsAnActiveAdmittedNonBootstrapRe
 	_, err = svc.ProvisionRepositoryStorage(ctx, "admitted", "not-admitted")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "has not been admitted")
+}
+
+func TestProvisionRepositoryStorageTreatsAlreadyExistsAsIdempotentSuccess(t *testing.T) {
+	writer := &mockGitWriter{createRepoErr: status.Error(codes.AlreadyExists, "repository already exists")}
+	svc := newTestSvc(t, writer)
+	ctx := context.Background()
+	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{ID: testNsID1, Name: "admitted", Tier: datastore.NamespaceTierUser}))
+	statusJSON, err := json.Marshal(catalog.RepositoryStatus{Conditions: []catalog.Condition{{Type: catalog.ConditionAdmissionAccepted, Status: catalog.ConditionTrue}}})
+	require.NoError(t, err)
+	repository := &datastore.Repository{UID: "01960000-0000-7000-8000-000000000016", ID: "01960000-0000-7000-8000-000000000016", RepositoryID: "01960000-0000-7000-8000-000000000016", Namespace: "admitted", NamespaceID: "admitted", Name: "catalog", Status: statusJSON}
+	require.NoError(t, svcStore(t, svc).CreateRepositoryInActiveNamespace(ctx, repository))
+	require.NoError(t, svcStore(t, svc).CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "admitted", Name: "catalog", RepositoryID: repository.UID}))
+
+	provisioned, err := svc.ProvisionRepositoryStorage(ctx, "admitted", "catalog")
+	require.NoError(t, err)
+	assert.Equal(t, repository.UID, provisioned.UID)
 }
 
 func TestProvisionSystemRepositoryCreatesOnlyTheSystemManagedBootstrapRepository(t *testing.T) {

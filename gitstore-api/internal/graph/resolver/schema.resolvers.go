@@ -46,6 +46,8 @@ func (r *mutationResolver) UpdateResourceStatus(ctx context.Context, input model
 		return r.updateCategoryTaxonomyStatusGeneric(ctx, input)
 	case "Namespace":
 		return r.updateNamespaceStatusGeneric(ctx, input)
+	case "Repository":
+		return r.updateRepositoryStatusGeneric(ctx, input)
 	case "File":
 		return r.updateFileStatusGeneric(ctx, input)
 	default:
