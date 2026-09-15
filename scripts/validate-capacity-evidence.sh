@@ -119,6 +119,7 @@ validate_release_service_containers() {
          imageReference:.Config.Image,
          imageID:.Image,
          executable:.Path,
+         arguments:(.Args // []),
          revision:(.Config.Labels["org.opencontainers.image.revision"] // ""),
          running:.State.Running}]
     ' <<<"${inspection}")"
@@ -131,10 +132,16 @@ validate_release_service_containers() {
     all(.[];
       .running and .revision == $revision and
       (.imageReference | test("@sha256:[0-9a-f]{64}$")) and
-      ((.role == "api" and .executable == "/app/api") or
+      ((.role == "api" and (
+          .executable == "/app/api" or
+          (.executable == "/bin/sh" and
+           (.arguments | length) == 2 and
+           .arguments[0] == "-ec" and
+           (.arguments[1] | contains("cat /run/secrets/serviceaccount-signing-key")) and
+           (.arguments[1] | contains("exec /app/api --config-file /etc/gitstore/gitstore.toml"))))) or
        (.role == "git-service" and .executable == "/app/git-service")))
   ' <<<"${release_service_containers}" >/dev/null || {
-    echo "live API and Git-service containers must use digest-pinned release images for the tested revision" >&2
+    echo "live API and Git-service containers must use digest-pinned release images for the tested revision and an approved executable shape" >&2
     exit 1
   }
 
