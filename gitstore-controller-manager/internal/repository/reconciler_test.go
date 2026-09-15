@@ -71,11 +71,22 @@ func condition(t *testing.T, conditions []*status.Condition, conditionType strin
 	return nil
 }
 
-func TestReconcileMissingRepositoryReturnsTerminal(t *testing.T) {
+func TestReconcileMissingRepositoryIsAlreadyReconciled(t *testing.T) {
 	r := NewReconciler(seedRepositoryCache(t), &fakeStatusClient{}, &fakeStorageClient{}, &fakeCompletionClient{})
 	result := r.Reconcile(context.Background(), repositoryKey("acme", "missing"))
-	if _, ok := result.(types.TerminalFailure); !ok {
-		t.Fatalf("Reconcile result = %T, want types.TerminalFailure", result)
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %T, want types.Success", result)
+	}
+}
+
+func TestReconcileStatusConflictRequeuesForFreshCacheState(t *testing.T) {
+	current := repositoryFixture()
+	r := NewReconciler(seedRepositoryCache(t, current), &fakeStatusClient{err: types.ErrConflict}, &fakeStorageClient{}, &fakeCompletionClient{})
+
+	result := r.Reconcile(context.Background(), repositoryKey("acme", "catalog"))
+	requeue, ok := result.(types.RequeueAfter)
+	if !ok || requeue.After != conflictRequeueDelay {
+		t.Fatalf("Reconcile result = %#v, want RequeueAfter(%s)", result, conflictRequeueDelay)
 	}
 }
 
@@ -192,5 +203,17 @@ func TestReconcileTerminatingRepositoryRetriesCompletionFailure(t *testing.T) {
 	result := r.Reconcile(context.Background(), repositoryKey("acme", "catalog"))
 	if _, ok := result.(types.TransientFailure); !ok {
 		t.Fatalf("Reconcile result = %T, want types.TransientFailure", result)
+	}
+}
+
+func TestReconcileTerminatingRepositoryConflictRequeuesForFreshCacheState(t *testing.T) {
+	current := repositoryFixture(func(repository *Repository) {
+		repository.Finalizers = []string{ForegroundDeletionFinalizer}
+	})
+	r := NewReconciler(seedRepositoryCache(t, current), &fakeStatusClient{}, &fakeStorageClient{}, &fakeCompletionClient{err: types.ErrConflict})
+
+	result := r.Reconcile(context.Background(), repositoryKey("acme", "catalog"))
+	if _, ok := result.(types.RequeueAfter); !ok {
+		t.Fatalf("Reconcile result = %T, want types.RequeueAfter", result)
 	}
 }

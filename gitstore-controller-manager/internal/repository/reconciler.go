@@ -35,6 +35,8 @@ const (
 	// bool strings. StatusPatch.IsNoOp compares these values exactly.
 	statusTrue  = "TRUE"
 	statusFalse = "FALSE"
+
+	conflictRequeueDelay = 100 * time.Millisecond
 )
 
 // Repository is the cache entity populated by RepositoryListWatcher.
@@ -89,7 +91,9 @@ func NewReconciler(c cache.CacheAccessor[Repository], statusClient status.Status
 func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
 	current, ok := r.cache.Get(key)
 	if !ok {
-		return types.ResultTerminal(fmt.Errorf("repository: %q/%q not found in cache", key.Namespace, key.Name))
+		// A queued key can outlive its object after watch replay, deletion, or a
+		// checkpointed controller restart. Absence is the reconciled state.
+		return types.ResultOK()
 	}
 	if current.Name == SystemRepositoryName {
 		return types.ResultOK()
@@ -117,6 +121,12 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 	}
 	if !patch.IsNoOp(current.Status) {
 		if err := r.statusClient.Apply(ctx, key, patch); err != nil {
+			if errors.Is(err, types.ErrConflict) {
+				// Another replica (or a newer watch event) won the status write.
+				// Re-enter through the queue so the next attempt observes fresh
+				// cache state instead of exhausting one stale retry budget.
+				return types.ResultAfter(conflictRequeueDelay)
+			}
 			if provisionErr != nil {
 				return types.ResultTransient(fmt.Errorf("repository: provision and status update failed: %w", errors.Join(provisionErr, err)))
 			}
@@ -131,6 +141,9 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 
 func (r *Reconciler) reconcileDeletion(ctx context.Context, current Repository) types.ReconcileResult {
 	if err := r.completionClient.CompleteDeletion(ctx, current.Namespace, current.Name, current.ResourceVersion); err != nil {
+		if errors.Is(err, types.ErrConflict) {
+			return types.ResultAfter(conflictRequeueDelay)
+		}
 		return types.ResultTransient(fmt.Errorf("repository: complete deletion: %w", err))
 	}
 	return types.ResultOK()

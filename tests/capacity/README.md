@@ -110,6 +110,13 @@ replacement with cursor-resumed recovery. Configure it with the
 `REPOSITORY_CAPACITY_*` variables shown by `make help`. Diagnostic mode permits
 smaller experiments but never produces passing gate evidence.
 
+When a load balancer or local container runtime buffers WebSocket traffic,
+point `REPOSITORY_OVERFLOW_API` at a reader-only API replica on the same
+datastore and journal. Configure only that chaos endpoint with
+`watch.namespace.subscriber_buffer=1` and
+`watch.namespace.subscriber_backpressure_millis=1`; the two measured API
+replicas must retain their production settings.
+
 The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
 `3g` per node. Override it explicitly when testing another resource tier and
 set `CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE` to the corresponding byte value.

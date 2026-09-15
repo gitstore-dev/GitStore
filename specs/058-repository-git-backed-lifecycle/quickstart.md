@@ -22,6 +22,7 @@ must replace the selected API process in place:
 make capacity TARGET=repository PROFILE=lifecycle MODE=production \
   REPOSITORY_API_A=http://localhost:4000 \
   REPOSITORY_API_B=http://localhost:4001 \
+  REPOSITORY_OVERFLOW_API=http://localhost:4002 \
   REPOSITORY_CONTROLLER_A=http://localhost:5001 \
   REPOSITORY_CONTROLLER_B=http://localhost:5002 \
   REPOSITORY_API_REPLACEMENT=http://localhost:4001 \
@@ -37,6 +38,13 @@ Production evidence enforces the full 60-minute, 1,000-subscriber,
 10,000-event replay, 1,000-transition overflow, burst, resource, and recovery
 contract. A diagnostic run is useful while assembling the deployment but is
 not evidence for T035/T037.
+
+`REPOSITORY_OVERFLOW_API` may equal API A when the network path applies normal
+TCP backpressure. Behind a buffering proxy, use a reader-only API replica on
+the same datastore/journal and configure that replica with
+`watch.namespace.subscriber_buffer=1` and
+`watch.namespace.subscriber_backpressure_millis=1`. Keep API A and API B at
+their production settings so the load and latency measurements remain valid.
 
 ## Manual verification
 

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -32,6 +33,7 @@ const (
 
 type repositoryCapacityConfig struct {
 	apiA, apiB                  string
+	overflowAPI                 string
 	controllerA, controllerB    string
 	replacement, trigger, token string
 	namespace                   string
@@ -45,6 +47,8 @@ type repositoryCapacityConfig struct {
 	mutationWorkers             int
 	burstSize                   int
 	burstInterval               time.Duration
+	baselineStabilization       time.Duration
+	postLoadStabilization       time.Duration
 	mode                        capacityMode
 	skipReplacement             bool
 }
@@ -87,6 +91,7 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	require.NotEqual(t, cfg.controllerA, cfg.controllerB, "controller endpoints must identify distinct replicas")
 	require.True(t, endpointReady(client, cfg.apiA), "API A must be healthy and ready")
 	require.True(t, endpointReady(client, cfg.apiB), "API B must be healthy and ready")
+	require.True(t, endpointReady(client, cfg.overflowAPI), "overflow API must be healthy and ready")
 	identityA := repositoryCapacityAPIIdentity(t, client, cfg.apiA)
 	identityB := repositoryCapacityAPIIdentity(t, client, cfg.apiB)
 	require.NotEqual(t, identityA, identityB, "API endpoints resolve to the same process instance")
@@ -103,6 +108,7 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		"api_a": mustRepositoryCapacityMetrics(t, client, cfg.apiA),
 		"api_b": mustRepositoryCapacityMetrics(t, client, cfg.apiB),
 	}
+	metricsStart = stabilizeRepositoryCapacityBaseline(t, client, cfg, metricsStart)
 
 	replayCursor := repositoryCapacityBootstrapCursor(t, cfg.apiA, cfg)
 	replayPrefix := "rcr-" + runID + "-"
@@ -193,7 +199,9 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		"api_a": mustRepositoryCapacityMetrics(t, client, cfg.apiA),
 		"api_b": mustRepositoryCapacityMetrics(t, client, cfg.apiB),
 	}
-	assertCapacityMetrics(t, metricsStart, metricsEnd, time.Since(soakStarted), recovery, false)
+	metricsElapsed := time.Since(soakStarted)
+	metricsEnd = stabilizeRepositoryCapacityMemory(t, client, cfg, metricsEnd)
+	assertCapacityMetrics(t, metricsStart, metricsEnd, metricsElapsed, recovery, false)
 	t.Logf("Repository lifecycle capacity passed: mode=%s replay=%d replay_p95=%s subscribers=%d admitted=%d duration=%s", cfg.mode, cfg.replayEvents, replayP95, cfg.subscribers, load.admitted, time.Since(soakStarted))
 }
 
@@ -205,6 +213,7 @@ func loadRepositoryCapacityConfig(t *testing.T) repositoryCapacityConfig {
 	delay := capacityEnvDuration(t, "REPOSITORY_CAPACITY_REPLACEMENT_DELAY", duration/2)
 	return repositoryCapacityConfig{
 		apiA: strings.TrimSuffix(os.Getenv("REPOSITORY_API_A"), "/"), apiB: strings.TrimSuffix(os.Getenv("REPOSITORY_API_B"), "/"),
+		overflowAPI: strings.TrimSuffix(getEnv("REPOSITORY_OVERFLOW_API", os.Getenv("REPOSITORY_API_A")), "/"),
 		controllerA: strings.TrimSuffix(os.Getenv("REPOSITORY_CONTROLLER_A"), "/"), controllerB: strings.TrimSuffix(os.Getenv("REPOSITORY_CONTROLLER_B"), "/"),
 		replacement: strings.TrimSuffix(os.Getenv("REPOSITORY_API_REPLACEMENT"), "/"), trigger: os.Getenv("REPOSITORY_REPLACEMENT_TRIGGER_FILE"),
 		token: repositoryCapacityToken(t), namespace: getEnv("REPOSITORY_CAPACITY_NAMESPACE", "repository-capacity"),
@@ -213,8 +222,41 @@ func loadRepositoryCapacityConfig(t *testing.T) repositoryCapacityConfig {
 		replaySamples: capacityEnvInt(t, "REPOSITORY_CAPACITY_REPLAY_SAMPLES", 20), resourcePool: capacityEnvInt(t, "REPOSITORY_CAPACITY_RESOURCE_POOL", 50),
 		overflowTransitions: capacityEnvInt(t, "REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS", 1000), mutationWorkers: capacityEnvInt(t, "REPOSITORY_CAPACITY_MUTATION_WORKERS", 20),
 		burstSize: capacityEnvInt(t, "REPOSITORY_CAPACITY_BURST_SIZE", 100), burstInterval: capacityEnvDuration(t, "REPOSITORY_CAPACITY_BURST_INTERVAL", time.Minute),
-		mode: mode, skipReplacement: os.Getenv("REPOSITORY_CAPACITY_SKIP_REPLACEMENT") == "1",
+		baselineStabilization: capacityEnvDuration(t, "REPOSITORY_CAPACITY_BASELINE_STABILIZATION", 5*time.Minute),
+		postLoadStabilization: capacityEnvDuration(t, "REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION", 10*time.Minute),
+		mode:                  mode, skipReplacement: os.Getenv("REPOSITORY_CAPACITY_SKIP_REPLACEMENT") == "1",
 	}
+}
+
+func stabilizeRepositoryCapacityBaseline(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, result map[string]capacityProcessMetrics) map[string]capacityProcessMetrics {
+	t.Helper()
+	deadline := time.Now().Add(cfg.baselineStabilization)
+	for time.Now().Before(deadline) {
+		time.Sleep(min(time.Second, time.Until(deadline)))
+		result = mergeCapacityBaselineSamples(result, repositoryCapacityMetricSamples(t, client, cfg))
+	}
+	return result
+}
+
+func stabilizeRepositoryCapacityMemory(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, result map[string]capacityProcessMetrics) map[string]capacityProcessMetrics {
+	t.Helper()
+	deadline := time.Now().Add(cfg.postLoadStabilization)
+	for time.Now().Before(deadline) {
+		time.Sleep(min(time.Second, time.Until(deadline)))
+		result = mergeCapacityMemorySamples(result, repositoryCapacityMetricSamples(t, client, cfg))
+	}
+	return result
+}
+
+func repositoryCapacityMetricSamples(t *testing.T, client *http.Client, cfg repositoryCapacityConfig) map[string]capacityProcessMetrics {
+	t.Helper()
+	result := make(map[string]capacityProcessMetrics, 2)
+	for label, endpoint := range map[string]string{"api_a": cfg.apiA, "api_b": cfg.apiB} {
+		metrics, err := fetchCapacityMetrics(client, endpoint)
+		require.NoErrorf(t, err, "%s process metrics", label)
+		result[label] = metrics
+	}
+	return result
 }
 
 func validateRepositoryCapacityScale(t *testing.T, cfg repositoryCapacityConfig) {
@@ -445,6 +487,11 @@ func repositoryCapacityBootstrapCursor(t *testing.T, endpoint string, cfg reposi
 }
 
 func dialRepositoryCapacityWatch(endpoint string, cfg repositoryCapacityConfig, cursor string) (*websocket.Conn, error) {
+	selection := `type name resourceVersion repository { metadata { annotations } }`
+	return dialRepositoryCapacityWatchSelection(endpoint, cfg, cursor, selection)
+}
+
+func dialRepositoryCapacityWatchSelection(endpoint string, cfg repositoryCapacityConfig, cursor, selection string) (*websocket.Conn, error) {
 	wsURL := strings.Replace(strings.TrimSuffix(endpoint, "/"), "http", "ws", 1) + "/graphql"
 	header := http.Header{"Authorization": []string{"Bearer " + cfg.token}}
 	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}, HandshakeTimeout: 10 * time.Second}
@@ -461,7 +508,7 @@ func dialRepositoryCapacityWatch(endpoint string, cfg repositoryCapacityConfig, 
 		conn.Close()
 		return nil, fmt.Errorf("repository watch connection acknowledgement: %v %v", ack, err)
 	}
-	query := `subscription($namespace: String!, $cursor: String) { watchRepositories(namespace: $namespace, resourceVersion: $cursor) { type name resourceVersion repository { metadata { annotations } } } }`
+	query := fmt.Sprintf(`subscription($namespace: String!, $cursor: String) { watchRepositories(namespace: $namespace, resourceVersion: $cursor) { %s } }`, selection)
 	err = conn.WriteJSON(map[string]any{"id": "repository-capacity", "type": "subscribe", "payload": map[string]any{"query": query, "variables": map[string]any{"namespace": cfg.namespace, "cursor": cursor}}})
 	if err != nil {
 		conn.Close()
@@ -656,10 +703,17 @@ func runRepositoryCapacityReplacement(cfg repositoryCapacityConfig, client *http
 
 func runRepositoryCapacityOverflow(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, poolPrefix, eventPrefix string) {
 	t.Helper()
-	cursor := repositoryCapacityBootstrapCursor(t, cfg.apiA, cfg)
-	conn, err := dialRepositoryCapacityWatch(cfg.apiA, cfg, cursor)
+	cursor := repositoryCapacityBootstrapCursor(t, cfg.overflowAPI, cfg)
+	selection := `type name resourceVersion repository { metadata { annotations } }`
+	for i := 0; i < 32; i++ {
+		selection += fmt.Sprintf(` payload%d: repository { metadata { annotations } }`, i)
+	}
+	conn, err := dialRepositoryCapacityWatchSelection(cfg.overflowAPI, cfg, cursor, selection)
 	require.NoError(t, err)
 	defer conn.Close()
+	if tcp, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
+		require.NoError(t, tcp.SetReadBuffer(1024), "constrain the deliberately slow consumer's receive window")
+	}
 	sequences := make([]int, cfg.overflowTransitions)
 	for i := range sequences {
 		sequences[i] = i + 1
