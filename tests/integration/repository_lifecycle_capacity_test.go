@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"sort"
 	"strconv"
@@ -487,8 +488,60 @@ func repositoryCapacityBootstrapCursor(t *testing.T, endpoint string, cfg reposi
 }
 
 func dialRepositoryCapacityWatch(endpoint string, cfg repositoryCapacityConfig, cursor string) (*websocket.Conn, error) {
+	return dialRepositoryCapacityWatchWithTimeout(endpoint, cfg, cursor, 30*time.Second)
+}
+
+func dialRepositoryCapacityWatchWithTimeout(endpoint string, cfg repositoryCapacityConfig, cursor string, timeout time.Duration) (*websocket.Conn, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		conn, err := dialRepositoryCapacityWatchOnce(endpoint, cfg, cursor)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		if !time.Now().Before(deadline) {
+			return nil, fmt.Errorf("Repository watch endpoint unavailable for %s: %w", timeout, lastErr)
+		}
+		time.Sleep(min(250*time.Millisecond, time.Until(deadline)))
+	}
+}
+
+func dialRepositoryCapacityWatchOnce(endpoint string, cfg repositoryCapacityConfig, cursor string) (*websocket.Conn, error) {
 	selection := `type name resourceVersion repository { metadata { annotations } }`
 	return dialRepositoryCapacityWatchSelection(endpoint, cfg, cursor, selection)
+}
+
+func TestDialRepositoryCapacityWatchRetriesTransientHandshake(t *testing.T) {
+	t.Parallel()
+	var attempts atomic.Int64
+	upgrader := websocket.Upgrader{
+		Subprotocols: []string{"graphql-transport-ws"},
+		CheckOrigin:  func(*http.Request) bool { return true },
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+		var message map[string]any
+		require.NoError(t, conn.ReadJSON(&message))
+		require.Equal(t, "connection_init", message["type"])
+		require.NoError(t, conn.WriteJSON(map[string]any{"type": "connection_ack"}))
+		require.NoError(t, conn.ReadJSON(&message))
+		require.Equal(t, "subscribe", message["type"])
+	}))
+	defer server.Close()
+
+	conn, err := dialRepositoryCapacityWatchWithTimeout(server.URL, repositoryCapacityConfig{
+		token: "capacity-token", namespace: "capacity-namespace",
+	}, "capacity-cursor", 2*time.Second)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, attempts.Load())
+	require.NoError(t, conn.Close())
 }
 
 func dialRepositoryCapacityWatchSelection(endpoint string, cfg repositoryCapacityConfig, cursor, selection string) (*websocket.Conn, error) {
