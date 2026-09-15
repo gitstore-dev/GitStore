@@ -142,6 +142,8 @@ func TestAdmitCommittedManifest_RepositoryUsesTheBatchAdmissionPath(t *testing.T
 	repository, err := store.GetRepository(ctx, mapping.RepositoryID)
 	require.NoError(t, err)
 	assert.Equal(t, "premium", repository.StorageClass)
+	assert.Equal(t, "main@sha1:"+commit, repository.Revision)
+	assert.Equal(t, "refs/heads/main", repository.GitRef)
 	var refs []catalog.OwnerReference
 	require.NoError(t, json.Unmarshal(repository.OwnerReferences, &refs))
 	assert.Equal(t, namespace.UID, refs[0].UID)

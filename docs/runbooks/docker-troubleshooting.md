@@ -120,10 +120,9 @@ CONFIG_FILE=./config/config.toml docker compose --profile local \
   -f compose.yml -f compose.local.yml config
 ```
 
-For non-profile/manual startup, check required auth settings:
+For non-profile/manual startup, check the active auth settings:
 
-- `GITSTORE_AUTH__ADMIN__USERNAME`
-- `GITSTORE_AUTH__ADMIN__PASSWORD_HASH`
+- `auth.staticusers.users_file` points to a readable users file
 - `GITSTORE_AUTH__JWT__SECRET`
 
 Inspect logs:

@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -82,7 +83,7 @@ func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.Commi
 		ActorSubject: actor,
 		CommitSHA:    commitSHA,
 		RefName:      req.RefName,
-		Revision:     req.RefName + "@sha1:" + commitSHA,
+		Revision:     strings.TrimPrefix(req.RefName, "refs/heads/") + "@sha1:" + commitSHA,
 		Now:          now,
 		superseded:   &superseded,
 	}

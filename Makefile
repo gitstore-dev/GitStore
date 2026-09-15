@@ -831,7 +831,25 @@ _bootstrap-repository: _bootstrap-tools
 		echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
 		exit 1; \
 	done; \
-	echo "$$response" | jq -r '.data.createRepository.repository | "Created repository \(.metadata.namespace)/\(.metadata.name) (\(.id))\nClone URL: http://localhost:9000/\(.metadata.namespace)/\(.metadata.name).git"'
+	created_response="$$response"; \
+	query='query RepositoryReadiness($$namespace: String!, $$name: String!) { repository(by: {namespacePath: {namespace: $$namespace, name: $$name}}) { status { conditions { type status } } } }'; \
+	payload=$$(jq -n --arg query "$$query" --arg namespace "$${NAMESPACE}" --arg name "$${REPOSITORY}" '{query: $$query, variables: {namespace: $$namespace, name: $$name}}'); \
+	attempt=0; \
+	while :; do \
+		response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
+			echo "Failed to reach GitStore API at $${API_URL} while waiting for repository storage."; \
+			exit 1; \
+		}; \
+		if echo "$$response" | jq -e '((.errors // []) | length == 0) and ([.data.repository.status.conditions[]? | select(.type == "StorageProvisioned" and .status == "TRUE")] | length > 0) and ([.data.repository.status.conditions[]? | select(.type == "Ready" and .status == "TRUE")] | length > 0)' >/dev/null; then break; fi; \
+		if [ "$$attempt" -ge 60 ]; then \
+			echo "Repository $${NAMESPACE}/$${REPOSITORY} was admitted but did not become ready within 60 seconds."; \
+			echo "$$response" | jq .; \
+			exit 1; \
+		fi; \
+		attempt=$$((attempt + 1)); \
+		sleep 1; \
+	done; \
+	echo "$$created_response" | jq -r '.data.createRepository.repository | "Created repository \(.metadata.namespace)/\(.metadata.name) (\(.id))\nClone URL: http://localhost:9000/\(.metadata.namespace)/\(.metadata.name).git"'
 
 clean: ## Remove scoped local runtime state; set TARGET and CONFIRM=1.
 	@./scripts/run-make-workflow.sh clean "$(TARGET)"

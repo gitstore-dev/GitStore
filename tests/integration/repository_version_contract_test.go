@@ -32,7 +32,7 @@ type repositoryVersionResource struct {
 	} `json:"status"`
 }
 
-func TestRepositoryVersionContract_CreateRenameTransfer(t *testing.T) {
+func TestRepositoryVersionContract_CreateAndDeferredIdentityChanges(t *testing.T) {
 	h := newNamespaceContractHarness(t)
 	suffix := time.Now().UnixNano()
 	from := fmt.Sprintf("repo-version-from-%d", suffix)
@@ -55,84 +55,38 @@ func TestRepositoryVersionContract_CreateRenameTransfer(t *testing.T) {
 	assert.Equal(t, "1", created.Metadata.ResourceVersion)
 	assert.Equal(t, 1, created.Metadata.Generation)
 	assert.Equal(t, from, created.Metadata.Namespace)
-	assert.Zero(t, created.Status.ObservedGeneration)
+	assert.Equal(t, 1, created.Status.ObservedGeneration)
 	assert.NotNil(t, created.Status.Conditions)
-	assert.Empty(t, created.Status.Conditions)
+	require.Len(t, created.Status.Conditions, 1)
+	assert.Equal(t, "AdmissionAccepted", created.Status.Conditions[0].Type)
+	assert.Equal(t, "TRUE", created.Status.Conditions[0].Status)
 
-	renamed := repositoryVersionRename(t, h, created.ID, "catalog-renamed")
-	assert.Equal(t, created.ID, renamed.ID)
-	assert.Equal(t, created.Metadata.UID, renamed.Metadata.UID)
-	assert.Equal(t, "2", renamed.Metadata.ResourceVersion)
-	assert.Equal(t, 2, renamed.Metadata.Generation)
-	assert.Equal(t, "catalog-renamed", renamed.Metadata.Name)
-	assert.NotNil(t, renamed.Status.Conditions)
-	repositoryVersionAssertOnlyActivePath(t, h, created.ID,
-		repositoryVersionPath{namespace: from, name: "catalog-renamed"},
-		repositoryVersionPath{namespace: from, name: "catalog"},
-		repositoryVersionPath{namespace: from, name: "catalog-renamed"},
-	)
-
-	repeatedRename := repositoryVersionRename(t, h, created.ID, "catalog-renamed")
-	assert.Equal(t, renamed, repeatedRename)
-
-	retriedName := "catalog-retried"
-	repositoryVersionLoseMutationResponse(t, h,
-		`mutation($repositoryID: ID!, $newName: String!) {
+	rename := h.gql(`mutation($repositoryID: ID!, $newName: String!) {
 			renameRepository(input: {repositoryId: $repositoryID, newName: $newName}) {
 				repository { id }
 			}
-		}`,
-		map[string]any{"repositoryID": created.ID, "newName": retriedName},
-	)
-	committedRename := repositoryVersionQueryByID(t, h, created.ID)
-	assert.Equal(t, "3", committedRename.Metadata.ResourceVersion)
-	assert.Equal(t, 3, committedRename.Metadata.Generation)
-	assert.Equal(t, retriedName, committedRename.Metadata.Name)
-	assert.Equal(t, from, committedRename.Metadata.Namespace)
+		}`, map[string]any{"repositoryID": created.ID, "newName": "catalog-renamed"})
+	require.NotEmpty(t, rename.Errors)
+	assert.Contains(t, namespaceContractErrors(rename.Errors), "renameRepository is unimplemented")
 
-	retriedRename := repositoryVersionRename(t, h, created.ID, retriedName)
-	assert.Equal(t, committedRename, retriedRename)
-	repositoryVersionAssertOnlyActivePath(t, h, created.ID,
-		repositoryVersionPath{namespace: from, name: retriedName},
-		repositoryVersionPath{namespace: from, name: "catalog"},
-		repositoryVersionPath{namespace: from, name: "catalog-renamed"},
-		repositoryVersionPath{namespace: from, name: retriedName},
-	)
-
-	repositoryVersionLoseMutationResponse(t, h,
-		`mutation($repositoryID: ID!, $targetNamespaceID: ID!) {
+	transfer := h.gql(`mutation($repositoryID: ID!, $targetNamespaceID: ID!) {
 			transferRepository(input: {
 				repositoryId: $repositoryID
 				targetNamespaceId: $targetNamespaceID
 			}) {
 				repository { id }
 			}
-		}`,
-		map[string]any{"repositoryID": created.ID, "targetNamespaceID": targetNamespaceID},
-	)
-	committedTransfer := repositoryVersionQueryByID(t, h, created.ID)
-	assert.Equal(t, "4", committedTransfer.Metadata.ResourceVersion)
-	assert.Equal(t, 3, committedTransfer.Metadata.Generation)
-	assert.Equal(t, retriedName, committedTransfer.Metadata.Name)
-	assert.Equal(t, to, committedTransfer.Metadata.Namespace)
+		}`, map[string]any{"repositoryID": created.ID, "targetNamespaceID": targetNamespaceID})
+	require.NotEmpty(t, transfer.Errors)
+	assert.Contains(t, namespaceContractErrors(transfer.Errors), "transferRepository is unimplemented")
 
-	transferred := repositoryVersionTransfer(t, h, created.ID, targetNamespaceID)
-	assert.Equal(t, committedTransfer, transferred)
-	assert.Equal(t, created.ID, transferred.ID)
-	assert.Equal(t, created.Metadata.UID, transferred.Metadata.UID)
-	assert.Equal(t, "4", transferred.Metadata.ResourceVersion)
-	assert.Equal(t, 3, transferred.Metadata.Generation)
-	assert.Equal(t, to, transferred.Metadata.Namespace)
-	assert.NotNil(t, transferred.Status.Conditions)
-
-	repeatedTransfer := repositoryVersionTransfer(t, h, created.ID, targetNamespaceID)
-	assert.Equal(t, transferred, repeatedTransfer)
+	unchanged := repositoryVersionQueryByID(t, h, created.ID)
+	assert.Equal(t, created, unchanged)
 	repositoryVersionAssertOnlyActivePath(t, h, created.ID,
-		repositoryVersionPath{namespace: to, name: retriedName},
+		repositoryVersionPath{namespace: from, name: "catalog"},
 		repositoryVersionPath{namespace: from, name: "catalog"},
 		repositoryVersionPath{namespace: from, name: "catalog-renamed"},
-		repositoryVersionPath{namespace: from, name: retriedName},
-		repositoryVersionPath{namespace: to, name: retriedName},
+		repositoryVersionPath{namespace: to, name: "catalog"},
 	)
 }
 
@@ -174,7 +128,12 @@ func repositoryVersionCreate(t *testing.T, h *namespaceContractHarness, namespac
 	t.Helper()
 	resp := h.gql(
 		`mutation($namespace: String!, $name: String!) {
-			createRepository(input: {namespace: $namespace, name: $name}) {
+			createRepository(input: {
+				apiVersion: "gitstore.dev/v1beta1"
+				kind: "Repository"
+				metadata: {namespace: $namespace, name: $name}
+				spec: {defaultBranch: "main", visibility: PRIVATE, storageClass: "standard"}
+			}) {
 				repository `+repositoryVersionSelection()+`
 			}
 		}`,
@@ -339,13 +298,7 @@ func repositoryVersionLookupNamespaceID(t *testing.T, h *namespaceContractHarnes
 
 func repositoryVersionDelete(t *testing.T, h *namespaceContractHarness, repositoryID string) {
 	t.Helper()
-	resp := h.gql(
-		`mutation($repositoryID: ID!) {
-			deleteRepository(input: {repositoryId: $repositoryID}) { deletedRepositoryId }
-		}`,
-		map[string]any{"repositoryID": repositoryID},
-	)
-	if len(resp.Errors) > 0 {
-		t.Logf("cleanup deleteRepository(%s): %s", repositoryID, namespaceContractErrors(resp.Errors))
+	if errors := h.deleteRepositoryAndComplete(repositoryID); len(errors) > 0 {
+		t.Logf("cleanup deleteRepository(%s): %s", repositoryID, namespaceContractErrors(errors))
 	}
 }

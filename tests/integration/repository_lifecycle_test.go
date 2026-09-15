@@ -134,7 +134,13 @@ func waitForAdmittedRepository(t *testing.T, token, namespace, name string) *rep
 				metadata { name namespace uid }
 			}
 		}`, map[string]any{"namespace": namespace, "name": name})
-		require.Empty(t, response.Errors, "repository direct lookup GraphQL errors: %s", response.Errors)
+		if len(response.Errors) > 0 {
+			if time.Now().After(deadline) || !repositoryNotFoundResponse(response.Errors) {
+				require.Empty(t, response.Errors, "repository direct lookup GraphQL errors: %s", response.Errors)
+			}
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
 
 		var data struct {
 			Repository *repositoryAdmissionResource `json:"repository"`
@@ -146,6 +152,23 @@ func waitForAdmittedRepository(t *testing.T, token, namespace, name string) *rep
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+func repositoryNotFoundResponse(errors []json.RawMessage) bool {
+	if len(errors) == 0 {
+		return false
+	}
+	for _, raw := range errors {
+		var item struct {
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
+		}
+		if json.Unmarshal(raw, &item) != nil || item.Extensions.Code != "NOT_FOUND" {
+			return false
+		}
+	}
+	return true
 }
 
 func waitForRepositoryReady(t *testing.T, token, namespace, name string) {

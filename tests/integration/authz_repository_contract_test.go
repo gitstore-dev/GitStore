@@ -97,6 +97,15 @@ func createNamespaceAsUser(t *testing.T, h *namespaceContractHarness, token, nam
 	assert.NotEmpty(t, data.CreateNamespace.Namespace.Metadata.UID)
 	assert.NotEqual(t, data.CreateNamespace.Namespace.ID, data.CreateNamespace.Namespace.Metadata.UID)
 	assert.NotEmpty(t, data.CreateNamespace.Namespace.CreatedBy)
+
+	resp = h.gqlWithToken(token, `
+		mutation($namespace: String!) {
+			provisionNamespaceSystemRepository(input: {namespace: $namespace}) {
+				repository { id }
+			}
+		}
+	`, map[string]any{"namespace": namespace})
+	require.Empty(t, resp.Errors, namespaceContractErrors(resp.Errors))
 }
 
 func createRepositoryAsUser(
@@ -109,7 +118,12 @@ func createRepositoryAsUser(
 	t.Helper()
 	resp := h.gqlWithToken(token, `
 		mutation($namespace: String!, $name: String!) {
-			createRepository(input: {namespace: $namespace, name: $name, defaultBranch: "main"}) {
+			createRepository(input: {
+				apiVersion: "gitstore.dev/v1beta1"
+				kind: "Repository"
+				metadata: {namespace: $namespace, name: $name}
+				spec: {defaultBranch: "main", visibility: PRIVATE, storageClass: "standard"}
+			}) {
 				repository {
 					id
 					metadata {
