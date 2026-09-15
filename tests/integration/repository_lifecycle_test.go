@@ -101,6 +101,14 @@ func TestRepositoryLifecycle_DualControllerRegistrationAndReconcile(t *testing.T
 	require.Empty(t, repositoryControllerPoison(t, client, controllerB))
 }
 
+// TestRepositoryLifecycle_TwoReplicaCapacity is the evidence-gated deployment
+// harness for T035/T037. It requires two real API processes, two real
+// controller-manager processes, shared durable storage, and an external
+// replacement trigger. Focused and in-process tests deliberately skip it.
+func TestRepositoryLifecycle_TwoReplicaCapacity(t *testing.T) {
+	runRepositoryLifecycleCapacity(t)
+}
+
 func validRepositoryFixture(name, namespace string) string {
 	return fmt.Sprintf(`---
 apiVersion: gitstore.dev/v1beta1

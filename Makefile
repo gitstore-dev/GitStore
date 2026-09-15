@@ -99,6 +99,26 @@ NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE ?=
 NAMESPACE_WATCH_TOKEN ?=
 NAMESPACE_WATCH_TOKEN_FILE ?=
 NAMESPACE_WATCH_OVERFLOW_TRANSITIONS ?=
+REPOSITORY_CAPACITY_DURATION ?=60m
+REPOSITORY_CAPACITY_SUBSCRIBERS ?=1000
+REPOSITORY_CAPACITY_REPLAY_EVENTS ?=10000
+REPOSITORY_CAPACITY_REPLAY_SAMPLES ?=20
+REPOSITORY_CAPACITY_RESOURCE_POOL ?=50
+REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS ?=1000
+REPOSITORY_CAPACITY_MUTATION_WORKERS ?=20
+REPOSITORY_CAPACITY_BURST_INTERVAL ?=1m
+REPOSITORY_CAPACITY_BURST_SIZE ?=100
+REPOSITORY_CAPACITY_REPLACEMENT_DELAY ?=
+REPOSITORY_CAPACITY_SKIP_REPLACEMENT ?=0
+REPOSITORY_API_A ?=http://localhost:4000
+REPOSITORY_API_B ?=http://localhost:4001
+REPOSITORY_CONTROLLER_A ?=http://localhost:5001
+REPOSITORY_CONTROLLER_B ?=http://localhost:5002
+REPOSITORY_API_REPLACEMENT ?=
+REPOSITORY_REPLACEMENT_TRIGGER_FILE ?=
+REPOSITORY_TOKEN ?=
+REPOSITORY_TOKEN_FILE ?=
+REPOSITORY_CAPACITY_NAMESPACE ?=repository-capacity
 CAPACITY_PROFILE ?= api-readiness
 MODE ?= diagnostic
 TARGET ?= api
@@ -131,7 +151,7 @@ export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
 .PHONY: help git api controller dev compose scylla ps logs stop down
 .PHONY: build test lint pr-ready check clean bootstrap secret capacity capacity-dispatch-test chaos test-scylla-hardening test-scylla-integration
-.PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-observability _capacity-observability-down
+.PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-repository-lifecycle _capacity-observability _capacity-observability-down
 .PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
 .PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac _secret-signing-key
 .PHONY: admin-compose admin-down admin-stop admin-logs add-user add-role assign-role hash-user-password enroll-controller-serviceaccount
@@ -178,6 +198,9 @@ help: ## Show available targets and common variables.
 	@printf "  NAMESPACE_WATCH_API_A=%s NAMESPACE_WATCH_API_B=%s\n" "$(NAMESPACE_WATCH_API_A)" "$(NAMESPACE_WATCH_API_B)"
 	@printf "  NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=<path> Required coordination signal for an actual replica restart\n"
 	@printf "  NAMESPACE_WATCH_TOKEN=<token> Required for the cross-replica Namespace watch probe\n"
+	@printf "  REPOSITORY_API_A=%s REPOSITORY_API_B=%s\n" "$(REPOSITORY_API_A)" "$(REPOSITORY_API_B)"
+	@printf "  REPOSITORY_CONTROLLER_A=%s REPOSITORY_CONTROLLER_B=%s\n" "$(REPOSITORY_CONTROLLER_A)" "$(REPOSITORY_CONTROLLER_B)"
+	@printf "  REPOSITORY_REPLACEMENT_TRIGGER_FILE=<path> Required for Repository lifecycle rolling-replacement evidence\n"
 	@printf "  BOOTSTRAP_TOKEN=<token>   Use an existing bearer token for bootstrap\n"
 	@printf "  TARGET=<value>            Required selector for check, clean, bootstrap, secret, and capacity\n"
 	@printf "  NAMESPACE=%s REPOSITORY=%s DEFAULT_BRANCH=%s\n" "$(NAMESPACE)" "$(REPOSITORY)" "$(DEFAULT_BRANCH)"
@@ -531,6 +554,31 @@ _capacity-namespace-recovery:
 		NAMESPACE_WATCH_TOKEN_FILE="$(NAMESPACE_WATCH_TOKEN_FILE)" \
 		NAMESPACE_WATCH_OVERFLOW_TRANSITIONS="$(NAMESPACE_WATCH_OVERFLOW_TRANSITIONS)" \
 		go test -count=1 -run '^TestNamespaceWatch(CrossReplicaBootstrapAndResume|RecoveryProbe|DocumentedConsumer)$$' .
+
+_capacity-repository-lifecycle:
+	@cd "$(ROOT)/tests/integration" && \
+		REPOSITORY_API_A="$(REPOSITORY_API_A)" \
+		REPOSITORY_API_B="$(REPOSITORY_API_B)" \
+		REPOSITORY_CONTROLLER_A="$(REPOSITORY_CONTROLLER_A)" \
+		REPOSITORY_CONTROLLER_B="$(REPOSITORY_CONTROLLER_B)" \
+		REPOSITORY_API_REPLACEMENT="$(REPOSITORY_API_REPLACEMENT)" \
+		REPOSITORY_REPLACEMENT_TRIGGER_FILE="$(REPOSITORY_REPLACEMENT_TRIGGER_FILE)" \
+		REPOSITORY_TOKEN="$(REPOSITORY_TOKEN)" \
+		REPOSITORY_TOKEN_FILE="$(REPOSITORY_TOKEN_FILE)" \
+		REPOSITORY_CAPACITY_NAMESPACE="$(REPOSITORY_CAPACITY_NAMESPACE)" \
+		REPOSITORY_CAPACITY_DURATION="$(REPOSITORY_CAPACITY_DURATION)" \
+		REPOSITORY_CAPACITY_SUBSCRIBERS="$(REPOSITORY_CAPACITY_SUBSCRIBERS)" \
+		REPOSITORY_CAPACITY_REPLAY_EVENTS="$(REPOSITORY_CAPACITY_REPLAY_EVENTS)" \
+		REPOSITORY_CAPACITY_REPLAY_SAMPLES="$(REPOSITORY_CAPACITY_REPLAY_SAMPLES)" \
+		REPOSITORY_CAPACITY_RESOURCE_POOL="$(REPOSITORY_CAPACITY_RESOURCE_POOL)" \
+		REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS="$(REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS)" \
+		REPOSITORY_CAPACITY_MUTATION_WORKERS="$(REPOSITORY_CAPACITY_MUTATION_WORKERS)" \
+		REPOSITORY_CAPACITY_BURST_INTERVAL="$(REPOSITORY_CAPACITY_BURST_INTERVAL)" \
+		REPOSITORY_CAPACITY_BURST_SIZE="$(REPOSITORY_CAPACITY_BURST_SIZE)" \
+		REPOSITORY_CAPACITY_REPLACEMENT_DELAY="$(REPOSITORY_CAPACITY_REPLACEMENT_DELAY)" \
+		REPOSITORY_CAPACITY_SKIP_REPLACEMENT="$(REPOSITORY_CAPACITY_SKIP_REPLACEMENT)" \
+		MODE="$(MODE)" REPOSITORY_LIFECYCLE_CAPACITY_RUN=1 \
+		go test -v -count=1 -timeout 0 -run '^TestRepositoryLifecycle_TwoReplicaCapacity$$' .
 
 lint: ## Run Rust formatting/clippy and Go formatting/vet/staticcheck.
 	@cd "$(GIT_SERVICE_DIR)" && cargo fmt --all -- --check

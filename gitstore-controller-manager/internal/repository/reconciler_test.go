@@ -80,10 +80,12 @@ func TestReconcileMissingRepositoryReturnsTerminal(t *testing.T) {
 }
 
 func TestReconcileAdmittedRepositoryProvisionsStorageAndMarksReady(t *testing.T) {
-	current := Repository{
-		UID: "repo-1", Namespace: "acme", Name: "catalog", StorageClass: "premium", Generation: 3, ResourceVersion: "7",
-		Status: status.ResourceStatus{ResourceVersion: "7", Conditions: []*status.Condition{admissionAccepted(3)}},
-	}
+	current := repositoryFixture(func(repository *Repository) {
+		repository.StorageClass = "premium"
+		repository.Generation = 3
+		repository.ResourceVersion = "7"
+		repository.Status = status.ResourceStatus{ResourceVersion: "7", Conditions: []*status.Condition{admissionAccepted(3)}}
+	})
 	statuses := &fakeStatusClient{}
 	storage := &fakeStorageClient{}
 	r := NewReconciler(seedRepositoryCache(t, current), statuses, storage, &fakeCompletionClient{})
@@ -128,10 +130,10 @@ func TestReconcileSkipsNamespaceBootstrapRepository(t *testing.T) {
 }
 
 func TestReconcileProvisionFailureMarksNotReadyAndRetries(t *testing.T) {
-	current := Repository{
-		UID: "repo-1", Namespace: "acme", Name: "catalog", StorageClass: "default", Generation: 1, ResourceVersion: "2",
-		Status: status.ResourceStatus{Conditions: []*status.Condition{admissionAccepted(1)}},
-	}
+	current := repositoryFixture(func(repository *Repository) {
+		repository.StorageClass = "default"
+		repository.Status.ResourceVersion = ""
+	})
 	statuses := &fakeStatusClient{}
 	r := NewReconciler(seedRepositoryCache(t, current), statuses, &fakeStorageClient{err: errors.New("git service unavailable")}, &fakeCompletionClient{})
 
@@ -151,7 +153,7 @@ func TestReconcileProvisionFailureMarksNotReadyAndRetries(t *testing.T) {
 }
 
 func TestReconcileWithoutAdmissionDoesNotProvisionStorage(t *testing.T) {
-	current := Repository{UID: "repo-1", Namespace: "acme", Name: "catalog", Generation: 1, ResourceVersion: "2"}
+	current := repositoryFixture(func(repository *Repository) { repository.Status = status.ResourceStatus{} })
 	storage := &fakeStorageClient{}
 	r := NewReconciler(seedRepositoryCache(t, current), &fakeStatusClient{}, storage, &fakeCompletionClient{})
 
@@ -165,7 +167,10 @@ func TestReconcileWithoutAdmissionDoesNotProvisionStorage(t *testing.T) {
 }
 
 func TestReconcileTerminatingRepositoryCompletesDeletion(t *testing.T) {
-	current := Repository{UID: "repo-1", Namespace: "acme", Name: "catalog", ResourceVersion: "9", Finalizers: []string{ForegroundDeletionFinalizer}}
+	current := repositoryFixture(func(repository *Repository) {
+		repository.ResourceVersion = "9"
+		repository.Finalizers = []string{ForegroundDeletionFinalizer}
+	})
 	completion := &fakeCompletionClient{}
 	r := NewReconciler(seedRepositoryCache(t, current), &fakeStatusClient{}, &fakeStorageClient{}, completion)
 
@@ -179,7 +184,10 @@ func TestReconcileTerminatingRepositoryCompletesDeletion(t *testing.T) {
 }
 
 func TestReconcileTerminatingRepositoryRetriesCompletionFailure(t *testing.T) {
-	current := Repository{UID: "repo-1", Namespace: "acme", Name: "catalog", ResourceVersion: "9", Finalizers: []string{ForegroundDeletionFinalizer}}
+	current := repositoryFixture(func(repository *Repository) {
+		repository.ResourceVersion = "9"
+		repository.Finalizers = []string{ForegroundDeletionFinalizer}
+	})
 	r := NewReconciler(seedRepositoryCache(t, current), &fakeStatusClient{}, &fakeStorageClient{}, &fakeCompletionClient{err: errors.New("git service unavailable")})
 	result := r.Reconcile(context.Background(), repositoryKey("acme", "catalog"))
 	if _, ok := result.(types.TransientFailure); !ok {

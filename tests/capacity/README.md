@@ -9,8 +9,8 @@ make capacity TARGET=api PROFILE=readiness MODE=diagnostic \
 ```
 
 Valid target/profile pairs are `api/readiness`, `namespace/admission`,
-`namespace/validation`, `namespace/watch`, `namespace/recovery`, and
-`scylla/soak`. Admission is deployed k6 load; validation is the in-process
+`namespace/validation`, `namespace/watch`, `namespace/recovery`,
+`repository/lifecycle`, and `scylla/soak`. Admission is deployed k6 load; validation is the in-process
 two-replica soak. `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
 The dispatcher is the only public capacity entry point.
 
@@ -55,7 +55,7 @@ CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3
 ```
 
 The same manifest contract applies to the Go-based `validation`, `watch`,
-`recovery`, and `soak` profiles. Their focused Go test is recorded as the
+`recovery`, Repository `lifecycle`, and `soak` profiles. Their focused Go test is recorded as the
 domain verifier; deployed Scylla-backed profiles additionally require the
 before/after container-health evidence above.
 Non-diagnostic `watch` and `recovery` runs also require
@@ -86,7 +86,7 @@ legitimate replicas start in the same kernel tick.
 `CAPACITY_BASE_URL` must be one of those verified endpoints. Every live
 container must also use a digest-pinned image, the `/app/api` release
 executable, and an OCI revision matching the tested checkout.
-For `namespace/watch` and `namespace/recovery`, the dispatcher repeats this
+For `namespace/watch`, `namespace/recovery`, and `repository/lifecycle`, the dispatcher repeats this
 identity and artifact inspection after the workload. A replacement using a
 different image, executable, or revision therefore makes the evidence fail and
 is retained in `postflight-environment.json` for audit. The preflight and
@@ -98,6 +98,17 @@ Alpha and production evidence requires a clean Git checkout so the recorded
 Recovery additionally requires at least 1,000 overflow transitions, and its
 terminal-error read is capped at 60 seconds so a misconfigured deployment fails
 promptly instead of waiting for the overall Go test timeout.
+
+`repository/lifecycle` is the end-to-end spec-058 gate. It alternates
+Git-delegating Repository mutations across two API endpoints, verifies durable
+watch delivery and reads through both replicas, requires both independent
+controller-manager endpoints to reconcile without poison items, measures
+10,000-event replay, holds 1,000 live subscribers during sustained load and
+bursts, forces slow-consumer overflow, and coordinates one real API process
+replacement with cursor-resumed recovery. Configure it with the
+`REPOSITORY_API_*`, `REPOSITORY_CONTROLLER_*`, `REPOSITORY_TOKEN[_FILE]`, and
+`REPOSITORY_CAPACITY_*` variables shown by `make help`. Diagnostic mode permits
+smaller experiments but never produces passing gate evidence.
 
 The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
 `3g` per node. Override it explicitly when testing another resource tier and

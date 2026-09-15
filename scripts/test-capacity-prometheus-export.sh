@@ -59,4 +59,11 @@ PATH="${test_dir}/bin:${PATH}" CAPACITY_PROMETHEUS_LOOKBACK=30m \
 jq -e '.capacityTarget == "api/readiness" and (.queries | map(.name)) == ["api_targets_up"]' \
   "${test_dir}/readiness/prometheus/manifest.json" >/dev/null
 
+mkdir -p "${test_dir}/repository"
+printf '{"target":"repository","scenario":"lifecycle","startedAt":"2026-09-04T00:00:00Z"}\n' >"${test_dir}/repository/metadata.json"
+PATH="${test_dir}/bin:${PATH}" CAPACITY_PROMETHEUS_LOOKBACK=30m \
+  "${repo_root}/scripts/export-capacity-prometheus.sh" "${test_dir}/repository" http://prometheus.invalid >/dev/null
+jq -e '.capacityTarget == "repository/lifecycle" and (.queries | map(.name)) == ["api_targets_up","repository_datastore_operation_p95","repository_datastore_errors","namespace_cdc_discovery_p95","namespace_materializer_stage_p95","namespace_delivery_p95"]' \
+  "${test_dir}/repository/prometheus/manifest.json" >/dev/null
+
 echo "capacity Prometheus export tests passed"

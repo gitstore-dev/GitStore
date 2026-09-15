@@ -19,6 +19,7 @@ valid target/profile combinations:
   namespace/validation
   namespace/watch
   namespace/recovery
+  repository/lifecycle
   scylla/soak
 
 valid modes: diagnostic, alpha, production
@@ -51,12 +52,26 @@ case "${target}/${profile}" in
     runner_kind=go-test
     command=(make --no-print-directory _capacity-namespace-recovery "MODE=${mode}")
     ;;
+  repository/lifecycle)
+    runner_kind=go-test
+    command=(make --no-print-directory _capacity-repository-lifecycle "MODE=${mode}")
+    ;;
   scylla/soak)
     runner_kind=go-test
     command=(make --no-print-directory _capacity-scylla-soak "MODE=${mode}")
     ;;
   *) usage; exit 2 ;;
 esac
+
+if [[ "${target}/${profile}" == "repository/lifecycle" ]]; then
+  export NAMESPACE_WATCH_API_A="${REPOSITORY_API_A:-}"
+  export NAMESPACE_WATCH_API_B="${REPOSITORY_API_B:-}"
+  export NAMESPACE_WATCH_API_REPLACEMENT="${REPOSITORY_API_REPLACEMENT:-}"
+  export NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE="${REPOSITORY_REPLACEMENT_TRIGGER_FILE:-}"
+  export NAMESPACE_WATCH_TOKEN="${REPOSITORY_TOKEN:-}"
+  export NAMESPACE_WATCH_TOKEN_FILE="${REPOSITORY_TOKEN_FILE:-}"
+  export NAMESPACE_WATCH_OVERFLOW_TRANSITIONS="${REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS:-}"
+fi
 
 export CAPACITY_TARGET="${target}"
 export CAPACITY_SCENARIO="${profile}"
@@ -175,7 +190,7 @@ fi
 postflight_status=0
 if (( preflight_status == 0 && container_check_status == 0 && verifier_status == 0 )) &&
   [[ "${mode}" != "diagnostic" ]] &&
-  [[ "${target}/${profile}" == "namespace/watch" || "${target}/${profile}" == "namespace/recovery" ]]; then
+  [[ "${target}/${profile}" == "namespace/watch" || "${target}/${profile}" == "namespace/recovery" || "${target}/${profile}" == "repository/lifecycle" ]]; then
   set +e
   "${repo_root}/scripts/validate-capacity-evidence.sh" "${evidence_dir}" "${target}" "${profile}" "${mode}" postflight \
     2>&1 | tee "${evidence_dir}/postflight.log"

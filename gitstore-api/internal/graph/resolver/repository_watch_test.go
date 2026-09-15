@@ -13,6 +13,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -203,12 +204,9 @@ func repositoryWatchPayload(t *testing.T, repository *datastore.Repository) []by
 }
 
 func repositoryWatchFixture(namespace, name, team string) *datastore.Repository {
-	return &datastore.Repository{
-		APIVersion: "gitstore.dev/v1beta1", Kind: "Repository",
-		UID: "018f47d2-cd4b-7a11-9c35-4b4c423d56cb", Namespace: namespace, Name: name,
-		DefaultBranch: "main", StorageClass: "default", Labels: map[string]string{"team": team},
-		CreationTimestamp: time.Now().UTC(),
-	}
+	repository := testutil.RepositoryFixture("018f47d2-cd4b-7a11-9c35-4b4c423d56cb", namespace, name)
+	repository.Labels = map[string]string{"team": team}
+	return repository
 }
 
 func receiveTypedRepositoryEvent(t *testing.T, events <-chan *model.RepositoryWatchEvent) *model.RepositoryWatchEvent {

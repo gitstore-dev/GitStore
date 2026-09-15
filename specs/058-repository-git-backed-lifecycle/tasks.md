@@ -6,8 +6,8 @@
 ## Phase 1: Setup
 
 - [X] T001 Validate the Repository lifecycle contract and defaulted shared envelope in `specs/058-repository-git-backed-lifecycle/contracts/`.
-- [ ] T002 [P] Add shared Repository lifecycle test fixtures in `gitstore-api/internal/testutil/`.
-- [ ] T003 [P] Add controller Repository test fixtures in `gitstore-controller-manager/internal/repository/`.
+- [X] T002 [P] Add shared Repository lifecycle test fixtures in `gitstore-api/internal/testutil/`.
+- [X] T003 [P] Add controller Repository test fixtures in `gitstore-controller-manager/internal/repository/`.
 
 ## Phase 2: Foundational Admission and Schema
 

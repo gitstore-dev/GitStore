@@ -23,6 +23,7 @@ assert_dispatch namespace admission 'CAPACITY_PROFILE=namespace-admission'
 assert_dispatch namespace validation '_capacity-namespace-admission'
 assert_dispatch namespace watch '_capacity-namespace-watch'
 assert_dispatch namespace recovery '_capacity-namespace-recovery'
+assert_dispatch repository lifecycle '_capacity-repository-lifecycle'
 assert_dispatch scylla soak '_capacity-scylla-soak'
 
 if CAPACITY_DRY_RUN=1 "${dispatcher}" namespace unknown alpha >/dev/null 2>&1; then

@@ -11,6 +11,33 @@
 7. **Integration**: add end-to-end coverage spanning push → admission → read, mutation → commit → admission → read, create → update → delete → `Terminating` → removed, Repository watch cross-replica/recovery behavior, and `renameRepository`/`transferRepository` → `Unimplemented` + `@deprecated` introspection.
 8. **Status mutation**: add failing controller-authorization, partial-merge, spec-write rejection, and stale-resourceVersion tests for `updateRepositoryStatus`; stale writes must return a GraphQL `RESOURCE_VERSION_CONFLICT` error carrying `currentResourceVersion` in extensions, never a conflict payload.
 
+## Two-replica lifecycle and capacity gate
+
+Run the Repository-specific deployment gate only against two distinct API
+processes, two distinct controller-manager processes, and their shared Scylla
+journal. The replacement trigger must be watched by the deployment harness and
+must replace the selected API process in place:
+
+```bash
+make capacity TARGET=repository PROFILE=lifecycle MODE=production \
+  REPOSITORY_API_A=http://localhost:4000 \
+  REPOSITORY_API_B=http://localhost:4001 \
+  REPOSITORY_CONTROLLER_A=http://localhost:5001 \
+  REPOSITORY_CONTROLLER_B=http://localhost:5002 \
+  REPOSITORY_API_REPLACEMENT=http://localhost:4001 \
+  REPOSITORY_REPLACEMENT_TRIGGER_FILE=/tmp/gitstore-repository-replace \
+  REPOSITORY_TOKEN_FILE=/path/to/untracked/token \
+  CAPACITY_OBSERVABILITY=prometheus \
+  CAPACITY_PROMETHEUS_TARGETS=host.docker.internal:4000,host.docker.internal:4001 \
+  CAPACITY_CONFIG_MANIFEST=/path/to/config-manifest.json \
+  CAPACITY_ENVIRONMENT_MANIFEST=/path/to/environment-manifest.json
+```
+
+Production evidence enforces the full 60-minute, 1,000-subscriber,
+10,000-event replay, 1,000-transition overflow, burst, resource, and recovery
+contract. A diagnostic run is useful while assembling the deployment but is
+not evidence for T035/T037.
+
 ## Manual verification
 
 ```bash

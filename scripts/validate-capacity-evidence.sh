@@ -212,7 +212,7 @@ case "${target}/${profile}" in
       exit 2
     }
     ;;
-  namespace/watch|namespace/recovery)
+  namespace/watch|namespace/recovery|repository/lifecycle)
     if [[ "${profile}" == "watch" && "${NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT:-0}" == "1" ]]; then
       echo "NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT is only valid in diagnostic mode" >&2
       exit 2
@@ -310,14 +310,14 @@ case "${target}/${profile}" in
         exit 1
       }
     fi
-    if [[ "${profile}" == "recovery" ]]; then
+    if [[ "${profile}" == "recovery" || "${target}/${profile}" == "repository/lifecycle" ]]; then
       [[ -n "${NAMESPACE_WATCH_TOKEN:-}" || -r "${NAMESPACE_WATCH_TOKEN_FILE:-}" ]] || {
-        echo "namespace/recovery evidence requires NAMESPACE_WATCH_TOKEN or a readable token file" >&2
+        echo "${target}/${profile} evidence requires a watch token or readable token file" >&2
         exit 2
       }
       [[ "${NAMESPACE_WATCH_OVERFLOW_TRANSITIONS:-}" =~ ^[1-9][0-9]*$ ]] &&
         (( 10#${NAMESPACE_WATCH_OVERFLOW_TRANSITIONS} >= 1000 )) || {
-        echo "namespace/recovery evidence requires NAMESPACE_WATCH_OVERFLOW_TRANSITIONS >= 1000" >&2
+        echo "${target}/${profile} evidence requires at least 1000 overflow transitions" >&2
         exit 2
       }
     fi
