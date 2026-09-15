@@ -117,6 +117,23 @@ func (h *pushHelper) commitNamespace(filename, content string) {
 	run(h.t, h.workDir, "git", "commit", "-m", fmt.Sprintf("update %s", filename))
 }
 
+// commitRepository writes a declarative Repository manifest and commits it.
+// Repository manifests are admitted from the authoring repository's
+// repositories/ directory, just like the post-receive hook supplies them.
+func (h *pushHelper) commitRepository(filename, content string) {
+	h.t.Helper()
+	dir := filepath.Join(h.workDir, "repositories")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		h.t.Fatalf("mkdir repositories: %v", err)
+	}
+	path := filepath.Join(dir, filename)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		h.t.Fatalf("write repository file: %v", err)
+	}
+	run(h.t, h.workDir, "git", "add", path)
+	run(h.t, h.workDir, "git", "commit", "-m", fmt.Sprintf("add %s", filename))
+}
+
 // push executes git push and returns (stdout+stderr, error).
 func (h *pushHelper) push() (string, error) {
 	h.t.Helper()

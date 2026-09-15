@@ -5,13 +5,17 @@ package resolver_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -61,6 +65,119 @@ func TestCreateRepository_assignsUUIDv7AndCallsGRPC(t *testing.T) {
 	assert.Equal(t, repo.ID, writer.createRepoCalls[0], "gRPC must receive the repo_id UUID")
 }
 
+func TestProvisionRepositoryStorage_onlyProvisionsAnActiveAdmittedNonBootstrapRepository(t *testing.T) {
+	writer := &mockGitWriter{}
+	svc := newTestSvc(t, writer)
+	ctx := context.Background()
+	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
+		ID: testNsID1, Name: "admitted", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
+	}))
+	status, err := json.Marshal(catalog.RepositoryStatus{Conditions: []catalog.Condition{{
+		Type: catalog.ConditionAdmissionAccepted, Status: catalog.ConditionTrue,
+	}}})
+	require.NoError(t, err)
+	repository := &datastore.Repository{
+		UID: "01960000-0000-7000-8000-000000000012", ID: "01960000-0000-7000-8000-000000000012",
+		RepositoryID: "01960000-0000-7000-8000-000000000012", Namespace: "admitted", NamespaceID: "admitted",
+		Name: "catalog", StorageClass: "premium", Status: status,
+	}
+	require.NoError(t, svcStore(t, svc).CreateRepositoryInActiveNamespace(ctx, repository))
+	require.NoError(t, svcStore(t, svc).CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
+		Namespace: "admitted", Name: "catalog", RepositoryID: repository.UID,
+	}))
+
+	provisioned, err := svc.ProvisionRepositoryStorage(ctx, "admitted", "catalog")
+	require.NoError(t, err)
+	assert.Equal(t, repository.UID, provisioned.UID)
+	_, err = svc.ProvisionRepositoryStorage(ctx, "admitted", "catalog")
+	require.NoError(t, err, "retries must delegate to the idempotent git-service operation")
+
+	writer.mu.Lock()
+	assert.Equal(t, []string{repository.UID, repository.UID}, writer.createRepoCalls)
+	writer.mu.Unlock()
+
+	bootstrap := *repository
+	bootstrap.Name = resolver.SystemRepositoryName
+	bootstrap.UID = "01960000-0000-7000-8000-000000000014"
+	bootstrap.ID = bootstrap.UID
+	bootstrap.RepositoryID = bootstrap.UID
+	require.NoError(t, svcStore(t, svc).CreateRepositoryInActiveNamespace(ctx, &bootstrap))
+	require.NoError(t, svcStore(t, svc).CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
+		Namespace: "admitted", Name: resolver.SystemRepositoryName, RepositoryID: bootstrap.UID,
+	}))
+	_, err = svc.ProvisionRepositoryStorage(ctx, "admitted", resolver.SystemRepositoryName)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "system-managed")
+
+	terminating := *repository
+	terminating.Name = "terminating"
+	terminating.UID = "01960000-0000-7000-8000-000000000013"
+	terminating.ID = terminating.UID
+	terminating.RepositoryID = terminating.UID
+	now := time.Now().UTC()
+	terminating.DeletionTimestamp = &now
+	require.NoError(t, svcStore(t, svc).CreateRepositoryInActiveNamespace(ctx, &terminating))
+	require.NoError(t, svcStore(t, svc).CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
+		Namespace: "admitted", Name: "terminating", RepositoryID: terminating.UID,
+	}))
+	_, err = svc.ProvisionRepositoryStorage(ctx, "admitted", "terminating")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "terminating")
+
+	notAdmitted := *repository
+	notAdmitted.Name = "not-admitted"
+	notAdmitted.UID = "01960000-0000-7000-8000-000000000015"
+	notAdmitted.ID = notAdmitted.UID
+	notAdmitted.RepositoryID = notAdmitted.UID
+	notAdmitted.Status = []byte(`{"observedGeneration":0,"conditions":[]}`)
+	require.NoError(t, svcStore(t, svc).CreateRepositoryInActiveNamespace(ctx, &notAdmitted))
+	require.NoError(t, svcStore(t, svc).CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
+		Namespace: "admitted", Name: "not-admitted", RepositoryID: notAdmitted.UID,
+	}))
+	_, err = svc.ProvisionRepositoryStorage(ctx, "admitted", "not-admitted")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "has not been admitted")
+}
+
+func TestProvisionRepositoryStorageTreatsAlreadyExistsAsIdempotentSuccess(t *testing.T) {
+	writer := &mockGitWriter{createRepoErr: status.Error(codes.AlreadyExists, "repository already exists")}
+	svc := newTestSvc(t, writer)
+	ctx := context.Background()
+	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{ID: testNsID1, Name: "admitted", Tier: datastore.NamespaceTierUser}))
+	statusJSON, err := json.Marshal(catalog.RepositoryStatus{Conditions: []catalog.Condition{{Type: catalog.ConditionAdmissionAccepted, Status: catalog.ConditionTrue}}})
+	require.NoError(t, err)
+	repository := &datastore.Repository{UID: "01960000-0000-7000-8000-000000000016", ID: "01960000-0000-7000-8000-000000000016", RepositoryID: "01960000-0000-7000-8000-000000000016", Namespace: "admitted", NamespaceID: "admitted", Name: "catalog", Status: statusJSON}
+	require.NoError(t, svcStore(t, svc).CreateRepositoryInActiveNamespace(ctx, repository))
+	require.NoError(t, svcStore(t, svc).CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "admitted", Name: "catalog", RepositoryID: repository.UID}))
+
+	provisioned, err := svc.ProvisionRepositoryStorage(ctx, "admitted", "catalog")
+	require.NoError(t, err)
+	assert.Equal(t, repository.UID, provisioned.UID)
+}
+
+func TestProvisionSystemRepositoryCreatesOnlyTheSystemManagedBootstrapRepository(t *testing.T) {
+	writer := &mockGitWriter{}
+	svc := newTestSvc(t, writer)
+	ctx := context.Background()
+	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
+		ID: testNsID1, Name: "bootstrap-target", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
+	}))
+
+	require.NoError(t, svc.ProvisionSystemRepository(ctx, "bootstrap-target", "controller-manager"))
+	require.NoError(t, svc.ProvisionSystemRepository(ctx, "bootstrap-target", "controller-manager"))
+
+	mapping, err := svc.LookupRepository(ctx, "bootstrap-target", resolver.SystemRepositoryName)
+	require.NoError(t, err)
+	repository, err := svc.GetRepository(ctx, mapping.RepositoryID)
+	require.NoError(t, err)
+	assert.Equal(t, resolver.SystemRepositoryName, repository.Name)
+	assert.Equal(t, "bootstrap-target", repository.Namespace)
+
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	require.Len(t, writer.createRepoCalls, 1, "retries must not provision storage again")
+}
+
 func TestRepositoryMutations_preserveExistingErrors(t *testing.T) {
 	writer := &mockGitWriter{}
 	svc := newTestSvc(t, writer)
@@ -91,6 +208,10 @@ func TestRepositoryMutations_preserveExistingErrors(t *testing.T) {
 		t.Run(operation, func(t *testing.T) {
 			err := call()
 			require.Error(t, err)
+			if operation == "rename" || operation == "transfer" {
+				assert.Contains(t, err.Error(), "unimplemented")
+				return
+			}
 			assert.Equal(t, "input: repository not found", err.Error())
 		})
 	}
@@ -98,7 +219,7 @@ func TestRepositoryMutations_preserveExistingErrors(t *testing.T) {
 
 // ── renameRepository ──────────────────────────────────────────────────────────
 
-func TestRenameRepository_oldNameNotFoundNewNameReturnsSameRepoID(t *testing.T) {
+func TestRenameRepository_IsDeferredToLifecyclePhase2(t *testing.T) {
 	writer := &mockGitWriter{}
 	svc := newTestSvc(t, writer)
 	ctx := context.Background()
@@ -111,26 +232,18 @@ func TestRenameRepository_oldNameNotFoundNewNameReturnsSameRepoID(t *testing.T) 
 	require.NoError(t, err)
 	originalID := repo.ID
 
-	renamed, err := svc.RenameRepository(ctx, originalID, "new-name", "test-user")
-	require.NoError(t, err)
-	require.NotNil(t, renamed)
-	assert.Equal(t, originalID, renamed.ID, "repo_id must be unchanged after rename")
-	assert.Equal(t, "new-name", renamed.Name)
-	assert.Equal(t, int64(2), renamed.Generation)
-	assert.Equal(t, "2", renamed.ResourceVersion)
-	assert.JSONEq(t, `{"observedGeneration":0,"conditions":[]}`, string(renamed.Status))
+	_, err = svc.RenameRepository(ctx, originalID, "new-name", "test-user")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unimplemented")
 
-	_, err = svcStore(t, svc).LookupRepository(ctx, "acme-rename", "old-name")
-	require.ErrorIs(t, err, datastore.ErrNotFound)
-
-	m, err := svcStore(t, svc).LookupRepository(ctx, "acme-rename", "new-name")
+	persisted, err := svc.GetRepository(ctx, originalID)
 	require.NoError(t, err)
-	assert.Equal(t, originalID, m.RepoID)
+	assert.Equal(t, "old-name", persisted.Name)
 }
 
 // ── transferRepository ────────────────────────────────────────────────────────
 
-func TestTransferRepository_oldNSInvalidatedNewNSReturnsSameRepoID(t *testing.T) {
+func TestTransferRepository_IsDeferredToLifecyclePhase2(t *testing.T) {
 	writer := &mockGitWriter{}
 	svc := newTestSvc(t, writer)
 	ctx := context.Background()
@@ -146,26 +259,18 @@ func TestTransferRepository_oldNSInvalidatedNewNSReturnsSameRepoID(t *testing.T)
 	require.NoError(t, err)
 	originalID := repo.ID
 
-	transferred, err := svc.TransferRepository(ctx, originalID, testNsID2, "test-user")
-	require.NoError(t, err)
-	assert.Equal(t, originalID, transferred.ID)
-	assert.Equal(t, "ns-to", transferred.Namespace)
-	assert.Equal(t, "ns-to", transferred.NamespaceID)
-	assert.Equal(t, int64(1), transferred.Generation)
-	assert.Equal(t, "2", transferred.ResourceVersion)
-	assert.JSONEq(t, `{"observedGeneration":0,"conditions":[]}`, string(transferred.Status))
+	_, err = svc.TransferRepository(ctx, originalID, testNsID2, "test-user")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unimplemented")
 
-	_, err = svcStore(t, svc).LookupRepository(ctx, "ns-from", "app")
-	require.ErrorIs(t, err, datastore.ErrNotFound)
-
-	m, err := svcStore(t, svc).LookupRepository(ctx, "ns-to", "app")
+	persisted, err := svc.GetRepository(ctx, originalID)
 	require.NoError(t, err)
-	assert.Equal(t, originalID, m.RepoID)
+	assert.Equal(t, "ns-from", persisted.Namespace)
 }
 
 // ── deleteRepository ──────────────────────────────────────────────────────────
 
-func TestDeleteRepository_callsGRPCAndRemovesMapping(t *testing.T) {
+func TestDeleteRepository_marksTerminatingWithoutRemovingStorageOrMapping(t *testing.T) {
 	writer := &mockGitWriter{}
 	svc := newTestSvc(t, writer)
 	ctx := context.Background()
@@ -182,11 +287,102 @@ func TestDeleteRepository_callsGRPCAndRemovesMapping(t *testing.T) {
 
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
-	require.Len(t, writer.deleteRepoCalls, 1)
-	assert.Equal(t, repo.ID, writer.deleteRepoCalls[0])
+	assert.Empty(t, writer.deleteRepoCalls)
 
+	persisted, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
+	require.NoError(t, err)
+	require.NotNil(t, persisted.DeletionTimestamp)
+	assert.Contains(t, persisted.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
+	assert.Equal(t, "2", persisted.ResourceVersion)
 	_, err = svcStore(t, svc).LookupRepository(ctx, "ns-del", "to-delete")
+	require.NoError(t, err)
+
+	// Repeated user requests are idempotent and do not advance the version.
+	require.NoError(t, svc.DeleteRepository(ctx, repo.ID, "test-user"))
+	again, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
+	require.NoError(t, err)
+	assert.Equal(t, persisted.ResourceVersion, again.ResourceVersion)
+}
+
+func TestCompleteRepositoryDeletion_removesStorageThenMetadataAfterDrain(t *testing.T) {
+	writer := &mockGitWriter{}
+	svc := newTestSvc(t, writer)
+	ctx := context.Background()
+
+	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
+		ID: testNsID1, Name: "ns-complete-delete", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
+	}))
+	repo, err := svc.CreateRepository(ctx, testNsID1, "to-complete", "main", "default", "test-user")
+	require.NoError(t, err)
+	require.NoError(t, svc.DeleteRepository(ctx, repo.ID, "test-user"))
+	terminating, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
+	require.NoError(t, err)
+
+	_, err = svc.CompleteRepositoryDeletion(ctx, terminating.Namespace, terminating.Name, terminating.ResourceVersion)
+	require.NoError(t, err)
+	writer.mu.Lock()
+	require.Equal(t, []string{repo.ID}, writer.deleteRepoCalls)
+	writer.mu.Unlock()
+	_, err = svcStore(t, svc).GetRepository(ctx, repo.ID)
 	require.ErrorIs(t, err, datastore.ErrNotFound)
+	_, err = svcStore(t, svc).LookupRepository(ctx, "ns-complete-delete", "to-complete")
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestCompleteRepositoryDeletion_keepsTerminatingRecordWhenCatalogResourcesReappear(t *testing.T) {
+	writer := &mockGitWriter{}
+	svc := newTestSvc(t, writer)
+	ctx := context.Background()
+	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
+		ID: testNsID1, Name: "ns-complete-blocked", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
+	}))
+	repo, err := svc.CreateRepository(ctx, testNsID1, "still-owned", "main", "default", "test-user")
+	require.NoError(t, err)
+	require.NoError(t, svc.DeleteRepository(ctx, repo.ID, "test-user"))
+	terminating, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
+	require.NoError(t, err)
+	require.NoError(t, svcStore(t, svc).CreateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{
+		UID: "01960000-0000-7000-8000-000000000097", Namespace: terminating.Namespace, Name: "late-owner",
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy", Generation: 1, ResourceVersion: "1",
+		CreationTimestamp: time.Now(), RepositoryID: repo.ID,
+	}))
+
+	_, err = svc.CompleteRepositoryDeletion(ctx, terminating.Namespace, terminating.Name, terminating.ResourceVersion)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "still contains catalog resources")
+	persisted, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, persisted.DeletionTimestamp)
+	assert.Contains(t, persisted.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
+	writer.mu.Lock()
+	assert.Empty(t, writer.deleteRepoCalls)
+	writer.mu.Unlock()
+}
+
+func TestCompleteRepositoryDeletion_preservesOtherFinalizers(t *testing.T) {
+	writer := &mockGitWriter{}
+	svc := newTestSvc(t, writer)
+	ctx := context.Background()
+	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
+		ID: testNsID1, Name: "ns-extra-finalizer", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
+	}))
+	repo, err := svc.CreateRepository(ctx, testNsID1, "extra-finalizer", "main", "default", "test-user")
+	require.NoError(t, err)
+	require.NoError(t, svc.DeleteRepository(ctx, repo.ID, "test-user"))
+	terminating, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
+	require.NoError(t, err)
+	terminating.Finalizers = append(terminating.Finalizers, "example.test/retain")
+	expected := terminating.ResourceVersion
+	datastore.AdvanceRepositorySystemVersion(terminating)
+	require.NoError(t, svcStore(t, svc).UpdateRepository(ctx, terminating, expected))
+
+	_, err = svc.CompleteRepositoryDeletion(ctx, terminating.Namespace, terminating.Name, terminating.ResourceVersion)
+	require.NoError(t, err)
+	persisted, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
+	require.NoError(t, err)
+	assert.NotContains(t, persisted.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
+	assert.Contains(t, persisted.Finalizers, "example.test/retain")
+	assert.NotNil(t, persisted.DeletionTimestamp)
 }
 
 func TestDeleteRepository_withCatalogResource_rejected(t *testing.T) {

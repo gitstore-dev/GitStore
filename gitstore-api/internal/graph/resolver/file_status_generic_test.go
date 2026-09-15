@@ -6,6 +6,7 @@ package resolver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -13,6 +14,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
 
@@ -39,10 +41,11 @@ func TestUpdateResourceStatusFileResolvedAndConflict(t *testing.T) {
 	require.Equal(t, "2", current.ResourceVersion)
 	require.Contains(t, string(current.Status), "thumb")
 
-	conflict, err := mr.UpdateResourceStatus(context.Background(), model.UpdateResourceStatusInput{
+	_, err = mr.UpdateResourceStatus(context.Background(), model.UpdateResourceStatusInput{
 		Kind: "File", Namespace: "ns", Name: "hero", ResourceVersion: "1",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, conflict.Conflict)
-	require.Equal(t, "2", conflict.Conflict.CurrentResourceVersion)
+	var graphErr *gqlerror.Error
+	require.True(t, errors.As(err, &graphErr))
+	require.Equal(t, "RESOURCE_VERSION_CONFLICT", graphErr.Extensions["code"])
+	require.Equal(t, "2", graphErr.Extensions["resourceVersion"])
 }

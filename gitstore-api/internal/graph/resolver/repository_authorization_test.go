@@ -74,6 +74,10 @@ type repositoryAuthzHarness struct {
 }
 
 func newRepositoryAuthzHarness(t *testing.T) *repositoryAuthzHarness {
+	return newRepositoryAuthzHarnessWithTargetOwner(t, "alice")
+}
+
+func newRepositoryAuthzHarnessWithTargetOwner(t *testing.T, targetOwner string) *repositoryAuthzHarness {
 	t.Helper()
 	ctx := context.Background()
 	store, err := memdb.New()
@@ -90,8 +94,8 @@ func newRepositoryAuthzHarness(t *testing.T) *repositoryAuthzHarness {
 		UID:           repositoryAuthzTargetNamespaceID,
 		Name:          "alice-target",
 		Tier:          datastore.NamespaceTierUser,
-		CreationActor: "alice",
-		UpdateActor:   "alice",
+		CreationActor: targetOwner,
+		UpdateActor:   targetOwner,
 	}
 	require.NoError(t, store.CreateNamespace(ctx, source))
 	require.NoError(t, store.CreateNamespace(ctx, target))
@@ -161,8 +165,20 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 			name:   "create",
 			action: "repository.create.any",
 			object: "Mutation", field: "createRepository", args: map[string]any{"input": model.CreateRepositoryInput{
-				Namespace: h.sourceNamespace.Name,
-				Name:      "new-catalog",
+				APIVersion: "gitstore.dev/v1beta1",
+				Kind:       "Repository",
+				Metadata:   &model.MetadataInput{Name: "new-catalog", Namespace: h.sourceNamespace.Name},
+				Spec:       &model.RepositorySpecInput{},
+			}},
+		},
+		{
+			name:   "update",
+			action: "repository.update.any",
+			object: "Mutation", field: "updateRepository", args: map[string]any{"input": model.UpdateRepositoryInput{
+				APIVersion: "gitstore.dev/v1beta1",
+				Kind:       "Repository",
+				Metadata:   &model.MetadataInput{Name: h.repository.Name, Namespace: h.sourceNamespace.Name},
+				Spec:       &model.RepositorySpecInput{},
 			}},
 		},
 		{
@@ -239,6 +255,80 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 			}
 		})
 	}
+}
+
+func TestRepositoryStatusMutationUsesControllerWriteAction(t *testing.T) {
+	h := newRepositoryAuthzHarness(t)
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
+		Subject:    "bob",
+		AuthMethod: "test",
+	})
+
+	for _, tc := range []struct {
+		name  string
+		field string
+		input any
+	}{
+		{name: "status", field: "updateRepositoryStatus", input: model.UpdateRepositoryStatusInput{Namespace: h.sourceNamespace.Name, Name: h.repository.Name}},
+		{name: "provision storage", field: "provisionRepositoryStorage", input: model.ProvisionRepositoryStorageInput{Namespace: h.sourceNamespace.Name, Name: h.repository.Name}},
+		{name: "complete deletion", field: "completeRepositoryDeletion", input: model.CompleteRepositoryDeletionInput{Namespace: h.sourceNamespace.Name, Name: h.repository.Name, ResourceVersion: "1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h.authz.reset()
+			err := h.authorizeField(ctx, "Mutation", tc.field, map[string]any{"input": tc.input})
+			require.EqualError(t, err, "input: permission denied: cross-tenant access denied")
+			calls := h.authz.callsSnapshot()
+			require.Len(t, calls, 1)
+			assert.Equal(t, "repository.status.write", calls[0].action)
+			assert.Equal(t, "repository", calls[0].resource.Kind)
+			assert.Equal(t, h.repository.Name, calls[0].resource.Name)
+			assert.Equal(t, h.sourceNamespace.Name, calls[0].resource.Attrs["namespace"])
+		})
+	}
+}
+
+func TestRepositoryTransferUsesAnyScopeWhenTargetNamespaceHasDifferentOwner(t *testing.T) {
+	h := newRepositoryAuthzHarnessWithTargetOwner(t, "bob")
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "alice", AuthMethod: "test"})
+	targetID, err := resolver.EncodeNodeID("Namespace", h.targetNamespace.UID)
+	require.NoError(t, err)
+
+	err = h.authorizeField(ctx, "Mutation", "transferRepository", map[string]any{"input": model.TransferRepositoryInput{
+		RepositoryID: h.repositoryNodeID, TargetNamespaceID: targetID,
+	}})
+	require.NoError(t, err)
+	calls := h.authz.callsSnapshot()
+	require.Len(t, calls, 1)
+	assert.Equal(t, "repository.transfer.any", calls[0].action)
+	assert.Equal(t, "alice", calls[0].resource.OwnerSub)
+	assert.Equal(t, h.sourceNamespace.Name, calls[0].resource.Attrs["namespace"])
+	assert.Equal(t, h.targetNamespace.Name, calls[0].resource.Attrs["targetNamespace"])
+	assert.Equal(t, "bob", calls[0].resource.Attrs["targetOwnerSub"])
+}
+
+func TestRepositoryNamespacePathAuthorizationDoesNotLeakSameNamedRepositoryAcrossNamespaces(t *testing.T) {
+	h := newRepositoryAuthzHarnessWithTargetOwner(t, "bob")
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "alice", AuthMethod: "test"})
+	targetRepository := &datastore.Repository{
+		UID: "01960000-0000-7000-8000-000000000133", RepositoryID: "01960000-0000-7000-8000-000000000133",
+		Namespace: h.targetNamespace.Name, NamespaceID: h.targetNamespace.Name, Name: h.repository.Name,
+		CreationActor: "bob", UpdateActor: "bob", CreationTimestamp: time.Now().UTC(),
+	}
+	require.NoError(t, h.store.CreateRepository(context.Background(), targetRepository))
+	require.NoError(t, h.store.CreateNamespaceMapping(context.Background(), &datastore.NamespaceMapping{
+		Namespace: h.targetNamespace.Name, Name: targetRepository.Name, RepositoryID: targetRepository.UID,
+	}))
+
+	err := h.authorizeField(ctx, "Query", "repository", map[string]any{"by": model.RepositoryBy{
+		NamespacePath: &model.RepositoryNamespacePath{Namespace: h.targetNamespace.Name, Name: h.repository.Name},
+	}})
+	require.EqualError(t, err, "input: permission denied: cross-tenant access denied")
+	calls := h.authz.callsSnapshot()
+	require.Len(t, calls, 1)
+	assert.Equal(t, "repository.read.any", calls[0].action)
+	assert.Equal(t, "catalog", calls[0].resource.Name)
+	assert.Equal(t, "bob", calls[0].resource.OwnerSub)
+	assert.Equal(t, h.targetNamespace.Name, calls[0].resource.Attrs["namespace"])
 }
 
 func TestRepositoryFieldAuthorizerUsesOwnActionForTenantOwner(t *testing.T) {

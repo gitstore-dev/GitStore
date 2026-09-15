@@ -1239,9 +1239,10 @@ func repositorySpecFromDatastore(repository *datastore.Repository) (*model.Repos
 
 func repositoryStatusFromJSON(raw json.RawMessage, repositoryID, storagePath, storageClass string) (*model.RepositoryStatus, error) {
 	var stored struct {
-		ObservedGeneration  int32          `json:"observedGeneration"`
-		LastAppliedRevision string         `json:"lastAppliedRevision"`
-		Conditions          []rawCondition `json:"conditions"`
+		ObservedGeneration  int32                                 `json:"observedGeneration"`
+		LastAppliedRevision string                                `json:"lastAppliedRevision"`
+		Conditions          []rawCondition                        `json:"conditions"`
+		Resolved            *catalog.ResolvedRepositoryDefinition `json:"resolved,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &stored); err != nil {
 		return nil, fmt.Errorf("Repository %q: unmarshal status: %w", repositoryID, err)
@@ -1250,13 +1251,18 @@ func repositoryStatusFromJSON(raw json.RawMessage, repositoryID, storagePath, st
 	for _, condition := range stored.Conditions {
 		conditions = append(conditions, conditionFromRaw(condition))
 	}
+	resolved := &model.ResolvedRepositoryDefinition{
+		StoragePath:  storagePath,
+		StorageClass: storageClass,
+	}
+	if stored.Resolved != nil {
+		resolved.StoragePath = stored.Resolved.StoragePath
+		resolved.StorageClass = stored.Resolved.StorageClass
+	}
 	status := &model.RepositoryStatus{
 		ObservedGeneration: stored.ObservedGeneration,
 		Conditions:         conditions,
-		Resolved: &model.ResolvedRepositoryDefinition{
-			StoragePath:  storagePath,
-			StorageClass: storageClass,
-		},
+		Resolved:           resolved,
 	}
 	if stored.LastAppliedRevision != "" {
 		revision := stored.LastAppliedRevision

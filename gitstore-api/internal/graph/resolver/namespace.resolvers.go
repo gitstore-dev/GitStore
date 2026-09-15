@@ -57,14 +57,39 @@ func (r *mutationResolver) DeleteNamespace(ctx context.Context, input model.Dele
 func (r *mutationResolver) CompleteNamespaceDeletion(ctx context.Context, input model.CompleteNamespaceDeletionInput) (*model.CompleteNamespaceDeletionPayload, error) {
 	deleted, err := r.service.CompleteNamespaceDeletion(ctx, input.Identifier, input.ResourceVersion)
 	if errors.Is(err, datastore.ErrConflict) {
-		return &model.CompleteNamespaceDeletionPayload{
-			Conflict: &model.StatusConflict{CurrentResourceVersion: deleted.ResourceVersion},
-		}, nil
+		if deleted == nil {
+			return nil, gqlerror.Errorf("namespace deletion conflict, and current version could not be read")
+		}
+		return nil, statusConflictError("Namespace", "", input.Identifier, deleted.ResourceVersion)
 	}
 	if err != nil {
 		return nil, err
 	}
 	return &model.CompleteNamespaceDeletionPayload{DeletedIdentifier: &input.Identifier}, nil
+}
+
+// ProvisionNamespaceSystemRepository is the resolver for the provisionNamespaceSystemRepository field.
+func (r *mutationResolver) ProvisionNamespaceSystemRepository(ctx context.Context, input model.ProvisionNamespaceSystemRepositoryInput) (*model.ProvisionNamespaceSystemRepositoryPayload, error) {
+	if err := r.service.ProvisionSystemRepository(ctx, input.Namespace, callerUsernameOrAnon(ctx, r)); err != nil {
+		return nil, err
+	}
+	namespace, err := r.service.GetNamespaceByName(ctx, input.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	mapping, err := r.service.LookupRepository(ctx, namespace.Name, SystemRepositoryName)
+	if err != nil {
+		return nil, err
+	}
+	repository, err := r.service.GetRepository(ctx, mapping.RepositoryID)
+	if err != nil {
+		return nil, err
+	}
+	result, err := datastoreRepositoryToModelStrict(repository, namespace, r.storageDataDir)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to hydrate system repository: %v", err)
+	}
+	return &model.ProvisionNamespaceSystemRepositoryPayload{Repository: result}, nil
 }
 
 // Namespace is the resolver for the namespace field.
@@ -109,7 +134,7 @@ func (r *subscriptionResolver) WatchNamespaces(ctx context.Context, selector *mo
 	}
 	rawCursor := ""
 	if resourceVersion != nil {
-		rawCursor = *resourceVersion
+		rawCursor = normalizeResourceWatchCursor(*resourceVersion)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream, err := r.namespaceSubscriber.SubscribePath(streamCtx, rawCursor, "typed")
@@ -139,6 +164,9 @@ func (r *subscriptionResolver) WatchNamespaces(ctx context.Context, selector *mo
 			case event, ok := <-events:
 				if !ok {
 					events = nil
+					continue
+				}
+				if !namespaceJournalEventMatchesKind(event) {
 					continue
 				}
 				projected, matches := projectNamespaceJournalEventForSelector(event, selector)

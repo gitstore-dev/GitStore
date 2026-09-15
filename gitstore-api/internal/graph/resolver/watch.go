@@ -18,6 +18,23 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
+const (
+	namespaceWatchBootstrapCursor  = "__namespace_watch_bootstrap__"
+	repositoryWatchBootstrapCursor = "__repository_watch_bootstrap__"
+)
+
+// normalizeResourceWatchCursor preserves the private typed-watch bootstrap
+// sentinels while the Namespace and Repository projections share one generic
+// durable journal. Ordinary opaque cursors are returned unchanged.
+func normalizeResourceWatchCursor(raw string) string {
+	switch raw {
+	case namespaceWatchBootstrapCursor, repositoryWatchBootstrapCursor:
+		return watchjournal.BootstrapCursor
+	default:
+		return raw
+	}
+}
+
 // publishCategoryTaxonomyStatusEvent fans out a Modified event after a
 // successful status write, so a watcher observing the resource also sees
 // controller-driven status changes, not only spec-pipeline admissions
@@ -68,8 +85,8 @@ func toWatchEventType(t eventbus.EventType) model.WatchEventType {
 
 // NamespaceJournalEventToGraphQL maps the durable event envelope without
 // weakening the shipped Namespace resource contract.
-func NamespaceJournalEventToGraphQL(event datastore.NamespaceWatchEvent, namespace *datastore.Namespace) (*model.NamespaceWatchEvent, error) {
-	if namespace == nil && (event.Type == datastore.NamespaceWatchAdded || event.Type == datastore.NamespaceWatchModified) {
+func NamespaceJournalEventToGraphQL(event datastore.ResourceWatchEvent, namespace *datastore.Namespace) (*model.NamespaceWatchEvent, error) {
+	if namespace == nil && (event.Type == datastore.ResourceWatchAdded || event.Type == datastore.ResourceWatchModified) {
 		var err error
 		namespace, err = namespaceFromJournalEvent(event)
 		if err != nil {
@@ -87,8 +104,8 @@ func NamespaceJournalEventToGraphQL(event datastore.NamespaceWatchEvent, namespa
 	return out, nil
 }
 
-func namespaceFromJournalEvent(event datastore.NamespaceWatchEvent) (*datastore.Namespace, error) {
-	if event.Type == datastore.NamespaceWatchDeleted || event.Type == datastore.NamespaceWatchBookmark {
+func namespaceFromJournalEvent(event datastore.ResourceWatchEvent) (*datastore.Namespace, error) {
+	if event.Type == datastore.ResourceWatchDeleted || event.Type == datastore.ResourceWatchBookmark {
 		return nil, nil
 	}
 	if len(event.Payload) == 0 {
@@ -101,7 +118,7 @@ func namespaceFromJournalEvent(event datastore.NamespaceWatchEvent) (*datastore.
 	return namespace, nil
 }
 
-func namespaceJournalEventToGeneric(event datastore.NamespaceWatchEvent) (*model.WatchEvent, *datastore.Namespace, error) {
+func namespaceJournalEventToGeneric(event datastore.ResourceWatchEvent) (*model.WatchEvent, *datastore.Namespace, error) {
 	typed, err := NamespaceJournalEventToGraphQL(event, nil)
 	if err != nil {
 		return nil, nil, err
@@ -124,11 +141,11 @@ func namespaceJournalEventToGeneric(event datastore.NamespaceWatchEvent) (*model
 // transition semantics. A MODIFIED event becomes ADDED when the resource
 // enters the selector and DELETED when it leaves, preventing filtered caches
 // from retaining objects that no longer match.
-func projectNamespaceJournalEventForSelector(event datastore.NamespaceWatchEvent, selector *model.LabelSelectorInput) (datastore.NamespaceWatchEvent, bool) {
+func projectNamespaceJournalEventForSelector(event datastore.ResourceWatchEvent, selector *model.LabelSelectorInput) (datastore.ResourceWatchEvent, bool) {
 	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
 		return event, true
 	}
-	if event.Type == datastore.NamespaceWatchBookmark {
+	if event.Type == datastore.ResourceWatchBookmark {
 		return event, true
 	}
 	currentLabels := event.SelectorLabels
@@ -138,7 +155,7 @@ func projectNamespaceJournalEventForSelector(event datastore.NamespaceWatchEvent
 		}
 	}
 	currentMatches := matchesWatchSelector(selector, currentLabels)
-	if event.Type != datastore.NamespaceWatchModified {
+	if event.Type != datastore.ResourceWatchModified {
 		return event, currentMatches
 	}
 
@@ -147,16 +164,26 @@ func projectNamespaceJournalEventForSelector(event datastore.NamespaceWatchEvent
 	case previousMatches && currentMatches:
 		return event, true
 	case !previousMatches && currentMatches:
-		event.Type = datastore.NamespaceWatchAdded
+		event.Type = datastore.ResourceWatchAdded
 		return event, true
 	case previousMatches && !currentMatches:
-		event.Type = datastore.NamespaceWatchDeleted
+		event.Type = datastore.ResourceWatchDeleted
 		event.Payload = nil
 		event.SelectorLabels = event.PreviousSelectorLabels
 		return event, true
 	default:
 		return event, false
 	}
+}
+
+// namespaceJournalEventMatchesKind retains cluster-wide bookmarks while
+// projecting the shared durable journal onto the Namespace stream. Empty Kind
+// remains accepted only for pre-generic-journal retained Namespace entries.
+func namespaceJournalEventMatchesKind(event datastore.ResourceWatchEvent) bool {
+	if event.Type == datastore.ResourceWatchBookmark {
+		return true
+	}
+	return event.Kind == "" || event.Kind == "Namespace"
 }
 
 func namespaceWatchGraphQLError(err error) *gqlerror.Error {
@@ -206,7 +233,7 @@ func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.
 	}
 	rawCursor := ""
 	if resourceVersion != nil {
-		rawCursor = *resourceVersion
+		rawCursor = normalizeResourceWatchCursor(*resourceVersion)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream, err := r.namespaceSubscriber.SubscribePath(streamCtx, rawCursor, "generic")
@@ -236,6 +263,9 @@ func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.
 			case event, ok := <-events:
 				if !ok {
 					events = nil
+					continue
+				}
+				if !namespaceJournalEventMatchesKind(event) {
 					continue
 				}
 				projected, matches := projectNamespaceJournalEventForSelector(event, selector)
@@ -353,6 +383,8 @@ func toGenericWatchEvent(kind string, ev eventbus.Event) *model.WatchEvent {
 			out.Object = namespaceToJSONMap(namespace)
 		} else if file, ok := ev.Object.(*datastore.File); ok {
 			out.Object = fileToJSONMap(file)
+		} else if repository, ok := ev.Object.(*datastore.Repository); ok {
+			out.Object = repositoryToJSONMap(repository)
 		}
 	}
 
@@ -385,6 +417,22 @@ func fileToJSONMap(file *datastore.File) map[string]any {
 
 func namespaceToJSONMap(namespace *datastore.Namespace) map[string]any {
 	data, err := json.Marshal(DatastoreNamespaceToGraphQL(namespace))
+	if err != nil {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// repositoryToJSONMap deliberately passes through the Repository GraphQL
+// converter. This keeps the generic watch payload on the same public identity
+// boundary as typed Repository results: Relay id and metadata.uid are never
+// replaced by the datastore's raw UID.
+func repositoryToJSONMap(repository *datastore.Repository) map[string]any {
+	data, err := json.Marshal(DatastoreRepositoryToGraphQL(repository))
 	if err != nil {
 		return nil
 	}
@@ -456,6 +504,27 @@ func productEventMatchesSelector(ev eventbus.Event, selector *model.LabelSelecto
 		return false
 	}
 	return matchesWatchSelector(selector, p.Labels)
+}
+
+func repositoryEventMatchesSelector(ev eventbus.Event, selector *model.LabelSelectorInput) bool {
+	if selector == nil || (len(selector.MatchLabels) == 0 && len(selector.MatchExpressions) == 0) {
+		return true
+	}
+	repository, ok := ev.Object.(*datastore.Repository)
+	return ok && repository != nil && matchesWatchSelector(selector, repository.Labels)
+}
+
+func watchEventMatchesSelector(kind string, ev eventbus.Event, selector *model.LabelSelectorInput) bool {
+	switch kind {
+	case "Repository":
+		return repositoryEventMatchesSelector(ev, selector)
+	case "File":
+		return fileEventMatchesSelector(ev, selector)
+	case "Product":
+		return productEventMatchesSelector(ev, selector)
+	default:
+		return categoryEventMatchesSelector(ev, selector)
+	}
 }
 
 // toProductWatchEvent maps an eventbus.Event to the strongly-typed

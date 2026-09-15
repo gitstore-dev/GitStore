@@ -162,7 +162,12 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 		if stallBaseline.IsZero() {
 			stallBaseline = startedAt
 		}
-		stalled := !stallBaseline.IsZero() && time.Since(stallBaseline) > ks.reg.StallThreshold
+		// An idle reconciler is healthy. A stale last-success timestamp only
+		// indicates a stall while work is actively running or waiting to run.
+		// Without this work-presence guard, quiet resource kinds permanently
+		// degrade /health once StallThreshold elapses.
+		stalled := (active > 0 || depth > 0) &&
+			!stallBaseline.IsZero() && time.Since(stallBaseline) > ks.reg.StallThreshold
 		if stalled {
 			health.StalledWorkers.WithLabelValues(kind).Set(1)
 		} else {

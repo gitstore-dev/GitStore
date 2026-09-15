@@ -105,6 +105,38 @@ func TestClassifyCommittedNamespaceChanges(t *testing.T) {
 	}
 }
 
+func TestClassifyResourcePreservesKindScopeAndResourceLabels(t *testing.T) {
+	labels := func(payload json.RawMessage) map[string]string {
+		var resource struct {
+			Labels map[string]string `json:"labels"`
+		}
+		_ = json.Unmarshal(payload, &resource)
+		return resource.Labels
+	}
+	event, ok := ClassifyResource(Change{
+		Kind:      "Repository",
+		Namespace: "storefront",
+		Name:      "catalog",
+		Before:    json.RawMessage(`{"labels":{"tier":"standard"}}`),
+		After:     json.RawMessage(`{"labels":{"tier":"premium"}}`),
+	}, labels)
+	require.True(t, ok)
+	assert.Equal(t, datastore.ResourceWatchModified, event.Type)
+	assert.Equal(t, "Repository", event.Kind)
+	assert.Equal(t, "storefront", event.Namespace)
+	assert.Equal(t, "premium", event.SelectorLabels["tier"])
+	assert.Equal(t, "standard", event.PreviousSelectorLabels["tier"])
+}
+
+func TestClassifyResourceSuppressesNoopRepositoryCDCWrite(t *testing.T) {
+	payload := json.RawMessage(`{"Labels":{"team":"catalog"},"Name":"catalog","Namespace":"shop"}`)
+	event, ok := ClassifyResource(Change{
+		Kind: "Repository", Namespace: "shop", Name: "catalog", Before: payload, After: payload,
+	}, namespaceLabels)
+	assert.False(t, ok)
+	assert.Empty(t, event.Type)
+}
+
 func TestMaterializerAppendsBeforeSavingProgress(t *testing.T) {
 	store := &orderedMaterializerStore{}
 	m := NewMaterializer(store, MaterializerConfig{EventTTL: 7 * 24 * time.Hour})

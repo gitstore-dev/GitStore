@@ -60,6 +60,9 @@ func TestRepositoryDeclarativeSchemaContract(t *testing.T) {
 	}
 	requireGraphQLField(t, schema, "ResolvedRepositoryDefinition", "storagePath", "String!")
 	requireGraphQLField(t, schema, "ResolvedRepositoryDefinition", "storageClass", "String!")
+	requireGraphQLField(t, schema, "UpdateRepositoryStatusInput", "resolved", "RepositoryResolvedStatusInput")
+	requireGraphQLField(t, schema, "RepositoryResolvedStatusInput", "storagePath", "String!")
+	requireGraphQLField(t, schema, "RepositoryResolvedStatusInput", "storageClass", "String!")
 
 	require.NotNil(t, schema.Types["Long"])
 	assert.Equal(t, ast.Scalar, schema.Types["Long"].Kind)

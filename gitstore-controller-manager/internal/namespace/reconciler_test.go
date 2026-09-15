@@ -147,14 +147,11 @@ func TestReconcileAdmittedNamespaceProvisionsSystemRepositoryAndMarksReady(t *te
 // the full Reconcile path with the real GraphQLRepositoryClient (not the
 // fake) against a server that reproduces gitstore-api's actual response for
 // a genuinely fresh environment: repository(by: namespacePath) returns a
-// "repository not found" / NOT_FOUND GraphQL error because gitstore-system
-// has never been created. Before the fix, systemRepositoryExists treated
-// that error as a hard failure and EnsureSystemRepository never reached
-// createRepository, so this reconcile would end in TransientFailure with
-// SystemRepoReady=FALSE forever. After the fix, it must fall through to
-// createRepository and reach Success with SystemRepoReady=TRUE.
+// The controller uses the dedicated bootstrap operation, rather than the
+// author-facing createRepository mutation. The API owns the idempotent
+// lookup/create race, so a fresh Namespace reaches Success directly.
 func TestReconcileFreshNamespaceProvisionsSystemRepositoryViaRealClient(t *testing.T) {
-	var queries, mutations int
+	var mutations int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Query string `json:"query"`
@@ -163,11 +160,10 @@ func TestReconcileFreshNamespaceProvisionsSystemRepositoryViaRealClient(t *testi
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(req.Query, "mutation") {
 			mutations++
-			_, _ = w.Write([]byte(`{"data":{"createRepository":{"repository":{"metadata":{"name":"gitstore-system"}}}}}`))
+			_, _ = w.Write([]byte(`{"data":{"provisionNamespaceSystemRepository":{"repository":{"metadata":{"name":"gitstore-system"}}}}}`))
 			return
 		}
-		queries++
-		_, _ = w.Write([]byte(`{"data":{"repository":null},"errors":[{"message":"repository not found","extensions":{"code":"NOT_FOUND"}}]}`))
+		t.Fatalf("unexpected query: %s", req.Query)
 	}))
 	defer srv.Close()
 
@@ -189,8 +185,8 @@ func TestReconcileFreshNamespaceProvisionsSystemRepositoryViaRealClient(t *testi
 	if _, ok := result.(types.Success); !ok {
 		t.Fatalf("Reconcile result = %#v, want types.Success", result)
 	}
-	if queries != 1 || mutations != 1 {
-		t.Fatalf("queries=%d mutations=%d, want 1/1 (createRepository must actually be called)", queries, mutations)
+	if mutations != 1 {
+		t.Fatalf("mutations=%d, want 1", mutations)
 	}
 	if len(sc.patches) != 1 {
 		t.Fatalf("status calls = %d, want 1", len(sc.patches))

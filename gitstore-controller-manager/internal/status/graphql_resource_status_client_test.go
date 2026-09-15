@@ -21,7 +21,7 @@ func TestResourceStatusApplySendsKindAwareMutation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"updateResourceStatus":{"object":{"metadata":{"resourceVersion":"3"}},"conflict":null}}}`))
+		_, _ = w.Write([]byte(`{"data":{"updateResourceStatus":{"object":{"metadata":{"resourceVersion":"3"}}}}}`))
 	}))
 	defer srv.Close()
 
@@ -53,7 +53,7 @@ func TestResourceStatusApplySendsKindAwareMutation(t *testing.T) {
 func TestResourceStatusApplyConflictMapsToErrConflict(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"updateResourceStatus":{"object":null,"conflict":{"currentResourceVersion":"4"}}}}`))
+		_, _ = w.Write([]byte(`{"data":{"updateResourceStatus":null},"errors":[{"message":"resource version conflict","extensions":{"code":"RESOURCE_VERSION_CONFLICT","resourceVersion":"4"}}]}`))
 	}))
 	defer srv.Close()
 

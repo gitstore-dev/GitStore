@@ -163,8 +163,9 @@ func TestManager_QuarantineNotBypassedByPendingEvent(t *testing.T) {
 	}
 }
 
-// TestManager_Stalled detects a stalled reconciler via /health (P2a fix).
-func TestManager_Stalled(t *testing.T) {
+// TestManager_IdleKindIsNotStalled verifies that a quiet registered kind does
+// not degrade health solely because its last successful reconcile is old.
+func TestManager_IdleKindIsNotStalled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -204,8 +205,8 @@ func TestManager_Stalled(t *testing.T) {
 	stats := mgr.KindStats()
 	if s, ok := stats["Staller"]; !ok {
 		t.Fatal("Staller kind not found in stats")
-	} else if !s.Stalled {
-		t.Error("expected Stalled=true after StallThreshold exceeded")
+	} else if s.Stalled {
+		t.Error("expected Stalled=false after the successful work item became idle")
 	}
 }
 

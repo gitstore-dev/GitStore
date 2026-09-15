@@ -119,6 +119,7 @@ validate_release_service_containers() {
          imageReference:.Config.Image,
          imageID:.Image,
          executable:.Path,
+         arguments:(.Args // []),
          revision:(.Config.Labels["org.opencontainers.image.revision"] // ""),
          running:.State.Running}]
     ' <<<"${inspection}")"
@@ -131,10 +132,16 @@ validate_release_service_containers() {
     all(.[];
       .running and .revision == $revision and
       (.imageReference | test("@sha256:[0-9a-f]{64}$")) and
-      ((.role == "api" and .executable == "/app/api") or
+      ((.role == "api" and (
+          .executable == "/app/api" or
+          (.executable == "/bin/sh" and
+           (.arguments | length) == 2 and
+           .arguments[0] == "-ec" and
+           (.arguments[1] | contains("cat /run/secrets/serviceaccount-signing-key")) and
+           (.arguments[1] | contains("exec /app/api --config-file /etc/gitstore/gitstore.toml"))))) or
        (.role == "git-service" and .executable == "/app/git-service")))
   ' <<<"${release_service_containers}" >/dev/null || {
-    echo "live API and Git-service containers must use digest-pinned release images for the tested revision" >&2
+    echo "live API and Git-service containers must use digest-pinned release images for the tested revision and an approved executable shape" >&2
     exit 1
   }
 
@@ -212,7 +219,7 @@ case "${target}/${profile}" in
       exit 2
     }
     ;;
-  namespace/watch|namespace/recovery)
+  namespace/watch|namespace/recovery|repository/lifecycle)
     if [[ "${profile}" == "watch" && "${NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT:-0}" == "1" ]]; then
       echo "NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT is only valid in diagnostic mode" >&2
       exit 2
@@ -310,14 +317,14 @@ case "${target}/${profile}" in
         exit 1
       }
     fi
-    if [[ "${profile}" == "recovery" ]]; then
+    if [[ "${profile}" == "recovery" || "${target}/${profile}" == "repository/lifecycle" ]]; then
       [[ -n "${NAMESPACE_WATCH_TOKEN:-}" || -r "${NAMESPACE_WATCH_TOKEN_FILE:-}" ]] || {
-        echo "namespace/recovery evidence requires NAMESPACE_WATCH_TOKEN or a readable token file" >&2
+        echo "${target}/${profile} evidence requires a watch token or readable token file" >&2
         exit 2
       }
       [[ "${NAMESPACE_WATCH_OVERFLOW_TRANSITIONS:-}" =~ ^[1-9][0-9]*$ ]] &&
         (( 10#${NAMESPACE_WATCH_OVERFLOW_TRANSITIONS} >= 1000 )) || {
-        echo "namespace/recovery evidence requires NAMESPACE_WATCH_OVERFLOW_TRANSITIONS >= 1000" >&2
+        echo "${target}/${profile} evidence requires at least 1000 overflow transitions" >&2
         exit 2
       }
     fi

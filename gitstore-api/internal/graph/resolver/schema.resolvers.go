@@ -46,6 +46,8 @@ func (r *mutationResolver) UpdateResourceStatus(ctx context.Context, input model
 		return r.updateCategoryTaxonomyStatusGeneric(ctx, input)
 	case "Namespace":
 		return r.updateNamespaceStatusGeneric(ctx, input)
+	case "Repository":
+		return r.updateRepositoryStatusGeneric(ctx, input)
 	case "File":
 		return r.updateFileStatusGeneric(ctx, input)
 	default:
@@ -107,6 +109,9 @@ func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, 
 		}
 		return r.watchNamespaceResources(ctx, selector, resourceVersion)
 	}
+	if kind == "Repository" {
+		return r.watchRepositoryResources(ctx, namespace, selector, resourceVersion)
+	}
 	if r.eventBus == nil {
 		return nil, gqlerror.Errorf("watch subscriptions are not available")
 	}
@@ -143,7 +148,7 @@ func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, 
 				if !ok {
 					return
 				}
-				if !categoryEventMatchesFilters(ev, namespace) || !categoryEventMatchesSelector(ev, selector) {
+				if !categoryEventMatchesFilters(ev, namespace) || !watchEventMatchesSelector(kind, ev, selector) {
 					continue
 				}
 				select {

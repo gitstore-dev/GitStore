@@ -80,4 +80,5 @@ var (
 	ErrQueueShutdown     = errors.New("queue is shutting down")
 	ErrKindNotRegistered = errors.New("kind not registered")
 	ErrConflict          = errors.New("optimistic concurrency conflict")
+	ErrRateLimited       = errors.New("remote API rate limited request")
 )

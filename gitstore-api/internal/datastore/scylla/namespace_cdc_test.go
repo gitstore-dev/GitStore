@@ -24,6 +24,7 @@ import (
 type sequencerStore struct {
 	mu       sync.Mutex
 	names    []string
+	events   []datastore.ResourceWatchEvent
 	sequence uint64
 }
 
@@ -33,6 +34,7 @@ func (s *sequencerStore) Append(_ context.Context, _ datastore.NamespaceWatchLea
 	s.sequence++
 	event.Sequence = s.sequence
 	s.names = append(s.names, event.Name)
+	s.events = append(s.events, event)
 	return event, nil
 }
 
@@ -69,6 +71,39 @@ func TestNamespaceCDCSequencerOrdersConcurrentStreams(t *testing.T) {
 	store.mu.Unlock()
 	cancel()
 	assert.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestRepositoryCDCUsesSharedSequencerAndJournalEnvelope(t *testing.T) {
+	store := &sequencerStore{}
+	materializer := watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{})
+	sequencer := newNamespaceCDCSequencer(materializer, datastore.ResourceWatchLease{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"repository-stream"})
+	require.NoError(t, sequencer.Register(ctx, "repository-stream"))
+
+	progressed := make(chan string, 1)
+	request := sequenceTestRequest("repository-stream", "catalog", gocql.MinTimeUUID(time.Now().UTC()), progressed)
+	request.change.Kind = "Repository"
+	request.change.Namespace = "shop"
+	request.change.After = []byte(`{"Labels":{"team":"catalog"},"Name":"catalog","Namespace":"shop"}`)
+	require.NoError(t, sequencer.Submit(ctx, request))
+	require.NoError(t, sequencer.Unregister("repository-stream"))
+	require.Equal(t, "catalog", <-progressed)
+
+	store.mu.Lock()
+	require.Len(t, store.events, 1)
+	event := store.events[0]
+	store.mu.Unlock()
+	assert.Equal(t, datastore.ResourceWatchAdded, event.Type)
+	assert.Equal(t, "Repository", event.Kind)
+	assert.Equal(t, "shop", event.Namespace)
+	assert.Equal(t, "catalog", event.Name)
+	assert.Equal(t, map[string]string{"team": "catalog"}, event.SelectorLabels)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func TestNamespaceCDCSequencerFlushesPendingTailBeforeNextGeneration(t *testing.T) {

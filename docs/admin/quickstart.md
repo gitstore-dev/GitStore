@@ -109,8 +109,8 @@ The admin container depends on the API health check and uses `GITSTORE_GRAPHQL_U
 
 Verify the API auth configuration:
 
-- `GITSTORE_AUTH__ADMIN__USERNAME`
-- `GITSTORE_AUTH__ADMIN__PASSWORD_HASH`
+- the bootstrap identity exists in the configured `users.yaml`
+- the identity has the required role binding in `policy.yaml`
 - `GITSTORE_AUTH__JWT__SECRET`
 
 You can create or refresh a bootstrap token with:

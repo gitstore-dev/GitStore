@@ -14,12 +14,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gorilla/websocket"
 )
 
@@ -42,10 +44,13 @@ func New(baseURL string, credentials CredentialSource) *Client {
 	if credentials == nil {
 		panic("graphqlclient.New: credentials must not be nil")
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 200
+	transport.MaxIdleConnsPerHost = 100
 	return &Client{
 		baseURL:     baseURL,
 		credentials: credentials,
-		http:        http.DefaultClient,
+		http:        &http.Client{Transport: transport},
 		dialer:      websocket.DefaultDialer,
 	}
 }
@@ -111,6 +116,13 @@ func (c *Client) do(ctx context.Context, doc string, vars map[string]any, out an
 	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode >= 300 {
+		// Consume bounded error bodies so net/http can reuse the connection.
+		// Rate-limit bursts otherwise leave thousands of short-lived sockets in
+		// TIME_WAIT and can exhaust a controller replica's ephemeral port range.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return fmt.Errorf("%w: HTTP status %d", types.ErrRateLimited, resp.StatusCode)
+		}
 		return fmt.Errorf("graphqlclient: unexpected HTTP status %d", resp.StatusCode)
 	}
 

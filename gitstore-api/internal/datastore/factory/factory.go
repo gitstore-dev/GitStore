@@ -42,3 +42,14 @@ func NamespaceWatchJournal(store datastore.Datastore) (datastore.NamespaceWatchJ
 	}
 	return capable.NamespaceWatchJournal(), nil
 }
+
+// ResourceWatchJournal resolves the generic durable-watch capability. New
+// resource controllers and GraphQL projections use this rather than a
+// Namespace-named accessor.
+func ResourceWatchJournal(store datastore.Datastore) (datastore.ResourceWatchJournal, error) {
+	capable, ok := store.(datastore.ResourceWatchCapable)
+	if !ok || capable.ResourceWatchJournal() == nil {
+		return nil, fmt.Errorf("datastore does not implement the resource watch journal capability")
+	}
+	return capable.ResourceWatchJournal(), nil
+}

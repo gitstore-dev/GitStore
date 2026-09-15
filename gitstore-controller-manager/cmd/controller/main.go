@@ -24,6 +24,7 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
+	repositorycontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/repository"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
@@ -76,6 +77,13 @@ func main() {
 
 	if _, err = registerNamespace(ctx, mgr, checkpointStore, cfg, log, client); err != nil {
 		log.Fatal("failed to register Namespace reconciler", zap.Error(err))
+	}
+	if _, err = registerRepository(
+		ctx, mgr, checkpointStore, cfg, log, client,
+		listwatch.NewRepositoryListWatcher(client),
+		repositorycontroller.NewGraphQLStorageClient(client),
+	); err != nil {
+		log.Fatal("failed to register Repository reconciler", zap.Error(err))
 	}
 
 	var productRunnerMu sync.RWMutex
@@ -211,6 +219,62 @@ func registerNamespace(ctx context.Context, mgr *manager.Manager, checkpointStor
 	go func() {
 		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
 			log.Error("Namespace runner exited with error", zap.Error(err))
+		}
+	}()
+	return runner, nil
+}
+
+// registerRepository constructs the Repository runner and reconciler once the
+// process has been supplied with the concrete typed Repository ListWatcher and
+// idempotent storage provisioner. They are explicit dependencies because the
+// controller has no direct Git-service credentials: the provisioner must use a
+// server-side API contract rather than teach the controller a second transport.
+func registerRepository(
+	ctx context.Context,
+	mgr *manager.Manager,
+	checkpointStore *checkpoint.FilesystemStore,
+	cfg *config.Config,
+	log *zap.Logger,
+	client *graphqlclient.Client,
+	watcher listwatch.ListWatcher[repositorycontroller.Repository],
+	storageClient repositorycontroller.StorageClient,
+) (*listwatch.Runner[repositorycontroller.Repository], error) {
+	repositoryCache := cache.New[repositorycontroller.Repository]()
+	runner := &listwatch.Runner[repositorycontroller.Repository]{
+		Kind:        "Repository",
+		ListWatcher: watcher,
+		Cache:       repositoryCache,
+		Store:       checkpointStore,
+		Enqueue:     mgr.Enqueue,
+		KeyFunc: func(item repositorycontroller.Repository) types.WorkItemKey {
+			return types.WorkItemKey{Kind: "Repository", Namespace: item.Namespace, Name: item.Name}
+		},
+		RevisionFunc: func(item repositorycontroller.Repository) string {
+			return item.ResourceVersion
+		},
+		FlushIntervalEvents: cfg.Controller.CheckpointFlushIntervalEvents,
+		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
+		Log:                 log,
+	}
+	reconciler := repositorycontroller.NewReconciler(
+		cache.AsReadOnly(repositoryCache),
+		status.NewGraphQLResourceStatusClient(client),
+		storageClient,
+		repositorycontroller.NewGraphQLCompletionClient(client),
+	)
+	if err := mgr.Register(manager.ReconcilerRegistration{
+		Kind:           "Repository",
+		Reconciler:     reconciler,
+		Cache:          repositoryCache,
+		OnSuccess:      runner.MarkCompleted,
+		MaxAttempts:    cfg.Controller.DefaultMaxAttempts,
+		StallThreshold: cfg.Controller.DefaultStallThreshold,
+	}); err != nil {
+		return nil, fmt.Errorf("register Repository: %w", err)
+	}
+	go func() {
+		if err := runner.Run(ctx); err != nil && ctx.Err() == nil {
+			log.Error("Repository runner exited with error", zap.Error(err))
 		}
 	}()
 	return runner, nil

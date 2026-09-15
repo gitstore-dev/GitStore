@@ -180,6 +180,7 @@ func (c *namespaceCDCConsumer) Consume(ctx context.Context, change scyllacdc.Cha
 			return c.reporter.MarkProgress(markCtx, scyllacdc.Progress{LastProcessedRecordTime: change.Time})
 		},
 		change: watchjournal.Change{
+			Kind:             "Namespace",
 			StreamID:         c.streamID,
 			Position:         change.Time.Bytes(),
 			DeduplicationKey: c.streamID + ":" + change.Time.String(),
@@ -785,6 +786,10 @@ func encodeCDCStreamID(streamID scyllacdc.StreamID) string {
 // to the sequencer prevents any batch from publishing while another batch is
 // still being initialized, regardless of cluster size or scheduler delay.
 func (s *scyllaDatastore) namespaceCDCGenerationStreams(ctx context.Context, generation time.Time) ([]string, error) {
+	return s.resourceCDCGenerationStreams(ctx, generation, "namespaces_by_uid", "Namespace")
+}
+
+func (s *scyllaDatastore) resourceCDCGenerationStreams(ctx context.Context, generation time.Time, table, kind string) ([]string, error) {
 	consistency, err := s.namespaceCDCGenerationConsistency(ctx)
 	if err != nil {
 		return nil, err
@@ -802,14 +807,14 @@ func (s *scyllaDatastore) namespaceCDCGenerationStreams(ctx context.Context, gen
 	if keyspaceMetadata["initial_tablets"] != nil {
 		iter := s.session.Session.Query(
 			"SELECT stream_id FROM system.cdc_streams WHERE keyspace_name = ? AND table_name = ? AND timestamp = ? AND stream_state = ?",
-			s.keyspace, "namespaces_by_uid", generation, 0,
+			s.keyspace, table, generation, 0,
 		).WithContext(ctx).Consistency(consistency).Iter()
 		var stream scyllacdc.StreamID
 		for iter.Scan(&stream) {
 			streams = append(streams, append(scyllacdc.StreamID(nil), stream...))
 		}
 		if err := iter.Close(); err != nil {
-			return nil, fmt.Errorf("read Namespace CDC tablet generation %s: %w", generation, err)
+			return nil, fmt.Errorf("read %s CDC tablet generation %s: %w", kind, generation, err)
 		}
 	} else {
 		iter := s.session.Session.Query(
@@ -823,11 +828,11 @@ func (s *scyllaDatastore) namespaceCDCGenerationStreams(ctx context.Context, gen
 			}
 		}
 		if err := iter.Close(); err != nil {
-			return nil, fmt.Errorf("read Namespace CDC generation %s: %w", generation, err)
+			return nil, fmt.Errorf("read %s CDC generation %s: %w", kind, generation, err)
 		}
 	}
 	if len(streams) == 0 {
-		return nil, fmt.Errorf("namespace CDC generation %s contains no streams", generation)
+		return nil, fmt.Errorf("%s CDC generation %s contains no streams", kind, generation)
 	}
 
 	encoded := make([]string, 0, len(streams))

@@ -184,6 +184,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountassertion"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountjwt"
+	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
@@ -231,6 +232,18 @@ func (m *mockGitWriter) ResolveRefForRepo(_ context.Context, _ string, _ string)
 
 func (m *mockGitWriter) ReadFileForRepo(_ context.Context, _ string, _ string, _ string) ([]byte, error) {
 	return nil, nil
+}
+
+func (m *mockGitWriter) ListFiles(_ context.Context, _ string, _ string, _ string) ([]string, error) {
+	return nil, nil
+}
+
+func (m *mockGitWriter) ReadFile(_ context.Context, _ string, _ string, _ string) ([]byte, error) {
+	return nil, nil
+}
+
+func (m *mockGitWriter) ResolveRef(_ context.Context, _ string, _ string) (string, error) {
+	return "deadbeef", nil
 }
 
 func (m *mockGitWriter) DeleteFile(_ context.Context, _ gitclient.DeleteFileParams) (string, error) {
@@ -343,12 +356,23 @@ func main() {
 	}); err != nil {
 		panic(err)
 	}
+	gitWriter := &mockGitWriter{}
+	committedAdmitter, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
+		Store:       store,
+		GitReader:   gitWriter,
+		Logger:      zap.NewNop(),
+		IDGenerator: ids,
+	})
+	if err != nil {
+		panic(err)
+	}
 	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{
 		Store:     store,
-		GitWriter: &mockGitWriter{},
+		GitWriter: gitWriter,
 		Logger:    zap.NewNop(),
 		Registry:  registry,
 		IDs:       ids,
+		CommittedManifestAdmitter: committedAdmitter,
 		ServiceAccountAudience: cfg.ServiceAccount.Audience,
 		ConnectionRegistry: wsregistry.New(),
 	})
@@ -688,15 +712,8 @@ func (h *namespaceContractHarness) cleanupNamespace(identifier string) {
 
 	repoID, ok := h.lookupRepositoryID(identifier, namespaceContractSystemRepository)
 	if ok {
-		resp := h.gql(`
-			mutation($repositoryID: ID!) {
-				deleteRepository(input: {repositoryId: $repositoryID}) {
-					deletedRepositoryId
-				}
-			}
-		`, map[string]any{"repositoryID": repoID})
-		if len(resp.Errors) > 0 {
-			h.t.Logf("cleanup deleteRepository(%s/%s) errors: %s", identifier, namespaceContractSystemRepository, namespaceContractErrors(resp.Errors))
+		if errors := h.deleteRepositoryAndComplete(repoID); len(errors) > 0 {
+			h.t.Logf("cleanup deleteRepository(%s/%s) errors: %s", identifier, namespaceContractSystemRepository, namespaceContractErrors(errors))
 		}
 	}
 
@@ -748,6 +765,13 @@ func (h *namespaceContractHarness) requireDeleteSystemRepository(namespace strin
 		h.t.Fatalf("system repository %q not found in namespace %q", namespaceContractSystemRepository, namespace)
 	}
 
+	if errors := h.deleteRepositoryAndComplete(repoID); len(errors) > 0 {
+		h.t.Fatalf("graphql errors deleting system repository %s/%s: %s", namespace, namespaceContractSystemRepository, namespaceContractErrors(errors))
+	}
+}
+
+func (h *namespaceContractHarness) deleteRepositoryAndComplete(repoID string) []json.RawMessage {
+	h.t.Helper()
 	resp := h.gql(`
 		mutation($repositoryID: ID!) {
 			deleteRepository(input: {repositoryId: $repositoryID}) {
@@ -756,7 +780,7 @@ func (h *namespaceContractHarness) requireDeleteSystemRepository(namespace strin
 		}
 	`, map[string]any{"repositoryID": repoID})
 	if len(resp.Errors) > 0 {
-		h.t.Fatalf("graphql errors deleting system repository %s/%s: %s", namespace, namespaceContractSystemRepository, namespaceContractErrors(resp.Errors))
+		return resp.Errors
 	}
 
 	var data struct {
@@ -765,11 +789,48 @@ func (h *namespaceContractHarness) requireDeleteSystemRepository(namespace strin
 		} `json:"deleteRepository"`
 	}
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
-		h.t.Fatalf("unmarshal deleteRepository response: %v", err)
+		return []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"message":%q}`, err.Error()))}
 	}
 	if data.DeleteRepository == nil || data.DeleteRepository.DeletedRepositoryID != repoID {
-		h.t.Fatalf("deleteRepository returned %+v, want deletedRepositoryId %q", data.DeleteRepository, repoID)
+		return []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"message":%q}`, fmt.Sprintf("deleteRepository returned %+v, want deletedRepositoryId %q", data.DeleteRepository, repoID)))}
 	}
+
+	resp = h.gql(`
+		query($repositoryID: ID!) {
+			repository(by: {id: $repositoryID}) {
+				metadata { namespace name resourceVersion }
+			}
+		}
+	`, map[string]any{"repositoryID": repoID})
+	if len(resp.Errors) > 0 {
+		return resp.Errors
+	}
+	var current struct {
+		Repository struct {
+			Metadata struct {
+				Namespace       string `json:"namespace"`
+				Name            string `json:"name"`
+				ResourceVersion string `json:"resourceVersion"`
+			} `json:"metadata"`
+		} `json:"repository"`
+	}
+	if err := json.Unmarshal(resp.Data, &current); err != nil {
+		return []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"message":%q}`, err.Error()))}
+	}
+	resp = h.gql(`
+		mutation($namespace: String!, $name: String!, $resourceVersion: String!) {
+			completeRepositoryDeletion(input: {
+				namespace: $namespace
+				name: $name
+				resourceVersion: $resourceVersion
+			}) { deletedRepositoryId }
+		}
+	`, map[string]any{
+		"namespace":       current.Repository.Metadata.Namespace,
+		"name":            current.Repository.Metadata.Name,
+		"resourceVersion": current.Repository.Metadata.ResourceVersion,
+	})
+	return resp.Errors
 }
 
 func (h *namespaceContractHarness) createNamespace(identifier, title string) {
@@ -811,15 +872,13 @@ func (h *namespaceContractHarness) createNamespace(identifier, title string) {
 	}
 
 	resp = h.gql(`
-		mutation($namespace: String!, $name: String!, $defaultBranch: String!) {
-			createRepository(input: {namespace: $namespace, name: $name, defaultBranch: $defaultBranch}) {
+		mutation($namespace: String!) {
+			provisionNamespaceSystemRepository(input: {namespace: $namespace}) {
 				repository { id }
 			}
 		}
 	`, map[string]any{
-		"namespace":     identifier,
-		"name":          namespaceContractSystemRepository,
-		"defaultBranch": "main",
+		"namespace": identifier,
 	})
 	if len(resp.Errors) > 0 {
 		h.t.Fatalf("graphql errors provisioning system repository for %q: %s", identifier, namespaceContractErrors(resp.Errors))

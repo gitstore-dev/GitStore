@@ -38,7 +38,9 @@ COPY --from=builder /build/api /app/api
 COPY --from=builder /build/gitctl /app/gitctl
 COPY --from=builder /build/shared/schemas /app/schemas
 
-# Expose GraphQL API port
+# Expose ports
 EXPOSE 4000
+EXPOSE 9000
+EXPOSE 6000
 
 CMD ["/app/api"]

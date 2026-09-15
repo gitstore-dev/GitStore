@@ -8,7 +8,9 @@ package resolver
 import (
 	"context"
 	"errors"
+	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -17,21 +19,36 @@ import (
 
 // CreateRepository is the resolver for the createRepository field.
 func (r *mutationResolver) CreateRepository(ctx context.Context, input model.CreateRepositoryInput) (*model.CreateRepositoryPayload, error) {
-	ns, err := r.service.GetNamespaceByName(ctx, input.Namespace)
+	if input.APIVersion != repositoryAPIVersion {
+		return nil, gqlerror.Errorf("apiVersion must be %q", repositoryAPIVersion)
+	}
+	if input.Kind != repositoryKind {
+		return nil, gqlerror.Errorf("kind must be %q", repositoryKind)
+	}
+	if input.Metadata == nil || input.Spec == nil {
+		return nil, gqlerror.Errorf("metadata and spec are required")
+	}
+	if input.Metadata.Name == SystemRepositoryName {
+		return nil, gqlerror.Errorf("repository %q is system-managed", SystemRepositoryName)
+	}
+	if _, err := r.service.CommitRepositoryManifest(ctx, input.APIVersion, input.Kind, input.Metadata, input.Spec, callerUsernameOrAnon(ctx, r), true); err != nil {
+		return nil, err
+	}
+	ns, err := r.service.GetNamespaceByName(ctx, input.Metadata.Namespace)
 	if err != nil {
 		return nil, err
 	}
-	defaultBranch := "main"
-	if input.DefaultBranch != nil && *input.DefaultBranch != "" {
-		defaultBranch = *input.DefaultBranch
+	mapping, err := r.service.LookupRepository(ctx, ns.Name, input.Metadata.Name)
+	if err != nil {
+		return nil, err
 	}
-	repo, err := r.service.CreateRepository(ctx, ns.Name, input.Name, defaultBranch, "default", callerUsernameOrAnon(ctx, r))
+	repo, err := r.service.GetRepository(ctx, mapping.RepositoryID)
 	if err != nil {
 		return nil, err
 	}
 	r.logger.Info("lookup repository",
-		zap.String("namespace", input.Namespace),
-		zap.String("name", input.Name),
+		zap.String("namespace", input.Metadata.Namespace),
+		zap.String("name", input.Metadata.Name),
 		zap.String("repo_id", repo.ID),
 	)
 	result, err := datastoreRepositoryToModelStrict(repo, ns, r.storageDataDir)
@@ -43,66 +60,119 @@ func (r *mutationResolver) CreateRepository(ctx context.Context, input model.Cre
 	}, nil
 }
 
-// RenameRepository is the resolver for the renameRepository field.
-func (r *mutationResolver) RenameRepository(ctx context.Context, input model.RenameRepositoryInput) (*model.RenameRepositoryPayload, error) {
-	repoID, err := decodeNodeIDAs(nodeKindRepository, input.RepositoryID)
+// UpdateRepository is the resolver for the updateRepository field.
+func (r *mutationResolver) UpdateRepository(ctx context.Context, input model.UpdateRepositoryInput) (*model.UpdateRepositoryPayload, error) {
+	if input.APIVersion != repositoryAPIVersion || input.Kind != repositoryKind || input.Metadata == nil || input.Spec == nil {
+		return nil, gqlerror.Errorf("invalid Repository resource envelope")
+	}
+	mapping, err := r.service.LookupRepository(ctx, input.Metadata.Namespace, input.Metadata.Name)
 	if err != nil {
 		return nil, err
 	}
-	repo, err := r.service.GetRepository(ctx, repoID)
+	repo, err := r.service.GetRepository(ctx, mapping.RepositoryID)
 	if err != nil {
 		return nil, err
 	}
-	ns, err := r.service.GetNamespaceByName(ctx, repo.Namespace)
+	if repo.Name == SystemRepositoryName {
+		return nil, gqlerror.Errorf("repository %q is system-managed", SystemRepositoryName)
+	}
+	if _, err := r.service.CommitRepositoryManifest(ctx, input.APIVersion, input.Kind, input.Metadata, input.Spec, callerUsernameOrAnon(ctx, r), false); err != nil {
+		return nil, err
+	}
+	updated, err := r.service.GetRepository(ctx, repo.UID)
 	if err != nil {
 		return nil, err
 	}
-	repo, err = r.service.RenameRepository(ctx, repoID, input.NewName, callerUsernameOrAnon(ctx, r))
+	ns, err := r.service.GetNamespaceByName(ctx, updated.Namespace)
 	if err != nil {
 		return nil, err
 	}
-	r.logger.Info("rename repository",
-		zap.String("repo_id", repoID),
-		zap.String("new_name", input.NewName),
-	)
-	result, err := datastoreRepositoryToModelStrict(repo, ns, r.storageDataDir)
+	result, err := datastoreRepositoryToModelStrict(updated, ns, r.storageDataDir)
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to hydrate repository: %v", err)
 	}
-	return &model.RenameRepositoryPayload{
-		Repository: result,
-	}, nil
+	return &model.UpdateRepositoryPayload{Repository: result}, nil
+}
+
+// UpdateRepositoryStatus is the resolver for the updateRepositoryStatus field.
+func (r *mutationResolver) UpdateRepositoryStatus(ctx context.Context, input model.UpdateRepositoryStatusInput) (*model.UpdateRepositoryStatusPayload, error) {
+	mapping, err := r.service.LookupRepository(ctx, input.Namespace, input.Name)
+	if err != nil {
+		return nil, err
+	}
+	repository, err := r.service.GetRepository(ctx, mapping.RepositoryID)
+	if err != nil {
+		return nil, err
+	}
+	patch := datastore.RepositoryStatusPatch{
+		ResourceVersion:     input.ResourceVersion,
+		LastAppliedRevision: input.LastAppliedRevision,
+	}
+	if input.ObservedGeneration != nil {
+		generation := int64(*input.ObservedGeneration)
+		patch.ObservedGeneration = &generation
+	}
+	if input.Conditions != nil {
+		patch.Conditions = toConditions(input.Conditions)
+	}
+	if input.Resolved != nil {
+		patch.Resolved = &catalog.ResolvedRepositoryDefinition{
+			StoragePath:  input.Resolved.StoragePath,
+			StorageClass: input.Resolved.StorageClass,
+		}
+	}
+	if err := datastore.ApplyRepositoryStatusPatch(repository, patch); err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			return nil, &gqlerror.Error{Message: "Repository status update conflict", Extensions: map[string]any{"code": "RESOURCE_VERSION_CONFLICT", "resourceVersion": repository.ResourceVersion}}
+		}
+		return nil, gqlerror.Errorf("update Repository status: %v", err)
+	}
+	if err := r.service.Store().UpdateRepository(ctx, repository, input.ResourceVersion); err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			current, getErr := r.service.GetRepository(ctx, mapping.RepositoryID)
+			if getErr != nil {
+				return nil, gqlerror.Errorf("Repository status update conflict")
+			}
+			return nil, &gqlerror.Error{Message: "Repository status update conflict", Extensions: map[string]any{"code": "RESOURCE_VERSION_CONFLICT", "resourceVersion": current.ResourceVersion}}
+		}
+		return nil, gqlerror.Errorf("update Repository status: %v", err)
+	}
+	namespace, err := r.service.GetNamespaceByName(ctx, repository.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	result, err := datastoreRepositoryToModelStrict(repository, namespace, r.storageDataDir)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to hydrate repository: %v", err)
+	}
+	return &model.UpdateRepositoryStatusPayload{Repository: result}, nil
+}
+
+// ProvisionRepositoryStorage is the resolver for the provisionRepositoryStorage field.
+func (r *mutationResolver) ProvisionRepositoryStorage(ctx context.Context, input model.ProvisionRepositoryStorageInput) (*model.ProvisionRepositoryStoragePayload, error) {
+	repository, err := r.service.ProvisionRepositoryStorage(ctx, input.Namespace, input.Name)
+	if err != nil {
+		return nil, err
+	}
+	namespace, err := r.service.GetNamespaceByName(ctx, repository.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	result, err := datastoreRepositoryToModelStrict(repository, namespace, r.storageDataDir)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to hydrate repository: %v", err)
+	}
+	return &model.ProvisionRepositoryStoragePayload{Repository: result}, nil
+}
+
+// RenameRepository is the resolver for the renameRepository field.
+func (r *mutationResolver) RenameRepository(ctx context.Context, input model.RenameRepositoryInput) (*model.RenameRepositoryPayload, error) {
+	return nil, gqlerror.Errorf("renameRepository is unimplemented; see docs/ADRs/0003-repository-lifecycle.md")
 }
 
 // TransferRepository is the resolver for the transferRepository field.
 func (r *mutationResolver) TransferRepository(ctx context.Context, input model.TransferRepositoryInput) (*model.TransferRepositoryPayload, error) {
-	repoID, err := decodeNodeIDAs(nodeKindRepository, input.RepositoryID)
-	if err != nil {
-		return nil, err
-	}
-	targetNsID, err := decodeNodeIDAs(nodeKindNamespace, input.TargetNamespaceID)
-	if err != nil {
-		return nil, err
-	}
-	ns, err := r.service.GetNamespaceByID(ctx, targetNsID)
-	if err != nil {
-		return nil, err
-	}
-	repo, err := r.service.TransferRepository(ctx, repoID, ns.Name, callerUsernameOrAnon(ctx, r))
-	if err != nil {
-		return nil, err
-	}
-	r.logger.Info("transfer repository",
-		zap.String("repo_id", repoID),
-		zap.String("to_namespace_id", targetNsID),
-	)
-	result, err := datastoreRepositoryToModelStrict(repo, ns, r.storageDataDir)
-	if err != nil {
-		return nil, gqlerror.Errorf("failed to hydrate repository: %v", err)
-	}
-	return &model.TransferRepositoryPayload{
-		Repository: result,
-	}, nil
+	return nil, gqlerror.Errorf("transferRepository is unimplemented; see docs/ADRs/0003-repository-lifecycle.md")
 }
 
 // DeleteRepository is the resolver for the deleteRepository field.
@@ -118,6 +188,26 @@ func (r *mutationResolver) DeleteRepository(ctx context.Context, input model.Del
 	return &model.DeleteRepositoryPayload{
 		DeletedRepositoryID: mustEncodeNodeID(nodeKindRepository, repoID),
 	}, nil
+}
+
+// CompleteRepositoryDeletion is the resolver for the completeRepositoryDeletion field.
+func (r *mutationResolver) CompleteRepositoryDeletion(ctx context.Context, input model.CompleteRepositoryDeletionInput) (*model.CompleteRepositoryDeletionPayload, error) {
+	deleted, err := r.service.CompleteRepositoryDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)
+	if errors.Is(err, datastore.ErrConflict) {
+		if deleted == nil {
+			return nil, gqlerror.Errorf("Repository deletion conflict, and current version could not be read")
+		}
+		return nil, statusConflictError("Repository", input.Namespace, input.Name, deleted.ResourceVersion)
+	}
+	if err != nil {
+		return nil, err
+	}
+	payload := &model.CompleteRepositoryDeletionPayload{}
+	if deleted != nil {
+		id := mustEncodeNodeID(nodeKindRepository, deleted.UID)
+		payload.DeletedRepositoryID = &id
+	}
+	return payload, nil
 }
 
 // Repository is the resolver for the repository field.
@@ -187,4 +277,70 @@ func (r *queryResolver) Repositories(ctx context.Context, namespace string, firs
 		return nil, err
 	}
 	return BuildRepositoryConnection(result, ns, r.storageDataDir)
+}
+
+// WatchRepositories is the resolver for the watchRepositories field.
+func (r *subscriptionResolver) WatchRepositories(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.RepositoryWatchEvent, error) {
+	if err := r.repositoryWatchAvailable(); err != nil {
+		return nil, err
+	}
+	rawCursor := ""
+	if resourceVersion != nil {
+		rawCursor = normalizeResourceWatchCursor(*resourceVersion)
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream, err := r.namespaceSubscriber.SubscribePath(streamCtx, rawCursor, "typed")
+	if err != nil {
+		cancel()
+		return nil, repositoryWatchGraphQLError(err)
+	}
+	out := make(chan *model.RepositoryWatchEvent, r.namespaceWatch.SubscriberBuffer)
+	go func() {
+		defer cancel()
+		defer close(out)
+		for events, errorsOut := stream.Events, stream.Errors; events != nil || errorsOut != nil; {
+			select {
+			case <-ctx.Done():
+				return
+			case streamErr, ok := <-errorsOut:
+				if !ok {
+					errorsOut = nil
+					continue
+				}
+				if streamErr != nil {
+					addRepositoryWatchSubscriptionError(ctx, repositoryWatchGraphQLError(streamErr))
+					return
+				}
+			case event, ok := <-events:
+				if !ok {
+					events = nil
+					continue
+				}
+				if !repositoryJournalEventMatchesKind(event) || !repositoryJournalEventMatchesNamespace(event, namespace) {
+					continue
+				}
+				projected, matches := projectRepositoryJournalEvent(event, selector)
+				if !matches {
+					continue
+				}
+				repository, decodeErr := repositoryFromJournalEvent(projected)
+				if decodeErr != nil {
+					addRepositoryWatchSubscriptionError(ctx, decodeErr)
+					return
+				}
+				converted, convertErr := RepositoryJournalEventToGraphQL(projected, repository)
+				if convertErr != nil {
+					addRepositoryWatchSubscriptionError(ctx, convertErr)
+					return
+				}
+				if sendErr := sendNamespaceWatchOutput(streamCtx, out, converted, time.Duration(r.namespaceWatch.SubscriberBackpressureMillis)*time.Millisecond, r.namespaceMetrics); sendErr != nil {
+					if streamCtx.Err() == nil {
+						addRepositoryWatchSubscriptionError(streamCtx, repositoryWatchGraphQLError(sendErr))
+					}
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }

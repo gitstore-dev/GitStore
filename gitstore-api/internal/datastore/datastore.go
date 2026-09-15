@@ -49,26 +49,37 @@ const DefaultPageSize = 100
 // unbounded datastore read.
 const MaxOwnerDependentPageSize = 100
 
-// NamespaceWatchJournal is an optional datastore capability. Keeping it
+// ResourceWatchJournal is an optional datastore capability. Keeping it
 // separate from Datastore avoids forcing resource-only test doubles to own
 // watch infrastructure while allowing both production backends to expose the
-// same durable contract.
-type NamespaceWatchJournal interface {
-	Bounds(ctx context.Context) (NamespaceWatchBounds, error)
-	Append(ctx context.Context, lease NamespaceWatchLease, event NamespaceWatchEvent, ttl time.Duration) (NamespaceWatchEvent, error)
-	ReadAfter(ctx context.Context, cursor NamespaceWatchCursor, limit int) ([]NamespaceWatchEvent, error)
-	AcquireLease(ctx context.Context, holder string, now time.Time, ttl time.Duration) (NamespaceWatchLease, bool, error)
-	RenewLease(ctx context.Context, lease NamespaceWatchLease, now time.Time, ttl time.Duration) (NamespaceWatchLease, bool, error)
-	ReleaseLease(ctx context.Context, lease NamespaceWatchLease) error
-	LoadProgress(ctx context.Context, streamID string) (NamespaceCDCProgress, error)
-	SaveProgress(ctx context.Context, lease NamespaceWatchLease, progress NamespaceCDCProgress) error
+// same durable contract. Source and streamID identify independent CDC
+// adapters, so a slow or repaired source cannot overwrite another kind's
+// checkpoint.
+type ResourceWatchJournal interface {
+	Bounds(ctx context.Context) (ResourceWatchBounds, error)
+	Append(ctx context.Context, lease ResourceWatchLease, event ResourceWatchEvent, ttl time.Duration) (ResourceWatchEvent, error)
+	ReadAfter(ctx context.Context, cursor ResourceWatchCursor, limit int) ([]ResourceWatchEvent, error)
+	AcquireLease(ctx context.Context, holder string, now time.Time, ttl time.Duration) (ResourceWatchLease, bool, error)
+	RenewLease(ctx context.Context, lease ResourceWatchLease, now time.Time, ttl time.Duration) (ResourceWatchLease, bool, error)
+	ReleaseLease(ctx context.Context, lease ResourceWatchLease) error
+	// streamID is a canonical source-qualified checkpoint key. Adapters must
+	// use Source/StreamID together when constructing it (for example
+	// "Repository/<cdc-stream>") so kind-local sources cannot collide.
+	LoadProgress(ctx context.Context, streamID string) (ResourceCDCProgress, error)
+	SaveProgress(ctx context.Context, lease ResourceWatchLease, progress ResourceCDCProgress) error
 }
 
 // NamespaceWatchCapable is implemented by datastores that can serve the
 // Namespace watch journal.
-type NamespaceWatchCapable interface {
-	NamespaceWatchJournal() NamespaceWatchJournal
+type ResourceWatchCapable interface {
+	ResourceWatchJournal() ResourceWatchJournal
 }
+
+// Deprecated compatibility aliases for the Namespace-only API. Backends can
+// expose both accessors during the migration, but new callers use the generic
+// capability above.
+type NamespaceWatchJournal = ResourceWatchJournal
+type NamespaceWatchCapable interface{ NamespaceWatchJournal() ResourceWatchJournal }
 
 // CategoryTaxonomyForegroundDeletionFinalizer holds a CategoryTaxonomy while
 // its controller rechecks blocking dependents and decouples Products.
@@ -256,6 +267,48 @@ type NamespaceStatusPatch struct {
 	ObservedGeneration  *int64
 	LastAppliedRevision *string
 	Conditions          []catalog.Condition
+}
+
+// RepositoryStatusPatch is the controller-only partial status write for a
+// Repository. It deliberately mirrors Namespace status semantics: controller
+// retries use ResourceVersion, while author-owned generation is unchanged.
+type RepositoryStatusPatch struct {
+	ResourceVersion     string
+	ObservedGeneration  *int64
+	LastAppliedRevision *string
+	Conditions          []catalog.Condition
+	Resolved            *catalog.ResolvedRepositoryDefinition
+}
+
+func ApplyRepositoryStatusPatch(repository *Repository, patch RepositoryStatusPatch) error {
+	if patch.ResourceVersion != repository.ResourceVersion {
+		return ErrConflict
+	}
+	var status catalog.RepositoryStatus
+	if len(repository.Status) > 0 {
+		if err := json.Unmarshal(repository.Status, &status); err != nil {
+			return fmt.Errorf("datastore: unmarshal existing Repository status: %w", err)
+		}
+	}
+	if patch.ObservedGeneration != nil {
+		status.ObservedGeneration = *patch.ObservedGeneration
+	}
+	if patch.LastAppliedRevision != nil {
+		status.LastAppliedRevision = *patch.LastAppliedRevision
+	}
+	if patch.Conditions != nil {
+		status.Conditions = patch.Conditions
+	}
+	if patch.Resolved != nil {
+		status.Resolved = patch.Resolved
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		return fmt.Errorf("datastore: marshal updated Repository status: %w", err)
+	}
+	repository.Status = data
+	AdvanceRepositorySystemVersion(repository)
+	return nil
 }
 
 func ApplyNamespaceStatusPatch(namespace *Namespace, patch NamespaceStatusPatch) error {

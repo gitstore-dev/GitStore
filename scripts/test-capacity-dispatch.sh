@@ -23,6 +23,7 @@ assert_dispatch namespace admission 'CAPACITY_PROFILE=namespace-admission'
 assert_dispatch namespace validation '_capacity-namespace-admission'
 assert_dispatch namespace watch '_capacity-namespace-watch'
 assert_dispatch namespace recovery '_capacity-namespace-recovery'
+assert_dispatch repository lifecycle '_capacity-repository-lifecycle'
 assert_dispatch scylla soak '_capacity-scylla-soak'
 
 if CAPACITY_DRY_RUN=1 "${dispatcher}" namespace unknown alpha >/dev/null 2>&1; then
@@ -115,7 +116,7 @@ printf '#!/usr/bin/env bash\nif [[ "$1" == exec ]]; then case "$2" in api-1) if 
 chmod +x "${test_dir}/bin/make"
 chmod +x "${test_dir}/bin/docker"
 jq -n --arg revision "${source_revision}" --arg digest "${image_digest}" '[
-  {Id:"api-id-1",Name:"/api-1",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
+  {Id:"api-id-1",Name:"/api-1",Image:("sha256:"+$digest),Path:"/bin/sh",Args:["-ec","export GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY=\"$(cat /run/secrets/serviceaccount-signing-key)\"; exec /app/api --config-file /etc/gitstore/gitstore.toml"],Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
   {Id:"api-id-2",Name:"/api-2",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
   {Id:"git-id-1",Name:"/git-1",Image:("sha256:"+$digest),Path:"/app/git-service",Config:{Image:("ghcr.io/gitstore-dev/git-service@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}}
 ]' >"${test_dir}/service-containers.json"

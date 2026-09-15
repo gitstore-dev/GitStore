@@ -413,7 +413,12 @@ func repositoryReadContractCreate(
 	t.Helper()
 	resp := h.gql(`
 		mutation($namespace: String!, $name: String!) {
-			createRepository(input: {namespace: $namespace, name: $name, defaultBranch: "main"}) {
+			createRepository(input: {
+				apiVersion: "gitstore.dev/v1beta1"
+				kind: "Repository"
+				metadata: {namespace: $namespace, name: $name}
+				spec: {defaultBranch: "main", visibility: PRIVATE, storageClass: "standard"}
+			}) {
 				repository {
 					id
 				}
@@ -438,15 +443,8 @@ func repositoryReadContractDelete(t *testing.T, h *namespaceContractHarness, id 
 	if id == "" {
 		return
 	}
-	resp := h.gql(`
-		mutation($id: ID!) {
-			deleteRepository(input: {repositoryId: $id}) {
-				deletedRepositoryId
-			}
-		}
-	`, map[string]any{"id": id})
-	if len(resp.Errors) > 0 {
-		t.Logf("cleanup deleteRepository(%s) errors: %s", id, namespaceContractErrors(resp.Errors))
+	if errors := h.deleteRepositoryAndComplete(id); len(errors) > 0 {
+		t.Logf("cleanup deleteRepository(%s) errors: %s", id, namespaceContractErrors(errors))
 	}
 }
 
