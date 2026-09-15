@@ -90,6 +90,26 @@ func TestReconcileStatusConflictRequeuesForFreshCacheState(t *testing.T) {
 	}
 }
 
+func TestReconcileRateLimitRequeuesWithoutConsumingPoisonRetryBudget(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		statuses *fakeStatusClient
+		storage  *fakeStorageClient
+	}{
+		{name: "status", statuses: &fakeStatusClient{err: types.ErrRateLimited}, storage: &fakeStorageClient{}},
+		{name: "storage", statuses: &fakeStatusClient{}, storage: &fakeStorageClient{err: types.ErrRateLimited}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := NewReconciler(seedRepositoryCache(t, repositoryFixture()), test.statuses, test.storage, &fakeCompletionClient{}).
+				Reconcile(context.Background(), repositoryKey("acme", "catalog"))
+			requeue, ok := result.(types.RequeueAfter)
+			if !ok || requeue.After != rateLimitRequeueDelay {
+				t.Fatalf("Reconcile result = %#v, want RequeueAfter(%s)", result, rateLimitRequeueDelay)
+			}
+		})
+	}
+}
+
 func TestReconcileAdmittedRepositoryProvisionsStorageAndMarksReady(t *testing.T) {
 	current := repositoryFixture(func(repository *Repository) {
 		repository.StorageClass = "premium"

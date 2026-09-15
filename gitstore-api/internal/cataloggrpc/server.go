@@ -1287,7 +1287,9 @@ func (s *Server) admitParsedEntries(
 		case "File":
 			s.admitFile(ctx, e.parsed.File, e.body, admCtx, e.path, op, existing)
 		case "Repository":
-			s.admitRepository(ctx, e.parsed.Repository, e.body, admCtx, e.path, op, existing)
+			if err := s.admitRepository(ctx, e.parsed.Repository, e.body, admCtx, e.path, op, existing); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -1354,53 +1356,80 @@ func (s *Server) lookupResourceByIdentity(ctx context.Context, id resourceIdenti
 // non-bootstrap Repository records. The Namespace reference is resolved here,
 // rather than accepted from the author, so every new Repository owns exactly
 // one blocking Namespace reference from its first durable row.
-func (s *Server) admitRepository(ctx context.Context, resource *catalog.RepositoryResource, body []byte, admCtx AdmissionContext, sourcePath string, op admission.Operation, rawExisting any) {
+const maxRepositoryAdmissionUpdateAttempts = 8
+
+func (s *Server) admitRepository(ctx context.Context, resource *catalog.RepositoryResource, body []byte, admCtx AdmissionContext, sourcePath string, op admission.Operation, rawExisting any) error {
 	if resource == nil || resource.Metadata.Name == "" || resource.Metadata.Namespace == "" || resource.Metadata.Name == "gitstore-system" {
-		return
+		return nil
 	}
 	namespace, err := s.store.GetNamespaceByName(ctx, resource.Metadata.Namespace)
-	if err != nil || namespace.DeletionTimestamp != nil {
-		return
+	if err != nil {
+		return fmt.Errorf("admit Repository: resolve namespace: %w", err)
+	}
+	if namespace.DeletionTimestamp != nil {
+		return nil
 	}
 	existing, _ := rawExisting.(*datastore.Repository)
 	if op == admission.OperationUpdate && existing == nil {
-		return
+		return nil
 	}
 	if existing != nil && (existing.Name != resource.Metadata.Name || existing.Namespace != resource.Metadata.Namespace) {
-		return
+		return nil
 	}
 	specJSON, err := json.Marshal(resource.Spec)
 	if err != nil {
-		return
+		return fmt.Errorf("admit Repository: marshal spec: %w", err)
 	}
 	ownerReferences, err := json.Marshal([]catalog.OwnerReference{{APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace", Name: namespace.Name, UID: namespace.UID, BlockOwnerDeletion: true}})
 	if err != nil {
-		return
+		return fmt.Errorf("admit Repository: marshal owner references: %w", err)
 	}
 	if existing == nil {
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
 		if !ok {
-			return
+			return fmt.Errorf("admit Repository: generate UID")
 		}
 		repo := &datastore.Repository{APIVersion: resource.APIVersion, Kind: resource.Kind, UID: uid, ID: uid, RepositoryID: uid, Namespace: namespace.Name, NamespaceID: namespace.Name, Name: resource.Metadata.Name, Labels: cloneStringMap(resource.Metadata.Labels), Annotations: cloneStringMap(resource.Metadata.Annotations), OwnerReferences: ownerReferences, Finalizers: []string{}, Revision: admCtx.Revision, CreationTimestamp: admCtx.Now, CreationActor: admCtx.ActorSubject, UpdateTimestamp: admCtx.Now, UpdateActor: admCtx.ActorSubject, SourcePath: sourcePath, GitCommitSHA: admCtx.CommitSHA, GitRef: admCtx.RefName, Spec: specJSON, Body: string(body), DefaultBranch: resource.Spec.DefaultBranch, StorageClass: resource.Spec.StorageClass}
 		datastore.NormalizeRepositoryContract(repo)
 		repo.Status = admissionAcceptedStatus(repo.Generation, admCtx.Revision, admCtx.Now)
-		if s.store.CreateRepositoryInActiveNamespace(ctx, repo) != nil {
-			return
+		if err := s.store.CreateRepositoryInActiveNamespace(ctx, repo); err != nil {
+			return fmt.Errorf("admit Repository: create authoritative row: %w", err)
 		}
-		_ = s.store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: namespace.Name, Name: repo.Name, RepositoryID: uid})
-		return
+		if err := s.store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: namespace.Name, Name: repo.Name, RepositoryID: uid}); err != nil {
+			return fmt.Errorf("admit Repository: create namespace mapping: %w", err)
+		}
+		return nil
 	}
 	if isRepositoryStorageClassDowngrade(existing.StorageClass, resource.Spec.StorageClass) {
-		return
+		return nil
 	}
-	expected := existing.ResourceVersion
-	existing.Labels, existing.Annotations, existing.OwnerReferences = cloneStringMap(resource.Metadata.Labels), cloneStringMap(resource.Metadata.Annotations), ownerReferences
-	existing.Spec, existing.Body, existing.DefaultBranch, existing.StorageClass = specJSON, string(body), resource.Spec.DefaultBranch, resource.Spec.StorageClass
-	existing.Revision, existing.UpdateTimestamp, existing.UpdateActor, existing.SourcePath, existing.GitCommitSHA, existing.GitRef = admCtx.Revision, admCtx.Now, admCtx.ActorSubject, sourcePath, admCtx.CommitSHA, admCtx.RefName
-	datastore.AdvanceRepositorySpecVersion(existing)
-	existing.Status = admissionAcceptedStatus(existing.Generation, admCtx.Revision, admCtx.Now)
-	_ = s.store.UpdateRepository(ctx, existing, expected)
+	for attempt := 0; attempt < maxRepositoryAdmissionUpdateAttempts; attempt++ {
+		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
+			admCtx.markSuperseded()
+			return nil
+		}
+		expected := existing.ResourceVersion
+		existing.Labels, existing.Annotations, existing.OwnerReferences = cloneStringMap(resource.Metadata.Labels), cloneStringMap(resource.Metadata.Annotations), ownerReferences
+		existing.Spec, existing.Body, existing.DefaultBranch, existing.StorageClass = specJSON, string(body), resource.Spec.DefaultBranch, resource.Spec.StorageClass
+		existing.Revision, existing.UpdateTimestamp, existing.UpdateActor, existing.SourcePath, existing.GitCommitSHA, existing.GitRef = admCtx.Revision, admCtx.Now, admCtx.ActorSubject, sourcePath, admCtx.CommitSHA, admCtx.RefName
+		datastore.AdvanceRepositorySpecVersion(existing)
+		existing.Status = admissionAcceptedStatus(existing.Generation, admCtx.Revision, admCtx.Now)
+		err = s.store.UpdateRepository(ctx, existing, expected)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, datastore.ErrConflict) {
+			return fmt.Errorf("admit Repository: update authoritative row: %w", err)
+		}
+		existing, err = s.store.GetRepository(ctx, existing.UID)
+		if err != nil {
+			return fmt.Errorf("admit Repository: reload after conflict: %w", err)
+		}
+		if existing.Name != resource.Metadata.Name || existing.Namespace != resource.Metadata.Namespace {
+			return fmt.Errorf("admit Repository: identity changed during conflict retry")
+		}
+	}
+	return fmt.Errorf("admit Repository: update conflict retry budget exhausted: %w", datastore.ErrConflict)
 }
 
 // isRepositoryStorageClassDowngrade recognizes the currently documented

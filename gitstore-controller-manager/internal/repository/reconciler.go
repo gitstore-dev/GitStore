@@ -36,7 +36,8 @@ const (
 	statusTrue  = "TRUE"
 	statusFalse = "FALSE"
 
-	conflictRequeueDelay = 100 * time.Millisecond
+	conflictRequeueDelay  = 100 * time.Millisecond
+	rateLimitRequeueDelay = time.Second
 )
 
 // Repository is the cache entity populated by RepositoryListWatcher.
@@ -121,6 +122,9 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 	}
 	if !patch.IsNoOp(current.Status) {
 		if err := r.statusClient.Apply(ctx, key, patch); err != nil {
+			if errors.Is(err, types.ErrRateLimited) || errors.Is(provisionErr, types.ErrRateLimited) {
+				return types.ResultAfter(rateLimitRequeueDelay)
+			}
 			if errors.Is(err, types.ErrConflict) {
 				// Another replica (or a newer watch event) won the status write.
 				// Re-enter through the queue so the next attempt observes fresh
@@ -134,6 +138,9 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 		}
 	}
 	if provisionErr != nil {
+		if errors.Is(provisionErr, types.ErrRateLimited) {
+			return types.ResultAfter(rateLimitRequeueDelay)
+		}
 		return types.ResultTransient(fmt.Errorf("repository: provision storage: %w", provisionErr))
 	}
 	return types.ResultOK()

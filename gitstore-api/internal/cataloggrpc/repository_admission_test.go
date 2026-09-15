@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,6 +34,18 @@ spec:
   storageClass: standard
 ---
 `
+
+type repositoryConflictOnceStore struct {
+	datastore.Datastore
+	remaining atomic.Int32
+}
+
+func (s *repositoryConflictOnceStore) UpdateRepository(ctx context.Context, repository *datastore.Repository, expectedResourceVersion string) error {
+	if s.remaining.CompareAndSwap(1, 0) {
+		return datastore.ErrConflict
+	}
+	return s.Datastore.UpdateRepository(ctx, repository, expectedResourceVersion)
+}
 
 func TestValidateResources_RepositoryAuthoringTarget(t *testing.T) {
 	store, err := memdb.New()
@@ -132,6 +145,43 @@ func TestAdmitCommittedManifest_RepositoryUsesTheBatchAdmissionPath(t *testing.T
 	var refs []catalog.OwnerReference
 	require.NoError(t, json.Unmarshal(repository.OwnerReferences, &refs))
 	assert.Equal(t, namespace.UID, refs[0].UID)
+}
+
+func TestAdmitCommittedManifest_RepositoryRetriesConcurrentStatusConflict(t *testing.T) {
+	ctx := context.Background()
+	base, err := memdb.New()
+	require.NoError(t, err)
+	defer base.Close()
+	require.NoError(t, base.CreateNamespace(ctx, &datastore.Namespace{UID: "00000000-0000-0000-0000-000000000171", Name: "acme", Tier: datastore.NamespaceTierUser}))
+	require.NoError(t, base.CreateRepository(ctx, &datastore.Repository{UID: testRepoID, ID: testRepoID, RepositoryID: testRepoID, Namespace: "acme", Name: "gitstore-system"}))
+	uid := "00000000-0000-0000-0000-000000000172"
+	require.NoError(t, base.CreateRepository(ctx, &datastore.Repository{
+		UID: uid, ID: uid, RepositoryID: uid, Namespace: "acme", NamespaceID: "acme", Name: "catalog",
+		APIVersion: "gitstore.dev/v1beta1", Kind: "Repository", DefaultBranch: "main", StorageClass: "standard",
+		Generation: 1, ResourceVersion: "1",
+	}))
+	require.NoError(t, base.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "acme", Name: "catalog", RepositoryID: uid}))
+
+	store := &repositoryConflictOnceStore{Datastore: base}
+	store.remaining.Store(1)
+	path := "repositories/catalog.md"
+	commit := strings.Repeat("d", 40)
+	content := repositoryManifestFor("catalog", "acme", "trunk", "premium")
+	current := commit
+	srv := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{commit: {path: content}}))
+
+	_, err = srv.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{
+		RepositoryID: testRepoID, Namespace: "acme", ActorSubject: "alice",
+		CommitSHA: commit, RefName: "refs/heads/main", Path: path, Content: content,
+		Operation: admission.OperationUpdate,
+	})
+	require.NoError(t, err)
+	assert.Zero(t, store.remaining.Load(), "the injected status-write conflict was exercised")
+	updated, err := base.GetRepository(ctx, uid)
+	require.NoError(t, err)
+	assert.Equal(t, "trunk", updated.DefaultBranch)
+	assert.Equal(t, "premium", updated.StorageClass)
+	assert.Equal(t, commit, updated.GitCommitSHA)
 }
 
 func TestAdmitResources_RepositoryRejectsDowngradeAndImmutableIdentity(t *testing.T) {

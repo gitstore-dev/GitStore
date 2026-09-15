@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gorilla/websocket"
 )
 
@@ -116,6 +117,19 @@ func TestQuery_HTTPErrorStatusReturnsError(t *testing.T) {
 	var out struct{}
 	if err := c.Query(context.Background(), `query { categories(namespace: "acme") { totalCount } }`, nil, &out); err == nil {
 		t.Fatal("expected error for HTTP 500, got nil")
+	}
+}
+
+func TestQuery_RateLimitStatusReturnsRetryableSentinel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
+	err := c.Query(context.Background(), `query { categories(namespace: "acme") { totalCount } }`, nil, &struct{}{})
+	if !errors.Is(err, types.ErrRateLimited) {
+		t.Fatalf("Query error = %v, want errors.Is(..., types.ErrRateLimited)", err)
 	}
 }
 

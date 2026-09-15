@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gorilla/websocket"
 )
 
@@ -111,6 +112,9 @@ func (c *Client) do(ctx context.Context, doc string, vars map[string]any, out an
 	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return fmt.Errorf("%w: HTTP status %d", types.ErrRateLimited, resp.StatusCode)
+		}
 		return fmt.Errorf("graphqlclient: unexpected HTTP status %d", resp.StatusCode)
 	}
 
