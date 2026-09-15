@@ -18,7 +18,7 @@ func RepositoryFixture(uid, namespace, name string) *datastore.Repository {
 		APIVersion: "gitstore.dev/v1beta1", Kind: "Repository",
 		Namespace: namespace, NamespaceID: namespace, Name: name,
 		DefaultBranch: "main", StorageClass: "standard",
-		Spec:              []byte(`{"defaultBranch":"main","visibility":"PRIVATE","storageClass":"standard"}`),
+		Spec:       []byte(`{"defaultBranch":"main","visibility":"PRIVATE","storageClass":"standard"}`),
 		Generation: 1, ResourceVersion: "1",
 		Status:            []byte(`{"observedGeneration":0,"conditions":[]}`),
 		CreationTimestamp: time.Now().UTC(),
