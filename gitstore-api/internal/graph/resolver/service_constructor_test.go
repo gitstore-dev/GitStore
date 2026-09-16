@@ -82,12 +82,14 @@ func TestServiceCreateNamespaceAndRepositoryUsesInjectedClockAndIDs(t *testing.T
 		RepositoryID: systemRepositoryID,
 	}))
 	writer := &mockGitWriter{}
+	ids := apiruntime.NewSequenceIDGenerator(namespaceID, repositoryID)
 	svc, err := resolver.NewService(resolver.ServiceDeps{
-		Store:       store,
-		GitWriter:   writer,
-		Logger:      zap.NewNop(),
-		Clock:       apiruntime.NewFixedClock(now),
-		IDGenerator: apiruntime.NewSequenceIDGenerator(namespaceID, repositoryID),
+		Store:                     store,
+		GitWriter:                 writer,
+		Logger:                    zap.NewNop(),
+		Clock:                     apiruntime.NewFixedClock(now),
+		IDGenerator:               ids,
+		CommittedManifestAdmitter: testCommittedNamespaceAdmitter{store: store, ids: ids, now: func() time.Time { return now }},
 	})
 	require.NoError(t, err)
 

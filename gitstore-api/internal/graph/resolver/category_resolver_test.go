@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
 
@@ -407,12 +408,13 @@ func TestUpdateCategoryStatusDecoupleRejectsStaleCategoryVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	decouple := true
-	payload, err := mutation.UpdateCategoryStatus(ctx, model.UpdateCategoryStatusInput{
+	_, err = mutation.UpdateCategoryStatus(ctx, model.UpdateCategoryStatusInput{
 		Namespace: category.Namespace, Name: category.Name, ResourceVersion: "stale", DecoupleProducts: &decouple,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, payload.Conflict)
-	assert.Equal(t, terminating.ResourceVersion, payload.Conflict.CurrentResourceVersion)
+	var graphErr *gqlerror.Error
+	require.ErrorAs(t, err, &graphErr)
+	assert.Equal(t, "RESOURCE_VERSION_CONFLICT", graphErr.Extensions["code"])
+	assert.Equal(t, terminating.ResourceVersion, graphErr.Extensions["resourceVersion"])
 }
 
 func TestDeleteCategoryIsIdempotentAndRepositoryScoped(t *testing.T) {

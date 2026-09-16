@@ -5,23 +5,15 @@ package namespace
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
 
-const systemRepositoryQuery = `
-query($by: RepositoryBy!) {
-  repository(by: $by) {
-    metadata { name }
-  }
-}`
-
-const createSystemRepositoryMutation = `
-mutation($input: CreateRepositoryInput!) {
-  createRepository(input: $input) {
+const provisionNamespaceSystemRepositoryMutation = `
+mutation($input: ProvisionNamespaceSystemRepositoryInput!) {
+  provisionNamespaceSystemRepository(input: $input) {
     repository { metadata { name } }
   }
 }`
@@ -41,8 +33,10 @@ mutation($input: CompleteNamespaceDeletionInput!) {
   }
 }`
 
-// GraphQLRepositoryClient uses the existing repository query/create mutation
-// to provision system repositories idempotently.
+// GraphQLRepositoryClient uses the controller-only bootstrap mutation to
+// provision system repositories idempotently. This intentionally does not use
+// createRepository: gitstore-system is system-managed and is not an author
+// declarative Repository resource.
 type GraphQLRepositoryClient struct {
 	client *graphqlclient.Client
 }
@@ -52,91 +46,31 @@ func NewGraphQLRepositoryClient(client *graphqlclient.Client) *GraphQLRepository
 	return &GraphQLRepositoryClient{client: client}
 }
 
-// EnsureSystemRepository creates gitstore-system when it does not already exist.
+// EnsureSystemRepository ensures the system-managed gitstore-system repository
+// exists. The API owns the lookup/create race so every controller replica can
+// invoke this operation safely.
 func (c *GraphQLRepositoryClient) EnsureSystemRepository(ctx context.Context, namespace string) error {
-	exists, err := c.systemRepositoryExists(ctx, namespace)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-
 	var response struct {
-		CreateRepository struct {
+		ProvisionNamespaceSystemRepository struct {
 			Repository *struct {
 				Metadata struct {
 					Name string `json:"name"`
 				} `json:"metadata"`
 			} `json:"repository"`
-		} `json:"createRepository"`
+		} `json:"provisionNamespaceSystemRepository"`
 	}
-	err = c.client.Mutate(ctx, createSystemRepositoryMutation, map[string]any{
+	err := c.client.Mutate(ctx, provisionNamespaceSystemRepositoryMutation, map[string]any{
 		"input": map[string]any{
-			"namespace":     namespace,
-			"name":          SystemRepositoryName,
-			"defaultBranch": "main",
+			"namespace": namespace,
 		},
 	}, &response)
-	if err == nil && response.CreateRepository.Repository != nil {
-		return nil
-	}
-
-	// A concurrent reconcile may have created the repository after our lookup.
-	if existsAfterCreate, lookupErr := c.systemRepositoryExists(ctx, namespace); lookupErr == nil && existsAfterCreate {
+	if err == nil && response.ProvisionNamespaceSystemRepository.Repository != nil {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("namespace repository client: create system repository: %w", err)
+		return fmt.Errorf("namespace repository client: provision system repository: %w", err)
 	}
-	return fmt.Errorf("namespace repository client: create system repository returned no repository")
-}
-
-func (c *GraphQLRepositoryClient) systemRepositoryExists(ctx context.Context, namespace string) (bool, error) {
-	var response struct {
-		Repository *struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-		} `json:"repository"`
-	}
-	if err := c.client.Query(ctx, systemRepositoryQuery, map[string]any{
-		"by": map[string]any{
-			"namespacePath": map[string]any{
-				"namespace": namespace,
-				"name":      SystemRepositoryName,
-			},
-		},
-	}, &response); err != nil {
-		if isNotFoundError(err) {
-			// The repository genuinely does not exist yet — this is the
-			// expected steady state before EnsureSystemRepository creates
-			// it, not a hard failure.
-			return false, nil
-		}
-		return false, fmt.Errorf("namespace repository client: query system repository: %w", err)
-	}
-	return response.Repository != nil, nil
-}
-
-// isNotFoundError reports whether err is a GraphQL error signaling that the
-// queried repository does not exist. The primary signal is the "NOT_FOUND"
-// extensions code gitstore-api's resolvers use for missing resources.
-// During a rolling deployment, this controller may still query an
-// older API replica whose repository(by: namespacePath) resolver predates
-// that convention and returns only the plain message "repository not
-// found" with no extensions code — that legacy shape is recognized too, so
-// EnsureSystemRepository keeps working through a mixed-version rollout
-// rather than requiring every old replica to drain first.
-func isNotFoundError(err error) bool {
-	var gqlErr *graphqlclient.Error
-	if !errors.As(err, &gqlErr) || gqlErr == nil {
-		return false
-	}
-	if code, _ := gqlErr.Extensions["code"].(string); code == "NOT_FOUND" {
-		return true
-	}
-	return gqlErr.Extensions == nil && gqlErr.Message == "repository not found"
+	return fmt.Errorf("namespace repository client: provision system repository returned no repository")
 }
 
 // HasRepositories reports whether the namespace currently owns any repository.

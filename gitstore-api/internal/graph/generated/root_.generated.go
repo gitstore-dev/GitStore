@@ -158,8 +158,11 @@ type ComplexityRoot struct {
 	}
 
 	CompleteNamespaceDeletionPayload struct {
-		Conflict          func(childComplexity int) int
 		DeletedIdentifier func(childComplexity int) int
+	}
+
+	CompleteRepositoryDeletionPayload struct {
+		DeletedRepositoryID func(childComplexity int) int
 	}
 
 	Condition struct {
@@ -332,32 +335,37 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
-		CompleteNamespaceDeletion func(childComplexity int, input model.CompleteNamespaceDeletionInput) int
-		CreateCategory            func(childComplexity int, input model.CreateCategoryInput) int
-		CreateCollection          func(childComplexity int, input model.CreateCollectionInput) int
-		CreateNamespace           func(childComplexity int, input model.CreateNamespaceInput) int
-		CreateRepository          func(childComplexity int, input model.CreateRepositoryInput) int
-		CreateServiceAccount      func(childComplexity int, input model.CreateServiceAccountInput) int
-		DeleteCategory            func(childComplexity int, input model.DeleteCategoryInput) int
-		DeleteCollection          func(childComplexity int, input model.DeleteCollectionInput) int
-		DeleteNamespace           func(childComplexity int, input model.DeleteNamespaceInput) int
-		DeleteRepository          func(childComplexity int, input model.DeleteRepositoryInput) int
-		DeleteServiceAccount      func(childComplexity int, input model.DeleteServiceAccountInput) int
-		IssueServiceAccountToken  func(childComplexity int, input model.IssueServiceAccountTokenInput) int
-		Login                     func(childComplexity int, input model.LoginInput) int
-		Logout                    func(childComplexity int) int
-		PublishCatalog            func(childComplexity int, input model.PublishCatalogInput) int
-		RefreshToken              func(childComplexity int, input model.RefreshTokenInput) int
-		RenameRepository          func(childComplexity int, input model.RenameRepositoryInput) int
-		ReorderCategories         func(childComplexity int, input model.ReorderCategoriesInput) int
-		RotateServiceAccountKey   func(childComplexity int, input model.RotateServiceAccountKeyInput) int
-		TransferRepository        func(childComplexity int, input model.TransferRepositoryInput) int
-		UpdateCategory            func(childComplexity int, input model.UpdateCategoryInput) int
-		UpdateCategoryStatus      func(childComplexity int, input model.UpdateCategoryStatusInput) int
-		UpdateCollection          func(childComplexity int, input model.UpdateCollectionInput) int
-		UpdateNamespace           func(childComplexity int, input model.UpdateNamespaceInput) int
-		UpdateProductStatus       func(childComplexity int, input model.UpdateProductStatusInput) int
-		UpdateResourceStatus      func(childComplexity int, input model.UpdateResourceStatusInput) int
+		CompleteNamespaceDeletion          func(childComplexity int, input model.CompleteNamespaceDeletionInput) int
+		CompleteRepositoryDeletion         func(childComplexity int, input model.CompleteRepositoryDeletionInput) int
+		CreateCategory                     func(childComplexity int, input model.CreateCategoryInput) int
+		CreateCollection                   func(childComplexity int, input model.CreateCollectionInput) int
+		CreateNamespace                    func(childComplexity int, input model.CreateNamespaceInput) int
+		CreateRepository                   func(childComplexity int, input model.CreateRepositoryInput) int
+		CreateServiceAccount               func(childComplexity int, input model.CreateServiceAccountInput) int
+		DeleteCategory                     func(childComplexity int, input model.DeleteCategoryInput) int
+		DeleteCollection                   func(childComplexity int, input model.DeleteCollectionInput) int
+		DeleteNamespace                    func(childComplexity int, input model.DeleteNamespaceInput) int
+		DeleteRepository                   func(childComplexity int, input model.DeleteRepositoryInput) int
+		DeleteServiceAccount               func(childComplexity int, input model.DeleteServiceAccountInput) int
+		IssueServiceAccountToken           func(childComplexity int, input model.IssueServiceAccountTokenInput) int
+		Login                              func(childComplexity int, input model.LoginInput) int
+		Logout                             func(childComplexity int) int
+		ProvisionNamespaceSystemRepository func(childComplexity int, input model.ProvisionNamespaceSystemRepositoryInput) int
+		ProvisionRepositoryStorage         func(childComplexity int, input model.ProvisionRepositoryStorageInput) int
+		PublishCatalog                     func(childComplexity int, input model.PublishCatalogInput) int
+		RefreshToken                       func(childComplexity int, input model.RefreshTokenInput) int
+		RenameRepository                   func(childComplexity int, input model.RenameRepositoryInput) int
+		ReorderCategories                  func(childComplexity int, input model.ReorderCategoriesInput) int
+		RotateServiceAccountKey            func(childComplexity int, input model.RotateServiceAccountKeyInput) int
+		TransferRepository                 func(childComplexity int, input model.TransferRepositoryInput) int
+		UpdateCategory                     func(childComplexity int, input model.UpdateCategoryInput) int
+		UpdateCategoryStatus               func(childComplexity int, input model.UpdateCategoryStatusInput) int
+		UpdateCollection                   func(childComplexity int, input model.UpdateCollectionInput) int
+		UpdateNamespace                    func(childComplexity int, input model.UpdateNamespaceInput) int
+		UpdateProductStatus                func(childComplexity int, input model.UpdateProductStatusInput) int
+		UpdateRepository                   func(childComplexity int, input model.UpdateRepositoryInput) int
+		UpdateRepositoryStatus             func(childComplexity int, input model.UpdateRepositoryStatusInput) int
+		UpdateResourceStatus               func(childComplexity int, input model.UpdateResourceStatusInput) int
 	}
 
 	Namespace struct {
@@ -585,6 +593,14 @@ type ComplexityRoot struct {
 		Type            func(childComplexity int) int
 	}
 
+	ProvisionNamespaceSystemRepositoryPayload struct {
+		Repository func(childComplexity int) int
+	}
+
+	ProvisionRepositoryStoragePayload struct {
+		Repository func(childComplexity int) int
+	}
+
 	PublishCatalogPayload struct {
 		CatalogVersion func(childComplexity int) int
 	}
@@ -684,6 +700,14 @@ type ComplexityRoot struct {
 		Resolved            func(childComplexity int) int
 	}
 
+	RepositoryWatchEvent struct {
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		Repository      func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Type            func(childComplexity int) int
+	}
+
 	ResolvedCategoryDefinition struct {
 		Name func(childComplexity int) int
 		Path func(childComplexity int) int
@@ -778,20 +802,17 @@ type ComplexityRoot struct {
 		UID               func(childComplexity int) int
 	}
 
-	StatusConflict struct {
-		CurrentResourceVersion func(childComplexity int) int
-	}
-
 	StrategyDefinition struct {
 		Type func(childComplexity int) int
 	}
 
 	Subscription struct {
-		WatchCategories func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
-		WatchFiles      func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
-		WatchNamespaces func(childComplexity int, selector *model.LabelSelectorInput, resourceVersion *string) int
-		WatchProducts   func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
-		WatchResources  func(childComplexity int, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchCategories   func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchFiles        func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchNamespaces   func(childComplexity int, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchProducts     func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchRepositories func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchResources    func(childComplexity int, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 	}
 
 	TokenRequestStatus struct {
@@ -819,7 +840,6 @@ type ComplexityRoot struct {
 
 	UpdateCategoryStatusPayload struct {
 		Category                 func(childComplexity int) int
-		Conflict                 func(childComplexity int) int
 		HasMoreProductDependents func(childComplexity int) int
 	}
 
@@ -833,13 +853,19 @@ type ComplexityRoot struct {
 	}
 
 	UpdateProductStatusPayload struct {
-		Conflict func(childComplexity int) int
-		Product  func(childComplexity int) int
+		Product func(childComplexity int) int
+	}
+
+	UpdateRepositoryPayload struct {
+		Repository func(childComplexity int) int
+	}
+
+	UpdateRepositoryStatusPayload struct {
+		Repository func(childComplexity int) int
 	}
 
 	UpdateResourceStatusPayload struct {
-		Conflict func(childComplexity int) int
-		Object   func(childComplexity int) int
+		Object func(childComplexity int) int
 	}
 
 	VariantSummaryDefinition struct {
@@ -1386,19 +1412,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CollectionStatus.Resolved(childComplexity), true
 
-	case "CompleteNamespaceDeletionPayload.conflict":
-		if e.ComplexityRoot.CompleteNamespaceDeletionPayload.Conflict == nil {
-			break
-		}
-
-		return e.ComplexityRoot.CompleteNamespaceDeletionPayload.Conflict(childComplexity), true
-
 	case "CompleteNamespaceDeletionPayload.deletedIdentifier":
 		if e.ComplexityRoot.CompleteNamespaceDeletionPayload.DeletedIdentifier == nil {
 			break
 		}
 
 		return e.ComplexityRoot.CompleteNamespaceDeletionPayload.DeletedIdentifier(childComplexity), true
+
+	case "CompleteRepositoryDeletionPayload.deletedRepositoryId":
+		if e.ComplexityRoot.CompleteRepositoryDeletionPayload.DeletedRepositoryID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CompleteRepositoryDeletionPayload.DeletedRepositoryID(childComplexity), true
 
 	case "Condition.lastTransitionTime":
 		if e.ComplexityRoot.Condition.LastTransitionTime == nil {
@@ -1944,6 +1970,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.CompleteNamespaceDeletion(childComplexity, args["input"].(model.CompleteNamespaceDeletionInput)), true
 
+	case "Mutation.completeRepositoryDeletion":
+		if e.ComplexityRoot.Mutation.CompleteRepositoryDeletion == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_completeRepositoryDeletion_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CompleteRepositoryDeletion(childComplexity, args["input"].(model.CompleteRepositoryDeletionInput)), true
+
 	case "Mutation.createCategory":
 		if e.ComplexityRoot.Mutation.CreateCategory == nil {
 			break
@@ -2095,6 +2133,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.Logout(childComplexity), true
 
+	case "Mutation.provisionNamespaceSystemRepository":
+		if e.ComplexityRoot.Mutation.ProvisionNamespaceSystemRepository == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_provisionNamespaceSystemRepository_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ProvisionNamespaceSystemRepository(childComplexity, args["input"].(model.ProvisionNamespaceSystemRepositoryInput)), true
+
+	case "Mutation.provisionRepositoryStorage":
+		if e.ComplexityRoot.Mutation.ProvisionRepositoryStorage == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_provisionRepositoryStorage_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ProvisionRepositoryStorage(childComplexity, args["input"].(model.ProvisionRepositoryStorageInput)), true
+
 	case "Mutation.publishCatalog":
 		if e.ComplexityRoot.Mutation.PublishCatalog == nil {
 			break
@@ -2226,6 +2288,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.UpdateProductStatus(childComplexity, args["input"].(model.UpdateProductStatusInput)), true
+
+	case "Mutation.updateRepository":
+		if e.ComplexityRoot.Mutation.UpdateRepository == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateRepository_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateRepository(childComplexity, args["input"].(model.UpdateRepositoryInput)), true
+
+	case "Mutation.updateRepositoryStatus":
+		if e.ComplexityRoot.Mutation.UpdateRepositoryStatus == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateRepositoryStatus_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateRepositoryStatus(childComplexity, args["input"].(model.UpdateRepositoryStatusInput)), true
 
 	case "Mutation.updateResourceStatus":
 		if e.ComplexityRoot.Mutation.UpdateResourceStatus == nil {
@@ -3210,6 +3296,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ProductWatchEvent.Type(childComplexity), true
 
+	case "ProvisionNamespaceSystemRepositoryPayload.repository":
+		if e.ComplexityRoot.ProvisionNamespaceSystemRepositoryPayload.Repository == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProvisionNamespaceSystemRepositoryPayload.Repository(childComplexity), true
+
+	case "ProvisionRepositoryStoragePayload.repository":
+		if e.ComplexityRoot.ProvisionRepositoryStoragePayload.Repository == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProvisionRepositoryStoragePayload.Repository(childComplexity), true
+
 	case "PublishCatalogPayload.catalogVersion":
 		if e.ComplexityRoot.PublishCatalogPayload.CatalogVersion == nil {
 			break
@@ -3700,6 +3800,41 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.RepositoryStatus.Resolved(childComplexity), true
 
+	case "RepositoryWatchEvent.name":
+		if e.ComplexityRoot.RepositoryWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryWatchEvent.Name(childComplexity), true
+
+	case "RepositoryWatchEvent.namespace":
+		if e.ComplexityRoot.RepositoryWatchEvent.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryWatchEvent.Namespace(childComplexity), true
+
+	case "RepositoryWatchEvent.repository":
+		if e.ComplexityRoot.RepositoryWatchEvent.Repository == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryWatchEvent.Repository(childComplexity), true
+
+	case "RepositoryWatchEvent.resourceVersion":
+		if e.ComplexityRoot.RepositoryWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryWatchEvent.ResourceVersion(childComplexity), true
+
+	case "RepositoryWatchEvent.type":
+		if e.ComplexityRoot.RepositoryWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RepositoryWatchEvent.Type(childComplexity), true
+
 	case "ResolvedCategoryDefinition.name":
 		if e.ComplexityRoot.ResolvedCategoryDefinition.Name == nil {
 			break
@@ -4043,13 +4178,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ServiceAccountObjectMeta.UID(childComplexity), true
 
-	case "StatusConflict.currentResourceVersion":
-		if e.ComplexityRoot.StatusConflict.CurrentResourceVersion == nil {
-			break
-		}
-
-		return e.ComplexityRoot.StatusConflict.CurrentResourceVersion(childComplexity), true
-
 	case "StrategyDefinition.type":
 		if e.ComplexityRoot.StrategyDefinition.Type == nil {
 			break
@@ -4104,6 +4232,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.WatchProducts(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
+	case "Subscription.watchRepositories":
+		if e.ComplexityRoot.Subscription.WatchRepositories == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchRepositories_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchRepositories(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
 
 	case "Subscription.watchResources":
 		if e.ComplexityRoot.Subscription.WatchResources == nil {
@@ -4201,13 +4341,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateCategoryStatusPayload.Category(childComplexity), true
 
-	case "UpdateCategoryStatusPayload.conflict":
-		if e.ComplexityRoot.UpdateCategoryStatusPayload.Conflict == nil {
-			break
-		}
-
-		return e.ComplexityRoot.UpdateCategoryStatusPayload.Conflict(childComplexity), true
-
 	case "UpdateCategoryStatusPayload.hasMoreProductDependents":
 		if e.ComplexityRoot.UpdateCategoryStatusPayload.HasMoreProductDependents == nil {
 			break
@@ -4236,13 +4369,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateNamespacePayload.Namespace(childComplexity), true
 
-	case "UpdateProductStatusPayload.conflict":
-		if e.ComplexityRoot.UpdateProductStatusPayload.Conflict == nil {
-			break
-		}
-
-		return e.ComplexityRoot.UpdateProductStatusPayload.Conflict(childComplexity), true
-
 	case "UpdateProductStatusPayload.product":
 		if e.ComplexityRoot.UpdateProductStatusPayload.Product == nil {
 			break
@@ -4250,12 +4376,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateProductStatusPayload.Product(childComplexity), true
 
-	case "UpdateResourceStatusPayload.conflict":
-		if e.ComplexityRoot.UpdateResourceStatusPayload.Conflict == nil {
+	case "UpdateRepositoryPayload.repository":
+		if e.ComplexityRoot.UpdateRepositoryPayload.Repository == nil {
 			break
 		}
 
-		return e.ComplexityRoot.UpdateResourceStatusPayload.Conflict(childComplexity), true
+		return e.ComplexityRoot.UpdateRepositoryPayload.Repository(childComplexity), true
+
+	case "UpdateRepositoryStatusPayload.repository":
+		if e.ComplexityRoot.UpdateRepositoryStatusPayload.Repository == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateRepositoryStatusPayload.Repository(childComplexity), true
 
 	case "UpdateResourceStatusPayload.object":
 		if e.ComplexityRoot.UpdateResourceStatusPayload.Object == nil {
@@ -4340,6 +4473,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCollectionBy,
 		ec.unmarshalInputCollectionNamespacePath,
 		ec.unmarshalInputCompleteNamespaceDeletionInput,
+		ec.unmarshalInputCompleteRepositoryDeletionInput,
 		ec.unmarshalInputConditionInput,
 		ec.unmarshalInputCreateCategoryInput,
 		ec.unmarshalInputCreateCollectionInput,
@@ -4355,6 +4489,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputLabelSelectorInput,
 		ec.unmarshalInputLabelSelectorRequirementInput,
 		ec.unmarshalInputLoginInput,
+		ec.unmarshalInputMetadataInput,
 		ec.unmarshalInputNamespaceBy,
 		ec.unmarshalInputNamespaceMetadataInput,
 		ec.unmarshalInputNamespacePushPolicyDefaultsInput,
@@ -4365,12 +4500,16 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputProductNamespacePath,
 		ec.unmarshalInputProductVariantBy,
 		ec.unmarshalInputProductVariantNamespacePath,
+		ec.unmarshalInputProvisionNamespaceSystemRepositoryInput,
+		ec.unmarshalInputProvisionRepositoryStorageInput,
 		ec.unmarshalInputPublishCatalogInput,
 		ec.unmarshalInputRefreshTokenInput,
 		ec.unmarshalInputRenameRepositoryInput,
 		ec.unmarshalInputReorderCategoriesInput,
 		ec.unmarshalInputRepositoryBy,
 		ec.unmarshalInputRepositoryNamespacePath,
+		ec.unmarshalInputRepositoryResolvedStatusInput,
+		ec.unmarshalInputRepositorySpecInput,
 		ec.unmarshalInputResolvedCategoryTaxonomyInput,
 		ec.unmarshalInputRotateServiceAccountKeyInput,
 		ec.unmarshalInputServiceAccountPublicKeyInput,
@@ -4381,6 +4520,8 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputUpdateCollectionInput,
 		ec.unmarshalInputUpdateNamespaceInput,
 		ec.unmarshalInputUpdateProductStatusInput,
+		ec.unmarshalInputUpdateRepositoryInput,
+		ec.unmarshalInputUpdateRepositoryStatusInput,
 		ec.unmarshalInputUpdateResourceStatusInput,
 	)
 	first := true
@@ -4637,7 +4778,8 @@ extend type Mutation {
   Only non-null input fields are changed; all other existing status
   fields are left unchanged (FR-008, spec 040). Requires
   resourceVersion to match the resource's current value or the
-  request fails with a StatusConflict (FR-009). Rejects any attempt
+  request fails with a RESOURCE_VERSION_CONFLICT GraphQL error whose
+  extensions include the current resourceVersion (FR-009). Rejects any attempt
   to alter .spec or author-controlled .metadata by construction —
   this input type has no such fields (FR-010). Requires
   controller-level authorization independent of the resourceVersion
@@ -5081,11 +5223,8 @@ input ResolvedCategoryTaxonomyInput {
 }
 
 type UpdateCategoryStatusPayload {
-  """Null when the write failed (conflict or not-found)."""
+  """The updated CategoryTaxonomy."""
   category: Category
-
-  """Non-null only when the resourceVersion precondition failed."""
-  conflict: StatusConflict
 
   """True when another bounded Product page remains to be processed."""
   hasMoreProductDependents: Boolean!
@@ -5811,7 +5950,20 @@ type DeleteNamespacePayload {
 
 type CompleteNamespaceDeletionPayload {
   deletedIdentifier: String
-  conflict: StatusConflict
+}
+
+"""
+Controller-only bootstrap operation. Ensures the system-managed
+` + "`" + `gitstore-system` + "`" + ` repository exists for an admitted Namespace. It is separate
+from createRepository because bootstrap repositories are not author-managed
+declarative Repository resources.
+"""
+input ProvisionNamespaceSystemRepositoryInput {
+  namespace: String!
+}
+
+type ProvisionNamespaceSystemRepositoryPayload {
+  repository: Repository!
 }
 
 extend type Query {
@@ -5854,6 +6006,9 @@ extend type Mutation {
   Permanently delete a terminating namespace after its repositories are gone.
   """
   completeNamespaceDeletion(input: CompleteNamespaceDeletionInput!): CompleteNamespaceDeletionPayload!
+
+  """Controller-only, idempotent Namespace bootstrap repository provisioning."""
+  provisionNamespaceSystemRepository(input: ProvisionNamespaceSystemRepositoryInput!): ProvisionNamespaceSystemRepositoryPayload!
 }
 
 extend type Subscription {
@@ -5979,7 +6134,6 @@ input UpdateProductStatusInput {
 
 type UpdateProductStatusPayload {
   product: Product
-  conflict: StatusConflict
 }
 
 """A pointer to another catalogue resource."""
@@ -6662,38 +6816,140 @@ input RepositoryNamespacePath {
 }
 
 # ============================================================================
+# Subscription additions
+# ============================================================================
+
+extend type Subscription {
+  """
+  Global Repository watch. Omit namespace for the controller's fleet-wide
+  stream; provide it only to filter a tenant-scoped consumer. A Repository
+  event cursor is opaque and distinct from Repository.metadata.resourceVersion.
+  """
+  watchRepositories(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): RepositoryWatchEvent!
+}
+
+"""
+Strongly typed Repository lifecycle event. ADDED and MODIFIED events carry a
+Repository; DELETED and BOOKMARK events carry no repository payload.
+"""
+type RepositoryWatchEvent {
+  type: WatchEventType!
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+  repository: Repository
+}
+
+# ============================================================================
 # Mutation additions
 # ============================================================================
 
 extend type Mutation {
   """
-  Create a new repository within a namespace.
+  Create a new repository by committing its manifest to the owning namespace's
+  gitstore-system repository and awaiting admission.
   """
   createRepository(input: CreateRepositoryInput!): CreateRepositoryPayload!
+
+  """Update an admitted Repository's author-controlled specification."""
+  updateRepository(input: UpdateRepositoryInput!): UpdateRepositoryPayload!
+
+  """Write controller-owned Repository status with optimistic concurrency."""
+  updateRepositoryStatus(input: UpdateRepositoryStatusInput!): UpdateRepositoryStatusPayload!
+
+  """Controller-only, idempotent provisioning of an admitted Repository's bare Git storage."""
+  provisionRepositoryStorage(input: ProvisionRepositoryStorageInput!): ProvisionRepositoryStoragePayload!
 
   """
   Rename a repository within its namespace. Does not move storage.
   """
   renameRepository(input: RenameRepositoryInput!): RenameRepositoryPayload!
+    @deprecated(reason: "Not supported in Repository lifecycle Phase 1; see docs/ADRs/0003-repository-lifecycle.md.")
 
   """
   Transfer a repository to a different namespace. Does not move storage.
   """
   transferRepository(input: TransferRepositoryInput!): TransferRepositoryPayload!
+    @deprecated(reason: "Not supported in Repository lifecycle Phase 1; see docs/ADRs/0003-repository-lifecycle.md.")
 
   """
-  Delete a repository and its storage. Deletion is blocked when the repository contains catalog resources.
+  Start foreground deletion of a repository. Deletion is blocked when the
+  repository contains catalog resources; storage removal and record GC happen
+  asynchronously after controller finalizer completion.
   """
   deleteRepository(input: DeleteRepositoryInput!): DeleteRepositoryPayload!
+
+  """Controller-only completion of a terminating Repository deletion."""
+  completeRepositoryDeletion(input: CompleteRepositoryDeletionInput!): CompleteRepositoryDeletionPayload!
+}
+
+"""Author-controlled metadata shared by declarative resource mutations."""
+input MetadataInput {
+  name: String!
+  namespace: String!
+  labels: JSON
+  annotations: JSON
+}
+
+input RepositorySpecInput {
+  defaultBranch: String
+  visibility: RepositoryVisibility
+  storageClass: String
+}
+
+"""Identifies an admitted, non-bootstrap Repository for controller provisioning."""
+input ProvisionRepositoryStorageInput {
+  namespace: String!
+  name: String!
+}
+
+type ProvisionRepositoryStoragePayload {
+  repository: Repository!
 }
 
 input CreateRepositoryInput {
-  namespace: String!
-  name: String!
-  defaultBranch: String
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Repository"
+  metadata: MetadataInput!
+  spec: RepositorySpecInput!
 }
 
 type CreateRepositoryPayload {
+  repository: Repository!
+}
+
+input UpdateRepositoryInput {
+  apiVersion: String! = "gitstore.dev/v1beta1"
+  kind: String! = "Repository"
+  metadata: MetadataInput!
+  spec: RepositorySpecInput!
+}
+
+type UpdateRepositoryPayload {
+  repository: Repository
+}
+
+input UpdateRepositoryStatusInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [ConditionInput!]
+  resolved: RepositoryResolvedStatusInput
+}
+
+"""System-computed Repository storage state written only by its controller."""
+input RepositoryResolvedStatusInput {
+  storagePath: String!
+  storageClass: String!
+}
+
+type UpdateRepositoryStatusPayload {
   repository: Repository!
 }
 
@@ -6730,6 +6986,16 @@ input DeleteRepositoryInput {
 
 type DeleteRepositoryPayload {
   deletedRepositoryId: ID!
+}
+
+input CompleteRepositoryDeletionInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+}
+
+type CompleteRepositoryDeletionPayload {
+  deletedRepositoryId: ID
 }
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/schema.graphqls", Input: `# GitStore GraphQL Schema
@@ -6798,7 +7064,7 @@ type Query {
 
   """
   Get current catalog version (release tag)
-  TODO: Remove. It is unclear which repository this belongs to and it is not used in the UI.
+  TODO(Remove): It is unclear which repository this belongs to and it is not used in the UI.
   """
   catalogVersion: CatalogVersion!
 }
@@ -6810,9 +7076,22 @@ type Query {
 type Mutation {
   """
   Publish changes (commit + push + create release tag)
-  TODO: Remove. It is unclear which repository we're are publishing to.
+  TODO(Remove): It is unclear which repository we're are publishing to.
   """
   publishCatalog(input: PublishCatalogInput!): PublishCatalogPayload!
+
+  """
+  Generic status-subresource write for CRD-defined kinds that have no
+  compile-time-known ` + "`" + `resolved` + "`" + ` shape. Core kinds SHOULD use their
+  dedicated per-kind mutation (e.g. updateCategoryStatus) instead —
+  this field exists so a kind unknown to the schema at build time can
+  still write status (FR-006, SC-005). Semantics (partial-merge,
+  resourceVersion precondition, spec-write rejection by construction,
+  controller authorization) are identical to the per-kind mutations.
+  """
+  updateResourceStatus(
+    input: UpdateResourceStatusInput!
+  ): UpdateResourceStatusPayload!
 }
 
 # ============================================================================
@@ -6903,25 +7182,6 @@ input LabelSelectorRequirementInput {
   values: [String!]
 }
 
-# ============================================================================
-# Status Subresource API (spec 040)
-# ============================================================================
-
-extend type Mutation {
-  """
-  Generic status-subresource write for CRD-defined kinds that have no
-  compile-time-known ` + "`" + `resolved` + "`" + ` shape. Core kinds SHOULD use their
-  dedicated per-kind mutation (e.g. updateCategoryStatus) instead —
-  this field exists so a kind unknown to the schema at build time can
-  still write status (FR-006, SC-005). Semantics (partial-merge,
-  resourceVersion precondition, spec-write rejection by construction,
-  controller authorization) are identical to the per-kind mutations.
-  """
-  updateResourceStatus(
-    input: UpdateResourceStatusInput!
-  ): UpdateResourceStatusPayload!
-}
-
 input UpdateResourceStatusInput {
   kind: String!
   name: String!
@@ -6939,10 +7199,8 @@ input UpdateResourceStatusInput {
 }
 
 type UpdateResourceStatusPayload {
-  """JSON-boxed current resource state; null when the write failed."""
+  """JSON-boxed current resource state."""
   object: JSON
-
-  conflict: StatusConflict
 }
 
 """
@@ -6956,15 +7214,6 @@ input ConditionInput {
   lastTransitionTime: DateTime!
   reason: String
   message: String
-}
-
-"""
-Optimistic-concurrency conflict payload shared by all status-write
-mutations (per-kind and generic).
-"""
-type StatusConflict {
-  """The resource's actual current resourceVersion, for retry."""
-  currentResourceVersion: String!
 }
 
 # ============================================================================
@@ -7109,6 +7358,7 @@ input ProductVariantNamespacePath {
 }
 
 """
+TODO(REMOVE): Was added for demo
 Product inventory status
 """
 enum InventoryStatus {
@@ -7117,15 +7367,6 @@ enum InventoryStatus {
   PREORDER
   DISCONTINUED
 }
-
-
-# ============================================================================
-# Include entity type definitions
-# ============================================================================
-
-# Product types defined in product.graphql
-# Category types defined in category.graphql
-# Collection types defined in collection.graphql
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/serviceaccount.graphqls", Input: `# ServiceAccount identity plane (spec 061): GitStore-issued service-account
 # credentials so gitstore-controller-manager (and future non-human callers)
@@ -7550,10 +7791,16 @@ func (ec *executionContext) childFields_CompleteNamespaceDeletionPayload(ctx con
 	switch field.Name {
 	case "deletedIdentifier":
 		return ec.fieldContext_CompleteNamespaceDeletionPayload_deletedIdentifier(ctx, field)
-	case "conflict":
-		return ec.fieldContext_CompleteNamespaceDeletionPayload_conflict(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CompleteNamespaceDeletionPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_CompleteRepositoryDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "deletedRepositoryId":
+		return ec.fieldContext_CompleteRepositoryDeletionPayload_deletedRepositoryId(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CompleteRepositoryDeletionPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_Condition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8334,6 +8581,22 @@ func (ec *executionContext) childFields_ProductWatchEvent(ctx context.Context, f
 	return nil, fmt.Errorf("no field named %q was found under type ProductWatchEvent", field.Name)
 }
 
+func (ec *executionContext) childFields_ProvisionNamespaceSystemRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "repository":
+		return ec.fieldContext_ProvisionNamespaceSystemRepositoryPayload_repository(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProvisionNamespaceSystemRepositoryPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_ProvisionRepositoryStoragePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "repository":
+		return ec.fieldContext_ProvisionRepositoryStoragePayload_repository(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProvisionRepositoryStoragePayload", field.Name)
+}
+
 func (ec *executionContext) childFields_PublishCatalogPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "catalogVersion":
@@ -8494,6 +8757,22 @@ func (ec *executionContext) childFields_RepositoryStatus(ctx context.Context, fi
 		return ec.fieldContext_RepositoryStatus_resolved(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type RepositoryStatus", field.Name)
+}
+
+func (ec *executionContext) childFields_RepositoryWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_RepositoryWatchEvent_type(ctx, field)
+	case "namespace":
+		return ec.fieldContext_RepositoryWatchEvent_namespace(ctx, field)
+	case "name":
+		return ec.fieldContext_RepositoryWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_RepositoryWatchEvent_resourceVersion(ctx, field)
+	case "repository":
+		return ec.fieldContext_RepositoryWatchEvent_repository(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RepositoryWatchEvent", field.Name)
 }
 
 func (ec *executionContext) childFields_ResolvedCategoryDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8684,14 +8963,6 @@ func (ec *executionContext) childFields_ServiceAccountObjectMeta(ctx context.Con
 	return nil, fmt.Errorf("no field named %q was found under type ServiceAccountObjectMeta", field.Name)
 }
 
-func (ec *executionContext) childFields_StatusConflict(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "currentResourceVersion":
-		return ec.fieldContext_StatusConflict_currentResourceVersion(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type StatusConflict", field.Name)
-}
-
 func (ec *executionContext) childFields_StrategyDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "type":
@@ -8750,8 +9021,6 @@ func (ec *executionContext) childFields_UpdateCategoryStatusPayload(ctx context.
 	switch field.Name {
 	case "category":
 		return ec.fieldContext_UpdateCategoryStatusPayload_category(ctx, field)
-	case "conflict":
-		return ec.fieldContext_UpdateCategoryStatusPayload_conflict(ctx, field)
 	case "hasMoreProductDependents":
 		return ec.fieldContext_UpdateCategoryStatusPayload_hasMoreProductDependents(ctx, field)
 	}
@@ -8780,18 +9049,30 @@ func (ec *executionContext) childFields_UpdateProductStatusPayload(ctx context.C
 	switch field.Name {
 	case "product":
 		return ec.fieldContext_UpdateProductStatusPayload_product(ctx, field)
-	case "conflict":
-		return ec.fieldContext_UpdateProductStatusPayload_conflict(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateProductStatusPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "repository":
+		return ec.fieldContext_UpdateRepositoryPayload_repository(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateRepositoryPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateRepositoryStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "repository":
+		return ec.fieldContext_UpdateRepositoryStatusPayload_repository(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateRepositoryStatusPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateResourceStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "object":
 		return ec.fieldContext_UpdateResourceStatusPayload_object(ctx, field)
-	case "conflict":
-		return ec.fieldContext_UpdateResourceStatusPayload_conflict(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateResourceStatusPayload", field.Name)
 }

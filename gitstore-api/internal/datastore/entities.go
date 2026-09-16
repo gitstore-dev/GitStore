@@ -54,33 +54,40 @@ type Namespace struct {
 	ID string
 }
 
-// NamespaceWatchEventType is the normalized durable Namespace transition.
-type NamespaceWatchEventType string
+// ResourceWatchEventType is the normalized durable resource transition. A
+// single journal is deliberately shared by all GitStore resource kinds: its
+// cursor establishes a total order across kinds, while Kind and Namespace
+// make per-kind and per-namespace projections lossless.
+type ResourceWatchEventType string
 
 const (
-	NamespaceWatchAdded    NamespaceWatchEventType = "ADDED"
-	NamespaceWatchModified NamespaceWatchEventType = "MODIFIED"
-	NamespaceWatchDeleted  NamespaceWatchEventType = "DELETED"
-	NamespaceWatchBookmark NamespaceWatchEventType = "BOOKMARK"
+	ResourceWatchAdded    ResourceWatchEventType = "ADDED"
+	ResourceWatchModified ResourceWatchEventType = "MODIFIED"
+	ResourceWatchDeleted  ResourceWatchEventType = "DELETED"
+	ResourceWatchBookmark ResourceWatchEventType = "BOOKMARK"
 )
 
-// NamespaceWatchCursor identifies one ordered event inside a journal epoch.
+// ResourceWatchCursor identifies one ordered event inside a journal epoch.
 // Its external encoding is owned by internal/watchjournal.
-type NamespaceWatchCursor struct {
+type ResourceWatchCursor struct {
 	Epoch    string
 	Sequence uint64
 }
 
-// NamespaceWatchEvent is the backend-neutral durable journal record. Payload
-// is a full committed Namespace postimage for ADDED/MODIFIED and nil for
+// ResourceWatchEvent is the backend-neutral durable journal record. Payload
+// is a full committed resource postimage for ADDED/MODIFIED and nil for
 // DELETED/BOOKMARK. SelectorLabels preserves the postimage labels (or the
 // last-known labels for DELETED), while PreviousSelectorLabels preserves the
 // MODIFIED preimage labels. Together they let filtered watches express a
 // resource entering or leaving a selector without exposing deleted payloads.
-type NamespaceWatchEvent struct {
-	Epoch                  string
-	Sequence               uint64
-	Type                   NamespaceWatchEventType
+type ResourceWatchEvent struct {
+	Epoch    string
+	Sequence uint64
+	Type     ResourceWatchEventType
+	// Kind is the canonical API kind (for example Namespace or Repository).
+	Kind string
+	// Namespace is empty only for cluster-scoped resources.
+	Namespace              string
 	Name                   string
 	Payload                json.RawMessage
 	SelectorLabels         map[string]string
@@ -90,8 +97,8 @@ type NamespaceWatchEvent struct {
 	At                     time.Time
 }
 
-// NamespaceWatchBounds is the retained interval in one journal epoch.
-type NamespaceWatchBounds struct {
+// ResourceWatchBounds is the retained interval in one journal epoch.
+type ResourceWatchBounds struct {
 	Epoch     string
 	Oldest    uint64
 	HighWater uint64
@@ -105,20 +112,43 @@ type NamespaceWatchBounds struct {
 	ProgressAt time.Time
 }
 
-// NamespaceWatchLease carries the materializer fencing token.
-type NamespaceWatchLease struct {
+// ResourceWatchLease carries the materializer fencing token. Leases fence the
+// shared journal materializer, not one resource kind.
+type ResourceWatchLease struct {
 	Holder       string
 	FencingToken uint64
 	ExpiresAt    time.Time
 }
 
-// NamespaceCDCProgress stores a source checkpoint or the published frontier's
+// ResourceCDCProgress stores a source checkpoint or the published frontier's
 // bounded recovery manifest after its journal append.
-type NamespaceCDCProgress struct {
+type ResourceCDCProgress struct {
+	// Source identifies the resource-kind CDC adapter which owns this position.
+	// StreamID is source-local, so both values form the durable progress key.
+	Source    string
 	StreamID  string
 	Position  []byte
 	UpdatedAt time.Time
 }
+
+// Namespace watch aliases are retained while the Namespace GraphQL adapter is
+// migrated onto ResourceWatchJournal. New code must use ResourceWatch*.
+// They are aliases rather than wrappers so existing durable backends remain
+// source-compatible during the alpha-only migration.
+type NamespaceWatchEventType = ResourceWatchEventType
+
+const (
+	NamespaceWatchAdded    = ResourceWatchAdded
+	NamespaceWatchModified = ResourceWatchModified
+	NamespaceWatchDeleted  = ResourceWatchDeleted
+	NamespaceWatchBookmark = ResourceWatchBookmark
+)
+
+type NamespaceWatchCursor = ResourceWatchCursor
+type NamespaceWatchEvent = ResourceWatchEvent
+type NamespaceWatchBounds = ResourceWatchBounds
+type NamespaceWatchLease = ResourceWatchLease
+type NamespaceCDCProgress = ResourceCDCProgress
 
 // Product is the fully hydrated catalogue product record stored in the
 // datastore. It merges author-supplied frontmatter (APIVersion, Kind,

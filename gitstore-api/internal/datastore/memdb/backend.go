@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -1191,6 +1192,7 @@ func (m *memdbDatastore) createRepository(r *datastore.Repository, requireActive
 		return fmt.Errorf("memdb: insert repository: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedRepository(datastore.ResourceWatchAdded, stored, nil)
 	return nil
 }
 
@@ -1256,11 +1258,17 @@ func (m *memdbDatastore) UpdateRepository(_ context.Context, r *datastore.Reposi
 		txn.Abort()
 		return fmt.Errorf("%w: repository %s/%s", datastore.ErrAlreadyExists, r.Namespace, r.Name)
 	}
-	if err := txn.Insert("repository", normalizedRepositoryCopy(r)); err != nil {
+	candidate := normalizedRepositoryCopy(r)
+	if reflect.DeepEqual(current, candidate) {
+		txn.Abort()
+		return nil
+	}
+	if err := txn.Insert("repository", candidate); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: update repository: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedRepository(datastore.ResourceWatchModified, r, current.Labels)
 	return nil
 }
 
@@ -1291,7 +1299,9 @@ func (m *memdbDatastore) DeleteRepository(_ context.Context, uid string) error {
 		txn.Abort()
 		return fmt.Errorf("memdb: delete repository: %w", err)
 	}
+	deleted := normalizedRepositoryCopy(raw.(*datastore.Repository))
 	txn.Commit()
+	m.recordCommittedRepository(datastore.ResourceWatchDeleted, deleted, nil)
 	return nil
 }
 

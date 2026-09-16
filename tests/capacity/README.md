@@ -9,8 +9,8 @@ make capacity TARGET=api PROFILE=readiness MODE=diagnostic \
 ```
 
 Valid target/profile pairs are `api/readiness`, `namespace/admission`,
-`namespace/validation`, `namespace/watch`, `namespace/recovery`, and
-`scylla/soak`. Admission is deployed k6 load; validation is the in-process
+`namespace/validation`, `namespace/watch`, `namespace/recovery`,
+`repository/lifecycle`, and `scylla/soak`. Admission is deployed k6 load; validation is the in-process
 two-replica soak. `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
 The dispatcher is the only public capacity entry point.
 
@@ -21,6 +21,22 @@ recovery, CPU, and memory requirements hard, enforces Namespace visibility p95
 `production` enforces visibility p95 ≤1s and p99 ≤3s. Require at least five
 clean fixed-topology 10-minute repetitions before proposing another threshold
 change.
+
+Repository lifecycle has separate minimum scales for the two evidence tiers:
+
+| Mode | Duration | Transition interval | Subscribers | Replay events | Replay samples | Resources | Overflow transitions | Burst | Visibility | API CPU | API RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | --- |
+| `alpha` | 10m | 500ms | 100 | 1,000 | 5 | 20 | 256 | 20 | p95 ≤2s, p99 ≤3s | <80% | <75% growth and <256 MiB per API |
+| `production` | 60m | 100ms | 1,000 | 10,000 | 20 | 50 | 1,000 | 100 | p95 ≤1s, p99 ≤3s | <80% | <10% growth |
+
+Both modes require two real API processes, two real controller-manager
+processes, shared durable storage, an observed replacement of the selected API
+process, cursor-resumed recovery, and zero event loss. Alpha is intentionally
+laptop-safe; passing it does not claim the production soak passed.
+Alpha's wider relative RSS allowance accounts for Go/runtime cache warm-up in
+the cold-start 10-minute run, but the simultaneous 256 MiB per-API ceiling
+keeps it bounded. Production retains the stricter less-than-10% RSS-growth
+gate. The less-than-80% normalized CPU gate is unchanged in both modes.
 
 The default runner uses the pinned container image declared in the Makefile.
 Set `K6_BIN` to an explicit executable when container networking is unsuitable,
@@ -55,7 +71,7 @@ CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3
 ```
 
 The same manifest contract applies to the Go-based `validation`, `watch`,
-`recovery`, and `soak` profiles. Their focused Go test is recorded as the
+`recovery`, Repository `lifecycle`, and `soak` profiles. Their focused Go test is recorded as the
 domain verifier; deployed Scylla-backed profiles additionally require the
 before/after container-health evidence above.
 Non-diagnostic `watch` and `recovery` runs also require
@@ -84,20 +100,65 @@ container's collision-safe process-instance UUID. Process start time remains
 available for replacement proof, while endpoint aliases fail even when
 legitimate replicas start in the same kernel tick.
 `CAPACITY_BASE_URL` must be one of those verified endpoints. Every live
-container must also use a digest-pinned image, the `/app/api` release
-executable, and an OCI revision matching the tested checkout.
-For `namespace/watch` and `namespace/recovery`, the dispatcher repeats this
-identity and artifact inspection after the workload. A replacement using a
-different image, executable, or revision therefore makes the evidence fail and
-is retained in `postflight-environment.json` for audit. The preflight and
-postflight identities must show that exactly `NAMESPACE_WATCH_API_REPLACEMENT`
-changed while every other replica stayed up unchanged.
+container must use the release executable and an OCI revision matching the
+tested checkout. Production requires a digest-pinned image; alpha may use a
+locally built exact-revision release image because the evidence records and
+verifies its immutable image ID.
+For `namespace/watch`, `namespace/recovery`, and `repository/lifecycle`, the
+dispatcher repeats this identity and artifact inspection after the workload. A
+replacement using a different image, executable, or revision therefore makes
+the evidence fail and is retained in `postflight-environment.json` for audit.
+The preflight and postflight identities must show that exactly the selected
+Namespace or Repository replacement endpoint changed while every other replica
+stayed up unchanged.
 
 Alpha and production evidence requires a clean Git checkout so the recorded
 `gitRevision` identifies the exact verifier and gate scripts that produced it.
 Recovery additionally requires at least 1,000 overflow transitions, and its
 terminal-error read is capped at 60 seconds so a misconfigured deployment fails
 promptly instead of waiting for the overall Go test timeout.
+
+`repository/lifecycle` is the end-to-end spec-058 gate. It alternates
+Git-delegating Repository mutations across two API endpoints, verifies durable
+watch delivery and reads through both replicas, requires both independent
+controller-manager endpoints to reconcile without poison items, measures
+replay, holds live subscribers during sustained load and bursts, forces
+slow-consumer overflow, and coordinates one real API process
+replacement with cursor-resumed recovery. Configure it with the
+`REPOSITORY_API_*`, `REPOSITORY_CONTROLLER_*`, `REPOSITORY_TOKEN[_FILE]`, and
+`REPOSITORY_CAPACITY_*` variables shown by `make help`. Diagnostic mode permits
+smaller experiments but never produces passing gate evidence.
+
+The managed alpha topology contains two APIs, one singleton Git service, two
+active-active controllers, and three Scylla nodes. The shared Git volume is not
+sharded or replicated, so this is not a Git-service HA test. Controllers do
+not acquire an API lease or fencing token; their concurrency contract is
+level-triggered idempotency plus optimistic resource-version checks. The
+Scylla-backed lease/fencing signals in this profile belong only to CDC journal
+materialization. Alpha requires 256 overflow transitions, which exceeds the
+two 64-event buffering stages; production retains its 1,000-transition floor.
+`REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT` defaults to 31 seconds so the
+probe does not read until the configured 30-second backpressure bound expires.
+
+For a complete isolated laptop alpha deployment, use the canonical capacity
+interface rather than assembling those variables manually:
+
+```bash
+make capacity TARGET=repository PROFILE=lifecycle MODE=alpha
+```
+
+The command manages stack startup, readiness, token bootstrap, API-B
+replacement, evidence capture, and cleanup. Production mode does not create a
+local stack; point it at an externally managed topology with the documented
+`REPOSITORY_*` and `CAPACITY_*` variables. The managed alpha topology is
+defined in the shared `compose.capacity.yml` capacity overlay.
+
+When a load balancer or local container runtime buffers WebSocket traffic,
+point `REPOSITORY_OVERFLOW_API` at a reader-only API replica on the same
+datastore and journal. Configure only that chaos endpoint with
+`watch.namespace.subscriber_buffer=1` and
+`watch.namespace.subscriber_backpressure_millis=1`; the two measured API
+replicas must retain their production settings.
 
 The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
 `3g` per node. Override it explicitly when testing another resource tier and

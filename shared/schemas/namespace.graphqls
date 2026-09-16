@@ -338,7 +338,20 @@ type DeleteNamespacePayload {
 
 type CompleteNamespaceDeletionPayload {
   deletedIdentifier: String
-  conflict: StatusConflict
+}
+
+"""
+Controller-only bootstrap operation. Ensures the system-managed
+`gitstore-system` repository exists for an admitted Namespace. It is separate
+from createRepository because bootstrap repositories are not author-managed
+declarative Repository resources.
+"""
+input ProvisionNamespaceSystemRepositoryInput {
+  namespace: String!
+}
+
+type ProvisionNamespaceSystemRepositoryPayload {
+  repository: Repository!
 }
 
 extend type Query {
@@ -381,6 +394,9 @@ extend type Mutation {
   Permanently delete a terminating namespace after its repositories are gone.
   """
   completeNamespaceDeletion(input: CompleteNamespaceDeletionInput!): CompleteNamespaceDeletionPayload!
+
+  """Controller-only, idempotent Namespace bootstrap repository provisioning."""
+  provisionNamespaceSystemRepository(input: ProvisionNamespaceSystemRepositoryInput!): ProvisionNamespaceSystemRepositoryPayload!
 }
 
 extend type Subscription {

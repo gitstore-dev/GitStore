@@ -122,7 +122,7 @@ func openNamespaceWatchWithWriteGate(t *testing.T, journal datastore.NamespaceWa
 	t.Helper()
 	root, err := resolver.NewResolver(resolver.ResolverDeps{
 		Store: &testutil.StubStore{}, Logger: zap.NewNop(),
-		NamespaceJournal: journal, NamespaceWatch: namespaceWatchConfig(),
+		ResourceJournal: journal, NamespaceWatch: namespaceWatchConfig(),
 	})
 	require.NoError(t, err)
 	server := gqlhandler.New(generated.NewExecutableSchema(generated.Config{Resolvers: root}))
@@ -153,6 +153,41 @@ func openNamespaceWatchWithWriteGate(t *testing.T, journal datastore.NamespaceWa
 		"payload": map[string]any{"query": query, "variables": map[string]any{"cursor": cursor}},
 	}))
 	return conn, unblock
+}
+
+// openRepositoryWatch exercises the same generic durable journal through the
+// Repository-specific GraphQL field. Keeping this at the transport boundary
+// proves terminal errors remain subscription errors rather than silent stream
+// completion after gqlgen's WebSocket transport has handled them.
+func openRepositoryWatch(t *testing.T, journal datastore.ResourceWatchJournal, cursor string, generic bool) *websocket.Conn {
+	t.Helper()
+	root, err := resolver.NewResolver(resolver.ResolverDeps{
+		Store: &testutil.StubStore{}, Logger: zap.NewNop(),
+		ResourceJournal: journal, NamespaceWatch: namespaceWatchConfig(),
+	})
+	require.NoError(t, err)
+	server := gqlhandler.New(generated.NewExecutableSchema(generated.Config{Resolvers: root}))
+	server.AddTransport(transport.Websocket{})
+	httpServer := httptest.NewServer(server)
+	t.Cleanup(httpServer.Close)
+	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}
+	conn, _, err := dialer.Dial(strings.Replace(httpServer.URL, "http", "ws", 1), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	require.NoError(t, conn.WriteJSON(map[string]any{"type": "connection_init"}))
+	var ack map[string]any
+	require.NoError(t, conn.ReadJSON(&ack))
+	require.Equal(t, "connection_ack", ack["type"])
+	query := `subscription($cursor: String) { watchRepositories(resourceVersion: $cursor) { type resourceVersion } }`
+	if generic {
+		query = `subscription($cursor: String) { watchResources(kind: "Repository", resourceVersion: $cursor) { type resourceVersion } }`
+	}
+	require.NoError(t, conn.WriteJSON(map[string]any{
+		"id": "repository-watch", "type": "subscribe",
+		"payload": map[string]any{"query": query, "variables": map[string]any{"cursor": cursor}},
+	}))
+	return conn
 }
 
 func requireWatchTransportError(t *testing.T, conn *websocket.Conn, code, reason string) {
@@ -191,6 +226,27 @@ func TestNamespaceWatchUnavailableSurvivesWebSocketTransport(t *testing.T) {
 		read:   func(datastore.NamespaceWatchCursor, int) ([]datastore.NamespaceWatchEvent, error) { return nil, nil },
 	}
 	conn := openNamespaceWatch(t, journal, "")
+	requireWatchTransportError(t, conn, watchjournal.CodeUnavailable, string(watchjournal.ReasonMaterializerNotReady))
+}
+
+func TestRepositoryWatchExpiryAndUnavailableSurviveWebSocketTransport(t *testing.T) {
+	epoch := uuid.NewString()
+	expired := &transportWatchJournal{
+		bounds: datastore.ResourceWatchBounds{Epoch: epoch, HighWater: 1, UpdatedAt: time.Now().UTC(), ProgressAt: time.Now().UTC()},
+		read:   func(datastore.ResourceWatchCursor, int) ([]datastore.ResourceWatchEvent, error) { return nil, nil },
+	}
+	conn := openRepositoryWatch(t, expired, "nwv2:"+epoch+":1", false)
+	requireWatchTransportError(t, conn, watchjournal.CodeExpired, string(watchjournal.ReasonIncompatibleCursor))
+	conn = openRepositoryWatch(t, expired, "nwv2:"+epoch+":1", true)
+	requireWatchTransportError(t, conn, watchjournal.CodeExpired, string(watchjournal.ReasonIncompatibleCursor))
+
+	unavailable := &transportWatchJournal{
+		bounds: datastore.ResourceWatchBounds{Epoch: uuid.NewString()},
+		read:   func(datastore.ResourceWatchCursor, int) ([]datastore.ResourceWatchEvent, error) { return nil, nil },
+	}
+	conn = openRepositoryWatch(t, unavailable, "", false)
+	requireWatchTransportError(t, conn, watchjournal.CodeUnavailable, string(watchjournal.ReasonMaterializerNotReady))
+	conn = openRepositoryWatch(t, unavailable, "", true)
 	requireWatchTransportError(t, conn, watchjournal.CodeUnavailable, string(watchjournal.ReasonMaterializerNotReady))
 }
 

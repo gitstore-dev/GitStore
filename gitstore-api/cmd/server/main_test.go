@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/app"
 	authpkg "github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
@@ -37,6 +38,35 @@ type mockGitWriter struct {
 	commitCalls    []gitclient.CommitFileParams
 	deleteCalls    []gitclient.DeleteFileParams
 	createTagCalls []gitclient.CreateTagParams
+}
+
+// testCommittedManifestAdmitter keeps this HTTP/authentication test focused on
+// handler wiring. Production injects cataloggrpc.Server, which implements the
+// same committed-manifest admission boundary.
+type testCommittedManifestAdmitter struct{ store datastore.Datastore }
+
+func (a testCommittedManifestAdmitter) AdmitCommittedManifest(ctx context.Context, request admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	name := strings.TrimSuffix(strings.TrimPrefix(request.Path, "namespaces/"), ".md")
+	if current, err := a.store.GetNamespaceByName(ctx, name); err == nil {
+		return &admission.CommittedManifestResult{Kind: "Namespace", Name: current.Name, CommitSHA: request.CommitSHA}, nil
+	}
+	now := time.Now().UTC()
+	namespace := &datastore.Namespace{
+		UID:               "00000000-0000-7000-8000-000000000003",
+		Name:              name,
+		Title:             name,
+		Tier:              datastore.NamespaceTierUser,
+		CreationTimestamp: now,
+		CreationActor:     request.ActorSubject,
+		UpdateTimestamp:   now,
+		UpdateActor:       request.ActorSubject,
+		GitCommitSHA:      request.CommitSHA,
+	}
+	datastore.NormalizeNamespaceContract(namespace)
+	if err := a.store.CreateNamespace(ctx, namespace); err != nil {
+		return nil, err
+	}
+	return &admission.CommittedManifestResult{Kind: "Namespace", Name: namespace.Name, CommitSHA: request.CommitSHA}, nil
 }
 
 func TestMain(m *testing.M) {
@@ -168,7 +198,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	require.NoError(t, err)
 	seedNamespaceAuthoringRepository(t, store)
 
-	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
+	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator(), CommittedManifestAdmitter: testCommittedManifestAdmitter{store: store}})
 	require.NoError(t, err)
 
 	loginReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{

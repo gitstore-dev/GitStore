@@ -297,7 +297,6 @@ func TestUpdateCategoryStatus_PartialMergeAppliesOnlySuppliedFields(t *testing.T
 		ObservedGeneration: &generation,
 	})
 	require.NoError(t, err)
-	require.Nil(t, payload.Conflict)
 	require.NotNil(t, payload.Category)
 
 	updated, err := store.GetCategoryTaxonomyByName(ctx, "acme", "electronics")
@@ -310,8 +309,8 @@ func TestUpdateCategoryStatus_PartialMergeAppliesOnlySuppliedFields(t *testing.T
 }
 
 // T026: updateCategoryStatus with a stale resourceVersion returns a
-// non-null conflict, leaving status unchanged.
-func TestUpdateCategoryStatus_StaleResourceVersionReturnsConflict(t *testing.T) {
+// RESOURCE_VERSION_CONFLICT GraphQL error, leaving status unchanged.
+func TestUpdateCategoryStatus_StaleResourceVersionReturnsGraphQLError(t *testing.T) {
 	r, store, _ := newWatchTestResolver(t)
 	ctx := context.Background()
 
@@ -322,15 +321,15 @@ func TestUpdateCategoryStatus_StaleResourceVersionReturnsConflict(t *testing.T) 
 	}
 	require.NoError(t, store.CreateCategoryTaxonomy(ctx, c))
 
-	payload, err := r.Mutation().UpdateCategoryStatus(ctx, model.UpdateCategoryStatusInput{
+	_, err := r.Mutation().UpdateCategoryStatus(ctx, model.UpdateCategoryStatusInput{
 		Name:            "furniture",
 		Namespace:       "acme",
 		ResourceVersion: "stale",
 	})
-	require.NoError(t, err)
-	require.Nil(t, payload.Category)
-	require.NotNil(t, payload.Conflict)
-	require.Equal(t, "1", payload.Conflict.CurrentResourceVersion)
+	var gqlErr *gqlerror.Error
+	require.True(t, errors.As(err, &gqlErr))
+	require.Equal(t, "RESOURCE_VERSION_CONFLICT", gqlErr.Extensions["code"])
+	require.Equal(t, "1", gqlErr.Extensions["resourceVersion"])
 }
 
 // T027: updateCategoryStatus targeting a deleted/nonexistent resource
@@ -374,7 +373,6 @@ func TestUpdateResourceStatus_GenericPathAppliesToCategoryTaxonomy(t *testing.T)
 		ResourceVersion: "1",
 	})
 	require.NoError(t, err)
-	require.Nil(t, payload.Conflict)
 	require.NotNil(t, payload.Object)
 }
 

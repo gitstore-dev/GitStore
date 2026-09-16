@@ -29,6 +29,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Runtime stage
 FROM alpine:3.23.3
 
+ARG GIT_REVISION=unknown
+LABEL org.opencontainers.image.revision=${GIT_REVISION}
+
 RUN apk --no-cache add ca-certificates
 
 WORKDIR /app
@@ -38,7 +41,9 @@ COPY --from=builder /build/api /app/api
 COPY --from=builder /build/gitctl /app/gitctl
 COPY --from=builder /build/shared/schemas /app/schemas
 
-# Expose GraphQL API port
+# Expose ports
 EXPOSE 4000
+EXPOSE 9000
+EXPOSE 6000
 
 CMD ["/app/api"]

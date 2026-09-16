@@ -51,8 +51,9 @@ type Service struct {
 	clock     apiruntime.Clock
 	ids       apiruntime.IDGenerator
 
-	namespacePolicy  namespaceadmission.PolicyEvaluator
-	namespaceMetrics *namespaceadmission.Metrics
+	namespacePolicy   namespaceadmission.PolicyEvaluator
+	namespaceMetrics  *namespaceadmission.Metrics
+	committedAdmitter admission.CommittedManifestAdmitter
 
 	namespaceRepositoryFenceEnabled bool
 }
@@ -79,6 +80,7 @@ type ServiceDeps struct {
 	IDGenerator                  apiruntime.IDGenerator
 	NamespacePolicyEvaluator     namespaceadmission.PolicyEvaluator
 	NamespaceMetrics             *namespaceadmission.Metrics
+	CommittedManifestAdmitter    admission.CommittedManifestAdmitter
 	NamespaceRepositoryFenceMode NamespaceRepositoryFenceMode
 }
 
@@ -125,6 +127,7 @@ func NewService(deps ServiceDeps) (*Service, error) {
 		ids:                             ids,
 		namespacePolicy:                 namespacePolicy,
 		namespaceMetrics:                namespaceMetrics,
+		committedAdmitter:               deps.CommittedManifestAdmitter,
 		namespaceRepositoryFenceEnabled: namespaceRepositoryFenceEnabled,
 	}, nil
 }
@@ -471,6 +474,107 @@ func (s *Service) CreateNamespace(ctx context.Context, input model.CreateNamespa
 	return s.commitAndAdmitNamespace(ctx, resource, content, callerUsername, true, preflight)
 }
 
+// CommitRepositoryManifest writes one Repository envelope and synchronously
+// materializes that exact committed file through the shared admission runtime.
+// The post-receive batch path uses the same runtime asynchronously.
+func (s *Service) CommitRepositoryManifest(ctx context.Context, apiVersion, kind string, metadata *model.MetadataInput, spec *model.RepositorySpecInput, callerUsername string, create bool) (*admission.CommittedManifestResult, error) {
+	if apiVersion != repositoryAPIVersion || kind != repositoryKind || metadata == nil || spec == nil {
+		return nil, gqlerror.Errorf("invalid Repository resource envelope")
+	}
+	if metadata.Name == "" || metadata.Namespace == "" || metadata.Name == SystemRepositoryName {
+		return nil, gqlerror.Errorf("invalid Repository metadata")
+	}
+	if s.committedAdmitter == nil {
+		return nil, gqlerror.Errorf("Repository admission runtime is unavailable")
+	}
+	if s.gitWriter == nil {
+		return nil, gqlerror.Errorf("Repository Git writer is unavailable")
+	}
+	mapping, err := s.store.LookupRepository(ctx, metadata.Namespace, SystemRepositoryName)
+	if err != nil {
+		return nil, gqlerror.Errorf("namespace system repository is unavailable")
+	}
+	datastore.NormalizeNamespaceMappingContract(mapping)
+	labels, err := stringMap(metadata.Labels)
+	if err != nil {
+		return nil, gqlerror.Errorf("metadata.labels: %v", err)
+	}
+	annotations, err := stringMap(metadata.Annotations)
+	if err != nil {
+		return nil, gqlerror.Errorf("metadata.annotations: %v", err)
+	}
+	resource := catalog.RepositoryResource{APIVersion: apiVersion, Kind: kind, Metadata: catalog.ObjectMeta{Name: metadata.Name, Namespace: metadata.Namespace, Labels: labels, Annotations: annotations}, Spec: catalog.RepositorySpec{Visibility: model.RepositoryVisibilityPrivate.String()}}
+	if spec.DefaultBranch != nil {
+		resource.Spec.DefaultBranch = *spec.DefaultBranch
+	}
+	if spec.Visibility != nil {
+		resource.Spec.Visibility = spec.Visibility.String()
+	}
+	if spec.StorageClass != nil {
+		resource.Spec.StorageClass = *spec.StorageClass
+	}
+	if err := s.preflightRepositoryManifestOperation(ctx, metadata.Namespace, metadata.Name, resource.Spec.StorageClass, create); err != nil {
+		return nil, err
+	}
+	content, err := yaml.Marshal(resource)
+	if err != nil {
+		return nil, gqlerror.Errorf("encode Repository manifest: %v", err)
+	}
+	verb := "Update"
+	if create {
+		verb = "Create"
+	}
+	path := fmt.Sprintf("repositories/%s.md", metadata.Name)
+	manifest := append(append([]byte("---\n"), content...), []byte("---\n")...)
+	sha, err := s.gitWriter.CommitFileForRepo(ctx, mapping.RepositoryID, gitclient.CommitFileParams{Path: path, Content: manifest, CommitMessage: fmt.Sprintf("%s Repository %s", verb, metadata.Name), AuthorName: callerUsername})
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to commit Repository manifest: %v", err)
+	}
+	op := admission.OperationUpdate
+	if create {
+		op = admission.OperationCreate
+	}
+	result, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{
+		RepositoryID: mapping.RepositoryID, Namespace: metadata.Namespace, ActorSubject: callerUsername,
+		CommitSHA: sha, RefName: "refs/heads/main", Path: path, Content: manifest, Operation: op,
+	})
+	if err != nil {
+		return nil, gqlerror.Errorf("Repository admission failed: %v", err)
+	}
+	return result, nil
+}
+
+func (s *Service) preflightRepositoryManifestOperation(ctx context.Context, namespace, name, proposedStorageClass string, create bool) error {
+	mapping, err := s.store.LookupRepository(ctx, namespace, name)
+	if errors.Is(err, datastore.ErrNotFound) {
+		if create {
+			return nil
+		}
+		return gqlerror.Errorf("repository %q does not exist", name)
+	}
+	if err != nil {
+		return gqlerror.Errorf("failed to validate Repository operation")
+	}
+	if create {
+		return gqlerror.Errorf("repository %q already exists", name)
+	}
+	existing, err := s.store.GetRepository(ctx, mapping.RepositoryID)
+	if err != nil {
+		return gqlerror.Errorf("failed to validate Repository operation")
+	}
+	if repositoryStorageClassDowngrade(existing.StorageClass, proposedStorageClass) {
+		return gqlerror.Errorf("repository storageClass downgrade is not allowed")
+	}
+	return nil
+}
+
+func repositoryStorageClassDowngrade(current, proposed string) bool {
+	ranks := map[string]int{"standard": 1, "premium": 2}
+	currentRank, knownCurrent := ranks[strings.ToLower(current)]
+	proposedRank, knownProposed := ranks[strings.ToLower(proposed)]
+	return knownCurrent && knownProposed && proposedRank < currentRank
+}
+
 // UpdateNamespace commits and admits a replacement Namespace spec.
 func (s *Service) UpdateNamespace(ctx context.Context, input model.UpdateNamespaceInput, callerUsername string) (*datastore.Namespace, error) {
 	started := time.Now()
@@ -605,20 +709,16 @@ func (s *Service) commitAndAdmitNamespace(
 	if err != nil {
 		return nil, gqlerror.Errorf("failed to commit Namespace manifest: %v", err)
 	}
-	now := s.clock.Now().UTC()
 	convergenceStarted := time.Now()
 	namespace, err := s.convergeCommittedNamespace(
 		ctx,
 		mapping.RepositoryID,
 		path,
 		resource,
-		now,
 		callerUsername,
 		sha,
 		content,
-		body,
 		namespaceAdmissionOperation(create),
-		preflight,
 	)
 	s.namespaceMetrics.ObserveAdmissionStage("admission_convergence", time.Since(convergenceStarted))
 	if err != nil {
@@ -636,7 +736,7 @@ func (s *Service) commitAndAdmitNamespace(
 			mapped = NewNamespaceNotFoundError(fmt.Sprintf("namespace %q not found", resource.Metadata.Name))
 		case errors.Is(err, namespaceadmission.ErrAuthoringRefCheck):
 			return nil, gqlerror.Errorf("failed to verify Namespace commit: %v", err)
-		case errors.Is(err, namespaceadmission.ErrAuthoringRefSuperseded):
+		case errors.Is(err, admission.ErrCommittedManifestSuperseded), errors.Is(err, namespaceadmission.ErrAuthoringRefSuperseded):
 			mapped = NewNamespaceConflictError(namespaceadmission.ReasonResourceVersionConflict, "Namespace commit was superseded by a newer commit")
 		case errors.Is(err, datastore.ErrConflict):
 			mapped = NewNamespaceConflictError(namespaceadmission.ReasonResourceVersionConflict, fmt.Sprintf("namespace %q changed while the update was applied", resource.Metadata.Name))
@@ -653,114 +753,41 @@ func (s *Service) convergeCommittedNamespace(
 	ctx context.Context,
 	repositoryID, path string,
 	resource *catalog.NamespaceResource,
-	now time.Time,
 	actor, committedSHA string,
-	committedContent, committedBody []byte,
+	committedContent []byte,
 	operation admission.Operation,
-	preflight namespaceadmission.Preflight,
 ) (*datastore.Namespace, error) {
-	targetResource := resource
-	targetBody := append([]byte(nil), committedBody...)
-	targetSHA := committedSHA
-	targetOperation := operation
-	targetPreflight := preflight
-
-	for range namespaceadmission.AdmissionWriteAttempts {
-		currentHead, err := s.gitWriter.ResolveRefForRepo(ctx, repositoryID, "refs/heads/main")
-		if err != nil {
-			return nil, fmt.Errorf("%w: %v", namespaceadmission.ErrAuthoringRefCheck, err)
-		}
-		if currentHead != targetSHA {
-			latestResource, latestBody, latestContent, readErr := s.readNamespaceAtCommit(
-				ctx,
-				repositoryID,
-				path,
-				currentHead,
-				resource.Metadata.Name,
-			)
-			if readErr != nil {
-				return nil, readErr
-			}
-			if !bytes.Equal(latestContent, committedContent) {
-				current, lookupErr := s.store.GetNamespaceByName(ctx, resource.Metadata.Name)
-				if lookupErr == nil && current.GitCommitSHA == currentHead {
-					return current, nil
-				}
-				return nil, namespaceadmission.ErrAuthoringRefSuperseded
-			}
-			targetResource = latestResource
-			targetBody = latestBody
-			targetSHA = currentHead
-			targetOperation = ""
-			targetPreflight = namespaceadmission.Preflight{}
-		}
-
-		namespace, _, err := namespaceadmission.ApplyManifestOrdered(
-			ctx,
-			s.store,
-			s.ids,
-			targetResource,
-			now,
-			"main@sha1:"+targetSHA,
-			actor,
-			namespaceadmission.ApplyManifestOptions{
-				Operation:     targetOperation,
-				Preflight:     targetPreflight,
-				WriteAttempts: namespaceadmission.AdmissionWriteAttempts,
-				Body:          targetBody,
-				SourcePath:    path,
-				GitCommitSHA:  targetSHA,
-				GitRef:        "refs/heads/main",
-				CheckAuthoringRef: func(checkCtx context.Context) (bool, error) {
-					head, resolveErr := s.gitWriter.ResolveRefForRepo(checkCtx, repositoryID, "refs/heads/main")
-					if resolveErr != nil {
-						return false, fmt.Errorf("%w: %v", namespaceadmission.ErrAuthoringRefCheck, resolveErr)
-					}
-					if head == targetSHA {
-						return true, nil
-					}
-					latestContent, readErr := s.gitWriter.ReadFileForRepo(checkCtx, repositoryID, path, head)
-					if readErr != nil {
-						return false, nil
-					}
-					// A later commit to another Namespace does not supersede this
-					// manifest. Requiring an exact shared-repository head here makes
-					// otherwise independent creates starve under sustained traffic.
-					return bytes.Equal(latestContent, committedContent), nil
-				},
-			},
-		)
-		if errors.Is(err, namespaceadmission.ErrAuthoringRefSuperseded) {
-			targetOperation = ""
-			targetPreflight = namespaceadmission.Preflight{}
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		currentHead, resolveErr := s.gitWriter.ResolveRefForRepo(ctx, repositoryID, "refs/heads/main")
-		if resolveErr != nil {
-			return nil, fmt.Errorf("%w: %v", namespaceadmission.ErrAuthoringRefCheck, resolveErr)
-		}
-		if currentHead != targetSHA {
-			latestContent, readErr := s.gitWriter.ReadFileForRepo(ctx, repositoryID, path, currentHead)
-			if readErr != nil {
-				return nil, fmt.Errorf("%w: read descendant Namespace manifest: %v", namespaceadmission.ErrAuthoringRefCheck, readErr)
-			}
-			// The exact-head check before the conditional datastore write is
-			// sufficient when later commits leave this Namespace unchanged. Only
-			// a same-path descendant requires another convergence attempt; chasing
-			// every unrelated commit starves admission on the shared repository.
-			if bytes.Equal(latestContent, committedContent) {
-				return namespace, nil
-			}
-			targetOperation = ""
-			targetPreflight = namespaceadmission.Preflight{}
-			continue
-		}
-		return namespace, nil
+	if s.committedAdmitter == nil {
+		return nil, gqlerror.Errorf("namespace admission runtime is unavailable")
 	}
-	return nil, namespaceadmission.ErrAuthoringRefSuperseded
+	// Policy preflight is still performed before the Git write above, so bad
+	// requests never create a commit. Once committed, all materialization is
+	// delegated to cataloggrpc's shared committed-manifest path. This prevents
+	// GraphQL from retaining a second direct datastore admission implementation.
+	result, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{
+		RepositoryID: repositoryID,
+		Namespace:    "gitstore-system",
+		ActorSubject: actor,
+		CommitSHA:    committedSHA,
+		RefName:      "refs/heads/main",
+		Path:         path,
+		Content:      committedContent,
+		Operation:    operation,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || result.Kind != namespaceKind || result.Name != resource.Metadata.Name {
+		return nil, fmt.Errorf("committed Namespace admission returned an unexpected result")
+	}
+	namespace, err := s.store.GetNamespaceByName(ctx, result.Name)
+	if err != nil {
+		return nil, err
+	}
+	if namespace.GitCommitSHA != result.CommitSHA {
+		return nil, admission.ErrCommittedManifestSuperseded
+	}
+	return namespace, nil
 }
 
 func (s *Service) readNamespaceAtCommit(
@@ -1353,6 +1380,70 @@ func (s *Service) CreateRepository(ctx context.Context, namespace, name, default
 	return repo, nil
 }
 
+// ProvisionRepositoryStorage is the controller-only bridge to git-service for
+// a Repository that has already been admitted. It deliberately never creates
+// Repository metadata or namespace mappings: admission remains the sole
+// authoring path, and git-service's create operation is idempotent on retries.
+func (s *Service) ProvisionRepositoryStorage(ctx context.Context, namespace, name string) (*datastore.Repository, error) {
+	namespaceName, err := s.canonicalNamespaceName(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	mapping, err := s.store.LookupRepository(ctx, namespaceName, name)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, gqlerror.Errorf("repository not found")
+		}
+		return nil, gqlerror.Errorf("failed to retrieve repository")
+	}
+	repository, err := s.store.GetRepository(ctx, mapping.RepositoryID)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, gqlerror.Errorf("repository not found")
+		}
+		return nil, gqlerror.Errorf("failed to retrieve repository")
+	}
+	datastore.NormalizeRepositoryContract(repository)
+	if repository.Name == SystemRepositoryName {
+		return nil, gqlerror.Errorf("repository %q is system-managed", SystemRepositoryName)
+	}
+	if repository.DeletionTimestamp != nil {
+		return nil, gqlerror.Errorf("repository %q is terminating", repository.Name)
+	}
+	if !repositoryAdmissionAccepted(repository.Status) {
+		return nil, gqlerror.Errorf("repository %q has not been admitted", repository.Name)
+	}
+	if s.gitWriter == nil {
+		return nil, gqlerror.Errorf("repository storage provisioning is unavailable")
+	}
+	if _, err := s.gitWriter.CreateRepository(ctx, repository.UID, repository.StorageClass); err != nil && status.Code(err) != codes.AlreadyExists {
+		s.logger.Error("gRPC CreateRepository failed",
+			zap.String("repo_id", repository.UID),
+			zap.String("rpc", "CreateRepository"),
+			zap.Error(err),
+		)
+		return nil, gqlerror.Errorf("failed to provision repository storage")
+	}
+	s.logger.Info("gRPC CreateRepository succeeded",
+		zap.String("repo_id", repository.UID),
+		zap.String("rpc", "CreateRepository"),
+	)
+	return repository, nil
+}
+
+func repositoryAdmissionAccepted(raw json.RawMessage) bool {
+	var status catalog.RepositoryStatus
+	if len(raw) == 0 || json.Unmarshal(raw, &status) != nil {
+		return false
+	}
+	for _, condition := range status.Conditions {
+		if condition.Type == catalog.ConditionAdmissionAccepted && condition.Status == catalog.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
 // GetRepository retrieves a repository by its raw UUID.
 func (s *Service) GetRepository(ctx context.Context, id string) (*datastore.Repository, error) {
 	r, err := s.store.GetRepository(ctx, id)
@@ -1424,110 +1515,16 @@ func (s *Service) ListRepositories(ctx context.Context, params datastore.PagePar
 	return result, nil
 }
 
-// RenameRepository renames a repository within its namespace. Storage is not moved.
-func (s *Service) RenameRepository(ctx context.Context, repoID, newName, callerUsername string) (*datastore.Repository, error) {
-	repo, err := s.store.GetRepository(ctx, repoID)
-	if err != nil {
-		if errors.Is(err, datastore.ErrNotFound) {
-			return nil, gqlerror.Errorf("repository not found")
-		}
-		return nil, gqlerror.Errorf("failed to retrieve repository")
-	}
-	datastore.NormalizeRepositoryContract(repo)
-	oldName := repo.Name
-	if oldName == newName {
-		return repo, nil
-	}
-	mutationCtx := datastore.WithMutationAudit(ctx, callerUsername, s.clock.Now().UTC())
-	if err := s.store.RenameRepository(mutationCtx, repo.Namespace, oldName, newName); err != nil {
-		s.logger.Error("failed to rename repository",
-			zap.String("repo_id", repoID),
-			zap.String("old_name", oldName),
-			zap.String("new_name", newName),
-			zap.Error(err),
-		)
-		return nil, gqlerror.Errorf("failed to rename repository")
-	}
-	persisted, err := s.store.GetRepository(ctx, repoID)
-	if err != nil {
-		return nil, gqlerror.Errorf("failed to retrieve renamed repository")
-	}
-	datastore.NormalizeRepositoryContract(persisted)
-	if persisted.Name == newName {
-		return persisted, nil
-	}
-	repo.Name = newName
-	repo.UpdateTimestamp = s.clock.Now().UTC()
-	repo.UpdateActor = callerUsername
-	expectedResourceVersion := repo.ResourceVersion
-	datastore.AdvanceRepositorySpecVersion(repo)
-	if err := s.store.UpdateRepository(ctx, repo, expectedResourceVersion); err != nil {
-		s.logger.Error("failed to update repository record after rename",
-			zap.String("repo_id", repoID),
-			zap.Error(err),
-		)
-		return nil, gqlerror.Errorf("failed to update repository record")
-	}
-	s.logger.Info("rename repository",
-		zap.String("repo_id", repoID),
-		zap.String("old_name", oldName),
-		zap.String("new_name", newName),
-	)
-	return repo, nil
+// RenameRepository is deferred to ADR-0003 Phase 2. A repository's name is
+// part of its Git manifest path, so direct datastore rename is unsafe.
+func (s *Service) RenameRepository(context.Context, string, string, string) (*datastore.Repository, error) {
+	return nil, gqlerror.Errorf("renameRepository is unimplemented; see docs/ADRs/0003-repository-lifecycle.md")
 }
 
-// TransferRepository transfers a repository to a different namespace. Storage is not moved.
-func (s *Service) TransferRepository(ctx context.Context, repoID, toNamespace, callerUsername string) (*datastore.Repository, error) {
-	if err := s.requireNamespaceRepositoryFence("TRANSFER_REPOSITORY"); err != nil {
-		return nil, err
-	}
-	toNamespaceName, err := s.canonicalNamespaceName(ctx, toNamespace)
-	if err != nil {
-		return nil, err
-	}
-	repo, err := s.store.GetRepository(ctx, repoID)
-	if err != nil {
-		if errors.Is(err, datastore.ErrNotFound) {
-			return nil, gqlerror.Errorf("repository not found")
-		}
-		return nil, gqlerror.Errorf("failed to retrieve repository")
-	}
-	datastore.NormalizeRepositoryContract(repo)
-	fromNamespace := repo.Namespace
-	if fromNamespace == toNamespaceName {
-		return repo, nil
-	}
-	mutationCtx := datastore.WithMutationAudit(ctx, callerUsername, s.clock.Now().UTC())
-	if err := s.store.TransferRepository(mutationCtx, repoID, fromNamespace, toNamespaceName); err != nil {
-		if errors.Is(err, datastore.ErrNamespaceNotActive) {
-			return nil, gqlerror.Errorf("namespace %q is terminating", toNamespaceName)
-		}
-		if errors.Is(err, datastore.ErrNotFound) {
-			return nil, gqlerror.Errorf("namespace %q not found", toNamespaceName)
-		}
-		s.logger.Error("failed to transfer repository",
-			zap.String("repo_id", repoID),
-			zap.String("from_namespace", fromNamespace),
-			zap.String("to_namespace", toNamespaceName),
-			zap.Error(err),
-		)
-		return nil, gqlerror.Errorf("failed to transfer repository")
-	}
-	persisted, err := s.store.GetRepository(ctx, repoID)
-	if err != nil {
-		return nil, gqlerror.Errorf("failed to retrieve transferred repository")
-	}
-	datastore.NormalizeRepositoryContract(persisted)
-	if persisted.Namespace == toNamespaceName {
-		return persisted, nil
-	}
-	s.logger.Error("repository transfer did not update authoritative namespace",
-		zap.String("repo_id", repoID),
-		zap.String("from_namespace", fromNamespace),
-		zap.String("to_namespace", toNamespaceName),
-		zap.String("persisted_namespace", persisted.Namespace),
-	)
-	return nil, gqlerror.Errorf("failed to transfer repository")
+// TransferRepository is deferred to ADR-0003 Phase 2. Cross-namespace direct
+// datastore transfer would bypass Git admission and owner-reference updates.
+func (s *Service) TransferRepository(context.Context, string, string, string) (*datastore.Repository, error) {
+	return nil, gqlerror.Errorf("transferRepository is unimplemented; see docs/ADRs/0003-repository-lifecycle.md")
 }
 
 func (s *Service) requireNamespaceRepositoryFence(operation string) error {
@@ -1540,18 +1537,22 @@ func (s *Service) requireNamespaceRepositoryFence(operation string) error {
 	return NewNamespaceRepositoryFenceDisabledError(operation)
 }
 
-// DeleteRepository deletes a repository, its mapping, and its storage via gRPC.
-//
-// Storage is removed first; only on success do we drop the metadata rows. This
-// avoids leaving an orphaned .git directory when the gRPC call transiently
-// fails, since the caller can retry against the still-resolvable repo_id.
-func (s *Service) DeleteRepository(ctx context.Context, repoID, _ string) error {
+// DeleteRepository starts foreground deletion. The Repository remains visible
+// and resolvable while its controller removes storage; it is hard-deleted only
+// after the foreground finalizer has been cleared.
+func (s *Service) DeleteRepository(ctx context.Context, repoID, caller string) error {
 	repo, err := s.store.GetRepository(ctx, repoID)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
 			return gqlerror.Errorf("repository not found")
 		}
 		return gqlerror.Errorf("failed to retrieve repository")
+	}
+	datastore.NormalizeRepositoryContract(repo)
+	if repo.DeletionTimestamp != nil {
+		// A repeated delete is deliberately a no-op. In particular, do not
+		// repeat a drain check after termination has already been accepted.
+		return nil
 	}
 	hasCatalogResources, err := s.store.HasCatalogResources(ctx, repoID)
 	if err != nil {
@@ -1567,30 +1568,102 @@ func (s *Service) DeleteRepository(ctx context.Context, repoID, _ string) error 
 		)
 		return gqlerror.Errorf("repository %q contains catalog resources and cannot be deleted", repo.Name)
 	}
-	if s.gitWriter != nil {
-		if err := s.gitWriter.DeleteRepository(ctx, repoID); err != nil {
-			s.logger.Error("gRPC DeleteRepository failed",
-				zap.String("repo_id", repoID),
-				zap.String("rpc", "DeleteRepository"),
-				zap.Error(err),
-			)
-			return gqlerror.Errorf("failed to delete repository storage")
+
+	now := s.clock.Now().UTC()
+	expectedResourceVersion := repo.ResourceVersion
+	repo.DeletionTimestamp = &now
+	if !containsString(repo.Finalizers, datastore.RepositoryForegroundDeletionFinalizer) {
+		repo.Finalizers = append(repo.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
+	}
+	repo.UpdateTimestamp = now
+	repo.UpdateActor = caller
+	datastore.AdvanceRepositorySystemVersion(repo)
+	if err := s.store.UpdateRepository(ctx, repo, expectedResourceVersion); err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			latest, reloadErr := s.store.GetRepository(ctx, repoID)
+			if reloadErr == nil && latest.DeletionTimestamp != nil {
+				return nil
+			}
 		}
-		s.logger.Info("gRPC DeleteRepository succeeded",
-			zap.String("repo_id", repoID),
-			zap.String("rpc", "DeleteRepository"),
-		)
-	}
-	datastore.NormalizeRepositoryContract(repo)
-	if err := s.store.DeleteNamespaceMapping(ctx, repo.Namespace, repo.Name); err != nil && !errors.Is(err, datastore.ErrNotFound) {
-		s.logger.Error("failed to delete namespace mapping", zap.String("repo_id", repoID), zap.Error(err))
-		return gqlerror.Errorf("failed to delete namespace mapping")
-	}
-	if err := s.store.DeleteRepository(ctx, repoID); err != nil && !errors.Is(err, datastore.ErrNotFound) {
-		s.logger.Error("failed to delete repository record", zap.String("repo_id", repoID), zap.Error(err))
-		return gqlerror.Errorf("failed to delete repository")
+		return gqlerror.Errorf("failed to start repository deletion")
 	}
 	return nil
+}
+
+// CompleteRepositoryDeletion is the controller-only finalizer completion
+// operation. It proves the resource is terminating and drained, removes the
+// backing storage, clears this controller's finalizer, and garbage-collects
+// the row only when no finalizer remains. Catalog resources are never
+// cascaded.
+func (s *Service) CompleteRepositoryDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*datastore.Repository, error) {
+	mapping, err := s.store.LookupRepository(ctx, namespace, name)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, gqlerror.Errorf("failed to complete repository deletion")
+	}
+	repo, err := s.store.GetRepository(ctx, mapping.RepositoryID)
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, gqlerror.Errorf("failed to complete repository deletion")
+	}
+	datastore.NormalizeRepositoryContract(repo)
+	if repo.ResourceVersion != expectedResourceVersion {
+		return repo, datastore.ErrConflict
+	}
+	if repo.DeletionTimestamp == nil || !containsString(repo.Finalizers, datastore.RepositoryForegroundDeletionFinalizer) {
+		return nil, gqlerror.Errorf("repository %q is not awaiting foreground deletion", name)
+	}
+	hasCatalogResources, err := s.store.HasCatalogResources(ctx, repo.UID)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to complete repository deletion")
+	}
+	if hasCatalogResources {
+		return nil, gqlerror.Errorf("repository %q still contains catalog resources", name)
+	}
+	if s.gitWriter != nil {
+		if err := s.gitWriter.DeleteRepository(ctx, repo.UID); err != nil && status.Code(err) != codes.NotFound {
+			s.logger.Error("gRPC DeleteRepository failed during finalizer completion", zap.String("repo_id", repo.UID), zap.Error(err))
+			return nil, gqlerror.Errorf("failed to delete repository storage")
+		}
+	}
+
+	updated := *repo
+	updated.Finalizers = removeString(updated.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
+	updated.UpdateTimestamp = s.clock.Now().UTC()
+	datastore.AdvanceRepositorySystemVersion(&updated)
+	if err := s.store.UpdateRepository(ctx, &updated, expectedResourceVersion); err != nil {
+		if errors.Is(err, datastore.ErrConflict) {
+			latest, reloadErr := s.store.GetRepository(ctx, repo.UID)
+			if reloadErr == nil {
+				return latest, datastore.ErrConflict
+			}
+		}
+		return nil, gqlerror.Errorf("failed to complete repository deletion")
+	}
+	if len(updated.Finalizers) != 0 {
+		return &updated, nil
+	}
+	if err := s.store.DeleteNamespaceMapping(ctx, updated.Namespace, updated.Name); err != nil && !errors.Is(err, datastore.ErrNotFound) {
+		return nil, gqlerror.Errorf("failed to garbage collect repository mapping")
+	}
+	if err := s.store.DeleteRepository(ctx, updated.UID); err != nil && !errors.Is(err, datastore.ErrNotFound) {
+		return nil, gqlerror.Errorf("failed to garbage collect repository")
+	}
+	return &updated, nil
+}
+
+func removeString(values []string, target string) []string {
+	result := values[:0]
+	for _, value := range values {
+		if value != target {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 // ── ProductVariant ─────────────────────────────────────────────────────────

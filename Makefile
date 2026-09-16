@@ -99,6 +99,32 @@ NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE ?=
 NAMESPACE_WATCH_TOKEN ?=
 NAMESPACE_WATCH_TOKEN_FILE ?=
 NAMESPACE_WATCH_OVERFLOW_TRANSITIONS ?=
+REPOSITORY_CAPACITY_DURATION ?=60m
+REPOSITORY_CAPACITY_SUBSCRIBERS ?=1000
+REPOSITORY_CAPACITY_REPLAY_EVENTS ?=10000
+REPOSITORY_CAPACITY_REPLAY_SAMPLES ?=20
+REPOSITORY_CAPACITY_RESOURCE_POOL ?=50
+REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS ?=1000
+REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT ?=31s
+REPOSITORY_CAPACITY_MUTATION_WORKERS ?=20
+REPOSITORY_CAPACITY_BURST_INTERVAL ?=1m
+REPOSITORY_CAPACITY_BURST_SIZE ?=100
+REPOSITORY_CAPACITY_TRANSITION_INTERVAL ?=100ms
+REPOSITORY_CAPACITY_REPLACEMENT_DELAY ?=
+REPOSITORY_CAPACITY_BASELINE_STABILIZATION ?=5m
+REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION ?=10m
+REPOSITORY_CAPACITY_SKIP_REPLACEMENT ?=0
+REPOSITORY_API_A ?=http://localhost:4000
+REPOSITORY_API_B ?=http://localhost:4001
+REPOSITORY_OVERFLOW_API ?=$(REPOSITORY_API_A)
+REPOSITORY_CONTROLLER_A ?=http://localhost:5001
+REPOSITORY_CONTROLLER_B ?=http://localhost:5002
+REPOSITORY_GIT_URL ?=http://localhost:9000
+REPOSITORY_API_REPLACEMENT ?=
+REPOSITORY_REPLACEMENT_TRIGGER_FILE ?=
+REPOSITORY_TOKEN ?=
+REPOSITORY_TOKEN_FILE ?=
+REPOSITORY_CAPACITY_NAMESPACE ?=repository-capacity
 CAPACITY_PROFILE ?= api-readiness
 MODE ?= diagnostic
 TARGET ?= api
@@ -125,13 +151,17 @@ CAPACITY_CHAOS_PROFILE ?=
 CAPACITY_CHAOS_TARGET ?=
 CAPACITY_CHAOS_DELAY ?=30s
 CAPACITY_CHAOS_CONFIRM ?=0
+REPOSITORY_CAPACITY_PROJECT ?= gitstore-repository-capacity
+REPOSITORY_CAPACITY_STATE_DIR ?= $(ROOT)/.gitstore/repository-capacity
+REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT ?= 1536m
+REPOSITORY_CAPACITY_SCYLLA_MEMORY_BYTES ?= 1610612736
 
 export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CACHE
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
 .PHONY: help git api controller dev compose scylla ps logs stop down
 .PHONY: build test lint pr-ready check clean bootstrap secret capacity capacity-dispatch-test chaos test-scylla-hardening test-scylla-integration
-.PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-observability _capacity-observability-down
+.PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-repository-lifecycle _capacity-repository-overflow _capacity-observability _capacity-observability-down
 .PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
 .PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac _secret-signing-key
 .PHONY: admin-compose admin-down admin-stop admin-logs add-user add-role assign-role hash-user-password enroll-controller-serviceaccount
@@ -178,6 +208,12 @@ help: ## Show available targets and common variables.
 	@printf "  NAMESPACE_WATCH_API_A=%s NAMESPACE_WATCH_API_B=%s\n" "$(NAMESPACE_WATCH_API_A)" "$(NAMESPACE_WATCH_API_B)"
 	@printf "  NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE=<path> Required coordination signal for an actual replica restart\n"
 	@printf "  NAMESPACE_WATCH_TOKEN=<token> Required for the cross-replica Namespace watch probe\n"
+	@printf "  REPOSITORY_API_A=%s REPOSITORY_API_B=%s REPOSITORY_OVERFLOW_API=%s\n" "$(REPOSITORY_API_A)" "$(REPOSITORY_API_B)" "$(REPOSITORY_OVERFLOW_API)"
+	@printf "  REPOSITORY_CONTROLLER_A=%s REPOSITORY_CONTROLLER_B=%s\n" "$(REPOSITORY_CONTROLLER_A)" "$(REPOSITORY_CONTROLLER_B)"
+	@printf "  REPOSITORY_GIT_URL=%s  Git smart-HTTP endpoint used by the deployed raw-push probe\n" "$(REPOSITORY_GIT_URL)"
+	@printf "  REPOSITORY_REPLACEMENT_TRIGGER_FILE=<path> Required for Repository lifecycle rolling-replacement evidence\n"
+	@printf "  REPOSITORY_CAPACITY_PROJECT=%s  Isolated laptop alpha Compose project\n" "$(REPOSITORY_CAPACITY_PROJECT)"
+	@printf "  REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT=%s  Per-node laptop alpha Scylla limit\n" "$(REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT)"
 	@printf "  BOOTSTRAP_TOKEN=<token>   Use an existing bearer token for bootstrap\n"
 	@printf "  TARGET=<value>            Required selector for check, clean, bootstrap, secret, and capacity\n"
 	@printf "  NAMESPACE=%s REPOSITORY=%s DEFAULT_BRANCH=%s\n" "$(NAMESPACE)" "$(REPOSITORY)" "$(DEFAULT_BRANCH)"
@@ -420,6 +456,7 @@ test: ## Run Rust and Go test suites.
 	@./scripts/test-make-workflow-dispatch.sh
 	@./scripts/test-capacity-dispatch.sh
 	@./scripts/test-capacity-prometheus-export.sh
+	@./scripts/test-repository-capacity-stack.sh
 	@cd "$(GIT_SERVICE_DIR)" && cargo test --verbose
 	@for dir in $(GO_MODULE_DIRS); do \
 		echo "==> go test $$dir"; \
@@ -427,12 +464,25 @@ test: ## Run Rust and Go test suites.
 	done
 
 capacity: ## Run a capacity scenario; set TARGET, PROFILE, and MODE.
+ifeq ($(TARGET)/$(PROFILE)/$(MODE),repository/lifecycle/alpha)
+	@REPOSITORY_CAPACITY_PROJECT="$(REPOSITORY_CAPACITY_PROJECT)" \
+		REPOSITORY_CAPACITY_STATE_DIR="$(REPOSITORY_CAPACITY_STATE_DIR)" \
+		SCYLLA_CLUSTER_SMP=1 \
+		SCYLLA_CLUSTER_MEMORY_LIMIT="$(REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT)" \
+		REPOSITORY_CAPACITY_SCYLLA_MEMORY_BYTES="$(REPOSITORY_CAPACITY_SCYLLA_MEMORY_BYTES)" \
+		CAPACITY_EVIDENCE_DIR="$(CAPACITY_EVIDENCE_DIR)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" \
+		CAPACITY_OBSERVABILITY="$(CAPACITY_OBSERVABILITY)" CAPACITY_PROMETHEUS_URL="$(CAPACITY_PROMETHEUS_URL)" \
+		CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" \
+		CAPACITY_PROMETHEUS_TARGETS="$(CAPACITY_PROMETHEUS_TARGETS)" \
+		./scripts/repository-capacity-stack.sh local-alpha
+else
 	@CAPACITY_EVIDENCE_DIR="$(CAPACITY_EVIDENCE_DIR)" CAPACITY_PROMETHEUS_URL="$(CAPACITY_PROMETHEUS_URL)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" \
 		CAPACITY_OBSERVABILITY="$(CAPACITY_OBSERVABILITY)" CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" \
 		CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" CAPACITY_PROMETHEUS_TARGETS="$(CAPACITY_PROMETHEUS_TARGETS)" \
 		CAPACITY_CONFIG_MANIFEST="$(CAPACITY_CONFIG_MANIFEST)" CAPACITY_ENVIRONMENT_MANIFEST="$(CAPACITY_ENVIRONMENT_MANIFEST)" \
 		CAPACITY_DATASTORE_CONTAINERS="$(CAPACITY_DATASTORE_CONTAINERS)" \
 		./scripts/run-capacity-target.sh "$(TARGET)" "$(PROFILE)" "$(MODE)"
+endif
 
 capacity-dispatch-test: ## Validate capacity target/profile routing without starting load.
 	@./scripts/test-capacity-dispatch.sh
@@ -531,6 +581,54 @@ _capacity-namespace-recovery:
 		NAMESPACE_WATCH_TOKEN_FILE="$(NAMESPACE_WATCH_TOKEN_FILE)" \
 		NAMESPACE_WATCH_OVERFLOW_TRANSITIONS="$(NAMESPACE_WATCH_OVERFLOW_TRANSITIONS)" \
 		go test -count=1 -run '^TestNamespaceWatch(CrossReplicaBootstrapAndResume|RecoveryProbe|DocumentedConsumer)$$' .
+
+_capacity-repository-lifecycle:
+	@cd "$(ROOT)/tests/integration" && \
+		REPOSITORY_API_A="$(REPOSITORY_API_A)" \
+		REPOSITORY_API_B="$(REPOSITORY_API_B)" \
+		REPOSITORY_OVERFLOW_API="$(REPOSITORY_OVERFLOW_API)" \
+		REPOSITORY_CONTROLLER_A="$(REPOSITORY_CONTROLLER_A)" \
+		REPOSITORY_CONTROLLER_B="$(REPOSITORY_CONTROLLER_B)" \
+		API_URL="$(REPOSITORY_API_A)" \
+		GIT_URL="$(REPOSITORY_GIT_URL)" \
+		NAMESPACE="$(REPOSITORY_CAPACITY_NAMESPACE)" \
+		REPOSITORY_API_REPLACEMENT="$(REPOSITORY_API_REPLACEMENT)" \
+		REPOSITORY_REPLACEMENT_TRIGGER_FILE="$(REPOSITORY_REPLACEMENT_TRIGGER_FILE)" \
+		REPOSITORY_TOKEN="$(REPOSITORY_TOKEN)" \
+		REPOSITORY_TOKEN_FILE="$(REPOSITORY_TOKEN_FILE)" \
+		REPOSITORY_CAPACITY_NAMESPACE="$(REPOSITORY_CAPACITY_NAMESPACE)" \
+		REPOSITORY_CAPACITY_DURATION="$(REPOSITORY_CAPACITY_DURATION)" \
+		REPOSITORY_CAPACITY_SUBSCRIBERS="$(REPOSITORY_CAPACITY_SUBSCRIBERS)" \
+		REPOSITORY_CAPACITY_REPLAY_EVENTS="$(REPOSITORY_CAPACITY_REPLAY_EVENTS)" \
+		REPOSITORY_CAPACITY_REPLAY_SAMPLES="$(REPOSITORY_CAPACITY_REPLAY_SAMPLES)" \
+		REPOSITORY_CAPACITY_RESOURCE_POOL="$(REPOSITORY_CAPACITY_RESOURCE_POOL)" \
+		REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS="$(REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS)" \
+		REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT="$(REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT)" \
+		REPOSITORY_CAPACITY_MUTATION_WORKERS="$(REPOSITORY_CAPACITY_MUTATION_WORKERS)" \
+		REPOSITORY_CAPACITY_BURST_INTERVAL="$(REPOSITORY_CAPACITY_BURST_INTERVAL)" \
+		REPOSITORY_CAPACITY_BURST_SIZE="$(REPOSITORY_CAPACITY_BURST_SIZE)" \
+		REPOSITORY_CAPACITY_TRANSITION_INTERVAL="$(REPOSITORY_CAPACITY_TRANSITION_INTERVAL)" \
+		REPOSITORY_CAPACITY_REPLACEMENT_DELAY="$(REPOSITORY_CAPACITY_REPLACEMENT_DELAY)" \
+		REPOSITORY_CAPACITY_BASELINE_STABILIZATION="$(REPOSITORY_CAPACITY_BASELINE_STABILIZATION)" \
+		REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION="$(REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION)" \
+		REPOSITORY_CAPACITY_SKIP_REPLACEMENT="$(REPOSITORY_CAPACITY_SKIP_REPLACEMENT)" \
+		MODE="$(MODE)" REPOSITORY_LIFECYCLE_CAPACITY_RUN=1 \
+		go test -v -count=1 -timeout 0 -run '^TestRepositoryLifecycle_DeployedEvidenceGate$$' .
+
+_capacity-repository-overflow:
+	@cd "$(ROOT)/tests/integration" && \
+		REPOSITORY_API_A="$(REPOSITORY_API_A)" \
+		REPOSITORY_API_B="$(REPOSITORY_API_B)" \
+		REPOSITORY_OVERFLOW_API="$(REPOSITORY_OVERFLOW_API)" \
+		REPOSITORY_TOKEN="$(REPOSITORY_TOKEN)" \
+		REPOSITORY_TOKEN_FILE="$(REPOSITORY_TOKEN_FILE)" \
+		REPOSITORY_CAPACITY_NAMESPACE="$(REPOSITORY_CAPACITY_NAMESPACE)" \
+		REPOSITORY_CAPACITY_RESOURCE_POOL="$(REPOSITORY_CAPACITY_RESOURCE_POOL)" \
+		REPOSITORY_CAPACITY_MUTATION_WORKERS="$(REPOSITORY_CAPACITY_MUTATION_WORKERS)" \
+		REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS="$(REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS)" \
+		REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT="$(REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT)" \
+		MODE="$(MODE)" REPOSITORY_LIFECYCLE_OVERFLOW_RUN=1 \
+		go test -v -count=1 -timeout 0 -run '^TestRepositoryLifecycle_OverflowOnly$$' .
 
 lint: ## Run Rust formatting/clippy and Go formatting/vet/staticcheck.
 	@cd "$(GIT_SERVICE_DIR)" && cargo fmt --all -- --check
@@ -760,17 +858,42 @@ _bootstrap-repository: _bootstrap-tools
 		echo "Namespace \"$${NAMESPACE}\" was not found. Run make bootstrap TARGET=namespace first."; \
 		exit 1; \
 	}; \
-	query='mutation CreateRepository($$namespace: String!, $$name: String!, $$defaultBranch: String!) { createRepository(input: { namespace: $$namespace, name: $$name, defaultBranch: $$defaultBranch }) { repository { id name defaultBranch storagePath namespace { metadata { name } } } } }'; \
-	payload=$$(jq -n --arg query "$$query" --arg namespace "$${NAMESPACE}" --arg name "$${REPOSITORY}" --arg defaultBranch "$${DEFAULT_BRANCH}" '{query: $$query, variables: {namespace: $$namespace, name: $$name, defaultBranch: $$defaultBranch}}'); \
-	response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
-		echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
-		exit 1; \
-	}; \
-	if echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then \
+	query='mutation CreateRepository($$input: CreateRepositoryInput!) { createRepository(input: $$input) { repository { id metadata { name namespace } spec { defaultBranch } status { resolved { storagePath } } } } }'; \
+	payload=$$(jq -n --arg query "$$query" --arg namespace "$${NAMESPACE}" --arg name "$${REPOSITORY}" --arg defaultBranch "$${DEFAULT_BRANCH}" '{query: $$query, variables: {input: {apiVersion: "gitstore.dev/v1beta1", kind: "Repository", metadata: {namespace: $$namespace, name: $$name}, spec: {defaultBranch: $$defaultBranch, visibility: "PRIVATE", storageClass: "standard"}}}}'); \
+	attempt=0; \
+	while :; do \
+		response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
+			echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
+			exit 1; \
+		}; \
+		if ! echo "$$response" | jq -e '(.errors // []) | length > 0' >/dev/null; then break; fi; \
+		if [ "$$attempt" -lt 60 ] && echo "$$response" | jq -e 'any(.errors[]?; .message | contains("namespace system repository is unavailable"))' >/dev/null; then \
+			attempt=$$((attempt + 1)); \
+			sleep 1; \
+			continue; \
+		fi; \
 		echo "$$response" | jq -r '.errors[]?.message' | sed 's/^/GraphQL error: /'; \
 		exit 1; \
-	fi; \
-	echo "$$response" | jq -r '.data.createRepository.repository | "Created repository \(.namespace.metadata.name)/\(.name) (\(.id))\nClone URL: http://localhost:9000/\(.namespace.metadata.name)/\(.name).git"'
+	done; \
+	created_response="$$response"; \
+	query='query RepositoryReadiness($$namespace: String!, $$name: String!) { repository(by: {namespacePath: {namespace: $$namespace, name: $$name}}) { status { conditions { type status } } } }'; \
+	payload=$$(jq -n --arg query "$$query" --arg namespace "$${NAMESPACE}" --arg name "$${REPOSITORY}" '{query: $$query, variables: {namespace: $$namespace, name: $$name}}'); \
+	attempt=0; \
+	while :; do \
+		response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
+			echo "Failed to reach GitStore API at $${API_URL} while waiting for repository storage."; \
+			exit 1; \
+		}; \
+		if echo "$$response" | jq -e '((.errors // []) | length == 0) and ([.data.repository.status.conditions[]? | select(.type == "StorageProvisioned" and .status == "TRUE")] | length > 0) and ([.data.repository.status.conditions[]? | select(.type == "Ready" and .status == "TRUE")] | length > 0)' >/dev/null; then break; fi; \
+		if [ "$$attempt" -ge 60 ]; then \
+			echo "Repository $${NAMESPACE}/$${REPOSITORY} was admitted but did not become ready within 60 seconds."; \
+			echo "$$response" | jq .; \
+			exit 1; \
+		fi; \
+		attempt=$$((attempt + 1)); \
+		sleep 1; \
+	done; \
+	echo "$$created_response" | jq -r '.data.createRepository.repository | "Created repository \(.metadata.namespace)/\(.metadata.name) (\(.id))\nClone URL: http://localhost:9000/\(.metadata.namespace)/\(.metadata.name).git"'
 
 clean: ## Remove scoped local runtime state; set TARGET and CONFIRM=1.
 	@./scripts/run-make-workflow.sh clean "$(TARGET)"

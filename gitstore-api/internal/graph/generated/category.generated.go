@@ -1321,38 +1321,6 @@ func (ec *executionContext) fieldContext_UpdateCategoryStatusPayload_category(_ 
 	return fc, nil
 }
 
-func (ec *executionContext) _UpdateCategoryStatusPayload_conflict(ctx context.Context, field graphql.CollectedField, obj *model.UpdateCategoryStatusPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_UpdateCategoryStatusPayload_conflict(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Conflict, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.StatusConflict) graphql.Marshaler {
-			return ec.marshalOStatusConflict2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐStatusConflict(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_UpdateCategoryStatusPayload_conflict(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "UpdateCategoryStatusPayload",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_StatusConflict(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _UpdateCategoryStatusPayload_hasMoreProductDependents(ctx context.Context, field graphql.CollectedField, obj *model.UpdateCategoryStatusPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2402,8 +2370,6 @@ func (ec *executionContext) _UpdateCategoryStatusPayload(ctx context.Context, se
 			out.Values[i] = graphql.MarshalString("UpdateCategoryStatusPayload")
 		case "category":
 			out.Values[i] = ec._UpdateCategoryStatusPayload_category(ctx, field, obj)
-		case "conflict":
-			out.Values[i] = ec._UpdateCategoryStatusPayload_conflict(ctx, field, obj)
 		case "hasMoreProductDependents":
 			out.Values[i] = ec._UpdateCategoryStatusPayload_hasMoreProductDependents(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

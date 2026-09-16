@@ -29,7 +29,8 @@ reference. This ADR formalises their delegation model and adds the finalizer pro
 ## Decision
 
 `Repository` is **hybrid** for the same bootstrap reason as `Namespace`. The
-`gitstore-system` repository created by namespace bootstrap is a direct datastore write.
+`gitstore-system` repository created by namespace bootstrap uses the dedicated
+controller-only bootstrap ensure path.
 All other repositories are git-backed: their manifests live under
 `repositories/<name>.md` inside the namespace's `gitstore-system` repository.
 
@@ -49,8 +50,8 @@ All other repositories are git-backed: their manifests live under
 **Bootstrap path (`gitstore-system` only):**
 
 1. Auto-provisioned by namespace bootstrap; no git commit.
-2. Record is written directly to the datastore with `source: bootstrap` in the audit
-   log.
+2. The dedicated bootstrap ensure operation establishes the system repository;
+   it is not routed through author-facing Repository admission or reconciliation.
 3. `storageClass: system` is set; this field is immutable after creation.
 
 **Git-backed path (all other repositories):**
@@ -59,16 +60,20 @@ All other repositories are git-backed: their manifests live under
 2. Pre-receive validates envelope, name format, `spec.defaultBranch`, and
    `spec.visibility`.
 3. Pre-receive validates manifest are pushed to `gitstore-system` repository only within the current namespace.
-4. Post-receive admission writes the repository record and sets `AdmissionAccepted=True`.
+4. The shared committed-manifest admission service admits the committed manifest,
+   writes the repository record, and sets `AdmissionAccepted=True`. Post-receive
+   and GraphQL convergence invoke this same service.
 5. Controller reconciles: provisions the bare git repository on the git-service
    filesystem, sets `StorageProvisioned=True`, and then `Ready=True`.
 
 **GraphQL mutation path:**
 
 When a caller issues `createRepository` with an explicit namespace and name, the API
-commits a `Repository` manifest to `gitstore-system` and waits for admission before
-returning. This is the delegation-to-git path — the mutation does not write directly
-to the datastore. See the GraphQL mutation delegation table below.
+commits a `Repository` manifest to `gitstore-system`, calls the shared
+committed-manifest admission service for that exact commit, and waits for the
+hydrated admission result before returning. This is the delegation-to-git path —
+the mutation does not write directly to the datastore. See the GraphQL mutation
+delegation table below.
 
 #### Update
 
@@ -121,7 +126,7 @@ repositories/<name>.md
 
 ```markdown
 ---
-apiVersion: core.gitstore.dev/v1beta1
+apiVersion: gitstore.dev/v1beta1
 kind: Repository
 metadata:
   name: catalog
@@ -152,8 +157,9 @@ Long-form repository description.
 | `getRepository`      | Read-only datastore query.                                                                               |
 | `listRepositories`   | Read-only datastore query, namespace-scoped.                                                             |
 
-Direct datastore writes are only permitted for the bootstrap `gitstore-system`
-repository. All other repositories must flow through git admission.
+The bootstrap `gitstore-system` repository is established through its dedicated
+controller-only ensure operation. All author-managed repositories flow through
+the shared committed-manifest admission service after a Git commit.
 
 ### Validation and admission rules
 
@@ -162,6 +168,14 @@ repository. All other repositories must flow through git admission.
 | Pre-receive | Envelope valid; `kind: Repository`; `metadata.name` format; `spec.defaultBranch` is a valid ref name.              |
 | Admission   | Name uniqueness within namespace; `spec.storageClass` is a known value; namespace is `Active` (not `Terminating`). |
 | Controller  | Bare git repository provisioned on git-service; `StorageProvisioned=True`; then `Ready=True`.                      |
+
+### Durable controller watch
+
+Repository reconciliation consumes `watchRepositories` from the generic durable
+resource journal. The Repository CDC source reads authoritative
+`repositories_by_uid` changes, preserves per-source progress, and uses the
+same fenced journal lease/cursor contract as Namespace. The journal, not an
+in-process event bus, is the source of replay and replica-safe ordering.
 
 ### Status and reconciliation behaviour
 

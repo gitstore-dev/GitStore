@@ -335,6 +335,55 @@ mod tests {
         assert!(matches!(result, AdmissionDecision::Accept));
     }
 
+    // Repository manifests are deliberately validated by CatalogService: the
+    // hook must preserve their authoritative system-repository path and carry
+    // a rejection back to receive-pack unchanged.  Keeping the kind-specific
+    // policy in the API avoids a second, divergent parser in the Git service.
+    #[tokio::test]
+    async fn test_repository_authoring_target_rejection_is_propagated() {
+        let addr = start_mock_server(|req| {
+            assert_eq!(req.repository_id, "namespace-system-repository");
+            assert_eq!(req.blobs.len(), 1);
+            assert_eq!(req.blobs[0].path, "repositories/payments.md");
+            assert!(String::from_utf8_lossy(&req.blobs[0].content).contains("kind: Repository"));
+            Ok(ValidateResourcesResponse {
+                accepted: false,
+                errors: vec![ValidationError {
+                    file_path: "repositories/payments.md".into(),
+                    field: "metadata.namespace".into(),
+                    constraint: "authoring-target".into(),
+                    message: "Repository manifests must be authored in the namespace gitstore-system repository".into(),
+                }],
+            })
+        })
+        .await;
+
+        let handler = SchemaValidationHandler::connect(
+            &addr,
+            Duration::from_secs(5),
+            "repository-default".into(),
+        )
+        .await
+        .unwrap();
+        let result = handler
+            .validate(
+                &[make_blob(
+                    "repositories/payments.md",
+                    b"apiVersion: gitstore.dev/v1beta1\nkind: Repository\n",
+                )],
+                &HookContext {
+                    repository_id: "namespace-system-repository".into(),
+                    ..HookContext::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(result, AdmissionDecision::Reject(message) if message.contains("namespace gitstore-system repository"))
+        );
+    }
+
     // T010b: mock returning accepted=false with two ValidationErrors → Reject with aggregated message
     #[tokio::test]
     async fn test_rejected_response_aggregates_errors() {

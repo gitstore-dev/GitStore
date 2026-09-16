@@ -9,6 +9,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -30,7 +31,7 @@ type Resolver struct {
 	storageDataDir         string // data_dir used to build storagePath in responses; defaults to "/data"
 	clock                  apiruntime.Clock
 	eventBus               *eventbus.Bus
-	namespaceJournal       datastore.NamespaceWatchJournal
+	resourceJournal        datastore.ResourceWatchJournal
 	namespaceSubscriber    *watchjournal.Subscriber
 	namespaceWatch         config.NamespaceWatchConfig
 	namespaceMetrics       *watchjournal.Metrics
@@ -46,11 +47,12 @@ type ResolverDeps struct {
 	Logger                       *zap.Logger
 	Clock                        apiruntime.Clock
 	IDGenerator                  apiruntime.IDGenerator
+	CommittedManifestAdmitter    admission.CommittedManifestAdmitter
 	NamespaceRepositoryFenceMode NamespaceRepositoryFenceMode
 	// EventBus backs the watchCategories/watchResources subscription
 	// resolvers (spec 040). Optional — nil disables watch subscriptions.
 	EventBus         *eventbus.Bus
-	NamespaceJournal datastore.NamespaceWatchJournal
+	ResourceJournal  datastore.ResourceWatchJournal
 	NamespaceWatch   config.NamespaceWatchConfig
 	NamespaceMetrics *watchjournal.Metrics
 	// ServiceAccountAudience is the configured audience value for service
@@ -65,8 +67,8 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 		return nil, errMissingLogger
 	}
 	var namespaceSubscriber *watchjournal.Subscriber
-	if deps.NamespaceJournal != nil && deps.NamespaceWatch.ReadersEnabled {
-		namespaceSubscriber = watchjournal.NewSubscriber(deps.NamespaceJournal, watchjournal.SubscriberConfig{
+	if deps.ResourceJournal != nil && deps.NamespaceWatch.ReadersEnabled {
+		namespaceSubscriber = watchjournal.NewSubscriber(deps.ResourceJournal, watchjournal.SubscriberConfig{
 			ReadBatchSize:       deps.NamespaceWatch.ReadBatchSize,
 			MaxReplayEvents:     deps.NamespaceWatch.MaxReplayEvents,
 			BufferSize:          deps.NamespaceWatch.SubscriberBuffer,
@@ -84,6 +86,7 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 		Logger:                       deps.Logger,
 		Clock:                        deps.Clock,
 		IDGenerator:                  deps.IDGenerator,
+		CommittedManifestAdmitter:    deps.CommittedManifestAdmitter,
 		NamespaceRepositoryFenceMode: deps.NamespaceRepositoryFenceMode,
 	})
 	if err != nil {
@@ -101,7 +104,7 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 		storageDataDir:         "/data",
 		clock:                  clock,
 		eventBus:               deps.EventBus,
-		namespaceJournal:       deps.NamespaceJournal,
+		resourceJournal:        deps.ResourceJournal,
 		namespaceSubscriber:    namespaceSubscriber,
 		namespaceWatch:         deps.NamespaceWatch,
 		namespaceMetrics:       deps.NamespaceMetrics,

@@ -4,17 +4,23 @@
 package resolver_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
+	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,6 +44,43 @@ type mockGitWriter struct {
 	deleteErr     error
 	createRepoErr error
 	deleteRepoErr error
+}
+
+// testCommittedNamespaceAdmitter keeps Service unit tests focused on GraphQL
+// error mapping and Git delegation. Production uses cataloggrpc.Server, which
+// owns this shared committed-manifest boundary; this small in-memory adapter
+// is deliberately test-only.
+type testCommittedNamespaceAdmitter struct {
+	store datastore.Datastore
+	ids   apiruntime.IDGenerator
+	now   func() time.Time
+}
+
+func (a testCommittedNamespaceAdmitter) AdmitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	parsed, body, err := validate.NewParser().ParseResource(bytes.NewReader(req.Content))
+	if err != nil || parsed == nil || parsed.Namespace == nil {
+		if err == nil {
+			err = errors.New("expected Namespace manifest")
+		}
+		return nil, err
+	}
+	resource := parsed.Namespace
+	now := time.Now
+	if a.now != nil {
+		now = a.now
+	}
+	namespace, _, err := namespaceadmission.ApplyManifestOrdered(
+		ctx, a.store, a.ids, resource, now().UTC(), strings.TrimPrefix(req.RefName, "refs/heads/")+"@sha1:"+req.CommitSHA, req.ActorSubject,
+		namespaceadmission.ApplyManifestOptions{
+			Operation: req.Operation, WriteAttempts: namespaceadmission.AdmissionWriteAttempts,
+			Body: body, SourcePath: req.Path, GitCommitSHA: req.CommitSHA, GitRef: req.RefName,
+			CheckAuthoringRef: func(context.Context) (bool, error) { return true, nil },
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &admission.CommittedManifestResult{Kind: "Namespace", Name: namespace.Name, CommitSHA: req.CommitSHA}, nil
 }
 
 func (m *mockGitWriter) CreateRepository(_ context.Context, repositoryID, _ string) (string, error) {
@@ -166,6 +209,7 @@ func newTestSvcWithFenceMode(
 		Store:                        store,
 		GitWriter:                    writer,
 		Logger:                       zap.NewNop(),
+		CommittedManifestAdmitter:    testCommittedNamespaceAdmitter{store: store, ids: apiruntime.UUIDGenerator{}},
 		NamespaceRepositoryFenceMode: mode,
 	})
 	require.NoError(t, err)

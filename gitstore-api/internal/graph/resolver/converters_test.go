@@ -237,6 +237,18 @@ func TestDatastoreRepositoryToModel_DeclarativeProjection(t *testing.T) {
 	assert.Equal(t, repo.Body, *got.Body)
 }
 
+func TestDatastoreRepositoryToModel_UsesPersistedResolvedStatus(t *testing.T) {
+	repo, ns := repositoryContractFixture()
+	repo.Status = json.RawMessage(`{"observedGeneration":2,"conditions":[],"resolved":{"storagePath":"/provisioned/acme/catalog.git","storageClass":"ssd"}}`)
+
+	got := datastoreRepositoryToModel(repo, ns, "/var/lib/gitstore")
+
+	require.NotNil(t, got.Status)
+	require.NotNil(t, got.Status.Resolved)
+	assert.Equal(t, "/provisioned/acme/catalog.git", got.Status.Resolved.StoragePath)
+	assert.Equal(t, "ssd", got.Status.Resolved.StorageClass)
+}
+
 func TestDatastoreRepositoryToModel_PreservesLegacyProjection(t *testing.T) {
 	repo, ns := repositoryContractFixture()
 

@@ -63,8 +63,6 @@ jobs:
     # CI-specific credentials override the tracked development fixture.
     env:
       GITSTORE_GIT__DATA_DIR: ./data/repos
-      GITSTORE_AUTH__ADMIN__USERNAME: admin
-      GITSTORE_AUTH__ADMIN__PASSWORD_HASH: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
       GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
       GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
 
@@ -101,7 +99,6 @@ jobs:
       run: timeout 30 sh -c 'until curl -sf http://localhost:5001/health; do sleep 1; done'
 
     - name: Bootstrap namespace and repository
-      # admin123 is the plaintext for the stub bcrypt hash set in GITSTORE_AUTH__ADMIN__PASSWORD_HASH above
       run: make bootstrap TARGET=all ADMIN_PASSWORD=admin123 NAMESPACE=gitci NAMESPACE_DISPLAY_NAME=CI NAMESPACE_TIER=USER REPOSITORY=catalog
 
     - name: Seed repository with initial commit
@@ -166,8 +163,6 @@ jobs:
       contents: read
     env:
       GITSTORE_GIT__DATA_DIR: ./data/repos
-      GITSTORE_AUTH__ADMIN__USERNAME: admin
-      GITSTORE_AUTH__ADMIN__PASSWORD_HASH: "$2a$10$awdOeTC5BhJGSasW9EdvO.4wnP7SbC96ycmbPx5dxIxEdbHye6eOy"
       GITSTORE_AUTH__JWT__SECRET: ci-test-jwt-secret-minimum-32-characters-long
       GITSTORE_AUTH__GRPC__HMAC_SECRET: ci-test-grpc-hmac-secret
 

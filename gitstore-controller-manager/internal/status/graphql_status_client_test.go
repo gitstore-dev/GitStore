@@ -42,7 +42,7 @@ func TestApply_SendsUpdateCategoryStatusMutation(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"updateCategoryStatus":{"category":{"metadata":{"resourceVersion":"2"}},"conflict":null}}}`))
+		_, _ = w.Write([]byte(`{"data":{"updateCategoryStatus":{"category":{"metadata":{"resourceVersion":"2"}}}}}`))
 	}))
 	defer srv.Close()
 
@@ -96,10 +96,10 @@ func TestApply_SendsUpdateCategoryStatusMutation(t *testing.T) {
 	}
 }
 
-func TestApply_NonNullConflictMapsToErrConflict(t *testing.T) {
+func TestApply_ConflictExtensionMapsToErrConflict(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"updateCategoryStatus":{"category":null,"conflict":{"currentResourceVersion":"5"}}}}`))
+		_, _ = w.Write([]byte(`{"data":null,"errors":[{"message":"resource version conflict","extensions":{"code":"RESOURCE_VERSION_CONFLICT","resourceVersion":"5"}}]}`))
 	}))
 	defer srv.Close()
 

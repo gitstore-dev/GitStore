@@ -16,16 +16,12 @@ const updateResourceStatusMutation = `
 mutation($input: UpdateResourceStatusInput!) {
   updateResourceStatus(input: $input) {
     object
-    conflict { currentResourceVersion }
   }
 }`
 
 type updateResourceStatusResponse struct {
 	UpdateResourceStatus struct {
-		Object   map[string]any `json:"object"`
-		Conflict *struct {
-			CurrentResourceVersion string `json:"currentResourceVersion"`
-		} `json:"conflict"`
+		Object map[string]any `json:"object"`
 	} `json:"updateResourceStatus"`
 }
 
@@ -49,17 +45,15 @@ func (c *graphqlResourceStatusClient) Apply(ctx context.Context, key types.WorkI
 	var response updateResourceStatusResponse
 	if err := c.client.Mutate(ctx, updateResourceStatusMutation, map[string]any{"input": input}, &response); err != nil {
 		var gqlErr *graphqlclient.Error
-		if errors.As(err, &gqlErr) && gqlErr.Extensions["code"] == "NOT_FOUND" {
-			return fmt.Errorf("graphqlResourceStatusClient: %w: %w", types.ErrNotFound, err)
+		if errors.As(err, &gqlErr) {
+			switch gqlErr.Extensions["code"] {
+			case "NOT_FOUND":
+				return fmt.Errorf("graphqlResourceStatusClient: %w: %w", types.ErrNotFound, err)
+			case "RESOURCE_VERSION_CONFLICT":
+				return fmt.Errorf("graphqlResourceStatusClient: %w: current resourceVersion %q: %w", types.ErrConflict, gqlErr.Extensions["resourceVersion"], err)
+			}
 		}
 		return fmt.Errorf("graphqlResourceStatusClient: updateResourceStatus: %w", err)
-	}
-	if response.UpdateResourceStatus.Conflict != nil {
-		return fmt.Errorf(
-			"graphqlResourceStatusClient: %w: current resourceVersion %q",
-			types.ErrConflict,
-			response.UpdateResourceStatus.Conflict.CurrentResourceVersion,
-		)
 	}
 	return nil
 }

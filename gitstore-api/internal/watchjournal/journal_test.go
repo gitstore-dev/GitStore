@@ -43,7 +43,7 @@ func TestNamespaceCursorOrdersBySequenceInsideEpoch(t *testing.T) {
 }
 
 func TestBootstrapSentinelIsNotAnExternalCursor(t *testing.T) {
-	assert.Equal(t, "__namespace_watch_bootstrap__", BootstrapCursor)
+	assert.Equal(t, "__resource_watch_bootstrap__", BootstrapCursor)
 	_, err := ParseCursor(BootstrapCursor)
 	require.Error(t, err)
 }

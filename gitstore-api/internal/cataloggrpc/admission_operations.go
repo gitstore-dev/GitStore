@@ -180,6 +180,12 @@ func comparableForParsed(parsed *validate.ParsedResource, body []byte, defaultNa
 			return comparableResource{}, false
 		}
 		return comparableFromMeta(r.APIVersion, r.Kind, r.Metadata, r.Spec, body, defaultNamespace), true
+	case "Repository":
+		r := parsed.Repository
+		if r == nil {
+			return comparableResource{}, false
+		}
+		return comparableFromMeta(r.APIVersion, r.Kind, r.Metadata, r.Spec, body, defaultNamespace), true
 	default:
 		return comparableResource{}, false
 	}
@@ -307,4 +313,31 @@ func operationSortPriority(op admission.Operation) int {
 	default:
 		return 3
 	}
+}
+
+// repositoryImmutablePathChanges detects a Repository identity change in the
+// same manifest path. Pre-receive rejects this via
+// validateImmutableResourceChanges; this second guard makes post-receive safe
+// when a caller invokes AdmitResources directly or a rolling deployment has a
+// stale pre-receive hook. Without it, identity-based operation derivation
+// would incorrectly turn a rename/transfer into a create.
+func repositoryImmutablePathChanges(oldEntries, newEntries []*parsedEntry) []string {
+	oldByPath := make(map[string]*parsedEntry, len(oldEntries))
+	for _, entry := range oldEntries {
+		if entry != nil && entry.identity.Kind == "Repository" {
+			oldByPath[entry.path] = entry
+		}
+	}
+	var changed []string
+	for _, entry := range newEntries {
+		if entry == nil || entry.identity.Kind != "Repository" {
+			continue
+		}
+		old, ok := oldByPath[entry.path]
+		if ok && (old.identity.Name != entry.identity.Name || old.identity.Namespace != entry.identity.Namespace) {
+			changed = append(changed, entry.path)
+		}
+	}
+	sort.Strings(changed)
+	return changed
 }

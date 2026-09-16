@@ -44,7 +44,8 @@ extend type Mutation {
   Only non-null input fields are changed; all other existing status
   fields are left unchanged (FR-008, spec 040). Requires
   resourceVersion to match the resource's current value or the
-  request fails with a StatusConflict (FR-009). Rejects any attempt
+  request fails with a RESOURCE_VERSION_CONFLICT GraphQL error whose
+  extensions include the current resourceVersion (FR-009). Rejects any attempt
   to alter .spec or author-controlled .metadata by construction —
   this input type has no such fields (FR-010). Requires
   controller-level authorization independent of the resourceVersion
@@ -488,11 +489,8 @@ input ResolvedCategoryTaxonomyInput {
 }
 
 type UpdateCategoryStatusPayload {
-  """Null when the write failed (conflict or not-found)."""
+  """The updated CategoryTaxonomy."""
   category: Category
-
-  """Non-null only when the resourceVersion precondition failed."""
-  conflict: StatusConflict
 
   """True when another bounded Product page remains to be processed."""
   hasMoreProductDependents: Boolean!

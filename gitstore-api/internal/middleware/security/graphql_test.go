@@ -602,6 +602,54 @@ func TestGraphQLFieldAuthorizerUpdateCategoryStatusUsesPolicy(t *testing.T) {
 	assert.Equal(t, "category.status.write", authz.Action)
 }
 
+func TestGraphQLFieldAuthorizerCompleteRepositoryDeletionUsesControllerPolicy(t *testing.T) {
+	authz := testutil.NewDenyAllAuthZ(t)
+	registry := auth.NewProviderRegistry(nil, authz, nil)
+	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "untrusted", AuthMethod: "static-users"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Mutation",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "completeRepositoryDeletion"}},
+		Args:   map[string]any{"input": model.CompleteRepositoryDeletionInput{Namespace: "acme", Name: "catalog", ResourceVersion: "9"}},
+	})
+
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+		called = true
+		return "ok", nil
+	})
+	require.Error(t, err)
+	assert.False(t, called)
+	assert.Equal(t, "repository.status.write", authz.Action)
+	var graphErr *gqlerror.Error
+	require.ErrorAs(t, err, &graphErr)
+	assert.Equal(t, "FORBIDDEN", graphErr.Extensions["code"])
+}
+
+func TestGraphQLFieldAuthorizerProvisionRepositoryStorageUsesControllerPolicy(t *testing.T) {
+	authz := testutil.NewDenyAllAuthZ(t)
+	registry := auth.NewProviderRegistry(nil, authz, nil)
+	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "untrusted", AuthMethod: "static-users"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Mutation",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "provisionRepositoryStorage"}},
+		Args:   map[string]any{"input": model.ProvisionRepositoryStorageInput{Namespace: "acme", Name: "catalog"}},
+	})
+
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+		called = true
+		return "ok", nil
+	})
+	require.Error(t, err)
+	assert.False(t, called)
+	assert.Equal(t, "repository.status.write", authz.Action)
+	var graphErr *gqlerror.Error
+	require.ErrorAs(t, err, &graphErr)
+	assert.Equal(t, "FORBIDDEN", graphErr.Extensions["code"])
+}
+
 func TestGraphQLFieldAuthorizerUpdateCategoryStatusDenyReturnsForbidden(t *testing.T) {
 	authz := testutil.NewDenyAllAuthZ(t)
 	registry := auth.NewProviderRegistry(nil, authz, nil)

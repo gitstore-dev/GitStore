@@ -41,7 +41,16 @@ case "${capacity_target}" in
     ;;
 esac
 case "${capacity_target}" in
-  namespace/watch|namespace/recovery)
+  repository/lifecycle)
+    names+=(repository_datastore_operation_p95 repository_datastore_errors)
+    queries+=(
+      "histogram_quantile(0.95, sum by (le,operation,backend,instance) (increase(gitstore_datastore_operation_duration_seconds_bucket{operation=~\"CreateRepository|UpdateRepository\"}[${lookback}])))"
+      "sum by (operation,backend,instance) (increase(gitstore_datastore_operation_errors_total{operation=~\"CreateRepository|UpdateRepository\"}[${lookback}])) or on() vector(0)"
+    )
+    ;;
+esac
+case "${capacity_target}" in
+  namespace/watch|namespace/recovery|repository/lifecycle)
     names+=(namespace_cdc_discovery_p95 namespace_materializer_stage_p95 namespace_delivery_p95)
     queries+=(
       "histogram_quantile(0.95, sum by (le,instance) (increase(gitstore_namespace_watch_cdc_discovery_seconds_bucket[${lookback}])))"
