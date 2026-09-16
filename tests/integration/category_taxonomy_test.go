@@ -141,29 +141,40 @@ type categoryQueryResult struct {
 func queryCategory(t *testing.T, name string) *categoryQueryResult {
 	t.Helper()
 	ns := getEnv("NAMESPACE", "gitstore-test")
-	resp := gqlQuery(t, `
-		query($namespace: String!, $name: String!) {
-			category(by: {namespacePath: {namespace: $namespace, name: $name}}) {
-				id
-				apiVersion
-				kind
-				metadata { name }
-				spec { title }
-				path
-				depth
+	const (
+		maxWait  = 10 * time.Second
+		interval = 200 * time.Millisecond
+	)
+	deadline := time.Now().Add(maxWait)
+	for {
+		resp := gqlQuery(t, `
+			query($namespace: String!, $name: String!) {
+				category(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+					id
+					apiVersion
+					kind
+					metadata { name }
+					spec { title }
+					path
+					depth
+				}
 			}
+		`, map[string]any{"namespace": ns, "name": name})
+		if len(resp.Errors) > 0 {
+			t.Fatalf("graphql errors querying category %q: %s", name, resp.Errors)
 		}
-	`, map[string]any{"namespace": ns, "name": name})
-	if len(resp.Errors) > 0 {
-		t.Fatalf("graphql errors querying category %q: %s", name, resp.Errors)
+		var data struct {
+			Category *categoryQueryResult `json:"category"`
+		}
+		if err := json.Unmarshal(resp.Data, &data); err != nil {
+			t.Fatalf("unmarshal category response: %v", err)
+		}
+		if data.Category == nil && time.Now().Before(deadline) {
+			time.Sleep(interval)
+			continue
+		}
+		return data.Category
 	}
-	var data struct {
-		Category *categoryQueryResult `json:"category"`
-	}
-	if err := json.Unmarshal(resp.Data, &data); err != nil {
-		t.Fatalf("unmarshal category response: %v", err)
-	}
-	return data.Category
 }
 
 // ── T041: Push a valid root CategoryTaxonomy and query it ────────────────────
@@ -176,9 +187,6 @@ func TestCategoryTaxonomyPublish(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected push to succeed, got error:\n%s", out)
 	}
-
-	// Give post-receive admission a moment to complete.
-	time.Sleep(500 * time.Millisecond)
 
 	cat := queryCategory(t, name)
 	if cat == nil {
@@ -211,16 +219,17 @@ func TestCategoryTaxonomyHierarchy(t *testing.T) {
 		t.Fatalf("push parent failed:\n%s", out)
 	}
 
-	// Admission is fire-and-forget; wait for parent to be stored.
-	time.Sleep(500 * time.Millisecond)
+	// Admission is fire-and-forget; wait for the parent before validating a
+	// child push that references it.
+	if parent := queryCategory(t, parentName); parent == nil {
+		t.Fatalf("expected parent category %q to be queryable after push, got nil", parentName)
+	}
 
 	h2 := newPushHelper(t)
 	h2.commitCategory(childName+".md", childCategoryFixture(childName, parentName))
 	if out, err := h2.push(); err != nil {
 		t.Fatalf("push child failed:\n%s", out)
 	}
-	time.Sleep(500 * time.Millisecond)
-
 	cat := queryCategory(t, childName)
 	if cat == nil {
 		t.Fatalf("expected child category %q to be queryable, got nil", childName)
@@ -281,7 +290,9 @@ func TestCategoryTaxonomyProductSingleRef(t *testing.T) {
 	if out, err := h.push(); err != nil {
 		t.Fatalf("push category failed:\n%s", out)
 	}
-	time.Sleep(500 * time.Millisecond)
+	if category := queryCategory(t, catName); category == nil {
+		t.Fatalf("expected category %q to be queryable after push, got nil", catName)
+	}
 
 	// Push a product with a single categoryRef — must be accepted.
 	h2 := newPushHelper(t)
@@ -315,8 +326,6 @@ func TestCategoryTaxonomyCoCreation(t *testing.T) {
 	if out, err := h.push(); err != nil {
 		t.Fatalf("expected co-creation push to succeed, got:\n%s", out)
 	}
-	time.Sleep(500 * time.Millisecond)
-
 	child := queryCategory(t, childName)
 	if child == nil {
 		t.Fatalf("expected child category %q to be queryable, got nil", childName)
