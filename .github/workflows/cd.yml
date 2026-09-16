@@ -113,8 +113,6 @@ jobs:
       with:
         context: .
         file: ./docker/git-service.Dockerfile
-        build-args: |
-          GIT_REVISION=${{ github.sha }}
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ${{ steps.meta-git-service.outputs.tags }}
@@ -167,8 +165,6 @@ jobs:
       with:
         context: .
         file: ./docker/api.Dockerfile
-        build-args: |
-          GIT_REVISION=${{ github.sha }}
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ${{ steps.meta-api.outputs.tags }}
@@ -273,8 +269,6 @@ jobs:
       with:
         context: .
         file: ./docker/controller-manager.Dockerfile
-        build-args: |
-          GIT_REVISION=${{ github.sha }}
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ${{ steps.meta-controller-manager.outputs.tags }}
