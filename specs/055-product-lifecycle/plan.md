@@ -60,6 +60,7 @@ infrastructure.
 ### Documentation
 
 ```mermaid
+%%{init: {"treeView": {"showIcons": true}} }%%
 treeView-beta
     specs/
         055-product-lifecycle/
@@ -77,6 +78,7 @@ treeView-beta
 ### Source changes
 
 ```mermaid
+%%{init: {"treeView": {"showIcons": true}} }%%
 treeView-beta
     shared/
         schemas/
