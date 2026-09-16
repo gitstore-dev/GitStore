@@ -15,7 +15,7 @@ replacement_watcher="${REPOSITORY_CAPACITY_REPLACEMENT_WATCHER:-${repo_root}/scr
 capacity_runner="${REPOSITORY_CAPACITY_RUNNER:-${repo_root}/scripts/run-capacity-target.sh}"
 watcher_pid=""
 
-compose=(docker compose -p "${project}" --profile repository-capacity
+compose=(docker compose -p "${project}" --profile capacity-stack
   -f "${repo_root}/compose.yml"
   -f "${repo_root}/compose.scylla.cluster.yml"
   -f "${repo_root}/compose.capacity.yml")
@@ -220,7 +220,7 @@ run_local_alpha() {
   trap finish_local_stack EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  "${compose[@]}" up -d --build
+  "${compose[@]}" up -d --build api-a api-b controller-manager-a controller-manager-b
   # Keep run_alpha's watcher-only traps scoped to the verifier so the outer
   # stack teardown remains installed for every success and failure path.
   (run_alpha)
@@ -232,7 +232,7 @@ case "${action}" in
   up)
     mkdir -p "${state_dir}"
     rm -f "${trigger_file}"
-    "${compose[@]}" up -d --build
+    "${compose[@]}" up -d --build api-a api-b controller-manager-a controller-manager-b
     ;;
   wait) wait_stack ;;
   token) wait_stack; bootstrap_token ;;

@@ -13,7 +13,7 @@ export CONFIG_FILE="${CONFIG_FILE:-${repo_root}/config/config.toml}"
 export SCYLLA_CLUSTER_SMP="${SCYLLA_CLUSTER_SMP:-1}"
 export SCYLLA_CLUSTER_MEMORY_LIMIT="${SCYLLA_CLUSTER_MEMORY_LIMIT:-1536m}"
 
-compose=(docker compose -p "${project}" --profile repository-capacity
+compose=(docker compose -p "${project}" --profile capacity-stack
   -f "${repo_root}/compose.yml"
   -f "${repo_root}/compose.scylla.cluster.yml"
   -f "${repo_root}/compose.capacity.yml")

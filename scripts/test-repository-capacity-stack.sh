@@ -31,7 +31,7 @@ PATH="${test_dir}/bin:${PATH}" \
   REPOSITORY_CAPACITY_PROJECT=capacity-test \
   "${repo_root}/scripts/repository-capacity-stack.sh" config
 
-grep -q -- '-p capacity-test --profile repository-capacity' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
+grep -q -- '-p capacity-test --profile capacity-stack' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 grep -q -- 'compose.capacity.yml config' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 
 : >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
@@ -50,12 +50,23 @@ if grep -Eq '(api-a|controller-manager)' "${REPOSITORY_CAPACITY_DOCKER_LOG}"; th
 fi
 
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  default_observability_render="${test_dir}/compose-observability.json"
+  env -u CAPACITY_PROMETHEUS_TARGETS_FILE docker compose --profile capacity \
+    -f "${repo_root}/compose.yml" \
+    -f "${repo_root}/compose.local.yml" \
+    -f "${repo_root}/compose.capacity.yml" config --format json >"${default_observability_render}"
+  jq -e '
+    .services["capacity-prometheus"].volumes[] |
+    select(.target == "/etc/prometheus/targets.json") |
+    .source | endswith("/tests/capacity/prometheus/empty-targets.json")
+  ' "${default_observability_render}" >/dev/null
+
   rendered="${test_dir}/compose.json"
   CAPACITY_GIT_REVISION=0123456789abcdef0123456789abcdef01234567 \
     CONFIG_FILE="${repo_root}/config/config.toml" \
     CAPACITY_PROMETHEUS_TARGETS_FILE="${test_dir}/prometheus-targets.json" \
     SCYLLA_CLUSTER_SMP=1 SCYLLA_CLUSTER_MEMORY_LIMIT=1536m \
-    docker compose -p capacity-render-test --profile repository-capacity \
+    docker compose -p capacity-render-test --profile capacity-stack \
       -f "${repo_root}/compose.yml" \
       -f "${repo_root}/compose.scylla.cluster.yml" \
       -f "${repo_root}/compose.capacity.yml" config --format json >"${rendered}"
@@ -67,8 +78,10 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     .services["api-b"].depends_on["api-a"].condition == "service_healthy" and
     .services["api-b"].depends_on["capacity-credential-bootstrap"].condition == "service_completed_successfully" and
     .services["api-b"].depends_on["scylla-init"].condition == "service_completed_successfully" and
-    .services["api-b"].depends_on["git-service"].condition == "service_started" and
-    ([.services | to_entries[] | select(.key | startswith("git-service"))] | length) == 1 and
+    .services["api-b"].depends_on["capacity-git-service"].condition == "service_started" and
+    .services["capacity-git-service"].environment.GITSTORE_CATALOG_SERVICE__URI == "http://api-a:6000" and
+    ((.services["capacity-credential-bootstrap"].ports // []) | length) == 0 and
+    ((.services["capacity-serviceaccount-enrollment"].ports // []) | length) == 0 and
     (.services["api-a"].depends_on["api-b"] == null)
   ' "${rendered}" >/dev/null
 fi
@@ -113,7 +126,7 @@ if grep -q 'unbound variable' <<<"${failure_output}"; then
 fi
 [[ -r "${test_dir}/watcher.pid" ]]
 [[ -r "${test_dir}/watcher.stopped" ]]
-grep -q -- 'up -d --build$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
+grep -q -- 'up -d --build api-a api-b controller-manager-a controller-manager-b$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 grep -q -- 'ps --all$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 grep -q -- 'logs --no-color$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 grep -q -- 'down -v --remove-orphans$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"

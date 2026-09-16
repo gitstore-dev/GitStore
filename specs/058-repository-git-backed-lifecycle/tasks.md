@@ -71,7 +71,7 @@
 
 - [X] T035 [P] Add two-replica admission/reconciler/watch correctness coverage in `tests/integration/repository_lifecycle_test.go`.
 - [X] T036 [P] Add authorization and namespace-isolation coverage in `gitstore-api/internal/graph/resolver/repository_authorization_test.go`.
-- [ ] T037 [P] Add bounded-load, replay, overflow, rolling-replacement, and recovery validation to `tests/integration/repository_lifecycle_test.go`.
+- [X] T037 [P] Add bounded-load, replay, overflow, rolling-replacement, and recovery validation to `tests/integration/repository_lifecycle_test.go`.
 - [X] T038 Update Repository lifecycle/watch documentation in `docs/repository/repository-spec.md`, `docs/repository/repository-watch.md`, and `docs/ADRs/0003-repository-lifecycle.md`.
 - [X] T039 Validate `specs/058-repository-git-backed-lifecycle/quickstart.md`, run focused Repository watch tests, `make build`, `make test`, and `make pr-ready`.
 - [X] T040 Replace `StatusConflict` payload outcomes with stable GraphQL conflict errors for CategoryTaxonomy, Namespace, File, and Product status writes in `shared/schemas/` and `gitstore-api/internal/graph/resolver/`.
