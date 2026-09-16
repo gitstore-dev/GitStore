@@ -85,53 +85,67 @@ validate_api_deployment() {
 }
 
 validate_release_service_containers() {
-  local expected_replicas="$1" source_revision inspection api_names_json container metrics process_start instance_id
+  local expected_replicas="$1" expected_git_replicas="${2:-1}" source_revision inspection api_names_json git_names_json
+  local git_container_csv container metrics process_start instance_id
   local endpoint_start endpoint_instance container_start container_instance container_id index
-  [[ -n "${CAPACITY_API_CONTAINERS:-}" && -n "${CAPACITY_GIT_SERVICE_CONTAINER:-}" ]] || {
-    echo "${target}/${profile} evidence requires CAPACITY_API_CONTAINERS and CAPACITY_GIT_SERVICE_CONTAINER" >&2
+  git_container_csv="${CAPACITY_GIT_SERVICE_CONTAINERS:-${CAPACITY_GIT_SERVICE_CONTAINER:-}}"
+  [[ -n "${CAPACITY_API_CONTAINERS:-}" && -n "${git_container_csv}" ]] || {
+    echo "${target}/${profile} evidence requires CAPACITY_API_CONTAINERS and CAPACITY_GIT_SERVICE_CONTAINERS" >&2
     exit 2
   }
   IFS=',' read -r -a api_containers <<<"${CAPACITY_API_CONTAINERS}"
+  IFS=',' read -r -a git_containers <<<"${git_container_csv}"
   (( ${#api_containers[@]} == expected_replicas )) || {
     echo "CAPACITY_API_CONTAINERS count does not match the declared API topology" >&2
     exit 2
   }
-  for container in "${api_containers[@]}" "${CAPACITY_GIT_SERVICE_CONTAINER}"; do
+  (( ${#git_containers[@]} == expected_git_replicas )) || {
+    echo "Git-service container count does not match the declared Git-service topology" >&2
+    exit 2
+  }
+  for container in "${api_containers[@]}" "${git_containers[@]}"; do
     [[ "${container}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || {
       echo "invalid release service container name: ${container}" >&2
       exit 2
     }
   done
   api_names_json="$(printf '%s\n' "${api_containers[@]}" | jq -Rsc 'split("\n")[:-1]')"
+  git_names_json="$(printf '%s\n' "${git_containers[@]}" | jq -Rsc 'split("\n")[:-1]')"
   source_revision="$(git rev-parse HEAD)"
-  inspection="$(docker inspect "${api_containers[@]}" "${CAPACITY_GIT_SERVICE_CONTAINER}")" || {
+  inspection="$(docker inspect "${api_containers[@]}" "${git_containers[@]}")" || {
     echo "cannot inspect live API and Git-service containers" >&2
     exit 1
   }
   release_service_containers="$(jq -c \
-    --argjson api_names "${api_names_json}" --arg git_name "${CAPACITY_GIT_SERVICE_CONTAINER}" \
+    --argjson api_names "${api_names_json}" --argjson git_names "${git_names_json}" \
     --arg revision "${source_revision}" '
       [.[] |
         (.Name | ltrimstr("/")) as $name |
         {id:.Id,
          name:$name,
-         role:(if ($api_names | index($name)) != null then "api" elif $name == $git_name then "git-service" else "unknown" end),
+         role:(if ($api_names | index($name)) != null then "api" elif ($git_names | index($name)) != null then "git-service" else "unknown" end),
          imageReference:.Config.Image,
          imageID:.Image,
          executable:.Path,
          arguments:(.Args // []),
+         gitServiceURI:(((.Config.Env // []) | map(select(startswith("GITSTORE_GIT__GRPC__URI="))) | first // "") | sub("^GITSTORE_GIT__GRPC__URI="; "")),
+         catalogServiceURI:(((.Config.Env // []) | map(select(startswith("GITSTORE_CATALOG_SERVICE__URI="))) | first // "") | sub("^GITSTORE_CATALOG_SERVICE__URI="; "")),
          revision:(.Config.Labels["org.opencontainers.image.revision"] // ""),
          running:.State.Running}]
     ' <<<"${inspection}")"
-  jq -e --argjson expected_replicas "${expected_replicas}" --arg revision "${source_revision}" '
-    length == ($expected_replicas + 1) and
+  jq -e --argjson expected_replicas "${expected_replicas}" --argjson expected_git_replicas "${expected_git_replicas}" --arg revision "${source_revision}" --arg mode "${mode}" '
+    length == ($expected_replicas + $expected_git_replicas) and
     ([.[].id] | unique | length) == length and
     ([.[].name] | unique | length) == length and
     ([.[] | select(.role == "api")] | length) == $expected_replicas and
-    ([.[] | select(.role == "git-service")] | length) == 1 and
+    ([.[] | select(.role == "git-service")] | length) == $expected_git_replicas and
     all(.[];
       .running and .revision == $revision and
-      (.imageReference | test("@sha256:[0-9a-f]{64}$")) and
+      (if $mode == "production" then
+         (.imageReference | test("@sha256:[0-9a-f]{64}$"))
+       else
+         (.imageID | test("^sha256:[0-9a-f]{64}$"))
+       end) and
       ((.role == "api" and (
           .executable == "/app/api" or
           (.executable == "/bin/sh" and
@@ -141,9 +155,20 @@ validate_release_service_containers() {
            (.arguments[1] | contains("exec /app/api --config-file /etc/gitstore/gitstore.toml"))))) or
        (.role == "git-service" and .executable == "/app/git-service")))
   ' <<<"${release_service_containers}" >/dev/null || {
-    echo "live API and Git-service containers must use digest-pinned release images for the tested revision and an approved executable shape" >&2
+    echo "live API and Git-service containers must use exact-revision release images with immutable identities and an approved executable shape (production requires digest pins)" >&2
     exit 1
   }
+  if [[ "${target}/${profile}" == "repository/lifecycle" ]]; then
+    jq -e --argjson expected_replicas "${expected_replicas}" '
+      ([.[] | select(.role == "api") | .gitServiceURI] | length) == $expected_replicas and
+      ([.[] | select(.role == "api") | .gitServiceURI] | all(length > 0)) and
+      ([.[] | select(.role == "api") | .gitServiceURI] | unique | length) == 1 and
+      ([.[] | select(.role == "git-service") | .catalogServiceURI] == ["http://api-a:6000"])
+    ' <<<"${release_service_containers}" >/dev/null || {
+      echo "repository/lifecycle evidence requires both APIs to use the singleton Git service whose CatalogService callback targets API A" >&2
+      exit 1
+    }
+  fi
 
   container_identities='[]'
   for container in "${api_containers[@]}"; do
@@ -224,15 +249,15 @@ case "${target}/${profile}" in
       echo "NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT is only valid in diagnostic mode" >&2
       exit 2
     fi
-    jq -e '
+    jq -e --arg mode "${mode}" '
       .schemaVersion == 1 and
       (.services.api.replicas | numbers) >= 2 and
       .services.api.build == "release" and
       (.services.scylla.nodes | numbers) >= 3 and
-      (.services.scylla.smpPerNode | numbers) >= 2 and
+      ((.services.scylla.smpPerNode | numbers) >= (if $mode == "alpha" then 1 else 2 end)) and
       (.services.gitService.build == "release")
     ' "${config}" >/dev/null || {
-      echo "${target}/${profile} evidence requires three Scylla nodes with two shards each and a release Git service" >&2
+      echo "${target}/${profile} evidence requires three Scylla nodes, alpha >=1 shard per node (production >=2), and a release Git service" >&2
       exit 2
     }
     jq -e '
@@ -248,7 +273,14 @@ case "${target}/${profile}" in
     }
     config_api_replicas="$(jq -r '.services.api.replicas' "${config}")"
     environment_api_replicas="$(jq -r '.topology.apiReplicas' "${environment}")"
+    config_git_replicas="$(jq -r '.services.gitService.replicas // 1' "${config}")"
+    environment_git_replicas="$(jq -r '.topology.gitServiceReplicas // 1' "${environment}")"
     (( config_api_replicas == environment_api_replicas )) || { echo "API replica counts differ between manifests" >&2; exit 2; }
+    (( config_git_replicas == environment_git_replicas )) || { echo "Git-service replica counts differ between manifests" >&2; exit 2; }
+    if [[ "${target}/${profile}" == "repository/lifecycle" ]] && (( config_git_replicas != 1 )); then
+      echo "repository/lifecycle evidence requires exactly one singleton Git service" >&2
+      exit 2
+    fi
     require_declared_integer CAPACITY_API_REPLICAS "${config_api_replicas}"
     [[ "${CAPACITY_API_BUILD:-}" == "release" ]] || { echo "CAPACITY_API_BUILD=release is required" >&2; exit 2; }
     [[ "${CAPACITY_GIT_SERVICE_BUILD:-}" == "release" ]] || { echo "CAPACITY_GIT_SERVICE_BUILD=release is required" >&2; exit 2; }
@@ -269,7 +301,7 @@ case "${target}/${profile}" in
       echo "NAMESPACE_WATCH_API_A and NAMESPACE_WATCH_API_B must be members of CAPACITY_API_ENDPOINTS" >&2
       exit 2
     }
-    validate_release_service_containers "${config_api_replicas}"
+    validate_release_service_containers "${config_api_replicas}" "${config_git_replicas}"
     validate_scylla_deployment
     [[ -n "${NAMESPACE_WATCH_API_REPLACEMENT:-}" ]] || {
       echo "${target}/${profile} evidence requires a replacement endpoint" >&2
@@ -322,9 +354,13 @@ case "${target}/${profile}" in
         echo "${target}/${profile} evidence requires a watch token or readable token file" >&2
         exit 2
       }
+      minimum_overflow=1000
+      if [[ "${target}/${profile}" == "repository/lifecycle" && "${mode}" == "alpha" ]]; then
+        minimum_overflow=256
+      fi
       [[ "${NAMESPACE_WATCH_OVERFLOW_TRANSITIONS:-}" =~ ^[1-9][0-9]*$ ]] &&
-        (( 10#${NAMESPACE_WATCH_OVERFLOW_TRANSITIONS} >= 1000 )) || {
-        echo "${target}/${profile} evidence requires at least 1000 overflow transitions" >&2
+        (( 10#${NAMESPACE_WATCH_OVERFLOW_TRANSITIONS} >= minimum_overflow )) || {
+        echo "${target}/${profile} ${mode} evidence requires at least ${minimum_overflow} overflow transitions" >&2
         exit 2
       }
     fi

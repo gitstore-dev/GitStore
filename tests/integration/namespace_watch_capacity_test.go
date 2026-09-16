@@ -1886,7 +1886,19 @@ func fetchCapacityMetrics(client *http.Client, endpoint string) (capacityProcess
 	}, nil
 }
 
+type capacityMemoryLimits struct {
+	maxGrowthPercent float64
+	maxResidentBytes float64
+}
+
+var strictCapacityMemoryLimits = capacityMemoryLimits{maxGrowthPercent: 10}
+
 func assertCapacityMetrics(t *testing.T, start, end map[string]capacityProcessMetrics, elapsed time.Duration, recovery capacityRecoveryResult, allowMissing bool) {
+	t.Helper()
+	assertCapacityMetricsWithLimits(t, start, end, elapsed, recovery, allowMissing, strictCapacityMemoryLimits)
+}
+
+func assertCapacityMetricsWithLimits(t *testing.T, start, end map[string]capacityProcessMetrics, elapsed time.Duration, recovery capacityRecoveryResult, allowMissing bool, memoryLimits capacityMemoryLimits) {
 	t.Helper()
 	for _, label := range []string{"api_a", "api_b"} {
 		before, beforeOK := start[label]
@@ -1921,8 +1933,22 @@ func assertCapacityMetrics(t *testing.T, start, end map[string]capacityProcessMe
 		cpuPercent := 100 * normalizedCPUSeconds / measuredSeconds
 		t.Logf("%s normalized_cpu=%.2f%% gomaxprocs=%.0f resident_start=%.0f resident_end=%.0f resident_growth=%.2f%%", label, cpuPercent, before.gomaxprocs, before.resident, after.resident, memoryGrowth)
 		assert.Lessf(t, cpuPercent, 80.0, "%s process CPU must remain below 80%%", label)
-		assert.Lessf(t, memoryGrowth, 10.0, "%s resident-memory growth must remain below 10%%", label)
+		assert.Truef(t, capacityMemoryWithinLimits(memoryGrowth, after.resident, memoryLimits),
+			"%s resident memory must remain below %.0f%% growth%s; got growth %.2f%% and end RSS %.0f bytes",
+			label, memoryLimits.maxGrowthPercent, capacityResidentLimitDescription(memoryLimits), memoryGrowth, after.resident)
 	}
+}
+
+func capacityMemoryWithinLimits(growthPercent, residentBytes float64, limits capacityMemoryLimits) bool {
+	return growthPercent < limits.maxGrowthPercent &&
+		(limits.maxResidentBytes <= 0 || residentBytes < limits.maxResidentBytes)
+}
+
+func capacityResidentLimitDescription(limits capacityMemoryLimits) string {
+	if limits.maxResidentBytes <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" and below %.0f MiB final RSS", limits.maxResidentBytes/(1024*1024))
 }
 
 func capacityMemoryGrowth(start, end float64) float64 {

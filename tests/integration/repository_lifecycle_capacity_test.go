@@ -27,9 +27,10 @@ import (
 )
 
 const (
-	repositoryCapacitySequenceAnnotation = "capacity.gitstore.dev/sequence"
-	repositoryCapacitySentAtAnnotation   = "capacity.gitstore.dev/sent-at"
-	repositoryCapacityPaddingAnnotation  = "capacity.gitstore.dev/padding"
+	repositoryCapacitySequenceAnnotation  = "capacity.gitstore.dev/sequence"
+	repositoryCapacitySentAtAnnotation    = "capacity.gitstore.dev/sent-at"
+	repositoryCapacityPaddingAnnotation   = "capacity.gitstore.dev/padding"
+	repositoryCapacityMinimumOverflowWait = 31 * time.Second
 )
 
 type repositoryCapacityConfig struct {
@@ -45,9 +46,11 @@ type repositoryCapacityConfig struct {
 	replaySamples               int
 	resourcePool                int
 	overflowTransitions         int
+	overflowBackpressureWait    time.Duration
 	mutationWorkers             int
 	burstSize                   int
 	burstInterval               time.Duration
+	transitionInterval          time.Duration
 	baselineStabilization       time.Duration
 	postLoadStabilization       time.Duration
 	mode                        capacityMode
@@ -82,10 +85,10 @@ type repositoryCapacityLoadResult struct {
 func runRepositoryLifecycleCapacity(t *testing.T) {
 	t.Helper()
 	if os.Getenv("REPOSITORY_LIFECYCLE_CAPACITY_RUN") != "1" {
-		t.Skip("run through make capacity TARGET=repository PROFILE=lifecycle MODE=production against a deployed two-API/two-controller stack")
+		t.Skip("run through make capacity TARGET=repository PROFILE=lifecycle MODE=alpha or MODE=production against a deployed two-API/two-controller stack")
 	}
 	cfg := loadRepositoryCapacityConfig(t)
-	validateRepositoryCapacityScale(t, cfg)
+	require.NoError(t, validateRepositoryCapacityScale(cfg))
 
 	client := &http.Client{Timeout: 20 * time.Second}
 	require.NotEqual(t, cfg.apiA, cfg.apiB, "API endpoints must identify distinct replicas")
@@ -98,6 +101,11 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	require.NotEqual(t, identityA, identityB, "API endpoints resolve to the same process instance")
 	controllerBeforeA := requireRepositoryController(t, client, cfg.controllerA)
 	controllerBeforeB := requireRepositoryController(t, client, cfg.controllerB)
+	require.NotEqual(t,
+		repositoryControllerIdentity(t, client, cfg.controllerA),
+		repositoryControllerIdentity(t, client, cfg.controllerB),
+		"controller endpoints resolve to the same process instance",
+	)
 
 	ensureRepositoryCapacityNamespace(t, cfg)
 	runID := strconv.FormatInt(time.Now().UnixNano(), 36)
@@ -137,7 +145,7 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	}
 
 	livePrefix := "rcl-" + runID + "-"
-	maxTransitions := int(cfg.duration/(100*time.Millisecond)) +
+	maxTransitions := int(cfg.duration/cfg.transitionInterval) +
 		(int(cfg.duration/cfg.burstInterval)+2)*cfg.burstSize + 128
 	subscribers := openRepositoryCapacitySubscribers(t, cfg, maxTransitions)
 	readCtx, cancelReaders := context.WithCancel(context.Background())
@@ -202,8 +210,36 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	}
 	metricsElapsed := time.Since(soakStarted)
 	metricsEnd = stabilizeRepositoryCapacityMemory(t, client, cfg, metricsEnd)
-	assertCapacityMetrics(t, metricsStart, metricsEnd, metricsElapsed, recovery, false)
+	assertCapacityMetricsWithLimits(t, metricsStart, metricsEnd, metricsElapsed, recovery, false, repositoryCapacityMemoryLimits(cfg.mode))
 	t.Logf("Repository lifecycle capacity passed: mode=%s replay=%d replay_p95=%s subscribers=%d admitted=%d duration=%s", cfg.mode, cfg.replayEvents, replayP95, cfg.subscribers, load.admitted, time.Since(soakStarted))
+}
+
+func repositoryCapacityMemoryLimits(mode capacityMode) capacityMemoryLimits {
+	if mode == capacityModeProduction {
+		return strictCapacityMemoryLimits
+	}
+	return capacityMemoryLimits{
+		maxGrowthPercent: 75,
+		maxResidentBytes: 256 * 1024 * 1024,
+	}
+}
+
+func TestRepositoryCapacityMemoryLimits(t *testing.T) {
+	t.Parallel()
+	production := repositoryCapacityMemoryLimits(capacityModeProduction)
+	require.Equal(t, float64(10), production.maxGrowthPercent)
+	require.Zero(t, production.maxResidentBytes)
+	require.True(t, capacityMemoryWithinLimits(9.99, 512*1024*1024, production))
+	require.False(t, capacityMemoryWithinLimits(10, 128*1024*1024, production))
+
+	for _, mode := range []capacityMode{capacityModeAlpha, capacityModeDiagnostic} {
+		limits := repositoryCapacityMemoryLimits(mode)
+		require.Equal(t, float64(75), limits.maxGrowthPercent)
+		require.Equal(t, float64(256*1024*1024), limits.maxResidentBytes)
+		require.True(t, capacityMemoryWithinLimits(74.99, 255*1024*1024, limits))
+		require.False(t, capacityMemoryWithinLimits(75, 255*1024*1024, limits))
+		require.False(t, capacityMemoryWithinLimits(50, 256*1024*1024, limits))
+	}
 }
 
 func loadRepositoryCapacityConfig(t *testing.T) repositoryCapacityConfig {
@@ -223,9 +259,11 @@ func loadRepositoryCapacityConfig(t *testing.T) repositoryCapacityConfig {
 		replaySamples: capacityEnvInt(t, "REPOSITORY_CAPACITY_REPLAY_SAMPLES", 20), resourcePool: capacityEnvInt(t, "REPOSITORY_CAPACITY_RESOURCE_POOL", 50),
 		overflowTransitions: capacityEnvInt(t, "REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS", 1000), mutationWorkers: capacityEnvInt(t, "REPOSITORY_CAPACITY_MUTATION_WORKERS", 20),
 		burstSize: capacityEnvInt(t, "REPOSITORY_CAPACITY_BURST_SIZE", 100), burstInterval: capacityEnvDuration(t, "REPOSITORY_CAPACITY_BURST_INTERVAL", time.Minute),
-		baselineStabilization: capacityEnvDuration(t, "REPOSITORY_CAPACITY_BASELINE_STABILIZATION", 5*time.Minute),
-		postLoadStabilization: capacityEnvDuration(t, "REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION", 10*time.Minute),
-		mode:                  mode, skipReplacement: os.Getenv("REPOSITORY_CAPACITY_SKIP_REPLACEMENT") == "1",
+		transitionInterval:       capacityEnvDuration(t, "REPOSITORY_CAPACITY_TRANSITION_INTERVAL", 100*time.Millisecond),
+		overflowBackpressureWait: capacityEnvDuration(t, "REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT", repositoryCapacityMinimumOverflowWait),
+		baselineStabilization:    capacityEnvDuration(t, "REPOSITORY_CAPACITY_BASELINE_STABILIZATION", 5*time.Minute),
+		postLoadStabilization:    capacityEnvDuration(t, "REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION", 10*time.Minute),
+		mode:                     mode, skipReplacement: os.Getenv("REPOSITORY_CAPACITY_SKIP_REPLACEMENT") == "1",
 	}
 }
 
@@ -260,28 +298,162 @@ func repositoryCapacityMetricSamples(t *testing.T, client *http.Client, cfg repo
 	return result
 }
 
-func validateRepositoryCapacityScale(t *testing.T, cfg repositoryCapacityConfig) {
-	t.Helper()
+func validateRepositoryCapacityScale(cfg repositoryCapacityConfig) error {
 	for key, value := range map[string]string{"REPOSITORY_API_A": cfg.apiA, "REPOSITORY_API_B": cfg.apiB, "REPOSITORY_CONTROLLER_A": cfg.controllerA, "REPOSITORY_CONTROLLER_B": cfg.controllerB, "REPOSITORY_TOKEN": cfg.token} {
-		require.NotEmpty(t, value, "%s is required", key)
+		if value == "" {
+			return fmt.Errorf("%s is required", key)
+		}
 	}
 	if !cfg.skipReplacement {
-		require.Contains(t, []string{cfg.apiA, cfg.apiB}, cfg.replacement)
-		require.NotEmpty(t, cfg.trigger)
+		if cfg.replacement != cfg.apiA && cfg.replacement != cfg.apiB {
+			return errors.New("REPOSITORY_API_REPLACEMENT must identify API A or API B")
+		}
+		if cfg.trigger == "" {
+			return errors.New("REPOSITORY_REPLACEMENT_TRIGGER_FILE is required")
+		}
 		_, err := os.Stat(cfg.trigger)
-		require.ErrorIs(t, err, os.ErrNotExist, "replacement trigger must be fresh")
+		if !errors.Is(err, os.ErrNotExist) {
+			return errors.New("replacement trigger must be fresh")
+		}
+	}
+	if cfg.transitionInterval <= 0 {
+		return fmt.Errorf("%s evidence requires REPOSITORY_CAPACITY_TRANSITION_INTERVAL>0", cfg.mode)
+	}
+	if cfg.burstInterval <= 0 {
+		return fmt.Errorf("%s evidence requires REPOSITORY_CAPACITY_BURST_INTERVAL>0", cfg.mode)
+	}
+	if cfg.overflowBackpressureWait <= 0 {
+		return fmt.Errorf("%s evidence requires REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT>0", cfg.mode)
 	}
 	if cfg.mode == capacityModeDiagnostic {
-		return
+		return nil
 	}
-	require.GreaterOrEqual(t, cfg.duration, 60*time.Minute)
-	require.GreaterOrEqual(t, cfg.subscribers, 1000)
-	require.GreaterOrEqual(t, cfg.replayEvents, 10000)
-	require.GreaterOrEqual(t, cfg.replaySamples, 20)
-	require.GreaterOrEqual(t, cfg.resourcePool, 50)
-	require.GreaterOrEqual(t, cfg.overflowTransitions, 1000)
-	require.GreaterOrEqual(t, cfg.burstSize, 100)
-	require.False(t, cfg.skipReplacement)
+	if cfg.overflowBackpressureWait < repositoryCapacityMinimumOverflowWait {
+		return fmt.Errorf("%s evidence requires REPOSITORY_CAPACITY_OVERFLOW_BACKPRESSURE_WAIT>=%s", cfg.mode, repositoryCapacityMinimumOverflowWait)
+	}
+	if cfg.skipReplacement {
+		return fmt.Errorf("REPOSITORY_CAPACITY_SKIP_REPLACEMENT is only valid in diagnostic mode")
+	}
+	maximumTransitionInterval := 100 * time.Millisecond
+	if cfg.mode == capacityModeAlpha {
+		maximumTransitionInterval = 500 * time.Millisecond
+	}
+	if cfg.transitionInterval > maximumTransitionInterval {
+		return fmt.Errorf("%s evidence requires REPOSITORY_CAPACITY_TRANSITION_INTERVAL<=%s", cfg.mode, maximumTransitionInterval)
+	}
+
+	minimum := repositoryCapacityConfig{
+		duration: 60 * time.Minute, subscribers: 1000, replayEvents: 10000,
+		replaySamples: 20, resourcePool: 50, overflowTransitions: 1000, burstSize: 100,
+	}
+	if cfg.mode == capacityModeAlpha {
+		minimum = repositoryCapacityConfig{
+			duration: 10 * time.Minute, subscribers: 100, replayEvents: 1000,
+			replaySamples: 5, resourcePool: 20, overflowTransitions: 256, burstSize: 20,
+		}
+	}
+	for _, threshold := range []struct {
+		name       string
+		actual     int64
+		minimum    int64
+		formatUnit string
+	}{
+		{name: "REPOSITORY_CAPACITY_DURATION", actual: int64(cfg.duration), minimum: int64(minimum.duration), formatUnit: "duration"},
+		{name: "REPOSITORY_CAPACITY_SUBSCRIBERS", actual: int64(cfg.subscribers), minimum: int64(minimum.subscribers)},
+		{name: "REPOSITORY_CAPACITY_REPLAY_EVENTS", actual: int64(cfg.replayEvents), minimum: int64(minimum.replayEvents)},
+		{name: "REPOSITORY_CAPACITY_REPLAY_SAMPLES", actual: int64(cfg.replaySamples), minimum: int64(minimum.replaySamples)},
+		{name: "REPOSITORY_CAPACITY_RESOURCE_POOL", actual: int64(cfg.resourcePool), minimum: int64(minimum.resourcePool)},
+		{name: "REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS", actual: int64(cfg.overflowTransitions), minimum: int64(minimum.overflowTransitions)},
+		{name: "REPOSITORY_CAPACITY_BURST_SIZE", actual: int64(cfg.burstSize), minimum: int64(minimum.burstSize)},
+	} {
+		if threshold.actual < threshold.minimum {
+			if threshold.formatUnit == "duration" {
+				return fmt.Errorf("%s evidence requires %s>=%s", cfg.mode, threshold.name, time.Duration(threshold.minimum))
+			}
+			return fmt.Errorf("%s evidence requires %s>=%d", cfg.mode, threshold.name, threshold.minimum)
+		}
+	}
+	return nil
+}
+
+func TestValidateRepositoryCapacityScale(t *testing.T) {
+	t.Parallel()
+	minimum := func(mode capacityMode) repositoryCapacityConfig {
+		cfg := repositoryCapacityConfig{
+			apiA: "http://api-a", apiB: "http://api-b",
+			controllerA: "http://controller-a", controllerB: "http://controller-b",
+			replacement: "http://api-b", trigger: t.TempDir() + "/replacement", token: "token",
+			mode: mode, burstInterval: time.Minute, overflowBackpressureWait: repositoryCapacityMinimumOverflowWait,
+		}
+		if mode == capacityModeAlpha {
+			cfg.duration, cfg.subscribers, cfg.replayEvents = 10*time.Minute, 100, 1000
+			cfg.replaySamples, cfg.resourcePool, cfg.overflowTransitions, cfg.burstSize = 5, 20, 256, 20
+			cfg.transitionInterval = 500 * time.Millisecond
+			return cfg
+		}
+		cfg.duration, cfg.subscribers, cfg.replayEvents = 60*time.Minute, 1000, 10000
+		cfg.replaySamples, cfg.resourcePool, cfg.overflowTransitions, cfg.burstSize = 20, 50, 1000, 100
+		cfg.transitionInterval = 100 * time.Millisecond
+		return cfg
+	}
+
+	for _, mode := range []capacityMode{capacityModeAlpha, capacityModeProduction} {
+		mode := mode
+		t.Run(string(mode)+" accepts its minimum", func(t *testing.T) {
+			require.NoError(t, validateRepositoryCapacityScale(minimum(mode)))
+		})
+		for name, undersize := range map[string]func(*repositoryCapacityConfig){
+			"duration":             func(cfg *repositoryCapacityConfig) { cfg.duration-- },
+			"subscribers":          func(cfg *repositoryCapacityConfig) { cfg.subscribers-- },
+			"replay events":        func(cfg *repositoryCapacityConfig) { cfg.replayEvents-- },
+			"replay samples":       func(cfg *repositoryCapacityConfig) { cfg.replaySamples-- },
+			"resource pool":        func(cfg *repositoryCapacityConfig) { cfg.resourcePool-- },
+			"overflow transitions": func(cfg *repositoryCapacityConfig) { cfg.overflowTransitions-- },
+			"burst size":           func(cfg *repositoryCapacityConfig) { cfg.burstSize-- },
+			"overflow wait":        func(cfg *repositoryCapacityConfig) { cfg.overflowBackpressureWait-- },
+		} {
+			t.Run(string(mode)+" rejects undersized "+name, func(t *testing.T) {
+				cfg := minimum(mode)
+				undersize(&cfg)
+				require.Error(t, validateRepositoryCapacityScale(cfg))
+			})
+		}
+	}
+
+	alpha := minimum(capacityModeAlpha)
+	alpha.skipReplacement = true
+	require.Error(t, validateRepositoryCapacityScale(alpha), "alpha replacement must remain mandatory")
+	diagnostic := minimum(capacityModeAlpha)
+	diagnostic.mode = capacityModeDiagnostic
+	diagnostic.transitionInterval = 0
+	require.Error(t, validateRepositoryCapacityScale(diagnostic), "diagnostic load interval must remain valid")
+	diagnostic = minimum(capacityModeAlpha)
+	diagnostic.mode = capacityModeDiagnostic
+	diagnostic.burstInterval = 0
+	require.Error(t, validateRepositoryCapacityScale(diagnostic), "diagnostic burst interval must remain valid")
+	diagnostic = minimum(capacityModeAlpha)
+	diagnostic.mode = capacityModeDiagnostic
+	diagnostic.overflowBackpressureWait = 0
+	require.Error(t, validateRepositoryCapacityScale(diagnostic), "diagnostic overflow wait must remain valid")
+
+	for _, mode := range []capacityMode{capacityModeAlpha, capacityModeProduction} {
+		mode := mode
+		for name, interval := range map[string]time.Duration{
+			"zero transition interval": 0,
+			"slow transition interval": minimum(mode).transitionInterval + time.Millisecond,
+		} {
+			t.Run(string(mode)+" rejects "+name, func(t *testing.T) {
+				cfg := minimum(mode)
+				cfg.transitionInterval = interval
+				require.Error(t, validateRepositoryCapacityScale(cfg))
+			})
+		}
+		t.Run(string(mode)+" rejects zero burst interval", func(t *testing.T) {
+			cfg := minimum(mode)
+			cfg.burstInterval = 0
+			require.Error(t, validateRepositoryCapacityScale(cfg))
+		})
+	}
 }
 
 func repositoryCapacityToken(t *testing.T) string {
@@ -389,7 +561,7 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 		}()
 	}
 	started := time.Now()
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(cfg.transitionInterval)
 	burst := time.NewTicker(cfg.burstInterval)
 	sequence := 0
 	enqueue := func() {
@@ -767,12 +939,11 @@ func runRepositoryCapacityReplacement(cfg repositoryCapacityConfig, client *http
 
 func runRepositoryCapacityOverflow(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, poolPrefix, eventPrefix string) {
 	t.Helper()
-	cursor := repositoryCapacityBootstrapCursor(t, cfg.overflowAPI, cfg)
 	selection := `type name resourceVersion repository { metadata { annotations } }`
 	for i := 0; i < 32; i++ {
 		selection += fmt.Sprintf(` payload%d: repository { metadata { annotations } }`, i)
 	}
-	conn, err := dialRepositoryCapacityWatchSelection(cfg.overflowAPI, cfg, cursor, selection)
+	conn, err := openRepositoryCapacityOverflowSubscriber(cfg.overflowAPI, cfg, selection)
 	require.NoError(t, err)
 	defer conn.Close()
 	if tcp, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
@@ -785,6 +956,10 @@ func runRepositoryCapacityOverflow(t *testing.T, client *http.Client, cfg reposi
 	padding := strings.Repeat("x", 16*1024)
 	ack := runRepositoryCapacityBatch(t, client, cfg, poolPrefix, eventPrefix, sequences, padding)
 	require.Equal(t, cfg.overflowTransitions, ack.count())
+	// Do not read from the slow connection until the server's bounded delivery
+	// timeout has elapsed. Reading immediately after the batch can drain the
+	// resolver and transport buffers before SUBSCRIBER_OVERFLOW is emitted.
+	time.Sleep(cfg.overflowBackpressureWait)
 	require.NoError(t, conn.SetReadDeadline(time.Now().Add(60*time.Second)))
 	for i := 0; i < cfg.overflowTransitions*4+100; i++ {
 		var message struct {
@@ -802,6 +977,118 @@ func runRepositoryCapacityOverflow(t *testing.T, client *http.Client, cfg reposi
 		}
 	}
 	t.Fatal("slow Repository subscriber did not receive the bounded overflow terminal error")
+}
+
+// TestRepositoryLifecycle_OverflowOnly is an internal deployed diagnostic for
+// iterating on the strict overflow contract without repeating the full soak.
+// It remains gated so focused and in-process test runs cannot masquerade as
+// live evidence.
+func TestRepositoryLifecycle_OverflowOnly(t *testing.T) {
+	if os.Getenv("REPOSITORY_LIFECYCLE_OVERFLOW_RUN") != "1" {
+		t.Skip("set REPOSITORY_LIFECYCLE_OVERFLOW_RUN=1 against the deployed Repository capacity stack")
+	}
+	cfg := loadRepositoryCapacityConfig(t)
+	require.NotEmpty(t, cfg.apiA)
+	require.NotEmpty(t, cfg.apiB)
+	require.NotEmpty(t, cfg.token)
+	require.Positive(t, cfg.overflowTransitions)
+	require.Positive(t, cfg.overflowBackpressureWait)
+
+	ensureRepositoryCapacityNamespace(t, cfg)
+	runID := strconv.FormatInt(time.Now().UnixNano(), 36)
+	poolPrefix := "rcop-" + runID + "-"
+	createRepositoryCapacityPool(t, http.DefaultClient, cfg, poolPrefix)
+	runRepositoryCapacityOverflow(t, http.DefaultClient, cfg, poolPrefix, "rco-only-"+runID+"-")
+}
+
+func openRepositoryCapacityOverflowSubscriber(endpoint string, cfg repositoryCapacityConfig, selection string) (*websocket.Conn, error) {
+	conn, err := dialRepositoryCapacityWatchSelection(endpoint, cfg, "__repository_watch_bootstrap__", selection)
+	if err != nil {
+		return nil, err
+	}
+	bookmark, err := readRepositoryCapacityEvent(conn)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("wait for slow Repository subscriber registration: %w", err)
+	}
+	if bookmark.Type != "BOOKMARK" || bookmark.ResourceVersion == "" {
+		conn.Close()
+		return nil, fmt.Errorf("slow Repository subscriber registration returned %q with resourceVersion %q, want BOOKMARK", bookmark.Type, bookmark.ResourceVersion)
+	}
+	return conn, nil
+}
+
+func TestOpenRepositoryCapacityOverflowSubscriberWaitsForBookmark(t *testing.T) {
+	t.Parallel()
+	upgrader := websocket.Upgrader{
+		Subprotocols: []string{"graphql-transport-ws"},
+		CheckOrigin:  func(*http.Request) bool { return true },
+	}
+	subscribed := make(chan struct{})
+	releaseBookmark := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		require.NoError(t, err)
+		defer conn.Close()
+		var message struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Variables struct {
+					Cursor string `json:"cursor"`
+				} `json:"variables"`
+			} `json:"payload"`
+		}
+		require.NoError(t, conn.ReadJSON(&message))
+		require.Equal(t, "connection_init", message.Type)
+		require.NoError(t, conn.WriteJSON(map[string]any{"type": "connection_ack"}))
+		require.NoError(t, conn.ReadJSON(&message))
+		require.Equal(t, "subscribe", message.Type)
+		require.Equal(t, "__repository_watch_bootstrap__", message.Payload.Variables.Cursor)
+		close(subscribed)
+		<-releaseBookmark
+		require.NoError(t, conn.WriteJSON(map[string]any{
+			"type": "next",
+			"payload": map[string]any{"data": map[string]any{"watchRepositories": map[string]any{
+				"type": "BOOKMARK", "resourceVersion": "rwv1:test:1",
+			}}},
+		}))
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	result := make(chan struct {
+		conn *websocket.Conn
+		err  error
+	}, 1)
+	go func() {
+		conn, err := openRepositoryCapacityOverflowSubscriber(server.URL, repositoryCapacityConfig{
+			token: "capacity-token", namespace: "capacity-namespace",
+		}, `type resourceVersion`)
+		result <- struct {
+			conn *websocket.Conn
+			err  error
+		}{conn: conn, err: err}
+	}()
+
+	select {
+	case <-subscribed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("overflow subscriber did not send its subscription")
+	}
+	select {
+	case <-result:
+		t.Fatal("overflow subscriber returned before its registration BOOKMARK")
+	default:
+	}
+	close(releaseBookmark)
+	select {
+	case opened := <-result:
+		require.NoError(t, opened.err)
+		require.NotNil(t, opened.conn)
+		require.NoError(t, opened.conn.Close())
+	case <-time.After(2 * time.Second):
+		t.Fatal("overflow subscriber did not return after its registration BOOKMARK")
+	}
 }
 
 func assertRepositoryCrossReplicaRead(t *testing.T, cfg repositoryCapacityConfig, name string) {

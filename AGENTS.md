@@ -59,7 +59,7 @@ Auto-generated from all feature plans. Last updated: 2026-03-26
 - `make hash-user-password PASSWORD=<password>` — print a bcrypt hash for manual `users.yaml` maintenance.
 - `make add-role ROLE=<role> ALLOW=<actions> [DENY=<actions>] [POLICY_FILE=<path>]` — add an RBAC role through an atomic YAML-aware write; comma-separate multiple actions.
 - `make assign-role SUBJECT=<subject> ROLE=<role> [POLICY_FILE=<path>]` — idempotently bind an existing role to any authentication subject.
-- `make secret TARGET=<jwt|grpc-hmac>` — generate local authentication material. `jwt` updates `gitstore-api/.env`; `grpc-hmac` writes the same shared secret to both service `.env` files.
+- `make secret TARGET=<jwt|grpc-hmac|signing-key> [DESTINATION_PATH=<path>]` — generate local authentication material. `jwt` updates `gitstore-api/.env`; `grpc-hmac` writes the same shared secret to both service `.env` files.
 - `make bootstrap TARGET=<all|token|namespace|repository> [ADMIN_PASSWORD=<password>]` — authenticate/cache a token or create selected bootstrap resources. `repository` requires the namespace to exist.
 - `make clean TARGET=<git-data|controller-checkpoints> CONFIRM=1` — remove only the selected local runtime state; never removes Docker volumes.
 - `make build`, `make test`, `make lint`, `make check TARGET=all`, `make pr-ready` — aggregate development and PR readiness checks.

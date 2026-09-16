@@ -1,6 +1,106 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (c) 2026 GitStore contributors
 
+x-capacity-api: &capacity-api
+  image: gitstore-capacity-api:${CAPACITY_GIT_REVISION:-unknown}
+  build:
+    context: .
+    dockerfile: docker/api.Dockerfile
+    args:
+      GIT_REVISION: ${CAPACITY_GIT_REVISION:-unknown}
+  command:
+    - /bin/sh
+    - -ec
+    - |
+      export GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat /run/secrets/serviceaccount-signing-key)"
+      exec /app/api --config-file /etc/gitstore/gitstore.toml
+  environment: &capacity-api-environment
+    GITSTORE_DATASTORE__BACKEND: scylla
+    GITSTORE_DATASTORE__SCYLLA__HOSTS: scylla-1:9042,scylla-2:9042,scylla-3:9042
+    GITSTORE_DATASTORE__SCYLLA__KEYSPACE: gitstore
+    GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE: enabled
+    GITSTORE_WATCH__NAMESPACE__READERS_ENABLED: "true"
+    GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED: "true"
+    GITSTORE_WATCH__NAMESPACE__JOURNAL_RETENTION_SECONDS: "604800"
+    GITSTORE_WATCH__NAMESPACE__CDC_RETENTION_SECONDS: "1209600"
+    GITSTORE_WATCH__NAMESPACE__CDC_CONFIDENCE_WINDOW_MILLIS: "500"
+    GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE: "4096"
+    GITSTORE_WATCH__NAMESPACE__READ_BATCH_SIZE: "256"
+    GITSTORE_WATCH__NAMESPACE__MAX_REPLAY_EVENTS: "100000"
+    GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BUFFER: "64"
+    GITSTORE_WATCH__NAMESPACE__SUBSCRIBER_BACKPRESSURE_MILLIS: "30000"
+    GITSTORE_WATCH__NAMESPACE__POLL_MIN_MILLIS: "100"
+    GITSTORE_WATCH__NAMESPACE__POLL_MAX_MILLIS: "2000"
+    GITSTORE_WATCH__NAMESPACE__BOOKMARK_INTERVAL_SECONDS: "30"
+    GITSTORE_WATCH__NAMESPACE__LEASE_TTL_SECONDS: "30"
+    GITSTORE_WATCH__NAMESPACE__LEASE_RENEW_INTERVAL_SECONDS: "10"
+    GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS: "60"
+  volumes:
+    - ${CONFIG_FILE:-./config/config.toml}:/etc/gitstore/gitstore.toml:ro
+    - ./config/policy.yaml:/etc/gitstore/policy.yaml:ro
+    - ./config/users.yaml:/etc/gitstore/users.yaml:ro
+    - api-serviceaccount-issuer-key:/run/secrets:ro
+  depends_on:
+    capacity-credential-bootstrap:
+      condition: service_completed_successfully
+    scylla-init:
+      condition: service_completed_successfully
+    git-service:
+      condition: service_started
+  networks:
+    - gitstore-network
+  healthcheck:
+    test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4000/ready"]
+    interval: 2s
+    timeout: 2s
+    retries: 30
+    start_period: 5s
+  profiles: [repository-capacity]
+
+x-capacity-controller: &capacity-controller
+  image: gitstore-capacity-controller-manager:${CAPACITY_GIT_REVISION:-unknown}
+  build:
+    context: .
+    dockerfile: docker/controller-manager.Dockerfile
+    args:
+      GIT_REVISION: ${CAPACITY_GIT_REVISION:-unknown}
+  command:
+    - /bin/sh
+    - -ec
+    - |
+      serviceaccount_uid="$$(sed -n 's/^GITSTORE_CONTROLLER__SERVICEACCOUNT__UID=//p' /run/controller-bootstrap/serviceaccount.env)"
+      test -n "$$serviceaccount_uid"
+      export GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$serviceaccount_uid"
+      exec /app/controller-manager --config-file /etc/gitstore/gitstore.toml
+  volumes:
+    - ${CONFIG_FILE:-./config/config.toml}:/etc/gitstore/gitstore.toml:ro
+    - controller-serviceaccount-secrets:/run/secrets:ro
+    - controller-serviceaccount-identity:/run/controller-bootstrap:ro
+  networks:
+    - gitstore-network
+  healthcheck:
+    test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5001/health"]
+    interval: 2s
+    timeout: 2s
+    retries: 30
+    start_period: 5s
+  profiles: [repository-capacity]
+
+x-capacity-git-service: &capacity-git-service
+  image: gitstore-capacity-git-service:${CAPACITY_GIT_REVISION:-unknown}
+  build:
+    context: .
+    dockerfile: docker/git-service.Dockerfile
+    args:
+      GIT_REVISION: ${CAPACITY_GIT_REVISION:-unknown}
+  command: ["/app/git-service", "--config-file", "/etc/gitstore/gitstore.toml"]
+  volumes:
+    - ${CONFIG_FILE:-./config/config.toml}:/etc/gitstore/gitstore.toml:ro
+    - git-repo-data-root:/var/lib/gitstore/repos
+  networks:
+    - gitstore-network
+  profiles: [repository-capacity]
+
 services:
   capacity-prometheus:
     profiles: [capacity]
@@ -21,3 +121,154 @@ services:
       - /prometheus:rw,uid=65534,gid=65534,mode=0770
     networks:
       - gitstore-network
+
+  # Disable the single-replica base services for this explicit topology.
+  api:
+    profiles: [repository-capacity-disabled]
+
+  controller-manager:
+    profiles: [repository-capacity-disabled]
+
+  scylla-1:
+    image: scylladb/scylla:2026.1
+    container_name: gitstore-capacity-scylla-1
+    ports: !reset []
+    profiles: [repository-capacity]
+
+  scylla-2:
+    image: scylladb/scylla:2026.1
+    container_name: gitstore-capacity-scylla-2
+    profiles: [repository-capacity]
+
+  scylla-3:
+    image: scylladb/scylla:2026.1
+    container_name: gitstore-capacity-scylla-3
+    profiles: [repository-capacity]
+
+  scylla-init:
+    image: scylladb/scylla:2026.1
+    profiles: [repository-capacity]
+
+  git-service:
+    <<: *capacity-git-service
+    container_name: gitstore-capacity-git-service
+    environment:
+      GITSTORE_CATALOG_SERVICE__URI: http://api-a:6000
+
+  capacity-credential-bootstrap:
+    <<: *capacity-api
+    container_name: gitstore-capacity-credential-bootstrap
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /run/controller-secrets/gitstore-controller-manager-signing-key
+        rm -f /run/controller-bootstrap/serviceaccount.env
+        /app/gitctl generate-signing-key --private-key-path /run/api-issuer/serviceaccount-signing-key
+        /app/gitctl generate-signing-key --private-key-path /run/controller-secrets/gitstore-controller-manager-signing-key/privateKey
+    environment: {}
+    volumes:
+      - api-serviceaccount-issuer-key:/run/api-issuer
+      - controller-serviceaccount-secrets:/run/controller-secrets
+      - controller-serviceaccount-identity:/run/controller-bootstrap
+    depends_on: {}
+    healthcheck:
+      disable: true
+
+  api-a:
+    <<: *capacity-api
+    container_name: gitstore-capacity-api-a
+    environment:
+      <<: *capacity-api-environment
+      GITSTORE_GIT__GRPC__URI: dns:///git-service:50051
+    ports:
+      - "4000:4000"
+      - "9000:9000"
+      - "6000:6000"
+
+  api-b:
+    <<: *capacity-api
+    container_name: gitstore-capacity-api-b
+    environment:
+      <<: *capacity-api-environment
+      GITSTORE_GIT__GRPC__URI: dns:///git-service:50051
+    depends_on:
+      capacity-credential-bootstrap:
+        condition: service_completed_successfully
+      scylla-init:
+        condition: service_completed_successfully
+      git-service:
+        condition: service_started
+      api-a:
+        condition: service_healthy
+    ports:
+      - "4001:4000"
+      - "9001:9000"
+      - "6001:6000"
+
+  capacity-serviceaccount-enrollment:
+    <<: *capacity-api
+    container_name: gitstore-capacity-serviceaccount-enrollment
+    environment:
+      GITSTORE_BOOTSTRAP_ADMIN_USERNAME: ${GITSTORE_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      GITSTORE_BOOTSTRAP_ADMIN_PASSWORD: ${GITSTORE_BOOTSTRAP_ADMIN_PASSWORD:-admin123}
+    command:
+      - /app/gitctl
+      - enroll-serviceaccount
+      - --api-url
+      - http://api-a:4000/graphql
+      - --namespace
+      - controllers
+      - --name
+      - gitstore-controller-manager
+      - --key-id
+      - controller-key
+      - --replace-existing-key
+      - --private-key-path
+      - /run/controller-secrets/gitstore-controller-manager-signing-key/privateKey
+      - --identity-output-path
+      - /run/controller-bootstrap/serviceaccount.env
+    volumes:
+      - controller-serviceaccount-secrets:/run/controller-secrets
+      - controller-serviceaccount-identity:/run/controller-bootstrap
+    depends_on:
+      api-a:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  controller-manager-a:
+    <<: *capacity-controller
+    container_name: gitstore-capacity-controller-manager-a
+    environment:
+      GITSTORE_CONTROLLER__API_URI: http://api-a:4000/graphql
+    ports:
+      - "5001:5001"
+    volumes:
+      - ${CONFIG_FILE:-./config/config.toml}:/etc/gitstore/gitstore.toml:ro
+      - controller-checkpoints-a:/var/lib/gitstore/checkpoints
+      - controller-serviceaccount-secrets:/run/secrets:ro
+      - controller-serviceaccount-identity:/run/controller-bootstrap:ro
+    depends_on:
+      capacity-serviceaccount-enrollment:
+        condition: service_completed_successfully
+
+  controller-manager-b:
+    <<: *capacity-controller
+    container_name: gitstore-capacity-controller-manager-b
+    environment:
+      GITSTORE_CONTROLLER__API_URI: http://api-b:4000/graphql
+    ports:
+      - "5002:5001"
+    volumes:
+      - ${CONFIG_FILE:-./config/config.toml}:/etc/gitstore/gitstore.toml:ro
+      - controller-checkpoints-b:/var/lib/gitstore/checkpoints
+      - controller-serviceaccount-secrets:/run/secrets:ro
+      - controller-serviceaccount-identity:/run/controller-bootstrap:ro
+    depends_on:
+      capacity-serviceaccount-enrollment:
+        condition: service_completed_successfully
+
+volumes:
+  controller-checkpoints-a:
+  controller-checkpoints-b:

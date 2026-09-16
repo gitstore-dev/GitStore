@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
@@ -33,6 +34,11 @@ type repositoryAdmissionResource struct {
 // public read envelope exposes the same Relay-encoded identity.  In
 // particular, metadata.uid must never regress to the datastore UUID.
 func TestRepositoryLifecycle_PushAdmissionReadIdentity(t *testing.T) {
+	runRepositoryLifecyclePushAdmissionReadIdentity(t)
+}
+
+func runRepositoryLifecyclePushAdmissionReadIdentity(t *testing.T) {
+	t.Helper()
 	namespace := getEnv("NAMESPACE", "gitstore-test")
 	name := uniqueName("repository-push-admission")
 	token := namespaceContractBootstrapToken(t, apiURL)
@@ -74,6 +80,11 @@ func TestRepositoryLifecycle_PushAdmissionReadIdentity(t *testing.T) {
 // checkpoints. The counter deltas prove both registrations consumed work from
 // the live Repository watch after the push.
 func TestRepositoryLifecycle_DualControllerRegistrationAndReconcile(t *testing.T) {
+	runRepositoryLifecycleDualControllerRegistrationAndReconcile(t)
+}
+
+func runRepositoryLifecycleDualControllerRegistrationAndReconcile(t *testing.T) {
+	t.Helper()
 	controllerA := strings.TrimSuffix(os.Getenv("REPOSITORY_CONTROLLER_A"), "/")
 	controllerB := strings.TrimSuffix(os.Getenv("REPOSITORY_CONTROLLER_B"), "/")
 	if controllerA == "" || controllerB == "" {
@@ -84,6 +95,11 @@ func TestRepositoryLifecycle_DualControllerRegistrationAndReconcile(t *testing.T
 	client := &http.Client{Timeout: 5 * time.Second}
 	beforeA := requireRepositoryController(t, client, controllerA)
 	beforeB := requireRepositoryController(t, client, controllerB)
+	require.NotEqual(t,
+		repositoryControllerIdentity(t, client, controllerA),
+		repositoryControllerIdentity(t, client, controllerB),
+		"controller endpoints resolve to the same process instance",
+	)
 
 	namespace := getEnv("NAMESPACE", "gitstore-test")
 	name := uniqueName("repository-dual-controller")
@@ -107,6 +123,20 @@ func TestRepositoryLifecycle_DualControllerRegistrationAndReconcile(t *testing.T
 // replacement trigger. Focused and in-process tests deliberately skip it.
 func TestRepositoryLifecycle_TwoReplicaCapacity(t *testing.T) {
 	runRepositoryLifecycleCapacity(t)
+}
+
+// TestRepositoryLifecycle_DeployedEvidenceGate runs the capacity workload
+// first so its namespace and bootstrap repository exist, then proves the raw
+// Git-push admission path and both independently running controller managers
+// against that same deployed stack. The capacity dispatcher selects this
+// aggregate test so all three probes are retained in one verifier log.
+func TestRepositoryLifecycle_DeployedEvidenceGate(t *testing.T) {
+	if os.Getenv("REPOSITORY_LIFECYCLE_CAPACITY_RUN") != "1" {
+		t.Skip("run through make capacity TARGET=repository PROFILE=lifecycle MODE=alpha or MODE=production against a deployed two-API/two-controller stack")
+	}
+	runRepositoryLifecycleCapacity(t)
+	t.Run("RawGitPushAdmission", runRepositoryLifecyclePushAdmissionReadIdentity)
+	t.Run("DualControllerRegistrationAndReconcile", runRepositoryLifecycleDualControllerRegistrationAndReconcile)
 }
 
 func validRepositoryFixture(name, namespace string) string {
@@ -217,7 +247,7 @@ func requireRepositoryController(t *testing.T, client *http.Client, endpoint str
 	defer response.Body.Close()
 	contents, err := io.ReadAll(response.Body)
 	require.NoError(t, err)
-	require.Contains(t, []int{http.StatusOK, http.StatusServiceUnavailable}, response.StatusCode, string(contents))
+	require.Equal(t, http.StatusOK, response.StatusCode, string(contents))
 	var health struct {
 		Kinds map[string]struct {
 			Registered bool `json:"registered"`
@@ -247,6 +277,39 @@ func repositoryControllerSuccessMetric(t *testing.T, client *http.Client, endpoi
 	}
 	require.NoError(t, scanner.Err())
 	return 0
+}
+
+func repositoryControllerIdentity(t *testing.T, client *http.Client, endpoint string) string {
+	t.Helper()
+	response, err := client.Get(endpoint + "/metrics")
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	scanner := bufio.NewScanner(response.Body)
+	const prefix = `gitstore_controller_process_instance_info{instance_id="`
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, prefix) {
+			identity, _, found := strings.Cut(strings.TrimPrefix(line, prefix), `"}`)
+			require.True(t, found, "malformed controller process identity metric from %s", endpoint)
+			require.NotEmpty(t, identity)
+			return identity
+		}
+	}
+	require.NoError(t, scanner.Err())
+	t.Fatalf("%s does not expose gitstore_controller_process_instance_info", endpoint)
+	return ""
+}
+
+func TestRepositoryControllerIdentityReadsCollisionSafeMetric(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "# HELP gitstore_controller_process_instance_info Collision-safe identity.\n"+
+			"gitstore_controller_process_instance_info{instance_id=\"controller-process-a\"} 1\n")
+	}))
+	defer server.Close()
+
+	require.Equal(t, "controller-process-a", repositoryControllerIdentity(t, server.Client(), server.URL))
 }
 
 func waitForRepositoryControllerAdvance(t *testing.T, client *http.Client, endpoint string, before float64) {

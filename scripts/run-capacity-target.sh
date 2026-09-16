@@ -236,7 +236,7 @@ jq --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson verifier_exit_code "${verifier_status}" --argjson datastore_exit_code "${container_check_status}" \
   --argjson postflight_exit_code "${postflight_status}" \
   --argjson prometheus_exit_code "${prometheus_status}" \
-  '. + {completedAt:$completed_at,exitCode:$exit_code,sourceStateExitCode:$source_exit_code,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,postflightRequired:(.mode != "diagnostic" and .target == "namespace" and (.profile == "watch" or .profile == "recovery")),postflightExitCode:$postflight_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic" and .worktreeDirty == false)}' \
+  '. + {completedAt:$completed_at,exitCode:$exit_code,sourceStateExitCode:$source_exit_code,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,postflightRequired:(.mode != "diagnostic" and ((.target == "namespace" and (.profile == "watch" or .profile == "recovery")) or (.target == "repository" and .profile == "lifecycle"))),postflightExitCode:$postflight_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic" and .worktreeDirty == false)}' \
   "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
 echo "capacity evidence: ${evidence_dir}"

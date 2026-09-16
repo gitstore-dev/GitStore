@@ -5,11 +5,20 @@
 package health
 
 import (
+	"crypto/rand"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+var processInstanceID = rand.Text()
+
 var (
+	processInstanceInfo = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "gitstore_controller_process_instance_info",
+		Help: "Collision-safe identity of this controller-manager process.",
+	}, []string{"instance_id"})
+
 	QueueDepth = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "gitstore_controller_queue_depth",
 		Help: "Number of items waiting in the work queue per kind.",
@@ -71,3 +80,7 @@ var (
 		Help:      "Transient CategoryTaxonomy deletion reconciliation retries.",
 	})
 )
+
+func init() {
+	processInstanceInfo.WithLabelValues(processInstanceID).Set(1)
+}

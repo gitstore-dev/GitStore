@@ -73,6 +73,9 @@ RUN --mount=type=cache,id=cargo-registry-$TARGETARCH,target=/usr/local/cargo/reg
 # in-process via gix (gitoxide).
 FROM alpine:3
 
+ARG GIT_REVISION=unknown
+LABEL org.opencontainers.image.revision=${GIT_REVISION}
+
 RUN apk add --no-cache \
     ca-certificates \
     libgcc && \

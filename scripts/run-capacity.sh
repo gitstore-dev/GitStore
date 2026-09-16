@@ -20,7 +20,7 @@ case "${mode}" in
   *) echo "MODE must be diagnostic, alpha, or production" >&2; exit 2 ;;
 esac
 if [[ -z "${profile}" ]]; then
-  echo "usage: make capacity CAPACITY_PROFILE=<profile>" >&2
+  echo "usage: run-capacity.sh <internal-k6-profile>" >&2
   exit 2
 fi
 if [[ ! "${profile}" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then

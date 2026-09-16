@@ -29,6 +29,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Runtime stage
 FROM alpine:3.23.3
 
+ARG GIT_REVISION=unknown
+LABEL org.opencontainers.image.revision=${GIT_REVISION}
+
 RUN apk --no-cache add ca-certificates
 
 WORKDIR /app

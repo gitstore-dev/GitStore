@@ -57,6 +57,11 @@ Production paths must also define:
 - sustained Git push load and downstream backpressure behavior;
 - repeatable replica, failover, load, soak, and recovery validation.
 
+Future controllers and multi-controller deployments must also follow the
+[controller ownership and replica-group design](architecture/controller-ownership-and-replica-groups.md),
+which distinguishes logical ownership, optimistic concurrency, and CDC
+materializer leases from API-enforced controller fencing.
+
 Repository-wide capacity and fault tooling is exposed through the root
 Makefile. Use `make capacity TARGET=<target> PROFILE=<scenario>
 MODE=<diagnostic|alpha|production>` for offered-load and threshold

@@ -13,10 +13,54 @@
 
 ## Two-replica lifecycle and capacity gate
 
-Run the Repository-specific deployment gate only against two distinct API
-processes, two distinct controller-manager processes, and their shared Scylla
-journal. The replacement trigger must be watched by the deployment harness and
-must replace the selected API process in place:
+The checked-in laptop alpha harness builds release images and starts two
+distinct API processes, one singleton Git-service process, two concurrently
+active controller-manager processes, and a shared three-node Scylla journal. It also
+generates the sanitized manifests and token, replaces API B when the verifier
+requests it, captures the evidence, and removes the isolated stack:
+
+```bash
+make capacity TARGET=repository PROFILE=lifecycle MODE=alpha
+```
+
+This is the only public interface for the managed laptop deployment. It owns
+startup, readiness, token bootstrap, replacement, evidence capture, and
+cleanup through the shared `compose.capacity.yml` capacity overlay. Production
+mode remains an externally managed deployment, configured through the
+canonical dispatcher variables below.
+
+The singleton Git service owns the shared bare-repository volume; this gate
+does not claim Git sharding, replication, or high availability. Both
+controller managers reconcile concurrently. The API does not lease or fence
+controller replicas: repeated work is safe because reconciliation is
+level-triggered and idempotent, while status/finalizer writes use optimistic
+resource-version concurrency. The Scylla LWT lease and fencing described by
+the watch design applies to CDC journal materialization, not controller
+ownership.
+
+Alpha is the laptop-safe evidence tier: at least 10 minutes, 100 subscribers,
+1,000 replay events, 5 replay samples, a 20-resource pool, 256 overflow
+transitions (exceeding both 64-event buffers), bursts of 20, and a 500ms
+transition interval. The slow-consumer probe waits 31 seconds after admission,
+exceeding the configured 30-second backpressure bound, before it reads the
+terminal overflow error. It requires
+visibility p95 ≤2 seconds and p99 ≤3 seconds. It still requires the real
+two-API/two-controller topology, an observed API-B replacement, cursor-resumed
+recovery, and zero lost acknowledged transitions; duplicate delivery remains
+permitted and idempotent. Alpha is valid alpha evidence; it is not production
+soak evidence.
+
+Because alpha measures a cold-start 10-minute process, every API must satisfy
+both retained-RSS gates: less than 75% growth and less than 256 MiB absolute
+RSS. Production retains the less-than-10% RSS-growth gate. Normalized API CPU
+must remain below 80% in both tiers.
+
+Run the production tier only on hardware sized for the full gate. It uses the
+same real topology and correctness/replacement requirements, but raises the
+minimums to 60 minutes, 1,000 subscribers, 10,000 replay events, 20 replay
+samples, a 50-resource pool, 1,000 overflow transitions, and bursts of 100,
+with a 100ms transition interval, visibility p95 ≤1 second, and p99 ≤3 seconds.
+Configure an externally managed deployment with the canonical dispatcher:
 
 ```bash
 make capacity TARGET=repository PROFILE=lifecycle MODE=production \
@@ -35,9 +79,11 @@ make capacity TARGET=repository PROFILE=lifecycle MODE=production \
 ```
 
 Production evidence enforces the full 60-minute, 1,000-subscriber,
-10,000-event replay, 1,000-transition overflow, burst, resource, and recovery
-contract. A diagnostic run is useful while assembling the deployment but is
-not evidence for T035/T037.
+10,000-event replay, 1,000-transition overflow, burst, resource, replacement,
+and recovery contract. A diagnostic run is useful while assembling the
+deployment but is not evidence for T035/T037. Alpha can provide the laptop-safe
+two-replica lifecycle evidence, but it must never be reported as a production
+soak pass.
 
 `REPOSITORY_OVERFLOW_API` may equal API A when the network path applies normal
 TCP backpressure. Behind a buffering proxy, use a reader-only API replica on

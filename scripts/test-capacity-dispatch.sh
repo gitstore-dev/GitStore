@@ -113,16 +113,29 @@ done
 mkdir -p "${test_dir}/evidence"
 printf '#!/usr/bin/env bash\necho "mock capacity command: $*"\nif [[ -n "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE:-}" ]]; then cp "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE}" "${MOCK_SERVICE_CONTAINERS_FILE}"; fi\nif [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" ]]; then touch "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}"; fi\n[[ "${FAIL_MAKE:-0}" != "1" ]]\n' >"${test_dir}/bin/make"
 printf '#!/usr/bin/env bash\nif [[ "$1" == exec ]]; then case "$2" in api-1) if [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" && -e "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}" ]]; then instance=instance-a-replacement; else instance=instance-a; fi; printf "process_start_time_seconds 100\\ngitstore_api_process_instance_info{instance_id=\\"%%s\\"} 1\\n" "$instance" ;; api-2) if [[ "${MOCK_SAME_START:-0}" == 1 ]]; then start=100; else start=200; fi; if [[ "${MOCK_REPLACE_ALL:-0}" == 1 && -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" && -e "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}" ]]; then instance=instance-b-replacement; else instance=instance-b; fi; printf "process_start_time_seconds %%s\\ngitstore_api_process_instance_info{instance_id=\\"%%s\\"} 1\\n" "$start" "$instance" ;; *) if [[ "${MOCK_SCYLLA_BAD_MEMBERSHIP:-0}" == 1 ]]; then printf "UN node-1\\n"; else printf "UN node-1\\nUN node-2\\nUN node-3\\n"; fi ;; esac; exit 0; fi\nif [[ "$*" == *api-1* ]]; then cat "${MOCK_SERVICE_CONTAINERS_FILE}"; else cat "${MOCK_SCYLLA_CONTAINERS_FILE}"; fi\n' >"${test_dir}/bin/docker"
+printf '#!/usr/bin/env bash\ncase "$1" in rev-parse) printf "%%s\\n" "${MOCK_SOURCE_REVISION}" ;; status|diff|ls-files) exit 0 ;; *) exit 1 ;; esac\n' >"${test_dir}/bin/git"
 chmod +x "${test_dir}/bin/make"
 chmod +x "${test_dir}/bin/docker"
+chmod +x "${test_dir}/bin/git"
+export MOCK_SOURCE_REVISION="${source_revision}"
 jq -n --arg revision "${source_revision}" --arg digest "${image_digest}" '[
   {Id:"api-id-1",Name:"/api-1",Image:("sha256:"+$digest),Path:"/bin/sh",Args:["-ec","export GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY=\"$(cat /run/secrets/serviceaccount-signing-key)\"; exec /app/api --config-file /etc/gitstore/gitstore.toml"],Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
   {Id:"api-id-2",Name:"/api-2",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
   {Id:"git-id-1",Name:"/git-1",Image:("sha256:"+$digest),Path:"/app/git-service",Config:{Image:("ghcr.io/gitstore-dev/git-service@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}}
 ]' >"${test_dir}/service-containers.json"
-jq '.[0].Config.Image = "ghcr.io/gitstore-dev/api:latest"' "${test_dir}/service-containers.json" >"${test_dir}/unverified-service-containers.json"
+jq 'map(.Config.Image |= sub("@sha256:[0-9a-f]+$"; ":local-alpha"))' "${test_dir}/service-containers.json" >"${test_dir}/local-service-containers.json"
+jq -n --arg revision "${source_revision}" --arg digest "${image_digest}" '[
+  {Id:"api-id-1",Name:"/api-1",Image:("sha256:"+$digest),Path:"/bin/sh",Args:["-ec","export GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY=\"$(cat /run/secrets/serviceaccount-signing-key)\"; exec /app/api --config-file /etc/gitstore/gitstore.toml"],Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Env:["GITSTORE_GIT__GRPC__URI=dns:///git-1:50051"],Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
+  {Id:"api-id-2",Name:"/api-2",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Env:["GITSTORE_GIT__GRPC__URI=dns:///git-1:50051"],Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
+  {Id:"git-id-1",Name:"/git-1",Image:("sha256:"+$digest),Path:"/app/git-service",Config:{Image:("ghcr.io/gitstore-dev/git-service@sha256:"+$digest),Env:["GITSTORE_CATALOG_SERVICE__URI=http://api-a:6000"],Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}}
+]' >"${test_dir}/repository-service-containers.json"
+jq 'map(.Config.Image |= sub("@sha256:[0-9a-f]+$"; ":local-alpha"))' "${test_dir}/repository-service-containers.json" >"${test_dir}/repository-local-service-containers.json"
+jq '.[0].Config.Labels["org.opencontainers.image.revision"] = "wrong-revision"' "${test_dir}/service-containers.json" >"${test_dir}/unverified-service-containers.json"
 jq '.[1].Id = .[0].Id' "${test_dir}/service-containers.json" >"${test_dir}/duplicate-service-containers.json"
 jq -n '[range(1;4) as $i | {Id:("scylla-id-"+($i|tostring)),Name:("/scylla-"+($i|tostring)),Config:{Image:"scylla",Cmd:["--smp=2"]},RestartCount:0,HostConfig:{Memory:3221225472,NanoCpus:0,CpusetCpus:""},State:{Running:true,OOMKilled:false,StartedAt:"start"}}]' >"${test_dir}/scylla-containers.json"
+jq 'map(.Config.Cmd = ["--smp=1"] | .HostConfig.Memory = 1610612736)' "${test_dir}/scylla-containers.json" >"${test_dir}/alpha-scylla-containers.json"
+jq '.services.scylla.smpPerNode = 1 | .services.gitService.replicas = 1' "${repo_root}/tests/capacity/examples/config-manifest.json" >"${test_dir}/alpha-config-manifest.json"
+jq '.datastore.memoryBytesPerNode = 1610612736 | .topology.gitServiceReplicas = 1' "${repo_root}/tests/capacity/examples/environment-manifest.json" >"${test_dir}/alpha-environment-manifest.json"
 jq '[.[0], .[0], .[0]]' "${test_dir}/scylla-containers.json" >"${test_dir}/duplicate-scylla-containers.json"
 export MOCK_SCYLLA_CONTAINERS_FILE="${test_dir}/scylla-containers.json"
 export MOCK_REPLACEMENT_MARKER_PREFIX="${test_dir}/replacement"
@@ -196,6 +209,53 @@ jq -e '(.topology.liveApiReplicas | length) == 2 and (.artifacts.releaseServiceC
   "${test_dir}/evidence/namespace/watch/alpha/deployed-run/postflight-environment.json" >/dev/null
 jq -e 'length == 3 and all(.[]; .memoryLimitBytes == 3221225472 and .smpPerNode == 2 and .scyllaLiveNodes == 3)' \
   "${test_dir}/evidence/namespace/watch/alpha/deployed-run/datastore-before.json" >/dev/null
+
+MOCK_SAME_START=1 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=repository-deployed-run \
+  CAPACITY_CONFIG_MANIFEST="${test_dir}/alpha-config-manifest.json" \
+  CAPACITY_ENVIRONMENT_MANIFEST="${test_dir}/alpha-environment-manifest.json" \
+  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
+  REPOSITORY_API_A=http://api-a.internal REPOSITORY_API_B=http://api-b.internal \
+  REPOSITORY_API_REPLACEMENT=http://api-a.internal REPOSITORY_REPLACEMENT_TRIGGER_FILE="${test_dir}/repository-replacement-trigger" \
+  REPOSITORY_CONTROLLER_A=http://controller-a.internal REPOSITORY_CONTROLLER_B=http://controller-b.internal \
+  REPOSITORY_TOKEN=test-token REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS=256 \
+  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINERS=git-1 \
+  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/repository-local-service-containers.json" \
+  MOCK_SCYLLA_CONTAINERS_FILE="${test_dir}/alpha-scylla-containers.json" \
+  CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
+  CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=1 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=1610612736 \
+  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
+  "${dispatcher}" repository lifecycle alpha >/dev/null
+metadata="${test_dir}/evidence/repository/lifecycle/alpha/repository-deployed-run/metadata.json"
+jq -e '.passed == true and .postflightRequired == true and .postflightExitCode == 0 and .datastoreVerifierExitCode == 0' "${metadata}" >/dev/null
+jq -e '
+  (.artifacts.releaseServiceContainers | length) == 3 and
+  ([.artifacts.releaseServiceContainers[] | select(.role == "git-service")] | length) == 1 and
+  ([.artifacts.releaseServiceContainers[] | select(.role == "api") | .gitServiceURI] | unique | length) == 1
+' "${test_dir}/evidence/repository/lifecycle/alpha/repository-deployed-run/preflight-environment.json" >/dev/null
+jq -e '(.artifacts.releaseServiceContainers | length) == 3' \
+  "${test_dir}/evidence/repository/lifecycle/alpha/repository-deployed-run/postflight-environment.json" >/dev/null
+
+if MOCK_SAME_START=1 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=repository-production-undersized \
+  CAPACITY_CONFIG_MANIFEST="${test_dir}/alpha-config-manifest.json" \
+  CAPACITY_ENVIRONMENT_MANIFEST="${test_dir}/alpha-environment-manifest.json" \
+  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
+  REPOSITORY_API_A=http://api-a.internal REPOSITORY_API_B=http://api-b.internal \
+  REPOSITORY_API_REPLACEMENT=http://api-a.internal REPOSITORY_REPLACEMENT_TRIGGER_FILE="${test_dir}/repository-production-trigger" \
+  REPOSITORY_TOKEN=test-token REPOSITORY_CAPACITY_OVERFLOW_TRANSITIONS=256 \
+  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINERS=git-1 \
+  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/repository-local-service-containers.json" \
+  MOCK_SCYLLA_CONTAINERS_FILE="${test_dir}/alpha-scylla-containers.json" \
+  CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
+  CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=1 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=1610612736 \
+  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
+  "${dispatcher}" repository lifecycle production >/dev/null 2>&1; then
+  echo "production Repository lifecycle unexpectedly accepted alpha SMP, overflow, and local image references" >&2
+  exit 1
+fi
+metadata="${test_dir}/evidence/repository/lifecycle/production/repository-production-undersized/metadata.json"
+jq -e '.passed == false and .preflightExitCode == 2' "${metadata}" >/dev/null
+
+export MOCK_SCYLLA_CONTAINERS_FILE="${test_dir}/scylla-containers.json"
 
 if MOCK_SAME_START=1 MOCK_REPLACE_ALL=1 PATH="${test_dir}/bin:${PATH}" \
   CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=all-replicas-replaced-run \

@@ -177,8 +177,9 @@ summary, timestamps, exit code, and pass/fail status. Tokens belong in the
 untracked environment file and MUST NOT be copied into evidence.
 
 Valid target/profile pairs are `api/readiness`, `namespace/admission`,
-`namespace/validation`, `namespace/watch`, `namespace/recovery`, and
-`scylla/soak`. Admission is deployed k6 load; validation is the in-process
+`namespace/validation`, `namespace/watch`, `namespace/recovery`,
+`repository/lifecycle`, and `scylla/soak`. Admission is deployed k6 load;
+validation is the in-process
 two-replica soak. Diagnostic mode
 cannot produce passing evidence. Alpha mode is an explicitly provisional local
 environment gate: Namespace-watch visibility p95 must be ≤2 seconds and p99
@@ -217,6 +218,46 @@ Alpha and production watch evidence requires a run of at least 60 minutes,
 1,000 subscribers, 10,000 replay events, bursts of at least 100 transitions,
 and a burst interval shorter than the run. Use diagnostic mode for smaller
 experiments.
+
+Repository lifecycle provides a checked-in, isolated laptop alpha deployment:
+
+```bash
+make capacity TARGET=repository PROFILE=lifecycle MODE=alpha
+```
+
+This canonical command builds and starts the laptop topology, waits for it,
+bootstraps the untracked token, runs the verifier and API-B replacement,
+captures evidence, and removes the isolated deployment. The harness runs
+release images against a shared three-node Scylla journal. Its managed
+topology comes from the shared `compose.capacity.yml` capacity overlay; the
+overlay is an implementation detail, not a second public command interface.
+The concrete topology is two API processes, one singleton Git-service process
+with the shared bare-repository volume, two active-active controller-manager
+processes, and three Scylla nodes. It does not claim Git sharding or Git high
+availability. Controller replicas are not leased or fenced by the API;
+level-triggered idempotency and optimistic resource-version concurrency make
+their duplicate work safe. Journal materializer leasing/fencing is separate
+and must not be described as controller leadership.
+
+Repository alpha evidence has laptop-safe minimums of 10 minutes, 100 live
+subscribers, 1,000 replay events, 5 replay samples, a 20-resource pool, 256
+overflow transitions (enough to exceed both 64-event buffers), bursts of 20,
+and a 500ms transition interval. The overflow probe waits at least 31 seconds
+after admission so the configured 30-second backpressure bound can expire before
+it consumes the terminal error. Visibility
+must remain p95 ≤2 seconds and p99 ≤3 seconds. Production evidence requires 60
+minutes, a 100ms transition interval, 1,000 subscribers, 10,000 replay events,
+20 replay samples, a 50-resource pool, 1,000 overflow transitions, bursts of
+100, p95 ≤1 second, and p99 ≤3 seconds. Both tiers require two distinct APIs,
+two distinct controller managers, real rolling replacement, cursor-resumed
+recovery, and zero event loss. Alpha is valid laptop evidence but MUST NOT be
+described as a passing production soak.
+
+Repository alpha is a cold-start 10-minute gate, so each API must remain below
+both 75% retained-RSS growth and 256 MiB absolute RSS. The absolute ceiling
+prevents the wider warm-up allowance from masking unbounded retention.
+Production keeps the established stricter less-than-10% RSS-growth gate. Both
+modes retain the unchanged less-than-80% normalized process-CPU gate.
 
 A k6 pass proves only that the declared offered load and metric thresholds
 passed. Each feature profile MUST pair it with a domain correctness verifier
@@ -281,15 +322,17 @@ API process identities to those containers.
 The dispatcher enforces the same manifest preflight for Go-based capacity
 profiles. It records their focused Go test as the domain verifier and, for
 deployed Scylla-backed profiles, refuses alpha or production evidence without
-the before/after datastore checks. Namespace watch and recovery additionally
-repeat the live endpoint-to-container and release-artifact verification after
-the workload, retaining the replacement state in
+the before/after datastore checks. Namespace watch, Namespace recovery, and
+Repository lifecycle additionally repeat the live endpoint-to-container and
+release-artifact verification after the workload, retaining the replacement
+state in
 `postflight-environment.json` and rejecting stale or debug replacements. The
 identity comparison requires exactly the selected replacement endpoint to
 change and every non-selected replica to remain unchanged. Alpha and production
 runs—including k6 profiles—also require a clean verifier checkout so
-`gitRevision` is reproducible. The recovery overflow probe requires at least
-1,000 transitions and bounds the terminal-error read to 60 seconds.
+`gitRevision` is reproducible. Namespace recovery's overflow probe requires at
+least 1,000 transitions and bounds the terminal-error read to 60 seconds;
+Repository lifecycle applies its mode-specific overflow minimum above.
 
 Capacity preflight MUST identify optimized/release service artifacts. Debug
 builds are useful for functional diagnosis but cannot produce capacity evidence;
