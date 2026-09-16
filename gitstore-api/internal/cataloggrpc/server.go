@@ -262,6 +262,11 @@ func (s *Server) ValidateResources(
 		for _, tree := range req.GetTrees() {
 			allErrors = append(allErrors, s.validateResourceBlobs(ctx, req.RepositoryId, tree.GetProposedBlobs())...)
 			allErrors = append(allErrors, s.validateImmutableResourceChanges(tree.GetOldBlobs(), tree.GetProposedBlobs())...)
+			deletionErrors, err := s.validateRepositoryDeletions(ctx, req.RepositoryId, tree.GetOldBlobs(), tree.GetProposedBlobs())
+			if err != nil {
+				return nil, grpcstatus.Error(codes.Unavailable, "repository deletion validation unavailable")
+			}
+			allErrors = append(allErrors, deletionErrors...)
 		}
 	}
 	s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.PhaseStructural, time.Since(structuralStarted))
@@ -557,6 +562,53 @@ func repositoryEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceB
 		}
 	}
 	return entries
+}
+
+func (s *Server) validateRepositoryDeletions(ctx context.Context, repositoryID string, oldBlobs, proposedBlobs []*catalogv1.ResourceBlob) ([]*catalogv1.ValidationError, error) {
+	oldEntries := repositoryEntriesByPath(s.parser, oldBlobs)
+	proposedIdentities := make(map[string]struct{})
+	for _, entry := range repositoryEntriesByPath(s.parser, proposedBlobs) {
+		proposedIdentities[entry.identity.key()] = struct{}{}
+	}
+	var validationErrors []*catalogv1.ValidationError
+	for path, entry := range oldEntries {
+		if _, remains := proposedIdentities[entry.identity.key()]; remains {
+			continue
+		}
+		if err := s.validateRepositoryAuthoringTarget(ctx, repositoryID, path, entry.identity.Namespace, entry.identity.Name); err != nil {
+			validationErrors = append(validationErrors, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.name", Constraint: "authoring_target", Message: err.Error(),
+			})
+			continue
+		}
+		existing, err := s.lookupResourceByIdentity(ctx, entry.identity)
+		if errors.Is(err, datastore.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("lookup Repository deletion target: %w", err)
+		}
+		repository, ok := existing.(*datastore.Repository)
+		if !ok || repository == nil {
+			continue
+		}
+		if repository.Name == "gitstore-system" {
+			validationErrors = append(validationErrors, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.name", Constraint: "protected", Message: "validate: bootstrap Repository cannot be deleted",
+			})
+			continue
+		}
+		hasCatalogResources, err := s.store.HasCatalogResources(ctx, repository.UID)
+		if err != nil {
+			return nil, fmt.Errorf("check Repository deletion dependents: %w", err)
+		}
+		if hasCatalogResources {
+			validationErrors = append(validationErrors, &catalogv1.ValidationError{
+				FilePath: path, Field: "metadata.name", Constraint: "dependent_resources", Message: "validate: Repository contains catalog resources and cannot be deleted",
+			})
+		}
+	}
+	return validationErrors, nil
 }
 
 func namespaceEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {

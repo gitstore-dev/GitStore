@@ -66,6 +66,37 @@ func TestValidateResources_RepositoryAuthoringTarget(t *testing.T) {
 	assert.Contains(t, wrongPath.Errors[0].Message, "repositories/catalog.md")
 }
 
+func TestValidateResources_RepositoryDeletionRejectsDependentCatalogResources(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+	require.NoError(t, store.CreateNamespace(ctx, &datastore.Namespace{UID: "00000000-0000-0000-0000-000000000101", Name: "acme", Tier: datastore.NamespaceTierUser}))
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{UID: testRepoID, ID: testRepoID, RepositoryID: testRepoID, Namespace: "acme", Name: "gitstore-system"}))
+	const repositoryID = "00000000-0000-0000-0000-000000000102"
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{
+		UID: repositoryID, ID: repositoryID, RepositoryID: repositoryID, Namespace: "acme", NamespaceID: "acme", Name: "catalog",
+		APIVersion: "gitstore.dev/v1beta1", Kind: "Repository", ResourceVersion: "1", Generation: 1,
+		SourcePath: "repositories/catalog.md", GitRef: "refs/heads/main",
+	}))
+	require.NoError(t, store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "acme", Name: "catalog", RepositoryID: repositoryID}))
+	require.NoError(t, store.CreateProduct(ctx, &datastore.Product{
+		UID: "00000000-0000-0000-0000-000000000103", Namespace: "acme", Name: "dependent-product", RepositoryID: repositoryID,
+	}))
+
+	response, err := newCatalogServer(t, store, nil).ValidateResources(ctx, &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Trees: []*catalogv1.ResourceValidationTree{{
+			OldBlobs: []*catalogv1.ResourceBlob{{Path: "repositories/catalog.md", Content: repositoryManifestFor("catalog", "acme", "main", "standard")}},
+		}},
+	})
+	require.NoError(t, err)
+	require.False(t, response.Accepted)
+	require.Len(t, response.Errors, 1)
+	assert.Equal(t, "dependent_resources", response.Errors[0].Constraint)
+	assert.Contains(t, response.Errors[0].Message, "cannot be deleted")
+}
+
 func repositoryManifestFor(name, namespace, branch, storageClass string) []byte {
 	return []byte("---\napiVersion: gitstore.dev/v1beta1\nkind: Repository\nmetadata:\n  name: " + name + "\n  namespace: " + namespace + "\nspec:\n  defaultBranch: " + branch + "\n  visibility: PRIVATE\n  storageClass: " + storageClass + "\n---\n")
 }
