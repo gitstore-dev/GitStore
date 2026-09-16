@@ -214,19 +214,27 @@ func TestRunner_Backpressure_PausesOnWriteFailure_ResumesOnSuccess(t *testing.T)
 	defer cancel()
 
 	done := make(chan error, 1)
+	failureBaseline := testutil.ToFloat64(health.CheckpointWriteFailuresTotal.WithLabelValues("Widget"))
 	go func() { done <- r.Run(ctx) }()
 
+	// Wait for both injected failures instead of sleeping for the nominal
+	// retry interval: exponential backoff jitter may schedule retry two at the
+	// edge of that interval on a busy CI runner.
+	deadline := time.After(1 * time.Second)
+	for testutil.ToFloat64(health.CheckpointWriteFailuresTotal.WithLabelValues("Widget"))-failureBaseline < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("expected 2 recorded checkpoint write failures, got %d Save attempts and metric delta %v",
+				store.saveCalls.Load(),
+				testutil.ToFloat64(health.CheckpointWriteFailuresTotal.WithLabelValues("Widget"))-failureBaseline)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 	// While Save keeps failing, the second event must not be drained.
-	time.Sleep(150 * time.Millisecond)
 	if enqueued.len() > 1 {
 		t.Errorf("expected at most 1 event processed while checkpoint writes are failing, got %d", enqueued.len())
 	}
-	failuresBefore := testutil.ToFloat64(health.CheckpointWriteFailuresTotal.WithLabelValues("Widget"))
-	if failuresBefore < 2 {
-		t.Errorf("expected at least 2 recorded write failures, got %v", failuresBefore)
-	}
-
-	deadline := time.After(1 * time.Second)
+	deadline = time.After(1 * time.Second)
 	for store.savedCount() == 0 {
 		select {
 		case <-deadline:
