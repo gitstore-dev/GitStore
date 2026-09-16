@@ -6,6 +6,7 @@ package scylla
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -25,6 +26,8 @@ const (
 // repository projection. Progress keys are source-qualified, allowing this
 // source to share one durable journal and lease with Namespace CDC safely.
 func (s *scyllaDatastore) RunRepositoryCDC(ctx context.Context, materializer *watchjournal.Materializer, lease datastore.ResourceWatchLease, changeAgeLimit, confidenceWindow time.Duration, ready func()) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	sequencer := newNamespaceCDCSequencer(materializer, lease)
 	progress := &repositoryCDCProgressManager{journal: s, lease: lease}
 	progress.beginGeneration = func(generationCtx context.Context, generation time.Time) error {
@@ -34,10 +37,14 @@ func (s *scyllaDatastore) RunRepositoryCDC(ctx context.Context, materializer *wa
 		}
 		return sequencer.BeginGeneration(generationCtx, generation, streams)
 	}
-	go sequencer.Run(ctx)
-	reader, err := scyllacdc.NewReader(ctx, &scyllacdc.ReaderConfig{
+	sequencerErr := make(chan error, 1)
+	go func() {
+		sequencerErr <- sequencer.Run(runCtx)
+		cancel()
+	}()
+	reader, err := scyllacdc.NewReader(runCtx, &scyllacdc.ReaderConfig{
 		Session: s.session.Session, TableNames: []string{s.keyspace + ".repositories_by_uid"}, Consistency: gocql.Quorum,
-		ChangeConsumerFactory: &repositoryCDCConsumerFactory{sequencer: sequencer},
+		ChangeConsumerFactory: &repositoryCDCConsumerFactory{sequencer: sequencer, additionReady: s.repositoryCDCAdditionReady},
 		ProgressManager:       progress,
 		Logger:                zapCDCLogger{s.log},
 		Advanced: scyllacdc.AdvancedReaderConfig{ChangeAgeLimit: changeAgeLimit, ConfidenceWindowSize: confidenceWindow,
@@ -50,11 +57,21 @@ func (s *scyllaDatastore) RunRepositoryCDC(ctx context.Context, materializer *wa
 	if ready != nil {
 		ready()
 	}
-	return reader.Run(ctx)
+	readerErr := reader.Run(runCtx)
+	cancel()
+	sequenceErr := <-sequencerErr
+	if readerErr != nil && !errors.Is(readerErr, context.Canceled) {
+		return readerErr
+	}
+	if sequenceErr != nil && !errors.Is(sequenceErr, context.Canceled) {
+		return sequenceErr
+	}
+	return readerErr
 }
 
 type repositoryCDCConsumerFactory struct {
-	sequencer *namespaceCDCSequencer
+	sequencer     *namespaceCDCSequencer
+	additionReady func(context.Context, *datastore.Repository) (bool, error)
 }
 
 func (f *repositoryCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, input scyllacdc.CreateChangeConsumerInput) (scyllacdc.ChangeConsumer, error) {
@@ -65,7 +82,7 @@ func (f *repositoryCDCConsumerFactory) CreateChangeConsumer(ctx context.Context,
 	if err := f.sequencer.Register(ctx, streamID); err != nil {
 		return repositoryCDCFailedConsumer{err}, nil
 	}
-	return &repositoryCDCConsumer{sequencer: f.sequencer, streamID: streamID, reporter: input.ProgressReporter}, nil
+	return &repositoryCDCConsumer{sequencer: f.sequencer, streamID: streamID, reporter: input.ProgressReporter, additionReady: f.additionReady}, nil
 }
 
 type repositoryCDCFailedConsumer struct{ err error }
@@ -75,9 +92,10 @@ func (c repositoryCDCFailedConsumer) Empty(context.Context, gocql.UUID) error   
 func (repositoryCDCFailedConsumer) End() error                                        { return nil }
 
 type repositoryCDCConsumer struct {
-	sequencer *namespaceCDCSequencer
-	streamID  string
-	reporter  *scyllacdc.ProgressReporter
+	sequencer     *namespaceCDCSequencer
+	streamID      string
+	reporter      *scyllacdc.ProgressReporter
+	additionReady func(context.Context, *datastore.Repository) (bool, error)
 }
 
 func (c *repositoryCDCConsumer) Consume(ctx context.Context, change scyllacdc.Change) error {
@@ -97,9 +115,15 @@ func (c *repositoryCDCConsumer) Consume(ctx context.Context, change scyllacdc.Ch
 	} else if before != nil {
 		name, namespace = before.Name, before.Namespace
 	}
-	return c.sequencer.Submit(ctx, namespaceCDCSequenceRequest{cdcTime: change.Time, streamID: c.streamID, markProgress: func(markCtx context.Context) error {
+	request := namespaceCDCSequenceRequest{cdcTime: change.Time, streamID: c.streamID, markProgress: func(markCtx context.Context) error {
 		return c.reporter.MarkProgress(markCtx, scyllacdc.Progress{LastProcessedRecordTime: change.Time})
-	}, change: watchjournal.Change{Kind: repositoryCDCSource, Namespace: namespace, StreamID: c.streamID, Position: change.Time.Bytes(), DeduplicationKey: c.streamID + ":" + change.Time.String(), Name: name, Before: beforeJSON, After: afterJSON, At: change.Time.Time().UTC()}})
+	}, change: watchjournal.Change{Kind: repositoryCDCSource, Namespace: namespace, StreamID: c.streamID, Position: change.Time.Bytes(), DeduplicationKey: c.streamID + ":" + change.Time.String(), Name: name, Before: beforeJSON, After: afterJSON, At: change.Time.Time().UTC()}}
+	if before == nil && after != nil && c.additionReady != nil {
+		request.shouldPublish = func(publishCtx context.Context) (bool, error) {
+			return c.additionReady(publishCtx, after)
+		}
+	}
+	return c.sequencer.Submit(ctx, request)
 }
 func (c *repositoryCDCConsumer) Empty(ctx context.Context, ackTime gocql.UUID) error {
 	return c.sequencer.Submit(ctx, namespaceCDCSequenceRequest{cdcTime: ackTime, streamID: c.streamID, progressOnly: true, markProgress: func(markCtx context.Context) error {
@@ -153,6 +177,90 @@ func marshalOptionalRepository(repository *datastore.Repository) (json.RawMessag
 		return nil, fmt.Errorf("marshal Repository CDC postimage: %w", err)
 	}
 	return raw, nil
+}
+
+// repositoryCDCAdditionReady establishes the list/watch linearization point
+// for Repository creation. The authoritative insert produces CDC before the
+// namespace listing projection is written, so an ADDED event must not become
+// public until the exact version carried by that event is list-visible.
+func (s *scyllaDatastore) repositoryCDCAdditionReady(ctx context.Context, repository *datastore.Repository) (bool, error) {
+	if repository == nil {
+		return false, nil
+	}
+	uid, err := gocql.ParseUUID(repository.UID)
+	if err != nil {
+		return false, fmt.Errorf("parse Repository CDC addition uid: %w", err)
+	}
+	return repositoryCDCAdditionVisible(
+		ctx,
+		repository,
+		func(readCtx context.Context) (*repositoryCDCVersion, error) {
+			var current repositoryCDCVersion
+			err := s.session.Query(
+				"SELECT namespace, creation_timestamp, resource_version FROM repositories_by_uid WHERE uid=?",
+				nil,
+			).WithContext(readCtx).Bind(uid).GetRelease(&current)
+			if errors.Is(err, gocql.ErrNotFound) {
+				return nil, nil
+			}
+			if err != nil {
+				return nil, fmt.Errorf("read Repository CDC authoritative version: %w", err)
+			}
+			return &current, nil
+		},
+		func(readCtx context.Context) (bool, error) {
+			var projection struct {
+				UID gocql.UUID `db:"uid"`
+			}
+			err := s.session.Query(
+				"SELECT uid FROM repositories_by_namespace WHERE namespace=? AND bucket=? AND creation_timestamp=? AND uid=?",
+				nil,
+			).WithContext(readCtx).Bind(repository.Namespace, namespaceBucket(repository.CreationTimestamp), repository.CreationTimestamp, uid).GetRelease(&projection)
+			if errors.Is(err, gocql.ErrNotFound) {
+				return false, nil
+			}
+			if err != nil {
+				return false, fmt.Errorf("read Repository CDC namespace projection: %w", err)
+			}
+			return true, nil
+		},
+	)
+}
+
+type repositoryCDCVersion struct {
+	Namespace         string    `db:"namespace"`
+	CreationTimestamp time.Time `db:"creation_timestamp"`
+	ResourceVersion   string    `db:"resource_version"`
+}
+
+func repositoryCDCAdditionVisible(
+	ctx context.Context,
+	repository *datastore.Repository,
+	readCurrent func(context.Context) (*repositoryCDCVersion, error),
+	projectionVisible func(context.Context) (bool, error),
+) (bool, error) {
+	current, err := readCurrent(ctx)
+	if err != nil {
+		return false, err
+	}
+	if current == nil || current.ResourceVersion != repository.ResourceVersion ||
+		current.Namespace != repository.Namespace || !current.CreationTimestamp.Equal(repository.CreationTimestamp) {
+		// The create was rolled back, deleted, or superseded. Its later CDC
+		// transition (if any) represents the current list state, so advancing
+		// past this stale addition is safe.
+		return false, nil
+	}
+	visible, err := projectionVisible(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !visible {
+		// Returning an error prevents both public journal publication and the
+		// source checkpoint from advancing. The CDC supervisor restarts from
+		// durable progress and retries after the projection write completes.
+		return false, fmt.Errorf("repository CDC namespace projection is not committed")
+	}
+	return true, nil
 }
 
 type repositoryCDCProgressManager struct {

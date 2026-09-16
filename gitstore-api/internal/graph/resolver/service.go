@@ -513,6 +513,9 @@ func (s *Service) CommitRepositoryManifest(ctx context.Context, apiVersion, kind
 	if spec.StorageClass != nil {
 		resource.Spec.StorageClass = *spec.StorageClass
 	}
+	if err := s.preflightRepositoryManifestOperation(ctx, metadata.Namespace, metadata.Name, resource.Spec.StorageClass, create); err != nil {
+		return nil, err
+	}
 	content, err := yaml.Marshal(resource)
 	if err != nil {
 		return nil, gqlerror.Errorf("encode Repository manifest: %v", err)
@@ -539,6 +542,37 @@ func (s *Service) CommitRepositoryManifest(ctx context.Context, apiVersion, kind
 		return nil, gqlerror.Errorf("Repository admission failed: %v", err)
 	}
 	return result, nil
+}
+
+func (s *Service) preflightRepositoryManifestOperation(ctx context.Context, namespace, name, proposedStorageClass string, create bool) error {
+	mapping, err := s.store.LookupRepository(ctx, namespace, name)
+	if errors.Is(err, datastore.ErrNotFound) {
+		if create {
+			return nil
+		}
+		return gqlerror.Errorf("repository %q does not exist", name)
+	}
+	if err != nil {
+		return gqlerror.Errorf("failed to validate Repository operation")
+	}
+	if create {
+		return gqlerror.Errorf("repository %q already exists", name)
+	}
+	existing, err := s.store.GetRepository(ctx, mapping.RepositoryID)
+	if err != nil {
+		return gqlerror.Errorf("failed to validate Repository operation")
+	}
+	if repositoryStorageClassDowngrade(existing.StorageClass, proposedStorageClass) {
+		return gqlerror.Errorf("repository storageClass downgrade is not allowed")
+	}
+	return nil
+}
+
+func repositoryStorageClassDowngrade(current, proposed string) bool {
+	ranks := map[string]int{"standard": 1, "premium": 2}
+	currentRank, knownCurrent := ranks[strings.ToLower(current)]
+	proposedRank, knownProposed := ranks[strings.ToLower(proposed)]
+	return knownCurrent && knownProposed && proposedRank < currentRank
 }
 
 // UpdateNamespace commits and admits a replacement Namespace spec.
@@ -1591,7 +1625,7 @@ func (s *Service) CompleteRepositoryDeletion(ctx context.Context, namespace, nam
 		return nil, gqlerror.Errorf("repository %q still contains catalog resources", name)
 	}
 	if s.gitWriter != nil {
-		if err := s.gitWriter.DeleteRepository(ctx, repo.UID); err != nil {
+		if err := s.gitWriter.DeleteRepository(ctx, repo.UID); err != nil && status.Code(err) != codes.NotFound {
 			s.logger.Error("gRPC DeleteRepository failed during finalizer completion", zap.String("repo_id", repo.UID), zap.Error(err))
 			return nil, gqlerror.Errorf("failed to delete repository storage")
 		}

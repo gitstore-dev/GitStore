@@ -329,6 +329,25 @@ func TestCompleteRepositoryDeletion_removesStorageThenMetadataAfterDrain(t *test
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
+func TestCompleteRepositoryDeletionTreatsMissingStorageAsIdempotentSuccess(t *testing.T) {
+	writer := &mockGitWriter{deleteRepoErr: status.Error(codes.NotFound, "repository storage already removed")}
+	svc := newTestSvc(t, writer)
+	ctx := context.Background()
+	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
+		ID: testNsID1, Name: "ns-missing-storage", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
+	}))
+	repo, err := svc.CreateRepository(ctx, testNsID1, "already-removed", "main", "default", "test-user")
+	require.NoError(t, err)
+	require.NoError(t, svc.DeleteRepository(ctx, repo.ID, "test-user"))
+	terminating, err := svcStore(t, svc).GetRepository(ctx, repo.ID)
+	require.NoError(t, err)
+
+	_, err = svc.CompleteRepositoryDeletion(ctx, terminating.Namespace, terminating.Name, terminating.ResourceVersion)
+	require.NoError(t, err)
+	_, err = svcStore(t, svc).GetRepository(ctx, repo.ID)
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
 func TestCompleteRepositoryDeletion_keepsTerminatingRecordWhenCatalogResourcesReappear(t *testing.T) {
 	writer := &mockGitWriter{}
 	svc := newTestSvc(t, writer)

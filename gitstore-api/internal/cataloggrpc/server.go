@@ -522,6 +522,12 @@ func (s *Server) validateImmutableResourceChanges(oldBlobs, proposedBlobs []*cat
 				Message: "validate: metadata.namespace is immutable at the same repository path",
 			})
 		}
+		if isRepositoryStorageClassDowngrade(old.parsed.Repository.Spec.StorageClass, proposed.parsed.Repository.Spec.StorageClass) {
+			errorsOut = append(errorsOut, &catalogv1.ValidationError{
+				FilePath: path, Field: "spec.storageClass", Constraint: "immutable_downgrade",
+				Message: "validate: Repository storageClass downgrade is not allowed",
+			})
+		}
 	}
 
 	oldEntries := immutableEntries(s.parser, oldBlobs)
@@ -1175,7 +1181,11 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 		return err
 	}
 	for _, op := range deletes {
-		if err := s.deleteResource(ctx, op.identity, admCtx.RepositoryID, admCtx.RefName); err != nil {
+		sourcePath := ""
+		if op.oldEntry != nil {
+			sourcePath = op.oldEntry.path
+		}
+		if err := s.deleteResource(ctx, op.identity, admCtx.RepositoryID, admCtx.RefName, sourcePath, admCtx.ActorSubject); err != nil {
 			return err
 		}
 	}
@@ -1445,7 +1455,7 @@ func isRepositoryStorageClassDowngrade(current, proposed string) bool {
 
 var errCategoryDeletionBlocked = errors.New("category deletion blocked by child categories")
 
-func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, repositoryID, refName string) error {
+func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, repositoryID, refName, sourcePath, actor string) error {
 	existing, err := s.lookupResourceByIdentity(ctx, id)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
@@ -1539,6 +1549,53 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 		s.log.Info("admit_resources: Namespace manifest deletion ignored; use deleteNamespace",
 			zap.String("name", r.Name))
 		return nil
+	case *datastore.Repository:
+		if err := s.validateRepositoryAuthoringTarget(ctx, repositoryID, sourcePath, r.Namespace, r.Name); err != nil {
+			s.log.Info("admit_resources: Repository deletion skipped; invalid authoring target",
+				zap.String("namespace", r.Namespace),
+				zap.String("name", r.Name),
+				zap.String("repository_id", repositoryID),
+				zap.String("source_path", sourcePath),
+				zap.Error(err))
+			return nil
+		}
+		if r.GitRef == "" || refName == "" || r.GitRef != refName {
+			s.log.Info("admit_resources: Repository deletion skipped; resource owned by a different ref",
+				zap.String("namespace", r.Namespace),
+				zap.String("name", r.Name),
+				zap.String("deleted_ref", refName),
+				zap.String("owning_ref", r.GitRef))
+			return nil
+		}
+		if r.DeletionTimestamp != nil {
+			return nil
+		}
+		hasCatalogResources, checkErr := s.store.HasCatalogResources(ctx, r.UID)
+		if checkErr != nil {
+			return fmt.Errorf("check Repository deletion dependents: %w", checkErr)
+		}
+		if hasCatalogResources {
+			return fmt.Errorf("repository %s/%s contains catalog resources and cannot be deleted", r.Namespace, r.Name)
+		}
+		expectedResourceVersion := r.ResourceVersion
+		now := s.clock.Now().UTC()
+		r.DeletionTimestamp = &now
+		if !containsStringValue(r.Finalizers, datastore.RepositoryForegroundDeletionFinalizer) {
+			r.Finalizers = append(r.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
+		}
+		r.UpdateTimestamp = now
+		r.UpdateActor = actor
+		datastore.AdvanceRepositorySystemVersion(r)
+		if updateErr := s.store.UpdateRepository(ctx, r, expectedResourceVersion); updateErr != nil {
+			if errors.Is(updateErr, datastore.ErrConflict) {
+				latest, reloadErr := s.store.GetRepository(ctx, r.UID)
+				if reloadErr == nil && latest.DeletionTimestamp != nil {
+					return nil
+				}
+			}
+			return fmt.Errorf("start Repository foreground deletion: %w", updateErr)
+		}
+		return nil
 	case *datastore.File:
 		uid = r.UID
 		deleteErr = s.store.DeleteFileWithResourceVersion(ctx, r.UID, r.ResourceVersion)
@@ -1566,6 +1623,15 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 		zap.String("name", id.Name),
 		zap.String("uid", uid))
 	return nil
+}
+
+func containsStringValue(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 // resourceOwnership returns existing's (RepositoryID, GitRef) and true, or

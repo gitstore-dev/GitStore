@@ -207,6 +207,18 @@ func TestAdmitResources_RepositoryRejectsDowngradeAndImmutableIdentity(t *testin
 		downgrade: {path: repositoryManifestFor("catalog", "acme", "trunk", "standard")},
 		renamed:   {path: repositoryManifestFor("renamed", "acme", "main", "premium")},
 	}))
+	validation, err := srv.ValidateResources(ctx, &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID,
+		Trees: []*catalogv1.ResourceValidationTree{{
+			OldBlobs:      []*catalogv1.ResourceBlob{{Path: path, Content: repositoryManifestFor("catalog", "acme", "main", "premium")}},
+			ProposedBlobs: []*catalogv1.ResourceBlob{{Path: path, Content: repositoryManifestFor("catalog", "acme", "trunk", "standard")}},
+		}},
+	})
+	require.NoError(t, err)
+	require.False(t, validation.Accepted)
+	require.Len(t, validation.Errors, 1)
+	assert.Equal(t, "spec.storageClass", validation.Errors[0].Field)
+	assert.Equal(t, "immutable_downgrade", validation.Errors[0].Constraint)
 
 	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: downgrade, CommitSha: downgrade, RefName: "refs/heads/main", ChangedPaths: []string{path}})
 	require.NoError(t, err)
@@ -222,6 +234,57 @@ func TestAdmitResources_RepositoryRejectsDowngradeAndImmutableIdentity(t *testin
 	assert.Equal(t, codes.FailedPrecondition, grpcstatus.Code(err))
 	_, err = store.LookupRepository(ctx, "acme", "renamed")
 	assert.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestAdmitResources_RepositoryManifestRemovalStartsForegroundDeletion(t *testing.T) {
+	ctx := context.Background()
+	store, err := memdb.New()
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, store.CreateNamespace(ctx, &datastore.Namespace{UID: "00000000-0000-0000-0000-000000000101", Name: "acme", Tier: datastore.NamespaceTierUser}))
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{UID: testRepoID, ID: testRepoID, RepositoryID: testRepoID, Namespace: "acme", Name: "gitstore-system"}))
+	uid := "00000000-0000-0000-0000-000000000102"
+	path := "repositories/catalog.md"
+	oldCommit, newCommit := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{
+		UID: uid, ID: uid, RepositoryID: uid, Namespace: "acme", NamespaceID: "acme", Name: "catalog",
+		APIVersion: "gitstore.dev/v1beta1", Kind: "Repository", ResourceVersion: "3", Generation: 1,
+		SourcePath: path, GitCommitSHA: oldCommit, GitRef: "refs/heads/main",
+	}))
+	require.NoError(t, store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "acme", Name: "catalog", RepositoryID: uid}))
+	current := newCommit
+	srv := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{
+		oldCommit: {path: repositoryManifestFor("catalog", "acme", "main", "standard")},
+		newCommit: {},
+	}))
+	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
+		RepositoryId: uid, OldCommitSha: oldCommit, NewCommitSha: newCommit, CommitSha: newCommit,
+		RefName: "refs/heads/main", ActorSubject: "mallory", ChangedPaths: []string{path},
+	})
+	require.NoError(t, err)
+	notTerminating, err := store.GetRepository(ctx, uid)
+	require.NoError(t, err)
+	assert.Nil(t, notTerminating.DeletionTimestamp, "a non-system authoring repository must not delete Repository metadata")
+	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, OldCommitSha: oldCommit, NewCommitSha: newCommit, CommitSha: newCommit,
+		RefName: "refs/heads/feature", ActorSubject: "mallory", ChangedPaths: []string{path},
+	})
+	require.NoError(t, err)
+	notTerminating, err = store.GetRepository(ctx, uid)
+	require.NoError(t, err)
+	assert.Nil(t, notTerminating.DeletionTimestamp, "a different ref must not delete the Repository owned by main")
+
+	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, OldCommitSha: oldCommit, NewCommitSha: newCommit, CommitSha: newCommit,
+		RefName: "refs/heads/main", ActorSubject: "alice", ChangedPaths: []string{path},
+	})
+	require.NoError(t, err)
+	terminating, err := store.GetRepository(ctx, uid)
+	require.NoError(t, err)
+	require.NotNil(t, terminating.DeletionTimestamp)
+	assert.Contains(t, terminating.Finalizers, datastore.RepositoryForegroundDeletionFinalizer)
+	assert.Equal(t, "alice", terminating.UpdateActor)
+	assert.Equal(t, "4", terminating.ResourceVersion)
 }
 
 func TestAdmitResources_RepositoryRejectsBootstrapAndTerminatingNamespace(t *testing.T) {

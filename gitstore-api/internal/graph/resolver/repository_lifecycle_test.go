@@ -197,6 +197,32 @@ func TestRepositoryMutationsDelegateOneCommittedManifestToSharedAdmission(t *tes
 	assert.Equal(t, admission.OperationUpdate, admitter.calls[1].Operation)
 }
 
+func TestRepositoryMutationPreflightRejectsDuplicateCreateAndStorageDowngradeBeforeGitCommit(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	defer store.Close()
+	ctx := context.Background()
+	const systemRepositoryID = "01960000-0000-7000-8000-000000000081"
+	const repositoryID = "01960000-0000-7000-8000-000000000082"
+	require.NoError(t, store.CreateNamespace(ctx, &datastore.Namespace{UID: "01960000-0000-7000-8000-000000000080", Name: "acme"}))
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{UID: systemRepositoryID, RepositoryID: systemRepositoryID, Namespace: "acme", Name: SystemRepositoryName}))
+	require.NoError(t, store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "acme", Name: SystemRepositoryName, RepositoryID: systemRepositoryID}))
+	require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{UID: repositoryID, RepositoryID: repositoryID, Namespace: "acme", Name: "catalog", StorageClass: "premium"}))
+	require.NoError(t, store.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "acme", Name: "catalog", RepositoryID: repositoryID}))
+	writer := &repositoryLifecycleWriter{}
+	service, err := NewService(ServiceDeps{Store: store, GitWriter: writer, Logger: zap.NewNop(), CommittedManifestAdmitter: &repositoryLifecycleAdmitter{store: store}})
+	require.NoError(t, err)
+	metadata := &model.MetadataInput{Name: "catalog", Namespace: "acme"}
+
+	_, err = service.CommitRepositoryManifest(ctx, repositoryAPIVersion, repositoryKind, metadata, &model.RepositorySpecInput{StorageClass: stringPointer("premium")}, "alice", true)
+	require.ErrorContains(t, err, "already exists")
+	assert.Empty(t, writer.commits)
+
+	_, err = service.CommitRepositoryManifest(ctx, repositoryAPIVersion, repositoryKind, metadata, &model.RepositorySpecInput{StorageClass: stringPointer("standard")}, "alice", false)
+	require.ErrorContains(t, err, "downgrade")
+	assert.Empty(t, writer.commits)
+}
+
 func TestRepositoryMutationRejectsEnvelopeMismatchAndBootstrapBeforeGitCommit(t *testing.T) {
 	mutation := &mutationResolver{Resolver: &Resolver{logger: zap.NewNop()}}
 	_, err := mutation.CreateRepository(context.Background(), model.CreateRepositoryInput{APIVersion: "wrong", Kind: repositoryKind, Metadata: &model.MetadataInput{Name: "catalog", Namespace: "acme"}, Spec: &model.RepositorySpecInput{}})
