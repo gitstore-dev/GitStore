@@ -465,66 +465,57 @@ federation are not current runtime dependencies.
 ### Target Architecture Diagram
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#E5E7EB', 'edgeLabelBackground':'#ffffff', 'tertiaryColor': '#fff'}}}%%
-flowchart LR
-    Author([Human / AI author])
-    Storefront([Storefront / Admin])
-    Agent([Agent workers])
-    Federation[Optional federation gateway]
-    Store[(ScyllaDB resource state)]
+architecture-beta
+    group git_service(server)[gitstore-git-service · Rust]
+    group api(server)[gitstore-api · Go]
+    group controllers(server)[gitstore-controller-manager · Go]
 
-    subgraph GitService[gitstore-git-service · Rust]
-        Receive[Git receive-pack and hook callbacks]
-        GitRepos[(Bare Git repositories)]
-        Receive <--> GitRepos
-    end
+    service author(internet)[Human / AI author]
+    service storefront(internet)[Storefront / Admin]
+    service agent(server)[Agent workers]
+    service federation(cloud)[Optional federation gateway]
+    service store(database)[ScyllaDB resource state]
 
-    subgraph API[gitstore-api · Go]
-        Gateway[GraphQL and Git Smart HTTP ingress]
-        Events[GitEvent ingress]
-        Parse[Parse and normalize]
-        Convert[Hub conversion · WASI]
-        Admit[Admission policies]
-        Project[Resource projections]
-        ResourceWatch[Resource Watch\nall Git-backed resources\nNamespace · Repository · CategoryTaxonomy · …]
-        Query[Query handlers]
-        Schema[Dynamic GraphQL schema]
+    service receive(server)[Git receive-pack + hooks] in git_service
+    service git_repos(disk)[Bare Git repositories] in git_service
 
-        Events --> Parse --> Convert --> Admit --> Project
-        Project --> ResourceWatch
-        Query --> Schema
-    end
+    service gateway(server)[GraphQL + Git Smart HTTP] in api
+    service events(server)[GitEvent ingress] in api
+    service parse(server)[Parse + normalize] in api
+    service convert(server)[Hub conversion + WASI] in api
+    service admit(server)[Admission policies] in api
+    service project(server)[Resource projections] in api
+    service resource_watch(server)[Resource Watch: all Git-backed kinds] in api
+    service query(server)[Query handlers] in api
+    service schema(server)[Dynamic GraphQL schema] in api
 
-    subgraph Controllers[gitstore-controller-manager · Go]
-        ListWatch[List, resume, and enqueue]
-        Reconcile[Idempotent reconciliation]
-        Status[Status-subresource mutation]
-        ListWatch --> Reconcile --> Status
-    end
+    service list_watch(server)[List + resume + enqueue] in controllers
+    service reconcile(server)[Idempotent reconciliation] in controllers
+    service status(server)[Status-subresource mutation] in controllers
 
-    Author --> Gateway
-    Gateway -->|Git transport| Receive
-    Gateway -->|GraphQL mutations| Admit
-    Receive -->|GitEvent contract| Events
-    Project <--> Store
-    Store --> ResourceWatch
-    ResourceWatch -->|resourceVersion stream| ListWatch
-    ResourceWatch -->|resourceVersion stream| Agent
-    Status -->|GraphQL mutation| Gateway
-    Agent -->|proposed spec change| Gateway
-    Store --> Query
-    Gateway --> Storefront
-    Federation -. external subgraphs .-> Schema
+    git_repos:R <--> L:receive
+    events:R --> L:parse
+    parse:R --> L:convert
+    convert:R --> L:admit
+    admit:R --> L:project
+    project:R --> L:resource_watch
+    list_watch:R --> L:reconcile
+    reconcile:R --> L:status
+    query:R --> L:schema
 
-    classDef api fill:#BAE6FD,stroke:#0284C7,stroke-width:2px,color:#000;
-    classDef git fill:#FCA5A5,stroke:#DC2626,stroke-width:2px,color:#000;
-    classDef controller fill:#C7D2FE,stroke:#4F46E5,stroke-width:2px,color:#000;
-    classDef external fill:#fff,stroke:#111,stroke-width:1px,color:#000;
-
-    class Gateway,Events,Parse,Convert,Admit,Project,ResourceWatch,Query,Schema api;
-    class Receive git;
-    class ListWatch,Reconcile,Status controller;
-    class Author,Storefront,Agent,Federation external;
+    author:R --> L:gateway
+    gateway:R --> L:receive
+    gateway:R --> L:admit
+    receive:R --> L:events
+    project:R <--> L:store
+    store:R --> L:resource_watch
+    resource_watch:R --> L:list_watch
+    resource_watch:R --> L:agent
+    status:R --> L:gateway
+    agent:R --> L:gateway
+    store:R --> L:query
+    gateway:R --> L:storefront
+    federation:R --> L:schema
 ```
 
 `Resource Watch` is a kind-agnostic contract, not a Namespace-only subsystem.
