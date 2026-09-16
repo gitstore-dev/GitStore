@@ -12,9 +12,12 @@ This document describes the architecture of the AI-native commerce engine: the s
 - Support concurrent users and agents through pluggable authentication and authorization.
 - Sustain catalogues with millions of products and prolonged peak Git push workloads.
 
-## Roadmap Alignment (Current Direction)
+## Roadmap Alignment
 
-The current architecture target is **Proposal 3**. Use this table as the quick index from capability area to tracking initiatives.
+The **accepted architecture** is the implemented baseline described below.
+**Proposal 3** is the roadmap target, not a description of shipped topology or
+contracts. Use this table as the quick index from capability area to tracking
+initiatives.
 
 | Capability Area           | Tracking Initiatives                                           |
 |---------------------------|----------------------------------------------------------------|
@@ -44,7 +47,7 @@ All proposals share the same core building blocks, arranged with different contr
 - `shared/schemas/`: GraphQL schema contracts consumed by the API layer.
 - `shared/proto/gitstore/git/v1/`: Canonical `.proto` definition for the gRPC Git service contract.
 
-> **Admin**: For the optional web interface, see [`docs/admin/architecture.md`](admin/architecture.md).
+> **Admin**: For the optional web interface, see [`docs/admin/architecture.md`](../admin/architecture.md).
 
 ### Production Deployment Model
 
@@ -56,25 +59,29 @@ support multiple replicas and autoscaling without depending on process affinity.
 - Controller reconciliation must be idempotent and use an explicit
   coordination, partitioning, or duplicate-safe work model.
 - Git-service deployment must define repository placement, reference-update
-  serialization, durable storage, routing, and failover without divergent refs.
+  serialization, durable storage, sharding, routing, and failover without divergent refs.
 - Routine catalogue paths must remain bounded at 5,000,000 or more products.
 - Git push validation, admission, projection, and reconciliation must use
   bounded concurrency and backpressure and must pass sustained-load testing.
 
 ### Service Boundary
 
-The API gateway (`gitstore-api`) and the Git server (`gitstore-git-service`) communicate exclusively through gRPC on port `50051`. **No shared volume mount is required.** The API holds no local git state; every read (catalogue load) and every write (commit, delete, tag) is an RPC call to the Git service.
+The API gateway (`gitstore-api`) and the Git server (`gitstore-git-service`) communicate exclusively through gRPC on port `50051`. The API holds no local git state; every read (catalogue load) and every write (commit, delete, tag) is an RPC call to the Git service.
 
-`gitstore-api` serves two ports:
+`gitstore-api` serves 3 ports:
 - Port `4000` — GraphQL API
 - Port `9000` — Git smart HTTP (`git clone`, `git fetch`, `git push`)
+- Port `6000` — Catalogue service gRPC (internal only)
 
-`gitstore-git-service` serves one port:
+`gitstore-git-service` serves 1 port:
 - Port `50051` — gRPC only
+
+`gitstore-controller-manager` serves 1 port:
+- Port `5001` - Health checks and poison items (internal only)
 
 ### Go API Composition
 
-`gitstore-api` uses explicit manual dependency injection. Runtime wiring is centralized in `gitstore-api/internal/app`, and `cmd/server/main.go` is limited to configuration loading, logger construction, server startup, and signal-driven shutdown.
+`gitstore-api` uses explicit manual dependency injection. Runtime wiring is centralised in `gitstore-api/internal/app`, and `cmd/server/main.go` is limited to configuration loading, logger construction, server startup, and signal-driven shutdown.
 
 Business packages receive dependencies through plain `Deps` structs rather than package globals or a DI framework. Shared infrastructure seams such as clocks, ID generators, catalog parsers, Git clients, auth services, and loggers are passed into constructors so tests can use deterministic time, IDs, and token expiry behavior.
 
@@ -410,9 +417,12 @@ graph TD
 
 ---
 
-## Proposal 3 — Initiative-Aligned Control Plane (Current Direction)
+## Proposal 3 — Initiative-Aligned Control Plane (Roadmap Target)
 
-Proposal 3 reflects the current roadmap initiatives and supersedes Proposals 1 and 2 as the active target architecture.
+Proposal 3 reflects the current roadmap initiatives. It is intentionally kept
+separate from the accepted implementation below: GitEvent streaming, WASI hub
+conversion, universal resource storage, dynamic schema synthesis, and
+federation are not current runtime dependencies.
 
 ### Top-Down Flow
 
@@ -420,7 +430,10 @@ Proposal 3 reflects the current roadmap initiatives and supersedes Proposals 1 a
 2. **Git event emission**: `gitstore-git-service` publishes normalised Git ref events (`branch-*`, `tag-*`, `push-rejected`) through the GitEvent contract.
 3. **Validation pipeline**: parsing, hub-version conversion, schema/CEL checks, and admission policies run in `gitstore-api`.
 4. **Persistence**: current Git-backed catalog resources are projected into resource-specific datastore tables with monotonic `resourceVersion`; the universal ScyllaDB resource model remains a target architecture item.
-5. **Reconciliation**: controller manager consumes watch streams, executes side effects, and writes status conditions via status subresource mutations.
+5. **Resource watch and reconciliation**: every Git-backed resource is exposed
+   through the generic Resource Watch contract. Controller manager and agent
+   workers consume those streams, execute side effects, and write status
+   conditions through status-subresource mutations.
 6. **Graph serving**: dynamic GraphQL schema synthesis serves core and CRD kinds from unified storage; federation is optional for external app subgraphs.
 
 ### Initiative Mapping
@@ -449,58 +462,85 @@ Proposal 3 reflects the current roadmap initiatives and supersedes Proposals 1 a
 [gh-166]: https://github.com/gitstore-dev/GitStore/issues/166
 [gh-169]: https://github.com/gitstore-dev/GitStore/issues/169
 
-### Architecture Diagram
+### Target Architecture Diagram
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#E5E7EB', 'edgeLabelBackground':'#ffffff', 'tertiaryColor': '#fff'}}}%%
-graph TD
-    Actor[("👩‍💻 Human / 🤖 AI")]
-    API[("🐹 gitstore-api\nGraphQL + Git ingress")]
-    GitSvc[("🦀 gitstore-git-service\nStorage + hook callbacks")]
-    Events[("📨 GitEvent stream")]
-    Parse[("🧩 Parsing layer")]
-    Convert[("🔁 Hub conversion (WASI)")]
-    Admit[("✅ Admission pipeline")]
-    Store[("🗄️ ScyllaDB universal resources")]
-    Watch[("👀 Watch API\nresourceVersion resume")]
-    Ctl[("⚙️ Controller manager")]
-    Status[("📝 Status subresource")]
-    Query[("🔎 Query handlers")]
-    Schema[("🧬 Dynamic schema synthesis")]
-    Fed[("🌐 Optional federation gateway")]
-    Agent[("🧠 Agent workers")]
-    Storefront[("🌐 Storefront / Admin")]
+flowchart LR
+    Author([Human / AI author])
+    Storefront([Storefront / Admin])
+    Agent([Agent workers])
+    Federation[Optional federation gateway]
+    Store[(ScyllaDB resource state)]
 
-    Actor ---> API
-    API <----> GitSvc
-    GitSvc --> Events
-    Events --> Parse --> Convert --> Admit --> Store
+    subgraph GitService[gitstore-git-service · Rust]
+        Receive[Git receive-pack and hook callbacks]
+        GitRepos[(Bare Git repositories)]
+        Receive <--> GitRepos
+    end
 
-    Store --> Watch --> Ctl --> Status --> API --> Store
-    Watch --> Agent
-    Agent --> API
+    subgraph API[gitstore-api · Go]
+        Gateway[GraphQL and Git Smart HTTP ingress]
+        Events[GitEvent ingress]
+        Parse[Parse and normalize]
+        Convert[Hub conversion · WASI]
+        Admit[Admission policies]
+        Project[Resource projections]
+        ResourceWatch[Resource Watch\nall Git-backed resources\nNamespace · Repository · CategoryTaxonomy · …]
+        Query[Query handlers]
+        Schema[Dynamic GraphQL schema]
 
-    Store --> Query --> Schema --> API --> Storefront
-    Fed -. external subgraphs .-> Schema
+        Events --> Parse --> Convert --> Admit --> Project
+        Project --> ResourceWatch
+        Query --> Schema
+    end
 
-    classDef core fill:#BAE6FD,stroke:#0284C7,stroke-width:2px,color:#000;
-    classDef rust fill:#FCA5A5,stroke:#DC2626,stroke-width:2px,color:#000;
-    classDef data fill:#E5E7EB,stroke:#4B5563,stroke-width:2px,color:#000;
-    classDef control fill:#C7D2FE,stroke:#4F46E5,stroke-width:2px,color:#000;
+    subgraph Controllers[gitstore-controller-manager · Go]
+        ListWatch[List, resume, and enqueue]
+        Reconcile[Idempotent reconciliation]
+        Status[Status-subresource mutation]
+        ListWatch --> Reconcile --> Status
+    end
 
-    class API,Query,Schema core;
-    class GitSvc rust;
-    class Store,Events data;
-    class Parse,Convert,Admit,Watch,Ctl,Status,Agent,Fed control;
+    Author --> Gateway
+    Gateway -->|Git transport| Receive
+    Gateway -->|GraphQL mutations| Admit
+    Receive -->|GitEvent contract| Events
+    Project <--> Store
+    Store --> ResourceWatch
+    ResourceWatch -->|resourceVersion stream| ListWatch
+    ResourceWatch -->|resourceVersion stream| Agent
+    Status -->|GraphQL mutation| Gateway
+    Agent -->|proposed spec change| Gateway
+    Store --> Query
+    Gateway --> Storefront
+    Federation -. external subgraphs .-> Schema
+
+    classDef api fill:#BAE6FD,stroke:#0284C7,stroke-width:2px,color:#000;
+    classDef git fill:#FCA5A5,stroke:#DC2626,stroke-width:2px,color:#000;
+    classDef controller fill:#C7D2FE,stroke:#4F46E5,stroke-width:2px,color:#000;
+    classDef external fill:#fff,stroke:#111,stroke-width:1px,color:#000;
+
+    class Gateway,Events,Parse,Convert,Admit,Project,ResourceWatch,Query,Schema api;
+    class Receive git;
+    class ListWatch,Reconcile,Status controller;
+    class Author,Storefront,Agent,Federation external;
 ```
+
+`Resource Watch` is a kind-agnostic contract, not a Namespace-only subsystem.
+It covers every Git-backed resource and carries resumable `resourceVersion`
+streams to controllers and agents. Namespace and Repository already use the
+durable resource journal; CategoryTaxonomy has a shipped watch surface but must
+move from its event-bus backend to the journal before it satisfies this target
+architecture.
 
 ### Initiative Legend
 
 - **Git events and stream** (`Events`): [#169][gh-169], [#139][gh-139]
 - **Parsing and admission** (`Parse`, `Convert`, `Admit`): [#134][gh-134], [#164][gh-164], [#123][gh-123], [#106][gh-106]
 - **Storage and versioning** (`Store`): [#140][gh-140], [#141][gh-141], [#137][gh-137]
-- **Watch and reconciliation** (`Watch`, `Ctl`, `Status`): [#131][gh-131], [#165][gh-165], [#166][gh-166]
-- **Query and graph runtime** (`Query`, `Schema`, `Fed`): [#148][gh-148], [#149][gh-149], [#162][gh-162]
+- **Watch and reconciliation** (`ResourceWatch`, `ListWatch`, `Reconcile`, `Status`): [#131][gh-131], [#165][gh-165], [#166][gh-166]
+- **Query and graph runtime** (`Query`, `Schema`, `Federation`): [#148][gh-148], [#149][gh-149], [#162][gh-162]
 - **Agent orchestration** (`Agent`): [#150][gh-150]
 
 ### Operational Notes
@@ -513,7 +553,10 @@ graph TD
 
 ## Choosing Between Proposals
 
-- **Current target**: choose **Proposal 3**. It aligns with the active initiative set and current service boundary decisions.
+- **Accepted implementation**: use the implemented architecture below for
+  current behaviour and operational decisions.
+- **Roadmap target**: Proposal 3 aligns with the active initiative set and
+  current service-boundary direction.
 - Treat **Proposal 1** and **Proposal 2** as historical alternatives retained for design context.
 - In all variants, Git remains the source of intent and ScyllaDB is the serving read layer; a KV cache is optional and data-driven.
 
@@ -577,73 +620,134 @@ preserve it.
 All namespace operations are GraphQL, consistent with the rest of the domain API. See `shared/schemas/namespace.graphqls` for the full contract.
 
 ```graphql
-# Create a user namespace
-mutation {
-  createNamespace(input: { identifier: "acme-corp", tier: USER }) {
-        namespace { id identifier tier createdAt createdBy }
+# Create a Namespace with the versioned resource envelope.
+mutation CreateNamespace {
+  createNamespace(input: {
+    apiVersion: "gitstore.dev/v1beta1"
+    kind: "Namespace"
+    metadata: { name: "acme-corp" }
+    spec: { title: "Acme Corporation", tier: ORGANIZATION }
+  }) {
+    namespace {
+      apiVersion
+      kind
+      metadata { name uid resourceVersion generation }
+      spec { title tier }
+      status { observedGeneration lastAppliedRevision }
+    }
   }
 }
 
-# List all namespaces
-query {
+# List the current Namespace projection.
+query ListNamespaces {
   namespaces(first: 20) {
     edges {
-      node { id identifier tier createdBy }
+      node {
+        apiVersion
+        kind
+        metadata { name uid resourceVersion generation }
+        spec { title tier }
+        status { observedGeneration conditions { type status reason message } }
+      }
     }
     pageInfo { hasNextPage endCursor }
     totalCount
   }
 }
 
-# Get namespace by identifier
-query {
-  namespace(by: {identifier: "acme-corp"}) {
-    id identifier displayName tier
-    createdAt createdBy updatedAt updatedBy
+# Look up by the current canonical name rather than the deprecated identifier.
+query NamespaceByName {
+  namespace(by: { name: "acme-corp" }) {
+    metadata { name uid resourceVersion generation }
+    spec { title tier }
+    status { observedGeneration conditions { type status reason message } }
   }
 }
 
-# Get namespace by opaque global Node ID
-query {
-  namespace(by: {id: "Z2lkOi8vR2l0U3RvcmUvTmFtZXNwYWNlL25hbWVzcGFjZS11dWlk"}) {
-    id identifier displayName tier
-    createdAt createdBy updatedAt updatedBy
-  }
-}
-
-# Delete a namespace (owner or admin only)
-mutation {
+# Start foreground deletion. The payload distinguishes a new request from one
+# that found an already-terminating Namespace.
+mutation DeleteNamespace {
   deleteNamespace(input: { identifier: "acme-corp" }) {
-        deletedIdentifier
+    deletedIdentifier
+    outcome
   }
 }
 ```
 
+Every Git-backed resource uses the generic `watchResources` shape in the target
+architecture. The kind and cursor are variables so the same operation works
+for `Namespace`, `Repository`, `CategoryTaxonomy`, and future Git-backed kinds:
+
+```graphql
+subscription WatchResource(
+  $kind: String!
+  $namespace: String
+  $resourceVersion: String
+) {
+  watchResources(
+    kind: $kind
+    namespace: $namespace
+    resourceVersion: $resourceVersion
+  ) {
+    type
+    kind
+    namespace
+    name
+    resourceVersion
+    object
+  }
+}
+```
+
+For Namespace, use the typed `watchNamespaces` subscription and its bootstrap
+BOOKMARK when a strongly typed payload and race-free list/watch bootstrap are
+needed. `watchResources(kind: "Namespace")` remains the compatible generic
+route used by the controller manager.
+
 ### Deletion Guard
 
-Deletion is blocked when the namespace contains repositories (enforced in the service layer). The guard is a no-op stub in this release (repositories table is out of scope); it will be enforced when the repository spec lands.
+Deletion is blocked while the Namespace contains repositories. A successful
+request begins foreground termination; permanent removal requires the
+controller-only completion step after lifecycle preconditions are met.
 
-For quickstart examples and `curl`-based testing, see [`specs/009-api-namespaces/quickstart.md`](../specs/009-api-namespaces/quickstart.md).
+For quickstart examples and `curl`-based testing, see [`specs/009-api-namespaces/quickstart.md`](../../specs/009-api-namespaces/quickstart.md).
 
 ---
 
-## Controller Manager, Reconciliation Loop, and AI Integration (Proposal)
+## Accepted Architecture: Admission, Namespace Watch, and Reconciliation
 
-This model applies to both core resources and CRD-defined kinds. It avoids a split-brain read path by treating ScyllaDB as the unified serving state for reconciled resources while keeping Git as the audited intent log for `.spec`.
+This is the implemented baseline. It applies directly to the current Git-backed
+admission path. Namespace and Repository use the shared durable resource-watch
+journal; CategoryTaxonomy, Product, and File retain their current event-bus
+backends. It does not imply that the Proposal 3 components have shipped.
 
 ### End-to-End Flow
 
-1. Desired state enters via Git.
-2. API validates and projects `.spec` into hub-version storage.
-3. Controller manager watches reconciled objects and drives side effects.
-4. Controllers report `.status` through API mutations.
-5. API increments `resourceVersion` and publishes the next watch event.
+1. Git Smart HTTP reaches `gitstore-api`, which resolves the repository and
+   proxies Git transport to `gitstore-git-service` over gRPC.
+2. During receive-pack, the Git service calls `CatalogService.ValidateResources`
+   synchronously. On a successful ref update it calls
+   `CatalogService.AdmitResources` with the repository, ref, and old/new tips.
+3. The API verifies that the ref is still current, derives resource operations,
+   and writes the resource-specific datastore projections. Post-receive
+   admission is asynchronous from the client's perspective and cannot reject
+   an accepted push retroactively.
+4. For Namespace and Repository, Scylla CDC records the committed authoritative
+   change. A leased, fenced API-replica materializer normalizes it into the
+   shared, bounded durable resource-watch journal.
+5. API replicas tail that journal once per process and expose it over
+   GraphQL `graphql-transport-ws`. The controller manager lists, resumes via
+   `watchResources(kind: "Namespace")`, reconciles, and writes its status via
+   GraphQL with optimistic resource-version preconditions.
 
 ### Ownership and Write Boundaries
 
-- Users and AI agents own desired state (`.spec`) and submit it exclusively through Git push/PR workflows.
+- Users and AI agents own desired state (`.spec`) and submit it through Git
+  push/PR workflows or resource-specific GraphQL control-plane mutations where
+  that resource supports them.
 - Standard controllers own observed state (`.status`) and write it through GraphQL status mutations on the API server, which then persists to ScyllaDB.
-- No actor writes directly to ScyllaDB; every write is gated through the API to ensure resource versioning and watch-cache consistency.
+- No controller writes directly to ScyllaDB. API-owned writes preserve resource
+  versioning and, for Namespace, become observable through the durable journal.
 
 ### Validation Pipeline
 
@@ -700,49 +804,66 @@ status:
 
 The API surface stays GraphQL-first while preserving Kubernetes-style watch semantics:
 
-- Controllers subscribe through GraphQL-over-SSE (HTTP/2 friendly) backed by an in-process watch cache.
-- Events are emitted as `ADDED`, `MODIFIED`, and `DELETED` envelopes containing full reconciled objects (`metadata`, `.spec`, `.status`).
-- Watch streams support resume from `resourceVersion` so disconnected controllers can continue without full resync.
-- On restart, the API rebuilds cache state from ScyllaDB before opening new watch streams.
+- Controllers subscribe using the `graphql-transport-ws` WebSocket protocol.
+- Namespace uses `watchNamespaces` as its typed canonical contract and the
+  compatible `watchResources(kind: "Namespace")` path used by the controller.
+  Both read the same durable journal and expose `ADDED`, `MODIFIED`, `DELETED`,
+  and `BOOKMARK` events.
+- Namespace cursors are opaque, replica-portable journal cursors. A controller
+  bootstraps with a durable BOOKMARK, lists, drains buffered events, and resumes
+  strictly after its persisted cursor. Continuity failures return explicit
+  `WATCH_EXPIRED`; materializer unavailability returns `WATCH_UNAVAILABLE`.
+- CategoryTaxonomy, Product, and File retain their event-bus watch backends
+  until their own durable-watch migrations land; they must not be represented
+  as Namespace journal consumers.
 
 ### Reconciliation Model
 
-1. Controller receives a watch event with latest `.spec` and `.status`.
-2. Controller compares desired and observed state and executes external side effects.
-3. Controller reports observed outcome via GraphQL status mutation (`update...Status`) with optimistic preconditions.
-4. API writes new `.status`, increments `resourceVersion`, and fans out the next watch event.
+1. Controller receives the latest `.spec` and `.status` from its list/watch
+   cache.
+2. Controller compares desired and observed state and executes idempotent
+   external side effects.
+3. Controller reports the observed outcome through `updateResourceStatus` (or
+   a dedicated per-kind status mutation) with optimistic preconditions.
+4. The API writes the status, advances `resourceVersion`, and Namespace status
+   changes subsequently flow through CDC and the durable journal.
 
 AI controllers follow the same observation loop but act by proposing new `.spec` via Git (branch + PR). They do not bypass status ownership or admission boundaries.
 
 ```mermaid
 sequenceDiagram
     participant U as Human / CI / AI Author
+    participant HTTP as gitstore-api Git Smart HTTP
     participant G as Git Service (Rust)
     participant API as API Server (Go, GraphQL)
     participant DB as ScyllaDB
-    participant WC as Watch Cache
+    participant CDC as Scylla CDC + fenced materializer
+    participant J as Durable Namespace journal
     participant RC as Controller Manager
 
     rect rgb(30, 40, 60)
     note right of U: 1. Desired state update via Git
-    U->>G: git push (manifest change)
+    U->>HTTP: git push (manifest change)
+    HTTP->>G: GitService gRPC receive-pack
     G->>API: gRPC pre-receive (validate only)
     API-->>G: allow/reject
     G->>G: persist accepted commit
     G->>API: gRPC post-receive (ref + old/new commits)
     API->>API: stale-ref check + derive resource operations
     API->>DB: apply create/update/delete (generation/resourceVersion lifecycle)
-    API->>WC: apply reconciled object
-    WC--)RC: ADDED/MODIFIED event
+    DB-->>CDC: committed Namespace CDC record
+    CDC->>J: append ordered durable event
+    J--)RC: GraphQL-over-WebSocket watchResources(Namespace)
     end
 
     rect rgb(40, 50, 40)
     note right of RC: 2. Reconcile and report status
     RC->>RC: compare .spec with external state
-    RC->>API: GraphQL mutation (update status)
-    API->>DB: UPSERT .status (resourceVersion++; generation stable)
-    API->>WC: apply reconciled object
-    WC--)RC: MODIFIED event (resume-safe)
+    RC->>API: GraphQL mutation (updateResourceStatus)
+    API->>DB: update .status (resourceVersion++#59; generation stable)
+    DB-->>CDC: committed Namespace CDC record
+    CDC->>J: append ordered MODIFIED event
+    J--)RC: resume-safe MODIFIED event
     end
 
     rect rgb(50, 40, 50)
