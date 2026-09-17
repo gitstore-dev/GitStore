@@ -24,12 +24,20 @@ import (
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 )
+
+var productDeletionOutcomes = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "gitstore_product_deletion_outcomes_total",
+	Help: "Product foreground deletion outcomes at the admitted lifecycle boundary.",
+}, []string{"outcome"})
+
+func init() { prometheus.MustRegister(productDeletionOutcomes) }
 
 // SystemRepositoryName is the well-known repository auto-provisioned for
 // every namespace on creation (ADR-0002/ADR-0003). It is the authoring
@@ -235,6 +243,7 @@ func (s *Service) DeleteProductManifest(ctx context.Context, uid, caller string)
 		return nil, false, gqlerror.Errorf("product not found")
 	}
 	if product.DeletionTimestamp != nil {
+		productDeletionOutcomes.WithLabelValues("ALREADY_TERMINATING").Inc()
 		return product, false, nil
 	}
 	owners, ok := s.store.(datastore.OwnerReferenceStore)
@@ -248,6 +257,8 @@ func (s *Service) DeleteProductManifest(ctx context.Context, uid, caller string)
 		return nil, false, gqlerror.Errorf("check Product deletion blockers: %v", err)
 	}
 	if blocked {
+		productDeletionOutcomes.WithLabelValues("BLOCKED").Inc()
+		s.logger.Info("product deletion blocked", zap.String("namespace", product.Namespace), zap.String("name", product.Name), zap.String("actor", caller))
 		return product, false, gqlerror.Errorf("Product %q still has blocking ProductVariants", product.Name)
 	}
 	if s.gitWriter == nil || s.committedAdmitter == nil {
@@ -264,6 +275,8 @@ func (s *Service) DeleteProductManifest(ctx context.Context, uid, caller string)
 	if _, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{RepositoryID: product.RepositoryID, Namespace: product.Namespace, ActorSubject: caller, CommitSHA: sha, RefName: refName, Path: product.SourcePath, Operation: admission.OperationDelete, Kind: "Product", Name: product.Name}); err != nil {
 		return nil, false, gqlerror.Errorf("Product deletion admission failed: %v", err)
 	}
+	productDeletionOutcomes.WithLabelValues("TERMINATION_STARTED").Inc()
+	s.logger.Info("product deletion termination started", zap.String("namespace", product.Namespace), zap.String("name", product.Name), zap.String("actor", caller))
 	updated, err := s.store.GetProduct(ctx, uid)
 	if err != nil {
 		return nil, false, gqlerror.Errorf("Product deletion admission did not retain terminating product")
@@ -293,6 +306,7 @@ func (s *Service) CompleteProductDeletion(ctx context.Context, namespace, name, 
 		return product, err
 	}
 	if blocked {
+		productDeletionOutcomes.WithLabelValues("BLOCKED_AT_COMPLETION").Inc()
 		return product, gqlerror.Errorf("Product %q still has blocking ProductVariants", name)
 	}
 	lifecycle, ok := s.store.(datastore.ProductLifecycleStore)
@@ -302,6 +316,8 @@ func (s *Service) CompleteProductDeletion(ctx context.Context, namespace, name, 
 	if err := lifecycle.CompleteProductDeletion(ctx, product.UID, expectedResourceVersion); err != nil {
 		return product, err
 	}
+	productDeletionOutcomes.WithLabelValues("COMPLETED").Inc()
+	s.logger.Info("product deletion completed", zap.String("namespace", product.Namespace), zap.String("name", product.Name))
 	return product, nil
 }
 
