@@ -6,12 +6,14 @@
 // slices; keeping the profile executable from the outset prevents an
 // unregistered scenario from becoming production-only work.
 import { check } from 'k6';
+import { Counter } from 'k6/metrics';
 import { env } from '../lib/config.js';
 import { graphql } from '../lib/graphql.js';
 
 const apiA = env('CAPACITY_API_A');
 const apiB = env('CAPACITY_API_B');
 const token = env('CAPACITY_TOKEN');
+const replicaChecks = new Counter('product_lifecycle_replica_checks');
 
 export const options = {
   scenarios: {
@@ -37,5 +39,6 @@ export default function () {
       'Product lifecycle API replica is reachable': ({ response, body }) =>
         response.status >= 200 && response.status < 300 && !body.errors,
     });
+    replicaChecks.add(1);
   }
 }
