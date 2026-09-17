@@ -6,6 +6,7 @@
 // slices; keeping the profile executable from the outset prevents an
 // unregistered scenario from becoming production-only work.
 import { check } from 'k6';
+import http from 'k6/http';
 import { Counter } from 'k6/metrics';
 import { env } from '../lib/config.js';
 import { graphql } from '../lib/graphql.js';
@@ -19,6 +20,7 @@ const apiB = env('PRODUCT_CAPACITY_API_B', env('CAPACITY_API_B'));
 const token = env('CAPACITY_TOKEN');
 const replicaChecks = new Counter('product_lifecycle_replica_checks');
 const admissionChecks = new Counter('product_lifecycle_admission_checks');
+const deletionRaceChecks = new Counter('product_lifecycle_deletion_race_checks');
 
 export const options = {
   scenarios: {
@@ -54,19 +56,57 @@ export default function () {
     apiVersion: 'catalog.gitstore.dev/v1beta1', kind: 'Product',
     metadata: { namespace: 'default', name }, spec: { title: name },
   } }, { operation: 'productLifecycleCreate' });
-  check(created, {
+  const admitted = check(created, {
     'Product lifecycle GraphQL admission succeeds': ({ response, body }) =>
       response.status >= 200 && response.status < 300 && !body.errors &&
       body.data && body.data.createProduct && body.data.createProduct.product.metadata.name === name,
   });
+  if (admitted) {
+    admissionChecks.add(1);
+  }
 
   const observed = graphql(apiB, token, `query($namespace: String!, $name: String!) {
     product(by: { namespacePath: { namespace: $namespace, name: $name } }) { metadata { name } }
   }`, { namespace: 'default', name }, { operation: 'productLifecycleCrossReplicaRead' });
-  check(observed, {
+  const visibleOnPeer = check(observed, {
     'Product lifecycle admission is visible on peer replica': ({ response, body }) =>
       response.status >= 200 && response.status < 300 && !body.errors &&
       body.data && body.data.product && body.data.product.metadata.name === name,
   });
-  admissionChecks.add(1);
+  if (!admitted || !visibleOnPeer) {
+    return;
+  }
+
+  // Race two API replicas to start the same foreground deletion.  Completion
+  // is controller-owned and may win immediately, so the invariant here is
+  // that at least one request observes a valid lifecycle outcome rather than
+  // requiring a timing-dependent final Product read.
+  const id = created.body.data.createProduct.product.id;
+  const deleteRequest = JSON.stringify({
+    query: `mutation($input: DeleteProductInput!) {
+      deleteProduct(input: $input) { outcome product { metadata { deletionTimestamp } } }
+    }`,
+    variables: { input: { id } },
+  });
+  const deleteResponses = http.batch([apiA, apiB].map((url) => ({
+    method: 'POST', url, body: deleteRequest,
+    params: {
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      tags: { operation: 'productLifecycleDeletionRace' },
+    },
+  })));
+  const raceObserved = check(deleteResponses, {
+    'Product lifecycle deletion race starts exactly one foreground workflow': (responses) =>
+      responses.some((response) => {
+        if (response.status < 200 || response.status >= 300) return false;
+        let body;
+        try { body = response.json(); } catch (_) { return false; }
+        const payload = body.data && body.data.deleteProduct;
+        return !body.errors && payload &&
+          (payload.outcome === 'TERMINATION_STARTED' || payload.outcome === 'ALREADY_TERMINATING');
+      }),
+  });
+  if (raceObserved) {
+    deletionRaceChecks.add(1);
+  }
 }
