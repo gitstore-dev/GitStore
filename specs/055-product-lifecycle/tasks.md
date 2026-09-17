@@ -56,7 +56,7 @@ revision/identity, then submit invalid input and observe no partial Product.
 
 - [ ] T016 [P] [US1] Add Git-service SchemaValidation and Product-admission tests for generic `OperationDelete`, Product provenance, stable UID/mutable generation, author-system-field rejection, and deletion transition in `gitstore-git-service/src/git/hooks/` and `gitstore-api/internal/cataloggrpc/product_lifecycle_test.go`.
 - [X] T017 [US1] Generalize the CategoryTaxonomy proposed-tree SchemaValidation path to `OperationDelete` for every supported resource type; refactor Product admission/deletion to preserve provenance, use lifecycle state rather than hard delete, and emit every committed transition in `gitstore-git-service/src/git/hooks/` and `gitstore-api/internal/cataloggrpc/server.go`.
-- [ ] T018 [P] [US1] Add resolver contract tests for create/update/delete commit-and-wait behavior, non-system provenance update routing, implicit `gitstore-system` create routing, and ID delete input in `gitstore-api/internal/graph/resolver/product_lifecycle_test.go`.
+- [X] T018 [P] [US1] Add resolver contract tests for create/update/delete commit-and-wait behavior, non-system provenance update routing, implicit `gitstore-system` create routing, and ID delete input in `gitstore-api/internal/graph/resolver/product_lifecycle_test.go`.
 - [X] T019 [US1] Implement Product GraphQL create/update/delete in `gitstore-api/internal/graph/resolver/product.resolvers.go`: create targets `gitstore-system`; update resolves stored repository/source path; all await admitted revision.
 - [X] T020 [US1] Return `ProductDeletionOutcome` and the terminating Product envelope from `deleteProduct` in `gitstore-api/internal/graph/resolver/product.resolvers.go`.
 - [ ] T021 [US1] Add Git-push versus GraphQL end-to-end admission parity coverage in `tests/integration/product_lifecycle_test.go`.
@@ -93,7 +93,7 @@ finalize exactly once after a fresh clear check.
 
 - [X] T029 [P] [US3] Add ProductVariant admission tests for canonical blocking Product owner references and terminating-parent rejection in `gitstore-api/internal/cataloggrpc/server_test.go`.
 - [X] T030 [US3] Resolve and persist ProductVariant-to-Product blocking owner references, including deferred resolution and terminating-target rejection, in `gitstore-api/internal/cataloggrpc/server.go` and `gitstore-api/internal/catalog/product_variant_policy.go`.
-- [ ] T031 [P] [US3] Add resolver deletion matrix tests for blockers, ID lookup authorization, started/already-terminating outcomes, and no cascade in `gitstore-api/internal/graph/resolver/product_deletion_resolver_test.go`.
+- [X] T031 [P] [US3] Add resolver deletion matrix tests for blockers, ID lookup authorization, started/already-terminating outcomes, and no cascade in `gitstore-api/internal/graph/resolver/product_deletion_resolver_test.go`.
 - [X] T032 [US3] Enforce indexed pre-mark blocker rejection and expected-version terminating state in Product Git/GraphQL deletion handling in `gitstore-api/internal/{cataloggrpc/server.go,graph/resolver/product.resolvers.go}`.
 - [X] T033 [P] [US3] Add Product controller finalizer/retry/conflict tests in `gitstore-controller-manager/internal/product/reconciler_test.go`.
 - [X] T034 [US3] Implement dedicated Product reconciliation, fresh blocker check, bounded requeue, status ownership, and finalizer completion client in `gitstore-controller-manager/internal/product/{reconciler.go,graphql_client.go}`.
