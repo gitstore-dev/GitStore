@@ -13,6 +13,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -86,4 +87,22 @@ func TestDeleteProductReturnsTerminatingEnvelopeAndIsIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, model.ResourceDeletionOutcomeAlreadyTerminating, second.Outcome)
 	assert.Len(t, admitter.calls, 1, "an already-terminating Product must not cascade a second Git delete")
+}
+
+func TestProductDeletionMetricsRecordIdempotentLifecycleOutcome(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	product := productLifecycleFixture("acme", "already-terminating")
+	now := time.Now().UTC()
+	product.DeletionTimestamp = &now
+	require.NoError(t, store.CreateProduct(context.Background(), product))
+	service, err := NewService(ServiceDeps{Store: store, Logger: zap.NewNop()})
+	require.NoError(t, err)
+
+	before := testutil.ToFloat64(productDeletionOutcomes.WithLabelValues("ALREADY_TERMINATING"))
+	got, started, err := service.DeleteProductManifest(context.Background(), product.UID, "controller:product")
+	require.NoError(t, err)
+	assert.False(t, started)
+	assert.Equal(t, product.UID, got.UID)
+	assert.Equal(t, before+1, testutil.ToFloat64(productDeletionOutcomes.WithLabelValues("ALREADY_TERMINATING")))
 }
