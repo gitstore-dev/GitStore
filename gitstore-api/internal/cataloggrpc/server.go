@@ -2365,6 +2365,9 @@ func (s *Server) admitProduct(
 			Generation:        1,
 			ResourceVersion:   "1",
 			CreationTimestamp: admCtx.Now,
+			CreationActor:     admCtx.ActorSubject,
+			UpdateTimestamp:   admCtx.Now,
+			UpdateActor:       admCtx.ActorSubject,
 			Revision:          admCtx.Revision,
 			RepositoryID:      admCtx.RepositoryID,
 			SourcePath:        sourcePath,
@@ -2410,6 +2413,8 @@ func (s *Server) admitProduct(
 		existing.OwnerReferences = ownerReferences
 		existing.Generation = gen
 		existing.ResourceVersion = nextResourceVersion(existing.ResourceVersion)
+		existing.UpdateTimestamp = admCtx.Now
+		existing.UpdateActor = admCtx.ActorSubject
 		existing.Revision = admCtx.Revision
 		existing.RepositoryID = admCtx.RepositoryID
 		existing.SourcePath = sourcePath

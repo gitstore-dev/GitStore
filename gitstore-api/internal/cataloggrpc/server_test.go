@@ -752,6 +752,7 @@ func TestAdmitResources_NewProduct_Created(t *testing.T) {
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
+		ActorSubject: "alice",
 	})
 	require.NoError(t, err)
 
@@ -761,6 +762,9 @@ func TestAdmitResources_NewProduct_Created(t *testing.T) {
 	assert.Equal(t, int64(1), p.Generation)
 	assert.Equal(t, uid, p.UID)
 	assert.Equal(t, now, p.CreationTimestamp)
+	assert.Equal(t, "alice", p.CreationActor)
+	assert.Equal(t, now, p.UpdateTimestamp)
+	assert.Equal(t, "alice", p.UpdateActor)
 	assert.Equal(t, "main@sha1:"+strings.Repeat("a", 40), p.Revision)
 	var spec catalog.ProductSpec
 	require.NoError(t, json.Unmarshal(p.Spec, &spec))
@@ -951,6 +955,7 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
+		ActorSubject: "alice",
 	})
 	require.NoError(t, err)
 
@@ -965,6 +970,7 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 		RepositoryId: testRepoID,
 		NewCommitSha: strings.Repeat("b", 40),
 		RefName:      "refs/heads/main",
+		ActorSubject: "bob",
 	})
 	require.NoError(t, err)
 
@@ -973,6 +979,8 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 	assert.Equal(t, uid1, p2.UID, "UID must be preserved on update")
 	assert.Equal(t, ts1, p2.CreationTimestamp, "creationTimestamp must be preserved on update")
 	assert.Greater(t, p2.Generation, gen1, "generation must be incremented")
+	assert.Equal(t, "alice", p2.CreationActor, "updates must preserve the original author")
+	assert.Equal(t, "bob", p2.UpdateActor, "updates must retain the admitted actor for audit")
 }
 
 // T020c: two product files in one commit → both stored independently
