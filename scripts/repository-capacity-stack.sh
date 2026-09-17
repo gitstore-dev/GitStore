@@ -222,6 +222,12 @@ run_alpha() {
   REPOSITORY_CAPACITY_BASELINE_STABILIZATION="${REPOSITORY_CAPACITY_BASELINE_STABILIZATION:-1m}" \
   REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION="${REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION:-1m}" \
   "${capacity_runner}" "${capacity_target}" "${capacity_profile}" alpha
+  if [[ "${capacity_target}" == "product" ]]; then
+    PRODUCT_WATCH_API_A=http://127.0.0.1:4000 \
+    PRODUCT_WATCH_API_B=http://127.0.0.1:4001 \
+    PRODUCT_WATCH_TOKEN_FILE="${token_file}" \
+    go -C "${repo_root}/tests/integration" test -count=1 -run '^TestProductWatchCrossReplicaBootstrapAndResume$$' .
+  fi
   validate_controllers_post_run
   cleanup_replacement_watcher
   trap - EXIT INT TERM
