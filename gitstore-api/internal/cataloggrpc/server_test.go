@@ -2372,6 +2372,27 @@ func TestAdmitResources_OperationAwareDeleteRemovesProductVariant(t *testing.T) 
 	assert.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
+func TestAdmitResources_ProductVariantProjectsBlockingProductOwner(t *testing.T) {
+	store := newTestDatastore(t)
+	zero, commit := strings.Repeat("0", 40), strings.Repeat("a", 40)
+	current := commit
+	git := newTreeGitReader(&current, map[string]map[string][]byte{commit: {
+		"products/widget.md": makeProduct("widget"),
+		"variants/red.md":    makeProductVariant("red", "SKU-1"),
+	}})
+	srv := newCatalogServer(t, store, git)
+	admitDelta(t, srv, zero, commit)
+	product, err := store.GetProductByName(context.Background(), "gitstore", "widget")
+	require.NoError(t, err)
+	variant, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+	var refs []catalog.OwnerReference
+	require.NoError(t, json.Unmarshal(variant.OwnerReferences, &refs))
+	require.Len(t, refs, 1)
+	assert.Equal(t, product.UID, refs[0].UID)
+	assert.True(t, refs[0].BlockOwnerDeletion)
+}
+
 func TestAdmitResources_ReparentChildBeforeDeletingFormerParent(t *testing.T) {
 	store := newTestDatastore(t)
 	zero := strings.Repeat("0", 40)
