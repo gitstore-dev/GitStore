@@ -51,7 +51,7 @@ export default function () {
 
   const name = `capacity-product-${__VU}-${__ITER}-${Date.now()}`;
   const created = graphql(apiA, token, `mutation($input: CreateProductInput!) {
-    createProduct(input: $input) { product { metadata { name } } }
+    createProduct(input: $input) { product { id metadata { name } } }
   }`, { input: {
     apiVersion: 'catalog.gitstore.dev/v1beta1', kind: 'Product',
     metadata: { namespace: 'default', name }, spec: { title: name },
@@ -59,7 +59,8 @@ export default function () {
   const admitted = check(created, {
     'Product lifecycle GraphQL admission succeeds': ({ response, body }) =>
       response.status >= 200 && response.status < 300 && !body.errors &&
-      body.data && body.data.createProduct && body.data.createProduct.product.metadata.name === name,
+      body.data && body.data.createProduct && body.data.createProduct.product.id &&
+      body.data.createProduct.product.metadata.name === name,
   });
   if (admitted) {
     admissionChecks.add(1);

@@ -24,6 +24,10 @@ compose=(docker compose -p "${project}" --profile capacity-stack
   -f "${repo_root}/compose.capacity.yml")
 
 export CAPACITY_GIT_REVISION="${revision}"
+# The nested dispatcher uses this identity for its evidence directory. Keep it
+# in the parent harness too, so the post-k6 Git/watch probe appends to that
+# same immutable run directory rather than a sibling with an empty name.
+export CAPACITY_RUN_ID="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 export CONFIG_FILE="${CONFIG_FILE:-${repo_root}/config/config.toml}"
 export SCYLLA_CLUSTER_SMP="${SCYLLA_CLUSTER_SMP:-1}"
 export SCYLLA_CLUSTER_MEMORY_LIMIT="${SCYLLA_CLUSTER_MEMORY_LIMIT:-1536m}"
@@ -242,6 +246,11 @@ run_alpha() {
     jq -n --argjson exit_code "${product_probe_status}" \
       '{schemaVersion:1,gitPush:true,durableWatch:true,rollingReplacement:true,passed:($exit_code == 0),exitCode:$exit_code}' \
       >"${product_evidence_dir}/product-integration.json"
+    # The k6 domain verifier covers GraphQL admission and the concurrent
+    # deletion race; this companion artifact is a required gate input for the
+    # real Git-push and WebSocket/replacement probes executed afterwards.
+    jq -e '.passed == true and .gitPush == true and .durableWatch == true and .rollingReplacement == true and .exitCode == 0' \
+      "${product_evidence_dir}/product-integration.json" >/dev/null || return 1
     (( product_probe_status == 0 )) || return "${product_probe_status}"
   fi
   validate_controllers_post_run
