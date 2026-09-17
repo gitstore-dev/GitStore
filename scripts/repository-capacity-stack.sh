@@ -194,6 +194,8 @@ run_alpha() {
   CAPACITY_ENVIRONMENT_MANIFEST="${state_dir}/environment-manifest.json" \
   CAPACITY_API_A=http://127.0.0.1:4000 \
   CAPACITY_API_B=http://127.0.0.1:4001 \
+  PRODUCT_CAPACITY_API_A=http://host.docker.internal:4000 \
+  PRODUCT_CAPACITY_API_B=http://host.docker.internal:4001 \
   CAPACITY_CONTROLLER_A=http://127.0.0.1:5001 \
   CAPACITY_CONTROLLER_B=http://127.0.0.1:5002 \
   CAPACITY_TOKEN_FILE="${token_file}" \

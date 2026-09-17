@@ -10,8 +10,12 @@ import { Counter } from 'k6/metrics';
 import { env } from '../lib/config.js';
 import { graphql } from '../lib/graphql.js';
 
-const apiA = env('CAPACITY_API_A');
-const apiB = env('CAPACITY_API_B');
+// The local alpha stack is validated from the host on 127.0.0.1, whereas k6
+// runs in a Docker container on Docker Desktop.  Permit that runner to use
+// Docker's stable host gateway without weakening the independently validated
+// replica endpoints recorded in the gate evidence.
+const apiA = env('PRODUCT_CAPACITY_API_A', env('CAPACITY_API_A'));
+const apiB = env('PRODUCT_CAPACITY_API_B', env('CAPACITY_API_B'));
 const token = env('CAPACITY_TOKEN');
 const replicaChecks = new Counter('product_lifecycle_replica_checks');
 
