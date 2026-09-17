@@ -293,7 +293,7 @@ func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t
 	require.Error(t, consumer.Consume(ctx, scyllacdc.Change{}))
 }
 
-func TestProductCDCConsumerFactorySignalsReadyAfterStreamRegistration(t *testing.T) {
+func TestProductCDCConsumerFactorySignalsReadyAfterStreamPoll(t *testing.T) {
 	store := &sequencerStore{}
 	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -318,8 +318,20 @@ func TestProductCDCConsumerFactorySignalsReadyAfterStreamRegistration(t *testing
 	require.NotNil(t, consumer)
 	select {
 	case <-ready:
+		t.Fatal("Product CDC must not report readiness before a stream poll")
+	default:
+	}
+	factory.markReady()
+	factory.markReady()
+	select {
+	case <-ready:
 	case <-time.After(time.Second):
-		t.Fatal("Product CDC readiness was not signalled after stream registration")
+		t.Fatal("Product CDC readiness was not signalled after a stream poll")
+	}
+	select {
+	case <-ready:
+		t.Fatal("Product CDC readiness was signalled more than once")
+	default:
 	}
 }
 

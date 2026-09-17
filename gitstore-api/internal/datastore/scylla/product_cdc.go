@@ -73,13 +73,18 @@ func (f *productCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, in
 	if err := f.sequencer.Register(ctx, streamID); err != nil {
 		return productCDCFailedConsumer{err}, nil
 	}
-	// A constructed Reader has not necessarily attached to a CDC stream. Signal
-	// readiness only after the first stream is registered, so callers do not
-	// admit mutations into a window the Product reader could still miss.
+	return &productCDCConsumer{
+		sequencer: f.sequencer,
+		streamID:  streamID,
+		reporter:  input.ProgressReporter,
+		onReady:   f.markReady,
+	}, nil
+}
+
+func (f *productCDCConsumerFactory) markReady() {
 	if f.onReady != nil {
 		f.readyOnce.Do(f.onReady)
 	}
-	return &productCDCConsumer{sequencer: f.sequencer, streamID: streamID, reporter: input.ProgressReporter}, nil
 }
 
 type productCDCFailedConsumer struct{ err error }
@@ -92,6 +97,7 @@ type productCDCConsumer struct {
 	sequencer *namespaceCDCSequencer
 	streamID  string
 	reporter  *scyllacdc.ProgressReporter
+	onReady   func()
 }
 
 func (c *productCDCConsumer) Consume(ctx context.Context, change scyllacdc.Change) error {
@@ -111,19 +117,27 @@ func (c *productCDCConsumer) Consume(ctx context.Context, change scyllacdc.Chang
 	} else if before != nil {
 		name, namespace = before.Name, before.Namespace
 	}
-	return c.sequencer.Submit(ctx, namespaceCDCSequenceRequest{cdcTime: change.Time, streamID: c.streamID,
+	err = c.sequencer.Submit(ctx, namespaceCDCSequenceRequest{cdcTime: change.Time, streamID: c.streamID,
 		markProgress: func(markCtx context.Context) error {
 			return c.reporter.MarkProgress(markCtx, scyllacdc.Progress{LastProcessedRecordTime: change.Time})
 		},
 		change: watchjournal.Change{Kind: productCDCSource, Namespace: namespace, StreamID: c.streamID, Position: change.Time.Bytes(), DeduplicationKey: c.streamID + ":" + change.Time.String(), Name: name, Before: beforeJSON, After: afterJSON, At: change.Time.Time().UTC()},
 	})
+	if err == nil && c.onReady != nil {
+		c.onReady()
+	}
+	return err
 }
 func (c *productCDCConsumer) Empty(ctx context.Context, ackTime gocql.UUID) error {
-	return c.sequencer.Submit(ctx, namespaceCDCSequenceRequest{cdcTime: ackTime, streamID: c.streamID, progressOnly: true,
+	err := c.sequencer.Submit(ctx, namespaceCDCSequenceRequest{cdcTime: ackTime, streamID: c.streamID, progressOnly: true,
 		markProgress: func(markCtx context.Context) error {
 			return c.reporter.MarkProgress(markCtx, scyllacdc.Progress{LastProcessedRecordTime: ackTime})
 		},
 	})
+	if err == nil && c.onReady != nil {
+		c.onReady()
+	}
+	return err
 }
 func (c *productCDCConsumer) End() error { return c.sequencer.Unregister(c.streamID) }
 
