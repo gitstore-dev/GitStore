@@ -246,6 +246,15 @@ run_alpha() {
     jq -n --argjson exit_code "${product_probe_status}" \
       '{schemaVersion:1,gitPush:true,durableWatch:true,rollingReplacement:true,passed:($exit_code == 0),exitCode:$exit_code}' \
       >"${product_evidence_dir}/product-integration.json"
+    # Fold the post-k6 probe into the canonical run metadata as well. Without
+    # this, a failed Git or watch probe could leave an earlier k6-only
+    # metadata.json claiming the overall Product capacity evidence passed.
+    if [[ -r "${product_evidence_dir}/metadata.json" ]]; then
+      jq --slurpfile probe "${product_evidence_dir}/product-integration.json" \
+        '. + {productLifecycleProbe:$probe[0]} | .passed = (.passed and $probe[0].passed)' \
+        "${product_evidence_dir}/metadata.json" >"${product_evidence_dir}/metadata.json.tmp"
+      mv "${product_evidence_dir}/metadata.json.tmp" "${product_evidence_dir}/metadata.json"
+    fi
     # The k6 domain verifier covers GraphQL admission and the concurrent
     # deletion race; this companion artifact is a required gate input for the
     # real Git-push and WebSocket/replacement probes executed afterwards.
