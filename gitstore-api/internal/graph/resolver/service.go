@@ -1682,18 +1682,25 @@ func (s *Service) requireNamespaceRepositoryFence(operation string) error {
 // and resolvable while its controller removes storage; it is hard-deleted only
 // after the foreground finalizer has been cleared.
 func (s *Service) DeleteRepository(ctx context.Context, repoID, caller string) error {
+	_, _, err := s.deleteRepositoryWithOutcome(ctx, repoID, caller)
+	return err
+}
+
+// deleteRepositoryWithOutcome returns the persisted Repository and whether this
+// request, rather than a concurrent request, started foreground termination.
+func (s *Service) deleteRepositoryWithOutcome(ctx context.Context, repoID, caller string) (*datastore.Repository, bool, error) {
 	repo, err := s.store.GetRepository(ctx, repoID)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
-			return gqlerror.Errorf("repository not found")
+			return nil, false, gqlerror.Errorf("repository not found")
 		}
-		return gqlerror.Errorf("failed to retrieve repository")
+		return nil, false, gqlerror.Errorf("failed to retrieve repository")
 	}
 	datastore.NormalizeRepositoryContract(repo)
 	if repo.DeletionTimestamp != nil {
 		// A repeated delete is deliberately a no-op. In particular, do not
 		// repeat a drain check after termination has already been accepted.
-		return nil
+		return repo, false, nil
 	}
 	hasCatalogResources, err := s.store.HasCatalogResources(ctx, repoID)
 	if err != nil {
@@ -1701,13 +1708,13 @@ func (s *Service) DeleteRepository(ctx context.Context, repoID, caller string) e
 			zap.String("repo_id", repoID),
 			zap.Error(err),
 		)
-		return gqlerror.Errorf("failed to delete repository")
+		return nil, false, gqlerror.Errorf("failed to delete repository")
 	}
 	if hasCatalogResources {
 		s.logger.Info("repository deletion rejected: contains catalog resources",
 			zap.String("repo_id", repoID),
 		)
-		return gqlerror.Errorf("repository %q contains catalog resources and cannot be deleted", repo.Name)
+		return nil, false, gqlerror.Errorf("repository %q contains catalog resources and cannot be deleted", repo.Name)
 	}
 
 	now := s.clock.Now().UTC()
@@ -1723,12 +1730,12 @@ func (s *Service) DeleteRepository(ctx context.Context, repoID, caller string) e
 		if errors.Is(err, datastore.ErrConflict) {
 			latest, reloadErr := s.store.GetRepository(ctx, repoID)
 			if reloadErr == nil && latest.DeletionTimestamp != nil {
-				return nil
+				return latest, false, nil
 			}
 		}
-		return gqlerror.Errorf("failed to start repository deletion")
+		return nil, false, gqlerror.Errorf("failed to start repository deletion")
 	}
-	return nil
+	return repo, true, nil
 }
 
 // CompleteRepositoryDeletion is the controller-only finalizer completion

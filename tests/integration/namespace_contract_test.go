@@ -717,16 +717,31 @@ func (h *namespaceContractHarness) cleanupNamespace(identifier string) {
 		}
 	}
 
-	resp := h.gql(`
-		mutation($identifier: String!) {
-			deleteNamespace(input: {identifier: $identifier}) {
-				deletedIdentifier
-			}
-		}
-	`, map[string]any{"identifier": identifier})
+	namespaceID, ok := h.lookupNamespaceID(identifier)
+	if !ok {
+		return
+	}
+	resp := h.gql(`mutation($id: ID!) { deleteNamespace(input: {id: $id}) { namespace { id } outcome } }`, map[string]any{"id": namespaceID})
 	if len(resp.Errors) > 0 {
 		h.t.Logf("cleanup deleteNamespace(%s) errors: %s", identifier, namespaceContractErrors(resp.Errors))
 	}
+}
+
+func (h *namespaceContractHarness) lookupNamespaceID(identifier string) (string, bool) {
+	h.t.Helper()
+	resp := h.gql(`query($name: String!) { namespace(by: {name: $name}) { id } }`, map[string]any{"name": identifier})
+	if len(resp.Errors) > 0 {
+		return "", false
+	}
+	var data struct {
+		Namespace *struct {
+			ID string `json:"id"`
+		} `json:"namespace"`
+	}
+	if json.Unmarshal(resp.Data, &data) != nil || data.Namespace == nil || data.Namespace.ID == "" {
+		return "", false
+	}
+	return data.Namespace.ID, true
 }
 
 func (h *namespaceContractHarness) lookupRepositoryID(namespace, name string) (string, bool) {
@@ -774,8 +789,8 @@ func (h *namespaceContractHarness) deleteRepositoryAndComplete(repoID string) []
 	h.t.Helper()
 	resp := h.gql(`
 		mutation($repositoryID: ID!) {
-			deleteRepository(input: {repositoryId: $repositoryID}) {
-				deletedRepositoryId
+			deleteRepository(input: {id: $repositoryID}) {
+				repository { id }
 			}
 		}
 	`, map[string]any{"repositoryID": repoID})
@@ -785,14 +800,16 @@ func (h *namespaceContractHarness) deleteRepositoryAndComplete(repoID string) []
 
 	var data struct {
 		DeleteRepository *struct {
-			DeletedRepositoryID string `json:"deletedRepositoryId"`
+			Repository *struct {
+				ID string `json:"id"`
+			} `json:"repository"`
 		} `json:"deleteRepository"`
 	}
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
 		return []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"message":%q}`, err.Error()))}
 	}
-	if data.DeleteRepository == nil || data.DeleteRepository.DeletedRepositoryID != repoID {
-		return []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"message":%q}`, fmt.Sprintf("deleteRepository returned %+v, want deletedRepositoryId %q", data.DeleteRepository, repoID)))}
+	if data.DeleteRepository == nil || data.DeleteRepository.Repository == nil || data.DeleteRepository.Repository.ID != repoID {
+		return []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"message":%q}`, fmt.Sprintf("deleteRepository returned %+v, want repository.id %q", data.DeleteRepository, repoID)))}
 	}
 
 	resp = h.gql(`
@@ -823,7 +840,7 @@ func (h *namespaceContractHarness) deleteRepositoryAndComplete(repoID string) []
 				namespace: $namespace
 				name: $name
 				resourceVersion: $resourceVersion
-			}) { deletedRepositoryId }
+			}) { id }
 		}
 	`, map[string]any{
 		"namespace":       current.Repository.Metadata.Namespace,
@@ -1280,20 +1297,18 @@ func TestNamespaceContract_DeleteNamespaceBehaviorUnchanged(t *testing.T) {
 	created = true
 	h.requireDeleteSystemRepository(identifier)
 
-	resp := h.gql(`
-		mutation($identifier: String!) {
-			deleteNamespace(input: {identifier: $identifier}) {
-				deletedIdentifier
-			}
-		}
-	`, map[string]any{"identifier": identifier})
+	namespaceID, ok := h.lookupNamespaceID(identifier)
+	require.True(t, ok)
+	resp := h.gql(`mutation($id: ID!) { deleteNamespace(input: {id: $id}) { namespace { id } outcome } }`, map[string]any{"id": namespaceID})
 	if len(resp.Errors) > 0 {
 		t.Fatalf("graphql errors deleting namespace: %s", namespaceContractErrors(resp.Errors))
 	}
 
 	var data struct {
 		DeleteNamespace *struct {
-			DeletedIdentifier string `json:"deletedIdentifier"`
+			Namespace *struct {
+				ID string `json:"id"`
+			} `json:"namespace"`
 		} `json:"deleteNamespace"`
 	}
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
@@ -1302,8 +1317,8 @@ func TestNamespaceContract_DeleteNamespaceBehaviorUnchanged(t *testing.T) {
 	if data.DeleteNamespace == nil {
 		t.Fatal("deleteNamespace payload is nil")
 	}
-	if data.DeleteNamespace.DeletedIdentifier != identifier {
-		t.Fatalf("deletedIdentifier = %q, want %q", data.DeleteNamespace.DeletedIdentifier, identifier)
+	if data.DeleteNamespace.Namespace == nil || data.DeleteNamespace.Namespace.ID != namespaceID {
+		t.Fatalf("namespace ID = %+v, want %q", data.DeleteNamespace.Namespace, namespaceID)
 	}
 	created = false
 }

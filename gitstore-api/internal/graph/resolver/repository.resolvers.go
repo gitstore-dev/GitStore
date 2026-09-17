@@ -184,15 +184,7 @@ func (r *mutationResolver) DeleteRepository(ctx context.Context, input model.Del
 	if err != nil {
 		return nil, err
 	}
-	before, err := r.service.GetRepository(ctx, repoID)
-	if err != nil {
-		return nil, err
-	}
-	started := before.DeletionTimestamp == nil
-	if err := r.service.DeleteRepository(ctx, repoID, callerUsernameOrAnon(ctx, r)); err != nil {
-		return nil, err
-	}
-	repo, err := r.service.GetRepository(ctx, repoID)
+	repo, started, err := r.service.deleteRepositoryWithOutcome(ctx, repoID, callerUsernameOrAnon(ctx, r))
 	if err != nil {
 		return nil, err
 	}
