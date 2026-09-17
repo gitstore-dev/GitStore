@@ -2289,6 +2289,12 @@ func (s *Server) admitProduct(
 	op admission.Operation,
 	rawExisting any,
 ) {
+	// Lifecycle is author-owned desired state. Persist an explicit default so
+	// Git-authored Products and GraphQL-authored Products have identical
+	// admitted representations.
+	if resource.Spec.Lifecycle.State == "" {
+		resource.Spec.Lifecycle.State = "ACTIVE"
+	}
 	specJSON, err := json.Marshal(resource.Spec)
 	if err != nil {
 		s.log.Error("admit_resources: marshal product spec failed",

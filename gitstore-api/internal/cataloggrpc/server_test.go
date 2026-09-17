@@ -762,6 +762,9 @@ func TestAdmitResources_NewProduct_Created(t *testing.T) {
 	assert.Equal(t, uid, p.UID)
 	assert.Equal(t, now, p.CreationTimestamp)
 	assert.Equal(t, "main@sha1:"+strings.Repeat("a", 40), p.Revision)
+	var spec catalog.ProductSpec
+	require.NoError(t, json.Unmarshal(p.Spec, &spec))
+	assert.Equal(t, "ACTIVE", spec.Lifecycle.State)
 
 	var status catalog.ProductStatus
 	require.NoError(t, json.Unmarshal(p.Status, &status))
