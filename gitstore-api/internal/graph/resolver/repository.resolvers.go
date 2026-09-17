@@ -177,17 +177,31 @@ func (r *mutationResolver) TransferRepository(ctx context.Context, input model.T
 
 // DeleteRepository is the resolver for the deleteRepository field.
 func (r *mutationResolver) DeleteRepository(ctx context.Context, input model.DeleteRepositoryInput) (*model.DeleteRepositoryPayload, error) {
-	repoID, err := decodeNodeIDAs(nodeKindRepository, input.RepositoryID)
+	if input.ID == nil {
+		return nil, gqlerror.Errorf("repository ID is required")
+	}
+	repoID, err := decodeNodeIDAs(nodeKindRepository, *input.ID)
 	if err != nil {
 		return nil, err
 	}
-	if err := r.service.DeleteRepository(ctx, repoID, callerUsernameOrAnon(ctx, r)); err != nil {
+	repo, started, err := r.service.deleteRepositoryWithOutcome(ctx, repoID, callerUsernameOrAnon(ctx, r))
+	if err != nil {
 		return nil, err
 	}
 	r.logger.Info("delete repository", zap.String("repo_id", repoID))
-	return &model.DeleteRepositoryPayload{
-		DeletedRepositoryID: mustEncodeNodeID(nodeKindRepository, repoID),
-	}, nil
+	ns, err := r.service.GetNamespaceByName(ctx, repo.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	resource, err := datastoreRepositoryToModelStrict(repo, ns, r.storageDataDir)
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to hydrate repository: %v", err)
+	}
+	outcome := model.ResourceDeletionOutcomeAlreadyTerminating
+	if started {
+		outcome = model.ResourceDeletionOutcomeTerminationStarted
+	}
+	return &model.DeleteRepositoryPayload{Repository: resource, Outcome: outcome}, nil
 }
 
 // CompleteRepositoryDeletion is the resolver for the completeRepositoryDeletion field.
@@ -205,7 +219,7 @@ func (r *mutationResolver) CompleteRepositoryDeletion(ctx context.Context, input
 	payload := &model.CompleteRepositoryDeletionPayload{}
 	if deleted != nil {
 		id := mustEncodeNodeID(nodeKindRepository, deleted.UID)
-		payload.DeletedRepositoryID = &id
+		payload.ID = &id
 	}
 	return payload, nil
 }

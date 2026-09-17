@@ -292,24 +292,29 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
 		}
 	case "deleteNamespace":
-		identifier, ok := nestedStringArg(fc.Args, "input", "identifier")
-		if !ok || identifier == "" {
-			return next(ctx)
+		encodedID, ok := nestedStringArg(fc.Args, "input", "id")
+		if !ok || encodedID == "" {
+			return nil, gqlerror.Errorf("invalid namespace ID")
+		}
+		uid, err := decodeGlobalIDAs("Namespace", encodedID)
+		if err != nil {
+			return nil, gqlerror.Errorf("invalid namespace ID")
 		}
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
-		ns, action, err := a.namespaceDeleteAction(ctx, identifier, principal)
+		ns, err := a.store.GetNamespace(ctx, uid)
 		if err != nil {
-			if errors.Is(err, datastore.ErrNotFound) {
-				return nil, gqlerror.Errorf("namespace %q not found", identifier)
-			}
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		_, action, err := a.namespaceDeleteAction(ctx, ns.Name, principal)
+		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
 
 		decision, err := authz.Authorize(ctx, principal, action, auth.ResourceContext{
 			Kind:     "namespace",
-			Name:     identifier,
+			Name:     ns.Name,
 			OwnerSub: ns.CreationActor,
 		})
 		if err != nil {
@@ -846,7 +851,11 @@ func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.Fi
 		}
 		operation, namespaces = "update", []*datastore.Namespace{ns}
 	case "Mutation.renameRepository", "Mutation.deleteRepository":
-		encodedID, ok := nestedStringArg(fc.Args, "input", "repositoryID")
+		field := "repositoryID"
+		if fc.Field.Name == "deleteRepository" {
+			field = "id"
+		}
+		encodedID, ok := nestedStringArg(fc.Args, "input", field)
 		if !ok {
 			return nil
 		}

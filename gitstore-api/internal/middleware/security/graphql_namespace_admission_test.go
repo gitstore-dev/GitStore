@@ -5,6 +5,7 @@ package security_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -96,11 +97,12 @@ func TestNamespaceAdmissionAuthorizationHidesUpdateReason(t *testing.T) {
 func TestNamespaceAdmissionAuthorizationHidesDeleteReasons(t *testing.T) {
 	store := newNamespaceAdmissionStore(t)
 	now := time.Now().UTC()
-	require.NoError(t, store.CreateNamespace(context.Background(), &datastore.Namespace{
+	namespace := &datastore.Namespace{
 		UID: uuid.NewString(), Name: "gitstore-system", Title: "System",
 		Tier: datastore.NamespaceTierOrganization, CreationTimestamp: now, UpdateTimestamp: now,
 		CreationActor: "system", UpdateActor: "system",
-	}))
+	}
+	require.NoError(t, store.CreateNamespace(context.Background(), namespace))
 	require.NoError(t, store.CreateRepository(context.Background(), &datastore.Repository{
 		UID: uuid.NewString(), Namespace: "gitstore-system", Name: "gitstore-system",
 		DefaultBranch: "main", StorageClass: "local",
@@ -108,9 +110,10 @@ func TestNamespaceAdmissionAuthorizationHidesDeleteReasons(t *testing.T) {
 		CreationActor: "system", UpdateActor: "system",
 	}))
 	handler := newNamespaceAdmissionHandler(t, store, auth.NewChainedAuthN(namespaceAdmissionAuthN{}))
+	encodedID := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/" + namespace.UID))
 	response := postNamespaceMutation(t, handler, `mutation {
-		deleteNamespace(input: {identifier: "gitstore-system"}) {
-			deletedIdentifier
+		deleteNamespace(input: {id: "`+encodedID+`"}) {
+			namespace { id }
 			outcome
 		}
 	}`)

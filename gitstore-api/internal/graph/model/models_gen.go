@@ -256,7 +256,7 @@ type CompleteNamespaceDeletionInput struct {
 }
 
 type CompleteNamespaceDeletionPayload struct {
-	DeletedIdentifier *string `json:"deletedIdentifier,omitempty"`
+	ID *string `json:"id,omitempty"`
 }
 
 type CompleteRepositoryDeletionInput struct {
@@ -266,7 +266,7 @@ type CompleteRepositoryDeletionInput struct {
 }
 
 type CompleteRepositoryDeletionPayload struct {
-	DeletedRepositoryID *string `json:"deletedRepositoryId,omitempty"`
+	ID *string `json:"id,omitempty"`
 }
 
 // A named status condition shared by core catalog resources.
@@ -400,15 +400,15 @@ type DeleteNamespaceInput struct {
 	// The identifier of the namespace to delete.
 	// Deletion is blocked if any repositories exist within the namespace.
 	// Requires the caller to be the namespace owner (createdBy) or isAdmin.
-	Identifier string `json:"identifier"`
+	ID *string `json:"id,omitempty"`
 }
 
 // Payload returned after successfully deleting a namespace.
 type DeleteNamespacePayload struct {
-	// The identifier of the deleted namespace.
-	DeletedIdentifier string `json:"deletedIdentifier"`
+	// The Namespace while foreground termination is in progress.
+	Namespace *Namespace `json:"namespace,omitempty"`
 	// Whether this request started termination or observed an existing termination.
-	Outcome NamespaceDeletionOutcome `json:"outcome"`
+	Outcome ResourceDeletionOutcome `json:"outcome"`
 }
 
 type DeleteProductInput struct {
@@ -420,15 +420,17 @@ type DeleteProductPayload struct {
 	// The current Product envelope, including terminating metadata.
 	Product *Product `json:"product,omitempty"`
 	// Whether this request started termination or observed existing termination.
-	Outcome ProductDeletionOutcome `json:"outcome"`
+	Outcome ResourceDeletionOutcome `json:"outcome"`
 }
 
 type DeleteRepositoryInput struct {
-	RepositoryID string `json:"repositoryId"`
+	ID *string `json:"id,omitempty"`
 }
 
 type DeleteRepositoryPayload struct {
-	DeletedRepositoryID string `json:"deletedRepositoryId"`
+	// The Repository while foreground termination is in progress.
+	Repository *Repository             `json:"repository,omitempty"`
+	Outcome    ResourceDeletionOutcome `json:"outcome"`
 }
 
 // deleteServiceAccount mutation input (Relay pattern).
@@ -1946,64 +1948,6 @@ func (e LabelSelectorOperator) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// The successful result of requesting Namespace termination.
-type NamespaceDeletionOutcome string
-
-const (
-	// This request set the deletion timestamp and foreground deletion finalizer.
-	NamespaceDeletionOutcomeTerminationStarted NamespaceDeletionOutcome = "TERMINATION_STARTED"
-	// The Namespace was already terminating, so no datastore write occurred.
-	NamespaceDeletionOutcomeAlreadyTerminating NamespaceDeletionOutcome = "ALREADY_TERMINATING"
-)
-
-var AllNamespaceDeletionOutcome = []NamespaceDeletionOutcome{
-	NamespaceDeletionOutcomeTerminationStarted,
-	NamespaceDeletionOutcomeAlreadyTerminating,
-}
-
-func (e NamespaceDeletionOutcome) IsValid() bool {
-	switch e {
-	case NamespaceDeletionOutcomeTerminationStarted, NamespaceDeletionOutcomeAlreadyTerminating:
-		return true
-	}
-	return false
-}
-
-func (e NamespaceDeletionOutcome) String() string {
-	return string(e)
-}
-
-func (e *NamespaceDeletionOutcome) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = NamespaceDeletionOutcome(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid NamespaceDeletionOutcome", str)
-	}
-	return nil
-}
-
-func (e NamespaceDeletionOutcome) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *NamespaceDeletionOutcome) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e NamespaceDeletionOutcome) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
 // The tier of a namespace, which determines ownership and repository capabilities.
 type NamespaceTier string
 
@@ -2059,61 +2003,6 @@ func (e *NamespaceTier) UnmarshalJSON(b []byte) error {
 }
 
 func (e NamespaceTier) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
-type ProductDeletionOutcome string
-
-const (
-	ProductDeletionOutcomeTerminationStarted ProductDeletionOutcome = "TERMINATION_STARTED"
-	ProductDeletionOutcomeAlreadyTerminating ProductDeletionOutcome = "ALREADY_TERMINATING"
-)
-
-var AllProductDeletionOutcome = []ProductDeletionOutcome{
-	ProductDeletionOutcomeTerminationStarted,
-	ProductDeletionOutcomeAlreadyTerminating,
-}
-
-func (e ProductDeletionOutcome) IsValid() bool {
-	switch e {
-	case ProductDeletionOutcomeTerminationStarted, ProductDeletionOutcomeAlreadyTerminating:
-		return true
-	}
-	return false
-}
-
-func (e ProductDeletionOutcome) String() string {
-	return string(e)
-}
-
-func (e *ProductDeletionOutcome) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = ProductDeletionOutcome(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid ProductDeletionOutcome", str)
-	}
-	return nil
-}
-
-func (e ProductDeletionOutcome) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *ProductDeletionOutcome) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e ProductDeletionOutcome) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil
@@ -2226,6 +2115,64 @@ func (e *RepositoryVisibility) UnmarshalJSON(b []byte) error {
 }
 
 func (e RepositoryVisibility) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// The successful result of requesting Namespace termination.
+type ResourceDeletionOutcome string
+
+const (
+	// This request set the deletion timestamp and foreground deletion finalizer.
+	ResourceDeletionOutcomeTerminationStarted ResourceDeletionOutcome = "TERMINATION_STARTED"
+	// The Namespace was already terminating, so no datastore write occurred.
+	ResourceDeletionOutcomeAlreadyTerminating ResourceDeletionOutcome = "ALREADY_TERMINATING"
+)
+
+var AllResourceDeletionOutcome = []ResourceDeletionOutcome{
+	ResourceDeletionOutcomeTerminationStarted,
+	ResourceDeletionOutcomeAlreadyTerminating,
+}
+
+func (e ResourceDeletionOutcome) IsValid() bool {
+	switch e {
+	case ResourceDeletionOutcomeTerminationStarted, ResourceDeletionOutcomeAlreadyTerminating:
+		return true
+	}
+	return false
+}
+
+func (e ResourceDeletionOutcome) String() string {
+	return string(e)
+}
+
+func (e *ResourceDeletionOutcome) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ResourceDeletionOutcome(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ResourceDeletionOutcome", str)
+	}
+	return nil
+}
+
+func (e ResourceDeletionOutcome) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ResourceDeletionOutcome) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ResourceDeletionOutcome) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

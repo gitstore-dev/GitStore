@@ -89,7 +89,7 @@ func TestGraphQLRepositoryClientReportsRepositoryPresence(t *testing.T) {
 func TestGraphQLDeletionClientCompletesDeletion(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"completeNamespaceDeletion":{"deletedIdentifier":"acme","conflict":null}}}`))
+		_, _ = w.Write([]byte(`{"data":{"completeNamespaceDeletion":{"id":"namespace-1","conflict":null}}}`))
 	}))
 	defer srv.Close()
 
@@ -102,7 +102,7 @@ func TestGraphQLDeletionClientCompletesDeletion(t *testing.T) {
 func TestGraphQLDeletionClientReturnsConflict(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"completeNamespaceDeletion":{"deletedIdentifier":null,"conflict":{"currentResourceVersion":"10"}}}}`))
+		_, _ = w.Write([]byte(`{"data":{"completeNamespaceDeletion":{"id":null,"conflict":{"currentResourceVersion":"10"}}}}`))
 	}))
 	defer srv.Close()
 

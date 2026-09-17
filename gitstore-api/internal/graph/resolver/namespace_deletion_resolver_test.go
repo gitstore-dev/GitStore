@@ -37,11 +37,11 @@ func TestDeleteNamespaceResolverOutcomes(t *testing.T) {
 
 	payload, err := invokeDeleteNamespaceResolver(t, mutation, store, ctx, ns.Name)
 	require.NoError(t, err)
-	assert.Equal(t, model.NamespaceDeletionOutcomeTerminationStarted, payload.Outcome)
+	assert.Equal(t, model.ResourceDeletionOutcomeTerminationStarted, payload.Outcome)
 
 	payload, err = invokeDeleteNamespaceResolver(t, mutation, store, ctx, ns.Name)
 	require.NoError(t, err)
-	assert.Equal(t, model.NamespaceDeletionOutcomeAlreadyTerminating, payload.Outcome)
+	assert.Equal(t, model.ResourceDeletionOutcomeAlreadyTerminating, payload.Outcome)
 }
 
 func TestDeleteNamespaceResolverReturnsDeterministicBlockers(t *testing.T) {
@@ -103,17 +103,20 @@ func invokeDeleteNamespaceResolver(
 	registry := auth.NewProviderRegistry(nil, deletionAuthZ{}, nil)
 	authorizer := security.NewAuthorizeWithStore(registry, store, zap.NewNop())
 	ctx = auth.ContextWithPrincipal(ctx, &auth.Principal{Subject: "alice", AuthMethod: "test"})
+	ns, err := store.GetNamespaceByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	id := mustEncodeNodeID(nodeKindNamespace, ns.UID)
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
-		Args: map[string]any{
-			"input": model.DeleteNamespaceInput{Identifier: name},
-		},
+		Args:   map[string]any{"input": model.DeleteNamespaceInput{ID: &id}},
 	})
 	var payload *model.DeleteNamespacePayload
-	_, err := authorizer.GraphQLFieldAuthorizer(ctx, func(nextCtx context.Context) (any, error) {
+	_, err = authorizer.GraphQLFieldAuthorizer(ctx, func(nextCtx context.Context) (any, error) {
 		var resolverErr error
-		payload, resolverErr = mutation.DeleteNamespace(nextCtx, model.DeleteNamespaceInput{Identifier: name})
+		payload, resolverErr = mutation.DeleteNamespace(nextCtx, model.DeleteNamespaceInput{ID: &id})
 		return payload, resolverErr
 	})
 	return payload, err
