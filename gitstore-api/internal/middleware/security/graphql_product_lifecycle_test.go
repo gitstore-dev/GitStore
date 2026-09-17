@@ -108,7 +108,9 @@ func TestProductReadAuthorizationRunsBeforeResolver(t *testing.T) {
 
 func TestProductListAuthorizationDoesNotDiscloseCrossNamespaceExistence(t *testing.T) {
 	authz := testutil.NewDenyAllAuthZ(t)
-	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
+	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{GetNamespaceByNameFunc: func(context.Context, string) (*datastore.Namespace, error) {
+		return &datastore.Namespace{Name: "private", CreationActor: "namespace-owner"}, nil
+	}}, zap.NewNop())
 	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "other-namespace", AuthMethod: "bearer"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: "products"}}, Args: map[string]any{"namespace": "private"}})
 	called := false
@@ -117,6 +119,7 @@ func TestProductListAuthorizationDoesNotDiscloseCrossNamespaceExistence(t *testi
 	assert.False(t, called, "the list resolver must not reveal whether private Products exist")
 	assert.Equal(t, "product.read", authz.Action)
 	assert.Equal(t, "private", authz.Resource.Attrs["namespace"])
+	assert.Equal(t, "namespace-owner", authz.Resource.OwnerSub)
 }
 
 func TestProductNodeAuthorizationRunsBeforeResolver(t *testing.T) {

@@ -680,7 +680,21 @@ func (a *Authorize) authorizeProductQueryField(ctx context.Context, fc *graphql.
 	}
 	if fc.Field.Name == "products" {
 		namespace, _ := directStringArg(fc.Args, "namespace")
-		return authorizeProductAction(ctx, authz, principal, "product.read", "", namespace, "")
+		// A list selector names a namespace rather than a Product, so preserve
+		// the namespace owner's subject in the resource context.  Without this
+		// lookup an owner-aware provider cannot distinguish a caller listing its
+		// own namespace from a caller probing somebody else's Product names.
+		owner := ""
+		if a.store != nil && namespace != "" {
+			ns, err := a.store.GetNamespaceByName(ctx, namespace)
+			if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+				return gqlerror.Errorf("authorization error")
+			}
+			if ns != nil {
+				owner = ns.CreationActor
+			}
+		}
+		return authorizeProductAction(ctx, authz, principal, "product.read", "", namespace, owner)
 	}
 	if a.store == nil {
 		return gqlerror.Errorf("authorization service unavailable")
