@@ -13,6 +13,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // ── Kubernetes-style product fixtures ─────────────────────────────────────────
@@ -165,6 +168,132 @@ func TestProductLifecycle_ValidFile_AcceptedAndQueryable(t *testing.T) {
 	if data.Product.Spec.Title == nil || *data.Product.Spec.Title != "Integration Test Product" {
 		t.Errorf("expected spec.title %q, got %v", "Integration Test Product", data.Product.Spec.Title)
 	}
+}
+
+// TestProductLifecycle_GitPushAndGraphQLAdmissionParity proves the two public
+// authoring paths meet at the committed-admission boundary.  It intentionally
+// compares the consumer-visible envelope rather than Git provenance: GraphQL
+// creates land in the namespace system repository while a user push retains
+// the authoring repository as provenance.
+func TestProductLifecycle_GitPushAndGraphQLAdmissionParity(t *testing.T) {
+	namespace := getEnv("NAMESPACE", "gitstore-test")
+	graphqlName := uniqueName("parity-graphql")
+	gitName := uniqueName("parity-git")
+
+	created := gqlQuery(t, `mutation($input: CreateProductInput!) {
+		createProduct(input: $input) {
+			product { apiVersion kind metadata { uid name namespace } spec { title lifecycle { state } } }
+		}
+	}`, map[string]any{"input": map[string]any{
+		"apiVersion": "catalog.gitstore.dev/v1beta1",
+		"kind":       "Product",
+		"metadata":   map[string]any{"namespace": namespace, "name": graphqlName},
+		"spec":       map[string]any{"title": "Admission parity product"},
+	}})
+	requireGraphQLSuccess(t, created)
+	graphqlProduct := decodeParityProduct(t, created, "createProduct.product")
+
+	h := newPushHelper(t)
+	h.commitProduct(gitName+".md", productFixtureWithTitle(gitName, namespace, "Admission parity product"))
+	if output, err := h.push(); err != nil {
+		t.Fatalf("Product parity Git push failed: %v\n%s", err, output)
+	}
+
+	var gitProduct parityProduct
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		response := gqlQuery(t, `query($namespace: String!, $name: String!) {
+			product(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+				apiVersion kind metadata { uid name namespace } spec { title lifecycle { state } }
+			}
+		}`, map[string]any{"namespace": namespace, "name": gitName})
+		requireGraphQLSuccess(t, response)
+		gitProduct = decodeParityProduct(t, response, "product")
+		if gitProduct.Metadata.UID != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Git Product %q did not materialize before admission deadline", gitName)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	assertProductAdmissionParity(t, graphqlProduct, gitProduct)
+}
+
+type parityProduct struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Metadata   struct {
+		UID       string `json:"uid"`
+		Name      string `json:"name"`
+		Namespace string `json:"namespace"`
+	} `json:"metadata"`
+	Spec struct {
+		Title     *string `json:"title"`
+		Lifecycle struct {
+			State string `json:"state"`
+		} `json:"lifecycle"`
+	} `json:"spec"`
+}
+
+func productFixtureWithTitle(name, namespace, title string) string {
+	return fmt.Sprintf(`---
+apiVersion: catalog.gitstore.dev/v1beta1
+kind: Product
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  title: %s
+---
+`, name, namespace, title)
+}
+
+func requireGraphQLSuccess(t *testing.T, response gqlResponse) {
+	t.Helper()
+	if len(response.Errors) != 0 {
+		t.Fatalf("GraphQL errors: %s", response.Errors)
+	}
+}
+
+func decodeParityProduct(t *testing.T, response gqlResponse, path string) parityProduct {
+	t.Helper()
+	var envelope struct {
+		CreateProduct struct {
+			Product parityProduct `json:"product"`
+		} `json:"createProduct"`
+		Product parityProduct `json:"product"`
+	}
+	require.NoError(t, json.Unmarshal(response.Data, &envelope))
+	if path == "createProduct.product" {
+		require.NotEmpty(t, envelope.CreateProduct.Product.Metadata.UID)
+		return envelope.CreateProduct.Product
+	}
+	return envelope.Product
+}
+
+func assertProductAdmissionParity(t *testing.T, graphqlProduct, gitProduct parityProduct) {
+	t.Helper()
+	assert.Equal(t, "catalog.gitstore.dev/v1beta1", graphqlProduct.APIVersion)
+	assert.Equal(t, graphqlProduct.APIVersion, gitProduct.APIVersion)
+	assert.Equal(t, "Product", graphqlProduct.Kind)
+	assert.Equal(t, graphqlProduct.Kind, gitProduct.Kind)
+	assert.NotEmpty(t, graphqlProduct.Metadata.UID)
+	assert.NotEmpty(t, gitProduct.Metadata.UID)
+	assert.NotEqual(t, graphqlProduct.Metadata.UID, gitProduct.Metadata.UID)
+	assert.Equal(t, graphqlProduct.Metadata.Namespace, gitProduct.Metadata.Namespace)
+	assert.Equal(t, "Admission parity product", dereferenceParityTitle(graphqlProduct.Spec.Title))
+	assert.Equal(t, dereferenceParityTitle(graphqlProduct.Spec.Title), dereferenceParityTitle(gitProduct.Spec.Title))
+	assert.Equal(t, "ACTIVE", graphqlProduct.Spec.Lifecycle.State)
+	assert.Equal(t, graphqlProduct.Spec.Lifecycle.State, gitProduct.Spec.Lifecycle.State)
+}
+
+func dereferenceParityTitle(title *string) string {
+	if title == nil {
+		return ""
+	}
+	return *title
 }
 
 // ── T033/T040: Invalid title — push rejected with field-scoped error ──────────
