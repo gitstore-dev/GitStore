@@ -142,7 +142,7 @@ else
   fi
   while IFS='=' read -r name _; do
     case "${name}" in
-      CAPACITY_*|K6_*) docker_args+=(-e "${name}") ;;
+      CAPACITY_*|PRODUCT_CAPACITY_*|K6_*) docker_args+=(-e "${name}") ;;
     esac
   done < <(env)
   docker "${docker_args[@]}" "${k6_image}" run --summary-export /evidence/summary.json "/workspace/tests/capacity/profiles/${profile}.js" 2>&1 | tee "${evidence_dir}/k6.log"
