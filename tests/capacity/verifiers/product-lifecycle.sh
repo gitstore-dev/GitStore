@@ -14,13 +14,13 @@ output="${evidence_dir}/domain-verifier.json"
 [[ -r "${summary}" ]] || { echo "Product lifecycle verifier requires summary.json" >&2; exit 2; }
 
 jq -e '
-  (.metrics.checks.values.fails // 1) == 0 and
-  (.metrics.http_req_failed.values.rate // 1) < 0.001 and
-  (.metrics.product_lifecycle_replica_checks.values.count // 0) >= 2
+  (.metrics.checks.fails // .metrics.checks.values.fails // 1) == 0 and
+  (.metrics.http_req_failed.value // .metrics.http_req_failed.values.rate // 1) < 0.001 and
+  (.metrics.product_lifecycle_replica_checks.count // .metrics.product_lifecycle_replica_checks.values.count // 0) >= 2
 ' "${summary}" >/dev/null || {
   jq -n '{schemaVersion:1,passed:false,reason:"Product lifecycle replica reachability or transport correctness failed"}' >"${output}"
   echo "Product lifecycle domain verification failed" >&2
   exit 1
 }
 
-jq -n --slurpfile summary "${summary}" '{schemaVersion:1,passed:true,replicaChecks:$summary[0].metrics.product_lifecycle_replica_checks.values.count}' >"${output}"
+jq -n --slurpfile summary "${summary}" '{schemaVersion:1,passed:true,replicaChecks:($summary[0].metrics.product_lifecycle_replica_checks.count // $summary[0].metrics.product_lifecycle_replica_checks.values.count)}' >"${output}"
