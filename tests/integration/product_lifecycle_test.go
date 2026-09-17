@@ -4,13 +4,12 @@
 package integration
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -99,22 +98,16 @@ type gqlResponse struct {
 	Errors []json.RawMessage `json:"errors,omitempty"`
 }
 
+var integrationAdminTokens sync.Map // map[string]string, keyed by GraphQL base URL
+
 func gqlQuery(t *testing.T, query string, vars map[string]any) gqlResponse {
 	t.Helper()
-	body, err := json.Marshal(gqlRequest{Query: query, Variables: vars})
-	if err != nil {
-		t.Fatalf("marshal gql request: %v", err)
+	token, ok := integrationAdminTokens.Load(apiURL)
+	if !ok {
+		issued := namespaceContractBootstrapToken(t, apiURL)
+		token, _ = integrationAdminTokens.LoadOrStore(apiURL, issued)
 	}
-	resp, err := http.Post(apiURL+"/graphql", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("graphql request failed: %v — is the stack up? (API_URL=%s)", err, apiURL)
-	}
-	defer resp.Body.Close()
-	var gqlResp gqlResponse
-	if err := json.NewDecoder(resp.Body).Decode(&gqlResp); err != nil {
-		t.Fatalf("decode gql response: %v", err)
-	}
-	return gqlResp
+	return gqlQueryWithURL(t, apiURL, token.(string), query, vars)
 }
 
 // uniqueName returns a timestamped product name to avoid collisions between runs.
@@ -207,10 +200,15 @@ func TestProductLifecycle_GitPushAndGraphQLAdmissionParity(t *testing.T) {
 				apiVersion kind metadata { uid name namespace } spec { title lifecycle { state } }
 			}
 		}`, map[string]any{"namespace": namespace, "name": gitName})
-		requireGraphQLSuccess(t, response)
-		gitProduct = decodeParityProduct(t, response, "product")
-		if gitProduct.Metadata.UID != "" {
-			break
+		if len(response.Errors) > 0 {
+			if !graphqlErrorHasCode(response.Errors, "NOT_FOUND") {
+				requireGraphQLSuccess(t, response)
+			}
+		} else {
+			gitProduct = decodeParityProduct(t, response, "product")
+			if gitProduct.Metadata.UID != "" {
+				break
+			}
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("Git Product %q did not materialize before admission deadline", gitName)
@@ -406,8 +404,8 @@ func TestDocumentationExamples_ParseCorrectly(t *testing.T) {
 	examplesDir := filepath.Join("..", "..", "docs", "products", "examples")
 
 	cases := []struct {
-		file        string
-		expectAccept bool
+		file              string
+		expectAccept      bool
 		expectErrFragment string
 	}{
 		{"valid-product.md", true, ""},
