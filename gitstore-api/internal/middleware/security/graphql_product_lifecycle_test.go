@@ -104,6 +104,19 @@ func TestProductReadAuthorizationRunsBeforeResolver(t *testing.T) {
 	assert.Equal(t, "acme", authz.Resource.Attrs["namespace"])
 }
 
+func TestProductListAuthorizationDoesNotDiscloseCrossNamespaceExistence(t *testing.T) {
+	authz := testutil.NewDenyAllAuthZ(t)
+	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "other-namespace", AuthMethod: "bearer"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: "products"}}, Args: map[string]any{"namespace": "private"}})
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
+	require.Error(t, err)
+	assert.False(t, called, "the list resolver must not reveal whether private Products exist")
+	assert.Equal(t, "product.read", authz.Action)
+	assert.Equal(t, "private", authz.Resource.Attrs["namespace"])
+}
+
 func TestProductNodeAuthorizationRunsBeforeResolver(t *testing.T) {
 	productID := "Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC9wcm9kLXVpZA=="
 	store := &testutil.StubStore{GetProductFunc: func(context.Context, string) (*datastore.Product, error) {
