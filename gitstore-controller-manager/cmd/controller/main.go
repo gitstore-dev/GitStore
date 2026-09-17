@@ -24,6 +24,7 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
+	productcontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/product"
 	repositorycontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/repository"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
@@ -397,17 +398,11 @@ func registerProductWatch(ctx context.Context, mgr *manager.Manager, checkpointS
 		ListWatcher: listWatcher,
 		Cache:       productCache,
 		Store:       checkpointStore,
-		Enqueue: func(types.WorkItemKey) error {
-			// Product has no registered Reconciler/work queue of its own
-			// (research.md R1) — the Runner's own replay-dedup Enqueue hook
-			// is therefore a no-op; the real side effect is the cache event
-			// handler above, driven by Cache.Set/Delete, not by this hook.
-			return nil
-		},
+		Enqueue:     mgr.Enqueue,
 		ReplayEnqueue: func(key types.WorkItemKey) error {
 			return mgr.Enqueue(key)
 		},
-		DisableReplay: true,
+		DisableReplay: false,
 		KeyFunc: func(p categorytaxonomy.Product) types.WorkItemKey {
 			return types.WorkItemKey{Kind: "Product", Namespace: p.Namespace, Name: p.Name}
 		},
@@ -417,6 +412,13 @@ func registerProductWatch(ctx context.Context, mgr *manager.Manager, checkpointS
 		FlushIntervalEvents: 1,
 		MaxBackoff:          cfg.Controller.MaxWatchBackoff,
 		Log:                 log,
+	}
+	if err := mgr.Register(manager.ReconcilerRegistration{
+		Kind: "Product", Reconciler: productcontroller.NewReconciler(cache.AsReadOnly(productCache), productcontroller.NewGraphQLCompletionClient(client)), Cache: productCache,
+		OnSuccess: runner.MarkCompleted, MaxAttempts: cfg.Controller.DefaultMaxAttempts, StallThreshold: cfg.Controller.DefaultStallThreshold,
+	}); err != nil {
+		log.Error("failed to register Product reconciler", zap.Error(err))
+		return nil
 	}
 	productCache.AddEventHandler(categorytaxonomy.NewProductCategoryEnqueueHandler(enqueueCategory))
 

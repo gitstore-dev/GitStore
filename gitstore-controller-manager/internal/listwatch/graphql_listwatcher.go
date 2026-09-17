@@ -386,7 +386,7 @@ type namespacesListResponse struct {
 }
 
 const productFields = `
-  metadata { uid name namespace resourceVersion }
+  metadata { uid name namespace resourceVersion finalizers deletionTimestamp }
   spec { categoryRef { name } }
 `
 
@@ -420,10 +420,12 @@ subscription($namespace: String, $resourceVersion: String) {
 }`
 
 type productMetadataJSON struct {
-	UID             string `json:"uid"`
-	Name            string `json:"name"`
-	Namespace       string `json:"namespace"`
-	ResourceVersion string `json:"resourceVersion"`
+	UID               string     `json:"uid"`
+	Name              string     `json:"name"`
+	Namespace         string     `json:"namespace"`
+	ResourceVersion   string     `json:"resourceVersion"`
+	Finalizers        []string   `json:"finalizers"`
+	DeletionTimestamp *time.Time `json:"deletionTimestamp"`
 }
 
 type productSpecJSON struct {
@@ -439,10 +441,12 @@ type productNodeJSON struct {
 
 func (n productNodeJSON) toProduct() categorytaxonomy.Product {
 	p := categorytaxonomy.Product{
-		UID:             n.Metadata.UID,
-		Namespace:       n.Metadata.Namespace,
-		Name:            n.Metadata.Name,
-		ResourceVersion: n.Metadata.ResourceVersion,
+		UID:               n.Metadata.UID,
+		Namespace:         n.Metadata.Namespace,
+		Name:              n.Metadata.Name,
+		ResourceVersion:   n.Metadata.ResourceVersion,
+		Finalizers:        n.Metadata.Finalizers,
+		DeletionTimestamp: n.Metadata.DeletionTimestamp,
 	}
 	if n.Spec.CategoryRef != nil {
 		p.CategoryRefName = n.Spec.CategoryRef.Name
