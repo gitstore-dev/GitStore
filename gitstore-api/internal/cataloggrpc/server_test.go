@@ -2288,6 +2288,34 @@ func (s *concurrentProductDeleteStore) DeleteProductWithResourceVersion(ctx cont
 	return s.Datastore.DeleteProductWithResourceVersion(ctx, uid, expectedResourceVersion)
 }
 
+func (s *concurrentProductDeleteStore) MarkProductTerminating(ctx context.Context, uid, expectedResourceVersion, finalizer string, at time.Time) (*datastore.Product, error) {
+	current, err := s.GetProduct(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+	current.ResourceVersion = "concurrent-write"
+	if err := s.UpdateProduct(ctx, current); err != nil {
+		return nil, err
+	}
+	return s.Datastore.(datastore.ProductLifecycleStore).MarkProductTerminating(ctx, uid, expectedResourceVersion, finalizer, at)
+}
+
+func (s *concurrentProductDeleteStore) CompleteProductDeletion(ctx context.Context, uid, expectedResourceVersion string) error {
+	return s.Datastore.(datastore.ProductLifecycleStore).CompleteProductDeletion(ctx, uid, expectedResourceVersion)
+}
+
+func (s *concurrentProductDeleteStore) HasBlockingOwnerDependents(ctx context.Context, scope datastore.OwnerReferenceScope, ownerUID string) (bool, error) {
+	return s.Datastore.(datastore.OwnerReferenceStore).HasBlockingOwnerDependents(ctx, scope, ownerUID)
+}
+
+func (s *concurrentProductDeleteStore) ListBlockingOwnerDependents(ctx context.Context, scope datastore.OwnerReferenceScope, ownerUID, after string, limit int) (datastore.OwnerDependentPage, error) {
+	return s.Datastore.(datastore.OwnerReferenceStore).ListBlockingOwnerDependents(ctx, scope, ownerUID, after, limit)
+}
+
+func (s *concurrentProductDeleteStore) ListNonBlockingProductOwnerDependents(ctx context.Context, scope datastore.OwnerReferenceScope, ownerUID, after string, limit int) (datastore.OwnerDependentPage, error) {
+	return s.Datastore.(datastore.OwnerReferenceStore).ListNonBlockingProductOwnerDependents(ctx, scope, ownerUID, after, limit)
+}
+
 func TestAdmitResources_DeleteRejectsConcurrentReownership(t *testing.T) {
 	base := newTestDatastore(t)
 	store := &concurrentProductDeleteStore{Datastore: base}
@@ -2377,7 +2405,7 @@ func TestAdmitResources_ReparentChildBeforeDeletingFormerParent(t *testing.T) {
 // last-known namespace/name (its categoryRef itself is only recoverable
 // downstream from the controller-manager's own cache, per research.md R2 —
 // this event's Namespace/Name is what the consumer needs).
-func TestAdmitResources_DeleteProductWithCategoryRef_PublishesDeletedEvent(t *testing.T) {
+func TestAdmitResources_DeleteProductWithCategoryRef_PublishesTerminatingEvent(t *testing.T) {
 	store := newTestDatastore(t)
 	bus := eventbus.New(100)
 	zero := strings.Repeat("0", 40)
@@ -2398,7 +2426,7 @@ func TestAdmitResources_DeleteProductWithCategoryRef_PublishesDeletedEvent(t *te
 
 	admitDelta(t, srv, zero, a)
 	// Drain the Added event from creation so it doesn't get mistaken for
-	// the Deleted event under test.
+	// the terminating Modified event under test.
 	select {
 	case <-events:
 	case <-time.After(time.Second):
@@ -2410,12 +2438,12 @@ func TestAdmitResources_DeleteProductWithCategoryRef_PublishesDeletedEvent(t *te
 
 	select {
 	case ev := <-events:
-		assert.Equal(t, eventbus.Deleted, ev.Type)
+		assert.Equal(t, eventbus.Modified, ev.Type)
 		assert.Equal(t, "Product", ev.Kind)
 		assert.Equal(t, "gitstore", ev.Namespace)
 		assert.Equal(t, "widget", ev.Name)
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for Product Deleted event")
+		t.Fatal("timed out waiting for Product terminating event")
 	}
 }
 
@@ -2737,10 +2765,12 @@ func TestAdmitResources_BranchDeleteRefGone_ProceedsWithDeletion(t *testing.T) {
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
-	// The delete admission proceeds; since newCommit is zero-OID and there are no
-	// new files, all resources from the old commit should have been deleted.
-	_, err = store.GetProductByName(context.Background(), "gitstore", "widget")
-	assert.ErrorIs(t, err, datastore.ErrNotFound, "widget must be deleted after branch delete admission")
+	// Git deletion starts foreground termination. The Product remains visible
+	// until its controller observes an empty blocker index and completes its
+	// finalizer.
+	product, err := store.GetProductByName(context.Background(), "gitstore", "widget")
+	require.NoError(t, err)
+	assert.NotNil(t, product.DeletionTimestamp)
 }
 
 func isZeroRef(ref string) bool {

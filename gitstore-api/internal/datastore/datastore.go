@@ -408,6 +408,14 @@ type ProductStore interface {
 	DeleteProductWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 }
 
+// ProductLifecycleStore provides the compare-and-swap transitions used by
+// foreground Product deletion. It is additive while the Scylla rollout lands;
+// callers must require it before starting a terminating transition.
+type ProductLifecycleStore interface {
+	MarkProductTerminating(ctx context.Context, uid, expectedResourceVersion, finalizer string, deletionTimestamp time.Time) (*Product, error)
+	CompleteProductDeletion(ctx context.Context, uid, expectedResourceVersion string) error
+}
+
 // CategoryTaxonomyStore persists CategoryTaxonomy resources.
 type CategoryTaxonomyStore interface {
 	CreateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error

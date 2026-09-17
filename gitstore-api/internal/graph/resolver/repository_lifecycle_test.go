@@ -144,6 +144,9 @@ func (*repositoryLifecycleWriter) ReadFileForRepo(context.Context, string, strin
 func (*repositoryLifecycleWriter) DeleteFile(context.Context, gitclient.DeleteFileParams) (string, error) {
 	return "", nil
 }
+func (w *repositoryLifecycleWriter) DeleteFileForRepo(ctx context.Context, _ string, p gitclient.DeleteFileParams) (string, error) {
+	return w.DeleteFile(ctx, p)
+}
 func (*repositoryLifecycleWriter) CreateTag(context.Context, gitclient.CreateTagParams) (string, error) {
 	return "", nil
 }

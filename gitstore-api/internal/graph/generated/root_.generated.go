@@ -186,6 +186,10 @@ type ComplexityRoot struct {
 		Namespace func(childComplexity int) int
 	}
 
+	CreateProductPayload struct {
+		Product func(childComplexity int) int
+	}
+
 	CreateRepositoryPayload struct {
 		Repository func(childComplexity int) int
 	}
@@ -210,6 +214,11 @@ type ComplexityRoot struct {
 	DeleteNamespacePayload struct {
 		DeletedIdentifier func(childComplexity int) int
 		Outcome           func(childComplexity int) int
+	}
+
+	DeleteProductPayload struct {
+		Outcome func(childComplexity int) int
+		Product func(childComplexity int) int
 	}
 
 	DeleteRepositoryPayload struct {
@@ -340,11 +349,13 @@ type ComplexityRoot struct {
 		CreateCategory                     func(childComplexity int, input model.CreateCategoryInput) int
 		CreateCollection                   func(childComplexity int, input model.CreateCollectionInput) int
 		CreateNamespace                    func(childComplexity int, input model.CreateNamespaceInput) int
+		CreateProduct                      func(childComplexity int, input model.CreateProductInput) int
 		CreateRepository                   func(childComplexity int, input model.CreateRepositoryInput) int
 		CreateServiceAccount               func(childComplexity int, input model.CreateServiceAccountInput) int
 		DeleteCategory                     func(childComplexity int, input model.DeleteCategoryInput) int
 		DeleteCollection                   func(childComplexity int, input model.DeleteCollectionInput) int
 		DeleteNamespace                    func(childComplexity int, input model.DeleteNamespaceInput) int
+		DeleteProduct                      func(childComplexity int, input model.DeleteProductInput) int
 		DeleteRepository                   func(childComplexity int, input model.DeleteRepositoryInput) int
 		DeleteServiceAccount               func(childComplexity int, input model.DeleteServiceAccountInput) int
 		IssueServiceAccountToken           func(childComplexity int, input model.IssueServiceAccountTokenInput) int
@@ -362,6 +373,7 @@ type ComplexityRoot struct {
 		UpdateCategoryStatus               func(childComplexity int, input model.UpdateCategoryStatusInput) int
 		UpdateCollection                   func(childComplexity int, input model.UpdateCollectionInput) int
 		UpdateNamespace                    func(childComplexity int, input model.UpdateNamespaceInput) int
+		UpdateProduct                      func(childComplexity int, input model.UpdateProductInput) int
 		UpdateProductStatus                func(childComplexity int, input model.UpdateProductStatusInput) int
 		UpdateRepository                   func(childComplexity int, input model.UpdateRepositoryInput) int
 		UpdateRepositoryStatus             func(childComplexity int, input model.UpdateRepositoryStatusInput) int
@@ -526,6 +538,10 @@ type ComplexityRoot struct {
 		Node   func(childComplexity int) int
 	}
 
+	ProductLifecycleSpec struct {
+		State func(childComplexity int) int
+	}
+
 	ProductOptionDefinition struct {
 		Name   func(childComplexity int) int
 		Title  func(childComplexity int) int
@@ -534,6 +550,7 @@ type ComplexityRoot struct {
 
 	ProductSpec struct {
 		CategoryRef func(childComplexity int) int
+		Lifecycle   func(childComplexity int) int
 		Media       func(childComplexity int) int
 		Options     func(childComplexity int) int
 		Tags        func(childComplexity int) int
@@ -850,6 +867,10 @@ type ComplexityRoot struct {
 
 	UpdateNamespacePayload struct {
 		Namespace func(childComplexity int) int
+	}
+
+	UpdateProductPayload struct {
+		Product func(childComplexity int) int
 	}
 
 	UpdateProductStatusPayload struct {
@@ -1489,6 +1510,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CreateNamespacePayload.Namespace(childComplexity), true
 
+	case "CreateProductPayload.product":
+		if e.ComplexityRoot.CreateProductPayload.Product == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CreateProductPayload.Product(childComplexity), true
+
 	case "CreateRepositoryPayload.repository":
 		if e.ComplexityRoot.CreateRepositoryPayload.Repository == nil {
 			break
@@ -1565,6 +1593,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.DeleteNamespacePayload.Outcome(childComplexity), true
+
+	case "DeleteProductPayload.outcome":
+		if e.ComplexityRoot.DeleteProductPayload.Outcome == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteProductPayload.Outcome(childComplexity), true
+
+	case "DeleteProductPayload.product":
+		if e.ComplexityRoot.DeleteProductPayload.Product == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteProductPayload.Product(childComplexity), true
 
 	case "DeleteRepositoryPayload.deletedRepositoryId":
 		if e.ComplexityRoot.DeleteRepositoryPayload.DeletedRepositoryID == nil {
@@ -2018,6 +2060,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.CreateNamespace(childComplexity, args["input"].(model.CreateNamespaceInput)), true
 
+	case "Mutation.createProduct":
+		if e.ComplexityRoot.Mutation.CreateProduct == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_createProduct_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CreateProduct(childComplexity, args["input"].(model.CreateProductInput)), true
+
 	case "Mutation.createRepository":
 		if e.ComplexityRoot.Mutation.CreateRepository == nil {
 			break
@@ -2077,6 +2131,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.DeleteNamespace(childComplexity, args["input"].(model.DeleteNamespaceInput)), true
+
+	case "Mutation.deleteProduct":
+		if e.ComplexityRoot.Mutation.DeleteProduct == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deleteProduct_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.DeleteProduct(childComplexity, args["input"].(model.DeleteProductInput)), true
 
 	case "Mutation.deleteRepository":
 		if e.ComplexityRoot.Mutation.DeleteRepository == nil {
@@ -2276,6 +2342,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.UpdateNamespace(childComplexity, args["input"].(model.UpdateNamespaceInput)), true
+
+	case "Mutation.updateProduct":
+		if e.ComplexityRoot.Mutation.UpdateProduct == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateProduct_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateProduct(childComplexity, args["input"].(model.UpdateProductInput)), true
 
 	case "Mutation.updateProductStatus":
 		if e.ComplexityRoot.Mutation.UpdateProductStatus == nil {
@@ -3016,6 +3094,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ProductEdge.Node(childComplexity), true
 
+	case "ProductLifecycleSpec.state":
+		if e.ComplexityRoot.ProductLifecycleSpec.State == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductLifecycleSpec.State(childComplexity), true
+
 	case "ProductOptionDefinition.name":
 		if e.ComplexityRoot.ProductOptionDefinition.Name == nil {
 			break
@@ -3043,6 +3128,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ProductSpec.CategoryRef(childComplexity), true
+
+	case "ProductSpec.lifecycle":
+		if e.ComplexityRoot.ProductSpec.Lifecycle == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductSpec.Lifecycle(childComplexity), true
 
 	case "ProductSpec.media":
 		if e.ComplexityRoot.ProductSpec.Media == nil {
@@ -4369,6 +4461,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateNamespacePayload.Namespace(childComplexity), true
 
+	case "UpdateProductPayload.product":
+		if e.ComplexityRoot.UpdateProductPayload.Product == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateProductPayload.Product(childComplexity), true
+
 	case "UpdateProductStatusPayload.product":
 		if e.ComplexityRoot.UpdateProductStatusPayload.Product == nil {
 			break
@@ -4468,6 +4567,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputCatalogObjectReferenceInput,
 		ec.unmarshalInputCategoryBy,
 		ec.unmarshalInputCategoryNamespacePath,
 		ec.unmarshalInputCollectionBy,
@@ -4478,17 +4578,21 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCreateCategoryInput,
 		ec.unmarshalInputCreateCollectionInput,
 		ec.unmarshalInputCreateNamespaceInput,
+		ec.unmarshalInputCreateProductInput,
 		ec.unmarshalInputCreateRepositoryInput,
 		ec.unmarshalInputCreateServiceAccountInput,
 		ec.unmarshalInputDeleteCategoryInput,
 		ec.unmarshalInputDeleteCollectionInput,
 		ec.unmarshalInputDeleteNamespaceInput,
+		ec.unmarshalInputDeleteProductInput,
 		ec.unmarshalInputDeleteRepositoryInput,
 		ec.unmarshalInputDeleteServiceAccountInput,
+		ec.unmarshalInputFileReferenceInput,
 		ec.unmarshalInputIssueServiceAccountTokenInput,
 		ec.unmarshalInputLabelSelectorInput,
 		ec.unmarshalInputLabelSelectorRequirementInput,
 		ec.unmarshalInputLoginInput,
+		ec.unmarshalInputMediaDefinitionInput,
 		ec.unmarshalInputMetadataInput,
 		ec.unmarshalInputNamespaceBy,
 		ec.unmarshalInputNamespaceMetadataInput,
@@ -4497,7 +4601,10 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputNamespaceSpecInput,
 		ec.unmarshalInputObjectMetaInput,
 		ec.unmarshalInputProductBy,
+		ec.unmarshalInputProductLifecycleSpecInput,
 		ec.unmarshalInputProductNamespacePath,
+		ec.unmarshalInputProductOptionDefinitionInput,
+		ec.unmarshalInputProductSpecInput,
 		ec.unmarshalInputProductVariantBy,
 		ec.unmarshalInputProductVariantNamespacePath,
 		ec.unmarshalInputProvisionNamespaceSystemRepositoryInput,
@@ -4519,6 +4626,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputUpdateCategoryStatusInput,
 		ec.unmarshalInputUpdateCollectionInput,
 		ec.unmarshalInputUpdateNamespaceInput,
+		ec.unmarshalInputUpdateProductInput,
 		ec.unmarshalInputUpdateProductStatusInput,
 		ec.unmarshalInputUpdateRepositoryInput,
 		ec.unmarshalInputUpdateRepositoryStatusInput,
@@ -4770,6 +4878,8 @@ extend type Mutation {
 
   """
   Reorder categories (drag-and-drop)
+  TODO(REMOVE): This is a temporary mutation for the admin UI. It will be replaced by a more general tree-restructure mutation
+  that can move categories between parents and reorder them in one operation.
   """
   reorderCategories(input: ReorderCategoriesInput!): ReorderCategoriesPayload!
 
@@ -4888,6 +4998,7 @@ type CategorySpec {
 
 """
 A key-value pair for label maps.
+TODO(REMOVE): No longer used in favour of JSON
 """
 type KeyValuePair {
   key: String!
@@ -4966,9 +5077,6 @@ type CategoryConnection {
 Input for creating a category
 """
 input CreateCategoryInput {
-
-
-
   """
   Category name
   """
@@ -4999,9 +5107,6 @@ input CreateCategoryInput {
 Payload for createCategory mutation
 """
 type CreateCategoryPayload {
-
-
-
   """
   The created category
   """
@@ -5012,9 +5117,6 @@ type CreateCategoryPayload {
 Input for updating a category
 """
 input UpdateCategoryInput {
-
-
-
   """
   Category ID to update
   """
@@ -5056,9 +5158,6 @@ input UpdateCategoryInput {
 Payload for updateCategory mutation
 """
 type UpdateCategoryPayload {
-
-
-
   """
   The updated category
   """
@@ -5074,9 +5173,6 @@ type UpdateCategoryPayload {
 Input for deleting a category
 """
 input DeleteCategoryInput {
-
-
-
   """
   Category ID to delete
   """
@@ -5087,9 +5183,6 @@ input DeleteCategoryInput {
 Payload for deleteCategory mutation
 """
 type DeleteCategoryPayload {
-
-
-
   """
   Deleted category ID
   """
@@ -5103,11 +5196,9 @@ type DeleteCategoryPayload {
 
 """
 Input for reordering categories (drag-and-drop)
+TODO(REMOVE): Not needed
 """
 input ReorderCategoriesInput {
-
-
-
   """
   Ordered list of category IDs within parent
   """
@@ -5131,11 +5222,9 @@ input ReorderCategoriesInput {
 
 """
 Payload for reorderCategories mutation
+TODO(REMOVE): Not needed
 """
 type ReorderCategoriesPayload {
-
-
-
   """
   Updated categories
   """
@@ -5144,6 +5233,7 @@ type ReorderCategoriesPayload {
 
 """
 Optimistic lock conflict for category
+TODO(REMOVE): resourceVersion is used for optimistic locking.
 """
 type CategoryOptimisticLockConflict {
   """
@@ -6037,7 +6127,8 @@ type NamespaceWatchEvent {
 	{Name: "../../../../shared/schemas/product.graphqls", Input: `# Product Resource — Kubernetes-style GraphQL Schema
 # Full rewrite: alpha software, no backwards compatibility required.
 # All reads served from the datastore (fully hydrated view).
-# Mutations are git-driven; GraphQL mutations removed (deferred to GH#185/186).
+# Mutations are git-driven: GraphQL commits the canonical manifest and awaits
+# the same admission path as a Git push.
 
 extend type Query {
   """Fetch a single product by globally unique ID or namespace + name."""
@@ -6068,6 +6159,15 @@ extend type Subscription {
 }
 
 extend type Mutation {
+  """Create a Product in the namespace's implicit gitstore-system repository."""
+  createProduct(input: CreateProductInput!): CreateProductPayload!
+
+  """Update the canonical manifest at the admitted Product's stored provenance."""
+  updateProduct(input: UpdateProductInput!): UpdateProductPayload!
+
+  """Start or observe foreground Product termination."""
+  deleteProduct(input: DeleteProductInput!): DeleteProductPayload!
+
   """
   Controller-only Product status and category-resolution update.
   """
@@ -6115,6 +6215,94 @@ type ProductSpec {
   tags: [String!]!
   media: [MediaDefinition!]!
   options: [ProductOptionDefinition!]!
+  lifecycle: ProductLifecycleSpec!
+}
+
+enum ProductLifecycleState {
+  ACTIVE
+  RETIRED
+}
+
+type ProductLifecycleSpec {
+  state: ProductLifecycleState!
+}
+
+input ProductLifecycleSpecInput {
+  state: ProductLifecycleState = ACTIVE
+}
+
+input ProductSpecInput {
+  title: String
+  categoryRef: CatalogObjectReferenceInput
+  tags: [String!]
+  media: [MediaDefinitionInput!]
+  options: [ProductOptionDefinitionInput!]
+  lifecycle: ProductLifecycleSpecInput
+}
+
+input CatalogObjectReferenceInput {
+  apiVersion: String
+  kind: String
+  name: String!
+  namespace: String
+}
+
+input MediaDefinitionInput {
+  fileRef: FileReferenceInput!
+}
+
+input FileReferenceInput {
+  name: String!
+  kind: String!
+  optional: Boolean
+}
+
+input ProductOptionDefinitionInput {
+  name: String!
+  title: String
+  values: [String!]!
+}
+
+input CreateProductInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "Product"
+  metadata: MetadataInput!
+  spec: ProductSpecInput!
+  body: String
+}
+
+input UpdateProductInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "Product"
+  metadata: MetadataInput!
+  spec: ProductSpecInput!
+  body: String
+}
+
+input DeleteProductInput {
+  """Opaque global Product Node ID; never a raw UID or source selector."""
+  id: ID
+}
+
+type CreateProductPayload {
+  product: Product
+}
+
+type UpdateProductPayload {
+  product: Product
+}
+
+enum ProductDeletionOutcome {
+  TERMINATION_STARTED
+  ALREADY_TERMINATING
+}
+
+type DeleteProductPayload {
+  "The current Product envelope, including terminating metadata."
+  product: Product
+
+  "Whether this request started termination or observed existing termination."
+  outcome: ProductDeletionOutcome!
 }
 
 type ProductStatus {
@@ -6129,7 +6317,8 @@ input UpdateProductStatusInput {
   namespace: String!
   resourceVersion: String!
   conditions: [ConditionInput!]
-  removeOwnerUID: String
+  "Opaque node ID of the owner reference to remove."
+  removeOwnerID: ID
 }
 
 type UpdateProductStatusPayload {
@@ -7845,6 +8034,14 @@ func (ec *executionContext) childFields_CreateNamespacePayload(ctx context.Conte
 	return nil, fmt.Errorf("no field named %q was found under type CreateNamespacePayload", field.Name)
 }
 
+func (ec *executionContext) childFields_CreateProductPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "product":
+		return ec.fieldContext_CreateProductPayload_product(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CreateProductPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_CreateRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "repository":
@@ -7895,6 +8092,16 @@ func (ec *executionContext) childFields_DeleteNamespacePayload(ctx context.Conte
 		return ec.fieldContext_DeleteNamespacePayload_outcome(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DeleteNamespacePayload", field.Name)
+}
+
+func (ec *executionContext) childFields_DeleteProductPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "product":
+		return ec.fieldContext_DeleteProductPayload_product(ctx, field)
+	case "outcome":
+		return ec.fieldContext_DeleteProductPayload_outcome(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type DeleteProductPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_DeleteRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8447,6 +8654,14 @@ func (ec *executionContext) childFields_ProductEdge(ctx context.Context, field g
 	return nil, fmt.Errorf("no field named %q was found under type ProductEdge", field.Name)
 }
 
+func (ec *executionContext) childFields_ProductLifecycleSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "state":
+		return ec.fieldContext_ProductLifecycleSpec_state(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProductLifecycleSpec", field.Name)
+}
+
 func (ec *executionContext) childFields_ProductOptionDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "name":
@@ -8471,6 +8686,8 @@ func (ec *executionContext) childFields_ProductSpec(ctx context.Context, field g
 		return ec.fieldContext_ProductSpec_media(ctx, field)
 	case "options":
 		return ec.fieldContext_ProductSpec_options(ctx, field)
+	case "lifecycle":
+		return ec.fieldContext_ProductSpec_lifecycle(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ProductSpec", field.Name)
 }
@@ -9043,6 +9260,14 @@ func (ec *executionContext) childFields_UpdateNamespacePayload(ctx context.Conte
 		return ec.fieldContext_UpdateNamespacePayload_namespace(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateNamespacePayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateProductPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "product":
+		return ec.fieldContext_UpdateProductPayload_product(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateProductPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateProductStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

@@ -266,6 +266,53 @@ func (s *scyllaDatastore) CompleteCategoryTaxonomyDeletion(
 	return category, nil
 }
 
+// MarkProductTerminating performs the Product foreground-deletion transition
+// with an authoritative-row resourceVersion compare-and-swap.
+func (s *scyllaDatastore) MarkProductTerminating(
+	ctx context.Context,
+	uid, expectedResourceVersion, finalizer string,
+	at time.Time,
+) (*datastore.Product, error) {
+	product, err := s.GetProduct(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+	if product.ResourceVersion != expectedResourceVersion {
+		return nil, datastore.ErrConflict
+	}
+	if product.DeletionTimestamp != nil {
+		return product, nil
+	}
+	when := at.UTC()
+	product.DeletionTimestamp = &when
+	if finalizer != "" && !containsFinalizer(product.Finalizers, finalizer) {
+		product.Finalizers = append(product.Finalizers, finalizer)
+	}
+	product.UpdateTimestamp = when
+	product.UpdateActor = "deletion"
+	datastore.AdvanceProductSystemVersion(product)
+	if err := s.UpdateProduct(ctx, product); err != nil {
+		return nil, err
+	}
+	return product, nil
+}
+
+// CompleteProductDeletion removes an already-terminating Product using the
+// same expected-version conditional delete as other Product lifecycle writes.
+func (s *scyllaDatastore) CompleteProductDeletion(ctx context.Context, uid, expectedResourceVersion string) error {
+	product, err := s.GetProduct(ctx, uid)
+	if err != nil {
+		return err
+	}
+	if product.ResourceVersion != expectedResourceVersion {
+		return datastore.ErrConflict
+	}
+	if product.DeletionTimestamp == nil {
+		return fmt.Errorf("%w: product is not terminating", datastore.ErrInvalidArgument)
+	}
+	return s.DeleteProductWithResourceVersion(ctx, uid, expectedResourceVersion)
+}
+
 func containsFinalizer(finalizers []string, finalizer string) bool {
 	for _, current := range finalizers {
 		if current == finalizer {

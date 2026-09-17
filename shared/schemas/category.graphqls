@@ -36,6 +36,8 @@ extend type Mutation {
 
   """
   Reorder categories (drag-and-drop)
+  TODO(REMOVE): This is a temporary mutation for the admin UI. It will be replaced by a more general tree-restructure mutation
+  that can move categories between parents and reorder them in one operation.
   """
   reorderCategories(input: ReorderCategoriesInput!): ReorderCategoriesPayload!
 
@@ -154,6 +156,7 @@ type CategorySpec {
 
 """
 A key-value pair for label maps.
+TODO(REMOVE): No longer used in favour of JSON
 """
 type KeyValuePair {
   key: String!
@@ -232,9 +235,6 @@ type CategoryConnection {
 Input for creating a category
 """
 input CreateCategoryInput {
-
-
-
   """
   Category name
   """
@@ -265,9 +265,6 @@ input CreateCategoryInput {
 Payload for createCategory mutation
 """
 type CreateCategoryPayload {
-
-
-
   """
   The created category
   """
@@ -278,9 +275,6 @@ type CreateCategoryPayload {
 Input for updating a category
 """
 input UpdateCategoryInput {
-
-
-
   """
   Category ID to update
   """
@@ -322,9 +316,6 @@ input UpdateCategoryInput {
 Payload for updateCategory mutation
 """
 type UpdateCategoryPayload {
-
-
-
   """
   The updated category
   """
@@ -340,9 +331,6 @@ type UpdateCategoryPayload {
 Input for deleting a category
 """
 input DeleteCategoryInput {
-
-
-
   """
   Category ID to delete
   """
@@ -353,9 +341,6 @@ input DeleteCategoryInput {
 Payload for deleteCategory mutation
 """
 type DeleteCategoryPayload {
-
-
-
   """
   Deleted category ID
   """
@@ -369,11 +354,9 @@ type DeleteCategoryPayload {
 
 """
 Input for reordering categories (drag-and-drop)
+TODO(REMOVE): Not needed
 """
 input ReorderCategoriesInput {
-
-
-
   """
   Ordered list of category IDs within parent
   """
@@ -397,11 +380,9 @@ input ReorderCategoriesInput {
 
 """
 Payload for reorderCategories mutation
+TODO(REMOVE): Not needed
 """
 type ReorderCategoriesPayload {
-
-
-
   """
   Updated categories
   """
@@ -410,6 +391,7 @@ type ReorderCategoriesPayload {
 
 """
 Optimistic lock conflict for category
+TODO(REMOVE): resourceVersion is used for optimistic locking.
 """
 type CategoryOptimisticLockConflict {
   """

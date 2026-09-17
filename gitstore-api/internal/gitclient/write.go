@@ -96,12 +96,17 @@ func (c *Client) CommitFileForRepo(ctx context.Context, repositoryID string, p C
 // DeleteFile removes a file and commits the deletion to the default branch.
 // Returns the new commit SHA on success.
 func (c *Client) DeleteFile(ctx context.Context, p DeleteFileParams) (string, error) {
-	authorization, err := RequestAuthorization(ctx, "repository.write.any", c.RepositoryID)
+	return c.DeleteFileForRepo(ctx, c.RepositoryID, p)
+}
+
+// DeleteFileForRepo removes a file from an explicitly selected repository.
+func (c *Client) DeleteFileForRepo(ctx context.Context, repositoryID string, p DeleteFileParams) (string, error) {
+	authorization, err := RequestAuthorization(ctx, "repository.write.any", repositoryID)
 	if err != nil {
 		return "", err
 	}
 	resp, err := c.Git.DeleteFile(ctx, &gitv1.DeleteFileRequest{
-		RepositoryId:  c.RepositoryID,
+		RepositoryId:  repositoryID,
 		Path:          p.Path,
 		CommitMessage: p.CommitMessage,
 		AuthorName:    p.AuthorName,

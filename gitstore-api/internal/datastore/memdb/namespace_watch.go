@@ -225,3 +225,27 @@ func (m *memdbDatastore) recordCommittedRepository(eventType datastore.ResourceW
 		At:                     now,
 	})
 }
+
+// recordCommittedProduct is the Product equivalent of an authoritative-table
+// CDC record. It is invoked only after the write transaction commits.
+func (m *memdbDatastore) recordCommittedProduct(eventType datastore.ResourceWatchEventType, product *datastore.Product, previousLabels map[string]string) {
+	if product == nil {
+		return
+	}
+	now := time.Now().UTC()
+	var payload []byte
+	if eventType == datastore.ResourceWatchAdded || eventType == datastore.ResourceWatchModified {
+		payload, _ = json.Marshal(product)
+	}
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	m.pruneLocked(now.Add(-m.namespaceWatchRetention))
+	m.namespaceWatchSequence++
+	m.namespaceWatchEvents = append(m.namespaceWatchEvents, datastore.ResourceWatchEvent{
+		Epoch: m.namespaceWatchEpoch, Sequence: m.namespaceWatchSequence,
+		Type: eventType, Kind: "Product", Namespace: product.Namespace, Name: product.Name, Payload: payload,
+		SelectorLabels: cloneStringMap(product.Labels), PreviousSelectorLabels: cloneStringMap(previousLabels),
+		DeduplicationKey: fmt.Sprintf("memdb:%s:%s:%d", eventType, product.UID, m.namespaceWatchSequence),
+		At:               now,
+	})
+}

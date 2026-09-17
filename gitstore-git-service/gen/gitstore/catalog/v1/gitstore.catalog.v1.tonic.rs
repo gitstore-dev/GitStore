@@ -119,6 +119,35 @@ pub mod catalog_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        pub async fn validate_resource_deletions(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ValidateResourceDeletionsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ValidateResourceDeletionsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/gitstore.catalog.v1.CatalogService/ValidateResourceDeletions",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "gitstore.catalog.v1.CatalogService",
+                        "ValidateResourceDeletions",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         pub async fn validate_category_taxonomy_deletion(
             &mut self,
             request: impl tonic::IntoRequest<
@@ -199,6 +228,13 @@ pub mod catalog_service_server {
             request: tonic::Request<super::ValidateResourcesRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ValidateResourcesResponse>,
+            tonic::Status,
+        >;
+        async fn validate_resource_deletions(
+            &self,
+            request: tonic::Request<super::ValidateResourceDeletionsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ValidateResourceDeletionsResponse>,
             tonic::Status,
         >;
         async fn validate_category_taxonomy_deletion(
@@ -323,6 +359,58 @@ pub mod catalog_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ValidateResourcesSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/gitstore.catalog.v1.CatalogService/ValidateResourceDeletions" => {
+                    #[allow(non_camel_case_types)]
+                    struct ValidateResourceDeletionsSvc<T: CatalogService>(pub Arc<T>);
+                    impl<
+                        T: CatalogService,
+                    > tonic::server::UnaryService<
+                        super::ValidateResourceDeletionsRequest,
+                    > for ValidateResourceDeletionsSvc<T> {
+                        type Response = super::ValidateResourceDeletionsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ValidateResourceDeletionsRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as CatalogService>::validate_resource_deletions(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ValidateResourceDeletionsSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

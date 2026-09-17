@@ -16,10 +16,10 @@ means it can proceed in parallel once its phase prerequisites are complete.
 
 ## Phase 1: Setup
 
-- [ ] T001 Review and preserve the Product lifecycle decisions in `specs/055-product-lifecycle/{spec.md,plan.md,research.md,data-model.md}` before source changes.
-- [ ] T002 Add the Product lifecycle capacity profile skeleton to `tests/capacity/profiles/product-lifecycle.js` and register `product/lifecycle` validation in `Makefile`.
-- [ ] T003 [P] Add the Product lifecycle chaos profile skeleton to `tests/chaos/profiles/product-lifecycle.json`.
-- [ ] T004 [P] Create focused Product lifecycle test fixtures and authenticated principals in `gitstore-api/internal/graph/resolver/product_lifecycle_test.go`.
+- [X] T001 Review and preserve the Product lifecycle decisions in `specs/055-product-lifecycle/{spec.md,plan.md,research.md,data-model.md}` before source changes.
+- [X] T002 Add the Product lifecycle capacity profile skeleton to `tests/capacity/profiles/product-lifecycle.js` and register `product/lifecycle` validation in `Makefile`.
+- [X] T003 [P] Add the Product lifecycle chaos profile skeleton to `tests/chaos/profiles/product-lifecycle.json`.
+- [X] T004 [P] Create focused Product lifecycle test fixtures and authenticated principals in `gitstore-api/internal/graph/resolver/product_lifecycle_test.go`.
 
 ---
 
@@ -28,16 +28,16 @@ means it can proceed in parallel once its phase prerequisites are complete.
 **Purpose**: Establish the shared Product contract, authorization, datastore,
 and Resource Watch prerequisites before any user-story slice.
 
-- [ ] T005 Add Product mutation/delete-payload schema contract tests, including `DeleteProductInput { id: ID }` and `ProductDeletionOutcome`, in `gitstore-api/internal/graph/resolver/product_schema_contract_test.go`.
-- [ ] T006 Update `shared/schemas/product.graphqls` with create/update/delete envelopes, `ProductDeletionOutcome`, Namespace-style delete payload, lifecycle spec, and typed watch envelope; regenerate gqlgen output in `gitstore-api/internal/graph/generated/` and `gitstore-api/internal/graph/model/`.
+- [X] T005 Add Product mutation/delete-payload schema contract tests, including `DeleteProductInput { id: ID }` and `ProductDeletionOutcome`, in `gitstore-api/internal/graph/resolver/product_schema_contract_test.go`.
+- [X] T006 Update `shared/schemas/product.graphqls` with create/update/delete envelopes, `ProductDeletionOutcome`, Namespace-style delete payload, lifecycle spec, and typed watch envelope; regenerate gqlgen output in `gitstore-api/internal/graph/generated/` and `gitstore-api/internal/graph/model/`.
 - [ ] T007 [P] Add Product resource-action authorization matrix tests for read, author, update, delete, watch, status, and completion in `gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go`.
 - [ ] T008 Add resource-aware Product authorization gates before lookup, node, list, relationships/counts, mutation, typed watch, generic watch, status, and completion disclosure in `gitstore-api/internal/middleware/security/graphql.go`.
-- [ ] T009 [P] Add datastore contract tests for indexed ProductVariant blockers and expected-version Product termination/completion in `gitstore-api/internal/datastore/product_lifecycle_contract_test.go`.
-- [ ] T010 Extend Product/ProductVariant datastore interfaces and memdb implementation for blocker lookup, mark termination, complete deletion, and owner-reference projection in `gitstore-api/internal/datastore/{datastore.go,memdb/}`.
-- [ ] T011 [P] Add Scylla migration and backend contract tests for Product owner-reference lookup and lifecycle writes in `gitstore-api/internal/datastore/scylla/{migrations/,product_lifecycle_test.go}`.
-- [ ] T012 Implement Scylla Product lifecycle/blocker persistence with resource-version guards in `gitstore-api/internal/datastore/scylla/`.
-- [ ] T013 Add Product CDC/journal migration and backend-neutral journal source tests in `gitstore-api/internal/datastore/scylla/{migrations/,product_cdc_test.go}` and `gitstore-api/internal/datastore/memdb/product_watch_test.go`.
-- [ ] T014 Implement Product CDC normalization/materializer source, memdb equivalent, bounded retention/progress/lease wiring, and Product readiness in `gitstore-api/internal/datastore/{scylla/product_cdc.go,memdb/product_watch.go}` and `gitstore-api/internal/watchjournal/`.
+- [X] T009 [P] Add datastore contract tests for indexed ProductVariant blockers and expected-version Product termination/completion in `gitstore-api/internal/datastore/product_lifecycle_contract_test.go`.
+- [X] T010 Extend Product/ProductVariant datastore interfaces and memdb implementation for blocker lookup, mark termination, complete deletion, and owner-reference projection in `gitstore-api/internal/datastore/{datastore.go,memdb/}`.
+- [X] T011 [P] Verify the existing owner-reference projection migration and Product lifecycle columns cover Product; add backend contract tests for lifecycle capability in `gitstore-api/internal/datastore/scylla/product_lifecycle_test.go`.
+- [X] T012 Implement Scylla Product lifecycle/blocker persistence with resource-version guards in `gitstore-api/internal/datastore/scylla/`.
+- [X] T013 Add Product CDC/journal migration and backend-neutral journal source tests in `gitstore-api/internal/datastore/scylla/{migrations/,repository_watch_migration_test.go}` and `gitstore-api/internal/datastore/memdb/product_watch_test.go`.
+- [X] T014 Implement Product CDC normalization/materializer source, memdb equivalent, bounded retention/progress/lease wiring, and Product readiness in `gitstore-api/internal/datastore/{scylla/product_cdc.go,memdb/product_watch.go}` and `gitstore-api/internal/watchjournal/`.
 - [ ] T015 Add Product journal metrics, lifecycle/finalizer/blocker metrics, and structured audit-safe logs in `gitstore-api/internal/{watchjournal/,cataloggrpc/,graph/resolver/}`.
 
 **Checkpoint**: Schema, authorization, lifecycle datastore operations, and a
@@ -54,8 +54,8 @@ canonical admission path and stable Product identity.
 **Independent test**: Create/update via Git and GraphQL, compare admitted
 revision/identity, then submit invalid input and observe no partial Product.
 
-- [ ] T016 [P] [US1] Add Git admission tests for Product provenance, stable UID/mutable generation, author-system-field rejection, and deletion transition in `gitstore-api/internal/cataloggrpc/product_lifecycle_test.go`.
-- [ ] T017 [US1] Refactor Product admission and Git deletion to preserve provenance, use lifecycle state rather than hard delete, and emit every committed transition in `gitstore-api/internal/cataloggrpc/server.go`.
+- [ ] T016 [P] [US1] Add Git-service SchemaValidation and Product-admission tests for generic `OperationDelete`, Product provenance, stable UID/mutable generation, author-system-field rejection, and deletion transition in `gitstore-git-service/src/git/hooks/` and `gitstore-api/internal/cataloggrpc/product_lifecycle_test.go`.
+- [ ] T017 [US1] Generalize the CategoryTaxonomy proposed-tree SchemaValidation path to `OperationDelete` for every supported resource type; refactor Product admission/deletion to preserve provenance, use lifecycle state rather than hard delete, and emit every committed transition in `gitstore-git-service/src/git/hooks/` and `gitstore-api/internal/cataloggrpc/server.go`.
 - [ ] T018 [P] [US1] Add resolver contract tests for create/update/delete commit-and-wait behavior, non-system provenance update routing, implicit `gitstore-system` create routing, and ID delete input in `gitstore-api/internal/graph/resolver/product_lifecycle_test.go`.
 - [ ] T019 [US1] Implement Product GraphQL create/update/delete in `gitstore-api/internal/graph/resolver/product.resolvers.go`: create targets `gitstore-system`; update resolves stored repository/source path; all await admitted revision.
 - [ ] T020 [US1] Return `ProductDeletionOutcome` and the terminating Product envelope from `deleteProduct` in `gitstore-api/internal/graph/resolver/product.resolvers.go`.

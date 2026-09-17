@@ -112,6 +112,9 @@ func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, 
 	if kind == "Repository" {
 		return r.watchRepositoryResources(ctx, namespace, selector, resourceVersion)
 	}
+	if kind == "Product" {
+		return r.watchProductGenericResources(ctx, namespace, selector, resourceVersion)
+	}
 	if r.eventBus == nil {
 		return nil, gqlerror.Errorf("watch subscriptions are not available")
 	}

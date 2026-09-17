@@ -22,7 +22,7 @@ Sync Impact Report:
   - ✅ .specify/templates/commands/ (directory absent; no command templates to update)
 - Runtime guidance updated:
   - ✅ README.md
-  - ✅ docs/architecture.md
+  - ✅ docs/architecture/README.md
   - ✅ docs/developer-guide.md
   - ✅ AGENTS.md
   - ✅ specs/048-scylla-query-design/plan.md

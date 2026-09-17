@@ -31,8 +31,11 @@ func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.Commi
 	if req.RepositoryID == "" || req.CommitSHA == "" || req.RefName == "" || req.Path == "" {
 		return nil, fmt.Errorf("committed admission requires repository, ref, commit, and path")
 	}
+	if req.Operation == admission.OperationDelete {
+		return s.admitCommittedProductDeletion(ctx, req)
+	}
 	if req.Operation != admission.OperationCreate && req.Operation != admission.OperationUpdate {
-		return nil, fmt.Errorf("committed admission requires create or update operation")
+		return nil, fmt.Errorf("committed admission requires create, update, or delete operation")
 	}
 
 	content := append([]byte(nil), req.Content...)
@@ -106,6 +109,31 @@ func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.Commi
 		return nil, fmt.Errorf("committed admission did not materialize %s %s/%s: %w", entry.identity.Kind, entry.identity.Namespace, entry.identity.Name, err)
 	}
 	return &admission.CommittedManifestResult{Kind: entry.identity.Kind, Namespace: entry.identity.Namespace, Name: entry.identity.Name, CommitSHA: commitSHA}, nil
+}
+
+func (s *Server) admitCommittedProductDeletion(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	if req.Kind != "Product" || req.Name == "" {
+		return nil, fmt.Errorf("committed deletion requires a Product identity")
+	}
+	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	if !ok || current != req.CommitSHA {
+		return nil, ErrCommittedManifestSuperseded
+	}
+	product, err := s.store.GetProductByName(ctx, req.Namespace, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	if product.RepositoryID != req.RepositoryID || product.SourcePath != req.Path {
+		return nil, fmt.Errorf("committed Product deletion provenance does not match")
+	}
+	lifecycle, ok := s.store.(datastore.ProductLifecycleStore)
+	if !ok {
+		return nil, fmt.Errorf("Product lifecycle datastore is unavailable")
+	}
+	if _, err := lifecycle.MarkProductTerminating(ctx, product.UID, product.ResourceVersion, "gitstore.dev/foreground-deletion", s.clock.Now().UTC()); err != nil {
+		return nil, err
+	}
+	return &admission.CommittedManifestResult{Kind: "Product", Namespace: product.Namespace, Name: product.Name, CommitSHA: req.CommitSHA}, nil
 }
 
 // validateCommittedOperation makes synchronous admission strict. The batch

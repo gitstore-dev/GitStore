@@ -1458,6 +1458,15 @@ func (s *scyllaDatastore) CreateProductVariant(ctx context.Context, v *datastore
 			},
 		})
 	}
+	actions = append(actions, mutationAction{
+		Step: catalogueStep("create", "ProductVariant", v.UID, ownerReferenceDependentsTable, v.UID, "write-owner-references"),
+		Apply: func(ctx context.Context) error {
+			return s.syncOwnerReferenceDependents(ctx, v.Namespace, v.RepositoryID, "ProductVariant", v.UID, v.Name, v.ResourceVersion, nil, v.OwnerReferences)
+		},
+		Compensate: func(ctx context.Context) error {
+			return s.syncOwnerReferenceDependents(ctx, v.Namespace, v.RepositoryID, "ProductVariant", v.UID, v.Name, v.ResourceVersion, v.OwnerReferences, nil)
+		},
+	})
 	if err := s.mutations.execute(ctx, actions...); err != nil {
 		return fmt.Errorf("scylla: create product_variant: %w", err)
 	}
@@ -1711,6 +1720,18 @@ func (s *scyllaDatastore) UpdateProductVariant(ctx context.Context, v *datastore
 			},
 		})
 	}
+	projections = append(projections, mutationAction{
+		Step: catalogueStep("update", "ProductVariant", v.UID, ownerReferenceDependentsTable, v.UID, "converge-owner-references"),
+		Apply: func(ctx context.Context) error {
+			if existing.RepositoryID != v.RepositoryID {
+				if err := s.syncOwnerReferenceDependents(ctx, v.Namespace, existing.RepositoryID, "ProductVariant", v.UID, v.Name, existing.ResourceVersion, existing.OwnerReferences, nil); err != nil {
+					return err
+				}
+				return s.syncOwnerReferenceDependents(ctx, v.Namespace, v.RepositoryID, "ProductVariant", v.UID, v.Name, v.ResourceVersion, nil, v.OwnerReferences)
+			}
+			return s.syncOwnerReferenceDependents(ctx, v.Namespace, v.RepositoryID, "ProductVariant", v.UID, v.Name, v.ResourceVersion, existing.OwnerReferences, v.OwnerReferences)
+		},
+	})
 	err = s.mutations.executeUpdate(ctx, row.ResourceVersion,
 		mutationAction{
 			Step: catalogueStep("update", "ProductVariant", v.UID, "product_variant_by_namespace", v.UID, "update-authoritative"),
@@ -1746,6 +1767,15 @@ func (s *scyllaDatastore) deleteProductVariantWithResourceVersion(ctx context.Co
 	uid := v.UID
 	parsedUID := mustParseUUID(uid)
 	projections := []mutationAction{
+		{
+			Step: catalogueStep("delete", "ProductVariant", uid, ownerReferenceDependentsTable, uid, "delete-owner-references"),
+			Apply: func(ctx context.Context) error {
+				return s.syncOwnerReferenceDependents(ctx, v.Namespace, v.RepositoryID, "ProductVariant", v.UID, v.Name, v.ResourceVersion, v.OwnerReferences, nil)
+			},
+			Compensate: func(ctx context.Context) error {
+				return s.syncOwnerReferenceDependents(ctx, v.Namespace, v.RepositoryID, "ProductVariant", v.UID, v.Name, v.ResourceVersion, nil, v.OwnerReferences)
+			},
+		},
 		{
 			Step: catalogueStep("delete", "ProductVariant", uid, "product_variant_by_name", v.Namespace+"/"+v.Name, "delete-name"),
 			Apply: func(ctx context.Context) error {

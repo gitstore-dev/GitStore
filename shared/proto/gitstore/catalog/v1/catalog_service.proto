@@ -26,10 +26,14 @@ service CatalogService {
   // The response carries all violations across all blobs in a single call.
   rpc ValidateResources(ValidateResourcesRequest) returns (ValidateResourcesResponse);
 
-  // ValidateCategoryTaxonomyDeletion validates CategoryTaxonomy deletions against
-  // the proposed trees before refs are updated. It is read-only and is invoked
-  // only when a push removes at least one file.
-  rpc ValidateCategoryTaxonomyDeletion(ValidateCategoryTaxonomyDeletionRequest) returns (ValidateCategoryTaxonomyDeletionResponse);
+  // ValidateResourceDeletions validates all supported resource deletions
+  // against proposed trees before refs are updated. It is read-only and is
+  // invoked only when a push derives one or more OperationDelete transitions.
+  rpc ValidateResourceDeletions(ValidateResourceDeletionsRequest) returns (ValidateResourceDeletionsResponse);
+
+  // Deprecated: use ValidateResourceDeletions. Retained during rolling
+  // upgrades for Git-service/API pairs that only understand CategoryTaxonomy.
+  rpc ValidateCategoryTaxonomyDeletion(ValidateCategoryTaxonomyDeletionRequest) returns (ValidateCategoryTaxonomyDeletionResponse) { option deprecated = true; }
 
   // AdmitResources triggers catalog storage for resources in an accepted push commit.
   // The git service calls this in the post-receive phase (fire-and-forget).
@@ -101,6 +105,22 @@ message ValidateResourcesResponse {
   repeated ValidationError errors = 2;
 }
 
+// ValidateResourceDeletionsRequest carries every changed ref tree in one
+// atomic receive-pack operation. ResourceValidationTree is deliberately shared
+// with schema validation so every Git-backed kind receives identical
+// old/proposed-tree semantics.
+message ValidateResourceDeletionsRequest {
+  string repository_id = 15;
+  repeated ResourceValidationTree trees = 1;
+}
+
+// ValidateResourceDeletionsResponse is a stable, non-sensitive precondition
+// result for generic OperationDelete validation.
+message ValidateResourceDeletionsResponse {
+  bool accepted = 1;
+  string reason = 2;
+}
+
 // CategoryTaxonomyDeletionTree carries one old/proposed ref-tree pair. The Git
 // service sends the complete resource sets because the proposed tree, rather
 // than the currently admitted catalog state, determines whether a child is
@@ -135,7 +155,7 @@ message AdmitResourcesRequest {
   // commit_sha is the full SHA of the accepted push commit.
   // Deprecated for new callers in favor of new_commit_sha, but retained as
   // the canonical new commit for older git-service versions.
-  string commit_sha = 1;
+  string commit_sha = 1 [deprecated = true];
 
   // ref_name is the fully-qualified ref that was updated, e.g. "refs/heads/main".
   string ref_name = 2;

@@ -69,9 +69,12 @@ recovery behavior. A generic journal avoids a third bespoke watch design.
 
 ## R3 — Foreground Product deletion and ProductVariant ownership
 
-**Decision**: Product deletion is a foreground state machine. Admission checks
-an indexed ProductVariant owner-reference projection before marking a Product
-terminating. If clear, it writes the deletion timestamp and
+**Decision**: Product deletion is a foreground state machine. Git service
+SchemaValidation evaluates the old and proposed repository trees and derives a
+generic `OperationDelete` for every removed supported resource. It replaces the
+CategoryTaxonomy-only deletion callout as the shared pre-receive boundary.
+Product admission then checks an indexed ProductVariant owner-reference
+projection before marking a Product terminating. If clear, it writes the deletion timestamp and
 `gitstore.dev/foreground-deletion` finalizer. The Product controller repeats
 the indexed check at completion and only then removes the finalizer/finalizes.
 ProductVariant has a system-owned Product owner reference with
@@ -88,6 +91,8 @@ handoff.
 - Cascade-delete variants — rejected by the feature's pure-block rule.
 - Admit new blockers during termination — rejected by clarification because it
   prevents bounded deletion convergence.
+- A Product-only GraphQL/datastore deletion path — rejected because deletion
+  must remain a Git-authored `OperationDelete`, validated before the ref update.
 
 **Evidence**: `docs/ADRs/0002-namespace-lifecycle.md`,
 `gitstore-controller-manager/internal/namespace/reconciler.go`,

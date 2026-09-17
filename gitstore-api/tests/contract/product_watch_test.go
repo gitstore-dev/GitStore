@@ -142,16 +142,16 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 		require.NotNil(t, ev.Namespace)
 		require.Equal(t, "gitstore", *ev.Namespace)
 		require.NotNil(t, ev.Product)
-		require.NotNil(t, ev.Product.Spec.CategoryRef)
-		require.Equal(t, "electronics", ev.Product.Spec.CategoryRef.Name)
+		require.Equal(t, "widget", ev.Product.Metadata.Name)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for watchProducts event")
 	}
 }
 
-// T019: deleting a product with a categoryRef delivers a DELETED
-// ProductWatchEvent with product: null and the correct name/namespace.
-func TestWatchProducts_ProductDeletion_DeliversDeletedEvent(t *testing.T) {
+// T019: deleting a product with a categoryRef first delivers a MODIFIED
+// terminating ProductWatchEvent. The Product controller emits the final
+// DELETED event only after foreground blockers are clear.
+func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
@@ -249,12 +249,13 @@ func TestWatchProducts_ProductDeletion_DeliversDeletedEvent(t *testing.T) {
 
 	select {
 	case ev := <-events:
-		require.Equal(t, model.WatchEventTypeDeleted, ev.Type)
+		require.Equal(t, model.WatchEventTypeModified, ev.Type)
 		require.Equal(t, "widget", ev.Name)
 		require.NotNil(t, ev.Namespace)
 		require.Equal(t, "gitstore", *ev.Namespace)
-		require.Nil(t, ev.Product)
+		require.NotNil(t, ev.Product)
+		require.NotNil(t, ev.Product.Metadata.DeletionTimestamp)
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for DELETED watchProducts event")
+		t.Fatal("timed out waiting for terminating watchProducts event")
 	}
 }

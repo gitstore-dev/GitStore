@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "description": "Feature 055 Product lifecycle fault profile; run separately against API, controller, and materializer replicas.",
+  "action": "restart",
+  "expectedRecovery": "30s",
+  "assertions": [
+    "durable Product watch resumes or returns an explicit recovery outcome",
+    "a Product with a blocking ProductVariant is never finalized",
+    "final deletion is performed at most once after a fresh blocker check"
+  ]
+}

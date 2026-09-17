@@ -169,7 +169,9 @@ the routes safely without deleting additive journal/projection data.
 
 ### Ownership and deletion
 
-Add indexed live-blocker existence, expected-version mark-termination, and
+Generalize git-service SchemaValidation from the existing CategoryTaxonomy
+proposed-tree deletion check to an `OperationDelete` pre-receive contract for
+all supported resource kinds. Add indexed live-blocker existence, expected-version mark-termination, and
 completion operations. Before Git delete/lifecycle marking, admission rejects
 live blockers. Eligible deletion writes deletion timestamp and foreground
 finalizer, emits MODIFIED, and returns terminating. Reconciliation refetches,

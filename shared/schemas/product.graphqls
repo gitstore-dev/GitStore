@@ -1,7 +1,8 @@
 # Product Resource — Kubernetes-style GraphQL Schema
 # Full rewrite: alpha software, no backwards compatibility required.
 # All reads served from the datastore (fully hydrated view).
-# Mutations are git-driven; GraphQL mutations removed (deferred to GH#185/186).
+# Mutations are git-driven: GraphQL commits the canonical manifest and awaits
+# the same admission path as a Git push.
 
 extend type Query {
   """Fetch a single product by globally unique ID or namespace + name."""
@@ -32,6 +33,15 @@ extend type Subscription {
 }
 
 extend type Mutation {
+  """Create a Product in the namespace's implicit gitstore-system repository."""
+  createProduct(input: CreateProductInput!): CreateProductPayload!
+
+  """Update the canonical manifest at the admitted Product's stored provenance."""
+  updateProduct(input: UpdateProductInput!): UpdateProductPayload!
+
+  """Start or observe foreground Product termination."""
+  deleteProduct(input: DeleteProductInput!): DeleteProductPayload!
+
   """
   Controller-only Product status and category-resolution update.
   """
@@ -79,6 +89,94 @@ type ProductSpec {
   tags: [String!]!
   media: [MediaDefinition!]!
   options: [ProductOptionDefinition!]!
+  lifecycle: ProductLifecycleSpec!
+}
+
+enum ProductLifecycleState {
+  ACTIVE
+  RETIRED
+}
+
+type ProductLifecycleSpec {
+  state: ProductLifecycleState!
+}
+
+input ProductLifecycleSpecInput {
+  state: ProductLifecycleState = ACTIVE
+}
+
+input ProductSpecInput {
+  title: String
+  categoryRef: CatalogObjectReferenceInput
+  tags: [String!]
+  media: [MediaDefinitionInput!]
+  options: [ProductOptionDefinitionInput!]
+  lifecycle: ProductLifecycleSpecInput
+}
+
+input CatalogObjectReferenceInput {
+  apiVersion: String
+  kind: String
+  name: String!
+  namespace: String
+}
+
+input MediaDefinitionInput {
+  fileRef: FileReferenceInput!
+}
+
+input FileReferenceInput {
+  name: String!
+  kind: String!
+  optional: Boolean
+}
+
+input ProductOptionDefinitionInput {
+  name: String!
+  title: String
+  values: [String!]!
+}
+
+input CreateProductInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "Product"
+  metadata: MetadataInput!
+  spec: ProductSpecInput!
+  body: String
+}
+
+input UpdateProductInput {
+  apiVersion: String! = "catalog.gitstore.dev/v1beta1"
+  kind: String! = "Product"
+  metadata: MetadataInput!
+  spec: ProductSpecInput!
+  body: String
+}
+
+input DeleteProductInput {
+  """Opaque global Product Node ID; never a raw UID or source selector."""
+  id: ID
+}
+
+type CreateProductPayload {
+  product: Product
+}
+
+type UpdateProductPayload {
+  product: Product
+}
+
+enum ProductDeletionOutcome {
+  TERMINATION_STARTED
+  ALREADY_TERMINATING
+}
+
+type DeleteProductPayload {
+  "The current Product envelope, including terminating metadata."
+  product: Product
+
+  "Whether this request started termination or observed existing termination."
+  outcome: ProductDeletionOutcome!
 }
 
 type ProductStatus {
@@ -93,7 +191,8 @@ input UpdateProductStatusInput {
   namespace: String!
   resourceVersion: String!
   conditions: [ConditionInput!]
-  removeOwnerUID: String
+  "Opaque node ID of the owner reference to remove."
+  removeOwnerID: ID
 }
 
 type UpdateProductStatusPayload {

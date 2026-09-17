@@ -48,6 +48,8 @@ type datastoreGetter interface {
 	GetNamespace(ctx context.Context, id string) (*datastore.Namespace, error)
 	LookupRepository(ctx context.Context, namespace, name string) (*datastore.NamespaceMapping, error)
 	GetCategoryTaxonomy(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error)
+	GetProduct(ctx context.Context, uid string) (*datastore.Product, error)
+	GetProductByName(ctx context.Context, namespace, name string) (*datastore.Product, error)
 }
 
 // authorizeRepositoryTenant is the common repository policy decision used by

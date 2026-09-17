@@ -236,7 +236,8 @@ mod tests {
     use catalog_proto::{
         catalog_service_server::{CatalogService, CatalogServiceServer},
         AdmitResourcesRequest, AdmitResourcesResponse, ValidateCategoryTaxonomyDeletionRequest,
-        ValidateCategoryTaxonomyDeletionResponse, ValidateResourcesResponse, ValidationError,
+        ValidateCategoryTaxonomyDeletionResponse, ValidateResourceDeletionsRequest,
+        ValidateResourceDeletionsResponse, ValidateResourcesResponse, ValidationError,
     };
     use std::sync::Arc;
     use tonic::{transport::Server, Request, Response, Status};
@@ -272,6 +273,16 @@ mod tests {
             _req: Request<ValidateCategoryTaxonomyDeletionRequest>,
         ) -> Result<Response<ValidateCategoryTaxonomyDeletionResponse>, Status> {
             Ok(Response::new(ValidateCategoryTaxonomyDeletionResponse {
+                accepted: true,
+                reason: String::new(),
+            }))
+        }
+
+        async fn validate_resource_deletions(
+            &self,
+            _req: Request<ValidateResourceDeletionsRequest>,
+        ) -> Result<Response<ValidateResourceDeletionsResponse>, Status> {
+            Ok(Response::new(ValidateResourceDeletionsResponse {
                 accepted: true,
                 reason: String::new(),
             }))

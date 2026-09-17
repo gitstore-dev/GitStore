@@ -68,7 +68,7 @@
 - [X] T024 [US1] Normalize path and reverse-path mappings to Namespace names and `repository_id` with direct projection lookups in `gitstore-api/internal/datastore/scylla/namespace_mapping.go` and `gitstore-api/internal/datastore/scylla/models.go`
 - [X] T025 [US1] Persist Namespace body and canonical author/system metadata and apply generation changes for metadata/spec/body updates in `gitstore-api/internal/cataloggrpc/server.go`
 - [X] T026 [US1] Return canonical Namespace/Repository envelopes and bodies and pass immutable Namespace names to datastore lookups in `gitstore-api/internal/graph/resolver/converters.go`, `gitstore-api/internal/graph/resolver/service.go`, `gitstore-api/internal/graph/resolver/repository.resolvers.go`, and `gitstore-api/internal/graph/resolver/pagination.go`
-- [X] T027 [US1] Document authoritative versus projection ownership, hydration, count projections, and canonical naming in `docs/resource-storage/README.md` and `docs/architecture.md`
+- [X] T027 [US1] Document authoritative versus projection ownership, hydration, count projections, and canonical naming in `docs/resource-storage/README.md` and `docs/architecture/README.md`
 - [X] T028 [US1] Run the focused US1 contract and integration commands and record reproducible evidence in `specs/048-scylla-query-design/quickstart.md`
 
 **Checkpoint**: User Story 1 is independently complete and is the suggested MVP.

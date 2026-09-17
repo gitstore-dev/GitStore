@@ -22,6 +22,8 @@ type StubStore struct {
 	HasRepositoriesFunc     func(ctx context.Context, namespaceID string) (bool, error)
 	HasCatalogResourcesFunc func(ctx context.Context, repoID string) (bool, error)
 	GetCategoryTaxonomyFunc func(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error)
+	GetProductFunc          func(ctx context.Context, uid string) (*datastore.Product, error)
+	GetProductByNameFunc    func(ctx context.Context, namespace, name string) (*datastore.Product, error)
 }
 
 func (s *StubStore) CreateFile(_ context.Context, _ *datastore.File) error { return nil }
@@ -77,10 +79,16 @@ func (s *StubStore) HasCatalogResources(ctx context.Context, repoID string) (boo
 }
 
 func (s *StubStore) CreateProduct(_ context.Context, _ *datastore.Product) error { return nil }
-func (s *StubStore) GetProduct(_ context.Context, _ string) (*datastore.Product, error) {
+func (s *StubStore) GetProduct(ctx context.Context, uid string) (*datastore.Product, error) {
+	if s.GetProductFunc != nil {
+		return s.GetProductFunc(ctx, uid)
+	}
 	return nil, datastore.ErrNotFound
 }
-func (s *StubStore) GetProductByName(_ context.Context, _, _ string) (*datastore.Product, error) {
+func (s *StubStore) GetProductByName(ctx context.Context, namespace, name string) (*datastore.Product, error) {
+	if s.GetProductByNameFunc != nil {
+		return s.GetProductByNameFunc(ctx, namespace, name)
+	}
 	return nil, datastore.ErrNotFound
 }
 func (s *StubStore) ListProducts(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {

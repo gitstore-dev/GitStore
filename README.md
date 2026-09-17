@@ -97,7 +97,7 @@ See the [user guide](docs/user-guide.md) for the complete Docker workflow, catal
 
 - **User Guide**: [docs/user-guide.md](docs/user-guide.md)
 - **Developer Guide**: [docs/developer-guide.md](docs/developer-guide.md)
-- **Architecture**: [docs/architecture.md](docs/architecture.md)
+- **Architecture**: [docs/architecture/](docs/architecture/README.md)
 - **API Reference**: [docs/api-reference.md](docs/api-reference.md)
 - **Admin**: [docs/admin/README.md](docs/admin/README.md)
 - **Configuration**: [docs/configuration.md](docs/configuration.md)

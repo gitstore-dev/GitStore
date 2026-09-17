@@ -115,7 +115,7 @@ See [research.md](research.md) for full findings. Key decisions:
 - **Integration tests**: Go tests in `tests/integration/`, cover four core interaction scenarios (valid push → WebSocket, tag push → GraphQL data, invalid push → rejection, health checks).
 - **CI path filtering**: Core jobs have NO `paths` filter (always run, required status checks). Only the new `admin-test` CI job carries `paths: ['gitstore-admin/**']`. CD has NO path filtering — all images always build together.
 - **compose.admin.yml**: Docker Compose override file (two-file invocation). Does not redefine networks, volumes, or core services.
-- **Admin docs**: `docs/admin/` directory with `overview.md`, `architecture.md`, `quickstart.md`.
+- **Admin docs**: `docs/admin/` directory with `architecture.md`, `README.md`, `quickstart.md`.
 
 ## Phase 1 — Design & Contracts
 
@@ -171,10 +171,10 @@ No changes to the GraphQL schema, gRPC interfaces, or WebSocket protocol are int
 
 ### Documentation change map
 
-| File                      | Change                                                                                                                                                                                                                                               |
-|---------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `README.md`               | Architecture diagram: remove AdminUI node and its edges. Components list: remove Admin UI bullet. Build-from-source: remove Admin UI section. Quick Start expected output: remove `gitstore-admin` row. Add "Admin add-on: see docs/admin/" callout. |
-| `docs/architecture.md`    | Implementation Baseline section: update folder names (`api/` → `gitstore-api/`, `git-server/` → `gitstore-git-service/`, remove `admin-ui/`). Proposal diagrams: remove Admin UI node from both Proposal 1 and Proposal 2 diagrams.                  |
-| `docs/developer-guide.md` | Expected output block: remove `gitstore-admin` row. All `cd api/`, `cd git-server/` commands → updated paths. Admin UI section → single pointer to `docs/admin/`.                                                                                    |
-| `docs/user-guide.md`      | "Using the Admin" section → replace content with pointer to `docs/admin/quickstart.md`.                                                                                                                                                              |
-| `docs/admin/`             | Create new directory with `overview.md`, `architecture.md`, `quickstart.md`.                                                                                                                                                                         |
+| File                          | Change                                                                                                                                                                                                                                               |
+|-------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `README.md`                   | Architecture diagram: remove AdminUI node and its edges. Components list: remove Admin UI bullet. Build-from-source: remove Admin UI section. Quick Start expected output: remove `gitstore-admin` row. Add "Admin add-on: see docs/admin/" callout. |
+| `docs/architecture/README.md` | Implementation Baseline section: update folder names (`api/` → `gitstore-api/`, `git-server/` → `gitstore-git-service/`, remove `admin-ui/`). Proposal diagrams: remove Admin UI node from both Proposal 1 and Proposal 2 diagrams.                  |
+| `docs/developer-guide.md`     | Expected output block: remove `gitstore-admin` row. All `cd api/`, `cd git-server/` commands → updated paths. Admin UI section → single pointer to `docs/admin/`.                                                                                    |
+| `docs/user-guide.md`          | "Using the Admin" section → replace content with pointer to `docs/admin/quickstart.md`.                                                                                                                                                              |
+| `docs/admin/`                 | Create new directory with `overview.md`, `README.md`, `quickstart.md`.                                                                                                                                                                               |

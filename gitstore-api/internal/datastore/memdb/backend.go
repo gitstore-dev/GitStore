@@ -400,6 +400,7 @@ func (m *memdbDatastore) CreateProduct(_ context.Context, p *datastore.Product) 
 		return err
 	}
 	txn.Commit()
+	m.recordCommittedProduct(datastore.ResourceWatchAdded, stored, nil)
 	return nil
 }
 
@@ -453,7 +454,8 @@ func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product) 
 		return fmt.Errorf("%w: product is nil", datastore.ErrInvalidArgument)
 	}
 	txn := m.db.Txn(true)
-	if raw, _ := txn.First("product", "id", p.UID); raw == nil {
+	raw, _ := txn.First("product", "id", p.UID)
+	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: product uid %s", datastore.ErrNotFound, p.UID)
 	}
@@ -470,6 +472,7 @@ func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product) 
 		return err
 	}
 	txn.Commit()
+	m.recordCommittedProduct(datastore.ResourceWatchModified, p, raw.(*datastore.Product).Labels)
 	return nil
 }
 
@@ -479,6 +482,56 @@ func (m *memdbDatastore) DeleteProduct(_ context.Context, uid string) error {
 
 func (m *memdbDatastore) DeleteProductWithResourceVersion(_ context.Context, uid, expectedResourceVersion string) error {
 	return m.deleteProduct(uid, expectedResourceVersion, true)
+}
+
+// MarkProductTerminating is the durable first phase of foreground deletion.
+// It advances only resourceVersion; generation remains authored-spec state.
+func (m *memdbDatastore) MarkProductTerminating(_ context.Context, uid, expectedResourceVersion, finalizer string, deletionTimestamp time.Time) (*datastore.Product, error) {
+	txn := m.db.Txn(true)
+	raw, _ := txn.First("product", "id", uid)
+	if raw == nil {
+		txn.Abort()
+		return nil, fmt.Errorf("%w: product uid %s", datastore.ErrNotFound, uid)
+	}
+	current := raw.(*datastore.Product)
+	if current.ResourceVersion != expectedResourceVersion {
+		txn.Abort()
+		return nil, datastore.ErrConflict
+	}
+	if current.DeletionTimestamp != nil {
+		result := cloneProduct(current)
+		txn.Abort()
+		return result, nil
+	}
+	updated := cloneProduct(current)
+	when := deletionTimestamp.UTC()
+	updated.DeletionTimestamp = &when
+	if finalizer != "" {
+		found := false
+		for _, existing := range updated.Finalizers {
+			if existing == finalizer {
+				found = true
+				break
+			}
+		}
+		if !found {
+			updated.Finalizers = append(updated.Finalizers, finalizer)
+		}
+	}
+	datastore.AdvanceProductSystemVersion(updated)
+	if err := txn.Insert("product", updated); err != nil {
+		txn.Abort()
+		return nil, fmt.Errorf("memdb: mark product terminating: %w", err)
+	}
+	txn.Commit()
+	m.recordCommittedProduct(datastore.ResourceWatchModified, updated, current.Labels)
+	return cloneProduct(updated), nil
+}
+
+// CompleteProductDeletion performs the final expected-version removal after
+// the Product controller has completed all foreground finalizers.
+func (m *memdbDatastore) CompleteProductDeletion(ctx context.Context, uid, expectedResourceVersion string) error {
+	return m.DeleteProductWithResourceVersion(ctx, uid, expectedResourceVersion)
 }
 
 func (m *memdbDatastore) deleteProduct(uid, expectedResourceVersion string, checkResourceVersion bool) error {
@@ -501,6 +554,7 @@ func (m *memdbDatastore) deleteProduct(uid, expectedResourceVersion string, chec
 		return fmt.Errorf("memdb: delete product: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedProduct(datastore.ResourceWatchDeleted, raw.(*datastore.Product), nil)
 	return nil
 }
 
@@ -529,6 +583,10 @@ func (m *memdbDatastore) CreateProductVariant(_ context.Context, v *datastore.Pr
 	if err := txn.Insert("product_variant", stored); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: insert product_variant: %w", err)
+	}
+	if err := syncOwnerReferenceProjections(txn, stored.Namespace, stored.RepositoryID, "ProductVariant", stored.UID, stored.Name, stored.ResourceVersion, stored.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
 	}
 	txn.Commit()
 	return nil
@@ -607,7 +665,8 @@ func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.Pr
 		return fmt.Errorf("%w: product variant is nil", datastore.ErrInvalidArgument)
 	}
 	txn := m.db.Txn(true)
-	if raw, _ := txn.First("product_variant", "id", v.UID); raw == nil {
+	raw, _ := txn.First("product_variant", "id", v.UID)
+	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: product_variant uid %s", datastore.ErrNotFound, v.UID)
 	}
@@ -624,6 +683,10 @@ func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.Pr
 	if err := txn.Insert("product_variant", cloneProductVariant(v)); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: update product_variant: %w", err)
+	}
+	if err := syncOwnerReferenceProjections(txn, v.Namespace, v.RepositoryID, "ProductVariant", v.UID, v.Name, v.ResourceVersion, v.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
 	}
 	txn.Commit()
 	return nil
@@ -647,6 +710,10 @@ func (m *memdbDatastore) deleteProductVariant(uid, expectedResourceVersion strin
 	if checkResourceVersion && raw.(*datastore.ProductVariant).ResourceVersion != expectedResourceVersion {
 		txn.Abort()
 		return datastore.ErrConflict
+	}
+	if err := deleteOwnerReferenceProjections(txn, "ProductVariant", uid); err != nil {
+		txn.Abort()
+		return err
 	}
 	if err := txn.Delete("product_variant", raw); err != nil {
 		txn.Abort()

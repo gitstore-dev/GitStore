@@ -27,6 +27,15 @@ func (r *discontinuityNamespaceCDCRunner) RunNamespaceCDC(context.Context, *watc
 	return datastore.ErrNamespaceWatchDiscontinuity
 }
 
+type readyProductCDCRunner struct{ calls atomic.Int64 }
+
+func (r *readyProductCDCRunner) RunProductCDC(ctx context.Context, _ *watchjournal.Materializer, _ datastore.ResourceWatchLease, _ time.Duration, _ time.Duration, ready func()) error {
+	r.calls.Add(1)
+	ready()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func TestNamespaceWatchLeaderReleasesLeaseBeforeReturning(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -120,6 +129,31 @@ func TestNamespaceWatchRuntimeStopsRetryingAfterOrderingDiscontinuity(t *testing
 		t.Fatal("runtime kept retrying an unrecoverable CDC discontinuity")
 	}
 	require.EqualValues(t, 1, runner.calls.Load())
+}
+
+func TestNamespaceWatchLeaderStartsProductCDCWorker(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	journal := store.(datastore.NamespaceWatchJournal)
+	metrics, err := watchjournal.NewMetrics(prometheus.NewRegistry())
+	require.NoError(t, err)
+	clock := apiruntime.SystemClock{}
+	runner := &readyProductCDCRunner{}
+	runtime := &namespaceWatchRuntime{
+		journal: journal, materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour, Clock: clock, Metrics: metrics}),
+		leaseManager: watchjournal.NewLeaseManager(journal, "leader", time.Minute, time.Second, clock), metrics: metrics,
+		productRunner: runner, cfg: config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60, CDCRetentionSeconds: 60, CDCConfidenceWindowMillis: 1}, log: zap.NewNop(),
+	}
+	lease, acquired, err := runtime.leaseManager.Acquire(t.Context())
+	require.NoError(t, err)
+	require.True(t, acquired)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- runtime.runAsLeader(ctx, lease) }()
+	require.Eventually(t, func() bool { return runner.calls.Load() == 1 }, time.Second, 10*time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func TestNamespaceWatchReadinessRefreshesFollowerMetricsFromSharedBounds(t *testing.T) {

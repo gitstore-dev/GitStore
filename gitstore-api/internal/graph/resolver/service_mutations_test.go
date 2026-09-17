@@ -154,6 +154,9 @@ func (m *mockGitWriter) DeleteFile(_ context.Context, p gitclient.DeleteFilePara
 	}
 	return "cafe1234", nil
 }
+func (m *mockGitWriter) DeleteFileForRepo(_ context.Context, _ string, p gitclient.DeleteFileParams) (string, error) {
+	return m.DeleteFile(context.Background(), p)
+}
 
 func (m *mockGitWriter) CreateTag(_ context.Context, p gitclient.CreateTagParams) (string, error) {
 	m.mu.Lock()

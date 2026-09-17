@@ -37,6 +37,7 @@ input UpdateProductInput {
 }
 
 input DeleteProductInput {
+  "Opaque global Product Node ID; never a raw UID or source selector."
   id: ID
 }
 
@@ -68,8 +69,10 @@ extend type Mutation {
   repository; each waits for the shared admission result.
 - `apiVersion` defaults to `catalog.gitstore.dev/v1beta1`; `kind` defaults to
   `Product`. Explicit mismatches are rejected.
-- `DeleteProductInput` uses the standard `id: ID` resource-delete shape. The
-  server resolves namespace, name, repository, and source path from the
+- `DeleteProductInput.id` is the opaque global Product Node ID (the same ID
+  representation returned by `Product.id`), never a raw datastore UID or a
+  namespace/name/repository/path selector. The server decodes it as a Product
+  Node ID and resolves namespace, name, repository, and source path from the
   admitted Product before authorisation-sensitive lifecycle work begins.
 - `DeleteProductPayload` follows Namespace's asynchronous-deletion shape: it
   returns the terminating Product envelope and a mandatory outcome of
