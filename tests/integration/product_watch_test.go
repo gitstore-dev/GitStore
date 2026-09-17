@@ -117,6 +117,53 @@ func TestProductWatchRecoveryProbe(t *testing.T) {
 	})
 }
 
+// TestProductCapacityGitPushParity is intentionally deployment-driven.  It
+// proves a real Git push is admitted by the same shared Scylla-backed catalog
+// seen by the peer API replica; the GraphQL workload and durable-watch probes
+// in the alpha gate cover the other two Product authoring boundaries.
+func TestProductCapacityGitPushParity(t *testing.T) {
+	apiA := strings.TrimSuffix(os.Getenv("PRODUCT_WATCH_API_A"), "/")
+	apiB := strings.TrimSuffix(os.Getenv("PRODUCT_WATCH_API_B"), "/")
+	token := productWatchToken(t)
+	gitEndpoint := strings.TrimSuffix(os.Getenv("PRODUCT_CAPACITY_GIT_URL"), "/")
+	namespace := os.Getenv("PRODUCT_CAPACITY_NAMESPACE")
+	repository := os.Getenv("PRODUCT_CAPACITY_REPOSITORY")
+	if apiA == "" || apiB == "" || token == "" || gitEndpoint == "" || namespace == "" || repository == "" {
+		t.Skip("set Product capacity API, token, Git endpoint, namespace, and repository variables")
+	}
+
+	name := uniqueName("product-capacity-git")
+	previousGitURL := gitURL
+	gitURL = gitEndpoint
+	t.Cleanup(func() { gitURL = previousGitURL })
+	h := newPushHelperForRepo(t, namespace, repository)
+	h.commitProduct(name+".md", validProductFixture(name, namespace))
+	if output, err := h.push(); err != nil {
+		t.Fatalf("Product capacity Git push failed: %v\n%s", err, output)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		response := gqlQueryWithURL(t, apiB, token, `query($namespace: String!, $name: String!) {
+  product(by: {namespacePath: {namespace: $namespace, name: $name}}) { metadata { name } }
+}`, map[string]any{"namespace": namespace, "name": name})
+		require.Empty(t, response.Errors, string(response.Data))
+		var data struct {
+			Product *struct {
+				Metadata struct{ Name string `json:"name"` } `json:"metadata"`
+			} `json:"product"`
+		}
+		require.NoError(t, json.Unmarshal(response.Data, &data))
+		if data.Product != nil && data.Product.Metadata.Name == name {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Git-pushed Product %q did not materialize on peer API %s", name, apiB)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 func productWatchToken(t *testing.T) string {
 	t.Helper()
 	if token := strings.TrimSpace(os.Getenv("PRODUCT_WATCH_TOKEN")); token != "" {

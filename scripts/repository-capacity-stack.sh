@@ -223,12 +223,26 @@ run_alpha() {
   REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION="${REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION:-1m}" \
   "${capacity_runner}" "${capacity_target}" "${capacity_profile}" alpha
   if [[ "${capacity_target}" == "product" ]]; then
+    local product_evidence_dir product_probe_status
+    product_evidence_dir="${CAPACITY_EVIDENCE_DIR:-${repo_root}/.gitstore/capacity}/product/lifecycle/alpha/${CAPACITY_RUN_ID}"
+    mkdir -p "${product_evidence_dir}"
+    set +e
     PRODUCT_WATCH_API_A=http://127.0.0.1:4000 \
     PRODUCT_WATCH_API_B=http://127.0.0.1:4001 \
-	PRODUCT_WATCH_API_REPLACEMENT=http://127.0.0.1:4001 \
-	PRODUCT_WATCH_REPLACEMENT_TRIGGER_FILE="${trigger_file}" \
+    PRODUCT_WATCH_API_REPLACEMENT=http://127.0.0.1:4001 \
+    PRODUCT_WATCH_REPLACEMENT_TRIGGER_FILE="${trigger_file}" \
     PRODUCT_WATCH_TOKEN_FILE="${token_file}" \
-    go -C "${repo_root}/tests/integration" test -count=1 -run '^TestProductWatch' .
+    PRODUCT_CAPACITY_GIT_URL=http://127.0.0.1:9000 \
+    PRODUCT_CAPACITY_NAMESPACE=default \
+    PRODUCT_CAPACITY_REPOSITORY=gitstore-system \
+    go -C "${repo_root}/tests/integration" test -count=1 -run '^TestProduct(Watch|CapacityGitPushParity)' . \
+      2>&1 | tee "${product_evidence_dir}/product-integration.log"
+    product_probe_status=${PIPESTATUS[0]}
+    set -e
+    jq -n --argjson exit_code "${product_probe_status}" \
+      '{schemaVersion:1,gitPush:true,durableWatch:true,rollingReplacement:true,passed:($exit_code == 0),exitCode:$exit_code}' \
+      >"${product_evidence_dir}/product-integration.json"
+    (( product_probe_status == 0 )) || return "${product_probe_status}"
   fi
   validate_controllers_post_run
   cleanup_replacement_watcher
