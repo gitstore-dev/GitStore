@@ -136,6 +136,13 @@ func TestProductCapacityGitPushParity(t *testing.T) {
 	previousGitURL := gitURL
 	gitURL = gitEndpoint
 	t.Cleanup(func() { gitURL = previousGitURL })
+	// The capacity API's smart-HTTP endpoint is protected by the same bearer
+	// policy as GraphQL. Git honors this scoped process configuration for the
+	// probe's ls-remote, clone, and push commands without persisting a token in
+	// the temporary checkout.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "http.extraHeader")
+	t.Setenv("GIT_CONFIG_VALUE_0", "Authorization: Bearer "+token)
 	h := newPushHelperForRepo(t, namespace, repository)
 	h.commitProduct(name+".md", validProductFixture(name, namespace))
 	if output, err := h.push(); err != nil {
