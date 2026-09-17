@@ -164,24 +164,24 @@ func TestProductAuthorizationCapabilitiesAreAttributedAcrossPrincipalProviders(t
 		action    string
 	}{
 		{
-			name: "human author creates product",
+			name:      "human author creates product",
 			principal: &auth.Principal{Subject: "alice", AuthMethod: "static-users", Claims: map[string]any{"access_token": "must-not-appear"}},
-			field: "createProduct", args: map[string]any{"input": map[string]any{"metadata": map[string]any{"namespace": "acme", "name": "widget"}}}, action: "product.create",
+			field:     "createProduct", args: map[string]any{"input": map[string]any{"metadata": map[string]any{"namespace": "acme", "name": "widget"}}}, action: "product.create",
 		},
 		{
-			name: "service account updates product",
+			name:      "service account updates product",
 			principal: &auth.Principal{Subject: "serviceaccount:store:author", AuthMethod: "serviceaccount-jwt", Claims: map[string]any{"client_assertion": "must-not-appear"}},
-			field: "updateProduct", args: map[string]any{"input": map[string]any{"metadata": map[string]any{"namespace": "acme", "name": "widget"}}}, action: "product.update",
+			field:     "updateProduct", args: map[string]any{"input": map[string]any{"metadata": map[string]any{"namespace": "acme", "name": "widget"}}}, action: "product.update",
 		},
 		{
-			name: "controller writes status",
+			name:      "controller writes status",
 			principal: &auth.Principal{Subject: "serviceaccount:controllers:gitstore-controller-manager", AuthMethod: "grpc-forwarded", Claims: map[string]any{"authorization": "must-not-appear"}},
-			field: "updateProductStatus", args: map[string]any{"input": map[string]any{"namespace": "acme", "name": "widget"}}, action: "product.status.write",
+			field:     "updateProductStatus", args: map[string]any{"input": map[string]any{"namespace": "acme", "name": "widget"}}, action: "product.status.write",
 		},
 		{
-			name: "human deletes product",
+			name:      "human deletes product",
 			principal: &auth.Principal{Subject: "alice", AuthMethod: "static-users"},
-			field: "deleteProduct", args: map[string]any{"input": model.DeleteProductInput{ID: &productID}}, action: "product.delete",
+			field:     "deleteProduct", args: map[string]any{"input": model.DeleteProductInput{ID: &productID}}, action: "product.delete",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
