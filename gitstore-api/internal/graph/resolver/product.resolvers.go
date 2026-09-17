@@ -130,6 +130,19 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 	return &model.UpdateProductStatusPayload{Product: DatastoreProductToGraphQL(product)}, nil
 }
 
+// CompleteProductDeletion is the resolver for the completeProductDeletion field.
+func (r *mutationResolver) CompleteProductDeletion(ctx context.Context, input model.CompleteProductDeletionInput) (*model.CompleteProductDeletionPayload, error) {
+	deleted, err := r.service.CompleteProductDeletion(ctx, input.Namespace, input.Name, input.ResourceVersion)
+	if errors.Is(err, datastore.ErrConflict) {
+		return nil, statusConflictError("Product", input.Namespace, input.Name, deleted.ResourceVersion)
+	}
+	if err != nil {
+		return nil, err
+	}
+	id := mustEncodeNodeID(nodeKindProduct, deleted.UID)
+	return &model.CompleteProductDeletionPayload{ID: &id}, nil
+}
+
 // Product is the resolver for the product field.
 func (r *queryResolver) Product(ctx context.Context, by model.ProductBy) (*model.Product, error) {
 	switch {

@@ -271,6 +271,40 @@ func (s *Service) DeleteProductManifest(ctx context.Context, uid, caller string)
 	return updated, true, nil
 }
 
+// CompleteProductDeletion repeats the blocker check at the controller-owned
+// finalizer boundary so at-least-once reconciliation cannot orphan a variant.
+func (s *Service) CompleteProductDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*datastore.Product, error) {
+	product, err := s.store.GetProductByName(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	if product.DeletionTimestamp == nil {
+		return product, gqlerror.Errorf("Product %q is not terminating", name)
+	}
+	if product.ResourceVersion != expectedResourceVersion {
+		return product, datastore.ErrConflict
+	}
+	owners, ok := s.store.(datastore.OwnerReferenceStore)
+	if !ok {
+		return product, gqlerror.Errorf("Product deletion is unavailable while owner-reference indexing is disabled")
+	}
+	blocked, err := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{Namespace: product.Namespace, RepositoryID: product.RepositoryID}, product.UID)
+	if err != nil {
+		return product, err
+	}
+	if blocked {
+		return product, gqlerror.Errorf("Product %q still has blocking ProductVariants", name)
+	}
+	lifecycle, ok := s.store.(datastore.ProductLifecycleStore)
+	if !ok {
+		return product, gqlerror.Errorf("Product lifecycle datastore is unavailable")
+	}
+	if err := lifecycle.CompleteProductDeletion(ctx, product.UID, expectedResourceVersion); err != nil {
+		return product, err
+	}
+	return product, nil
+}
+
 func productManifestSpec(spec *model.ProductSpecInput) map[string]any {
 	result := map[string]any{"tags": spec.Tags}
 	if spec.Title != nil {

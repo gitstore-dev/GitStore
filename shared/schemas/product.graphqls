@@ -46,6 +46,9 @@ extend type Mutation {
   Controller-only Product status and category-resolution update.
   """
   updateProductStatus(input: UpdateProductStatusInput!): UpdateProductStatusPayload!
+
+  """Controller-only finalizer completion for a terminating Product."""
+  completeProductDeletion(input: CompleteProductDeletionInput!): CompleteProductDeletionPayload!
 }
 
 """
@@ -192,6 +195,16 @@ input UpdateProductStatusInput {
 
 type UpdateProductStatusPayload {
   product: Product
+}
+
+input CompleteProductDeletionInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+}
+
+type CompleteProductDeletionPayload {
+  id: ID
 }
 
 """A pointer to another catalogue resource."""

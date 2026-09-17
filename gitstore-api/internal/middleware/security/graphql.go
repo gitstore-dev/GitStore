@@ -271,6 +271,12 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if err := a.authorizeStoredProductAction(ctx, authz, principal, "product.delete", "", "", rawID); err != nil {
 			return nil, err
 		}
+	case "completeProductDeletion":
+		namespace, _ := nestedStringArg(fc.Args, "input", "namespace")
+		name, _ := nestedStringArg(fc.Args, "input", "name")
+		if err := a.authorizeStoredProductAction(ctx, authz, principal, "product.delete.complete", namespace, name, ""); err != nil {
+			return nil, err
+		}
 	case "createNamespace":
 		tier, ok := nestedStringPath(fc.Args, "input", "spec", "tier")
 		if !ok || tier != "ORGANIZATION" {
@@ -617,7 +623,7 @@ func graphqlFieldRequiresAuthorization(fc *graphql.FieldContext) bool {
 		return fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node" || fc.Field.Name == "nodes"
 	case "Mutation":
 		switch fc.Field.Name {
-		case "createProduct", "updateProduct", "deleteProduct", "createRepository", "renameRepository", "transferRepository", "deleteRepository", "deleteNamespace", "completeNamespaceDeletion", "provisionNamespaceSystemRepository", "completeRepositoryDeletion", "provisionRepositoryStorage", "updateCategoryStatus", "updateProductStatus", "deleteCategory", "updateResourceStatus", "issueServiceAccountToken", "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount":
+		case "createProduct", "updateProduct", "deleteProduct", "completeProductDeletion", "createRepository", "renameRepository", "transferRepository", "deleteRepository", "deleteNamespace", "completeNamespaceDeletion", "provisionNamespaceSystemRepository", "completeRepositoryDeletion", "provisionRepositoryStorage", "updateCategoryStatus", "updateProductStatus", "deleteCategory", "updateResourceStatus", "issueServiceAccountToken", "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount":
 			return true
 		case "createNamespace":
 			tier, ok := nestedStringPath(fc.Args, "input", "spec", "tier")

@@ -259,6 +259,16 @@ type CompleteNamespaceDeletionPayload struct {
 	ID *string `json:"id,omitempty"`
 }
 
+type CompleteProductDeletionInput struct {
+	Namespace       string `json:"namespace"`
+	Name            string `json:"name"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type CompleteProductDeletionPayload struct {
+	ID *string `json:"id,omitempty"`
+}
+
 type CompleteRepositoryDeletionInput struct {
 	Namespace       string `json:"namespace"`
 	Name            string `json:"name"`

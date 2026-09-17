@@ -232,6 +232,29 @@ func (ec *executionContext) fieldContext_CatalogObjectReference_fieldPath(_ cont
 	return graphql.NewScalarFieldContext("CatalogObjectReference", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _CompleteProductDeletionPayload_id(ctx context.Context, field graphql.CollectedField, obj *model.CompleteProductDeletionPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CompleteProductDeletionPayload_id(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOID2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_CompleteProductDeletionPayload_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CompleteProductDeletionPayload", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
 func (ec *executionContext) _CreateProductPayload_product(ctx context.Context, field graphql.CollectedField, obj *model.CreateProductPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1996,6 +2019,50 @@ func (ec *executionContext) unmarshalInputCatalogObjectReferenceInput(ctx contex
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputCompleteProductDeletionInput(ctx context.Context, obj any) (model.CompleteProductDeletionInput, error) {
+	var it model.CompleteProductDeletionInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"namespace", "name", "resourceVersion"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "resourceVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resourceVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ResourceVersion = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputCreateProductInput(ctx context.Context, obj any) (model.CreateProductInput, error) {
 	var it model.CreateProductInput
 	if obj == nil {
@@ -2467,6 +2534,42 @@ func (ec *executionContext) _CatalogObjectReference(ctx context.Context, sel ast
 			out.Values[i] = ec._CatalogObjectReference_resourceVersion(ctx, field, obj)
 		case "fieldPath":
 			out.Values[i] = ec._CatalogObjectReference_fieldPath(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var completeProductDeletionPayloadImplementors = []string{"CompleteProductDeletionPayload"}
+
+func (ec *executionContext) _CompleteProductDeletionPayload(ctx context.Context, sel ast.SelectionSet, obj *model.CompleteProductDeletionPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, completeProductDeletionPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CompleteProductDeletionPayload")
+		case "id":
+			out.Values[i] = ec._CompleteProductDeletionPayload_id(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -3498,6 +3601,25 @@ func (ec *executionContext) marshalNCatalogObjectReference2ᚖgithubᚗcomᚋgit
 		return graphql.Null
 	}
 	return ec._CatalogObjectReference(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNCompleteProductDeletionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteProductDeletionInput(ctx context.Context, v any) (model.CompleteProductDeletionInput, error) {
+	res, err := ec.unmarshalInputCompleteProductDeletionInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNCompleteProductDeletionPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteProductDeletionPayload(ctx context.Context, sel ast.SelectionSet, v model.CompleteProductDeletionPayload) graphql.Marshaler {
+	return ec._CompleteProductDeletionPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNCompleteProductDeletionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteProductDeletionPayload(ctx context.Context, sel ast.SelectionSet, v *model.CompleteProductDeletionPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CompleteProductDeletionPayload(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNCreateProductInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductInput(ctx context.Context, v any) (model.CreateProductInput, error) {

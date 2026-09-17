@@ -161,6 +161,10 @@ type ComplexityRoot struct {
 		ID func(childComplexity int) int
 	}
 
+	CompleteProductDeletionPayload struct {
+		ID func(childComplexity int) int
+	}
+
 	CompleteRepositoryDeletionPayload struct {
 		ID func(childComplexity int) int
 	}
@@ -346,6 +350,7 @@ type ComplexityRoot struct {
 
 	Mutation struct {
 		CompleteNamespaceDeletion          func(childComplexity int, input model.CompleteNamespaceDeletionInput) int
+		CompleteProductDeletion            func(childComplexity int, input model.CompleteProductDeletionInput) int
 		CompleteRepositoryDeletion         func(childComplexity int, input model.CompleteRepositoryDeletionInput) int
 		CreateCategory                     func(childComplexity int, input model.CreateCategoryInput) int
 		CreateCollection                   func(childComplexity int, input model.CreateCollectionInput) int
@@ -1441,6 +1446,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CompleteNamespaceDeletionPayload.ID(childComplexity), true
 
+	case "CompleteProductDeletionPayload.id":
+		if e.ComplexityRoot.CompleteProductDeletionPayload.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CompleteProductDeletionPayload.ID(childComplexity), true
+
 	case "CompleteRepositoryDeletionPayload.id":
 		if e.ComplexityRoot.CompleteRepositoryDeletionPayload.ID == nil {
 			break
@@ -2019,6 +2031,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.CompleteNamespaceDeletion(childComplexity, args["input"].(model.CompleteNamespaceDeletionInput)), true
+
+	case "Mutation.completeProductDeletion":
+		if e.ComplexityRoot.Mutation.CompleteProductDeletion == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_completeProductDeletion_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CompleteProductDeletion(childComplexity, args["input"].(model.CompleteProductDeletionInput)), true
 
 	case "Mutation.completeRepositoryDeletion":
 		if e.ComplexityRoot.Mutation.CompleteRepositoryDeletion == nil {
@@ -4581,6 +4605,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCollectionBy,
 		ec.unmarshalInputCollectionNamespacePath,
 		ec.unmarshalInputCompleteNamespaceDeletionInput,
+		ec.unmarshalInputCompleteProductDeletionInput,
 		ec.unmarshalInputCompleteRepositoryDeletionInput,
 		ec.unmarshalInputConditionInput,
 		ec.unmarshalInputCreateCategoryInput,
@@ -6178,6 +6203,9 @@ extend type Mutation {
   Controller-only Product status and category-resolution update.
   """
   updateProductStatus(input: UpdateProductStatusInput!): UpdateProductStatusPayload!
+
+  """Controller-only finalizer completion for a terminating Product."""
+  completeProductDeletion(input: CompleteProductDeletionInput!): CompleteProductDeletionPayload!
 }
 
 """
@@ -6324,6 +6352,16 @@ input UpdateProductStatusInput {
 
 type UpdateProductStatusPayload {
   product: Product
+}
+
+input CompleteProductDeletionInput {
+  namespace: String!
+  name: String!
+  resourceVersion: String!
+}
+
+type CompleteProductDeletionPayload {
+  id: ID
 }
 
 """A pointer to another catalogue resource."""
@@ -7985,6 +8023,14 @@ func (ec *executionContext) childFields_CompleteNamespaceDeletionPayload(ctx con
 		return ec.fieldContext_CompleteNamespaceDeletionPayload_id(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CompleteNamespaceDeletionPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_CompleteProductDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_CompleteProductDeletionPayload_id(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CompleteProductDeletionPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_CompleteRepositoryDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
