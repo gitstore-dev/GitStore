@@ -152,7 +152,7 @@ includes it or its child variant.
 - [X] T048 [P] Add Product lifecycle/watch rollout, mixed-version deny, rollback, cursor recovery, and finalizer operator guidance in `docs/runbooks/product-lifecycle.md` and `docs/configuration.md`.
 - [ ] T049 [P] Complete bounded overload, observability, and alert assertions for Product journal/materializer/controller metrics in `tests/contract/product_observability_test.go`.
 - [ ] T050 Implement the full two-API/two-controller Git-push/GraphQL/watch/deletion-race capacity verifier in `tests/capacity/profiles/product-lifecycle.js` and Makefile evidence export in `Makefile`.
-- [ ] T051 Implement Product lifecycle replacement/materializer/mid-deletion chaos assertions in `tests/chaos/profiles/product-lifecycle.json`.
+- [X] T051 Implement Product lifecycle replacement/materializer/mid-deletion chaos assertions in `tests/chaos/profiles/product-lifecycle.json`.
 - [X] T052 Run focused suites and production-readiness validation, recording results in `specs/055-product-lifecycle/quickstart.md`: `make test`, `make build`, `make capacity TARGET=product PROFILE=lifecycle MODE=alpha`, and `make pr-ready`.
 
 ## Dependencies and execution order
