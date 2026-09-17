@@ -6,6 +6,9 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-}"
+capacity_target="${CAPACITY_STACK_TARGET:-repository}"
+capacity_profile="${CAPACITY_STACK_PROFILE:-lifecycle}"
+controller_kind="${CAPACITY_STACK_CONTROLLER_KIND:-${capacity_target^}}"
 state_dir="${REPOSITORY_CAPACITY_STATE_DIR:-${repo_root}/.gitstore/repository-capacity}"
 token_file="${REPOSITORY_TOKEN_FILE:-${state_dir}/token}"
 trigger_file="${REPOSITORY_REPLACEMENT_TRIGGER_FILE:-${state_dir}/replace-api-b}"
@@ -46,8 +49,8 @@ wait_stack() {
   wait_http http://127.0.0.1:5002/health "controller B health"
   for endpoint in http://127.0.0.1:5001 http://127.0.0.1:5002; do
     health="$(curl -fsS --max-time 2 "${endpoint}/health")"
-    jq -e '.credentialReady == true and .kinds.Repository.registered == true' <<<"${health}" >/dev/null || {
-      echo "Repository controller is not ready at ${endpoint}" >&2
+    jq -e --arg kind "${controller_kind}" '.credentialReady == true and .kinds[$kind].registered == true' <<<"${health}" >/dev/null || {
+      echo "${controller_kind} controller is not ready at ${endpoint}" >&2
       return 1
     }
   done
@@ -70,8 +73,8 @@ validate_controllers_post_run() {
     # curl -f makes this an explicit HTTP 200 requirement, not merely a JSON
     # parse of an unhealthy response body.
     health="$(curl -fsS --max-time 5 "${endpoint}/health")"
-    jq -e '.credentialReady == true and .kinds.Repository.registered == true' <<<"${health}" >/dev/null || {
-      echo "Repository controller failed post-run registration validation at ${endpoint}" >&2
+    jq -e --arg kind "${controller_kind}" '.credentialReady == true and .kinds[$kind].registered == true' <<<"${health}" >/dev/null || {
+      echo "${controller_kind} controller failed post-run registration validation at ${endpoint}" >&2
       return 1
     }
   done
@@ -175,7 +178,9 @@ run_alpha() {
   trap 'cleanup_replacement_watcher; exit 130' INT
   trap 'cleanup_replacement_watcher; exit 143' TERM
   CAPACITY_API_REPLICAS=2 \
+  CAPACITY_CONTROLLER_REPLICAS=2 \
   CAPACITY_API_BUILD=release \
+  CAPACITY_CONTROLLER_BUILD=release \
   CAPACITY_GIT_SERVICE_BUILD=release \
   CAPACITY_API_ENDPOINTS=http://127.0.0.1:4000,http://127.0.0.1:4001 \
   CAPACITY_API_CONTAINERS=gitstore-capacity-api-a,gitstore-capacity-api-b \
@@ -187,6 +192,11 @@ run_alpha() {
   CAPACITY_DATASTORE_CONTAINERS=gitstore-capacity-scylla-1,gitstore-capacity-scylla-2,gitstore-capacity-scylla-3 \
   CAPACITY_CONFIG_MANIFEST="${state_dir}/config-manifest.json" \
   CAPACITY_ENVIRONMENT_MANIFEST="${state_dir}/environment-manifest.json" \
+  CAPACITY_API_A=http://127.0.0.1:4000 \
+  CAPACITY_API_B=http://127.0.0.1:4001 \
+  CAPACITY_CONTROLLER_A=http://127.0.0.1:5001 \
+  CAPACITY_CONTROLLER_B=http://127.0.0.1:5002 \
+  CAPACITY_TOKEN_FILE="${token_file}" \
   REPOSITORY_API_A=http://127.0.0.1:4000 \
   REPOSITORY_API_B=http://127.0.0.1:4001 \
   REPOSITORY_OVERFLOW_API=http://127.0.0.1:4000 \
@@ -208,7 +218,7 @@ run_alpha() {
   REPOSITORY_CAPACITY_REPLACEMENT_DELAY="${REPOSITORY_CAPACITY_REPLACEMENT_DELAY:-5m}" \
   REPOSITORY_CAPACITY_BASELINE_STABILIZATION="${REPOSITORY_CAPACITY_BASELINE_STABILIZATION:-1m}" \
   REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION="${REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION:-1m}" \
-  "${capacity_runner}" repository lifecycle alpha
+  "${capacity_runner}" "${capacity_target}" "${capacity_profile}" alpha
   validate_controllers_post_run
   cleanup_replacement_watcher
   trap - EXIT INT TERM
