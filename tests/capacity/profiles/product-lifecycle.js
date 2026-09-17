@@ -78,10 +78,10 @@ export default function () {
     return;
   }
 
-  // Race two API replicas to start the same foreground deletion.  Completion
-  // is controller-owned and may win immediately, so the invariant here is
-  // that at least one request observes a valid lifecycle outcome rather than
-  // requiring a timing-dependent final Product read.
+  // Start the Git-backed foreground workflow once, then race duplicate
+  // requests across the two replicas. The latter is the lifecycle's actual
+  // idempotency boundary: retries must observe the one terminating workflow,
+  // rather than competing to create two independent Git commits.
   const id = created.body.data.createProduct.product.id;
   const deleteRequest = JSON.stringify({
     query: `mutation($input: DeleteProductInput!) {
@@ -89,6 +89,18 @@ export default function () {
     }`,
     variables: { input: { id } },
   });
+  const started = graphql(apiA, token, `mutation($input: DeleteProductInput!) {
+    deleteProduct(input: $input) { outcome }
+  }`, { input: { id } }, { operation: 'productLifecycleDeletionStart' });
+  const workflowStarted = check(started, {
+    'Product lifecycle deletion starts a foreground workflow': ({ response, body }) =>
+      response.status >= 200 && response.status < 300 && !body.errors &&
+      body.data && body.data.deleteProduct &&
+      body.data.deleteProduct.outcome === 'TERMINATION_STARTED',
+  });
+  if (!workflowStarted) {
+    return;
+  }
   const deleteResponses = http.batch([apiA, apiB].map((url) => ({
     method: 'POST', url, body: deleteRequest,
     params: {
@@ -97,14 +109,14 @@ export default function () {
     },
   })));
   const raceObserved = check(deleteResponses, {
-    'Product lifecycle deletion race starts exactly one foreground workflow': (responses) =>
+    'Product lifecycle deletion race observes the existing foreground workflow': (responses) =>
       responses.some((response) => {
         if (response.status < 200 || response.status >= 300) return false;
         let body;
         try { body = response.json(); } catch (_) { return false; }
         const payload = body.data && body.data.deleteProduct;
         return !body.errors && payload &&
-          (payload.outcome === 'TERMINATION_STARTED' || payload.outcome === 'ALREADY_TERMINATING');
+          payload.outcome === 'ALREADY_TERMINATING';
       }),
   });
   if (raceObserved) {
