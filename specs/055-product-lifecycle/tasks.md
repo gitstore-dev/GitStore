@@ -95,7 +95,7 @@ finalize exactly once after a fresh clear check.
 - [X] T030 [US3] Resolve and persist ProductVariant-to-Product blocking owner references, including deferred resolution and terminating-target rejection, in `gitstore-api/internal/cataloggrpc/server.go` and `gitstore-api/internal/catalog/product_variant_policy.go`.
 - [ ] T031 [P] [US3] Add resolver deletion matrix tests for blockers, ID lookup authorization, started/already-terminating outcomes, and no cascade in `gitstore-api/internal/graph/resolver/product_deletion_resolver_test.go`.
 - [X] T032 [US3] Enforce indexed pre-mark blocker rejection and expected-version terminating state in Product Git/GraphQL deletion handling in `gitstore-api/internal/{cataloggrpc/server.go,graph/resolver/product.resolvers.go}`.
-- [ ] T033 [P] [US3] Add Product controller finalizer/retry/conflict tests in `gitstore-controller-manager/internal/product/reconciler_test.go`.
+- [X] T033 [P] [US3] Add Product controller finalizer/retry/conflict tests in `gitstore-controller-manager/internal/product/reconciler_test.go`.
 - [X] T034 [US3] Implement dedicated Product reconciliation, fresh blocker check, bounded requeue, status ownership, and finalizer completion client in `gitstore-controller-manager/internal/product/{reconciler.go,graphql_client.go}`.
 - [X] T035 [US3] Register Product list/watch/cache/reconciler ownership in `gitstore-controller-manager/cmd/controller/main.go`.
 - [ ] T036 [US3] Add deletion race, controller-replacement, and final-removal-once integration coverage in `tests/integration/product_deletion_lifecycle_test.go`.

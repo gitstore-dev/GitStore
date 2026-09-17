@@ -55,6 +55,20 @@ func TestReconcileConflictRequeues(t *testing.T) {
 	}
 }
 
+func TestReconcileTransientCompletionFailureUsesRetryBudget(t *testing.T) {
+	now := time.Now()
+	client := &fakeCompletionClient{err: errors.New("temporary API outage")}
+	r := reconcilerFor(t, categorytaxonomy.Product{Namespace: "acme", Name: "widget", ResourceVersion: "8", DeletionTimestamp: &now, Finalizers: []string{foregroundDeletionFinalizer}}, client)
+	result := r.Reconcile(context.Background(), productKey())
+	transient, ok := result.(types.TransientFailure)
+	if !ok {
+		t.Fatalf("result = %T, want transient failure", result)
+	}
+	if !errors.Is(transient.Err, client.err) {
+		t.Fatalf("retry error = %v, want wrapped %v", transient.Err, client.err)
+	}
+}
+
 func TestReconcileActiveProductDoesNotComplete(t *testing.T) {
 	client := &fakeCompletionClient{err: errors.New("must not call")}
 	r := reconcilerFor(t, categorytaxonomy.Product{Namespace: "acme", Name: "widget", ResourceVersion: "8"}, client)
