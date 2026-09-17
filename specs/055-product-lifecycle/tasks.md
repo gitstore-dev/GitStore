@@ -54,7 +54,7 @@ canonical admission path and stable Product identity.
 **Independent test**: Create/update via Git and GraphQL, compare admitted
 revision/identity, then submit invalid input and observe no partial Product.
 
-- [ ] T016 [P] [US1] Add Git-service SchemaValidation and Product-admission tests for generic `OperationDelete`, Product provenance, stable UID/mutable generation, author-system-field rejection, and deletion transition in `gitstore-git-service/src/git/hooks/` and `gitstore-api/internal/cataloggrpc/product_lifecycle_test.go`.
+- [X] T016 [P] [US1] Add Git-service SchemaValidation and Product-admission tests for generic `OperationDelete`, Product provenance, stable UID/mutable generation, author-system-field rejection, and deletion transition in `gitstore-git-service/src/git/hooks/` and `gitstore-api/internal/cataloggrpc/product_lifecycle_test.go`.
 - [X] T017 [US1] Generalize the CategoryTaxonomy proposed-tree SchemaValidation path to `OperationDelete` for every supported resource type; refactor Product admission/deletion to preserve provenance, use lifecycle state rather than hard delete, and emit every committed transition in `gitstore-git-service/src/git/hooks/` and `gitstore-api/internal/cataloggrpc/server.go`.
 - [X] T018 [P] [US1] Add resolver contract tests for create/update/delete commit-and-wait behavior, non-system provenance update routing, implicit `gitstore-system` create routing, and ID delete input in `gitstore-api/internal/graph/resolver/product_lifecycle_test.go`.
 - [X] T019 [US1] Implement Product GraphQL create/update/delete in `gitstore-api/internal/graph/resolver/product.resolvers.go`: create targets `gitstore-system`; update resolves stored repository/source path; all await admitted revision.
