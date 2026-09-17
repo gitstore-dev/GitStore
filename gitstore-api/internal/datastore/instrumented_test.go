@@ -11,6 +11,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -72,6 +73,25 @@ func (s *stubDatastore) DeleteProduct(_ context.Context, _ string) error {
 }
 func (s *stubDatastore) DeleteProductWithResourceVersion(_ context.Context, _, _ string) error {
 	return s.getProductErr
+}
+
+func TestInstrumentedDatastorePreservesProductLifecycleCapability(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	product := &datastore.Product{
+		UID: "00000000-0000-0000-0000-000000000551", Namespace: "acme", Name: "widget",
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "Product", ResourceVersion: "1", Generation: 1,
+	}
+	require.NoError(t, store.CreateProduct(context.Background(), product))
+	wrapped := datastore.NewInstrumentedDatastoreWithRegistry(store, "memdb", zap.NewNop(), prometheus.NewRegistry())
+	lifecycle, ok := wrapped.(datastore.ProductLifecycleStore)
+	require.True(t, ok, "instrumentation must not erase Product deletion capability")
+
+	terminating, err := lifecycle.MarkProductTerminating(context.Background(), product.UID, "1", "gitstore.dev/foreground-deletion", time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, terminating.DeletionTimestamp)
+	require.NoError(t, lifecycle.CompleteProductDeletion(context.Background(), product.UID, terminating.ResourceVersion))
 }
 func (s *stubDatastore) CreateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
 	return s.getProductErr

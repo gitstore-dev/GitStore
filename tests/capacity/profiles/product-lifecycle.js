@@ -92,10 +92,6 @@ export default function () {
   const started = graphql(apiA, token, `mutation($input: DeleteProductInput!) {
     deleteProduct(input: $input) { outcome }
   }`, { input: { id } }, { operation: 'productLifecycleDeletionStart' });
-  if (!started.body || !started.body.data || !started.body.data.deleteProduct ||
-      started.body.data.deleteProduct.outcome !== 'TERMINATION_STARTED') {
-    console.error(`Product lifecycle deletion start response: ${JSON.stringify(started.body)}`);
-  }
   const workflowStarted = check(started, {
     'Product lifecycle deletion starts a foreground workflow': ({ response, body }) =>
       response.status >= 200 && response.status < 300 && !body.errors &&

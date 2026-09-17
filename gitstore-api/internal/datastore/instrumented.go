@@ -138,6 +138,37 @@ func (d *InstrumentedDatastore) DeleteProductWithResourceVersion(ctx context.Con
 	return err
 }
 
+// MarkProductTerminating and CompleteProductDeletion are deliberately
+// forwarded by the instrumentation decorator. Production wiring wraps the
+// Scylla backend before it reaches CatalogService; omitting these additive
+// lifecycle capabilities made a healthy backend appear unsupported only on
+// the Git-backed deletion path.
+func (d *InstrumentedDatastore) MarkProductTerminating(ctx context.Context, uid, expectedResourceVersion, finalizer string, deletionTimestamp time.Time) (*Product, error) {
+	start := time.Now()
+	lifecycle, ok := d.next.(ProductLifecycleStore)
+	if !ok {
+		err := fmt.Errorf("product lifecycle datastore is unavailable")
+		d.observe("MarkProductTerminating", start, err)
+		return nil, err
+	}
+	product, err := lifecycle.MarkProductTerminating(d.withFindingObserver(ctx), uid, expectedResourceVersion, finalizer, deletionTimestamp)
+	d.observe("MarkProductTerminating", start, err)
+	return product, err
+}
+
+func (d *InstrumentedDatastore) CompleteProductDeletion(ctx context.Context, uid, expectedResourceVersion string) error {
+	start := time.Now()
+	lifecycle, ok := d.next.(ProductLifecycleStore)
+	if !ok {
+		err := fmt.Errorf("product lifecycle datastore is unavailable")
+		d.observe("CompleteProductDeletion", start, err)
+		return err
+	}
+	err := lifecycle.CompleteProductDeletion(d.withFindingObserver(ctx), uid, expectedResourceVersion)
+	d.observe("CompleteProductDeletion", start, err)
+	return err
+}
+
 func (d *InstrumentedDatastore) CreateFile(ctx context.Context, f *File) error {
 	start := time.Now()
 	err := d.next.CreateFile(d.withFindingObserver(ctx), f)
