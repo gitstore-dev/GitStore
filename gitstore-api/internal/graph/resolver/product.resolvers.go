@@ -50,9 +50,9 @@ func (r *mutationResolver) DeleteProduct(ctx context.Context, input model.Delete
 	if err != nil {
 		return nil, err
 	}
-	outcome := model.ProductDeletionOutcomeAlreadyTerminating
+	outcome := model.ResourceDeletionOutcomeAlreadyTerminating
 	if started {
-		outcome = model.ProductDeletionOutcomeTerminationStarted
+		outcome = model.ResourceDeletionOutcomeTerminationStarted
 	}
 	return &model.DeleteProductPayload{Product: DatastoreProductToGraphQL(product), Outcome: outcome}, nil
 }

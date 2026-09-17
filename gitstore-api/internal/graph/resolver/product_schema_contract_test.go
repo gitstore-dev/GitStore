@@ -38,12 +38,12 @@ func TestProductLifecycleSchemaContract(t *testing.T) {
 	assert.Nil(t, schema.Types["DeleteProductInput"].Fields.ForName("namespace"))
 	assert.Nil(t, schema.Types["DeleteProductInput"].Fields.ForName("name"))
 	requireGraphQLField(t, schema, "DeleteProductPayload", "product", "Product")
-	requireGraphQLField(t, schema, "DeleteProductPayload", "outcome", "ProductDeletionOutcome!")
+	requireGraphQLField(t, schema, "DeleteProductPayload", "outcome", "ResourceDeletionOutcome!")
 	requireGraphQLField(t, schema, "Mutation", "createProduct", "CreateProductPayload!")
 	requireGraphQLField(t, schema, "Mutation", "updateProduct", "UpdateProductPayload!")
 	requireGraphQLField(t, schema, "Mutation", "deleteProduct", "DeleteProductPayload!")
 
-	outcome := schema.Types["ProductDeletionOutcome"]
+	outcome := schema.Types["ResourceDeletionOutcome"]
 	require.NotNil(t, outcome)
 	assert.Equal(t, ast.Enum, outcome.Kind)
 	assert.NotNil(t, outcome.EnumValues.ForName("TERMINATION_STARTED"))

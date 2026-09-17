@@ -308,15 +308,15 @@ func (ec *executionContext) _DeleteProductPayload_outcome(ctx context.Context, f
 			return obj.Outcome, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v model.ProductDeletionOutcome) graphql.Marshaler {
-			return ec.marshalNProductDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductDeletionOutcome(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v model.ResourceDeletionOutcome) graphql.Marshaler {
+			return ec.marshalNResourceDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceDeletionOutcome(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
 func (ec *executionContext) fieldContext_DeleteProductPayload_outcome(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("DeleteProductPayload", field, false, false, errors.New("field of type ProductDeletionOutcome does not have child fields"))
+	return graphql.NewScalarFieldContext("DeleteProductPayload", field, false, false, errors.New("field of type ResourceDeletionOutcome does not have child fields"))
 }
 
 func (ec *executionContext) _FileReference_name(ctx context.Context, field graphql.CollectedField, obj *model.FileReference) (ret graphql.Marshaler) {
@@ -3658,16 +3658,6 @@ func (ec *executionContext) marshalNProductConnection2ᚖgithubᚗcomᚋgitstore
 		return graphql.Null
 	}
 	return ec._ProductConnection(ctx, sel, v)
-}
-
-func (ec *executionContext) unmarshalNProductDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductDeletionOutcome(ctx context.Context, v any) (model.ProductDeletionOutcome, error) {
-	var res model.ProductDeletionOutcome
-	err := res.UnmarshalGQL(v)
-	return res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalNProductDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductDeletionOutcome(ctx context.Context, sel ast.SelectionSet, v model.ProductDeletionOutcome) graphql.Marshaler {
-	return v
 }
 
 func (ec *executionContext) marshalNProductEdge2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductEdgeᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ProductEdge) graphql.Marshaler {

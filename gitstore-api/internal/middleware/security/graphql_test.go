@@ -23,6 +23,8 @@ import (
 	"go.uber.org/zap"
 )
 
+func ptr(s string) *string { return &s }
+
 func TestGraphQLAuthenticatorValidBearerInjectsPrincipal(t *testing.T) {
 	registry, staticAdmin := newTestRegistry(t)
 	token, _, err := staticAdmin.IssueSession(t.Context(), "admin")
@@ -464,7 +466,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {
 	authz := testutil.NewDenyAllAuthZ(t)
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 	store := &testutil.StubStore{
-		GetNamespaceByNameFunc: func(_ context.Context, name string) (*datastore.Namespace, error) {
+		GetNamespaceFunc: func(_ context.Context, name string) (*datastore.Namespace, error) {
 			return &datastore.Namespace{Name: name, CreationActor: "alice"}, nil
 		},
 	}
@@ -474,7 +476,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
 		Args: map[string]any{
-			"input": model.DeleteNamespaceInput{Identifier: "acme"},
+			"input": model.DeleteNamespaceInput{ID: ptr(base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/acme")))},
 		},
 	})
 
@@ -513,10 +515,11 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenialHidesDeletionDetails(t *test
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			tc.namespace.UID = tc.namespace.ID
 			authz := testutil.NewDenyAllAuthZ(t)
 			registry := auth.NewProviderRegistry(nil, authz, nil)
 			store := &testutil.StubStore{
-				GetNamespaceByNameFunc: func(_ context.Context, _ string) (*datastore.Namespace, error) {
+				GetNamespaceFunc: func(_ context.Context, _ string) (*datastore.Namespace, error) {
 					return tc.namespace, nil
 				},
 			}
@@ -526,7 +529,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenialHidesDeletionDetails(t *test
 				Object: "Mutation",
 				Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
 				Args: map[string]any{
-					"input": model.DeleteNamespaceInput{Identifier: tc.namespace.Name},
+					"input": model.DeleteNamespaceInput{ID: ptr(base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/" + tc.namespace.UID)))},
 				},
 			})
 
@@ -549,8 +552,9 @@ func TestGraphQLFieldAuthorizerDeleteNamespacePassesAuthorizedRecord(t *testing.
 	authz := testutil.NewAllowAllAuthZ()
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 	authorized := &datastore.Namespace{ID: "namespace-id", Name: "acme", CreationActor: "alice"}
+	authorized.UID = authorized.ID
 	store := &testutil.StubStore{
-		GetNamespaceByNameFunc: func(_ context.Context, _ string) (*datastore.Namespace, error) {
+		GetNamespaceFunc: func(_ context.Context, _ string) (*datastore.Namespace, error) {
 			return authorized, nil
 		},
 	}
@@ -560,7 +564,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespacePassesAuthorizedRecord(t *testing.
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
 		Args: map[string]any{
-			"input": model.DeleteNamespaceInput{Identifier: "acme"},
+			"input": model.DeleteNamespaceInput{ID: ptr(base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/acme")))},
 		},
 	})
 

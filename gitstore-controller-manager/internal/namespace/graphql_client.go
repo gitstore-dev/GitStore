@@ -28,7 +28,7 @@ query($namespace: String!) {
 const completeNamespaceDeletionMutation = `
 mutation($input: CompleteNamespaceDeletionInput!) {
   completeNamespaceDeletion(input: $input) {
-    deletedIdentifier
+    id
     conflict { currentResourceVersion }
   }
 }`
@@ -100,8 +100,8 @@ func NewGraphQLDeletionClient(client *graphqlclient.Client) *GraphQLDeletionClie
 func (c *GraphQLDeletionClient) CompleteDeletion(ctx context.Context, namespace, resourceVersion string) error {
 	var response struct {
 		CompleteNamespaceDeletion struct {
-			DeletedIdentifier *string `json:"deletedIdentifier"`
-			Conflict          *struct {
+			ID       *string `json:"id"`
+			Conflict *struct {
 				CurrentResourceVersion string `json:"currentResourceVersion"`
 			} `json:"conflict"`
 		} `json:"completeNamespaceDeletion"`
@@ -121,7 +121,7 @@ func (c *GraphQLDeletionClient) CompleteDeletion(ctx context.Context, namespace,
 			response.CompleteNamespaceDeletion.Conflict.CurrentResourceVersion,
 		)
 	}
-	if response.CompleteNamespaceDeletion.DeletedIdentifier == nil {
+	if response.CompleteNamespaceDeletion.ID == nil {
 		return fmt.Errorf("namespace deletion client: completion returned no deleted identifier")
 	}
 	return nil

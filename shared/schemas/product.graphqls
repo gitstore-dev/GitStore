@@ -166,17 +166,12 @@ type UpdateProductPayload {
   product: Product
 }
 
-enum ProductDeletionOutcome {
-  TERMINATION_STARTED
-  ALREADY_TERMINATING
-}
-
 type DeleteProductPayload {
   "The current Product envelope, including terminating metadata."
   product: Product
 
   "Whether this request started termination or observed existing termination."
-  outcome: ProductDeletionOutcome!
+  outcome: ResourceDeletionOutcome!
 }
 
 type ProductStatus {

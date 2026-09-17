@@ -281,7 +281,7 @@ input DeleteNamespaceInput {
   Deletion is blocked if any repositories exist within the namespace.
   Requires the caller to be the namespace owner (createdBy) or isAdmin.
   """
-  identifier: String!
+  id: ID
 }
 
 """
@@ -309,7 +309,7 @@ type UpdateNamespacePayload {
 """
 The successful result of requesting Namespace termination.
 """
-enum NamespaceDeletionOutcome {
+enum ResourceDeletionOutcome {
   """
   This request set the deletion timestamp and foreground deletion finalizer.
   """
@@ -325,19 +325,17 @@ enum NamespaceDeletionOutcome {
 Payload returned after successfully deleting a namespace.
 """
 type DeleteNamespacePayload {
-  """
-  The identifier of the deleted namespace.
-  """
-  deletedIdentifier: String!
+  "The Namespace while foreground termination is in progress."
+  namespace: Namespace
 
   """
   Whether this request started termination or observed an existing termination.
   """
-  outcome: NamespaceDeletionOutcome!
+  outcome: ResourceDeletionOutcome!
 }
 
 type CompleteNamespaceDeletionPayload {
-  deletedIdentifier: String
+  id: ID
 }
 
 """

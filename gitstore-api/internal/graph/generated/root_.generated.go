@@ -158,11 +158,11 @@ type ComplexityRoot struct {
 	}
 
 	CompleteNamespaceDeletionPayload struct {
-		DeletedIdentifier func(childComplexity int) int
+		ID func(childComplexity int) int
 	}
 
 	CompleteRepositoryDeletionPayload struct {
-		DeletedRepositoryID func(childComplexity int) int
+		ID func(childComplexity int) int
 	}
 
 	Condition struct {
@@ -212,8 +212,8 @@ type ComplexityRoot struct {
 	}
 
 	DeleteNamespacePayload struct {
-		DeletedIdentifier func(childComplexity int) int
-		Outcome           func(childComplexity int) int
+		Namespace func(childComplexity int) int
+		Outcome   func(childComplexity int) int
 	}
 
 	DeleteProductPayload struct {
@@ -222,7 +222,8 @@ type ComplexityRoot struct {
 	}
 
 	DeleteRepositoryPayload struct {
-		DeletedRepositoryID func(childComplexity int) int
+		Outcome    func(childComplexity int) int
+		Repository func(childComplexity int) int
 	}
 
 	DeleteServiceAccountPayload struct {
@@ -1433,19 +1434,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CollectionStatus.Resolved(childComplexity), true
 
-	case "CompleteNamespaceDeletionPayload.deletedIdentifier":
-		if e.ComplexityRoot.CompleteNamespaceDeletionPayload.DeletedIdentifier == nil {
+	case "CompleteNamespaceDeletionPayload.id":
+		if e.ComplexityRoot.CompleteNamespaceDeletionPayload.ID == nil {
 			break
 		}
 
-		return e.ComplexityRoot.CompleteNamespaceDeletionPayload.DeletedIdentifier(childComplexity), true
+		return e.ComplexityRoot.CompleteNamespaceDeletionPayload.ID(childComplexity), true
 
-	case "CompleteRepositoryDeletionPayload.deletedRepositoryId":
-		if e.ComplexityRoot.CompleteRepositoryDeletionPayload.DeletedRepositoryID == nil {
+	case "CompleteRepositoryDeletionPayload.id":
+		if e.ComplexityRoot.CompleteRepositoryDeletionPayload.ID == nil {
 			break
 		}
 
-		return e.ComplexityRoot.CompleteRepositoryDeletionPayload.DeletedRepositoryID(childComplexity), true
+		return e.ComplexityRoot.CompleteRepositoryDeletionPayload.ID(childComplexity), true
 
 	case "Condition.lastTransitionTime":
 		if e.ComplexityRoot.Condition.LastTransitionTime == nil {
@@ -1580,12 +1581,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.DeleteCollectionPayload.DeletedCollectionID(childComplexity), true
 
-	case "DeleteNamespacePayload.deletedIdentifier":
-		if e.ComplexityRoot.DeleteNamespacePayload.DeletedIdentifier == nil {
+	case "DeleteNamespacePayload.namespace":
+		if e.ComplexityRoot.DeleteNamespacePayload.Namespace == nil {
 			break
 		}
 
-		return e.ComplexityRoot.DeleteNamespacePayload.DeletedIdentifier(childComplexity), true
+		return e.ComplexityRoot.DeleteNamespacePayload.Namespace(childComplexity), true
 
 	case "DeleteNamespacePayload.outcome":
 		if e.ComplexityRoot.DeleteNamespacePayload.Outcome == nil {
@@ -1608,12 +1609,19 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.DeleteProductPayload.Product(childComplexity), true
 
-	case "DeleteRepositoryPayload.deletedRepositoryId":
-		if e.ComplexityRoot.DeleteRepositoryPayload.DeletedRepositoryID == nil {
+	case "DeleteRepositoryPayload.outcome":
+		if e.ComplexityRoot.DeleteRepositoryPayload.Outcome == nil {
 			break
 		}
 
-		return e.ComplexityRoot.DeleteRepositoryPayload.DeletedRepositoryID(childComplexity), true
+		return e.ComplexityRoot.DeleteRepositoryPayload.Outcome(childComplexity), true
+
+	case "DeleteRepositoryPayload.repository":
+		if e.ComplexityRoot.DeleteRepositoryPayload.Repository == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteRepositoryPayload.Repository(childComplexity), true
 
 	case "DeleteServiceAccountPayload.apiVersion":
 		if e.ComplexityRoot.DeleteServiceAccountPayload.APIVersion == nil {
@@ -5983,7 +5991,7 @@ input DeleteNamespaceInput {
   Deletion is blocked if any repositories exist within the namespace.
   Requires the caller to be the namespace owner (createdBy) or isAdmin.
   """
-  identifier: String!
+  id: ID
 }
 
 """
@@ -6011,7 +6019,7 @@ type UpdateNamespacePayload {
 """
 The successful result of requesting Namespace termination.
 """
-enum NamespaceDeletionOutcome {
+enum ResourceDeletionOutcome {
   """
   This request set the deletion timestamp and foreground deletion finalizer.
   """
@@ -6027,19 +6035,17 @@ enum NamespaceDeletionOutcome {
 Payload returned after successfully deleting a namespace.
 """
 type DeleteNamespacePayload {
-  """
-  The identifier of the deleted namespace.
-  """
-  deletedIdentifier: String!
+  "The Namespace while foreground termination is in progress."
+  namespace: Namespace
 
   """
   Whether this request started termination or observed an existing termination.
   """
-  outcome: NamespaceDeletionOutcome!
+  outcome: ResourceDeletionOutcome!
 }
 
 type CompleteNamespaceDeletionPayload {
-  deletedIdentifier: String
+  id: ID
 }
 
 """
@@ -6292,17 +6298,12 @@ type UpdateProductPayload {
   product: Product
 }
 
-enum ProductDeletionOutcome {
-  TERMINATION_STARTED
-  ALREADY_TERMINATING
-}
-
 type DeleteProductPayload {
   "The current Product envelope, including terminating metadata."
   product: Product
 
   "Whether this request started termination or observed existing termination."
-  outcome: ProductDeletionOutcome!
+  outcome: ResourceDeletionOutcome!
 }
 
 type ProductStatus {
@@ -7170,11 +7171,13 @@ type TransferRepositoryPayload {
 }
 
 input DeleteRepositoryInput {
-  repositoryId: ID!
+  id: ID
 }
 
 type DeleteRepositoryPayload {
-  deletedRepositoryId: ID!
+  "The Repository while foreground termination is in progress."
+  repository: Repository
+  outcome: ResourceDeletionOutcome!
 }
 
 input CompleteRepositoryDeletionInput {
@@ -7184,7 +7187,7 @@ input CompleteRepositoryDeletionInput {
 }
 
 type CompleteRepositoryDeletionPayload {
-  deletedRepositoryId: ID
+  id: ID
 }
 `, BuiltIn: false},
 	{Name: "../../../../shared/schemas/schema.graphqls", Input: `# GitStore GraphQL Schema
@@ -7978,16 +7981,16 @@ func (ec *executionContext) childFields_CollectionStatus(ctx context.Context, fi
 
 func (ec *executionContext) childFields_CompleteNamespaceDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "deletedIdentifier":
-		return ec.fieldContext_CompleteNamespaceDeletionPayload_deletedIdentifier(ctx, field)
+	case "id":
+		return ec.fieldContext_CompleteNamespaceDeletionPayload_id(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CompleteNamespaceDeletionPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_CompleteRepositoryDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "deletedRepositoryId":
-		return ec.fieldContext_CompleteRepositoryDeletionPayload_deletedRepositoryId(ctx, field)
+	case "id":
+		return ec.fieldContext_CompleteRepositoryDeletionPayload_id(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CompleteRepositoryDeletionPayload", field.Name)
 }
@@ -8086,8 +8089,8 @@ func (ec *executionContext) childFields_DeleteCollectionPayload(ctx context.Cont
 
 func (ec *executionContext) childFields_DeleteNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "deletedIdentifier":
-		return ec.fieldContext_DeleteNamespacePayload_deletedIdentifier(ctx, field)
+	case "namespace":
+		return ec.fieldContext_DeleteNamespacePayload_namespace(ctx, field)
 	case "outcome":
 		return ec.fieldContext_DeleteNamespacePayload_outcome(ctx, field)
 	}
@@ -8106,8 +8109,10 @@ func (ec *executionContext) childFields_DeleteProductPayload(ctx context.Context
 
 func (ec *executionContext) childFields_DeleteRepositoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
-	case "deletedRepositoryId":
-		return ec.fieldContext_DeleteRepositoryPayload_deletedRepositoryId(ctx, field)
+	case "repository":
+		return ec.fieldContext_DeleteRepositoryPayload_repository(ctx, field)
+	case "outcome":
+		return ec.fieldContext_DeleteRepositoryPayload_outcome(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DeleteRepositoryPayload", field.Name)
 }

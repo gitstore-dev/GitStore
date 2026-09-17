@@ -17,6 +17,7 @@ import (
 // are no-ops that satisfy the full datastore.Datastore interface.
 type StubStore struct {
 	GetNamespaceByNameFunc  func(ctx context.Context, name string) (*datastore.Namespace, error)
+	GetNamespaceFunc        func(ctx context.Context, id string) (*datastore.Namespace, error)
 	LookupRepositoryFunc    func(ctx context.Context, namespaceID, name string) (*datastore.NamespaceMapping, error)
 	GetRepositoryFunc       func(ctx context.Context, id string) (*datastore.Repository, error)
 	HasRepositoriesFunc     func(ctx context.Context, namespaceID string) (bool, error)
@@ -46,6 +47,9 @@ func (s *StubStore) UpdateFileStatus(_ context.Context, _, _ string, _ datastore
 func (s *StubStore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
 	if s.GetNamespaceByNameFunc != nil {
 		return s.GetNamespaceByNameFunc(ctx, name)
+	}
+	if s.GetNamespaceFunc != nil {
+		return s.GetNamespaceFunc(ctx, name)
 	}
 	return nil, datastore.ErrNotFound
 }
@@ -167,7 +171,10 @@ func (s *StubStore) ListProductsByLabelSelector(_ context.Context, _ string, _ c
 	return nil, nil
 }
 func (s *StubStore) CreateNamespace(_ context.Context, _ *datastore.Namespace) error { return nil }
-func (s *StubStore) GetNamespace(_ context.Context, _ string) (*datastore.Namespace, error) {
+func (s *StubStore) GetNamespace(ctx context.Context, id string) (*datastore.Namespace, error) {
+	if s.GetNamespaceFunc != nil {
+		return s.GetNamespaceFunc(ctx, id)
+	}
 	return nil, datastore.ErrNotFound
 }
 func (s *StubStore) ListNamespaces(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {

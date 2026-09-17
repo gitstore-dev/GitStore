@@ -15,7 +15,7 @@ import (
 const completeRepositoryDeletionMutation = `
 mutation($input: CompleteRepositoryDeletionInput!) {
   completeRepositoryDeletion(input: $input) {
-    deletedRepositoryId
+    id
   }
 }`
 
@@ -81,7 +81,7 @@ func NewGraphQLCompletionClient(client *graphqlclient.Client) *GraphQLCompletion
 func (c *GraphQLCompletionClient) CompleteDeletion(ctx context.Context, namespace, name, resourceVersion string) error {
 	var response struct {
 		CompleteRepositoryDeletion struct {
-			DeletedRepositoryID *string `json:"deletedRepositoryId"`
+			ID *string `json:"id"`
 		} `json:"completeRepositoryDeletion"`
 	}
 	if err := c.client.Mutate(ctx, completeRepositoryDeletionMutation, map[string]any{

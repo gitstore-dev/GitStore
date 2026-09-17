@@ -657,9 +657,9 @@ query NamespaceByName {
 
 # Start foreground deletion. The payload distinguishes a new request from one
 # that found an already-terminating Namespace.
-mutation DeleteNamespace {
-  deleteNamespace(input: { identifier: "acme-corp" }) {
-    deletedIdentifier
+mutation DeleteNamespace($id: ID!) {
+  deleteNamespace(input: { id: $id }) {
+	namespace { id }
     outcome
   }
 }
