@@ -11,9 +11,9 @@ import { env } from '../lib/config.js';
 import { graphql } from '../lib/graphql.js';
 
 // The local alpha stack is validated from the host on 127.0.0.1, whereas k6
-// runs in a Docker container on Docker Desktop.  Permit that runner to use
-// Docker's stable host gateway without weakening the independently validated
-// replica endpoints recorded in the gate evidence.
+// joins the Compose network and reaches each independent service by its
+// Docker DNS name. This keeps runner routing separate from the independently
+// validated replica endpoints recorded in the gate evidence.
 const apiA = env('PRODUCT_CAPACITY_API_A', env('CAPACITY_API_A'));
 const apiB = env('PRODUCT_CAPACITY_API_B', env('CAPACITY_API_B'));
 const token = env('CAPACITY_TOKEN');
