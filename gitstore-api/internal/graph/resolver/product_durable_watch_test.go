@@ -77,6 +77,35 @@ func TestTypedProductWatchBootstrapCursorNormalizes(t *testing.T) {
 	assert.Equal(t, watchjournal.BootstrapCursor, normalizeResourceWatchCursor(productWatchBootstrapCursor))
 }
 
+// Bootstrap is a shared journal operation: a typed Product subscriber and a
+// generic Product subscriber must receive the same bookmark before live
+// events, so either stream can resume from the returned cursor.
+func TestTypedAndGenericProductWatchShareBootstrapBookmark(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	lease, acquired, err := journal.AcquireLease(context.Background(), "product-bootstrap-test", time.Now(), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	_, err = journal.Append(context.Background(), lease, datastore.ResourceWatchEvent{Type: datastore.ResourceWatchBookmark, At: time.Now()}, time.Hour)
+	require.NoError(t, err)
+
+	r, err := NewResolver(repositoryWatchResolverDeps(store, journal))
+	require.NoError(t, err)
+	bootstrap := watchjournal.BootstrapCursor
+	typed, err := r.Subscription().WatchProducts(context.Background(), nil, nil, &bootstrap)
+	require.NoError(t, err)
+	generic, err := r.Subscription().WatchResources(context.Background(), "Product", nil, nil, &bootstrap)
+	require.NoError(t, err)
+
+	typedBookmark := receiveTypedProductEvent(t, typed)
+	genericBookmark := receiveGenericProductEvent(t, generic)
+	assert.Equal(t, model.WatchEventTypeBookmark, typedBookmark.Type)
+	assert.Equal(t, typedBookmark.ResourceVersion, genericBookmark.ResourceVersion)
+	assert.Nil(t, typedBookmark.Product)
+	assert.Nil(t, genericBookmark.Object)
+}
+
 func receiveTypedProductEvent(t *testing.T, events <-chan *model.ProductWatchEvent) *model.ProductWatchEvent {
 	t.Helper()
 	select {

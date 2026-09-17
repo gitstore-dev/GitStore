@@ -30,8 +30,8 @@ and Resource Watch prerequisites before any user-story slice.
 
 - [X] T005 Add Product mutation/delete-payload schema contract tests, including `DeleteProductInput { id: ID }` and `ProductDeletionOutcome`, in `gitstore-api/internal/graph/resolver/product_schema_contract_test.go`.
 - [X] T006 Update `shared/schemas/product.graphqls` with create/update/delete envelopes, `ProductDeletionOutcome`, Namespace-style delete payload, lifecycle spec, and typed watch envelope; regenerate gqlgen output in `gitstore-api/internal/graph/generated/` and `gitstore-api/internal/graph/model/`.
-- [ ] T007 [P] Add Product resource-action authorization matrix tests for read, author, update, delete, watch, status, and completion in `gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go`.
-- [ ] T008 Add resource-aware Product authorization gates before lookup, node, list, relationships/counts, mutation, typed watch, generic watch, status, and completion disclosure in `gitstore-api/internal/middleware/security/graphql.go`.
+- [X] T007 [P] Add Product resource-action authorization matrix tests for read, author, update, delete, watch, status, and completion in `gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go`.
+- [X] T008 Add resource-aware Product authorization gates before lookup, node, list, relationships/counts, mutation, typed watch, generic watch, status, and completion disclosure in `gitstore-api/internal/middleware/security/graphql.go`.
 - [X] T009 [P] Add datastore contract tests for indexed ProductVariant blockers and expected-version Product termination/completion in `gitstore-api/internal/datastore/product_lifecycle_contract_test.go`.
 - [X] T010 Extend Product/ProductVariant datastore interfaces and memdb implementation for blocker lookup, mark termination, complete deletion, and owner-reference projection in `gitstore-api/internal/datastore/{datastore.go,memdb/}`.
 - [X] T011 [P] Verify the existing owner-reference projection migration and Product lifecycle columns cover Product; add backend contract tests for lifecycle capability in `gitstore-api/internal/datastore/scylla/product_lifecycle_test.go`.
@@ -91,8 +91,8 @@ fresh indexed blocker check.
 termination; reject a newly resolved variant targeting the terminating Product;
 finalize exactly once after a fresh clear check.
 
-- [ ] T029 [P] [US3] Add ProductVariant admission tests for canonical blocking Product owner references and terminating-parent rejection in `gitstore-api/internal/cataloggrpc/product_variant_lifecycle_test.go`.
-- [ ] T030 [US3] Resolve and persist ProductVariant-to-Product blocking owner references, including deferred resolution and terminating-target rejection, in `gitstore-api/internal/cataloggrpc/server.go` and `gitstore-api/internal/catalog/product_variant_policy.go`.
+- [X] T029 [P] [US3] Add ProductVariant admission tests for canonical blocking Product owner references and terminating-parent rejection in `gitstore-api/internal/cataloggrpc/server_test.go`.
+- [X] T030 [US3] Resolve and persist ProductVariant-to-Product blocking owner references, including deferred resolution and terminating-target rejection, in `gitstore-api/internal/cataloggrpc/server.go` and `gitstore-api/internal/catalog/product_variant_policy.go`.
 - [ ] T031 [P] [US3] Add resolver deletion matrix tests for blockers, ID lookup authorization, started/already-terminating outcomes, and no cascade in `gitstore-api/internal/graph/resolver/product_deletion_resolver_test.go`.
 - [ ] T032 [US3] Enforce indexed pre-mark blocker rejection and expected-version terminating state in Product Git/GraphQL deletion handling in `gitstore-api/internal/{cataloggrpc/server.go,graph/resolver/product.resolvers.go}`.
 - [ ] T033 [P] [US3] Add Product controller finalizer/retry/conflict tests in `gitstore-controller-manager/internal/product/reconciler_test.go`.
