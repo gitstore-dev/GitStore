@@ -71,7 +71,7 @@ typed and generic durable watches without replica-local gaps.
 **Independent test**: Bootstrap/list/drain, replace an API replica, resume the
 cursor, and verify create/spec/status/terminating/final-delete coverage.
 
-- [ ] T022 [P] [US2] Add typed/generic Product watch contract tests for full envelopes, selectors, bootstrap, replay, expiry, bookmarks, and authorization-before-cursor behavior in `tests/contract/product_watch_test.go`.
+- [X] T022 [P] [US2] Add typed/generic Product watch contract tests for full envelopes, selectors, bootstrap, replay, expiry, bookmarks, and authorization-before-cursor behavior in `tests/contract/product_watch_test.go`.
 - [X] T023 [US2] Add Product event conversion and generic `watchResources(kind: "Product")` routing from the Resource Watch journal in `gitstore-api/internal/graph/resolver/{watch.go,product_watch.go}`.
 - [X] T024 [US2] Replace eventbus-backed `watchProducts` with the durable typed Product adapter in `gitstore-api/internal/graph/resolver/product.resolvers.go`.
 - [ ] T025 [P] [US2] Add Product lookup/list/node/relationship/count cross-namespace authorization and no-disclosure tests in `gitstore-api/internal/graph/resolver/product_authorization_test.go`.
