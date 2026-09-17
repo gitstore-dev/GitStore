@@ -21,6 +21,7 @@ import (
 const (
 	namespaceWatchBootstrapCursor  = "__namespace_watch_bootstrap__"
 	repositoryWatchBootstrapCursor = "__repository_watch_bootstrap__"
+	productWatchBootstrapCursor    = "__product_watch_bootstrap__"
 )
 
 // normalizeResourceWatchCursor preserves the private typed-watch bootstrap
@@ -28,7 +29,7 @@ const (
 // durable journal. Ordinary opaque cursors are returned unchanged.
 func normalizeResourceWatchCursor(raw string) string {
 	switch raw {
-	case namespaceWatchBootstrapCursor, repositoryWatchBootstrapCursor:
+	case namespaceWatchBootstrapCursor, repositoryWatchBootstrapCursor, productWatchBootstrapCursor:
 		return watchjournal.BootstrapCursor
 	default:
 		return raw

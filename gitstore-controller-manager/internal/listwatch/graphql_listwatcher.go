@@ -507,7 +507,7 @@ func listNamespaceIdentifiers(ctx context.Context, client *graphqlclient.Client)
 	return identifiers, nil
 }
 
-// List establishes an event-bus cursor before enumerating every namespace,
+// List establishes a durable journal cursor before enumerating every namespace,
 // then paginates the products query for each to completion. Changes that race
 // with the snapshot are replayed by the subsequent Watch from that cursor.
 // When there are zero prior Product events, the cursor is
@@ -570,7 +570,7 @@ func (lw *ProductListWatcher) List(ctx context.Context) (ListResponse[categoryta
 	return ListResponse[categorytaxonomy.Product]{Items: items, ResourceVersion: cursorEvent.ResourceVersion}, nil
 }
 
-// Watch opens a watchProducts subscription (across all namespaces)
+// Watch opens a typed Product watch subscription (across all namespaces)
 // starting after resourceVersion.
 func (lw *ProductListWatcher) Watch(ctx context.Context, resourceVersion string) (Watcher[categorytaxonomy.Product], error) {
 	vars := map[string]any{}
@@ -621,7 +621,6 @@ func (w *productWatcher) run() {
 			return
 		}
 		ev := payload.WatchProducts
-
 		var evType EventType
 		switch ev.Type {
 		case "ADDED":
