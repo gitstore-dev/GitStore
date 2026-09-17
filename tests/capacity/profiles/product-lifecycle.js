@@ -18,6 +18,7 @@ const apiA = env('PRODUCT_CAPACITY_API_A', env('CAPACITY_API_A'));
 const apiB = env('PRODUCT_CAPACITY_API_B', env('CAPACITY_API_B'));
 const token = env('CAPACITY_TOKEN');
 const replicaChecks = new Counter('product_lifecycle_replica_checks');
+const admissionChecks = new Counter('product_lifecycle_admission_checks');
 
 export const options = {
   scenarios: {
@@ -45,4 +46,27 @@ export default function () {
     });
     replicaChecks.add(1);
   }
+
+  const name = `capacity-product-${__VU}-${__ITER}-${Date.now()}`;
+  const created = graphql(apiA, token, `mutation($input: CreateProductInput!) {
+    createProduct(input: $input) { product { metadata { name } } }
+  }`, { input: {
+    apiVersion: 'catalog.gitstore.dev/v1beta1', kind: 'Product',
+    metadata: { namespace: 'default', name }, spec: { title: name },
+  } }, { operation: 'productLifecycleCreate' });
+  check(created, {
+    'Product lifecycle GraphQL admission succeeds': ({ response, body }) =>
+      response.status >= 200 && response.status < 300 && !body.errors &&
+      body.data && body.data.createProduct && body.data.createProduct.product.metadata.name === name,
+  });
+
+  const observed = graphql(apiB, token, `query($namespace: String!, $name: String!) {
+    product(by: { namespacePath: { namespace: $namespace, name: $name } }) { metadata { name } }
+  }`, { namespace: 'default', name }, { operation: 'productLifecycleCrossReplicaRead' });
+  check(observed, {
+    'Product lifecycle admission is visible on peer replica': ({ response, body }) =>
+      response.status >= 200 && response.status < 300 && !body.errors &&
+      body.data && body.data.product && body.data.product.metadata.name === name,
+  });
+  admissionChecks.add(1);
 }
