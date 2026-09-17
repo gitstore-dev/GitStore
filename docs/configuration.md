@@ -211,6 +211,12 @@ cannot create an oversized catch-up batch.
 | `watch.namespace.lease_renew_interval_seconds` | `GITSTORE_WATCH__NAMESPACE__LEASE_RENEW_INTERVAL_SECONDS` | `10` | Renewal interval; must be less than lease TTL. |
 | `watch.namespace.max_materializer_lag_seconds` | `GITSTORE_WATCH__NAMESPACE__MAX_MATERIALIZER_LAG_SECONDS` | `60` | Reader readiness freshness ceiling; must remain below the fixed 1,209,600-second CDC retention. |
 
+Product durable-watch rollout follows the same fenced reader/materializer
+configuration family as Namespace and Repository. Enable it only after the
+Product CDC migration and Product-aware API/controller rollout; see
+[`product-lifecycle.md`](runbooks/product-lifecycle.md) for the mixed-version
+deny and rollback sequence.
+
 See [Namespace watch contract](namespace/namespace-watch.md) and the
 [controller watch/status runbook](runbooks/controller-watch-status.md).
 
