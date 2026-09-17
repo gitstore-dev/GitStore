@@ -128,7 +128,7 @@ func (s *Server) admitCommittedProductDeletion(ctx context.Context, req admissio
 	}
 	lifecycle, ok := s.store.(datastore.ProductLifecycleStore)
 	if !ok {
-		return nil, fmt.Errorf("Product lifecycle datastore is unavailable")
+		return nil, fmt.Errorf("product lifecycle datastore is unavailable")
 	}
 	if _, err := lifecycle.MarkProductTerminating(ctx, product.UID, product.ResourceVersion, "gitstore.dev/foreground-deletion", s.clock.Now().UTC()); err != nil {
 		return nil, err
