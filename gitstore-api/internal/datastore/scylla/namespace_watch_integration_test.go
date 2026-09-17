@@ -387,6 +387,7 @@ func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
 	lease, acquired, err := journal.AcquireLease(context.Background(), "integration-reader", now, 2*time.Minute)
 	require.NoError(t, err)
 	require.True(t, acquired)
+	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), lease)) })
 	materializer := watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: 7 * 24 * time.Hour})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -505,6 +506,7 @@ func TestProductCDCReaderMaterializesTerminationEvent(t *testing.T) {
 	lease, acquired, err := journal.AcquireLease(context.Background(), "product-integration-reader", time.Now().UTC(), 2*time.Minute)
 	require.NoError(t, err)
 	require.True(t, acquired)
+	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), lease)) })
 	materializer := watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: 7 * 24 * time.Hour})
 
 	ctx, cancel := context.WithCancel(context.Background())
