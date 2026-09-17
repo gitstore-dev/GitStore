@@ -16,6 +16,9 @@ roles:
       - "repository.read.any"
       - "repository.status.write"
       - "repository.watch"
+      - "product.read.any"
+      - "product.watch"
+      - "product.delete.complete"
       - "serviceaccount.token.issue"
     deny: []
   api-internal:
