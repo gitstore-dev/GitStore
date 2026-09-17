@@ -99,7 +99,7 @@ func (r *Resolver) watchProductResources(ctx context.Context, namespace *string,
 	// Keep the event-bus adapter only for single-process development and
 	// compatibility tests that deliberately do not wire a journal. Production
 	// ResolverDeps always provide the durable subscriber.
-	if r.namespaceSubscriber == nil {
+	if r.resourceJournal == nil {
 		return r.watchLegacyProducts(ctx, namespace, selector, resourceVersion)
 	}
 	if err := r.repositoryWatchAvailable(); err != nil {

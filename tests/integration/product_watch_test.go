@@ -49,6 +49,74 @@ func TestProductWatchCrossReplicaBootstrapAndResume(t *testing.T) {
 	require.NotEqual(t, added.ResourceVersion, resumed.ResourceVersion)
 }
 
+// TestProductWatchRecoveryProbe uses the same shared-Scylla deployment as the
+// alpha capacity gate. It proves that an expired cursor is rejected without
+// disclosure and that a replacement API process can resume a Product cursor
+// after the materializer lease is handed off.
+func TestProductWatchRecoveryProbe(t *testing.T) {
+	apiA := strings.TrimSuffix(os.Getenv("PRODUCT_WATCH_API_A"), "/")
+	apiB := strings.TrimSuffix(os.Getenv("PRODUCT_WATCH_API_B"), "/")
+	token := productWatchToken(t)
+	if apiA == "" || apiB == "" || token == "" {
+		t.Skip("set PRODUCT_WATCH_API_A, PRODUCT_WATCH_API_B, and PRODUCT_WATCH_TOKEN")
+	}
+
+	bootstrap := openProductWatch(t, apiA, token, "__product_watch_bootstrap__")
+	cursor := readProductWatchEvent(t, bootstrap).ResourceVersion
+	require.NoError(t, bootstrap.Close())
+
+	t.Run("forced epoch expiry", func(t *testing.T) {
+		expired := openProductWatch(t, apiA, token, "rwv1:00000000-0000-4000-8000-000000000001:0")
+		requireNamespaceWatchWireError(t, expired, "WATCH_EXPIRED", "EPOCH_MISMATCH")
+	})
+
+	t.Run("rolling replacement and lease handoff", func(t *testing.T) {
+		replacement := strings.TrimSuffix(os.Getenv("PRODUCT_WATCH_API_REPLACEMENT"), "/")
+		trigger := os.Getenv("PRODUCT_WATCH_REPLACEMENT_TRIGGER_FILE")
+		require.NotEmpty(t, replacement, "deployment harness must select a replacement endpoint")
+		require.Contains(t, []string{apiA, apiB}, replacement, "replacement must identify one of the live replicas")
+		require.NotEmpty(t, trigger, "deployment harness must provide PRODUCT_WATCH_REPLACEMENT_TRIGGER_FILE")
+		_, statErr := os.Stat(trigger)
+		require.ErrorIs(t, statErr, os.ErrNotExist, "replacement trigger must not exist before the probe")
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		before, err := fetchCapacityMetrics(client, replacement)
+		require.NoError(t, err, "scrape replacement identity before trigger")
+		require.NoError(t, os.WriteFile(trigger, []byte("replace product recovery probe\n"), 0o600))
+
+		probeClient := &http.Client{Timeout: 500 * time.Millisecond}
+		outageDeadline := time.Now().Add(30 * time.Second)
+		for endpointReady(probeClient, replacement) && time.Now().Before(outageDeadline) {
+			time.Sleep(100 * time.Millisecond)
+		}
+		require.False(t, endpointReady(probeClient, replacement), "replacement trigger must produce an observed outage")
+
+		var after capacityProcessMetrics
+		recoveryDeadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(recoveryDeadline) {
+			if endpointReady(probeClient, replacement) {
+				candidate, metricsErr := fetchCapacityMetrics(client, replacement)
+				if metricsErr == nil && candidate.processStart != before.processStart {
+					after = candidate
+					break
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		require.NotZero(t, after.processStart, "replacement must return with a changed process_start_time_seconds")
+
+		watch := openProductWatch(t, replacement, token, cursor)
+		peer := apiA
+		if replacement == apiA {
+			peer = apiB
+		}
+		name := uniqueName("product-watch-handoff")
+		createProductThrough(t, peer, token, name)
+		event := readProductWatchTransition(t, watch)
+		require.Equal(t, name, event.Name)
+	})
+}
+
 func productWatchToken(t *testing.T) string {
 	t.Helper()
 	if token := strings.TrimSpace(os.Getenv("PRODUCT_WATCH_TOKEN")); token != "" {

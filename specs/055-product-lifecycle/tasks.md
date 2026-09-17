@@ -72,12 +72,12 @@ typed and generic durable watches without replica-local gaps.
 cursor, and verify create/spec/status/terminating/final-delete coverage.
 
 - [ ] T022 [P] [US2] Add typed/generic Product watch contract tests for full envelopes, selectors, bootstrap, replay, expiry, bookmarks, and authorization-before-cursor behavior in `tests/contract/product_watch_test.go`.
-- [ ] T023 [US2] Add Product event conversion and generic `watchResources(kind: "Product")` routing from the Resource Watch journal in `gitstore-api/internal/graph/resolver/{watch.go,product_watch.go}`.
-- [ ] T024 [US2] Replace eventbus-backed `watchProducts` with the durable typed Product adapter in `gitstore-api/internal/graph/resolver/product.resolvers.go`.
+- [X] T023 [US2] Add Product event conversion and generic `watchResources(kind: "Product")` routing from the Resource Watch journal in `gitstore-api/internal/graph/resolver/{watch.go,product_watch.go}`.
+- [X] T024 [US2] Replace eventbus-backed `watchProducts` with the durable typed Product adapter in `gitstore-api/internal/graph/resolver/product.resolvers.go`.
 - [ ] T025 [P] [US2] Add Product lookup/list/node/relationship/count cross-namespace authorization and no-disclosure tests in `gitstore-api/internal/graph/resolver/product_authorization_test.go`.
 - [ ] T026 [US2] Enforce private authorized Product reads and full lifecycle metadata conversion in `gitstore-api/internal/graph/resolver/{product.resolvers.go,converters.go}`.
 - [X] T027 [US2] Migrate Product controller ListWatcher bootstrap/list/drain/recovery from eventbus cursors to the typed durable `watchProducts` stream in `gitstore-controller-manager/internal/listwatch/graphql_listwatcher.go` and `gitstore-controller-manager/tests/contract/product_listwatcher_test.go`.
-- [ ] T028 [US2] Add two-API-replica Product watch replacement, replay, expiry, and materializer-unavailability integration coverage in `tests/integration/product_watch_test.go`.
+- [X] T028 [US2] Add two-API-replica Product watch replacement, replay, expiry, and materializer-unavailability integration coverage in `tests/integration/product_watch_test.go`.
 - [X] T053 [US2] Correct the Namespace controller ListWatcher to use the typed durable `watchNamespaces` stream rather than `watchResources(kind: "Namespace")`; preserve bootstrap/replay/expiry behavior and add typed-stream contract coverage in `gitstore-controller-manager/internal/listwatch/{namespace_listwatcher.go,namespace_listwatcher_test.go}`.
 
 ---

@@ -9,12 +9,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/gqlerror"
+	"go.uber.org/zap"
 )
 
 // Product's typed and generic streams must be two projections of the same
@@ -75,6 +78,31 @@ func TestTypedAndGenericProductWatchShareDurableJournal(t *testing.T) {
 
 func TestTypedProductWatchBootstrapCursorNormalizes(t *testing.T) {
 	assert.Equal(t, watchjournal.BootstrapCursor, normalizeResourceWatchCursor(productWatchBootstrapCursor))
+}
+
+// Product watches must fail closed when the shared journal materializer is not
+// ready. In particular, they must not fall back to an event-bus cursor that
+// cannot be resumed on another API replica.
+func TestProductWatchFailsClosedWhenDurableReadersAreDisabled(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	r, err := NewResolver(ResolverDeps{
+		Store: store, Logger: zap.NewNop(), ResourceJournal: journal,
+		NamespaceWatch: config.NamespaceWatchConfig{ReadersEnabled: false},
+	})
+	require.NoError(t, err)
+
+	invalidCursor := "revealing-invalid-cursor"
+	_, err = r.Subscription().WatchProducts(context.Background(), nil, nil, &invalidCursor)
+	require.Error(t, err)
+	assert.Equal(t, "WATCH_UNAVAILABLE", err.(*gqlerror.Error).Extensions["code"])
+	assert.Equal(t, "MATERIALIZER_NOT_READY", err.(*gqlerror.Error).Extensions["reason"])
+
+	_, err = r.Subscription().WatchResources(context.Background(), "Product", nil, nil, &invalidCursor)
+	require.Error(t, err)
+	assert.Equal(t, "WATCH_UNAVAILABLE", err.(*gqlerror.Error).Extensions["code"])
+	assert.Equal(t, "MATERIALIZER_NOT_READY", err.(*gqlerror.Error).Extensions["reason"])
 }
 
 // Bootstrap is a shared journal operation: a typed Product subscriber and a

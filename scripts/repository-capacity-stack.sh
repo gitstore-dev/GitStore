@@ -225,8 +225,10 @@ run_alpha() {
   if [[ "${capacity_target}" == "product" ]]; then
     PRODUCT_WATCH_API_A=http://127.0.0.1:4000 \
     PRODUCT_WATCH_API_B=http://127.0.0.1:4001 \
+	PRODUCT_WATCH_API_REPLACEMENT=http://127.0.0.1:4001 \
+	PRODUCT_WATCH_REPLACEMENT_TRIGGER_FILE="${trigger_file}" \
     PRODUCT_WATCH_TOKEN_FILE="${token_file}" \
-    go -C "${repo_root}/tests/integration" test -count=1 -run '^TestProductWatchCrossReplicaBootstrapAndResume$$' .
+    go -C "${repo_root}/tests/integration" test -count=1 -run '^TestProductWatch' .
   fi
   validate_controllers_post_run
   cleanup_replacement_watcher
