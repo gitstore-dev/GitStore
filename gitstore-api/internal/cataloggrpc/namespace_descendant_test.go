@@ -37,7 +37,7 @@ func TestNamespaceDescendantAdmissionConvergesDisjointResources(t *testing.T) {
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: older,
-		CommitSha:    older,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{xPath},
 		ActorSubject: "alice",
@@ -47,7 +47,7 @@ func TestNamespaceDescendantAdmissionConvergesDisjointResources(t *testing.T) {
 		RepositoryId: testRepoID,
 		OldCommitSha: older,
 		NewCommitSha: newer,
-		CommitSha:    newer,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{yPath},
 		ActorSubject: "bob",
@@ -79,7 +79,7 @@ func TestNamespaceDescendantAdmissionSameResourceUsesNewestContent(t *testing.T)
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: newer,
-		CommitSha:    newer,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 		ActorSubject: "bob",
@@ -117,7 +117,7 @@ func TestNamespaceDescendantSameResourceLeavesAuditToExactHeadHandler(t *testing
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: initial,
-		CommitSha:    initial,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 		ActorSubject: "seed",
@@ -132,7 +132,7 @@ func TestNamespaceDescendantSameResourceLeavesAuditToExactHeadHandler(t *testing
 		RepositoryId: testRepoID,
 		OldCommitSha: initial,
 		NewCommitSha: older,
-		CommitSha:    older,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 		ActorSubject: "alice",
@@ -152,7 +152,7 @@ func TestNamespaceDescendantSameResourceLeavesAuditToExactHeadHandler(t *testing
 		RepositoryId: testRepoID,
 		OldCommitSha: older,
 		NewCommitSha: newer,
-		CommitSha:    newer,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 		ActorSubject: "bob",
@@ -192,7 +192,7 @@ func TestNamespaceDescendantDisjointCommitKeepsRequestAudit(t *testing.T) {
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: older,
-		CommitSha:    older,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{xPath},
 		ActorSubject: "alice",
@@ -214,7 +214,7 @@ func TestNamespaceDescendantDisjointCommitKeepsRequestAudit(t *testing.T) {
 		RepositoryId: testRepoID,
 		OldCommitSha: older,
 		NewCommitSha: newer,
-		CommitSha:    newer,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{yPath},
 		ActorSubject: "bob",

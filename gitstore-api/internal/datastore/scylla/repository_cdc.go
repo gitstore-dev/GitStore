@@ -319,4 +319,3 @@ func (m *repositoryCDCProgressManager) SaveProgress(ctx context.Context, generat
 func repositoryCDCProgressKey(generation time.Time, table string, streamID scyllacdc.StreamID) string {
 	return cdcProgressKey(generation, table, streamID)
 }
-func repositoryCDCStorageKey(key string) string { return repositoryCDCSource + ":" + key }

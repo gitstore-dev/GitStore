@@ -484,16 +484,6 @@ func categoryTaxonomyToJSONMap(c *datastore.CategoryTaxonomy) map[string]any {
 	return out
 }
 
-// productEventMatchesFilters reports whether ev satisfies the namespace
-// filter for a watchProducts subscription (spec 042, mirroring
-// categoryEventMatchesFilters). A nil/empty namespace means no filter.
-func productEventMatchesFilters(ev eventbus.Event, namespace *string) bool {
-	if namespace == nil || *namespace == "" {
-		return true
-	}
-	return ev.Namespace == *namespace
-}
-
 // productEventMatchesSelector reports whether ev's underlying Product's
 // labels satisfy selector, mirroring categoryEventMatchesSelector.
 func productEventMatchesSelector(ev eventbus.Event, selector *model.LabelSelectorInput) bool {

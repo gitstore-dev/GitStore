@@ -108,7 +108,7 @@ func TestNamespaceReplicaStaleUpdateCannotOverwriteConcurrentDeletion(t *testing
 			RepositoryId: testRepoID,
 			OldCommitSha: oldCommit,
 			NewCommitSha: newCommit,
-			CommitSha:    newCommit,
+
 			RefName:      "refs/heads/main",
 			ChangedPaths: []string{path},
 		})
@@ -176,7 +176,7 @@ func TestNamespaceReplicaStaleDeleteCannotOverwriteConcurrentUpdate(t *testing.T
 		RepositoryId: testRepoID,
 		OldCommitSha: oldCommit,
 		NewCommitSha: newCommit,
-		CommitSha:    newCommit,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 	})

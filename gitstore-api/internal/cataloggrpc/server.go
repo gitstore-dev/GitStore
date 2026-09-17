@@ -1101,6 +1101,7 @@ func (s *Server) AdmitResources(
 
 	newCommit := req.GetNewCommitSha()
 	if newCommit == "" {
+		//lint:ignore SA1019 compatibility fallback for pre-new_commit_sha git-service releases
 		newCommit = req.GetCommitSha()
 	}
 	if newCommit == "" {
@@ -1633,7 +1634,7 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 		}
 		owners, ok := s.store.(datastore.OwnerReferenceStore)
 		if !ok {
-			return fmt.Errorf("Product deletion requires owner-reference datastore support")
+			return fmt.Errorf("product deletion requires owner-reference datastore support")
 		}
 		lookupStarted := time.Now()
 		blocked, checkErr := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{
@@ -1641,16 +1642,16 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 		}, r.UID)
 		productDeletionDependentLookupDuration.Observe(time.Since(lookupStarted).Seconds())
 		if checkErr != nil {
-			return fmt.Errorf("check Product deletion dependents: %w", checkErr)
+			return fmt.Errorf("check product deletion dependents: %w", checkErr)
 		}
 		if blocked {
 			productDeletionBlockedTotal.Inc()
 			s.log.Info("Product deletion blocked by ProductVariant owner reference", zap.String("namespace", r.Namespace), zap.String("name", r.Name), zap.String("uid", r.UID))
-			return fmt.Errorf("Product %s/%s has blocking ProductVariants", r.Namespace, r.Name)
+			return fmt.Errorf("product %s/%s has blocking ProductVariants", r.Namespace, r.Name)
 		}
 		lifecycle, ok := s.store.(datastore.ProductLifecycleStore)
 		if !ok {
-			return fmt.Errorf("Product deletion requires lifecycle datastore support")
+			return fmt.Errorf("product deletion requires lifecycle datastore support")
 		}
 		terminating, markErr := lifecycle.MarkProductTerminating(ctx, r.UID, r.ResourceVersion, "gitstore.dev/foreground-deletion", s.clock.Now().UTC())
 		if markErr != nil {

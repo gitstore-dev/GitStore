@@ -64,7 +64,7 @@ type productCDCConsumerFactory struct{ sequencer *namespaceCDCSequencer }
 
 func (f *productCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, input scyllacdc.CreateChangeConsumerInput) (scyllacdc.ChangeConsumer, error) {
 	if f.sequencer == nil || input.ProgressReporter == nil {
-		return productCDCFailedConsumer{fmt.Errorf("Product CDC consumer is not configured")}, nil
+		return productCDCFailedConsumer{fmt.Errorf("product CDC consumer is not configured")}, nil
 	}
 	streamID := encodeCDCStreamID(input.StreamID)
 	if err := f.sequencer.Register(ctx, streamID); err != nil {

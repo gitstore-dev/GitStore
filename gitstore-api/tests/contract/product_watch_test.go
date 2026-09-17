@@ -130,7 +130,7 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 
 	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
 		RepositoryId: repoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -223,7 +223,6 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 
 	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
 		RepositoryId: repoID,
-		CommitSha:    a,
 		OldCommitSha: zero,
 		NewCommitSha: a,
 		RefName:      "refs/heads/main",
@@ -240,7 +239,6 @@ func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 	current = b
 	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
 		RepositoryId: repoID,
-		CommitSha:    b,
 		OldCommitSha: a,
 		NewCommitSha: b,
 		RefName:      "refs/heads/main",

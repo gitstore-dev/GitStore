@@ -181,7 +181,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: a,
-		CommitSha:    a,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 		ActorSubject: "alice",
@@ -210,7 +210,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: b,
-		CommitSha:    b,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 	})
@@ -229,7 +229,7 @@ func TestAdmitResources_NamespaceCreateUpdateAndTierDemotion(t *testing.T) {
 		RepositoryId: testRepoID,
 		OldCommitSha: b,
 		NewCommitSha: c,
-		CommitSha:    c,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 	})
@@ -274,7 +274,7 @@ spec:
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: a,
-		CommitSha:    a,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 	})
@@ -291,7 +291,7 @@ spec:
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: b,
-		CommitSha:    b,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 	})
@@ -363,7 +363,7 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 			RepositoryId: testRepoID,
 			OldCommitSha: initial,
 			NewCommitSha: a,
-			CommitSha:    a,
+
 			RefName:      "refs/heads/main",
 			ChangedPaths: []string{path},
 		})
@@ -383,7 +383,7 @@ func TestAdmitResources_NamespaceOlderCommitCannotOverwriteNewerAdmission(t *tes
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: b,
-		CommitSha:    b,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 	})
@@ -419,7 +419,7 @@ func TestAdmitResources_NamespaceBootstrapNameRejected(t *testing.T) {
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: a,
-		CommitSha:    a,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 	})
@@ -638,7 +638,7 @@ func TestValidateAndAdmitResources_File(t *testing.T) {
 	require.NotEmpty(t, invalid.Errors)
 	assert.Contains(t, invalid.Errors[0].Message, "spec.source.type")
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, CommitSha: commit, RefName: "refs/heads/main",
+		RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
@@ -693,12 +693,12 @@ func TestAdmitResources_FileContentTypeIsImmutable(t *testing.T) {
 	})
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, CommitSha: a, RefName: "refs/heads/main",
+		RepositoryId: testRepoID, NewCommitSha: a, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	current = b
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, CommitSha: b, OldCommitSha: a, NewCommitSha: b, RefName: "refs/heads/main",
+		RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
@@ -706,7 +706,7 @@ func TestAdmitResources_FileContentTypeIsImmutable(t *testing.T) {
 	assert.Contains(t, string(file.Spec), `"ContentType":"image/jpeg"`)
 	current = c
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, CommitSha: c, OldCommitSha: b, NewCommitSha: c, RefName: "refs/heads/main",
+		RepositoryId: testRepoID, OldCommitSha: b, NewCommitSha: c, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	file, err = store.GetFileByName(context.Background(), "gitstore", "hero")
@@ -750,7 +750,7 @@ func TestAdmitResources_NewProduct_Created(t *testing.T) {
 	})
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -805,7 +805,7 @@ func TestAdmitResources_NewProductWithCategoryRef_PublishesAddedEvent(t *testing
 
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -846,7 +846,7 @@ func TestAdmitResources_UpdateProductCategoryRef_PublishesModifiedEvent(t *testi
 	ref = "electronics"
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -860,7 +860,7 @@ func TestAdmitResources_UpdateProductCategoryRef_PublishesModifiedEvent(t *testi
 	ref = "computers"
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("b", 40),
+		NewCommitSha: strings.Repeat("b", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -899,7 +899,7 @@ func TestAdmitResources_UpdateProductNonCategoryField_DoesNotPublishEvent(t *tes
 
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -912,7 +912,7 @@ func TestAdmitResources_UpdateProductNonCategoryField_DoesNotPublishEvent(t *tes
 	title = "Widget Deluxe"
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("b", 40),
+		NewCommitSha: strings.Repeat("b", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -949,7 +949,7 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 	// First admission — creates the product
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -963,7 +963,7 @@ func TestAdmitResources_ExistingProduct_Updated(t *testing.T) {
 	// Second admission — updates the product
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("b", 40),
+		NewCommitSha: strings.Repeat("b", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -993,7 +993,7 @@ func TestAdmitResources_TwoProducts_BothStored(t *testing.T) {
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1023,7 +1023,7 @@ func TestAdmitResources_OneParseFailure_OtherStored(t *testing.T) {
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err, "AdmitResources must not fail even when one product parse fails")
@@ -1050,7 +1050,7 @@ func TestAdmitResources_AdmissionAcceptedConditionSet(t *testing.T) {
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1271,7 +1271,7 @@ func TestAdmitResources_CategoryTaxonomy_Created(t *testing.T) {
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1303,7 +1303,7 @@ func TestAdmitResources_CategoryTaxonomy_Updated(t *testing.T) {
 	// First admission
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1316,7 +1316,7 @@ func TestAdmitResources_CategoryTaxonomy_Updated(t *testing.T) {
 	// Second admission — update
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("b", 40),
+		NewCommitSha: strings.Repeat("b", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1341,7 +1341,7 @@ func TestAdmitResources_CategoryTaxonomy_AdmissionAcceptedCondition(t *testing.T
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1380,7 +1380,7 @@ func TestAdmitResources_CategoryTaxonomy_RootAncestorPath(t *testing.T) {
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1590,7 +1590,7 @@ func TestAdmitResources_IntraPushCycle_BothStoredWithAcyclicFalse(t *testing.T) 
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1639,7 +1639,7 @@ func TestAdmitResources_ValidChain_BothStoredWithAcyclicTrue(t *testing.T) {
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1687,7 +1687,7 @@ func TestAdmitResources_RootCategory_AncestorPathEqualsName(t *testing.T) {
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1712,7 +1712,7 @@ func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T
 	srv := newCatalogServer(t, memStore, git1)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1729,7 +1729,7 @@ func TestAdmitResources_ChildWithStoredParent_AncestorPathInherited(t *testing.T
 	srv2 := newCatalogServer(t, memStore, git2)
 	_, err = srv2.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("b", 40),
+		NewCommitSha: strings.Repeat("b", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1765,7 +1765,7 @@ func TestAdmitResources_CoCreation_ParentAndChildInSamePush(t *testing.T) {
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1788,7 +1788,7 @@ func TestAdmitResources_ChildWithMissingParent_TentativeRoot_ParentResolvedFalse
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1838,7 +1838,7 @@ func TestAdmitResources_DeepCoCreation_GrandchildAncestorPath(t *testing.T) {
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -1872,7 +1872,7 @@ func TestAdmitResources_TailCycle_AllMembersMarkedAcyclicFalse(t *testing.T) {
 	srv := newCatalogServer(t, memStore, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -2012,7 +2012,7 @@ body
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    "abc123",
+		NewCommitSha: "abc123",
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -2066,7 +2066,7 @@ body
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    "abc123",
+		NewCommitSha: "abc123",
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -2104,7 +2104,7 @@ body
 	srv := newCatalogServer(t, store, git)
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    "abc123",
+		NewCommitSha: "abc123",
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -2286,7 +2286,6 @@ func admitDelta(t *testing.T, srv *cataloggrpc.Server, oldCommit, newCommit stri
 	t.Helper()
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    newCommit,
 		OldCommitSha: oldCommit,
 		NewCommitSha: newCommit,
 		RefName:      "refs/heads/main",
@@ -2355,7 +2354,6 @@ func TestAdmitResources_DeleteRejectsConcurrentReownership(t *testing.T) {
 	current = b
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    b,
 		OldCommitSha: a,
 		NewCommitSha: b,
 		RefName:      "refs/heads/main",
@@ -2633,8 +2631,8 @@ func TestAdmitResources_EmptySHAFromResolveRef_AdmissionProceeds(t *testing.T) {
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: a,
-		CommitSha:    a,
-		RefName:      "refs/heads/main",
+
+		RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -2662,7 +2660,7 @@ func TestExtraValidatingPolicies_CalledForAdmittedResources(t *testing.T) {
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -2703,7 +2701,7 @@ func TestDeniedAdmission_BlocksStorage(t *testing.T) {
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -2744,8 +2742,8 @@ func TestAdmitResources_BranchDeleteRecreated_SkipsDeleteAdmission(t *testing.T)
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: zero,
-		CommitSha:    zero,
-		RefName:      "refs/heads/main",
+
+		RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -2777,7 +2775,7 @@ func TestAdmitResources_BranchDeleteRefGone_ProceedsWithDeletion(t *testing.T) {
 	seedSrv := newCatalogServer(t, store, seedGit)
 	_, err := seedSrv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    a,
+		NewCommitSha: a,
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -2804,8 +2802,8 @@ func TestAdmitResources_BranchDeleteRefGone_ProceedsWithDeletion(t *testing.T) {
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: zero,
-		CommitSha:    zero,
-		RefName:      "refs/heads/main",
+
+		RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	// Git deletion starts foreground termination. The Product remains visible
@@ -2857,8 +2855,8 @@ func TestAdmitResourcesLegacyPathAbsent(t *testing.T) {
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    a,
 		NewCommitSha: a,
+
 		// OldCommitSha is intentionally empty — was the legacy trigger.
 		OldCommitSha: "",
 		RefName:      "refs/heads/main",
@@ -2905,7 +2903,6 @@ func TestAdmitResourcesChangedPathsFastPath(t *testing.T) {
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    b,
 		OldCommitSha: a,
 		NewCommitSha: b,
 		RefName:      "refs/heads/main",
@@ -3005,7 +3002,7 @@ func TestAdmitResources_OperationSetCorrectly(t *testing.T) {
 
 	req := &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	}
 

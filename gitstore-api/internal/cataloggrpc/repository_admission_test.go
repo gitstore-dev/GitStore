@@ -120,7 +120,7 @@ func TestAdmitResources_RepositoryLifecycleWritesCanonicalNamespaceOwnerReferenc
 		second: {path: repositoryManifestFor("catalog", "acme", "trunk", "premium")},
 	}))
 
-	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, OldCommitSha: zero, NewCommitSha: first, CommitSha: first, RefName: "refs/heads/main", ChangedPaths: []string{path}})
+	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, OldCommitSha: zero, NewCommitSha: first, RefName: "refs/heads/main", ChangedPaths: []string{path}})
 	require.NoError(t, err)
 	createdMapping, err := store.LookupRepository(ctx, "acme", "catalog")
 	require.NoError(t, err)
@@ -135,7 +135,7 @@ func TestAdmitResources_RepositoryLifecycleWritesCanonicalNamespaceOwnerReferenc
 	require.Equal(t, []catalog.OwnerReference{{APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace", Name: "acme", UID: namespace.UID, BlockOwnerDeletion: true}}, refs)
 
 	current = second
-	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: second, CommitSha: second, RefName: "refs/heads/main", ChangedPaths: []string{path}})
+	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: second, RefName: "refs/heads/main", ChangedPaths: []string{path}})
 	require.NoError(t, err)
 	updated, err := store.GetRepository(ctx, created.UID)
 	require.NoError(t, err)
@@ -251,7 +251,7 @@ func TestAdmitResources_RepositoryRejectsDowngradeAndImmutableIdentity(t *testin
 	assert.Equal(t, "spec.storageClass", validation.Errors[0].Field)
 	assert.Equal(t, "immutable_downgrade", validation.Errors[0].Constraint)
 
-	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: downgrade, CommitSha: downgrade, RefName: "refs/heads/main", ChangedPaths: []string{path}})
+	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: downgrade, RefName: "refs/heads/main", ChangedPaths: []string{path}})
 	require.NoError(t, err)
 	unchanged, err := store.GetRepository(ctx, uid)
 	require.NoError(t, err)
@@ -260,7 +260,7 @@ func TestAdmitResources_RepositoryRejectsDowngradeAndImmutableIdentity(t *testin
 	assert.Equal(t, int64(3), unchanged.Generation)
 
 	current = renamed
-	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: renamed, CommitSha: renamed, RefName: "refs/heads/main", ChangedPaths: []string{path}})
+	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: renamed, RefName: "refs/heads/main", ChangedPaths: []string{path}})
 	require.Error(t, err)
 	assert.Equal(t, codes.FailedPrecondition, grpcstatus.Code(err))
 	_, err = store.LookupRepository(ctx, "acme", "renamed")
@@ -289,7 +289,7 @@ func TestAdmitResources_RepositoryManifestRemovalStartsForegroundDeletion(t *tes
 		newCommit: {},
 	}))
 	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
-		RepositoryId: uid, OldCommitSha: oldCommit, NewCommitSha: newCommit, CommitSha: newCommit,
+		RepositoryId: uid, OldCommitSha: oldCommit, NewCommitSha: newCommit,
 		RefName: "refs/heads/main", ActorSubject: "mallory", ChangedPaths: []string{path},
 	})
 	require.NoError(t, err)
@@ -297,7 +297,7 @@ func TestAdmitResources_RepositoryManifestRemovalStartsForegroundDeletion(t *tes
 	require.NoError(t, err)
 	assert.Nil(t, notTerminating.DeletionTimestamp, "a non-system authoring repository must not delete Repository metadata")
 	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, OldCommitSha: oldCommit, NewCommitSha: newCommit, CommitSha: newCommit,
+		RepositoryId: testRepoID, OldCommitSha: oldCommit, NewCommitSha: newCommit,
 		RefName: "refs/heads/feature", ActorSubject: "mallory", ChangedPaths: []string{path},
 	})
 	require.NoError(t, err)
@@ -306,7 +306,7 @@ func TestAdmitResources_RepositoryManifestRemovalStartsForegroundDeletion(t *tes
 	assert.Nil(t, notTerminating.DeletionTimestamp, "a different ref must not delete the Repository owned by main")
 
 	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, OldCommitSha: oldCommit, NewCommitSha: newCommit, CommitSha: newCommit,
+		RepositoryId: testRepoID, OldCommitSha: oldCommit, NewCommitSha: newCommit,
 		RefName: "refs/heads/main", ActorSubject: "alice", ChangedPaths: []string{path},
 	})
 	require.NoError(t, err)
@@ -342,7 +342,7 @@ func TestAdmitResources_RepositoryRejectsBootstrapAndTerminatingNamespace(t *tes
 			path := "repositories/" + test.manifestName + ".md"
 			current := commit
 			srv := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{commit: {path: repositoryManifestFor(test.manifestName, "acme", "main", "standard")}}))
-			_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, OldCommitSha: strings.Repeat("0", 40), NewCommitSha: commit, CommitSha: commit, RefName: "refs/heads/main", ChangedPaths: []string{path}})
+			_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{RepositoryId: testRepoID, OldCommitSha: strings.Repeat("0", 40), NewCommitSha: commit, RefName: "refs/heads/main", ChangedPaths: []string{path}})
 			require.NoError(t, err)
 			_, err = store.LookupRepository(ctx, "acme", test.manifestName)
 			assert.ErrorIs(t, err, datastore.ErrNotFound)
