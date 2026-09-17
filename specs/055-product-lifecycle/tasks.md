@@ -113,7 +113,7 @@ reassignment and replacement; only affected category counts converge.
 - [X] T037 [P] [US4] Add durable Product-event category enqueue tests for create, delete, category reassignment, and status/finalizer non-fan-out in `gitstore-controller-manager/internal/categorytaxonomy/products_test.go`.
 - [X] T038 [US4] Route the existing Product-to-CategoryTaxonomy enqueue handler through durable Product events while preserving affected-only behavior in `gitstore-controller-manager/internal/categorytaxonomy/{products.go,watch.go}`.
 - [ ] T039 [US4] Add two-controller stale-status and replica-handoff integration tests in `tests/integration/product_controller_convergence_test.go`.
-- [ ] T040 [US4] Make Product controller status writes preserve other system-owned status and recompute after optimistic conflicts in `gitstore-controller-manager/internal/product/reconciler.go` and `gitstore-api/internal/graph/resolver/product_status.go`.
+- [X] T040 [US4] Make Product controller status writes preserve other system-owned status and recompute after optimistic conflicts in `gitstore-controller-manager/internal/product/reconciler.go` and `gitstore-api/internal/graph/resolver/product_status.go`.
 
 ---
 
