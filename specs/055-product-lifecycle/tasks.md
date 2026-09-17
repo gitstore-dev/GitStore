@@ -55,10 +55,10 @@ canonical admission path and stable Product identity.
 revision/identity, then submit invalid input and observe no partial Product.
 
 - [ ] T016 [P] [US1] Add Git-service SchemaValidation and Product-admission tests for generic `OperationDelete`, Product provenance, stable UID/mutable generation, author-system-field rejection, and deletion transition in `gitstore-git-service/src/git/hooks/` and `gitstore-api/internal/cataloggrpc/product_lifecycle_test.go`.
-- [ ] T017 [US1] Generalize the CategoryTaxonomy proposed-tree SchemaValidation path to `OperationDelete` for every supported resource type; refactor Product admission/deletion to preserve provenance, use lifecycle state rather than hard delete, and emit every committed transition in `gitstore-git-service/src/git/hooks/` and `gitstore-api/internal/cataloggrpc/server.go`.
+- [X] T017 [US1] Generalize the CategoryTaxonomy proposed-tree SchemaValidation path to `OperationDelete` for every supported resource type; refactor Product admission/deletion to preserve provenance, use lifecycle state rather than hard delete, and emit every committed transition in `gitstore-git-service/src/git/hooks/` and `gitstore-api/internal/cataloggrpc/server.go`.
 - [ ] T018 [P] [US1] Add resolver contract tests for create/update/delete commit-and-wait behavior, non-system provenance update routing, implicit `gitstore-system` create routing, and ID delete input in `gitstore-api/internal/graph/resolver/product_lifecycle_test.go`.
-- [ ] T019 [US1] Implement Product GraphQL create/update/delete in `gitstore-api/internal/graph/resolver/product.resolvers.go`: create targets `gitstore-system`; update resolves stored repository/source path; all await admitted revision.
-- [ ] T020 [US1] Return `ProductDeletionOutcome` and the terminating Product envelope from `deleteProduct` in `gitstore-api/internal/graph/resolver/product.resolvers.go`.
+- [X] T019 [US1] Implement Product GraphQL create/update/delete in `gitstore-api/internal/graph/resolver/product.resolvers.go`: create targets `gitstore-system`; update resolves stored repository/source path; all await admitted revision.
+- [X] T020 [US1] Return `ProductDeletionOutcome` and the terminating Product envelope from `deleteProduct` in `gitstore-api/internal/graph/resolver/product.resolvers.go`.
 - [ ] T021 [US1] Add Git-push versus GraphQL end-to-end admission parity coverage in `tests/integration/product_lifecycle_test.go`.
 
 ---
@@ -75,7 +75,7 @@ cursor, and verify create/spec/status/terminating/final-delete coverage.
 - [X] T023 [US2] Add Product event conversion and generic `watchResources(kind: "Product")` routing from the Resource Watch journal in `gitstore-api/internal/graph/resolver/{watch.go,product_watch.go}`.
 - [X] T024 [US2] Replace eventbus-backed `watchProducts` with the durable typed Product adapter in `gitstore-api/internal/graph/resolver/product.resolvers.go`.
 - [ ] T025 [P] [US2] Add Product lookup/list/node/relationship/count cross-namespace authorization and no-disclosure tests in `gitstore-api/internal/graph/resolver/product_authorization_test.go`.
-- [ ] T026 [US2] Enforce private authorized Product reads and full lifecycle metadata conversion in `gitstore-api/internal/graph/resolver/{product.resolvers.go,converters.go}`.
+- [X] T026 [US2] Enforce private authorized Product reads and full lifecycle metadata conversion in `gitstore-api/internal/graph/resolver/{product.resolvers.go,converters.go}`.
 - [X] T027 [US2] Migrate Product controller ListWatcher bootstrap/list/drain/recovery from eventbus cursors to the typed durable `watchProducts` stream in `gitstore-controller-manager/internal/listwatch/graphql_listwatcher.go` and `gitstore-controller-manager/tests/contract/product_listwatcher_test.go`.
 - [X] T028 [US2] Add two-API-replica Product watch replacement, replay, expiry, and materializer-unavailability integration coverage in `tests/integration/product_watch_test.go`.
 - [X] T053 [US2] Correct the Namespace controller ListWatcher to use the typed durable `watchNamespaces` stream rather than `watchResources(kind: "Namespace")`; preserve bootstrap/replay/expiry behavior and add typed-stream contract coverage in `gitstore-controller-manager/internal/listwatch/{namespace_listwatcher.go,namespace_listwatcher_test.go}`.
@@ -94,10 +94,10 @@ finalize exactly once after a fresh clear check.
 - [X] T029 [P] [US3] Add ProductVariant admission tests for canonical blocking Product owner references and terminating-parent rejection in `gitstore-api/internal/cataloggrpc/server_test.go`.
 - [X] T030 [US3] Resolve and persist ProductVariant-to-Product blocking owner references, including deferred resolution and terminating-target rejection, in `gitstore-api/internal/cataloggrpc/server.go` and `gitstore-api/internal/catalog/product_variant_policy.go`.
 - [ ] T031 [P] [US3] Add resolver deletion matrix tests for blockers, ID lookup authorization, started/already-terminating outcomes, and no cascade in `gitstore-api/internal/graph/resolver/product_deletion_resolver_test.go`.
-- [ ] T032 [US3] Enforce indexed pre-mark blocker rejection and expected-version terminating state in Product Git/GraphQL deletion handling in `gitstore-api/internal/{cataloggrpc/server.go,graph/resolver/product.resolvers.go}`.
+- [X] T032 [US3] Enforce indexed pre-mark blocker rejection and expected-version terminating state in Product Git/GraphQL deletion handling in `gitstore-api/internal/{cataloggrpc/server.go,graph/resolver/product.resolvers.go}`.
 - [ ] T033 [P] [US3] Add Product controller finalizer/retry/conflict tests in `gitstore-controller-manager/internal/product/reconciler_test.go`.
-- [ ] T034 [US3] Implement dedicated Product reconciliation, fresh blocker check, bounded requeue, status ownership, and finalizer completion client in `gitstore-controller-manager/internal/product/{reconciler.go,graphql_client.go}`.
-- [ ] T035 [US3] Register Product list/watch/cache/reconciler ownership in `gitstore-controller-manager/cmd/controller/main.go`.
+- [X] T034 [US3] Implement dedicated Product reconciliation, fresh blocker check, bounded requeue, status ownership, and finalizer completion client in `gitstore-controller-manager/internal/product/{reconciler.go,graphql_client.go}`.
+- [X] T035 [US3] Register Product list/watch/cache/reconciler ownership in `gitstore-controller-manager/cmd/controller/main.go`.
 - [ ] T036 [US3] Add deletion race, controller-replacement, and final-removal-once integration coverage in `tests/integration/product_deletion_lifecycle_test.go`.
 
 ---
@@ -110,8 +110,8 @@ of CategoryTaxonomy status or breaking category counts.
 **Independent test**: Run two controllers through Product add/delete/category
 reassignment and replacement; only affected category counts converge.
 
-- [ ] T037 [P] [US4] Add durable Product-event category enqueue tests for create, delete, category reassignment, and status/finalizer non-fan-out in `gitstore-controller-manager/internal/categorytaxonomy/products_test.go`.
-- [ ] T038 [US4] Route the existing Product-to-CategoryTaxonomy enqueue handler through durable Product events while preserving affected-only behavior in `gitstore-controller-manager/internal/categorytaxonomy/{products.go,watch.go}`.
+- [X] T037 [P] [US4] Add durable Product-event category enqueue tests for create, delete, category reassignment, and status/finalizer non-fan-out in `gitstore-controller-manager/internal/categorytaxonomy/products_test.go`.
+- [X] T038 [US4] Route the existing Product-to-CategoryTaxonomy enqueue handler through durable Product events while preserving affected-only behavior in `gitstore-controller-manager/internal/categorytaxonomy/{products.go,watch.go}`.
 - [ ] T039 [US4] Add two-controller stale-status and replica-handoff integration tests in `tests/integration/product_controller_convergence_test.go`.
 - [ ] T040 [US4] Make Product controller status writes preserve other system-owned status and recompute after optimistic conflicts in `gitstore-controller-manager/internal/product/reconciler.go` and `gitstore-api/internal/graph/resolver/product_status.go`.
 
@@ -140,16 +140,16 @@ release candidates, and never rewrites active snapshots.
 unchanged active snapshot, then reject a release candidate that explicitly
 includes it or its child variant.
 
-- [ ] T044 [P] [US6] Add Product lifecycle-state validation and admission tests in `gitstore-api/internal/cataloggrpc/product_retirement_test.go`.
-- [ ] T045 [US6] Implement `spec.lifecycle.state` validation/defaulting and persisted admission semantics in `gitstore-api/internal/cataloggrpc/server.go` and `gitstore-api/internal/catalog/product.go`.
+- [X] T044 [P] [US6] Add Product lifecycle-state validation and admission tests in `gitstore-api/internal/cataloggrpc/product_retirement_test.go`.
+- [X] T045 [US6] Implement `spec.lifecycle.state` validation/defaulting and persisted admission semantics in `gitstore-api/internal/cataloggrpc/server.go` and `gitstore-api/internal/catalog/product.go`.
 - [ ] T046 [P] [US6] Add release-preparation compatibility contract tests without implementing publication resources in `tests/contract/product_retirement_contract_test.go`.
-- [ ] T047 [US6] Document Product retirement’s release-candidate rejection contract and immutable-publication boundary in `docs/products/product-spec.md` and `docs/products/publication-lifecycle.md`.
+- [X] T047 [US6] Document Product retirement’s release-candidate rejection contract and immutable-publication boundary in `docs/products/product-spec.md` and `docs/products/publication-lifecycle.md`.
 
 ---
 
 ## Phase 9: Polish, rollout, and production evidence
 
-- [ ] T048 [P] Add Product lifecycle/watch rollout, mixed-version deny, rollback, cursor recovery, and finalizer operator guidance in `docs/runbooks/product-lifecycle.md` and `docs/configuration.md`.
+- [X] T048 [P] Add Product lifecycle/watch rollout, mixed-version deny, rollback, cursor recovery, and finalizer operator guidance in `docs/runbooks/product-lifecycle.md` and `docs/configuration.md`.
 - [ ] T049 [P] Complete bounded overload, observability, and alert assertions for Product journal/materializer/controller metrics in `tests/contract/product_observability_test.go`.
 - [ ] T050 Implement the full two-API/two-controller Git-push/GraphQL/watch/deletion-race capacity verifier in `tests/capacity/profiles/product-lifecycle.js` and Makefile evidence export in `Makefile`.
 - [ ] T051 Implement Product lifecycle replacement/materializer/mid-deletion chaos assertions in `tests/chaos/profiles/product-lifecycle.json`.
