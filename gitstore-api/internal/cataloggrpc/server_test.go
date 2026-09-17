@@ -1216,6 +1216,25 @@ func TestValidateResources_ProductAndCategoryTaxonomy_BothValidated(t *testing.T
 	assert.Empty(t, resp.Errors)
 }
 
+func TestValidateResources_ProductLifecycleState(t *testing.T) {
+	srv := newCatalogServer(t, nil, nil)
+	for _, tc := range []struct {
+		name, state string
+		accepted    bool
+	}{
+		{name: "active", state: "ACTIVE", accepted: true},
+		{name: "retired", state: "RETIRED", accepted: true},
+		{name: "invalid", state: "ARCHIVED", accepted: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := strings.Replace(string(makeProduct("widget")), "  title: widget", "  title: widget\n  lifecycle:\n    state: "+tc.state, 1)
+			response, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{RepositoryId: testRepoID, Blobs: []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: []byte(content)}}})
+			require.NoError(t, err)
+			assert.Equal(t, tc.accepted, response.Accepted)
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // T020: AdmitResources — CategoryTaxonomy admission
 // ---------------------------------------------------------------------------
