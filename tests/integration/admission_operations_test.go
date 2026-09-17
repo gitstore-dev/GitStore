@@ -126,10 +126,7 @@ func queryProduct(t *testing.T, namespace, name string) *productQueryResult {
 func queryProductAbsent(t *testing.T, namespace, name string) bool {
 	t.Helper()
 	const (
-		// Product removal follows a durable watch and controller-owned finalizer.
-		// Its shipped delivery/backpressure contract is bounded at 30 seconds;
-		// leave a small scheduling margin for the integration Compose stack.
-		maxWait  = 35 * time.Second
+		maxWait  = 5 * time.Second
 		interval = 200 * time.Millisecond
 	)
 	deadline := time.Now().Add(maxWait)

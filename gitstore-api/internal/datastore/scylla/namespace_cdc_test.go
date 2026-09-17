@@ -494,6 +494,24 @@ func TestAssignCDCValueAllocatesNullableTimestamp(t *testing.T) {
 	assert.Equal(t, deletionAt, *decoded)
 }
 
+func TestAssignCDCValueFlattensNullableCollectionElements(t *testing.T) {
+	first, second := "first", "second"
+	var decoded []string
+
+	assignCDCValue([]*string{&first, &second}, &decoded)
+
+	assert.Equal(t, []string{"first", "second"}, decoded)
+}
+
+func TestAssignCDCValueFlattensCDCListPostimage(t *testing.T) {
+	first, second := gocql.TimeUUID(), gocql.TimeUUID()
+	var decoded []string
+
+	assignCDCValue(map[gocql.UUID]string{first: "first", second: "second"}, &decoded)
+
+	assert.ElementsMatch(t, []string{"first", "second"}, decoded)
+}
+
 func TestNamespaceCDCDeletionSuppressesUncommittedCreateRollback(t *testing.T) {
 	ready, err := (*scyllaDatastore)(nil).namespaceCDCDeletionReady(context.Background(), &datastore.Namespace{}, false)
 	require.NoError(t, err)

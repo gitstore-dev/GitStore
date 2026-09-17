@@ -24,6 +24,10 @@ type namespaceCDCTestRunner interface {
 	RunNamespaceCDC(context.Context, *watchjournal.Materializer, datastore.NamespaceWatchLease, time.Duration, time.Duration, func()) error
 }
 
+type productCDCTestRunner interface {
+	RunProductCDC(context.Context, *watchjournal.Materializer, datastore.ResourceWatchLease, time.Duration, time.Duration, func()) error
+}
+
 type namespaceWatchBatchAppender interface {
 	AppendBatch(context.Context, datastore.NamespaceWatchLease, []datastore.NamespaceWatchEvent, time.Duration) ([]datastore.NamespaceWatchEvent, error)
 }
@@ -486,6 +490,92 @@ func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
 		}
 	}
 	t.Fatalf("committed Namespace CDC change was not materialized into the durable journal; bounds_err=%v observed=%+v", lastBoundsErr, observed)
+}
+
+// Product foreground deletion is controller-driven, so the terminating
+// MODIFIED transition must reach the shared durable journal before a
+// controller can complete the finalizer.
+func TestProductCDCReaderMaterializesTerminationEvent(t *testing.T) {
+	store := newTestStore(t)
+	runner, ok := store.(productCDCTestRunner)
+	require.True(t, ok)
+	capable, ok := store.(datastore.ResourceWatchCapable)
+	require.True(t, ok)
+	journal := capable.ResourceWatchJournal()
+	lease, acquired, err := journal.AcquireLease(context.Background(), "product-integration-reader", time.Now().UTC(), 2*time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	materializer := watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: 7 * 24 * time.Hour})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	ready := make(chan struct{})
+	go func() {
+		errCh <- runner.RunProductCDC(ctx, materializer, lease, 14*24*time.Hour, 500*time.Millisecond, func() { close(ready) })
+	}()
+	select {
+	case <-ready:
+	case runErr := <-errCh:
+		require.NoError(t, runErr)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Product CDC reader did not become ready")
+	}
+
+	product := newProduct("cdc-products", "terminating-"+newID()[:8])
+	product.ResourceVersion = "1"
+	require.NoError(t, store.CreateProduct(context.Background(), product))
+
+	deadline := time.Now().Add(75 * time.Second)
+	cursor := datastore.ResourceWatchCursor{}
+	for time.Now().Before(deadline) {
+		bounds, boundsErr := journal.Bounds(context.Background())
+		require.NoError(t, boundsErr)
+		if cursor.Epoch == "" {
+			cursor.Epoch = bounds.Epoch
+			if bounds.Oldest > 0 {
+				cursor.Sequence = bounds.Oldest - 1
+			}
+		}
+		events, readErr := journal.ReadAfter(context.Background(), cursor, 256)
+		require.NoError(t, readErr)
+		for _, event := range events {
+			cursor.Sequence = event.Sequence
+			if event.Kind != "Product" || event.Name != product.Name || event.Type != datastore.ResourceWatchAdded {
+				continue
+			}
+			current, getErr := store.GetProduct(context.Background(), product.UID)
+			require.NoError(t, getErr)
+			terminating, markErr := store.(datastore.ProductLifecycleStore).MarkProductTerminating(context.Background(), current.UID, current.ResourceVersion, "gitstore.dev/foreground-deletion", time.Now().UTC())
+			require.NoError(t, markErr)
+
+			terminationDeadline := time.Now().Add(75 * time.Second)
+			for time.Now().Before(terminationDeadline) {
+				updates, updateErr := journal.ReadAfter(context.Background(), cursor, 256)
+				require.NoError(t, updateErr)
+				for _, update := range updates {
+					cursor.Sequence = update.Sequence
+					if update.Kind != "Product" || update.Name != product.Name || update.Type != datastore.ResourceWatchModified {
+						continue
+					}
+					var observed datastore.Product
+					require.NoError(t, json.Unmarshal(update.Payload, &observed))
+					require.Equal(t, terminating.ResourceVersion, observed.ResourceVersion)
+					require.NotNil(t, observed.DeletionTimestamp)
+					require.Contains(t, observed.Finalizers, "gitstore.dev/foreground-deletion")
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			t.Fatal("Product termination was not materialized into the durable journal")
+		}
+		select {
+		case runErr := <-errCh:
+			require.NoError(t, runErr)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	t.Fatal("Product creation was not materialized into the durable journal")
 }
 
 func namespaceCDCRowCount(t *testing.T) int64 {
