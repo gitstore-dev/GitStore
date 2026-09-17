@@ -126,10 +126,7 @@ func queryProduct(t *testing.T, namespace, name string) *productQueryResult {
 func queryProductAbsent(t *testing.T, namespace, name string) bool {
 	t.Helper()
 	const (
-		// A delete is durably observed through the Scylla projection path, which
-		// may lag the accepted Git push beyond the ordinary read-materialization
-		// budget under a loaded integration stack.
-		maxWait  = 10 * time.Second
+		maxWait  = 5 * time.Second
 		interval = 200 * time.Millisecond
 	)
 	deadline := time.Now().Add(maxWait)

@@ -293,6 +293,36 @@ func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t
 	require.Error(t, consumer.Consume(ctx, scyllacdc.Change{}))
 }
 
+func TestProductCDCConsumerFactorySignalsReadyAfterStreamRegistration(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = sequencer.Run(ctx) }()
+
+	stream := scyllacdc.StreamID("product-stream")
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{encodeCDCStreamID(stream)})
+	ready := make(chan struct{}, 1)
+	factory := &productCDCConsumerFactory{
+		sequencer: sequencer,
+		onReady: func() {
+			ready <- struct{}{}
+		},
+	}
+
+	consumer, err := factory.CreateChangeConsumer(ctx, scyllacdc.CreateChangeConsumerInput{
+		StreamID:         stream,
+		ProgressReporter: &scyllacdc.ProgressReporter{},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, consumer)
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("Product CDC readiness was not signalled after stream registration")
+	}
+}
+
 func TestNamespaceCDCSequencerRejectsStreamBehindRestoredFrontier(t *testing.T) {
 	base := time.Now().UTC()
 	store := &sequencerStore{}

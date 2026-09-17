@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -35,18 +36,16 @@ func (s *scyllaDatastore) RunProductCDC(ctx context.Context, materializer *watch
 	}
 	sequencerErr := make(chan error, 1)
 	go func() { sequencerErr <- sequencer.Run(runCtx); cancel() }()
+	factory := &productCDCConsumerFactory{sequencer: sequencer, onReady: ready}
 	reader, err := scyllacdc.NewReader(runCtx, &scyllacdc.ReaderConfig{
 		Session: s.session.Session, TableNames: []string{s.keyspace + ".products_by_namespace"}, Consistency: gocql.Quorum,
-		ChangeConsumerFactory: &productCDCConsumerFactory{sequencer: sequencer}, ProgressManager: progress, Logger: zapCDCLogger{s.log},
+		ChangeConsumerFactory: factory, ProgressManager: progress, Logger: zapCDCLogger{s.log},
 		Advanced: scyllacdc.AdvancedReaderConfig{ChangeAgeLimit: changeAgeLimit, ConfidenceWindowSize: confidenceWindow,
 			PostEmptyQueryDelay: 100 * time.Millisecond, PostNonEmptyQueryDelay: 100 * time.Millisecond,
 			PostFailedQueryDelay: 100 * time.Millisecond, MaxPostFailedQueryDelay: 2 * time.Second, TableMissingRetryLimit: 30},
 	})
 	if err != nil {
 		return fmt.Errorf("create Product CDC reader: %w", err)
-	}
-	if ready != nil {
-		ready()
 	}
 	readerErr := reader.Run(runCtx)
 	cancel()
@@ -60,7 +59,11 @@ func (s *scyllaDatastore) RunProductCDC(ctx context.Context, materializer *watch
 	return readerErr
 }
 
-type productCDCConsumerFactory struct{ sequencer *namespaceCDCSequencer }
+type productCDCConsumerFactory struct {
+	sequencer *namespaceCDCSequencer
+	onReady   func()
+	readyOnce sync.Once
+}
 
 func (f *productCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, input scyllacdc.CreateChangeConsumerInput) (scyllacdc.ChangeConsumer, error) {
 	if f.sequencer == nil || input.ProgressReporter == nil {
@@ -69,6 +72,12 @@ func (f *productCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, in
 	streamID := encodeCDCStreamID(input.StreamID)
 	if err := f.sequencer.Register(ctx, streamID); err != nil {
 		return productCDCFailedConsumer{err}, nil
+	}
+	// A constructed Reader has not necessarily attached to a CDC stream. Signal
+	// readiness only after the first stream is registered, so callers do not
+	// admit mutations into a window the Product reader could still miss.
+	if f.onReady != nil {
+		f.readyOnce.Do(f.onReady)
 	}
 	return &productCDCConsumer{sequencer: f.sequencer, streamID: streamID, reporter: input.ProgressReporter}, nil
 }
