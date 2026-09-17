@@ -38,7 +38,7 @@ and Resource Watch prerequisites before any user-story slice.
 - [X] T012 Implement Scylla Product lifecycle/blocker persistence with resource-version guards in `gitstore-api/internal/datastore/scylla/`.
 - [X] T013 Add Product CDC/journal migration and backend-neutral journal source tests in `gitstore-api/internal/datastore/scylla/{migrations/,repository_watch_migration_test.go}` and `gitstore-api/internal/datastore/memdb/product_watch_test.go`.
 - [X] T014 Implement Product CDC normalization/materializer source, memdb equivalent, bounded retention/progress/lease wiring, and Product readiness in `gitstore-api/internal/datastore/{scylla/product_cdc.go,memdb/product_watch.go}` and `gitstore-api/internal/watchjournal/`.
-- [ ] T015 Add Product journal metrics, lifecycle/finalizer/blocker metrics, and structured audit-safe logs in `gitstore-api/internal/{watchjournal/,cataloggrpc/,graph/resolver/}`.
+- [X] T015 Add Product journal metrics, lifecycle/finalizer/blocker metrics, and structured audit-safe logs in `gitstore-api/internal/{watchjournal/,cataloggrpc/,graph/resolver/}`.
 
 **Checkpoint**: Schema, authorization, lifecycle datastore operations, and a
 durable Product event source are available. All following stories depend on
@@ -59,7 +59,7 @@ revision/identity, then submit invalid input and observe no partial Product.
 - [X] T018 [P] [US1] Add resolver contract tests for create/update/delete commit-and-wait behavior, non-system provenance update routing, implicit `gitstore-system` create routing, and ID delete input in `gitstore-api/internal/graph/resolver/product_lifecycle_test.go`.
 - [X] T019 [US1] Implement Product GraphQL create/update/delete in `gitstore-api/internal/graph/resolver/product.resolvers.go`: create targets `gitstore-system`; update resolves stored repository/source path; all await admitted revision.
 - [X] T020 [US1] Return `ProductDeletionOutcome` and the terminating Product envelope from `deleteProduct` in `gitstore-api/internal/graph/resolver/product.resolvers.go`.
-- [ ] T021 [US1] Add Git-push versus GraphQL end-to-end admission parity coverage in `tests/integration/product_lifecycle_test.go`.
+- [X] T021 [US1] Add Git-push versus GraphQL end-to-end admission parity coverage in `tests/integration/product_lifecycle_test.go`.
 
 ---
 
@@ -98,7 +98,7 @@ finalize exactly once after a fresh clear check.
 - [X] T033 [P] [US3] Add Product controller finalizer/retry/conflict tests in `gitstore-controller-manager/internal/product/reconciler_test.go`.
 - [X] T034 [US3] Implement dedicated Product reconciliation, fresh blocker check, bounded requeue, status ownership, and finalizer completion client in `gitstore-controller-manager/internal/product/{reconciler.go,graphql_client.go}`.
 - [X] T035 [US3] Register Product list/watch/cache/reconciler ownership in `gitstore-controller-manager/cmd/controller/main.go`.
-- [ ] T036 [US3] Add deletion race, controller-replacement, and final-removal-once integration coverage in `tests/integration/product_deletion_lifecycle_test.go`.
+- [X] T036 [US3] Add deletion race, controller-replacement, and final-removal-once integration coverage in `tests/integration/product_deletion_lifecycle_test.go`.
 
 ---
 
@@ -112,7 +112,7 @@ reassignment and replacement; only affected category counts converge.
 
 - [X] T037 [P] [US4] Add durable Product-event category enqueue tests for create, delete, category reassignment, and status/finalizer non-fan-out in `gitstore-controller-manager/internal/categorytaxonomy/products_test.go`.
 - [X] T038 [US4] Route the existing Product-to-CategoryTaxonomy enqueue handler through durable Product events while preserving affected-only behavior in `gitstore-controller-manager/internal/categorytaxonomy/{products.go,watch.go}`.
-- [ ] T039 [US4] Add two-controller stale-status and replica-handoff integration tests in `tests/integration/product_controller_convergence_test.go`.
+- [X] T039 [US4] Add two-controller stale-status and replica-handoff integration tests in `tests/integration/product_controller_convergence_test.go`.
 - [X] T040 [US4] Make Product controller status writes preserve other system-owned status and recompute after optimistic conflicts in `gitstore-controller-manager/internal/product/reconciler.go` and `gitstore-api/internal/graph/resolver/product_status.go`.
 
 ---
@@ -125,9 +125,9 @@ authorized Product capabilities with attributable audit evidence.
 **Independent test**: Exercise all Product paths as reader, author, controller,
 and unauthorized subjects in two namespaces.
 
-- [ ] T041 [P] [US5] Add cross-provider Product capability/audit tests for human, service-account, and controller principals in `gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go`.
-- [ ] T042 [US5] Wire Product lifecycle authorization decisions and redacted audit fields through configured providers in `gitstore-api/internal/{middleware/security/graphql.go,auth/,graph/resolver/}`.
-- [ ] T043 [US5] Add end-to-end multi-namespace Product authorization regression coverage in `tests/integration/product_authorization_test.go`.
+- [X] T041 [P] [US5] Add cross-provider Product capability/audit tests for human, service-account, and controller principals in `gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go`.
+- [X] T042 [US5] Wire Product lifecycle authorization decisions and redacted audit fields through configured providers in `gitstore-api/internal/{middleware/security/graphql.go,auth/,graph/resolver/}`.
+- [X] T043 [US5] Add end-to-end multi-namespace Product authorization regression coverage in `tests/integration/product_authorization_test.go`.
 
 ---
 
@@ -142,7 +142,7 @@ includes it or its child variant.
 
 - [X] T044 [P] [US6] Add Product lifecycle-state validation and admission tests in `gitstore-api/internal/cataloggrpc/product_retirement_test.go`.
 - [X] T045 [US6] Implement `spec.lifecycle.state` validation/defaulting and persisted admission semantics in `gitstore-api/internal/cataloggrpc/server.go` and `gitstore-api/internal/catalog/product.go`.
-- [ ] T046 [P] [US6] Add release-preparation compatibility contract tests without implementing publication resources in `tests/contract/product_retirement_contract_test.go`.
+- [X] T046 [P] [US6] Add release-preparation compatibility contract tests without implementing publication resources in `tests/contract/product_retirement_contract_test.go`.
 - [X] T047 [US6] Document Product retirement’s release-candidate rejection contract and immutable-publication boundary in `docs/products/product-spec.md` and `docs/products/publication-lifecycle.md`.
 
 ---
@@ -150,8 +150,8 @@ includes it or its child variant.
 ## Phase 9: Polish, rollout, and production evidence
 
 - [X] T048 [P] Add Product lifecycle/watch rollout, mixed-version deny, rollback, cursor recovery, and finalizer operator guidance in `docs/runbooks/product-lifecycle.md` and `docs/configuration.md`.
-- [ ] T049 [P] Complete bounded overload, observability, and alert assertions for Product journal/materializer/controller metrics in `tests/contract/product_observability_test.go`.
-- [ ] T050 Implement the full two-API/two-controller Git-push/GraphQL/watch/deletion-race capacity verifier in `tests/capacity/profiles/product-lifecycle.js` and Makefile evidence export in `Makefile`.
+- [X] T049 [P] Complete bounded overload, observability, and alert assertions for Product journal/materializer/controller metrics in `tests/contract/product_observability_test.go`.
+- [X] T050 Implement the full two-API/two-controller Git-push/GraphQL/watch/deletion-race capacity verifier in `tests/capacity/profiles/product-lifecycle.js` and Makefile evidence export in `Makefile`.
 - [X] T051 Implement Product lifecycle replacement/materializer/mid-deletion chaos assertions in `tests/chaos/profiles/product-lifecycle.json`.
 - [X] T052 Run focused suites and production-readiness validation, recording results in `specs/055-product-lifecycle/quickstart.md`: `make test`, `make build`, `make capacity TARGET=product PROFILE=lifecycle MODE=alpha`, and `make pr-ready`.
 
