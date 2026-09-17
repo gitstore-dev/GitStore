@@ -154,10 +154,18 @@ func TestProductCapacityGitPushParity(t *testing.T) {
 		response := gqlQueryWithURL(t, apiB, token, `query($namespace: String!, $name: String!) {
   product(by: {namespacePath: {namespace: $namespace, name: $name}}) { metadata { name } }
 }`, map[string]any{"namespace": namespace, "name": name})
-		require.Empty(t, response.Errors, string(response.Data))
+		if len(response.Errors) > 0 {
+			if strings.Contains(string(response.Errors[0]), `"code":"NOT_FOUND"`) && time.Now().Before(deadline) {
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			require.Empty(t, response.Errors, string(response.Data))
+		}
 		var data struct {
 			Product *struct {
-				Metadata struct{ Name string `json:"name"` } `json:"metadata"`
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
 			} `json:"product"`
 		}
 		require.NoError(t, json.Unmarshal(response.Data, &data))
