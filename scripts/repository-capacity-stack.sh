@@ -194,8 +194,8 @@ run_alpha() {
   CAPACITY_ENVIRONMENT_MANIFEST="${state_dir}/environment-manifest.json" \
   CAPACITY_API_A=http://127.0.0.1:4000 \
   CAPACITY_API_B=http://127.0.0.1:4001 \
-  PRODUCT_CAPACITY_API_A=http://api-a:4000 \
-  PRODUCT_CAPACITY_API_B=http://api-b:4000 \
+  PRODUCT_CAPACITY_API_A=http://api-a:4000/graphql \
+  PRODUCT_CAPACITY_API_B=http://api-b:4000/graphql \
   CAPACITY_DOCKER_NETWORK="${project}_gitstore-network" \
   CAPACITY_CONTROLLER_A=http://127.0.0.1:5001 \
   CAPACITY_CONTROLLER_B=http://127.0.0.1:5002 \
