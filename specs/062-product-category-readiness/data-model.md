@@ -12,11 +12,12 @@ adds the first writer of the `True` side and defines the reason vocabulary:
 
 | Condition          | Status  | Reason               | Written by                                                             |
 |--------------------|---------|----------------------|------------------------------------------------------------------------|
-| `CategoryResolved` | `True`  | `CategoryFound`      | This feature (controller, new)                                         |
-| `CategoryResolved` | `False` | `CategoryNotFound`   | This feature (controller, new)                                         |
-| `CategoryResolved` | `False` | `CategoryDeleted`    | Existing (`DecoupleCategoryProducts`, spec 055) — unchanged, transient |
-| `Ready`            | `True`  | `ProductReady`       | This feature (controller, new)                                         |
-| `Ready`            | `False` | `CategoryUnresolved` | This feature (controller, new)                                         |
+| `CategoryResolved` | `True`  | `CategoryFound`         | This feature (controller, new)                                        |
+| `CategoryResolved` | `True`  | `NoCategoryReference`   | This feature (controller, new) — no `categoryRef` set; vacuously resolved |
+| `CategoryResolved` | `False` | `CategoryNotFound`      | This feature (controller, new)                                        |
+| `CategoryResolved` | `False` | `CategoryDeleted`       | Existing (`DecoupleCategoryProducts`, spec 055) — unchanged, transient |
+| `Ready`            | `True`  | `ProductReady`          | This feature (controller, new)                                        |
+| `Ready`            | `False` | `CategoryUnresolved`    | This feature (controller, new)                                        |
 
 Conditions are merged by type (`mergeProductConditions`, already used by the
 resolver) — this feature does not replace the merge mechanism, only adds new
@@ -86,25 +87,35 @@ admission, spec update, or a CategoryTaxonomy-driven re-enqueue per R3):
 1. Look up `CategoryRefName` (empty if the Product has no `categoryRef`) in
    the controller's own CategoryTaxonomy cache, scoped to the Product's
    namespace.
-2. Found, and the found entry has no `DeletionTimestamp` and no
-   foreground-deletion finalizer → `CategoryResolved=True`/`CategoryFound`,
-   `resolved.category = {name, uid: found.UID}` (already the Relay-encoded
-   id — see the note above the schema; the controller never encodes it
-   itself).
-3. Not found — including "no `categoryRef` at all" (a Product with no
-   category can never be `CategoryResolved=True`) — **and** including a
-   found entry that is `Terminating` (`DeletionTimestamp` set or the
-   foreground-deletion finalizer present) → `CategoryResolved=False`/
-   `CategoryNotFound`, `resolved.category = null`. Treating a `Terminating`
-   category as not-found is what makes `CategoryDeleted` (above) converge to
+2. `CategoryRefName` empty (no `categoryRef` at all — `spec.categoryRef` is
+   nullable) → `CategoryResolved=True`/`NoCategoryReference`,
+   `resolved.category = null`. An uncategorized Product is a valid,
+   Ready-eligible state, not an unresolved reference — this is *not* the
+   same outcome as step 4's not-found case, even though both leave
+   `resolved.category` null. (Corrected 2026-09-19 after manual testing
+   surfaced that the original version of this document treated "no
+   categoryRef" the same as "categoryRef set but unresolvable," which
+   incorrectly blocked `Ready` for every uncategorized Product — neither
+   FR-002 nor FR-003 in spec.md actually requires that; both are scoped to a
+   ref that "resolves" or "does not resolve," not to the ref's absence.)
+3. `CategoryRefName` non-empty, found, and the found entry has no
+   `DeletionTimestamp` and no foreground-deletion finalizer →
+   `CategoryResolved=True`/`CategoryFound`, `resolved.category = {name, uid:
+   found.UID}` (already the Relay-encoded id — see the note above the
+   schema; the controller never encodes it itself).
+4. `CategoryRefName` non-empty and not found — **or** found but
+   `Terminating` (`DeletionTimestamp` set or the foreground-deletion
+   finalizer present) → `CategoryResolved=False`/`CategoryNotFound`,
+   `resolved.category = null`. Treating a `Terminating` category as
+   not-found is what makes `CategoryDeleted` (above) converge to
    `CategoryNotFound` without ever flapping back through `True`: the
    Product-updated event `DecoupleCategoryProducts` publishes re-enqueues
    this Product while its category is still `Terminating` and still present
-   in the controller's cache, so step 2's "found" check alone would
+   in the controller's cache, so step 3's "found" check alone would
    incorrectly re-resolve it as `True` until `CompleteCategoryDeletion`
    finally removes the category from cache.
-4. `updateProductStatus` is called with that condition + `resolved.category`
-   every time step 1-3's outcome differs from the cached `ResourceStatus`
+5. `updateProductStatus` is called with that condition + `resolved.category`
+   every time step 2-4's outcome differs from the cached `ResourceStatus`
    (`StatusPatch.IsNoOp`, R5) — which, per R7, also synchronizes the owner
    reference to match.
 

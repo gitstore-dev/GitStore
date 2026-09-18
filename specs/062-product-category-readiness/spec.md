@@ -66,6 +66,7 @@ A CategoryTaxonomy referenced by an already-`Ready` Product is deleted. The Prod
 - A Product's `spec.categoryRef` is changed from one existing category to another: the controller MUST re-resolve against the new reference and update `CategoryResolved`/`Ready` accordingly; stale resolution state from the old reference MUST NOT persist.
 - A namespace or repository backing a Product becomes non-`Active` after the Product was already `Ready`: this feature does not add new behavior for that case; existing Product/Repository/Namespace lifecycle rules apply unchanged.
 - `MediaResolved` is out of scope for this feature; a Product's `Ready` computation in this feature depends only on `AdmissionAccepted` (already true by the time the controller observes the Product) and `CategoryResolved`.
+- A Product with no `spec.categoryRef` at all (the field is nullable — an uncategorized Product is valid): the controller MUST set `CategoryResolved=True` (reason `NoCategoryReference`) rather than `CategoryNotFound`, so such a Product can still reach `Ready=True`. This is distinct from a `categoryRef` that is set but does not resolve, which remains `CategoryResolved=False`/`CategoryNotFound` per FR-003.
 
 ## Requirements *(mandatory)*
 

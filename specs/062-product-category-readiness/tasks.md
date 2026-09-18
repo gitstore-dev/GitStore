@@ -169,9 +169,14 @@ Task: "Unit test for graphqlProductStatusClient in gitstore-controller-manager/i
 
 ---
 
+## Post-implementation fixes
+
+- [X] T039 Fix: a Product with no `spec.categoryRef` at all was incorrectly resolving `CategoryResolved=False/CategoryNotFound` (blocking `Ready`) — found via manual testing against `../catalog-work` (categoryRef set to `null` on create and on update both showed `Ready=False`). `spec.categoryRef` is nullable and an uncategorized Product is valid (spec.md Edge Cases, amended). Fixed in `gitstore-controller-manager/internal/product/reconciler.go`: `CategoryRefName == ""` now resolves `CategoryResolved=True`/`NoCategoryReference` (vacuous, not found-but-blocking), distinct from a set-but-unresolvable ref (`CategoryNotFound`, unchanged). Added `TestReconcileActive_NoCategoryRefResolvesReadyTrue`; corrected `data-model.md`'s algorithm/condition table and `spec.md`'s Edge Cases accordingly. `resolved.category.path` was also reported always-empty during the same testing session — confirmed by design, not a bug: FR-015 only requires `name`/`uid`, and no code anywhere (before or after spec 062) ever writes `path` for a Product's resolved category.
+
 ## Notes
 
 - The reconciler's resolution algorithm is deliberately identical across all three stories (R8) — resist the temptation to special-case "why was this Product enqueued" inside `Reconcile`.
+- A Product with no `categoryRef` at all is vacuously `CategoryResolved=True/NoCategoryReference` (T039) — do not conflate "nothing to resolve" with "failed to resolve" (`CategoryNotFound`).
 - A CategoryTaxonomy match only counts as "found" when it is not `Terminating` (T012/T017) — this is what makes the transient `CategoryDeleted` reason (T031) converge to `CategoryNotFound` (T032) instead of flapping back through `CategoryResolved=True`.
 - `MediaResolved` and `CrossNamespaceRef` are explicitly out of scope (FR-013/FR-014) — do not add conditions or checks for either.
 - The controller cannot itself Relay-encode a raw UUID (no access to `gitstore-api`'s internal node-ID scheme); every `uid` value the reconciler emits must already have arrived pre-encoded from a GraphQL response field.

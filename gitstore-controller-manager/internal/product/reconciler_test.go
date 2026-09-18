@@ -164,6 +164,33 @@ func TestReconcileActive_CategoryNotFoundResolvesReadyFalse(t *testing.T) {
 	assertCondition(t, patch.Conditions, "Ready", statusFalse, "CategoryUnresolved")
 }
 
+// A Product with no categoryRef at all (spec.categoryRef is nullable) is a
+// valid, uncategorized Product — CategoryResolved must be True (vacuously,
+// reason NoCategoryReference) so Ready can become True, not treated the same
+// as a set-but-unresolvable categoryRef. Covers both the create and update
+// path, since the reconciler runs the same resolve logic either way.
+func TestReconcileActive_NoCategoryRefResolvesReadyTrue(t *testing.T) {
+	statusClient := &fakeStatusClient{}
+	item := categorytaxonomy.Product{
+		Namespace: "acme", Name: "widget", ResourceVersion: "1", Generation: 1,
+		CategoryRefName: "",
+		Status:          status.ResourceStatus{ResourceVersion: "1", Conditions: []*status.Condition{admissionAcceptedCondition()}},
+	}
+	r := resolveReconcilerFor(t, item, nil, statusClient)
+
+	result := r.Reconcile(context.Background(), productKey())
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("result = %T, want success (no categoryRef has nothing to retry)", result)
+	}
+	patch := statusClient.patches[0]
+	resolved := decodeResolvedCategory(t, patch.Resolved)
+	if resolved.Category != nil {
+		t.Fatalf("resolved.category = %+v, want nil", resolved.Category)
+	}
+	assertCondition(t, patch.Conditions, "CategoryResolved", statusTrue, "NoCategoryReference")
+	assertCondition(t, patch.Conditions, "Ready", statusTrue, "ProductReady")
+}
+
 // T012: a matching CategoryTaxonomy that is Terminating (DeletionTimestamp
 // set) resolves the same as not-found — never CategoryFound.
 func TestReconcileActive_TerminatingCategoryResolvesAsNotFound(t *testing.T) {

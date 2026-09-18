@@ -97,9 +97,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 // CategoryTaxonomy-driven re-enqueue).
 func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey, current categorytaxonomy.Product) types.ReconcileResult {
 	found, resolved := r.resolveCategory(current)
+	// A Product with no categoryRef at all has nothing to resolve — that is
+	// a valid, uncategorized Product (spec.categoryRef is nullable), not an
+	// unresolved reference. Only an actually-set-but-unmatched categoryRef
+	// is CategoryNotFound.
+	categoryResolved := found || current.CategoryRefName == ""
 	admitted := conditionTrue(current.Status.Conditions, "AdmissionAccepted")
 
-	conditions := mergeCategoryConditions(current, found, admitted)
+	conditions := mergeCategoryConditions(current, found, categoryResolved, admitted)
 	generation := current.Generation
 	patch := &status.StatusPatch{
 		ResourceVersion:    current.ResourceVersion,
@@ -124,10 +129,12 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 			return types.ResultTransient(fmt.Errorf("product: update status: %w", err))
 		}
 	}
-	if !found {
-		// FR-011: bounded-interval fallback retry for CategoryNotFound. The
-		// watch-driven re-enqueue (R3) is the primary convergence path; this
-		// is only a fallback for missed/replayed events.
+	if !categoryResolved {
+		// FR-011: bounded-interval fallback retry for CategoryNotFound (a set
+		// but unmatched categoryRef only — a Product with no categoryRef has
+		// nothing to retry). The watch-driven re-enqueue (R3) is the primary
+		// convergence path; this is only a fallback for missed/replayed
+		// events.
 		return types.ResultAfter(categoryUnresolvedRequeueDelay)
 	}
 	return types.ResultOK()
@@ -161,10 +168,13 @@ func (r *Reconciler) resolveCategory(current categorytaxonomy.Product) (found bo
 
 // mergeCategoryConditions builds fresh CategoryResolved/Ready conditions and
 // merges them into current's other conditions. Ready=True iff admitted and
-// found (FR-004) — AdmissionAccepted is a precondition of the controller
-// ever observing a reconcilable Product, so checking it here is defensive,
-// not redundant (research.md R4).
-func mergeCategoryConditions(current categorytaxonomy.Product, found, admitted bool) []*status.Condition {
+// categoryResolved (FR-004) — AdmissionAccepted is a precondition of the
+// controller ever observing a reconcilable Product, so checking it here is
+// defensive, not redundant (research.md R4). categoryResolved is true both
+// when found (an actual categoryRef resolved) and when the Product has no
+// categoryRef at all — spec.categoryRef is nullable, and an uncategorized
+// Product is a valid, Ready-eligible state, not an unresolved reference.
+func mergeCategoryConditions(current categorytaxonomy.Product, found, categoryResolved, admitted bool) []*status.Condition {
 	conditions := make([]*status.Condition, 0, len(current.Status.Conditions)+2)
 	for _, prior := range current.Status.Conditions {
 		if prior == nil || prior.Type == conditionCategoryResolved || prior.Type == conditionReady {
@@ -182,13 +192,18 @@ func mergeCategoryConditions(current categorytaxonomy.Product, found, admitted b
 		Reason:             "CategoryNotFound",
 		Message:            "spec.categoryRef does not resolve to an existing CategoryTaxonomy in this namespace.",
 	}
-	if found {
+	switch {
+	case found:
 		categoryCondition.Status = statusTrue
 		categoryCondition.Reason = "CategoryFound"
 		categoryCondition.Message = "spec.categoryRef resolves to an existing CategoryTaxonomy in this namespace."
+	case categoryResolved:
+		categoryCondition.Status = statusTrue
+		categoryCondition.Reason = "NoCategoryReference"
+		categoryCondition.Message = "spec.categoryRef is not set; the Product is uncategorized."
 	}
 
-	ready := admitted && found
+	ready := admitted && categoryResolved
 	readyCondition := &status.Condition{
 		Type:               conditionReady,
 		Status:             statusFalse,
