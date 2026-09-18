@@ -53,7 +53,7 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 		return nil
 	}
 	if ns.DeletionTimestamp != nil {
-		status.Conditions = upsertTerminatingCondition(status.Conditions, ns.Generation, *ns.DeletionTimestamp)
+		status.Conditions = upsertTerminatingCondition(status.Conditions, ns.Generation, *ns.DeletionTimestamp, "Namespace is awaiting foreground deletion completion.")
 	}
 	var revision *string
 	if ns.Revision != "" {
@@ -168,7 +168,7 @@ func namespaceStatusFromJSON(raw json.RawMessage) (*model.NamespaceStatus, error
 	return status, nil
 }
 
-func upsertTerminatingCondition(conditions []*model.Condition, generation int64, since time.Time) []*model.Condition {
+func upsertTerminatingCondition(conditions []*model.Condition, generation int64, since time.Time, message string) []*model.Condition {
 	out := make([]*model.Condition, 0, len(conditions)+1)
 	for _, condition := range conditions {
 		if condition != nil && condition.Type == catalog.ConditionTerminating {
@@ -182,7 +182,7 @@ func upsertTerminatingCondition(conditions []*model.Condition, generation int64,
 		ObservedGeneration: int32Pointer(int32(generation)),
 		LastTransitionTime: since,
 		Reason:             stringPointer("DeletionRequested"),
-		Message:            stringPointer("Namespace is awaiting foreground deletion completion."),
+		Message:            stringPointer(message),
 	})
 	return out
 }
@@ -525,7 +525,7 @@ func DatastoreCategoryTaxonomyToGraphQL(c *datastore.CategoryTaxonomy) *model.Ca
 		if categoryStatus == nil {
 			categoryStatus = &model.CategoryTaxonomyStatus{Conditions: []*model.Condition{}}
 		}
-		categoryStatus.Conditions = upsertTerminatingCondition(categoryStatus.Conditions, c.Generation, *c.DeletionTimestamp)
+		categoryStatus.Conditions = upsertTerminatingCondition(categoryStatus.Conditions, c.Generation, *c.DeletionTimestamp, "CategoryTaxonomy is awaiting foreground deletion completion.")
 	}
 
 	apiVersion := c.APIVersion
