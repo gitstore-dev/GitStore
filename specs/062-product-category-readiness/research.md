@@ -191,7 +191,23 @@ CategoryTaxonomy cache on *every* reconcile, unconditionally — the same code
 path whether the Product was just admitted with an already-existing
 category (User Story 1), is still waiting on one (User Story 2), or is being
 re-enqueued after its category was deleted (User Story 3). It never reads
-`Product.OwnerReferences` to short-circuit this decision.
+`Product.OwnerReferences` to short-circuit this decision. A cache entry
+counts as "found" only when it has no `DeletionTimestamp` and no
+foreground-deletion finalizer — a `Terminating` CategoryTaxonomy resolves the
+same as a missing one (`CategoryResolved=False/CategoryNotFound`).
+
+This `Terminating`-as-not-found rule is required for User Story 3 to actually
+converge to the reason spec.md's FR-010/US3 acceptance scenario mandate
+(`CategoryNotFound`), not the transient `CategoryDeleted` reason
+`DecoupleCategoryProducts` (spec 055) writes synchronously while the category
+is still `Terminating` and still present in this cache. Without the
+`Terminating` check, the Product-updated event that decoupling publishes
+would re-enqueue this Product straight into a reconcile that finds the
+still-cached, still-`Terminating` category and incorrectly flips
+`CategoryResolved` back to `True` until `CompleteCategoryDeletion` finally
+removes it — a flap, not a clean transition. No new cache field is needed:
+`categorytaxonomy.CategoryTaxonomy` already carries `DeletionTimestamp` and
+`Finalizers` for this exact check.
 
 **Rationale**: The controller already needs read access to its own
 CategoryTaxonomy cache for R3 (watch-driven re-enqueue) and R6 (bounded
