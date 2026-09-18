@@ -40,25 +40,6 @@ type Repository implements Node {
   """
   status: RepositoryStatus!
 
-  name: String!
-    @deprecated(reason: "Use metadata.name; removal requires a future major GraphQL API release.")
-  namespace: Namespace!
-    @deprecated(reason: "Use metadata.namespace; removal requires a future major GraphQL API release.")
-  defaultBranch: String!
-    @deprecated(reason: "Use spec.defaultBranch; removal requires a future major GraphQL API release.")
-  storageClass: String!
-    @deprecated(reason: "Use status.resolved.storageClass; removal requires a future major GraphQL API release.")
-  storagePath: String!
-    @deprecated(reason: "Use status.resolved.storagePath; removal requires a future major GraphQL API release.")
-  createdAt: DateTime!
-    @deprecated(reason: "Use metadata.creationTimestamp; removal requires a future major GraphQL API release.")
-  createdBy: String!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-  updatedAt: DateTime!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-  updatedBy: String!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-
   """
   Markdown body content (repository description).
   """
@@ -225,18 +206,6 @@ extend type Mutation {
   provisionRepositoryStorage(input: ProvisionRepositoryStorageInput!): ProvisionRepositoryStoragePayload!
 
   """
-  Rename a repository within its namespace. Does not move storage.
-  """
-  renameRepository(input: RenameRepositoryInput!): RenameRepositoryPayload!
-    @deprecated(reason: "Not supported in Repository lifecycle Phase 1; see docs/ADRs/0003-repository-lifecycle.md.")
-
-  """
-  Transfer a repository to a different namespace. Does not move storage.
-  """
-  transferRepository(input: TransferRepositoryInput!): TransferRepositoryPayload!
-    @deprecated(reason: "Not supported in Repository lifecycle Phase 1; see docs/ADRs/0003-repository-lifecycle.md.")
-
-  """
   Start foreground deletion of a repository. Deletion is blocked when the
   repository contains catalog resources; storage removal and record GC happen
   asynchronously after controller finalizer completion.
@@ -310,33 +279,6 @@ input RepositoryResolvedStatusInput {
 }
 
 type UpdateRepositoryStatusPayload {
-  repository: Repository!
-}
-
-input RenameRepositoryInput {
-  """
-  Relay ID of the repository to rename.
-  """
-  repositoryId: ID!
-  newName: String!
-}
-
-type RenameRepositoryPayload {
-  repository: Repository!
-}
-
-input TransferRepositoryInput {
-  """
-  Relay ID of the repository to transfer.
-  """
-  repositoryId: ID!
-  """
-  Relay ID of the destination namespace.
-  """
-  targetNamespaceId: ID!
-}
-
-type TransferRepositoryPayload {
   repository: Repository!
 }
 

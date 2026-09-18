@@ -60,7 +60,6 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 		value := ns.Revision
 		revision = &value
 	}
-	displayName := spec.Title
 	apiVersion := ns.APIVersion
 	if apiVersion == "" {
 		apiVersion = namespaceAPIVersion
@@ -70,15 +69,16 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 		kind = namespaceKind
 	}
 	body := ns.Body
+	nodeID := mustEncodeNodeID(nodeKindNamespace, ns.UID)
 	return &model.Namespace{
-		ID:         mustEncodeNodeID(nodeKindNamespace, ns.UID),
+		ID:         nodeID,
 		APIVersion: apiVersion,
 		Kind:       kind,
 		Metadata: &model.NamespaceMetadata{
 			Name:              ns.Name,
 			Labels:            stringMapToJSONMap(ns.Labels),
 			Annotations:       stringMapToJSONMap(ns.Annotations),
-			UID:               ns.UID,
+			UID:               nodeID,
 			ResourceVersion:   ns.ResourceVersion,
 			Generation:        int32(ns.Generation),
 			CreationTimestamp: ns.CreationTimestamp,
@@ -86,16 +86,9 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 			OwnerReferences:   ownerReferences,
 			Finalizers:        append([]string{}, ns.Finalizers...),
 		},
-		Spec:        spec,
-		Status:      status,
-		Identifier:  ns.Name,
-		DisplayName: displayName,
-		Tier:        datastoreNamespaceTierToModel(ns.Tier),
-		CreatedAt:   ns.CreationTimestamp,
-		CreatedBy:   ns.CreationActor,
-		UpdatedAt:   ns.UpdateTimestamp,
-		UpdatedBy:   ns.UpdateActor,
-		Body:        &body,
+		Spec:   spec,
+		Status: status,
+		Body:   &body,
 	}
 }
 
@@ -336,16 +329,53 @@ func ownerRefsFromJSON(raw json.RawMessage) []*model.OwnerReference {
 	return refs
 }
 
+// ownerReferenceNodeKind maps an OwnerReference's Kubernetes-style Kind
+// (e.g. "CategoryTaxonomy") to the internal Relay node-kind label
+// mustEncodeNodeID/decodeNodeIDAs use (e.g. "Category").
+func ownerReferenceNodeKind(kind string) (string, bool) {
+	switch kind {
+	case "Namespace":
+		return nodeKindNamespace, true
+	case "CategoryTaxonomy":
+		return nodeKindCategory, true
+	case "Product":
+		return nodeKindProduct, true
+	case "ProductVariant":
+		return nodeKindProductVariant, true
+	case "Repository":
+		return nodeKindRepository, true
+	case "Collection":
+		return nodeKindCollection, true
+	case "File":
+		return nodeKindFile, true
+	default:
+		return "", false
+	}
+}
+
 func ownerRefsFromJSONStrict(raw json.RawMessage) ([]*model.OwnerReference, error) {
 	if len(raw) == 0 {
 		return []*model.OwnerReference{}, nil
 	}
-	var refs []*model.OwnerReference
-	if err := json.Unmarshal(raw, &refs); err != nil {
+	var stored []catalog.OwnerReference
+	if err := json.Unmarshal(raw, &stored); err != nil {
 		return nil, fmt.Errorf("unmarshal owner references: %w", err)
 	}
-	if refs == nil {
-		return []*model.OwnerReference{}, nil
+	refs := make([]*model.OwnerReference, 0, len(stored))
+	for _, ref := range stored {
+		uid := ref.UID
+		if nodeKind, ok := ownerReferenceNodeKind(ref.Kind); ok {
+			if encoded, err := EncodeNodeID(nodeKind, ref.UID); err == nil {
+				uid = encoded
+			}
+		}
+		refs = append(refs, &model.OwnerReference{
+			APIVersion:         ref.APIVersion,
+			Kind:               ref.Kind,
+			Name:               ref.Name,
+			UID:                uid,
+			BlockOwnerDeletion: ref.BlockOwnerDeletion,
+		})
 	}
 	return refs, nil
 }
@@ -1075,7 +1105,7 @@ func variantStatusFromJSON(raw json.RawMessage) *model.ProductVariantStatus {
 		if rs.Resolved.Product != nil {
 			resolved.Product = &model.ResolvedProductRef{
 				Name: rs.Resolved.Product.Name,
-				UID:  rs.Resolved.Product.UID,
+				UID:  mustEncodeNodeID(nodeKindProduct, rs.Resolved.Product.UID),
 			}
 		}
 		if rs.Resolved.SelectedOptionsHash != "" {
@@ -1139,15 +1169,8 @@ func datastoreRepositoryToModelStrict(r *datastore.Repository, ns *datastore.Nam
 	}
 	nodeID := mustEncodeNodeID(nodeKindRepository, repository.UID)
 	namespace := repository.Namespace
-	var legacyNamespace *model.Namespace
-	if ns != nil {
-		if ns.Name != namespace {
-			return nil, fmt.Errorf("Repository %q namespace %q does not match resolved Namespace %q", repository.UID, namespace, ns.Name)
-		}
-		legacyNamespace = DatastoreNamespaceToGraphQL(ns)
-		if legacyNamespace == nil {
-			return nil, fmt.Errorf("convert Namespace %q", ns.Name)
-		}
+	if ns != nil && ns.Name != namespace {
+		return nil, fmt.Errorf("Repository %q namespace %q does not match resolved Namespace %q", repository.UID, namespace, ns.Name)
 	}
 	ownerReferences, err := ownerRefsFromJSONStrict(repository.OwnerReferences)
 	if err != nil {
@@ -1193,18 +1216,9 @@ func datastoreRepositoryToModelStrict(r *datastore.Repository, ns *datastore.Nam
 			OwnerReferences:   ownerReferences,
 			Finalizers:        append([]string{}, repository.Finalizers...),
 		},
-		Spec:          spec,
-		Status:        status,
-		Name:          repository.Name,
-		Namespace:     legacyNamespace,
-		DefaultBranch: repository.DefaultBranch,
-		StorageClass:  repository.StorageClass,
-		StoragePath:   storagePath,
-		CreatedAt:     repository.CreationTimestamp,
-		CreatedBy:     repository.CreationActor,
-		UpdatedAt:     repository.UpdateTimestamp,
-		UpdatedBy:     repository.UpdateActor,
-		Body:          &body,
+		Spec:   spec,
+		Status: status,
+		Body:   &body,
 	}
 	return repo, nil
 }

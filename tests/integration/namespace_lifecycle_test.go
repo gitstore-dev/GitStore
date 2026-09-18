@@ -45,7 +45,7 @@ func queryNamespaceLifecycle(t *testing.T, name string) *namespaceLifecycleState
 	t.Helper()
 	resp := gqlQuery(t, `
 		query($name: String!) {
-			namespace(by: {identifier: $name}) {
+			namespace(by: {name: $name}) {
 				metadata { resourceVersion generation }
 				spec { title }
 				status {

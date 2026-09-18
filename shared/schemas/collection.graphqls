@@ -242,31 +242,3 @@ input DeleteCollectionInput {
 type DeleteCollectionPayload {
   deletedCollectionId: ID
 }
-
-# ============================================================================
-# Publish / CatalogVersion (kept here for schema continuity)
-# ============================================================================
-
-input PublishCatalogInput {
-  version: String!
-  message: String!
-}
-
-type PublishCatalogPayload {
-  catalogVersion: CatalogVersion
-}
-
-type CatalogVersion {
-  tag: String!
-  commit: String!
-  publishedAt: DateTime!
-  message: String
-  stats: CatalogStats!
-}
-
-type CatalogStats {
-  productCount: Int!
-  categoryCount: Int!
-  collectionCount: Int!
-  orphanedReferences: Int!
-}

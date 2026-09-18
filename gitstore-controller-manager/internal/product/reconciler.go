@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
@@ -48,10 +49,5 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 }
 
 func hasFinalizer(values []string) bool {
-	for _, value := range values {
-		if value == foregroundDeletionFinalizer {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, foregroundDeletionFinalizer)
 }

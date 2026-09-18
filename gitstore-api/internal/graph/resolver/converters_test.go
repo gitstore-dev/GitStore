@@ -33,7 +33,8 @@ func TestDatastoreNamespaceToGraphQL_DeclarativeProjection(t *testing.T) {
 
 	require.NotNil(t, got.Metadata)
 	assert.Equal(t, "acme", got.Metadata.Name)
-	assert.Equal(t, ns.ID, got.Metadata.UID)
+	assert.Equal(t, got.ID, got.Metadata.UID, "metadata.uid is the encoded Relay node ID, matching Namespace.id")
+	assert.NotEqual(t, ns.ID, got.Metadata.UID)
 	assert.Equal(t, namespaceInitialResourceVersion, got.Metadata.ResourceVersion)
 	assert.Equal(t, namespaceInitialGeneration, got.Metadata.Generation)
 	assert.Equal(t, map[string]any{"team": "catalog"}, got.Metadata.Labels)
@@ -69,22 +70,6 @@ func TestDatastoreNamespaceToGraphQL_DeclarativeProjection(t *testing.T) {
 	assert.Equal(t, ns.Body, *got.Body)
 }
 
-func TestDatastoreNamespaceToGraphQL_PreservesLegacyProjection(t *testing.T) {
-	ns := namespaceContractFixture("00000000-0000-0000-0000-000000000044", "legacy")
-
-	got := datastoreNamespaceToModel(ns)
-	require.NotNil(t, got)
-	assert.Equal(t, mustEncodeNodeID(nodeKindNamespace, ns.ID), got.ID)
-	assert.Equal(t, ns.Name, got.Identifier)
-	require.NotNil(t, got.DisplayName)
-	assert.Equal(t, ns.Title, *got.DisplayName)
-	assert.Equal(t, model.NamespaceTierUser, got.Tier)
-	assert.Equal(t, ns.CreationTimestamp, got.CreatedAt)
-	assert.Equal(t, ns.CreationActor, got.CreatedBy)
-	assert.Equal(t, ns.UpdateTimestamp, got.UpdatedAt)
-	assert.Equal(t, ns.UpdateActor, got.UpdatedBy)
-}
-
 func TestDatastoreNamespaceToGraphQL_IdentityAndVersionDefaultsArePerResource(t *testing.T) {
 	first := namespaceContractFixture("00000000-0000-0000-0000-000000000101", "first")
 	second := namespaceContractFixture("00000000-0000-0000-0000-000000000202", "second")
@@ -96,8 +81,8 @@ func TestDatastoreNamespaceToGraphQL_IdentityAndVersionDefaultsArePerResource(t 
 	require.NotNil(t, firstModel.Metadata)
 	require.NotNil(t, secondModel.Metadata)
 	assert.NotEqual(t, firstModel.ID, secondModel.ID)
-	assert.Equal(t, first.ID, firstModel.Metadata.UID)
-	assert.Equal(t, second.ID, secondModel.Metadata.UID)
+	assert.Equal(t, firstModel.ID, firstModel.Metadata.UID)
+	assert.Equal(t, secondModel.ID, secondModel.Metadata.UID)
 	assert.NotEqual(t, firstModel.Metadata.UID, secondModel.Metadata.UID)
 	assert.Equal(t, "1", firstModel.Metadata.ResourceVersion)
 	assert.Equal(t, "1", secondModel.Metadata.ResourceVersion)
@@ -247,23 +232,6 @@ func TestDatastoreRepositoryToModel_UsesPersistedResolvedStatus(t *testing.T) {
 	require.NotNil(t, got.Status.Resolved)
 	assert.Equal(t, "/provisioned/acme/catalog.git", got.Status.Resolved.StoragePath)
 	assert.Equal(t, "ssd", got.Status.Resolved.StorageClass)
-}
-
-func TestDatastoreRepositoryToModel_PreservesLegacyProjection(t *testing.T) {
-	repo, ns := repositoryContractFixture()
-
-	got := datastoreRepositoryToModel(repo, ns, "/var/lib/gitstore")
-
-	assert.Equal(t, repo.Name, got.Name)
-	require.NotNil(t, got.Namespace)
-	assert.Equal(t, ns.Name, got.Namespace.Identifier)
-	assert.Equal(t, repo.DefaultBranch, got.DefaultBranch)
-	assert.Equal(t, repo.StorageClass, got.StorageClass)
-	assert.Equal(t, fanoutStoragePath("/var/lib/gitstore", repo.UID), got.StoragePath)
-	assert.Equal(t, repo.CreationTimestamp, got.CreatedAt)
-	assert.Equal(t, repo.CreationActor, got.CreatedBy)
-	assert.Equal(t, repo.UpdateTimestamp, got.UpdatedAt)
-	assert.Equal(t, repo.UpdateActor, got.UpdatedBy)
 }
 
 func TestDatastoreRepositoryToModel_LegacyDefaultsAndEmptyConditionVocabulary(t *testing.T) {

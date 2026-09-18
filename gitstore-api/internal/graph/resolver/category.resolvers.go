@@ -34,18 +34,6 @@ func (r *categoryResolver) Products(ctx context.Context, obj *model.Category, fi
 	return BuildProductConnection(result), nil
 }
 
-// CreateCategory is the resolver for the createCategory field.
-// Category mutations are managed via git push; this stub returns an informative error.
-func (r *mutationResolver) CreateCategory(ctx context.Context, input model.CreateCategoryInput) (*model.CreateCategoryPayload, error) {
-	return nil, errors.New("category mutations are managed via git push")
-}
-
-// UpdateCategory is the resolver for the updateCategory field.
-// Category mutations are managed via git push; this stub returns an informative error.
-func (r *mutationResolver) UpdateCategory(ctx context.Context, input model.UpdateCategoryInput) (*model.UpdateCategoryPayload, error) {
-	return nil, errors.New("category mutations are managed via git push")
-}
-
 // DeleteCategory is the resolver for the existing CategoryTaxonomy-backed
 // deleteCategory API. It starts (or returns) the shared foreground lifecycle.
 func (r *mutationResolver) DeleteCategory(ctx context.Context, input model.DeleteCategoryInput) (*model.DeleteCategoryPayload, error) {
@@ -59,16 +47,6 @@ func (r *mutationResolver) DeleteCategory(ctx context.Context, input model.Delet
 	}
 	r.publishCategoryTaxonomyStatusEvent(category)
 	return &model.DeleteCategoryPayload{DeletedCategoryID: &input.ID}, nil
-}
-
-// ReorderCategories is the resolver for the reorderCategories field.
-// Category mutations are managed via git push; this stub returns an informative error.
-func (r *mutationResolver) ReorderCategories(ctx context.Context, input model.ReorderCategoriesInput) (*model.ReorderCategoriesPayload, error) {
-	// Validate node IDs before rejecting (preserves existing validation behaviour).
-	if _, err := decodeNodeIDsAs(nodeKindCategory, input.OrderedIds); err != nil {
-		return nil, err
-	}
-	return nil, errors.New("category mutations are managed via git push")
 }
 
 // UpdateCategoryStatus is the resolver for the updateCategoryStatus field.

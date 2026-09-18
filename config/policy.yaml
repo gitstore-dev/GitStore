@@ -21,6 +21,7 @@ roles:
       - "product.read"
       - "product.watch"
       - "product.delete.complete"
+      - "product.status.write"
       - "serviceaccount.token.issue"
     deny: []
   api-internal:

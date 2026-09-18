@@ -201,7 +201,7 @@ func registerNamespace(ctx context.Context, mgr *manager.Manager, checkpointStor
 	}
 	reconciler := namespacecontroller.NewReconciler(
 		cache.AsReadOnly(namespaceCache),
-		status.NewGraphQLResourceStatusClient(client),
+		status.NewGraphQLNamespaceStatusClient(client),
 		namespacecontroller.NewGraphQLRepositoryClient(client),
 		namespacecontroller.NewGraphQLDeletionClient(client),
 	)
@@ -259,7 +259,7 @@ func registerRepository(
 	}
 	reconciler := repositorycontroller.NewReconciler(
 		cache.AsReadOnly(repositoryCache),
-		status.NewGraphQLResourceStatusClient(client),
+		status.NewGraphQLRepositoryStatusClient(client),
 		storageClient,
 		repositorycontroller.NewGraphQLCompletionClient(client),
 	)

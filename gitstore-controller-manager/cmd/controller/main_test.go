@@ -138,9 +138,9 @@ func TestRegisterRepositoryAcrossTwoControllerManagers(t *testing.T) {
 		case strings.Contains(request.Query, "provisionRepositoryStorage"):
 			provisionCalls.Add(1)
 			_, _ = w.Write([]byte(`{"data":{"provisionRepositoryStorage":{"repository":{"metadata":{"namespace":"acme","name":"catalog"}}}}}`))
-		case strings.Contains(request.Query, "updateResourceStatus"):
+		case strings.Contains(request.Query, "updateRepositoryStatus"):
 			statusCalls.Add(1)
-			_, _ = w.Write([]byte(`{"data":{"updateResourceStatus":{"object":{}}}}`))
+			_, _ = w.Write([]byte(`{"data":{"updateRepositoryStatus":{"repository":{"metadata":{"resourceVersion":"2"}}}}}`))
 		default:
 			http.Error(w, "unexpected GraphQL operation", http.StatusBadRequest)
 		}

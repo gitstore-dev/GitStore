@@ -45,15 +45,7 @@ type namespaceContractNamespace struct {
 	Metadata   *namespaceContractNamespaceMeta  `json:"metadata"`
 	Spec       *namespaceContractNamespaceSpec  `json:"spec"`
 	Status     *namespaceContractNamespaceState `json:"status"`
-
-	Identifier  string  `json:"identifier"`
-	DisplayName *string `json:"displayName"`
-	Tier        string  `json:"tier"`
-	CreatedAt   string  `json:"createdAt"`
-	CreatedBy   string  `json:"createdBy"`
-	UpdatedAt   string  `json:"updatedAt"`
-	UpdatedBy   string  `json:"updatedBy"`
-	Body        *string `json:"body"`
+	Body       *string                          `json:"body"`
 }
 
 type namespaceContractNamespaceMeta struct {
@@ -688,29 +680,6 @@ func assertNamespaceContractShape(t *testing.T, got *namespaceContractNamespace,
 		got.Status.Conditions[0].Status != "TRUE" {
 		t.Fatalf("status.conditions = %+v, want AdmissionAccepted=TRUE", got.Status.Conditions)
 	}
-	if got.Identifier != identifier {
-		t.Fatalf("identifier = %q, want %q", got.Identifier, identifier)
-	}
-	if title != nil {
-		if got.DisplayName == nil || *got.DisplayName != *title {
-			t.Fatalf("displayName = %v, want %q", got.DisplayName, *title)
-		}
-	}
-	if got.Tier != tier {
-		t.Fatalf("tier = %q, want %q", got.Tier, tier)
-	}
-	if got.CreatedAt == "" {
-		t.Fatal("createdAt is empty")
-	}
-	if got.CreatedBy == "" {
-		t.Fatal("createdBy is empty")
-	}
-	if got.UpdatedAt == "" {
-		t.Fatal("updatedAt is empty")
-	}
-	if got.UpdatedBy == "" {
-		t.Fatal("updatedBy is empty")
-	}
 }
 
 func (h *namespaceContractHarness) cleanupNamespace(identifier string) {
@@ -916,7 +885,7 @@ func TestNamespaceContract_QueryNamespaceProjectsDeclarativeFields(t *testing.T)
 
 	resp := h.gqlAnonymous(`
 		query($identifier: String!) {
-			namespace(by: {identifier: $identifier}) {
+			namespace(by: {name: $identifier}) {
 				id
 				apiVersion
 				kind
@@ -949,13 +918,6 @@ func TestNamespaceContract_QueryNamespaceProjectsDeclarativeFields(t *testing.T)
 						status
 					}
 				}
-				identifier
-				displayName
-				tier
-				createdAt
-				createdBy
-				updatedAt
-				updatedBy
 			}
 		}
 	`, map[string]any{"identifier": identifier})
@@ -1015,13 +977,6 @@ func TestNamespaceContract_NamespacesConnectionProjectsDeclarativeFields(t *test
 								status
 							}
 						}
-						identifier
-						displayName
-						tier
-						createdAt
-						createdBy
-						updatedAt
-						updatedBy
 					}
 				}
 				pageInfo {
@@ -1114,19 +1069,12 @@ func TestNamespaceContract_DirectAndConnectionEnvelopeBodyParity(t *testing.T) {
 				status
 			}
 		}
-		identifier
-		displayName
-		tier
-		createdAt
-		createdBy
-		updatedAt
-		updatedBy
 		body
 	}`
 
 	directResponse := h.gqlAnonymous(
 		`query($identifier: String!) {
-			namespace(by: {identifier: $identifier}) `+selection+`
+			namespace(by: {name: $identifier}) `+selection+`
 		}`,
 		map[string]any{"identifier": identifier},
 	)
@@ -1186,8 +1134,8 @@ func TestNamespaceContract_DirectAndConnectionEnvelopeBodyParity(t *testing.T) {
 	if directData.Namespace.Metadata.UID == "" {
 		t.Fatal("metadata.uid is empty")
 	}
-	if directData.Namespace.ID == directData.Namespace.Metadata.UID {
-		t.Fatalf("Relay id %q must remain distinct from canonical uid", directData.Namespace.ID)
+	if directData.Namespace.ID != directData.Namespace.Metadata.UID {
+		t.Fatalf("metadata.uid %q must use the Namespace Relay encoding, matching id %q", directData.Namespace.Metadata.UID, directData.Namespace.ID)
 	}
 	if directData.Namespace.Metadata.Labels == nil || directData.Namespace.Metadata.Annotations == nil {
 		t.Fatalf("metadata maps must be present: labels=%v annotations=%v",
@@ -1199,10 +1147,6 @@ func TestNamespaceContract_DirectAndConnectionEnvelopeBodyParity(t *testing.T) {
 	}
 	if directData.Namespace.Body == nil || *directData.Namespace.Body != body {
 		t.Fatalf("body = %v, want raw Markdown %q", directData.Namespace.Body, body)
-	}
-	if directData.Namespace.CreatedBy == "" || directData.Namespace.UpdatedBy == "" {
-		t.Fatalf("audit actors must be populated: createdBy=%q updatedBy=%q",
-			directData.Namespace.CreatedBy, directData.Namespace.UpdatedBy)
 	}
 }
 
@@ -1253,13 +1197,6 @@ func TestNamespaceContract_CreateNamespaceReturnsAdditiveContract(t *testing.T) 
 							status
 						}
 					}
-					identifier
-					displayName
-					tier
-					createdAt
-					createdBy
-					updatedAt
-					updatedBy
 				}
 			}
 		}

@@ -449,6 +449,20 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if decision.Outcome == auth.OutcomeDeny {
 			return nil, &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
 		}
+	case "updateNamespaceStatus":
+		if authz == nil {
+			return nil, gqlerror.Errorf("authorization service unavailable")
+		}
+		name, _ := nestedStringArg(fc.Args, "input", "name")
+		decision, err := authz.Authorize(ctx, principal, "namespace.status.write", auth.ResourceContext{
+			Kind: "namespace", Name: name,
+		})
+		if err != nil {
+			return nil, gqlerror.Errorf("authorization error")
+		}
+		if decision.Outcome == auth.OutcomeDeny {
+			return nil, &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
+		}
 	case "deleteCategory":
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
@@ -623,7 +637,7 @@ func graphqlFieldRequiresAuthorization(fc *graphql.FieldContext) bool {
 		return fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node" || fc.Field.Name == "nodes"
 	case "Mutation":
 		switch fc.Field.Name {
-		case "createProduct", "updateProduct", "deleteProduct", "completeProductDeletion", "createRepository", "renameRepository", "transferRepository", "deleteRepository", "deleteNamespace", "completeNamespaceDeletion", "provisionNamespaceSystemRepository", "completeRepositoryDeletion", "provisionRepositoryStorage", "updateCategoryStatus", "updateProductStatus", "deleteCategory", "updateResourceStatus", "issueServiceAccountToken", "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount":
+		case "createProduct", "updateProduct", "deleteProduct", "completeProductDeletion", "createRepository", "deleteRepository", "deleteNamespace", "completeNamespaceDeletion", "provisionNamespaceSystemRepository", "completeRepositoryDeletion", "provisionRepositoryStorage", "updateCategoryStatus", "updateProductStatus", "updateNamespaceStatus", "deleteCategory", "updateResourceStatus", "issueServiceAccountToken", "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount":
 			return true
 		case "createNamespace":
 			tier, ok := nestedStringPath(fc.Args, "input", "spec", "tier")
@@ -870,41 +884,15 @@ func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.Fi
 			return asAuthorizeFieldError(err, repositoryNotFoundError)
 		}
 		operation, namespaces = "update", []*datastore.Namespace{ns}
-	case "Mutation.renameRepository", "Mutation.deleteRepository":
-		field := "repositoryID"
-		if fc.Field.Name == "deleteRepository" {
-			field = "id"
-		}
-		encodedID, ok := nestedStringArg(fc.Args, "input", field)
+	case "Mutation.deleteRepository":
+		encodedID, ok := nestedStringArg(fc.Args, "input", "id")
 		if !ok {
 			return nil
 		}
 		if err := loadRepository(encodedID); err != nil {
 			return err
 		}
-		if fc.Field.Name == "renameRepository" {
-			operation = "rename"
-		} else {
-			operation = "delete"
-		}
-	case "Mutation.transferRepository":
-		encodedRepositoryID, repositoryOK := nestedStringArg(fc.Args, "input", "repositoryID")
-		encodedNamespaceID, namespaceOK := nestedStringArg(fc.Args, "input", "targetNamespaceID")
-		if !repositoryOK || !namespaceOK {
-			return nil
-		}
-		if err := loadRepository(encodedRepositoryID); err != nil {
-			return err
-		}
-		targetID, err := decodeGlobalIDAs("Namespace", encodedNamespaceID)
-		if err != nil {
-			return err
-		}
-		target, err := a.store.GetNamespace(ctx, targetID)
-		if err != nil {
-			return asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(targetID) })
-		}
-		operation, namespaces = "transfer", append(namespaces, target)
+		operation = "delete"
 	case "Query.repository":
 		if encodedID, ok := nestedStringPath(fc.Args, "by", "id"); ok && encodedID != "" {
 			if err := loadRepository(encodedID); err != nil {

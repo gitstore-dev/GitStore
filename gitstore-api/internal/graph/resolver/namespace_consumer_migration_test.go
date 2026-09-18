@@ -67,17 +67,6 @@ func TestNamespaceConsumersAvoidDeprecatedOutputSelections(t *testing.T) {
 	assert.Empty(t, offenders, "Namespace operations must select metadata/spec/status instead of deprecated flat outputs")
 }
 
-func TestNamespaceConsumerMigrationKeepsDeprecationWindow(t *testing.T) {
-	schema := namespaceContractSchema(t)
-	for _, fieldName := range []string{"identifier", "displayName", "tier", "createdAt", "createdBy", "updatedAt", "updatedBy"} {
-		field := schema.Types["Namespace"].Fields.ForName(fieldName)
-		require.NotNil(t, field)
-		deprecation := field.Directives.ForName("deprecated")
-		require.NotNil(t, deprecation)
-		assert.NotEmpty(t, deprecation.Arguments.ForName("reason").Value.Raw)
-	}
-}
-
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	_, currentFile, _, ok := runtime.Caller(0)

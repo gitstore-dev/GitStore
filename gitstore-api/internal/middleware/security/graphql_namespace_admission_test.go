@@ -58,7 +58,7 @@ func TestNamespaceAdmissionAuthorizationHidesCreateReason(t *testing.T) {
 			kind: "Namespace"
 			metadata: {name: "Invalid Name"}
 			spec: {tier: ORGANIZATION}
-		}) { namespace { identifier } }
+		}) { namespace { metadata { name } } }
 	}`)
 
 	assertDeniedNamespaceResponse(t, response,
@@ -83,7 +83,7 @@ func TestNamespaceAdmissionAuthorizationHidesUpdateReason(t *testing.T) {
 			kind: "Namespace"
 			metadata: {name: "secret-update"}
 			spec: {tier: USER}
-		}) { namespace { identifier } }
+		}) { namespace { metadata { name } } }
 	}`)
 
 	assertDeniedNamespaceResponse(t, response,

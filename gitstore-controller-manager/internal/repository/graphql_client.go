@@ -22,7 +22,10 @@ mutation($input: CompleteRepositoryDeletionInput!) {
 const provisionRepositoryStorageMutation = `
 mutation($input: ProvisionRepositoryStorageInput!) {
   provisionRepositoryStorage(input: $input) {
-    repository { metadata { name namespace } }
+    repository {
+      metadata { name namespace }
+      status { resolved { storagePath storageClass } }
+    }
   }
 }`
 
@@ -39,7 +42,7 @@ func NewGraphQLStorageClient(client *graphqlclient.Client) *GraphQLStorageClient
 
 // EnsureStorage is safe for at-least-once reconciliation: provisioning is
 // idempotent at the API/Git-service boundary.
-func (c *GraphQLStorageClient) EnsureStorage(ctx context.Context, namespace, name string) error {
+func (c *GraphQLStorageClient) EnsureStorage(ctx context.Context, namespace, name string) (ResolvedStorage, error) {
 	var response struct {
 		ProvisionRepositoryStorage struct {
 			Repository *struct {
@@ -47,18 +50,21 @@ func (c *GraphQLStorageClient) EnsureStorage(ctx context.Context, namespace, nam
 					Name      string `json:"name"`
 					Namespace string `json:"namespace"`
 				} `json:"metadata"`
+				Status struct {
+					Resolved ResolvedStorage `json:"resolved"`
+				} `json:"status"`
 			} `json:"repository"`
 		} `json:"provisionRepositoryStorage"`
 	}
 	if err := c.client.Mutate(ctx, provisionRepositoryStorageMutation, map[string]any{
 		"input": map[string]any{"namespace": namespace, "name": name},
 	}, &response); err != nil {
-		return fmt.Errorf("repository storage client: provision storage: %w", err)
+		return ResolvedStorage{}, fmt.Errorf("repository storage client: provision storage: %w", err)
 	}
 	if response.ProvisionRepositoryStorage.Repository == nil {
-		return fmt.Errorf("repository storage client: provision storage returned no repository")
+		return ResolvedStorage{}, fmt.Errorf("repository storage client: provision storage returned no repository")
 	}
-	return nil
+	return response.ProvisionRepositoryStorage.Repository.Status.Resolved, nil
 }
 
 // GraphQLCompletionClient completes foreground Repository deletion through the

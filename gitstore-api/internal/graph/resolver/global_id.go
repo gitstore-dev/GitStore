@@ -110,18 +110,6 @@ func decodeNodeIDAs(kind, id string) (string, error) {
 	return rawID, nil
 }
 
-func decodeNodeIDsAs(kind string, ids []string) ([]string, error) {
-	rawIDs := make([]string, len(ids))
-	for i, id := range ids {
-		rawID, err := decodeNodeIDAs(kind, id)
-		if err != nil {
-			return nil, err
-		}
-		rawIDs[i] = rawID
-	}
-	return rawIDs, nil
-}
-
 func invalidGlobalIDError(err error) error {
 	return gqlerror.Errorf("invalid global ID: %v", err)
 }

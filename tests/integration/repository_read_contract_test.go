@@ -5,7 +5,6 @@ package integration
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,17 +18,7 @@ type repositoryReadContractResource struct {
 	Metadata   *repositoryReadContractMetadata `json:"metadata"`
 	Spec       *repositoryReadContractSpec     `json:"spec"`
 	Status     *repositoryReadContractStatus   `json:"status"`
-
-	Name          string                           `json:"name"`
-	Namespace     *repositoryReadContractNamespace `json:"namespace"`
-	DefaultBranch string                           `json:"defaultBranch"`
-	StorageClass  string                           `json:"storageClass"`
-	StoragePath   string                           `json:"storagePath"`
-	CreatedAt     string                           `json:"createdAt"`
-	CreatedBy     string                           `json:"createdBy"`
-	UpdatedAt     string                           `json:"updatedAt"`
-	UpdatedBy     string                           `json:"updatedBy"`
-	Body          *string                          `json:"body"`
+	Body       *string                         `json:"body"`
 }
 
 type repositoryReadContractMetadata struct {
@@ -84,12 +73,6 @@ type repositoryReadContractResolved struct {
 	StorageClass string `json:"storageClass"`
 }
 
-type repositoryReadContractNamespace struct {
-	Metadata struct {
-		Name string `json:"name"`
-	} `json:"metadata"`
-}
-
 func TestRepositoryReadContract_LegacyAndCreatedRepositoriesAcrossReadPaths(t *testing.T) {
 	h := newNamespaceContractHarness(t)
 	namespace := uniqueName("repository-read-contract")
@@ -127,15 +110,13 @@ func TestRepositoryReadContract_LegacyAndCreatedRepositoriesAcrossReadPaths(t *t
 	assert.Equal(t, created, listedByName[created.Metadata.Name])
 }
 
-func TestRepositoryReadContract_DeprecatesOnlyLegacyDuplicateFields(t *testing.T) {
+func TestRepositoryReadContract_HasNoLegacyDuplicateFields(t *testing.T) {
 	h := newNamespaceContractHarness(t)
 	resp := h.gqlAnonymous(`
 		query {
 			__type(name: "Repository") {
 				fields(includeDeprecated: true) {
 					name
-					isDeprecated
-					deprecationReason
 				}
 			}
 		}
@@ -145,23 +126,15 @@ func TestRepositoryReadContract_DeprecatesOnlyLegacyDuplicateFields(t *testing.T
 	var data struct {
 		Type struct {
 			Fields []struct {
-				Name              string  `json:"name"`
-				IsDeprecated      bool    `json:"isDeprecated"`
-				DeprecationReason *string `json:"deprecationReason"`
+				Name string `json:"name"`
 			} `json:"fields"`
 		} `json:"__type"`
 	}
 	require.NoError(t, json.Unmarshal(resp.Data, &data))
 
-	fields := make(map[string]struct {
-		deprecated bool
-		reason     *string
-	}, len(data.Type.Fields))
+	names := make(map[string]bool, len(data.Type.Fields))
 	for _, field := range data.Type.Fields {
-		fields[field.Name] = struct {
-			deprecated bool
-			reason     *string
-		}{deprecated: field.IsDeprecated, reason: field.DeprecationReason}
+		names[field.Name] = true
 	}
 
 	for _, name := range []string{
@@ -175,15 +148,9 @@ func TestRepositoryReadContract_DeprecatesOnlyLegacyDuplicateFields(t *testing.T
 		"updatedAt",
 		"updatedBy",
 	} {
-		field, ok := fields[name]
-		require.True(t, ok, "Repository.%s missing from introspection", name)
-		assert.True(t, field.deprecated, "Repository.%s must be deprecated", name)
-		require.NotNil(t, field.reason, "Repository.%s must provide migration guidance", name)
-		assert.NotEmpty(t, strings.TrimSpace(*field.reason))
+		assert.False(t, names[name], "Repository.%s should have been removed", name)
 	}
-	require.Contains(t, fields, "id")
-	assert.False(t, fields["id"].deprecated, "Relay id must remain non-deprecated")
-	assert.Nil(t, fields["id"].reason)
+	assert.True(t, names["id"])
 }
 
 func TestRepositoryReadContract_DirectNodeAndConnectionEnvelopeBodyParity(t *testing.T) {
@@ -229,8 +196,6 @@ func TestRepositoryReadContract_DirectNodeAndConnectionEnvelopeBodyParity(t *tes
 	assert.NotNil(t, byPath.Metadata.Annotations)
 	assert.NotNil(t, byPath.Metadata.OwnerReferences)
 	assert.NotNil(t, byPath.Metadata.Finalizers)
-	assert.NotEmpty(t, byPath.CreatedBy)
-	assert.NotEmpty(t, byPath.UpdatedBy)
 }
 
 func repositoryReadContractSelection() string {
@@ -289,19 +254,6 @@ func repositoryReadContractSelection() string {
 				storageClass
 			}
 		}
-		name
-		namespace {
-			metadata {
-				name
-			}
-		}
-		defaultBranch
-		storageClass
-		storagePath
-		createdAt
-		createdBy
-		updatedAt
-		updatedBy
 		body
 	}`
 }
@@ -476,7 +428,6 @@ func assertRepositoryReadIntegrationShape(
 	assert.NotNil(t, got.Metadata.OwnerReferences)
 	assert.NotNil(t, got.Metadata.Finalizers)
 
-	assert.Equal(t, got.DefaultBranch, got.Spec.DefaultBranch)
 	assert.Equal(t, "PRIVATE", got.Spec.Visibility)
 	assert.Equal(t, int64(0), got.Spec.PushPolicy.MaxPackSizeBytes)
 	assert.Equal(t, int64(0), got.Spec.PushPolicy.MaxFileSizeBytes)
@@ -486,14 +437,4 @@ func assertRepositoryReadIntegrationShape(
 
 	assert.NotNil(t, got.Status.Conditions)
 	assert.NotEmpty(t, got.Status.Resolved.StoragePath)
-	assert.Equal(t, got.StoragePath, got.Status.Resolved.StoragePath)
-	assert.Equal(t, got.StorageClass, got.Status.Resolved.StorageClass)
-
-	assert.Equal(t, name, got.Name)
-	require.NotNil(t, got.Namespace)
-	assert.Equal(t, namespace, got.Namespace.Metadata.Name)
-	assert.Equal(t, got.Metadata.CreationTimestamp, got.CreatedAt)
-	assert.NotEmpty(t, got.CreatedBy)
-	assert.NotEmpty(t, got.UpdatedAt)
-	assert.NotEmpty(t, got.UpdatedBy)
 }

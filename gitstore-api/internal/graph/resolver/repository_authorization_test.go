@@ -150,8 +150,6 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 		Subject:    "bob",
 		AuthMethod: "test",
 	})
-	targetNamespaceNodeID, err := resolver.EncodeNodeID("Namespace", h.targetNamespace.UID)
-	require.NoError(t, err)
 	first := int32(10)
 
 	tests := []struct {
@@ -179,22 +177,6 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 				Kind:       "Repository",
 				Metadata:   &model.MetadataInput{Name: h.repository.Name, Namespace: h.sourceNamespace.Name},
 				Spec:       &model.RepositorySpecInput{},
-			}},
-		},
-		{
-			name:   "rename",
-			action: "repository.rename.any",
-			object: "Mutation", field: "renameRepository", args: map[string]any{"input": model.RenameRepositoryInput{
-				RepositoryID: h.repositoryNodeID,
-				NewName:      "renamed-catalog",
-			}},
-		},
-		{
-			name:   "transfer",
-			action: "repository.transfer.any",
-			object: "Mutation", field: "transferRepository", args: map[string]any{"input": model.TransferRepositoryInput{
-				RepositoryID:      h.repositoryNodeID,
-				TargetNamespaceID: targetNamespaceNodeID,
 			}},
 		},
 		{
@@ -249,10 +231,6 @@ func TestRepositoryResolversDenyCrossTenantAccessBeforeMutationOrRead(t *testing
 			assert.Equal(t, "repository", calls[0].resource.Kind)
 			assert.Equal(t, "alice", calls[0].resource.OwnerSub)
 			assert.Equal(t, h.sourceNamespace.Name, calls[0].resource.Attrs["namespace"])
-			if test.name == "transfer" {
-				assert.Equal(t, h.targetNamespace.Name, calls[0].resource.Attrs["targetNamespace"])
-				assert.Equal(t, "alice", calls[0].resource.Attrs["targetOwnerSub"])
-			}
 		})
 	}
 }
@@ -285,25 +263,6 @@ func TestRepositoryStatusMutationUsesControllerWriteAction(t *testing.T) {
 			assert.Equal(t, h.sourceNamespace.Name, calls[0].resource.Attrs["namespace"])
 		})
 	}
-}
-
-func TestRepositoryTransferUsesAnyScopeWhenTargetNamespaceHasDifferentOwner(t *testing.T) {
-	h := newRepositoryAuthzHarnessWithTargetOwner(t, "bob")
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "alice", AuthMethod: "test"})
-	targetID, err := resolver.EncodeNodeID("Namespace", h.targetNamespace.UID)
-	require.NoError(t, err)
-
-	err = h.authorizeField(ctx, "Mutation", "transferRepository", map[string]any{"input": model.TransferRepositoryInput{
-		RepositoryID: h.repositoryNodeID, TargetNamespaceID: targetID,
-	}})
-	require.NoError(t, err)
-	calls := h.authz.callsSnapshot()
-	require.Len(t, calls, 1)
-	assert.Equal(t, "repository.transfer.any", calls[0].action)
-	assert.Equal(t, "alice", calls[0].resource.OwnerSub)
-	assert.Equal(t, h.sourceNamespace.Name, calls[0].resource.Attrs["namespace"])
-	assert.Equal(t, h.targetNamespace.Name, calls[0].resource.Attrs["targetNamespace"])
-	assert.Equal(t, "bob", calls[0].resource.Attrs["targetOwnerSub"])
 }
 
 func TestRepositoryNamespacePathAuthorizationDoesNotLeakSameNamedRepositoryAcrossNamespaces(t *testing.T) {

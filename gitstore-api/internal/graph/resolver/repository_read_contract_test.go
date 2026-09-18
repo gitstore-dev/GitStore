@@ -220,8 +220,8 @@ func TestRepositoryReadContract_ListUsesResolvedNamespaceWithoutPerRowLookups(t 
 	for _, edge := range connection.Edges {
 		require.NotNil(t, edge)
 		require.NotNil(t, edge.Node)
-		expected := expectedByName[edge.Node.Name]
-		require.NotNil(t, expected, "unexpected repository %q", edge.Node.Name)
+		expected := expectedByName[edge.Node.Metadata.Name]
+		require.NotNil(t, expected, "unexpected repository %q", edge.Node.Metadata.Name)
 		assertRepositoryReadContract(t, edge.Node, expected, h.namespace)
 	}
 
@@ -291,16 +291,6 @@ func assertRepositoryReadContract(
 	assert.Equal(t, repositoryReadStoragePath(repositoryReadDataDir, expected.UID), got.Status.Resolved.StoragePath)
 	assert.Equal(t, expected.StorageClass, got.Status.Resolved.StorageClass)
 
-	assert.Equal(t, expected.Name, got.Name)
-	require.NotNil(t, got.Namespace)
-	assert.Equal(t, namespace.Name, got.Namespace.Identifier)
-	assert.Equal(t, expected.DefaultBranch, got.DefaultBranch)
-	assert.Equal(t, expected.StorageClass, got.StorageClass)
-	assert.Equal(t, got.Status.Resolved.StoragePath, got.StoragePath)
-	assert.Equal(t, expected.CreationTimestamp, got.CreatedAt)
-	assert.Equal(t, expected.CreationActor, got.CreatedBy)
-	assert.Equal(t, expected.UpdateTimestamp, got.UpdatedAt)
-	assert.Equal(t, expected.UpdateActor, got.UpdatedBy)
 	require.NotNil(t, got.Body)
 	assert.Equal(t, expected.Body, *got.Body)
 }

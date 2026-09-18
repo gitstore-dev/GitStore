@@ -1415,7 +1415,7 @@ func capacityNamespaceExists(client *http.Client, apiURL, token, name string) bo
 
 func capacityNamespaceExistsContext(ctx context.Context, client *http.Client, apiURL, token, name string) bool {
 	body, err := json.Marshal(gqlRequest{
-		Query:     `query($name: String!) { namespace(by: {identifier: $name}) { id } }`,
+		Query:     `query($name: String!) { namespace(by: {name: $name}) { id } }`,
 		Variables: map[string]any{"name": name},
 	})
 	if err != nil {

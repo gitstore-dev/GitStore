@@ -77,16 +77,21 @@ func TestGraphQLStorageClientProvisionsByNamespaceAndName(t *testing.T) {
 		}
 		gotInput, _ = request.Variables["input"].(map[string]any)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"provisionRepositoryStorage":{"repository":{"metadata":{"namespace":"acme","name":"catalog"}}}}}`))
+		_, _ = w.Write([]byte(`{"data":{"provisionRepositoryStorage":{"repository":{"metadata":{"namespace":"acme","name":"catalog"},"status":{"resolved":{"storagePath":"/data/acme/catalog.git","storageClass":"standard"}}}}}}`))
 	}))
 	defer srv.Close()
 
 	client := NewGraphQLStorageClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
-	if err := client.EnsureStorage(context.Background(), "acme", "catalog"); err != nil {
+	resolved, err := client.EnsureStorage(context.Background(), "acme", "catalog")
+	if err != nil {
 		t.Fatalf("EnsureStorage() error = %v", err)
 	}
 	if gotInput["namespace"] != "acme" || gotInput["name"] != "catalog" {
 		t.Fatalf("input = %#v, want namespace/name", gotInput)
+	}
+	want := ResolvedStorage{StoragePath: "/data/acme/catalog.git", StorageClass: "standard"}
+	if resolved != want {
+		t.Fatalf("EnsureStorage() resolved = %#v, want %#v", resolved, want)
 	}
 }
 
@@ -104,7 +109,7 @@ func TestGraphQLStorageClientPreservesAuthorizationAndRetryErrors(t *testing.T) 
 				_, _ = w.Write([]byte(tc.body))
 			}))
 			defer srv.Close()
-			err := NewGraphQLStorageClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token"))).EnsureStorage(context.Background(), "acme", "catalog")
+			_, err := NewGraphQLStorageClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token"))).EnsureStorage(context.Background(), "acme", "catalog")
 			if err == nil {
 				t.Fatal("EnsureStorage() error = nil, want propagated API error")
 			}
@@ -122,10 +127,10 @@ func TestGraphQLStorageClientTwoReplicaProvisioningIsIdempotent(t *testing.T) {
 	defer srv.Close()
 	first := NewGraphQLStorageClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("replica-a")))
 	second := NewGraphQLStorageClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("replica-b")))
-	if err := first.EnsureStorage(context.Background(), "acme", "catalog"); err != nil {
+	if _, err := first.EnsureStorage(context.Background(), "acme", "catalog"); err != nil {
 		t.Fatal(err)
 	}
-	if err := second.EnsureStorage(context.Background(), "acme", "catalog"); err != nil {
+	if _, err := second.EnsureStorage(context.Background(), "acme", "catalog"); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {
