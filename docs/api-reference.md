@@ -103,11 +103,11 @@ mutation Logout {
 | `createNamespace(input: CreateNamespaceInput!)`           | Create a namespace                                                                      |
 | `deleteNamespace(input: DeleteNamespaceInput!)`           | Delete an empty namespace                                                               |
 | `createRepository(input: CreateRepositoryInput!)`         | Create a repository in a namespace                                                      |
-| `renameRepository(input: RenameRepositoryInput!)`         | Rename a repository                                                                     |
-| `transferRepository(input: TransferRepositoryInput!)`     | Move a repository to another namespace                                                  |
 | `deleteRepository(input: DeleteRepositoryInput!)`         | Delete a repository and its storage                                                     |
 | `updateCategoryStatus(input: UpdateCategoryStatusInput!)` | Controller-only partial-merge write to a CategoryTaxonomy's `.status` sub-resource      |
-| `updateResourceStatus(input: UpdateResourceStatusInput!)` | Generic, kind-parameterized counterpart of `updateCategoryStatus` for CRD-defined kinds |
+| `updateNamespaceStatus(input: UpdateNamespaceStatusInput!)` | Controller-only partial-merge write to a Namespace's `.status` sub-resource           |
+| `updateRepositoryStatus(input: UpdateRepositoryStatusInput!)` | Controller-only partial-merge write to a Repository's `.status` sub-resource        |
+| `updateResourceStatus(input: UpdateResourceStatusInput!)` | Generic, kind-parameterized counterpart of the per-kind status mutations for CRD-defined kinds |
 
 ### Subscriptions
 
@@ -173,8 +173,12 @@ query GetNodes($ids: [ID!]!) {
       }
     }
     ... on Repository {
-      name
-      defaultBranch
+      metadata {
+        name
+      }
+      spec {
+        defaultBranch
+      }
     }
   }
 }
@@ -184,7 +188,7 @@ query GetNodes($ids: [ID!]!) {
 
 ```graphql
 query GetNamespace {
-  namespace(by: { identifier: "gitstore-test" }) {
+  namespace(by: { name: "gitstore-test" }) {
     id
     apiVersion
     kind
@@ -220,9 +224,6 @@ query GetNamespace {
   }
 }
 ```
-
-Existing flat fields remain available with deprecation reasons. New callers
-should use the declarative fields shown above.
 
 ### namespaces
 
@@ -267,17 +268,17 @@ query GetRepository {
     }
   ) {
     id
-    name
-    defaultBranch
-    storageClass
-    storagePath
-    namespace {
-      metadata {
-        name
-      }
-      spec {
-        title
-        tier
+    metadata {
+      name
+      namespace
+    }
+    spec {
+      defaultBranch
+    }
+    status {
+      resolved {
+        storagePath
+        storageClass
       }
     }
   }
@@ -293,8 +294,12 @@ query ListRepositories($namespace: String!) {
       cursor
       node {
         id
-        name
-        defaultBranch
+        metadata {
+          name
+        }
+        spec {
+          defaultBranch
+        }
       }
     }
     totalCount
@@ -605,27 +610,6 @@ query ListCollections {
 }
 ```
 
-### catalogVersion
-
-`catalogVersion` remains in the schema for continuity. Repository-scoped catalogue version semantics are still being clarified, so prefer resource queries for current catalogue state.
-
-```graphql
-query CatalogVersion {
-  catalogVersion {
-    tag
-    commit
-    publishedAt
-    message
-    stats {
-      productCount
-      categoryCount
-      collectionCount
-      orphanedReferences
-    }
-  }
-}
-```
-
 ## Mutation Operations
 
 ### login
@@ -648,9 +632,10 @@ Creates a namespace.
 mutation CreateNamespace {
   createNamespace(
     input: {
-            identifier: "gitstore-test"
-      displayName: "GitStore Test"
-      tier: USER
+      apiVersion: "gitstore.dev/v1beta1"
+      kind: "Namespace"
+      metadata: { name: "gitstore-test" }
+      spec: { title: "GitStore Test", tier: USER }
     }
   ) {
     namespace {
@@ -672,11 +657,11 @@ mutation CreateNamespace {
 
 Input fields:
 
-| Field         | Required | Notes                                          |
-|---------------|----------|------------------------------------------------|
-| `identifier`  | yes      | Globally unique DNS-label namespace identifier |
-| `displayName` | no       | Human-friendly name                            |
-| `tier`        | yes      | `USER` or `ORGANIZATION`                       |
+| Field                | Required | Notes                                          |
+|----------------------|----------|-------------------------------------------------|
+| `metadata.name`      | yes      | Globally unique DNS-label namespace identifier |
+| `spec.title`         | no       | Human-friendly display title                   |
+| `spec.tier`          | yes      | `USER` or `ORGANIZATION`                       |
 
 ### deleteNamespace
 
@@ -703,60 +688,24 @@ Creates a repository in a namespace.
 mutation CreateRepository($namespace: String!) {
   createRepository(
     input: {
-      namespace: $namespace
-      name: "catalog"
-      defaultBranch: "main"
+      apiVersion: "gitstore.dev/v1beta1"
+      kind: "Repository"
+      metadata: { namespace: $namespace, name: "catalog" }
+      spec: { defaultBranch: "main", visibility: PRIVATE }
     }
   ) {
     repository {
       id
-      name
-      defaultBranch
-      storagePath
-      namespace {
-        metadata {
-          name
-        }
+      metadata {
+        name
+        namespace
       }
-    }
-  }
-}
-```
-
-### renameRepository
-
-```graphql
-mutation RenameRepository($repositoryId: ID!) {
-  renameRepository(
-    input: {
-            repositoryId: $repositoryId
-      newName: "summer-catalog"
-    }
-  ) {
-        repository {
-      id
-      name
-    }
-  }
-}
-```
-
-### transferRepository
-
-```graphql
-mutation TransferRepository($repositoryId: ID!, $targetNamespaceId: ID!) {
-  transferRepository(
-    input: {
-            repositoryId: $repositoryId
-      targetNamespaceId: $targetNamespaceId
-    }
-  ) {
-        repository {
-      id
-      name
-      namespace {
-        metadata {
-          name
+      spec {
+        defaultBranch
+      }
+      status {
+        resolved {
+          storagePath
         }
       }
     }
@@ -894,15 +843,6 @@ type Namespace implements Node {
   metadata: NamespaceMetadata!
   spec: NamespaceSpec!
   status: NamespaceStatus!
-
-  # Deprecated compatibility fields remain until a future major API release.
-  identifier: String! @deprecated
-  displayName: String @deprecated
-  tier: NamespaceTier! @deprecated
-  createdAt: DateTime! @deprecated
-  createdBy: String! @deprecated
-  updatedAt: DateTime! @deprecated
-  updatedBy: String! @deprecated
 }
 ```
 
@@ -922,17 +862,6 @@ type Repository implements Node {
   metadata: ObjectMeta!
   spec: RepositorySpec!
   status: RepositoryStatus!
-
-  # Deprecated compatibility fields remain until a future major API release.
-  name: String! @deprecated
-  namespace: Namespace! @deprecated
-  defaultBranch: String! @deprecated
-  storageClass: String! @deprecated
-  storagePath: String! @deprecated
-  createdAt: DateTime! @deprecated
-  createdBy: String! @deprecated
-  updatedAt: DateTime! @deprecated
-  updatedBy: String! @deprecated
 }
 
 type RepositorySpec {
