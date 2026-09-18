@@ -61,6 +61,39 @@ start/restart as the Product list-then-watch cache replays (no separate
 persistence; replica-safe by construction since each replica derives it from
 its own durable-watch-backed cache, per R3).
 
+## Reconciler resolution algorithm (uniform — no admission fast path)
+
+On every reconcile of an active (non-`Terminating`) Product, the resolution
+step is the same regardless of *why* the reconciler was enqueued (initial
+admission, spec update, or a CategoryTaxonomy-driven re-enqueue per R3):
+
+1. Look up `CategoryRefName` (empty if the Product has no `categoryRef`) in
+   the controller's own CategoryTaxonomy cache, scoped to the Product's
+   namespace.
+2. Found → `CategoryResolved=True`/`CategoryFound`,
+   `resolved.category = {name, uid: encode(found.UID)}`.
+3. Not found (including "no `categoryRef` at all", which this feature treats
+   the same as unresolved — a Product with no category can never be
+   `CategoryResolved=True`) → `CategoryResolved=False`/`CategoryNotFound`,
+   `resolved.category = null`.
+4. `updateProductStatus` is called with that condition + `resolved.category`
+   every time step 1-3's outcome differs from the cached `ResourceStatus`
+   (`StatusPatch.IsNoOp`, R5) — which, per R7, also synchronizes the owner
+   reference to match.
+
+This deliberately does **not** special-case "admission already resolved this
+at push time" as a distinct fast path: the controller does not need to read
+or trust `Product.OwnerReferences` at all to decide `CategoryResolved`. It
+independently re-derives the same answer admission would have computed
+(against its own CategoryTaxonomy cache, which it already needs for R3's
+watch-driven convergence). This is simpler than branching on pre-existing
+owner-reference state, avoids extending the lightweight
+`categorytaxonomy.Product` cache entity with owner-reference data it does not
+otherwise need, and is self-correcting: if admission's synchronous
+resolution and the controller's cache-based resolution ever disagreed (e.g. a
+race at push time), the controller's next reconcile converges to a single
+answer either way.
+
 ## State transitions (Product, as observed by this feature's reconciler)
 
 ```text

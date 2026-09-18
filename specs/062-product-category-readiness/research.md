@@ -183,3 +183,30 @@ already exists and already works once the owner reference is present.
   is `gitstore-api`-internal (unexported, datastore-adjacent); duplicating
   its owner-reference shape in the controller would create two independent
   implementations of the same synthesis that could drift.
+
+## R8: One uniform resolution algorithm — no "admission already resolved it" fast path
+
+**Decision**: The reconciler resolves `spec.categoryRef` against its own
+CategoryTaxonomy cache on *every* reconcile, unconditionally — the same code
+path whether the Product was just admitted with an already-existing
+category (User Story 1), is still waiting on one (User Story 2), or is being
+re-enqueued after its category was deleted (User Story 3). It never reads
+`Product.OwnerReferences` to short-circuit this decision.
+
+**Rationale**: The controller already needs read access to its own
+CategoryTaxonomy cache for R3 (watch-driven re-enqueue) and R6 (bounded
+retry), so resolving against it is not extra machinery — it is the same
+lookup either way. Branching on "did admission already write an owner
+reference" would require extending the lightweight `categorytaxonomy.Product`
+cache entity (today: `UID, Namespace, Name, ResourceVersion, Finalizers,
+DeletionTimestamp, CategoryRefName` — no owner-reference data) purely to
+support a fast path that saves nothing (the cache lookup it would skip is
+O(1)), while adding a second source of truth that could disagree with the
+controller's own resolution during a race at push time.
+
+**Alternatives considered**: Have the reconciler check
+`Product.OwnerReferences` first and only fall back to a CategoryTaxonomy
+cache lookup when absent — rejected per Simplicity: no measured benefit,
+extends the Product cache entity for no reason, and introduces a
+theoretical disagreement between two resolution mechanisms that the uniform
+approach avoids by construction.
