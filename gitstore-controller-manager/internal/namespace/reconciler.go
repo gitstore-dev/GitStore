@@ -158,8 +158,8 @@ func mergeControllerConditions(current Namespace, admitted, systemReady bool, pr
 		if condition == nil || condition.Type == conditionSystemRepoReady || condition.Type == conditionReady {
 			continue
 		}
-		copy := *condition
-		conditions = append(conditions, &copy)
+		copied := *condition
+		conditions = append(conditions, &copied)
 	}
 
 	systemCondition := &status.Condition{

@@ -95,19 +95,20 @@ mutation Logout {
 
 ### Mutations
 
-| Operation                                                 | Purpose                                                                                 |
-|-----------------------------------------------------------|-----------------------------------------------------------------------------------------|
-| `login(input: LoginInput!)`                               | Create an OIDC-style token response for local providers                                 |
-| `logout`                                                  | End the current session                                                                 |
-| `refreshToken(input: RefreshTokenInput!)`                 | Exchange a refresh token for a new OIDC-style token response                            |
-| `createNamespace(input: CreateNamespaceInput!)`           | Create a namespace                                                                      |
-| `deleteNamespace(input: DeleteNamespaceInput!)`           | Delete an empty namespace                                                               |
-| `createRepository(input: CreateRepositoryInput!)`         | Create a repository in a namespace                                                      |
-| `deleteRepository(input: DeleteRepositoryInput!)`         | Delete a repository and its storage                                                     |
-| `updateCategoryStatus(input: UpdateCategoryStatusInput!)` | Controller-only partial-merge write to a CategoryTaxonomy's `.status` sub-resource      |
-| `updateNamespaceStatus(input: UpdateNamespaceStatusInput!)` | Controller-only partial-merge write to a Namespace's `.status` sub-resource           |
-| `updateRepositoryStatus(input: UpdateRepositoryStatusInput!)` | Controller-only partial-merge write to a Repository's `.status` sub-resource        |
-| `updateResourceStatus(input: UpdateResourceStatusInput!)` | Generic, kind-parameterized counterpart of the per-kind status mutations for CRD-defined kinds |
+| Operation                                                     | Purpose                                                                                                                                                                              |
+|---------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `login(input: LoginInput!)`                                   | Create an OIDC-style token response for local providers                                                                                                                              |
+| `logout`                                                      | End the current session                                                                                                                                                              |
+| `refreshToken(input: RefreshTokenInput!)`                     | Exchange a refresh token for a new OIDC-style token response                                                                                                                         |
+| `createNamespace(input: CreateNamespaceInput!)`               | Create a namespace                                                                                                                                                                   |
+| `deleteNamespace(input: DeleteNamespaceInput!)`               | Delete an empty namespace                                                                                                                                                            |
+| `createRepository(input: CreateRepositoryInput!)`             | Create a repository in a namespace                                                                                                                                                   |
+| `deleteRepository(input: DeleteRepositoryInput!)`             | Delete a repository and its storage                                                                                                                                                  |
+| `updateCategoryStatus(input: UpdateCategoryStatusInput!)`     | Controller-only partial-merge write to a CategoryTaxonomy's `.status` sub-resource                                                                                                   |
+| `updateNamespaceStatus(input: UpdateNamespaceStatusInput!)`   | Controller-only partial-merge write to a Namespace's `.status` sub-resource                                                                                                          |
+| `updateProductStatus(input: UpdateProductStatusInput!)`       | Controller-only partial-merge write to a Product's `.status` sub-resource, including `resolved.category` (`{name, uid}`) and its declarative `CategoryTaxonomy` owner-reference sync |
+| `updateRepositoryStatus(input: UpdateRepositoryStatusInput!)` | Controller-only partial-merge write to a Repository's `.status` sub-resource                                                                                                         |
+| `updateResourceStatus(input: UpdateResourceStatusInput!)`     | Generic, kind-parameterized counterpart of the per-kind status mutations for CRD-defined kinds                                                                                       |
 
 ### Subscriptions
 

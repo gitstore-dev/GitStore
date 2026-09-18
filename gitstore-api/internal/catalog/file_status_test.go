@@ -11,6 +11,6 @@ import (
 
 func TestValidateFileConditions(t *testing.T) {
 	require.NoError(t, ValidateFileConditions([]Condition{{Type: ConditionReady, Status: ConditionTrue}}))
-	require.Error(t, ValidateFileConditions([]Condition{{Type: ConditionPublished, Status: ConditionTrue}}))
+	require.Error(t, ValidateFileConditions([]Condition{{Type: ConditionCategoryResolved, Status: ConditionTrue}}))
 	require.Error(t, ValidateFileConditions([]Condition{{Type: ConditionReady, Status: "Invalid"}}))
 }

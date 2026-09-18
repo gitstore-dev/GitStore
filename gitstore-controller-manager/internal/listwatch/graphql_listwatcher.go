@@ -386,8 +386,14 @@ type namespacesListResponse struct {
 }
 
 const productFields = `
-  metadata { uid name namespace resourceVersion finalizers deletionTimestamp }
+  metadata { uid name namespace resourceVersion generation finalizers deletionTimestamp }
   spec { categoryRef { name } }
+  status {
+    observedGeneration
+    lastAppliedRevision
+    conditions { type status observedGeneration lastTransitionTime reason message }
+    resolved { category { name uid } }
+  }
 `
 
 // productsListQueryByNamespace paginates products within one namespace.
@@ -424,6 +430,7 @@ type productMetadataJSON struct {
 	Name              string     `json:"name"`
 	Namespace         string     `json:"namespace"`
 	ResourceVersion   string     `json:"resourceVersion"`
+	Generation        int64      `json:"generation"`
 	Finalizers        []string   `json:"finalizers"`
 	DeletionTimestamp *time.Time `json:"deletionTimestamp"`
 }
@@ -434,9 +441,24 @@ type productSpecJSON struct {
 	} `json:"categoryRef"`
 }
 
+type productResolvedJSON struct {
+	Category *struct {
+		Name string `json:"name"`
+		UID  string `json:"uid"`
+	} `json:"category"`
+}
+
+type productStatusJSON struct {
+	ObservedGeneration  int64                `json:"observedGeneration"`
+	LastAppliedRevision string               `json:"lastAppliedRevision"`
+	Conditions          []conditionJSON      `json:"conditions"`
+	Resolved            *productResolvedJSON `json:"resolved"`
+}
+
 type productNodeJSON struct {
 	Metadata productMetadataJSON `json:"metadata"`
 	Spec     productSpecJSON     `json:"spec"`
+	Status   *productStatusJSON  `json:"status"`
 }
 
 func (n productNodeJSON) toProduct() categorytaxonomy.Product {
@@ -444,12 +466,35 @@ func (n productNodeJSON) toProduct() categorytaxonomy.Product {
 		UID:               n.Metadata.UID,
 		Namespace:         n.Metadata.Namespace,
 		Name:              n.Metadata.Name,
+		Generation:        n.Metadata.Generation,
 		ResourceVersion:   n.Metadata.ResourceVersion,
 		Finalizers:        n.Metadata.Finalizers,
 		DeletionTimestamp: n.Metadata.DeletionTimestamp,
 	}
 	if n.Spec.CategoryRef != nil {
 		p.CategoryRefName = n.Spec.CategoryRef.Name
+	}
+	if n.Status == nil {
+		return p
+	}
+	p.Status = status.ResourceStatus{
+		ResourceVersion:     n.Metadata.ResourceVersion,
+		ObservedGeneration:  n.Status.ObservedGeneration,
+		LastAppliedRevision: n.Status.LastAppliedRevision,
+	}
+	for _, condition := range n.Status.Conditions {
+		p.Status.Conditions = append(p.Status.Conditions, &status.Condition{
+			Type: condition.Type, Status: condition.Status,
+			ObservedGeneration: condition.ObservedGeneration,
+			LastTransitionTime: condition.LastTransitionTime,
+			Reason:             condition.Reason, Message: condition.Message,
+		})
+	}
+	if n.Status.Resolved != nil && n.Status.Resolved.Category != nil {
+		resolvedJSON, err := json.Marshal(n.Status.Resolved)
+		if err == nil {
+			p.Status.Resolved = resolvedJSON
+		}
 	}
 	return p
 }

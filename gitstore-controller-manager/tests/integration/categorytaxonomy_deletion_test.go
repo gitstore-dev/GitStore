@@ -51,7 +51,12 @@ func (c *restartDeletionClient) CompleteDeletion(context.Context, string, string
 
 func TestIntegration_CategoryDeletionResumesAfterControllerRestart(t *testing.T) {
 	deletedAt := time.Now().UTC()
-	resolved, err := json.Marshal(categorytaxonomy.ResolvedCategoryTaxonomy{Path: []string{"parent"}})
+	// ProductCount must match what counter (below) freshly computes (1), or
+	// the category's own hierarchy patch is never a no-op and every
+	// reconcile keeps rewriting its own status instead of proceeding to
+	// DecoupleProducts/CompleteDeletion with a resourceVersion the server
+	// actually has (the fix for a P1-adjacent finding on PR #426).
+	resolved, err := json.Marshal(categorytaxonomy.ResolvedCategoryTaxonomy{Path: []string{"parent"}, ProductCount: 1})
 	require.NoError(t, err)
 	category := categorytaxonomy.CategoryTaxonomy{
 		UID: "parent-uid", Namespace: "acme", Name: "parent", ResourceVersion: "5",
@@ -60,7 +65,7 @@ func TestIntegration_CategoryDeletionResumesAfterControllerRestart(t *testing.T)
 			{Type: "ParentResolved", Status: "TRUE", LastTransitionTime: deletedAt},
 			{Type: "Acyclic", Status: "TRUE", LastTransitionTime: deletedAt},
 			{Type: "Ready", Status: "TRUE", LastTransitionTime: deletedAt},
-			{Type: "Terminating", Status: "TRUE", LastTransitionTime: deletedAt},
+			{Type: "Terminating", Status: "TRUE", LastTransitionTime: deletedAt, Reason: "DeletionRequested", Message: "CategoryTaxonomy is awaiting foreground deletion completion."},
 		}},
 	}
 	categories := cache.New[categorytaxonomy.CategoryTaxonomy]()

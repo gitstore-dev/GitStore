@@ -40,7 +40,7 @@ func NewStaticToken(token string) *StaticToken {
 }
 
 // Current returns the configured test credential.
-func (s *StaticToken) Current(ctx context.Context) (string, error) {
+func (s *StaticToken) Current(_ context.Context) (string, error) {
 	if s.token == "" {
 		return "", fmt.Errorf("static token is empty")
 	}

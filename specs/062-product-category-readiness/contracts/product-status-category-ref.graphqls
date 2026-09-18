@@ -1,0 +1,86 @@
+# Contract addition: Product Category and Readiness Reconciliation
+#
+# Additive changes to shared/schemas/product.graphqls. All new fields are
+# nullable/optional so an old controller replica (never sending them) and an
+# old API replica (ignoring them) both remain correct during a rolling
+# upgrade (constitution: Independently Deployable Delivery).
+#
+# Also removes UpdateProductStatusInput.removeOwnerID as part of this same
+# change: it was dead (no caller anywhere in gitstore-controller-manager,
+# tests/integration, or gitstore-api tests) and single-purpose (only ever
+# matched a CategoryTaxonomy-kind owner reference, per
+# productOwnerReferenceNodeID's now-removed implementation). Superseded by
+# the declarative resolved.category sync described below, which subsumes
+# both the add and remove cases this feature needs.
+#
+# BEFORE (current live schema):
+#
+# input UpdateProductStatusInput {
+#   name: String!
+#   namespace: String!
+#   resourceVersion: String!
+#   conditions: [ConditionInput!]
+# }
+#
+# type ResolvedCategoryDefinition {
+#   name: String!
+#   path: [String!]!
+# }
+#
+# AFTER:
+
+input UpdateProductStatusInput {
+  name: String!
+  namespace: String!
+  resourceVersion: String!
+
+  """Null = unchanged. Set on every successful reconcile, matching every other per-kind status mutation."""
+  observedGeneration: Int
+
+  """Null = unchanged, e.g. "main@sha1:a1b2c3d"."""
+  lastAppliedRevision: String
+
+  conditions: [ConditionInput!]
+
+  """
+  Null = unchanged. Kind-specific resolved payload for the fields this
+  feature needs (currently only the resolved category reference).
+  """
+  resolved: ResolvedProductStatusInput
+}
+
+"""Controller-only resolved-status payload accepted by updateProductStatus."""
+input ResolvedProductStatusInput {
+  """
+  Null clears any previously-resolved category reference. Non-null
+  declaratively sets it. Either way, the resolver synchronizes the
+  Product's non-blocking CategoryTaxonomy owner reference to match this
+  value (adds/updates it when set, removes it when null) — mirroring the
+  same synthesis admission already performs for a freshly-pushed Product
+  (resolvedCategoryOwnerReferences), so this is the only writer a
+  previously-unresolved Product ever needs.
+  """
+  category: ResolvedCategoryRefInput
+}
+
+"""
+A resolved CategoryTaxonomy reference: the category's name and its opaque
+Relay identifier (the same value CategoryTaxonomy.id already returns for
+that category), never the category's raw internal identifier.
+"""
+input ResolvedCategoryRefInput {
+  name: String!
+  uid: ID!
+}
+
+type ResolvedCategoryDefinition {
+  name: String!
+  path: [String!]!
+
+  """
+  The resolved category's opaque Relay identifier, matching
+  CategoryTaxonomy.id. Present only while the owning Product's
+  CategoryResolved condition is True.
+  """
+  uid: ID
+}

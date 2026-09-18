@@ -1547,6 +1547,29 @@ func (ec *executionContext) fieldContext_ResolvedCategoryDefinition_path(_ conte
 	return graphql.NewScalarFieldContext("ResolvedCategoryDefinition", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _ResolvedCategoryDefinition_uid(ctx context.Context, field graphql.CollectedField, obj *model.ResolvedCategoryDefinition) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ResolvedCategoryDefinition_uid(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOID2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ResolvedCategoryDefinition_uid(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ResolvedCategoryDefinition", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
 func (ec *executionContext) _ResolvedFileDefinition_name(ctx context.Context, field graphql.CollectedField, obj *model.ResolvedFileDefinition) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -2375,6 +2398,73 @@ func (ec *executionContext) unmarshalInputProductSpecInput(ctx context.Context, 
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputResolvedCategoryRefInput(ctx context.Context, obj any) (model.ResolvedCategoryRefInput, error) {
+	var it model.ResolvedCategoryRefInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"name", "uid"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "uid":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("uid"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.UID = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputResolvedProductStatusInput(ctx context.Context, obj any) (model.ResolvedProductStatusInput, error) {
+	var it model.ResolvedProductStatusInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"category"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "category":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("category"))
+			data, err := ec.unmarshalOResolvedCategoryRefInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResolvedCategoryRefInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Category = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputUpdateProductInput(ctx context.Context, obj any) (model.UpdateProductInput, error) {
 	var it model.UpdateProductInput
 	if obj == nil {
@@ -2451,7 +2541,7 @@ func (ec *executionContext) unmarshalInputUpdateProductStatusInput(ctx context.C
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "namespace", "resourceVersion", "conditions", "removeOwnerID"}
+	fieldsInOrder := [...]string{"name", "namespace", "resourceVersion", "observedGeneration", "lastAppliedRevision", "conditions", "resolved"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -2479,6 +2569,20 @@ func (ec *executionContext) unmarshalInputUpdateProductStatusInput(ctx context.C
 				return it, err
 			}
 			it.ResourceVersion = data
+		case "observedGeneration":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("observedGeneration"))
+			data, err := ec.unmarshalOInt2ᚖint32(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ObservedGeneration = data
+		case "lastAppliedRevision":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("lastAppliedRevision"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.LastAppliedRevision = data
 		case "conditions":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("conditions"))
 			data, err := ec.unmarshalOConditionInput2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐConditionInputᚄ(ctx, v)
@@ -2486,13 +2590,13 @@ func (ec *executionContext) unmarshalInputUpdateProductStatusInput(ctx context.C
 				return it, err
 			}
 			it.Conditions = data
-		case "removeOwnerID":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("removeOwnerID"))
-			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+		case "resolved":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resolved"))
+			data, err := ec.unmarshalOResolvedProductStatusInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResolvedProductStatusInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.RemoveOwnerID = data
+			it.Resolved = data
 		}
 	}
 	return it, nil
@@ -3323,6 +3427,8 @@ func (ec *executionContext) _ResolvedCategoryDefinition(ctx context.Context, sel
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "uid":
+			out.Values[i] = ec._ResolvedCategoryDefinition_uid(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -4048,6 +4154,14 @@ func (ec *executionContext) marshalOResolvedCategoryDefinition2ᚖgithubᚗcom�
 	return ec._ResolvedCategoryDefinition(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalOResolvedCategoryRefInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResolvedCategoryRefInput(ctx context.Context, v any) (*model.ResolvedCategoryRefInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputResolvedCategoryRefInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalOResolvedFileDefinition2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResolvedFileDefinition(ctx context.Context, sel ast.SelectionSet, v *model.ResolvedFileDefinition) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -4060,6 +4174,14 @@ func (ec *executionContext) marshalOResolvedProductDefinition2ᚖgithubᚗcomᚋ
 		return graphql.Null
 	}
 	return ec._ResolvedProductDefinition(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOResolvedProductStatusInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResolvedProductStatusInput(ctx context.Context, v any) (*model.ResolvedProductStatusInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputResolvedProductStatusInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalOVariantSummaryDefinition2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐVariantSummaryDefinition(ctx context.Context, sel ast.SelectionSet, v *model.VariantSummaryDefinition) graphql.Marshaler {

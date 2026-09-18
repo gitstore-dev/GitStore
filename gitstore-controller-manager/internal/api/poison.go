@@ -6,6 +6,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/retry"
@@ -69,10 +70,10 @@ func RequeuePoisonHandler(mgr Requeuer) http.HandlerFunc {
 
 		key := types.WorkItemKey{Kind: kind, Namespace: namespace, Name: name}
 		if err := mgr.Requeue(key); err != nil {
-			switch err {
-			case types.ErrKindNotRegistered:
+			switch {
+			case errors.Is(err, types.ErrKindNotRegistered):
 				writeJSON(w, http.StatusNotFound, errorBody{Error: "kind not registered"})
-			case types.ErrNotFound:
+			case errors.Is(err, types.ErrNotFound):
 				writeJSON(w, http.StatusNotFound, errorBody{Error: "item not in quarantine"})
 			default:
 				writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: err.Error()})

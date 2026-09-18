@@ -33,7 +33,6 @@ type ConditionType = string
 type ConditionStatus = string
 
 const (
-	ConditionPublished          ConditionType = "Published"
 	ConditionAdmissionAccepted  ConditionType = "AdmissionAccepted"
 	ConditionCategoryResolved   ConditionType = "CategoryResolved"
 	ConditionOptionsAccepted    ConditionType = "OptionsAccepted"
@@ -65,7 +64,7 @@ type ProductStatus struct {
 
 // Condition is a named status signal following the Kubernetes condition convention.
 type Condition struct {
-	Type               ConditionType   `json:"type"               validate:"required,oneof=Published AdmissionAccepted CategoryResolved OptionsAccepted VariantsResolved Ready ParentResolved Acyclic ProductResolved PricingAccepted"`
+	Type               ConditionType   `json:"type"               validate:"required,oneof=AdmissionAccepted CategoryResolved OptionsAccepted VariantsResolved Ready ParentResolved Acyclic ProductResolved PricingAccepted"`
 	Status             ConditionStatus `json:"status"             validate:"required,oneof=True False Unknown"`
 	ObservedGeneration int64           `json:"observedGeneration"`
 	LastTransitionTime time.Time       `json:"lastTransitionTime"`
@@ -87,6 +86,10 @@ type ResolvedProductDefinition struct {
 type ResolvedCategoryDefinition struct {
 	Name string   `json:"name"`
 	Path []string `json:"path"`
+	// UID is the resolved CategoryTaxonomy's opaque Relay-encoded id (the
+	// same value CategoryTaxonomy.id returns), never its raw internal
+	// identifier. Present only while CategoryResolved is True.
+	UID string `json:"uid,omitempty"`
 }
 
 // PriceRangeDefinition uses shopspring/decimal for monetary values, consistent

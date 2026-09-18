@@ -8,21 +8,11 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
-
-func productOwnerReferenceNodeID(ref catalog.OwnerReference) string {
-	// Product status currently removes category-resolution projections. Keep
-	// the raw UID inside the server boundary and compare the public node form.
-	if ref.Kind == "CategoryTaxonomy" {
-		return mustEncodeNodeID(nodeKindCategory, ref.UID)
-	}
-	return ""
-}
 
 func productFromJournalEvent(event datastore.ResourceWatchEvent) (*datastore.Product, error) {
 	if event.Type == datastore.ResourceWatchDeleted || event.Type == datastore.ResourceWatchBookmark {

@@ -417,6 +417,8 @@ func (r *Runner[T]) handleEvent(ctx context.Context, ev WatchEvent[T], pendingDe
 				r.Cache.Set(key, ev.Object)
 			case Deleted:
 				r.Cache.Delete(key)
+			default:
+				// Bookmark is handled above; this should never happen.
 			}
 		}
 

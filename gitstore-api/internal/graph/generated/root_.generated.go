@@ -669,6 +669,7 @@ type ComplexityRoot struct {
 	ResolvedCategoryDefinition struct {
 		Name func(childComplexity int) int
 		Path func(childComplexity int) int
+		UID  func(childComplexity int) int
 	}
 
 	ResolvedCategoryTaxonomy struct {
@@ -3591,6 +3592,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ResolvedCategoryDefinition.Path(childComplexity), true
 
+	case "ResolvedCategoryDefinition.uid":
+		if e.ComplexityRoot.ResolvedCategoryDefinition.UID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedCategoryDefinition.UID(childComplexity), true
+
 	case "ResolvedCategoryTaxonomy.childCount":
 		if e.ComplexityRoot.ResolvedCategoryTaxonomy.ChildCount == nil {
 			break
@@ -4250,7 +4258,9 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputRepositoryNamespacePath,
 		ec.unmarshalInputRepositoryResolvedStatusInput,
 		ec.unmarshalInputRepositorySpecInput,
+		ec.unmarshalInputResolvedCategoryRefInput,
 		ec.unmarshalInputResolvedCategoryTaxonomyInput,
+		ec.unmarshalInputResolvedProductStatusInput,
 		ec.unmarshalInputRotateServiceAccountKeyInput,
 		ec.unmarshalInputServiceAccountPublicKeyInput,
 		ec.unmarshalInputTokenRequestSpec,
@@ -5699,9 +5709,44 @@ input UpdateProductStatusInput {
   name: String!
   namespace: String!
   resourceVersion: String!
+
+  """Null = unchanged. Set on every successful reconcile, matching every other per-kind status mutation."""
+  observedGeneration: Int
+
+  """Null = unchanged, e.g. "main@sha1:a1b2c3d"."""
+  lastAppliedRevision: String
+
   conditions: [ConditionInput!]
-  "Opaque node ID of the owner reference to remove."
-  removeOwnerID: ID
+
+  """
+  Null = unchanged. Kind-specific resolved payload for the fields this
+  feature needs (currently only the resolved category reference).
+  """
+  resolved: ResolvedProductStatusInput
+}
+
+"""Controller-only resolved-status payload accepted by updateProductStatus."""
+input ResolvedProductStatusInput {
+  """
+  Null clears any previously-resolved category reference. Non-null
+  declaratively sets it. Either way, the resolver synchronizes the
+  Product's non-blocking CategoryTaxonomy owner reference to match this
+  value (adds/updates it when set, removes it when null) — mirroring the
+  same synthesis admission already performs for a freshly-pushed Product
+  (resolvedCategoryOwnerReferences), so this is the only writer a
+  previously-unresolved Product ever needs.
+  """
+  category: ResolvedCategoryRefInput
+}
+
+"""
+A resolved CategoryTaxonomy reference: the category's name and its opaque
+Relay identifier (the same value CategoryTaxonomy.id already returns for
+that category), never the category's raw internal identifier.
+"""
+input ResolvedCategoryRefInput {
+  name: String!
+  uid: ID!
 }
 
 type UpdateProductStatusPayload {
@@ -5765,6 +5810,13 @@ type ResolvedProductDefinition {
 type ResolvedCategoryDefinition {
   name: String!
   path: [String!]!
+
+  """
+  The resolved category's opaque Relay identifier, matching
+  CategoryTaxonomy.id. Present only while the owning Product's
+  CategoryResolved condition is True.
+  """
+  uid: ID
 }
 
 type PriceRangeDefinition {
@@ -8215,6 +8267,8 @@ func (ec *executionContext) childFields_ResolvedCategoryDefinition(ctx context.C
 		return ec.fieldContext_ResolvedCategoryDefinition_name(ctx, field)
 	case "path":
 		return ec.fieldContext_ResolvedCategoryDefinition_path(ctx, field)
+	case "uid":
+		return ec.fieldContext_ResolvedCategoryDefinition_uid(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ResolvedCategoryDefinition", field.Name)
 }

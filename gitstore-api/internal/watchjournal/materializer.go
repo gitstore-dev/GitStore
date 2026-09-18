@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -110,9 +111,7 @@ func namespaceLabels(payload json.RawMessage) map[string]string {
 		return nil
 	}
 	labels := make(map[string]string, len(namespace.Labels))
-	for key, value := range namespace.Labels {
-		labels[key] = value
-	}
+	maps.Copy(labels, namespace.Labels)
 	return labels
 }
 

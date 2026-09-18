@@ -56,7 +56,10 @@ func terminatingProduct(resourceVersion string) categorytaxonomy.Product {
 }
 
 func productReplica(resourceCache *cache.Cache[categorytaxonomy.Product], completion product.CompletionClient) *product.Reconciler {
-	return product.NewReconciler(cache.AsReadOnly(resourceCache), completion)
+	// These tests only exercise terminating Products, so the resolve path
+	// (which would need a real category cache/status client) is never
+	// reached; nil is safe here.
+	return product.NewReconciler(cache.AsReadOnly(resourceCache), nil, nil, completion)
 }
 
 func terminatingProductKey() types.WorkItemKey {

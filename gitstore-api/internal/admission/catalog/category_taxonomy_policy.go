@@ -79,11 +79,11 @@ func (p *CategoryTaxonomyValidatingPolicy) Validate(ctx context.Context, req adm
 
 	return admission.DecisionAllow(
 		admission.AdmissionCondition{
-			Type:   string(catalog.ConditionParentResolved),
+			Type:   catalog.ConditionParentResolved,
 			Status: parentResolved,
 		},
 		admission.AdmissionCondition{
-			Type:   string(catalog.ConditionAcyclic),
+			Type:   catalog.ConditionAcyclic,
 			Status: !inCycle,
 		},
 	)

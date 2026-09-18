@@ -12,6 +12,7 @@ import (
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
@@ -58,8 +59,7 @@ func (r *mutationResolver) DeleteProduct(ctx context.Context, input model.Delete
 }
 
 // UpdateProductStatus applies controller-managed category-resolution state.
-// It may remove exactly one resolved category owner reference, but never
-// touches the Git-authored spec.categoryRef.
+// It never touches the Git-authored spec.categoryRef.
 func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.UpdateProductStatusInput) (*model.UpdateProductStatusPayload, error) {
 	product, err := r.store.GetProductByName(ctx, input.Namespace, input.Name)
 	if err != nil {
@@ -74,39 +74,54 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 	if product.ResourceVersion != input.ResourceVersion {
 		return nil, statusConflictError("Product", input.Namespace, input.Name, product.ResourceVersion)
 	}
-	if input.RemoveOwnerID != nil {
-		var refs []catalog.OwnerReference
-		if len(product.OwnerReferences) > 0 {
-			if err := json.Unmarshal(product.OwnerReferences, &refs); err != nil {
-				return nil, gqlerror.Errorf("decode product owner references: %v", err)
-			}
-		}
-		filtered := refs[:0]
-		for _, ref := range refs {
-			if productOwnerReferenceNodeID(ref) != *input.RemoveOwnerID {
-				filtered = append(filtered, ref)
-			}
-		}
-		ownerReferences, err := json.Marshal(filtered)
-		if err != nil {
-			return nil, gqlerror.Errorf("encode product owner references: %v", err)
-		}
-		product.OwnerReferences = ownerReferences
-	}
 	var status catalog.ProductStatus
 	if len(product.Status) > 0 {
 		if err := json.Unmarshal(product.Status, &status); err != nil {
 			return nil, gqlerror.Errorf("decode product status: %v", err)
 		}
 	}
+	if input.ObservedGeneration != nil {
+		status.ObservedGeneration = int64(*input.ObservedGeneration)
+	}
+	if input.LastAppliedRevision != nil {
+		status.LastAppliedRevision = *input.LastAppliedRevision
+	}
 	if input.Conditions != nil {
 		status.Conditions = mergeProductConditions(status.Conditions, toConditions(input.Conditions))
+	}
+	if input.Resolved != nil {
+		if input.Resolved.Category != nil {
+			if status.Resolved == nil {
+				status.Resolved = &catalog.ResolvedProductDefinition{}
+			}
+			status.Resolved.Category = &catalog.ResolvedCategoryDefinition{
+				Name: input.Resolved.Category.Name,
+				UID:  input.Resolved.Category.UID,
+			}
+		} else if status.Resolved != nil {
+			status.Resolved.Category = nil
+		}
 	}
 	statusJSON, err := json.Marshal(status)
 	if err != nil {
 		return nil, gqlerror.Errorf("encode product status: %v", err)
 	}
 	product.Status = statusJSON
+	if input.Resolved != nil {
+		var categoryRef *catalog.ObjectReference
+		if input.Resolved.Category != nil {
+			categoryRef = &catalog.ObjectReference{Name: input.Resolved.Category.Name}
+		}
+		ownerReferences, err := cataloggrpc.ResolvedCategoryOwnerReferences(ctx, r.store, product.Namespace, categoryRef, false)
+		if err != nil {
+			// A transient lookup failure must not commit CategoryResolved=True
+			// with an empty owner-reference projection: DecoupleCategoryProducts
+			// would then be unable to find this Product later if its category
+			// is deleted. Fail the whole write so the controller retries.
+			return nil, gqlerror.Errorf("resolve category owner reference: %v", err)
+		}
+		product.OwnerReferences = ownerReferences
+	}
 	datastore.AdvanceProductSystemVersion(product)
 	if err := r.store.UpdateProduct(ctx, product); err != nil {
 		if errors.Is(err, datastore.ErrConflict) {
