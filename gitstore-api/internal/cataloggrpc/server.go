@@ -15,6 +15,7 @@ import (
 	"io"
 	"maps"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1547,7 +1548,7 @@ func (s *Server) admitRepository(ctx context.Context, resource *catalog.Reposito
 	if isRepositoryStorageClassDowngrade(existing.StorageClass, resource.Spec.StorageClass) {
 		return nil
 	}
-	for attempt := 0; attempt < maxRepositoryAdmissionUpdateAttempts; attempt++ {
+	for range maxRepositoryAdmissionUpdateAttempts {
 		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
 			admCtx.markSuperseded()
 			return nil
@@ -1788,12 +1789,7 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 }
 
 func containsStringValue(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(values, target)
 }
 
 // resourceOwnership returns existing's (RepositoryID, GitRef) and true, or
@@ -1875,24 +1871,48 @@ func productCategoryRefName(specJSON []byte) string {
 // ownership. Author manifests cannot supply ownerReferences, and unresolved
 // references intentionally produce no reverse projection.
 func (s *Server) resolvedCategoryOwnerReferences(ctx context.Context, namespace string, reference *catalog.ObjectReference, blockOwnerDeletion bool) json.RawMessage {
-	return ResolvedCategoryOwnerReferences(ctx, s.store, s.log, namespace, reference, blockOwnerDeletion)
+	references, err := ResolvedCategoryOwnerReferences(ctx, s.store, namespace, reference, blockOwnerDeletion)
+	if err != nil {
+		// Preserve this admission path's existing behavior exactly (fail
+		// open to an empty owner reference rather than rejecting the push) —
+		// only log it, now that the shared function actually reports it.
+		s.log.Warn("resolved_category_owner_references: category lookup failed",
+			zap.String("namespace", namespace),
+			zap.String("name", reference.Name),
+			zap.Error(err))
+		return json.RawMessage(`[]`)
+	}
+	return references
 }
 
 // ResolvedCategoryOwnerReferences resolves reference (by name, scoped to
 // namespace) against store and returns the CategoryTaxonomy-kind
-// OwnerReferences JSON payload it implies, or an empty array when
-// unresolved. Exported so both admission (this package) and the
-// updateProductStatus resolver (spec 062) can synthesize the exact same
-// owner-reference shape from a single implementation, rather than
-// maintaining two independent copies that could drift.
-func ResolvedCategoryOwnerReferences(ctx context.Context, store datastore.Datastore, log *zap.Logger, namespace string, reference *catalog.ObjectReference, blockOwnerDeletion bool) json.RawMessage {
+// OwnerReferences JSON payload it implies. It returns an empty array (never
+// an error) when reference is absent or genuinely does not resolve to an
+// existing, non-terminating category — that is a legitimate, expected
+// outcome. It returns a non-nil error only for a real lookup/marshal
+// failure, so a transient datastore blip is distinguishable from "no such
+// category" by callers that must retry rather than silently commit an empty
+// projection (spec 062: a caller that commits CategoryResolved=True without
+// actually establishing the owner reference leaves DecoupleCategoryProducts
+// unable to find that Product later). Exported so both admission (this
+// package) and the updateProductStatus resolver (spec 062) can synthesize
+// the exact same owner-reference shape from a single implementation, rather
+// than maintaining two independent copies that could drift.
+func ResolvedCategoryOwnerReferences(ctx context.Context, store datastore.Datastore, namespace string, reference *catalog.ObjectReference, blockOwnerDeletion bool) (json.RawMessage, error) {
 	empty := json.RawMessage(`[]`)
 	if reference == nil || reference.Name == "" {
-		return empty
+		return empty, nil
 	}
 	owner, err := store.GetCategoryTaxonomyByName(ctx, namespace, reference.Name)
-	if err != nil || owner == nil || owner.DeletionTimestamp != nil {
-		return empty
+	if errors.Is(err, datastore.ErrNotFound) {
+		return empty, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolved category owner references: look up %s/%s: %w", namespace, reference.Name, err)
+	}
+	if owner == nil || owner.DeletionTimestamp != nil {
+		return empty, nil
 	}
 	references, err := json.Marshal([]catalog.OwnerReference{{
 		APIVersion:         owner.APIVersion,
@@ -1903,13 +1923,9 @@ func ResolvedCategoryOwnerReferences(ctx context.Context, store datastore.Datast
 		RepositoryID:       owner.RepositoryID,
 	}})
 	if err != nil {
-		log.Warn("resolved_category_owner_references: marshal category owner reference failed",
-			zap.String("namespace", namespace),
-			zap.String("name", reference.Name),
-			zap.Error(err))
-		return empty
+		return nil, fmt.Errorf("resolved category owner references: marshal %s/%s: %w", namespace, reference.Name, err)
 	}
-	return references
+	return references, nil
 }
 
 // resolvedProductVariantOwnerReferences projects an admitted ProductVariant's
@@ -1998,7 +2014,7 @@ func (s *Server) admitNamespace(
 		}
 	}
 
-	for attempt := 0; attempt < namespaceadmission.AdmissionWriteAttempts; attempt++ {
+	for range namespaceadmission.AdmissionWriteAttempts {
 		refCheck := func(ctx context.Context) (bool, error) {
 			return s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA), nil
 		}
@@ -2241,7 +2257,7 @@ func (s *Server) admitFile(
 			return
 		}
 	}
-	for attempt := 0; attempt < maxFileAdmissionUpdateAttempts; attempt++ {
+	for range maxFileAdmissionUpdateAttempts {
 		changedSpecBody := specBodyChanged(existing.Spec, existing.Body, specJSON, body)
 		changedMetadata := existing.APIVersion != resource.APIVersion || existing.Kind != resource.Kind ||
 			!reflect.DeepEqual(existing.Labels, cloneStringMap(resource.Metadata.Labels)) ||
@@ -2654,7 +2670,7 @@ func (s *Server) admitProductVariant(
 		return
 	case admission.Allowed:
 		for _, c := range dec.Conditions {
-			switch catalog.ConditionType(c.Type) {
+			switch c.Type {
 			case catalog.ConditionProductResolved:
 				admitResult.ProductResolved = c.Status
 			case catalog.ConditionOptionsAccepted:
@@ -2869,7 +2885,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		return
 	case admission.Allowed:
 		for _, c := range dec.Conditions {
-			switch catalog.ConditionType(c.Type) {
+			switch c.Type {
 			case catalog.ConditionParentResolved:
 				parentResolved = c.Status
 			case catalog.ConditionAcyclic:

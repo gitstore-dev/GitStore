@@ -112,7 +112,15 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 		if input.Resolved.Category != nil {
 			categoryRef = &catalog.ObjectReference{Name: input.Resolved.Category.Name}
 		}
-		product.OwnerReferences = cataloggrpc.ResolvedCategoryOwnerReferences(ctx, r.store, r.logger, product.Namespace, categoryRef, false)
+		ownerReferences, err := cataloggrpc.ResolvedCategoryOwnerReferences(ctx, r.store, product.Namespace, categoryRef, false)
+		if err != nil {
+			// A transient lookup failure must not commit CategoryResolved=True
+			// with an empty owner-reference projection: DecoupleCategoryProducts
+			// would then be unable to find this Product later if its category
+			// is deleted. Fail the whole write so the controller retries.
+			return nil, gqlerror.Errorf("resolve category owner reference: %v", err)
+		}
+		product.OwnerReferences = ownerReferences
 	}
 	datastore.AdvanceProductSystemVersion(product)
 	if err := r.store.UpdateProduct(ctx, product); err != nil {

@@ -6,6 +6,7 @@ package resolver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -18,6 +19,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+// failingCategoryLookupStore wraps a real Datastore, overriding only
+// GetCategoryTaxonomyByName to fail — used to prove a transient lookup
+// failure is propagated rather than silently committing an empty owner
+// reference (P1 finding on PR #426).
+type failingCategoryLookupStore struct {
+	datastore.Datastore
+	err error
+}
+
+func (s failingCategoryLookupStore) GetCategoryTaxonomyByName(context.Context, string, string) (*datastore.CategoryTaxonomy, error) {
+	return nil, s.err
+}
 
 func newProductStatusTestFixture(t *testing.T) (*mutationResolver, datastore.Datastore, *datastore.Product, *datastore.CategoryTaxonomy) {
 	t.Helper()
@@ -44,6 +58,35 @@ func newProductStatusTestFixture(t *testing.T) (*mutationResolver, datastore.Dat
 	r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop()})
 	require.NoError(t, err)
 	return &mutationResolver{Resolver: r}, store, product, category
+}
+
+// TestUpdateProductStatus_TransientOwnerReferenceLookupFailurePropagates is a
+// regression test for a P1 finding on PR #426: if the category lookup for
+// owner-reference synchronization hits a transient datastore error,
+// UpdateProductStatus must fail the whole write rather than silently commit
+// CategoryResolved=True with an empty owner-reference projection —
+// otherwise DecoupleCategoryProducts can never find this Product later if
+// its category is deleted.
+func TestUpdateProductStatus_TransientOwnerReferenceLookupFailurePropagates(t *testing.T) {
+	_, store, product, category := newProductStatusTestFixture(t)
+	ctx := context.Background()
+	categoryUID := mustEncodeNodeID(nodeKindCategory, category.UID)
+
+	failingStore := failingCategoryLookupStore{Datastore: store, err: errors.New("transient datastore error")}
+	r, err := NewResolver(ResolverDeps{Store: failingStore, Logger: zap.NewNop()})
+	require.NoError(t, err)
+	mutation := &mutationResolver{Resolver: r}
+
+	_, err = mutation.UpdateProductStatus(ctx, model.UpdateProductStatusInput{
+		Namespace: product.Namespace, Name: product.Name, ResourceVersion: product.ResourceVersion,
+		Resolved: &model.ResolvedProductStatusInput{Category: &model.ResolvedCategoryRefInput{Name: category.Name, UID: categoryUID}},
+	})
+	require.Error(t, err, "a transient owner-reference lookup failure must fail the write, not commit an empty projection")
+
+	persisted, getErr := store.GetProduct(ctx, product.UID)
+	require.NoError(t, getErr)
+	assert.Empty(t, persisted.Status, "status must be unchanged after the failed write")
+	assert.Empty(t, persisted.OwnerReferences, "owner references must be unchanged after the failed write")
 }
 
 func TestUpdateProductStatus_ResolvedCategorySetMergesConditionsAndOwnerReference(t *testing.T) {
