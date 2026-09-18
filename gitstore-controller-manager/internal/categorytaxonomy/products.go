@@ -10,6 +10,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 )
 
@@ -43,19 +44,21 @@ type productsListResponse struct {
 }
 
 // Product is the cache entity type populated by ProductListWatcher's
-// list-then-watch loop against watchProducts/products (spec 042). Carries
-// only the fields the Product-cache-to-CategoryTaxonomy-enqueue glue needs
-// (data-model.md) — not the full product resource.
+// list-then-watch loop against watchProducts/products (spec 042, extended by
+// spec 062 to also carry Generation/Status for the Product reconciler's
+// category-resolution reconcile).
 type Product struct {
 	UID               string
 	Namespace         string
 	Name              string
+	Generation        int64
 	ResourceVersion   string
 	Finalizers        []string
 	DeletionTimestamp *time.Time
 	// CategoryRefName is empty when the product has no category reference.
 	// Mirrors spec.categoryRef.name.
 	CategoryRefName string
+	Status          status.ResourceStatus
 }
 
 // NewProductCounter returns a ProductCounter that paginates the existing

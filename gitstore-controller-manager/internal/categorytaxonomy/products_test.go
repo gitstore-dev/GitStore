@@ -102,3 +102,35 @@ func TestProductCategoryEnqueueHandler_OnUpdate(t *testing.T) {
 		t.Fatalf("OnUpdate from categoryRef to no-category: got %+v, want one call to electronics", calls)
 	}
 }
+
+// TestProductCategoryIndexHandler_MaintainsIndexAcrossAddUpdateDelete covers
+// T025: the Product-cache event handler wired in registerProductWatch keeps
+// ProductCategoryIndex correct on add, a categoryRef change, and delete —
+// alongside the existing spec-042 count-fan-out handler above, not
+// replacing it.
+func TestProductCategoryIndexHandler_MaintainsIndexAcrossAddUpdateDelete(t *testing.T) {
+	idx := NewProductCategoryIndex()
+	h := NewProductCategoryIndexHandler(idx)
+	key := types.WorkItemKey{Kind: "Product", Namespace: "acme", Name: "widget"}
+
+	h.OnAdd(key, Product{Namespace: "acme", Name: "widget", CategoryRefName: "electronics"})
+	if got := idx.Get("acme", "electronics"); len(got) != 1 || got[0] != key {
+		t.Fatalf("after OnAdd: Get(acme, electronics) = %+v, want [%v]", got, key)
+	}
+
+	h.OnUpdate(key,
+		Product{Namespace: "acme", Name: "widget", CategoryRefName: "electronics"},
+		Product{Namespace: "acme", Name: "widget", CategoryRefName: "computers"},
+	)
+	if got := idx.Get("acme", "electronics"); len(got) != 0 {
+		t.Fatalf("after OnUpdate: Get(acme, electronics) = %+v, want empty (stale membership)", got)
+	}
+	if got := idx.Get("acme", "computers"); len(got) != 1 || got[0] != key {
+		t.Fatalf("after OnUpdate: Get(acme, computers) = %+v, want [%v]", got, key)
+	}
+
+	h.OnDelete(key, Product{Namespace: "acme", Name: "widget", CategoryRefName: "computers"})
+	if got := idx.Get("acme", "computers"); len(got) != 0 {
+		t.Fatalf("after OnDelete: Get(acme, computers) = %+v, want empty", got)
+	}
+}
