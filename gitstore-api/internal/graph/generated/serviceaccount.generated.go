@@ -400,14 +400,14 @@ func (ec *executionContext) _ServiceAccountObjectMeta_uid(ctx context.Context, f
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNString2string(ctx, selections, v)
+			return ec.marshalNID2string(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
 func (ec *executionContext) fieldContext_ServiceAccountObjectMeta_uid(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("ServiceAccountObjectMeta", field, false, false, errors.New("field of type String does not have child fields"))
+	return graphql.NewScalarFieldContext("ServiceAccountObjectMeta", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
 func (ec *executionContext) _ServiceAccountObjectMeta_creationTimestamp(ctx context.Context, field graphql.CollectedField, obj *model.ServiceAccountObjectMeta) (ret graphql.Marshaler) {

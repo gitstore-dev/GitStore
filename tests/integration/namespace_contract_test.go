@@ -1134,8 +1134,8 @@ func TestNamespaceContract_DirectAndConnectionEnvelopeBodyParity(t *testing.T) {
 	if directData.Namespace.Metadata.UID == "" {
 		t.Fatal("metadata.uid is empty")
 	}
-	if directData.Namespace.ID == directData.Namespace.Metadata.UID {
-		t.Fatalf("Relay id %q must remain distinct from canonical uid", directData.Namespace.ID)
+	if directData.Namespace.ID != directData.Namespace.Metadata.UID {
+		t.Fatalf("metadata.uid %q must use the Namespace Relay encoding, matching id %q", directData.Namespace.Metadata.UID, directData.Namespace.ID)
 	}
 	if directData.Namespace.Metadata.Labels == nil || directData.Namespace.Metadata.Annotations == nil {
 		t.Fatalf("metadata maps must be present: labels=%v annotations=%v",

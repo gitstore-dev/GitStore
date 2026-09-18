@@ -88,7 +88,7 @@ func createNamespaceAsUser(t *testing.T, h *namespaceContractHarness, token, nam
 	require.NoError(t, json.Unmarshal(resp.Data, &data))
 	assert.Equal(t, namespace, data.CreateNamespace.Namespace.Metadata.Name)
 	assert.NotEmpty(t, data.CreateNamespace.Namespace.Metadata.UID)
-	assert.NotEqual(t, data.CreateNamespace.Namespace.ID, data.CreateNamespace.Namespace.Metadata.UID)
+	assert.Equal(t, data.CreateNamespace.Namespace.ID, data.CreateNamespace.Namespace.Metadata.UID, "metadata.uid uses the Namespace Relay encoding")
 
 	resp = h.gqlWithToken(token, `
 		mutation($namespace: String!) {

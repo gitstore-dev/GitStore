@@ -6899,7 +6899,7 @@ System-managed identity metadata returned for a ServiceAccount.
 type ServiceAccountObjectMeta {
   namespace: String!
   name: String!
-  uid: String!
+  uid: ID!
   creationTimestamp: DateTime!
 }
 
