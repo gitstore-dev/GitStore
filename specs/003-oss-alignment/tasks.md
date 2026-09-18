@@ -138,7 +138,7 @@
   - Build-from-source section: remove the "Admin UI (Astro/React)" subsection entirely
   - Add a brief callout after Components: `> **Admin add-on**: For the optional web UI, see [docs/admin/](docs/admin/).`
   - Update `cd api` → `cd gitstore-api` and `cd git-server` → `cd gitstore-git-service` in build instructions
-- [X] T034 [P] [US5] Update `docs/architecture.md`:
+- [X] T034 [P] [US5] Update `docs/architecture/README.md`:
   - Implementation Baseline section: update folder paths (`api/` → `gitstore-api/`, `git-server/` → `gitstore-git-service/`); remove `admin-ui/` line; add note: "Admin add-on: see `docs/admin/architecture.md`"
   - Proposal 1 diagram: remove the Admin UI subgraph node (if present); leave all core service nodes
   - Proposal 2 diagram: same — remove Admin UI node if present

@@ -266,11 +266,19 @@ func repositoryCDCAdditionVisible(
 type repositoryCDCProgressManager struct {
 	journal         datastore.ResourceWatchJournal
 	lease           datastore.ResourceWatchLease
+	source          string
 	beginGeneration func(context.Context, time.Time) error
 }
 
+func (m *repositoryCDCProgressManager) sourceName() string {
+	if m.source == "" {
+		return repositoryCDCSource
+	}
+	return m.source
+}
+
 func (m *repositoryCDCProgressManager) GetCurrentGeneration(ctx context.Context) (time.Time, error) {
-	progress, err := m.journal.LoadProgress(ctx, repositoryCDCStorageKey(repositoryCDCGenerationProgress))
+	progress, err := m.journal.LoadProgress(ctx, m.sourceName()+":"+repositoryCDCGenerationProgress)
 	if err == datastore.ErrNotFound {
 		return time.Time{}, nil
 	}
@@ -289,10 +297,10 @@ func (m *repositoryCDCProgressManager) StartGeneration(ctx context.Context, gene
 			return err
 		}
 	}
-	return m.journal.SaveProgress(ctx, m.lease, datastore.ResourceCDCProgress{Source: repositoryCDCSource, StreamID: repositoryCDCGenerationProgress, Position: []byte(strconv.FormatInt(generation.UnixNano(), 10)), UpdatedAt: time.Now().UTC()})
+	return m.journal.SaveProgress(ctx, m.lease, datastore.ResourceCDCProgress{Source: m.sourceName(), StreamID: repositoryCDCGenerationProgress, Position: []byte(strconv.FormatInt(generation.UnixNano(), 10)), UpdatedAt: time.Now().UTC()})
 }
 func (m *repositoryCDCProgressManager) GetProgress(ctx context.Context, generation time.Time, table string, streamID scyllacdc.StreamID) (scyllacdc.Progress, error) {
-	progress, err := m.journal.LoadProgress(ctx, repositoryCDCStorageKey(repositoryCDCProgressKey(generation, table, streamID)))
+	progress, err := m.journal.LoadProgress(ctx, m.sourceName()+":"+repositoryCDCProgressKey(generation, table, streamID))
 	if err == datastore.ErrNotFound {
 		return scyllacdc.Progress{}, nil
 	}
@@ -306,9 +314,8 @@ func (m *repositoryCDCProgressManager) GetProgress(ctx context.Context, generati
 	return scyllacdc.Progress{LastProcessedRecordTime: position}, nil
 }
 func (m *repositoryCDCProgressManager) SaveProgress(ctx context.Context, generation time.Time, table string, streamID scyllacdc.StreamID, progress scyllacdc.Progress) error {
-	return m.journal.SaveProgress(ctx, m.lease, datastore.ResourceCDCProgress{Source: repositoryCDCSource, StreamID: repositoryCDCProgressKey(generation, table, streamID), Position: progress.LastProcessedRecordTime.Bytes(), UpdatedAt: progress.LastProcessedRecordTime.Time().UTC()})
+	return m.journal.SaveProgress(ctx, m.lease, datastore.ResourceCDCProgress{Source: m.sourceName(), StreamID: repositoryCDCProgressKey(generation, table, streamID), Position: progress.LastProcessedRecordTime.Bytes(), UpdatedAt: progress.LastProcessedRecordTime.Time().UTC()})
 }
 func repositoryCDCProgressKey(generation time.Time, table string, streamID scyllacdc.StreamID) string {
 	return cdcProgressKey(generation, table, streamID)
 }
-func repositoryCDCStorageKey(key string) string { return repositoryCDCSource + ":" + key }

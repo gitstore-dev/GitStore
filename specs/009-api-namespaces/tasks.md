@@ -116,7 +116,7 @@
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [X] T024 [P] Update `docs/architecture.md` with a namespace lifecycle management section: three tiers, global identifier uniqueness, auth model (`IsAdmin` as elevated role), `gitstore-git-service` boundary (FR-011), and `curl` / GraphQL Playground examples referencing `quickstart.md`
+- [X] T024 [P] Update `docs/architecture/README.md` with a namespace lifecycle management section: three tiers, global identifier uniqueness, auth model (`IsAdmin` as elevated role), `gitstore-git-service` boundary (FR-011), and `curl` / GraphQL Playground examples referencing `quickstart.md`
 - [X] T025 [P] Verify SPDX license headers on all new files (`shared/schemas/namespace.graphqls`, new Go files): run `./scripts/check-go-license-headers.sh --diff-base origin/main` and `./scripts/check-js-license-headers.sh --diff-base origin/main`; add missing `// SPDX-License-Identifier: AGPL-3.0-or-later` headers
 - [X] T026 Run full pre-PR validation in `gitstore-api/`: `go vet ./...`, `staticcheck ./...`, `go build -v ./...`, `go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...`; fix any failures before opening the PR
 

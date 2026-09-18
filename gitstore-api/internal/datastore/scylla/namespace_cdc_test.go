@@ -293,6 +293,48 @@ func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t
 	require.Error(t, consumer.Consume(ctx, scyllacdc.Change{}))
 }
 
+func TestProductCDCConsumerFactorySignalsReadyAfterStreamPoll(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = sequencer.Run(ctx) }()
+
+	stream := scyllacdc.StreamID("product-stream")
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{encodeCDCStreamID(stream)})
+	ready := make(chan struct{}, 1)
+	factory := &productCDCConsumerFactory{
+		sequencer: sequencer,
+		onReady: func() {
+			ready <- struct{}{}
+		},
+	}
+
+	consumer, err := factory.CreateChangeConsumer(ctx, scyllacdc.CreateChangeConsumerInput{
+		StreamID:         stream,
+		ProgressReporter: &scyllacdc.ProgressReporter{},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, consumer)
+	select {
+	case <-ready:
+		t.Fatal("Product CDC must not report readiness before a stream poll")
+	default:
+	}
+	factory.markReady()
+	factory.markReady()
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("Product CDC readiness was not signalled after a stream poll")
+	}
+	select {
+	case <-ready:
+		t.Fatal("Product CDC readiness was signalled more than once")
+	default:
+	}
+}
+
 func TestNamespaceCDCSequencerRejectsStreamBehindRestoredFrontier(t *testing.T) {
 	base := time.Now().UTC()
 	store := &sequencerStore{}
@@ -450,6 +492,24 @@ func TestAssignCDCValueAllocatesNullableTimestamp(t *testing.T) {
 
 	require.NotNil(t, decoded)
 	assert.Equal(t, deletionAt, *decoded)
+}
+
+func TestAssignCDCValueFlattensNullableCollectionElements(t *testing.T) {
+	first, second := "first", "second"
+	var decoded []string
+
+	assignCDCValue([]*string{&first, &second}, &decoded)
+
+	assert.Equal(t, []string{"first", "second"}, decoded)
+}
+
+func TestAssignCDCValueFlattensCDCListPostimage(t *testing.T) {
+	first, second := gocql.TimeUUID(), gocql.TimeUUID()
+	var decoded []string
+
+	assignCDCValue(map[gocql.UUID]string{first: "first", second: "second"}, &decoded)
+
+	assert.ElementsMatch(t, []string{"first", "second"}, decoded)
 }
 
 func TestNamespaceCDCDeletionSuppressesUncommittedCreateRollback(t *testing.T) {

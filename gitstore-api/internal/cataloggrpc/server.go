@@ -669,13 +669,13 @@ func namespaceTier(value string) datastore.NamespaceTier {
 	return tier
 }
 
-// ValidateCategoryTaxonomyDeletion checks proposed trees without changing
-// datastore state. The complete old and proposed resource sets allow an atomic
-// child deletion or reparenting to satisfy a parent deletion precondition.
-func (s *Server) ValidateCategoryTaxonomyDeletion(
+// ValidateResourceDeletions checks proposed trees without changing datastore
+// state. The complete old and proposed resource sets allow an atomic deletion
+// or reparenting to satisfy resource-specific preconditions.
+func (s *Server) ValidateResourceDeletions(
 	ctx context.Context,
-	req *catalogv1.ValidateCategoryTaxonomyDeletionRequest,
-) (*catalogv1.ValidateCategoryTaxonomyDeletionResponse, error) {
+	req *catalogv1.ValidateResourceDeletionsRequest,
+) (*catalogv1.ValidateResourceDeletionsResponse, error) {
 	if req.GetRepositoryId() == "" {
 		return nil, grpcstatus.Error(codes.InvalidArgument, "repository_id is required")
 	}
@@ -697,14 +697,21 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 			return nil, grpcstatus.Errorf(codes.InvalidArgument, "invalid proposed resource tree: %v", err)
 		}
 
+		operations := deriveResourceAdmissionOperations(oldEntries, proposedEntries, nil)
 		deletedCategories := make(map[string]struct{})
-		for _, operation := range deriveResourceAdmissionOperations(oldEntries, proposedEntries, nil) {
-			if operation.operation == admission.OperationDelete &&
-				operation.identity.Kind == "CategoryTaxonomy" {
+		deletedProducts := false
+		for _, operation := range operations {
+			if operation.operation != admission.OperationDelete {
+				continue
+			}
+			switch operation.identity.Kind {
+			case "CategoryTaxonomy":
 				deletedCategories[operation.identity.key()] = struct{}{}
+			case "Product":
+				deletedProducts = true
 			}
 		}
-		if len(deletedCategories) == 0 {
+		if len(deletedCategories) == 0 && !deletedProducts {
 			continue
 		}
 
@@ -723,7 +730,7 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 				Name:       parentRef.Name,
 			}
 			if _, blocked := deletedCategories[parent.key()]; blocked {
-				return &catalogv1.ValidateCategoryTaxonomyDeletionResponse{
+				return &catalogv1.ValidateResourceDeletionsResponse{
 					Accepted: false,
 					Reason:   "child categories present",
 				}, nil
@@ -740,7 +747,7 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 				zap.String("namespace", namespace))
 			return nil, grpcstatus.Error(codes.Unavailable, "category deletion validation unavailable")
 		}
-		for _, operation := range deriveResourceAdmissionOperations(oldEntries, proposedEntries, nil) {
+		for _, operation := range operations {
 			if operation.operation != admission.OperationDelete || operation.identity.Kind != "CategoryTaxonomy" {
 				continue
 			}
@@ -770,7 +777,40 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 				}
 				for _, dependent := range page.Items {
 					if !proposedCategoryReleasesParent(proposedEntries, dependent, operation.identity.Name) {
-						return &catalogv1.ValidateCategoryTaxonomyDeletionResponse{Accepted: false, Reason: "child categories present"}, nil
+						return &catalogv1.ValidateResourceDeletionsResponse{Accepted: false, Reason: "child categories present"}, nil
+					}
+				}
+				if page.NextCursor == "" {
+					break
+				}
+				cursor = page.NextCursor
+			}
+		}
+
+		// Product foreground deletion follows the same proposed-tree rule. A
+		// ProductVariant deleted or retargeted in this push releases its
+		// blocking owner reference; a dependent in another repository remains a
+		// hard rejection through the durable reverse index.
+		for _, operation := range operations {
+			if operation.operation != admission.OperationDelete || operation.identity.Kind != "Product" {
+				continue
+			}
+			owner, lookupErr := s.store.GetProductByName(ctx, operation.identity.Namespace, operation.identity.Name)
+			if lookupErr != nil {
+				if errors.Is(lookupErr, datastore.ErrNotFound) {
+					continue
+				}
+				return nil, grpcstatus.Error(codes.Unavailable, "Product deletion validation unavailable")
+			}
+			cursor := ""
+			for {
+				page, listErr := owners.ListBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{Namespace: owner.Namespace, RepositoryID: owner.RepositoryID}, owner.UID, cursor, datastore.MaxOwnerDependentPageSize)
+				if listErr != nil {
+					return nil, grpcstatus.Error(codes.Unavailable, "Product deletion validation unavailable")
+				}
+				for _, dependent := range page.Items {
+					if !proposedProductVariantReleasesParent(proposedEntries, dependent, operation.identity.Name) {
+						return &catalogv1.ValidateResourceDeletionsResponse{Accepted: false, Reason: "ProductVariants present"}, nil
 					}
 				}
 				if page.NextCursor == "" {
@@ -781,7 +821,34 @@ func (s *Server) ValidateCategoryTaxonomyDeletion(
 		}
 	}
 
-	return &catalogv1.ValidateCategoryTaxonomyDeletionResponse{Accepted: true}, nil
+	return &catalogv1.ValidateResourceDeletionsResponse{Accepted: true}, nil
+}
+
+// ValidateCategoryTaxonomyDeletion is retained for mixed-version Git services.
+// New callers use ValidateResourceDeletions, which applies the same proposed
+// tree semantics to every supported resource kind.
+func (s *Server) ValidateCategoryTaxonomyDeletion(
+	ctx context.Context,
+	req *catalogv1.ValidateCategoryTaxonomyDeletionRequest,
+) (*catalogv1.ValidateCategoryTaxonomyDeletionResponse, error) {
+	trees := make([]*catalogv1.ResourceValidationTree, 0, len(req.GetTrees()))
+	for _, tree := range req.GetTrees() {
+		trees = append(trees, &catalogv1.ResourceValidationTree{
+			OldBlobs:      tree.GetOldBlobs(),
+			ProposedBlobs: tree.GetProposedBlobs(),
+		})
+	}
+	response, err := s.ValidateResourceDeletions(ctx, &catalogv1.ValidateResourceDeletionsRequest{
+		RepositoryId: req.GetRepositoryId(),
+		Trees:        trees,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &catalogv1.ValidateCategoryTaxonomyDeletionResponse{
+		Accepted: response.GetAccepted(),
+		Reason:   response.GetReason(),
+	}, nil
 }
 
 func proposedCategoryReleasesParent(entries []*parsedEntry, dependent datastore.OwnerDependent, deletedParent string) bool {
@@ -794,6 +861,20 @@ func proposedCategoryReleasesParent(entries []*parsedEntry, dependent datastore.
 		}
 		parent := entry.parsed.CategoryTaxonomy.Spec.ParentRef
 		return parent == nil || parent.Name != deletedParent
+	}
+	return false
+}
+
+func proposedProductVariantReleasesParent(entries []*parsedEntry, dependent datastore.OwnerDependent, deletedParent string) bool {
+	if dependent.DependentKind != "ProductVariant" {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.identity.Kind != "ProductVariant" || entry.identity.Name != dependent.Name {
+			continue
+		}
+		ref := entry.parsed.ProductVariant.Spec.ProductRef
+		return ref == nil || ref.Name != deletedParent
 	}
 	return false
 }
@@ -1027,6 +1108,7 @@ func (s *Server) AdmitResources(
 
 	newCommit := req.GetNewCommitSha()
 	if newCommit == "" {
+		//lint:ignore SA1019 compatibility fallback for pre-new_commit_sha git-service releases
 		newCommit = req.GetCommitSha()
 	}
 	if newCommit == "" {
@@ -1554,8 +1636,36 @@ func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, reposi
 	var deleteErr error
 	switch r := existing.(type) {
 	case *datastore.Product:
-		uid = r.UID
-		deleteErr = s.store.DeleteProductWithResourceVersion(ctx, r.UID, r.ResourceVersion)
+		if r.DeletionTimestamp != nil {
+			return nil
+		}
+		owners, ok := s.store.(datastore.OwnerReferenceStore)
+		if !ok {
+			return fmt.Errorf("product deletion requires owner-reference datastore support")
+		}
+		lookupStarted := time.Now()
+		blocked, checkErr := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{
+			Namespace: r.Namespace, RepositoryID: r.RepositoryID,
+		}, r.UID)
+		productDeletionDependentLookupDuration.Observe(time.Since(lookupStarted).Seconds())
+		if checkErr != nil {
+			return fmt.Errorf("check product deletion dependents: %w", checkErr)
+		}
+		if blocked {
+			productDeletionBlockedTotal.Inc()
+			s.log.Info("Product deletion blocked by ProductVariant owner reference", zap.String("namespace", r.Namespace), zap.String("name", r.Name), zap.String("uid", r.UID))
+			return fmt.Errorf("product %s/%s has blocking ProductVariants", r.Namespace, r.Name)
+		}
+		lifecycle, ok := s.store.(datastore.ProductLifecycleStore)
+		if !ok {
+			return fmt.Errorf("product deletion requires lifecycle datastore support")
+		}
+		terminating, markErr := lifecycle.MarkProductTerminating(ctx, r.UID, r.ResourceVersion, "gitstore.dev/foreground-deletion", s.clock.Now().UTC())
+		if markErr != nil {
+			return fmt.Errorf("mark Product deletion: %w", markErr)
+		}
+		s.publishProductEvent(eventbus.Modified, terminating)
+		return nil
 	case *datastore.CategoryTaxonomy:
 		owners, ok := s.store.(datastore.OwnerReferenceStore)
 		if !ok {
@@ -1789,6 +1899,40 @@ func (s *Server) resolvedCategoryOwnerReferences(ctx context.Context, namespace 
 		return empty
 	}
 	return references
+}
+
+// resolvedProductVariantOwnerReferences projects an admitted ProductVariant's
+// productRef into the datastore's reverse owner index. Product references that
+// cannot yet resolve deliberately remain absent: that preserves Git's
+// order-independent authoring model. A resolved, terminating Product is not a
+// valid target for a new dependent, however, because it could strand that
+// dependent behind foreground deletion.
+func (s *Server) resolvedProductVariantOwnerReferences(ctx context.Context, namespace string, reference *catalog.ObjectReference) (json.RawMessage, bool) {
+	empty := json.RawMessage(`[]`)
+	if reference == nil || reference.Name == "" {
+		return empty, false
+	}
+	owner, err := s.store.GetProductByName(ctx, namespace, reference.Name)
+	if err != nil || owner == nil {
+		return empty, false
+	}
+	if owner.DeletionTimestamp != nil {
+		return empty, true
+	}
+	references, err := json.Marshal([]catalog.OwnerReference{{
+		APIVersion:         owner.APIVersion,
+		Kind:               "Product",
+		Name:               owner.Name,
+		UID:                owner.UID,
+		BlockOwnerDeletion: true,
+		RepositoryID:       owner.RepositoryID,
+	}})
+	if err != nil {
+		s.log.Warn("admit_resources: marshal product owner reference failed",
+			zap.String("namespace", namespace), zap.String("name", reference.Name), zap.Error(err))
+		return empty, false
+	}
+	return references, false
 }
 
 func (s *Server) admitNamespace(
@@ -2153,6 +2297,12 @@ func (s *Server) admitProduct(
 	op admission.Operation,
 	rawExisting any,
 ) {
+	// Lifecycle is author-owned desired state. Persist an explicit default so
+	// Git-authored Products and GraphQL-authored Products have identical
+	// admitted representations.
+	if resource.Spec.Lifecycle.State == "" {
+		resource.Spec.Lifecycle.State = "ACTIVE"
+	}
 	specJSON, err := json.Marshal(resource.Spec)
 	if err != nil {
 		s.log.Error("admit_resources: marshal product spec failed",
@@ -2222,6 +2372,9 @@ func (s *Server) admitProduct(
 			Generation:        1,
 			ResourceVersion:   "1",
 			CreationTimestamp: admCtx.Now,
+			CreationActor:     admCtx.ActorSubject,
+			UpdateTimestamp:   admCtx.Now,
+			UpdateActor:       admCtx.ActorSubject,
 			Revision:          admCtx.Revision,
 			RepositoryID:      admCtx.RepositoryID,
 			SourcePath:        sourcePath,
@@ -2267,6 +2420,8 @@ func (s *Server) admitProduct(
 		existing.OwnerReferences = ownerReferences
 		existing.Generation = gen
 		existing.ResourceVersion = nextResourceVersion(existing.ResourceVersion)
+		existing.UpdateTimestamp = admCtx.Now
+		existing.UpdateActor = admCtx.ActorSubject
 		existing.Revision = admCtx.Revision
 		existing.RepositoryID = admCtx.RepositoryID
 		existing.SourcePath = sourcePath
@@ -2451,6 +2606,14 @@ func (s *Server) admitProductVariant(
 		}
 		op = admission.OperationCreate
 	}
+	ownerReferences, parentTerminating := s.resolvedProductVariantOwnerReferences(ctx, namespace, resource.Spec.ProductRef)
+	if parentTerminating {
+		s.log.Warn("admit_resources: product_variant targets terminating product",
+			zap.String("name", resource.Metadata.Name),
+			zap.String("namespace", namespace),
+			zap.String("product_ref", resource.Spec.ProductRef.Name))
+		return
+	}
 
 	// Run admission chain; map resulting conditions back to variantAdmitResult.
 	admitResult := variantAdmitResult{
@@ -2552,6 +2715,7 @@ func (s *Server) admitProductVariant(
 			GitRef:            admCtx.RefName,
 			SKU:               resource.Spec.SKU,
 			ProductRefName:    productRefName,
+			OwnerReferences:   ownerReferences,
 			Spec:              specJSON,
 			Body:              string(body),
 			Status:            statusJSON,
@@ -2578,7 +2742,8 @@ func (s *Server) admitProductVariant(
 		changedProvenance := existing.RepositoryID != admCtx.RepositoryID ||
 			existing.SourcePath != sourcePath
 		changedDenorm := existing.SKU != resource.Spec.SKU || existing.ProductRefName != productRefName
-		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedDenorm {
+		changedOwnerReferences := !bytes.Equal(existing.OwnerReferences, ownerReferences)
+		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedDenorm && !changedOwnerReferences {
 			return
 		}
 		gen := existing.Generation
@@ -2598,6 +2763,7 @@ func (s *Server) admitProductVariant(
 		existing.GitRef = admCtx.RefName
 		existing.SKU = resource.Spec.SKU
 		existing.ProductRefName = productRefName
+		existing.OwnerReferences = ownerReferences
 		existing.Spec = specJSON
 		existing.Body = string(body)
 		existing.Status = variantAdmissionStatus(gen, admCtx.Revision, admCtx.Now, admitResult)

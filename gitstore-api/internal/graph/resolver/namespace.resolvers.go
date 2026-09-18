@@ -39,17 +39,28 @@ func (r *mutationResolver) UpdateNamespace(ctx context.Context, input model.Upda
 
 // DeleteNamespace is the resolver for the deleteNamespace field.
 func (r *mutationResolver) DeleteNamespace(ctx context.Context, input model.DeleteNamespaceInput) (*model.DeleteNamespacePayload, error) {
+	if input.ID == nil {
+		return nil, gqlerror.Errorf("namespace ID is required")
+	}
+	uid, err := decodeNodeIDAs(nodeKindNamespace, *input.ID)
+	if err != nil {
+		return nil, gqlerror.Errorf("invalid namespace ID")
+	}
 	ns, ok := security.AuthorizedNamespaceForDeletion(ctx)
-	if !ok || ns.Name != input.Identifier {
+	if !ok || namespaceUID(ns) != uid {
 		return nil, gqlerror.Errorf("namespace deletion authorization context is missing")
 	}
 	outcome, err := r.service.DeleteNamespace(ctx, ns)
 	if err != nil {
 		return nil, err
 	}
+	ns, err = r.service.GetNamespaceByID(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
 	return &model.DeleteNamespacePayload{
-		DeletedIdentifier: input.Identifier,
-		Outcome:           model.NamespaceDeletionOutcome(outcome),
+		Namespace: DatastoreNamespaceToGraphQL(ns),
+		Outcome:   model.ResourceDeletionOutcome(outcome),
 	}, nil
 }
 
@@ -65,7 +76,8 @@ func (r *mutationResolver) CompleteNamespaceDeletion(ctx context.Context, input 
 	if err != nil {
 		return nil, err
 	}
-	return &model.CompleteNamespaceDeletionPayload{DeletedIdentifier: &input.Identifier}, nil
+	id := mustEncodeNodeID(nodeKindNamespace, namespaceUID(deleted))
+	return &model.CompleteNamespaceDeletionPayload{ID: &id}, nil
 }
 
 // ProvisionNamespaceSystemRepository is the resolver for the provisionNamespaceSystemRepository field.

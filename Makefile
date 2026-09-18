@@ -153,6 +153,8 @@ CAPACITY_CHAOS_DELAY ?=30s
 CAPACITY_CHAOS_CONFIRM ?=0
 REPOSITORY_CAPACITY_PROJECT ?= gitstore-repository-capacity
 REPOSITORY_CAPACITY_STATE_DIR ?= $(ROOT)/.gitstore/repository-capacity
+PRODUCT_CAPACITY_PROJECT ?= gitstore-product-capacity
+PRODUCT_CAPACITY_STATE_DIR ?= $(ROOT)/.gitstore/product-capacity
 REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT ?= 1536m
 REPOSITORY_CAPACITY_SCYLLA_MEMORY_BYTES ?= 1610612736
 
@@ -160,7 +162,7 @@ export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CAC
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
 .PHONY: help git api controller dev compose scylla ps logs stop down
-.PHONY: build test lint pr-ready check clean bootstrap secret capacity capacity-dispatch-test chaos test-scylla-hardening test-scylla-integration
+.PHONY: build test lint pr-ready check clean bootstrap secret capacity capacity-dispatch-test chaos test-datastore-contracts test-scylla-integration
 .PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-repository-lifecycle _capacity-repository-overflow _capacity-observability _capacity-observability-down
 .PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
 .PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac _secret-signing-key
@@ -475,6 +477,18 @@ ifeq ($(TARGET)/$(PROFILE)/$(MODE),repository/lifecycle/alpha)
 		CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" \
 		CAPACITY_PROMETHEUS_TARGETS="$(CAPACITY_PROMETHEUS_TARGETS)" \
 		./scripts/repository-capacity-stack.sh local-alpha
+else ifeq ($(TARGET)/$(PROFILE)/$(MODE),product/lifecycle/alpha)
+	@REPOSITORY_CAPACITY_PROJECT="$(PRODUCT_CAPACITY_PROJECT)" \
+		REPOSITORY_CAPACITY_STATE_DIR="$(PRODUCT_CAPACITY_STATE_DIR)" \
+		CAPACITY_STACK_TARGET=product CAPACITY_STACK_PROFILE=lifecycle \
+		SCYLLA_CLUSTER_SMP=1 \
+		SCYLLA_CLUSTER_MEMORY_LIMIT="$(REPOSITORY_CAPACITY_SCYLLA_MEMORY_LIMIT)" \
+		REPOSITORY_CAPACITY_SCYLLA_MEMORY_BYTES="$(REPOSITORY_CAPACITY_SCYLLA_MEMORY_BYTES)" \
+		CAPACITY_EVIDENCE_DIR="$(CAPACITY_EVIDENCE_DIR)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" \
+		CAPACITY_OBSERVABILITY="$(CAPACITY_OBSERVABILITY)" CAPACITY_PROMETHEUS_URL="$(CAPACITY_PROMETHEUS_URL)" \
+		CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" CAPACITY_PROMETHEUS_RETENTION="$(CAPACITY_PROMETHEUS_RETENTION)" \
+		CAPACITY_PROMETHEUS_TARGETS="$(CAPACITY_PROMETHEUS_TARGETS)" \
+		./scripts/repository-capacity-stack.sh local-alpha
 else
 	@CAPACITY_EVIDENCE_DIR="$(CAPACITY_EVIDENCE_DIR)" CAPACITY_PROMETHEUS_URL="$(CAPACITY_PROMETHEUS_URL)" CAPACITY_RUN_ID="$(CAPACITY_RUN_ID)" \
 		CAPACITY_OBSERVABILITY="$(CAPACITY_OBSERVABILITY)" CAPACITY_PROMETHEUS_PORT="$(CAPACITY_PROMETHEUS_PORT)" \
@@ -507,6 +521,9 @@ _capacity-k6:
 		CAPACITY_TOKEN_FILE="$(CAPACITY_TOKEN_FILE)" \
 		CAPACITY_CONFIG_MANIFEST="$(CAPACITY_CONFIG_MANIFEST)" \
 		CAPACITY_ENVIRONMENT_MANIFEST="$(CAPACITY_ENVIRONMENT_MANIFEST)" \
+		PRODUCT_CAPACITY_API_A="$${PRODUCT_CAPACITY_API_A}" \
+		PRODUCT_CAPACITY_API_B="$${PRODUCT_CAPACITY_API_B}" \
+		CAPACITY_DOCKER_NETWORK="$${CAPACITY_DOCKER_NETWORK}" \
 		CAPACITY_PROMETHEUS_URL="$(CAPACITY_PROMETHEUS_URL)" \
 		CAPACITY_DATASTORE_CONTAINERS="$(CAPACITY_DATASTORE_CONTAINERS)" \
 		CAPACITY_CHAOS_PROFILE="$(CAPACITY_CHAOS_PROFILE)" \
@@ -524,8 +541,8 @@ chaos: ## Inject an opt-in container fault and retain structured evidence.
 		PUMBA_IMAGE="$(PUMBA_IMAGE)" \
 		./scripts/run-chaos.sh "$(CHAOS_PROFILE)"
 
-test-scylla-hardening: ## Run focused datastore hardening tests without an external Scylla instance.
-	@cd "$(API_DIR)" && go test -count=1 ./internal/datastore/... ./tests/contract/datastore/...
+test-datastore-contracts: ## Run backend-neutral datastore contract tests without an external Scylla instance.
+	@cd "$(API_DIR)" && go test -tags memdb -count=1 ./internal/datastore/... ./tests/contract/datastore/...
 
 test-scylla-integration: ## Run tagged datastore hardening tests against Scylla.
 	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \

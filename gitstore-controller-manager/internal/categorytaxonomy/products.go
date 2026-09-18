@@ -6,6 +6,7 @@ package categorytaxonomy
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
@@ -46,10 +47,12 @@ type productsListResponse struct {
 // only the fields the Product-cache-to-CategoryTaxonomy-enqueue glue needs
 // (data-model.md) — not the full product resource.
 type Product struct {
-	UID             string
-	Namespace       string
-	Name            string
-	ResourceVersion string
+	UID               string
+	Namespace         string
+	Name              string
+	ResourceVersion   string
+	Finalizers        []string
+	DeletionTimestamp *time.Time
 	// CategoryRefName is empty when the product has no category reference.
 	// Mirrors spec.categoryRef.name.
 	CategoryRefName string

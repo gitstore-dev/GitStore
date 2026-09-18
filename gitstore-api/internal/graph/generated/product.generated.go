@@ -232,6 +232,116 @@ func (ec *executionContext) fieldContext_CatalogObjectReference_fieldPath(_ cont
 	return graphql.NewScalarFieldContext("CatalogObjectReference", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _CompleteProductDeletionPayload_id(ctx context.Context, field graphql.CollectedField, obj *model.CompleteProductDeletionPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CompleteProductDeletionPayload_id(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOID2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_CompleteProductDeletionPayload_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("CompleteProductDeletionPayload", field, false, false, errors.New("field of type ID does not have child fields"))
+}
+
+func (ec *executionContext) _CreateProductPayload_product(ctx context.Context, field graphql.CollectedField, obj *model.CreateProductPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_CreateProductPayload_product(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Product, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Product) graphql.Marshaler {
+			return ec.marshalOProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_CreateProductPayload_product(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CreateProductPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Product(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeleteProductPayload_product(ctx context.Context, field graphql.CollectedField, obj *model.DeleteProductPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_DeleteProductPayload_product(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Product, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Product) graphql.Marshaler {
+			return ec.marshalOProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_DeleteProductPayload_product(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeleteProductPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Product(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeleteProductPayload_outcome(ctx context.Context, field graphql.CollectedField, obj *model.DeleteProductPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_DeleteProductPayload_outcome(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Outcome, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.ResourceDeletionOutcome) graphql.Marshaler {
+			return ec.marshalNResourceDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceDeletionOutcome(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_DeleteProductPayload_outcome(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("DeleteProductPayload", field, false, false, errors.New("field of type ResourceDeletionOutcome does not have child fields"))
+}
+
 func (ec *executionContext) _FileReference_name(ctx context.Context, field graphql.CollectedField, obj *model.FileReference) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -891,6 +1001,29 @@ func (ec *executionContext) fieldContext_ProductEdge_node(_ context.Context, fie
 	return fc, nil
 }
 
+func (ec *executionContext) _ProductLifecycleSpec_state(ctx context.Context, field graphql.CollectedField, obj *model.ProductLifecycleSpec) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProductLifecycleSpec_state(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.State, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.ProductLifecycleState) graphql.Marshaler {
+			return ec.marshalNProductLifecycleState2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductLifecycleState(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProductLifecycleSpec_state(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ProductLifecycleSpec", field, false, false, errors.New("field of type ProductLifecycleState does not have child fields"))
+}
+
 func (ec *executionContext) _ProductOptionDefinition_name(ctx context.Context, field graphql.CollectedField, obj *model.ProductOptionDefinition) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1097,6 +1230,38 @@ func (ec *executionContext) fieldContext_ProductSpec_options(_ context.Context, 
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_ProductOptionDefinition(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ProductSpec_lifecycle(ctx context.Context, field graphql.CollectedField, obj *model.ProductSpec) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ProductSpec_lifecycle(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Lifecycle, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.ProductLifecycleSpec) graphql.Marshaler {
+			return ec.marshalNProductLifecycleSpec2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductLifecycleSpec(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_ProductSpec_lifecycle(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ProductSpec",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_ProductLifecycleSpec(ctx, field)
 		},
 	}
 	return fc, nil
@@ -1666,6 +1831,38 @@ func (ec *executionContext) fieldContext_ResolvedProductDefinition_media(_ conte
 	return fc, nil
 }
 
+func (ec *executionContext) _UpdateProductPayload_product(ctx context.Context, field graphql.CollectedField, obj *model.UpdateProductPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UpdateProductPayload_product(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Product, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Product) graphql.Marshaler {
+			return ec.marshalOProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UpdateProductPayload_product(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UpdateProductPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Product(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _UpdateProductStatusPayload_product(ctx context.Context, field graphql.CollectedField, obj *model.UpdateProductStatusPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -1771,6 +1968,478 @@ func (ec *executionContext) fieldContext_VariantSummaryDefinition_unavailable(_ 
 
 // region    **************************** input.gotpl *****************************
 
+func (ec *executionContext) unmarshalInputCatalogObjectReferenceInput(ctx context.Context, obj any) (model.CatalogObjectReferenceInput, error) {
+	var it model.CatalogObjectReferenceInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"apiVersion", "kind", "name", "namespace"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "apiVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("apiVersion"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.APIVersion = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputCompleteProductDeletionInput(ctx context.Context, obj any) (model.CompleteProductDeletionInput, error) {
+	var it model.CompleteProductDeletionInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"namespace", "name", "resourceVersion"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "resourceVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resourceVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ResourceVersion = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputCreateProductInput(ctx context.Context, obj any) (model.CreateProductInput, error) {
+	var it model.CreateProductInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["apiVersion"]; !present {
+		asMap["apiVersion"] = "catalog.gitstore.dev/v1beta1"
+	}
+	if _, present := asMap["kind"]; !present {
+		asMap["kind"] = "Product"
+	}
+
+	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata", "spec", "body"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "apiVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("apiVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.APIVersion = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "metadata":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
+			data, err := ec.unmarshalNMetadataInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐMetadataInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Metadata = data
+		case "spec":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("spec"))
+			data, err := ec.unmarshalNProductSpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductSpecInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Spec = data
+		case "body":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("body"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Body = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputDeleteProductInput(ctx context.Context, obj any) (model.DeleteProductInput, error) {
+	var it model.DeleteProductInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"id"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputFileReferenceInput(ctx context.Context, obj any) (model.FileReferenceInput, error) {
+	var it model.FileReferenceInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"name", "kind", "optional"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "optional":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("optional"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Optional = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputMediaDefinitionInput(ctx context.Context, obj any) (model.MediaDefinitionInput, error) {
+	var it model.MediaDefinitionInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"fileRef"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "fileRef":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("fileRef"))
+			data, err := ec.unmarshalNFileReferenceInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐFileReferenceInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.FileRef = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputProductLifecycleSpecInput(ctx context.Context, obj any) (model.ProductLifecycleSpecInput, error) {
+	var it model.ProductLifecycleSpecInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["state"]; !present {
+		asMap["state"] = "ACTIVE"
+	}
+
+	fieldsInOrder := [...]string{"state"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "state":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("state"))
+			data, err := ec.unmarshalOProductLifecycleState2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductLifecycleState(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.State = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputProductOptionDefinitionInput(ctx context.Context, obj any) (model.ProductOptionDefinitionInput, error) {
+	var it model.ProductOptionDefinitionInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"name", "title", "values"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "title":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("title"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Title = data
+		case "values":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("values"))
+			data, err := ec.unmarshalNString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Values = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputProductSpecInput(ctx context.Context, obj any) (model.ProductSpecInput, error) {
+	var it model.ProductSpecInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"title", "categoryRef", "tags", "media", "options", "lifecycle"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "title":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("title"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Title = data
+		case "categoryRef":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("categoryRef"))
+			data, err := ec.unmarshalOCatalogObjectReferenceInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogObjectReferenceInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.CategoryRef = data
+		case "tags":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("tags"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Tags = data
+		case "media":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("media"))
+			data, err := ec.unmarshalOMediaDefinitionInput2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐMediaDefinitionInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Media = data
+		case "options":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("options"))
+			data, err := ec.unmarshalOProductOptionDefinitionInput2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductOptionDefinitionInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Options = data
+		case "lifecycle":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("lifecycle"))
+			data, err := ec.unmarshalOProductLifecycleSpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductLifecycleSpecInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Lifecycle = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputUpdateProductInput(ctx context.Context, obj any) (model.UpdateProductInput, error) {
+	var it model.UpdateProductInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["apiVersion"]; !present {
+		asMap["apiVersion"] = "catalog.gitstore.dev/v1beta1"
+	}
+	if _, present := asMap["kind"]; !present {
+		asMap["kind"] = "Product"
+	}
+
+	fieldsInOrder := [...]string{"apiVersion", "kind", "metadata", "spec", "body"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "apiVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("apiVersion"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.APIVersion = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "metadata":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("metadata"))
+			data, err := ec.unmarshalNMetadataInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐMetadataInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Metadata = data
+		case "spec":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("spec"))
+			data, err := ec.unmarshalNProductSpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductSpecInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Spec = data
+		case "body":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("body"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Body = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputUpdateProductStatusInput(ctx context.Context, obj any) (model.UpdateProductStatusInput, error) {
 	var it model.UpdateProductStatusInput
 	if obj == nil {
@@ -1782,7 +2451,7 @@ func (ec *executionContext) unmarshalInputUpdateProductStatusInput(ctx context.C
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "namespace", "resourceVersion", "conditions", "removeOwnerUID"}
+	fieldsInOrder := [...]string{"name", "namespace", "resourceVersion", "conditions", "removeOwnerID"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -1817,13 +2486,13 @@ func (ec *executionContext) unmarshalInputUpdateProductStatusInput(ctx context.C
 				return it, err
 			}
 			it.Conditions = data
-		case "removeOwnerUID":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("removeOwnerUID"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+		case "removeOwnerID":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("removeOwnerID"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.RemoveOwnerUID = data
+			it.RemoveOwnerID = data
 		}
 	}
 	return it, nil
@@ -1865,6 +2534,119 @@ func (ec *executionContext) _CatalogObjectReference(ctx context.Context, sel ast
 			out.Values[i] = ec._CatalogObjectReference_resourceVersion(ctx, field, obj)
 		case "fieldPath":
 			out.Values[i] = ec._CatalogObjectReference_fieldPath(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var completeProductDeletionPayloadImplementors = []string{"CompleteProductDeletionPayload"}
+
+func (ec *executionContext) _CompleteProductDeletionPayload(ctx context.Context, sel ast.SelectionSet, obj *model.CompleteProductDeletionPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, completeProductDeletionPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CompleteProductDeletionPayload")
+		case "id":
+			out.Values[i] = ec._CompleteProductDeletionPayload_id(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var createProductPayloadImplementors = []string{"CreateProductPayload"}
+
+func (ec *executionContext) _CreateProductPayload(ctx context.Context, sel ast.SelectionSet, obj *model.CreateProductPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, createProductPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("CreateProductPayload")
+		case "product":
+			out.Values[i] = ec._CreateProductPayload_product(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var deleteProductPayloadImplementors = []string{"DeleteProductPayload"}
+
+func (ec *executionContext) _DeleteProductPayload(ctx context.Context, sel ast.SelectionSet, obj *model.DeleteProductPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, deleteProductPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("DeleteProductPayload")
+		case "product":
+			out.Values[i] = ec._DeleteProductPayload_product(ctx, field, obj)
+		case "outcome":
+			out.Values[i] = ec._DeleteProductPayload_outcome(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -2276,6 +3058,45 @@ func (ec *executionContext) _ProductEdge(ctx context.Context, sel ast.SelectionS
 	return out
 }
 
+var productLifecycleSpecImplementors = []string{"ProductLifecycleSpec"}
+
+func (ec *executionContext) _ProductLifecycleSpec(ctx context.Context, sel ast.SelectionSet, obj *model.ProductLifecycleSpec) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, productLifecycleSpecImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ProductLifecycleSpec")
+		case "state":
+			out.Values[i] = ec._ProductLifecycleSpec_state(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var productOptionDefinitionImplementors = []string{"ProductOptionDefinition"}
 
 func (ec *executionContext) _ProductOptionDefinition(ctx context.Context, sel ast.SelectionSet, obj *model.ProductOptionDefinition) graphql.Marshaler {
@@ -2349,6 +3170,11 @@ func (ec *executionContext) _ProductSpec(ctx context.Context, sel ast.SelectionS
 			}
 		case "options":
 			out.Values[i] = ec._ProductSpec_options(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lifecycle":
+			out.Values[i] = ec._ProductSpec_lifecycle(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -2626,6 +3452,42 @@ func (ec *executionContext) _ResolvedProductDefinition(ctx context.Context, sel 
 	return out
 }
 
+var updateProductPayloadImplementors = []string{"UpdateProductPayload"}
+
+func (ec *executionContext) _UpdateProductPayload(ctx context.Context, sel ast.SelectionSet, obj *model.UpdateProductPayload) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, updateProductPayloadImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UpdateProductPayload")
+		case "product":
+			out.Values[i] = ec._UpdateProductPayload_product(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var updateProductStatusPayloadImplementors = []string{"UpdateProductStatusPayload"}
 
 func (ec *executionContext) _UpdateProductStatusPayload(ctx context.Context, sel ast.SelectionSet, obj *model.UpdateProductStatusPayload) graphql.Marshaler {
@@ -2741,6 +3603,63 @@ func (ec *executionContext) marshalNCatalogObjectReference2ᚖgithubᚗcomᚋgit
 	return ec._CatalogObjectReference(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNCompleteProductDeletionInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteProductDeletionInput(ctx context.Context, v any) (model.CompleteProductDeletionInput, error) {
+	res, err := ec.unmarshalInputCompleteProductDeletionInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNCompleteProductDeletionPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteProductDeletionPayload(ctx context.Context, sel ast.SelectionSet, v model.CompleteProductDeletionPayload) graphql.Marshaler {
+	return ec._CompleteProductDeletionPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNCompleteProductDeletionPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCompleteProductDeletionPayload(ctx context.Context, sel ast.SelectionSet, v *model.CompleteProductDeletionPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CompleteProductDeletionPayload(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNCreateProductInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductInput(ctx context.Context, v any) (model.CreateProductInput, error) {
+	res, err := ec.unmarshalInputCreateProductInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNCreateProductPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductPayload(ctx context.Context, sel ast.SelectionSet, v model.CreateProductPayload) graphql.Marshaler {
+	return ec._CreateProductPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNCreateProductPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCreateProductPayload(ctx context.Context, sel ast.SelectionSet, v *model.CreateProductPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._CreateProductPayload(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNDeleteProductInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteProductInput(ctx context.Context, v any) (model.DeleteProductInput, error) {
+	res, err := ec.unmarshalInputDeleteProductInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNDeleteProductPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteProductPayload(ctx context.Context, sel ast.SelectionSet, v model.DeleteProductPayload) graphql.Marshaler {
+	return ec._DeleteProductPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNDeleteProductPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐDeleteProductPayload(ctx context.Context, sel ast.SelectionSet, v *model.DeleteProductPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._DeleteProductPayload(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNFileReference2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐFileReference(ctx context.Context, sel ast.SelectionSet, v *model.FileReference) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -2749,6 +3668,11 @@ func (ec *executionContext) marshalNFileReference2ᚖgithubᚗcomᚋgitstoreᚑd
 		return graphql.Null
 	}
 	return ec._FileReference(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNFileReferenceInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐFileReferenceInput(ctx context.Context, v any) (*model.FileReferenceInput, error) {
+	res, err := ec.unmarshalInputFileReferenceInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalNMediaDefinition2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐMediaDefinitionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MediaDefinition) graphql.Marshaler {
@@ -2775,6 +3699,11 @@ func (ec *executionContext) marshalNMediaDefinition2ᚖgithubᚗcomᚋgitstore�
 		return graphql.Null
 	}
 	return ec._MediaDefinition(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNMediaDefinitionInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐMediaDefinitionInput(ctx context.Context, v any) (*model.MediaDefinitionInput, error) {
+	res, err := ec.unmarshalInputMediaDefinitionInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalNOwnerReference2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐOwnerReferenceᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.OwnerReference) graphql.Marshaler {
@@ -2879,6 +3808,26 @@ func (ec *executionContext) marshalNProductEdge2ᚖgithubᚗcomᚋgitstoreᚑdev
 	return ec._ProductEdge(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNProductLifecycleSpec2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductLifecycleSpec(ctx context.Context, sel ast.SelectionSet, v *model.ProductLifecycleSpec) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ProductLifecycleSpec(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNProductLifecycleState2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductLifecycleState(ctx context.Context, v any) (model.ProductLifecycleState, error) {
+	var res model.ProductLifecycleState
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNProductLifecycleState2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductLifecycleState(ctx context.Context, sel ast.SelectionSet, v model.ProductLifecycleState) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) marshalNProductOptionDefinition2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductOptionDefinitionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.ProductOptionDefinition) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 1000, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -2905,6 +3854,11 @@ func (ec *executionContext) marshalNProductOptionDefinition2ᚖgithubᚗcomᚋgi
 	return ec._ProductOptionDefinition(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNProductOptionDefinitionInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductOptionDefinitionInput(ctx context.Context, v any) (*model.ProductOptionDefinitionInput, error) {
+	res, err := ec.unmarshalInputProductOptionDefinitionInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalNProductSpec2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductSpec(ctx context.Context, sel ast.SelectionSet, v *model.ProductSpec) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -2913,6 +3867,11 @@ func (ec *executionContext) marshalNProductSpec2ᚖgithubᚗcomᚋgitstoreᚑdev
 		return graphql.Null
 	}
 	return ec._ProductSpec(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNProductSpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductSpecInput(ctx context.Context, v any) (*model.ProductSpecInput, error) {
+	res, err := ec.unmarshalInputProductSpecInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalNProductWatchEvent2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductWatchEvent(ctx context.Context, sel ast.SelectionSet, v model.ProductWatchEvent) graphql.Marshaler {
@@ -2955,6 +3914,25 @@ func (ec *executionContext) marshalNResolvedFileDefinition2ᚖgithubᚗcomᚋgit
 	return ec._ResolvedFileDefinition(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNUpdateProductInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductInput(ctx context.Context, v any) (model.UpdateProductInput, error) {
+	res, err := ec.unmarshalInputUpdateProductInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNUpdateProductPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductPayload(ctx context.Context, sel ast.SelectionSet, v model.UpdateProductPayload) graphql.Marshaler {
+	return ec._UpdateProductPayload(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNUpdateProductPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductPayload(ctx context.Context, sel ast.SelectionSet, v *model.UpdateProductPayload) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UpdateProductPayload(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNUpdateProductStatusInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐUpdateProductStatusInput(ctx context.Context, v any) (model.UpdateProductStatusInput, error) {
 	res, err := ec.unmarshalInputUpdateProductStatusInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -2981,11 +3959,79 @@ func (ec *executionContext) marshalOCatalogObjectReference2ᚖgithubᚗcomᚋgit
 	return ec._CatalogObjectReference(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalOCatalogObjectReferenceInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐCatalogObjectReferenceInput(ctx context.Context, v any) (*model.CatalogObjectReferenceInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputCatalogObjectReferenceInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOMediaDefinitionInput2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐMediaDefinitionInputᚄ(ctx context.Context, v any) ([]*model.MediaDefinitionInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.MediaDefinitionInput, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNMediaDefinitionInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐMediaDefinitionInput(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
 func (ec *executionContext) marshalOProduct2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProduct(ctx context.Context, sel ast.SelectionSet, v *model.Product) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Product(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOProductLifecycleSpecInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductLifecycleSpecInput(ctx context.Context, v any) (*model.ProductLifecycleSpecInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputProductLifecycleSpecInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOProductLifecycleState2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductLifecycleState(ctx context.Context, v any) (*model.ProductLifecycleState, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(model.ProductLifecycleState)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOProductLifecycleState2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductLifecycleState(ctx context.Context, sel ast.SelectionSet, v *model.ProductLifecycleState) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
+}
+
+func (ec *executionContext) unmarshalOProductOptionDefinitionInput2ᚕᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductOptionDefinitionInputᚄ(ctx context.Context, v any) ([]*model.ProductOptionDefinitionInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.ProductOptionDefinitionInput, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNProductOptionDefinitionInput2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductOptionDefinitionInput(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
 }
 
 func (ec *executionContext) marshalOProductStatus2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐProductStatus(ctx context.Context, sel ast.SelectionSet, v *model.ProductStatus) graphql.Marshaler {

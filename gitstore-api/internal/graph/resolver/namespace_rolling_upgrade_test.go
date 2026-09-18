@@ -37,20 +37,20 @@ mutation {
 
 const outcomeDeleteNamespaceSelection = `
 mutation {
-  deleteNamespace(input: {identifier: "acme"}) {
-    deletedIdentifier
+  deleteNamespace(input: {id: "gid://GitStore/Namespace/acme"}) {
+    namespace { id }
     outcome
   }
 }
 `
 
-func TestNamespaceGraphQLServerFirstRolloutPreservesLegacySelections(t *testing.T) {
+func TestNamespaceGraphQLServerRejectsLegacyDeleteSelector(t *testing.T) {
 	oldSchema, err := gqlparser.LoadSchema(&ast.Source{Name: "legacy-namespace.graphqls", Input: legacyNamespaceDeletionSchema})
 	require.NoError(t, err)
 	newSchema := generated.NewExecutableSchema(generated.Config{Resolvers: &Resolver{}}).Schema()
 
 	assertNamespaceSelectionValid(t, oldSchema, legacyDeleteNamespaceSelection, true)
-	assertNamespaceSelectionValid(t, newSchema, legacyDeleteNamespaceSelection, true)
+	assertNamespaceSelectionValid(t, newSchema, legacyDeleteNamespaceSelection, false)
 	assertNamespaceSelectionValid(t, oldSchema, outcomeDeleteNamespaceSelection, false)
 	assertNamespaceSelectionValid(t, newSchema, outcomeDeleteNamespaceSelection, true)
 }

@@ -64,7 +64,7 @@ func TestAdmitResources_FileIdentityIsolatedAcrossNamespaces(t *testing.T) {
 	}
 	srvA := newCatalogServer(t, store, gitA)
 	_, err := srvA.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, CommitSha: commitA, RefName: "refs/heads/main",
+		RepositoryId: testRepoID, NewCommitSha: commitA, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -79,7 +79,7 @@ func TestAdmitResources_FileIdentityIsolatedAcrossNamespaces(t *testing.T) {
 	}
 	srvB := newCatalogServer(t, store, gitB)
 	_, err = srvB.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: secondNamespaceRepoID, CommitSha: commitB, RefName: "refs/heads/main",
+		RepositoryId: secondNamespaceRepoID, NewCommitSha: commitB, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -129,7 +129,7 @@ func TestAdmitResources_FileCrossNamespaceCredentialsRefNeverPersistedAtAdmissio
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		RepositoryId: testRepoID, CommitSha: commit, RefName: "refs/heads/main",
+		RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err, "admission must tolerate the rejected file without failing the whole push")
 

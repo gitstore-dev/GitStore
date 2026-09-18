@@ -25,6 +25,10 @@ type CommittedManifestRequest struct {
 	Path         string
 	Content      []byte
 	Operation    Operation
+	// Kind and Name identify a removed resource, whose manifest no longer
+	// exists at CommitSHA. They are used only for OperationDelete.
+	Kind string
+	Name string
 }
 
 // CommittedManifestResult identifies the resource admitted from a committed

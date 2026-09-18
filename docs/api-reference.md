@@ -684,13 +684,14 @@ Input fields:
 Deletes an empty namespace. Deletion is blocked if repositories remain.
 
 ```graphql
-mutation DeleteNamespace {
+mutation DeleteNamespace($id: ID!) {
   deleteNamespace(
     input: {
-            identifier: "gitstore-test"
+            id: $id
     }
   ) {
-        deletedIdentifier
+        namespace { id metadata { name } status { conditions { type } } }
+        outcome
   }
 }
 ```
@@ -769,13 +770,14 @@ mutation TransferRepository($repositoryId: ID!, $targetNamespaceId: ID!) {
 Deletes repository metadata and storage.
 
 ```graphql
-mutation DeleteRepository($repositoryId: ID!) {
+mutation DeleteRepository($id: ID!) {
   deleteRepository(
     input: {
-            repositoryId: $repositoryId
+            id: $id
     }
   ) {
-        deletedRepositoryId
+        repository { id metadata { name } status { conditions { type } } }
+        outcome
   }
 }
 ```

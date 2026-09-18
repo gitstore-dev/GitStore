@@ -20,20 +20,21 @@ pub mod catalog_proto {
 }
 
 use catalog_proto::catalog_service_client::CatalogServiceClient;
-use catalog_proto::{CategoryTaxonomyDeletionTree, ValidateCategoryTaxonomyDeletionRequest};
+use catalog_proto::{ResourceValidationTree, ValidateResourceDeletionsRequest};
 
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 
-/// Validates only removals before receive-pack updates refs. The API receives
-/// the complete old and proposed resource trees, so it can accept atomic child
-/// deletion or reparenting without consulting stale admitted relationships.
-pub struct CategoryTaxonomyDeletionHandler {
+/// Validates every supported resource removal before receive-pack updates refs.
+/// The API receives complete old and proposed resource trees, so it can assess
+/// an atomic deletion or reparenting against the proposed state rather than
+/// stale admitted relationships.
+pub struct ResourceDeletionHandler {
     client: CatalogServiceClient<tonic::transport::Channel>,
     timeout: Duration,
     repository_id: String,
 }
 
-impl CategoryTaxonomyDeletionHandler {
+impl ResourceDeletionHandler {
     pub fn new(
         client: CatalogServiceClient<tonic::transport::Channel>,
         timeout: Duration,
@@ -61,7 +62,7 @@ impl CategoryTaxonomyDeletionHandler {
 
     async fn validate_trees(
         &self,
-        trees: Vec<CategoryTaxonomyDeletionTree>,
+        trees: Vec<ResourceValidationTree>,
         hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
         let repository_id = if hook_ctx.repository_id.is_empty() {
@@ -72,16 +73,13 @@ impl CategoryTaxonomyDeletionHandler {
         let tree_count = trees.len();
         let start = std::time::Instant::now();
         let mut client = self.client.clone();
-        let mut request = tonic::Request::new(ValidateCategoryTaxonomyDeletionRequest {
+        let mut request = tonic::Request::new(ValidateResourceDeletionsRequest {
             repository_id,
             trees,
         });
         request.set_timeout(self.timeout);
-        let result = tokio::time::timeout(
-            self.timeout,
-            client.validate_category_taxonomy_deletion(request),
-        )
-        .await;
+        let result =
+            tokio::time::timeout(self.timeout, client.validate_resource_deletions(request)).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
         match result {
@@ -90,10 +88,10 @@ impl CategoryTaxonomyDeletionHandler {
                     tree_count,
                     duration_ms,
                     outcome = "timeout",
-                    "category_taxonomy_deletion_validation_complete"
+                    "resource_deletion_validation_complete"
                 );
                 Ok(AdmissionDecision::Reject(
-                    "category deletion validation unavailable".to_string(),
+                    "resource deletion validation unavailable".to_string(),
                 ))
             }
             Ok(Err(error)) => {
@@ -102,10 +100,10 @@ impl CategoryTaxonomyDeletionHandler {
                     duration_ms,
                     outcome = "service_unavailable",
                     error = %error,
-                    "category_taxonomy_deletion_validation_complete"
+                    "resource_deletion_validation_complete"
                 );
                 Ok(AdmissionDecision::Reject(
-                    "category deletion validation unavailable".to_string(),
+                    "resource deletion validation unavailable".to_string(),
                 ))
             }
             Ok(Ok(response)) => {
@@ -115,12 +113,12 @@ impl CategoryTaxonomyDeletionHandler {
                         tree_count,
                         duration_ms,
                         outcome = "accepted",
-                        "category_taxonomy_deletion_validation_complete"
+                        "resource_deletion_validation_complete"
                     );
                     Ok(AdmissionDecision::Accept)
                 } else {
                     let reason = if response.reason.is_empty() {
-                        "child categories present".to_string()
+                        "resource deletion rejected".to_string()
                     } else {
                         response.reason
                     };
@@ -128,7 +126,7 @@ impl CategoryTaxonomyDeletionHandler {
                         tree_count,
                         duration_ms,
                         outcome = "rejected",
-                        "category_taxonomy_deletion_validation_complete"
+                        "resource_deletion_validation_complete"
                     );
                     Ok(AdmissionDecision::Reject(reason))
                 }
@@ -138,7 +136,7 @@ impl CategoryTaxonomyDeletionHandler {
 }
 
 #[async_trait]
-impl ValidationHandler for CategoryTaxonomyDeletionHandler {
+impl ValidationHandler for ResourceDeletionHandler {
     async fn validate(
         &self,
         _blobs: &[ResourceBlob],
@@ -155,7 +153,7 @@ impl ValidationHandler for CategoryTaxonomyDeletionHandler {
         hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
         let trees = with_quarantine_repo(git_dir, quarantine_dir, |repo| {
-            collect_deletion_trees(repo, updates)
+            collect_resource_deletion_trees(repo, updates)
         })
         .map_err(anyhow::Error::msg)?;
         if trees.is_empty() {
@@ -165,10 +163,10 @@ impl ValidationHandler for CategoryTaxonomyDeletionHandler {
     }
 }
 
-fn collect_deletion_trees(
+fn collect_resource_deletion_trees(
     repo: &gix::Repository,
     updates: &[RefUpdate],
-) -> Result<Vec<CategoryTaxonomyDeletionTree>, String> {
+) -> Result<Vec<ResourceValidationTree>, String> {
     let mut trees = Vec::new();
 
     for update in updates {
@@ -191,9 +189,9 @@ fn collect_deletion_trees(
             )
         };
         // Avoid packaging complete trees (and making an RPC) for ordinary
-        // edits. Only an update that removes or changes a CategoryTaxonomy can
-        // require the deletion precondition check.
-        if !removes_category_taxonomy(repo, old_tree, proposed_tree) {
+        // edits. Only an update that removes a supported resource can require
+        // a deletion precondition check.
+        if !removes_resource(repo, old_tree, proposed_tree) {
             continue;
         }
 
@@ -206,7 +204,7 @@ fn collect_deletion_trees(
         };
         let mut old_blobs = Vec::new();
         collect_blobs_from_tree(repo, old_tree, "", &mut old_blobs);
-        trees.push(CategoryTaxonomyDeletionTree {
+        trees.push(ResourceValidationTree {
             old_blobs: old_blobs.into_iter().map(to_proto_blob).collect(),
             proposed_blobs: proposed_blobs.into_iter().map(to_proto_blob).collect(),
         });
@@ -214,18 +212,18 @@ fn collect_deletion_trees(
     Ok(trees)
 }
 
-fn removes_category_taxonomy(
+fn removes_resource(
     repo: &gix::Repository,
     old_tree: gix::ObjectId,
     proposed_tree: Option<gix::ObjectId>,
 ) -> bool {
     let Some(proposed_tree) = proposed_tree else {
-        return tree_contains_category_taxonomy(repo, old_tree);
+        return tree_contains_resource(repo, old_tree);
     };
-    category_removed_from_trees(repo, old_tree, proposed_tree)
+    resource_removed_from_trees(repo, old_tree, proposed_tree)
 }
 
-fn category_removed_from_trees(
+fn resource_removed_from_trees(
     repo: &gix::Repository,
     old_tree: gix::ObjectId,
     proposed_tree: gix::ObjectId,
@@ -246,44 +244,36 @@ fn category_removed_from_trees(
                 gix::object::tree::EntryKind::Tree,
                 Some((new_id, gix::object::tree::EntryKind::Tree)),
             ) if old.oid != new_id => {
-                if category_removed_from_trees(repo, old.oid, new_id) {
+                if resource_removed_from_trees(repo, old.oid, new_id) {
                     return true;
                 }
             }
             (gix::object::tree::EntryKind::Tree, Some((_, gix::object::tree::EntryKind::Tree))) => {
             }
-            (gix::object::tree::EntryKind::Tree, _)
-                if tree_contains_category_taxonomy(repo, old.oid) =>
-            {
+            (gix::object::tree::EntryKind::Tree, _) if tree_contains_resource(repo, old.oid) => {
                 return true
             }
             (kind, Some((new_id, new_kind)))
                 if is_blob(kind) && is_blob(new_kind) && old.oid != new_id =>
             {
-                if is_category_taxonomy_blob(repo, old.oid)
-                    && !is_category_taxonomy_blob(repo, new_id)
-                {
+                if is_resource_blob(repo, old.oid) && !is_resource_blob(repo, new_id) {
                     return true;
                 }
             }
-            (kind, None) if is_blob(kind) && is_category_taxonomy_blob(repo, old.oid) => {
-                return true
-            }
-            (kind, Some(_)) if is_blob(kind) && is_category_taxonomy_blob(repo, old.oid) => {
-                return true
-            }
+            (kind, None) if is_blob(kind) && is_resource_blob(repo, old.oid) => return true,
+            (kind, Some(_)) if is_blob(kind) && is_resource_blob(repo, old.oid) => return true,
             _ => {}
         }
     }
     false
 }
 
-fn tree_contains_category_taxonomy(repo: &gix::Repository, tree: gix::ObjectId) -> bool {
+fn tree_contains_resource(repo: &gix::Repository, tree: gix::ObjectId) -> bool {
     crate::git::tree_diff::decode_tree(repo, tree)
         .into_iter()
         .any(|entry| match entry.mode.kind() {
-            gix::object::tree::EntryKind::Tree => tree_contains_category_taxonomy(repo, entry.oid),
-            kind if is_blob(kind) => is_category_taxonomy_blob(repo, entry.oid),
+            gix::object::tree::EntryKind::Tree => tree_contains_resource(repo, entry.oid),
+            kind if is_blob(kind) => is_resource_blob(repo, entry.oid),
             _ => false,
         })
 }
@@ -295,13 +285,13 @@ fn is_blob(kind: gix::object::tree::EntryKind) -> bool {
     )
 }
 
-fn is_category_taxonomy_blob(repo: &gix::Repository, oid: gix::ObjectId) -> bool {
+fn is_resource_blob(repo: &gix::Repository, oid: gix::ObjectId) -> bool {
     repo.find_object(oid)
         .map(|object| {
             object
                 .data
-                .windows(b"kind: CategoryTaxonomy".len())
-                .any(|part| part == b"kind: CategoryTaxonomy")
+                .windows(b"\nkind: ".len())
+                .any(|part| part == b"\nkind: ")
         })
         .unwrap_or(false)
 }
@@ -327,8 +317,9 @@ mod tests {
     use super::*;
     use crate::git::hooks::category_taxonomy_deletion_handler::catalog_proto::{
         catalog_service_server::{CatalogService, CatalogServiceServer},
-        AdmitResourcesRequest, AdmitResourcesResponse, ValidateCategoryTaxonomyDeletionResponse,
-        ValidateResourcesRequest, ValidateResourcesResponse,
+        AdmitResourcesRequest, AdmitResourcesResponse, ValidateCategoryTaxonomyDeletionRequest,
+        ValidateCategoryTaxonomyDeletionResponse, ValidateResourceDeletionsRequest,
+        ValidateResourceDeletionsResponse, ValidateResourcesRequest, ValidateResourcesResponse,
     };
 
     struct MockCatalogService {
@@ -361,6 +352,26 @@ mod tests {
             Ok(Response::new(ValidateCategoryTaxonomyDeletionResponse {
                 accepted: self.accepted,
                 reason: "child categories present".to_string(),
+            }))
+        }
+
+        async fn validate_resource_deletions(
+            &self,
+            request: Request<ValidateResourceDeletionsRequest>,
+        ) -> Result<Response<ValidateResourceDeletionsResponse>, Status> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let trees = request.into_inner().trees;
+            assert_eq!(trees.len(), 1);
+            if let Some(blob) = trees[0].old_blobs.first() {
+                assert_eq!(blob.path, "file.txt");
+            }
+            Ok(Response::new(ValidateResourceDeletionsResponse {
+                accepted: self.accepted,
+                reason: if self.accepted {
+                    String::new()
+                } else {
+                    "child categories present".to_string()
+                },
             }))
         }
 
@@ -470,7 +481,7 @@ mod tests {
         let new_oid = make_commit(&repository, "second");
         let calls = Arc::new(AtomicUsize::new(0));
         let address = start_mock_server(Arc::clone(&calls), true).await;
-        let handler = CategoryTaxonomyDeletionHandler::connect(
+        let handler = ResourceDeletionHandler::connect(
             &address,
             Duration::from_secs(1),
             "repo-1".to_string(),
@@ -511,17 +522,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejected_deletion_maps_to_pre_receive_rejection() {
+    async fn rejected_product_deletion_maps_to_pre_receive_rejection() {
         let directory = tempfile::TempDir::new().unwrap();
         let repository = make_bare_repo(directory.path());
         let old_oid = make_commit(
             &repository,
-            "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: CategoryTaxonomy\nmetadata:\n  name: parent\nspec:\n  title: Parent\n---\n",
+            "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: parent\nspec:\n  title: Parent\n---\n",
         );
         let new_oid = make_empty_commit(&repository);
         let calls = Arc::new(AtomicUsize::new(0));
         let address = start_mock_server(Arc::clone(&calls), false).await;
-        let handler = CategoryTaxonomyDeletionHandler::connect(
+        let handler = ResourceDeletionHandler::connect(
             &address,
             Duration::from_secs(1),
             "repo-1".to_string(),
@@ -558,7 +569,7 @@ mod tests {
             &repository,
             "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: CategoryTaxonomy\nmetadata:\n  name: parent\nspec:\n  title: Parent\n---\n",
         );
-        let handler = CategoryTaxonomyDeletionHandler::connect(
+        let handler = ResourceDeletionHandler::connect(
             "http://127.0.0.1:1",
             Duration::from_millis(100),
             "repo-1".to_string(),
@@ -582,7 +593,7 @@ mod tests {
 
         assert!(matches!(
             decision,
-            AdmissionDecision::Reject(reason) if reason == "category deletion validation unavailable"
+            AdmissionDecision::Reject(reason) if reason == "resource deletion validation unavailable"
         ));
     }
 }

@@ -24,12 +24,20 @@ import (
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 )
+
+var productDeletionOutcomes = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "gitstore_product_deletion_outcomes_total",
+	Help: "Product foreground deletion outcomes at the admitted lifecycle boundary.",
+}, []string{"outcome"})
+
+func init() { prometheus.MustRegister(productDeletionOutcomes) }
 
 // SystemRepositoryName is the well-known repository auto-provisioned for
 // every namespace on creation (ADR-0002/ADR-0003). It is the authoring
@@ -68,6 +76,7 @@ type GitWriter interface {
 	ResolveRefForRepo(ctx context.Context, repositoryID, ref string) (string, error)
 	ReadFileForRepo(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
 	DeleteFile(ctx context.Context, p gitclient.DeleteFileParams) (string, error)
+	DeleteFileForRepo(ctx context.Context, repositoryID string, p gitclient.DeleteFileParams) (string, error)
 	CreateTag(ctx context.Context, p gitclient.CreateTagParams) (string, error)
 }
 
@@ -162,6 +171,188 @@ func (s *Service) GetProductByName(ctx context.Context, namespace, name string) 
 		return nil, fmt.Errorf("product not found: %s/%s", namespace, name)
 	}
 	return p, nil
+}
+
+// CommitProductManifest routes Product authoring through Git and the shared
+// committed-admission boundary. GraphQL never writes Product desired state
+// directly to the datastore.
+func (s *Service) CommitProductManifest(ctx context.Context, apiVersion, kind string, metadata *model.MetadataInput, spec *model.ProductSpecInput, body *string, caller string, create bool) (*datastore.Product, error) {
+	if apiVersion != "catalog.gitstore.dev/v1beta1" || kind != "Product" || metadata == nil || spec == nil || metadata.Name == "" || metadata.Namespace == "" {
+		return nil, gqlerror.Errorf("invalid Product resource envelope")
+	}
+	if s.gitWriter == nil || s.committedAdmitter == nil {
+		return nil, gqlerror.Errorf("Product admission runtime is unavailable")
+	}
+	labels, err := stringMap(metadata.Labels)
+	if err != nil {
+		return nil, gqlerror.Errorf("metadata.labels: %v", err)
+	}
+	annotations, err := stringMap(metadata.Annotations)
+	if err != nil {
+		return nil, gqlerror.Errorf("metadata.annotations: %v", err)
+	}
+	repositoryID, path := "", ""
+	if create {
+		mapping, lookupErr := s.store.LookupRepository(ctx, metadata.Namespace, SystemRepositoryName)
+		if lookupErr != nil {
+			return nil, gqlerror.Errorf("namespace system repository is unavailable")
+		}
+		repositoryID, path = mapping.RepositoryID, fmt.Sprintf("products/%s.md", metadata.Name)
+	} else {
+		existing, lookupErr := s.store.GetProductByName(ctx, metadata.Namespace, metadata.Name)
+		if lookupErr != nil {
+			return nil, gqlerror.Errorf("product not found")
+		}
+		repositoryID, path = existing.RepositoryID, existing.SourcePath
+		if repositoryID == "" || path == "" {
+			return nil, gqlerror.Errorf("Product provenance is unavailable")
+		}
+	}
+	manifestSpec := productManifestSpec(spec)
+	resource := map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"name": metadata.Name, "namespace": metadata.Namespace, "labels": labels, "annotations": annotations}, "spec": manifestSpec}
+	frontmatter, err := yaml.Marshal(resource)
+	if err != nil {
+		return nil, gqlerror.Errorf("encode Product manifest: %v", err)
+	}
+	content := append([]byte("---\n"), frontmatter...)
+	content = append(content, []byte("---\n")...)
+	if body != nil {
+		content = append(content, []byte(*body)...)
+	}
+	verb, operation := "Update", admission.OperationUpdate
+	if create {
+		verb, operation = "Create", admission.OperationCreate
+	}
+	sha, err := s.gitWriter.CommitFileForRepo(ctx, repositoryID, gitclient.CommitFileParams{Path: path, Content: content, CommitMessage: fmt.Sprintf("%s Product %s", verb, metadata.Name), AuthorName: caller})
+	if err != nil {
+		return nil, gqlerror.Errorf("failed to commit Product manifest: %v", err)
+	}
+	if _, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{RepositoryID: repositoryID, Namespace: metadata.Namespace, ActorSubject: caller, CommitSHA: sha, RefName: "refs/heads/main", Path: path, Content: content, Operation: operation}); err != nil {
+		return nil, gqlerror.Errorf("Product admission failed: %v", err)
+	}
+	product, err := s.store.GetProductByName(ctx, metadata.Namespace, metadata.Name)
+	if err != nil {
+		return nil, gqlerror.Errorf("Product admission did not materialize product")
+	}
+	return product, nil
+}
+
+func (s *Service) DeleteProductManifest(ctx context.Context, uid, caller string) (*datastore.Product, bool, error) {
+	product, err := s.store.GetProduct(ctx, uid)
+	if err != nil {
+		return nil, false, gqlerror.Errorf("product not found")
+	}
+	if product.DeletionTimestamp != nil {
+		productDeletionOutcomes.WithLabelValues("ALREADY_TERMINATING").Inc()
+		return product, false, nil
+	}
+	owners, ok := s.store.(datastore.OwnerReferenceStore)
+	if !ok {
+		return nil, false, gqlerror.Errorf("Product deletion is unavailable while owner-reference indexing is disabled")
+	}
+	blocked, err := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{
+		Namespace: product.Namespace, RepositoryID: product.RepositoryID,
+	}, product.UID)
+	if err != nil {
+		return nil, false, gqlerror.Errorf("check Product deletion blockers: %v", err)
+	}
+	if blocked {
+		productDeletionOutcomes.WithLabelValues("BLOCKED").Inc()
+		s.logger.Info("product deletion blocked", zap.String("namespace", product.Namespace), zap.String("name", product.Name), zap.String("actor", caller))
+		return product, false, gqlerror.Errorf("Product %q still has blocking ProductVariants", product.Name)
+	}
+	if s.gitWriter == nil || s.committedAdmitter == nil {
+		return nil, false, gqlerror.Errorf("Product admission runtime is unavailable")
+	}
+	sha, err := s.gitWriter.DeleteFileForRepo(ctx, product.RepositoryID, gitclient.DeleteFileParams{Path: product.SourcePath, CommitMessage: fmt.Sprintf("Delete Product %s", product.Name), AuthorName: caller})
+	if err != nil {
+		return nil, false, gqlerror.Errorf("failed to delete Product manifest: %v", err)
+	}
+	refName := product.GitRef
+	if refName == "" {
+		refName = "refs/heads/main"
+	}
+	if _, err := s.committedAdmitter.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{RepositoryID: product.RepositoryID, Namespace: product.Namespace, ActorSubject: caller, CommitSHA: sha, RefName: refName, Path: product.SourcePath, Operation: admission.OperationDelete, Kind: "Product", Name: product.Name}); err != nil {
+		return nil, false, gqlerror.Errorf("Product deletion admission failed: %v", err)
+	}
+	productDeletionOutcomes.WithLabelValues("TERMINATION_STARTED").Inc()
+	s.logger.Info("product deletion termination started", zap.String("namespace", product.Namespace), zap.String("name", product.Name), zap.String("actor", caller))
+	updated, err := s.store.GetProduct(ctx, uid)
+	if err != nil {
+		return nil, false, gqlerror.Errorf("Product deletion admission did not retain terminating product")
+	}
+	return updated, true, nil
+}
+
+// CompleteProductDeletion repeats the blocker check at the controller-owned
+// finalizer boundary so at-least-once reconciliation cannot orphan a variant.
+func (s *Service) CompleteProductDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*datastore.Product, error) {
+	product, err := s.store.GetProductByName(ctx, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	if product.DeletionTimestamp == nil {
+		return product, gqlerror.Errorf("Product %q is not terminating", name)
+	}
+	if product.ResourceVersion != expectedResourceVersion {
+		return product, datastore.ErrConflict
+	}
+	owners, ok := s.store.(datastore.OwnerReferenceStore)
+	if !ok {
+		return product, gqlerror.Errorf("Product deletion is unavailable while owner-reference indexing is disabled")
+	}
+	blocked, err := owners.HasBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{Namespace: product.Namespace, RepositoryID: product.RepositoryID}, product.UID)
+	if err != nil {
+		return product, err
+	}
+	if blocked {
+		productDeletionOutcomes.WithLabelValues("BLOCKED_AT_COMPLETION").Inc()
+		return product, gqlerror.Errorf("Product %q still has blocking ProductVariants", name)
+	}
+	lifecycle, ok := s.store.(datastore.ProductLifecycleStore)
+	if !ok {
+		return product, gqlerror.Errorf("Product lifecycle datastore is unavailable")
+	}
+	if err := lifecycle.CompleteProductDeletion(ctx, product.UID, expectedResourceVersion); err != nil {
+		return product, err
+	}
+	productDeletionOutcomes.WithLabelValues("COMPLETED").Inc()
+	s.logger.Info("product deletion completed", zap.String("namespace", product.Namespace), zap.String("name", product.Name))
+	return product, nil
+}
+
+func productManifestSpec(spec *model.ProductSpecInput) map[string]any {
+	result := map[string]any{"tags": spec.Tags}
+	if spec.Title != nil {
+		result["title"] = *spec.Title
+	}
+	if spec.CategoryRef != nil {
+		result["categoryRef"] = productReferenceManifest(spec.CategoryRef)
+	}
+	media := make([]any, 0, len(spec.Media))
+	for _, item := range spec.Media {
+		if item != nil && item.FileRef != nil {
+			media = append(media, map[string]any{"fileRef": map[string]any{"name": item.FileRef.Name, "kind": item.FileRef.Kind, "optional": item.FileRef.Optional}})
+		}
+	}
+	result["media"] = media
+	options := make([]any, 0, len(spec.Options))
+	for _, item := range spec.Options {
+		if item != nil {
+			options = append(options, map[string]any{"name": item.Name, "title": item.Title, "values": item.Values})
+		}
+	}
+	result["options"] = options
+	state := "ACTIVE"
+	if spec.Lifecycle != nil && spec.Lifecycle.State != nil {
+		state = string(*spec.Lifecycle.State)
+	}
+	result["lifecycle"] = map[string]any{"state": state}
+	return result
+}
+
+func productReferenceManifest(ref *model.CatalogObjectReferenceInput) map[string]any {
+	return map[string]any{"apiVersion": ref.APIVersion, "kind": ref.Kind, "name": ref.Name, "namespace": ref.Namespace}
 }
 
 // GetCategoryTaxonomies returns paginated CategoryTaxonomy resources.
@@ -1541,18 +1732,25 @@ func (s *Service) requireNamespaceRepositoryFence(operation string) error {
 // and resolvable while its controller removes storage; it is hard-deleted only
 // after the foreground finalizer has been cleared.
 func (s *Service) DeleteRepository(ctx context.Context, repoID, caller string) error {
+	_, _, err := s.deleteRepositoryWithOutcome(ctx, repoID, caller)
+	return err
+}
+
+// deleteRepositoryWithOutcome returns the persisted Repository and whether this
+// request, rather than a concurrent request, started foreground termination.
+func (s *Service) deleteRepositoryWithOutcome(ctx context.Context, repoID, caller string) (*datastore.Repository, bool, error) {
 	repo, err := s.store.GetRepository(ctx, repoID)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
-			return gqlerror.Errorf("repository not found")
+			return nil, false, gqlerror.Errorf("repository not found")
 		}
-		return gqlerror.Errorf("failed to retrieve repository")
+		return nil, false, gqlerror.Errorf("failed to retrieve repository")
 	}
 	datastore.NormalizeRepositoryContract(repo)
 	if repo.DeletionTimestamp != nil {
 		// A repeated delete is deliberately a no-op. In particular, do not
 		// repeat a drain check after termination has already been accepted.
-		return nil
+		return repo, false, nil
 	}
 	hasCatalogResources, err := s.store.HasCatalogResources(ctx, repoID)
 	if err != nil {
@@ -1560,13 +1758,13 @@ func (s *Service) DeleteRepository(ctx context.Context, repoID, caller string) e
 			zap.String("repo_id", repoID),
 			zap.Error(err),
 		)
-		return gqlerror.Errorf("failed to delete repository")
+		return nil, false, gqlerror.Errorf("failed to delete repository")
 	}
 	if hasCatalogResources {
 		s.logger.Info("repository deletion rejected: contains catalog resources",
 			zap.String("repo_id", repoID),
 		)
-		return gqlerror.Errorf("repository %q contains catalog resources and cannot be deleted", repo.Name)
+		return nil, false, gqlerror.Errorf("repository %q contains catalog resources and cannot be deleted", repo.Name)
 	}
 
 	now := s.clock.Now().UTC()
@@ -1582,12 +1780,12 @@ func (s *Service) DeleteRepository(ctx context.Context, repoID, caller string) e
 		if errors.Is(err, datastore.ErrConflict) {
 			latest, reloadErr := s.store.GetRepository(ctx, repoID)
 			if reloadErr == nil && latest.DeletionTimestamp != nil {
-				return nil
+				return latest, false, nil
 			}
 		}
-		return gqlerror.Errorf("failed to start repository deletion")
+		return nil, false, gqlerror.Errorf("failed to start repository deletion")
 	}
-	return nil
+	return repo, true, nil
 }
 
 // CompleteRepositoryDeletion is the controller-only finalizer completion

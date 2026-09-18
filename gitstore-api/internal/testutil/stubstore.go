@@ -17,11 +17,14 @@ import (
 // are no-ops that satisfy the full datastore.Datastore interface.
 type StubStore struct {
 	GetNamespaceByNameFunc  func(ctx context.Context, name string) (*datastore.Namespace, error)
+	GetNamespaceFunc        func(ctx context.Context, id string) (*datastore.Namespace, error)
 	LookupRepositoryFunc    func(ctx context.Context, namespaceID, name string) (*datastore.NamespaceMapping, error)
 	GetRepositoryFunc       func(ctx context.Context, id string) (*datastore.Repository, error)
 	HasRepositoriesFunc     func(ctx context.Context, namespaceID string) (bool, error)
 	HasCatalogResourcesFunc func(ctx context.Context, repoID string) (bool, error)
 	GetCategoryTaxonomyFunc func(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error)
+	GetProductFunc          func(ctx context.Context, uid string) (*datastore.Product, error)
+	GetProductByNameFunc    func(ctx context.Context, namespace, name string) (*datastore.Product, error)
 }
 
 func (s *StubStore) CreateFile(_ context.Context, _ *datastore.File) error { return nil }
@@ -44,6 +47,9 @@ func (s *StubStore) UpdateFileStatus(_ context.Context, _, _ string, _ datastore
 func (s *StubStore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
 	if s.GetNamespaceByNameFunc != nil {
 		return s.GetNamespaceByNameFunc(ctx, name)
+	}
+	if s.GetNamespaceFunc != nil {
+		return s.GetNamespaceFunc(ctx, name)
 	}
 	return nil, datastore.ErrNotFound
 }
@@ -77,10 +83,16 @@ func (s *StubStore) HasCatalogResources(ctx context.Context, repoID string) (boo
 }
 
 func (s *StubStore) CreateProduct(_ context.Context, _ *datastore.Product) error { return nil }
-func (s *StubStore) GetProduct(_ context.Context, _ string) (*datastore.Product, error) {
+func (s *StubStore) GetProduct(ctx context.Context, uid string) (*datastore.Product, error) {
+	if s.GetProductFunc != nil {
+		return s.GetProductFunc(ctx, uid)
+	}
 	return nil, datastore.ErrNotFound
 }
-func (s *StubStore) GetProductByName(_ context.Context, _, _ string) (*datastore.Product, error) {
+func (s *StubStore) GetProductByName(ctx context.Context, namespace, name string) (*datastore.Product, error) {
+	if s.GetProductByNameFunc != nil {
+		return s.GetProductByNameFunc(ctx, namespace, name)
+	}
 	return nil, datastore.ErrNotFound
 }
 func (s *StubStore) ListProducts(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
@@ -159,7 +171,10 @@ func (s *StubStore) ListProductsByLabelSelector(_ context.Context, _ string, _ c
 	return nil, nil
 }
 func (s *StubStore) CreateNamespace(_ context.Context, _ *datastore.Namespace) error { return nil }
-func (s *StubStore) GetNamespace(_ context.Context, _ string) (*datastore.Namespace, error) {
+func (s *StubStore) GetNamespace(ctx context.Context, id string) (*datastore.Namespace, error) {
+	if s.GetNamespaceFunc != nil {
+		return s.GetNamespaceFunc(ctx, id)
+	}
 	return nil, datastore.ErrNotFound
 }
 func (s *StubStore) ListNamespaces(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.Namespace], error) {

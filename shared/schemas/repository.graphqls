@@ -341,11 +341,13 @@ type TransferRepositoryPayload {
 }
 
 input DeleteRepositoryInput {
-  repositoryId: ID!
+  id: ID
 }
 
 type DeleteRepositoryPayload {
-  deletedRepositoryId: ID!
+  "The Repository while foreground termination is in progress."
+  repository: Repository
+  outcome: ResourceDeletionOutcome!
 }
 
 input CompleteRepositoryDeletionInput {
@@ -355,5 +357,5 @@ input CompleteRepositoryDeletionInput {
 }
 
 type CompleteRepositoryDeletionPayload {
-  deletedRepositoryId: ID
+  id: ID
 }

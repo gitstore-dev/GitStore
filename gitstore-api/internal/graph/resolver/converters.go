@@ -215,9 +215,10 @@ func SetConverterLogger(l *zap.Logger) { converterLogger = l }
 // also return the empty spec.
 func specFromJSON(raw json.RawMessage) *model.ProductSpec {
 	empty := &model.ProductSpec{
-		Tags:    []string{},
-		Media:   []*model.MediaDefinition{},
-		Options: []*model.ProductOptionDefinition{},
+		Tags:      []string{},
+		Media:     []*model.MediaDefinition{},
+		Options:   []*model.ProductOptionDefinition{},
+		Lifecycle: &model.ProductLifecycleSpec{State: model.ProductLifecycleStateActive},
 	}
 	if len(raw) == 0 {
 		return empty
@@ -235,6 +236,9 @@ func specFromJSON(raw json.RawMessage) *model.ProductSpec {
 	}
 	if s.Options == nil {
 		s.Options = []*model.ProductOptionDefinition{}
+	}
+	if s.Lifecycle == nil {
+		s.Lifecycle = &model.ProductLifecycleSpec{State: model.ProductLifecycleStateActive}
 	}
 	return &s
 }

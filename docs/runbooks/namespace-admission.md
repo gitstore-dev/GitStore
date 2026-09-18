@@ -19,7 +19,7 @@ activation gates.
    `completeNamespaceDeletion`, `createRepository`, and `transferRepository`.
    This is mandatory: legacy replicas do not understand the new feature gate
    and would otherwise bypass the fence.
-2. Keep clients selecting only `deletedIdentifier`.
+2. Keep clients selecting only the terminating `namespace { id }` envelope and `outcome`.
 3. Apply migration `005_namespace_repository_fence.cql`.
 4. Deploy every API replica with
    `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=disabled` (or `auto`, which
@@ -52,8 +52,8 @@ reaches them.
 
 1. Restore the fleet-wide deny for `deleteNamespace`,
    `completeNamespaceDeletion`, `createRepository`, and `transferRepository`.
-2. Disable client selections of `outcome` and verify requests use only
-   `deletedIdentifier`.
+2. Disable client selections of `outcome` only when rolling back to a compatible
+   API artifact; current clients use `namespace { id }`.
 3. Set `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=disabled` on the current
    fleet and verify gate rejections.
 4. Roll back replicas only with an artifact that still embeds the complete

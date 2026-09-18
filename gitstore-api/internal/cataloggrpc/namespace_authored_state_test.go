@@ -36,7 +36,7 @@ func TestAdmitResourcesNamespacePersistsCompleteAuthoredState(t *testing.T) {
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: createCommit,
-		CommitSha:    createCommit,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 		ActorSubject: "alice",
@@ -55,7 +55,7 @@ func TestAdmitResourcesNamespacePersistsCompleteAuthoredState(t *testing.T) {
 		RepositoryId: testRepoID,
 		OldCommitSha: createCommit,
 		NewCommitSha: updateCommit,
-		CommitSha:    updateCommit,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 		ActorSubject: "bob",
@@ -98,7 +98,7 @@ func TestAdmitResourcesNamespaceProvenanceOnlyChangeKeepsGeneration(t *testing.T
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: createCommit,
-		CommitSha:    createCommit,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 		ActorSubject: "alice",
@@ -148,7 +148,7 @@ spec:
 		RepositoryId: testRepoID,
 		OldCommitSha: zero,
 		NewCommitSha: first,
-		CommitSha:    first,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 		ActorSubject: "alice",
@@ -162,7 +162,7 @@ spec:
 		RepositoryId: testRepoID,
 		OldCommitSha: first,
 		NewCommitSha: second,
-		CommitSha:    second,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 		ActorSubject: "bob",

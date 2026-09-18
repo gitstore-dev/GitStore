@@ -150,7 +150,7 @@ func TestGraphQLFieldAuthorizerAuthorizesGenericFileWatch(t *testing.T) {
 	assert.Equal(t, "acme-store", authz.Resource.Attrs["namespace"])
 }
 
-func TestGraphQLFieldAuthorizerLeavesExistingNonFileWatchesUnchanged(t *testing.T) {
+func TestGraphQLFieldAuthorizerAuthorizesProductWatches(t *testing.T) {
 	authz := testutil.NewDenyAllAuthZ(t)
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
@@ -165,7 +165,7 @@ func TestGraphQLFieldAuthorizerLeavesExistingNonFileWatchesUnchanged(t *testing.
 		called = true
 		return "ok", nil
 	})
-	require.NoError(t, err)
-	assert.True(t, called)
-	assert.Empty(t, authz.Action, "existing Product watch policy must not change in a File-scoped feature")
+	require.Error(t, err)
+	assert.False(t, called)
+	assert.Equal(t, "product.watch", authz.Action)
 }

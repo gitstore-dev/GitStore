@@ -35,6 +35,13 @@ type CatalogObjectReference struct {
 	FieldPath       *string `json:"fieldPath,omitempty"`
 }
 
+type CatalogObjectReferenceInput struct {
+	APIVersion *string `json:"apiVersion,omitempty"`
+	Kind       *string `json:"kind,omitempty"`
+	Name       string  `json:"name"`
+	Namespace  *string `json:"namespace,omitempty"`
+}
+
 type CatalogStats struct {
 	ProductCount       int32 `json:"productCount"`
 	CategoryCount      int32 `json:"categoryCount"`
@@ -120,6 +127,7 @@ type CategoryNamespacePath struct {
 }
 
 // Optimistic lock conflict for category
+// TODO(REMOVE): resourceVersion is used for optimistic locking.
 type CategoryOptimisticLockConflict struct {
 	// TODO: Should this be a datetime?
 	// Current version in database
@@ -248,7 +256,17 @@ type CompleteNamespaceDeletionInput struct {
 }
 
 type CompleteNamespaceDeletionPayload struct {
-	DeletedIdentifier *string `json:"deletedIdentifier,omitempty"`
+	ID *string `json:"id,omitempty"`
+}
+
+type CompleteProductDeletionInput struct {
+	Namespace       string `json:"namespace"`
+	Name            string `json:"name"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type CompleteProductDeletionPayload struct {
+	ID *string `json:"id,omitempty"`
 }
 
 type CompleteRepositoryDeletionInput struct {
@@ -258,7 +276,7 @@ type CompleteRepositoryDeletionInput struct {
 }
 
 type CompleteRepositoryDeletionPayload struct {
-	DeletedRepositoryID *string `json:"deletedRepositoryId,omitempty"`
+	ID *string `json:"id,omitempty"`
 }
 
 // A named status condition shared by core catalog resources.
@@ -324,6 +342,18 @@ type CreateNamespacePayload struct {
 	Namespace *Namespace `json:"namespace"`
 }
 
+type CreateProductInput struct {
+	APIVersion string            `json:"apiVersion"`
+	Kind       string            `json:"kind"`
+	Metadata   *MetadataInput    `json:"metadata"`
+	Spec       *ProductSpecInput `json:"spec"`
+	Body       *string           `json:"body,omitempty"`
+}
+
+type CreateProductPayload struct {
+	Product *Product `json:"product,omitempty"`
+}
+
 type CreateRepositoryInput struct {
 	APIVersion string               `json:"apiVersion"`
 	Kind       string               `json:"kind"`
@@ -380,23 +410,37 @@ type DeleteNamespaceInput struct {
 	// The identifier of the namespace to delete.
 	// Deletion is blocked if any repositories exist within the namespace.
 	// Requires the caller to be the namespace owner (createdBy) or isAdmin.
-	Identifier string `json:"identifier"`
+	ID *string `json:"id,omitempty"`
 }
 
 // Payload returned after successfully deleting a namespace.
 type DeleteNamespacePayload struct {
-	// The identifier of the deleted namespace.
-	DeletedIdentifier string `json:"deletedIdentifier"`
+	// The Namespace while foreground termination is in progress.
+	Namespace *Namespace `json:"namespace,omitempty"`
 	// Whether this request started termination or observed an existing termination.
-	Outcome NamespaceDeletionOutcome `json:"outcome"`
+	Outcome ResourceDeletionOutcome `json:"outcome"`
+}
+
+type DeleteProductInput struct {
+	// Opaque global Product Node ID; never a raw UID or source selector.
+	ID *string `json:"id,omitempty"`
+}
+
+type DeleteProductPayload struct {
+	// The current Product envelope, including terminating metadata.
+	Product *Product `json:"product,omitempty"`
+	// Whether this request started termination or observed existing termination.
+	Outcome ResourceDeletionOutcome `json:"outcome"`
 }
 
 type DeleteRepositoryInput struct {
-	RepositoryID string `json:"repositoryId"`
+	ID *string `json:"id,omitempty"`
 }
 
 type DeleteRepositoryPayload struct {
-	DeletedRepositoryID string `json:"deletedRepositoryId"`
+	// The Repository while foreground termination is in progress.
+	Repository *Repository             `json:"repository,omitempty"`
+	Outcome    ResourceDeletionOutcome `json:"outcome"`
 }
 
 // deleteServiceAccount mutation input (Relay pattern).
@@ -454,6 +498,12 @@ type FileReference struct {
 	Name     string `json:"name"`
 	Kind     string `json:"kind"`
 	Optional bool   `json:"optional"`
+}
+
+type FileReferenceInput struct {
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Optional *bool  `json:"optional,omitempty"`
 }
 
 type FileSource struct {
@@ -523,6 +573,7 @@ type IssueServiceAccountTokenPayload struct {
 }
 
 // A key-value pair for label maps.
+// TODO(REMOVE): No longer used in favour of JSON
 type KeyValuePair struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
@@ -587,6 +638,10 @@ type LogoutPayload struct {
 
 type MediaDefinition struct {
 	FileRef *FileReference `json:"fileRef"`
+}
+
+type MediaDefinitionInput struct {
+	FileRef *FileReferenceInput `json:"fileRef"`
 }
 
 // Author-controlled metadata shared by declarative resource mutations.
@@ -883,6 +938,14 @@ type ProductEdge struct {
 	Node   *Product `json:"node"`
 }
 
+type ProductLifecycleSpec struct {
+	State ProductLifecycleState `json:"state"`
+}
+
+type ProductLifecycleSpecInput struct {
+	State *ProductLifecycleState `json:"state,omitempty"`
+}
+
 // Composite selector: namespace identifier (human-readable slug) + product name.
 type ProductNamespacePath struct {
 	Namespace string `json:"namespace"`
@@ -895,12 +958,28 @@ type ProductOptionDefinition struct {
 	Values []string `json:"values"`
 }
 
+type ProductOptionDefinitionInput struct {
+	Name   string   `json:"name"`
+	Title  *string  `json:"title,omitempty"`
+	Values []string `json:"values"`
+}
+
 type ProductSpec struct {
 	Title       *string                    `json:"title,omitempty"`
 	CategoryRef *CatalogObjectReference    `json:"categoryRef,omitempty"`
 	Tags        []string                   `json:"tags"`
 	Media       []*MediaDefinition         `json:"media"`
 	Options     []*ProductOptionDefinition `json:"options"`
+	Lifecycle   *ProductLifecycleSpec      `json:"lifecycle"`
+}
+
+type ProductSpecInput struct {
+	Title       *string                         `json:"title,omitempty"`
+	CategoryRef *CatalogObjectReferenceInput    `json:"categoryRef,omitempty"`
+	Tags        []string                        `json:"tags,omitempty"`
+	Media       []*MediaDefinitionInput         `json:"media,omitempty"`
+	Options     []*ProductOptionDefinitionInput `json:"options,omitempty"`
+	Lifecycle   *ProductLifecycleSpecInput      `json:"lifecycle,omitempty"`
 }
 
 type ProductStatus struct {
@@ -1082,6 +1161,7 @@ type RenameRepositoryPayload struct {
 }
 
 // Input for reordering categories (drag-and-drop)
+// TODO(REMOVE): Not needed
 type ReorderCategoriesInput struct {
 	// Ordered list of category IDs within parent
 	OrderedIds []string `json:"orderedIds"`
@@ -1094,6 +1174,7 @@ type ReorderCategoriesInput struct {
 }
 
 // Payload for reorderCategories mutation
+// TODO(REMOVE): Not needed
 type ReorderCategoriesPayload struct {
 	// Updated categories
 	Categories []*Category `json:"categories,omitempty"`
@@ -1494,12 +1575,25 @@ type UpdateNamespacePayload struct {
 	Namespace *Namespace `json:"namespace,omitempty"`
 }
 
+type UpdateProductInput struct {
+	APIVersion string            `json:"apiVersion"`
+	Kind       string            `json:"kind"`
+	Metadata   *MetadataInput    `json:"metadata"`
+	Spec       *ProductSpecInput `json:"spec"`
+	Body       *string           `json:"body,omitempty"`
+}
+
+type UpdateProductPayload struct {
+	Product *Product `json:"product,omitempty"`
+}
+
 type UpdateProductStatusInput struct {
 	Name            string            `json:"name"`
 	Namespace       string            `json:"namespace"`
 	ResourceVersion string            `json:"resourceVersion"`
 	Conditions      []*ConditionInput `json:"conditions,omitempty"`
-	RemoveOwnerUID  *string           `json:"removeOwnerUID,omitempty"`
+	// Opaque node ID of the owner reference to remove.
+	RemoveOwnerID *string `json:"removeOwnerID,omitempty"`
 }
 
 type UpdateProductStatusPayload struct {
@@ -1864,64 +1958,6 @@ func (e LabelSelectorOperator) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// The successful result of requesting Namespace termination.
-type NamespaceDeletionOutcome string
-
-const (
-	// This request set the deletion timestamp and foreground deletion finalizer.
-	NamespaceDeletionOutcomeTerminationStarted NamespaceDeletionOutcome = "TERMINATION_STARTED"
-	// The Namespace was already terminating, so no datastore write occurred.
-	NamespaceDeletionOutcomeAlreadyTerminating NamespaceDeletionOutcome = "ALREADY_TERMINATING"
-)
-
-var AllNamespaceDeletionOutcome = []NamespaceDeletionOutcome{
-	NamespaceDeletionOutcomeTerminationStarted,
-	NamespaceDeletionOutcomeAlreadyTerminating,
-}
-
-func (e NamespaceDeletionOutcome) IsValid() bool {
-	switch e {
-	case NamespaceDeletionOutcomeTerminationStarted, NamespaceDeletionOutcomeAlreadyTerminating:
-		return true
-	}
-	return false
-}
-
-func (e NamespaceDeletionOutcome) String() string {
-	return string(e)
-}
-
-func (e *NamespaceDeletionOutcome) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = NamespaceDeletionOutcome(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid NamespaceDeletionOutcome", str)
-	}
-	return nil
-}
-
-func (e NamespaceDeletionOutcome) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *NamespaceDeletionOutcome) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e NamespaceDeletionOutcome) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
 // The tier of a namespace, which determines ownership and repository capabilities.
 type NamespaceTier string
 
@@ -1982,6 +2018,61 @@ func (e NamespaceTier) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+type ProductLifecycleState string
+
+const (
+	ProductLifecycleStateActive  ProductLifecycleState = "ACTIVE"
+	ProductLifecycleStateRetired ProductLifecycleState = "RETIRED"
+)
+
+var AllProductLifecycleState = []ProductLifecycleState{
+	ProductLifecycleStateActive,
+	ProductLifecycleStateRetired,
+}
+
+func (e ProductLifecycleState) IsValid() bool {
+	switch e {
+	case ProductLifecycleStateActive, ProductLifecycleStateRetired:
+		return true
+	}
+	return false
+}
+
+func (e ProductLifecycleState) String() string {
+	return string(e)
+}
+
+func (e *ProductLifecycleState) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ProductLifecycleState(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ProductLifecycleState", str)
+	}
+	return nil
+}
+
+func (e ProductLifecycleState) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ProductLifecycleState) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ProductLifecycleState) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
 type RepositoryVisibility string
 
 const (
@@ -2034,6 +2125,64 @@ func (e *RepositoryVisibility) UnmarshalJSON(b []byte) error {
 }
 
 func (e RepositoryVisibility) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// The successful result of requesting Namespace termination.
+type ResourceDeletionOutcome string
+
+const (
+	// This request set the deletion timestamp and foreground deletion finalizer.
+	ResourceDeletionOutcomeTerminationStarted ResourceDeletionOutcome = "TERMINATION_STARTED"
+	// The Namespace was already terminating, so no datastore write occurred.
+	ResourceDeletionOutcomeAlreadyTerminating ResourceDeletionOutcome = "ALREADY_TERMINATING"
+)
+
+var AllResourceDeletionOutcome = []ResourceDeletionOutcome{
+	ResourceDeletionOutcomeTerminationStarted,
+	ResourceDeletionOutcomeAlreadyTerminating,
+}
+
+func (e ResourceDeletionOutcome) IsValid() bool {
+	switch e {
+	case ResourceDeletionOutcomeTerminationStarted, ResourceDeletionOutcomeAlreadyTerminating:
+		return true
+	}
+	return false
+}
+
+func (e ResourceDeletionOutcome) String() string {
+	return string(e)
+}
+
+func (e *ResourceDeletionOutcome) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = ResourceDeletionOutcome(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid ResourceDeletionOutcome", str)
+	}
+	return nil
+}
+
+func (e ResourceDeletionOutcome) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *ResourceDeletionOutcome) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e ResourceDeletionOutcome) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

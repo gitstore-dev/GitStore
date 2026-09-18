@@ -21,6 +21,7 @@ import (
 const (
 	namespaceWatchBootstrapCursor  = "__namespace_watch_bootstrap__"
 	repositoryWatchBootstrapCursor = "__repository_watch_bootstrap__"
+	productWatchBootstrapCursor    = "__product_watch_bootstrap__"
 )
 
 // normalizeResourceWatchCursor preserves the private typed-watch bootstrap
@@ -28,7 +29,7 @@ const (
 // durable journal. Ordinary opaque cursors are returned unchanged.
 func normalizeResourceWatchCursor(raw string) string {
 	switch raw {
-	case namespaceWatchBootstrapCursor, repositoryWatchBootstrapCursor:
+	case namespaceWatchBootstrapCursor, repositoryWatchBootstrapCursor, productWatchBootstrapCursor:
 		return watchjournal.BootstrapCursor
 	default:
 		return raw
@@ -481,16 +482,6 @@ func categoryTaxonomyToJSONMap(c *datastore.CategoryTaxonomy) map[string]any {
 		return nil
 	}
 	return out
-}
-
-// productEventMatchesFilters reports whether ev satisfies the namespace
-// filter for a watchProducts subscription (spec 042, mirroring
-// categoryEventMatchesFilters). A nil/empty namespace means no filter.
-func productEventMatchesFilters(ev eventbus.Event, namespace *string) bool {
-	if namespace == nil || *namespace == "" {
-		return true
-	}
-	return ev.Namespace == *namespace
 }
 
 // productEventMatchesSelector reports whether ev's underlying Product's

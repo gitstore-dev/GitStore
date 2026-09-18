@@ -6,6 +6,9 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-}"
+capacity_target="${CAPACITY_STACK_TARGET:-repository}"
+capacity_profile="${CAPACITY_STACK_PROFILE:-lifecycle}"
+controller_kind="${CAPACITY_STACK_CONTROLLER_KIND:-${capacity_target^}}"
 state_dir="${REPOSITORY_CAPACITY_STATE_DIR:-${repo_root}/.gitstore/repository-capacity}"
 token_file="${REPOSITORY_TOKEN_FILE:-${state_dir}/token}"
 trigger_file="${REPOSITORY_REPLACEMENT_TRIGGER_FILE:-${state_dir}/replace-api-b}"
@@ -21,6 +24,10 @@ compose=(docker compose -p "${project}" --profile capacity-stack
   -f "${repo_root}/compose.capacity.yml")
 
 export CAPACITY_GIT_REVISION="${revision}"
+# The nested dispatcher uses this identity for its evidence directory. Keep it
+# in the parent harness too, so the post-k6 Git/watch probe appends to that
+# same immutable run directory rather than a sibling with an empty name.
+export CAPACITY_RUN_ID="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 export CONFIG_FILE="${CONFIG_FILE:-${repo_root}/config/config.toml}"
 export SCYLLA_CLUSTER_SMP="${SCYLLA_CLUSTER_SMP:-1}"
 export SCYLLA_CLUSTER_MEMORY_LIMIT="${SCYLLA_CLUSTER_MEMORY_LIMIT:-1536m}"
@@ -46,8 +53,8 @@ wait_stack() {
   wait_http http://127.0.0.1:5002/health "controller B health"
   for endpoint in http://127.0.0.1:5001 http://127.0.0.1:5002; do
     health="$(curl -fsS --max-time 2 "${endpoint}/health")"
-    jq -e '.credentialReady == true and .kinds.Repository.registered == true' <<<"${health}" >/dev/null || {
-      echo "Repository controller is not ready at ${endpoint}" >&2
+    jq -e --arg kind "${controller_kind}" '.credentialReady == true and .kinds[$kind].registered == true' <<<"${health}" >/dev/null || {
+      echo "${controller_kind} controller is not ready at ${endpoint}" >&2
       return 1
     }
   done
@@ -70,8 +77,8 @@ validate_controllers_post_run() {
     # curl -f makes this an explicit HTTP 200 requirement, not merely a JSON
     # parse of an unhealthy response body.
     health="$(curl -fsS --max-time 5 "${endpoint}/health")"
-    jq -e '.credentialReady == true and .kinds.Repository.registered == true' <<<"${health}" >/dev/null || {
-      echo "Repository controller failed post-run registration validation at ${endpoint}" >&2
+    jq -e --arg kind "${controller_kind}" '.credentialReady == true and .kinds[$kind].registered == true' <<<"${health}" >/dev/null || {
+      echo "${controller_kind} controller failed post-run registration validation at ${endpoint}" >&2
       return 1
     }
   done
@@ -175,7 +182,9 @@ run_alpha() {
   trap 'cleanup_replacement_watcher; exit 130' INT
   trap 'cleanup_replacement_watcher; exit 143' TERM
   CAPACITY_API_REPLICAS=2 \
+  CAPACITY_CONTROLLER_REPLICAS=2 \
   CAPACITY_API_BUILD=release \
+  CAPACITY_CONTROLLER_BUILD=release \
   CAPACITY_GIT_SERVICE_BUILD=release \
   CAPACITY_API_ENDPOINTS=http://127.0.0.1:4000,http://127.0.0.1:4001 \
   CAPACITY_API_CONTAINERS=gitstore-capacity-api-a,gitstore-capacity-api-b \
@@ -187,6 +196,14 @@ run_alpha() {
   CAPACITY_DATASTORE_CONTAINERS=gitstore-capacity-scylla-1,gitstore-capacity-scylla-2,gitstore-capacity-scylla-3 \
   CAPACITY_CONFIG_MANIFEST="${state_dir}/config-manifest.json" \
   CAPACITY_ENVIRONMENT_MANIFEST="${state_dir}/environment-manifest.json" \
+  CAPACITY_API_A=http://127.0.0.1:4000 \
+  CAPACITY_API_B=http://127.0.0.1:4001 \
+  PRODUCT_CAPACITY_API_A=http://api-a:4000/graphql \
+  PRODUCT_CAPACITY_API_B=http://api-b:4000/graphql \
+  CAPACITY_DOCKER_NETWORK="${project}_gitstore-network" \
+  CAPACITY_CONTROLLER_A=http://127.0.0.1:5001 \
+  CAPACITY_CONTROLLER_B=http://127.0.0.1:5002 \
+  CAPACITY_TOKEN_FILE="${token_file}" \
   REPOSITORY_API_A=http://127.0.0.1:4000 \
   REPOSITORY_API_B=http://127.0.0.1:4001 \
   REPOSITORY_OVERFLOW_API=http://127.0.0.1:4000 \
@@ -208,7 +225,43 @@ run_alpha() {
   REPOSITORY_CAPACITY_REPLACEMENT_DELAY="${REPOSITORY_CAPACITY_REPLACEMENT_DELAY:-5m}" \
   REPOSITORY_CAPACITY_BASELINE_STABILIZATION="${REPOSITORY_CAPACITY_BASELINE_STABILIZATION:-1m}" \
   REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION="${REPOSITORY_CAPACITY_POST_LOAD_STABILIZATION:-1m}" \
-  "${capacity_runner}" repository lifecycle alpha
+  "${capacity_runner}" "${capacity_target}" "${capacity_profile}" alpha
+  if [[ "${capacity_target}" == "product" ]]; then
+    local product_evidence_dir product_probe_status
+    product_evidence_dir="${CAPACITY_EVIDENCE_DIR:-${repo_root}/.gitstore/capacity}/product/lifecycle/alpha/${CAPACITY_RUN_ID}"
+    mkdir -p "${product_evidence_dir}"
+    set +e
+    PRODUCT_WATCH_API_A=http://127.0.0.1:4000 \
+    PRODUCT_WATCH_API_B=http://127.0.0.1:4001 \
+    PRODUCT_WATCH_API_REPLACEMENT=http://127.0.0.1:4001 \
+    PRODUCT_WATCH_REPLACEMENT_TRIGGER_FILE="${trigger_file}" \
+    PRODUCT_WATCH_TOKEN_FILE="${token_file}" \
+    PRODUCT_CAPACITY_GIT_URL=http://127.0.0.1:9000 \
+    PRODUCT_CAPACITY_NAMESPACE=default \
+    PRODUCT_CAPACITY_REPOSITORY=gitstore-system \
+    go -C "${repo_root}/tests/integration" test -count=1 -run '^TestProduct(Watch|CapacityGitPushParity)' . \
+      2>&1 | tee "${product_evidence_dir}/product-integration.log"
+    product_probe_status=${PIPESTATUS[0]}
+    set -e
+    jq -n --argjson exit_code "${product_probe_status}" \
+      '{schemaVersion:1,gitPush:true,durableWatch:true,rollingReplacement:true,passed:($exit_code == 0),exitCode:$exit_code}' \
+      >"${product_evidence_dir}/product-integration.json"
+    # Fold the post-k6 probe into the canonical run metadata as well. Without
+    # this, a failed Git or watch probe could leave an earlier k6-only
+    # metadata.json claiming the overall Product capacity evidence passed.
+    if [[ -r "${product_evidence_dir}/metadata.json" ]]; then
+      jq --slurpfile probe "${product_evidence_dir}/product-integration.json" \
+        '. + {productLifecycleProbe:$probe[0]} | .passed = (.passed and $probe[0].passed)' \
+        "${product_evidence_dir}/metadata.json" >"${product_evidence_dir}/metadata.json.tmp"
+      mv "${product_evidence_dir}/metadata.json.tmp" "${product_evidence_dir}/metadata.json"
+    fi
+    # The k6 domain verifier covers GraphQL admission and the concurrent
+    # deletion race; this companion artifact is a required gate input for the
+    # real Git-push and WebSocket/replacement probes executed afterwards.
+    jq -e '.passed == true and .gitPush == true and .durableWatch == true and .rollingReplacement == true and .exitCode == 0' \
+      "${product_evidence_dir}/product-integration.json" >/dev/null || return 1
+    (( product_probe_status == 0 )) || return "${product_probe_status}"
+  fi
   validate_controllers_post_run
   cleanup_replacement_watcher
   trap - EXIT INT TERM

@@ -29,16 +29,16 @@ import (
 
 // region    **************************** field.gotpl *****************************
 
-func (ec *executionContext) _CompleteRepositoryDeletionPayload_deletedRepositoryId(ctx context.Context, field graphql.CollectedField, obj *model.CompleteRepositoryDeletionPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _CompleteRepositoryDeletionPayload_id(ctx context.Context, field graphql.CollectedField, obj *model.CompleteRepositoryDeletionPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_CompleteRepositoryDeletionPayload_deletedRepositoryId(ctx, field)
+			return ec.fieldContext_CompleteRepositoryDeletionPayload_id(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.DeletedRepositoryID, nil
+			return obj.ID, nil
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
@@ -48,7 +48,7 @@ func (ec *executionContext) _CompleteRepositoryDeletionPayload_deletedRepository
 		false,
 	)
 }
-func (ec *executionContext) fieldContext_CompleteRepositoryDeletionPayload_deletedRepositoryId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_CompleteRepositoryDeletionPayload_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("CompleteRepositoryDeletionPayload", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
@@ -84,27 +84,59 @@ func (ec *executionContext) fieldContext_CreateRepositoryPayload_repository(_ co
 	return fc, nil
 }
 
-func (ec *executionContext) _DeleteRepositoryPayload_deletedRepositoryId(ctx context.Context, field graphql.CollectedField, obj *model.DeleteRepositoryPayload) (ret graphql.Marshaler) {
+func (ec *executionContext) _DeleteRepositoryPayload_repository(ctx context.Context, field graphql.CollectedField, obj *model.DeleteRepositoryPayload) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_DeleteRepositoryPayload_deletedRepositoryId(ctx, field)
+			return ec.fieldContext_DeleteRepositoryPayload_repository(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.DeletedRepositoryID, nil
+			return obj.Repository, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
-			return ec.marshalNID2string(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Repository) graphql.Marshaler {
+			return ec.marshalORepository2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐRepository(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_DeleteRepositoryPayload_repository(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DeleteRepositoryPayload",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Repository(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DeleteRepositoryPayload_outcome(ctx context.Context, field graphql.CollectedField, obj *model.DeleteRepositoryPayload) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_DeleteRepositoryPayload_outcome(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Outcome, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v model.ResourceDeletionOutcome) graphql.Marshaler {
+			return ec.marshalNResourceDeletionOutcome2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋgraphᚋmodelᚐResourceDeletionOutcome(ctx, selections, v)
 		},
 		true,
 		true,
 	)
 }
-func (ec *executionContext) fieldContext_DeleteRepositoryPayload_deletedRepositoryId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("DeleteRepositoryPayload", field, false, false, errors.New("field of type ID does not have child fields"))
+func (ec *executionContext) fieldContext_DeleteRepositoryPayload_outcome(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("DeleteRepositoryPayload", field, false, false, errors.New("field of type ResourceDeletionOutcome does not have child fields"))
 }
 
 func (ec *executionContext) _ProvisionRepositoryStoragePayload_repository(ctx context.Context, field graphql.CollectedField, obj *model.ProvisionRepositoryStoragePayload) (ret graphql.Marshaler) {
@@ -1430,20 +1462,20 @@ func (ec *executionContext) unmarshalInputDeleteRepositoryInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"repositoryId"}
+	fieldsInOrder := [...]string{"id"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
 			continue
 		}
 		switch k {
-		case "repositoryId":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("repositoryId"))
-			data, err := ec.unmarshalNID2string(ctx, v)
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
 			if err != nil {
 				return it, err
 			}
-			it.RepositoryID = data
+			it.ID = data
 		}
 	}
 	return it, nil
@@ -1915,8 +1947,8 @@ func (ec *executionContext) _CompleteRepositoryDeletionPayload(ctx context.Conte
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("CompleteRepositoryDeletionPayload")
-		case "deletedRepositoryId":
-			out.Values[i] = ec._CompleteRepositoryDeletionPayload_deletedRepositoryId(ctx, field, obj)
+		case "id":
+			out.Values[i] = ec._CompleteRepositoryDeletionPayload_id(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -1990,8 +2022,10 @@ func (ec *executionContext) _DeleteRepositoryPayload(ctx context.Context, sel as
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("DeleteRepositoryPayload")
-		case "deletedRepositoryId":
-			out.Values[i] = ec._DeleteRepositoryPayload_deletedRepositoryId(ctx, field, obj)
+		case "repository":
+			out.Values[i] = ec._DeleteRepositoryPayload_repository(ctx, field, obj)
+		case "outcome":
+			out.Values[i] = ec._DeleteRepositoryPayload_outcome(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

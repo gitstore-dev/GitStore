@@ -22,13 +22,9 @@ func TestRepositoryAuthorization_TwoUserNamespaceIsolation(t *testing.T) {
 	bobToken := namespaceContractLogin(t, h, "bob", "admin123")
 	createNamespaceAsUser(t, h, aliceToken, aliceNamespace)
 	createNamespaceAsUser(t, h, bobToken, bobNamespace)
-	resp := h.gqlWithToken(aliceToken, `
-		mutation($identifier: String!) {
-			deleteNamespace(input: {identifier: $identifier}) {
-				deletedIdentifier
-			}
-		}
-	`, map[string]any{"identifier": bobNamespace})
+	bobNamespaceID, ok := h.lookupNamespaceID(bobNamespace)
+	require.True(t, ok)
+	resp := h.gqlWithToken(aliceToken, `mutation($id: ID!) { deleteNamespace(input: {id: $id}) { namespace { id } } }`, map[string]any{"id": bobNamespaceID})
 	require.Len(t, resp.Errors, 1)
 	assert.Contains(t, string(resp.Errors[0]), "permission denied: resource belongs to another user")
 	aliceRepositoryID := createRepositoryAsUser(t, h, aliceToken, aliceNamespace, aliceRepository)

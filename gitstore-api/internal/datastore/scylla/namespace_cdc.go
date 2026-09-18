@@ -744,7 +744,7 @@ func assignCDC(row *scyllacdc.ChangeRow, column string, destination any) {
 
 func assignCDCValue(value, destination any) {
 	source := reflect.ValueOf(value)
-	for source.Kind() == reflect.Pointer {
+	for source.Kind() == reflect.Pointer || source.Kind() == reflect.Interface {
 		if source.IsNil() {
 			return
 		}
@@ -759,6 +759,57 @@ func assignCDCValue(value, destination any) {
 		allocated := reflect.New(target.Type().Elem())
 		allocated.Elem().Set(source)
 		target.Set(allocated)
+		return
+	}
+	if source.Kind() == reflect.Slice && target.Kind() == reflect.Slice {
+		values := reflect.MakeSlice(target.Type(), source.Len(), source.Len())
+		for index := 0; index < source.Len(); index++ {
+			value := source.Index(index)
+			for value.Kind() == reflect.Pointer || value.Kind() == reflect.Interface {
+				if value.IsNil() {
+					return
+				}
+				value = value.Elem()
+			}
+			if value.Type().AssignableTo(target.Type().Elem()) {
+				values.Index(index).Set(value)
+				continue
+			}
+			if value.Type().ConvertibleTo(target.Type().Elem()) {
+				values.Index(index).Set(value.Convert(target.Type().Elem()))
+				continue
+			}
+			return
+		}
+		target.Set(values)
+		return
+	}
+	if source.Kind() == reflect.Map && target.Kind() == reflect.Slice {
+		// Scylla CDC represents non-frozen list postimages as map[cell
+		// timestamp]element. Finalizers are a list in the authoritative schema;
+		// recover its values for the API's []string representation.
+		keys := source.MapKeys()
+		sort.Slice(keys, func(i, j int) bool { return fmt.Sprint(keys[i].Interface()) < fmt.Sprint(keys[j].Interface()) })
+		values := reflect.MakeSlice(target.Type(), 0, len(keys))
+		for _, key := range keys {
+			value := source.MapIndex(key)
+			for value.Kind() == reflect.Pointer || value.Kind() == reflect.Interface {
+				if value.IsNil() {
+					return
+				}
+				value = value.Elem()
+			}
+			if value.Type().AssignableTo(target.Type().Elem()) {
+				values = reflect.Append(values, value)
+				continue
+			}
+			if value.Type().ConvertibleTo(target.Type().Elem()) {
+				values = reflect.Append(values, value.Convert(target.Type().Elem()))
+				continue
+			}
+			return
+		}
+		target.Set(values)
 		return
 	}
 	if source.Type().AssignableTo(target.Type()) {

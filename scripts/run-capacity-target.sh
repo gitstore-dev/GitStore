@@ -20,6 +20,7 @@ valid target/profile combinations:
   namespace/watch
   namespace/recovery
   repository/lifecycle
+  product/lifecycle
   scylla/soak
 
 valid modes: diagnostic, alpha, production
@@ -55,6 +56,12 @@ case "${target}/${profile}" in
   repository/lifecycle)
     runner_kind=go-test
     command=(make --no-print-directory _capacity-repository-lifecycle "MODE=${mode}")
+    ;;
+  product/lifecycle)
+    # The Product lifecycle profile is intentionally a k6 profile while the
+    # full two-API/two-controller verifier is assembled in feature 055.
+    runner_kind=k6
+    command=(make --no-print-directory _capacity-k6 CAPACITY_PROFILE=product-lifecycle "MODE=${mode}")
     ;;
   scylla/soak)
     runner_kind=go-test

@@ -70,6 +70,26 @@ pub struct ValidateResourcesResponse {
     #[prost(message, repeated, tag="2")]
     pub errors: ::prost::alloc::vec::Vec<ValidationError>,
 }
+/// ValidateResourceDeletionsRequest carries every changed ref tree in one
+/// atomic receive-pack operation. ResourceValidationTree is deliberately shared
+/// with schema validation so every Git-backed kind receives identical
+/// old/proposed-tree semantics.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidateResourceDeletionsRequest {
+    #[prost(string, tag="15")]
+    pub repository_id: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="1")]
+    pub trees: ::prost::alloc::vec::Vec<ResourceValidationTree>,
+}
+/// ValidateResourceDeletionsResponse is a stable, non-sensitive precondition
+/// result for generic OperationDelete validation.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidateResourceDeletionsResponse {
+    #[prost(bool, tag="1")]
+    pub accepted: bool,
+    #[prost(string, tag="2")]
+    pub reason: ::prost::alloc::string::String,
+}
 /// CategoryTaxonomyDeletionTree carries one old/proposed ref-tree pair. The Git
 /// service sends the complete resource sets because the proposed tree, rather
 /// than the currently admitted catalog state, determines whether a child is
@@ -111,6 +131,7 @@ pub struct AdmitResourcesRequest {
     /// commit_sha is the full SHA of the accepted push commit.
     /// Deprecated for new callers in favor of new_commit_sha, but retained as
     /// the canonical new commit for older git-service versions.
+    #[deprecated]
     #[prost(string, tag="1")]
     pub commit_sha: ::prost::alloc::string::String,
     /// ref_name is the fully-qualified ref that was updated, e.g. "refs/heads/main".

@@ -16,6 +16,11 @@ roles:
       - "repository.read.any"
       - "repository.status.write"
       - "repository.watch"
+      # Product read authorization is resource-aware; unlike Repository
+      # mutations it resolves to the canonical `product.read` action.
+      - "product.read"
+      - "product.watch"
+      - "product.delete.complete"
       - "serviceaccount.token.issue"
     deny: []
   api-internal:

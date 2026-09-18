@@ -32,6 +32,19 @@ func TestRepositoryWatchMigrationEnablesAuthoritativeFullImageCDC(t *testing.T) 
 	}
 }
 
+func TestProductWatchMigrationEnablesAuthoritativeFullImageCDC(t *testing.T) {
+	raw, err := migrations.Files.ReadFile("013_product_watch_cdc.cql")
+	require.NoError(t, err)
+	cql := strings.ToLower(string(raw))
+
+	assert.False(t, strings.HasPrefix(strings.TrimSpace(cql), "--"))
+	assert.Contains(t, cql, "alter table products_by_namespace with cdc")
+	assert.Contains(t, cql, "'preimage': 'full'")
+	assert.Contains(t, cql, "'postimage': 'true'")
+	assert.Contains(t, cql, "'ttl': '1209600'")
+	assert.NotContains(t, cql, "product_watch_events", "Product must reuse the generic journal")
+}
+
 func TestResourceWatchJournalMigrationAddsIdentityColumnsAtomically(t *testing.T) {
 	raw, err := migrations.Files.ReadFile("011_resource_watch_journal.cql")
 	require.NoError(t, err)

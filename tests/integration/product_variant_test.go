@@ -362,7 +362,10 @@ Variant with selected options.
 }
 
 // productWithOptions returns a Product fixture that declares options.
-func productWithOptions(name, ns string, opts []struct{ Name string; Values []string }) string {
+func productWithOptions(name, ns string, opts []struct {
+	Name   string
+	Values []string
+}) string {
 	var optLines string
 	for _, o := range opts {
 		optLines += fmt.Sprintf("  - name: %s\n    values: [%s]\n", o.Name, joinStrings(o.Values))
@@ -813,7 +816,9 @@ func TestProductVariant_ProductVariantsConnection(t *testing.T) {
 		`, map[string]any{"ns": ns, "name": productName, "vn": variantName})
 		if len(probe.Errors) == 0 {
 			type probeData struct {
-				ProductVariant *struct{ ID string `json:"id"` } `json:"productVariant"`
+				ProductVariant *struct {
+					ID string `json:"id"`
+				} `json:"productVariant"`
 			}
 			var pd probeData
 			if err := json.Unmarshal(probe.Data, &pd); err == nil && pd.ProductVariant != nil {
@@ -1482,8 +1487,12 @@ func TestProductVariant_ProductVariantsPageInfo(t *testing.T) {
 		Edges []struct {
 			Cursor string `json:"cursor"`
 			Node   struct {
-				Metadata struct{ Name string `json:"name"` } `json:"metadata"`
-				Spec     struct{ SKU string `json:"sku"` }    `json:"spec"`
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+				Spec struct {
+					SKU string `json:"sku"`
+				} `json:"spec"`
 			} `json:"node"`
 		} `json:"edges"`
 		PageInfo struct {
@@ -1507,7 +1516,14 @@ func TestProductVariant_ProductVariantsPageInfo(t *testing.T) {
 			}
 		`, map[string]any{"ns": ns, "name": productName})
 		if len(resp.Errors) > 0 {
-			t.Fatalf("graphql errors waiting for variants: %s", resp.Errors)
+			if !graphqlErrorHasCode(resp.Errors, "NOT_FOUND") {
+				t.Fatalf("graphql errors waiting for variants: %s", resp.Errors)
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for product %q to be admitted", productName)
+			}
+			time.Sleep(200 * time.Millisecond)
+			continue
 		}
 		var probe struct {
 			Product *struct {

@@ -5,22 +5,87 @@ package contract_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+// Typed and generic Product streams are projections of the same durable
+// cursor. This contract intentionally bypasses the process-local event bus so
+// replay and selector behavior cannot regress to replica-local state.
+func TestProductDurableWatchContract_TypedGenericBootstrapReplayAndSelector(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	lease, acquired, err := journal.AcquireLease(context.Background(), "product-contract", time.Now(), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	_, err = journal.Append(context.Background(), lease, datastore.ResourceWatchEvent{Type: datastore.ResourceWatchBookmark, At: time.Now()}, time.Hour)
+	require.NoError(t, err)
+	r, err := resolver.NewResolver(resolver.ResolverDeps{
+		Store: store, Logger: zap.NewNop(), ResourceJournal: journal,
+		NamespaceWatch: config.NamespaceWatchConfig{ReadersEnabled: true, ReadBatchSize: 32, MaxReplayEvents: 32, SubscriberBuffer: 8, SubscriberBackpressureMillis: 100, PollMinMillis: 1, PollMaxMillis: 5, MaxMaterializerLagSeconds: 60},
+	})
+	require.NoError(t, err)
+	bootstrap := watchjournal.BootstrapCursor
+	selector := &model.LabelSelectorInput{MatchLabels: map[string]any{"team": "catalog"}}
+	typed, err := r.Subscription().WatchProducts(context.Background(), nil, selector, &bootstrap)
+	require.NoError(t, err)
+	generic, err := r.Subscription().WatchResources(context.Background(), "Product", nil, selector, &bootstrap)
+	require.NoError(t, err)
+	require.Equal(t, model.WatchEventTypeBookmark, receiveProductContractTyped(t, typed).Type)
+	require.Equal(t, model.WatchEventTypeBookmark, receiveProductContractGeneric(t, generic).Type)
+
+	product := &datastore.Product{UID: uuid.NewString(), Namespace: "gitstore", Name: "widget", APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "Product", Generation: 1, ResourceVersion: "1", Labels: map[string]string{"team": "catalog"}}
+	payload, err := json.Marshal(product)
+	require.NoError(t, err)
+	_, err = journal.Append(context.Background(), lease, datastore.ResourceWatchEvent{Type: datastore.ResourceWatchAdded, Kind: "Product", Namespace: product.Namespace, Name: product.Name, Payload: payload, SelectorLabels: product.Labels, At: time.Now()}, time.Hour)
+	require.NoError(t, err)
+	gotTyped := receiveProductContractTyped(t, typed)
+	gotGeneric := receiveProductContractGeneric(t, generic)
+	require.Equal(t, model.WatchEventTypeAdded, gotTyped.Type)
+	require.Equal(t, gotTyped.ResourceVersion, gotGeneric.ResourceVersion)
+	require.NotNil(t, gotTyped.Product)
+	require.Equal(t, product.Name, gotTyped.Product.Metadata.Name)
+}
+
+func receiveProductContractTyped(t *testing.T, events <-chan *model.ProductWatchEvent) *model.ProductWatchEvent {
+	t.Helper()
+	select {
+	case event := <-events:
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for typed Product event")
+		return nil
+	}
+}
+
+func receiveProductContractGeneric(t *testing.T, events <-chan *model.WatchEvent) *model.WatchEvent {
+	t.Helper()
+	select {
+	case event := <-events:
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for generic Product event")
+		return nil
+	}
+}
 
 // stubGitReader is a minimal cataloggrpc.GitReader returning one fixed
 // product file, for exercising AdmitResources end-to-end in this package.
@@ -130,7 +195,7 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 
 	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
 		RepositoryId: repoID,
-		CommitSha:    strings.Repeat("a", 40),
+		NewCommitSha: strings.Repeat("a", 40),
 		RefName:      "refs/heads/main",
 	})
 	require.NoError(t, err)
@@ -142,16 +207,16 @@ func TestWatchProducts_ProductAdmission_DeliversAddedEvent(t *testing.T) {
 		require.NotNil(t, ev.Namespace)
 		require.Equal(t, "gitstore", *ev.Namespace)
 		require.NotNil(t, ev.Product)
-		require.NotNil(t, ev.Product.Spec.CategoryRef)
-		require.Equal(t, "electronics", ev.Product.Spec.CategoryRef.Name)
+		require.Equal(t, "widget", ev.Product.Metadata.Name)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for watchProducts event")
 	}
 }
 
-// T019: deleting a product with a categoryRef delivers a DELETED
-// ProductWatchEvent with product: null and the correct name/namespace.
-func TestWatchProducts_ProductDeletion_DeliversDeletedEvent(t *testing.T) {
+// T019: deleting a product with a categoryRef first delivers a MODIFIED
+// terminating ProductWatchEvent. The Product controller emits the final
+// DELETED event only after foreground blockers are clear.
+func TestWatchProducts_ProductDeletion_DeliversTerminatingEvent(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
@@ -223,7 +288,6 @@ func TestWatchProducts_ProductDeletion_DeliversDeletedEvent(t *testing.T) {
 
 	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
 		RepositoryId: repoID,
-		CommitSha:    a,
 		OldCommitSha: zero,
 		NewCommitSha: a,
 		RefName:      "refs/heads/main",
@@ -240,7 +304,6 @@ func TestWatchProducts_ProductDeletion_DeliversDeletedEvent(t *testing.T) {
 	current = b
 	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
 		RepositoryId: repoID,
-		CommitSha:    b,
 		OldCommitSha: a,
 		NewCommitSha: b,
 		RefName:      "refs/heads/main",
@@ -249,12 +312,13 @@ func TestWatchProducts_ProductDeletion_DeliversDeletedEvent(t *testing.T) {
 
 	select {
 	case ev := <-events:
-		require.Equal(t, model.WatchEventTypeDeleted, ev.Type)
+		require.Equal(t, model.WatchEventTypeModified, ev.Type)
 		require.Equal(t, "widget", ev.Name)
 		require.NotNil(t, ev.Namespace)
 		require.Equal(t, "gitstore", *ev.Namespace)
-		require.Nil(t, ev.Product)
+		require.NotNil(t, ev.Product)
+		require.NotNil(t, ev.Product.Metadata.DeletionTimestamp)
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for DELETED watchProducts event")
+		t.Fatal("timed out waiting for terminating watchProducts event")
 	}
 }

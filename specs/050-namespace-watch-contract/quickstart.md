@@ -64,7 +64,7 @@ Cover:
 Start the repository's Scylla test services, then:
 
 ```bash
-make test-scylla-hardening
+make test-datastore-contracts
 make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9042
 ```
 
@@ -578,7 +578,7 @@ Completed:
 Commands exercised:
 
 ```bash
-make test-scylla-hardening
+make test-datastore-contracts
 make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9042
 NAMESPACE_WATCH_API_A=http://127.0.0.1:4100 \
 NAMESPACE_WATCH_API_B=http://127.0.0.1:4101 \

@@ -36,12 +36,13 @@ query($after: String) {
 
 const watchNamespacesSubscription = `
 subscription($resourceVersion: String) {
-  watchResources(kind: "Namespace", resourceVersion: $resourceVersion) {
+  watchNamespaces(resourceVersion: $resourceVersion) {
     type
-    kind
     name
     resourceVersion
-    object
+    namespace {
+` + namespaceFields + `
+    }
   }
 }`
 
@@ -105,7 +106,7 @@ type namespacesControllerListResponse struct {
 	} `json:"namespaces"`
 }
 
-// NamespaceListWatcher lists Namespaces and watches the generic Namespace
+// NamespaceListWatcher lists Namespaces and watches the typed Namespace
 // resource stream.
 type NamespaceListWatcher struct {
 	client *graphqlclient.Client
@@ -118,7 +119,7 @@ func NewNamespaceListWatcher(client *graphqlclient.Client) *NamespaceListWatcher
 
 const namespaceWatchBootstrapCursor = "__namespace_watch_bootstrap__"
 
-// List establishes an event-bus cursor before paginating Namespaces. Changes
+// List establishes a typed durable cursor before paginating Namespaces. Changes
 // racing with the snapshot are replayed by the subsequent Watch from that
 // cursor.
 func (lw *NamespaceListWatcher) List(ctx context.Context) (ListResponse[namespacecontroller.Namespace], error) {
@@ -169,7 +170,7 @@ func (lw *NamespaceListWatcher) List(ctx context.Context) (ListResponse[namespac
 	return ListResponse[namespacecontroller.Namespace]{Items: items, ResourceVersion: cursorEvent.ResourceVersion}, nil
 }
 
-// Watch opens the generic watchResources stream for Namespace events.
+// Watch opens the typed watchNamespaces stream for Namespace events.
 func (lw *NamespaceListWatcher) Watch(ctx context.Context, resourceVersion string) (Watcher[namespacecontroller.Namespace], error) {
 	vars := map[string]any{}
 	if resourceVersion != "" {
@@ -192,11 +193,10 @@ func (lw *NamespaceListWatcher) Watch(ctx context.Context, resourceVersion strin
 }
 
 type namespaceWatchEventJSON struct {
-	Type            string          `json:"type"`
-	Kind            string          `json:"kind"`
-	Name            string          `json:"name"`
-	ResourceVersion string          `json:"resourceVersion"`
-	Object          json.RawMessage `json:"object"`
+	Type            string             `json:"type"`
+	Name            string             `json:"name"`
+	ResourceVersion string             `json:"resourceVersion"`
+	Namespace       *namespaceNodeJSON `json:"namespace"`
 }
 
 type namespaceWatcher struct {
@@ -216,10 +216,10 @@ func (w *namespaceWatcher) run() {
 	defer close(w.events)
 	for raw := range w.subscription.Next() {
 		var payload struct {
-			WatchResources namespaceWatchEventJSON `json:"watchResources"`
+			WatchResources namespaceWatchEventJSON `json:"watchNamespaces"`
 		}
 		if err := json.Unmarshal(raw, &payload); err != nil {
-			w.err = fmt.Errorf("listwatch: decode Namespace watch payload: %w", err)
+			w.err = fmt.Errorf("listwatch: decode typed Namespace watch payload: %w", err)
 			return
 		}
 		event := payload.WatchResources
@@ -239,13 +239,8 @@ func (w *namespaceWatcher) run() {
 		}
 
 		item := namespacecontroller.Namespace{Name: event.Name, ResourceVersion: event.ResourceVersion}
-		if len(event.Object) > 0 && string(event.Object) != "null" {
-			var node namespaceNodeJSON
-			if err := json.Unmarshal(event.Object, &node); err != nil {
-				w.err = fmt.Errorf("listwatch: decode Namespace object: %w", err)
-				return
-			}
-			item = node.toNamespace()
+		if event.Namespace != nil {
+			item = event.Namespace.toNamespace()
 		}
 		w.events <- WatchEvent[namespacecontroller.Namespace]{
 			Type:            eventType,

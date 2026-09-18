@@ -69,7 +69,7 @@ func productNodeJSON(uid, name, namespace, rv, categoryRef string) map[string]an
 	}
 }
 
-// T008: ProductListWatcher.List captures the event-bus cursor before it
+// ProductListWatcher.List captures a typed Product watch cursor before it
 // enumerates namespaces and paginates products per namespace.
 func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +127,7 @@ func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
 		t.Errorf("unexpected item: %+v", resp.Items[0])
 	}
 	if resp.ResourceVersion != "42" {
-		t.Errorf("ResourceVersion = %q, want event-bus cursor %q", resp.ResourceVersion, "42")
+		t.Errorf("ResourceVersion = %q, want durable journal cursor %q", resp.ResourceVersion, "42")
 	}
 }
 

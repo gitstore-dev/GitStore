@@ -99,12 +99,14 @@ impl AdmissionHandler for AdmissionControlHandler {
             tokio::spawn(async move {
                 let req = AdmitResourcesRequest {
                     repository_id,
-                    commit_sha: new_commit_sha.clone(),
                     ref_name: ref_name.clone(),
                     old_commit_sha,
                     new_commit_sha,
                     changed_paths,
                     actor_subject,
+                    // `commit_sha` is deprecated. Leave it at its protobuf
+                    // default for rolling readers rather than writing it.
+                    ..Default::default()
                 };
                 if let Err(e) = client.admit_resources(req).await {
                     error!(
@@ -217,8 +219,8 @@ mod tests {
     use catalog_proto::{
         catalog_service_server::{CatalogService, CatalogServiceServer},
         AdmitResourcesResponse, ValidateCategoryTaxonomyDeletionRequest,
-        ValidateCategoryTaxonomyDeletionResponse, ValidateResourcesRequest,
-        ValidateResourcesResponse,
+        ValidateCategoryTaxonomyDeletionResponse, ValidateResourceDeletionsRequest,
+        ValidateResourceDeletionsResponse, ValidateResourcesRequest, ValidateResourcesResponse,
     };
     use std::sync::{
         atomic::{AtomicU32, Ordering},
@@ -271,6 +273,16 @@ mod tests {
             _req: Request<ValidateCategoryTaxonomyDeletionRequest>,
         ) -> Result<Response<ValidateCategoryTaxonomyDeletionResponse>, Status> {
             Ok(Response::new(ValidateCategoryTaxonomyDeletionResponse {
+                accepted: true,
+                reason: String::new(),
+            }))
+        }
+
+        async fn validate_resource_deletions(
+            &self,
+            _req: Request<ValidateResourceDeletionsRequest>,
+        ) -> Result<Response<ValidateResourceDeletionsResponse>, Status> {
+            Ok(Response::new(ValidateResourceDeletionsResponse {
                 accepted: true,
                 reason: String::new(),
             }))

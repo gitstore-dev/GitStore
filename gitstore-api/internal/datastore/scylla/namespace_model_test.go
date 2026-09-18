@@ -183,6 +183,7 @@ func TestScyllaSchemaIncludesOwnerReferenceProjectionMigration(t *testing.T) {
 		"010_service_account_listing.cql",
 		"011_resource_watch_journal.cql",
 		"012_repository_watch_cdc.cql",
+		"013_product_watch_cdc.cql",
 	}, names)
 }
 

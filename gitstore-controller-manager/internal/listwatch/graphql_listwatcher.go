@@ -386,7 +386,7 @@ type namespacesListResponse struct {
 }
 
 const productFields = `
-  metadata { uid name namespace resourceVersion }
+  metadata { uid name namespace resourceVersion finalizers deletionTimestamp }
   spec { categoryRef { name } }
 `
 
@@ -420,10 +420,12 @@ subscription($namespace: String, $resourceVersion: String) {
 }`
 
 type productMetadataJSON struct {
-	UID             string `json:"uid"`
-	Name            string `json:"name"`
-	Namespace       string `json:"namespace"`
-	ResourceVersion string `json:"resourceVersion"`
+	UID               string     `json:"uid"`
+	Name              string     `json:"name"`
+	Namespace         string     `json:"namespace"`
+	ResourceVersion   string     `json:"resourceVersion"`
+	Finalizers        []string   `json:"finalizers"`
+	DeletionTimestamp *time.Time `json:"deletionTimestamp"`
 }
 
 type productSpecJSON struct {
@@ -439,10 +441,12 @@ type productNodeJSON struct {
 
 func (n productNodeJSON) toProduct() categorytaxonomy.Product {
 	p := categorytaxonomy.Product{
-		UID:             n.Metadata.UID,
-		Namespace:       n.Metadata.Namespace,
-		Name:            n.Metadata.Name,
-		ResourceVersion: n.Metadata.ResourceVersion,
+		UID:               n.Metadata.UID,
+		Namespace:         n.Metadata.Namespace,
+		Name:              n.Metadata.Name,
+		ResourceVersion:   n.Metadata.ResourceVersion,
+		Finalizers:        n.Metadata.Finalizers,
+		DeletionTimestamp: n.Metadata.DeletionTimestamp,
 	}
 	if n.Spec.CategoryRef != nil {
 		p.CategoryRefName = n.Spec.CategoryRef.Name
@@ -503,7 +507,7 @@ func listNamespaceIdentifiers(ctx context.Context, client *graphqlclient.Client)
 	return identifiers, nil
 }
 
-// List establishes an event-bus cursor before enumerating every namespace,
+// List establishes a durable journal cursor before enumerating every namespace,
 // then paginates the products query for each to completion. Changes that race
 // with the snapshot are replayed by the subsequent Watch from that cursor.
 // When there are zero prior Product events, the cursor is
@@ -566,7 +570,7 @@ func (lw *ProductListWatcher) List(ctx context.Context) (ListResponse[categoryta
 	return ListResponse[categorytaxonomy.Product]{Items: items, ResourceVersion: cursorEvent.ResourceVersion}, nil
 }
 
-// Watch opens a watchProducts subscription (across all namespaces)
+// Watch opens a typed Product watch subscription (across all namespaces)
 // starting after resourceVersion.
 func (lw *ProductListWatcher) Watch(ctx context.Context, resourceVersion string) (Watcher[categorytaxonomy.Product], error) {
 	vars := map[string]any{}
@@ -617,7 +621,6 @@ func (w *productWatcher) run() {
 			return
 		}
 		ev := payload.WatchProducts
-
 		var evType EventType
 		switch ev.Type {
 		case "ADDED":

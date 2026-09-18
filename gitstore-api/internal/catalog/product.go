@@ -45,6 +45,13 @@ type ProductSpec struct {
 	Tags        []string                  `yaml:"tags"`
 	Media       []MediaDefinition         `yaml:"media"               validate:"omitempty,dive"`
 	Options     []ProductOptionDefinition `yaml:"options"    validate:"omitempty,dive"`
+	Lifecycle   ProductLifecycleSpec      `yaml:"lifecycle"`
+}
+
+// ProductLifecycleSpec is author-owned desired lifecycle state. Runtime
+// deletion metadata remains system-owned on the enclosing Product record.
+type ProductLifecycleSpec struct {
+	State string `yaml:"state" validate:"omitempty,oneof=ACTIVE RETIRED"`
 }
 
 // ObjectReference is a pointer to another catalogue resource.

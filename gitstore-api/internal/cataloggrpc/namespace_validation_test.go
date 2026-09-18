@@ -184,7 +184,7 @@ func TestAdmitResourcesNamespaceUpdateMissingAfterConflictDoesNotCreate(t *testi
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: b,
-		CommitSha:    b,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 	})
@@ -222,7 +222,7 @@ func TestAdmitResourcesNamespaceUpdateMissingInitiallyDoesNotCreate(t *testing.T
 		RepositoryId: testRepoID,
 		OldCommitSha: a,
 		NewCommitSha: b,
-		CommitSha:    b,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 	})
@@ -297,7 +297,7 @@ func TestAdmitResourcesReintroducedNamespaceUpdatesDurableIdentity(t *testing.T)
 		RepositoryId: testRepoID,
 		OldCommitSha: oldCommit,
 		NewCommitSha: newCommit,
-		CommitSha:    newCommit,
+
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
 	})

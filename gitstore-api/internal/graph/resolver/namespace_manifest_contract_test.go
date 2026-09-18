@@ -55,7 +55,7 @@ func TestNamespaceDocumentationManifestContract(t *testing.T) {
 	}
 }
 
-func TestNamespaceDeletionOutcomeSchemaContract(t *testing.T) {
+func TestResourceDeletionOutcomeSchemaContract(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	require.True(t, ok)
 	schemaPath := filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "..", "shared", "schemas", "namespace.graphqls")
@@ -63,10 +63,10 @@ func TestNamespaceDeletionOutcomeSchemaContract(t *testing.T) {
 	require.NoError(t, err)
 
 	text := string(content)
-	assert.Contains(t, text, "enum NamespaceDeletionOutcome {")
+	assert.Contains(t, text, "enum ResourceDeletionOutcome {")
 	assert.Contains(t, text, "TERMINATION_STARTED")
 	assert.Contains(t, text, "ALREADY_TERMINATING")
-	assert.Regexp(t, `(?s)type DeleteNamespacePayload\s*\{.*outcome:\s*NamespaceDeletionOutcome!`, text)
+	assert.Regexp(t, `(?s)type DeleteNamespacePayload\s*\{.*namespace:\s*Namespace.*outcome:\s*ResourceDeletionOutcome!`, text)
 }
 
 func firstFencedCodeBlockInSection(markdown, heading string) (string, bool) {

@@ -107,6 +107,10 @@ type repositoryCDCRunner interface {
 	RunRepositoryCDC(context.Context, *watchjournal.Materializer, datastore.ResourceWatchLease, time.Duration, time.Duration, func()) error
 }
 
+type productCDCRunner interface {
+	RunProductCDC(context.Context, *watchjournal.Materializer, datastore.ResourceWatchLease, time.Duration, time.Duration, func()) error
+}
+
 type namespaceWatchRuntime struct {
 	journal          datastore.NamespaceWatchJournal
 	materializer     *watchjournal.Materializer
@@ -114,6 +118,7 @@ type namespaceWatchRuntime struct {
 	metrics          *watchjournal.Metrics
 	runner           namespaceCDCRunner
 	repositoryRunner repositoryCDCRunner
+	productRunner    productCDCRunner
 	cfg              config.NamespaceWatchConfig
 	log              *zap.Logger
 	cancel           context.CancelFunc
@@ -181,6 +186,9 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		}
 		if runner, ok := rawStore.(repositoryCDCRunner); ok {
 			namespaceWatch.repositoryRunner = runner
+		}
+		if runner, ok := rawStore.(productCDCRunner); ok {
+			namespaceWatch.productRunner = runner
 		}
 	}
 	store := datastore.NewInstrumentedDatastore(rawStore, cfg.Datastore.Backend, log)
@@ -841,14 +849,14 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 	r.metrics.SetLeader(true)
 	defer r.metrics.SetLeader(false)
 
-	errCh := make(chan error, 3)
+	errCh := make(chan error, 4)
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
 		errCh <- r.leaseManager.Maintain(ctx, lease)
 	}()
-	if r.runner != nil || r.repositoryRunner != nil {
-		ready := make(chan struct{}, 2)
+	if r.runner != nil || r.repositoryRunner != nil || r.productRunner != nil {
+		ready := make(chan struct{}, 3)
 		readyCount := 0
 		if r.runner != nil {
 			readyCount++
@@ -869,6 +877,19 @@ func (r *namespaceWatchRuntime) runAsLeader(parent context.Context, lease datast
 			go func() {
 				defer workers.Done()
 				errCh <- r.repositoryRunner.RunRepositoryCDC(
+					ctx, r.materializer, lease,
+					time.Duration(r.cfg.CDCRetentionSeconds)*time.Second,
+					time.Duration(r.cfg.CDCConfidenceWindowMillis)*time.Millisecond,
+					func() { ready <- struct{}{} },
+				)
+			}()
+		}
+		if r.productRunner != nil {
+			readyCount++
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				errCh <- r.productRunner.RunProductCDC(
 					ctx, r.materializer, lease,
 					time.Duration(r.cfg.CDCRetentionSeconds)*time.Second,
 					time.Duration(r.cfg.CDCConfidenceWindowMillis)*time.Millisecond,

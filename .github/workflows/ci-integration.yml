@@ -122,6 +122,9 @@ jobs:
         REPOSITORY: catalog
       run: go test -count=1 -v -timeout 240s ./...
 
+    - name: Run backend-neutral datastore hardening
+      run: make test-datastore-contracts
+
     - name: Collect logs on failure
       if: failure()
       run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml logs
@@ -129,31 +132,6 @@ jobs:
     - name: Cleanup
       if: always()
       run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml down -v
-
-  datastore-contract-test:
-    name: Datastore Hardening (backend-neutral + memdb)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        persist-credentials: false
-
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.26.0'
-        cache-dependency-path: gitstore-api/go.sum
-
-    - name: Run backend-neutral datastore hardening
-      run: make test-scylla-hardening
-
-    - name: Run memdb datastore contracts
-      working-directory: ./gitstore-api
-      run: go test -tags memdb -count=1 -v -race -timeout 180s ./tests/contract/datastore/...
 
   integration-test-scylla:
     name: Integration (ScyllaDB)
@@ -225,6 +203,9 @@ jobs:
           REPOSITORY: catalog
         run: go test -count=1 -v -timeout 240s ./...
 
+      - name: Run tagged Scylla datastore hardening and failure injection
+        run: make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9042
+
       - name: Collect logs on failure
         if: failure()
         run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml -f compose.scylla.yml logs
@@ -232,70 +213,6 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker compose --profile local -f compose.yml -f compose.local.yml -f compose.ci.yml -f compose.scylla.yml down -v
-
-  datastore-contract-test-scylla:
-    name: Datastore Hardening (tagged ScyllaDB + failure injection)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        persist-credentials: false
-
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.26.0'
-        cache-dependency-path: gitstore-api/go.sum
-
-    - name: Start ScyllaDB
-      run: |
-        docker run -d --name gitstore-scylla-test \
-          -p 9042:9042 \
-          scylladb/scylla:5.4 \
-          --developer-mode=1 --overprovisioned=1 --smp=1
-        timeout 120 sh -c 'until docker exec gitstore-scylla-test cqlsh -e "describe cluster"; do sleep 2; done'
-
-    - name: Run tagged Scylla hardening and failure-injection tests
-      run: make test-scylla-integration SCYLLA_TEST_ADDR=127.0.0.1:9042
-
-    - name: Stop ScyllaDB
-      if: always()
-      run: docker rm -f gitstore-scylla-test || true
-
-  repair-cli-test:
-    name: Projection Repair CLI Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-
-    steps:
-    - uses: actions/checkout@v6
-      with:
-        persist-credentials: false
-
-    - name: Set up Go
-      uses: actions/setup-go@v6
-      with:
-        go-version: '1.26.0'
-        cache-dependency-path: gitstore-api/go.sum
-
-    - name: Run repair CLI tests
-      working-directory: ./gitstore-api
-      run: |
-        test -f ./cmd/gitctl/main_test.go
-        go test -count=1 -v -timeout 90s ./cmd/gitctl
-
-    - name: Run repair planning and conditional-apply tests
-      working-directory: ./gitstore-api
-      run: >-
-        go test -count=1 -v -timeout 90s
-        -run 'Test(BuildRepairPlan|ProjectionRepairService|ValidateRepairPlan)'
-        ./internal/datastore/scylla
 
   grpc-contract-test:
     name: gRPC Contract Tests (testcontainers)

@@ -26,7 +26,7 @@ func TestGraphQLCompletionClientCompletesRepositoryDeletion(t *testing.T) {
 		}
 		gotInput, _ = request.Variables["input"].(map[string]any)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"completeRepositoryDeletion":{"deletedRepositoryId":"repo-1"}}}`))
+		_, _ = w.Write([]byte(`{"data":{"completeRepositoryDeletion":{"id":"repo-1"}}}`))
 	}))
 	defer srv.Close()
 

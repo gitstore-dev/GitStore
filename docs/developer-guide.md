@@ -232,9 +232,9 @@ The API is the Git Smart HTTP front door. The Rust Git service is gRPC-only stor
 2. `gitstore-api` resolves `{namespace}/{repo}` to the stable repository ID stored in the datastore.
 3. `gitstore-api` forwards Git transport work to `gitstore-git-service` through `GitService` gRPC.
 4. During receive-pack, `gitstore-git-service` stages objects in quarantine and runs enabled hook phases.
-5. In the blocking pre-receive phase, `gitstore-git-service` sends frontmatter resource blobs to `gitstore-api` via `CatalogService.ValidateResources`.
+5. In the blocking pre-receive phase, `gitstore-git-service` sends frontmatter resource blobs to `gitstore-api` via `CatalogService.ValidateResources`; when a resource is removed, it additionally sends the old and proposed trees to `CatalogService.ValidateResourceDeletions`.
 6. If validation passes, refs are updated and the push succeeds.
-7. In the post-receive phase, `gitstore-git-service` calls `CatalogService.AdmitResources` with repository ID, ref name, old commit SHA, and new commit SHA. The legacy `commit_sha` field remains a compatibility alias for the new commit.
+7. In the post-receive phase, `gitstore-git-service` calls `CatalogService.AdmitResources` with repository ID, ref name, old commit SHA, and new commit SHA. New callers populate `new_commit_sha`; the deprecated `commit_sha` tag remains reserved for mixed-version decoding only.
 8. `gitstore-api` verifies that the ref still points at the admitted new commit, skips stale admissions if a newer push already won, compares old/new resource identities, applies admission checks, and creates, updates, or deletes hydrated records in the datastore.
 9. `gitstore-controller-manager` reconciles controller-owned status and operational follow-up through the API.
 
@@ -526,7 +526,7 @@ Spec quickstarts are useful implementation references, but they are not user-fac
 
 - [User Guide](user-guide.md)
 - [API Reference](api-reference.md)
-- [Architecture](architecture.md)
+- [Architecture](architecture/README.md)
 - [Admin](admin/README.md)
 - [Push Validation](products/push-validation.md)
 - [Release Process](runbooks/release-process.md)
