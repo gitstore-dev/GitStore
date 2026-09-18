@@ -155,7 +155,7 @@ func TestCategoryTaxonomyReconciler_DepthThreeHierarchy(t *testing.T) {
 	}
 
 	rootStatus := waitForResolved(t, rootName, 30*time.Second, func(s *categoryStatusResult) bool {
-		return s.Resolved != nil && s.Resolved.Depth == 0
+		return s.Resolved != nil && s.Resolved.Depth == 0 && s.Resolved.ChildCount == 1
 	})
 	if len(rootStatus.Resolved.Path) != 1 || rootStatus.Resolved.Path[0] != rootName {
 		t.Errorf("root path: got %v, want [%s]", rootStatus.Resolved.Path, rootName)
@@ -165,7 +165,7 @@ func TestCategoryTaxonomyReconciler_DepthThreeHierarchy(t *testing.T) {
 	}
 
 	midStatus := waitForResolved(t, midName, 30*time.Second, func(s *categoryStatusResult) bool {
-		return s.Resolved != nil && s.Resolved.Depth == 1
+		return s.Resolved != nil && s.Resolved.Depth == 1 && s.Resolved.ChildCount == 1
 	})
 	wantMidPath := []string{rootName, midName}
 	if len(midStatus.Resolved.Path) != 2 || midStatus.Resolved.Path[0] != wantMidPath[0] || midStatus.Resolved.Path[1] != wantMidPath[1] {
