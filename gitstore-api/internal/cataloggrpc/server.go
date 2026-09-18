@@ -697,14 +697,21 @@ func (s *Server) ValidateResourceDeletions(
 			return nil, grpcstatus.Errorf(codes.InvalidArgument, "invalid proposed resource tree: %v", err)
 		}
 
+		operations := deriveResourceAdmissionOperations(oldEntries, proposedEntries, nil)
 		deletedCategories := make(map[string]struct{})
-		for _, operation := range deriveResourceAdmissionOperations(oldEntries, proposedEntries, nil) {
-			if operation.operation == admission.OperationDelete &&
-				operation.identity.Kind == "CategoryTaxonomy" {
+		deletedProducts := false
+		for _, operation := range operations {
+			if operation.operation != admission.OperationDelete {
+				continue
+			}
+			switch operation.identity.Kind {
+			case "CategoryTaxonomy":
 				deletedCategories[operation.identity.key()] = struct{}{}
+			case "Product":
+				deletedProducts = true
 			}
 		}
-		if len(deletedCategories) == 0 {
+		if len(deletedCategories) == 0 && !deletedProducts {
 			continue
 		}
 
@@ -740,7 +747,7 @@ func (s *Server) ValidateResourceDeletions(
 				zap.String("namespace", namespace))
 			return nil, grpcstatus.Error(codes.Unavailable, "category deletion validation unavailable")
 		}
-		for _, operation := range deriveResourceAdmissionOperations(oldEntries, proposedEntries, nil) {
+		for _, operation := range operations {
 			if operation.operation != admission.OperationDelete || operation.identity.Kind != "CategoryTaxonomy" {
 				continue
 			}
@@ -784,7 +791,7 @@ func (s *Server) ValidateResourceDeletions(
 		// ProductVariant deleted or retargeted in this push releases its
 		// blocking owner reference; a dependent in another repository remains a
 		// hard rejection through the durable reverse index.
-		for _, operation := range deriveResourceAdmissionOperations(oldEntries, proposedEntries, nil) {
+		for _, operation := range operations {
 			if operation.operation != admission.OperationDelete || operation.identity.Kind != "Product" {
 				continue
 			}
@@ -2600,7 +2607,7 @@ func (s *Server) admitProductVariant(
 		op = admission.OperationCreate
 	}
 	ownerReferences, parentTerminating := s.resolvedProductVariantOwnerReferences(ctx, namespace, resource.Spec.ProductRef)
-	if parentTerminating && existing == nil {
+	if parentTerminating {
 		s.log.Warn("admit_resources: product_variant targets terminating product",
 			zap.String("name", resource.Metadata.Name),
 			zap.String("namespace", namespace),

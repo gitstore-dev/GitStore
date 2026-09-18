@@ -1580,6 +1580,34 @@ func TestValidateCategoryTaxonomyDeletionRejectsIndexedChildOutsideProposedTree(
 	assert.Equal(t, "child categories present", response.Reason)
 }
 
+func TestValidateResourceDeletionsRejectsProductOnlyTreeWithBlockingVariant(t *testing.T) {
+	store := newTestDatastore(t)
+	ctx := context.Background()
+	product := &datastore.Product{
+		UID: "00000000-0000-0000-0000-000000000401", Namespace: "gitstore", Name: "widget",
+		RepositoryID: testRepoID, ResourceVersion: "1", APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "Product",
+	}
+	variant := &datastore.ProductVariant{
+		UID: "00000000-0000-0000-0000-000000000402", Namespace: "gitstore", Name: "red", SKU: "SKU-RED",
+		RepositoryID: testRepoID, ResourceVersion: "1", APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "ProductVariant",
+		ProductRefName:  "widget",
+		OwnerReferences: []byte(`[{"apiVersion":"catalog.gitstore.dev/v1beta1","kind":"Product","name":"widget","uid":"00000000-0000-0000-0000-000000000401","repositoryID":"00000000-0000-0000-0000-000000000001","blockOwnerDeletion":true}]`),
+	}
+	require.NoError(t, store.CreateProduct(ctx, product))
+	require.NoError(t, store.CreateProductVariant(ctx, variant))
+
+	srv := newCatalogServer(t, store, nil)
+	response, err := srv.ValidateResourceDeletions(ctx, &catalogv1.ValidateResourceDeletionsRequest{
+		RepositoryId: testRepoID,
+		Trees: []*catalogv1.ResourceValidationTree{{
+			OldBlobs: []*catalogv1.ResourceBlob{{Path: "products/widget.md", BlobOid: "widget", Content: makeProduct("widget")}},
+		}},
+	})
+	require.NoError(t, err)
+	assert.False(t, response.Accepted)
+	assert.Equal(t, "ProductVariants present", response.Reason)
+}
+
 func TestAdmitResources_IntraPushCycle_BothStoredWithAcyclicFalse(t *testing.T) {
 	memStore := newTestDatastore(t)
 	files := map[string][]byte{
@@ -2255,6 +2283,10 @@ func (p *recordingPolicy) Validate(_ context.Context, req admission.AdmissionReq
 }
 
 func makeProductVariant(name, sku string) []byte {
+	return makeProductVariantWithProductRef(name, sku, "widget")
+}
+
+func makeProductVariantWithProductRef(name, sku, productRef string) []byte {
 	return []byte(`---
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: ProductVariant
@@ -2265,7 +2297,7 @@ spec:
   title: ` + name + `
   sku: ` + sku + `
   productRef:
-    name: widget
+    name: ` + productRef + `
 ---
 `)
 }
@@ -2416,6 +2448,42 @@ func TestAdmitResources_ProductVariantProjectsBlockingProductOwner(t *testing.T)
 	require.Len(t, refs, 1)
 	assert.Equal(t, product.UID, refs[0].UID)
 	assert.True(t, refs[0].BlockOwnerDeletion)
+}
+
+func TestAdmitResources_ProductVariantUpdateRejectsTerminatingProductTarget(t *testing.T) {
+	store := newTestDatastore(t)
+	zero := strings.Repeat("0", 40)
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	current := a
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		a: {
+			"products/widget.md": makeProduct("widget"),
+			"products/other.md":  makeProduct("other"),
+			"variants/red.md":    makeProductVariantWithProductRef("red", "SKU-1", "other"),
+		},
+		b: {
+			"products/widget.md": makeProduct("widget"),
+			"products/other.md":  makeProduct("other"),
+			"variants/red.md":    makeProductVariantWithProductRef("red", "SKU-1", "widget"),
+		},
+	})
+	srv := newCatalogServer(t, store, git)
+	admitDelta(t, srv, zero, a)
+
+	widget, err := store.GetProductByName(context.Background(), "gitstore", "widget")
+	require.NoError(t, err)
+	_, err = store.(datastore.ProductLifecycleStore).MarkProductTerminating(
+		context.Background(), widget.UID, widget.ResourceVersion, "gitstore.dev/foreground-deletion", time.Now().UTC(),
+	)
+	require.NoError(t, err)
+
+	current = b
+	admitDelta(t, srv, a, b)
+
+	variant, err := store.GetProductVariantByName(context.Background(), "gitstore", "red")
+	require.NoError(t, err)
+	assert.Equal(t, "other", variant.ProductRefName)
 }
 
 func TestAdmitResources_ReparentChildBeforeDeletingFormerParent(t *testing.T) {

@@ -28,8 +28,8 @@ means it can proceed in parallel once its phase prerequisites are complete.
 **Purpose**: Establish the shared Product contract, authorization, datastore,
 and Resource Watch prerequisites before any user-story slice.
 
-- [X] T005 Add Product mutation/delete-payload schema contract tests, including `DeleteProductInput { id: ID }` and `ProductDeletionOutcome`, in `gitstore-api/internal/graph/resolver/product_schema_contract_test.go`.
-- [X] T006 Update `shared/schemas/product.graphqls` with create/update/delete envelopes, `ProductDeletionOutcome`, Namespace-style delete payload, lifecycle spec, and typed watch envelope; regenerate gqlgen output in `gitstore-api/internal/graph/generated/` and `gitstore-api/internal/graph/model/`.
+- [X] T005 Add Product mutation/delete-payload schema contract tests, including `DeleteProductInput { id: ID }` and shared `ResourceDeletionOutcome`, in `gitstore-api/internal/graph/resolver/product_schema_contract_test.go`.
+- [X] T006 Update `shared/schemas/product.graphqls` with create/update/delete envelopes, shared `ResourceDeletionOutcome`, Namespace-style delete payload, lifecycle spec, and typed watch envelope; regenerate gqlgen output in `gitstore-api/internal/graph/generated/` and `gitstore-api/internal/graph/model/`.
 - [X] T007 [P] Add Product resource-action authorization matrix tests for read, author, update, delete, watch, status, and completion in `gitstore-api/internal/middleware/security/graphql_product_lifecycle_test.go`.
 - [X] T008 Add resource-aware Product authorization gates before lookup, node, list, relationships/counts, mutation, typed watch, generic watch, status, and completion disclosure in `gitstore-api/internal/middleware/security/graphql.go`.
 - [X] T009 [P] Add datastore contract tests for indexed ProductVariant blockers and expected-version Product termination/completion in `gitstore-api/internal/datastore/product_lifecycle_contract_test.go`.
@@ -58,7 +58,7 @@ revision/identity, then submit invalid input and observe no partial Product.
 - [X] T017 [US1] Generalize the CategoryTaxonomy proposed-tree SchemaValidation path to `OperationDelete` for every supported resource type; refactor Product admission/deletion to preserve provenance, use lifecycle state rather than hard delete, and emit every committed transition in `gitstore-git-service/src/git/hooks/` and `gitstore-api/internal/cataloggrpc/server.go`.
 - [X] T018 [P] [US1] Add resolver contract tests for create/update/delete commit-and-wait behavior, non-system provenance update routing, implicit `gitstore-system` create routing, and ID delete input in `gitstore-api/internal/graph/resolver/product_lifecycle_test.go`.
 - [X] T019 [US1] Implement Product GraphQL create/update/delete in `gitstore-api/internal/graph/resolver/product.resolvers.go`: create targets `gitstore-system`; update resolves stored repository/source path; all await admitted revision.
-- [X] T020 [US1] Return `ProductDeletionOutcome` and the terminating Product envelope from `deleteProduct` in `gitstore-api/internal/graph/resolver/product.resolvers.go`.
+- [X] T020 [US1] Return shared `ResourceDeletionOutcome` and the terminating Product envelope from `deleteProduct` in `gitstore-api/internal/graph/resolver/product.resolvers.go`.
 - [X] T021 [US1] Add Git-push versus GraphQL end-to-end admission parity coverage in `tests/integration/product_lifecycle_test.go`.
 
 ---

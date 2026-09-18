@@ -9,7 +9,7 @@ input ProductLifecycleSpecInput {
 }
 
 enum ProductLifecycleState { ACTIVE RETIRED }
-enum ProductDeletionOutcome { TERMINATION_STARTED ALREADY_TERMINATING }
+enum ResourceDeletionOutcome { TERMINATION_STARTED ALREADY_TERMINATING }
 
 input ProductSpecInput {
   title: String
@@ -49,7 +49,7 @@ type DeleteProductPayload {
   product: Product
 
   "Whether the request began termination or observed an existing workflow."
-  outcome: ProductDeletionOutcome!
+  outcome: ResourceDeletionOutcome!
 }
 
 extend type Mutation {
