@@ -158,27 +158,49 @@ func TestReconcile_ConflictMapsToTransientFailure(t *testing.T) {
 	}
 }
 
-func TestReconcile_TerminatingCategoryDecouplesProductsThenCompletes(t *testing.T) {
-	deletedAt := time.Now().UTC().Truncate(time.Second)
-	resolved, err := json.Marshal(ResolvedCategoryTaxonomy{Path: []string{"electronics"}})
-	if err != nil {
-		t.Fatal(err)
-	}
+// settledTerminatingRoot reconciles a freshly-Terminating root category (empty
+// status — its own hierarchy/condition patch is guaranteed not to be a no-op)
+// once, asserts that first reconcile only writes its own status and requeues
+// without touching the deletion client (the fix for the P1-adjacent finding
+// on PR #426: calling DecoupleProducts/CompleteDeletion with the pre-Apply
+// resourceVersion always conflicts against the write Apply itself just made),
+// then applies the captured patch to build the settled CategoryTaxonomy a
+// second, watch-triggered reconcile would actually observe — with its own
+// status patch now a no-op, so that reconcile proceeds straight to
+// reconcileDeletion with a resourceVersion that matches the server.
+func settledTerminatingRoot(t *testing.T, deletedAt time.Time) CategoryTaxonomy {
+	t.Helper()
 	root := CategoryTaxonomy{
 		Namespace: "acme", Name: "electronics", ResourceVersion: "4",
 		DeletionTimestamp: &deletedAt, Finalizers: []string{datastoreForegroundDeletionFinalizer},
-		Status: status.ResourceStatus{
-			ResourceVersion: "4", Resolved: resolved,
-			Conditions: []*status.Condition{
-				{Type: "ParentResolved", Status: "TRUE", LastTransitionTime: deletedAt},
-				{Type: "Acyclic", Status: "TRUE", LastTransitionTime: deletedAt},
-				{Type: "Ready", Status: "TRUE", LastTransitionTime: deletedAt},
-				{Type: "Terminating", Status: "TRUE", LastTransitionTime: deletedAt},
-			},
-		},
 	}
+	setupStatusClient := &fakeStatusClient{}
+	setupResult := NewReconciler(seedCache(t, root), setupStatusClient, noProducts, nil, &fakeDeletionClient{}).
+		Reconcile(context.Background(), key("acme", "electronics"))
+	if _, ok := setupResult.(types.RequeueAfter); !ok {
+		t.Fatalf("first reconcile of a freshly-Terminating category = %T, want types.RequeueAfter (own status write must not chain into the deletion client in the same pass)", setupResult)
+	}
+	require.Len(t, setupStatusClient.calls, 1, "first reconcile must write its own status exactly once")
+	patch := setupStatusClient.calls[0]
+
+	settled := root
+	settled.ResourceVersion = "5"
+	settled.Status = status.ResourceStatus{
+		ResourceVersion: "5",
+		Conditions:      patch.Conditions,
+		Resolved:        patch.Resolved,
+	}
+	if patch.ObservedGeneration != nil {
+		settled.Status.ObservedGeneration = *patch.ObservedGeneration
+	}
+	return settled
+}
+
+func TestReconcile_TerminatingCategoryDecouplesProductsThenCompletes(t *testing.T) {
+	deletedAt := time.Now().UTC().Truncate(time.Second)
+	settled := settledTerminatingRoot(t, deletedAt)
 	deletion := &fakeDeletionClient{}
-	r := NewReconciler(seedCache(t, root), &fakeStatusClient{}, noProducts, nil, deletion)
+	r := NewReconciler(seedCache(t, settled), &fakeStatusClient{}, noProducts, nil, deletion)
 
 	result := r.Reconcile(context.Background(), key("acme", "electronics"))
 	if _, ok := result.(types.Success); !ok {
@@ -191,25 +213,9 @@ func TestReconcile_TerminatingCategoryDecouplesProductsThenCompletes(t *testing.
 
 func TestReconcile_TerminatingCategoryContinuesAfterBoundedProductPage(t *testing.T) {
 	deletedAt := time.Now().UTC().Truncate(time.Second)
-	resolved, err := json.Marshal(ResolvedCategoryTaxonomy{Path: []string{"electronics"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := CategoryTaxonomy{
-		Namespace: "acme", Name: "electronics", ResourceVersion: "4",
-		DeletionTimestamp: &deletedAt, Finalizers: []string{datastoreForegroundDeletionFinalizer},
-		Status: status.ResourceStatus{
-			ResourceVersion: "4", Resolved: resolved,
-			Conditions: []*status.Condition{
-				{Type: "ParentResolved", Status: "TRUE", LastTransitionTime: deletedAt},
-				{Type: "Acyclic", Status: "TRUE", LastTransitionTime: deletedAt},
-				{Type: "Ready", Status: "TRUE", LastTransitionTime: deletedAt},
-				{Type: "Terminating", Status: "TRUE", LastTransitionTime: deletedAt},
-			},
-		},
-	}
+	settled := settledTerminatingRoot(t, deletedAt)
 	deletion := &fakeDeletionClient{hasMore: true}
-	r := NewReconciler(seedCache(t, root), &fakeStatusClient{}, noProducts, nil, deletion)
+	r := NewReconciler(seedCache(t, settled), &fakeStatusClient{}, noProducts, nil, deletion)
 
 	if _, ok := r.Reconcile(context.Background(), key("acme", "electronics")).(types.RequeueAfter); !ok {
 		t.Fatalf("expected bounded Product page to schedule a continuation")
@@ -229,8 +235,13 @@ func TestReconcile_TerminationStatusIsVisibleBeforeLifecycleOperations(t *testin
 	deletion := &fakeDeletionClient{}
 	result := NewReconciler(seedCache(t, root), statusClient, noProducts, nil, deletion).
 		Reconcile(context.Background(), key("acme", "electronics"))
-	if _, ok := result.(types.Success); !ok {
-		t.Fatalf("Reconcile result = %T, want types.Success", result)
+	// The Terminating condition must be visible in the write this reconcile
+	// makes — but per the fix, this same reconcile must not also call the
+	// deletion client with the now-stale pre-Apply resourceVersion; that
+	// happens on the next, watch-triggered reconcile instead (see
+	// settledTerminatingRoot / the other tests in this file).
+	if _, ok := result.(types.RequeueAfter); !ok {
+		t.Fatalf("Reconcile result = %T, want types.RequeueAfter", result)
 	}
 	require.Equal(t, 1, statusClient.callCount())
 	conditions := statusClient.calls[0].Conditions
@@ -242,30 +253,19 @@ func TestReconcile_TerminationStatusIsVisibleBeforeLifecycleOperations(t *testin
 		}
 		return false
 	})
-	assert.Equal(t, 1, deletion.decoupleCalls)
-	assert.Equal(t, 1, deletion.completeCalls)
+	assert.Zero(t, deletion.decoupleCalls)
+	assert.Zero(t, deletion.completeCalls)
 }
 
 func TestReconcile_TerminatingCategoryRetriesDecouplingAndCompletionConflicts(t *testing.T) {
 	deletedAt := time.Now().UTC().Truncate(time.Second)
-	resolved, err := json.Marshal(ResolvedCategoryTaxonomy{Path: []string{"electronics"}})
-	require.NoError(t, err)
-	root := CategoryTaxonomy{
-		Namespace: "acme", Name: "electronics", ResourceVersion: "4",
-		DeletionTimestamp: &deletedAt, Finalizers: []string{datastoreForegroundDeletionFinalizer},
-		Status: status.ResourceStatus{ResourceVersion: "4", Resolved: resolved, Conditions: []*status.Condition{
-			{Type: "ParentResolved", Status: "TRUE", LastTransitionTime: deletedAt},
-			{Type: "Acyclic", Status: "TRUE", LastTransitionTime: deletedAt},
-			{Type: "Ready", Status: "TRUE", LastTransitionTime: deletedAt},
-			{Type: "Terminating", Status: "TRUE", LastTransitionTime: deletedAt},
-		}},
-	}
+	settled := settledTerminatingRoot(t, deletedAt)
 	for name, deletion := range map[string]*fakeDeletionClient{
 		"decoupling failure":  {decoupleErr: errors.New("temporary page failure")},
 		"completion conflict": {completeErr: types.ErrConflict},
 	} {
 		t.Run(name, func(t *testing.T) {
-			result := NewReconciler(seedCache(t, root), &fakeStatusClient{}, noProducts, nil, deletion).
+			result := NewReconciler(seedCache(t, settled), &fakeStatusClient{}, noProducts, nil, deletion).
 				Reconcile(context.Background(), key("acme", "electronics"))
 			_, transient := result.(types.TransientFailure)
 			assert.True(t, transient)

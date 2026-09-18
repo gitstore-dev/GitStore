@@ -210,7 +210,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		return types.ResultTransient(err)
 	}
 	if current.DeletionTimestamp != nil || slices.Contains(current.Finalizers, datastoreForegroundDeletionFinalizer) {
-		return r.reconcileDeletion(ctx, current)
+		// Do not call reconcileDeletion with `current` here: Apply just
+		// advanced this category's resourceVersion server-side, so
+		// DecoupleProducts/CompleteDeletion would immediately conflict
+		// against the write this very call just made. Let the watch event
+		// that write generates re-trigger this same key; the next reconcile
+		// observes patch.IsNoOp(current.Status)==true (its own status now
+		// matches) and proceeds straight to reconcileDeletion with a
+		// resourceVersion that actually matches the server. The bounded
+		// delay is a fallback only, in case that watch event is delayed.
+		return types.ResultAfter(categoryDeletionRetryInterval)
 	}
 
 	// Re-enqueue whatever points at this node (its children per ParentRefName,
