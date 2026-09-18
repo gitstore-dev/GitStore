@@ -114,4 +114,3 @@ func TestGraphQLNamespaceStatusClient_NotFoundExtensionMapsToErrNotFound(t *test
 		t.Fatalf("Apply err = %v, want errors.Is(..., types.ErrNotFound)", err)
 	}
 }
-
