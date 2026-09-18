@@ -152,6 +152,40 @@ func TestReconcileAdmittedRepositoryProvisionsStorageAndMarksReady(t *testing.T)
 	}
 }
 
+func TestReconcileSkipsStorageProvisioningWhenAlreadyCurrent(t *testing.T) {
+	resolved := ResolvedStorage{StoragePath: "/data/acme/catalog.git", StorageClass: "standard"}
+	resolvedJSON, err := json.Marshal(resolved)
+	if err != nil {
+		t.Fatalf("marshal resolved: %v", err)
+	}
+	current := repositoryFixture(func(repository *Repository) {
+		repository.Status = status.ResourceStatus{
+			ResourceVersion:    "2",
+			ObservedGeneration: 1,
+			Conditions: []*status.Condition{
+				admissionAccepted(1),
+				{Type: conditionStorageProvisioned, Status: statusTrue, ObservedGeneration: 1, Reason: "StorageReady", Message: "bare Git repository exists"},
+				{Type: conditionReady, Status: statusTrue, ObservedGeneration: 1, Reason: "RepositoryReady", Message: "repository admission and storage provisioning are complete"},
+			},
+			Resolved: resolvedJSON,
+		}
+	})
+	storage := &fakeStorageClient{}
+	statuses := &fakeStatusClient{}
+	r := NewReconciler(seedRepositoryCache(t, current), statuses, storage, &fakeCompletionClient{})
+
+	result := r.Reconcile(context.Background(), repositoryKey("acme", "catalog"))
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %T, want types.Success", result)
+	}
+	if len(storage.calls) != 0 {
+		t.Fatalf("storage calls = %#v, want none: EnsureStorage must not be re-invoked once already provisioned", storage.calls)
+	}
+	if len(statuses.patches) != 0 {
+		t.Fatalf("status patches = %#v, want none: an unchanged status must not be re-applied", statuses.patches)
+	}
+}
+
 func TestReconcileSkipsNamespaceBootstrapRepository(t *testing.T) {
 	current := Repository{
 		UID: "bootstrap", Namespace: "acme", Name: SystemRepositoryName, Generation: 1, ResourceVersion: "1",

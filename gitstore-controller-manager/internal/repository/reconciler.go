@@ -115,10 +115,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 
 func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey, current Repository) types.ReconcileResult {
 	admitted := conditionTrue(current.Status.Conditions, conditionAdmissionAccepted)
-	var resolved ResolvedStorage
+
+	var resolvedJSON json.RawMessage
 	var provisionErr error
-	if admitted {
-		resolved, provisionErr = r.storageClient.EnsureStorage(ctx, current.Namespace, current.Name)
+	switch {
+	case admitted && storageProvisionedCurrent(current):
+		// Storage was already provisioned for this generation: re-invoking
+		// EnsureStorage on every reconcile (including the one triggered by
+		// this reconciler's own prior status write) would call gRPC
+		// CreateRepository forever without ever advancing state.
+		resolvedJSON = current.Status.Resolved
+	case admitted:
+		resolved, err := r.storageClient.EnsureStorage(ctx, current.Namespace, current.Name)
+		provisionErr = err
+		if err == nil {
+			resolvedJSON, err = json.Marshal(resolved)
+			if err != nil {
+				return types.ResultTransient(fmt.Errorf("repository: marshal resolved status: %w", err))
+			}
+		}
 	}
 
 	storageReady := admitted && provisionErr == nil
@@ -130,10 +145,6 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 		Conditions:         conditions,
 	}
 	if storageReady {
-		resolvedJSON, err := json.Marshal(resolved)
-		if err != nil {
-			return types.ResultTransient(fmt.Errorf("repository: marshal resolved status: %w", err))
-		}
 		patch.Resolved = resolvedJSON
 	}
 	if !patch.IsNoOp(current.Status) {
@@ -176,6 +187,19 @@ func conditionTrue(conditions []*status.Condition, conditionType string) bool {
 	for _, condition := range conditions {
 		if condition != nil && condition.Type == conditionType {
 			return strings.EqualFold(condition.Status, "true")
+		}
+	}
+	return false
+}
+
+// storageProvisionedCurrent reports whether StorageProvisioned is already
+// True as observed at the repository's current generation. A stale
+// observation (an older generation, e.g. after a storage class change)
+// requires EnsureStorage to run again.
+func storageProvisionedCurrent(current Repository) bool {
+	for _, condition := range current.Status.Conditions {
+		if condition != nil && condition.Type == conditionStorageProvisioned {
+			return strings.EqualFold(condition.Status, "true") && condition.ObservedGeneration == current.Generation
 		}
 	}
 	return false
