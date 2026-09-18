@@ -162,7 +162,7 @@ export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CAC
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
 .PHONY: help git api controller dev compose scylla ps logs stop down
-.PHONY: build test lint pr-ready check clean bootstrap secret capacity capacity-dispatch-test chaos test-scylla-hardening test-scylla-integration
+.PHONY: build test lint pr-ready check clean bootstrap secret capacity capacity-dispatch-test chaos test-datastore-contracts test-scylla-integration
 .PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-repository-lifecycle _capacity-repository-overflow _capacity-observability _capacity-observability-down
 .PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
 .PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac _secret-signing-key
@@ -541,8 +541,8 @@ chaos: ## Inject an opt-in container fault and retain structured evidence.
 		PUMBA_IMAGE="$(PUMBA_IMAGE)" \
 		./scripts/run-chaos.sh "$(CHAOS_PROFILE)"
 
-test-scylla-hardening: ## Run focused datastore hardening tests without an external Scylla instance.
-	@cd "$(API_DIR)" && go test -count=1 ./internal/datastore/... ./tests/contract/datastore/...
+test-datastore-contracts: ## Run backend-neutral datastore contract tests without an external Scylla instance.
+	@cd "$(API_DIR)" && go test -tags memdb -count=1 ./internal/datastore/... ./tests/contract/datastore/...
 
 test-scylla-integration: ## Run tagged datastore hardening tests against Scylla.
 	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \

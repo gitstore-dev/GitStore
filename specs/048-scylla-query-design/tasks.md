@@ -17,7 +17,7 @@
 
 **Purpose**: Establish focused commands and reusable test harnesses for the hardening work.
 
-- [X] T001 Add `test-scylla-hardening`, `test-scylla-integration`, and env-gated `test-scylla-capacity` targets to `Makefile`, and document their variables in `AGENTS.md`
+- [X] T001 Add `test-datastore-contracts`, `test-scylla-integration`, and env-gated `test-scylla-capacity` targets to `Makefile`, and document their variables in `AGENTS.md`
 - [X] T002 [P] Add deterministic resource, bucket, and projection assertion helpers in `gitstore-api/tests/contract/datastore/hardening_helpers_test.go`
 - [X] T003 [P] Add a mutation-step failure-injection harness covering before/after statement failures in `gitstore-api/internal/datastore/scylla/failure_injection_test.go`
 - [X] T004 [P] Add production-dataset, concurrency, duration, and reporting configuration helpers in `gitstore-api/internal/datastore/scylla/capacity_test.go`

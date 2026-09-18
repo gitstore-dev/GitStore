@@ -123,11 +123,7 @@ jobs:
       run: go test -count=1 -v -timeout 240s ./...
 
     - name: Run backend-neutral datastore hardening
-      run: make test-scylla-hardening
-
-    - name: Run memdb datastore contracts
-      working-directory: ./gitstore-api
-      run: go test -tags memdb -count=1 -v -race -timeout 180s ./tests/contract/datastore/...
+      run: make test-datastore-contracts
 
     - name: Collect logs on failure
       if: failure()
