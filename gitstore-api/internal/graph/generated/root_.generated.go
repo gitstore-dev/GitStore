@@ -5700,8 +5700,6 @@ input UpdateProductStatusInput {
   namespace: String!
   resourceVersion: String!
   conditions: [ConditionInput!]
-  "Opaque node ID of the owner reference to remove."
-  removeOwnerID: ID
 }
 
 type UpdateProductStatusPayload {

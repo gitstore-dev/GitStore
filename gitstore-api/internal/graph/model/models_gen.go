@@ -1444,8 +1444,6 @@ type UpdateProductStatusInput struct {
 	Namespace       string            `json:"namespace"`
 	ResourceVersion string            `json:"resourceVersion"`
 	Conditions      []*ConditionInput `json:"conditions,omitempty"`
-	// Opaque node ID of the owner reference to remove.
-	RemoveOwnerID *string `json:"removeOwnerID,omitempty"`
 }
 
 type UpdateProductStatusPayload struct {

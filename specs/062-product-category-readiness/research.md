@@ -25,7 +25,8 @@ rather than adding a new mutation. Add three fields to `UpdateProductStatusInput
 `uid: ID` to the existing `ResolvedCategoryDefinition` output type.
 
 **Rationale**: `UpdateProductStatusInput` today only has
-`name, namespace, resourceVersion, conditions, removeOwnerID` — no
+`name, namespace, resourceVersion, conditions` (plus a dead `removeOwnerID`
+field removed by this feature — see R7) — no
 `observedGeneration`/`lastAppliedRevision`/`resolved`, unlike every sibling
 per-kind status mutation (`updateRepositoryStatus`, `updateCategoryStatus`,
 `updateNamespaceStatus`), which all carry the full partial-merge shape. This
@@ -137,3 +138,48 @@ unresolved Product — rejected as unnecessary; the watch-driven re-enqueue
 (R3) already converges immediately once the category exists, so the
 interval-based retry is only a fallback for cases the watch might miss
 (e.g. missed/replayed events), not the primary convergence path.
+
+## R7: The controller's resolved-category write must also (re-)establish the owner reference — reuse admission's mechanism, don't reinvent it
+
+**Decision**: `resolvedCategoryOwnerReferences` (`gitstore-api/internal/cataloggrpc/server.go:1877`)
+already resolves `spec.categoryRef` into a non-blocking `CategoryTaxonomy`
+`OwnerReference` — but only at Product admission (push/mutation) time.
+A Product pushed before its category exists gets `OwnerReferences: []`
+and nothing ever re-runs that resolution later; only a new Product push
+would. For User Story 2 (category created after the Product), the
+controller's `updateProductStatus` write is therefore the only path that
+can establish that owner reference for an already-admitted Product. Rather
+than adding a separate imperative add/remove mechanism, `resolved.category`
+(R2) drives it declaratively: the `UpdateProductStatus` resolver
+synchronizes the Product's `CategoryTaxonomy` owner reference to match
+whatever `resolved.category` says on every call — present and matching if
+set, absent if null — mirroring exactly what admission already computes for
+a freshly-pushed Product. `UpdateProductStatusInput.removeOwnerID` (dead:
+zero callers anywhere in `gitstore-controller-manager`, `tests/integration`,
+or `gitstore-api`'s own tests, and single-purpose — its only non-empty
+branch matched a `CategoryTaxonomy`-kind reference) is removed as part of
+this change; it is fully subsumed by the declarative sync.
+
+**Rationale**: This closes a gap the original R1–R6 decisions missed —
+writing `CategoryResolved=True`/`resolved.category` without also
+establishing the owner reference would leave `DecoupleCategoryProducts`
+(the already-implemented, already-wired User-Story-3 mechanism — see
+`updateCategoryStatus(decoupleProducts: true)`) blind to that Product: its
+owner-reference reverse index would have no entry for it, so a later
+category deletion would silently fail to flip that Product's
+`CategoryResolved` back to `False`. Reusing the declarative, resolved-state
+approach (rather than an imperative add-owner-reference RPC) also means User
+Story 3 requires **no new controller code at all** — deletion decoupling
+already exists and already works once the owner reference is present.
+
+**Alternatives considered**:
+- *A dedicated `addOwnerID`-style imperative field, mirroring the removed
+  `removeOwnerID`* — rejected. Two imperative, single-purpose fields
+  (add/remove) duplicate what a single declarative `resolved.category` field
+  already expresses; the resolver can derive "add", "update", or "remove"
+  from a single before/after comparison.
+- *Have the controller call `resolvedCategoryOwnerReferences`'s logic itself
+  and write raw `OwnerReferences` JSON directly* — rejected. That function
+  is `gitstore-api`-internal (unexported, datastore-adjacent); duplicating
+  its owner-reference shape in the controller would create two independent
+  implementations of the same synthesis that could drift.

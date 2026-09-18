@@ -2451,7 +2451,7 @@ func (ec *executionContext) unmarshalInputUpdateProductStatusInput(ctx context.C
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "namespace", "resourceVersion", "conditions", "removeOwnerID"}
+	fieldsInOrder := [...]string{"name", "namespace", "resourceVersion", "conditions"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -2486,13 +2486,6 @@ func (ec *executionContext) unmarshalInputUpdateProductStatusInput(ctx context.C
 				return it, err
 			}
 			it.Conditions = data
-		case "removeOwnerID":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("removeOwnerID"))
-			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.RemoveOwnerID = data
 		}
 	}
 	return it, nil

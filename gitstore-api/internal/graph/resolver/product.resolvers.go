@@ -58,8 +58,7 @@ func (r *mutationResolver) DeleteProduct(ctx context.Context, input model.Delete
 }
 
 // UpdateProductStatus applies controller-managed category-resolution state.
-// It may remove exactly one resolved category owner reference, but never
-// touches the Git-authored spec.categoryRef.
+// It never touches the Git-authored spec.categoryRef.
 func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.UpdateProductStatusInput) (*model.UpdateProductStatusPayload, error) {
 	product, err := r.store.GetProductByName(ctx, input.Namespace, input.Name)
 	if err != nil {
@@ -73,25 +72,6 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 	}
 	if product.ResourceVersion != input.ResourceVersion {
 		return nil, statusConflictError("Product", input.Namespace, input.Name, product.ResourceVersion)
-	}
-	if input.RemoveOwnerID != nil {
-		var refs []catalog.OwnerReference
-		if len(product.OwnerReferences) > 0 {
-			if err := json.Unmarshal(product.OwnerReferences, &refs); err != nil {
-				return nil, gqlerror.Errorf("decode product owner references: %v", err)
-			}
-		}
-		filtered := refs[:0]
-		for _, ref := range refs {
-			if productOwnerReferenceNodeID(ref) != *input.RemoveOwnerID {
-				filtered = append(filtered, ref)
-			}
-		}
-		ownerReferences, err := json.Marshal(filtered)
-		if err != nil {
-			return nil, gqlerror.Errorf("encode product owner references: %v", err)
-		}
-		product.OwnerReferences = ownerReferences
 	}
 	var status catalog.ProductStatus
 	if len(product.Status) > 0 {

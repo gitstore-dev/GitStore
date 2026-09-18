@@ -5,6 +5,14 @@
 # old API replica (ignoring them) both remain correct during a rolling
 # upgrade (constitution: Independently Deployable Delivery).
 #
+# Also removes UpdateProductStatusInput.removeOwnerID as part of this same
+# change: it was dead (no caller anywhere in gitstore-controller-manager,
+# tests/integration, or gitstore-api tests) and single-purpose (only ever
+# matched a CategoryTaxonomy-kind owner reference, per
+# productOwnerReferenceNodeID's now-removed implementation). Superseded by
+# the declarative resolved.category sync described below, which subsumes
+# both the add and remove cases this feature needs.
+#
 # BEFORE (current live schema):
 #
 # input UpdateProductStatusInput {
@@ -12,8 +20,6 @@
 #   namespace: String!
 #   resourceVersion: String!
 #   conditions: [ConditionInput!]
-#   "Opaque node ID of the owner reference to remove."
-#   removeOwnerID: ID
 # }
 #
 # type ResolvedCategoryDefinition {
@@ -38,18 +44,22 @@ input UpdateProductStatusInput {
 
   """
   Null = unchanged. Kind-specific resolved payload for the fields this
-  feature needs (currently only the resolved category reference); absent
-  or null clears any previously-resolved category.
+  feature needs (currently only the resolved category reference).
   """
   resolved: ResolvedProductStatusInput
-
-  "Opaque node ID of the owner reference to remove."
-  removeOwnerID: ID
 }
 
 """Controller-only resolved-status payload accepted by updateProductStatus."""
 input ResolvedProductStatusInput {
-  """Null clears any previously-resolved category reference."""
+  """
+  Null clears any previously-resolved category reference. Non-null
+  declaratively sets it. Either way, the resolver synchronizes the
+  Product's non-blocking CategoryTaxonomy owner reference to match this
+  value (adds/updates it when set, removes it when null) — mirroring the
+  same synthesis admission already performs for a freshly-pushed Product
+  (resolvedCategoryOwnerReferences), so this is the only writer a
+  previously-unresolved Product ever needs.
+  """
   category: ResolvedCategoryRefInput
 }
 
