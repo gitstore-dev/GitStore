@@ -1875,11 +1875,22 @@ func productCategoryRefName(specJSON []byte) string {
 // ownership. Author manifests cannot supply ownerReferences, and unresolved
 // references intentionally produce no reverse projection.
 func (s *Server) resolvedCategoryOwnerReferences(ctx context.Context, namespace string, reference *catalog.ObjectReference, blockOwnerDeletion bool) json.RawMessage {
+	return ResolvedCategoryOwnerReferences(ctx, s.store, s.log, namespace, reference, blockOwnerDeletion)
+}
+
+// ResolvedCategoryOwnerReferences resolves reference (by name, scoped to
+// namespace) against store and returns the CategoryTaxonomy-kind
+// OwnerReferences JSON payload it implies, or an empty array when
+// unresolved. Exported so both admission (this package) and the
+// updateProductStatus resolver (spec 062) can synthesize the exact same
+// owner-reference shape from a single implementation, rather than
+// maintaining two independent copies that could drift.
+func ResolvedCategoryOwnerReferences(ctx context.Context, store datastore.Datastore, log *zap.Logger, namespace string, reference *catalog.ObjectReference, blockOwnerDeletion bool) json.RawMessage {
 	empty := json.RawMessage(`[]`)
 	if reference == nil || reference.Name == "" {
 		return empty
 	}
-	owner, err := s.store.GetCategoryTaxonomyByName(ctx, namespace, reference.Name)
+	owner, err := store.GetCategoryTaxonomyByName(ctx, namespace, reference.Name)
 	if err != nil || owner == nil || owner.DeletionTimestamp != nil {
 		return empty
 	}
@@ -1892,7 +1903,7 @@ func (s *Server) resolvedCategoryOwnerReferences(ctx context.Context, namespace 
 		RepositoryID:       owner.RepositoryID,
 	}})
 	if err != nil {
-		s.log.Warn("admit_resources: marshal category owner reference failed",
+		log.Warn("resolved_category_owner_references: marshal category owner reference failed",
 			zap.String("namespace", namespace),
 			zap.String("name", reference.Name),
 			zap.Error(err))
@@ -2151,9 +2162,7 @@ func cloneStringMap(input map[string]string) map[string]string {
 		return map[string]string{}
 	}
 	output := make(map[string]string, len(input))
-	for key, value := range input {
-		output[key] = value
-	}
+	maps.Copy(output, input)
 	return output
 }
 

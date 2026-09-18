@@ -12,6 +12,7 @@ import (
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/eventbus"
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
@@ -79,14 +80,40 @@ func (r *mutationResolver) UpdateProductStatus(ctx context.Context, input model.
 			return nil, gqlerror.Errorf("decode product status: %v", err)
 		}
 	}
+	if input.ObservedGeneration != nil {
+		status.ObservedGeneration = int64(*input.ObservedGeneration)
+	}
+	if input.LastAppliedRevision != nil {
+		status.LastAppliedRevision = *input.LastAppliedRevision
+	}
 	if input.Conditions != nil {
 		status.Conditions = mergeProductConditions(status.Conditions, toConditions(input.Conditions))
+	}
+	if input.Resolved != nil {
+		if input.Resolved.Category != nil {
+			if status.Resolved == nil {
+				status.Resolved = &catalog.ResolvedProductDefinition{}
+			}
+			status.Resolved.Category = &catalog.ResolvedCategoryDefinition{
+				Name: input.Resolved.Category.Name,
+				UID:  input.Resolved.Category.UID,
+			}
+		} else if status.Resolved != nil {
+			status.Resolved.Category = nil
+		}
 	}
 	statusJSON, err := json.Marshal(status)
 	if err != nil {
 		return nil, gqlerror.Errorf("encode product status: %v", err)
 	}
 	product.Status = statusJSON
+	if input.Resolved != nil {
+		var categoryRef *catalog.ObjectReference
+		if input.Resolved.Category != nil {
+			categoryRef = &catalog.ObjectReference{Name: input.Resolved.Category.Name}
+		}
+		product.OwnerReferences = cataloggrpc.ResolvedCategoryOwnerReferences(ctx, r.store, r.logger, product.Namespace, categoryRef, false)
+	}
 	datastore.AdvanceProductSystemVersion(product)
 	if err := r.store.UpdateProduct(ctx, product); err != nil {
 		if errors.Is(err, datastore.ErrConflict) {
