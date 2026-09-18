@@ -20,26 +20,9 @@ extend type Query {
 
 extend type Mutation {
   """
-  Create a new category
-  """
-  createCategory(input: CreateCategoryInput!): CreateCategoryPayload!
-
-  """
-  Update an existing category
-  """
-  updateCategory(input: UpdateCategoryInput!): UpdateCategoryPayload!
-
-  """
   Delete a category
   """
   deleteCategory(input: DeleteCategoryInput!): DeleteCategoryPayload!
-
-  """
-  Reorder categories (drag-and-drop)
-  TODO(REMOVE): This is a temporary mutation for the admin UI. It will be replaced by a more general tree-restructure mutation
-  that can move categories between parents and reorder them in one operation.
-  """
-  reorderCategories(input: ReorderCategoriesInput!): ReorderCategoriesPayload!
 
   """
   Partial-merge update to a CategoryTaxonomy's .status sub-resource.
@@ -155,15 +138,6 @@ type CategorySpec {
 }
 
 """
-A key-value pair for label maps.
-TODO(REMOVE): No longer used in favour of JSON
-"""
-type KeyValuePair {
-  key: String!
-  value: String!
-}
-
-"""
 System-written status for a git-backed CategoryTaxonomy resource.
 """
 type CategoryTaxonomyStatus {
@@ -232,102 +206,6 @@ type CategoryConnection {
 # ============================================================================
 
 """
-Input for creating a category
-"""
-input CreateCategoryInput {
-  """
-  Category name
-  """
-  name: String!
-
-  """
-  URL-friendly slug (must be unique)
-  """
-  slug: String!
-
-  """
-  Parent category ID (null for root)
-  """
-  parentId: ID
-
-  """
-  Display order
-  """
-  displayOrder: Int
-
-  """
-  Markdown body content
-  """
-  body: String
-}
-
-"""
-Payload for createCategory mutation
-"""
-type CreateCategoryPayload {
-  """
-  The created category
-  """
-  category: Category
-}
-
-"""
-Input for updating a category
-"""
-input UpdateCategoryInput {
-  """
-  Category ID to update
-  """
-  id: ID!
-
-  """
-  New name
-  """
-  name: String
-
-  """
-  New slug
-  """
-  slug: String
-
-  """
-  New parent ID (null to make root, ID to change parent)
-  """
-  parentId: ID
-
-  """
-  New display order
-  """
-  displayOrder: Int
-
-  """
-  New body content
-  """
-  body: String
-
-  """
-  TODO: Should this be a datetime?
-  Version for optimistic locking
-  """
-  version: DateTime!
-}
-
-"""
-Payload for updateCategory mutation
-"""
-type UpdateCategoryPayload {
-  """
-  The updated category
-  """
-  category: Category
-
-  """
-  Conflict information (if optimistic lock failed)
-  """
-  conflict: CategoryOptimisticLockConflict
-}
-
-"""
 Input for deleting a category
 """
 input DeleteCategoryInput {
@@ -350,71 +228,6 @@ type DeleteCategoryPayload {
   Orphaned product IDs (products that referenced this category)
   """
   orphanedProductIds: [ID!]
-}
-
-"""
-Input for reordering categories (drag-and-drop)
-TODO(REMOVE): Not needed
-"""
-input ReorderCategoriesInput {
-  """
-  Ordered list of category IDs within parent
-  """
-  orderedIds: [ID!]!
-
-  """
-  Parent category ID (null for root categories)
-  """
-  parentId: ID
-
-  """
-  Category ID being moved (for tree restructure)
-  """
-  movedCategoryId: ID
-
-  """
-  New parent ID for moved category (for tree restructure)
-  """
-  newParentId: ID
-}
-
-"""
-Payload for reorderCategories mutation
-TODO(REMOVE): Not needed
-"""
-type ReorderCategoriesPayload {
-  """
-  Updated categories
-  """
-  categories: [Category!]
-}
-
-"""
-Optimistic lock conflict for category
-TODO(REMOVE): resourceVersion is used for optimistic locking.
-"""
-type CategoryOptimisticLockConflict {
-  """
-  TODO: Should this be a datetime?
-  Current version in database
-  """
-  currentVersion: DateTime!
-
-  """
-  TODO: Should this be a datetime?
-  Version client attempted to update
-  """
-  attemptedVersion: DateTime!
-
-  """
-  Current state of the category
-  """
-  current: Category!
-
-  """
-  Diff between current and attempted
-  """
-  diff: String!
 }
 
 # ============================================================================

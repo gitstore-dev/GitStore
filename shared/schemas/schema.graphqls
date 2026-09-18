@@ -61,12 +61,6 @@ type Query {
   Fetches multiple objects given their globally unique IDs
   """
   nodes(ids: [ID!]!): [Node]!
-
-  """
-  Get current catalog version (release tag)
-  TODO(Remove): It is unclear which repository this belongs to and it is not used in the UI.
-  """
-  catalogVersion: CatalogVersion!
 }
 
 # ============================================================================
@@ -74,12 +68,6 @@ type Query {
 # ============================================================================
 
 type Mutation {
-  """
-  Publish changes (commit + push + create release tag)
-  TODO(Remove): It is unclear which repository we're are publishing to.
-  """
-  publishCatalog(input: PublishCatalogInput!): PublishCatalogPayload!
-
   """
   Generic status-subresource write for CRD-defined kinds that have no
   compile-time-known `resolved` shape. Core kinds SHOULD use their
@@ -357,13 +345,3 @@ input ProductVariantNamespacePath {
   name: String!
 }
 
-"""
-TODO(REMOVE): Was added for demo
-Product inventory status
-"""
-enum InventoryStatus {
-  IN_STOCK
-  OUT_OF_STOCK
-  PREORDER
-  DISCONTINUED
-}

@@ -6,12 +6,12 @@ Catalogue reads are GraphQL-first. Catalogue writes are Git-driven today: author
 
 ## Endpoint
 
-| Item | Value |
-|---|---|
-| GraphQL URL | `http://localhost:4000/graphql` |
-| Playground | `http://localhost:4000/playground` |
-| Method | `POST` |
-| Content type | `application/json` |
+| Item         | Value                              |
+|--------------|------------------------------------|
+| GraphQL URL  | `http://localhost:4000/graphql`    |
+| Playground   | `http://localhost:4000/playground` |
+| Method       | `POST`                             |
+| Content type | `application/json`                 |
 
 ## Authentication
 
@@ -76,45 +76,44 @@ mutation Logout {
 
 ### Queries
 
-| Operation | Purpose |
-|---|---|
-| `node(id: ID!)` | Fetch one Relay node by global ID |
-| `nodes(ids: [ID!]!)` | Fetch multiple Relay nodes by global ID |
-| `namespace(by: NamespaceBy!)` | Fetch one namespace |
-| `namespaces(...)` | List namespaces |
-| `repository(by: RepositoryBy!)` | Fetch one repository |
-| `repositories(namespace: String!, ...)` | List repositories in a namespace |
-| `product(by: ProductBy!)` | Fetch one product resource |
-| `products(namespace: String!, ...)` | List products in a namespace |
-| `productVariant(by: ProductVariantBy!)` | Fetch one product variant resource |
-| `productVariants(namespace: String!, ...)` | List product variants in a namespace |
-| `category(by: CategoryBy!)` | Fetch one category resource |
-| `categories(namespace: String!, ...)` | List categories in a namespace |
-| `collection(by: CollectionBy!)` | Fetch one collection resource |
-| `collections(namespace: String!, ...)` | List collections in a namespace |
-| `catalogVersion` | Legacy schema-continuity field for current catalogue version metadata |
+| Operation                                  | Purpose                                 |
+|--------------------------------------------|-----------------------------------------|
+| `node(id: ID!)`                            | Fetch one Relay node by global ID       |
+| `nodes(ids: [ID!]!)`                       | Fetch multiple Relay nodes by global ID |
+| `namespace(by: NamespaceBy!)`              | Fetch one namespace                     |
+| `namespaces(...)`                          | List namespaces                         |
+| `repository(by: RepositoryBy!)`            | Fetch one repository                    |
+| `repositories(namespace: String!, ...)`    | List repositories in a namespace        |
+| `product(by: ProductBy!)`                  | Fetch one product resource              |
+| `products(namespace: String!, ...)`        | List products in a namespace            |
+| `productVariant(by: ProductVariantBy!)`    | Fetch one product variant resource      |
+| `productVariants(namespace: String!, ...)` | List product variants in a namespace    |
+| `category(by: CategoryBy!)`                | Fetch one category resource             |
+| `categories(namespace: String!, ...)`      | List categories in a namespace          |
+| `collection(by: CollectionBy!)`            | Fetch one collection resource           |
+| `collections(namespace: String!, ...)`     | List collections in a namespace         |
 
 ### Mutations
 
-| Operation | Purpose |
-|---|---|
-| `login(input: LoginInput!)` | Create an OIDC-style token response for local providers |
-| `logout` | End the current session |
-| `refreshToken(input: RefreshTokenInput!)` | Exchange a refresh token for a new OIDC-style token response |
-| `createNamespace(input: CreateNamespaceInput!)` | Create a namespace |
-| `deleteNamespace(input: DeleteNamespaceInput!)` | Delete an empty namespace |
-| `createRepository(input: CreateRepositoryInput!)` | Create a repository in a namespace |
-| `renameRepository(input: RenameRepositoryInput!)` | Rename a repository |
-| `transferRepository(input: TransferRepositoryInput!)` | Move a repository to another namespace |
-| `deleteRepository(input: DeleteRepositoryInput!)` | Delete a repository and its storage |
-| `updateCategoryStatus(input: UpdateCategoryStatusInput!)` | Controller-only partial-merge write to a CategoryTaxonomy's `.status` sub-resource |
+| Operation                                                 | Purpose                                                                                 |
+|-----------------------------------------------------------|-----------------------------------------------------------------------------------------|
+| `login(input: LoginInput!)`                               | Create an OIDC-style token response for local providers                                 |
+| `logout`                                                  | End the current session                                                                 |
+| `refreshToken(input: RefreshTokenInput!)`                 | Exchange a refresh token for a new OIDC-style token response                            |
+| `createNamespace(input: CreateNamespaceInput!)`           | Create a namespace                                                                      |
+| `deleteNamespace(input: DeleteNamespaceInput!)`           | Delete an empty namespace                                                               |
+| `createRepository(input: CreateRepositoryInput!)`         | Create a repository in a namespace                                                      |
+| `renameRepository(input: RenameRepositoryInput!)`         | Rename a repository                                                                     |
+| `transferRepository(input: TransferRepositoryInput!)`     | Move a repository to another namespace                                                  |
+| `deleteRepository(input: DeleteRepositoryInput!)`         | Delete a repository and its storage                                                     |
+| `updateCategoryStatus(input: UpdateCategoryStatusInput!)` | Controller-only partial-merge write to a CategoryTaxonomy's `.status` sub-resource      |
 | `updateResourceStatus(input: UpdateResourceStatusInput!)` | Generic, kind-parameterized counterpart of `updateCategoryStatus` for CRD-defined kinds |
 
 ### Subscriptions
 
-| Operation | Purpose |
-|---|---|
-| `watchCategories(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | List-then-watch stream of `CategoryTaxonomy` changes |
+| Operation                                                                                                 | Purpose                                                                            |
+|-----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| `watchCategories(namespace: String, selector: LabelSelectorInput, resourceVersion: String)`               | List-then-watch stream of `CategoryTaxonomy` changes                               |
 | `watchResources(kind: String!, namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Generic, kind-parameterized counterpart of `watchCategories` for CRD-defined kinds |
 
 ## Relay IDs
@@ -673,11 +672,11 @@ mutation CreateNamespace {
 
 Input fields:
 
-| Field | Required | Notes |
-|---|---|---|
-| `identifier` | yes | Globally unique DNS-label namespace identifier |
-| `displayName` | no | Human-friendly name |
-| `tier` | yes | `USER` or `ORGANIZATION` |
+| Field         | Required | Notes                                          |
+|---------------|----------|------------------------------------------------|
+| `identifier`  | yes      | Globally unique DNS-label namespace identifier |
+| `displayName` | no       | Human-friendly name                            |
+| `tier`        | yes      | `USER` or `ORGANIZATION`                       |
 
 ### deleteNamespace
 
@@ -1089,19 +1088,19 @@ Single-resource queries return `null` when the resource is not found.
 
 Common categories:
 
-| Code | Meaning |
-|---|---|
-| `NOT_FOUND` | Requested resource does not exist |
-| `VALIDATION_ERROR` | Input validation failed |
-| `CONFLICT` | Requested change conflicts with current state |
-| `INTERNAL_ERROR` | Server error |
+| Code               | Meaning                                       |
+|--------------------|-----------------------------------------------|
+| `NOT_FOUND`        | Requested resource does not exist             |
+| `VALIDATION_ERROR` | Input validation failed                       |
+| `CONFLICT`         | Requested change conflicts with current state |
+| `INTERNAL_ERROR`   | Server error                                  |
 
 ## Related Docs
 
 - [User Guide](user-guide.md)
 - [Developer Guide](developer-guide.md)
 - [Product Spec](products/product-spec.md)
-- [ProductVariant Spec](products/product-variants.md)
-- [CategoryTaxonomy Spec](categories/category-taxonomy.md)
+- [ProductVariant Spec](products/product-variant-spec.md)
+- [CategoryTaxonomy Spec](categories/category-taxonomy-spec.md)
 - [Collection Spec](collections/collection-spec.md)
 - [GraphQL schema files](../shared/schemas/)

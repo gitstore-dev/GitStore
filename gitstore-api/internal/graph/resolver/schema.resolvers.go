@@ -17,28 +17,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// PublishCatalog is the resolver for the publishCatalog field.
-// TODO(remove)
-func (r *mutationResolver) PublishCatalog(ctx context.Context, input model.PublishCatalogInput) (*model.PublishCatalogPayload, error) {
-	message := input.Message
-	if message == "" {
-		message = "Published catalog"
-	}
-
-	stats := r.getCatalogStats(ctx)
-
-	version := &model.CatalogVersion{
-		Tag:         input.Version,
-		Commit:      "abc123def456", // TODO: resolve actual commit from git push result
-		PublishedAt: r.clock.Now(),
-		Message:     &message,
-		Stats:       stats,
-	}
-	return &model.PublishCatalogPayload{
-		CatalogVersion: version,
-	}, nil
-}
-
 // UpdateResourceStatus is the resolver for the updateResourceStatus field.
 func (r *mutationResolver) UpdateResourceStatus(ctx context.Context, input model.UpdateResourceStatusInput) (*model.UpdateResourceStatusPayload, error) {
 	switch input.Kind {
@@ -86,19 +64,6 @@ func (r *queryResolver) Nodes(ctx context.Context, ids []string) ([]model.Node, 
 		nodes[i] = node
 	}
 	return nodes, nil
-}
-
-// CatalogVersion is the resolver for the catalogVersion field.
-// TODO(remove)
-func (r *queryResolver) CatalogVersion(ctx context.Context) (*model.CatalogVersion, error) {
-	stats := r.getCatalogStats(ctx)
-	return &model.CatalogVersion{
-		Tag:         "",
-		Commit:      "",
-		PublishedAt: r.clock.Now(),
-		Message:     nil,
-		Stats:       stats,
-	}, nil
 }
 
 // WatchResources is the resolver for the watchResources field.

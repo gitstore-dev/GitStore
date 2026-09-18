@@ -42,21 +42,6 @@ type CatalogObjectReferenceInput struct {
 	Namespace  *string `json:"namespace,omitempty"`
 }
 
-type CatalogStats struct {
-	ProductCount       int32 `json:"productCount"`
-	CategoryCount      int32 `json:"categoryCount"`
-	CollectionCount    int32 `json:"collectionCount"`
-	OrphanedReferences int32 `json:"orphanedReferences"`
-}
-
-type CatalogVersion struct {
-	Tag         string        `json:"tag"`
-	Commit      string        `json:"commit"`
-	PublishedAt time.Time     `json:"publishedAt"`
-	Message     *string       `json:"message,omitempty"`
-	Stats       *CatalogStats `json:"stats"`
-}
-
 // Category represents a hierarchical classification system for products.
 // Follows the Kubernetes-style resource envelope: id / apiVersion / kind / metadata / spec / status.
 // Tree-traversal convenience fields (parent, children, path, depth, products, body) are top-level
@@ -124,21 +109,6 @@ type CategoryEdge struct {
 type CategoryNamespacePath struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
-}
-
-// Optimistic lock conflict for category
-// TODO(REMOVE): resourceVersion is used for optimistic locking.
-type CategoryOptimisticLockConflict struct {
-	// TODO: Should this be a datetime?
-	// Current version in database
-	CurrentVersion time.Time `json:"currentVersion"`
-	// TODO: Should this be a datetime?
-	// Version client attempted to update
-	AttemptedVersion time.Time `json:"attemptedVersion"`
-	// Current state of the category
-	Current *Category `json:"current"`
-	// Diff between current and attempted
-	Diff string `json:"diff"`
 }
 
 // Author-supplied specification for a CategoryTaxonomy resource.
@@ -298,26 +268,6 @@ type ConditionInput struct {
 	LastTransitionTime time.Time       `json:"lastTransitionTime"`
 	Reason             *string         `json:"reason,omitempty"`
 	Message            *string         `json:"message,omitempty"`
-}
-
-// Input for creating a category
-type CreateCategoryInput struct {
-	// Category name
-	Name string `json:"name"`
-	// URL-friendly slug (must be unique)
-	Slug string `json:"slug"`
-	// Parent category ID (null for root)
-	ParentID *string `json:"parentId,omitempty"`
-	// Display order
-	DisplayOrder *int32 `json:"displayOrder,omitempty"`
-	// Markdown body content
-	Body *string `json:"body,omitempty"`
-}
-
-// Payload for createCategory mutation
-type CreateCategoryPayload struct {
-	// The created category
-	Category *Category `json:"category,omitempty"`
 }
 
 type CreateCollectionInput struct {
@@ -570,13 +520,6 @@ type IssueServiceAccountTokenPayload struct {
 	Kind       string                    `json:"kind"`
 	Metadata   *ServiceAccountObjectMeta `json:"metadata"`
 	Status     *TokenRequestStatus       `json:"status"`
-}
-
-// A key-value pair for label maps.
-// TODO(REMOVE): No longer used in favour of JSON
-type KeyValuePair struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
 }
 
 // A label selector that matches products by their labels.
@@ -1089,15 +1032,6 @@ type ProvisionRepositoryStoragePayload struct {
 	Repository *Repository `json:"repository"`
 }
 
-type PublishCatalogInput struct {
-	Version string `json:"version"`
-	Message string `json:"message"`
-}
-
-type PublishCatalogPayload struct {
-	CatalogVersion *CatalogVersion `json:"catalogVersion,omitempty"`
-}
-
 // Inclusive quantity range that must be satisfied for a price template to apply.
 type QuantityDefinition struct {
 	// Minimum order quantity (inclusive).
@@ -1131,26 +1065,6 @@ type RefreshTokenInput struct {
 type RefreshTokenPayload struct {
 	// OIDC-compatible token payload.
 	Token *TokenResponse `json:"token"`
-}
-
-// Input for reordering categories (drag-and-drop)
-// TODO(REMOVE): Not needed
-type ReorderCategoriesInput struct {
-	// Ordered list of category IDs within parent
-	OrderedIds []string `json:"orderedIds"`
-	// Parent category ID (null for root categories)
-	ParentID *string `json:"parentId,omitempty"`
-	// Category ID being moved (for tree restructure)
-	MovedCategoryID *string `json:"movedCategoryId,omitempty"`
-	// New parent ID for moved category (for tree restructure)
-	NewParentID *string `json:"newParentId,omitempty"`
-}
-
-// Payload for reorderCategories mutation
-// TODO(REMOVE): Not needed
-type ReorderCategoriesPayload struct {
-	// Updated categories
-	Categories []*Category `json:"categories,omitempty"`
 }
 
 // A namespace-scoped GitStore Repository resource.
@@ -1448,33 +1362,6 @@ type TokenResponse struct {
 	// OIDC ID token when available.
 	// GitStore local providers currently do not issue this field.
 	IDToken *string `json:"idToken,omitempty"`
-}
-
-// Input for updating a category
-type UpdateCategoryInput struct {
-	// Category ID to update
-	ID string `json:"id"`
-	// New name
-	Name *string `json:"name,omitempty"`
-	// New slug
-	Slug *string `json:"slug,omitempty"`
-	// New parent ID (null to make root, ID to change parent)
-	ParentID *string `json:"parentId,omitempty"`
-	// New display order
-	DisplayOrder *int32 `json:"displayOrder,omitempty"`
-	// New body content
-	Body *string `json:"body,omitempty"`
-	// TODO: Should this be a datetime?
-	// Version for optimistic locking
-	Version time.Time `json:"version"`
-}
-
-// Payload for updateCategory mutation
-type UpdateCategoryPayload struct {
-	// The updated category
-	Category *Category `json:"category,omitempty"`
-	// Conflict information (if optimistic lock failed)
-	Conflict *CategoryOptimisticLockConflict `json:"conflict,omitempty"`
 }
 
 type UpdateCategoryStatusInput struct {
@@ -1797,67 +1684,6 @@ func (e *InventoryPolicy) UnmarshalJSON(b []byte) error {
 }
 
 func (e InventoryPolicy) MarshalJSON() ([]byte, error) {
-	var buf bytes.Buffer
-	e.MarshalGQL(&buf)
-	return buf.Bytes(), nil
-}
-
-// TODO(REMOVE): Was added for demo
-// Product inventory status
-type InventoryStatus string
-
-const (
-	InventoryStatusInStock      InventoryStatus = "IN_STOCK"
-	InventoryStatusOutOfStock   InventoryStatus = "OUT_OF_STOCK"
-	InventoryStatusPreorder     InventoryStatus = "PREORDER"
-	InventoryStatusDiscontinued InventoryStatus = "DISCONTINUED"
-)
-
-var AllInventoryStatus = []InventoryStatus{
-	InventoryStatusInStock,
-	InventoryStatusOutOfStock,
-	InventoryStatusPreorder,
-	InventoryStatusDiscontinued,
-}
-
-func (e InventoryStatus) IsValid() bool {
-	switch e {
-	case InventoryStatusInStock, InventoryStatusOutOfStock, InventoryStatusPreorder, InventoryStatusDiscontinued:
-		return true
-	}
-	return false
-}
-
-func (e InventoryStatus) String() string {
-	return string(e)
-}
-
-func (e *InventoryStatus) UnmarshalGQL(v any) error {
-	str, ok := v.(string)
-	if !ok {
-		return fmt.Errorf("enums must be strings")
-	}
-
-	*e = InventoryStatus(str)
-	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid InventoryStatus", str)
-	}
-	return nil
-}
-
-func (e InventoryStatus) MarshalGQL(w io.Writer) {
-	fmt.Fprint(w, strconv.Quote(e.String()))
-}
-
-func (e *InventoryStatus) UnmarshalJSON(b []byte) error {
-	s, err := strconv.Unquote(string(b))
-	if err != nil {
-		return err
-	}
-	return e.UnmarshalGQL(s)
-}
-
-func (e InventoryStatus) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil
