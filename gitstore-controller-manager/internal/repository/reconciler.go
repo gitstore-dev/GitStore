@@ -187,8 +187,8 @@ func mergeControllerConditions(current Repository, admitted, storageReady bool, 
 		if prior == nil || prior.Type == conditionStorageProvisioned || prior.Type == conditionReady {
 			continue
 		}
-		copy := *prior
-		conditions = append(conditions, &copy)
+		copied := *prior
+		conditions = append(conditions, &copied)
 	}
 
 	storageCondition := &status.Condition{

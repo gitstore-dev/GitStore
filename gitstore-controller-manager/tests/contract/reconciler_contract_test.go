@@ -49,7 +49,7 @@ func TestReconcileResult_AllFourVariants(t *testing.T) {
 	if !is {
 		t.Errorf("ResultTransient() must return TransientFailure, got %T", transient)
 	}
-	if tf.Err != sentinelErr {
+	if !errors.Is(tf.Err, sentinelErr) {
 		t.Errorf("TransientFailure.Err = %v, want %v", tf.Err, sentinelErr)
 	}
 	if tf.BackoffHint != 0 {
@@ -69,15 +69,15 @@ func TestReconcileResult_AllFourVariants(t *testing.T) {
 	if !is {
 		t.Errorf("ResultTerminal() must return TerminalFailure, got %T", terminal)
 	}
-	if term.Err != termErr {
+	if !errors.Is(term.Err, termErr) {
 		t.Errorf("TerminalFailure.Err = %v, want %v", term.Err, termErr)
 	}
 
 	// Verify all four satisfy the ReconcileResult interface.
-	var _ types.ReconcileResult = ok
-	var _ types.ReconcileResult = after
-	var _ types.ReconcileResult = transient
-	var _ types.ReconcileResult = terminal
+	var _ = ok
+	var _ = after
+	var _ = transient
+	var _ = terminal
 }
 
 func TestReconcilerInterface_IsCallable(t *testing.T) {
@@ -98,7 +98,7 @@ func TestQueue_DeduplicatesEnqueue(t *testing.T) {
 	key := manager.WorkItemKey{Kind: "Widget", Namespace: "ns", Name: "w1"}
 
 	// Enqueue the same key 5 times before any Dequeue.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if err := q.Enqueue(key); err != nil {
 			t.Fatalf("Enqueue failed: %v", err)
 		}

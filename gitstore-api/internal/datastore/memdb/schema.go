@@ -3,6 +3,8 @@
 
 package memdb
 
+import "maps"
+
 import "github.com/hashicorp/go-memdb"
 
 var schema = &memdb.DBSchema{
@@ -176,9 +178,7 @@ func resourceTableSchema(name string, extra map[string]*memdb.IndexSchema) *memd
 			Indexer: &memdb.StringFieldIndex{Field: "Namespace"},
 		},
 	}
-	for indexName, index := range extra {
-		indexes[indexName] = index
-	}
+	maps.Copy(indexes, extra)
 	return &memdb.TableSchema{Name: name, Indexes: indexes}
 }
 

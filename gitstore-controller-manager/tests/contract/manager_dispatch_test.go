@@ -57,7 +57,7 @@ func TestManager_ReconcilerDispatchedOnce(t *testing.T) {
 	key := manager.WorkItemKey{Kind: "Widget", Namespace: "ns", Name: "w1"}
 
 	// Enqueue the same key 5 times — should dispatch once per quiescent moment.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if err := mgr.Enqueue(key); err != nil {
 			t.Fatalf("Enqueue failed: %v", err)
 		}
@@ -151,7 +151,7 @@ func TestManager_RequeueAfter_DelaysReenqueue(t *testing.T) {
 
 	delay := 150 * time.Millisecond
 	var mu sync.Mutex
-	callTimes := []time.Time{}
+	var callTimes []time.Time
 
 	r := &funcReconciler{fn: func(_ context.Context, _ manager.WorkItemKey) types.ReconcileResult {
 		mu.Lock()
