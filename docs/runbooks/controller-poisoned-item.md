@@ -27,6 +27,7 @@ A specific resource repeatedly fails reconciliation. Either it exhausted its ret
 4. Using `LastError` and the log context, determine **why** the reconciler is failing:
    - **Bad/invalid resource data** (e.g. a malformed reference, a constraint violation) — the item is genuinely poisoned; it will keep failing until the underlying data is fixed.
    - **A dependent service being down or slow** (e.g. a downstream API timeout) — this may look identical to a poisoned item if the outage outlasted the retry budget, but is not permanently broken; distinguishing this from genuinely bad data is judgment-based — check whether the same error is affecting *many* items across kinds simultaneously (points to an outage) versus just this one resource (points to bad data).
+   - **`LastError` is exactly `"<kind>: <namespace>/<name> not found in cache"`** — this is a reconciler bug, not poisoned data. A queued key legitimately outlives its object after watch replay, deletion, or a checkpointed controller restart; every `Reconcile` implementation must treat a cache-miss as already-reconciled (`types.ResultOK()`), not as a `TerminalFailure`. `Repository` and `Product` follow this convention; `CategoryTaxonomy` and `Namespace` did not, and quarantined every stale requeue as a result, until this was fixed. Requeuing will not help — if you see this error again for any kind, it means that kind's `Reconcile` has the same bug; fix the cache-miss branch rather than repeatedly requeuing.
 
 ## Recovery Actions
 
