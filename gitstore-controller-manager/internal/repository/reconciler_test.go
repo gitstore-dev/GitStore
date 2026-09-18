@@ -5,6 +5,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -24,13 +25,14 @@ func (f *fakeStatusClient) Apply(_ context.Context, _ types.WorkItemKey, patch *
 }
 
 type fakeStorageClient struct {
-	calls []struct{ namespace, name string }
-	err   error
+	calls    []struct{ namespace, name string }
+	err      error
+	resolved ResolvedStorage
 }
 
-func (f *fakeStorageClient) EnsureStorage(_ context.Context, namespace, name string) error {
+func (f *fakeStorageClient) EnsureStorage(_ context.Context, namespace, name string) (ResolvedStorage, error) {
 	f.calls = append(f.calls, struct{ namespace, name string }{namespace, name})
-	return f.err
+	return f.resolved, f.err
 }
 
 type fakeCompletionClient struct {
@@ -118,7 +120,7 @@ func TestReconcileAdmittedRepositoryProvisionsStorageAndMarksReady(t *testing.T)
 		repository.Status = status.ResourceStatus{ResourceVersion: "7", Conditions: []*status.Condition{admissionAccepted(3)}}
 	})
 	statuses := &fakeStatusClient{}
-	storage := &fakeStorageClient{}
+	storage := &fakeStorageClient{resolved: ResolvedStorage{StoragePath: "/data/acme/catalog.git", StorageClass: "premium"}}
 	r := NewReconciler(seedRepositoryCache(t, current), statuses, storage, &fakeCompletionClient{})
 
 	result := r.Reconcile(context.Background(), repositoryKey("acme", "catalog"))
@@ -140,6 +142,13 @@ func TestReconcileAdmittedRepositoryProvisionsStorageAndMarksReady(t *testing.T)
 	}
 	if got := condition(t, patch.Conditions, conditionReady).Status; got != statusTrue {
 		t.Errorf("Ready = %q, want TRUE", got)
+	}
+	var gotResolved ResolvedStorage
+	if err := json.Unmarshal(patch.Resolved, &gotResolved); err != nil {
+		t.Fatalf("unmarshal patch.Resolved: %v", err)
+	}
+	if gotResolved != storage.resolved {
+		t.Errorf("patch.Resolved = %#v, want %#v", gotResolved, storage.resolved)
 	}
 }
 

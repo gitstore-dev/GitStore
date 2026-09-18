@@ -6,6 +6,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -54,12 +55,19 @@ type Repository struct {
 	Status          status.ResourceStatus
 }
 
+// ResolvedStorage is the system-computed storage location and class the API
+// reports back once a Repository's bare Git storage has been provisioned.
+type ResolvedStorage struct {
+	StoragePath  string `json:"storagePath"`
+	StorageClass string `json:"storageClass"`
+}
+
 // StorageClient provisions a Repository's bare Git storage. It must be
 // idempotent: runners can replay events and reconciliation is at-least-once.
 // The API-backed production implementation is intentionally kept outside the
 // reconciler so Git-service credentials remain server-side.
 type StorageClient interface {
-	EnsureStorage(ctx context.Context, namespace, name string) error
+	EnsureStorage(ctx context.Context, namespace, name string) (ResolvedStorage, error)
 }
 
 // CompletionClient performs the final deletion boundary after a Repository is
@@ -107,9 +115,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 
 func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey, current Repository) types.ReconcileResult {
 	admitted := conditionTrue(current.Status.Conditions, conditionAdmissionAccepted)
+	var resolved ResolvedStorage
 	var provisionErr error
 	if admitted {
-		provisionErr = r.storageClient.EnsureStorage(ctx, current.Namespace, current.Name)
+		resolved, provisionErr = r.storageClient.EnsureStorage(ctx, current.Namespace, current.Name)
 	}
 
 	storageReady := admitted && provisionErr == nil
@@ -119,6 +128,13 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 		ResourceVersion:    current.ResourceVersion,
 		ObservedGeneration: &generation,
 		Conditions:         conditions,
+	}
+	if storageReady {
+		resolvedJSON, err := json.Marshal(resolved)
+		if err != nil {
+			return types.ResultTransient(fmt.Errorf("repository: marshal resolved status: %w", err))
+		}
+		patch.Resolved = resolvedJSON
 	}
 	if !patch.IsNoOp(current.Status) {
 		if err := r.statusClient.Apply(ctx, key, patch); err != nil {
