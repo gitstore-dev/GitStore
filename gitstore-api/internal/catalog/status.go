@@ -86,6 +86,10 @@ type ResolvedProductDefinition struct {
 type ResolvedCategoryDefinition struct {
 	Name string   `json:"name"`
 	Path []string `json:"path"`
+	// UID is the resolved CategoryTaxonomy's opaque Relay-encoded id (the
+	// same value CategoryTaxonomy.id returns), never its raw internal
+	// identifier. Present only while CategoryResolved is True.
+	UID string `json:"uid,omitempty"`
 }
 
 // PriceRangeDefinition uses shopspring/decimal for monetary values, consistent

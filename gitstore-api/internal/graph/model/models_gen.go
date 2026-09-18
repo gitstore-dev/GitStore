@@ -1174,6 +1174,18 @@ type RepositoryWatchEvent struct {
 type ResolvedCategoryDefinition struct {
 	Name string   `json:"name"`
 	Path []string `json:"path"`
+	// The resolved category's opaque Relay identifier, matching
+	// CategoryTaxonomy.id. Present only while the owning Product's
+	// CategoryResolved condition is True.
+	UID *string `json:"uid,omitempty"`
+}
+
+// A resolved CategoryTaxonomy reference: the category's name and its opaque
+// Relay identifier (the same value CategoryTaxonomy.id already returns for
+// that category), never the category's raw internal identifier.
+type ResolvedCategoryRefInput struct {
+	Name string `json:"name"`
+	UID  string `json:"uid"`
 }
 
 // Controller-computed category hierarchy metadata.
@@ -1253,6 +1265,18 @@ type ResolvedProductDefinition struct {
 type ResolvedProductRef struct {
 	Name string `json:"name"`
 	UID  string `json:"uid"`
+}
+
+// Controller-only resolved-status payload accepted by updateProductStatus.
+type ResolvedProductStatusInput struct {
+	// Null clears any previously-resolved category reference. Non-null
+	// declaratively sets it. Either way, the resolver synchronizes the
+	// Product's non-blocking CategoryTaxonomy owner reference to match this
+	// value (adds/updates it when set, removes it when null) — mirroring the
+	// same synthesis admission already performs for a freshly-pushed Product
+	// (resolvedCategoryOwnerReferences), so this is the only writer a
+	// previously-unresolved Product ever needs.
+	Category *ResolvedCategoryRefInput `json:"category,omitempty"`
 }
 
 // Resolved aggregates for a ProductVariant, computed at admission and kept current.
@@ -1440,10 +1464,17 @@ type UpdateProductPayload struct {
 }
 
 type UpdateProductStatusInput struct {
-	Name            string            `json:"name"`
-	Namespace       string            `json:"namespace"`
-	ResourceVersion string            `json:"resourceVersion"`
-	Conditions      []*ConditionInput `json:"conditions,omitempty"`
+	Name            string `json:"name"`
+	Namespace       string `json:"namespace"`
+	ResourceVersion string `json:"resourceVersion"`
+	// Null = unchanged. Set on every successful reconcile, matching every other per-kind status mutation.
+	ObservedGeneration *int32 `json:"observedGeneration,omitempty"`
+	// Null = unchanged, e.g. "main@sha1:a1b2c3d".
+	LastAppliedRevision *string           `json:"lastAppliedRevision,omitempty"`
+	Conditions          []*ConditionInput `json:"conditions,omitempty"`
+	// Null = unchanged. Kind-specific resolved payload for the fields this
+	// feature needs (currently only the resolved category reference).
+	Resolved *ResolvedProductStatusInput `json:"resolved,omitempty"`
 }
 
 type UpdateProductStatusPayload struct {
