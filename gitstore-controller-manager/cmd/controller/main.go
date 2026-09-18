@@ -259,7 +259,7 @@ func registerRepository(
 	}
 	reconciler := repositorycontroller.NewReconciler(
 		cache.AsReadOnly(repositoryCache),
-		status.NewGraphQLResourceStatusClient(client),
+		status.NewGraphQLRepositoryStatusClient(client),
 		storageClient,
 		repositorycontroller.NewGraphQLCompletionClient(client),
 	)

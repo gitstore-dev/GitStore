@@ -55,50 +55,6 @@ type Namespace implements Node {
   status: NamespaceStatus!
 
   """
-  Human-readable identifier, globally unique across all tiers.
-  DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
-  Cannot begin or end with a hyphen.
-  """
-  identifier: String!
-    @deprecated(reason: "Use metadata.name; removal requires a future major GraphQL API release.")
-
-  """
-  Optional human-friendly display name.
-  """
-  displayName: String
-    @deprecated(reason: "Use spec.title; removal requires a future major GraphQL API release.")
-
-  """
-  The tier of this namespace.
-  """
-  tier: NamespaceTier!
-    @deprecated(reason: "Use spec.tier; removal requires a future major GraphQL API release.")
-
-  """
-  Timestamp when this namespace was created.
-  """
-  createdAt: DateTime!
-    @deprecated(reason: "Use metadata.creationTimestamp; removal requires a future major GraphQL API release.")
-
-  """
-  Username of the caller who created this namespace.
-  """
-  createdBy: String!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-
-  """
-  Timestamp when this namespace was last modified.
-  """
-  updatedAt: DateTime!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-
-  """
-  Username of the caller who last modified this namespace.
-  """
-  updatedBy: String!
-    @deprecated(reason: "Legacy audit field; removal requires a future major GraphQL API release.")
-
-  """
   Markdown body content (namespace description).
   """
   body: String
@@ -222,7 +178,6 @@ Selector for looking up a namespace by exactly one unique key.
 """
 input NamespaceBy @oneOf {
   id: ID
-  identifier: String @deprecated(reason: "Use name; removal requires a future major GraphQL API release.")
   name: String
 }
 

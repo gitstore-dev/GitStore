@@ -39,14 +39,13 @@ func TestRepositoryAuthorization_TwoUserNamespaceIsolation(t *testing.T) {
 	aliceRepositories := repositoriesAsUser(t, h, aliceToken, aliceNamespace)
 	bobRepositories := repositoriesAsUser(t, h, bobToken, bobNamespace)
 
-	assertRepositoryNamespaceIsolation(t, aliceRepositories, aliceNamespace, aliceRepository, bobRepository, "alice")
-	assertRepositoryNamespaceIsolation(t, bobRepositories, bobNamespace, bobRepository, aliceRepository, "bob")
+	assertRepositoryNamespaceIsolation(t, aliceRepositories, aliceNamespace, aliceRepository, bobRepository)
+	assertRepositoryNamespaceIsolation(t, bobRepositories, bobNamespace, bobRepository, aliceRepository)
 }
 
 type authzRepositoryNode struct {
-	ID        string `json:"id"`
-	CreatedBy string `json:"createdBy"`
-	Metadata  struct {
+	ID       string `json:"id"`
+	Metadata struct {
 		Name      string `json:"name"`
 		Namespace string `json:"namespace"`
 		UID       string `json:"uid"`
@@ -69,7 +68,6 @@ func createNamespaceAsUser(t *testing.T, h *namespaceContractHarness, token, nam
 						uid
 						name
 					}
-					createdBy
 				}
 			}
 		}
@@ -79,9 +77,8 @@ func createNamespaceAsUser(t *testing.T, h *namespaceContractHarness, token, nam
 	var data struct {
 		CreateNamespace struct {
 			Namespace struct {
-				ID        string `json:"id"`
-				CreatedBy string `json:"createdBy"`
-				Metadata  struct {
+				ID       string `json:"id"`
+				Metadata struct {
 					UID  string `json:"uid"`
 					Name string `json:"name"`
 				} `json:"metadata"`
@@ -92,7 +89,6 @@ func createNamespaceAsUser(t *testing.T, h *namespaceContractHarness, token, nam
 	assert.Equal(t, namespace, data.CreateNamespace.Namespace.Metadata.Name)
 	assert.NotEmpty(t, data.CreateNamespace.Namespace.Metadata.UID)
 	assert.NotEqual(t, data.CreateNamespace.Namespace.ID, data.CreateNamespace.Namespace.Metadata.UID)
-	assert.NotEmpty(t, data.CreateNamespace.Namespace.CreatedBy)
 
 	resp = h.gqlWithToken(token, `
 		mutation($namespace: String!) {
@@ -126,7 +122,6 @@ func createRepositoryAsUser(
 						uid
 						namespace
 					}
-					createdBy
 				}
 			}
 		}
@@ -143,7 +138,6 @@ func createRepositoryAsUser(
 	assert.Equal(t, namespace, repository.Metadata.Namespace)
 	assert.NotEmpty(t, repository.Metadata.UID)
 	assert.Equal(t, repository.ID, repository.Metadata.UID)
-	assert.NotEmpty(t, repository.CreatedBy)
 	return repository.ID
 }
 
@@ -165,7 +159,6 @@ func repositoriesAsUser(
 							namespace
 							uid
 						}
-						createdBy
 					}
 				}
 			}
@@ -193,8 +186,7 @@ func assertRepositoryNamespaceIsolation(
 	repositories []authzRepositoryNode,
 	namespace,
 	expectedName,
-	forbiddenName,
-	expectedActor string,
+	forbiddenName string,
 ) {
 	t.Helper()
 	var found bool
@@ -205,7 +197,6 @@ func assertRepositoryNamespaceIsolation(
 		assert.Equal(t, repository.ID, repository.Metadata.UID)
 		if repository.Metadata.Name == expectedName {
 			found = true
-			assert.Equal(t, expectedActor, repository.CreatedBy)
 		}
 	}
 	assert.True(t, found, "repository %q not found in namespace %q", expectedName, namespace)

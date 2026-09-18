@@ -118,11 +118,7 @@ func (r *queryResolver) Namespace(ctx context.Context, by model.NamespaceBy) (*m
 		return DatastoreNamespaceToGraphQL(ns), nil
 	}
 
-	name := by.Name
-	if name == nil {
-		name = by.Identifier
-	}
-	ns, err := r.service.GetNamespaceByName(ctx, *name)
+	ns, err := r.service.GetNamespaceByName(ctx, *by.Name)
 	if err != nil {
 		return nil, err
 	}

@@ -53,8 +53,7 @@ func TestRepositoryLifecycleSchemaContract(t *testing.T) {
 	requireGraphQLField(t, schema, "CompleteRepositoryDeletionInput", "resourceVersion", "String!")
 
 	for _, fieldName := range []string{"renameRepository", "transferRepository"} {
-		field := requireGraphQLField(t, schema, "Mutation", fieldName, schema.Types["Mutation"].Fields.ForName(fieldName).Type.String())
-		require.NotNil(t, field.Directives.ForName("deprecated"), "%s must be deprecated", fieldName)
+		assert.Nil(t, schema.Types["Mutation"].Fields.ForName(fieldName), "Mutation.%s should have been removed", fieldName)
 	}
 }
 

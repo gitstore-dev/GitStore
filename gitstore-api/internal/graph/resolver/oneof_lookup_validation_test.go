@@ -59,7 +59,7 @@ func TestLookupOneOfSelectorsValidateExactlyOneKey(t *testing.T) {
 		selection string
 	}{
 		{field: "collection", natural: `namespacePath: {namespace: "my-store", name: "collection-1"}`, selection: "id"},
-		{field: "namespace", natural: `identifier: "namespace-1"`, selection: "id"},
+		{field: "namespace", natural: `name: "namespace-1"`, selection: "id"},
 	}
 
 	for _, tt := range tests {

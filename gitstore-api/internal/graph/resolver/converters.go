@@ -60,7 +60,6 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 		value := ns.Revision
 		revision = &value
 	}
-	displayName := spec.Title
 	apiVersion := ns.APIVersion
 	if apiVersion == "" {
 		apiVersion = namespaceAPIVersion
@@ -86,16 +85,9 @@ func datastoreNamespaceToModel(ns *datastore.Namespace) *model.Namespace {
 			OwnerReferences:   ownerReferences,
 			Finalizers:        append([]string{}, ns.Finalizers...),
 		},
-		Spec:        spec,
-		Status:      status,
-		Identifier:  ns.Name,
-		DisplayName: displayName,
-		Tier:        datastoreNamespaceTierToModel(ns.Tier),
-		CreatedAt:   ns.CreationTimestamp,
-		CreatedBy:   ns.CreationActor,
-		UpdatedAt:   ns.UpdateTimestamp,
-		UpdatedBy:   ns.UpdateActor,
-		Body:        &body,
+		Spec:   spec,
+		Status: status,
+		Body:   &body,
 	}
 }
 
@@ -1139,15 +1131,8 @@ func datastoreRepositoryToModelStrict(r *datastore.Repository, ns *datastore.Nam
 	}
 	nodeID := mustEncodeNodeID(nodeKindRepository, repository.UID)
 	namespace := repository.Namespace
-	var legacyNamespace *model.Namespace
-	if ns != nil {
-		if ns.Name != namespace {
-			return nil, fmt.Errorf("Repository %q namespace %q does not match resolved Namespace %q", repository.UID, namespace, ns.Name)
-		}
-		legacyNamespace = DatastoreNamespaceToGraphQL(ns)
-		if legacyNamespace == nil {
-			return nil, fmt.Errorf("convert Namespace %q", ns.Name)
-		}
+	if ns != nil && ns.Name != namespace {
+		return nil, fmt.Errorf("Repository %q namespace %q does not match resolved Namespace %q", repository.UID, namespace, ns.Name)
 	}
 	ownerReferences, err := ownerRefsFromJSONStrict(repository.OwnerReferences)
 	if err != nil {
@@ -1193,18 +1178,9 @@ func datastoreRepositoryToModelStrict(r *datastore.Repository, ns *datastore.Nam
 			OwnerReferences:   ownerReferences,
 			Finalizers:        append([]string{}, repository.Finalizers...),
 		},
-		Spec:          spec,
-		Status:        status,
-		Name:          repository.Name,
-		Namespace:     legacyNamespace,
-		DefaultBranch: repository.DefaultBranch,
-		StorageClass:  repository.StorageClass,
-		StoragePath:   storagePath,
-		CreatedAt:     repository.CreationTimestamp,
-		CreatedBy:     repository.CreationActor,
-		UpdatedAt:     repository.UpdateTimestamp,
-		UpdatedBy:     repository.UpdateActor,
-		Body:          &body,
+		Spec:   spec,
+		Status: status,
+		Body:   &body,
 	}
 	return repo, nil
 }

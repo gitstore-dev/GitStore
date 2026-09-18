@@ -28,7 +28,7 @@ const admitted = new Counter('gitstore_namespace_admitted');
 const graphqlFailures = new Rate('gitstore_namespace_graphql_failed');
 const conflicts = new Counter('gitstore_namespace_conflicts');
 const visibility = new Trend('gitstore_namespace_visibility_ms', true);
-const existenceQuery = `query($name: String!) { namespace(by: {identifier: $name}) { id } }`;
+const existenceQuery = `query($name: String!) { namespace(by: {name: $name}) { id } }`;
 
 const scenarios = {
   sustained: {

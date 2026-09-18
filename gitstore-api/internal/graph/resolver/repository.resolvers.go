@@ -165,16 +165,6 @@ func (r *mutationResolver) ProvisionRepositoryStorage(ctx context.Context, input
 	return &model.ProvisionRepositoryStoragePayload{Repository: result}, nil
 }
 
-// RenameRepository is the resolver for the renameRepository field.
-func (r *mutationResolver) RenameRepository(ctx context.Context, input model.RenameRepositoryInput) (*model.RenameRepositoryPayload, error) {
-	return nil, gqlerror.Errorf("renameRepository is unimplemented; see docs/ADRs/0003-repository-lifecycle.md")
-}
-
-// TransferRepository is the resolver for the transferRepository field.
-func (r *mutationResolver) TransferRepository(ctx context.Context, input model.TransferRepositoryInput) (*model.TransferRepositoryPayload, error) {
-	return nil, gqlerror.Errorf("transferRepository is unimplemented; see docs/ADRs/0003-repository-lifecycle.md")
-}
-
 // DeleteRepository is the resolver for the deleteRepository field.
 func (r *mutationResolver) DeleteRepository(ctx context.Context, input model.DeleteRepositoryInput) (*model.DeleteRepositoryPayload, error) {
 	if input.ID == nil {

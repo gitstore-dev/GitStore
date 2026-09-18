@@ -1706,18 +1706,6 @@ func (s *Service) ListRepositories(ctx context.Context, params datastore.PagePar
 	return result, nil
 }
 
-// RenameRepository is deferred to ADR-0003 Phase 2. A repository's name is
-// part of its Git manifest path, so direct datastore rename is unsafe.
-func (s *Service) RenameRepository(context.Context, string, string, string) (*datastore.Repository, error) {
-	return nil, gqlerror.Errorf("renameRepository is unimplemented; see docs/ADRs/0003-repository-lifecycle.md")
-}
-
-// TransferRepository is deferred to ADR-0003 Phase 2. Cross-namespace direct
-// datastore transfer would bypass Git admission and owner-reference updates.
-func (s *Service) TransferRepository(context.Context, string, string, string) (*datastore.Repository, error) {
-	return nil, gqlerror.Errorf("transferRepository is unimplemented; see docs/ADRs/0003-repository-lifecycle.md")
-}
-
 func (s *Service) requireNamespaceRepositoryFence(operation string) error {
 	if s.namespaceRepositoryFenceEnabled {
 		return nil

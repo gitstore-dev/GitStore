@@ -69,22 +69,6 @@ func TestDatastoreNamespaceToGraphQL_DeclarativeProjection(t *testing.T) {
 	assert.Equal(t, ns.Body, *got.Body)
 }
 
-func TestDatastoreNamespaceToGraphQL_PreservesLegacyProjection(t *testing.T) {
-	ns := namespaceContractFixture("00000000-0000-0000-0000-000000000044", "legacy")
-
-	got := datastoreNamespaceToModel(ns)
-	require.NotNil(t, got)
-	assert.Equal(t, mustEncodeNodeID(nodeKindNamespace, ns.ID), got.ID)
-	assert.Equal(t, ns.Name, got.Identifier)
-	require.NotNil(t, got.DisplayName)
-	assert.Equal(t, ns.Title, *got.DisplayName)
-	assert.Equal(t, model.NamespaceTierUser, got.Tier)
-	assert.Equal(t, ns.CreationTimestamp, got.CreatedAt)
-	assert.Equal(t, ns.CreationActor, got.CreatedBy)
-	assert.Equal(t, ns.UpdateTimestamp, got.UpdatedAt)
-	assert.Equal(t, ns.UpdateActor, got.UpdatedBy)
-}
-
 func TestDatastoreNamespaceToGraphQL_IdentityAndVersionDefaultsArePerResource(t *testing.T) {
 	first := namespaceContractFixture("00000000-0000-0000-0000-000000000101", "first")
 	second := namespaceContractFixture("00000000-0000-0000-0000-000000000202", "second")
@@ -247,23 +231,6 @@ func TestDatastoreRepositoryToModel_UsesPersistedResolvedStatus(t *testing.T) {
 	require.NotNil(t, got.Status.Resolved)
 	assert.Equal(t, "/provisioned/acme/catalog.git", got.Status.Resolved.StoragePath)
 	assert.Equal(t, "ssd", got.Status.Resolved.StorageClass)
-}
-
-func TestDatastoreRepositoryToModel_PreservesLegacyProjection(t *testing.T) {
-	repo, ns := repositoryContractFixture()
-
-	got := datastoreRepositoryToModel(repo, ns, "/var/lib/gitstore")
-
-	assert.Equal(t, repo.Name, got.Name)
-	require.NotNil(t, got.Namespace)
-	assert.Equal(t, ns.Name, got.Namespace.Identifier)
-	assert.Equal(t, repo.DefaultBranch, got.DefaultBranch)
-	assert.Equal(t, repo.StorageClass, got.StorageClass)
-	assert.Equal(t, fanoutStoragePath("/var/lib/gitstore", repo.UID), got.StoragePath)
-	assert.Equal(t, repo.CreationTimestamp, got.CreatedAt)
-	assert.Equal(t, repo.CreationActor, got.CreatedBy)
-	assert.Equal(t, repo.UpdateTimestamp, got.UpdatedAt)
-	assert.Equal(t, repo.UpdateActor, got.UpdatedBy)
 }
 
 func TestDatastoreRepositoryToModel_LegacyDefaultsAndEmptyConditionVocabulary(t *testing.T) {

@@ -235,7 +235,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	require.NotEmpty(t, loginResponse.Data.Login.Token.AccessToken)
 	assert.Equal(t, "Bearer", loginResponse.Data.Login.Token.TokenType)
 
-	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { identifier createdBy } } }"}`))
+	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { metadata { name } } } }"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+loginResponse.Data.Login.Token.AccessToken)
 	w := httptest.NewRecorder()
@@ -247,8 +247,9 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 		Data struct {
 			CreateNamespace struct {
 				Namespace struct {
-					Identifier string `json:"identifier"`
-					CreatedBy  string `json:"createdBy"`
+					Metadata struct {
+						Name string `json:"name"`
+					} `json:"metadata"`
 				} `json:"namespace"`
 			} `json:"createNamespace"`
 		} `json:"data"`
@@ -258,11 +259,10 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 	require.Empty(t, response.Errors)
-	assert.Equal(t, "alice", response.Data.CreateNamespace.Namespace.Identifier)
-	assert.Equal(t, "admin", response.Data.CreateNamespace.Namespace.CreatedBy)
+	assert.Equal(t, "alice", response.Data.CreateNamespace.Namespace.Metadata.Name)
 
 	listReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
-		"query": "query { namespaces(first: 10) { edges { cursor node { identifier } } pageInfo { hasNextPage endCursor } totalCount } }"
+		"query": "query { namespaces(first: 10) { edges { cursor node { metadata { name } } } pageInfo { hasNextPage endCursor } totalCount } }"
 	}`))
 	listReq.Header.Set("Content-Type", "application/json")
 	listW := httptest.NewRecorder()
@@ -276,7 +276,9 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 				Edges []struct {
 					Cursor string `json:"cursor"`
 					Node   struct {
-						Identifier string `json:"identifier"`
+						Metadata struct {
+							Name string `json:"name"`
+						} `json:"metadata"`
 					} `json:"node"`
 				} `json:"edges"`
 				TotalCount int `json:"totalCount"`
@@ -290,7 +292,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	require.Empty(t, listResponse.Errors)
 	require.Len(t, listResponse.Data.Namespaces.Edges, 2)
 	assert.NotEmpty(t, listResponse.Data.Namespaces.Edges[0].Cursor)
-	assert.Equal(t, "alice", listResponse.Data.Namespaces.Edges[0].Node.Identifier)
+	assert.Equal(t, "alice", listResponse.Data.Namespaces.Edges[0].Node.Metadata.Name)
 	assert.Equal(t, 2, listResponse.Data.Namespaces.TotalCount)
 }
 
@@ -327,7 +329,7 @@ func TestGraphQLHandlerRejectsNamespaceMutationWithoutBearerToken(t *testing.T) 
 	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
 	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
-		"query": "mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { identifier } } }"
+		"query": "mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { metadata { name } } } }"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -353,7 +355,7 @@ func TestGraphQLHandlerRejectsMutationWithInvalidBearerToken(t *testing.T) {
 	require.NoError(t, err)
 
 	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
-		"query": "mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { identifier } } }"
+		"query": "mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { metadata { name } } } }"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer invalid-token")

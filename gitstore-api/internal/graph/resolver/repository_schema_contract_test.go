@@ -4,7 +4,6 @@
 package resolver
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
@@ -79,36 +78,10 @@ func TestRepositoryUsesSharedMetadataAndConditionTypes(t *testing.T) {
 	assert.Nil(t, schema.Types["RepositoryCondition"])
 }
 
-func TestRepositoryLegacyFieldsAreDeprecated(t *testing.T) {
+func TestRepositoryHasNoDeprecatedLegacyFields(t *testing.T) {
 	schema := repositoryContractSchema(t)
-	replacements := map[string]string{
-		"name":          "metadata.name",
-		"namespace":     "metadata.namespace",
-		"defaultBranch": "spec.defaultBranch",
-		"storageClass":  "status.resolved.storageClass",
-		"storagePath":   "status.resolved.storagePath",
-		"createdAt":     "metadata.creationTimestamp",
+	for _, fieldName := range []string{"name", "namespace", "defaultBranch", "storageClass", "storagePath", "createdAt", "createdBy", "updatedAt", "updatedBy"} {
+		assert.Nil(t, schema.Types["Repository"].Fields.ForName(fieldName), "Repository.%s should have been removed", fieldName)
 	}
-	for fieldName, replacement := range replacements {
-		field := schema.Types["Repository"].Fields.ForName(fieldName)
-		require.NotNil(t, field)
-		directive := field.Directives.ForName("deprecated")
-		require.NotNil(t, directive, "Repository.%s must be deprecated", fieldName)
-		reason := directive.Arguments.ForName("reason")
-		require.NotNil(t, reason)
-		assert.Contains(t, reason.Value.Raw, replacement)
-		assert.Contains(t, reason.Value.Raw, "future major GraphQL API release")
-	}
-
-	for _, fieldName := range []string{"createdBy", "updatedAt", "updatedBy"} {
-		field := schema.Types["Repository"].Fields.ForName(fieldName)
-		require.NotNil(t, field)
-		directive := field.Directives.ForName("deprecated")
-		require.NotNil(t, directive, "Repository.%s must be deprecated", fieldName)
-		reason := directive.Arguments.ForName("reason")
-		require.NotNil(t, reason)
-		assert.True(t, strings.Contains(reason.Value.Raw, "Legacy audit field"))
-	}
-
 	assert.Nil(t, schema.Types["Repository"].Fields.ForName("id").Directives.ForName("deprecated"))
 }

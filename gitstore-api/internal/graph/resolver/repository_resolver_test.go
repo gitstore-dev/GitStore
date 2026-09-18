@@ -192,80 +192,9 @@ func TestRepositoryMutations_preserveExistingErrors(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, "input: repository already exists", err.Error())
 
-	for operation, call := range map[string]func() error{
-		"rename": func() error {
-			_, renameErr := svc.RenameRepository(ctx, "01960000-0000-7000-8000-000000000099", "new-name", "test-user")
-			return renameErr
-		},
-		"transfer": func() error {
-			_, transferErr := svc.TransferRepository(ctx, "01960000-0000-7000-8000-000000000099", testNsID1, "test-user")
-			return transferErr
-		},
-		"delete": func() error {
-			return svc.DeleteRepository(ctx, "01960000-0000-7000-8000-000000000099", "test-user")
-		},
-	} {
-		t.Run(operation, func(t *testing.T) {
-			err := call()
-			require.Error(t, err)
-			if operation == "rename" || operation == "transfer" {
-				assert.Contains(t, err.Error(), "unimplemented")
-				return
-			}
-			assert.Equal(t, "input: repository not found", err.Error())
-		})
-	}
-}
-
-// ── renameRepository ──────────────────────────────────────────────────────────
-
-func TestRenameRepository_IsDeferredToLifecyclePhase2(t *testing.T) {
-	writer := &mockGitWriter{}
-	svc := newTestSvc(t, writer)
-	ctx := context.Background()
-
-	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
-		ID: testNsID1, Name: "acme-rename", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
-	}))
-
-	repo, err := svc.CreateRepository(ctx, testNsID1, "old-name", "main", "default", "test-user")
-	require.NoError(t, err)
-	originalID := repo.ID
-
-	_, err = svc.RenameRepository(ctx, originalID, "new-name", "test-user")
+	err = svc.DeleteRepository(ctx, "01960000-0000-7000-8000-000000000099", "test-user")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unimplemented")
-
-	persisted, err := svc.GetRepository(ctx, originalID)
-	require.NoError(t, err)
-	assert.Equal(t, "old-name", persisted.Name)
-}
-
-// ── transferRepository ────────────────────────────────────────────────────────
-
-func TestTransferRepository_IsDeferredToLifecyclePhase2(t *testing.T) {
-	writer := &mockGitWriter{}
-	svc := newTestSvc(t, writer)
-	ctx := context.Background()
-
-	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
-		ID: testNsID1, Name: "ns-from", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
-	}))
-	require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
-		ID: testNsID2, Name: "ns-to", Tier: datastore.NamespaceTierUser, CreationActor: "test", UpdateActor: "test",
-	}))
-
-	repo, err := svc.CreateRepository(ctx, testNsID1, "app", "main", "default", "test-user")
-	require.NoError(t, err)
-	originalID := repo.ID
-
-	_, err = svc.TransferRepository(ctx, originalID, testNsID2, "test-user")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unimplemented")
-
-	persisted, err := svc.GetRepository(ctx, originalID)
-	require.NoError(t, err)
-	assert.Equal(t, "ns-from", persisted.Namespace)
+	assert.Equal(t, "input: repository not found", err.Error())
 }
 
 // ── deleteRepository ──────────────────────────────────────────────────────────

@@ -671,22 +671,6 @@ type Namespace struct {
 	Spec *NamespaceSpec `json:"spec"`
 	// System-owned observed state.
 	Status *NamespaceStatus `json:"status"`
-	// Human-readable identifier, globally unique across all tiers.
-	// DNS label format: lowercase alphanumeric and hyphens, 1–63 characters.
-	// Cannot begin or end with a hyphen.
-	Identifier string `json:"identifier"`
-	// Optional human-friendly display name.
-	DisplayName *string `json:"displayName,omitempty"`
-	// The tier of this namespace.
-	Tier NamespaceTier `json:"tier"`
-	// Timestamp when this namespace was created.
-	CreatedAt time.Time `json:"createdAt"`
-	// Username of the caller who created this namespace.
-	CreatedBy string `json:"createdBy"`
-	// Timestamp when this namespace was last modified.
-	UpdatedAt time.Time `json:"updatedAt"`
-	// Username of the caller who last modified this namespace.
-	UpdatedBy string `json:"updatedBy"`
 	// Markdown body content (namespace description).
 	Body *string `json:"body,omitempty"`
 }
@@ -698,9 +682,8 @@ func (this Namespace) GetID() string { return this.ID }
 
 // Selector for looking up a namespace by exactly one unique key.
 type NamespaceBy struct {
-	ID         *string `json:"id,omitempty"`
-	Identifier *string `json:"identifier,omitempty"`
-	Name       *string `json:"name,omitempty"`
+	ID   *string `json:"id,omitempty"`
+	Name *string `json:"name,omitempty"`
 }
 
 // Connection type for paginated namespaces (Relay pattern).
@@ -1150,16 +1133,6 @@ type RefreshTokenPayload struct {
 	Token *TokenResponse `json:"token"`
 }
 
-type RenameRepositoryInput struct {
-	// Relay ID of the repository to rename.
-	RepositoryID string `json:"repositoryId"`
-	NewName      string `json:"newName"`
-}
-
-type RenameRepositoryPayload struct {
-	Repository *Repository `json:"repository"`
-}
-
 // Input for reordering categories (drag-and-drop)
 // TODO(REMOVE): Not needed
 type ReorderCategoriesInput struct {
@@ -1195,16 +1168,7 @@ type Repository struct {
 	Spec *RepositorySpec `json:"spec"`
 	// System-derived Repository state. Present for every Repository, including
 	// resources created before this contract existed.
-	Status        *RepositoryStatus `json:"status"`
-	Name          string            `json:"name"`
-	Namespace     *Namespace        `json:"namespace"`
-	DefaultBranch string            `json:"defaultBranch"`
-	StorageClass  string            `json:"storageClass"`
-	StoragePath   string            `json:"storagePath"`
-	CreatedAt     time.Time         `json:"createdAt"`
-	CreatedBy     string            `json:"createdBy"`
-	UpdatedAt     time.Time         `json:"updatedAt"`
-	UpdatedBy     string            `json:"updatedBy"`
+	Status *RepositoryStatus `json:"status"`
 	// Markdown body content (repository description).
 	Body *string `json:"body,omitempty"`
 }
@@ -1484,17 +1448,6 @@ type TokenResponse struct {
 	// OIDC ID token when available.
 	// GitStore local providers currently do not issue this field.
 	IDToken *string `json:"idToken,omitempty"`
-}
-
-type TransferRepositoryInput struct {
-	// Relay ID of the repository to transfer.
-	RepositoryID string `json:"repositoryId"`
-	// Relay ID of the destination namespace.
-	TargetNamespaceID string `json:"targetNamespaceId"`
-}
-
-type TransferRepositoryPayload struct {
-	Repository *Repository `json:"repository"`
 }
 
 // Input for updating a category
