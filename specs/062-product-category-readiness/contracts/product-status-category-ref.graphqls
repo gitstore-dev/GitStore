@@ -1,0 +1,76 @@
+# Contract addition: Product Category and Readiness Reconciliation
+#
+# Additive changes to shared/schemas/product.graphqls. All new fields are
+# nullable/optional so an old controller replica (never sending them) and an
+# old API replica (ignoring them) both remain correct during a rolling
+# upgrade (constitution: Independently Deployable Delivery).
+#
+# BEFORE (current live schema):
+#
+# input UpdateProductStatusInput {
+#   name: String!
+#   namespace: String!
+#   resourceVersion: String!
+#   conditions: [ConditionInput!]
+#   "Opaque node ID of the owner reference to remove."
+#   removeOwnerID: ID
+# }
+#
+# type ResolvedCategoryDefinition {
+#   name: String!
+#   path: [String!]!
+# }
+#
+# AFTER:
+
+input UpdateProductStatusInput {
+  name: String!
+  namespace: String!
+  resourceVersion: String!
+
+  """Null = unchanged. Set on every successful reconcile, matching every other per-kind status mutation."""
+  observedGeneration: Int
+
+  """Null = unchanged, e.g. "main@sha1:a1b2c3d"."""
+  lastAppliedRevision: String
+
+  conditions: [ConditionInput!]
+
+  """
+  Null = unchanged. Kind-specific resolved payload for the fields this
+  feature needs (currently only the resolved category reference); absent
+  or null clears any previously-resolved category.
+  """
+  resolved: ResolvedProductStatusInput
+
+  "Opaque node ID of the owner reference to remove."
+  removeOwnerID: ID
+}
+
+"""Controller-only resolved-status payload accepted by updateProductStatus."""
+input ResolvedProductStatusInput {
+  """Null clears any previously-resolved category reference."""
+  category: ResolvedCategoryRefInput
+}
+
+"""
+A resolved CategoryTaxonomy reference: the category's name and its opaque
+Relay identifier (the same value CategoryTaxonomy.id already returns for
+that category), never the category's raw internal identifier.
+"""
+input ResolvedCategoryRefInput {
+  name: String!
+  uid: ID!
+}
+
+type ResolvedCategoryDefinition {
+  name: String!
+  path: [String!]!
+
+  """
+  The resolved category's opaque Relay identifier, matching
+  CategoryTaxonomy.id. Present only while the owning Product's
+  CategoryResolved condition is True.
+  """
+  uid: ID
+}
