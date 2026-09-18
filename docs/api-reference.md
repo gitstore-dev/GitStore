@@ -906,7 +906,7 @@ type Product implements Node {
   id: ID!
   apiVersion: String!
   kind: String!
-  metadata: ProductObjectMeta!
+  metadata: ObjectMeta!
   spec: ProductSpec!
   status: ProductStatus
 }
@@ -919,7 +919,7 @@ type ProductVariant implements Node {
   id: ID!
   apiVersion: String!
   kind: String!
-  metadata: ProductVariantObjectMeta!
+  metadata: ObjectMeta!
   spec: ProductVariantSpec!
   status: ProductVariantStatus
   body: String
@@ -933,7 +933,7 @@ type Category implements Node {
   id: ID!
   apiVersion: String
   kind: String
-  metadata: CategoryObjectMeta!
+  metadata: ObjectMeta!
   spec: CategorySpec!
   status: CategoryTaxonomyStatus
   body: String
@@ -952,7 +952,7 @@ type Collection implements Node {
   id: ID!
   apiVersion: String
   kind: String
-  metadata: CollectionObjectMeta!
+  metadata: ObjectMeta!
   spec: CollectionSpec!
   status: CollectionStatus
   body: String
