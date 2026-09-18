@@ -861,8 +861,8 @@ _bootstrap-repository: _bootstrap-tools
 			exit 1; \
 		}; \
 	fi; \
-	query='query Namespace($$identifier: String!) { namespace(by: { identifier: $$identifier }) { id metadata { name } } }'; \
-	payload=$$(jq -n --arg query "$$query" --arg identifier "$${NAMESPACE}" '{query: $$query, variables: {identifier: $$identifier}}'); \
+	query='query Namespace($$name: String!) { namespace(by: { name: $$name }) { id metadata { name } } }'; \
+	payload=$$(jq -n --arg query "$$query" --arg name "$${NAMESPACE}" '{query: $$query, variables: {name: $$name}}'); \
 	response=$$(curl --silent --show-error --connect-timeout 5 -H 'Content-Type: application/json' -H "Authorization: Bearer $$token" --data "$$payload" "$${API_URL}") || { \
 		echo "Failed to reach GitStore API at $${API_URL}. Start it with make compose or make dev."; \
 		exit 1; \
