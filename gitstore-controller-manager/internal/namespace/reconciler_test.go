@@ -89,14 +89,14 @@ func conditionByType(t *testing.T, conditions []*status.Condition, conditionType
 	return nil
 }
 
-func TestReconcileMissingNamespaceReturnsTerminal(t *testing.T) {
+func TestReconcileMissingNamespaceIsAlreadyReconciled(t *testing.T) {
 	sc := &fakeStatusClient{}
 	r := NewReconciler(seedNamespaceCache(t), sc, &fakeRepositoryClient{}, &fakeDeletionClient{})
 
 	result := r.Reconcile(context.Background(), namespaceKey("missing"))
 
-	if _, ok := result.(types.TerminalFailure); !ok {
-		t.Fatalf("Reconcile result = %T, want types.TerminalFailure", result)
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %T, want types.Success", result)
 	}
 	if len(sc.patches) != 0 {
 		t.Fatalf("status calls = %d, want 0", len(sc.patches))

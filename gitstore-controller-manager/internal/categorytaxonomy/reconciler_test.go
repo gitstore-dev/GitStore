@@ -57,14 +57,14 @@ func (f *fakeDeletionClient) CompleteDeletion(context.Context, string, string, s
 	return f.completeErr
 }
 
-func TestReconcile_MissingFromCache_ReturnsTerminal(t *testing.T) {
+func TestReconcile_MissingFromCache_IsAlreadyReconciled(t *testing.T) {
 	c := seedCache(t) // empty
 	sc := &fakeStatusClient{}
 	r := NewReconciler(c, sc, noProducts, nil)
 
 	result := r.Reconcile(context.Background(), key("acme", "ghost"))
-	if _, ok := result.(types.TerminalFailure); !ok {
-		t.Fatalf("Reconcile result = %T, want types.TerminalFailure", result)
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %T, want types.Success", result)
 	}
 	if sc.callCount() != 0 {
 		t.Errorf("expected no Apply call for a missing resource, got %d", sc.callCount())
@@ -278,12 +278,12 @@ func TestReconcile_TerminatingCategoryRetriesDecouplingAndCompletionConflicts(t 
 	}
 }
 
-func TestReconcile_RemovedCategoryIsTerminalWithoutDeletionCalls(t *testing.T) {
+func TestReconcile_RemovedCategoryIsAlreadyReconciledWithoutDeletionCalls(t *testing.T) {
 	deletion := &fakeDeletionClient{}
 	result := NewReconciler(seedCache(t), &fakeStatusClient{}, noProducts, nil, deletion).
 		Reconcile(context.Background(), key("acme", "removed"))
-	_, terminal := result.(types.TerminalFailure)
-	assert.True(t, terminal)
+	_, ok := result.(types.Success)
+	assert.True(t, ok)
 	assert.Zero(t, deletion.decoupleCalls)
 	assert.Zero(t, deletion.completeCalls)
 }

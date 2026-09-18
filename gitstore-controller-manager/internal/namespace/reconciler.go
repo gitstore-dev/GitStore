@@ -88,7 +88,9 @@ func NewReconciler(c cache.CacheAccessor[Namespace], statusClient status.StatusC
 func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
 	current, ok := r.cache.Get(key)
 	if !ok {
-		return types.ResultTerminal(fmt.Errorf("namespace: %q not found in cache", key.Name))
+		// A queued key can outlive its object after watch replay, deletion, or a
+		// checkpointed controller restart. Absence is the reconciled state.
+		return types.ResultOK()
 	}
 	if _, bootstrap := bootstrapNamespaces[current.Name]; bootstrap {
 		return types.ResultOK()
