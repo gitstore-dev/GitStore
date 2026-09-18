@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.0.0-alpha.3](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.3...v1.0.0-alpha.3) (2026-09-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** clients must migrate to metadata.name, metadata.namespace, spec.defaultBranch, status.resolved.{storagePath,storageClass}, and NamespaceBy.name; createdBy/updatedBy audit fields have no replacement and are no longer exposed over GraphQL.
+
+### Features
+
+* **auth:** add oidc-jwt provider and optional Hydra/Kratos reference OIDC stack (spec 059) ([#401](https://github.com/gitstore-dev/GitStore/issues/401)) ([0d6041f](https://github.com/gitstore-dev/GitStore/commit/0d6041fa3d75d03e336b37f07800c1b413e09e71))
+* **product:** add git-backed lifecycle foundations ([#380](https://github.com/gitstore-dev/GitStore/issues/380)) ([7fd2a80](https://github.com/gitstore-dev/GitStore/commit/7fd2a80d5e084d6452b9e11d90887d60255bf079))
+* **repository:** add Git-backed lifecycle and durable watches ([#394](https://github.com/gitstore-dev/GitStore/issues/394)) ([84b7bb4](https://github.com/gitstore-dev/GitStore/commit/84b7bb4d5b86dc64dce0a8729e10e5e44f00ae0a))
+
+
+### Bug Fixes
+
+* **api:** resource-specific status mutations, dead-code removal, and uid/id consistency ([#425](https://github.com/gitstore-dev/GitStore/issues/425)) ([42f7e95](https://github.com/gitstore-dev/GitStore/commit/42f7e95bfba16080352d899b56463f5e6663f094))
+
+
+### Documentation
+
+* introduce custom seller and buyer workflows with lifecycle management ([#422](https://github.com/gitstore-dev/GitStore/issues/422)) ([ab18f75](https://github.com/gitstore-dev/GitStore/commit/ab18f752b662582a73b6f65a9b377d576baf990f))
+
 ## [0.1.0-alpha.3](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.2...v0.1.0-alpha.3) (2026-09-04)
 
 
