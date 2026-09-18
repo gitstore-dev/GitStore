@@ -6,6 +6,7 @@ package integration
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -44,6 +45,34 @@ type productWithStatusResult struct {
 	Status *productStatusResult `json:"status"`
 }
 
+// isNotFoundGraphQLError reports whether every error in errs is shaped like
+// "the resource doesn't exist (yet)" rather than a genuine failure. Some
+// query fields (e.g. product, category) return this as an actual GraphQL
+// error from an authorization/scoping layer rather than a null result, so a
+// query issued in the window right after a push — before the async
+// admission pipeline has processed it — must tolerate it and keep polling,
+// not fail the test outright.
+func isNotFoundGraphQLError(errs []json.RawMessage) bool {
+	if len(errs) == 0 {
+		return false
+	}
+	for _, raw := range errs {
+		var e struct {
+			Message    string `json:"message"`
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
+		}
+		if err := json.Unmarshal(raw, &e); err != nil {
+			return false
+		}
+		if e.Extensions.Code != "NOT_FOUND" && !strings.Contains(e.Message, "not found") {
+			return false
+		}
+	}
+	return true
+}
+
 func queryProductStatus(t *testing.T, namespace, name string) *productStatusResult {
 	t.Helper()
 	resp := gqlQuery(t, `
@@ -57,6 +86,9 @@ func queryProductStatus(t *testing.T, namespace, name string) *productStatusResu
 		}
 	`, map[string]any{"namespace": namespace, "name": name})
 	if len(resp.Errors) > 0 {
+		if isNotFoundGraphQLError(resp.Errors) {
+			return nil
+		}
 		t.Fatalf("graphql errors querying product %q status: %s", name, resp.Errors)
 	}
 	var data struct {
@@ -90,7 +122,7 @@ func waitForProductStatus(t *testing.T, namespace, name string, timeout time.Dur
 	return nil
 }
 
-func queryCategoryID(t *testing.T, namespace, name string) string {
+func queryCategoryID(t *testing.T, namespace, name string) (string, bool) {
 	t.Helper()
 	resp := gqlQuery(t, `
 		query($namespace: String!, $name: String!) {
@@ -98,6 +130,9 @@ func queryCategoryID(t *testing.T, namespace, name string) string {
 		}
 	`, map[string]any{"namespace": namespace, "name": name})
 	if len(resp.Errors) > 0 {
+		if isNotFoundGraphQLError(resp.Errors) {
+			return "", false
+		}
 		t.Fatalf("graphql errors querying category %q id: %s", name, resp.Errors)
 	}
 	var data struct {
@@ -109,9 +144,26 @@ func queryCategoryID(t *testing.T, namespace, name string) string {
 		t.Fatalf("unmarshal category id response: %v", err)
 	}
 	if data.Category == nil {
-		t.Fatalf("category %s/%s not found", namespace, name)
+		return "", false
 	}
-	return data.Category.ID
+	return data.Category.ID, true
+}
+
+// waitForCategoryID polls until namespace/name's category is admitted and
+// returns its id, or fails the test after timeout. Admission is
+// asynchronous relative to the git push that triggers it, so querying
+// immediately after push is inherently racy.
+func waitForCategoryID(t *testing.T, namespace, name string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if id, ok := queryCategoryID(t, namespace, name); ok {
+			return id
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("timed out after %s waiting for category %s/%s to be admitted", timeout, namespace, name)
+	return ""
 }
 
 func deleteCategoryByID(t *testing.T, id string) {
@@ -155,7 +207,7 @@ func TestProductCategoryReadiness_CategoryAlreadyExists(t *testing.T) {
 		t.Fatalf("push category+product failed:\n%s", out)
 	}
 
-	categoryID := queryCategoryID(t, ns, categoryName)
+	categoryID := waitForCategoryID(t, ns, categoryName, 30*time.Second)
 
 	status := waitForProductStatus(t, ns, productName, 30*time.Second, func(s *productStatusResult) bool {
 		ready := productCondition(s, "Ready")
@@ -281,7 +333,7 @@ func TestProductCategoryReadiness_CategoryDeletedAfterResolution(t *testing.T) {
 		return ready != nil && ready.Status == "TRUE"
 	})
 
-	categoryID := queryCategoryID(t, ns, categoryName)
+	categoryID := waitForCategoryID(t, ns, categoryName, 30*time.Second)
 	deleteCategoryByID(t, categoryID)
 
 	// Poll well past the transient CategoryDeleted write to confirm the
