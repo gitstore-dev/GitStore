@@ -33,7 +33,6 @@ type ConditionType = string
 type ConditionStatus = string
 
 const (
-	ConditionPublished          ConditionType = "Published"
 	ConditionAdmissionAccepted  ConditionType = "AdmissionAccepted"
 	ConditionCategoryResolved   ConditionType = "CategoryResolved"
 	ConditionOptionsAccepted    ConditionType = "OptionsAccepted"
@@ -65,7 +64,7 @@ type ProductStatus struct {
 
 // Condition is a named status signal following the Kubernetes condition convention.
 type Condition struct {
-	Type               ConditionType   `json:"type"               validate:"required,oneof=Published AdmissionAccepted CategoryResolved OptionsAccepted VariantsResolved Ready ParentResolved Acyclic ProductResolved PricingAccepted"`
+	Type               ConditionType   `json:"type"               validate:"required,oneof=AdmissionAccepted CategoryResolved OptionsAccepted VariantsResolved Ready ParentResolved Acyclic ProductResolved PricingAccepted"`
 	Status             ConditionStatus `json:"status"             validate:"required,oneof=True False Unknown"`
 	ObservedGeneration int64           `json:"observedGeneration"`
 	LastTransitionTime time.Time       `json:"lastTransitionTime"`
